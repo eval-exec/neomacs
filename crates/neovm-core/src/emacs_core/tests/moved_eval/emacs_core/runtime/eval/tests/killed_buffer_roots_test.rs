@@ -23,7 +23,9 @@ fn create_and_kill(ev: &mut Context, name: &str) -> BufferId {
 /// whether the heap's buffer registry still holds its object.
 fn retained(ev: &Context, id: BufferId) -> (bool, bool) {
     (
-        ev.buffer_manager().get_dead(id).is_some(),
+        ev.buffer_manager()
+            .dead_buffer_last_name_value(id)
+            .is_some(),
         ev.tagged_heap().buffer_value(id).is_some(),
     )
 }

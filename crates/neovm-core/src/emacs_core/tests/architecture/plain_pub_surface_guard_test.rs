@@ -656,15 +656,6 @@ fn check_surface(scanned: &BTreeSet<Row>, baseline: &BTreeSet<Row>) -> Result<()
     ))
 }
 
-fn ceiling(text: &str) -> Result<usize, String> {
-    let text = text.trim();
-    if text.is_empty() || !text.bytes().all(|byte| byte.is_ascii_digit()) {
-        return Err("B3_PLAIN_PUB_RATCHET expected one nonnegative integer".into());
-    }
-    text.parse()
-        .map_err(|_| "B3_PLAIN_PUB_RATCHET count overflow".into())
-}
-
 fn at_most(rows: usize, limit: usize) -> Result<(), String> {
     merge_ratchet::at_most(rows, limit, &rules_for("p"))
 }

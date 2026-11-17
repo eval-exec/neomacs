@@ -151,26 +151,6 @@ impl Context {
         &self.obarray
     }
 
-    /// GNU `intern`: NAME as a member of this Context's obarray, as a Value.
-    ///
-    /// This is the member-producing Value funnel. A fresh name must come
-    /// through here (or [`Self::make_uninterned_symbol_value`] where GNU uses
-    /// `make-symbol`); wrapping a bare name-registry SymId would create a
-    /// Lisp-visible symbol that `intern-soft` cannot find (PEER 5786).
-    #[inline]
-    pub fn intern_member_value(&mut self, name: &str) -> Value {
-        Value::from_sym_id(self.obarray.intern_member(name))
-    }
-
-    /// GNU `intern` from an exact Lisp-string name, as a Value.
-    #[inline]
-    pub fn intern_member_value_lisp_string(
-        &mut self,
-        name: &neovm_value::heap_types::LispString,
-    ) -> Value {
-        Value::from_sym_id(self.obarray.intern_member_lisp_string(name))
-    }
-
     /// Publish an existing canonical `SymId` as an obarray member and return
     /// it as a Value.
     ///
@@ -178,16 +158,9 @@ impl Context {
     /// category ids) and GNU interns the name at publication. A non-canonical
     /// `make-symbol` id is left uninterned, as in GNU.
     #[inline]
-    pub fn intern_member_id_value(&mut self, id: SymId) -> Value {
+    pub(crate) fn intern_member_id_value(&mut self, id: SymId) -> Value {
         self.obarray.ensure_interned_global_id(id);
         Value::from_sym_id(id)
-    }
-
-    /// GNU `make-symbol`: a fresh uninterned symbol, as a Value. Never an
-    /// obarray member; use only where GNU itself calls `make-symbol`.
-    #[inline]
-    pub fn make_uninterned_symbol_value(name: &str) -> Value {
-        Value::from_sym_id(neovm_value::intern::make_uninterned_symbol(name))
     }
 
     /// R-b (PC11-F f1): the Context's tagged-heap view. The field this reads
@@ -456,7 +429,8 @@ impl Context {
     /// lookup (buffer-local, then `buffer_defaults`) — the obarray value cell of
     /// a forwarded slot var is always nil, so the resolver must read the default
     /// slot directly.
-    pub fn buffer_default_value(&self, name: &str) -> Option<Value> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn buffer_default_value(&self, name: &str) -> Option<Value> {
         // GNU default read: BVAR (&buffer_defaults, slot) for a slot-backed
         // per-buffer variable (src/buffer.c:1116, 2289); for any other
         // variable the obarray default cell is GNU's Fdefault_value.
@@ -1813,7 +1787,8 @@ impl Context {
         let _ = self.clear_echo_area_message_with_hook(false);
     }
 
-    pub fn clear_current_message(&mut self) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn clear_current_message(&mut self) {
         self.cancel_key_echo_state();
         if self.clear_echo_area_message() == EchoMessageClearResult::PreserveEchoArea {}
     }

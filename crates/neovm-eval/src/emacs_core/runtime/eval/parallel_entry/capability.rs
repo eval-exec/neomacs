@@ -20,13 +20,13 @@ pub struct HeapIdentity<'heap> {
 }
 
 #[allow(dead_code)] // Dormant E1 contract; E2 owns runtime construction.
-pub struct OwnerIdentity<'owner> {
+pub(crate) struct OwnerIdentity<'owner> {
     brand: Invariant<'owner>,
 }
 
 /// The borrow ends before a serial mutation may invalidate binding shape.
 #[allow(dead_code)] // Dormant E1 contract; E2 owns runtime construction.
-pub struct BindingShape<'shape> {
+pub(crate) struct BindingShape<'shape> {
     brand: Invariant<'shape>,
 }
 
@@ -43,7 +43,7 @@ pub struct OwnerState<'heap, 'owner, 'shape> {
 }
 
 #[allow(dead_code)] // Dormant E1 contract; E2 owns runtime construction.
-pub struct ParallelExecution<'loan, 'heap, 'owner, 'shape> {
+pub(crate) struct ParallelExecution<'loan, 'heap, 'owner, 'shape> {
     loan: PhantomData<&'loan mut ()>,
     heap: Invariant<'heap>,
     owner: Invariant<'owner>,
@@ -54,7 +54,7 @@ pub struct ParallelExecution<'loan, 'heap, 'owner, 'shape> {
 /// A native reservation has no heap-facing methods. This is not proof of a
 /// published native extent: E2/E5 must connect it to Proof 1's actual protocol.
 #[allow(dead_code)] // Dormant E1 contract; E2 owns runtime construction.
-pub struct NativeExecution<'loan, 'heap, 'owner> {
+pub(crate) struct NativeExecution<'loan, 'heap, 'owner> {
     loan: PhantomData<&'loan mut ()>,
     heap: Invariant<'heap>,
     owner: Invariant<'owner>,
@@ -64,7 +64,7 @@ pub struct NativeExecution<'loan, 'heap, 'owner> {
 /// Private-field placeholder, never constructed by E1. Its eventual constructor
 /// must own the real matching stopped ticket and exclusive serial loan.
 #[allow(dead_code)] // Dormant E1 contract; E2 owns runtime construction.
-pub struct WorldBatonGuard<'heap, 'owner> {
+pub(crate) struct WorldBatonGuard<'heap, 'owner> {
     heap: Invariant<'heap>,
     owner: Invariant<'owner>,
     confined: ThreadConfined,
@@ -80,7 +80,7 @@ pub struct BatonWitness<'guard, 'heap, 'owner> {
 
 /// A branded serial reservation, with no legacy Context/World access in E1.
 #[allow(dead_code)] // Dormant E1 contract; E2 owns runtime construction.
-pub struct SerialContext<'loan, 'guard, 'heap, 'owner> {
+pub(crate) struct SerialContext<'loan, 'guard, 'heap, 'owner> {
     loan: PhantomData<&'loan mut ()>,
     guard: Invariant<'guard>,
     heap: Invariant<'heap>,
@@ -137,7 +137,7 @@ impl<'heap, 'owner, 'shape> ParallelExecution<'_, 'heap, 'owner, 'shape> {
 impl<'heap, 'owner> WorldBatonGuard<'heap, 'owner> {
     /// The higher-ranked guard lifetime prevents returning the witness as R.
     /// This mints no live World authority: the guard has no E1 constructor.
-    pub fn with_witness<R>(
+    pub(crate) fn with_witness<R>(
         &mut self,
         body: impl for<'guard> FnOnce(BatonWitness<'guard, 'heap, 'owner>) -> R,
     ) -> R {

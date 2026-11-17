@@ -125,46 +125,48 @@ pub const BUFFER_SLOT_READ_ONLY: BufferSlot = BufferSlot::new(2);
 pub const BUFFER_SLOT_ENABLE_MULTIBYTE_CHARACTERS: BufferSlot = BufferSlot::new(3);
 /// Slot index for `buffer-file-truename`. Mirrors GNU's
 /// `file_truename_` (`buffer.h:325`).
-pub const BUFFER_SLOT_FILE_TRUENAME: BufferSlot = BufferSlot::new(4);
+pub(crate) const BUFFER_SLOT_FILE_TRUENAME: BufferSlot = BufferSlot::new(4);
 /// Slot index for `default-directory`. Mirrors GNU's
 /// `directory_` (`buffer.h:321`).
-pub const BUFFER_SLOT_DEFAULT_DIRECTORY: BufferSlot = BufferSlot::new(5);
+pub(crate) const BUFFER_SLOT_DEFAULT_DIRECTORY: BufferSlot = BufferSlot::new(5);
 /// Slot index for `buffer-saved-size`. Mirrors GNU's `save_length_`
 /// (`buffer.h:340`).
-pub const BUFFER_SLOT_SAVED_SIZE: BufferSlot = BufferSlot::new(6);
+pub(crate) const BUFFER_SLOT_SAVED_SIZE: BufferSlot = BufferSlot::new(6);
 /// Slot index for `buffer-backed-up`. Mirrors GNU's `backed_up_`
 /// (`buffer.h:341`).
-pub const BUFFER_SLOT_BACKED_UP: BufferSlot = BufferSlot::new(7);
+pub(crate) const BUFFER_SLOT_BACKED_UP: BufferSlot = BufferSlot::new(7);
 /// Slot index for `buffer-file-format`. Mirrors GNU's
 /// `file_format_` (`buffer.h:342`).
-pub const BUFFER_SLOT_FILE_FORMAT: BufferSlot = BufferSlot::new(8);
+pub(crate) const BUFFER_SLOT_FILE_FORMAT: BufferSlot = BufferSlot::new(8);
 /// Slot index for `buffer-auto-save-file-format`. Mirrors GNU's
 /// `auto_save_file_format_` (`buffer.h:343`).
-pub const BUFFER_SLOT_AUTO_SAVE_FILE_FORMAT: BufferSlot = BufferSlot::new(9);
+pub(crate) const BUFFER_SLOT_AUTO_SAVE_FILE_FORMAT: BufferSlot = BufferSlot::new(9);
 /// Slot index for `major-mode`. Mirrors GNU's `major_mode_`
 /// (`buffer.h:347`).
-pub const BUFFER_SLOT_MAJOR_MODE: BufferSlot = BufferSlot::new(10);
+pub(crate) const BUFFER_SLOT_MAJOR_MODE: BufferSlot = BufferSlot::new(10);
 /// Slot index for `local-minor-modes`. Mirrors GNU's
 /// `local_minor_modes_` (`buffer.h:349`).
-pub const BUFFER_SLOT_LOCAL_MINOR_MODES: BufferSlot = BufferSlot::new(11);
+pub(crate) const BUFFER_SLOT_LOCAL_MINOR_MODES: BufferSlot = BufferSlot::new(11);
 /// Slot index for `mode-name`. Mirrors GNU's `mode_name_`
 /// (`buffer.h:351`).
-pub const BUFFER_SLOT_MODE_NAME: BufferSlot = BufferSlot::new(12);
+pub(crate) const BUFFER_SLOT_MODE_NAME: BufferSlot = BufferSlot::new(12);
 /// Slot index for `mark-active`. Mirrors GNU's `mark_active_`
 /// (`buffer.h:381`).
-pub const BUFFER_SLOT_MARK_ACTIVE: BufferSlot = BufferSlot::new(13);
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) const BUFFER_SLOT_MARK_ACTIVE: BufferSlot = BufferSlot::new(13);
 /// Slot index for `point-before-scroll`. Mirrors GNU's
 /// `point_before_scroll_` (`buffer.h:413`).
-pub const BUFFER_SLOT_POINT_BEFORE_SCROLL: BufferSlot = BufferSlot::new(14);
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) const BUFFER_SLOT_POINT_BEFORE_SCROLL: BufferSlot = BufferSlot::new(14);
 /// Slot index for `buffer-display-count`. Mirrors GNU's
 /// `display_count_` (`buffer.h:418`).
-pub const BUFFER_SLOT_DISPLAY_COUNT: BufferSlot = BufferSlot::new(15);
+pub(crate) const BUFFER_SLOT_DISPLAY_COUNT: BufferSlot = BufferSlot::new(15);
 /// Slot index for `buffer-display-time`. Mirrors GNU's
 /// `display_time_` (`buffer.h:432`).
-pub const BUFFER_SLOT_DISPLAY_TIME: BufferSlot = BufferSlot::new(16);
+pub(crate) const BUFFER_SLOT_DISPLAY_TIME: BufferSlot = BufferSlot::new(16);
 /// Slot index for `buffer-invisibility-spec`. Mirrors GNU's
 /// `invisibility_spec_` (`buffer.h:411`).
-pub const BUFFER_SLOT_INVISIBILITY_SPEC: BufferSlot = BufferSlot::new(17);
+pub(crate) const BUFFER_SLOT_INVISIBILITY_SPEC: BufferSlot = BufferSlot::new(17);
 
 // ---------------------------------------------------------------------------
 // Phase 10D conditional slot offsets. These are BUFFER_OBJFWD slots
@@ -181,87 +183,87 @@ pub const BUFFER_SLOT_INVISIBILITY_SPEC: BufferSlot = BufferSlot::new(17);
 /// (`buffer.h:387`). First conditional slot migrated by Phase 10D
 /// step 3 — picked because the value is a simple integer with a
 /// non-trivial default (70) and dense test coverage.
-pub const BUFFER_SLOT_FILL_COLUMN: BufferSlot = BufferSlot::new(18);
+pub(crate) const BUFFER_SLOT_FILL_COLUMN: BufferSlot = BufferSlot::new(18);
 /// Slot index for `tab-width`. Mirrors GNU's `tab_width_`
 /// (`buffer.h:386`). Default 8 (`buffer.c:4848`).
-pub const BUFFER_SLOT_TAB_WIDTH: BufferSlot = BufferSlot::new(19);
+pub(crate) const BUFFER_SLOT_TAB_WIDTH: BufferSlot = BufferSlot::new(19);
 /// Slot index for `left-margin`. Mirrors GNU's `left_margin_`
 /// (`buffer.h:388`). Default 0 (`buffer.c:4867`).
-pub const BUFFER_SLOT_LEFT_MARGIN: BufferSlot = BufferSlot::new(20);
+pub(crate) const BUFFER_SLOT_LEFT_MARGIN: BufferSlot = BufferSlot::new(20);
 /// Slot index for `abbrev-mode`. Mirrors GNU's `abbrev_mode_`
 /// (`buffer.h:368`). Default nil (`buffer.c:4835`).
-pub const BUFFER_SLOT_ABBREV_MODE: BufferSlot = BufferSlot::new(21);
+pub(crate) const BUFFER_SLOT_ABBREV_MODE: BufferSlot = BufferSlot::new(21);
 /// Slot index for `overwrite-mode`. Mirrors GNU's `overwrite_mode_`
 /// (`buffer.h:369`). Default nil (`buffer.c:4836`).
-pub const BUFFER_SLOT_OVERWRITE_MODE: BufferSlot = BufferSlot::new(22);
+pub(crate) const BUFFER_SLOT_OVERWRITE_MODE: BufferSlot = BufferSlot::new(22);
 /// Slot index for `selective-display`. Mirrors GNU's
 /// `selective_display_` (`buffer.h:373`). Default nil (`buffer.c:4838`).
-pub const BUFFER_SLOT_SELECTIVE_DISPLAY: BufferSlot = BufferSlot::new(23);
+pub(crate) const BUFFER_SLOT_SELECTIVE_DISPLAY: BufferSlot = BufferSlot::new(23);
 /// Slot index for `selective-display-ellipses`. Mirrors GNU's
 /// `selective_display_ellipses_` (`buffer.h:374`). Default t
 /// (`buffer.c:4839`).
-pub const BUFFER_SLOT_SELECTIVE_DISPLAY_ELLIPSES: BufferSlot = BufferSlot::new(24);
+pub(crate) const BUFFER_SLOT_SELECTIVE_DISPLAY_ELLIPSES: BufferSlot = BufferSlot::new(24);
 /// Slot index for `truncate-lines`. Mirrors GNU's `truncate_lines_`
 /// (`buffer.h:355`). Default nil (`buffer.c:4849`).
-pub const BUFFER_SLOT_TRUNCATE_LINES: BufferSlot = BufferSlot::new(25);
+pub(crate) const BUFFER_SLOT_TRUNCATE_LINES: BufferSlot = BufferSlot::new(25);
 /// Slot index for `word-wrap`. Mirrors GNU's `word_wrap_`
 /// (`buffer.h:357`). Default nil (`buffer.c:4850`).
-pub const BUFFER_SLOT_WORD_WRAP: BufferSlot = BufferSlot::new(26);
+pub(crate) const BUFFER_SLOT_WORD_WRAP: BufferSlot = BufferSlot::new(26);
 /// Slot index for `ctl-arrow`. Mirrors GNU's `ctl_arrow_`
 /// (`buffer.h:359`). Default t (`buffer.c:4851`).
-pub const BUFFER_SLOT_CTL_ARROW: BufferSlot = BufferSlot::new(27);
+pub(crate) const BUFFER_SLOT_CTL_ARROW: BufferSlot = BufferSlot::new(27);
 /// Slot index for `auto-fill-function`. Mirrors GNU's
 /// `auto_fill_function_` (`buffer.h:367`). Default nil
 /// (`buffer.c:4837`).
-pub const BUFFER_SLOT_AUTO_FILL_FUNCTION: BufferSlot = BufferSlot::new(28);
+pub(crate) const BUFFER_SLOT_AUTO_FILL_FUNCTION: BufferSlot = BufferSlot::new(28);
 /// Slot index for `mode-line-format`. Default `"%-"`.
-pub const BUFFER_SLOT_MODE_LINE_FORMAT: BufferSlot = BufferSlot::new(29);
+pub(crate) const BUFFER_SLOT_MODE_LINE_FORMAT: BufferSlot = BufferSlot::new(29);
 /// Slot index for `header-line-format`. Default nil.
-pub const BUFFER_SLOT_HEADER_LINE_FORMAT: BufferSlot = BufferSlot::new(30);
+pub(crate) const BUFFER_SLOT_HEADER_LINE_FORMAT: BufferSlot = BufferSlot::new(30);
 /// Slot index for `tab-line-format`. Default nil.
-pub const BUFFER_SLOT_TAB_LINE_FORMAT: BufferSlot = BufferSlot::new(31);
+pub(crate) const BUFFER_SLOT_TAB_LINE_FORMAT: BufferSlot = BufferSlot::new(31);
 //
 // Phase 10D step 5 batch 2 — display/bidi/fringe/scroll-bar slots.
 /// Slot index for `bidi-display-reordering`. Default t.
-pub const BUFFER_SLOT_BIDI_DISPLAY_REORDERING: BufferSlot = BufferSlot::new(32);
+pub(crate) const BUFFER_SLOT_BIDI_DISPLAY_REORDERING: BufferSlot = BufferSlot::new(32);
 /// Slot index for `bidi-paragraph-direction`. Default nil.
-pub const BUFFER_SLOT_BIDI_PARAGRAPH_DIRECTION: BufferSlot = BufferSlot::new(33);
+pub(crate) const BUFFER_SLOT_BIDI_PARAGRAPH_DIRECTION: BufferSlot = BufferSlot::new(33);
 /// Slot index for `bidi-paragraph-start-re`. Default nil.
-pub const BUFFER_SLOT_BIDI_PARAGRAPH_START_RE: BufferSlot = BufferSlot::new(34);
+pub(crate) const BUFFER_SLOT_BIDI_PARAGRAPH_START_RE: BufferSlot = BufferSlot::new(34);
 /// Slot index for `bidi-paragraph-separate-re`. Default nil.
-pub const BUFFER_SLOT_BIDI_PARAGRAPH_SEPARATE_RE: BufferSlot = BufferSlot::new(35);
+pub(crate) const BUFFER_SLOT_BIDI_PARAGRAPH_SEPARATE_RE: BufferSlot = BufferSlot::new(35);
 /// Slot index for `cursor-type`. Default t.
-pub const BUFFER_SLOT_CURSOR_TYPE: BufferSlot = BufferSlot::new(36);
+pub(crate) const BUFFER_SLOT_CURSOR_TYPE: BufferSlot = BufferSlot::new(36);
 /// Slot index for `line-spacing`. Default nil.
-pub const BUFFER_SLOT_LINE_SPACING: BufferSlot = BufferSlot::new(37);
+pub(crate) const BUFFER_SLOT_LINE_SPACING: BufferSlot = BufferSlot::new(37);
 /// Slot index for `text-conversion-style`. Default nil.
-pub const BUFFER_SLOT_TEXT_CONVERSION_STYLE: BufferSlot = BufferSlot::new(38);
+pub(crate) const BUFFER_SLOT_TEXT_CONVERSION_STYLE: BufferSlot = BufferSlot::new(38);
 /// Slot index for `cursor-in-non-selected-windows`. Default t.
-pub const BUFFER_SLOT_CURSOR_IN_NON_SELECTED_WINDOWS: BufferSlot = BufferSlot::new(39);
+pub(crate) const BUFFER_SLOT_CURSOR_IN_NON_SELECTED_WINDOWS: BufferSlot = BufferSlot::new(39);
 /// Slot index for `left-margin-width`. Default nil.
-pub const BUFFER_SLOT_LEFT_MARGIN_WIDTH: BufferSlot = BufferSlot::new(40);
+pub(crate) const BUFFER_SLOT_LEFT_MARGIN_WIDTH: BufferSlot = BufferSlot::new(40);
 /// Slot index for `right-margin-width`. Default nil.
-pub const BUFFER_SLOT_RIGHT_MARGIN_WIDTH: BufferSlot = BufferSlot::new(41);
+pub(crate) const BUFFER_SLOT_RIGHT_MARGIN_WIDTH: BufferSlot = BufferSlot::new(41);
 /// Slot index for `left-fringe-width`. Default nil.
-pub const BUFFER_SLOT_LEFT_FRINGE_WIDTH: BufferSlot = BufferSlot::new(42);
+pub(crate) const BUFFER_SLOT_LEFT_FRINGE_WIDTH: BufferSlot = BufferSlot::new(42);
 /// Slot index for `right-fringe-width`. Default nil.
-pub const BUFFER_SLOT_RIGHT_FRINGE_WIDTH: BufferSlot = BufferSlot::new(43);
+pub(crate) const BUFFER_SLOT_RIGHT_FRINGE_WIDTH: BufferSlot = BufferSlot::new(43);
 /// Slot index for `fringes-outside-margins`. Default nil.
-pub const BUFFER_SLOT_FRINGES_OUTSIDE_MARGINS: BufferSlot = BufferSlot::new(44);
+pub(crate) const BUFFER_SLOT_FRINGES_OUTSIDE_MARGINS: BufferSlot = BufferSlot::new(44);
 /// Slot index for `scroll-bar-width`. Default nil.
-pub const BUFFER_SLOT_SCROLL_BAR_WIDTH: BufferSlot = BufferSlot::new(45);
+pub(crate) const BUFFER_SLOT_SCROLL_BAR_WIDTH: BufferSlot = BufferSlot::new(45);
 /// Slot index for `scroll-bar-height`. Default nil.
-pub const BUFFER_SLOT_SCROLL_BAR_HEIGHT: BufferSlot = BufferSlot::new(46);
+pub(crate) const BUFFER_SLOT_SCROLL_BAR_HEIGHT: BufferSlot = BufferSlot::new(46);
 /// Slot index for `vertical-scroll-bar`. Default t.
-pub const BUFFER_SLOT_VERTICAL_SCROLL_BAR: BufferSlot = BufferSlot::new(47);
+pub(crate) const BUFFER_SLOT_VERTICAL_SCROLL_BAR: BufferSlot = BufferSlot::new(47);
 /// Slot index for `horizontal-scroll-bar`. Default t.
-pub const BUFFER_SLOT_HORIZONTAL_SCROLL_BAR: BufferSlot = BufferSlot::new(48);
+pub(crate) const BUFFER_SLOT_HORIZONTAL_SCROLL_BAR: BufferSlot = BufferSlot::new(48);
 /// Slot index for `indicate-empty-lines`. Default nil.
-pub const BUFFER_SLOT_INDICATE_EMPTY_LINES: BufferSlot = BufferSlot::new(49);
+pub(crate) const BUFFER_SLOT_INDICATE_EMPTY_LINES: BufferSlot = BufferSlot::new(49);
 /// Slot index for `indicate-buffer-boundaries`. Default nil.
-pub const BUFFER_SLOT_INDICATE_BUFFER_BOUNDARIES: BufferSlot = BufferSlot::new(50);
+pub(crate) const BUFFER_SLOT_INDICATE_BUFFER_BOUNDARIES: BufferSlot = BufferSlot::new(50);
 /// Slot index for `fringe-indicator-alist`. Default nil.
-pub const BUFFER_SLOT_FRINGE_INDICATOR_ALIST: BufferSlot = BufferSlot::new(51);
+pub(crate) const BUFFER_SLOT_FRINGE_INDICATOR_ALIST: BufferSlot = BufferSlot::new(51);
 /// Slot index for `fringe-cursor-alist`. Default nil.
 ///
 /// Cursor audit Finding 14 in `drafts/cursor-audit.md`: this
@@ -271,17 +273,17 @@ pub const BUFFER_SLOT_FRINGE_INDICATOR_ALIST: BufferSlot = BufferSlot::new(51);
 /// `get_logical_cursor_bitmap` to map fringe indicator types to
 /// cursor bitmaps. Wiring it requires the fringe bitmap resolver,
 /// which is itself still mostly stubbed.
-pub const BUFFER_SLOT_FRINGE_CURSOR_ALIST: BufferSlot = BufferSlot::new(52);
+pub(crate) const BUFFER_SLOT_FRINGE_CURSOR_ALIST: BufferSlot = BufferSlot::new(52);
 /// Slot index for `scroll-up-aggressively`. Default nil.
-pub const BUFFER_SLOT_SCROLL_UP_AGGRESSIVELY: BufferSlot = BufferSlot::new(53);
+pub(crate) const BUFFER_SLOT_SCROLL_UP_AGGRESSIVELY: BufferSlot = BufferSlot::new(53);
 /// Slot index for `scroll-down-aggressively`. Default nil.
-pub const BUFFER_SLOT_SCROLL_DOWN_AGGRESSIVELY: BufferSlot = BufferSlot::new(54);
+pub(crate) const BUFFER_SLOT_SCROLL_DOWN_AGGRESSIVELY: BufferSlot = BufferSlot::new(54);
 /// Slot index for `cache-long-scans`. Default t.
-pub const BUFFER_SLOT_CACHE_LONG_SCANS: BufferSlot = BufferSlot::new(55);
+pub(crate) const BUFFER_SLOT_CACHE_LONG_SCANS: BufferSlot = BufferSlot::new(55);
 /// Slot index for `local-abbrev-table`. Default nil.
-pub const BUFFER_SLOT_LOCAL_ABBREV_TABLE: BufferSlot = BufferSlot::new(56);
+pub(crate) const BUFFER_SLOT_LOCAL_ABBREV_TABLE: BufferSlot = BufferSlot::new(56);
 /// Slot index for `buffer-display-table`. Default nil.
-pub const BUFFER_SLOT_BUFFER_DISPLAY_TABLE: BufferSlot = BufferSlot::new(57);
+pub(crate) const BUFFER_SLOT_BUFFER_DISPLAY_TABLE: BufferSlot = BufferSlot::new(57);
 /// Slot index for `buffer-file-coding-system`. Default nil
 /// (permanent).
 pub const BUFFER_SLOT_BUFFER_FILE_CODING_SYSTEM: BufferSlot = BufferSlot::new(58);
@@ -400,7 +402,7 @@ pub struct BufferSlotInfo {
     /// **For conditional slots (`local_flags_idx >= 0`), use
     /// `permanent_local` instead** — conditional slots are reset by
     /// default and `permanent_local: true` opts them out.
-    pub reset_on_kill: bool,
+    pub(crate) reset_on_kill: bool,
     /// Whether this *conditional* slot should be preserved across
     /// `kill-all-local-variables`. Mirrors GNU's
     /// `buffer_permanent_local_flags[idx]` table
@@ -410,7 +412,7 @@ pub struct BufferSlotInfo {
     ///
     /// For always-local slots this field is ignored — always-local
     /// slots are governed by `reset_on_kill`.
-    pub permanent_local: bool,
+    pub(crate) permanent_local: bool,
     /// GNU `buffer_local_flags` index. Mirrors `buffer.c:4703-4791`:
     /// - `-1`: always-local — every buffer has its own value, the
     ///   slot is authoritative without consulting `local_flags`.
@@ -1347,7 +1349,8 @@ pub const DISPLAY_AFFECTING_GLOBAL_VARS: &[&str] = &[
 /// truth queried by the `set`/`set-default`/buffer-local-set chokepoint
 /// so the answer is identical no matter which write path is taken
 /// (the tree-walk interpreter, the bytecode VM, `set-default`, custom).
-pub fn variable_affects_display(name: &str) -> bool {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn variable_affects_display(name: &str) -> bool {
     static DISPLAY_VAR_SET: OnceLock<FxHashMap<&'static str, ()>> = OnceLock::new();
     DISPLAY_VAR_SET
         .get_or_init(|| {
@@ -1945,7 +1948,7 @@ impl MarkerRef {
 
     /// Whether the marker is still spliced into a chain.
     #[inline]
-    pub fn is_chained(self) -> bool {
+    pub(crate) fn is_chained(self) -> bool {
         match self.0 {
             // SAFETY: see `anchor`.
             Some(ptr) => unsafe { (*ptr.as_ptr()).data.chained() },
@@ -2209,10 +2212,6 @@ impl AccessibleBufferRegionSnapshot {
         TextPositionAnchor::new(self.end_char, self.end_emacs_byte)
     }
 
-    pub fn start_emacs_byte(self) -> EmacsBytePos {
-        self.start_emacs_byte
-    }
-
     pub fn end_emacs_byte(self) -> EmacsBytePos {
         self.end_emacs_byte
     }
@@ -2225,10 +2224,11 @@ pub enum LabeledRestrictionLabel {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct LabeledRestriction {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) struct LabeledRestriction {
     pub label: LabeledRestrictionLabel,
-    pub beg_marker: MarkerRef,
-    pub end_marker: MarkerRef,
+    pub(crate) beg_marker: MarkerRef,
+    pub(crate) end_marker: MarkerRef,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -2244,7 +2244,7 @@ pub enum SavedRestrictionKind {
 pub struct SavedRestrictionState {
     pub buffer_id: BufferId,
     pub restriction: SavedRestrictionKind,
-    pub labeled_restrictions: SavedLabeledRestrictions,
+    pub(crate) labeled_restrictions: SavedLabeledRestrictions,
 }
 
 /// The labeled-restriction stack a `save-restriction` entry saved, as GNU's
@@ -2266,7 +2266,8 @@ pub struct SavedRestrictionState {
 /// or thread-local cache.
 #[repr(transparent)]
 #[derive(Clone, Debug, PartialEq)]
-pub struct SavedLabeledRestrictions(mem::ManuallyDrop<Option<Vec<LabeledRestriction>>>);
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) struct SavedLabeledRestrictions(mem::ManuallyDrop<Option<Vec<LabeledRestriction>>>);
 
 impl SavedLabeledRestrictions {
     /// The saved restrictions, outermost first, or `None` when the buffer had
@@ -2299,6 +2300,12 @@ impl Drop for SavedLabeledRestrictions {
 }
 
 impl SavedRestrictionState {
+    /// Test-facing access to the labeled-restriction stack this entry saved.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn labeled_restrictions(&self) -> &SavedLabeledRestrictions {
+        &self.labeled_restrictions
+    }
+
     pub fn trace_roots(&self, roots: &mut Vec<Value>) {
         if let Some(restrictions) = self.labeled_restrictions.as_slice() {
             for restriction in restrictions {
@@ -2350,7 +2357,7 @@ impl SavedRestrictionState {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct OutermostRestrictionResetState {
-    pub affected_buffers: Vec<BufferId>,
+    pub(crate) affected_buffers: Vec<BufferId>,
 }
 
 /// Complete buffer state reconstructed from a pdump image.
@@ -2685,7 +2692,7 @@ const NO_OVERLAY_CONTENT_DIGEST: u64 = 0x4e6f_4469_6765_7374;
 /// on `set-syntax-table`, which is exactly the class of silent staleness that
 /// makes a cache worse than no cache.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct AutomaticCompositionKey {
+pub(crate) struct AutomaticCompositionKey {
     chars_tick: i64,
     props_tick: i64,
     table: usize,
@@ -2697,7 +2704,7 @@ pub struct AutomaticCompositionKey {
 /// write tick for edits of it or of the syntax and category tables), the
 /// buffer's syntax and category tables, and the scanned range.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct AutomaticCompositionVisibleKey {
+pub(crate) struct AutomaticCompositionVisibleKey {
     chars_tick: i64,
     props_tick: i64,
     table: usize,
@@ -2830,7 +2837,8 @@ impl Buffer {
         )
     }
 
-    pub fn try_new_with_text_backend_kind(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn try_new_with_text_backend_kind(
         id: BufferId,
         name: Value,
         text_backend_kind: BufferTextBackendKind,
@@ -2862,7 +2870,8 @@ impl Buffer {
     }
 
     /// [`Buffer::new_standalone`] with an explicit text backend.
-    pub fn try_new_standalone_with_text_backend_kind(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn try_new_standalone_with_text_backend_kind(
         id: BufferId,
         name: Value,
         text_backend_kind: BufferTextBackendKind,
@@ -3068,7 +3077,8 @@ impl Buffer {
             .expect("buffer name must be a Lisp string")
     }
 
-    pub fn has_name(&self, name: &str) -> bool {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn has_name(&self, name: &str) -> bool {
         // Compare the bytes: `get-buffer' asks every buffer, and decoding each
         // name into a fresh `String' made that ~10x GNU.  A name that is
         // valid UTF-8 decodes to itself, so only a raw-byte name still needs
@@ -3119,7 +3129,7 @@ impl Buffer {
     /// Mirror the final object-state mutations in GNU `Fkill_buffer`:
     /// reset local state first, then move `name` to `last_name` and leave
     /// the buffer object addressable but not live.
-    pub fn mark_killed_after_local_reset(&mut self) {
+    pub(crate) fn mark_killed_after_local_reset(&mut self) {
         let old_name = self.name;
         debug_assert!(old_name.is_string());
         self.last_name = old_name;
@@ -3148,13 +3158,9 @@ impl Buffer {
         self.goto_emacs_byte_pos(EmacsBytePos::new(0));
     }
 
-    pub fn set_last_name_value(&mut self, name: Value) {
+    pub(crate) fn set_last_name_value(&mut self, name: Value) {
         debug_assert!(name.is_nil() || name.is_string());
         self.last_name = name;
-    }
-
-    pub fn set_name_runtime_string(&mut self, name: impl Into<String>) {
-        self.name = Value::string(name.into());
     }
 
     // -- Phase 10D: per-slot local-flag bitmap accessors. Conditional
@@ -3218,7 +3224,8 @@ impl Buffer {
 
     /// Write `buffer-file-name`. Mirrors GNU `bset_filename`
     /// (`buffer.c`). The slot stores either a Lisp string or `nil`.
-    pub fn set_file_name_value(&mut self, v: Value) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn set_file_name_value(&mut self, v: Value) {
         assert!(
             v.is_nil() || v.is_string(),
             "buffer-file-name must be nil or a Lisp string"
@@ -3234,7 +3241,8 @@ impl Buffer {
 
     /// Clone `buffer-auto-save-file-name` as an owned runtime string.
     /// This is a boundary helper for filesystem-facing code.
-    pub fn auto_save_file_name_runtime_string_owned(&self) -> Option<String> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn auto_save_file_name_runtime_string_owned(&self) -> Option<String> {
         self.auto_save_file_name_lisp_string()
             .map(|ls| neovm_value::emacs_char::to_utf8_lossy(ls.as_bytes()))
     }
@@ -3285,7 +3293,8 @@ impl Buffer {
 
     /// Write `enable-multibyte-characters`. `true` stores
     /// `Value::T`, `false` stores `Value::NIL`.
-    pub fn set_multibyte_value(&mut self, v: bool) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn set_multibyte_value(&mut self, v: bool) {
         self.text.set_multibyte(v);
         self.slots[BUFFER_SLOT_ENABLE_MULTIBYTE_CHARACTERS.index()] =
             if v { Value::T } else { Value::NIL };
@@ -3304,12 +3313,12 @@ impl Buffer {
     }
 
     /// Beginning of the accessible portion as a paired character/byte anchor.
-    pub fn point_min_anchor(&self) -> TextPositionAnchor {
+    pub(crate) fn point_min_anchor(&self) -> TextPositionAnchor {
         TextPositionAnchor::new(self.point_min_char_pos(), self.point_min_emacs_byte_pos())
     }
 
     /// End of the accessible portion as a paired character/byte anchor.
-    pub fn point_max_anchor(&self) -> TextPositionAnchor {
+    pub(crate) fn point_max_anchor(&self) -> TextPositionAnchor {
         TextPositionAnchor::new(self.point_max_char_pos(), self.point_max_emacs_byte_pos())
     }
 
@@ -3320,7 +3329,8 @@ impl Buffer {
     /// can restore them atomically.  The active text backend still recomputes
     /// the authoritative character coordinate from the restored byte
     /// coordinate, and debug builds verify that the saved pair was coherent.
-    pub fn set_point_anchor(&mut self, point: TextPositionAnchor) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn set_point_anchor(&mut self, point: TextPositionAnchor) {
         let requested_byte = point.emacs_byte_pos();
         let restored = self.accessible_anchor_for_emacs_byte_pos(requested_byte);
         self.set_point_anchor_unchecked(restored);
@@ -3453,7 +3463,8 @@ impl Buffer {
         self.text.is_empty()
     }
 
-    pub fn full_text_string(&self) -> String {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn full_text_string(&self) -> String {
         self.text.full_text_string()
     }
 
@@ -3970,7 +3981,7 @@ impl Buffer {
             .text_props_get_properties_at_emacs_byte_pos(self.clamped_emacs_byte_pos(pos))
     }
 
-    pub fn text_props_get_properties_ordered_at_emacs_byte_pos(
+    pub(crate) fn text_props_get_properties_ordered_at_emacs_byte_pos(
         &self,
         pos: EmacsBytePos,
     ) -> Vec<(Value, Value)> {
@@ -3978,7 +3989,7 @@ impl Buffer {
             .text_props_get_properties_ordered_at_emacs_byte_pos(self.clamped_emacs_byte_pos(pos))
     }
 
-    pub fn text_props_get_properties_plist_value_at_emacs_byte_pos(
+    pub(crate) fn text_props_get_properties_plist_value_at_emacs_byte_pos(
         &self,
         pos: EmacsBytePos,
     ) -> Value {
@@ -4001,7 +4012,7 @@ impl Buffer {
         )
     }
 
-    pub fn text_props_remove_properties_in_emacs_byte_range(
+    pub(crate) fn text_props_remove_properties_in_emacs_byte_range(
         &mut self,
         range: EmacsByteRange,
         names: &[Value],
@@ -4012,7 +4023,8 @@ impl Buffer {
         )
     }
 
-    pub fn text_props_remove_property_in_emacs_byte_range(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn text_props_remove_property_in_emacs_byte_range(
         &mut self,
         range: EmacsByteRange,
         name: Value,
@@ -4021,11 +4033,6 @@ impl Buffer {
             self.clamped_emacs_byte_range(range),
             name,
         )
-    }
-
-    pub fn text_props_remove_all_in_emacs_byte_range(&mut self, range: EmacsByteRange) {
-        self.text
-            .text_props_remove_all_in_emacs_byte_range(self.clamped_emacs_byte_range(range));
     }
 
     /// The first position in `range` whose text-property interval
@@ -4042,7 +4049,7 @@ impl Buffer {
 
     /// The first position in `range` whose text-property interval
     /// `differs` (see [`TextPropertyTable::first_char_pos_where`]).
-    pub fn text_props_first_char_pos_where_in_emacs_byte_range(
+    pub(crate) fn text_props_first_char_pos_where_in_emacs_byte_range(
         &self,
         range: EmacsByteRange,
         differs: impl FnMut(Value) -> bool,
@@ -4076,7 +4083,7 @@ impl Buffer {
 
     /// The next property change after `pos` strictly before the character
     /// position `bound`, or `None`.
-    pub fn text_props_next_change_after_emacs_byte_pos_before(
+    pub(crate) fn text_props_next_change_after_emacs_byte_pos_before(
         &self,
         pos: EmacsBytePos,
         bound: CharPos0,
@@ -4137,7 +4144,7 @@ impl Buffer {
     }
 
     /// See `TextPropertyTable::for_each_interval_from_char_pos`.
-    pub fn text_props_for_each_interval_from_char_pos<F>(&self, pos: CharPos0, f: F)
+    pub(crate) fn text_props_for_each_interval_from_char_pos<F>(&self, pos: CharPos0, f: F)
     where
         F: FnMut(CharPos0, CharPos0, Value) -> bool,
     {
@@ -4145,7 +4152,7 @@ impl Buffer {
             .text_props_for_each_interval_from_char_pos(pos.min(self.total_char_end_pos()), f)
     }
 
-    pub fn text_props_next_interval_boundary_after_emacs_byte_pos(
+    pub(crate) fn text_props_next_interval_boundary_after_emacs_byte_pos(
         &self,
         pos: EmacsBytePos,
     ) -> Option<EmacsBytePos> {
@@ -4155,7 +4162,7 @@ impl Buffer {
             )
     }
 
-    pub fn text_props_previous_interval_boundary_before_emacs_byte_pos(
+    pub(crate) fn text_props_previous_interval_boundary_before_emacs_byte_pos(
         &self,
         pos: EmacsBytePos,
     ) -> Option<EmacsBytePos> {
@@ -4195,7 +4202,10 @@ impl Buffer {
         self.text.text_props_replace(props);
     }
 
-    pub fn text_props_slice_emacs_byte_range(&self, range: EmacsByteRange) -> TextPropertyTable {
+    pub(crate) fn text_props_slice_emacs_byte_range(
+        &self,
+        range: EmacsByteRange,
+    ) -> TextPropertyTable {
         let clamped = self.clamped_emacs_byte_range(range);
         self.text.text_props_slice_emacs_byte_range(clamped)
     }
@@ -4232,12 +4242,7 @@ impl Buffer {
         });
     }
 
-    pub fn emacs_byte_range_contains_char_code(&self, range: EmacsByteRange, code: u32) -> bool {
-        self.text
-            .emacs_byte_range_contains_char_code(self.clamped_emacs_byte_range(range), code)
-    }
-
-    pub fn text_props_range_has_any_property_named_in_emacs_byte_range(
+    pub(crate) fn text_props_range_has_any_property_named_in_emacs_byte_range(
         &self,
         range: EmacsByteRange,
         names: &[Value],
@@ -4249,7 +4254,7 @@ impl Buffer {
             )
     }
 
-    pub fn text_props_range_has_all_properties_in_emacs_byte_range(
+    pub(crate) fn text_props_range_has_all_properties_in_emacs_byte_range(
         &self,
         range: EmacsByteRange,
         properties: &[(Value, Value)],
@@ -4261,7 +4266,7 @@ impl Buffer {
             )
     }
 
-    pub fn text_props_range_has_any_interval_in_emacs_byte_range(
+    pub(crate) fn text_props_range_has_any_interval_in_emacs_byte_range(
         &self,
         range: EmacsByteRange,
     ) -> bool {
@@ -4625,7 +4630,8 @@ impl Buffer {
     /// and `ZV`/`ZV_BYTE` are paired coordinates.  Callers provide byte
     /// positions; the active text backend recomputes the matching character
     /// positions.
-    pub fn set_accessible_region_and_point_from_emacs_bytes(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn set_accessible_region_and_point_from_emacs_bytes(
         &mut self,
         range: EmacsByteRange,
         point: EmacsBytePos,
@@ -4648,7 +4654,8 @@ impl Buffer {
         }
     }
 
-    pub fn restore_accessible_region(&mut self, snapshot: AccessibleBufferRegionSnapshot) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn restore_accessible_region(&mut self, snapshot: AccessibleBufferRegionSnapshot) {
         self.note_mode_line_restriction_change(snapshot.start_anchor(), snapshot.end_anchor());
         self.set_accessible_region_anchors_unchecked(
             snapshot.start_anchor(),
@@ -4657,7 +4664,8 @@ impl Buffer {
         self.goto_emacs_byte_pos(self.point_emacs_byte_pos());
     }
 
-    pub fn restore_accessible_region_with_current_full_end(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn restore_accessible_region_with_current_full_end(
         &mut self,
         snapshot: AccessibleBufferRegionSnapshot,
     ) {
@@ -4672,7 +4680,8 @@ impl Buffer {
         self.goto_emacs_byte_pos(self.point_emacs_byte_pos());
     }
 
-    pub fn register_marker_at_emacs_byte_pos(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn register_marker_at_emacs_byte_pos(
         &mut self,
         marker_ptr: *mut neovm_value::tagged::header::MarkerObj,
         pos: EmacsBytePos,
@@ -4682,7 +4691,7 @@ impl Buffer {
         self.register_marker_at_anchor(marker_ptr, position, insertion_type);
     }
 
-    pub fn register_marker_at_anchor(
+    pub(crate) fn register_marker_at_anchor(
         &mut self,
         marker_ptr: *mut neovm_value::tagged::header::MarkerObj,
         position: TextPositionAnchor,
@@ -4763,15 +4772,12 @@ impl Buffer {
         self.marker_anchor_for_emacs_byte_pos(position.emacs_byte_pos())
     }
 
-    pub fn remove_marker_entry(&mut self, marker: MarkerRef) {
+    pub(crate) fn remove_marker_entry(&mut self, marker: MarkerRef) {
         let _ = self.text.remove_marker_ptr(marker.as_ptr());
     }
 
-    pub fn has_marker(&self, marker: MarkerRef) -> bool {
-        self.text.has_marker_ptr(marker.as_ptr())
-    }
-
-    pub fn marker_chain_anchor_lookup(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn marker_chain_anchor_lookup(
         &self,
         marker: MarkerRef,
     ) -> Option<(TextPositionAnchor, InsertionType)> {
@@ -4817,14 +4823,15 @@ impl Buffer {
         contains
     }
 
-    pub fn marker_value(&self, marker: MarkerRef) -> Option<Value> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn marker_value(&self, marker: MarkerRef) -> Option<Value> {
         if marker.is_null() || !self.text.has_marker_ptr(marker.as_ptr()) {
             return None;
         }
         marker.as_value()
     }
 
-    pub fn unlink_marker_ptr(&self, ptr: *mut neovm_value::tagged::header::MarkerObj) {
+    pub(crate) fn unlink_marker_ptr(&self, ptr: *mut neovm_value::tagged::header::MarkerObj) {
         self.text.chain_unlink(ptr);
     }
 
@@ -4839,7 +4846,7 @@ impl Buffer {
     /// The anchor is canonicalised exactly as `register_marker_at_anchor`
     /// does, so the in-place and the re-chaining path cannot disagree about
     /// where a given byte position lands.
-    pub fn move_marker_ptr_to_emacs_byte_pos(
+    pub(crate) fn move_marker_ptr_to_emacs_byte_pos(
         &self,
         marker_ptr: *mut neovm_value::tagged::header::MarkerObj,
         pos: EmacsBytePos,
@@ -4854,7 +4861,8 @@ impl Buffer {
     // through the buffer's marker chain and auto-adjusts on edits.
 
     /// Set the mark to Emacs-byte position `pos`, creating the marker if needed.
-    pub fn set_mark_emacs_byte_pos(&mut self, pos: EmacsBytePos) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn set_mark_emacs_byte_pos(&mut self, pos: EmacsBytePos) {
         let position = self.marker_anchor_for_emacs_byte_pos(pos);
         if self.mark_marker.is_null() {
             // Create the marker eagerly and register in the chain so it
@@ -4920,11 +4928,6 @@ impl Buffer {
             return None;
         }
         self.mark_marker.anchor().map(TextPositionAnchor::char_pos)
-    }
-
-    /// Deactivate the mark.
-    pub fn clear_mark(&mut self) {
-        self.mark_marker = MarkerRef::NONE;
     }
 
     /// GNU `buffer_visited_file_modtime (current_buffer)`
@@ -5014,7 +5017,8 @@ impl Buffer {
 
     /// Record a text-property modification on this buffer (advances
     /// `props_modified_tick` + `modified_tick`, not `chars_modified_tick`).
-    pub fn record_text_property_modification(&mut self) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn record_text_property_modification(&mut self) {
         self.text.record_text_property_modification();
     }
 
@@ -5025,7 +5029,7 @@ impl Buffer {
     /// font-lock's per-keystroke refontification as a bounded dirty span
     /// instead of escalating the whole window to a Full rebuild. A property
     /// change never moves characters, so `old_z` is the current char count.
-    pub fn note_changed_property_region(&self, byte_range: EmacsByteRange) {
+    pub(crate) fn note_changed_property_region(&self, byte_range: EmacsByteRange) {
         let range = self.text.byte_range_to_char_range(byte_range);
         let z = self.text.char_count().get() as i64;
         self.text
@@ -5162,7 +5166,8 @@ impl Buffer {
     ///
     /// NOT memoized: the range moves with the window, so a memo keyed on the
     /// buffer alone would answer a different question than the one asked.
-    pub fn automatic_composition_spans_visible(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn automatic_composition_spans_visible(
         &self,
         composition_function_table: Value,
         first_char: usize,
@@ -5250,7 +5255,7 @@ impl Buffer {
         spans
     }
 
-    pub fn increment_overlay_modified_tick(&mut self) {
+    pub(crate) fn increment_overlay_modified_tick(&mut self) {
         self.overlay_modified_tick = self.overlay_modified_tick.wrapping_add(1);
     }
 
@@ -5270,7 +5275,8 @@ impl Buffer {
         }
     }
 
-    pub fn recent_auto_save_p(&self) -> bool {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn recent_auto_save_p(&self) -> bool {
         self.save_modified_tick() < self.autosave_modified_tick
     }
 
@@ -5284,7 +5290,8 @@ impl Buffer {
         }
     }
 
-    pub fn restore_modified_state(&mut self, flag: Value) -> Value {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn restore_modified_state(&mut self, flag: Value) -> Value {
         if flag.is_nil() {
             self.text.set_save_modified_tick(self.modified_tick());
         } else {
@@ -5298,7 +5305,7 @@ impl Buffer {
         flag
     }
 
-    pub fn mark_auto_saved(&mut self) {
+    pub(crate) fn mark_auto_saved(&mut self) {
         self.autosave_modified_tick = self.modified_tick();
     }
 
@@ -5353,16 +5360,8 @@ impl Buffer {
         self.local_var_alist.set(sym_id, value);
     }
 
-    /// Mark a per-buffer binding as void. Slot-backed names reset
-    /// to nil; `buffer-undo-list` clears the undo state; all other
-    /// names drop their entry from `local_var_alist` entirely.
-    /// GNU doesn't have a true "void per-buffer binding" — removing
-    /// the alist entry is the closest equivalent.
-    pub fn set_buffer_local_void(&mut self, name: &str) {
-        self.set_buffer_local_void_by_sym_id(intern(name));
-    }
-
-    pub fn set_buffer_local_void_by_sym_id(&mut self, sym_id: SymId) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn set_buffer_local_void_by_sym_id(&mut self, sym_id: SymId) {
         if let Some(info) = lookup_buffer_slot_by_sym_id(sym_id) {
             self.slots[info.offset.index()] = Value::NIL;
             return;
@@ -5378,7 +5377,8 @@ impl Buffer {
     /// Drop a per-buffer binding. Returns the previous binding if
     /// one existed. Mirrors the non-special path of GNU
     /// `Fkill_local_variable` (`data.c:2314-2378`).
-    pub fn kill_buffer_local(&mut self, name: &str) -> Option<RuntimeBindingValue> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn kill_buffer_local(&mut self, name: &str) -> Option<RuntimeBindingValue> {
         self.kill_buffer_local_by_sym_id(intern(name))
     }
 
@@ -5581,7 +5581,7 @@ impl Buffer {
     /// Used by Phase 10E callers that need to look up per-buffer
     /// values for LOCALIZED symbols without going through the
     /// obarray's BLV swap-in.
-    pub fn find_in_local_var_alist(&self, key: Value) -> Option<Value> {
+    pub(crate) fn find_in_local_var_alist(&self, key: Value) -> Option<Value> {
         if let Some(sym_id) = key.as_bare_symbol_id() {
             return self.local_var_alist.value(sym_id);
         }
@@ -5644,10 +5644,6 @@ impl Buffer {
         })
     }
 
-    pub fn has_buffer_local(&self, name: &str) -> bool {
-        self.has_buffer_local_by_sym_id(intern(name))
-    }
-
     pub fn has_buffer_local_by_sym_id(&self, sym_id: SymId) -> bool {
         self.has_buffer_local_by_sym_id_gated(sym_id, true)
     }
@@ -5688,7 +5684,7 @@ impl Buffer {
         self.keymap
     }
 
-    pub fn set_local_map(&mut self, keymap: Value) {
+    pub(crate) fn set_local_map(&mut self, keymap: Value) {
         self.keymap = keymap;
     }
 
@@ -5851,38 +5847,9 @@ impl Buffer {
             .map(|(sym_id, _)| sym_id)
             .collect()
     }
-
-    /// Walk the buffer's `local_var_alist` yielding a mutable
-    /// reference into each entry's value via the cons cell's cdr
-    /// field. Used by the GC-root visitor pipeline to avoid
-    /// traversing the alist twice.
-    pub fn bound_buffer_local_values_mut(&mut self) -> impl Iterator<Item = &mut Value> {
-        // In the new design, local_var_alist IS the source of truth
-        // for non-slot per-buffer bindings. Its cons cells are
-        // already GC-traced via `Buffer::trace_roots` walking
-        // `self.local_var_alist`, so nothing else needs a mutable
-        // visitor. Keep the method signature for API compatibility
-        // but return an empty iterator — the roots are reached
-        // through the alist walk in `trace_roots`.
-        std::iter::empty()
-    }
 }
 
 impl Buffer {
-    pub fn buffer_local_bound_p(&self, name: &str) -> bool {
-        matches!(
-            self.get_buffer_local_binding(name),
-            Some(RuntimeBindingValue::Bound(_))
-        )
-    }
-
-    pub fn buffer_local_void_p(&self, name: &str) -> bool {
-        matches!(
-            self.get_buffer_local_binding(name),
-            Some(RuntimeBindingValue::Void)
-        )
-    }
-
     pub(in crate::buffer) fn set_text_properties_with_undo_range(
         &mut self,
         byte_range: EmacsByteRange,
@@ -7099,7 +7066,8 @@ impl BufferManager {
     /// This mirrors GNU Emacs's `make-indirect-buffer` C boundary:
     /// indirect buffers share the root base buffer's text object, and double
     /// indirection is flattened so every indirect points at the same root.
-    pub fn create_indirect_buffer(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn create_indirect_buffer(
         &mut self,
         base_id: BufferId,
         name: &str,
@@ -7108,7 +7076,7 @@ impl BufferManager {
         self.create_indirect_buffer_with_hook_inhibition(base_id, name, clone, false)
     }
 
-    pub fn create_indirect_buffer_with_hook_inhibition(
+    pub(crate) fn create_indirect_buffer_with_hook_inhibition(
         &mut self,
         base_id: BufferId,
         name: &str,
@@ -7263,8 +7231,9 @@ impl BufferManager {
         self.buffers.get(&id)
     }
 
+    #[cfg(test)]
     /// Immutable access to a killed buffer by id.
-    pub fn get_dead(&self, id: BufferId) -> Option<&Buffer> {
+    pub(crate) fn get_dead(&self, id: BufferId) -> Option<&Buffer> {
         self.dead_buffers.get(&id)
     }
 
@@ -7523,19 +7492,6 @@ impl BufferManager {
             .map(|b| b.id)
     }
 
-    /// Find a killed buffer by its last known name.
-    pub fn find_dead_buffer_by_name(&self, name: &str) -> Option<BufferId> {
-        self.dead_buffers.iter().find_map(|(id, buffer)| {
-            (buffer
-                .last_name_value()
-                .as_lisp_string()
-                .map(|ls| neovm_value::emacs_char::to_utf8_lossy(ls.as_bytes()))
-                .as_deref()
-                == Some(name))
-            .then_some(*id)
-        })
-    }
-
     /// Remove a buffer.  Returns `true` if the buffer existed.
     ///
     /// If the killed buffer was current, `current` is set to `None`.
@@ -7751,18 +7707,29 @@ impl BufferManager {
         Some(EmacsByteRange::new(beg, end))
     }
 
-    pub fn current_labeled_restriction_bounds(&self, id: BufferId) -> Option<EmacsByteRange> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn current_labeled_restriction_bounds(
+        &self,
+        id: BufferId,
+    ) -> Option<EmacsByteRange> {
         self.labeled_restriction_emacs_byte_range(id, false)
     }
 
-    pub fn current_labeled_restriction_char_bounds(&self, id: BufferId) -> Option<CharRange> {
+    pub(crate) fn current_labeled_restriction_char_bounds(
+        &self,
+        id: BufferId,
+    ) -> Option<CharRange> {
         let restriction = self.labeled_restriction_at(id, false)?;
         let beg = self.marker_char_pos(restriction.beg_marker)?;
         let end = self.marker_char_pos(restriction.end_marker)?;
         Some(CharRange::new(beg, end))
     }
 
-    pub fn current_labeled_restriction_matches_label(&self, id: BufferId, label: &Value) -> bool {
+    pub(crate) fn current_labeled_restriction_matches_label(
+        &self,
+        id: BufferId,
+        label: &Value,
+    ) -> bool {
         let Some(restriction) = self.labeled_restriction_at(id, false) else {
             return false;
         };
@@ -7998,7 +7965,8 @@ impl BufferManager {
         Some(())
     }
 
-    pub fn delete_buffer_overlay(&mut self, id: BufferId, overlay_id: Value) -> Option<()> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn delete_buffer_overlay(&mut self, id: BufferId, overlay_id: Value) -> Option<()> {
         let changed = self
             .storage_mut()
             .buffers
@@ -8011,7 +7979,8 @@ impl BufferManager {
         Some(())
     }
 
-    pub fn put_buffer_overlay_property(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn put_buffer_overlay_property(
         &mut self,
         id: BufferId,
         overlay_id: Value,
@@ -8039,7 +8008,8 @@ impl BufferManager {
         Some(())
     }
 
-    pub fn narrow_buffer_to_emacs_byte_range(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn narrow_buffer_to_emacs_byte_range(
         &mut self,
         id: BufferId,
         range: EmacsByteRange,
@@ -8052,7 +8022,8 @@ impl BufferManager {
         Some(())
     }
 
-    pub fn widen_buffer(&mut self, id: BufferId) -> Option<()> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn widen_buffer(&mut self, id: BufferId) -> Option<()> {
         self.buffers.get(&id)?;
         let Some(restriction) = self.labeled_restriction_at(id, false).copied() else {
             return self.widen_buffer_fully(id);
@@ -8134,7 +8105,8 @@ impl BufferManager {
         Some(())
     }
 
-    pub fn put_buffer_text_property_in_emacs_byte_range(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn put_buffer_text_property_in_emacs_byte_range(
         &mut self,
         id: BufferId,
         byte_range: EmacsByteRange,
@@ -8161,7 +8133,7 @@ impl BufferManager {
         Some(buf.text_props_put_property_in_emacs_byte_range(byte_range, name, value))
     }
 
-    pub fn append_buffer_text_properties(
+    pub(crate) fn append_buffer_text_properties(
         &mut self,
         id: BufferId,
         table: &TextPropertyTable,
@@ -8175,7 +8147,7 @@ impl BufferManager {
         Some(())
     }
 
-    pub fn merge_missing_buffer_text_properties(
+    pub(crate) fn merge_missing_buffer_text_properties(
         &mut self,
         id: BufferId,
         table: &TextPropertyTable,
@@ -8189,7 +8161,7 @@ impl BufferManager {
         Some(())
     }
 
-    pub fn merge_adjacent_equal_buffer_text_properties(
+    pub(crate) fn merge_adjacent_equal_buffer_text_properties(
         &mut self,
         id: BufferId,
         byte_range: EmacsByteRange,
@@ -8207,7 +8179,7 @@ impl BufferManager {
     /// undo-run walk and one interval walk cover every name. Undo entries
     /// for distinct names commute, so per-run interleaving is equivalent
     /// to the per-name sequential order.
-    pub fn remove_buffer_text_properties_in_emacs_byte_range(
+    pub(crate) fn remove_buffer_text_properties_in_emacs_byte_range(
         &mut self,
         id: BufferId,
         byte_range: EmacsByteRange,
@@ -8226,36 +8198,6 @@ impl BufferManager {
         Some(buf.text_props_remove_properties_in_emacs_byte_range(byte_range, names))
     }
 
-    pub fn remove_buffer_text_property_in_emacs_byte_range(
-        &mut self,
-        id: BufferId,
-        byte_range: EmacsByteRange,
-        name: Value,
-    ) -> Option<bool> {
-        let buf = self.storage_mut().buffers.get_mut(&id)?;
-        let entries = buffer_text_property_undo_runs(buf, byte_range)
-            .into_iter()
-            .filter_map(|run| {
-                plist_get_eq(&run.plist, name)
-                    .map(|old_value| TextPropertyUndoEntry::new(name, old_value, run.range))
-            })
-            .collect();
-        record_buffer_text_property_undo_entries(buf, entries);
-        Some(buf.text_props_remove_property_in_emacs_byte_range(byte_range, name))
-    }
-
-    pub fn clear_buffer_text_properties_in_emacs_byte_range(
-        &mut self,
-        id: BufferId,
-        byte_range: EmacsByteRange,
-    ) -> Option<()> {
-        self.storage_mut()
-            .buffers
-            .get_mut(&id)?
-            .set_text_properties_with_undo_range(byte_range, Vec::new());
-        Some(())
-    }
-
     /// Char-range variant: the caller already knows the inserted char range, so
     /// this skips the byte->char conversion done by the byte-range version.
     #[doc(hidden)]
@@ -8272,7 +8214,7 @@ impl BufferManager {
         Some(())
     }
 
-    pub fn set_buffer_text_properties_in_emacs_byte_range(
+    pub(crate) fn set_buffer_text_properties_in_emacs_byte_range(
         &mut self,
         id: BufferId,
         byte_range: EmacsByteRange,
@@ -8285,7 +8227,7 @@ impl BufferManager {
         Some(())
     }
 
-    pub fn record_buffer_text_property_modification(
+    pub(crate) fn record_buffer_text_property_modification(
         &mut self,
         id: BufferId,
         byte_range: EmacsByteRange,
@@ -8325,7 +8267,11 @@ impl BufferManager {
         Some(())
     }
 
-    pub fn restore_buffer_modified_state(&mut self, id: BufferId, flag: Value) -> Option<Value> {
+    pub(crate) fn restore_buffer_modified_state(
+        &mut self,
+        id: BufferId,
+        flag: Value,
+    ) -> Option<Value> {
         let root_id = self.modified_state_root_id(id)?;
         let out = self
             .storage_mut()
@@ -8340,7 +8286,7 @@ impl BufferManager {
         Some(())
     }
 
-    pub fn set_buffer_modified_tick(&mut self, id: BufferId, tick: i64) -> Option<()> {
+    pub(crate) fn set_buffer_modified_tick(&mut self, id: BufferId, tick: i64) -> Option<()> {
         let root_id = self.modified_state_root_id(id)?;
         let buf = self.storage_mut().buffers.get_mut(&root_id)?;
         buf.text.set_modified_tick(tick);
@@ -8359,18 +8305,15 @@ impl BufferManager {
         Some(())
     }
 
-    pub fn set_buffer_file_truename(&mut self, id: BufferId, file_truename: Value) -> Option<()> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn set_buffer_file_truename(
+        &mut self,
+        id: BufferId,
+        file_truename: Value,
+    ) -> Option<()> {
         debug_assert!(file_truename.is_nil() || file_truename.is_string());
         let buf = self.storage_mut().buffers.get_mut(&id)?;
         buf.slots[BUFFER_SLOT_FILE_TRUENAME.index()] = file_truename;
-        Some(())
-    }
-
-    pub fn set_buffer_name(&mut self, id: BufferId, name: Value) -> Option<()> {
-        self.storage_mut()
-            .buffers
-            .get_mut(&id)?
-            .set_name_value(name);
         Some(())
     }
 
@@ -8414,7 +8357,8 @@ impl BufferManager {
         Some(())
     }
 
-    pub fn move_buffer_overlay_to_emacs_byte_range(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn move_buffer_overlay_to_emacs_byte_range(
         &mut self,
         id: BufferId,
         overlay_id: Value,
@@ -8483,7 +8427,8 @@ impl BufferManager {
             .unwrap_or(Value::NIL)
     }
 
-    pub fn set_buffer_local_map(&mut self, id: BufferId, keymap: Value) -> Option<()> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn set_buffer_local_map(&mut self, id: BufferId, keymap: Value) -> Option<()> {
         self.storage_mut()
             .buffers
             .get_mut(&id)?
@@ -8494,14 +8439,6 @@ impl BufferManager {
     pub fn set_current_local_map(&mut self, keymap: Value) -> Option<()> {
         let id = self.current?;
         self.set_buffer_local_map(id, keymap)
-    }
-
-    pub fn set_buffer_local_void_property(&mut self, id: BufferId, name: &str) -> Option<()> {
-        self.storage_mut()
-            .buffers
-            .get_mut(&id)?
-            .set_buffer_local_void(name);
-        Some(())
     }
 
     pub fn set_buffer_local_void_property_by_sym_id(
@@ -8786,7 +8723,7 @@ impl BufferManager {
     /// `make_indirect_buffer`, src/buffer.c:894, and re-syncs the pair on every
     /// buffer switch in `set_buffer_internal_2`, src/buffer.c:2352-2367), so an
     /// unconditional reset here erased the BASE buffer's history.
-    pub fn enable_buffer_undo(&mut self, id: BufferId) -> Option<()> {
+    pub(crate) fn enable_buffer_undo(&mut self, id: BufferId) -> Option<()> {
         let undo_list = self.buffers.get(&id)?.get_undo_list();
         match undo::UndoRecording::of(&undo_list) {
             undo::UndoRecording::Disabled => self.configure_buffer_undo_list(id, Value::NIL),
@@ -8814,7 +8751,12 @@ impl BufferManager {
 
     /// Generate a unique buffer name, allowing `ignore` to be reused even if
     /// a live buffer already owns that name.
-    pub fn generate_new_buffer_name_ignoring(&self, base: &str, ignore: Option<&str>) -> String {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn generate_new_buffer_name_ignoring(
+        &self,
+        base: &str,
+        ignore: Option<&str>,
+    ) -> String {
         self.generate_new_buffer_name_ignoring_with_random(base, ignore, || {
             neovm_value::random::emacs_get_random()
         })
@@ -8867,7 +8809,8 @@ impl BufferManager {
     /// after first calling `chain_unlink` on the
     /// owning buffer's `BufferText` to satisfy the
     /// `chain_splice_at_head` precondition.
-    pub fn create_marker_at_emacs_byte_pos(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn create_marker_at_emacs_byte_pos(
         &mut self,
         buffer_id: BufferId,
         pos: EmacsBytePos,
@@ -8910,7 +8853,8 @@ impl BufferManager {
             as *mut neovm_value::tagged::header::MarkerObj
     }
 
-    pub fn register_marker_at_emacs_byte_pos(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn register_marker_at_emacs_byte_pos(
         &mut self,
         marker_ptr: *mut neovm_value::tagged::header::MarkerObj,
         buffer_id: BufferId,
@@ -8922,7 +8866,7 @@ impl BufferManager {
         Some(())
     }
 
-    pub fn register_marker_at_anchor(
+    pub(crate) fn register_marker_at_anchor(
         &mut self,
         marker_ptr: *mut neovm_value::tagged::header::MarkerObj,
         buffer_id: BufferId,
@@ -8934,23 +8878,27 @@ impl BufferManager {
         Some(())
     }
 
-    pub fn marker_anchor_position(&self, marker: MarkerRef) -> Option<TextPositionAnchor> {
+    #[cfg(test)]
+    pub(crate) fn marker_anchor_position(&self, marker: MarkerRef) -> Option<TextPositionAnchor> {
         marker.anchor()
     }
 
-    pub fn marker_emacs_byte_pos(&self, marker: MarkerRef) -> Option<EmacsBytePos> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn marker_emacs_byte_pos(&self, marker: MarkerRef) -> Option<EmacsBytePos> {
         marker.anchor().map(TextPositionAnchor::emacs_byte_pos)
     }
 
-    pub fn marker_char_pos(&self, marker: MarkerRef) -> Option<CharPos0> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn marker_char_pos(&self, marker: MarkerRef) -> Option<CharPos0> {
         marker.anchor().map(TextPositionAnchor::char_pos)
     }
 
-    pub fn marker_value(&self, marker: MarkerRef) -> Option<Value> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn marker_value(&self, marker: MarkerRef) -> Option<Value> {
         marker.as_value()
     }
 
-    pub fn unlink_marker_ptr(
+    pub(crate) fn unlink_marker_ptr(
         &self,
         buffer_id: BufferId,
         ptr: *mut neovm_value::tagged::header::MarkerObj,
@@ -8960,7 +8908,7 @@ impl BufferManager {
     }
 
     /// See `Buffer::move_marker_ptr_to_emacs_byte_pos`.
-    pub fn move_marker_ptr_to_emacs_byte_pos(
+    pub(crate) fn move_marker_ptr_to_emacs_byte_pos(
         &self,
         buffer_id: BufferId,
         marker_ptr: *mut neovm_value::tagged::header::MarkerObj,

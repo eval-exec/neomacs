@@ -699,11 +699,6 @@ impl Context {
         self.chrome_dirty.note_chrome_generated(window);
     }
 
-    /// Drop a deleted window's chrome acknowledgement.
-    pub fn forget_chrome_window(&mut self, window: WindowId) {
-        self.chrome_dirty.forget_window(window);
-    }
-
     #[doc(hidden)]
     pub fn invalidate_redisplay(&mut self) {
         tracing::debug!(target: "neomacs::redisplay_sig", "invalidate_redisplay");
@@ -1277,7 +1272,8 @@ impl Context {
 
     /// Perform a full mark-and-sweep garbage collection.
     #[tracing::instrument(level = "debug", skip(self))]
-    pub fn gc_collect(&mut self) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn gc_collect(&mut self) {
         self.gc_collect_exact();
     }
 
@@ -1818,7 +1814,7 @@ impl Context {
     /// matching heap, Obarray and TLS writers without Lisp or allocation
     /// safepoints through capture and launch. Rejection precedes blackening.
     #[doc(hidden)]
-    pub unsafe fn start_concurrent_mark(
+    unsafe fn start_concurrent_mark(
         &mut self,
         heap_ptr: *mut neovm_value::tagged::gc::TaggedHeap,
         kind: ConcurrentCycleKind,

@@ -200,7 +200,7 @@ impl MotionEngine {
 
     /// Whether `(COLS . LINES)`'s COLS is applied at all
     /// (`src/indent.c:2528-2558`, inside the interactive arm).
-    pub fn honors_goal_column(self) -> bool {
+    pub(crate) fn honors_goal_column(self) -> bool {
         matches!(self, Self::DisplayIterator)
     }
 

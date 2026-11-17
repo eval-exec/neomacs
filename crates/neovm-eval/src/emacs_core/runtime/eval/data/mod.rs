@@ -27,6 +27,9 @@ pub mod redisplay;
 pub mod register;
 pub mod terminal_state;
 pub mod textprop_entries;
+#[cfg(not(feature = "test-support"))]
+pub(crate) mod window_edge_drag;
+#[cfg(feature = "test-support")]
 pub mod window_edge_drag;
 pub mod window_layout_query;
 pub mod window_markers;

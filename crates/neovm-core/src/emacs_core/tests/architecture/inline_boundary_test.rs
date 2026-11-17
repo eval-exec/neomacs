@@ -698,7 +698,7 @@ fn saved_labeled_restrictions_keep_the_cold_drop_boundary() {
     // The saved state's field must retain the wrapper, even if an unused
     // wrapper and its Drop implementation remain elsewhere in the source.
     let _: fn(&SavedRestrictionState) -> &SavedLabeledRestrictions =
-        |saved| &saved.labeled_restrictions;
+        |saved| saved.labeled_restrictions();
 
     let lines = read_source("buffer/buffer.rs");
     let found = find_item(&lines, "<SavedLabeledRestrictions as Drop>::drop");

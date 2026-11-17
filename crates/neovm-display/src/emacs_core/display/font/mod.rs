@@ -183,7 +183,6 @@ impl<'a> FontFamilyLookup<'a> {
 
 #[derive(Default)]
 struct AlternativeFontFamilyState {
-    source: AlternativeFontFamilyAlist,
     native: Vec<(FontNameSpelling, FrozenFontFamilies)>,
 }
 
@@ -206,7 +205,7 @@ impl AlternativeFontFamilyState {
                 (FontNameSpelling::from(spelling), names)
             })
             .collect();
-        Self { source, native }
+        Self { native }
     }
 
     /// GNU family alternatives preserve configured order, including the
@@ -313,55 +312,7 @@ pub(crate) fn replace_alternative_font_registry_alist(names: Vec<(LispString, Ve
     }
 }
 
-pub(crate) fn alternative_font_families(family: &str) -> Vec<String> {
-    let lookup = FontFamilyLookup::new(family);
-    if lookup.as_str().is_empty() {
-        return Vec::new();
-    }
-    capture_alternative_font_families(family)
-        .map(|names| names.iter().map(str::to_owned).collect())
-        .unwrap_or_else(|_| vec![lookup.as_str().to_owned()])
-}
-
-/// Capture a bounded family search order without cloning an unbounded alist.
-/// The byte budget conservatively allows UTF-8 expansion of Emacs bytes.
-pub(crate) fn bounded_alternative_font_families(
-    family: &str,
-    max_entries: usize,
-    max_bytes: usize,
-) -> Option<Vec<String>> {
-    if family.len() > max_bytes {
-        return None;
-    }
-    let lookup = FontFamilyLookup::new(family);
-    if lookup.as_str().is_empty() {
-        return Some(Vec::new());
-    }
-    let alist = alternative_font_family_alist().read().ok()?;
-    let mut remaining = max_bytes;
-    for (index, (name, families)) in alist.source.iter().enumerate() {
-        if index >= max_entries {
-            return None;
-        }
-        let name = neovm_value::intern::resolve_sym_lisp_string(*name);
-        remaining = remaining.checked_sub(name.as_bytes().len())?;
-        if !lookup.matches(name.as_bytes()) {
-            continue;
-        }
-        if families.len() > max_entries {
-            return None;
-        }
-        let mut result = Vec::new();
-        for family in families {
-            let name = neovm_value::intern::resolve_sym_lisp_string(*family);
-            remaining = remaining.checked_sub(name.as_bytes().len().checked_mul(4)?)?;
-            result.push(neovm_value::emacs_char::to_utf8_lossy(name.as_bytes()));
-        }
-        return Some(result);
-    }
-    Some(vec![lookup.as_str().to_owned()])
-}
-
+#[cfg(any(test, feature = "test-support"))]
 pub fn alternative_font_registries(registry: &str) -> Vec<String> {
     let lookup = registry.trim();
     if lookup.is_empty() {

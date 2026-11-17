@@ -72,7 +72,8 @@ impl AfterLoadKey {
 
 /// The kind of definition an autoload stands for.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum AutoloadType {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) enum AutoloadType {
     /// Normal function (default).
     Function,
     /// Macro.
@@ -106,7 +107,8 @@ impl AutoloadType {
 
 /// An entry in the autoload table.
 #[derive(Clone, Debug)]
-pub struct AutoloadEntry {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) struct AutoloadEntry {
     /// The file to load when the function is first called.
     pub file: LispString,
     /// Optional documentation string.
@@ -122,7 +124,8 @@ pub struct AutoloadEntry {
 // ---------------------------------------------------------------------------
 
 /// Central registry of autoloaded functions and eval-after-load callbacks.
-pub struct AutoloadManager {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) struct AutoloadManager {
     /// Map from function name to autoload entry.
     entries: HashMap<SymId, AutoloadEntry>,
     /// Map from file/feature name to list of forms to evaluate after loading.
@@ -157,16 +160,19 @@ impl AutoloadManager {
         self.register_symbol(intern(name), entry);
     }
 
-    pub fn register_symbol(&mut self, name: SymId, entry: AutoloadEntry) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn register_symbol(&mut self, name: SymId, entry: AutoloadEntry) {
         self.entries.insert(name, entry);
     }
 
     /// Check whether a function name has an autoload entry.
-    pub fn is_autoloaded(&self, name: &str) -> bool {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn is_autoloaded(&self, name: &str) -> bool {
         self.is_autoloaded_symbol(intern(name))
     }
 
-    pub fn is_autoloaded_symbol(&self, name: SymId) -> bool {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn is_autoloaded_symbol(&self, name: SymId) -> bool {
         self.entries.contains_key(&name)
     }
 
@@ -175,13 +181,14 @@ impl AutoloadManager {
         self.get_entry_symbol(intern(name))
     }
 
-    pub fn get_entry_symbol(&self, name: SymId) -> Option<&AutoloadEntry> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn get_entry_symbol(&self, name: SymId) -> Option<&AutoloadEntry> {
         self.entries.get(&name)
     }
 
     /// Snapshot current autoload entries for callers that need to rebuild
     /// function cells from the registered autoload metadata.
-    pub fn entries_snapshot(&self) -> Vec<(String, AutoloadEntry)> {
+    pub(crate) fn entries_snapshot(&self) -> Vec<(String, AutoloadEntry)> {
         self.entries
             .iter()
             .map(|(name, entry)| (resolve_sym(*name).to_string(), entry.clone()))
@@ -194,12 +201,13 @@ impl AutoloadManager {
         self.remove_symbol(intern(name));
     }
 
-    pub fn remove_symbol(&mut self, name: SymId) {
+    pub(crate) fn remove_symbol(&mut self, name: SymId) {
         self.entries.remove(&name);
     }
 
     /// Register a form to evaluate after a given file/feature is loaded.
-    pub fn add_after_load(&mut self, file: &str, form: Value) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn add_after_load(&mut self, file: &str, form: Value) {
         self.add_after_load_key(AfterLoadKey::from_runtime(file), form);
     }
 
@@ -209,7 +217,8 @@ impl AutoloadManager {
     }
 
     /// Get the after-load forms for a file (if any).
-    pub fn take_after_load_forms(&mut self, file: &str) -> Vec<Value> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn take_after_load_forms(&mut self, file: &str) -> Vec<Value> {
         self.take_after_load_forms_key(&AfterLoadKey::from_runtime(file))
     }
 
@@ -219,7 +228,8 @@ impl AutoloadManager {
     }
 
     /// Record that a file has been loaded.
-    pub fn mark_loaded(&mut self, file: &str) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn mark_loaded(&mut self, file: &str) {
         let file = runtime_string_to_autoload_string(file);
         if !self.loaded_files.contains(&file) {
             self.loaded_files.push(file);
@@ -227,13 +237,15 @@ impl AutoloadManager {
     }
 
     /// Check if a file has already been loaded.
-    pub fn is_loaded(&self, file: &str) -> bool {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn is_loaded(&self, file: &str) -> bool {
         let file = runtime_string_to_autoload_string(file);
         self.loaded_files.contains(&file)
     }
 
     /// Mark a function as obsolete.
-    pub fn make_obsolete(&mut self, old_name: &str, new_name: &str, when: &str) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn make_obsolete(&mut self, old_name: &str, new_name: &str, when: &str) {
         self.make_obsolete_symbol(
             intern(old_name),
             runtime_string_to_autoload_string(new_name),
@@ -241,7 +253,8 @@ impl AutoloadManager {
         );
     }
 
-    pub fn make_obsolete_symbol(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn make_obsolete_symbol(
         &mut self,
         old_name: SymId,
         new_name: LispString,
@@ -251,27 +264,34 @@ impl AutoloadManager {
     }
 
     /// Check if a function is marked obsolete.
-    pub fn is_function_obsolete(&self, name: &str) -> bool {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn is_function_obsolete(&self, name: &str) -> bool {
         self.is_function_obsolete_symbol(intern(name))
     }
 
-    pub fn is_function_obsolete_symbol(&self, name: SymId) -> bool {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn is_function_obsolete_symbol(&self, name: SymId) -> bool {
         self.obsolete_functions.contains_key(&name)
     }
 
     /// Get obsolete function info: (new-name, when).
-    pub fn get_obsolete_function(&self, name: &str) -> Option<(LispString, LispString)> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn get_obsolete_function(&self, name: &str) -> Option<(LispString, LispString)> {
         self.get_obsolete_function_symbol(intern(name))
     }
 
-    pub fn get_obsolete_function_symbol(&self, name: SymId) -> Option<(LispString, LispString)> {
+    pub(crate) fn get_obsolete_function_symbol(
+        &self,
+        name: SymId,
+    ) -> Option<(LispString, LispString)> {
         self.obsolete_functions
             .get(&name)
             .map(|(new_name, when)| (new_name.clone(), when.clone()))
     }
 
     /// Mark a variable as obsolete.
-    pub fn make_variable_obsolete(&mut self, old_name: &str, new_name: &str, when: &str) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn make_variable_obsolete(&mut self, old_name: &str, new_name: &str, when: &str) {
         self.make_variable_obsolete_symbol(
             intern(old_name),
             runtime_string_to_autoload_string(new_name),
@@ -279,7 +299,8 @@ impl AutoloadManager {
         );
     }
 
-    pub fn make_variable_obsolete_symbol(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn make_variable_obsolete_symbol(
         &mut self,
         old_name: SymId,
         new_name: LispString,
@@ -289,20 +310,25 @@ impl AutoloadManager {
     }
 
     /// Check if a variable is marked obsolete.
-    pub fn is_variable_obsolete(&self, name: &str) -> bool {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn is_variable_obsolete(&self, name: &str) -> bool {
         self.is_variable_obsolete_symbol(intern(name))
     }
 
-    pub fn is_variable_obsolete_symbol(&self, name: SymId) -> bool {
+    pub(crate) fn is_variable_obsolete_symbol(&self, name: SymId) -> bool {
         self.obsolete_variables.contains_key(&name)
     }
 
     /// Get obsolete variable info: (new-name, when).
-    pub fn get_obsolete_variable(&self, name: &str) -> Option<(LispString, LispString)> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn get_obsolete_variable(&self, name: &str) -> Option<(LispString, LispString)> {
         self.get_obsolete_variable_symbol(intern(name))
     }
 
-    pub fn get_obsolete_variable_symbol(&self, name: SymId) -> Option<(LispString, LispString)> {
+    pub(crate) fn get_obsolete_variable_symbol(
+        &self,
+        name: SymId,
+    ) -> Option<(LispString, LispString)> {
         self.obsolete_variables
             .get(&name)
             .map(|(new_name, when)| (new_name.clone(), when.clone()))

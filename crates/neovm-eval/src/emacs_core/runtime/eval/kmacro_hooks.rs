@@ -20,7 +20,7 @@ use neovm_value::{HookInstallError, HookInstallStatus};
 use std::sync::OnceLock;
 
 /// One GNU keyboard-macro entry point.
-pub type KmacroCommand = fn(&mut Context, Vec<Value>) -> EvalResult;
+pub(crate) type KmacroCommand = fn(&mut Context, Vec<Value>) -> EvalResult;
 
 /// The five cold keyboard-macro bodies the VM dispatch calls.
 #[derive(Clone, Copy)]
@@ -61,7 +61,7 @@ impl KmacroHooks {
     }
 
     /// `(call-last-kbd-macro &optional REPEAT LOOPFUNC)`.
-    pub fn call_last(&self) -> KmacroCommand {
+    pub(crate) fn call_last(&self) -> KmacroCommand {
         self.call_last
     }
 
@@ -112,26 +112,28 @@ fn hooks_or_refusal() -> Result<&'static KmacroHooks, Flow> {
 }
 
 /// Enter `start-kbd-macro` through the cold table.
-pub fn start_kbd_macro(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn start_kbd_macro(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
     (hooks_or_refusal()?.start())(ctx, args)
 }
 
 /// Enter `end-kbd-macro` through the cold table.
-pub fn end_kbd_macro(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn end_kbd_macro(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
     (hooks_or_refusal()?.end())(ctx, args)
 }
 
 /// Enter `call-last-kbd-macro` through the cold table.
-pub fn call_last_kbd_macro(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+pub(crate) fn call_last_kbd_macro(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
     (hooks_or_refusal()?.call_last())(ctx, args)
 }
 
 /// Enter `execute-kbd-macro` through the cold table.
-pub fn execute_kbd_macro(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+pub(crate) fn execute_kbd_macro(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
     (hooks_or_refusal()?.execute())(ctx, args)
 }
 
 /// Enter `store-kbd-macro-event` through the cold table.
-pub fn store_kbd_macro_event(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+pub(crate) fn store_kbd_macro_event(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
     (hooks_or_refusal()?.store_event())(ctx, args)
 }

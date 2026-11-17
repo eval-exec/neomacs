@@ -9,7 +9,8 @@
 //! via its own backend), matching the `#[cfg(unix)]` reaper path in the caller.
 
 /// The outcome of one non-blocking `waitpid` probe.
-pub enum ChildWait {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) enum ChildWait {
     /// No state change yet (`waitpid` returned 0).
     Running,
     /// Nothing to wait for -- already reaped, or `ECHILD`.
@@ -55,7 +56,8 @@ pub(crate) fn poll_child_status(pid: u32) -> ChildWait {
 
 /// Classify a raw `waitpid`/`wait` status word (exposed for status-decode
 /// tests; `poll_child_status` is the normal entry point).
-pub fn decode_wait_status(status: libc::c_int) -> ChildWait {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn decode_wait_status(status: libc::c_int) -> ChildWait {
     if libc::WIFEXITED(status) {
         return ChildWait::Exited(libc::WEXITSTATUS(status));
     }

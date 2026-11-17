@@ -697,7 +697,8 @@ pub mod enabled {
 
     /// Report the compiled-in SQLite backend.
     #[doc(hidden)]
-    pub fn available_p(args: Vec<Value>) -> EvalResult {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn available_p(args: Vec<Value>) -> EvalResult {
         neovm_eval::emacs_core::builtins::expect_args("sqlite-available-p", &args, 0)?;
         Ok(Value::T)
     }
@@ -711,7 +712,8 @@ pub mod enabled {
 
     /// (sqlitep OBJECT) → t or nil
     #[doc(hidden)]
-    pub fn is_sqlite_object(args: Vec<Value>) -> EvalResult {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn is_sqlite_object(args: Vec<Value>) -> EvalResult {
         neovm_eval::emacs_core::builtins::expect_args("sqlitep", &args, 1)?;
         Ok(Value::bool_val(args[0].is_sqlite()))
     }
@@ -1073,9 +1075,12 @@ pub mod enabled {
 }
 
 #[cfg(feature = "sqlite")]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) use enabled::{available_p, is_sqlite_object};
+#[cfg(feature = "sqlite")]
 pub use enabled::{
-    available_p, close, columns, commit, execute, finalize, install_sqlite_finalizer_hook,
-    is_sqlite_object, next, open, rollback, select, version,
+    close, columns, commit, execute, finalize, install_sqlite_finalizer_hook, next, open, rollback,
+    select, version,
 };
 #[cfg(feature = "sqlite")]
 pub(crate) use enabled::{execute_batch, load_extension, more_p, pragma, transaction};
@@ -1096,14 +1101,18 @@ pub fn swap_world_state(_slot: &mut dyn std::any::Any) {}
 
 #[cfg(not(feature = "sqlite"))]
 #[doc(hidden)]
-pub fn is_sqlite_object(args: Vec<neovm_value::value::Value>) -> neovm_value::error::EvalResult {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn is_sqlite_object(
+    args: Vec<neovm_value::value::Value>,
+) -> neovm_value::error::EvalResult {
     neovm_eval::emacs_core::builtins::expect_args("sqlitep", &args, 1)?;
     Ok(neovm_value::value::Value::NIL)
 }
 
 #[cfg(not(feature = "sqlite"))]
 #[doc(hidden)]
-pub fn available_p(args: Vec<neovm_value::value::Value>) -> neovm_value::error::EvalResult {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn available_p(args: Vec<neovm_value::value::Value>) -> neovm_value::error::EvalResult {
     neovm_eval::emacs_core::builtins::expect_args("sqlite-available-p", &args, 0)?;
     Ok(neovm_value::value::Value::NIL)
 }

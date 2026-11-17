@@ -9040,8 +9040,7 @@ fn resolve_presented_buffer_position(
             | GeometryQueryError::MissingMaterializedGeometry(_),
         ) => Ok(PresentedBufferPosition::Unavailable),
         Err(
-            error @ (GeometryQueryError::MissingRegion { .. }
-            | GeometryQueryError::CoordinateNotVisible { .. }
+            error @ (GeometryQueryError::CoordinateNotVisible { .. }
             | GeometryQueryError::VisualAnchorUnavailable(_)
             | GeometryQueryError::InvalidGeometry(_)),
         ) => Err(error),

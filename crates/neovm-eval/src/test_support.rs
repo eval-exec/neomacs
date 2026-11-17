@@ -282,13 +282,6 @@ pub mod authority {
         crate::emacs_core::builtins::file_notify::reset_file_notify_thread_locals();
     }
 
-    /// CG-1 fence (peer 11-08): GNU `makunbound` on the context's obarray
-    /// through the audited writer proxy.  The adapter method is `pub(crate)`;
-    /// this fence is the only cross-crate test route.
-    pub fn makunbound_for_test(context: &mut Context, name: &str) {
-        context.obarray_mut().makunbound(name);
-    }
-
     /// CG-1 fence (peer 11-08): raise the whole-table function clock through
     /// the audited writer proxy.  The adapter method is `pub(crate)`; this
     /// fence is the only cross-crate test route.
