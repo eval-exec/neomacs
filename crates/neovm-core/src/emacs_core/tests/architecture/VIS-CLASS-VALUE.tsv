@@ -1,4 +1,4 @@
-item	kind	rule	evidence
+item	kind	class	evidence
 display_vocab::EXTRA_BOLD	const	2	font-weight vocabulary read by layout/display tests against production font selection
 display_vocab::FrameParam::from_gnu_index	method	2	frame-parameter vocabulary; frame_params_test drives production parameter mapping
 display_vocab::FrameParam::gnu_index	method	2	frame-parameter vocabulary; frame_params_test drives production parameter mapping
@@ -23,7 +23,7 @@ heap_types::LispString::set_byte_same_char_count	method	1	production caller crat
 heap_types::LispString::set_from_str	method	2	mutates a production LispString; heap_types_test builds production string state
 intern::NAMES	use	2	re-export route to the production item `NAMES`; no production caller of the alias, cross-crate tests consume the widened route (well_known_test.rs)
 intern::WELL_KNOWN_NAMES	use	2	re-export route to the production item `WELL_KNOWN_NAMES`; no production caller of the alias, cross-crate tests consume the widened route (pdump_load_facade_test.rs, well_known_test.rs)
-keyboard_pure::basic_char_code	fn	3	self-subject copy: no production caller; duplicate of GNU `event-basic-type` numeric branch (subr.el:1865-1883, oracle (64 97 122 97 91 95 999)); tests asserted the copy only. DELETED; tests retargeted to production `event-basic-type` via eval in keyboard_test.rs
+keyboard_pure::basic_char_code	fn	3	self-subject copy: no production caller; duplicate of GNU `event-basic-type` numeric branch (subr.el:1865-1883, oracle (64 97 122 91 95 97 999)); tests asserted the copy only. DELETED; tests retargeted to production `event-basic-type` via eval in keyboard_test.rs
 keyboard_pure::event_modifier_bit	fn	1	production caller crates/neovm-value/src/keyboard_pure.rs:478: && let Some(bit) = event_modifier_bit(sym)
 keyboard_pure::resolve_control_code	fn	1	production caller crates/neovm-value/src/keyboard_pure.rs:518: && let Some(resolved) = resolve_control_code(code)
 keyboard_pure::symbol_has_modifier_prefix	fn	3	self-subject copy: no production caller; duplicates modifier-prefix recognition in production `parse_written_event_modifier`/`reorder_event_symbol_modifiers` (keyboard_pure.rs:404,422). DELETED; tests retargeted to `reorder_event_symbol_modifiers`
