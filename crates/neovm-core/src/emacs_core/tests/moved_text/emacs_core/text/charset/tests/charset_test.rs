@@ -1415,6 +1415,80 @@ fn iso_charset_ignores_alias_clones_after_snapshot_restore() {
     reset_charset_registry();
 }
 
+/// GNU `Fdeclare_equiv_charset` writes the designation that `iso-charset`
+/// reads (oracle: `(progn (declare-equiv-charset 1 94 ?B 'unicode)
+/// (iso-charset 1 94 ?B))` => `unicode`; declared through an alias of
+/// `latin-iso8859-1` => `latin-iso8859-1`).
+#[test]
+fn declare_equiv_charset_sets_the_iso_charset_designation() {
+    crate::test_utils::init_test_tracing();
+    reset_charset_registry();
+    let lookup = || {
+        builtin_iso_charset(vec![
+            Value::fixnum(1),
+            Value::fixnum(94),
+            Value::fixnum(i64::from(b'B')),
+        ])
+        .expect("iso-charset")
+    };
+    let declare = |charset: &'static str| {
+        builtin_declare_equiv_charset(vec![
+            Value::fixnum(1),
+            Value::fixnum(94),
+            Value::fixnum(i64::from(b'B')),
+            Value::symbol(charset),
+        ])
+        .expect("declare-equiv-charset")
+    };
+    assert_eq!(lookup(), Value::symbol("ascii"));
+    assert_eq!(declare("unicode"), Value::NIL);
+    assert_eq!(lookup(), Value::symbol("unicode"));
+    builtin_define_charset_alias(vec![
+        Value::symbol("test-equiv-alias"),
+        Value::symbol("latin-iso8859-1"),
+    ])
+    .unwrap();
+    assert_eq!(declare("test-equiv-alias"), Value::NIL);
+    assert_eq!(lookup(), Value::symbol("latin-iso8859-1"));
+    let snapshot = snapshot_charset_registry();
+    reset_charset_registry();
+    restore_charset_registry(snapshot);
+    assert_eq!(lookup(), Value::symbol("latin-iso8859-1"));
+    reset_charset_registry();
+}
+
+/// `define-charset-alias` only rebinds a name; GNU's table holds ids, so a
+/// charset whose name becomes an alias keeps its designation (oracle: after
+/// `(define-charset-alias 'latin-iso8859-1 'ascii)`, `(iso-charset 1 96 ?A)`
+/// => `latin-iso8859-1`). The rebuild for snapshots without the table must
+/// keep it as well.
+#[test]
+fn iso_charset_keeps_a_charset_shadowed_by_an_alias_after_legacy_restore() {
+    crate::test_utils::init_test_tracing();
+    reset_charset_registry();
+    let lookup = || {
+        builtin_iso_charset(vec![
+            Value::fixnum(1),
+            Value::fixnum(96),
+            Value::fixnum(i64::from(b'A')),
+        ])
+        .expect("iso-charset")
+    };
+    assert_eq!(lookup(), Value::symbol("latin-iso8859-1"));
+    builtin_define_charset_alias(vec![
+        Value::symbol("latin-iso8859-1"),
+        Value::symbol("ascii"),
+    ])
+    .unwrap();
+    assert_eq!(lookup(), Value::symbol("latin-iso8859-1"));
+    let mut legacy = snapshot_charset_registry();
+    legacy.iso_designations = None;
+    reset_charset_registry();
+    restore_charset_registry(legacy);
+    assert_eq!(lookup(), Value::symbol("latin-iso8859-1"));
+    reset_charset_registry();
+}
+
 #[test]
 fn iso_charset_validates_arguments_like_gnu() {
     crate::test_utils::init_test_tracing();
