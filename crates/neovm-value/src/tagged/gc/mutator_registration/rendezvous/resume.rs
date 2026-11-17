@@ -197,7 +197,8 @@ impl<'era> Mutator<'era> {
         }
     }
 
-    pub fn leave_native(&mut self) -> Result<u64, RendezvousError> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn leave_native(&mut self) -> Result<u64, RendezvousError> {
         let image = self.begin_restore(true)?;
         let epoch = image.epoch();
         image.apply_wait().map_err(|failure| failure.reason)?;

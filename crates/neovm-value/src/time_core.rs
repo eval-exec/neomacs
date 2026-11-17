@@ -215,7 +215,9 @@ impl TimeMicros {
     }
 
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    pub fn less_than(self, other: TimeMicros) -> bool {
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn less_than(self, other: TimeMicros) -> bool {
         if self.secs != other.secs {
             self.secs < other.secs
         } else if self.usecs != other.usecs {

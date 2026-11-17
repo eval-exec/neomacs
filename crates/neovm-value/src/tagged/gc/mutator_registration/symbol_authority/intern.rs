@@ -270,7 +270,9 @@ impl<'owner, 'era> RunAccess<'owner, 'era> {
 
     /// Running admission is from a validated owner home, never an arbitrary
     /// SymId. The exclusive word checks actual membership and canonical arm.
-    pub fn initial_symbol_handle(
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn initial_symbol_handle(
         &mut self,
         symbol: &OwnerRootSlot<'era>,
     ) -> Result<SymbolHandle, InitialInternError> {
@@ -332,7 +334,9 @@ impl<'owner, 'era> RunAccess<'owner, 'era> {
     /// Intern an ordinary name into this World's initial obarray. The matching
     /// writer and process registry guard span fresh ID/name-root publication.
     /// Gaps stay absent and existing cells retain their payloads.
-    pub fn initial_intern_into(
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn initial_intern_into(
         &mut self,
         name: &OwnerRootSlot<'era>,
         dst: &mut OwnerRootSlot<'era>,
@@ -369,7 +373,9 @@ impl<'owner, 'era> RunAccess<'owner, 'era> {
     /// contention is a typed refusal, never a miss. Both outcomes leave every
     /// registry/World storage and semantic clock unchanged. String contents
     /// are immutable for this closed era; no shorthand or callback is run.
-    pub fn initial_intern_soft_into(
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn initial_intern_soft_into(
         &mut self,
         name: &OwnerRootSlot<'era>,
         dst: &mut OwnerRootSlot<'era>,

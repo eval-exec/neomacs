@@ -106,7 +106,10 @@ pub(crate) mod shared;
 mod well_known;
 #[cfg(feature = "test-support")]
 pub mod well_known;
-pub use well_known::{FIRST_ID as FIRST_WELL_KNOWN_SYM_ID, NAMES as WELL_KNOWN_NAMES, WellKnown};
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+#[cfg(feature = "test-support")]
+pub(crate) use well_known::NAMES as WELL_KNOWN_NAMES;
+pub use well_known::{FIRST_ID as FIRST_WELL_KNOWN_SYM_ID, WellKnown};
 
 use hashbrown::HashMap;
 use parking_lot::RwLock;
@@ -1801,7 +1804,7 @@ pub fn make_uninterned_symbol_lisp_string(s: &LispString) -> SymId {
 /// the name atom, which drops the string's text properties and its
 /// multibyteness.
 #[inline]
-pub fn intern_lisp_value(name_value: TaggedValue) -> SymId {
+pub(crate) fn intern_lisp_value(name_value: TaggedValue) -> SymId {
     let mut registry = global_symbol_registry().write();
     registry.intern_lisp_value(name_value)
 }

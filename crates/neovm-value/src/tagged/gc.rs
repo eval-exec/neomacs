@@ -64,7 +64,8 @@ pub use cache_root_scan::CacheRootScan;
 /// is the SATB log keyed on `concurrent_mark_running`. The dump remembered set is
 /// maintained unconditionally in `record_heap_write` regardless of this mode.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum WriteTrackingMode {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) enum WriteTrackingMode {
     Disabled,
     OwnersAndRecords,
 }
@@ -1393,7 +1394,8 @@ impl TaggedHeap {
         }
     }
 
-    pub fn set_write_tracking_mode(&mut self, mode: WriteTrackingMode) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn set_write_tracking_mode(&mut self, mode: WriteTrackingMode) {
         self.write_tracking_mode = mode;
         TAGGED_HEAP_WRITE_TRACKING_MODE.with(|current| current.set(mode));
         // SAFETY: the executing mutator holds this heap's exclusive loan; no
@@ -1405,7 +1407,8 @@ impl TaggedHeap {
         }
     }
 
-    pub fn write_tracking_mode(&self) -> WriteTrackingMode {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn write_tracking_mode(&self) -> WriteTrackingMode {
         self.write_tracking_mode
     }
 
@@ -2775,6 +2778,18 @@ pub use facade_mark::{
     ConcurrentMarkPermit, FacadeEpochRetention, FacadeMarkExclusion, FacadeMarkExclusionError,
     QuiescentCollector,
 };
+pub use mutator_registration::FunctionCallCache;
+pub use mutator_registration::KeeperTableMut;
+pub use mutator_registration::MutatorPermit;
+pub use mutator_registration::NativeRoots;
+pub use mutator_registration::OwnerPublication;
+pub use mutator_registration::ResumeGcImage;
+pub use mutator_registration::SealedTableAccess;
+pub use mutator_registration::SliceRoot;
+pub use mutator_registration::SymbolMut;
+pub use mutator_registration::SymbolRef;
+pub use mutator_registration::TableMut;
+pub use mutator_registration::TableRef;
 #[cfg(all(
     any(test, feature = "test-support"),
     not(feature = "gc-memory-telemetry")
@@ -2782,15 +2797,18 @@ pub use facade_mark::{
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) use mutator_registration::symbol_functions::boundary as function_boundary_testkit;
 pub use mutator_registration::{
-    AllStopped, AllStoppedFailure, CollectionError, CollectionReport, FunctionActivation,
-    FunctionCallCache, FunctionError, FunctionSelection, FunctionStep, GlobalError,
-    InitialInternError, KeeperSymbols, KeeperTableMut, MinorCollectionError, Mode, Mutator,
-    MutatorEntry, MutatorFinishFailure, MutatorKey, MutatorPermit, MutatorStartFailure,
-    NativeReturn, NativeRoots, OwnerPublication, OwnerRootSlot, ParallelExecutionAdmission,
-    ParallelHeapEra, Phase, PlainSymbolBacking, RegistrationCensus, RegistrationError, Rendezvous,
-    RendezvousError, Request, ResumeGcImage, ResumeGcImageFailure, RootedRetireFailure, RunAccess,
-    RunSlice, SealedTableAccess, SliceRoot, Snapshot, StoppedSummaries, SymbolHandle, SymbolMut,
-    SymbolRef, TableMut, TableRef, YoungWorkerLoan,
+    AllStopped, CollectionError, CollectionReport, FunctionActivation, FunctionError,
+    FunctionSelection, KeeperSymbols, MinorCollectionError, Mode, Mutator, OwnerRootSlot,
+    ParallelExecutionAdmission, ParallelHeapEra, Phase, PlainSymbolBacking, RegistrationError,
+    RendezvousError, Request, RunAccess, RunSlice, Snapshot, SymbolHandle,
+};
+pub use mutator_registration::{
+    AllStoppedFailure, MutatorEntry, MutatorFinishFailure, MutatorStartFailure, NativeReturn,
+    RegistrationCensus, ResumeGcImageFailure, RootedRetireFailure, StoppedSummaries,
+    YoungWorkerLoan,
+};
+pub use mutator_registration::{
+    FunctionStep, GlobalError, InitialInternError, MutatorKey, Rendezvous,
 };
 // The extension-trait convenience re-export is `pub(crate)`: it can never name
 // anything for a dependency build, and no consumer in any configuration uses

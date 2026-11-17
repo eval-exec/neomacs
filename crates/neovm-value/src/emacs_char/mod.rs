@@ -913,7 +913,9 @@ pub struct MultibyteParseMetrics {
     pub nbytes: usize,
 }
 
-pub fn parse_str_as_multibyte(src: &[u8]) -> MultibyteParseMetrics {
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn parse_str_as_multibyte(src: &[u8]) -> MultibyteParseMetrics {
     let mut chars = 0usize;
     let mut nbytes = 0usize;
     let mut p = 0usize;

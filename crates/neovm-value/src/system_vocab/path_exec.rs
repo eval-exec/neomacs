@@ -56,15 +56,18 @@ use std::path::{Path, PathBuf};
 /// GNU's `${configuration}` (`configure.ac:290`): the host triple naming the
 /// architecture this build targets.  Published by `build.rs` from cargo's
 /// `TARGET`.
-pub const HOST_TRIPLE: &str = env!("NEOVM_HOST_TRIPLE");
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) const HOST_TRIPLE: &str = env!("NEOVM_HOST_TRIPLE");
 
 /// GNU's `${version}` in `archlibdir`.  The workspace version, which is also
 /// what the release artifacts are named after.
-pub const ARCHLIB_VERSION: &str = env!("CARGO_PKG_VERSION");
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) const ARCHLIB_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The `libexec` component itself -- GNU's `${libexecdir}` leaf, and the
 /// whole of `ns_applibexecdir`'s tail (`configure.ac:2792`).
-pub const LIBEXEC: &str = "libexec";
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) const LIBEXEC: &str = "libexec";
 
 /// Where a running neomacs found its architecture-dependent directory.
 ///
@@ -154,7 +157,8 @@ pub fn archlib_relative_path() -> PathBuf {
 /// `init_cmdargs` (`src/emacs.c:628-637`) precisely so that a
 /// `~/.local/bin/neomacs` symlink resolves against the real tree, and
 /// [`resolve`] does the same with `canonicalize`.
-pub fn path_exec_candidates(exe: &Path) -> Vec<(PathBuf, PathExecSource)> {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn path_exec_candidates(exe: &Path) -> Vec<(PathBuf, PathExecSource)> {
     // Same normalisation as `runtime_image_path_for_executable`: a bare
     // relative program name has an empty parent, which is the current
     // directory.

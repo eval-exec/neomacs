@@ -898,8 +898,7 @@ impl CanonicalDispatchCells {
     }
 
     #[inline(always)]
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    pub(crate) fn function_epoch(&self) -> u64 {
+    pub fn function_epoch(&self) -> u64 {
         self.function_epoch.load(Ordering::Acquire)
     }
 
@@ -918,8 +917,7 @@ impl CanonicalDispatchCells {
     }
 
     #[inline(always)]
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    pub(crate) fn debug_on_next_call_armed_fast(&self) -> bool {
+    pub fn debug_on_next_call_armed_fast(&self) -> bool {
         self.debug_on_next_call_cell_ref().get()
     }
 
@@ -2816,7 +2814,8 @@ impl Obarray {
     /// (`src/data.c:2112-2140`).  In the localized case GNU's swap-in leaves
     /// the current buffer's value in that same cell, so the cell is still the
     /// right thing to read.
-    pub fn bool_forwarder(&self, id: SymId) -> Option<&'static crate::forward::LispBoolFwd> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn bool_forwarder(&self, id: SymId) -> Option<&'static crate::forward::LispBoolFwd> {
         match self.slot(id)?.value_cell() {
             ValueCell::Forwarded(fwd) => fwd.as_bool_fwd(),
             ValueCell::Localized(_) => self.blv(id)?.fwd?.as_bool_fwd(),
@@ -2897,8 +2896,7 @@ impl Obarray {
     /// cell is unresolved (the stand-in reads armed), which only sends the
     /// caller to the reference path that resolves it; see the field.
     #[inline(always)]
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    pub(crate) fn debug_on_next_call_armed_fast(&self) -> bool {
+    pub fn debug_on_next_call_armed_fast(&self) -> bool {
         self.debug_on_next_call_cell_ref().get()
     }
 
@@ -4237,7 +4235,7 @@ impl Obarray {
     }
 
     /// Check if a symbol is bound (has a value cell).
-    pub(crate) fn canonical_boundp(&self, access: CanonicalAccess, name: &str) -> bool {
+    pub fn canonical_boundp(&self, access: CanonicalAccess, name: &str) -> bool {
         self.canonical_boundp_id(access, intern(name))
     }
 
@@ -4564,13 +4562,15 @@ impl Obarray {
     }
 
     /// Check whether a symbol is a buffer-local variable in the obarray.
-    pub fn is_buffer_local(&self, name: &str) -> bool {
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn is_buffer_local(&self, name: &str) -> bool {
         self.is_buffer_local_id(intern(name))
     }
 
     /// Check whether a symbol is a buffer-local variable by identity.
     /// Phase F: uses the redirect tag rather than the legacy value enum.
-    pub(crate) fn is_buffer_local_id(&self, id: SymId) -> bool {
+    pub fn is_buffer_local_id(&self, id: SymId) -> bool {
         self.slot(id)
             .is_some_and(|s| s.redirect() == SymbolRedirect::Localized)
     }

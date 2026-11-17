@@ -2648,7 +2648,8 @@ pub struct TextPropertyTable {
 /// This state can be shared between threads. A real interval table remains
 /// borrowed from its string on the mutator that owns it.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
-pub struct EmptyTextProperties {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) struct EmptyTextProperties {
     _private: (),
 }
 

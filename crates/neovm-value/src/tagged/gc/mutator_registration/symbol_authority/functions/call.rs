@@ -22,7 +22,9 @@ impl<'era> FunctionCallCache<'era> {
             counts: (0, 0, 0),
         })
     }
-    pub fn observed_epoch(&self) -> Option<u64> {
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn observed_epoch(&self) -> Option<u64> {
         self.observed_epoch
     }
 
@@ -133,7 +135,8 @@ impl<'era> RunAccess<'_, 'era> {
     /// Select only the supported constant-lambda whose identity is expected.
     /// The private activation home retains a successful selection even after
     /// redefinition; every subsequent call performs a fresh guarded selection.
-    pub fn sym_named_call_begin(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn sym_named_call_begin(
         &mut self,
         symbol: &SymbolHandle,
         expected: &OwnerRootSlot<'era>,
@@ -176,7 +179,9 @@ impl<'era> RunAccess<'_, 'era> {
         Ok(())
     }
 
-    pub fn sym_call_begin(
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn sym_call_begin(
         &mut self,
         symbol: &SymbolHandle,
         cache: &mut FunctionCallCache<'era>,
@@ -208,7 +213,8 @@ impl<'era> RunAccess<'_, 'era> {
     /// At most two finite instructions; one unit validates and yields, the
     /// next returns. No symbol lease, callback, allocation or poll survives a
     /// step. A returned activation cannot silently execute a second time.
-    pub fn sym_call_step(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn sym_call_step(
         &mut self,
         activation: &mut FunctionActivation<'era>,
         dst: &mut OwnerRootSlot<'era>,

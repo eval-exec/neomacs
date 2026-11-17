@@ -2,7 +2,9 @@
 //! the resident primitive touches only borrowed root homes and an exclusive run.
 use super::super::ConsCell;
 use super::super::mark_word::MarkWord;
-use super::cons_allocation::{ConsRunState, initialize_next_cons};
+use super::cons_allocation::ConsRunState;
+#[cfg(any(test, feature = "test-support"))]
+use super::cons_allocation::initialize_next_cons;
 use super::*;
 use crate::tagged::value::{TAG_MASK, TaggedValue};
 use std::ptr::NonNull;
@@ -78,7 +80,9 @@ impl<'brand> RunSlice<'brand, '_> {
     /// The branded operands and destination belong to this unique slice. Both
     /// old words load before result installation, including cloned-home aliases.
     #[inline(always)]
-    pub fn cons_into(
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn cons_into(
         &mut self,
         car: &SliceRoot<'brand>,
         cdr: &SliceRoot<'brand>,
@@ -153,7 +157,9 @@ impl<'brand> RunSlice<'brand, '_> {
     /// non-fixnum value marks the owner's published card and records the owner
     /// cell for the next major trace. No heap TLS and no catalog lock.
     #[allow(dead_code)]
-    pub fn store_car(
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn store_car(
         &mut self,
         cell: &SliceRoot<'brand>,
         value: &SliceRoot<'brand>,
@@ -163,7 +169,9 @@ impl<'brand> RunSlice<'brand, '_> {
 
     /// Store into cdr. Same barrier as [`Self::store_car`].
     #[allow(dead_code)]
-    pub fn store_cdr(
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn store_cdr(
         &mut self,
         cell: &SliceRoot<'brand>,
         value: &SliceRoot<'brand>,

@@ -365,7 +365,8 @@ pub fn key_sequence_values(value: &Value, mode: SymbolMode) -> Result<Vec<Value>
     }
 }
 
-pub fn resolve_control_code(code: i64) -> Option<i64> {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn resolve_control_code(code: i64) -> Option<i64> {
     match code {
         32 => Some(0),               // SPC
         63 => Some(127),             // ?
@@ -381,7 +382,8 @@ pub fn resolve_control_code(code: i64) -> Option<i64> {
     }
 }
 
-pub fn event_modifier_bit(symbol: &str) -> Option<i64> {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn event_modifier_bit(symbol: &str) -> Option<i64> {
     match symbol {
         "C" | "ctrl" | "control" => Some(KEY_CHAR_CTRL),
         "M" | "meta" => Some(KEY_CHAR_META),
@@ -582,7 +584,9 @@ pub fn event_modifier_prefix(bits: i64) -> String {
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-pub fn basic_char_code(mut code: i64) -> i64 {
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn basic_char_code(mut code: i64) -> i64 {
     code &= KEY_CHAR_CODE_MASK;
     match code {
         0 => 64,
@@ -594,7 +598,9 @@ pub fn basic_char_code(mut code: i64) -> i64 {
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-pub fn symbol_has_modifier_prefix(name: &str) -> bool {
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn symbol_has_modifier_prefix(name: &str) -> bool {
     name.starts_with("C-")
         || name.starts_with("M-")
         || name.starts_with("S-")

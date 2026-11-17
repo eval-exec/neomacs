@@ -163,7 +163,9 @@ fn install_first_panic_capture() {
 /// Thin wrapper around [`init`] with [`LogTarget::Test`]. Idempotent — safe
 /// to call from every `#[test]` function. The returned guard is discarded
 /// because tests do not have a well-defined process shutdown boundary.
-pub fn init_for_tests() {
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn init_for_tests() {
     let _ = init(LogTarget::Test);
 }
 
