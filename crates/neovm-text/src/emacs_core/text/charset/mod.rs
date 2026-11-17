@@ -1065,15 +1065,25 @@ impl CharsetRegistry {
 
     /// Approximate the ISO designation table for a snapshot that does not
     /// carry it (older dumps).  Alias clones that `snapshot` materialized into
-    /// `charsets` are skipped (the explicit alias list names them), and the
-    /// physical charsets are ordered by id, so the later definition wins.
-    /// `priority_identities` is not used: `set-charset-priority` reorders it,
-    /// which would flip winners.
+    /// `charsets` are skipped, and the physical charsets are ordered by id, so
+    /// the later definition wins.  `priority_identities` is not used:
+    /// `set-charset-priority` reorders it, which would flip winners.
     fn rebuild_iso_charset_table(&mut self) {
         let mut order: Vec<(i64, SymId)> = self
             .charsets
             .iter()
-            .filter(|(name, _)| !self.aliases.contains_key(name))
+            // A clone shares its target's id. A physical charset whose name
+            // was later reused as an alias keeps its own id, and GNU keeps its
+            // designation (the table holds ids, `define-charset-alias` only
+            // rebinds the name).
+            .filter(|(name, info)| {
+                let target = self.resolve_name(**name);
+                target == **name
+                    || self
+                        .charsets
+                        .get(&target)
+                        .is_none_or(|target_info| target_info.id != info.id)
+            })
             .map(|(name, info)| (info.id, *name))
             .collect();
         order.sort_by_key(|(id, _)| *id);
@@ -1081,6 +1091,15 @@ impl CharsetRegistry {
         for (_, name) in order {
             self.record_iso_designation(name);
         }
+    }
+
+    /// GNU `Fdeclare_equiv_charset` (charset.c:1428-1440): point the KEY
+    /// designation at CHARSET.  GNU stores the id from `CHECK_CHARSET_GET_ID`,
+    /// so an alias stands for its target and `iso-charset` answers the
+    /// target's own name.
+    fn declare_iso_designation(&mut self, key: IsoDesignationKey, charset: SymId) {
+        let name = self.resolve_name(charset);
+        self.iso_charset_table.insert(key, name);
     }
 
     /// Register ALIAS as another name for TARGET.
@@ -3167,8 +3186,9 @@ pub fn builtin_declare_equiv_charset_in_state<H: TextHost>(
 
 fn builtin_declare_equiv_charset_with_symbols(args: Vec<Value>, mode: SymbolMode) -> EvalResult {
     expect_args("declare-equiv-charset", &args, 4)?;
-    let _charset = require_known_charset(&args[3], mode)?;
-    check_iso_charset_parameter(&args[0], &args[1], Some(&args[2]))?;
+    let charset = require_known_charset(&args[3], mode)?;
+    let key = check_iso_charset_parameter(&args[0], &args[1], Some(&args[2]))?;
+    CHARSET_REGISTRY.with(|slot| slot.borrow_mut().declare_iso_designation(key, charset));
     Ok(Value::NIL)
 }
 

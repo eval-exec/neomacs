@@ -67,3 +67,24 @@ fn oracle_prop_iso_charset_designations_and_errors() {
     ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
+
+#[test]
+fn oracle_prop_declare_equiv_charset_and_alias_designations() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // GNU `Fdeclare_equiv_charset` (charset.c:1428) stores CHARSET's id in
+    // `iso_charset_table`, so an alias stands for its target. GNU
+    // `Fdefine_charset_alias` (charset.c:1289) only rebinds a name, so a
+    // charset whose name becomes an alias keeps its designation. CHARSET is
+    // checked before the ISO parameters.
+    let form = "(list (progn (declare-equiv-charset 1 94 ?B 'unicode) (iso-charset 1 94 ?B)) \
+        (progn (define-charset-alias 'oracle-equiv-alias 'latin-iso8859-1) \
+        (declare-equiv-charset 1 94 ?B 'oracle-equiv-alias) (iso-charset 1 94 ?B)) \
+        (progn (define-charset-alias 'latin-iso8859-1 'ascii) (iso-charset 1 96 ?A)) \
+        (condition-case e (declare-equiv-charset 0 94 ?B 'nope) (error e)) \
+        (condition-case e (declare-equiv-charset 0 94 ?B 'ascii) (error e)))";
+    let expect = expect_test::expect![[
+        r#""OK (unicode latin-iso8859-1 latin-iso8859-1 (wrong-type-argument charsetp nope) (error \"Invalid DIMENSION 0, it should be 1, 2, or 3\"))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
