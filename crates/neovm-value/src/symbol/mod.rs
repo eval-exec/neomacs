@@ -5322,3 +5322,25 @@ impl BlvDefaultCells {
         self.fwd
     }
 }
+
+#[cfg(test)]
+pub(crate) mod b13_test_hooks {
+    use super::*;
+    impl Obarray {
+        pub(crate) fn function_epoch_exclusive(&mut self) -> u64 {
+            *self.dispatch_cells.function_epoch.get_mut()
+        }
+
+        pub(crate) fn chunk_has_fn_stamps_for_test(&self, id: SymId) -> bool {
+            self.symbols.chunk_has_fn_stamps(Self::slot_index(id))
+        }
+    }
+    impl CanonicalDispatchCells {}
+    impl SymbolChunks {
+        pub(crate) fn chunk_has_fn_stamps(&self, idx: usize) -> bool {
+            self.sides
+                .get(idx >> 12)
+                .is_some_and(|side| side.has_stamps())
+        }
+    }
+}

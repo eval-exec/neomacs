@@ -5599,3 +5599,183 @@ impl TextPropertyTable {
             .unwrap_or(0)
     }
 }
+
+#[cfg(test)]
+pub(crate) mod b13_test_hooks {
+    use super::*;
+    impl TextPropertyTable {
+        pub(crate) fn set_properties_in_char_range(
+            &mut self,
+            range: CharRange,
+            plist: Vec<(Value, Value)>,
+        ) {
+            self.set_properties_raw(range, plist);
+        }
+
+        pub(crate) fn set_properties_raw(&mut self, range: CharRange, plist: Vec<(Value, Value)>) {
+            self.mutation_tick += 1;
+            self.syntax_prop_tick += 1;
+            if plist
+                .iter()
+                .any(|&(name, _)| Self::name_is_syntax_relevant(name))
+            {
+                self.syntax_ranges_note_put(range);
+            } else {
+                self.syntax_ranges_revalidate();
+            }
+            if range.is_empty() {
+                return;
+            }
+            if plist.is_empty() && self.intervals.is_empty() {
+                return;
+            }
+            for (name, _) in &plist {
+                self.property_names.observe(*name);
+            }
+
+            self.intervals.ensure_cover(range.end());
+            self.intervals.split_at(range.start());
+            self.intervals.split_at(range.end());
+
+            let mut cursor = range.start();
+            let mut first = true;
+            while cursor < range.end() {
+                let Some((node_start, id)) = self.intervals.find_id(cursor) else {
+                    break;
+                };
+                let node_end = self.intervals.interval_end(node_start, id);
+                self.intervals
+                    .set_node_plist(id, plist_value_from_pairs(&plist));
+                if first {
+                    first = false;
+                } else {
+                    self.intervals.merge_interval_left(id);
+                }
+                if node_end <= cursor {
+                    break;
+                }
+                cursor = node_end;
+            }
+
+            if plist.is_empty() {
+            } else {
+                self.intervals.prune_trailing_empty_intervals();
+            }
+        }
+
+        pub(crate) fn raw_plist_at_for_test(&self, pos: CharPos0) -> Option<Value> {
+            self.intervals
+                .find_id(pos)
+                .map(|(_, id)| self.intervals.nodes[id.0].plist)
+        }
+
+        pub(crate) fn append_shifted_reference_for_test(
+            &mut self,
+            other: &TextPropertyTable,
+            offset: CharLen,
+        ) {
+            self.mutation_tick += 1;
+            self.syntax_prop_tick += 1;
+            for run in other.intervals.runs() {
+                self.property_names.observe_plist(run.plist);
+                let start = run.start().add_len(offset);
+                let end = run.end().add_len(offset);
+                if start >= end {
+                    continue;
+                }
+                self.intervals.ensure_cover(end);
+                self.intervals.split_at(start);
+                self.intervals.split_at(end);
+                if !run.is_empty_plist() {
+                    self.intervals.rehome_predecessor_plist(start);
+                }
+                let mut cursor = start;
+                while cursor < end {
+                    let Some((node_start, id)) = self.intervals.find_id(cursor) else {
+                        break;
+                    };
+                    let node_end = self.intervals.interval_end(node_start, id);
+                    let fresh = copy_plist_value(run.plist);
+                    self.intervals.set_node_plist(id, fresh);
+                    if node_end <= cursor {
+                        break;
+                    }
+                    cursor = node_end;
+                }
+            }
+        }
+
+        pub(crate) fn tree_max_depth_for_test(&self) -> usize {
+            self.intervals.max_depth_for_test()
+        }
+
+        pub(crate) fn merge_adjacent_equal_properties_around_reference_for_test(
+            &mut self,
+            range: CharRange,
+        ) {
+            self.mutation_tick += 1;
+            let mut runs = self.intervals.runs();
+            let start = range.start();
+            let end = range.end();
+            if start > end || runs.len() < 2 {
+                return;
+            }
+
+            loop {
+                let mut merged = false;
+                let mut idx = 0;
+                while idx + 1 < runs.len() {
+                    let left_end = runs[idx].end();
+                    let right_start = runs[idx + 1].start();
+                    if left_end != right_start
+                        || runs[idx].plist.is_nil()
+                        || !plists_equal_eq(
+                            &plist_pairs(runs[idx].plist),
+                            &plist_pairs(runs[idx + 1].plist),
+                        )
+                        || left_end < start
+                        || right_start > end
+                    {
+                        idx += 1;
+                        continue;
+                    }
+
+                    let right_end = runs[idx + 1].end();
+                    runs[idx].set_end(right_end);
+                    runs[idx].refresh_cache();
+                    runs.remove(idx + 1);
+                    merged = true;
+                    break;
+                }
+
+                if !merged {
+                    break;
+                }
+            }
+            let names = ConservativePropertyNames::Empty;
+            self.replace_runs_preserving_shape(runs, ReplacementPropertyNames::Include(&names));
+        }
+
+        pub(crate) fn debug_interval_bounds(&self) -> Vec<(usize, usize, bool)> {
+            self.intervals
+                .runs()
+                .into_iter()
+                .map(|run| (run.start().get(), run.end().get(), run.is_empty_plist()))
+                .collect()
+        }
+    }
+    impl IntervalTree {
+        pub(crate) fn max_depth_for_test(&self) -> usize {
+            fn depth(tree: &IntervalTree, id: Option<IntervalId>) -> usize {
+                match id {
+                    None => 0,
+                    Some(id) => {
+                        1 + depth(tree, tree.nodes[id.0].left)
+                            .max(depth(tree, tree.nodes[id.0].right))
+                    }
+                }
+            }
+            depth(self, self.root)
+        }
+    }
+}

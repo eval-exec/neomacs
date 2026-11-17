@@ -840,3 +840,48 @@ pub fn with_xwidget_view_mut<R>(
     let _guard = HeapMutClosureGuard::enter();
     Some(f(unsafe { &mut *ptr }))
 }
+
+#[cfg(test)]
+pub(crate) mod b13_test_hooks {
+    use super::*;
+    pub(crate) fn set_closure_slot(value: TaggedValue, index: usize, item: TaggedValue) -> bool {
+        LispCollectionRevision::changed(value);
+        match value.veclike_type() {
+            // Atomic stores, as for vector slots: a concurrent reader of the slot
+            // (the GC thread, once closures are traced there) sees a whole value.
+            Some(VecLikeType::Lambda) => unsafe {
+                let ptr = value.as_veclike_ptr().unwrap() as *mut LambdaObj;
+                let obj = &mut *ptr;
+                let _ = obj.parsed_params.take();
+                if index >= obj.data.len() {
+                    return false;
+                }
+                crate::tagged::gc::gc_thread::b13_test_hooks::note_heap_slot_write(
+                    value,
+                    HeapWriteKind::ClosureSlot,
+                    index,
+                    item,
+                );
+                obj.data.store_atomic(index, item);
+                true
+            },
+            Some(VecLikeType::Macro) => unsafe {
+                let ptr = value.as_veclike_ptr().unwrap() as *mut MacroObj;
+                let obj = &mut *ptr;
+                let _ = obj.parsed_params.take();
+                if index >= obj.data.len() {
+                    return false;
+                }
+                crate::tagged::gc::gc_thread::b13_test_hooks::note_heap_slot_write(
+                    value,
+                    HeapWriteKind::ClosureSlot,
+                    index,
+                    item,
+                );
+                obj.data.store_atomic(index, item);
+                true
+            },
+            _ => false,
+        }
+    }
+}

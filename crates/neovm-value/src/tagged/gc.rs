@@ -2495,6 +2495,9 @@ pub mod alloc_probe;
 #[cfg(test)]
 #[path = "gc/tests/layout_stats_test.rs"]
 mod layout_stats_tests;
+#[cfg(test)]
+#[path = "gc/tests/slot_store_test.rs"]
+mod slot_store_tests;
 
 #[cfg(test)]
 #[path = "gc/tests/pacer_test.rs"]

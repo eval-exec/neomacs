@@ -293,3 +293,17 @@ impl TaggedHeap {
         self.dirty_writes.clear();
     }
 }
+
+#[cfg(test)]
+pub(crate) mod b13_test_hooks {
+    use super::*;
+    impl TaggedHeap {
+        pub(crate) fn dirty_owner_count(&self) -> usize {
+            self.dirty_owners.len()
+        }
+
+        pub(crate) fn dirty_write_count(&self) -> usize {
+            self.dirty_writes.len()
+        }
+    }
+}

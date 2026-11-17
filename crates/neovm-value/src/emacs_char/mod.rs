@@ -1456,3 +1456,35 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/raw_byte_recovery.rs"]
 mod raw_byte_recovery_tests;
+
+#[cfg(test)]
+pub(crate) mod b13_test_hooks {
+    use super::*;
+    pub(crate) fn utf8_to_emacs(s: &str) -> Vec<u8> {
+        // Standard UTF-8 is already valid Emacs encoding. No transformation needed.
+        s.as_bytes().to_vec()
+    }
+
+    pub(crate) fn multibyte_chars_in_text(bytes: &[u8]) -> usize {
+        let mut chars = 0usize;
+        let mut i = 0usize;
+        while i < bytes.len() {
+            let len = match multibyte_length(&bytes[i..], true) {
+                Some(n) => n,
+                None => {
+                    debug_assert!(false, "multibyte_chars_in_text: invalid sequence at {}", i);
+                    1
+                }
+            };
+            i += len;
+            chars += 1;
+        }
+        chars
+    }
+
+    impl EmacsChar {
+        pub(crate) fn is_unicode_scalar(self) -> bool {
+            char::from_u32(self.0).is_some()
+        }
+    }
+}

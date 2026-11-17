@@ -13,6 +13,101 @@ fn with_test_heap<R>(f: impl FnOnce() -> R) -> R {
 }
 
 #[test]
+fn hash_table_domains_match_gnu_symbols() {
+    assert_eq!(
+        HashTableTest::from_symbol_value(&Value::symbol("eq")),
+        Some(HashTableTest::Eq)
+    );
+    assert_eq!(
+        HashTableTest::from_symbol_value(&Value::symbol("eql")),
+        Some(HashTableTest::Eql)
+    );
+    assert_eq!(
+        HashTableTest::from_symbol_value(&Value::symbol("equal")),
+        Some(HashTableTest::Equal)
+    );
+    assert_eq!(
+        HashTableTest::from_symbol_name("equal-including-properties"),
+        None
+    );
+    assert_eq!(HashTableTest::Equal.name(), "equal");
+    assert_eq!(HashTableTest::Eql.gnu_code(), 0);
+    assert_eq!(HashTableTest::Eq.gnu_code(), 1);
+    assert_eq!(HashTableTest::Equal.gnu_code(), 2);
+    assert_eq!(HashTableTest::from_gnu_code(0), Some(HashTableTest::Eql));
+    assert_eq!(HashTableTest::from_gnu_code(1), Some(HashTableTest::Eq));
+    assert_eq!(HashTableTest::from_gnu_code(2), Some(HashTableTest::Equal));
+    assert_eq!(HashTableTest::from_gnu_code(3), None);
+
+    assert_eq!(
+        HashTableWeakness::from_symbol_value(&Value::symbol("key")),
+        Some(HashTableWeakness::Key)
+    );
+    assert_eq!(
+        HashTableWeakness::from_symbol_value(&Value::symbol("value")),
+        Some(HashTableWeakness::Value)
+    );
+    assert_eq!(
+        HashTableWeakness::from_symbol_value(&Value::symbol("key-or-value")),
+        Some(HashTableWeakness::KeyOrValue)
+    );
+    assert_eq!(
+        HashTableWeakness::from_symbol_value(&Value::symbol("key-and-value")),
+        Some(HashTableWeakness::KeyAndValue)
+    );
+    assert_eq!(HashTableWeakness::from_symbol_name("weak"), None);
+    assert_eq!(HashTableWeakness::KeyOrValue.name(), "key-or-value");
+    assert_eq!(HashTableWeakness::from_gnu_code(0), None);
+    assert_eq!(HashTableWeakness::option_from_gnu_code(0), Some(None));
+    assert_eq!(HashTableWeakness::Key.gnu_code(), 1);
+    assert_eq!(HashTableWeakness::Value.gnu_code(), 2);
+    assert_eq!(HashTableWeakness::KeyOrValue.gnu_code(), 3);
+    assert_eq!(HashTableWeakness::KeyAndValue.gnu_code(), 4);
+    assert_eq!(
+        HashTableWeakness::option_from_gnu_code(1),
+        Some(Some(HashTableWeakness::Key))
+    );
+    assert_eq!(
+        HashTableWeakness::option_from_gnu_code(4),
+        Some(Some(HashTableWeakness::KeyAndValue))
+    );
+    assert_eq!(HashTableWeakness::option_from_gnu_code(5), None);
+
+    assert_eq!(
+        HashTableMakeKeyword::from_symbol_value(&Value::keyword(":test")),
+        Some(HashTableMakeKeyword::Test)
+    );
+    assert_eq!(
+        HashTableMakeKeyword::from_symbol_value(&Value::keyword(":rehash-size")),
+        Some(HashTableMakeKeyword::RehashSize)
+    );
+    assert_eq!(
+        HashTableMakeKeyword::from_symbol_value(&Value::keyword(":purecopy")),
+        Some(HashTableMakeKeyword::Purecopy)
+    );
+    assert_eq!(HashTableMakeKeyword::from_symbol_name(":data"), None);
+    assert_eq!(
+        HashTableMakeKeyword::RehashThreshold.name(),
+        ":rehash-threshold"
+    );
+
+    assert_eq!(
+        HashTableLiteralKey::from_symbol_value(&Value::symbol("test")),
+        Some(HashTableLiteralKey::Test)
+    );
+    assert_eq!(
+        HashTableLiteralKey::from_symbol_value(&Value::symbol("data")),
+        Some(HashTableLiteralKey::Data)
+    );
+    assert_eq!(
+        HashTableLiteralKey::from_symbol_value(&Value::symbol("purecopy")),
+        Some(HashTableLiteralKey::Purecopy)
+    );
+    assert_eq!(HashTableLiteralKey::from_symbol_name(":test"), None);
+    assert_eq!(HashTableLiteralKey::RehashSize.name(), "rehash-size");
+}
+
+#[test]
 fn value_constructors() {
     crate::test_utils::init_test_tracing();
     with_test_heap(|| {
@@ -110,6 +205,30 @@ fn equal_hash_keys_preserve_structural_pseudovector_types() {
             vector.to_hash_key(&HashTableTest::Equal),
             record.to_hash_key(&HashTableTest::Equal)
         );
+    });
+}
+
+#[test]
+fn treesit_node_header_is_opaque_to_record_and_sequence_access() {
+    crate::test_utils::init_test_tracing();
+    with_test_heap(|| {
+        let parser = Value::make_record(vec![Value::symbol("treesit-parser"), Value::fixnum(7)]);
+        let slots = vec![Value::symbol("treesit-node"), Value::fixnum(19), parser];
+        let forged = Value::make_record(slots.clone());
+        let node = Value::make_treesit_node(slots);
+        let copied = node;
+
+        assert_eq!(node.veclike_type(), Some(VecLikeType::TsNode));
+        assert_eq!(node.type_name(), "treesit-node");
+        assert_eq!(copied, node);
+        assert_eq!(copied.as_treesit_node_data().unwrap()[2], parser);
+        assert!(forged.as_treesit_node_data().is_none());
+        assert!(!node.is_record());
+        assert!(node.as_record_data().is_none());
+        assert!(node.as_vector_data().is_none());
+        assert!(!node.set_record_slot(2, Value::NIL));
+        assert!(!node.replace_vectorlike_sequence_data(vec![Value::NIL]));
+        assert_eq!(node.as_treesit_node_data().unwrap()[2], parser);
     });
 }
 

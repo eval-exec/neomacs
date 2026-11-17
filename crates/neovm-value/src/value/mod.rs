@@ -5802,3 +5802,37 @@ impl HashTableStorage {
         self.switch_epoch
     }
 }
+
+#[cfg(test)]
+pub(crate) mod b13_test_hooks {
+    use super::*;
+    impl TaggedValue {
+        pub(crate) fn replace_vectorlike_sequence_data(self, values: Vec<Value>) -> bool {
+            match self.veclike_type() {
+                Some(VecLikeType::Vector) => self.replace_vector_data(values),
+                Some(VecLikeType::Record) => self.replace_record_data(values),
+                _ => false,
+            }
+        }
+    }
+    impl HashTableStorage {
+        pub(crate) fn get_mut_by_value(
+            &mut self,
+            value: Value,
+            test: HashTableTest,
+            symbols_with_pos_enabled: bool,
+        ) -> Option<&mut Value> {
+            let slot = self.slot_by_value(value, test, symbols_with_pos_enabled)?;
+            self.slot_value_mut(slot)
+        }
+    }
+    impl HashTableWeakness {
+        pub(crate) fn option_from_gnu_code(code: u8) -> Option<Option<Self>> {
+            if code == 0 {
+                Some(None)
+            } else {
+                Self::from_gnu_code(code).map(Some)
+            }
+        }
+    }
+}

@@ -2656,3 +2656,12 @@ pub mod test_support {
         }
     }
 }
+
+#[cfg(test)]
+pub(crate) mod b13_test_hooks {
+    use super::*;
+    pub(crate) fn resolve_sym_name_value(id: SymId) -> Option<TaggedValue> {
+        let registry = global_symbol_registry().read();
+        registry.resolve_name_value(id)
+    }
+}
