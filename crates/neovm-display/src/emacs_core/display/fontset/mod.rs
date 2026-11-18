@@ -156,19 +156,6 @@ impl FontsetRegistry {
         self.generation = self.generation.wrapping_add(1);
     }
 
-    fn update_target(
-        &mut self,
-        name: &FontNameSpelling,
-        target: FontsetTarget,
-        entry: FontSpecEntry,
-        add: FontsetAddMode,
-    ) {
-        self.ensure_fontset(name);
-        let data = self.fontsets.entry(name.clone()).or_default();
-        data.update_target(target, entry, add);
-        self.generation = self.generation.wrapping_add(1);
-    }
-
     /// One `set-fontset-font` call: every target gets ENTRY, and the
     /// generation moves once so cached font selections are redone.
     fn update_targets(
