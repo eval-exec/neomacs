@@ -270,3 +270,24 @@ fn a_key_read_finishes_an_idle_sweep_after_a_mouse_motion_it_consumes() {
     assert_eq!(context.gc_count_for_test(), completed + 1);
     drop(publisher);
 }
+
+#[test]
+fn an_idle_sweep_leaves_a_ready_keyboard_macro_key_to_the_read() {
+    use super::command_loop::CommandLoopHost;
+    // GNU `read_char` returns the next key of an executing keyboard macro
+    // (keyboard.c:2659-2680) and asks for a collection only when INTERACTIVE,
+    // which excludes an executing macro (commands.h:28, keyboard.c:2932).
+    let (mut context, completed) = context_with_a_paced_deferred_sweep();
+    context.begin_executing_kbd_macro_runtime(vec![Value::fixnum('x' as i64)]);
+    context.command_loop_1_idle_sweep();
+    assert!(
+        context.tagged_heap().sweep_in_progress(),
+        "a keyboard macro key ready for the read did not stop the idle sweep"
+    );
+    assert_eq!(context.gc_count_for_test(), completed);
+    assert_eq!(
+        context.command_loop().keyboard.kboard.kbd_macro_index,
+        0,
+        "the idle sweep consumed the macro key the read is owed"
+    );
+}

@@ -1143,9 +1143,13 @@ impl CommandLoopHost for Context {
     /// there: the read that follows takes it, so it alone sees the events
     /// and the channel's end.  When the read consumes such an event without
     /// returning a key, it finishes the sweep itself before it waits.
+    /// A key an executing keyboard macro still holds is ready input too:
+    /// GNU `read_char` returns it (keyboard.c:2659-2680) and collects only
+    /// when INTERACTIVE, which excludes an executing macro (commands.h:28).
     fn command_loop_1_idle_sweep(&mut self) {
         while self.tagged_heap().sweep_in_progress() {
             if self.input_rx().as_ref().is_some_and(|rx| !rx.is_empty())
+                || self.command_loop().keyboard.has_pending_kboard_input()
                 || self.input_pending_for_auto_save()
             {
                 return;
