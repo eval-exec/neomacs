@@ -1141,7 +1141,8 @@ impl CommandLoopHost for Context {
     /// host input channel still holds, as GNU `get_input_pending` reads
     /// the terminals' buffered input (keyboard.c:8049-8061), but leaves it
     /// there: the read that follows takes it, so it alone sees the events
-    /// and the channel's end.
+    /// and the channel's end.  When the read consumes such an event without
+    /// returning a key, it finishes the sweep itself before it waits.
     fn command_loop_1_idle_sweep(&mut self) {
         while self.tagged_heap().sweep_in_progress() {
             if self.input_rx().as_ref().is_some_and(|rx| !rx.is_empty())

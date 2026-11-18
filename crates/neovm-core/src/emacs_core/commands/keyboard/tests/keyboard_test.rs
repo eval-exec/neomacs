@@ -221,3 +221,52 @@ fn the_command_loop_finishes_a_paced_deferred_sweep_before_its_first_input_wait(
     );
     assert_eq!(context.gc_count_for_test(), completed + 1);
 }
+
+#[test]
+fn a_key_read_finishes_an_idle_sweep_after_a_mouse_motion_it_consumes() {
+    use crate::emacs_core::eval::keyboard::{InputEvent, Modifiers};
+    // With `track-mouse` nil a motion is no pending input in GNU
+    // (`some_mouse_moved`, keyboard.c:1296), so `read_char` collects before
+    // it waits (keyboard.c:2976-2977).  The pre-read drain stops for the
+    // motion still in the channel; the read consumes it without returning a
+    // key and must finish the sweep before it waits.
+    let (mut context, completed) = context_with_a_paced_deferred_sweep();
+    let publisher = crate::host_input::HostInputPublisher::install(&mut context);
+    publisher
+        .send(InputEvent::MouseMove {
+            x: 1.0,
+            y: 1.0,
+            modifiers: Modifiers::none(),
+            target_frame_id: 0,
+        })
+        .unwrap();
+    // A zero-delay idle timer ends the read once it waits: idle timers run
+    // only after the read has started its idle epoch.
+    context
+        .eval_str(
+            r#"(progn
+                 (fset 'timer-event-handler
+                       (lambda (timer)
+                         (setq timer-idle-list (delq timer timer-idle-list))
+                         (apply (aref timer 5) (aref timer 6))))
+                 (fset 'idle-sweep-test-end-read
+                       (lambda () (throw 'idle-sweep-test 'waited)))
+                 (setq timer-idle-list
+                       (list (vector nil 0 0 0 nil 'idle-sweep-test-end-read
+                                     nil t 0 nil))))"#,
+        )
+        .expect("install the idle timer that ends the read");
+    assert!(
+        context.tagged_heap().sweep_in_progress(),
+        "installing the idle timer finished the paced sweep"
+    );
+    let result =
+        context.eval_str(r#"(catch 'idle-sweep-test (read-key-sequence "key: ") 'read-returned)"#);
+    assert_eq!(crate::emacs_core::format_eval_result(&result), "OK waited");
+    assert!(
+        !context.tagged_heap().sweep_in_progress(),
+        "the read waited with the deferred sweep unfinished"
+    );
+    assert_eq!(context.gc_count_for_test(), completed + 1);
+    drop(publisher);
+}
