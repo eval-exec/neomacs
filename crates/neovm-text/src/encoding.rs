@@ -4557,6 +4557,7 @@ fn encode_via_iso2022(
 fn decode_via_iso2022(
     bytes: &[u8],
     spec: &crate::emacs_core::coding::Iso2022Spec,
+    charset_list: &[SymId],
     state: &mut Iso2022DecodeState,
     eol: DosEolLookahead,
 ) -> DecodedSource {
@@ -4572,6 +4573,43 @@ fn decode_via_iso2022(
     // `invalid_code` (coding.c:3946-3961): rewind, emit one byte, and put
     // ASCII back in G0. The charset names stay on the use above: a new
     // `charset::` path here is an upward layering edge.
+    // GNU `setup_iso_safe_charsets` (coding.c:2856-2917). Full support is the
+    // single symbol `iso-2022`. Otherwise the charset must be named by the
+    // list. A listed charset is safe when the request names it, or when its
+    // own 94/96 width has a register below 4. The escape's width is not the
+    // charset's width: `ESC ( Z` can name `latin-iso8859-1`, and `iso-2022-jp`
+    // still rejects it because that charset is not in the list.
+    fn iso2022_charset_is_safe(
+        cs: SymId,
+        spec: &crate::emacs_core::coding::Iso2022Spec,
+        charset_list: &[SymId],
+    ) -> bool {
+        let full = charset_list.len() == 1 && resolve_sym(charset_list[0]) == "iso-2022";
+        if !full && !charset_list.contains(&cs) {
+            return false;
+        }
+        if spec.request.iter().any(|(name, _)| *name == cs) {
+            return true;
+        }
+        let Some((_, _, chars_96)) = charset_iso2022_designation_physical(cs) else {
+            return false;
+        };
+        let reg = if chars_96 {
+            spec.reg_usage.1
+        } else {
+            spec.reg_usage.0
+        };
+        reg < 4
+    }
+    // GNU coding.c:3898-3910. A continuation below 0x20, in 0x80..0xA0, or on
+    // the other high-bit plane is `invalid_code`, which replays the first
+    // graphic byte and leaves the rest of the unit unread.
+    fn iso2022_continuation_ok(lead: u8, next: u8) -> bool {
+        if next < 0x20 || (next >= 0x80 && next < 0xA0) {
+            return false;
+        }
+        (lead & 0x80) == (next & 0x80)
+    }
     fn iso2022_designate_or_replay(
         unit: &mut UnitReader<'_>,
         sink: &mut DecodeSink,
@@ -4581,9 +4619,12 @@ fn decode_via_iso2022(
         final_byte: u8,
         dimension: i64,
         chars_96: bool,
+        spec: &crate::emacs_core::coding::Iso2022Spec,
+        charset_list: &[SymId],
     ) -> Result<(), NoMoreSource> {
         if let Some((cs, _)) = charset_by_iso_final(i64::from(final_byte), dimension, chars_96)
             && charset_iso2022_designation_physical(cs).is_some()
+            && iso2022_charset_is_safe(cs, spec, charset_list)
         {
             state.designation[reg] = Some(cs);
             return Ok(());
@@ -4646,21 +4687,48 @@ fn decode_via_iso2022(
                         }
                     };
                     return iso2022_designate_or_replay(
-                        unit, sink, state, ascii, reg, final_byte, 2, chars_96,
+                        unit,
+                        sink,
+                        state,
+                        ascii,
+                        reg,
+                        final_byte,
+                        2,
+                        chars_96,
+                        spec,
+                        charset_list,
                     );
                 }
                 0x28..=0x2B => {
                     let reg = usize::from(e - 0x28);
                     let final_byte = unit.byte()?;
                     return iso2022_designate_or_replay(
-                        unit, sink, state, ascii, reg, final_byte, 1, false,
+                        unit,
+                        sink,
+                        state,
+                        ascii,
+                        reg,
+                        final_byte,
+                        1,
+                        false,
+                        spec,
+                        charset_list,
                     );
                 }
                 0x2C..=0x2F => {
                     let reg = usize::from(e - 0x2C);
                     let final_byte = unit.byte()?;
                     return iso2022_designate_or_replay(
-                        unit, sink, state, ascii, reg, final_byte, 1, true,
+                        unit,
+                        sink,
+                        state,
+                        ascii,
+                        reg,
+                        final_byte,
+                        1,
+                        true,
+                        spec,
+                        charset_list,
                     );
                 }
                 _ => {
@@ -4728,13 +4796,39 @@ fn decode_via_iso2022(
             let physical = charset_iso2022_designation_physical(cs);
             let resolved = physical.or_else(|| charset_iso2022_designation(cs));
             if let Some((_, dim, _)) = resolved {
-                let dim = dim.clamp(1, 2) as usize;
+                // GNU reads two extra bytes when `CHARSET_DIMENSION > 2`
+                // (coding.c:3892-3913). The 3-byte formula validates `c3` and
+                // then uses `c2` twice: `c1 = (c1 << 16) | (c2 << 8) | c2`.
+                // The attested oracle decodes both `!!!` and `!!A` as the
+                // charset's code-offset.
+                let positions: usize = if dim <= 1 {
+                    1
+                } else if dim == 2 {
+                    2
+                } else {
+                    3
+                };
                 unit.rewind();
-                let position = unit.take(dim)?;
-                let mut code = 0i64;
-                for byte in position {
-                    code = (code << 8) | i64::from(byte & 0x7F);
-                }
+                let c1 = unit.byte()?;
+                let code = if positions == 1 {
+                    i64::from(c1 & 0x7F)
+                } else {
+                    let c2 = unit.byte()?;
+                    if !iso2022_continuation_ok(c1, c2) {
+                        return invalid_code(unit, sink);
+                    }
+                    if positions == 2 {
+                        (i64::from(c1 & 0x7F) << 8) | i64::from(c2 & 0x7F)
+                    } else {
+                        let c3 = unit.byte()?;
+                        if !iso2022_continuation_ok(c1, c3) {
+                            return invalid_code(unit, sink);
+                        }
+                        (i64::from(c1 & 0x7F) << 16)
+                            | (i64::from(c2 & 0x7F) << 8)
+                            | i64::from(c2 & 0x7F)
+                    }
+                };
                 let decoded = if physical.is_some() {
                     charset_decode_char_physical(cs, code)
                 } else {
@@ -5278,10 +5372,11 @@ fn builtin_coding_string_in_context<H: TextHost>(
                 decode_via_ccl(&source_bytes, spec, &coding, ctx.symbol_mode())?,
                 &source_bytes,
             ))
-        } else if let Some((spec, _)) = &full_iso {
+        } else if let Some((spec, charsets)) = &full_iso {
             Some(decode_via_iso2022(
                 &source_bytes,
                 spec,
+                charsets,
                 run.decoder_state(&mut scratch).iso_2022_mut(),
                 dos_eol,
             ))

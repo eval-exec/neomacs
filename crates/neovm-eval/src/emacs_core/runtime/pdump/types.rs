@@ -1200,6 +1200,18 @@ pub struct DumpCharsetRegistry {
     /// `iso-charset` designation winners; missing in sections before version 4.
     #[serde(default)]
     pub iso_designation_syms: Option<Vec<(DumpIsoDesignationKey, DumpSymId)>>,
+    /// `(identity, published CHARSET_NAME)` for a redefined table slot.
+    /// Missing before charset section version 5.
+    #[serde(default)]
+    pub published_names: Option<Vec<(DumpSymId, DumpSymId)>>,
+    /// `(name, identity, plist slot)`. Missing before version 5; restore then
+    /// infers sharing from plist contents.
+    #[serde(default)]
+    pub binding_slots: Option<Vec<(DumpSymId, DumpSymId, u32)>>,
+    /// Plist slots in index order. `None` inside the vec is unmaterialized.
+    /// The outer None means a section older than version 5.
+    #[serde(default)]
+    pub plist_slots: Option<Vec<Option<Vec<(DumpSymId, DumpValue)>>>>,
     pub next_id: i64,
 }
 

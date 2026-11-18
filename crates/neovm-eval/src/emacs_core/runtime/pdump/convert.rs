@@ -4522,6 +4522,31 @@ pub(crate) fn dump_charset_registry(encoder: &mut DumpEncoder) -> DumpCharsetReg
                 .map(|(key, name)| (key, dump_sym_id(name)))
                 .collect()
         }),
+        published_names: snapshot.published_names.map(|names| {
+            names
+                .into_iter()
+                .map(|(identity, published)| (dump_sym_id(identity), dump_sym_id(published)))
+                .collect()
+        }),
+        binding_slots: snapshot.binding_slots.map(|records| {
+            records
+                .into_iter()
+                .map(|(name, identity, slot)| (dump_sym_id(name), dump_sym_id(identity), slot))
+                .collect()
+        }),
+        plist_slots: snapshot.plist_slots.map(|slots| {
+            slots
+                .into_iter()
+                .map(|slot| {
+                    slot.map(|pairs| {
+                        pairs
+                            .into_iter()
+                            .map(|(key, value)| (dump_sym_id(key), encoder.dump_value(&value)))
+                            .collect()
+                    })
+                })
+                .collect()
+        }),
         next_id: snapshot.next_id,
     }
 }
@@ -6944,6 +6969,31 @@ pub(crate) fn load_charset_registry(decoder: &mut LoadDecoder, dcr: &DumpCharset
             entries
                 .iter()
                 .map(|(key, name)| (*key, load_sym_id(name)))
+                .collect()
+        }),
+        published_names: dcr.published_names.as_ref().map(|names| {
+            names
+                .iter()
+                .map(|(identity, published)| (load_sym_id(identity), load_sym_id(published)))
+                .collect()
+        }),
+        binding_slots: dcr.binding_slots.as_ref().map(|records| {
+            records
+                .iter()
+                .map(|(name, identity, slot)| (load_sym_id(name), load_sym_id(identity), *slot))
+                .collect()
+        }),
+        plist_slots: dcr.plist_slots.as_ref().map(|slots| {
+            slots
+                .iter()
+                .map(|slot| {
+                    slot.as_ref().map(|pairs| {
+                        pairs
+                            .iter()
+                            .map(|(key, value)| (load_sym_id(key), decoder.load_value(value)))
+                            .collect()
+                    })
+                })
                 .collect()
         }),
         next_id: dcr.next_id,
