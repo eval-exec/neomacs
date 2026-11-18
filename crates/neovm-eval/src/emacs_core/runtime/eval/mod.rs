@@ -41,7 +41,6 @@ use crate::emacs_core::eval::data::window_layout_query::{
 use crate::emacs_core::eval::data::window_state::{
     BodyRedisplayRevision, ForcedBodyRedisplay, FrameManager,
 };
-use crate::emacs_core::reader::ObarrayReadSymbolsExt;
 pub use neomacs_display_protocol::GraphicalFaceAttribute;
 use neovm_edit::buffer::{BufferId, BufferManager, CharPos0, EmacsBytePos, LispCharPos1};
 use neovm_edit::emacs_core::bookmark::BookmarkManager;

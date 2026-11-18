@@ -241,7 +241,7 @@ fn every_gnu_defsym_spelling_membership_follows_the_profile_set() {
     let eval = crate::test_utils::new_context();
     let mut wrong: Vec<(&str, bool, bool)> = Vec::new();
     let mut checked = 0usize;
-    for (name, gate) in gnu_defsyms_generated::GNU_DEFSYMS {
+    for (name, _) in gnu_defsyms_generated::GNU_DEFSYMS {
         if neovm_value::intern::is_gnu_startup_uninterned_spelling(name) {
             continue;
         }
