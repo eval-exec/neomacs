@@ -487,6 +487,7 @@ fn decode_iso2022_attaches_charset_property_for_designated_charset() {
     let decoded = decode_via_iso2022(
         b"X\x1b$B$3$s\x1b(BY",
         &spec,
+        &[intern("iso-2022")],
         &mut Iso2022DecodeState::default(),
         DosEolLookahead::NotRequired,
     );
@@ -851,6 +852,7 @@ fn iso2022_designation_uses_table_identity_and_replays_unsafe() {
         decode_via_iso2022(
             bytes,
             &spec,
+            &[intern("iso-2022")],
             &mut Iso2022DecodeState::default(),
             DosEolLookahead::NotRequired,
         )
@@ -975,6 +977,416 @@ fn charset_prop(charset: &str) -> Value {
         Value::symbol("charset"),
         Value::from_sym_id(neovm_value::intern::intern(charset)),
     ])
+}
+
+fn emacs_char_codes(bytes: &[u8]) -> Vec<u32> {
+    let mut pos = 0;
+    let mut out = Vec::new();
+    while pos < bytes.len() {
+        let (ch, n) = neovm_value::emacs_char::string_char(&bytes[pos..]);
+        if n == 0 {
+            break;
+        }
+        out.push(ch.code());
+        pos += n;
+    }
+    out
+}
+
+struct CharsetReset;
+impl Drop for CharsetReset {
+    fn drop(&mut self) {
+        crate::emacs_core::charset::reset_charset_registry();
+    }
+}
+
+fn define_offset_charset(
+    name: &'static str,
+    dimension: i64,
+    code_space: &[i64],
+    final_char: u8,
+    offset: i64,
+    mark: Option<i64>,
+) {
+    use crate::emacs_core::charset::builtin_define_charset_internal;
+    let mut elems = vec![
+        Value::symbol(":name"),
+        Value::symbol(name),
+        Value::symbol(":code-offset"),
+        Value::fixnum(offset),
+    ];
+    if let Some(mark) = mark {
+        elems.push(Value::symbol(":mark"));
+        elems.push(Value::fixnum(mark));
+    }
+    let mut args = vec![Value::NIL; 17];
+    args[0] = Value::symbol(name);
+    args[1] = Value::fixnum(dimension);
+    args[2] = Value::vector(code_space.iter().copied().map(Value::fixnum).collect());
+    args[5] = Value::fixnum(i64::from(final_char));
+    args[11] = Value::fixnum(offset);
+    args[16] = Value::list(elems);
+    builtin_define_charset_internal(args).unwrap();
+}
+
+fn iso_charset_name(dimension: i64, chars: i64, final_char: u8) -> Value {
+    crate::emacs_core::charset::builtin_iso_charset(vec![
+        Value::fixnum(dimension),
+        Value::fixnum(chars),
+        Value::fixnum(i64::from(final_char)),
+    ])
+    .unwrap()
+}
+
+/// GNU `Fdefine_charset_internal` keeps the id and publishes the name used
+/// for the redefinition (`charset.c:1114-1154`). Both finals then answer
+/// that name from `iso-charset`.
+#[test]
+fn redefine_through_alias_publishes_the_defining_name() {
+    crate::test_utils::init_test_tracing();
+    use crate::emacs_core::charset::{
+        builtin_charset_id_internal, builtin_charset_plist, builtin_define_charset_alias,
+        reset_charset_registry,
+    };
+    use neovm_value::plist::plist_get;
+
+    let _reset = CharsetReset;
+    reset_charset_registry();
+    define_offset_charset("cr-base", 1, &[33, 126], b'9', 100, None);
+    builtin_define_charset_alias(vec![Value::symbol("cr-probe"), Value::symbol("cr-base")])
+        .unwrap();
+    define_offset_charset("cr-probe", 1, &[33, 126], b'8', 200, None);
+    assert!(iso_charset_name(1, 94, b'9').is_bare_symbol_named("cr-probe"));
+    assert!(iso_charset_name(1, 94, b'8').is_bare_symbol_named("cr-probe"));
+    let id = |name: &'static str| {
+        builtin_charset_id_internal(vec![Value::symbol(name)])
+            .unwrap()
+            .as_int()
+            .unwrap()
+    };
+    assert_eq!(id("cr-probe"), id("cr-base"));
+    let plist = |name: &'static str| builtin_charset_plist(vec![Value::symbol(name)]).unwrap();
+    assert!(
+        plist_get(plist("cr-probe"), &Value::symbol(":name"))
+            .unwrap()
+            .is_bare_symbol_named("cr-probe")
+    );
+    assert!(
+        plist_get(plist("cr-base"), &Value::symbol(":name"))
+            .unwrap()
+            .is_bare_symbol_named("cr-base")
+    );
+}
+
+/// A 96-position code space is a 96-set for both registration and the
+/// designation escape. `[33 128]` does not start at 0x20.
+#[test]
+fn iso2022_emits_96_set_from_code_space_width() {
+    crate::test_utils::init_test_tracing();
+    use crate::emacs_core::charset::{charset_decode_char, reset_charset_registry};
+    use crate::emacs_core::coding::{Iso2022Spec, IsoFlag};
+    use neovm_value::intern::intern;
+
+    let _reset = CharsetReset;
+    reset_charset_registry();
+    define_offset_charset("cr-wide", 1, &[33, 128], b'W', 0xE000, None);
+    assert!(iso_charset_name(1, 96, b'W').is_bare_symbol_named("cr-wide"));
+    assert!(iso_charset_name(1, 94, b'W').is_nil());
+    let ch = charset_decode_char(intern("cr-wide"), 33).unwrap();
+    let spec = Iso2022Spec {
+        initial: [Some(intern("ascii")), None, None, None],
+        request: vec![],
+        reg_usage: (0, 0),
+        flags: enumflags2::BitFlags::from_flag(IsoFlag::SevenBits)
+            | IsoFlag::Designation
+            | IsoFlag::AsciiAtEol,
+    };
+    let encoded = encode_via_iso2022(
+        &neovm_value::heap_types::LispString::from_emacs_bytes(
+            neovm_value::emacs_char::EmacsChar::from_code(ch as u32)
+                .unwrap()
+                .to_emacs_bytes(),
+        ),
+        &spec,
+        &[intern("ascii"), intern("cr-wide")],
+        EncodingBoundary::CompleteText,
+        &mut CodingEncoderState::default(),
+    );
+    assert_eq!(encoded, b"\x1b,W!\x1b(B");
+}
+
+/// `iso-2022-jp` does not list `latin-iso8859-1`, so `ESC ( Z` is replayed.
+/// A full-support list still decodes it.
+#[test]
+fn iso2022_rejects_a_charset_the_coding_system_does_not_list() {
+    crate::test_utils::init_test_tracing();
+    use crate::emacs_core::charset::{builtin_declare_equiv_charset, reset_charset_registry};
+    use crate::emacs_core::coding::{Iso2022Spec, IsoFlag};
+    use neovm_value::intern::intern;
+
+    let _reset = CharsetReset;
+    reset_charset_registry();
+    builtin_declare_equiv_charset(vec![
+        Value::fixnum(1),
+        Value::fixnum(94),
+        Value::fixnum(i64::from(b'Z')),
+        Value::symbol("latin-iso8859-1"),
+    ])
+    .unwrap();
+    let spec = Iso2022Spec {
+        initial: [Some(intern("ascii")), None, None, None],
+        request: vec![],
+        reg_usage: (0, 0),
+        flags: enumflags2::BitFlags::from_flag(IsoFlag::SevenBits) | IsoFlag::Designation,
+    };
+    let decode = |list: &[neovm_value::intern::SymId]| {
+        decode_via_iso2022(
+            b"\x1b(ZA",
+            &spec,
+            list,
+            &mut Iso2022DecodeState::default(),
+            DosEolLookahead::NotRequired,
+        )
+    };
+    let rejected = decode(&[intern("ascii")]);
+    assert_eq!(rejected.bytes, b"\x1b(ZA");
+    let accepted = decode(&[intern("iso-2022")]);
+    assert_eq!(
+        neovm_value::emacs_char::to_utf8_lossy(&accepted.bytes),
+        "\u{00C1}"
+    );
+}
+
+/// Dimension 3 reads three positions. GNU's formula validates the third
+/// byte and then assembles `c2` twice (coding.c:3911).
+#[test]
+fn iso2022_reads_three_positions_of_a_dimension_three_charset() {
+    crate::test_utils::init_test_tracing();
+    use crate::emacs_core::charset::{builtin_declare_equiv_charset, reset_charset_registry};
+    use crate::emacs_core::coding::{Iso2022Spec, IsoFlag};
+    use neovm_value::intern::intern;
+
+    let _reset = CharsetReset;
+    reset_charset_registry();
+    define_offset_charset(
+        "cr-3d",
+        3,
+        &[33, 126, 33, 126, 33, 126],
+        b'Y',
+        0x300000,
+        None,
+    );
+    builtin_declare_equiv_charset(vec![
+        Value::fixnum(1),
+        Value::fixnum(94),
+        Value::fixnum(i64::from(b'Y')),
+        Value::symbol("cr-3d"),
+    ])
+    .unwrap();
+    let spec = Iso2022Spec {
+        initial: [Some(intern("ascii")), None, None, None],
+        request: vec![],
+        reg_usage: (0, 0),
+        flags: enumflags2::BitFlags::from_flag(IsoFlag::SevenBits) | IsoFlag::Designation,
+    };
+    let decode = |bytes: &[u8]| {
+        emacs_char_codes(
+            &decode_via_iso2022(
+                bytes,
+                &spec,
+                &[intern("iso-2022")],
+                &mut Iso2022DecodeState::default(),
+                DosEolLookahead::NotRequired,
+            )
+            .bytes,
+        )
+    };
+    assert_eq!(decode(b"\x1b(Y!!!"), vec![0x300000]);
+    assert_eq!(decode(b"\x1b(Y!!A"), vec![0x300000]);
+}
+
+/// A control byte is not a continuation. The first graphic byte is replayed
+/// and the following escape is decoded on its own.
+#[test]
+fn iso2022_rejects_a_control_continuation_before_assembly() {
+    crate::test_utils::init_test_tracing();
+    use crate::emacs_core::charset::{builtin_declare_equiv_charset, reset_charset_registry};
+    use crate::emacs_core::coding::{Iso2022Spec, IsoFlag};
+    use neovm_value::intern::intern;
+
+    let _reset = CharsetReset;
+    reset_charset_registry();
+    define_offset_charset("cr-open", 2, &[0, 255, 0, 255], b'X', 0, None);
+    builtin_declare_equiv_charset(vec![
+        Value::fixnum(1),
+        Value::fixnum(94),
+        Value::fixnum(i64::from(b'X')),
+        Value::symbol("cr-open"),
+    ])
+    .unwrap();
+    let spec = Iso2022Spec {
+        initial: [Some(intern("ascii")), None, None, None],
+        request: vec![],
+        reg_usage: (0, 0),
+        flags: enumflags2::BitFlags::from_flag(IsoFlag::SevenBits) | IsoFlag::Designation,
+    };
+    let decode = |bytes: &[u8]| {
+        emacs_char_codes(
+            &decode_via_iso2022(
+                bytes,
+                &spec,
+                &[intern("ascii"), intern("cr-open")],
+                &mut Iso2022DecodeState::default(),
+                DosEolLookahead::NotRequired,
+            )
+            .bytes,
+        )
+    };
+    assert_eq!(decode(b"\x1b(XA\x1b(B"), vec![b'A' as u32]);
+    assert_eq!(decode(b"\x1b(X!!"), vec![0x2121]);
+}
+
+fn plist_mark(name: &'static str) -> Option<i64> {
+    use crate::emacs_core::charset::builtin_charset_plist;
+    use neovm_value::plist::plist_get;
+    plist_get(
+        builtin_charset_plist(vec![Value::symbol(name)]).unwrap(),
+        &Value::symbol(":mark"),
+    )
+    .and_then(|value| value.as_int())
+}
+
+/// Alias plists survive a snapshot: a physical name that captured another
+/// charset's vector, an in-place `setcar`, and a shared slot that must not
+/// be split or joined by comparing pair contents.
+#[test]
+fn charset_snapshot_keeps_captured_plist_slots() {
+    crate::test_utils::init_test_tracing();
+    use crate::emacs_core::charset::{
+        builtin_charset_plist, builtin_define_charset_alias, reset_charset_registry,
+        restore_charset_registry, set_charset_plist_value, snapshot_charset_registry,
+    };
+    use neovm_value::value::eq_value;
+
+    let _reset = CharsetReset;
+    reset_charset_registry();
+
+    define_offset_charset("cr-phys", 1, &[33, 126], b'7', 10, Some(9));
+    define_offset_charset("cr-target", 1, &[33, 126], b'6', 20, Some(1));
+    builtin_define_charset_alias(vec![Value::symbol("cr-phys"), Value::symbol("cr-target")])
+        .unwrap();
+    define_offset_charset("cr-target", 1, &[33, 126], b'5', 30, Some(2));
+    assert_eq!(plist_mark("cr-phys"), Some(1));
+    assert_eq!(plist_mark("cr-target"), Some(2));
+
+    define_offset_charset("cr-live", 1, &[33, 126], b'4', 40, Some(1));
+    let live = builtin_charset_plist(vec![Value::symbol("cr-live")]).unwrap();
+    // (:name NAME :code-offset N :mark 1 ...) — the mark's value cell.
+    let mut cell = live;
+    for _ in 0..5 {
+        cell = cell.cons_cdr();
+    }
+    cell.set_car(Value::fixnum(2));
+    assert_eq!(plist_mark("cr-live"), Some(2));
+
+    define_offset_charset("cr-shared", 1, &[33, 126], b'3', 50, Some(1));
+    builtin_define_charset_alias(vec![
+        Value::symbol("cr-share-p"),
+        Value::symbol("cr-shared"),
+    ])
+    .unwrap();
+    builtin_define_charset_alias(vec![
+        Value::symbol("cr-share-q"),
+        Value::symbol("cr-shared"),
+    ])
+    .unwrap();
+    define_offset_charset("cr-shared", 1, &[33, 126], b'2', 60, Some(8));
+    assert_eq!(plist_mark("cr-share-p"), Some(1));
+    assert_eq!(plist_mark("cr-share-q"), Some(1));
+    let shared = builtin_charset_plist(vec![Value::symbol("cr-share-p")]).unwrap();
+    let shared_q = builtin_charset_plist(vec![Value::symbol("cr-share-q")]).unwrap();
+    assert!(eq_value(&shared, &shared_q));
+
+    define_offset_charset("cr-equal", 1, &[33, 126], b'1', 70, Some(4));
+    builtin_define_charset_alias(vec![Value::symbol("cr-equal-p"), Value::symbol("cr-equal")])
+        .unwrap();
+    define_offset_charset("cr-equal", 1, &[33, 126], b'0', 80, Some(4));
+    let before = builtin_charset_plist(vec![Value::symbol("cr-equal-p")]).unwrap();
+    let after = builtin_charset_plist(vec![Value::symbol("cr-equal")]).unwrap();
+    assert!(!eq_value(&before, &after));
+
+    let snapshot = snapshot_charset_registry();
+    reset_charset_registry();
+    restore_charset_registry(snapshot);
+
+    assert_eq!(plist_mark("cr-phys"), Some(1));
+    assert_eq!(plist_mark("cr-target"), Some(2));
+    assert_eq!(plist_mark("cr-live"), Some(2));
+    assert_eq!(plist_mark("cr-share-p"), Some(1));
+    assert_eq!(plist_mark("cr-share-q"), Some(1));
+    assert!(eq_value(
+        &builtin_charset_plist(vec![Value::symbol("cr-share-p")]).unwrap(),
+        &builtin_charset_plist(vec![Value::symbol("cr-share-q")]).unwrap(),
+    ));
+    assert!(!eq_value(
+        &builtin_charset_plist(vec![Value::symbol("cr-equal-p")]).unwrap(),
+        &builtin_charset_plist(vec![Value::symbol("cr-equal")]).unwrap(),
+    ));
+
+    let updated = Value::list(vec![
+        Value::symbol(":name"),
+        Value::symbol("cr-shared"),
+        Value::symbol(":mark"),
+        Value::fixnum(3),
+    ]);
+    let pairs = neovm_value::value::list_to_vec(&updated).unwrap();
+    let stored: Vec<_> = pairs
+        .chunks(2)
+        .map(|pair| {
+            (
+                pair[0]
+                    .as_symbol_id(neovm_value::tagged::value::SymbolMode::Bare)
+                    .unwrap(),
+                pair[1],
+            )
+        })
+        .collect();
+    set_charset_plist_value(neovm_value::intern::intern("cr-share-p"), stored, updated);
+    assert_eq!(plist_mark("cr-share-q"), Some(3));
+    assert_eq!(plist_mark("cr-shared"), Some(8));
+}
+
+/// A plist slot nobody still names is not a GC root. A slot an alias still
+/// holds is.
+#[test]
+fn abandoned_charset_plist_slot_is_not_a_gc_root() {
+    crate::test_utils::init_test_tracing();
+    use crate::emacs_core::charset::{
+        builtin_define_charset_alias, collect_charset_registry_gc_roots,
+        current_charset_registry_handle, reset_charset_registry,
+    };
+
+    let _reset = CharsetReset;
+    reset_charset_registry();
+    const ABANDONED: i64 = 0x504C_1501;
+    const KEPT: i64 = 0x504C_1502;
+    define_offset_charset("cr-gc", 1, &[33, 126], b'P', 1, Some(ABANDONED));
+    define_offset_charset("cr-gc", 1, &[33, 126], b'Q', 2, Some(2));
+    let handle = current_charset_registry_handle();
+    let mut roots = Vec::new();
+    collect_charset_registry_gc_roots(&handle, &mut roots);
+    assert!(roots.iter().all(|value| value.as_int() != Some(ABANDONED)));
+
+    define_offset_charset("cr-gc-keep", 1, &[33, 126], b'R', 3, Some(KEPT));
+    builtin_define_charset_alias(vec![
+        Value::symbol("cr-gc-alias"),
+        Value::symbol("cr-gc-keep"),
+    ])
+    .unwrap();
+    define_offset_charset("cr-gc-keep", 1, &[33, 126], b'S', 4, Some(5));
+    roots.clear();
+    collect_charset_registry_gc_roots(&handle, &mut roots);
+    assert!(roots.iter().any(|value| value.as_int() == Some(KEPT)));
 }
 
 #[cfg(test)]

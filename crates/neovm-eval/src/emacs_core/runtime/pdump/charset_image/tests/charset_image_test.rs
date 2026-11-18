@@ -58,6 +58,9 @@ fn charset_section_round_trips_registry_state() {
         priority_identity_syms: Some(vec![DumpSymId(8), DumpSymId(2)]),
         alias_syms: Some(vec![(DumpSymId(12), DumpSymId(8))]),
         iso_designation_syms: Some(vec![((1, true, 124), DumpSymId(8))]),
+        published_names: Some(vec![(DumpSymId(8), DumpSymId(12))]),
+        binding_slots: Some(vec![(DumpSymId(12), DumpSymId(8), 1)]),
+        plist_slots: Some(vec![None, Some(vec![(DumpSymId(5), DumpValue::Int(6))])]),
         next_id: 11,
     };
 
