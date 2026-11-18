@@ -5492,7 +5492,6 @@ impl Context {
         if forms.is_empty() {
             return Ok(Value::NIL);
         }
-        self.intern_read_form_symbols(&forms);
         // Root every parsed form: each `eval_sub` call may trigger GC, and
         // the un-iterated forms still sitting in the heap-allocated Vec are
         // otherwise invisible to the exact root walk.
@@ -5500,6 +5499,10 @@ impl Context {
         for form in &forms {
             self.push_specpdl_root(*form);
         }
+        // The reader interns as it reads (GNU `Fintern`); materialize that
+        // membership after the forms are rooted, because interning can
+        // allocate and collect.
+        self.intern_read_form_symbols(&forms);
         let mut result = Value::NIL;
         let mut error = None;
         for form in &forms {
@@ -5571,7 +5574,6 @@ impl Context {
                 ))];
             }
         };
-        self.intern_read_form_symbols(&forms);
         // Root every parsed form upfront. The previous version only rooted
         // successful results; un-iterated parsed forms still sitting in the
         // heap-allocated Vec were otherwise invisible to exact GC.
@@ -5579,6 +5581,8 @@ impl Context {
         for form in &forms {
             self.push_specpdl_root(*form);
         }
+        // Reader interning happens after rooting: it can allocate and collect.
+        self.intern_read_form_symbols(&forms);
         let mut results = Vec::with_capacity(forms.len());
         for form in &forms {
             // Each form is one top-level evaluation: its root group ends when
