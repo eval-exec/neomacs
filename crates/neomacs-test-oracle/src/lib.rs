@@ -447,29 +447,38 @@ pub fn wrap_elisp_outcome_with_normalizer_bindings(
                   (print-escape-newlines t)
                   (print-escape-control-characters t))
            {normalizer}
-           (let ({normalizer_bindings})
-             (condition-case neomacs--oracle-error
-                 (let ((neomacs--oracle-result
-                        (progn
-                          {setup}
-                          {probe})))
-                   (princ "\n" 'external-debugging-output)
-                   (princ {marker} 'external-debugging-output)
-                   (princ "OK " 'external-debugging-output)
-                   (prin1
+           ;; The bindings wrap only the normalization, never the probe.  An
+           ;; extra enclosing form would add one `eval' frame to the probe's
+           ;; dynamic depth, and packages that exhaust `max-lisp-eval-depth'
+           ;; on purpose (alt-codes' 383-clause pcase expansion) then signal
+           ;; from a different guard: eval.c's `excessive-lisp-nesting' at a
+           ;; shallower frame vs bytecode.c's plain `error' at one frame
+           ;; deeper.  Keeping the probe's frame budget identical to the
+           ;; pre-normalizer contract is part of the transport contract.
+           (condition-case neomacs--oracle-error
+               (let ((neomacs--oracle-result
+                      (progn
+                        {setup}
+                        {probe})))
+                 (princ "\n" 'external-debugging-output)
+                 (princ {marker} 'external-debugging-output)
+                 (princ "OK " 'external-debugging-output)
+                 (prin1
+                  (let ({normalizer_bindings})
                     (neomacs--test-oracle-normalized
-                     neomacs--oracle-result)
-                    'external-debugging-output)
-                   (terpri 'external-debugging-output))
-               (error
-                (princ "\n" 'external-debugging-output)
-                (princ {marker} 'external-debugging-output)
-                (princ "ERR " 'external-debugging-output)
-                (prin1
+                     neomacs--oracle-result))
+                  'external-debugging-output)
+                 (terpri 'external-debugging-output))
+             (error
+              (princ "\n" 'external-debugging-output)
+              (princ {marker} 'external-debugging-output)
+              (princ "ERR " 'external-debugging-output)
+              (prin1
+               (let ({normalizer_bindings})
                  (neomacs--test-oracle-normalized
-                  neomacs--oracle-error)
-                 'external-debugging-output)
-                (terpri 'external-debugging-output)))))"##,
+                  neomacs--oracle-error))
+               'external-debugging-output)
+              (terpri 'external-debugging-output))))"##,
         normalizer = oracle_normalizer_elisp(),
         normalizer_bindings = normalizer_bindings,
         setup = setup,
@@ -514,8 +523,13 @@ pub fn wrap_elisp_batch_outcomes(
 }
 
 /// As [`wrap_elisp_batch_outcomes`], with `normalizer_bindings` dynamically
-/// bound around the whole batch so every probe in it records the same
-/// documented normalizer contract.
+/// bound around each case's normalization so every probe in the batch records
+/// the same documented normalizer contract.
+///
+/// The bindings deliberately do not enclose the probes: an extra enclosing
+/// form would change the probe's `lisp_eval_depth', and a package that
+/// exhausts `max-lisp-eval-depth' on purpose can then signal from a different
+/// guard (eval.c `excessive-lisp-nesting' vs bytecode.c's plain `error').
 pub fn wrap_elisp_batch_outcomes_with_normalizer_bindings(
     setup: &str,
     cases: &[BatchProbe<'_>],
@@ -553,8 +567,9 @@ pub fn wrap_elisp_batch_outcomes_with_normalizer_bindings(
                  (princ ":" 'external-debugging-output)
                  (princ "OK " 'external-debugging-output)
                  (prin1
-                  (neomacs--test-oracle-normalized
-                   neomacs--oracle-result)
+                  (let ({bindings})
+                    (neomacs--test-oracle-normalized
+                     neomacs--oracle-result))
                   'external-debugging-output)
                  (terpri 'external-debugging-output))
              (error
@@ -564,8 +579,9 @@ pub fn wrap_elisp_batch_outcomes_with_normalizer_bindings(
               (princ ":" 'external-debugging-output)
               (princ "ERR " 'external-debugging-output)
               (prin1
-               (neomacs--test-oracle-normalized
-                neomacs--oracle-error)
+               (let ({bindings})
+                 (neomacs--test-oracle-normalized
+                  neomacs--oracle-error))
                'external-debugging-output)
               (terpri 'external-debugging-output)))
            (neomacs--test-oracle-case-complete {id})
@@ -573,6 +589,7 @@ pub fn wrap_elisp_batch_outcomes_with_normalizer_bindings(
             probe = case.probe,
             marker = outcome_marker_lit,
             id = id_lit,
+            bindings = normalizer_bindings,
         ));
     }
 
@@ -591,11 +608,9 @@ pub fn wrap_elisp_batch_outcomes_with_normalizer_bindings(
              (princ {completion_marker} 'external-debugging-output)
              (princ id 'external-debugging-output)
              (terpri 'external-debugging-output))
-           (let ({normalizer_bindings})
-             (progn
-               {body})))"##,
+           (progn
+             {body}))"##,
         normalizer = oracle_normalizer_elisp(),
-        normalizer_bindings = normalizer_bindings,
         begin_marker = begin_marker_lit,
         completion_marker = completion_marker_lit,
         body = body,
