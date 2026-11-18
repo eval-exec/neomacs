@@ -88,3 +88,35 @@ fn oracle_prop_declare_equiv_charset_and_alias_designations() {
     ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
+
+#[test]
+fn oracle_prop_iso_charset_full_designation_table() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // Every designation of the dumped `iso_charset_table` (charset.c:103,
+    // dumped by `PDUMPER_REMEMBER_SCALAR` at charset.c:2340), walked through
+    // `iso-charset` over every valid (DIMENSION, CHARS, FINAL-CHAR).
+    let form = "(let (acc) (dolist (d '(1 2 3)) (dolist (c '(94 96)) (let ((f ?0)) \
+        (while (<= f ?~) (let ((cs (iso-charset d c f))) (when cs (push (list d c f cs) acc))) \
+        (setq f (1+ f)))))) (nreverse acc))";
+    let expect = expect_test::expect![[
+        r#""OK ((1 94 48 chinese-sisheng) (1 94 49 lao) (1 94 50 arabic-digit) (1 94 51 arabic-1-column) (1 94 52 arabic-2-column) (1 94 53 indian-is13194) (1 94 66 ascii) (1 94 73 katakana-jisx0201) (1 94 74 latin-jisx0201) (1 96 48 ipa) (1 96 49 vietnamese-viscii-lower) (1 96 50 vietnamese-viscii-upper) (1 96 65 latin-iso8859-1) (1 96 66 latin-iso8859-2) (1 96 67 latin-iso8859-3) (1 96 68 latin-iso8859-4) (1 96 70 greek-iso8859-7) (1 96 71 arabic-iso8859-6) (1 96 72 hebrew-iso8859-8) (1 96 76 cyrillic-iso8859-5) (1 96 77 latin-iso8859-9) (1 96 84 thai-tis620) (1 96 86 latin-iso8859-10) (1 96 89 latin-iso8859-13) (1 96 95 latin-iso8859-14) (1 96 98 latin-iso8859-15) (1 96 102 latin-iso8859-16) (2 94 48 chinese-big5-1) (2 94 49 chinese-big5-2) (2 94 51 ethiopic) (2 94 53 indian-2-column) (2 94 54 indian-1-column) (2 94 55 tibetan) (2 94 56 tibetan-1-column) (2 94 64 japanese-jisx0208-1978) (2 94 65 chinese-gb2312) (2 94 66 japanese-jisx0208) (2 94 67 korean-ksc5601) (2 94 68 japanese-jisx0212) (2 94 71 chinese-cns11643-1) (2 94 72 chinese-cns11643-2) (2 94 73 chinese-cns11643-3) (2 94 74 chinese-cns11643-4) (2 94 75 chinese-cns11643-5) (2 94 76 chinese-cns11643-6) (2 94 77 chinese-cns11643-7) (2 94 79 japanese-jisx0213-1) (2 94 80 japanese-jisx0213-2) (2 94 81 japanese-jisx0213.2004-1) (2 96 49 mule-unicode-0100-24ff) (2 96 50 mule-unicode-2500-33ff) (2 96 51 mule-unicode-e000-ffff) (2 96 52 indian-glyph))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+#[test]
+fn oracle_prop_iso_charset_final_char_boundaries_and_type_errors() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // `check_iso_charset_parameter` (charset.c:1385-1404): CHECK_FIXNUM on
+    // DIMENSION and CHARS, CHECK_CHARACTER on FINAL-CHAR, then the DIMENSION,
+    // CHARS and FINAL-CHAR ('0'..'~') range errors in that order.
+    let form = "(mapcar (lambda (args) (condition-case e (apply #'iso-charset args) (error e))) \
+        '((1 94 ?0) (1 94 ?~) (1 94 127) (1 94 32) (1 94 233) (1.0 94 ?B) (1 nil ?B) \
+        (4 94 ?B) (1 95 ?B) (0 1 nil) (1 94 4194304) (3 96 ?B)))";
+    let expect = expect_test::expect![[
+        r#""OK (chinese-sisheng nil (error \"Invalid FINAL-CHAR ‘\u{7f}’, it should be ‘0’..‘~’\") (error \"Invalid FINAL-CHAR ‘ ’, it should be ‘0’..‘~’\") (error \"Invalid FINAL-CHAR ‘é’, it should be ‘0’..‘~’\") (wrong-type-argument fixnump 1.0) (wrong-type-argument fixnump nil) (error \"Invalid DIMENSION 4, it should be 1, 2, or 3\") (error \"Invalid CHARS 95, it should be 94 or 96\") (wrong-type-argument characterp nil) (wrong-type-argument characterp 4194304) nil)""#
+    ]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
