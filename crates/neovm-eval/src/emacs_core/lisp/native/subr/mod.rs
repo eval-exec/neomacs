@@ -631,6 +631,67 @@ pub fn take_registered_subr_trace_for_test() -> Vec<SubrRegistration> {
     REGISTERED_SUBR_TRACE.with(|trace| trace.borrow_mut().take().unwrap_or_default())
 }
 
+/// W-REG (R1 carry-forward): one installed registration stage — the owning
+/// crate, the typed segment id, and the number of registration rows the
+/// stage installed.
+///
+/// The core-side W-REG gate compares this sequence with the owner manifest,
+/// so a missing or present-but-uninstalled segment is named directly with
+/// its crate and row count before the frozen-trace diff runs.
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[doc(hidden)]
+pub struct SubrStageRegistration {
+    pub owner: &'static str,
+    pub segment: &'static str,
+    pub rows: usize,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+thread_local! {
+    /// `None` = disarmed; mirrors `REGISTERED_SUBR_TRACE`. Only stage calls
+    /// made while a test arms the trace are recorded.
+    static REGISTERED_STAGE_TRACE: std::cell::RefCell<Option<Vec<SubrStageRegistration>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Record one installed stage at its registrar. A no-op while disarmed.
+///
+/// Public (doc-hidden) because the owning crate's `register_stage` calls it;
+/// the item only exists under the test-support surface.
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub fn record_registered_subr_stage_for_test(
+    owner: &'static str,
+    segment: &'static str,
+    rows: usize,
+) {
+    REGISTERED_STAGE_TRACE.with(|trace| {
+        if let Some(trace) = trace.borrow_mut().as_mut() {
+            trace.push(SubrStageRegistration {
+                owner,
+                segment,
+                rows,
+            });
+        }
+    });
+}
+
+/// Arm the stage trace with an empty vector (from now on, stages record).
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub fn reset_registered_subr_stage_trace_for_test() {
+    REGISTERED_STAGE_TRACE.with(|trace| *trace.borrow_mut() = Some(Vec::new()));
+}
+
+/// Drain the stage trace and disarm it. An unarmed trace yields an empty
+/// vector.
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub fn take_registered_subr_stage_trace_for_test() -> Vec<SubrStageRegistration> {
+    REGISTERED_STAGE_TRACE.with(|trace| trace.borrow_mut().take().unwrap_or_default())
+}
+
 const fn is_subrs_source_file(path: &str) -> bool {
     const NAME: &[u8] = b"subrs.rs";
     let bytes = path.as_bytes();
