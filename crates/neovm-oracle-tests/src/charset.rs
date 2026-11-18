@@ -154,3 +154,119 @@ fn oracle_prop_iso_2022_designation_follows_declare_equiv_charset() {
     let expect = expect_test::expect![[r#""OK (((165) latin-jisx0201) ((92) nil))""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
+
+#[test]
+fn oracle_prop_charset_alias_keeps_captured_identity() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // `Fdefine_charset_alias` (charset.c:1289-1300) stores the target's
+    // current attribute vector. Rebinding that name replaces only its slot.
+    let form = "(progn (define-charset-alias 'probe 'latin-iso8859-1) \
+        (define-charset-alias 'latin-iso8859-1 'ascii) \
+        (list (charset-id-internal 'probe) (plist-get (charset-plist 'probe) :name) \
+          (charset-id-internal 'latin-iso8859-1) (plist-get (charset-plist 'latin-iso8859-1) :name)))";
+    let expect = expect_test::expect![[r#""OK (5 latin-iso8859-1 0 ascii)""#]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+#[test]
+fn oracle_prop_iso_2022_alias_keeps_designated_charset() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // Declare, then alias. The table holds the id captured at declare time
+    // (charset.c:1441), so the data byte still decodes through latin-iso8859-1.
+    let form = "(progn (declare-equiv-charset 1 94 ?Z 'latin-iso8859-1) \
+        (define-charset-alias 'latin-iso8859-1 'ascii) \
+        (let ((d (decode-coding-string \"\\e(ZA\" 'iso-2022-7bit))) \
+        (list (string-to-list d) (get-text-property 0 'charset d) (iso-charset 1 94 ?Z))))";
+    let expect = expect_test::expect![[r#""OK ((193) latin-iso8859-1 latin-iso8859-1)""#]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+#[test]
+fn oracle_prop_iso_2022_unknown_designation_replays_bytes() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // `DECODE_DESIGNATION` failure takes `invalid_code` (coding.c:3946):
+    // one source byte per output character, not a consumed escape.
+    let form = "(string-to-list (decode-coding-string \"\\e(Z\\\\\" 'iso-2022-7bit))";
+    let expect = expect_test::expect![[r#""OK (27 40 90 92)""#]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+#[test]
+fn oracle_prop_iso_2022_equiv_without_final_replays_designation() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // `declare-equiv-charset` always writes the table (charset.c:1428-1442).
+    // A charset with no ISO final is not in `Viso_2022_charset_list`
+    // (charset.c:1163-1168), so iso-2022-7bit replays the escape.
+    let form = "(progn (declare-equiv-charset 1 94 ?Z 'unicode) \
+        (let ((d (decode-coding-string \"\\e(ZA\" 'iso-2022-7bit))) \
+        (list (string-to-list d) (get-text-property 0 'charset d) (iso-charset 1 94 ?Z))))";
+    let expect = expect_test::expect![[r#""OK ((27 40 90 65) nil unicode)""#]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+#[test]
+fn oracle_prop_iso_2022_encode_ignores_public_alias() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // ISO encode selects from `Viso_2022_charset_list` by id. Aliasing
+    // latin-iso8859-1 does not change the bytes for U+00C1.
+    let form = "(let ((before (string-to-list (encode-coding-string (string #xC1) 'iso-2022-7bit)))) \
+        (define-charset-alias 'latin-iso8859-1 'ascii) \
+        (list before (string-to-list (encode-coding-string (string #xC1) 'iso-2022-7bit))))";
+    let expect = expect_test::expect![[r#""OK ((27 44 65 65 27 40 66) (27 44 65 65 27 40 66))""#]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+#[test]
+fn oracle_prop_redefine_splits_alias_plist_from_table_method() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // charset.c:1114-1154: redefining a name keeps the id, overwrites
+    // `charset_table[id]`, and replaces only that name's attribute vector.
+    // decode-char / encode-char use the id. charset-plist uses the vector.
+    // Old ISO finals stay in the table (charset.c:1163-1168 only inserts).
+    let form = "(progn \
+        (define-charset 'redef-x \"first\" :dimension 1 :code-space [33 126] :code-offset 500 :iso-final-char ?9) \
+        (define-charset-alias 'redef-probe 'redef-x) \
+        (set-charset-plist 'redef-x (append (charset-plist 'redef-x) '(:probe-mark 1))) \
+        (let ((shared (list \
+            (eq (charset-id-internal 'redef-probe) (charset-id-internal 'redef-x)) \
+            (eq (charset-plist 'redef-probe) (charset-plist 'redef-x)) \
+            (plist-get (charset-plist 'redef-probe) :probe-mark) \
+            (plist-get (charset-plist 'redef-probe) :code-offset) \
+            (decode-char 'redef-probe 65) \
+            (decode-char 'redef-x 65) \
+            (eq (iso-charset 1 94 ?9) 'redef-x)))) \
+          (define-charset 'redef-x \"second\" :dimension 1 :code-space [33 126] :code-offset 800 :iso-final-char ?8) \
+          (list shared \
+            (eq (charset-id-internal 'redef-probe) (charset-id-internal 'redef-x)) \
+            (eq (charset-plist 'redef-probe) (charset-plist 'redef-x)) \
+            (plist-get (charset-plist 'redef-probe) :code-offset) \
+            (plist-get (charset-plist 'redef-x) :code-offset) \
+            (plist-get (charset-plist 'redef-probe) :iso-final-char) \
+            (plist-get (charset-plist 'redef-x) :iso-final-char) \
+            (plist-get (charset-plist 'redef-probe) :probe-mark) \
+            (plist-get (charset-plist 'redef-x) :probe-mark) \
+            (decode-char 'redef-probe 65) \
+            (decode-char 'redef-x 65) \
+            (encode-char 532 'redef-probe) \
+            (encode-char 532 'redef-x) \
+            (encode-char 832 'redef-probe) \
+            (encode-char 832 'redef-x) \
+            (eq (iso-charset 1 94 ?9) 'redef-x) \
+            (eq (iso-charset 1 94 ?8) 'redef-x) \
+            (progn \
+              (set-charset-plist 'redef-x (append (charset-plist 'redef-x) '(:after 2))) \
+              (list (plist-get (charset-plist 'redef-probe) :after) \
+                (plist-get (charset-plist 'redef-x) :after) \
+                (plist-get (charset-plist 'redef-probe) :code-offset) \
+                (decode-char 'redef-probe 65))))))";
+    let expect = expect_test::expect![[
+        r#""OK ((t t 1 500 532 532 t) t nil 500 800 57 56 1 nil 832 832 nil nil 65 65 t t (nil 2 500 832))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}

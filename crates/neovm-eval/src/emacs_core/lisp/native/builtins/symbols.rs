@@ -3044,7 +3044,7 @@ pub fn builtin_set_charset_plist(args: Vec<Value>, symbol_mode: SymbolMode) -> E
             i += 2;
         }
     }
-    super::charset::set_charset_plist_registry(name, plist_pairs);
+    super::charset::set_charset_plist_value(name, plist_pairs, args[1]);
     Ok(args[1])
 }
 

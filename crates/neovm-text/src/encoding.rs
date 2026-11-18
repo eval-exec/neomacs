@@ -4382,7 +4382,10 @@ fn encode_via_iso2022(
     boundary: EncodingBoundary,
     state: &mut CodingEncoderState,
 ) -> Vec<u8> {
-    use crate::emacs_core::charset::{charset_encode_char, charset_iso2022_designation};
+    use crate::emacs_core::charset::{
+        charset_encode_char, charset_encode_char_physical, charset_iso2022_designation,
+        charset_iso2022_designation_physical,
+    };
     use crate::emacs_core::coding::IsoFlag;
     let seven = spec.flags.contains(IsoFlag::SevenBits);
     let single_shift = spec.flags.contains(IsoFlag::SingleShift);
@@ -4460,9 +4463,21 @@ fn encode_via_iso2022(
             // id-ordered set (with -1978 already dropped).
             let mut found = None;
             for &cs in &candidates {
-                if let Some((_, dim, c96)) = charset_iso2022_designation(cs)
-                    && let Some(code) = charset_encode_char(cs, i64::from(c))
-                {
+                // FULL_SUPPORT walks `Viso_2022_charset_list` by id. That list
+                // holds table slots, so an alias of the public name does not
+                // retarget the encoder. A concrete `:charset-list` is public
+                // names and still resolves once.
+                let desig_of = if full_support {
+                    charset_iso2022_designation_physical(cs)
+                } else {
+                    charset_iso2022_designation(cs)
+                };
+                let encoded = if full_support {
+                    charset_encode_char_physical(cs, i64::from(c))
+                } else {
+                    charset_encode_char(cs, i64::from(c))
+                };
+                if let (Some((_, dim, c96)), Some(code)) = (desig_of, encoded) {
                     found = Some((cs, code, dim, c96));
                     break;
                 }
@@ -4476,7 +4491,12 @@ fn encode_via_iso2022(
             .position(|&d| d == Some(charset))
             .unwrap_or_else(|| spec.encode_register(chars_96));
         if desig[reg] != Some(charset) {
-            if let Some((fc, d, c96)) = charset_iso2022_designation(charset) {
+            let escape_desig = if full_support {
+                charset_iso2022_designation_physical(charset)
+            } else {
+                charset_iso2022_designation(charset)
+            };
+            if let Some((fc, d, c96)) = escape_desig {
                 out.extend(iso2022_designation_escape(reg, fc, d, c96, long_form));
             }
             desig[reg] = Some(charset);
@@ -4523,6 +4543,34 @@ fn encode_via_iso2022(
     out
 }
 
+/// GNU `DECODE_DESIGNATION` (coding.c:3186-3217) accepts a final only when the
+/// table id is safe. A charset joins `Viso_2022_charset_list` only when it has
+/// an ISO final (charset.c:1163-1168), so a declared charset with no final is
+/// written to the table and still replayed. Failure is `invalid_code`
+/// (coding.c:3946-3961): rewind, emit one byte, and put ASCII back in G0.
+fn iso2022_designate_or_replay(
+    unit: &mut UnitReader<'_>,
+    sink: &mut DecodeSink,
+    state: &mut Iso2022DecodeState,
+    ascii: SymId,
+    reg: usize,
+    final_byte: u8,
+    dimension: i64,
+    chars_96: bool,
+) -> Result<(), NoMoreSource> {
+    if let Some((cs, _)) =
+        crate::emacs_core::charset::charset_by_iso_final(i64::from(final_byte), dimension, chars_96)
+        && crate::emacs_core::charset::charset_iso2022_designation_physical(cs).is_some()
+    {
+        state.designation[reg] = Some(cs);
+        return Ok(());
+    }
+    state.designation[reg] = None;
+    state.gl = 0;
+    state.designation[0] = Some(ascii);
+    invalid_code(unit, sink)
+}
+
 /// Decode bytes through the ISO-2022 escape-sequence machine to Emacs internal
 /// bytes (GNU `decode_coding_iso_2022`, src/coding.c:3200-3990), plus the
 /// `(charset NAME)` text-property runs GNU attaches for each maximal run of
@@ -4541,7 +4589,8 @@ fn decode_via_iso2022(
     eol: DosEolLookahead,
 ) -> DecodedSource {
     use crate::emacs_core::charset::{
-        charset_by_iso_final, charset_decode_char, charset_iso2022_designation,
+        charset_decode_char, charset_decode_char_physical, charset_iso2022_designation,
+        charset_iso2022_designation_physical,
     };
     use crate::emacs_core::coding::IsoFlag;
     let seven = spec.flags.contains(IsoFlag::SevenBits);
@@ -4596,27 +4645,23 @@ fn decode_via_iso2022(
                             return Ok(());
                         }
                     };
-                    if let Some((cs, _)) = charset_by_iso_final(i64::from(final_byte), 2, chars_96)
-                    {
-                        state.designation[reg] = Some(cs);
-                    }
-                    return Ok(());
+                    return iso2022_designate_or_replay(
+                        unit, sink, state, ascii, reg, final_byte, 2, chars_96,
+                    );
                 }
                 0x28..=0x2B => {
                     let reg = usize::from(e - 0x28);
                     let final_byte = unit.byte()?;
-                    if let Some((cs, _)) = charset_by_iso_final(i64::from(final_byte), 1, false) {
-                        state.designation[reg] = Some(cs);
-                    }
-                    return Ok(());
+                    return iso2022_designate_or_replay(
+                        unit, sink, state, ascii, reg, final_byte, 1, false,
+                    );
                 }
                 0x2C..=0x2F => {
                     let reg = usize::from(e - 0x2C);
                     let final_byte = unit.byte()?;
-                    if let Some((cs, _)) = charset_by_iso_final(i64::from(final_byte), 1, true) {
-                        state.designation[reg] = Some(cs);
-                    }
-                    return Ok(());
+                    return iso2022_designate_or_replay(
+                        unit, sink, state, ascii, reg, final_byte, 1, true,
+                    );
                 }
                 _ => {
                     unit.rewind();
@@ -4676,21 +4721,31 @@ fn decode_via_iso2022(
             sink.push(u32::from(b & 0x7F), None);
             return Ok(());
         }
-        if let Some(cs) = charset
-            && let Some((_, dim, _)) = charset_iso2022_designation(cs)
-        {
-            let dim = dim.clamp(1, 2) as usize;
-            unit.rewind();
-            let position = unit.take(dim)?;
-            let mut code = 0i64;
-            for byte in position {
-                code = (code << 8) | i64::from(byte & 0x7F);
+        if let Some(cs) = charset {
+            // The register holds the table slot. Resolve only when that name
+            // is not itself a physical charset (a pure alias used as an
+            // initial designation).
+            let physical = charset_iso2022_designation_physical(cs);
+            let resolved = physical.or_else(|| charset_iso2022_designation(cs));
+            if let Some((_, dim, _)) = resolved {
+                let dim = dim.clamp(1, 2) as usize;
+                unit.rewind();
+                let position = unit.take(dim)?;
+                let mut code = 0i64;
+                for byte in position {
+                    code = (code << 8) | i64::from(byte & 0x7F);
+                }
+                let decoded = if physical.is_some() {
+                    charset_decode_char_physical(cs, code)
+                } else {
+                    charset_decode_char(cs, code)
+                };
+                if let Some(ch) = decoded {
+                    sink.push(ch as u32, Some(cs));
+                    return Ok(());
+                }
+                return invalid_code(unit, sink);
             }
-            if let Some(ch) = charset_decode_char(cs, code) {
-                sink.push(ch as u32, Some(cs));
-                return Ok(());
-            }
-            return invalid_code(unit, sink);
         }
         if b < 0x80 {
             sink.push(u32::from(b), None);

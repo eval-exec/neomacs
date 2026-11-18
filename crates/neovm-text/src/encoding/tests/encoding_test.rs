@@ -625,6 +625,319 @@ fn decode_sjis_charset_runs_absorb_ascii_like_gnu() {
     assert_eq!(runs[2].plist, charset_prop("test-jis"));
 }
 
+/// GNU `Fdefine_charset_alias` stores the target's attribute vector
+/// (charset.c:1296). Rebinding that name replaces only its hash slot.
+/// Redefining it overwrites `charset_table[id]` and installs a new vector for
+/// that name; the alias keeps the old vector and still decodes through the id.
+#[test]
+fn charset_alias_keeps_captured_vector_and_redefine_splits_plist() {
+    crate::test_utils::init_test_tracing();
+    use crate::emacs_core::charset::{
+        builtin_charset_id_internal, builtin_charset_plist, builtin_define_charset_alias,
+        builtin_define_charset_internal, builtin_iso_charset, charset_decode_char,
+        charset_encode_char, reset_charset_registry, set_charset_plist_value,
+    };
+    use neovm_value::plist::plist_get;
+    use neovm_value::value::eq_value;
+
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            reset_charset_registry();
+        }
+    }
+    let _reset = Reset;
+    reset_charset_registry();
+
+    let id_of = |name: &'static str| {
+        builtin_charset_id_internal(vec![Value::symbol(name)])
+            .unwrap()
+            .as_int()
+            .unwrap()
+    };
+    let plist_of = |name: &'static str| builtin_charset_plist(vec![Value::symbol(name)]).unwrap();
+    let prop = |plist: &Value, key: &'static str| plist_get(*plist, &Value::symbol(key));
+
+    builtin_define_charset_alias(vec![
+        Value::symbol("probe"),
+        Value::symbol("latin-iso8859-1"),
+    ])
+    .unwrap();
+    builtin_define_charset_alias(vec![
+        Value::symbol("latin-iso8859-1"),
+        Value::symbol("ascii"),
+    ])
+    .unwrap();
+    assert_eq!(id_of("probe"), 5);
+    assert_eq!(id_of("latin-iso8859-1"), 0);
+    assert!(
+        prop(&plist_of("probe"), ":name")
+            .unwrap()
+            .is_bare_symbol_named("latin-iso8859-1")
+    );
+    assert!(
+        prop(&plist_of("latin-iso8859-1"), ":name")
+            .unwrap()
+            .is_bare_symbol_named("ascii")
+    );
+
+    let define = |offset: i64, final_char: i64, mark: Option<i64>| {
+        let mut elems = vec![
+            Value::symbol(":name"),
+            Value::symbol("redef-x"),
+            Value::symbol(":code-offset"),
+            Value::fixnum(offset),
+            Value::symbol(":iso-final-char"),
+            Value::fixnum(final_char),
+        ];
+        if let Some(mark) = mark {
+            elems.push(Value::symbol(":probe-mark"));
+            elems.push(Value::fixnum(mark));
+        }
+        let plist = Value::list(elems);
+        let mut args = vec![Value::NIL; 17];
+        args[0] = Value::symbol("redef-x");
+        args[1] = Value::fixnum(1);
+        args[2] = Value::vector(vec![Value::fixnum(33), Value::fixnum(126)]);
+        args[5] = Value::fixnum(final_char);
+        args[11] = Value::fixnum(offset);
+        args[16] = plist;
+        builtin_define_charset_internal(args).unwrap();
+    };
+    define(500, i64::from(b'9'), None);
+    builtin_define_charset_alias(vec![Value::symbol("redef-probe"), Value::symbol("redef-x")])
+        .unwrap();
+    let shared = Value::list(vec![
+        Value::symbol(":name"),
+        Value::symbol("redef-x"),
+        Value::symbol(":code-offset"),
+        Value::fixnum(500),
+        Value::symbol(":iso-final-char"),
+        Value::fixnum(i64::from(b'9')),
+        Value::symbol(":probe-mark"),
+        Value::fixnum(1),
+    ]);
+    let pairs = neovm_value::value::list_to_vec(&shared).unwrap();
+    let mut stored = Vec::new();
+    let mut i = 0;
+    while i + 1 < pairs.len() {
+        stored.push((
+            pairs[i]
+                .as_symbol_id(neovm_value::tagged::value::SymbolMode::Bare)
+                .unwrap(),
+            pairs[i + 1],
+        ));
+        i += 2;
+    }
+    set_charset_plist_value(neovm_value::intern::intern("redef-x"), stored, shared);
+    let probe_plist = plist_of("redef-probe");
+    let base_plist = plist_of("redef-x");
+    assert!(eq_value(&probe_plist, &base_plist));
+    assert!(eq_value(&probe_plist, &shared));
+    assert_eq!(prop(&probe_plist, ":probe-mark").unwrap().as_int(), Some(1));
+    assert_eq!(id_of("redef-probe"), id_of("redef-x"));
+    let probe = neovm_value::intern::intern("redef-probe");
+    let base = neovm_value::intern::intern("redef-x");
+    assert_eq!(charset_decode_char(probe, 65), Some(532));
+    assert_eq!(charset_decode_char(base, 65), Some(532));
+
+    define(800, i64::from(b'8'), None);
+    let probe_plist = plist_of("redef-probe");
+    let base_plist = plist_of("redef-x");
+    assert!(!eq_value(&probe_plist, &base_plist));
+    assert_eq!(id_of("redef-probe"), id_of("redef-x"));
+    assert_eq!(
+        prop(&probe_plist, ":code-offset").unwrap().as_int(),
+        Some(500)
+    );
+    assert_eq!(
+        prop(&base_plist, ":code-offset").unwrap().as_int(),
+        Some(800)
+    );
+    assert_eq!(
+        prop(&probe_plist, ":iso-final-char").unwrap().as_int(),
+        Some(i64::from(b'9'))
+    );
+    assert_eq!(
+        prop(&base_plist, ":iso-final-char").unwrap().as_int(),
+        Some(i64::from(b'8'))
+    );
+    assert_eq!(prop(&probe_plist, ":probe-mark").unwrap().as_int(), Some(1));
+    assert!(prop(&base_plist, ":probe-mark").is_none());
+    assert_eq!(charset_decode_char(probe, 65), Some(832));
+    assert_eq!(charset_decode_char(base, 65), Some(832));
+    assert_eq!(charset_encode_char(probe, 532), None);
+    assert_eq!(charset_encode_char(base, 532), None);
+    assert_eq!(charset_encode_char(probe, 832), Some(65));
+    assert_eq!(charset_encode_char(base, 832), Some(65));
+    let iso = |final_char: u8| {
+        builtin_iso_charset(vec![
+            Value::fixnum(1),
+            Value::fixnum(94),
+            Value::fixnum(i64::from(final_char)),
+        ])
+        .unwrap()
+    };
+    assert!(iso(b'9').is_bare_symbol_named("redef-x"));
+    assert!(iso(b'8').is_bare_symbol_named("redef-x"));
+
+    let after = Value::list(vec![
+        Value::symbol(":name"),
+        Value::symbol("redef-x"),
+        Value::symbol(":code-offset"),
+        Value::fixnum(800),
+        Value::symbol(":after"),
+        Value::fixnum(2),
+    ]);
+    let pairs = neovm_value::value::list_to_vec(&after).unwrap();
+    let stored: Vec<_> = pairs
+        .chunks(2)
+        .map(|pair| {
+            (
+                pair[0]
+                    .as_symbol_id(neovm_value::tagged::value::SymbolMode::Bare)
+                    .unwrap(),
+                pair[1],
+            )
+        })
+        .collect();
+    set_charset_plist_value(base, stored, after);
+    assert!(prop(&plist_of("redef-probe"), ":after").is_none());
+    assert_eq!(
+        prop(&plist_of("redef-x"), ":after").unwrap().as_int(),
+        Some(2)
+    );
+    assert_eq!(
+        prop(&plist_of("redef-probe"), ":code-offset")
+            .unwrap()
+            .as_int(),
+        Some(500)
+    );
+    assert_eq!(charset_decode_char(probe, 65), Some(832));
+}
+
+/// ISO-2022 keeps the charset that was in the designation table when the
+/// final was declared. An alias of that name does not retarget the bytes.
+/// An unknown final, or a charset with no ISO final, is replayed one byte at
+/// a time (`invalid_code`), and the table write still stands.
+#[test]
+fn iso2022_designation_uses_table_identity_and_replays_unsafe() {
+    crate::test_utils::init_test_tracing();
+    use crate::emacs_core::charset::{
+        builtin_declare_equiv_charset, builtin_define_charset_alias,
+        builtin_define_charset_internal, builtin_iso_charset, reset_charset_registry,
+    };
+    use crate::emacs_core::coding::{Iso2022Spec, IsoFlag};
+    use neovm_value::intern::intern;
+
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            reset_charset_registry();
+        }
+    }
+    let _reset = Reset;
+    reset_charset_registry();
+
+    let spec = Iso2022Spec {
+        initial: [Some(intern("ascii")), None, None, None],
+        request: vec![],
+        reg_usage: (0, 0),
+        flags: enumflags2::BitFlags::from_flag(IsoFlag::SevenBits)
+            | IsoFlag::Designation
+            | IsoFlag::AsciiAtEol,
+    };
+    let decode = |bytes: &[u8]| {
+        decode_via_iso2022(
+            bytes,
+            &spec,
+            &mut Iso2022DecodeState::default(),
+            DosEolLookahead::NotRequired,
+        )
+    };
+
+    builtin_declare_equiv_charset(vec![
+        Value::fixnum(1),
+        Value::fixnum(94),
+        Value::fixnum(i64::from(b'Z')),
+        Value::symbol("latin-iso8859-1"),
+    ])
+    .unwrap();
+    builtin_define_charset_alias(vec![
+        Value::symbol("latin-iso8859-1"),
+        Value::symbol("ascii"),
+    ])
+    .unwrap();
+    let decoded = decode(b"\x1b(ZA");
+    let text = neovm_value::emacs_char::to_utf8_lossy(&decoded.bytes);
+    assert_eq!(text, "\u{00C1}");
+    assert_eq!(decoded.runs.len(), 1);
+    assert_eq!(decoded.runs[0].plist, charset_prop("latin-iso8859-1"));
+    assert!(
+        builtin_iso_charset(vec![
+            Value::fixnum(1),
+            Value::fixnum(94),
+            Value::fixnum(i64::from(b'Z')),
+        ])
+        .unwrap()
+        .is_bare_symbol_named("latin-iso8859-1")
+    );
+
+    let encoded = encode_via_iso2022(
+        &neovm_value::heap_types::LispString::from_utf8("\u{00C1}"),
+        &spec,
+        &[intern("iso-2022")],
+        EncodingBoundary::CompleteText,
+        &mut CodingEncoderState::default(),
+    );
+    assert_eq!(encoded, b"\x1b,AA\x1b(B");
+
+    reset_charset_registry();
+    let replayed = decode(b"\x1b(Z\\");
+    assert_eq!(replayed.bytes, b"\x1b(Z\\");
+    assert!(replayed.runs.is_empty());
+
+    builtin_declare_equiv_charset(vec![
+        Value::fixnum(1),
+        Value::fixnum(94),
+        Value::fixnum(i64::from(b'Z')),
+        Value::symbol("unicode"),
+    ])
+    .unwrap();
+    let no_final = decode(b"\x1b(ZA");
+    assert_eq!(no_final.bytes, b"\x1b(ZA");
+    assert!(no_final.runs.is_empty());
+    assert!(
+        builtin_iso_charset(vec![
+            Value::fixnum(1),
+            Value::fixnum(94),
+            Value::fixnum(i64::from(b'Z')),
+        ])
+        .unwrap()
+        .is_bare_symbol_named("unicode")
+    );
+
+    let mut args = vec![Value::NIL; 17];
+    args[0] = Value::symbol("withfinal-probe");
+    args[1] = Value::fixnum(1);
+    args[2] = Value::vector(vec![Value::fixnum(33), Value::fixnum(126)]);
+    args[5] = Value::fixnum(i64::from(b'9'));
+    args[11] = Value::fixnum(400);
+    builtin_define_charset_internal(args).unwrap();
+    builtin_declare_equiv_charset(vec![
+        Value::fixnum(1),
+        Value::fixnum(94),
+        Value::fixnum(i64::from(b'Z')),
+        Value::symbol("withfinal-probe"),
+    ])
+    .unwrap();
+    let with_final = decode(b"\x1b(ZA");
+    let text = neovm_value::emacs_char::to_utf8_lossy(&with_final.bytes);
+    assert_eq!(text, "\u{01B0}");
+    assert_eq!(with_final.runs.len(), 1);
+    assert_eq!(with_final.runs[0].plist, charset_prop("withfinal-probe"));
+}
+
 fn encode_string(s: &str, coding_system: &str) -> Vec<u8> {
     super::encode_string(s, coding_system, EolConversion::Enabled)
 }
