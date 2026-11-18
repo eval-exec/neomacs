@@ -157,16 +157,18 @@ impl FontsetRegistry {
         self.generation = self.generation.wrapping_add(1);
     }
 
-    fn update_target(
+    /// One `set-fontset-font` call: every target gets ENTRY, and the
+    /// generation moves once so cached font selections are redone.
+    fn update_targets(
         &mut self,
         name: &FontNameSpelling,
-        target: FontsetTarget,
+        targets: Vec<FontsetTarget>,
         entry: FontSpecEntry,
         add: FontsetAddMode,
     ) {
         self.ensure_fontset(name);
         let data = self.fontsets.entry(name.clone()).or_default();
-        data.update_target(target, entry, add);
+        data.update_targets(targets, entry, add);
         self.generation = self.generation.wrapping_add(1);
     }
 
@@ -262,6 +264,155 @@ impl FontsetData {
             FontsetTarget::Fallback => self.update_fallback(entry, add),
             FontsetTarget::Range(from, to) => self.update_range(from, to, entry, add),
         }
+    }
+
+    fn update_targets(
+        &mut self,
+        targets: Vec<FontsetTarget>,
+        entry: FontSpecEntry,
+        add: FontsetAddMode,
+    ) {
+        let entry = StoredFontsetEntry::from(entry);
+        let mut new_ranges = Vec::new();
+        for target in targets {
+            match target {
+                FontsetTarget::Fallback => self.update_fallback(entry.clone(), add),
+                FontsetTarget::Range(from, to) => {
+                    if from <= to {
+                        new_ranges.push((from, to));
+                    }
+                }
+            }
+        }
+        if !new_ranges.is_empty() {
+            self.update_ranges(new_ranges, entry, add);
+        }
+    }
+
+    fn update_ranges(
+        &mut self,
+        mut new_ranges: Vec<(u32, u32)>,
+        entry: StoredFontsetEntry,
+        add: FontsetAddMode,
+    ) {
+        if new_ranges.is_empty() {
+            return;
+        }
+
+        new_ranges.sort_unstable_by_key(|&(from, _)| from);
+        // GNU `set-fontset-font` calls `fontset_add` once per target range,
+        // so a character that two targets cover gets an `append`ed or
+        // `prepend`ed entry twice.  Only `overwrite` is idempotent, so only it
+        // may merge overlapping targets.  Merging targets that merely touch
+        // is exact in every mode.  Sorted by start, any overlap shows up
+        // between neighbours.
+        let overlapping = new_ranges.windows(2).any(|pair| pair[1].0 <= pair[0].1);
+        match add {
+            FontsetAddMode::Append | FontsetAddMode::Prepend if overlapping => {
+                // The repeated entry is the same one, so the order of the
+                // per-target updates does not change the result.
+                for (from, to) in new_ranges {
+                    self.update_range(from, to, entry.clone(), add);
+                }
+                return;
+            }
+            FontsetAddMode::Overwrite | FontsetAddMode::Append | FontsetAddMode::Prepend => {}
+        }
+
+        let mut coalesced: Vec<(u32, u32)> = Vec::with_capacity(new_ranges.len());
+        for (from, to) in new_ranges {
+            if let Some(last) = coalesced.last_mut() {
+                if from <= last.1.saturating_add(1) {
+                    last.1 = last.1.max(to);
+                } else {
+                    coalesced.push((from, to));
+                }
+            } else {
+                coalesced.push((from, to));
+            }
+        }
+
+        let mut next = Vec::with_capacity(self.ranges.len() + coalesced.len() * 2);
+        let mut old_iter = std::mem::take(&mut self.ranges).into_iter().peekable();
+        let mut new_iter = coalesced.into_iter().peekable();
+
+        while let Some(&(n_from, n_to)) = new_iter.peek() {
+            let mut cursor = n_from;
+            while let Some(mut old) = old_iter.peek().cloned() {
+                if old.to < cursor {
+                    old_iter.next();
+                    push_range_entry(&mut next, old);
+                    continue;
+                }
+                if old.from > n_to {
+                    break;
+                }
+
+                // old overlaps with [cursor, n_to]
+                if old.from < cursor {
+                    push_range_entry(
+                        &mut next,
+                        RangeEntry {
+                            from: old.from,
+                            to: cursor - 1,
+                            entries: old.entries.clone(),
+                        },
+                    );
+                    old.from = cursor;
+                }
+
+                if cursor < old.from {
+                    push_range_entry(
+                        &mut next,
+                        RangeEntry {
+                            from: cursor,
+                            to: old.from - 1,
+                            entries: apply_fontset_add(None, entry.clone(), add),
+                        },
+                    );
+                    cursor = old.from;
+                }
+
+                let overlap_to = old.to.min(n_to);
+                push_range_entry(
+                    &mut next,
+                    RangeEntry {
+                        from: cursor,
+                        to: overlap_to,
+                        entries: apply_fontset_add(Some(&old.entries), entry.clone(), add),
+                    },
+                );
+                cursor = overlap_to.saturating_add(1);
+
+                if old.to > n_to {
+                    // The rest of OLD lies past this target; a later target
+                    // or the final copy loop takes it.
+                    if let Some(rest) = old_iter.peek_mut() {
+                        rest.from = n_to + 1;
+                    }
+                    break;
+                }
+                old_iter.next();
+            }
+
+            if cursor <= n_to {
+                push_range_entry(
+                    &mut next,
+                    RangeEntry {
+                        from: cursor,
+                        to: n_to,
+                        entries: apply_fontset_add(None, entry.clone(), add),
+                    },
+                );
+            }
+            new_iter.next();
+        }
+
+        for old in old_iter {
+            push_range_entry(&mut next, old);
+        }
+
+        self.ranges = next;
     }
 
     #[cfg(test)]
@@ -934,9 +1085,7 @@ pub fn set_fontset_font(
         )
     })?;
     let canonical = slot.register_fontset(fontset_name_spelling(&fontset_name), None);
-    for target in targets {
-        slot.update_target(&canonical, target, entry.clone(), add_mode);
-    }
+    slot.update_targets(&canonical, targets, entry, add_mode);
     Ok(Value::NIL)
 }
 

@@ -183,9 +183,9 @@ fn public_capture_binds_owner_generation_and_restore_keeps_detached_data_alive()
     super::super::reset_fontset_registry();
     {
         let mut slot = registry().write().unwrap();
-        slot.update_target(
+        slot.update_targets(
             &fontset_name_spelling(DEFAULT_FONTSET_NAME),
-            FontsetTarget::Fallback,
+            vec![FontsetTarget::Fallback],
             family_entry("before"),
             FontsetAddMode::Overwrite,
         );
@@ -194,9 +194,9 @@ fn public_capture_binds_owner_generation_and_restore_keeps_detached_data_alive()
     let saved = snapshot_fontset_registry();
     {
         let mut slot = registry().write().unwrap();
-        slot.update_target(
+        slot.update_targets(
             &fontset_name_spelling(DEFAULT_FONTSET_NAME),
-            FontsetTarget::Fallback,
+            vec![FontsetTarget::Fallback],
             family_entry("after"),
             FontsetAddMode::Overwrite,
         );
