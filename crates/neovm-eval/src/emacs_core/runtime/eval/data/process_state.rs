@@ -2285,18 +2285,27 @@ impl ProcessManager {
             .map(|delay| delay.min(Duration::from_millis(READ_OUTPUT_DELAY_MAX_MS)))
     }
 
-    pub fn clear_adaptive_read_skip_if_needed(&mut self, id: ProcessId) -> bool {
-        let Some(proc) = self.processes.get_mut(&id) else {
-            return false;
-        };
+    /// Consume a pending adaptive-read skip for `id`.
+    ///
+    /// GNU `wait_reading_process_output` (src/process.c:5681-5717) removes a
+    /// process with `read_output_skip` from the select set, bounds that wait by
+    /// `read_output_delay` (capped at `READ_OUTPUT_DELAY_MAX`), and clears the
+    /// skip flag, so the child's queued short writes are read together on the
+    /// next pass. Return the delay the caller must spend before servicing the
+    /// process again; `None` when no skip is pending.
+    pub fn clear_adaptive_read_skip_if_needed(&mut self, id: ProcessId) -> Option<Duration> {
+        let proc = self.processes.get_mut(&id)?;
         if proc.adaptive_read_buffering == 0
             || proc.read_output_delay.is_zero()
             || !proc.read_output_skip
         {
-            return false;
+            return None;
         }
         proc.read_output_skip = false;
-        true
+        Some(
+            proc.read_output_delay
+                .min(Duration::from_millis(READ_OUTPUT_DELAY_MAX_MS)),
+        )
     }
 
     #[allow(clippy::too_many_arguments)]

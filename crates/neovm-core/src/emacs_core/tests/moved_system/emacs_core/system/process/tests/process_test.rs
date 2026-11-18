@@ -11038,6 +11038,65 @@ fn adaptive_read_buffering_updates_delay_with_gnu_thresholds() {
     assert!(!process.read_output_skip);
 }
 
+/// GNU `process-adaptive-read-buffering` semantics: after a short read,
+/// `wait_reading_process_output` (src/process.c:5681-5717, :6270-6305) removes
+/// the process from the select set and bounds that wait by
+/// `read_output_delay` (20 ms after the first sub-256-byte read, +20 ms per
+/// later short read, capped at 70 ms; the select timeout is capped at 50 ms).
+/// The child therefore gets time to queue more output before the next read,
+/// and the filter sees fewer, larger chunks.
+///
+/// Measured on the pinned GNU oracle with a child writing eight 7-byte lines
+/// 2 ms apart: `process-adaptive-read-buffering` nil delivered 8 chunks every
+/// run, t delivered 4 chunks (7 14 28 7 / 7 14 21 14 patterns). Before the
+/// read-side delay existed, Neomacs delivered 8 chunks with t as well, which
+/// fed the rustic/app_monochrome compilation-parse races: compile.el's
+/// `compilation--ensure-parse` advances its parsed marker before parsing, so a
+/// chunk boundary inside a multi-line diagnostic can strand the message
+/// property. The assertion here is the delivery contract, not a chunk-size
+/// pin: with 10 ms gaps, t must coalesce (fewer filter calls than nil) and
+/// neither run may lose bytes.
+#[test]
+fn adaptive_read_buffering_coalesces_spaced_short_writes_like_gnu() {
+    let result = runtime_startup_eval_one(
+        r#"
+(let (rows)
+  (dolist (adaptive '(nil t))
+    (setq process-adaptive-read-buffering adaptive)
+    (let ((chunks nil)
+          (done nil))
+      (let ((process
+             (make-process
+              :name "adaptive-coalesce-probe"
+              :command '("sh" "-c"
+                         "i=0; while [ $i -lt 8 ]; do printf 'line-%s\n' $i; sleep 0.01; i=$((i+1)); done")
+              :buffer nil
+              :connection-type 'pipe
+              :noquery t
+              :filter (lambda (_process string) (push (length string) chunks))
+              :sentinel (lambda (_process _event) (setq done t)))))
+        (let ((deadline (+ (float-time) 10)))
+          (while (and (not done) (< (float-time) deadline))
+            (accept-process-output nil 0.05)))
+        (when (process-live-p process) (delete-process process)))
+      (push (list adaptive (length chunks) (apply #'+ chunks)) rows)))
+  (setq process-adaptive-read-buffering nil)
+  (let* ((ordered (nreverse rows))
+         (nil-row (nth 0 ordered))
+         (t-row (nth 1 ordered))
+         (nil-count (nth 1 nil-row))
+         (t-count (nth 1 t-row)))
+    (list (< t-count nil-count)
+          (= (nth 2 nil-row) 56)
+          (= (nth 2 t-row) 56)
+          (>= nil-count 2)
+          (>= t-count 1))))
+"#,
+    );
+
+    assert_eq!(result, "OK (t t t t t)");
+}
+
 #[test]
 fn internal_default_process_filter_inserts_while_another_buffer_is_read_only() {
     // neomacs#192 (magit-blame shows nothing): magit's blame filter calls

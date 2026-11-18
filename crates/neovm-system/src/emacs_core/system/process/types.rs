@@ -8932,8 +8932,17 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
                 continue;
             }
             if target_process.is_none()
-                && self.processes_mut().clear_adaptive_read_skip_if_needed(pid)
+                && let Some(delay) = self.processes_mut().clear_adaptive_read_skip_if_needed(pid)
             {
+                // GNU `wait_reading_process_output` (src/process.c:5681-5717)
+                // drops a process with `read_output_skip` from the select set
+                // and bounds that wait by the adaptive delay, so the child's
+                // queued short writes are read together on the next pass.
+                // Neo's ready-fd pass would otherwise read again immediately
+                // and defeat `process-adaptive-read-buffering` entirely.
+                // Spending the delay here gives the same read-time
+                // coalescing; it is bounded by READ_OUTPUT_DELAY_MAX.
+                std::thread::sleep(delay);
                 continue;
             }
 
