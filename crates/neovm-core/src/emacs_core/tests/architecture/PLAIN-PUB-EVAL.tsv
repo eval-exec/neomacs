@@ -3304,6 +3304,7 @@ crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCharsetInfo fi
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCharsetRegistry field alias_syms
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCharsetRegistry field charsets
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCharsetRegistry field emacs_mule_order_syms
+crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCharsetRegistry field iso_designation_syms
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCharsetRegistry field next_id
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCharsetRegistry field priority
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCharsetRegistry field priority_identity_syms
