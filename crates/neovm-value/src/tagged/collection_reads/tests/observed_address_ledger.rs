@@ -14,6 +14,16 @@ fn below(index: usize) -> usize {
     BASE - (index + 1) * STRIDE
 }
 
+// Test-only views stay in this child module, so the production ledger
+// carries no test-only items.
+fn runs(ledger: &SortedAddressLedger) -> (&[usize], &[usize]) {
+    (&ledger.bulk, &ledger.hot)
+}
+
+fn len(ledger: &SortedAddressLedger) -> usize {
+    ledger.bulk.len() + ledger.hot.len()
+}
+
 #[test]
 fn inserting_below_the_retained_bulk_is_bounded() {
     const BULK: usize = 200_000;
@@ -23,7 +33,7 @@ fn inserting_below_the_retained_bulk_is_bounded() {
     for index in 0..BULK {
         assert!(ledger.insert(BASE + index * STRIDE));
     }
-    let (bulk, hot) = ledger.runs();
+    let (bulk, hot) = runs(&ledger);
     let retained = bulk.len() + hot.len();
     assert_eq!(retained, BULK);
     assert!(
@@ -36,7 +46,7 @@ fn inserting_below_the_retained_bulk_is_bounded() {
     let old_cost = INSERTED * retained;
     let mut moved = 0;
     for index in 0..INSERTED {
-        let (inserted, elements) = ledger.insert_moved(below(index));
+        let (inserted, elements) = ledger.insert_inner::<true>(below(index));
         assert!(inserted);
         moved += elements;
     }
@@ -51,14 +61,14 @@ fn inserting_below_the_retained_bulk_is_bounded() {
         old_cost as f64 / moved as f64
     );
 
-    assert_eq!(ledger.len(), BULK + INSERTED);
+    assert_eq!(len(&ledger), BULK + INSERTED);
     for index in 0..BULK {
         assert!(ledger.contains(BASE + index * STRIDE));
     }
     for index in 0..INSERTED {
         assert!(ledger.contains(below(index)));
     }
-    let (bulk, hot) = ledger.runs();
+    let (bulk, hot) = runs(&ledger);
     assert!(bulk.windows(2).all(|pair| pair[0] < pair[1]));
     assert!(hot.windows(2).all(|pair| pair[0] < pair[1]));
 
@@ -118,8 +128,8 @@ fn two_run_ledger_matches_an_ordered_set_model() {
             let address = rng.below(SPAN) * STRIDE;
             assert_eq!(ledger.insert(address), model.insert(address));
         }
-        assert_eq!(ledger.len(), model.len());
-        let (bulk, hot) = ledger.runs();
+        assert_eq!(len(&ledger), model.len());
+        let (bulk, hot) = runs(&ledger);
         assert!(bulk.windows(2).all(|pair| pair[0] < pair[1]));
         assert!(hot.windows(2).all(|pair| pair[0] < pair[1]));
         assert!(hot.len() < HOT_ADDRESS_LIMIT, "a full hot run must merge");
@@ -157,7 +167,7 @@ fn two_run_ledger_matches_an_ordered_set_model() {
         let modulus = 2 + round % 5;
         ledger.retain(|address| !(address / STRIDE).is_multiple_of(modulus));
         model.retain(|address| !(address / STRIDE).is_multiple_of(modulus));
-        assert_eq!(ledger.len(), model.len());
+        assert_eq!(len(&ledger), model.len());
     }
     assert!(
         seam_queries > 0,

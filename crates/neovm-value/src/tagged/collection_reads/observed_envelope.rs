@@ -420,11 +420,6 @@ impl SortedAddressLedger {
         }
     }
 
-    #[cfg(test)]
-    fn len(&self) -> usize {
-        self.bulk.len() + self.hot.len()
-    }
-
     fn insert(&mut self, address: usize) -> bool {
         self.insert_inner::<false>(address).0
     }
@@ -450,11 +445,6 @@ impl SortedAddressLedger {
             }
         }
         (true, moved)
-    }
-
-    #[cfg(test)]
-    fn insert_moved(&mut self, address: usize) -> (bool, usize) {
-        self.insert_inner::<true>(address)
     }
 
     fn contains(&self, address: usize) -> bool {
@@ -487,11 +477,6 @@ impl SortedAddressLedger {
     fn retain(&mut self, mut keep: impl FnMut(usize) -> bool) {
         self.bulk.retain(|&address| keep(address));
         self.hot.retain(|&address| keep(address));
-    }
-
-    #[cfg(test)]
-    fn runs(&self) -> (&[usize], &[usize]) {
-        (&self.bulk, &self.hot)
     }
 
     /// Merge the sorted hot run into the sorted bulk in place. Reads and writes
