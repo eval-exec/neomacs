@@ -128,4 +128,54 @@ fn require_checkout_root_refuses_an_out_of_checkout_sandbox() {
         message.contains("CARGO_TARGET_DIR"),
         "the refusal must name the recipe: {message}"
     );
+    assert!(
+        message.contains("symlink"),
+        "the refusal must document the target-symlink recipe: {message}"
+    );
+}
+
+/// `<worktree>/target` may be a symlink onto another volume when
+/// `CARGO_TARGET_DIR` is unset. The checkout walk must stay on that logical
+/// path: canonicalizing first follows the symlink and misses the checkout that
+/// owns it. The directory the symlink points at stays refused.
+#[cfg(unix)]
+#[test]
+fn outermost_checkout_root_keeps_a_logical_target_symlink_inside_the_checkout() {
+    fn inside_checkout(mut path: &std::path::Path) -> bool {
+        loop {
+            if [".git", ".svn", ".cvs"]
+                .iter()
+                .any(|marker| path.join(marker).exists())
+            {
+                return true;
+            }
+            match path.parent() {
+                Some(parent) if parent != path => path = parent,
+                _ => return false,
+            }
+        }
+    }
+
+    if inside_checkout(std::path::Path::new("/tmp")) {
+        eprintln!("skipping: /tmp itself is inside a checkout on this host");
+        return;
+    }
+    let checkout = tempfile::tempdir_in("/tmp").expect("checkout");
+    std::fs::write(checkout.path().join(".git"), "gitdir: /unused\n").expect("marker");
+    let external = tempfile::tempdir_in("/tmp").expect("external target");
+    let link = checkout.path().join("target");
+    std::os::unix::fs::symlink(external.path(), &link).expect("symlink target");
+    let logical = link.join("melpa").join("case-root");
+    std::fs::create_dir_all(&logical).expect("logical case root");
+
+    let found = outermost_checkout_root(&logical)
+        .expect("logical target symlink stays inside the checkout");
+    assert_eq!(found, checkout.path());
+
+    let canonical = logical.canonicalize().expect("canonicalize");
+    assert_ne!(canonical, logical);
+    assert!(
+        outermost_checkout_root(&canonical).is_none(),
+        "an absolute path on the external volume is the skewing case"
+    );
 }

@@ -187,9 +187,10 @@ const MAX_SANDBOX_HOME: usize = 120;
 /// snapshots did not see.
 ///
 /// The MELPA cache root follows `CARGO_TARGET_DIR`, so this is inside the
-/// checkout only when that variable is unset.  Differential parity probes do
-/// not rely on that silently: they call [`require_checkout_root`] and refuse
-/// an out-of-checkout base with an actionable message.
+/// checkout only when that variable is unset.  A `<worktree>/target` symlink
+/// to another volume still counts: the checkout walk is logical.  Differential
+/// parity probes do not rely on that silently: they call [`require_checkout_root`]
+/// and refuse an out-of-checkout base with an actionable message.
 ///
 /// Package-TUI scenarios need a short HOME instead; see
 /// [`short_home_sandbox_base`].
@@ -363,17 +364,22 @@ pub fn package_environment_at(root: &Path) -> Result<CanonicalEnvironment, Strin
 
 /// The outermost ancestor of `path` that carries a checkout marker.
 ///
+/// The walk is lexical. Canonicalizing first would follow a
+/// `<worktree>/target` symlink onto another volume and miss the checkout that
+/// owns the link. Marker checks still use [`Path::exists`], which follows a
+/// symlink at the marker itself, matching `file-exists-p` in the
+/// auto-save-buffers-enhanced fixture.
+///
 /// The marker set and the "outermost wins" rule match the fixtures that read
 /// a checkout out of the sandbox path: auto-save-buffers-enhanced walks the
 /// whole ancestor chain and keeps the LAST `.git'/`.svn'/`.cvs' it sees
 /// (`auto-save-buffers-enhanced.el:288-305`), not the nearest one
 /// `locate-dominating-file` would return.
 pub fn outermost_checkout_root(path: &Path) -> Option<PathBuf> {
-    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    let mut directory = if canonical.is_dir() {
-        canonical
+    let mut directory = if path.is_dir() {
+        path.to_path_buf()
     } else {
-        canonical.parent()?.to_path_buf()
+        path.parent()?.to_path_buf()
     };
     let mut outermost = None;
     loop {
@@ -405,8 +411,11 @@ pub fn require_checkout_root(path: &Path) -> Result<PathBuf, String> {
             "sandbox {} is not inside a checkout (no .git/.svn/.cvs above it); \
              run the MELPA suite with CARGO_TARGET_DIR unset so the MELPA cache \
              root, and every case root below it, lives inside the checkout. \
-             GNU backup policy and the checkout fixtures derive observable state \
-             from that path.",
+             If build output must live on another volume, leave CARGO_TARGET_DIR \
+             unset and point <worktree>/target at that directory with a symlink; \
+             the checkout walk uses that logical path. An absolute CARGO_TARGET_DIR \
+             outside the checkout is refused. GNU backup policy and the checkout \
+             fixtures derive observable state from that path.",
             path.display()
         )
     })

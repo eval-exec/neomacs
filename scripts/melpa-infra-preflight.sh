@@ -22,7 +22,10 @@ scratch_parent="$target_root/melpa"
 # MelpaSandbox::new's require_checkout_root.  Refuse once here, before either
 # editor is launched, rather than failing per package with GNU==Neomacs
 # mismatches.  Match require_checkout_root's marker set and outermost-wins rule
-# (crates/neomacs-melpa-test-support/src/lib.rs).
+# (crates/neomacs-melpa-test-support/src/lib.rs).  The walk is lexical
+# (`dirname`, not realpath): a `<worktree>/target` symlink to another volume
+# still resolves to the checkout that owns the link.  An absolute
+# CARGO_TARGET_DIR outside the checkout does not.
 checkout_dir="$scratch_parent"
 checkout_root=
 while :; do
@@ -36,10 +39,14 @@ while :; do
   checkout_dir=$parent
 done
 if [[ -z "$checkout_root" ]]; then
-  echo "MELPA infrastructure preflight refused: sandbox $scratch_parent is not inside a checkout (no .git/.svn/.cvs above it); run the MELPA suite with CARGO_TARGET_DIR unset so the MELPA cache root, and every case root below it, lives inside the checkout. GNU backup policy and the checkout fixtures derive observable state from that path." >&2
+  echo "MELPA infrastructure preflight refused: sandbox $scratch_parent is not inside a checkout (no .git/.svn/.cvs above it); run the MELPA suite with CARGO_TARGET_DIR unset so the MELPA cache root, and every case root below it, lives inside the checkout. If build output must live on another volume, leave CARGO_TARGET_DIR unset and point <worktree>/target at that directory with a symlink; the checkout walk uses that logical path. An absolute CARGO_TARGET_DIR outside the checkout is refused. GNU backup policy and the checkout fixtures derive observable state from that path." >&2
   exit 2
 fi
 echo "MELPA infrastructure preflight checkout: $checkout_root"
+# The checkout-walk tests set this and stop before either editor is launched.
+if [[ -n "${NEOMACS_MELPA_PREFLIGHT_CHECK_ONLY:-}" ]]; then
+  exit 0
+fi
 
 mkdir -p "$scratch_parent"
 scratch_root=$(mktemp -d "$scratch_parent/preflight.XXXXXX")

@@ -120,7 +120,17 @@ fn nextest_runs_melpa_infrastructure_preflight_once_before_parity_tests() {
     assert!(nextest.contains(
         "filter = 'package(neomacs-melpa-tests) and not (test(~parity_tests::harness_contract::) or test(~source_lock::tests::))'"
     ));
-    assert!(nextest.contains("setup = 'melpa-infra-preflight'"));
+    assert_eq!(
+        nextest.matches("setup = 'melpa-infra-preflight'").count(),
+        1,
+        "package-TUI scenarios use new_with_short_home and must not take the refusing preflight"
+    );
+    assert!(
+        !nextest.contains(
+            "filter = 'test(~package_tui::)'\nplatform = { host = \"cfg(unix)\" }\nsetup = 'melpa-infra-preflight'"
+        ),
+        "the refusing preflight must not be attached to test(~package_tui::)"
+    );
     assert!(preflight.contains("NEXTEST_WORKSPACE_ROOT"));
     assert!(preflight.contains(r#"mktemp -d "$scratch_parent/preflight.XXXXXX""#));
     assert!(preflight.contains("resolve_executable Git git"));
@@ -191,8 +201,88 @@ fn preflight_refuses_a_cache_root_outside_the_checkout() {
         "the refusal must name the knob to fix: {stderr}"
     );
     assert!(
+        stderr.contains("symlink"),
+        "the refusal must document the target-symlink recipe: {stderr}"
+    );
+    assert!(
         !stderr.contains("preflight passed") && !stderr.contains("launch"),
         "the preflight must refuse before launching either editor: {stderr}"
+    );
+}
+
+/// `<worktree>/target` as a symlink, with `CARGO_TARGET_DIR` unset, is the
+/// supported way to keep build output on another volume. The preflight walk
+/// must accept that logical path and name the checkout that owns the link.
+#[cfg(unix)]
+#[test]
+fn preflight_accepts_a_logical_target_symlink_when_cargo_target_dir_is_unset() {
+    fn inside_checkout(mut path: &Path) -> bool {
+        loop {
+            if [".git", ".svn", ".cvs"]
+                .iter()
+                .any(|marker| path.join(marker).exists())
+            {
+                return true;
+            }
+            match path.parent() {
+                Some(parent) if parent != path => path = parent,
+                _ => return false,
+            }
+        }
+    }
+
+    if inside_checkout(Path::new("/tmp")) {
+        eprintln!("skipping: /tmp itself is inside a checkout on this host");
+        return;
+    }
+    let checkout = tempfile::Builder::new()
+        .prefix("melpa-preflight-link-")
+        .tempdir_in("/tmp")
+        .expect("checkout");
+    fs::write(checkout.path().join(".git"), "gitdir: /unused\n").expect("marker");
+    let external = tempfile::Builder::new()
+        .prefix("melpa-preflight-ext-")
+        .tempdir_in("/tmp")
+        .expect("external target");
+    let link = checkout.path().join("target");
+    std::os::unix::fs::symlink(external.path(), &link).expect("symlink target");
+    fs::create_dir_all(link.join("melpa")).expect("logical melpa cache root");
+    let script = concat!(
+        env!("CARGO_WORKSPACE_DIR"),
+        "/scripts/melpa-infra-preflight.sh"
+    );
+    let output = Command::new("bash")
+        .arg(script)
+        .env("NEXTEST_WORKSPACE_ROOT", checkout.path())
+        .env("NEOMACS_MELPA_PREFLIGHT_CHECK_ONLY", "1")
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("NEOMACS_BIN")
+        .output()
+        .expect("run the MELPA preflight");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a logical target symlink must pass the checkout walk; stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    let expected = format!(
+        "MELPA infrastructure preflight checkout: {}",
+        checkout.path().display()
+    );
+    let combined = format!("{stdout}{stderr}");
+    assert!(
+        combined.contains(&expected),
+        "the walk must name the checkout that owns the symlink: {combined}"
+    );
+    assert!(
+        !combined.contains("is not inside a checkout"),
+        "the symlink layout is the supported one: {combined}"
+    );
+    let external_checkout = format!("checkout: {}", external.path().display());
+    assert!(
+        !combined.contains(&external_checkout),
+        "the walk must not report the external target directory: {combined}"
     );
 }
 
