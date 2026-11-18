@@ -100,6 +100,38 @@ fn mixed_composition_keeps_sampling_homogeneous_atlas_parts() {
 }
 
 #[test]
+fn composed_subpixel_run_keeps_per_channel_coverage() {
+    // Zeno's subpixel mask stores coverage in R,G,B and leaves A at zero.
+    // Compositing a shaped Arabic/Indic run must read those channels, not A,
+    // or every glyph in the run disappears from the atlas.
+    let subpixel = |x, r, g, b| SampledSubGlyph {
+        glyph: SubGlyph {
+            bearing_x: x,
+            bearing_y: 1.0,
+            width: 1,
+            height: 1,
+            pixel_data: vec![r, g, b, 0],
+            pixel_kind: GlyphPixelKind::SubpixelRgba,
+            advance_width: 1.0,
+        },
+        sampling: GlyphSampling::Linear,
+    };
+    let parts = WgpuGlyphAtlas::composite_sampled_sub_glyphs(vec![
+        subpixel(0.0, 200, 100, 50),
+        subpixel(1.0, 0, 255, 0),
+    ])
+    .expect("two subpixel glyphs compose into one run");
+
+    assert_eq!(parts.len(), 1);
+    let composed = &parts[0];
+    assert_eq!(composed.pixel_kind, GlyphPixelKind::SubpixelRgba);
+    assert_eq!((composed.width, composed.height), (2, 1));
+    assert_eq!(composed.pixel_data.len(), 8);
+    assert_eq!(&composed.pixel_data[0..4], &[200, 100, 50, 200]);
+    assert_eq!(&composed.pixel_data[4..8], &[0, 255, 0, 255]);
+}
+
+#[test]
 fn color_bitmap_pixels_always_keep_linear_sampling() {
     use neomacs_font_materializer::RasterPixels;
 

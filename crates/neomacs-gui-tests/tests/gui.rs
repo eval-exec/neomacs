@@ -82,6 +82,9 @@ mod fill_column_stipple;
 #[path = "font_coverage.rs"]
 mod font_coverage;
 
+#[path = "font_fallback_composite_ink.rs"]
+mod font_fallback_composite_ink;
+
 #[path = "font_name_pattern_resize.rs"]
 mod font_name_pattern_resize;
 
