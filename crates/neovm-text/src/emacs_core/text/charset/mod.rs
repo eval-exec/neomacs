@@ -3056,21 +3056,25 @@ pub fn builtin_decode_sjis_char(args: Vec<Value>) -> EvalResult {
     Ok(Value::fixnum(code))
 }
 
-/// `(get-unused-iso-final-char DIMENSION CHARS)` -- return an available ISO
-/// final-char code for the requested DIMENSION/CHARS class.
+/// `(get-unused-iso-final-char DIMENSION CHARS)` -- the first private-use
+/// final char (`?0'..`??') whose DIMENSION/CHARS designation is free, or nil.
+/// Mirrors GNU `Fget_unused_iso_final_char` (charset.c:1407-1425), which scans
+/// the same `iso_charset_table` that `iso-charset` reads, so definitions and
+/// `declare-equiv-charset` both occupy a final char.
 #[doc(hidden)]
 pub fn builtin_get_unused_iso_final_char(args: Vec<Value>) -> EvalResult {
     expect_args("get-unused-iso-final-char", &args, 2)?;
     let (dimension, chars_96, _) = check_iso_charset_parameter(&args[0], &args[1], None)?;
-    let chars = if chars_96 { 96 } else { 94 };
-    let final_char = match (dimension, chars) {
-        (1, 94) => 54,
-        (1, 96) => 51,
-        (2, 94) => 50,
-        (2, 96) | (3, 94) | (3, 96) => 48,
-        _ => 48,
-    };
-    Ok(Value::fixnum(final_char))
+    Ok(CHARSET_REGISTRY
+        .with(|slot| {
+            let registry = slot.borrow();
+            (i64::from(b'0')..=i64::from(b'?')).find(|&final_char| {
+                !registry
+                    .iso_charset_table
+                    .contains_key(&(dimension, chars_96, final_char))
+            })
+        })
+        .map_or(Value::NIL, Value::fixnum))
 }
 
 /// GNU's `iso_chars_96` (charset.c:912): a charset is a 96-set when the

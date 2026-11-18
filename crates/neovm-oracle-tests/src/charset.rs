@@ -120,3 +120,24 @@ fn oracle_prop_iso_charset_final_char_boundaries_and_type_errors() {
     ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
+
+#[test]
+fn oracle_prop_get_unused_iso_final_char_scans_the_designation_table() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // GNU `Fget_unused_iso_final_char` (charset.c:1407-1425) returns the first
+    // private final '0'..'?' whose `iso_charset_table` slot is empty, and nil
+    // once all sixteen are taken; `declare-equiv-charset` fills slots.
+    let form = "(list (mapcar (lambda (dc) (apply #'get-unused-iso-final-char dc)) \
+        '((1 94) (1 96) (2 94) (2 96) (3 94) (3 96))) \
+        (condition-case e (get-unused-iso-final-char 4 nil) (error e)) \
+        (condition-case e (get-unused-iso-final-char 1 95) (error e)) \
+        (progn (declare-equiv-charset 1 94 ?6 'ascii) (get-unused-iso-final-char 1 94)) \
+        (progn (dolist (c '(?7 ?8 ?9 ?: 59 ?< ?= ?> ??)) (declare-equiv-charset 1 94 c 'ascii)) \
+        (get-unused-iso-final-char 1 94)) \
+        (get-unused-iso-final-char 1 96))";
+    let expect = expect_test::expect![[
+        r#""OK ((54 51 50 48 48 48) (wrong-type-argument fixnump nil) (error \"Invalid CHARS 95, it should be 94 or 96\") 55 nil 51)""#
+    ]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
