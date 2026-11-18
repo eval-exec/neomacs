@@ -1056,6 +1056,13 @@ jobs:
       NEOMACS_GUI_TEST_BACKEND: x11
       NEOMACS_GUI_TEST_BINARY: ${{ github.workspace }}/target/release/neomacs
       NEOMACS_GUI_TEST_GNU_EMACS: /opt/gnu-emacs-oracle/bin/emacs
+      # display_line_numbers::native_line_number_gui_matrix_capacity_matches_attested_gnu
+      # compares live X11 getters with the attested GNU GUI oracle and states
+      # that requirement as NEOVM_ORACLE_MODE=verify + NEOVM_FORCE_ORACLE_PATH
+      # (the same pair nextest-shards uses). Supply them rather than weaken
+      # the test's "unsupported setup is a failure, never a skip" contract.
+      NEOVM_ORACLE_MODE: verify
+      NEOVM_FORCE_ORACLE_PATH: /opt/gnu-emacs-oracle/bin/emacs
     steps:
       - *checkout
       - *prepare_workspace_tmp
