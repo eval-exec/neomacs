@@ -304,9 +304,18 @@ pub(crate) fn is_gnu_defsym_spelling_boot_member_for_this_profile(name: &str) ->
         return true;
     }
     let host = boot_extra_host_mask();
-    GNU_BOOT_EXTRA_DEFSYMS
-        .iter()
-        .any(|row| row.spelling == name && row.host_mask & host != 0)
+    GNU_BOOT_EXTRA_DEFSYMS.iter().any(|row| {
+        // The citation fields are part of the row's validity, not decoration:
+        // an allowlist entry without a well-formed GNU cite is not a boot
+        // member. `boot_extra_citations_drift_tests` re-reads the pinned
+        // source for the full check; this keeps the data self-describing in
+        // every test-support build.
+        row.spelling == name
+            && row.host_mask & host != 0
+            && row.source_line != 0
+            && !row.source_file.is_empty()
+            && row.source_needle.contains(row.spelling)
+    })
 }
 
 /// Whether `name` is a DEFSYM spelling GNU removes, or never interns, before
