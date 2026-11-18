@@ -4543,34 +4543,6 @@ fn encode_via_iso2022(
     out
 }
 
-/// GNU `DECODE_DESIGNATION` (coding.c:3186-3217) accepts a final only when the
-/// table id is safe. A charset joins `Viso_2022_charset_list` only when it has
-/// an ISO final (charset.c:1163-1168), so a declared charset with no final is
-/// written to the table and still replayed. Failure is `invalid_code`
-/// (coding.c:3946-3961): rewind, emit one byte, and put ASCII back in G0.
-fn iso2022_designate_or_replay(
-    unit: &mut UnitReader<'_>,
-    sink: &mut DecodeSink,
-    state: &mut Iso2022DecodeState,
-    ascii: SymId,
-    reg: usize,
-    final_byte: u8,
-    dimension: i64,
-    chars_96: bool,
-) -> Result<(), NoMoreSource> {
-    if let Some((cs, _)) =
-        crate::emacs_core::charset::charset_by_iso_final(i64::from(final_byte), dimension, chars_96)
-        && crate::emacs_core::charset::charset_iso2022_designation_physical(cs).is_some()
-    {
-        state.designation[reg] = Some(cs);
-        return Ok(());
-    }
-    state.designation[reg] = None;
-    state.gl = 0;
-    state.designation[0] = Some(ascii);
-    invalid_code(unit, sink)
-}
-
 /// Decode bytes through the ISO-2022 escape-sequence machine to Emacs internal
 /// bytes (GNU `decode_coding_iso_2022`, src/coding.c:3200-3990), plus the
 /// `(charset NAME)` text-property runs GNU attaches for each maximal run of
@@ -4589,10 +4561,38 @@ fn decode_via_iso2022(
     eol: DosEolLookahead,
 ) -> DecodedSource {
     use crate::emacs_core::charset::{
-        charset_decode_char, charset_decode_char_physical, charset_iso2022_designation,
-        charset_iso2022_designation_physical,
+        charset_by_iso_final, charset_decode_char, charset_decode_char_physical,
+        charset_iso2022_designation, charset_iso2022_designation_physical,
     };
     use crate::emacs_core::coding::IsoFlag;
+    // GNU `DECODE_DESIGNATION` (coding.c:3186-3217) accepts a final only when
+    // the table id is safe. A charset joins `Viso_2022_charset_list` only when
+    // it has an ISO final (charset.c:1163-1168), so a declared charset with no
+    // final is written to the table and still replayed. Failure is
+    // `invalid_code` (coding.c:3946-3961): rewind, emit one byte, and put
+    // ASCII back in G0. The charset names stay on the use above: a new
+    // `charset::` path here is an upward layering edge.
+    fn iso2022_designate_or_replay(
+        unit: &mut UnitReader<'_>,
+        sink: &mut DecodeSink,
+        state: &mut Iso2022DecodeState,
+        ascii: SymId,
+        reg: usize,
+        final_byte: u8,
+        dimension: i64,
+        chars_96: bool,
+    ) -> Result<(), NoMoreSource> {
+        if let Some((cs, _)) = charset_by_iso_final(i64::from(final_byte), dimension, chars_96)
+            && charset_iso2022_designation_physical(cs).is_some()
+        {
+            state.designation[reg] = Some(cs);
+            return Ok(());
+        }
+        state.designation[reg] = None;
+        state.gl = 0;
+        state.designation[0] = Some(ascii);
+        invalid_code(unit, sink)
+    }
     let seven = spec.flags.contains(IsoFlag::SevenBits);
     // GNU honours the shifts only when the coding system asks for them
     // (src/coding.c:3604-3625); otherwise the byte is `invalid_code' and comes
