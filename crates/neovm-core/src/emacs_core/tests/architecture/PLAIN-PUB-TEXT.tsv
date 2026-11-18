@@ -57,6 +57,7 @@ crates/neovm-text/src/emacs_core/text/charset/mod.rs	field	CharsetLeadingByte fi
 crates/neovm-text/src/emacs_core/text/charset/mod.rs	field	CharsetRegistrySnapshot field aliases
 crates/neovm-text/src/emacs_core/text/charset/mod.rs	field	CharsetRegistrySnapshot field charsets
 crates/neovm-text/src/emacs_core/text/charset/mod.rs	field	CharsetRegistrySnapshot field emacs_mule_order
+crates/neovm-text/src/emacs_core/text/charset/mod.rs	field	CharsetRegistrySnapshot field iso_designations
 crates/neovm-text/src/emacs_core/text/charset/mod.rs	field	CharsetRegistrySnapshot field next_id
 crates/neovm-text/src/emacs_core/text/charset/mod.rs	field	CharsetRegistrySnapshot field non_preferred_head
 crates/neovm-text/src/emacs_core/text/charset/mod.rs	field	CharsetRegistrySnapshot field priority
