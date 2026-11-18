@@ -1516,6 +1516,49 @@ fn get_unused_iso_final_char_scans_the_designation_table() {
     reset_charset_registry();
 }
 
+/// ISO-2022 detection and decoding resolve `ESC ( F` through the same table
+/// as `iso-charset` (GNU coding.c:3193 `DECODE_DESIGNATION`), so a later
+/// definition and `declare-equiv-charset` both take over the designation
+/// (oracle: after `(declare-equiv-charset 1 94 ?Z 'latin-jisx0201)`,
+/// `ESC ( Z \` decodes to the yen sign in `latin-jisx0201`; the build
+/// registry has no `latin-jisx0201`, so this declares `latin-iso8859-1`).
+#[test]
+fn iso_2022_designation_lookup_follows_the_designation_table() {
+    crate::test_utils::init_test_tracing();
+    reset_charset_registry();
+    let final_z = i64::from(b'Z');
+    assert_eq!(charset_by_iso_final(final_z, 1, false), None);
+    builtin_declare_equiv_charset(vec![
+        Value::fixnum(1),
+        Value::fixnum(94),
+        Value::fixnum(final_z),
+        Value::symbol("latin-iso8859-1"),
+    ])
+    .expect("declare-equiv-charset");
+    assert_eq!(
+        charset_by_iso_final(final_z, 1, false),
+        Some((intern("latin-iso8859-1"), 1))
+    );
+
+    let define = |name: &'static str, mule_id: Option<i64>| {
+        let mut args = vec![Value::NIL; 17];
+        args[0] = Value::symbol(name);
+        args[1] = Value::fixnum(1);
+        args[2] = Value::vector(vec![Value::fixnum(32), Value::fixnum(127)]);
+        args[5] = Value::fixnum(i64::from(b'~'));
+        args[7] = mule_id.map_or(Value::NIL, Value::fixnum);
+        builtin_define_charset_internal(args).unwrap();
+    };
+    // The later definition wins although it has the lower id.
+    define("test-iso-decode-first", None);
+    define("test-iso-decode-second", Some(201));
+    assert_eq!(
+        charset_by_iso_final(i64::from(b'~'), 1, true),
+        Some((intern("test-iso-decode-second"), 1))
+    );
+    reset_charset_registry();
+}
+
 #[test]
 fn iso_charset_validates_arguments_like_gnu() {
     crate::test_utils::init_test_tracing();

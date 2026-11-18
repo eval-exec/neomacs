@@ -141,3 +141,16 @@ fn oracle_prop_get_unused_iso_final_char_scans_the_designation_table() {
     ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
+
+#[test]
+fn oracle_prop_iso_2022_designation_follows_declare_equiv_charset() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // GNU's ISO-2022 decoder resolves `ESC ( F` through `iso_charset_table`
+    // (coding.c:3193 `DECODE_DESIGNATION`), the table `declare-equiv-charset`
+    // writes (charset.c:1441), so a declared equivalent takes over the
+    // designation.
+    let form = r#"(list (let ((s "\e(Z\\")) (progn (declare-equiv-charset 1 94 ?Z 'latin-jisx0201) (let ((d (decode-coding-string s 'iso-2022-7bit))) (list (string-to-list d) (get-text-property 0 'charset d))))) (let ((s "\e(J\\")) (progn (declare-equiv-charset 1 94 ?J 'ascii) (let ((d (decode-coding-string s 'iso-2022-7bit))) (list (string-to-list d) (get-text-property 0 'charset d))))))"#;
+    let expect = expect_test::expect![[r#""OK (((165) latin-jisx0201) ((92) nil))""#]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
