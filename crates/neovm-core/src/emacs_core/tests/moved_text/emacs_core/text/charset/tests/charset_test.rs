@@ -1559,6 +1559,49 @@ fn iso_2022_designation_lookup_follows_the_designation_table() {
     reset_charset_registry();
 }
 
+/// Ids can coincide through `:emacs-mule-id`, so an equal id alone does not
+/// mark a materialized alias clone in a snapshot without the designation
+/// table: a physical charset whose name became an alias of a charset with the
+/// same id keeps its own designation.
+#[test]
+fn iso_charset_legacy_restore_keeps_an_aliased_charset_sharing_the_target_id() {
+    crate::test_utils::init_test_tracing();
+    reset_charset_registry();
+    let define = |name: &'static str, final_char: u8| {
+        let mut args = vec![Value::NIL; 17];
+        args[0] = Value::symbol(name);
+        args[1] = Value::fixnum(1);
+        args[2] = Value::vector(vec![Value::fixnum(32), Value::fixnum(127)]);
+        args[5] = Value::fixnum(i64::from(final_char));
+        args[7] = Value::fixnum(202);
+        builtin_define_charset_internal(args).unwrap();
+    };
+    let lookup = |final_char: u8| {
+        builtin_iso_charset(vec![
+            Value::fixnum(1),
+            Value::fixnum(96),
+            Value::fixnum(i64::from(final_char)),
+        ])
+        .expect("iso-charset")
+    };
+    define("test-iso-same-id-a", b'{');
+    define("test-iso-same-id-b", b'|');
+    builtin_define_charset_alias(vec![
+        Value::symbol("test-iso-same-id-a"),
+        Value::symbol("test-iso-same-id-b"),
+    ])
+    .unwrap();
+    assert_eq!(lookup(b'{'), Value::symbol("test-iso-same-id-a"));
+    assert_eq!(lookup(b'|'), Value::symbol("test-iso-same-id-b"));
+    let mut legacy = snapshot_charset_registry();
+    legacy.iso_designations = None;
+    reset_charset_registry();
+    restore_charset_registry(legacy);
+    assert_eq!(lookup(b'{'), Value::symbol("test-iso-same-id-a"));
+    assert_eq!(lookup(b'|'), Value::symbol("test-iso-same-id-b"));
+    reset_charset_registry();
+}
+
 #[test]
 fn iso_charset_validates_arguments_like_gnu() {
     crate::test_utils::init_test_tracing();
