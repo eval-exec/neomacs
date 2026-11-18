@@ -65,6 +65,14 @@ struct BatchDef {
     module: &'static str,
     /// Stable short name used in descriptive display-run ids.
     key: &'static str,
+    /// Owning crate directory (`neovm-eval`, `neovm-display`, ...). W-REG:
+    /// the manifest rows of this batch live in that crate, so the crate can
+    /// keep their fns crate-private.
+    owner: &'static str,
+    /// W-REG stage selector for the two-argument registrar spelling
+    /// `module::register_subrs(ctx, SubrSegment::Variant);`. `None` is the
+    /// legacy one-argument form.
+    segment: Option<&'static str>,
     /// Source file holding the batch's `define_subrs!` block.
     file: &'static str,
     /// cfg for entries with no per-item attribute of their own.
@@ -82,6 +90,8 @@ const BATCHES: &[BatchDef] = &[
     BatchDef {
         module: "crate::emacs_core::w32::subrs",
         key: "w32",
+        owner: "neovm-system",
+        segment: None,
         file: "crates/neovm-system/src/emacs_core/system/platform/w32/subrs.rs",
         base_cfg: "windows",
         unlisted_layer: None,
@@ -90,6 +100,8 @@ const BATCHES: &[BatchDef] = &[
     BatchDef {
         module: "lcms",
         key: "lcms",
+        owner: "neovm-eval",
+        segment: None,
         file: "crates/neovm-eval/src/emacs_core/lisp/native/builtins/lcms/subrs.rs",
         base_cfg: "lcms2",
         unlisted_layer: Some("eval"),
@@ -98,6 +110,8 @@ const BATCHES: &[BatchDef] = &[
     BatchDef {
         module: "crate::emacs_core::neo::terminal",
         key: "terminal",
+        owner: "neovm-display",
+        segment: None,
         file: "crates/neovm-display/src/emacs_core/display/neo/terminal/subrs.rs",
         base_cfg: "always",
         unlisted_layer: None,
@@ -106,6 +120,8 @@ const BATCHES: &[BatchDef] = &[
     BatchDef {
         module: "crate::emacs_core::shader_surface",
         key: "shader",
+        owner: "neovm-display",
+        segment: None,
         file: "crates/neovm-display/src/emacs_core/display/shader_surface/subrs.rs",
         base_cfg: "always",
         unlisted_layer: None,
@@ -114,6 +130,8 @@ const BATCHES: &[BatchDef] = &[
     BatchDef {
         module: "crate::emacs_core::video",
         key: "video",
+        owner: "neovm-display",
+        segment: None,
         file: "crates/neovm-display/src/emacs_core/display/video/subrs.rs",
         base_cfg: "always",
         unlisted_layer: None,
@@ -122,6 +140,8 @@ const BATCHES: &[BatchDef] = &[
     BatchDef {
         module: "crate::emacs_core::xwidget",
         key: "xwidget",
+        owner: "neovm-display",
+        segment: None,
         file: "crates/neovm-display/src/emacs_core/display/xwidget/subrs.rs",
         base_cfg: "xwidgets",
         unlisted_layer: None,
@@ -130,6 +150,8 @@ const BATCHES: &[BatchDef] = &[
     BatchDef {
         module: "file_notify",
         key: "file_notify",
+        owner: "neovm-eval",
+        segment: None,
         file: "crates/neovm-eval/src/emacs_core/lisp/native/builtins/file_notify/subrs.rs",
         base_cfg: "always",
         unlisted_layer: Some("eval"),
@@ -138,6 +160,8 @@ const BATCHES: &[BatchDef] = &[
     BatchDef {
         module: "crate::emacs_core::dbusbind",
         key: "dbusbind",
+        owner: "neovm-system",
+        segment: None,
         file: "crates/neovm-system/src/emacs_core/system/dbusbind/subrs.rs",
         base_cfg: "dbus",
         unlisted_layer: None,
@@ -146,6 +170,8 @@ const BATCHES: &[BatchDef] = &[
     BatchDef {
         module: "crate::emacs_core::sqlite",
         key: "sqlite",
+        owner: "neovm-system",
+        segment: None,
         file: "crates/neovm-system/src/emacs_core/system/sqlite/subrs.rs",
         base_cfg: "sqlite",
         unlisted_layer: None,
@@ -154,6 +180,8 @@ const BATCHES: &[BatchDef] = &[
     BatchDef {
         module: "crate::emacs_core::font",
         key: "font",
+        owner: "neovm-display",
+        segment: None,
         file: "crates/neovm-display/src/emacs_core/display/font/subrs.rs",
         base_cfg: "always",
         unlisted_layer: None,
@@ -162,6 +190,8 @@ const BATCHES: &[BatchDef] = &[
     BatchDef {
         module: "crate::emacs_core::neo::effects",
         key: "effects",
+        owner: "neovm-display",
+        segment: None,
         file: "crates/neovm-display/src/emacs_core/display/neo/effects/subrs.rs",
         base_cfg: "always",
         unlisted_layer: None,
@@ -170,6 +200,8 @@ const BATCHES: &[BatchDef] = &[
     BatchDef {
         module: "crate::emacs_core::neo::modifiers",
         key: "modifiers",
+        owner: "neovm-display",
+        segment: None,
         file: "crates/neovm-display/src/emacs_core/display/neo/modifiers/subrs.rs",
         base_cfg: "always",
         unlisted_layer: None,
@@ -178,6 +210,8 @@ const BATCHES: &[BatchDef] = &[
     BatchDef {
         module: "crate::emacs_core::neo::chrome",
         key: "chrome",
+        owner: "neovm-display",
+        segment: None,
         file: "crates/neovm-display/src/emacs_core/display/neo/chrome/subrs.rs",
         base_cfg: "always",
         unlisted_layer: None,
@@ -186,6 +220,64 @@ const BATCHES: &[BatchDef] = &[
 ];
 
 /// The eval-owned registrar pieces, in the order the core manifest runs them.
+/// Resolve one registrar call to its owner-manifest row.
+///
+/// W-REG: the owner manifest is the single place that maps a call-site
+/// module (and, for the segment spelling, a `SubrSegment` variant) to the
+/// owning crate, its `subrs.rs` file and its cfg/layer metadata. An
+/// unrecognized call stays a hard error; the segment error lists every known
+/// segment for that module with its owning crate and parsed row count so a
+/// missing batch row names what it should have registered.
+fn owner_batch(
+    repo_root: &Path,
+    module: &str,
+    segment: Option<&str>,
+) -> Result<&'static BatchDef, String> {
+    if let Some(batch) = BATCHES
+        .iter()
+        .find(|batch| batch.module == module && batch.segment == segment)
+    {
+        return Ok(batch);
+    }
+    let same_module: Vec<&BatchDef> = BATCHES
+        .iter()
+        .filter(|batch| batch.module == module)
+        .collect();
+    let Some(first) = same_module.first() else {
+        return Err(format!(
+            "unknown batch registrar `{module}`; the owner manifest has no batch row for it"
+        ));
+    };
+    let mut known = Vec::with_capacity(same_module.len());
+    for batch in &same_module {
+        let rows = specs_in(&read(repo_root, batch.file)?, batch.base_cfg)?.len();
+        known.push(format!(
+            "{} (owner {}, {} rows)",
+            batch.segment.unwrap_or("<legacy one-arg call>"),
+            batch.owner,
+            rows,
+        ));
+    }
+    Err(format!(
+        "unknown segment `{}` for registrar `{module}` (owner {}); known segments: {}; \
+         the owner manifest needs one batch row per (module, segment) with its subrs.rs \
+         file and row count",
+        segment.unwrap_or("<none>"),
+        first.owner,
+        known.join(", "),
+    ))
+}
+
+/// Test probe for the owner-manifest lookup (W-REG R0 loud-failure gate).
+#[cfg(test)]
+pub(crate) fn owner_manifest_probe_for_test(
+    repo_root: &Path,
+    module: &str,
+    segment: Option<&str>,
+) -> Result<(&'static str, &'static str), String> {
+    owner_batch(repo_root, module, segment).map(|batch| (batch.owner, batch.key))
+}
+
 const EVAL_EVENT_ORDER: [&str; 7] = [
     "eval.lcms",
     "eval.data",
@@ -806,10 +898,26 @@ fn eval_event_for(method: &str) -> Option<&'static str> {
 }
 
 enum Event {
-    Direct { at: usize, spec: ParsedSpec },
-    Batch { at: usize, module: String },
-    Eval { at: usize, id: &'static str },
-    DisplayStep { at: usize, id: String },
+    Direct {
+        at: usize,
+        spec: ParsedSpec,
+    },
+    /// One registrar call. `segment` is `Some(variant)` for the W-REG
+    /// two-argument spelling `module::register_subrs(ctx, SubrSegment::v)`;
+    /// the legacy one-argument call has `None`.
+    Batch {
+        at: usize,
+        module: String,
+        segment: Option<String>,
+    },
+    Eval {
+        at: usize,
+        id: &'static str,
+    },
+    DisplayStep {
+        at: usize,
+        id: String,
+    },
 }
 
 /// A direct registration is either its existing literal descriptor expression
@@ -1232,6 +1340,49 @@ fn manifest_events(repo_root: &Path) -> Result<(Vec<Event>, String), String> {
         events.push(Event::Batch {
             at: end,
             module: source[start..end].to_owned(),
+            segment: None,
+        });
+    }
+    // W-REG stage spelling: `module::register_subrs(ctx, SubrSegment::V);`.
+    // The variant is owner data, not a free-form expression: the owner
+    // manifest must carry one batch row per (module, segment) pair.
+    for (offset, _) in body.match_indices("::register_subrs(ctx,") {
+        let at = body_start + offset;
+        let start = body[..offset]
+            .rfind(|character: char| {
+                !(character.is_ascii_alphanumeric() || character == '_' || character == ':')
+            })
+            .map(|index| body_start + index + 1)
+            .unwrap_or(body_start);
+        let after = &body[offset + "::register_subrs(ctx,".len()..];
+        let after = after.trim_start();
+        let variant = after.strip_prefix("SubrSegment::").ok_or_else(|| {
+            format!(
+                "manifest line {}: segment registrar needs SubrSegment::Variant",
+                line_of(&source, at)
+            )
+        })?;
+        let len = variant
+            .bytes()
+            .take_while(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+            .count();
+        if len == 0 {
+            return Err(format!(
+                "manifest line {}: empty segment variant",
+                line_of(&source, at)
+            ));
+        }
+        let segment = variant[..len].to_owned();
+        if !variant[len..].trim_start().starts_with(");") {
+            return Err(format!(
+                "manifest line {}: segment registrar must end with `);`",
+                line_of(&source, at)
+            ));
+        }
+        events.push(Event::Batch {
+            at,
+            module: source[start..at].to_owned(),
+            segment: Some(segment),
         });
     }
     for (offset, _) in body.match_indices("display_subrs::register_") {
@@ -1348,12 +1499,23 @@ fn canonical_items(repo_root: &Path) -> Result<Vec<Item>, String> {
     };
     let mut declared_display_order: Vec<String> = Vec::new();
 
+    // Keyed by the owner-manifest `key`, not the call-site module: W-REG
+    // stage tables may call one crate dispatcher several times, and each
+    // stage is a distinct batch with its own subrs.rs file.
     let mut batches: BTreeMap<&'static str, Vec<ParsedSpec>> = BTreeMap::new();
     for batch in BATCHES {
-        batches.insert(
-            batch.module,
-            specs_in(&read(repo_root, batch.file)?, batch.base_cfg)?,
-        );
+        if batches
+            .insert(
+                batch.key,
+                specs_in(&read(repo_root, batch.file)?, batch.base_cfg)?,
+            )
+            .is_some()
+        {
+            return Err(format!(
+                "duplicate batch key `{}` in owner manifest",
+                batch.key
+            ));
+        }
     }
 
     let mut items = Vec::new();
@@ -1372,20 +1534,21 @@ fn canonical_items(repo_root: &Path) -> Result<Vec<Item>, String> {
                     origin: Origin::Inline,
                 });
             }
-            Event::Batch { at, module } => {
-                let batch = BATCHES
-                    .iter()
-                    .find(|batch| batch.module == module)
-                    .ok_or_else(|| {
-                        format!(
-                            "manifest line {}: unknown batch registrar `{module}`",
-                            line_of(&source, at)
-                        )
-                    })?;
+            Event::Batch {
+                at,
+                module,
+                segment,
+            } => {
+                let batch = owner_batch(repo_root, &module, segment.as_deref())
+                    .map_err(|error| format!("manifest line {}: {error}", line_of(&source, at)))?;
                 push_batch_rows(&mut items, &batches, &upper, batch).map_err(|error| {
                     format!(
-                        "manifest line {}: batch `{module}`: {error}",
-                        line_of(&source, at)
+                        "manifest line {}: batch `{module}`{}: {error}",
+                        line_of(&source, at),
+                        segment
+                            .as_deref()
+                            .map(|segment| format!(" segment `{segment}`"))
+                            .unwrap_or_default(),
                     )
                 })?;
             }
@@ -1476,8 +1639,8 @@ fn push_batch_rows(
 ) -> Result<(), String> {
     let module = batch.module;
     let specs = batches
-        .get(module)
-        .ok_or_else(|| format!("unparsed batch `{module}`"))?;
+        .get(batch.key)
+        .ok_or_else(|| format!("unparsed batch `{module}` (owner {})", batch.owner))?;
     for spec in specs {
         let row = match upper.get(&spec.name) {
             Some(row) => {

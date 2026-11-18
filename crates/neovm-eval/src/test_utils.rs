@@ -4207,6 +4207,135 @@ mod plan_consistency {
             "the plan's upper names differ from the H3 snapshot"
         );
     }
+
+    /// W-REG mechanical H3 gate (lead ruling): expanding the step plan in
+    /// order must yield exactly the canonical name sequence. After a row move
+    /// the plan's step kinds/ids/positions may be regenerated, but the
+    /// expanded sequence may not change.
+    #[test]
+    fn the_expanded_plan_yields_the_names_sequence() {
+        let names = parse_names(NAMES);
+        let steps = parse_plan(PLAN);
+        let mut expanded = Vec::new();
+        for step in &steps {
+            expanded.extend(
+                names[step.first - 1..step.first - 1 + step.count]
+                    .iter()
+                    .map(|row| {
+                        (
+                            row.name.clone(),
+                            row.min,
+                            row.max,
+                            row.layer.clone(),
+                            row.cfg.clone(),
+                        )
+                    }),
+            );
+        }
+        let expected: Vec<_> = names
+            .iter()
+            .map(|row| {
+                (
+                    row.name.clone(),
+                    row.min,
+                    row.max,
+                    row.layer.clone(),
+                    row.cfg.clone(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            expanded, expected,
+            "expanding the canonical step plan does not reproduce the name sequence"
+        );
+    }
+
+    /// W-REG mechanical H3 gate (peer criterion): the upper ledger is
+    /// semantically identical to the canonical plan's non-eval rows: same
+    /// name set, arity, layer and cfg. Ledger order may change with the
+    /// direct/batch partition; the semantic mapping may not.
+    #[test]
+    fn the_upper_ledger_matches_the_canonical_names_set_and_fields() {
+        let names = parse_names(NAMES);
+        let mut ledger = std::collections::BTreeMap::new();
+        for row in parse_names(SNAPSHOT) {
+            assert!(
+                ledger
+                    .insert(row.name.clone(), (row.min, row.max, row.layer, row.cfg),)
+                    .is_none(),
+                "duplicate upper ledger name {:?}",
+                row.name
+            );
+        }
+        let mut canonical = 0usize;
+        for row in &names {
+            if row.layer == "eval" {
+                continue;
+            }
+            canonical += 1;
+            let Some((min, max, layer, cfg)) = ledger.get(&row.name) else {
+                panic!(
+                    "canonical upper name {:?} is missing from the H3 ledger",
+                    row.name
+                );
+            };
+            assert_eq!(
+                (*min, *max, layer.as_str(), cfg.as_str()),
+                (row.min, row.max, row.layer.as_str(), row.cfg.as_str()),
+                "H3 ledger row for {:?} is not arity/layer/cfg identical to the plan",
+                row.name
+            );
+        }
+        assert_eq!(
+            ledger.len(),
+            canonical,
+            "the H3 ledger has names the canonical plan does not carry"
+        );
+    }
+
+    /// W-REG R0 loud-failure gate: the owner manifest must either resolve a
+    /// registrar or fail with the module, owning crate, segment id and the
+    /// parsed row counts of the known segments.
+    #[test]
+    fn the_owner_manifest_names_or_rejects_every_registrar() {
+        let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        assert_eq!(
+            generator::owner_manifest_probe_for_test(
+                &repo_root,
+                "crate::emacs_core::sqlite",
+                None,
+            )
+            .expect("known sqlite registrar"),
+            ("neovm-system", "sqlite")
+        );
+
+        let error = generator::owner_manifest_probe_for_test(
+            &repo_root,
+            "crate::emacs_core::sqlite",
+            Some("NoSuchSegment"),
+        )
+        .expect_err("unknown segment must fail");
+        for needle in [
+            "NoSuchSegment",
+            "crate::emacs_core::sqlite",
+            "neovm-system",
+            "rows)",
+        ] {
+            assert!(
+                error.contains(needle),
+                "segment diagnostic is missing {needle:?}: {error}"
+            );
+        }
+
+        let error =
+            generator::owner_manifest_probe_for_test(&repo_root, "no::such::registrar", None)
+                .expect_err("unknown registrar must fail");
+        assert!(
+            error.contains("unknown batch registrar `no::such::registrar`"),
+            "{error}"
+        );
+        assert!(error.contains("owner manifest"), "{error}");
+    }
 }
 
 /// Eval-side T6 pin: a fresh unit-runtime context registers exactly the
@@ -4509,6 +4638,73 @@ mod absent_module_call_state {
                 .or_else(|| payload.downcast_ref::<&str>().copied())
                 .expect("named ABSENT panic");
             assert!(text.contains(marker), "panic was {text}, wanted {marker}");
+        }
+    }
+}
+
+/// W-REG semantic baselines.
+///
+/// The effect inventory (`effect_inventory.inc`) is generated data whose dense
+/// row indices are allowed to shift when a registration row moves into its
+/// owning crate. What must NOT change is the semantic mapping from a subr name
+/// to its kind, authority, E4 parallel class, variant and alias target. This
+/// module pins that mapping through the runtime lookup
+/// (`effect_catalog::inventory()`), never by dense index, against a checked-in
+/// pre-move baseline.
+#[cfg(test)]
+mod wreg_effect_baseline {
+    use crate::emacs_core::subr::effect_catalog;
+
+    const BASELINE: &str =
+        include_str!("emacs_core/lisp/native/subr/effect_inventory.semantic-baseline.tsv");
+
+    fn runtime_rows() -> Vec<String> {
+        let mut rows: Vec<String> = effect_catalog::inventory()
+            .iter()
+            .map(|entry| {
+                format!(
+                    "{:?}\t{}\t{:?}\t{:?}\t{:?}\t{:?}",
+                    entry.kind,
+                    entry.name,
+                    entry.authority,
+                    entry.class,
+                    entry.variant,
+                    entry.target,
+                )
+            })
+            .collect();
+        rows.sort();
+        rows
+    }
+
+    fn baseline_rows() -> Vec<&'static str> {
+        BASELINE
+            .lines()
+            .filter(|line| {
+                !line.is_empty() && !line.starts_with('#') && !line.starts_with("kind\t")
+            })
+            .collect()
+    }
+
+    #[test]
+    fn effect_inventory_semantic_mapping_matches_the_pre_move_baseline() {
+        assert_eq!(
+            runtime_rows(),
+            baseline_rows(),
+            "the effect inventory's name -> kind/authority/E4-class/variant/target \
+             mapping changed; dense indices may shift, the semantic mapping may not"
+        );
+    }
+
+    /// Fixture generator. Run with
+    /// `cargo nextest run -p neovm-eval --lib -E 'test(print_effect_inventory_semantic_baseline)' --run-ignored ignored-only --no-capture`
+    /// and replace the baseline file with the printed lines (header included).
+    #[test]
+    #[ignore = "fixture generator; prints the checked-in semantic baseline"]
+    fn print_effect_inventory_semantic_baseline() {
+        println!("kind\tname\tauthority\tclass\tvariant\ttarget");
+        for row in runtime_rows() {
+            println!("{row}");
         }
     }
 }
