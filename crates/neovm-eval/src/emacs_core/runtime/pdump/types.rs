@@ -1204,7 +1204,7 @@ pub struct DumpCharsetRegistry {
 }
 
 /// `(dimension, chars-96?, final char)`, the key of GNU's `iso_charset_table`.
-pub type DumpIsoDesignationKey = (i64, bool, i64);
+pub(crate) type DumpIsoDesignationKey = (i64, bool, i64);
 
 #[repr(u8)]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, IntoPrimitive, TryFromPrimitive)]
