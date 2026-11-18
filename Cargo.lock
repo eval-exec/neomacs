@@ -4334,6 +4334,7 @@ dependencies = [
  "neovm-display-identity",
  "neovm-edit",
  "neovm-eval",
+ "neovm-gnu-ledgers",
  "neovm-host-abi",
  "neovm-system",
  "neovm-text",
@@ -4515,6 +4516,10 @@ dependencies = [
  "whoami",
  "windows-sys 0.61.2",
 ]
+
+[[package]]
+name = "neovm-gnu-ledgers"
+version = "0.0.20"
 
 [[package]]
 name = "neovm-host-abi"
@@ -9510,6 +9515,7 @@ version = "0.0.20"
 dependencies = [
  "flate2",
  "neomacs-test-env",
+ "neovm-gnu-ledgers",
  "proc-macro2",
  "rayon",
  "resvg",
