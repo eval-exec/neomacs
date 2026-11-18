@@ -70,7 +70,8 @@ thread_local! {
 /// layout engine), which is why it is not `cfg(test)`. The mode is read once
 /// per snapshot, never on a per-character path, so the check costs nothing
 /// measurable.
-pub fn set_text_snapshot_mode_override(mode: Option<TextSnapshotMode>) {
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn set_text_snapshot_mode_override(mode: Option<TextSnapshotMode>) {
     MODE_OVERRIDE.with(|cell| cell.set(mode));
 }
 

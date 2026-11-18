@@ -57,7 +57,8 @@ pub struct MutatorStartFailure<'era> {
     permit: MutatorPermit<'era>,
 }
 impl<'era> MutatorStartFailure<'era> {
-    pub fn into_permit(self) -> MutatorPermit<'era> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn into_permit(self) -> MutatorPermit<'era> {
         self.permit
     }
 }
@@ -244,7 +245,9 @@ pub struct MutatorFinishFailure<'era> {
     owner: Mutator<'era>,
 }
 impl<'era> MutatorFinishFailure<'era> {
-    pub fn into_owner(self) -> Mutator<'era> {
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn into_owner(self) -> Mutator<'era> {
         self.owner
     }
 }
@@ -382,7 +385,9 @@ impl<'era> Mutator<'era> {
         RegistrationError::Busy
     }
 
-    pub fn begin_publication(
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn begin_publication(
         &mut self,
         epoch: NonZeroU64,
     ) -> Result<OwnerPublication<'_, 'era>, RegistrationError> {

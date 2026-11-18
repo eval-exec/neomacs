@@ -2614,6 +2614,9 @@ pub struct FontSpecResolveRequest {
     pub weight: Option<FontWeight>,
     pub slant: Option<FontSlant>,
     pub width: Option<FontWidth>,
+    /// GNU `:otf` requirement. Font matching rejects a font whose
+    /// GSUB/GPOS capability does not satisfy it (`src/font.c:2521-2533`).
+    pub otf: Option<crate::emacs_core::eval::data::fontset_state::StoredOtfSpec>,
 }
 
 /// Listing constraints which must not alter the driver's single-font match

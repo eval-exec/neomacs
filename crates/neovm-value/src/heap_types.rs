@@ -1003,7 +1003,8 @@ impl LispString {
     }
 
     /// True for GNU's `size_byte == -3`: unibyte bytes that must not move.
-    pub fn is_immovable(&self) -> bool {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn is_immovable(&self) -> bool {
         self.size_byte == SIZE_BYTE_UNIBYTE_IMMOVABLE
     }
 
@@ -1058,7 +1059,8 @@ impl LispString {
         !self.intervals.load(Ordering::Acquire).is_null()
     }
 
-    pub fn clear_intervals(&mut self) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn clear_intervals(&mut self) {
         // SATB (enforced): log the children being dropped BEFORE unlinking —
         // a concurrently-claimed interval-free string is never re-traced this
         // cycle, so this log is the only thing keeping the dropped children
@@ -1250,7 +1252,8 @@ impl LispString {
     /// makes. [`Self::mutate_bytes`] would pop and re-push the trailing NUL
     /// and recount a multibyte string's characters (a scan of the whole
     /// string per `aset`).
-    pub fn set_byte_same_char_count(&mut self, byte_pos: usize, byte: u8) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn set_byte_same_char_count(&mut self, byte_pos: usize, byte: u8) {
         debug_assert!(byte_pos < self.sbytes(), "byte position in range");
         debug_assert!(
             !self.is_multibyte() || (byte < 0x80 && self.as_bytes()[byte_pos] < 0x80),

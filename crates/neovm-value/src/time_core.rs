@@ -215,17 +215,6 @@ impl TimeMicros {
     }
 
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    pub fn less_than(self, other: TimeMicros) -> bool {
-        if self.secs != other.secs {
-            self.secs < other.secs
-        } else if self.usecs != other.usecs {
-            self.usecs < other.usecs
-        } else {
-            self.psecs < other.psecs
-        }
-    }
-
-    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
     pub fn equal(self, other: TimeMicros) -> bool {
         self.secs == other.secs && self.usecs == other.usecs && self.psecs == other.psecs
     }

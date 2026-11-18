@@ -78,6 +78,118 @@ fn miriub3_eager_sweep_preserves_young_and_old_survivors() {
     assert_eq!(heap.non_cons_object_addrs.len(), 3);
 }
 
+/// TASK 10 — the `dirty_owners` ABA regression.
+///
+/// The owner-tracking side tables (`dirty_owners` / `dirty_owner_bits` /
+/// `dirty_writes`) are the remembered-set precursor. Their dedup is keyed on
+/// the owner's address bits. If an entry recorded in one window survives into
+/// a later cycle's sweep, that cycle can FREE the owner and the arena can hand
+/// its slot (same size class ⇒ same address AND tag ⇒ identical bits) to a new
+/// object — whose barriered write is then wrongly deduped ("suppressed") by
+/// the stale entry. This test drives exactly that sequence with REAL frees and
+/// REAL deterministic arena slot reuse, and asserts the tables track the new
+/// occupant, not the freed ghosts.
+///
+/// It has teeth only under clear-at-BEGIN: revert `begin_collection`'s
+/// `clear_dirty_owners()/clear_dirty_writes()` (restore the end-of-collection
+/// clears) and BOTH the post-`begin_collection` `== 0` assertion and the final
+/// `== 1` assertion fail (the stale O/Q entries linger, and O''s write is
+/// deduped against O's ghost).
+#[test]
+fn dirty_owner_tracking_is_cleared_at_begin_so_freed_slot_reuse_is_not_deduped() {
+    crate::test_utils::init_test_tracing();
+    let mut heap = TaggedHeap::new();
+    heap.set_write_tracking_mode(WriteTrackingMode::OwnersAndRecords);
+    set_tagged_heap(&mut heap);
+
+    // --- Previous window: two GARBAGE owners O and Q, both mutated (barriered
+    //     write) so both land in the owner tables. Neither is rooted, so the
+    //     next collection will sweep them. ---
+    let o = heap.alloc_vector(vec![TaggedValue::fixnum(1), TaggedValue::fixnum(2)]);
+    let q = heap.alloc_vector(vec![TaggedValue::fixnum(3), TaggedValue::fixnum(4)]);
+    let o_addr = o.as_veclike_ptr().unwrap() as usize;
+    assert!(crate::tagged::mutate::set_vector_slot(
+        o,
+        0,
+        TaggedValue::fixnum(10)
+    ));
+    assert!(crate::tagged::mutate::set_vector_slot(
+        q,
+        0,
+        TaggedValue::fixnum(20)
+    ));
+    assert_eq!(
+        heap.dirty_owner_count(),
+        2,
+        "O and Q are both recorded dirty owners in this window"
+    );
+
+    // --- Start the collection that will free O and Q. Clear-at-begin empties
+    //     the owner tables HERE, before the sweep can free-and-reuse a slot.
+    //     (mark_all drains the internal runtime roots seeded by
+    //     begin_collection so only the unrooted O and Q are swept.) ---
+    // SAFETY: serial fixture heap; the caller holds the only heap view and no
+    // collector or compiled leaf runs.
+    unsafe { heap.begin_collection() };
+    heap.mark_all();
+    assert_eq!(
+        heap.dirty_owner_count(),
+        0,
+        "begin_collection must clear owner tracking (clear-at-begin): a stale \
+         pre-cycle entry that outlives this cycle's sweep is the ABA hazard",
+    );
+
+    // --- Sweep the vector arena: O and Q are unmarked ⇒ freed, their slots
+    //     returned to the class free list. ---
+    let vpages = heap.vector_arena.pages.len();
+    let (_live, freed) = heap.sweep_arena_pages_ranges(ArenaSweepRanges {
+        vector: PageRange::all(vpages),
+        ..ArenaSweepRanges::default()
+    });
+    assert!(
+        freed >= 2,
+        "the sweep must reclaim the two unrooted garbage vectors (freed={freed})",
+    );
+
+    // --- Deterministic reuse: allocating the same class pops the just-freed
+    //     slots off the free list, so O's exact address recurs. ---
+    let mut o_prime = None;
+    for _ in 0..64 {
+        let v = heap.alloc_vector(vec![TaggedValue::fixnum(0), TaggedValue::fixnum(0)]);
+        if v.as_veclike_ptr().unwrap() as usize == o_addr {
+            o_prime = Some(v);
+            break;
+        }
+    }
+    let o_prime = o_prime.expect("arena must hand O's freed slot back to a new same-class vector");
+    assert_eq!(
+        o_prime.as_veclike_ptr().unwrap() as usize,
+        o_addr,
+        "O' must occupy O's reclaimed slot (identical owner bits)",
+    );
+
+    // --- The barriered write to O' must be recorded as a FRESH owner. Under
+    //     the ABA-prone clear-at-end lifecycle, O's ghost bits (== O''s bits)
+    //     would dedup this write away, and Q's freed-but-uncleared entry would
+    //     still inflate the count — so the table would read 2 ghosts, never
+    //     the one true owner O'. ---
+    assert!(crate::tagged::mutate::set_vector_slot(
+        o_prime,
+        1,
+        TaggedValue::fixnum(99)
+    ));
+    assert!(
+        heap.is_dirty_owner(o_prime),
+        "O''s write must be recorded in the owner tables"
+    );
+    assert_eq!(
+        heap.dirty_owner_count(),
+        1,
+        "exactly O' is dirty; a lingering ghost O (deduped) plus ghost Q \
+         (freed, never cleared) would make this 2 under the stale-dedup ABA",
+    );
+}
+
 #[test]
 fn heap_identity_is_unique_across_heap_lifetimes() {
     crate::test_utils::init_test_tracing();

@@ -1361,6 +1361,7 @@ impl OverlayList {
         best.map(|(winner, _)| winner)
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn highest_priority_overlay_at_emacs_byte_pos(
         &self,
@@ -1802,6 +1803,7 @@ impl OverlayList {
         );
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn set_front_advance(&mut self, overlay: Value, advance: bool) {
         self.invalidate_snapshot();
@@ -1810,6 +1812,7 @@ impl OverlayList {
         });
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn set_rear_advance(&mut self, overlay: Value, advance: bool) {
         self.invalidate_snapshot();
@@ -1958,6 +1961,7 @@ fn overlay_range(overlay: Value) -> Option<EmacsByteRange> {
     data.buffer.map(|_| overlay_data_range(data))
 }
 
+#[cfg(any(test, feature = "test-support"))]
 fn overlay_covers_pos(overlay: Value, pos: EmacsBytePos) -> bool {
     let Some(data) = overlay.as_overlay_data() else {
         return false;
@@ -2194,6 +2198,7 @@ pub(crate) type OverlayPriorityLookup<'a> = &'a dyn Fn(Value) -> Option<Value>;
 /// otherwise.
 pub(crate) type OverlayPropertyLookup<'a> = &'a dyn Fn(Value, Value) -> Option<Value>;
 
+#[cfg(any(test, feature = "test-support"))]
 fn overlay_plist_property(overlay: Value, property: Value) -> Option<Value> {
     overlay_property_named(overlay, property)
 }

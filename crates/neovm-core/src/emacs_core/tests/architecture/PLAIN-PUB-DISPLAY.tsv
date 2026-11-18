@@ -78,12 +78,16 @@ crates/neovm-display/src/emacs_core/display/fontset/mod.rs	use	use FontsetCaptur
 crates/neovm-display/src/emacs_core/display/fontset/mod.rs	use	use FontsetRenderingEntry
 crates/neovm-display/src/emacs_core/display/fontset/mod.rs	use	use FontsetRenderingSpec
 crates/neovm-display/src/emacs_core/display/fontset/mod.rs	use	use StoredFontSpec
+crates/neovm-display/src/emacs_core/display/fontset/mod.rs	use	use StoredOtfFeatures
+crates/neovm-display/src/emacs_core/display/fontset/mod.rs	use	use StoredOtfLangsys
+crates/neovm-display/src/emacs_core/display/fontset/mod.rs	use	use StoredOtfSpec
 crates/neovm-display/src/emacs_core/display/fontset/mod.rs	use	use capture_default_fontset_chain
 crates/neovm-display/src/emacs_core/display/fontset/mod.rs	use	use native_font_name
 crates/neovm-display/src/emacs_core/display/fontset/native_policy.rs	enum	enum FontsetCaptureError
 crates/neovm-display/src/emacs_core/display/fontset/native_policy.rs	enum	enum FontsetRenderingEntry
 crates/neovm-display/src/emacs_core/display/fontset/native_policy.rs	field	FontsetRenderingSpec field family
 crates/neovm-display/src/emacs_core/display/fontset/native_policy.rs	field	FontsetRenderingSpec field lang
+crates/neovm-display/src/emacs_core/display/fontset/native_policy.rs	field	FontsetRenderingSpec field otf
 crates/neovm-display/src/emacs_core/display/fontset/native_policy.rs	field	FontsetRenderingSpec field registry
 crates/neovm-display/src/emacs_core/display/fontset/native_policy.rs	field	FontsetRenderingSpec field slant
 crates/neovm-display/src/emacs_core/display/fontset/native_policy.rs	field	FontsetRenderingSpec field weight

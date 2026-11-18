@@ -320,15 +320,6 @@ pub fn is_whitespace(c: char) -> bool {
     matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0b' | '\x0c')
 }
 
-/// Whether a string is multibyte (contains non-ASCII).
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
-pub(crate) fn is_multibyte_string(s: &str) -> bool {
-    s.chars().any(|ch| {
-        let cp = ch as u32;
-        cp > 0x7f && !(UNIBYTE_BYTE_SENTINEL_MIN..=UNIBYTE_BYTE_SENTINEL_MAX).contains(&cp)
-    })
-}
-
 /// Resolve the EOL conversion type of a coding-system NAME.
 ///
 /// GNU keys EOL conversion off `CODING_ID_EOL_TYPE` (the resolved coding

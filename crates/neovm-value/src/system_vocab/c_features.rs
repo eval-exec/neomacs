@@ -90,6 +90,18 @@ pub struct GnuCFeature {
     pub here: HereDecision,
 }
 
+#[cfg(feature = "test-support")]
+impl GnuCFeature {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn gnu_site(&self) -> &'static str {
+        self.gnu_site
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn gnu_guard(&self) -> GnuGuard {
+        self.gnu_guard
+    }
+}
+
 /// GNU 31.0.90 (`0ee48ac4df2`) makes **35** `Fprovide` calls in `src/*.c` and
 /// `src/*.m`, naming **29** distinct features, plus the `emacs` seed: **30
 /// rows**.  A name provided from more than one window-system backend cites the

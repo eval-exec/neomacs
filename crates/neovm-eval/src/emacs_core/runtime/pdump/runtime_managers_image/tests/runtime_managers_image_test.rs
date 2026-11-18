@@ -103,6 +103,18 @@ fn runtime_managers_section_round_trips_representative_state() {
                             weight: Some(400),
                             slant: Some(DumpFontSlant::Normal),
                             width: Some(DumpFontWidth::Normal),
+                            otf: Some(DumpStoredOtfSpec {
+                                script: "arab".to_string(),
+                                langsys: None,
+                                // The validator quirk's unmatchable LANGSYS
+                                // must survive the binary image codec.
+                                langsys_unmatchable: true,
+                                gsub: Some(DumpStoredOtfFeatures {
+                                    required: vec!["init".to_string()],
+                                    forbidden: vec!["liga".to_string()],
+                                }),
+                                gpos: None,
+                            }),
                             definition: Some(DumpFontDefinitionMetadata {
                                 encoding: DumpSymId(23),
                                 repertory: Some(DumpFontRepertory::CharsetSym(DumpSymId(18))),
@@ -194,6 +206,19 @@ fn runtime_managers_section_round_trips_representative_state() {
     else {
         panic!("font definition should survive the runtime manager round trip");
     };
+    assert_eq!(
+        spec.otf,
+        Some(DumpStoredOtfSpec {
+            script: "arab".to_string(),
+            langsys: None,
+            langsys_unmatchable: true,
+            gsub: Some(DumpStoredOtfFeatures {
+                required: vec!["init".to_string()],
+                forbidden: vec!["liga".to_string()],
+            }),
+            gpos: None,
+        })
+    );
     let definition = spec.definition.as_ref().expect("font definition metadata");
     assert_eq!(definition.encoding, DumpSymId(23));
     assert!(matches!(

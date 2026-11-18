@@ -85,6 +85,9 @@ mod font_coverage;
 #[path = "font_name_pattern_resize.rs"]
 mod font_name_pattern_resize;
 
+#[path = "font_otf_spec_selection.rs"]
+mod font_otf_spec_selection;
+
 #[path = "fontset_han_repertory.rs"]
 mod fontset_han_repertory;
 

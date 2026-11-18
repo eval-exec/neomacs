@@ -654,6 +654,30 @@ const fn is_subrs_source_file(path: &str) -> bool {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! define_subrs {
+    // W-REG crate-private form: the catalog and its registrar stay inside the
+    // owning crate so that moving a registration row into that crate adds no
+    // cross-crate `SUBRS`/`register_subrs` public symbols. The crate exposes
+    // its stage table (and one test-support accessor) instead.
+    (crate_private, $($spec:expr),+ $(,)?) => {
+        #[doc(hidden)]
+        pub(crate) const SUBRS: $crate::emacs_core::subr::SubrBatch =
+            $crate::emacs_core::subr::SubrBatch::new(
+                module_path!(),
+                &[$($spec),+],
+            );
+
+        // Apply cfg attributes to array elements before deriving declarations.
+        const _: () = $crate::emacs_core::subr::effect_schema::assert_valid(
+            &$crate::emacs_core::subr::WorldSubr::batch_declarations(&[$($spec),+]),
+        );
+
+        #[doc(hidden)]
+        pub(crate) fn register_subrs(
+            ctx: &mut $crate::emacs_core::eval::Context,
+        ) {
+            SUBRS.install(ctx);
+        }
+    };
     ($($spec:expr),+ $(,)?) => {
         #[doc(hidden)]
         pub const SUBRS: $crate::emacs_core::subr::SubrBatch =

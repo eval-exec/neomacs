@@ -21,14 +21,15 @@ use std::cell::UnsafeCell;
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 
 mod atomic_value;
-pub use atomic_value::AtomicTaggedValue;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) use atomic_value::AtomicTaggedValue;
 #[cfg(feature = "sqlite")]
 pub(crate) mod sqlite_finalizer;
 #[cfg(all(any(test, feature = "test-support"), feature = "sqlite"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) use sqlite_finalizer::sqlite_obj_finalizer_installed;
 mod value_vec;
-pub use value_vec::OwnedValueVec;
+pub(crate) use value_vec::OwnedValueVec;
 
 // ---------------------------------------------------------------------------
 // ConsCell — no header, minimal size
@@ -185,7 +186,8 @@ impl ConsCdrWord {
     ///
     /// `self` must be a free cons cell, making `next_free` the active member.
     #[inline]
-    pub unsafe fn free_next(&self) -> *mut ConsCell {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) unsafe fn free_next(&self) -> *mut ConsCell {
         // SAFETY: the caller proves the union holds `next_free`.
         unsafe { (*self.0.get()).next_free }
     }
@@ -328,7 +330,8 @@ impl ConsCell {
     /// `self` must be a free cons cell, making `next_free` the active union
     /// field.
     #[inline]
-    pub unsafe fn free_next(&self) -> *mut ConsCell {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) unsafe fn free_next(&self) -> *mut ConsCell {
         unsafe { self.cdr_or_next.free_next() }
     }
 
@@ -500,7 +503,8 @@ impl HeaderFlags {
 /// both.
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, IntoPrimitive)]
-pub enum MarkParity {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) enum MarkParity {
     One = 1,
     Two = 2,
 }
@@ -524,7 +528,8 @@ impl MarkParity {
 
 /// The mark byte of an object marked in no cycle: white under both
 /// parities.
-pub const UNMARKED_AT_REST: u8 = 0;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) const UNMARKED_AT_REST: u8 = 0;
 
 /// The generation byte of a [`GcHeader`] (byte 6; P3.0 §3.1, P3.1 §3.2).
 ///
@@ -723,7 +728,8 @@ impl GcHeader {
 
     /// A header of `kind` born marked at `parity`.
     #[inline]
-    pub fn new_marked(kind: HeapObjectKind, parity: MarkParity) -> Self {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn new_marked(kind: HeapObjectKind, parity: MarkParity) -> Self {
         let header = Self::new(kind);
         header.marked.store(parity.byte(), Ordering::Relaxed);
         header
@@ -806,7 +812,8 @@ impl GcHeader {
     /// the owning heap's parity — use `is_marked_at` unless you are
     /// asserting the raw byte itself (e.g. "never touched", or frozen).
     #[inline]
-    pub fn raw_mark(&self) -> u8 {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn raw_mark(&self) -> u8 {
         self.marked.load(Ordering::Relaxed)
     }
 
@@ -826,7 +833,8 @@ impl GcHeader {
 
     /// Is this young object marked for the cycle whose parity is `parity`?
     #[inline]
-    pub fn is_marked_at(&self, parity: MarkParity) -> bool {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn is_marked_at(&self, parity: MarkParity) -> bool {
         self.marked.load(Ordering::Relaxed) == parity.byte()
     }
 
@@ -1699,7 +1707,8 @@ pub struct VectorObj {
 }
 
 /// Number of slots in GNU's top-level char-table contents vector.
-pub const CHAR_TABLE_TOP_SLOTS: usize = 64;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) const CHAR_TABLE_TOP_SLOTS: usize = 64;
 
 /// Heap-allocated character table.
 ///
@@ -1947,7 +1956,8 @@ pub struct FontObjectData {
 
 /// Heap-allocated opened-font pseudovector (`PVEC_FONT`).
 #[repr(C)]
-pub struct FontObj {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) struct FontObj {
     pub header: VecLikeHeader,
     pub data: FontObjectData,
 }
@@ -2052,7 +2062,8 @@ impl BoolVectorObj {
     /// The mask of the valid bits of the last word (all ones when `nbits`
     /// is a multiple of the word size).
     #[inline]
-    pub const fn last_word_mask(nbits: usize) -> u64 {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) const fn last_word_mask(nbits: usize) -> u64 {
         match nbits % Self::WORD_BITS {
             0 => u64::MAX,
             rem => (1u64 << rem) - 1,
@@ -2194,7 +2205,8 @@ impl CondVarObj {
 
 /// Heap-allocated handle for one host-owned video session.
 #[repr(C)]
-pub struct VideoObj {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) struct VideoObj {
     pub header: VecLikeHeader,
     pub video_id: VideoId,
 }
@@ -2427,7 +2439,7 @@ impl SubrStorageLayout {
 /// owned resource is the `Integer`'s internal limb buffer, which is
 /// freed when `Drop` runs in `free_gc_object`.
 #[repr(C)]
-pub struct BignumObj {
+pub(crate) struct BignumObj {
     pub header: VecLikeHeader,
     pub value: Integer,
 }
@@ -2453,7 +2465,7 @@ pub struct SymbolWithPosObj {
 /// functions of unmarked finalizers, and re-marks them so they survive the
 /// sweep until they have run (errors ignored).
 #[repr(C)]
-pub struct FinalizerObj {
+pub(crate) struct FinalizerObj {
     pub header: VecLikeHeader,
     /// Called with zero args after the GC cycle that finds this object
     /// unreachable. Immutable after allocation.

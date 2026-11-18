@@ -887,7 +887,8 @@ impl TaggedValue {
 
     /// Extract raw cons cell pointer without tag check.
     #[inline(always)]
-    pub fn xcons_ptr(self) -> *const ConsCell {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn xcons_ptr(self) -> *const ConsCell {
         debug_assert!(self.is_cons());
         super::collection_reads::observe(self);
         (self.0 & !TAG_MASK) as *const ConsCell
@@ -906,7 +907,8 @@ impl TaggedValue {
 
     /// Extract raw float object pointer. Returns None if not a float.
     #[inline(always)]
-    pub fn as_float_ptr(self) -> Option<*const FloatObj> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn as_float_ptr(self) -> Option<*const FloatObj> {
         if self.is_float() {
             Some((self.0 & !TAG_MASK) as *const FloatObj)
         } else {

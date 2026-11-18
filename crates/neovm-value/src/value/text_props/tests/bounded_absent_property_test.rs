@@ -68,3 +68,16 @@ fn assigning_a_key_detaches_the_absence_proof_and_preserves_limits_and_values() 
     assert_eq!(bounded(&table, 0, invisible, 30), Some(30));
     assert_eq!(bounded(&table, 0, invisible, 150), None);
 }
+
+#[test]
+fn replacing_or_grafting_properties_makes_a_formerly_absent_key_visible() {
+    let invisible = Value::symbol("invisible");
+    let mut table = face_only_table();
+    table.set_properties_in_char_range(CharRange::from_usize(20, 30), vec![(invisible, Value::T)]);
+    assert_eq!(bounded(&table, 0, invisible, 40), Some(20));
+
+    let mut grafted = face_only_table();
+    grafted.append_shifted_at_char_offset(&table, CharLen::new(100));
+    assert_eq!(bounded(&grafted, 100, invisible, 140), Some(120));
+    assert_eq!(bounded(&grafted, 125, invisible, 150), Some(130));
+}

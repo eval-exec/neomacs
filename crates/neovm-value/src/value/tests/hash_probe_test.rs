@@ -196,6 +196,44 @@ fn a_long_list_lookup_does_not_recurse_per_cdr() {
     assert_eq!(found, Some(Value::T.bits()));
 }
 
+#[test]
+fn storage_lookups_by_value_agree_with_lookups_by_key() {
+    let values = corpus();
+    for test in TESTS {
+        let mut storage = HashTableStorage::default();
+        for (i, value) in values.iter().enumerate() {
+            storage.insert(
+                value.to_hash_key_swp(&test, false),
+                *value,
+                Value::fixnum(i as i64),
+            );
+        }
+        for value in &values {
+            let by_key = storage.get(&value.to_hash_key_swp(&test, false)).copied();
+            assert_eq!(
+                storage.lookup(*value, test, false).copied(),
+                by_key,
+                "{value:?} under {test:?}"
+            );
+        }
+        let fresh = list(&[Value::fixnum(1), Value::fixnum(2)]);
+        let expect_hit = matches!(test, HashTableTest::Equal);
+        assert_eq!(
+            storage.get_by_value(fresh, test, false).is_some(),
+            expect_hit
+        );
+        if expect_hit {
+            *storage.get_mut_by_value(fresh, test, false).unwrap() = Value::T;
+            assert_eq!(
+                storage.get(&fresh.to_hash_key_swp(&test, false)).copied(),
+                Some(Value::T)
+            );
+            assert_eq!(storage.remove_by_value(fresh, test, false), Some(Value::T));
+            assert!(storage.get(&fresh.to_hash_key_swp(&test, false)).is_none());
+        }
+    }
+}
+
 /// Small `eq`/`eql` tables answer fixnum and symbol lookups by scanning
 /// slots for the key's bits (`small_identity_scan`). Across every table size
 /// up to and past the scan limit, with removals leaving holes and mixed key

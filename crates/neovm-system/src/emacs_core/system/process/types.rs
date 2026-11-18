@@ -1251,8 +1251,7 @@ pub(super) enum ProcessRunDisposition {
 /// parameter rather than two because a read that had one and not the other
 /// could decode into the wrong shape or skip a decode GNU makes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
-pub(crate) struct ProcessOutputDestination {
+pub struct ProcessOutputDestination {
     pub(super) sink: ProcessOutputSink,
     pub(super) branch: ProcessReadBranch,
 }

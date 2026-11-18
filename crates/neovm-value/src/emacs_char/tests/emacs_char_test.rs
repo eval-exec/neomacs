@@ -1,4 +1,5 @@
 use super::*;
+use crate::emacs_char::b13_test_hooks::{multibyte_chars_in_text, utf8_to_emacs};
 
 // -----------------------------------------------------------------------
 // ASCII roundtrip
@@ -306,6 +307,20 @@ fn char_byte_pos_conversion() {
 // -----------------------------------------------------------------------
 
 #[test]
+fn try_as_utf8_valid() {
+    let s = "hello world";
+    let bytes = utf8_to_emacs(s);
+    assert_eq!(try_as_utf8(&bytes), Some(s));
+}
+
+#[test]
+fn try_as_utf8_with_unicode() {
+    let s = "\u{2018}cafe\u{0301}\u{2019}";
+    let bytes = utf8_to_emacs(s);
+    assert_eq!(try_as_utf8(&bytes), Some(s));
+}
+
+#[test]
 fn try_as_utf8_with_raw_bytes() {
     // Encode raw byte 0x80 — this produces overlong C0 80 which is not valid UTF-8.
     let mut buf = [0u8; MAX_MULTIBYTE_LENGTH];
@@ -316,6 +331,13 @@ fn try_as_utf8_with_raw_bytes() {
 // -----------------------------------------------------------------------
 // to_utf8_lossy
 // -----------------------------------------------------------------------
+
+#[test]
+fn to_utf8_lossy_clean() {
+    let s = "hello";
+    let bytes = utf8_to_emacs(s);
+    assert_eq!(to_utf8_lossy(&bytes), "hello");
+}
 
 #[test]
 fn to_utf8_lossy_with_raw_bytes() {
@@ -338,6 +360,29 @@ fn to_utf8_lossy_with_raw_bytes() {
 // -----------------------------------------------------------------------
 // utf8_to_emacs roundtrip
 // -----------------------------------------------------------------------
+
+#[test]
+fn utf8_to_emacs_roundtrip() {
+    let cases = [
+        "",
+        "hello",
+        "\u{E9}",    // e-acute
+        "\u{2018}",  // left single quote
+        "\u{1F344}", // mushroom
+        "mix\u{E9}d \u{2018}text\u{2019} with \u{1F344}",
+    ];
+    for s in cases {
+        let emacs_bytes = utf8_to_emacs(s);
+        // Since there are no raw bytes, try_as_utf8 should succeed and
+        // return the original string.
+        assert_eq!(
+            try_as_utf8(&emacs_bytes),
+            Some(s),
+            "roundtrip failed for {:?}",
+            s
+        );
+    }
+}
 
 // -----------------------------------------------------------------------
 // 5-byte character (extended Emacs range)
@@ -600,6 +645,13 @@ fn str_as_multibyte_preserves_valid_sequences() {
 }
 
 #[test]
+fn str_as_multibyte_promotes_lone_high_bytes() {
+    // A solitary 0xFF (not part of a valid sequence) becomes a raw-byte char.
+    let out = str_as_multibyte(&[b'A', 0xFF, b'B']);
+    assert_eq!(multibyte_chars_in_text(&out), 3);
+}
+
+#[test]
 fn parse_str_as_multibyte_counts() {
     let mut input = Vec::new();
     let mut tmp = [0u8; MAX_MULTIBYTE_LENGTH];
@@ -700,6 +752,40 @@ fn char_general_category_matches_gnu_unicode_data() {
     assert!(!char_general_category(0x200B).is_some_and(graphic_base_p));
     // Out-of-range (eight-bit / non-scalar) yields None, like GNU's nil entry.
     assert_eq!(char_general_category(0x110000), None);
+}
+
+// -----------------------------------------------------------------------
+// EmacsChar newtype (issue #131): make the "char code as Rust char / PUA
+// sentinel" mistake un-writable.
+// -----------------------------------------------------------------------
+#[test]
+fn emacs_char_classifies_unicode_eight_bit_and_nonunicode() {
+    // A real Private-Use glyph (nerd-font icon) is a Unicode scalar value.
+    let glyph = EmacsChar::from_code(0xE0A0).unwrap();
+    assert!(glyph.is_unicode_scalar());
+    assert!(!glyph.is_byte8());
+    assert_eq!(glyph.as_rust_char(), Some('\u{E0A0}'));
+    assert_eq!(glyph.to_byte8(), None);
+    // Its canonical bytes are real extended UTF-8, never an in-Unicode sentinel.
+    assert_eq!(glyph.to_emacs_bytes(), vec![0xEE, 0x82, 0xA0]);
+
+    // An eight-bit raw byte is disjoint from Unicode.
+    let raw = EmacsChar::from_byte8(0xA0);
+    assert_eq!(raw.code(), 0x3FFFA0);
+    assert!(!raw.is_unicode_scalar());
+    assert!(raw.is_byte8());
+    assert_eq!(raw.as_rust_char(), None);
+    assert_eq!(raw.to_byte8(), Some(0xA0));
+
+    // The glyph and the raw byte are distinct EmacsChars (the old storage
+    // string collapsed both onto U+E0A0).
+    assert_ne!(glyph, raw);
+
+    // A non-Unicode code (> 0x10FFFF, below the eight-bit range) is neither.
+    let nonuni = EmacsChar::from_code(0x110000).unwrap();
+    assert!(!nonuni.is_unicode_scalar());
+    assert!(!nonuni.is_byte8());
+    assert_eq!(nonuni.to_byte8(), None);
 }
 
 #[test]

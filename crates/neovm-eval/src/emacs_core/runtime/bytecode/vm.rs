@@ -978,6 +978,19 @@ struct InterpreterFrameCleanup {
 }
 
 impl InterpreterFrameCleanup {
+    /// The driver's entry frame has no caller cleanup frontiers.
+    ///
+    /// Both fields are the typed zero values `new(0, 0)` would compute: the
+    /// checked conversions of literal zero always succeed, and the entry
+    /// frame is a placeholder whose cleanup is never read (frame finish
+    /// returns immediately for `is_entry`). Using the constant keeps the
+    /// outlined, checked constructor for every variable caller frame while
+    /// removing its call from every driver entry.
+    const ENTRY: Self = Self {
+        condition_stack_base: 0,
+        specpdl_base: 0,
+    };
+
     // Outlined, NOT inlined into `run_loop`: the checked conversions are
     // invariant guards, not hot work, and inlining them changed the hot
     // computed-goto dispatch's code shape enough to cost inclist ~18% cycles
@@ -4946,7 +4959,7 @@ impl<'a> Vm<'a> {
             resume: InterpreterResumePoint::new(*pc, entry_osr_tried),
             #[cfg(not(feature = "jit"))]
             pc: *pc,
-            cleanup: InterpreterFrameCleanup::new(0, 0),
+            cleanup: InterpreterFrameCleanup::ENTRY,
             caller_return: InterpreterCallerReturn::ENTRY,
             #[cfg(debug_assertions)]
             entry_lexenv: Value::NIL,

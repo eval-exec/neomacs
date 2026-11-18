@@ -22,18 +22,9 @@ crates/neovm-text/src/emacs_core/mod.rs	mod	mod text_host
 crates/neovm-text/src/emacs_core/mod.rs	mod	mod treesit
 crates/neovm-text/src/emacs_core/mod.rs	mod	mod xml
 crates/neovm-text/src/emacs_core/mod.rs	mod	mod zlib
-crates/neovm-text/src/emacs_core/text/casetab/mod.rs	field	CaseTable field canonicalize
-crates/neovm-text/src/emacs_core/text/casetab/mod.rs	field	CaseTable field downcase
-crates/neovm-text/src/emacs_core/text/casetab/mod.rs	field	CaseTable field equivalences
-crates/neovm-text/src/emacs_core/text/casetab/mod.rs	field	CaseTable field upcase
 crates/neovm-text/src/emacs_core/text/casetab/mod.rs	fn	fn collect_casetab_gc_roots
-crates/neovm-text/src/emacs_core/text/casetab/mod.rs	fn	fn impl CaseTable::empty
-crates/neovm-text/src/emacs_core/text/casetab/mod.rs	fn	fn impl CaseTableManager::current_table
-crates/neovm-text/src/emacs_core/text/casetab/mod.rs	fn	fn impl CaseTableManager::new
-crates/neovm-text/src/emacs_core/text/casetab/mod.rs	fn	fn impl CaseTableManager::set_current
 crates/neovm-text/src/emacs_core/text/casetab/mod.rs	fn	fn is_case_table_with_symbols
 crates/neovm-text/src/emacs_core/text/casetab/mod.rs	fn	fn reset_casetab_thread_locals
-crates/neovm-text/src/emacs_core/text/casetab/mod.rs	struct	struct CaseTable
 crates/neovm-text/src/emacs_core/text/category/mod.rs	fn	fn collect_category_gc_roots
 crates/neovm-text/src/emacs_core/text/category/mod.rs	fn	fn register_bootstrap_vars
 crates/neovm-text/src/emacs_core/text/category/mod.rs	fn	fn reset_category_thread_locals
@@ -176,8 +167,6 @@ crates/neovm-text/src/emacs_core/text/syntax/mod.rs	fn	fn impl SyntaxFlags::new
 crates/neovm-text/src/emacs_core/text/syntax/mod.rs	fn	fn impl SyntaxTable::char_syntax
 crates/neovm-text/src/emacs_core/text/syntax/mod.rs	fn	fn impl SyntaxTable::char_syntax_code
 crates/neovm-text/src/emacs_core/text/syntax/mod.rs	fn	fn impl SyntaxTable::for_buffer
-crates/neovm-text/src/emacs_core/text/syntax/mod.rs	fn	fn impl SyntaxTable::get_entry
-crates/neovm-text/src/emacs_core/text/syntax/mod.rs	fn	fn impl SyntaxTable::modify_syntax_entry
 crates/neovm-text/src/emacs_core/text/syntax/mod.rs	fn	fn init_syntax_vars
 crates/neovm-text/src/emacs_core/text/syntax/mod.rs	fn	fn reset_syntax_thread_locals
 crates/neovm-text/src/emacs_core/text/syntax/mod.rs	struct	struct SyntaxFlags

@@ -209,6 +209,9 @@ contract-fixtures = ["neovm-eval/contract-fixtures"]
 test-support = []
 
 [dev-dependencies]
+# W-GEN: the architecture freshness guard runs the same ledger generator
+# xtask uses; a dev edge keeps it out of product builds.
+neovm-gnu-ledgers.workspace = true
 # Peer ruling A2 + TEST-SUPPORT-DESIGN rev 2: a provider's test surface is
 # enabled only by a dev edge from a crate above it, never for normal builds.
 # Each edge below enables one lower provider's surface for core's test units.

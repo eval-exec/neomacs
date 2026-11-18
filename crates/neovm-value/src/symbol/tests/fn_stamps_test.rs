@@ -85,6 +85,19 @@ fn a_slot_past_the_store_proves_nothing() {
     assert!(!ob.fn_unchanged_since(far, ob.function_epoch()));
 }
 
+/// The stamp array of a chunk is allocated only when one of its symbols
+/// first changes its binding.
+#[test]
+fn stamp_arrays_are_allocated_on_first_change() {
+    crate::test_utils::init_test_tracing();
+    let mut ob = Obarray::new();
+    let far = symbol_past_the_store(&ob, "lazy");
+    ob.ensure_symbol_id(far);
+    assert!(!ob.chunk_has_fn_stamps_for_test(far));
+    ob.set_symbol_function_id(far, Value::fixnum(1));
+    assert!(ob.chunk_has_fn_stamps_for_test(far));
+}
+
 /// A cloned obarray keeps the stamps and the floor; the copy is deep.
 #[test]
 fn a_clone_keeps_stamps_and_floor() {
@@ -111,6 +124,56 @@ fn a_clone_keeps_stamps_and_floor() {
     let copy = floored.clone();
     assert!(!copy.fn_unchanged_since(a, raised - 1));
     assert!(copy.fn_unchanged_since(a, raised));
+}
+
+/// Exclusive guards and shared publication readers agree, while independently
+/// owned mutators advance a deep clone's clock and bindings separately.
+#[cfg(feature = "jit")]
+#[test]
+fn exclusive_clock_reads_preserve_publication_and_owned_clone_independence() {
+    crate::test_utils::init_test_tracing();
+    let _on = StampsOn::new();
+    let mut ob = Obarray::new();
+    let sym = intern("neovm--fs-exclusive-clock");
+    ob.set_symbol_function_id(sym, Value::fixnum(1));
+    let before_floor = ob.function_epoch_exclusive();
+    assert_eq!(before_floor, ob.function_epoch());
+    ob.invalidate_all_function_bindings(FunctionEpochBump::SubrRewrite);
+    let published = ob.function_epoch_exclusive();
+    assert_eq!(published, ob.function_epoch());
+    assert!(!ob.fn_unchanged_since(sym, before_floor));
+    assert!(ob.fn_unchanged_since(sym, published));
+    let start = std::sync::Barrier::new(2);
+    let (copy_epoch, copy_value) = std::thread::scope(|scope| {
+        let cloned = scope.spawn(|| {
+            let _on = StampsOn::new();
+            // Construct and clone on the worker itself. Only the symbol ID,
+            // expected epoch and final immediate data cross this boundary.
+            let mut source = Obarray::new();
+            source.set_symbol_function_id(sym, Value::fixnum(1));
+            source.invalidate_all_function_bindings(FunctionEpochBump::SubrRewrite);
+            assert_eq!(source.function_epoch(), published);
+            let mut copy = source.clone();
+            start.wait();
+            copy.set_symbol_function_id(sym, Value::fixnum(4));
+            assert_eq!(copy.function_epoch_exclusive(), copy.function_epoch());
+            assert_eq!(source.function_epoch(), published);
+            assert_eq!(source.symbol_function_id(sym), Some(Value::fixnum(1)));
+            (
+                copy.function_epoch_exclusive(),
+                copy.symbol_function_id(sym).and_then(Value::as_fixnum),
+            )
+        });
+        start.wait();
+        ob.set_symbol_function_id(sym, Value::fixnum(2));
+        ob.set_symbol_function_id(sym, Value::fixnum(3));
+        assert_eq!(ob.function_epoch_exclusive(), ob.function_epoch());
+        cloned.join().expect("clone mutator")
+    });
+    assert_eq!(ob.function_epoch_exclusive(), published + 2);
+    assert_eq!(copy_epoch, published + 1);
+    assert_eq!(ob.symbol_function_id(sym), Some(Value::fixnum(3)));
+    assert_eq!(copy_value, Some(4));
 }
 
 /// A restored image's cells were written without stamps: nothing validated

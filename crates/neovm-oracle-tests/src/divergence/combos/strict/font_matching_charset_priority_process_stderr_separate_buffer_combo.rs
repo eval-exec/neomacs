@@ -37,7 +37,13 @@ fn div_v3_process_stderr_routing_variants() {
                             :sentinel (lambda (&rest _) nil))))
     (set-process-query-on-exit-flag proc nil)
     (neovm--oracle-settle-process proc 600)
-    (neovm--oracle-settle-process proc 600)
+    ;; PEER 5817: :stderr is a separate pipe process named "<name> stderr".
+    ;; Settle it too (and clear its query flag) so kill-buffer below never
+    ;; runs against a live process GNU would ask the user about.
+    (let ((stderr-proc (get-process "probe-psr stderr")))
+      (when stderr-proc
+        (set-process-query-on-exit-flag stderr-proc nil)
+        (neovm--oracle-settle-process stderr-proc 600)))
     (let ((out (with-current-buffer out-buf (buffer-string)))
           (err (with-current-buffer err-buf (buffer-string))))
       (kill-buffer out-buf)

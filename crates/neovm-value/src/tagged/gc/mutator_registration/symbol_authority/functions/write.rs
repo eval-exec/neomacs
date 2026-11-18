@@ -207,7 +207,9 @@ impl<K: EraKeeper> EraCore<'_, K> {
 impl<'era> RunAccess<'_, 'era> {
     /// Both operands stay in resident root homes. A no-op consumes no epoch,
     /// stamp, journal slot or allocation; every refusal preserves the answer.
-    pub fn sym_fset_into(
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn sym_fset_into(
         &mut self,
         symbol: &SymbolHandle,
         src: &OwnerRootSlot<'era>,
@@ -251,7 +253,9 @@ impl<'era> RunAccess<'_, 'era> {
 
     /// Store the explicit-unbound state, returning the original symbol even
     /// for a repeated no-op. Every validation precedes mutation of the answer.
-    pub fn sym_fmakunbound_into(
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn sym_fmakunbound_into(
         &mut self,
         symbol: &SymbolHandle,
         dst: &mut OwnerRootSlot<'era>,

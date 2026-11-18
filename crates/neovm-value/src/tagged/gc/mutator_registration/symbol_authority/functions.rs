@@ -27,7 +27,9 @@ use super::*;
 use crate::symbol::FunctionCellSnapshot;
 use crate::tagged::gc::mark_word::MarkWord;
 use crate::tagged::value::TaggedValue as Value;
-pub use call::{FunctionActivation, FunctionCallCache, FunctionSelection, FunctionStep};
+pub use call::FunctionCallCache;
+pub use call::FunctionStep;
+pub use call::{FunctionActivation, FunctionSelection};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FunctionError {

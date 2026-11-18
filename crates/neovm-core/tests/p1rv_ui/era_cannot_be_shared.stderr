@@ -125,7 +125,7 @@ error[E0599]: the associated function or constant `check` exists for struct `Thr
           which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
           `*mut HashTableObj: Send`
           which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
-          `*mut FinalizerObj: Send`
+          `*mut header::FinalizerObj: Send`
           which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
           `*mut *mut MarkerObj: Send`
           which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
@@ -169,7 +169,7 @@ error[E0599]: the associated function or constant `check` exists for struct `Thr
           which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
           `*mut HashTableObj: std::marker::Sync`
           which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
-          `*mut FinalizerObj: std::marker::Sync`
+          `*mut header::FinalizerObj: std::marker::Sync`
           which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
           `*mut *mut MarkerObj: std::marker::Sync`
           which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
@@ -189,7 +189,7 @@ error[E0599]: the associated function or constant `check` exists for struct `Thr
           which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
           `*mut MarkerObj: Send`
           which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
-          `*mut BignumObj: Send`
+          `*mut header::BignumObj: Send`
           which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
           `NonNull<[Cell<usize>; 8192]>: Send`
           which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
@@ -269,7 +269,7 @@ error[E0599]: the associated function or constant `check` exists for struct `Thr
           which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
           `*mut MarkerObj: std::marker::Sync`
           which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
-          `*mut BignumObj: std::marker::Sync`
+          `*mut header::BignumObj: std::marker::Sync`
           which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
           `*const LispSymbol: std::marker::Sync`
           which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`

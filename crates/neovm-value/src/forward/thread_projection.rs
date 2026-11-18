@@ -57,7 +57,8 @@ use std::num::NonZeroU32;
 /// The per-buffer slot index a projection's header carries: no buffer has
 /// it, so every slot access derived from the header fails its existing
 /// bounds or validity check.
-pub const THREAD_PROJECTION_OFFSET: u16 = u16::MAX;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) const THREAD_PROJECTION_OFFSET: u16 = u16::MAX;
 
 const _: () = assert!(BUFFER_SLOT_COUNT < THREAD_PROJECTION_OFFSET as usize);
 
@@ -245,13 +246,15 @@ impl ThreadProjectionDescriptor {
     /// no write changes -- a bind or a canonical write materializes the cell
     /// onto its own descriptor first ([`ThreadProjectionTable::issue`]).
     #[inline]
-    pub fn is_void(&self) -> bool {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn is_void(&self) -> bool {
         self.index == TlsIndex::VOID
     }
 
     /// Whether the logical cell carries the host-projection bit.
     #[inline]
-    pub fn host_projected(&self) -> bool {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn host_projected(&self) -> bool {
         self.host_projected
     }
 

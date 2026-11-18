@@ -8,6 +8,10 @@ use neovm_value::value::Value;
 #[path = "subrs.rs"]
 mod subrs;
 
+// W-REG R0: the additive crate-private batch form.
+#[path = "crate_private/subrs.rs"]
+mod crate_private;
+
 fn zero(_ctx: &mut Context) -> neovm_value::error::EvalResult {
     Ok(Value::NIL)
 }
@@ -36,6 +40,22 @@ fn compiled_subr_batch_is_the_executable_declaration_catalog() {
     let value = ctx
         .eval_str("(test-batch-zero)")
         .expect("the catalog should install its declaration");
+    assert!(value.is_nil());
+}
+
+/// W-REG R0: the crate-private form declares the same compiled batch and
+/// registrar, visible inside the owning crate but with no public `SUBRS`.
+#[test]
+fn crate_private_batch_form_is_crate_visible_and_installable() {
+    assert_eq!(
+        crate_private::SUBRS.owner(),
+        "neovm_eval::emacs_core::subr::tests::crate_private"
+    );
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
+    crate_private::register_subrs(&mut ctx);
+    let value = ctx
+        .eval_str("(wreg-crate-private-probe)")
+        .expect("the crate-private catalog should install its declaration");
     assert!(value.is_nil());
 }
 

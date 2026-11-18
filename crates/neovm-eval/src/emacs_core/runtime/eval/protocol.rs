@@ -577,6 +577,12 @@ pub trait DisplayHost {
     ) -> Result<FontCoverage, String> {
         Ok(FontCoverage::NeedsOpening)
     }
+    /// GNU `font_pixel_size` for a point size on the selected frame: the
+    /// frame's resolution converts points to pixels. `None` when the host has
+    /// no window frame (GNU returns 1 for a non-window frame).
+    fn font_opening_pixel_size(&mut self, _size: FontOpeningSize) -> Result<Option<u32>, String> {
+        Ok(None)
+    }
     fn probe_font_px_metrics(
         &mut self,
         _file: &str,
