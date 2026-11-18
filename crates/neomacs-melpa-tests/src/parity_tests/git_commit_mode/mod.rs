@@ -286,8 +286,13 @@ const GIT_COMMIT_MODE_TEST_PRELUDE: &str = r####"
            (root (expand-file-name
                   (format "git-commit-mode363-%s project 界/" case-name)
                   owner)))
-      (unless (and (file-in-directory-p owner scratch)
-                   (file-in-directory-p tmp scratch))
+      ;; `file-in-directory-p` confirms the shared root with `file-equal-p`
+      ;; (lisp/files.el), and that compares the complete `file-attributes`
+      ;; lists. SCRATCH is the shared MELPA cache. A parallel case changes
+      ;; its mtime between those two reads, so the predicate returns nil for
+      ;; a path that is inside. Compare the truenames instead.
+      (unless (and (string-prefix-p scratch owner)
+                   (string-prefix-p scratch tmp))
         (error "Git Commit Mode scratch paths escape the MELPA scratch root: %S"
                (list scratch owner tmp)))
       (unless (and (file-name-absolute-p root)
