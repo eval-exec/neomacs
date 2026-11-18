@@ -505,6 +505,10 @@ mod architecture_host_cfg_agreement_guard_test;
 mod architecture_canonical_registration_trace_test;
 
 #[cfg(test)]
+#[path = "tests/architecture/contract_twin_goldens_guard_test.rs"]
+mod architecture_contract_twin_goldens_guard_test;
+
+#[cfg(test)]
 #[path = "tests/architecture/host_cfg_elisp_regression_test.rs"]
 mod architecture_host_cfg_elisp_regression_test;
 
