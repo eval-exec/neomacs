@@ -13,7 +13,8 @@ use super::super::header::ConsCell;
 use super::super::value::{TAG_CONS, TAG_MASK, TAG_VECLIKE};
 use super::NativeWindowCollectionOwner;
 use rustc_hash::FxHashSet;
-use std::mem::{align_of, size_of};
+use std::collections::BTreeSet;
+use std::mem::size_of;
 
 const EMPTY_BOUNDS: (usize, usize) = (usize::MAX, 0);
 const MAX_RECLAMATION_RETRIES: usize = 3;
@@ -50,30 +51,29 @@ pub(super) struct ObservedEnvelope {
     geometry_rebuilds: usize,
 }
 
-const _: () = {
-    #[allow(dead_code)]
-    struct LegacyEnvelope {
-        owners: FxHashSet<usize>,
-        addresses: Vec<usize>,
-        addresses_hot: Vec<usize>,
-        slot_addresses: Vec<usize>,
-        slot_addresses_hot: Vec<usize>,
-        epoch: Option<u64>,
-        dump: BarrierWindow,
-        full: (usize, usize),
-        below: (usize, usize),
-        above: (usize, usize),
-        slot_below: (usize, usize),
-        slot_above: (usize, usize),
-        excluded: Option<BarrierWindow>,
-        excluded_cons: usize,
-        single_cons: usize,
-        #[cfg(any(test, feature = "test-support"))]
-        geometry_rebuilds: usize,
-    }
-    assert!(size_of::<ObservedEnvelope>() == size_of::<LegacyEnvelope>());
-    assert!(align_of::<ObservedEnvelope>() == align_of::<LegacyEnvelope>());
-};
+/// Frozen size of the envelope as it was when the thread-local `StateSlot`
+/// reserve was pinned (two ordered address sets). The reserve is sized from
+/// this layout, never from the live envelope: the envelope itself lives in
+/// the heap-side `State`, so growing it must not grow the per-thread TLS block
+/// and shift every `%fs` offset in the binary.
+#[allow(dead_code)]
+pub(super) struct LegacyEnvelopeLayout {
+    owners: FxHashSet<usize>,
+    addresses: BTreeSet<usize>,
+    slot_addresses: BTreeSet<usize>,
+    epoch: Option<u64>,
+    dump: BarrierWindow,
+    full: (usize, usize),
+    below: (usize, usize),
+    above: (usize, usize),
+    slot_below: (usize, usize),
+    slot_above: (usize, usize),
+    excluded: Option<BarrierWindow>,
+    excluded_cons: usize,
+    single_cons: usize,
+    #[cfg(any(test, feature = "test-support"))]
+    geometry_rebuilds: usize,
+}
 
 impl ObservedEnvelope {
     /// Heap reinstallation can change the native dump/owner protocol between
