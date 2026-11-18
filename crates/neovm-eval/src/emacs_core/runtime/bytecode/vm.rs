@@ -8418,7 +8418,14 @@ impl<'a> Vm<'a> {
         // falling back to call_for_jit_stack on every call). Counted here rather
         // than in the shared runner below so it stays a count of SPECULATED
         // calls, not of every native-to-native call.
-        #[cfg(any(test, debug_assertions))]
+        //
+        // CFG CONTRACT (RELEASE-TEST-SUPPORT-CFG): the counter's reader is
+        // compiled under `test-support`, which a unified release workspace
+        // test build enables on this LIB while `cfg(test)` and
+        // `debug_assertions` are both off for the dependency. The callee gate
+        // must include `feature = "test-support"` so it stays a superset of
+        // the reader; never narrow the reader instead.
+        #[cfg(any(test, debug_assertions, feature = "test-support"))]
         if leaf.accepts(nargs) {
             crate::emacs_core::jit::compile::SPEC_FAST_CALL_COUNT
                 .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
@@ -8451,7 +8458,7 @@ impl<'a> Vm<'a> {
         args_ptr: *const i64,
         nargs: usize,
     ) -> Option<crate::emacs_core::jit::cache::NativeCallOutcome> {
-        #[cfg(any(test, debug_assertions))]
+        #[cfg(any(test, debug_assertions, feature = "test-support"))]
         if leaf.accepts(nargs) {
             crate::emacs_core::jit::compile::SPEC_FAST_CALL_COUNT
                 .fetch_add(1, core::sync::atomic::Ordering::Relaxed);

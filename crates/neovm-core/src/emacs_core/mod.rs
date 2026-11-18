@@ -552,6 +552,10 @@ mod architecture_unsafe_shim_guard_test;
 mod architecture_debug_assert_side_effect_guard_test;
 
 #[cfg(test)]
+#[path = "tests/architecture/test_support_evidence_cfg_test.rs"]
+mod architecture_test_support_evidence_cfg_test;
+
+#[cfg(test)]
 #[path = "tests/architecture/leaf_slot_writer_guard_test.rs"]
 mod architecture_leaf_slot_writer_guard_test;
 

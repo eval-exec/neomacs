@@ -1727,7 +1727,7 @@ macro_rules! spec_call_body {
                     )
                 };
                 if status == STATUS_OK {
-                    #[cfg(any(test, debug_assertions))]
+                    #[cfg(any(test, debug_assertions, feature = "test-support"))]
                     crate::emacs_core::jit::cache::NATIVE_OK_COUNT.fetch_add(1, Ordering::Relaxed);
                     if ctx_ref.pop_native_backtrace_frame(bt_count) {
                         ctx_ref.depth -= 1;
@@ -1762,7 +1762,7 @@ macro_rules! spec_call_body {
                     )
                 };
                 if ret.status == STATUS_OK {
-                    #[cfg(any(test, debug_assertions))]
+                    #[cfg(any(test, debug_assertions, feature = "test-support"))]
                     crate::emacs_core::jit::cache::NATIVE_OK_COUNT.fetch_add(1, Ordering::Relaxed);
                     if ctx_ref.pop_native_backtrace_frame(bt_count) {
                         ctx_ref.depth -= 1;
@@ -1794,7 +1794,7 @@ macro_rules! spec_call_body {
                     frame_args,
                 ) {
                     NativeRun::Ok(bits) => {
-                        #[cfg(any(test, debug_assertions))]
+                        #[cfg(any(test, debug_assertions, feature = "test-support"))]
                         crate::emacs_core::jit::cache::NATIVE_OK_COUNT
                             .fetch_add(1, Ordering::Relaxed);
                         if ctx_ref.pop_native_backtrace_frame(bt_count) {
@@ -2056,7 +2056,7 @@ pub(super) fn call_spec_finish(
         let outcome = match run {
             FastRun::Done(value) => NativeCallOutcome::Value(value),
             FastRun::Raw(status) => {
-                #[cfg(any(test, debug_assertions))]
+                #[cfg(any(test, debug_assertions, feature = "test-support"))]
                 cache::count_native_status(status);
                 cache::direct_call_cold(std::ptr::from_mut(ctx), bc, callee, leaf, status)
             }
