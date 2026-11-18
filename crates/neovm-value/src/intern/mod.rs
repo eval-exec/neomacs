@@ -82,6 +82,231 @@ pub fn is_gnu_defsym_spelling_absent_for_this_profile(name: &str) -> bool {
         .unwrap_or(false)
 }
 
+// Host bits for the boot-extra allowlist (same vocabulary as the generated
+// `DefsymGate`: Linux 1, macOS 2, Windows 4).
+const BOOT_EXTRA_LINUX: u8 = 1;
+const BOOT_EXTRA_MACOS: u8 = 2;
+const BOOT_EXTRA_WINDOWS: u8 = 4;
+
+/// One startup-intern path for a spelling this build does not `DEFSYM`.
+///
+/// The citation is data, not prose, so `boot_extra_citations_drift_from_the_pinned_source`
+/// can re-read the pinned GNU checkout and fail when a cited line moves or no
+/// longer names the spelling. `source_needle` always contains `spelling`, and
+/// `source_line` is 1-based.
+#[derive(Clone, Copy, Debug)]
+#[doc(hidden)]
+pub struct GnuBootExtraDefsym {
+    /// The obarray spelling.
+    pub spelling: &'static str,
+    /// Attested host profiles (`BOOT_EXTRA_*` bits).
+    pub host_mask: u8,
+    /// GNU source file, relative to the checkout root.
+    pub source_file: &'static str,
+    /// 1-based line in that file.
+    pub source_line: u32,
+    /// Text that must still appear on that line of the pinned source.
+    pub source_needle: &'static str,
+}
+
+/// Spellings that are boot obarray members although this profile does not
+/// compile their `DEFSYM`, because preloaded Lisp or C startup interns them
+/// while reading/initializing. This is an explicit, cited exception list, not
+/// a general "gate absent => member" allowance: a member that is not listed
+/// here still fails the profile-set test.
+///
+/// Each row names the startup path that reaches the spelling on both attested
+/// profiles (linux-gtk3 and macos-ns):
+///
+/// * `wheel-*`: lisp/loadup.el:263 unconditionally loads `mouse`, whose
+///   `mouse-wheel-buttons` defcustom (lisp/mouse.el:137-138) is a quoted
+///   alist; the reader interns the four wheel symbols on every platform.
+/// * `condensed`/`expanded`/`reverse-italic`/`reverse-oblique`: `syms_of_font`
+///   builds the three style tables, and `build_style_table`
+///   (src/font.c:5717) calls `intern_c_string` on every name string in the
+///   tables at src/font.c:69-107.
+/// * `frame-title-format`/`icon-title-format`/`tool-bar-style`: `DEFVAR_LISP`
+///   in `syms_of_xdisp` (src/xdisp.c:38656/38664/38817) interns each name.
+/// * `lcms2`: `syms_of_lcms2` announces the feature with
+///   `Fprovide (intern_c_string ("lcms2"), ...)` (src/lcms.c:601).
+/// * `link`, `unknown`, `warning`, `underline`, `latin-1`,
+///   `overriding-text-conversion-style`: preloaded Lisp reads the bare or
+///   quoted symbol (`dnd.el`, `format.el`, `faces.el`, `mule-conf.el`,
+///   `subr.el`), which the reader interns.
+///
+/// Host-masked to the two attested profiles until a Windows oracle probe
+/// exists. Attested GNU 31.1 startup, string-only probe (nothing in the probe
+/// form interns the names):
+///
+/// linux-gtk3: all eighteen => t; `fontsize` => nil, `access` => t.
+/// macos-ns: all eighteen => t.
+const GNU_BOOT_EXTRA_DEFSYMS: &[GnuBootExtraDefsym] = &[
+    GnuBootExtraDefsym {
+        spelling: "wheel-down",
+        host_mask: BOOT_EXTRA_LINUX | BOOT_EXTRA_MACOS | BOOT_EXTRA_WINDOWS,
+        source_file: "lisp/mouse.el",
+        source_line: 138,
+        source_needle: "(5 . wheel-down)",
+    },
+    GnuBootExtraDefsym {
+        spelling: "wheel-up",
+        host_mask: BOOT_EXTRA_LINUX | BOOT_EXTRA_MACOS | BOOT_EXTRA_WINDOWS,
+        source_file: "lisp/mouse.el",
+        source_line: 138,
+        source_needle: "(4 . wheel-up)",
+    },
+    GnuBootExtraDefsym {
+        spelling: "wheel-left",
+        host_mask: BOOT_EXTRA_LINUX | BOOT_EXTRA_MACOS | BOOT_EXTRA_WINDOWS,
+        source_file: "lisp/mouse.el",
+        source_line: 138,
+        source_needle: "(6 . wheel-left)",
+    },
+    GnuBootExtraDefsym {
+        spelling: "wheel-right",
+        host_mask: BOOT_EXTRA_LINUX | BOOT_EXTRA_MACOS | BOOT_EXTRA_WINDOWS,
+        source_file: "lisp/mouse.el",
+        source_line: 138,
+        source_needle: "(7 . wheel-right)",
+    },
+    GnuBootExtraDefsym {
+        spelling: "condensed",
+        host_mask: BOOT_EXTRA_LINUX | BOOT_EXTRA_MACOS,
+        source_file: "src/font.c",
+        source_line: 103,
+        source_needle: "\"condensed\"",
+    },
+    GnuBootExtraDefsym {
+        spelling: "expanded",
+        host_mask: BOOT_EXTRA_LINUX | BOOT_EXTRA_MACOS,
+        source_file: "src/font.c",
+        source_line: 107,
+        source_needle: "\"expanded\"",
+    },
+    GnuBootExtraDefsym {
+        spelling: "reverse-italic",
+        host_mask: BOOT_EXTRA_LINUX | BOOT_EXTRA_MACOS,
+        source_file: "src/font.c",
+        source_line: 90,
+        source_needle: "\"reverse-italic\"",
+    },
+    GnuBootExtraDefsym {
+        spelling: "reverse-oblique",
+        host_mask: BOOT_EXTRA_LINUX | BOOT_EXTRA_MACOS,
+        source_file: "src/font.c",
+        source_line: 89,
+        source_needle: "\"reverse-oblique\"",
+    },
+    GnuBootExtraDefsym {
+        spelling: "frame-title-format",
+        host_mask: BOOT_EXTRA_LINUX | BOOT_EXTRA_MACOS,
+        source_file: "src/xdisp.c",
+        source_line: 38656,
+        source_needle: "\"frame-title-format\"",
+    },
+    GnuBootExtraDefsym {
+        spelling: "icon-title-format",
+        host_mask: BOOT_EXTRA_LINUX | BOOT_EXTRA_MACOS,
+        source_file: "src/xdisp.c",
+        source_line: 38664,
+        source_needle: "\"icon-title-format\"",
+    },
+    GnuBootExtraDefsym {
+        spelling: "tool-bar-style",
+        host_mask: BOOT_EXTRA_LINUX | BOOT_EXTRA_MACOS,
+        source_file: "src/xdisp.c",
+        source_line: 38817,
+        source_needle: "\"tool-bar-style\"",
+    },
+    GnuBootExtraDefsym {
+        spelling: "lcms2",
+        host_mask: BOOT_EXTRA_LINUX | BOOT_EXTRA_MACOS,
+        source_file: "src/lcms.c",
+        source_line: 601,
+        source_needle: "intern_c_string (\"lcms2\")",
+    },
+    GnuBootExtraDefsym {
+        spelling: "link",
+        host_mask: BOOT_EXTRA_LINUX | BOOT_EXTRA_MACOS,
+        source_file: "lisp/dnd.el",
+        source_line: 545,
+        source_needle: "'link",
+    },
+    GnuBootExtraDefsym {
+        spelling: "unknown",
+        host_mask: BOOT_EXTRA_LINUX | BOOT_EXTRA_MACOS,
+        source_file: "lisp/format.el",
+        source_line: 562,
+        source_needle: "'unknown",
+    },
+    GnuBootExtraDefsym {
+        spelling: "warning",
+        host_mask: BOOT_EXTRA_LINUX | BOOT_EXTRA_MACOS,
+        source_file: "lisp/faces.el",
+        source_line: 3103,
+        source_needle: "(defface warning",
+    },
+    GnuBootExtraDefsym {
+        spelling: "underline",
+        host_mask: BOOT_EXTRA_LINUX | BOOT_EXTRA_MACOS,
+        source_file: "lisp/faces.el",
+        source_line: 2458,
+        source_needle: "(defface underline",
+    },
+    GnuBootExtraDefsym {
+        spelling: "latin-1",
+        host_mask: BOOT_EXTRA_LINUX | BOOT_EXTRA_MACOS,
+        source_file: "lisp/international/mule-conf.el",
+        source_line: 1371,
+        source_needle: "'latin-1",
+    },
+    GnuBootExtraDefsym {
+        spelling: "overriding-text-conversion-style",
+        host_mask: BOOT_EXTRA_LINUX | BOOT_EXTRA_MACOS,
+        source_file: "lisp/subr.el",
+        source_line: 3968,
+        source_needle: "(defvar overriding-text-conversion-style)",
+    },
+];
+
+/// The cited startup-intern allowlist, for the drift test that re-reads the
+/// pinned GNU checkout.
+#[doc(hidden)]
+pub fn gnu_boot_extra_defsyms() -> &'static [GnuBootExtraDefsym] {
+    GNU_BOOT_EXTRA_DEFSYMS
+}
+
+fn boot_extra_host_mask() -> u8 {
+    if cfg!(windows) {
+        BOOT_EXTRA_WINDOWS
+    } else if cfg!(target_os = "macos") {
+        BOOT_EXTRA_MACOS
+    } else {
+        BOOT_EXTRA_LINUX
+    }
+}
+
+/// Whether GNU's startup obarray contains this spelling on the current
+/// profile: either this profile compiles its `DEFSYM`, or a cited boot path
+/// (preloaded Lisp/C initialization) interns it.
+#[doc(hidden)]
+pub fn is_gnu_defsym_spelling_boot_member_for_this_profile(name: &str) -> bool {
+    let table = gnu_defsyms_generated::GNU_DEFSYMS_BY_SPELLING;
+    let Ok(index) = table.binary_search_by(|(spelling, _)| (*spelling).cmp(name)) else {
+        // Not a DEFSYM spelling (a C DEFUN name or another boot symbol): this
+        // table says nothing about absence, so the caller's ordinary
+        // membership rule applies.
+        return true;
+    };
+    if table[index].1.is_active() {
+        return true;
+    }
+    let host = boot_extra_host_mask();
+    GNU_BOOT_EXTRA_DEFSYMS
+        .iter()
+        .any(|row| row.spelling == name && row.host_mask & host != 0)
+}
+
 /// Whether `name` is a DEFSYM spelling GNU removes, or never interns, before
 /// the startup obarray is complete.
 ///

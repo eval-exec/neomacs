@@ -360,11 +360,17 @@ mod compile_main_rule_test;
 #[path = "tests/build_support/generated_lisp_test.rs"]
 mod generated_lisp_test;
 #[cfg(test)]
+#[path = "tests/gnu_surface/boot_extra_citation_drift_test.rs"]
+mod gnu_boot_extra_citation_test;
+#[cfg(test)]
 #[path = "tests/gnu_surface/defsym_symbols_test.rs"]
 mod gnu_defsym_symbols_test;
 #[cfg(test)]
 #[path = "tests/gnu_surface/defvar_special_test.rs"]
 mod gnu_defvar_special_test;
+#[cfg(test)]
+#[path = "tests/gnu_surface/reader_entry_point_intern_test.rs"]
+mod gnu_reader_entry_point_intern_test;
 #[cfg(test)]
 #[path = "tests/gnu_surface/subr_test.rs"]
 mod gnu_subr_surface_test;

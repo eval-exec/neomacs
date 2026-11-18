@@ -41,6 +41,7 @@ use crate::emacs_core::eval::data::window_layout_query::{
 use crate::emacs_core::eval::data::window_state::{
     BodyRedisplayRevision, ForcedBodyRedisplay, FrameManager,
 };
+use crate::emacs_core::reader::ObarrayReadSymbolsExt;
 pub use neomacs_display_protocol::GraphicalFaceAttribute;
 use neovm_edit::buffer::{BufferId, BufferManager, CharPos0, EmacsBytePos, LispCharPos1};
 use neovm_edit::emacs_core::bookmark::BookmarkManager;
@@ -5468,6 +5469,18 @@ impl Context {
 
     /// Evaluate a Lisp expression string. Convenience for tests.
     /// Reads via the Value-native reader and evaluates via eval_sub.
+    /// GNU's reader interns every symbol token into the current obarray as it
+    /// reads it (`Fintern`, `src/lread.c:4674-4709`). The Value-native reader
+    /// allocates canonical ids only, so callers that read source materialize
+    /// the same obarray side effect here. Without this, a spelling the
+    /// profile does not DEFSYM at startup (`fontsize` on Linux, `access` on
+    /// macOS) answers `intern-soft` nil even though Lisp has just read it.
+    fn intern_read_form_symbols(&mut self, forms: &[Value]) {
+        for form in forms {
+            self.obarray_mut().intern_member_symbols_in(*form);
+        }
+    }
+
     pub fn eval_str(&mut self, source: &str) -> Result<Value, EvalError> {
         self.setup_thread_locals();
         let forms = super::value_reader::read_all(source, self.variables()).map_err(|e| {
@@ -5480,6 +5493,7 @@ impl Context {
         if forms.is_empty() {
             return Ok(Value::NIL);
         }
+        self.intern_read_form_symbols(&forms);
         // Root every parsed form: each `eval_sub` call may trigger GC, and
         // the un-iterated forms still sitting in the heap-allocated Vec are
         // otherwise invisible to the exact root walk.
@@ -5558,6 +5572,7 @@ impl Context {
                 ))];
             }
         };
+        self.intern_read_form_symbols(&forms);
         // Root every parsed form upfront. The previous version only rooted
         // successful results; un-iterated parsed forms still sitting in the
         // heap-allocated Vec were otherwise invisible to exact GC.
