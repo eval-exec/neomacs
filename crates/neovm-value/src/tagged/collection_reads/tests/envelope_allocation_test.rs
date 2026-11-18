@@ -49,11 +49,13 @@ fn collection_reads_envelope_turnover_allocation_counters() {
                     }
                 });
                 assert_eq!(envelope.owners.len(), count);
-                assert_eq!(envelope.addresses.len(), count);
-                assert_eq!(envelope.slot_addresses.len(), count / 2);
+                let ledger_len =
+                    |ledger: &SortedAddressLedger| ledger.bulk.len() + ledger.hot.len();
+                assert_eq!(ledger_len(&envelope.addresses), count);
+                assert_eq!(ledger_len(&envelope.slot_addresses), count / 2);
                 // Both runs stay sorted and disjoint; the hot run may hold the
                 // whole population until it reaches the merge limit.
-                let (bulk, hot) = envelope.addresses.runs();
+                let (bulk, hot) = (&envelope.addresses.bulk, &envelope.addresses.hot);
                 assert!(bulk.windows(2).all(|pair| pair[0] < pair[1]));
                 assert!(hot.windows(2).all(|pair| pair[0] < pair[1]));
                 let mut observed: Vec<usize> = envelope.addresses.iter().collect();
