@@ -350,7 +350,7 @@ fn font_c_pure_primitives_validate_and_project_font_values() {
         Value::NIL
     );
 
-    let err = font_match_p(vec![Value::NIL, font_spec]).unwrap_err();
+    let err = call_font_match_p(vec![Value::NIL, font_spec]).unwrap_err();
     assert!(
         if matches!(err.kind(), FlowRef::Signal(sig) if sig.symbol_name() == "wrong-type-argument")
         {
@@ -3354,6 +3354,11 @@ fn font_put_otf_validates_like_font_spec() {
 
 // --- GNU `font_match_p` (`src/font.c:2433-2540`) :otf arm ---
 
+fn call_font_match_p(args: Vec<Value>) -> EvalResult {
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    font_match_p(&mut eval, args)
+}
+
 fn otf_side(
     entries: &[(&str, &[(Option<&str>, &[&str])])],
 ) -> neovm_eval::emacs_core::eval::OtfSideCapability {
@@ -3497,7 +3502,7 @@ fn font_match_p_checks_gsub_and_gpos_features_on_opened_fonts() {
     for (otf, expected) in cases {
         let spec = font_spec(vec![Value::keyword("otf"), otf]).unwrap();
         assert_eq!(
-            font_match_p(vec![spec, font]).unwrap(),
+            call_font_match_p(vec![spec, font]).unwrap(),
             if expected { Value::T } else { Value::NIL },
             "{otf:?}"
         );
@@ -3525,14 +3530,14 @@ fn font_match_p_applies_otf_only_to_opened_font_objects() {
     ])
     .unwrap();
     // GNU requires FONT_OBJECT_P for the :otf arm.
-    assert!(font_match_p(vec![otf_only, entity]).unwrap().is_nil());
+    assert!(call_font_match_p(vec![otf_only, entity]).unwrap().is_nil());
 
     let named = font_spec(vec![Value::keyword("family"), Value::string("Hack")]).unwrap();
-    assert_eq!(font_match_p(vec![named, entity]).unwrap(), Value::T);
+    assert_eq!(call_font_match_p(vec![named, entity]).unwrap(), Value::T);
     let other = font_spec(vec![Value::keyword("family"), Value::string("Other")]).unwrap();
-    assert!(font_match_p(vec![other, entity]).unwrap().is_nil());
+    assert!(call_font_match_p(vec![other, entity]).unwrap().is_nil());
     assert_eq!(
-        font_match_p(vec![font_spec(Vec::new()).unwrap(), entity]).unwrap(),
+        call_font_match_p(vec![font_spec(Vec::new()).unwrap(), entity]).unwrap(),
         Value::T
     );
 }
@@ -3546,20 +3551,20 @@ fn font_match_p_rejects_a_missing_capability_for_otf_specs() {
         Value::list(vec![Value::symbol("arab"), Value::NIL, Value::NIL]),
     ])
     .unwrap();
-    assert!(font_match_p(vec![spec, font]).unwrap().is_nil());
+    assert!(call_font_match_p(vec![spec, font]).unwrap().is_nil());
 }
 
 #[test]
 fn font_match_p_validates_font_arguments_like_gnu() {
     crate::test_utils::init_test_tracing();
     let spec = font_spec(Vec::new()).unwrap();
-    let error = font_match_p(vec![spec, Value::fixnum(1)]).unwrap_err();
+    let error = call_font_match_p(vec![spec, Value::fixnum(1)]).unwrap_err();
     let neovm_value::error::FlowRef::Signal(signal) = error.kind() else {
         panic!("expected wrong-type-argument");
     };
     assert_eq!(signal.symbol, intern("wrong-type-argument"));
     assert_eq!(signal.data[0], Value::symbol("font"));
-    let error = font_match_p(vec![Value::fixnum(1), spec]).unwrap_err();
+    let error = call_font_match_p(vec![Value::fixnum(1), spec]).unwrap_err();
     let neovm_value::error::FlowRef::Signal(signal) = error.kind() else {
         panic!("expected wrong-type-argument");
     };
@@ -3586,4 +3591,158 @@ fn font_get_returns_the_driver_capability_for_opened_fonts() {
     let stored = Value::list(vec![Value::symbol("arab")]);
     let spec = font_spec(vec![Value::keyword("otf"), stored]).unwrap();
     assert_eq!(font_get(vec![spec, Value::keyword("otf")]).unwrap(), stored);
+}
+
+#[test]
+fn find_font_named_langsys_request_neither_errors_nor_crashes() {
+    crate::test_utils::init_test_tracing();
+    // GNU Emacs 31.1 segfaults when find-font/list-fonts reaches
+    // `hbotf_check_features` with a named LANGSYS (an out-of-bounds read at
+    // src/ftfont.c:3054-3066), so the form is GNU-UNDEFINED with no parity
+    // row. The contract is that the named language system is carried into
+    // matching unchanged: a symbol stays a named langsys, while the
+    // validator's non-symbol quirk can never `eq` a tag and makes the
+    // requirement unmatchable. Neomacs must build that request without
+    // crashing or signalling; the resolver then returns the matching font or
+    // nil (covered by the layout-engine fixture test).
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let spec = font_spec(vec![
+        Value::keyword("otf"),
+        Value::list(vec![
+            Value::symbol("arab"),
+            Value::symbol("URD "),
+            Value::list(vec![Value::symbol("rtlm")]),
+        ]),
+    ])
+    .unwrap();
+    let request =
+        font_spec_resolve_request(&mut eval, &spec, None).expect("named LANGSYS must not error");
+    let otf = request.otf.expect("the requirement reaches the request");
+    assert!(matches!(
+        otf.langsys,
+        neovm_eval::emacs_core::eval::data::fontset_state::StoredOtfLangsys::Named(ref tag)
+            if tag == "URD "
+    ));
+
+    let quirk = font_spec(vec![
+        Value::keyword("otf"),
+        Value::list(vec![
+            Value::symbol("arab"),
+            Value::string("URD "),
+            Value::list(vec![Value::symbol("rtlm")]),
+        ]),
+    ])
+    .unwrap();
+    let request = font_spec_resolve_request(&mut eval, &quirk, None)
+        .expect("the validator quirk must not error");
+    assert!(matches!(
+        request.otf.expect("requirement").langsys,
+        neovm_eval::emacs_core::eval::data::fontset_state::StoredOtfLangsys::Unmatchable
+    ));
+}
+
+fn named_entity(family: &str, weight: FontWeight, size: i64) -> Value {
+    let entity = build_font_entity_for_spec_match(&ResolvedFontSpecMatch {
+        coverage_handle: None,
+        family: LispString::from_utf8(family),
+        foundry: None,
+        registry: Some(LispString::from_utf8("iso10646-1")),
+        file: None,
+        weight: Some(weight),
+        slant: Some(FontSlant::Normal),
+        width: Some(FontWidth::Normal),
+        spacing: None,
+        postscript_name: None,
+    });
+    font_put_entity_field(entity, "size", Value::fixnum(size));
+    entity
+}
+
+#[test]
+fn font_match_p_scores_style_at_gnu_granularity_and_size_exactly() {
+    crate::test_utils::init_test_tracing();
+    let entity = named_entity("Hack", FontWeight::NORMAL, 16);
+    // GNU font_score compares the style-table code (the stored value shifted
+    // right by its alias bits); the same row matches, a different row rejects.
+    let same = font_spec(vec![
+        Value::keyword("family"),
+        Value::string("Hack"),
+        Value::keyword("weight"),
+        Value::symbol("regular"),
+    ])
+    .unwrap();
+    assert_eq!(call_font_match_p(vec![same, entity]).unwrap(), Value::T);
+    let different = font_spec(vec![
+        Value::keyword("family"),
+        Value::string("Hack"),
+        Value::keyword("weight"),
+        Value::symbol("bold"),
+    ])
+    .unwrap();
+    assert!(call_font_match_p(vec![different, entity]).unwrap().is_nil());
+
+    // A positive entity size is scored exactly: any different pixel size is
+    // a positive score, and a factor-of-two difference is rejected outright.
+    for (size, expected) in [(16, true), (13, false), (40, false)] {
+        let spec = font_spec(vec![
+            Value::keyword("family"),
+            Value::string("Hack"),
+            Value::keyword("size"),
+            Value::fixnum(size),
+        ])
+        .unwrap();
+        assert_eq!(
+            call_font_match_p(vec![spec, entity]).unwrap(),
+            if expected { Value::T } else { Value::NIL },
+            "size {size}"
+        );
+    }
+}
+
+#[test]
+fn font_match_p_lang_arm_uses_the_fonts_lang_extra() {
+    crate::test_utils::init_test_tracing();
+    let entity = named_entity("Hack", FontWeight::NORMAL, 0);
+    let spec = |lang: Value| {
+        font_spec(vec![
+            Value::keyword("family"),
+            Value::string("Hack"),
+            Value::keyword("lang"),
+            lang,
+        ])
+        .unwrap()
+    };
+    // The entity has no :lang extra, so GNU's assq miss rejects the spec.
+    assert!(
+        call_font_match_p(vec![spec(Value::symbol("ja")), entity])
+            .unwrap()
+            .is_nil()
+    );
+    // GNU's single-symbol branch tests `memq (val, XCDR (val2))`, so the
+    // font's stored language value must have the languages in its cdr.
+    font_put_entity_field(
+        entity,
+        "lang",
+        Value::list(vec![Value::NIL, Value::symbol("ja")]),
+    );
+    // A single spec symbol must be `memq` in the font's language cdr.
+    assert_eq!(
+        call_font_match_p(vec![spec(Value::symbol("ja")), entity]).unwrap(),
+        Value::T
+    );
+    assert!(
+        call_font_match_p(vec![spec(Value::symbol("en")), entity])
+            .unwrap()
+            .is_nil()
+    );
+    // GNU validates :lang with font_prop_validate_symbol, so a list is not a
+    // valid font-spec value even though font_spec_match has a list arm for
+    // internally built specs.
+    assert!(
+        font_spec(vec![
+            Value::keyword("lang"),
+            Value::list(vec![Value::symbol("ja")])
+        ])
+        .is_err()
+    );
 }

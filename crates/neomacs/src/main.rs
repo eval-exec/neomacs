@@ -2811,6 +2811,13 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         })
     }
 
+    fn font_opening_pixel_size(
+        &mut self,
+        size: neovm_core::emacs_core::eval::FontOpeningSize,
+    ) -> Result<Option<u32>, String> {
+        Ok(Some(self.font_sizing.font_opening_size_px(size).get()))
+    }
+
     fn probe_font_px_metrics(
         &mut self,
         file: &str,

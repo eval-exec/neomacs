@@ -224,3 +224,37 @@ fn captured_character_policy_adds_the_otf_representative_charset() {
         policy.charset_ranges
     );
 }
+
+#[test]
+fn otf_named_langsys_form_matches_without_crashing() {
+    // GNU Emacs 31.1 crashes on this form: `hbotf_check_features` bounds its
+    // language-tag scan by the script count and indexes `language_tags` out of
+    // range (src/ftfont.c:3054-3066), so the form is GNU-UNDEFINED and has no
+    // parity row. The source contract is that the named language system must
+    // exist in GSUB and GPOS; a present one is checked with its own features,
+    // a missing one rejects the font. Neomacs must evaluate that contract
+    // without crashing or signalling.
+    let (_dejavu, noto, catalog) = fixture_files();
+    let service = catalog.metrics_service();
+    let named = |langsys: &str| {
+        query(
+            Some("Noto Sans Arabic"),
+            Some(StoredOtfSpec {
+                script: "arab".to_owned(),
+                langsys: StoredOtfLangsys::Named(langsys.to_owned()),
+                gsub: Some(StoredOtfFeatures {
+                    required: vec!["rtlm".to_owned()],
+                    forbidden: Vec::new(),
+                }),
+                gpos: None,
+            }),
+        )
+    };
+    // Noto Sans Arabic's URD langsys carries rtlm.
+    assert_eq!(
+        resolved_file(&service, &named("URD ")).as_deref(),
+        Some(noto.to_string_lossy().as_ref())
+    );
+    // A language system the font does not advertise matches no font.
+    assert_eq!(resolved_file(&service, &named("ZZZ ")), None);
+}

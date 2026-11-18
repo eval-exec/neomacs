@@ -4597,20 +4597,232 @@ fn font_check_otf_lisp(spec: Value, capability: Value) -> bool {
             || font_check_otf_features_lisp(script, langsys, gpos_features, gpos))
 }
 
-/// GNU `font_match_p` (`src/font.c:2433-2540`) for the constraints this
-/// entry point can verify without the frame-dependent `font_score` port.
+/// GNU `font_score`'s numeric code for a stored weight/slant/width value.
+/// GNU stores style slots as numbers; Neomacs stores the canonical style
+/// symbol (or a validated number), so both map through the same GNU table.
+fn font_style_gnu_code(value: Value, table: &[(i64, &[&str])]) -> Option<i64> {
+    match value.kind() {
+        ValueKind::Fixnum(code) => Some(code),
+        ValueKind::Symbol(id) => {
+            let name = resolve_sym(id);
+            table
+                .iter()
+                .find(|(_, names)| names.contains(&name))
+                .map(|(code, _)| *code)
+        }
+        _ => None,
+    }
+}
+
+/// `font_pixel_size` (`src/font.c:3487-3510`): an integer size is already a
+/// pixel size; a float point size converts with the spec's DPI or the selected
+/// frame's resolution. GNU returns 1 for a non-window frame, so a host with no
+/// window sizing does the same.
+fn font_spec_pixel_size(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    spec_fields: &[Value],
+) -> Option<i64> {
+    let size = font_vector_get_flexible(spec_fields, "size").filter(|value| !value.is_nil())?;
+    if let Some(pixels) = size.as_fixnum() {
+        return Some(pixels);
+    }
+    if !size.is_float() {
+        return None;
+    }
+    let size = PositiveFontScalar::new(size.xfloat())?;
+    let dpi = font_vector_get_flexible(spec_fields, "dpi")
+        .and_then(|value| value.as_fixnum())
+        .and_then(|dpi| u32::try_from(dpi).ok())
+        .and_then(std::num::NonZeroU32::new);
+    Some(match eval.display_host.as_mut() {
+        Some(host) => host
+            .font_opening_pixel_size(FontOpeningSize::Points { size, dpi })
+            .ok()
+            .flatten()
+            .map(i64::from)
+            .unwrap_or(1),
+        None => 1,
+    })
+}
+
+/// GNU `font_score (font, spec_props) > 0` (`src/font.c:2128-2165`).
 ///
-/// Name slots (`:foundry`, `:family`, `:adstyle`, `:registry`) must be `eq`
-/// when both sides carry a value. A spec that constrains weight, slant,
-/// width, size, dpi, avgwidth, spacing, lang, or script still returns nil:
-/// those arms need `font_score`/`script-representative-chars` and the
-/// preexisting stub did not evaluate them. With no such constraint the
-/// `:otf` arm is exact, and GNU applies it only to an opened font object.
-fn font_spec_matches_font(spec: &Value, font: &Value) -> bool {
+/// Returns false when the score is positive. GNU stores style slots as
+/// `(table_code << 8) | alias_bits` and shifts right by 8, so two values in
+/// the same style-table row compare equal while different rows reject. GNU
+/// also rejects a different positive entity size.
+fn font_score_is_zero(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    spec_fields: &[Value],
+    font_fields: &[Value],
+) -> bool {
+    for (key, table) in [
+        ("weight", FONT_WEIGHT_STYLE_TABLE),
+        ("slant", FONT_SLANT_STYLE_TABLE),
+        ("width", FONT_WIDTH_STYLE_TABLE),
+    ] {
+        let Some(spec_value) = font_vector_get_flexible(spec_fields, key) else {
+            continue;
+        };
+        if spec_value.is_nil() {
+            continue;
+        }
+        let Some(font_value) = font_vector_get_flexible(font_fields, key) else {
+            continue;
+        };
+        if font_value.is_nil() || font_value == spec_value {
+            continue;
+        }
+        // GNU only scores a numeric entity slot.
+        let Some(font_code) = font_style_gnu_code(font_value, table) else {
+            continue;
+        };
+        let Some(spec_code) = font_style_gnu_code(spec_value, table) else {
+            continue;
+        };
+        if font_code != spec_code {
+            return false;
+        }
+    }
+    let Some(pixel_size) = font_spec_pixel_size(eval, spec_fields) else {
+        return true;
+    };
+    let Some(entity_size) = font_vector_get_flexible(font_fields, "size")
+        .and_then(|value| value.as_fixnum())
+        .filter(|size| *size > 0)
+    else {
+        // GNU only scores a positive numeric entity size.
+        return true;
+    };
+    if pixel_size * 2 < entity_size || entity_size * 2 < pixel_size {
+        // More than a factor of two off: GNU rejects the font outright.
+        return false;
+    }
+    let mut diff = (pixel_size - entity_size).abs() << 1;
+    if let Some(spec_dpi) =
+        font_vector_get_flexible(spec_fields, "dpi").filter(|value| !value.is_nil())
+        && font_vector_get_flexible(font_fields, "dpi").unwrap_or(Value::NIL) != spec_dpi
+    {
+        diff |= 1;
+    }
+    if let Some(spec_avgwidth) =
+        font_vector_get_flexible(spec_fields, "avgwidth").filter(|value| !value.is_nil())
+        && font_vector_get_flexible(font_fields, "avgwidth").unwrap_or(Value::NIL) != spec_avgwidth
+    {
+        diff |= 1;
+    }
+    diff == 0
+}
+
+/// GNU's `:lang` arm in `font_spec_match`: the font's `:lang` extra must
+/// contain the spec's entry (or the spec's list members).
+fn font_lang_matches(spec_value: Value, font_value: Option<Value>) -> bool {
+    let Some(font_value) = font_value.filter(|value| !value.is_nil()) else {
+        return false;
+    };
+    if spec_value.is_cons() {
+        if !font_value.is_cons() {
+            return false;
+        }
+        let mut tail = spec_value;
+        while tail.is_cons() {
+            if !font_list_memq(font_value, tail.cons_car()) {
+                return false;
+            }
+            tail = tail.cons_cdr();
+        }
+        return true;
+    }
+    if font_value.is_cons() {
+        font_list_memq(font_value.cons_cdr(), spec_value)
+    } else {
+        spec_value == font_value
+    }
+}
+
+/// GNU's `:script` arm in `font_spec_match`: every character of a list-valued
+/// `script-representative-chars` entry must be supported (a vector entry needs
+/// at least one), and only an opened font can be asked (`font_encode_char`).
+fn font_script_matches(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    spec_value: Value,
+    font: &Value,
+) -> bool {
+    let table = eval.variable_value_or_nil(intern("script-representative-chars"));
+    let Some(entry) = font_alist_assq(table, spec_value) else {
+        return true;
+    };
+    let chars = entry.cons_cdr();
+    if !(chars.is_cons() || chars.is_vector()) {
+        return true;
+    }
+    use super::display_host::{FontCoverage, FontCoverageRequest, FontCoverageTarget};
+    let Some(opened) = font.as_font_data() else {
+        return false;
+    };
+    let frame_id = super::window_cmds::ensure_selected_frame_id(eval);
+    let supported = |eval: &mut neovm_eval::emacs_core::eval::Context, ch| {
+        let Some(host) = eval.display_host.as_mut() else {
+            return false;
+        };
+        matches!(
+            host.font_character_coverage(FontCoverageRequest {
+                frame_id,
+                target: FontCoverageTarget::Opened(opened.identity.clone()),
+                character: ch,
+            }),
+            Ok(FontCoverage::Present)
+        )
+    };
+    if chars.is_vector() {
+        let Some(values) = chars.as_vector_data() else {
+            return true;
+        };
+        for value in values.iter() {
+            if let Some(ch) = value
+                .as_int()
+                .and_then(|code| u32::try_from(code).ok())
+                .and_then(neovm_value::emacs_char::EmacsChar::from_code)
+                && supported(eval, ch)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+    let mut tail = chars;
+    while tail.is_cons() {
+        let value = tail.cons_car();
+        if let Some(ch) = value
+            .as_int()
+            .and_then(|code| u32::try_from(code).ok())
+            .and_then(neovm_value::emacs_char::EmacsChar::from_code)
+            && !supported(eval, ch)
+        {
+            return false;
+        }
+        tail = tail.cons_cdr();
+    }
+    true
+}
+
+/// GNU `font_match_p` (`src/font.c:2433-2540`).
+///
+/// Name slots must be `eq` when both sides carry a value; `font_score` must
+/// be zero; then the spec's extra properties are checked. `:otf` and
+/// `:script` need an opened font object, exactly as GNU's `FONT_OBJECT_P`
+/// tests require; `:lang` compares the font's `:lang` extra.
+fn font_spec_matches_font(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    spec: &Value,
+    font: &Value,
+) -> bool {
     let Some(spec_fields) = font_value_fields(spec) else {
         return false;
     };
-    let font_fields = font_value_fields(font);
+    let Some(font_fields) = font_value_fields(font) else {
+        return false;
+    };
     for key in ["foundry", "family", "adstyle", "registry"] {
         let Some(spec_value) = font_vector_get_flexible(spec_fields, key) else {
             continue;
@@ -4618,30 +4830,27 @@ fn font_spec_matches_font(spec: &Value, font: &Value) -> bool {
         if spec_value.is_nil() {
             continue;
         }
-        let Some(font_value) = font_fields.and_then(|fields| font_vector_get_flexible(fields, key))
-        else {
+        let Some(font_value) = font_vector_get_flexible(font_fields, key) else {
             continue;
         };
         if !font_value.is_nil() && spec_value != font_value {
             return false;
         }
     }
-    for key in [
-        "weight",
-        "slant",
-        "width",
-        "size",
-        "dpi",
-        "avgwidth",
-        "average-width",
-        "avg-width",
-        "spacing",
-        "lang",
-        "script",
-    ] {
-        if font_vector_get_flexible(spec_fields, key).is_some_and(|value| !value.is_nil()) {
-            return false;
-        }
+    if !font_score_is_zero(eval, spec_fields, font_fields) {
+        return false;
+    }
+    if let Some(spec_value) = font_vector_get_flexible(spec_fields, "lang")
+        && !spec_value.is_nil()
+        && !font_lang_matches(spec_value, font_vector_get_flexible(font_fields, "lang"))
+    {
+        return false;
+    }
+    if let Some(spec_value) = font_vector_get_flexible(spec_fields, "script")
+        && !spec_value.is_nil()
+        && !font_script_matches(eval, spec_value, font)
+    {
+        return false;
     }
     let otf = font_vector_get_flexible(spec_fields, "otf").filter(|value| !value.is_nil());
     let Some(otf) = otf else {
@@ -4653,7 +4862,10 @@ fn font_spec_matches_font(spec: &Value, font: &Value) -> bool {
     font_check_otf_lisp(otf, data.capability)
 }
 
-pub(crate) fn font_match_p(args: Vec<Value>) -> EvalResult {
+pub(crate) fn font_match_p(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
     expect_args("font-match-p", &args, 2)?;
     if !is_font_spec(&args[0]) {
         return Err(signal(
@@ -4667,7 +4879,7 @@ pub(crate) fn font_match_p(args: Vec<Value>) -> EvalResult {
             vec![Value::symbol("font"), args[1]],
         ));
     }
-    Ok(if font_spec_matches_font(&args[0], &args[1]) {
+    Ok(if font_spec_matches_font(eval, &args[0], &args[1]) {
         Value::T
     } else {
         Value::NIL

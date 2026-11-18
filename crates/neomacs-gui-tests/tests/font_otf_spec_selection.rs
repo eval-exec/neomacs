@@ -206,6 +206,13 @@ fn run(engine: Engine) {
     assert_eq!(state["match-entity"], false, "{state}");
     assert_eq!(state["match-name"], true, "{state}");
     assert_eq!(state["match-name-mismatch"], false, "{state}");
+    assert_eq!(state["match-style"], true, "{state}");
+    assert_eq!(state["match-style-different"], false, "{state}");
+    assert_eq!(state["match-size"], true, "{state}");
+    assert_eq!(state["match-script"], false, "{state}");
+    assert_eq!(state["match-lang"], false, "{state}");
+    assert_eq!(state["match-specs"], true, "{state}");
+    assert_eq!(state["match-specs-mismatch"], false, "{state}");
     assert_eq!(state["font-at-family"], "Noto Sans Arabic", "{state}");
     assert_eq!(state["graphic"], true, "{state}");
 }

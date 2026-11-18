@@ -47,7 +47,38 @@
              (match-name (font-match-p (font-spec :family "Noto Sans Arabic")
                                        plain))
              (match-name-mismatch
-              (font-match-p (font-spec :family "DejaVu Sans") plain)))
+              (font-match-p (font-spec :family "DejaVu Sans") plain))
+             ;; GNU font_score compares style slots at >>8 granularity. A
+             ;; scalable entity's size 0 is not scored, so a numeric size
+             ;; spec still matches; the style row must be the entity's own.
+             (entity-weight (and plain (font-get plain :weight)))
+             (match-style (and entity-weight
+                               (font-match-p (font-spec :family "Noto Sans Arabic"
+                                                         :weight entity-weight)
+                                             plain)))
+             (match-style-different
+              (and entity-weight
+                   (font-match-p (font-spec :family "Noto Sans Arabic"
+                                            :weight (if (eq entity-weight 'bold)
+                                                        'light
+                                                      'bold))
+                                 plain)))
+             (match-size (font-match-p (font-spec :family "Noto Sans Arabic"
+                                                  :size 99)
+                                       plain))
+             ;; :script and :lang need a font-object / the font's lang extra;
+             ;; an entity has neither, so GNU rejects both.
+             (match-script (font-match-p (font-spec :family "Noto Sans Arabic"
+                                                    :script 'arabic)
+                                         plain))
+             (match-lang (font-match-p (font-spec :family "Noto Sans Arabic"
+                                                  :lang 'ja)
+                                       plain))
+             ;; A font-spec is a valid FONT argument and compares slots.
+             (match-specs (font-match-p (font-spec :family "X")
+                                        (font-spec :family "X" :weight 'bold)))
+             (match-specs-mismatch (font-match-p (font-spec :family "X")
+                                                 (font-spec :family "Y"))))
         (set-fontset-font "fontset-default" 'arabic
                           (font-spec :family "DejaVu Sans"
                                      :otf '(arab nil (init)))
@@ -71,6 +102,13 @@
                        (null match-entity)
                        match-name
                        (null match-name-mismatch)
+                       match-style
+                       (null match-style-different)
+                       match-size
+                       (null match-script)
+                       (null match-lang)
+                       match-specs
+                       (null match-specs-mismatch)
                        (equal font-at-family "Noto Sans Arabic"))
             (error "font :otf contract failed: %S"
                    (list :pos (font785-family pos)
@@ -81,6 +119,13 @@
                          :match-entity match-entity
                          :match-name match-name
                          :match-name-mismatch match-name-mismatch
+                         :match-style match-style
+                         :match-style-different match-style-different
+                         :match-size match-size
+                         :match-script match-script
+                         :match-lang match-lang
+                         :match-specs match-specs
+                         :match-specs-mismatch match-specs-mismatch
                          :font-at font-at-family)))
           (font785-write
            `((passed . t)
@@ -92,6 +137,13 @@
              (match-entity . ,(font785-boolean match-entity))
              (match-name . ,(font785-boolean match-name))
              (match-name-mismatch . ,(font785-boolean match-name-mismatch))
+             (match-style . ,(font785-boolean match-style))
+             (match-style-different . ,(font785-boolean match-style-different))
+             (match-size . ,(font785-boolean match-size))
+             (match-script . ,(font785-boolean match-script))
+             (match-lang . ,(font785-boolean match-lang))
+             (match-specs . ,(font785-boolean match-specs))
+             (match-specs-mismatch . ,(font785-boolean match-specs-mismatch))
              (font-at-family . ,font-at-family)
              (graphic . ,(font785-boolean (display-graphic-p)))))
           (when (fboundp 'neomacs--write-frame-snapshot)
