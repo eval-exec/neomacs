@@ -149,10 +149,32 @@ fn static_xwidget_page_survives_renderer_device_replacement() {
 /// installed").  A runtime without that feature has no backend to compose a
 /// page with, so the pixel proof is opt-in like NEOMACS_GUI_TEST_BACKEND:
 /// run `cargo xtask fresh-build --release --features webview` and set
-/// NEOMACS_GUI_TEST_WEBVIEW=1 to exercise it.  The oversized-glyph layout
-/// contract below runs either way.
+/// NEOMACS_GUI_TEST_WEBVIEW=1 to exercise it.
 fn webview_runtime_expected() -> bool {
     std::env::var_os("NEOMACS_GUI_TEST_WEBVIEW").is_some()
+}
+
+/// Ask the runtime under test whether it has an xwidget backend.
+///
+/// The fixture's first form is `(xwidget-insert ...)`; with the `webview`
+/// feature off there is no `xwidget-insert` subr, so the fixture aborts
+/// before it schedules `neomacs-gui-oversized-xwidget-capture`, the harness
+/// sees only the first-frame PNG (status Passed, on timeout) and the frame
+/// snapshot never exists. A build-flag guess would drift from the binary, so
+/// probe the binary itself.
+fn xwidget_backend_available(binary: &std::path::Path) -> bool {
+    std::process::Command::new(binary)
+        .args([
+            "-Q",
+            "--batch",
+            "--eval",
+            "(prin1 (fboundp 'xwidget-insert))",
+        ])
+        .output()
+        .map(|output| {
+            output.status.success() && String::from_utf8_lossy(&output.stdout).trim() == "t"
+        })
+        .unwrap_or(false)
 }
 
 fn assert_oversized_xwidget_page_visible(name: &str, fixture: &str) -> Option<PathBuf> {
@@ -174,6 +196,17 @@ fn assert_oversized_xwidget_page_visible(name: &str, fixture: &str) -> Option<Pa
         binary.exists(),
         "build {binary:?} with --features webview before running the xwidget regression"
     );
+    if !xwidget_backend_available(&binary) {
+        eprintln!(
+            "skipping oversized xwidget composition regression: {binary:?} has no \
+             xwidget backend ((fboundp 'xwidget-insert) is nil); the default Linux \
+             runtime is built without the `webview` feature. Run \
+             `cargo xtask fresh-build --release --features webview` and set \
+             NEOMACS_GUI_TEST_WEBVIEW=1 to exercise the glyph layout and the WPE \
+             pixel proof"
+        );
+        return None;
+    }
 
     let artifact_root = workspace_root.join("target/neomacs-gui-tests");
     let session = DisplayHarness::for_backend(backend)

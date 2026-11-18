@@ -1121,12 +1121,28 @@ jobs:
       # pushed every desktop_font_startup/updates stage, including GNU's own
       # `gnu_*` variants, to the deadline.  Run them, and the display
       # scroll-input units, one at a time, ahead of the bulk pass.
+      #
+      # The two `continuous_120hz_` scenarios are NOT in this pass. They are
+      # calibrated performance gates: native_scrolling/budget.rs judges the
+      # scroll response budget against recorded software-renderer capacity and
+      # deliberately fails on any host outside the recorded tiers. A shared
+      # GitHub runner is not such a host -- the same AMD EPYC 9V74 model has
+      # measured a 2.8 ms and a 4.0 ms llvmpipe median on different runs (the
+      # Xeon 8370C runner measured 3.7 ms), so no frozen tier can hold. Run
+      # them on a calibrated host instead:
+      #
+      #   NEOMACS_GUI_TEST_BACKEND=x11 NEOMACS_GUI_TEST_BINARY=target/release/neomacs \
+      #     cargo nextest run -p neomacs-gui-tests -E 'test(continuous_120hz_)'
+      #
+      # Both scenarios passed there (2026-11-18, i9-14900K, llvmpipe median
+      # 2.9-3.3 ms, tier SoftwareVulkanFast). The dispatch-only
+      # scroll120-cohort workflow covers the same scenarios' analysis.
       - name: Run serialized input and presentation-budget scenarios
         run: |
           cargo nextest run \
             --archive-file neomacs-workspace-tests.tar.zst \
             --extract-to "$TMPDIR/nextest" \
-            -E '(package(neomacs-gui-tests) and (test(~native_menus::) or test(~continuous_120hz_) or test(~presents_while_command_is_stalled) or test(~presents_resolved_destination_while_command_is_stalled) or test(~presents_pixels_while_evaluator_is_stalled) or test(~have_confirmed_input_latency) or test(~resize_presentation::) or test(~desktop_font_startup::) or test(~desktop_font_updates::))) or (package(neomacs-display-runtime) and test(scroll_input))' \
+            -E '(package(neomacs-gui-tests) and (test(~native_menus::) or test(~presents_while_command_is_stalled) or test(~presents_resolved_destination_while_command_is_stalled) or test(~presents_pixels_while_evaluator_is_stalled) or test(~have_confirmed_input_latency) or test(~resize_presentation::) or test(~desktop_font_startup::) or test(~desktop_font_updates::))) or (package(neomacs-display-runtime) and test(scroll_input))' \
             --workspace-remap "$GITHUB_WORKSPACE" \
             --test-threads 1 \
             --no-fail-fast
