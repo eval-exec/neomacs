@@ -2089,10 +2089,13 @@ pub(crate) fn charset_iso2022_designation(charset: SymId) -> Option<(i64, i64, b
 }
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
-/// The charset (and its dimension) matching an ISO-2022 designation — final
-/// char, dimension and set size — or `None`. Used when decoding an ESC
-/// designation sequence. Prefers the lowest charset id, so the modern
-/// japanese-jisx0208 (final `B`) wins over duplicates.
+/// The charset (and its dimension) designated by an ISO-2022 designation --
+/// final char, dimension and set size -- or `None`. Used when detecting and
+/// decoding an ESC designation sequence. GNU reads `iso_charset_table` there
+/// (coding.c:3000-3020 in `detect_coding_iso_2022`, coding.c:3193 in
+/// `DECODE_DESIGNATION`), the table `iso-charset` reads: the last definition
+/// of a designation wins, and `declare-equiv-charset` can redirect it to a
+/// charset of another shape, whose own dimension is returned.
 pub(crate) fn charset_by_iso_final(
     final_char: i64,
     dimension: i64,
@@ -2100,15 +2103,13 @@ pub(crate) fn charset_by_iso_final(
 ) -> Option<(SymId, i64)> {
     CHARSET_REGISTRY.with(|slot| {
         let reg = slot.borrow();
-        reg.charsets
-            .iter()
-            .filter(|(_, info)| {
-                info.iso_final_char == Some(final_char)
-                    && info.dimension == dimension
-                    && (info.code_space[0] == 0x20) == chars_96
-            })
-            .min_by_key(|(_, info)| info.id)
-            .map(|(name, info)| (*name, info.dimension))
+        let name = *reg
+            .iso_charset_table
+            .get(&(dimension, chars_96, final_char))?;
+        // The table holds the physical definition, not a public name that a
+        // later `define-charset-alias` may have rebound.
+        let info = reg.charsets.get(&name)?;
+        Some((name, info.dimension))
     })
 }
 
