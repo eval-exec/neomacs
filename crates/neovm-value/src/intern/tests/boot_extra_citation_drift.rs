@@ -22,6 +22,7 @@
 //! pull request) generates the boot-extra set from the pinned loadup closure,
 //! which removes the hand citations this test protects.
 
+use super::GNU_BOOT_EXTRA_DEFSYMS;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -66,7 +67,7 @@ fn boot_extra_citations_drift_from_the_pinned_source() {
         "the citation check must run against the pinned GNU 31.1 commit"
     );
 
-    let rows = neovm_value::intern::gnu_boot_extra_defsyms();
+    let rows = GNU_BOOT_EXTRA_DEFSYMS;
     assert!(
         rows.len() >= 18,
         "the cited boot-extra allowlist shrank to {} rows",

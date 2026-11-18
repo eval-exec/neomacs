@@ -360,9 +360,6 @@ mod compile_main_rule_test;
 #[path = "tests/build_support/generated_lisp_test.rs"]
 mod generated_lisp_test;
 #[cfg(test)]
-#[path = "tests/gnu_surface/boot_extra_citation_drift_test.rs"]
-mod gnu_boot_extra_citation_test;
-#[cfg(test)]
 #[path = "tests/gnu_surface/defsym_symbols_test.rs"]
 mod gnu_defsym_symbols_test;
 #[cfg(test)]

@@ -84,8 +84,11 @@ pub fn is_gnu_defsym_spelling_absent_for_this_profile(name: &str) -> bool {
 
 // Host bits for the boot-extra allowlist (same vocabulary as the generated
 // `DefsymGate`: Linux 1, macOS 2, Windows 4).
+#[cfg(feature = "test-support")]
 const BOOT_EXTRA_LINUX: u8 = 1;
+#[cfg(feature = "test-support")]
 const BOOT_EXTRA_MACOS: u8 = 2;
+#[cfg(feature = "test-support")]
 const BOOT_EXTRA_WINDOWS: u8 = 4;
 
 /// One startup-intern path for a spelling this build does not `DEFSYM`.
@@ -94,19 +97,19 @@ const BOOT_EXTRA_WINDOWS: u8 = 4;
 /// can re-read the pinned GNU checkout and fail when a cited line moves or no
 /// longer names the spelling. `source_needle` always contains `spelling`, and
 /// `source_line` is 1-based.
+#[cfg(feature = "test-support")]
 #[derive(Clone, Copy, Debug)]
-#[doc(hidden)]
-pub struct GnuBootExtraDefsym {
+struct GnuBootExtraDefsym {
     /// The obarray spelling.
-    pub spelling: &'static str,
+    spelling: &'static str,
     /// Attested host profiles (`BOOT_EXTRA_*` bits).
-    pub host_mask: u8,
+    host_mask: u8,
     /// GNU source file, relative to the checkout root.
-    pub source_file: &'static str,
+    source_file: &'static str,
     /// 1-based line in that file.
-    pub source_line: u32,
+    source_line: u32,
     /// Text that must still appear on that line of the pinned source.
-    pub source_needle: &'static str,
+    source_needle: &'static str,
 }
 
 /// Spellings that are boot obarray members although this profile does not
@@ -140,6 +143,7 @@ pub struct GnuBootExtraDefsym {
 ///
 /// linux-gtk3: all eighteen => t; `fontsize` => nil, `access` => t.
 /// macos-ns: all eighteen => t.
+#[cfg(feature = "test-support")]
 const GNU_BOOT_EXTRA_DEFSYMS: &[GnuBootExtraDefsym] = &[
     GnuBootExtraDefsym {
         spelling: "wheel-down",
@@ -269,13 +273,7 @@ const GNU_BOOT_EXTRA_DEFSYMS: &[GnuBootExtraDefsym] = &[
     },
 ];
 
-/// The cited startup-intern allowlist, for the drift test that re-reads the
-/// pinned GNU checkout.
-#[doc(hidden)]
-pub fn gnu_boot_extra_defsyms() -> &'static [GnuBootExtraDefsym] {
-    GNU_BOOT_EXTRA_DEFSYMS
-}
-
+#[cfg(feature = "test-support")]
 fn boot_extra_host_mask() -> u8 {
     if cfg!(windows) {
         BOOT_EXTRA_WINDOWS
@@ -289,8 +287,12 @@ fn boot_extra_host_mask() -> u8 {
 /// Whether GNU's startup obarray contains this spelling on the current
 /// profile: either this profile compiles its `DEFSYM`, or a cited boot path
 /// (preloaded Lisp/C initialization) interns it.
-#[doc(hidden)]
-pub fn is_gnu_defsym_spelling_boot_member_for_this_profile(name: &str) -> bool {
+///
+/// Test-support visibility: three core test files consume it to state the
+/// startup membership contract; production keeps it crate-private.
+#[cfg(feature = "test-support")]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn is_gnu_defsym_spelling_boot_member_for_this_profile(name: &str) -> bool {
     let table = gnu_defsyms_generated::GNU_DEFSYMS_BY_SPELLING;
     let Ok(index) = table.binary_search_by(|(spelling, _)| (*spelling).cmp(name)) else {
         // Not a DEFSYM spelling (a C DEFUN name or another boot symbol): this
@@ -2788,6 +2790,10 @@ mod native_lookup_cache_tests;
 #[cfg(test)]
 #[path = "tests/ascii_reader_name.rs"]
 mod ascii_reader_name_tests;
+
+#[cfg(all(test, feature = "test-support"))]
+#[path = "tests/boot_extra_citation_drift.rs"]
+mod boot_extra_citation_drift_tests;
 
 /// Carrier park: drop the heap-keyed visible symbol-name cache. The intern
 /// epoch caches are carrier-intrinsic and keep their capacity.
