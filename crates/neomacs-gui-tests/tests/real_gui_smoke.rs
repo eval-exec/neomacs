@@ -168,7 +168,11 @@ fn xwidget_backend_available(binary: &std::path::Path) -> bool {
             "-Q",
             "--batch",
             "--eval",
-            "(prin1 (fboundp 'xwidget-insert))",
+            // `xwidget-insert` is a Lisp definition in lisp/xwidget.el gated
+            // on the `xwidget-internal` feature, so require it first; with
+            // the backend compiled out the require still succeeds and the
+            // function stays unbound.
+            "(progn (require 'xwidget) (prin1 (fboundp 'xwidget-insert)))",
         ])
         .output()
         .map(|output| {

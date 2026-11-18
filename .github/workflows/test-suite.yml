@@ -1242,6 +1242,64 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  # The default Linux production runtime omits `webview` (Cargo.toml's
+  # production capabilities keep the WPE/WKWebView layer off by default), so
+  # the two oversized-xwidget page-composition regressions have no xwidget
+  # backend in the GUI job above and skip there by an explicit runtime probe.
+  # This job is the place they RUN: it builds the same workspace from source
+  # with `--features webview` inside the pinned Nix dev shell (the flake's
+  # nix-wpe-webkit cache supplies WebKit WPE 2.52.x) and drives both tests
+  # with NEOMACS_GUI_TEST_WEBVIEW=1, including the deterministic magenta WPE
+  # pixel proof. Verified locally against a webview fresh-build: both pass
+  # in ~4.05 s each (2026-11-18, WPE WebKit 2.52.3).
+  neomacs-xwidget-webview-gui:
+    name: xwidget webview page composition (linux x86_64, X11)
+    if: ${{ github.event_name != 'schedule' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: 1
+      TMPDIR: ${{ github.workspace }}/tmp
+      NEOMACS_GUI_TEST_BACKEND: x11
+      NEOMACS_GUI_TEST_BINARY: ${{ github.workspace }}/target/release/neomacs
+      NEOMACS_GUI_TEST_WEBVIEW: "1"
+    steps:
+      - *checkout
+      - *prepare_workspace_tmp
+      - name: Configure fast APT mirror
+        uses: ./.github/actions/configure-apt-mirror
+      - name: Install Linux ecosystem dependencies
+        run: scripts/ci/setup-linux.sh ecosystem
+      - name: Set up Rust tooling
+        uses: ./.github/actions/setup-rust
+        with:
+          cache-key: ci-xwidget-webview-gui
+          # Reuse the shared release dependency build; the webview feature
+          # changes the feature fingerprint of the crates that expose it, so
+          # only those and their dependents rebuild.
+          cache-shared-key: linux-x86_64-release
+          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
+          install-nextest: true
+      - name: Set up Nix for the pinned WPE WebKit toolchain
+        uses: ./.github/actions/setup-nix
+      - name: Build the webview runtime
+        run: |
+          nix develop --accept-flake-config --command bash -c '
+            set -euo pipefail
+            cd "${GITHUB_WORKSPACE:-$PWD}"
+            CC=gcc CXX=g++ cargo xtask fresh-build --release --features webview
+          '
+      - name: Run the xwidget page-composition regression
+        run: |
+          nix develop --accept-flake-config --command bash -c '
+            set -euo pipefail
+            cd "${GITHUB_WORKSPACE:-$PWD}"
+            cargo nextest run -p neomacs-gui-tests \
+              -E "test(~oversized_xwidget_) or test(~static_xwidget_)" \
+              --no-fail-fast
+          '
+
   doom-install-compatibility:
     name: doom install compatibility (linux x86_64)
     if: ${{ github.event_name != 'schedule' }}
