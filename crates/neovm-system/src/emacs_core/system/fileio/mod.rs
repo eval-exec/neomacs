@@ -1205,7 +1205,10 @@ fn lisp_file_name_normalize_directory_separators(
     filename: &neovm_value::heap_types::LispString,
 ) -> neovm_value::heap_types::LispString {
     if !filename.as_bytes().contains(&b'\\') {
-        return filename.clone();
+        // GNU's Ffile_name_directory always builds a fresh string
+        // (`make_specified_string`), so text properties on the input never
+        // reach the result. A clone would carry them.
+        return file_name_lisp_from_bytes(filename.as_bytes().to_vec(), filename.is_multibyte());
     }
     let mut bytes = filename.as_bytes().to_vec();
     for byte in &mut bytes {
@@ -1220,7 +1223,9 @@ fn lisp_file_name_normalize_directory_separators(
 fn lisp_file_name_normalize_directory_separators(
     filename: &neovm_value::heap_types::LispString,
 ) -> neovm_value::heap_types::LispString {
-    filename.clone()
+    // Ffile_name_directory allocates (`make_specified_string`); do not leak
+    // the input's text properties through a clone.
+    file_name_lisp_from_bytes(filename.as_bytes().to_vec(), filename.is_multibyte())
 }
 
 fn lisp_file_name_nondirectory(
@@ -1238,7 +1243,11 @@ fn lisp_file_name_nondirectory(
         .rposition(|&byte| file_name_directory_separator_byte(byte))
     {
         Some(pos) => file_name_lisp_from_bytes(bytes[pos + 1..].to_vec(), filename.is_multibyte()),
-        None => filename.clone(),
+        // GNU's Ffile_name_nondirectory returns `make_specified_string`,
+        // a fresh property-free string even when there is no separator.
+        // `filename.clone()` would carry the input's text properties (the
+        // company-c-headers `directory` property leak).
+        None => file_name_lisp_from_bytes(bytes.to_vec(), filename.is_multibyte()),
     }
 }
 
@@ -1249,7 +1258,9 @@ fn lisp_file_name_as_directory(
         return file_name_lisp_from_bytes(b"./".to_vec(), filename.is_multibyte());
     }
     if filename.as_bytes().ends_with(b"/") {
-        return filename.clone();
+        // Ffile_name_as_directory allocates; text properties on the input
+        // must not reach the result.
+        return file_name_lisp_from_bytes(filename.as_bytes().to_vec(), filename.is_multibyte());
     }
     let mut bytes = filename.as_bytes().to_vec();
     bytes.push(b'/');
@@ -1262,7 +1273,8 @@ fn lisp_directory_file_name(
 ) -> neovm_value::heap_types::LispString {
     let bytes = filename.as_bytes();
     if bytes.is_empty() {
-        return filename.clone();
+        // Fdirectory_file_name allocates a fresh string.
+        return file_name_lisp_from_bytes(Vec::new(), filename.is_multibyte());
     }
     #[cfg(windows)]
     if matches!(bytes, [drive, b':', b'/', rest @ ..]
@@ -1272,7 +1284,9 @@ fn lisp_directory_file_name(
     }
     if bytes.iter().all(|&byte| byte == b'/') {
         return if bytes.len() == 2 {
-            filename.clone()
+            // Fdirectory_file_name allocates; "//" stays "//" but without
+            // the input's text properties.
+            file_name_lisp_from_bytes(bytes.to_vec(), filename.is_multibyte())
         } else {
             file_name_lisp_from_bytes(vec![b'/'], filename.is_multibyte())
         };
