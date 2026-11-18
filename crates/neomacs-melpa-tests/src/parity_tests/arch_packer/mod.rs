@@ -9,7 +9,11 @@ pub(crate) use super::batch_support::ParityBatchCase;
 
 mod workflows;
 
-const ARCH_PACKER_TEST_TIMEOUT: Duration = Duration::from_secs(180);
+// The in-fixture waits reset their 150 s deadline on observable progress, so a
+// merely starved run can spend well over the old 180 s bound; the outer bound
+// only has to cover several progress stalls plus cleanup.  nextest's MELPA
+// slow timeout (960 s, .config/nextest.toml) remains the hard ceiling.
+const ARCH_PACKER_TEST_TIMEOUT: Duration = Duration::from_secs(600);
 const ARCH_PACKER_TEST_PRELUDE: &str = r####"
 (require 'cl-lib)
 (require 'thingatpt)
@@ -198,19 +202,43 @@ follow-up query from the action snapshot regardless of sentinel timing."
     (setenv "ARCH_PACKER_TEST_STATE" state)
     (list :root root :trace trace :state state)))
 
+(defun neomacs-arch-packer-test-progress-token ()
+  "Observable progress of the package's async workflow.
+The trace file, the process buffer's mode/size and the output buffer's size
+all advance as bash, the fake pacman and the menu rebuild do their work."
+  (list
+   (ignore-errors
+     (let ((attributes (file-attributes (getenv "ARCH_PACKER_TEST_TRACE"))))
+       (and attributes
+            (list (nth 7 attributes) (nth 5 attributes)))))
+   (and (get-buffer arch-packer-process-buffer)
+        (with-current-buffer arch-packer-process-buffer
+          (list major-mode (buffer-size))))
+   (and (get-buffer arch-packer-process-output-buffer)
+        (with-current-buffer arch-packer-process-output-buffer
+          (buffer-size)))))
+
 (defun neomacs-arch-packer-test-wait-for (predicate)
-  "Wait for PREDICATE on a wall-clock deadline.
+  "Wait for PREDICATE with a progress-reset deadline.
 
 The pacman stand-in, the shell filter and the menu rebuild are all real
 process and display work; on a loaded machine ten seconds of polling was
 not enough, and even a minute was not enough when the host is running
 other builds (both editors were measured to exceed 60 s here, on
-different cases).  The wait is still a deadline, not a round count, and
-the batch's own timeout is the outer bound."
-  (let ((deadline (+ (float-time) 150)))
+different cases).  A fixed wall-clock deadline is the wrong guard for a
+merely starved run, so the deadline resets whenever the workflow makes
+observable progress (trace, process mode/size, output buffer); a real
+hang still reaches the deadline because nothing advances.  The batch's
+own timeout is the outer bound."
+  (let ((deadline (+ (float-time) 150))
+        (last-progress (neomacs-arch-packer-test-progress-token)))
     (while (and (< (float-time) deadline)
                 (not (funcall predicate)))
-      (accept-process-output nil 0.05))
+      (accept-process-output nil 0.05)
+      (let ((progress (neomacs-arch-packer-test-progress-token)))
+        (unless (equal progress last-progress)
+          (setq last-progress progress
+                deadline (+ (float-time) 150)))))
     (unless (funcall predicate)
       ;; A bare timeout says nothing about WHICH step stalled.  Include the
       ;; observable state the predicate reads, so a failure names the step and
