@@ -110,12 +110,23 @@ has to be inhibited to see the prompt itself."
     (current-buffer)))
 
 (defun ac-inf-ruby-test-stop-repl ()
-  "Kill the REPL process and wait until it is really gone."
+  "Kill the REPL process and wait until it is really gone.
+`process-live-p' going nil is the status record, not the sentinel: the
+record is published asynchronously (child_status.rs `UpdateStatusSite`;
+DIVERGENCES ledger 180 measured a live-only wait losing the sentinel 4/60,
+and GNU itself does the same under load).  The public state this fixture
+pins (`:process nil` and the sentinel's \"Process ruby killed\" line) only
+exists after comint/inf-ruby's sentinel has dropped the dead process, so
+drain until the buffer no longer has a process instead of assuming the
+sentinel ran with the status change."
   (let ((process (get-buffer-process (current-buffer))))
     (when process
       (kill-process process)
       (cl-loop repeat 200
                until (not (process-live-p process))
+               do (accept-process-output nil 0.05))
+      (cl-loop repeat 200
+               while (get-buffer-process (current-buffer))
                do (accept-process-output nil 0.05)))))
 
 (defmacro ac-inf-ruby-test-with-repl (&rest body)
