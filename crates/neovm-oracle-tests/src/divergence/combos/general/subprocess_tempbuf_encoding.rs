@@ -15,6 +15,12 @@ fn divergence_process_multibyte_to_temp_buffer() {
       (let ((proc (start-process "test-mb-xxx" buf "printf" "caf\xc3\xa9 r\xc3\xa9sum\xc3\xa9")))
         (set-process-query-on-exit-flag proc nil)
         (while (process-live-p proc) (accept-process-output proc 1))
+        ;; Close the check-then-wait race: the child (printf/echo) can exit and
+        ;; its status be processed between the `process-live-p' check and the
+        ;; next accept, so the loop exits before the pipe is drained (GNU Emacs
+        ;; itself loses the output this way under load).  A zero-timeout accept
+        ;; drains whatever is already buffered without waiting.
+        (accept-process-output proc 0)
         (let ((output (buffer-string))
               (len (length (buffer-string))))
           (kill-buffer buf)
@@ -157,6 +163,12 @@ fn divergence_process_coding_system_conversion() {
       (let ((proc (start-process "test-coding-xxx" buf "echo" "test-output")))
         (set-process-query-on-exit-flag proc nil)
         (while (process-live-p proc) (accept-process-output proc 1))
+        ;; Close the check-then-wait race: the child (printf/echo) can exit and
+        ;; its status be processed between the `process-live-p' check and the
+        ;; next accept, so the loop exits before the pipe is drained (GNU Emacs
+        ;; itself loses the output this way under load).  A zero-timeout accept
+        ;; drains whatever is already buffered without waiting.
+        (accept-process-output proc 0)
         (let ((output (buffer-string)))
           (kill-buffer buf)
           (list (string-match "test-output" output)
