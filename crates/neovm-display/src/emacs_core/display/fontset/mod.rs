@@ -1,7 +1,8 @@
 use super::font::FontNameSpelling;
 use crate::face::{FontSlant, FontWeight, FontWidth};
 pub use neovm_eval::emacs_core::eval::data::fontset_state::{
-    FontDefinitionMetadata, FontRepertory, FontSpecEntry, StoredFontSpec,
+    FontDefinitionMetadata, FontRepertory, FontSpecEntry, StoredFontSpec, StoredOtfFeatures,
+    StoredOtfLangsys, StoredOtfSpec,
 };
 use neovm_eval::emacs_core::eval::data::fontset_state::{
     FontsetDataSnapshot, FontsetRangeEntrySnapshot, FontsetRegistrySnapshot,
@@ -396,6 +397,9 @@ impl StoredFontSpecExt for StoredFontSpec {
             weight: self.weight,
             slant: self.slant,
             width: self.width,
+            // The :otf requirement is a matching constraint, not informational
+            // metadata: rendering must keep rejecting fonts that fail it.
+            otf: self.otf.clone(),
             definition: None,
         }
     }
@@ -953,6 +957,7 @@ fn parse_font_spec_entry(
                 weight: None,
                 slant: None,
                 width: None,
+                otf: None,
                 definition: None,
             };
             spec.definition = Some(resolve_font_definition(&spec, font_encoding_alist));
@@ -1004,6 +1009,8 @@ fn parse_font_vector(items: &[Value]) -> StoredFontSpec {
     let width = font_vector_get_flexible(items, "width")
         .and_then(|value| value_text(&value))
         .and_then(|width| FontWidth::from_symbol(&width));
+    let otf =
+        font_vector_get_flexible(items, "otf").and_then(|value| parse_stored_otf_spec(&value));
 
     StoredFontSpec {
         family,
@@ -1012,8 +1019,88 @@ fn parse_font_vector(items: &[Value]) -> StoredFontSpec {
         weight,
         slant,
         width,
+        otf,
         definition: None,
     }
+}
+
+/// GNU `font_prop_validate_otf` value shape -> the stored requirement.
+///
+/// `font-spec` rejects a malformed `:otf` (see `normalize_font_prop_value`), so
+/// a well-formed value is `(SCRIPT [LANGSYS [GSUB [GPOS]]])` with symbol tags.
+/// A raw fontset entry that still carries a malformed value stores no
+/// requirement rather than failing the lookup.
+pub(crate) fn parse_stored_otf_spec(value: &Value) -> Option<StoredOtfSpec> {
+    if !value.is_cons() {
+        return None;
+    }
+    let script = value_text(&value.cons_car())?;
+    let mut rest = value.cons_cdr();
+    let mut slot = 0;
+    let mut langsys = StoredOtfLangsys::Default;
+    let mut gsub = None;
+    let mut gpos = None;
+    while !rest.is_nil() && slot < 3 {
+        if !rest.is_cons() {
+            return None;
+        }
+        let item = rest.cons_car();
+        match slot {
+            0 => {
+                // GNU's second-slot validator check re-tests XCAR(val), so any
+                // non-nil value reaches font_check_otf; a non-symbol can never
+                // `eq` a langsys tag and therefore rejects every font.
+                langsys = if item.is_nil() {
+                    StoredOtfLangsys::Default
+                } else if let Some(text) = value_symbol_text(&item) {
+                    StoredOtfLangsys::Named(text)
+                } else {
+                    // GNU compares LANGSYS with `eq` against the tag symbols
+                    // read from the font, so a non-symbol never matches.
+                    StoredOtfLangsys::Unmatchable
+                };
+            }
+            1 => gsub = parse_stored_otf_features(&item),
+            _ => gpos = parse_stored_otf_features(&item),
+        }
+        rest = rest.cons_cdr();
+        slot += 1;
+    }
+    Some(StoredOtfSpec {
+        script,
+        langsys,
+        gsub,
+        gpos,
+    })
+}
+
+/// `(FEATURE ... [nil FEATURE ...])`: before `nil` the features are required,
+/// after it they are forbidden (`src/font.c` `font_check_otf_features`).
+fn parse_stored_otf_features(value: &Value) -> Option<StoredOtfFeatures> {
+    if value.is_nil() {
+        return None;
+    }
+    let mut features = StoredOtfFeatures::default();
+    let mut negative = false;
+    let mut tail = *value;
+    while tail.is_cons() {
+        let item = tail.cons_car();
+        if item.is_nil() {
+            negative = true;
+        } else {
+            let tag = value_text(&item)?;
+            if negative {
+                features.forbidden.push(tag);
+            } else {
+                features.required.push(tag);
+            }
+        }
+        tail = tail.cons_cdr();
+    }
+    if !tail.is_nil() {
+        return None;
+    }
+    Some(features)
 }
 
 /// Issue #131: intern a font family/name Value faithfully. String values keep
@@ -1071,6 +1158,7 @@ fn parse_font_name_string(name: &neovm_value::heap_types::LispString) -> StoredF
                 weight: None,
                 slant: None,
                 width: None,
+                otf: None,
                 definition: None,
             };
         }
@@ -1083,6 +1171,7 @@ fn parse_font_name_string(name: &neovm_value::heap_types::LispString) -> StoredF
         weight: None,
         slant: None,
         width: None,
+        otf: None,
         definition: None,
     }
 }
@@ -1345,6 +1434,14 @@ fn list_to_vec(value: &Value) -> Vec<Value> {
 fn value_text(value: &Value) -> Option<String> {
     match value.kind() {
         ValueKind::String => fontset_string_text(value),
+        ValueKind::Symbol(id) => Some(resolve_sym(id).to_string()),
+        _ => None,
+    }
+}
+
+/// Only a symbol can `eq` an OpenType tag symbol in GNU's matcher.
+fn value_symbol_text(value: &Value) -> Option<String> {
+    match value.kind() {
         ValueKind::Symbol(id) => Some(resolve_sym(id).to_string()),
         _ => None,
     }

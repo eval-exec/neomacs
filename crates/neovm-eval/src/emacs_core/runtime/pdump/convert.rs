@@ -40,7 +40,8 @@ use crate::emacs_core::eval::data::face::{
 use crate::emacs_core::eval::data::face::{Face, FaceDecoration, FaceTable};
 use crate::emacs_core::eval::data::fontset_state::{
     FontDefinitionMetadata, FontRepertory, FontSpecEntry, FontsetDataSnapshot,
-    FontsetRangeEntrySnapshot, FontsetRegistrySnapshot, StoredFontSpec,
+    FontsetRangeEntrySnapshot, FontsetRegistrySnapshot, StoredFontSpec, StoredOtfFeatures,
+    StoredOtfLangsys, StoredOtfSpec,
 };
 use crate::emacs_core::eval::data::register::{RegisterContent, RegisterManager};
 use crate::emacs_core::eval::interactive_registry::{InteractiveRegistry, InteractiveSpec};
@@ -4533,6 +4534,51 @@ fn dump_font_width(width: &FontWidth) -> DumpFontWidth {
     }
 }
 
+fn dump_stored_otf_spec(spec: StoredOtfSpec) -> DumpStoredOtfSpec {
+    let (langsys, langsys_unmatchable) = match spec.langsys {
+        StoredOtfLangsys::Default => (None, false),
+        StoredOtfLangsys::Named(langsys) => (Some(langsys), false),
+        StoredOtfLangsys::Unmatchable => (None, true),
+    };
+    DumpStoredOtfSpec {
+        script: spec.script,
+        langsys,
+        langsys_unmatchable,
+        gsub: spec.gsub.map(dump_stored_otf_features),
+        gpos: spec.gpos.map(dump_stored_otf_features),
+    }
+}
+
+fn dump_stored_otf_features(features: StoredOtfFeatures) -> DumpStoredOtfFeatures {
+    DumpStoredOtfFeatures {
+        required: features.required,
+        forbidden: features.forbidden,
+    }
+}
+
+fn load_stored_otf_spec(spec: &DumpStoredOtfSpec) -> StoredOtfSpec {
+    StoredOtfSpec {
+        script: spec.script.clone(),
+        langsys: if spec.langsys_unmatchable {
+            StoredOtfLangsys::Unmatchable
+        } else {
+            spec.langsys
+                .clone()
+                .map(StoredOtfLangsys::Named)
+                .unwrap_or_default()
+        },
+        gsub: spec.gsub.as_ref().map(load_stored_otf_features),
+        gpos: spec.gpos.as_ref().map(load_stored_otf_features),
+    }
+}
+
+fn load_stored_otf_features(features: &DumpStoredOtfFeatures) -> StoredOtfFeatures {
+    StoredOtfFeatures {
+        required: features.required.clone(),
+        forbidden: features.forbidden.clone(),
+    }
+}
+
 fn dump_font_repertory(repertory: FontRepertory) -> DumpFontRepertory {
     match repertory {
         FontRepertory::Charset(name) => DumpFontRepertory::CharsetSym(dump_sym_id(name)),
@@ -4551,6 +4597,7 @@ fn dump_stored_font_spec(spec: StoredFontSpec) -> DumpStoredFontSpec {
         weight: spec.weight.map(FontWeight::dump_code),
         slant: spec.slant.map(|slant| dump_font_slant(&slant)),
         width: spec.width.map(|width| dump_font_width(&width)),
+        otf: spec.otf.map(dump_stored_otf_spec),
         definition: spec
             .definition
             .map(|definition| DumpFontDefinitionMetadata {
@@ -6963,6 +7010,7 @@ fn load_font_spec_entry(entry: &DumpFontSpecEntry) -> FontSpecEntry {
             weight: spec.weight.map(FontWeight::from_dump_code),
             slant: spec.slant.as_ref().map(load_font_slant),
             width: spec.width.as_ref().map(load_font_width),
+            otf: spec.otf.as_ref().map(load_stored_otf_spec),
             definition: spec
                 .definition
                 .as_ref()

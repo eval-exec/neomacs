@@ -1,6 +1,6 @@
 use super::super::{
     FontDefinitionMetadata, FontRepertory, FontsetAddMode, FontsetTarget, StoredFontSpec,
-    restore_fontset_registry, snapshot_fontset_registry,
+    StoredOtfLangsys, StoredOtfSpec, restore_fontset_registry, snapshot_fontset_registry,
 };
 use super::*;
 use neovm_value::intern::intern;
@@ -13,6 +13,7 @@ fn family_entry(family: &str) -> FontSpecEntry {
         weight: None,
         slant: None,
         width: None,
+        otf: None,
         definition: None,
     })
 }
@@ -292,6 +293,7 @@ fn encoded_entry(family: &str, encoding: &str) -> FontSpecEntry {
         weight: None,
         slant: None,
         width: None,
+        otf: None,
         definition: Some(FontDefinitionMetadata {
             encoding: intern(encoding),
             repertory: None,
@@ -348,6 +350,46 @@ fn shared_capture_follows_the_preferred_charsets() {
 }
 
 /// Characters that share a range share one reordered chain per preference.
+/// GNU `reorder_font_vector` exempts a spec with `:otf` from the encoding
+/// penalty (`src/fontset.c:413-416`): it is preferable "regardless of
+/// encoding and language", so it sorts ahead of a non-preferred encoding.
+#[test]
+fn shared_capture_keeps_an_otf_spec_ahead_of_a_penalized_encoding() {
+    let mut data = FontsetData::default();
+    for entry in [
+        encoded_entry("gb", "chinese-gb2312"),
+        encoded_entry("jis", "japanese-jisx0208"),
+        FontSpecEntry::Font(StoredFontSpec {
+            family: Some(intern("otf")),
+            registry: None,
+            lang: Some(intern("ja")),
+            weight: None,
+            slant: None,
+            width: None,
+            otf: Some(StoredOtfSpec {
+                script: "arab".to_owned(),
+                langsys: StoredOtfLangsys::Default,
+                gsub: None,
+                gpos: None,
+            }),
+            definition: Some(FontDefinitionMetadata {
+                encoding: intern("chinese-gb2312"),
+                repertory: None,
+            }),
+        }),
+    ] {
+        data.update_target(
+            FontsetTarget::Range('月' as u32, '月' as u32),
+            entry,
+            FontsetAddMode::Append,
+        );
+    }
+    publish_charset_preference(vec![intern("japanese-jisx0208")]);
+    let chain = CapturedFontsetChain::from_data(revision(), &data, '月');
+    let names: Vec<_> = chain.iter().map(family).collect();
+    assert_eq!(names, vec![Some("jis"), Some("otf"), Some("gb")]);
+}
+
 #[test]
 fn shared_capture_reorders_a_range_once_for_all_its_characters() {
     let mut data = FontsetData::default();

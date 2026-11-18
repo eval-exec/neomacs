@@ -900,22 +900,6 @@ pub(crate) fn sync_live_default_face_font_state(
     sync_live_frame_font_state(eval, frame_id, &resolution)
 }
 
-fn expect_optional_frame_designator_in_state(
-    frames: &FrameManager,
-    value: Option<&Value>,
-) -> Result<(), Flow> {
-    if let Some(frame) = value
-        && !frame.is_nil()
-        && !live_frame_designator_in_state(frames, frame)
-    {
-        return Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("frame-live-p"), *frame],
-        ));
-    }
-    Ok(())
-}
-
 pub(crate) fn frame_device_designator_p(value: &Value) -> bool {
     match value.kind() {
         // No `Fixnum` arm -- an integer is not a frame; see `frame::builtin_framep`.
@@ -1577,6 +1561,11 @@ fn validate_spacing_font_prop(prop: &Value, val: &Value) -> EvalResult {
 }
 
 fn normalize_font_prop_value(prop: &Value, val: &Value) -> EvalResult {
+    // GNU `font_prop_validate` returns VAL unchanged when it is nil, before
+    // dispatching to any property validator.
+    if val.is_nil() {
+        return Ok(*val);
+    }
     let key = match prop.kind() {
         ValueKind::Symbol(id) => resolve_sym(id).trim_start_matches(':'),
         _ => return Ok(*val),
@@ -1607,8 +1596,53 @@ fn normalize_font_prop_value(prop: &Value, val: &Value) -> EvalResult {
             validate_non_negative_font_prop(prop, val)
         }
         "spacing" => validate_spacing_font_prop(prop, val),
+        "otf" => validate_otf_font_prop(prop, val),
         _ => Ok(*val),
     }
+}
+
+/// GNU `font_prop_validate_otf` (`src/font.c`):
+/// `VAL = (SCRIPT [LANGSYS [GSUB-FEATURES [GPOS-FEATURES]]])` where every
+/// feature list is `(FEATURE ... [nil FEATURE ...])` and every element is a
+/// symbol (GNU's `SYMBOLP` also accepts nil). The value is stored verbatim;
+/// only a malformed shape is an invalid font property.
+///
+/// GNU's second slot check re-tests `XCAR (val)` rather than the langsys
+/// element, so any cons in the LANGSYS position is accepted. That quirk is
+/// reproduced deliberately: a font spec GNU accepts must be accepted here.
+fn validate_otf_font_prop(prop: &Value, val: &Value) -> EvalResult {
+    let is_symbol_or_nil =
+        |value: &Value| matches!(value.kind(), ValueKind::Symbol(_) | ValueKind::Nil);
+    if !val.is_cons() || !is_symbol_or_nil(&val.cons_car()) {
+        return Err(invalid_font_property(prop, val));
+    }
+    let mut tail = val.cons_cdr();
+    if tail.is_nil() {
+        return Ok(*val);
+    }
+    if !tail.is_cons() {
+        return Err(invalid_font_property(prop, val));
+    }
+    for _ in 0..2 {
+        tail = tail.cons_cdr();
+        if tail.is_nil() {
+            return Ok(*val);
+        }
+        if !tail.is_cons() {
+            return Err(invalid_font_property(prop, val));
+        }
+        let mut item = tail.cons_car();
+        while item.is_cons() {
+            if !is_symbol_or_nil(&item.cons_car()) {
+                return Err(invalid_font_property(prop, val));
+            }
+            item = item.cons_cdr();
+        }
+        if !item.is_nil() {
+            return Err(invalid_font_property(prop, val));
+        }
+    }
+    Ok(*val)
 }
 
 // ===========================================================================
@@ -2383,12 +2417,31 @@ pub(crate) fn font_get(args: Vec<Value>) -> EvalResult {
             }
 
             if let Some(id) = args[1].as_bare_keyword_id() {
-                return Ok(font_vector_get_flexible(elems, resolve_sym(id)).unwrap_or(Value::NIL));
+                let name = resolve_sym(id);
+                // GNU Ffont_get falls back to the driver's capability for a
+                // font-object whose extra property list has no :otf entry.
+                // The docstring specifies the raw `(GSUB . GPOS)` cons.
+                if name.trim_start_matches(':') == "otf"
+                    && let Some(data) = args[0].as_font_data()
+                {
+                    return Ok(font_object_otf_capability(data.capability));
+                }
+                return Ok(font_vector_get_flexible(elems, name).unwrap_or(Value::NIL));
             }
 
             Ok(Value::NIL)
         }
         _ => unreachable!("font check above guarantees property storage"),
+    }
+}
+
+/// Opened font objects store `(opentype . (GSUB . GPOS))` for `font-info`;
+/// GNU's `Ffont_get` exposes the raw `(GSUB . GPOS)` pair.
+fn font_object_otf_capability(capability: Value) -> Value {
+    if capability.is_cons() && capability.cons_car().is_bare_symbol_named("opentype") {
+        capability.cons_cdr()
+    } else {
+        capability
     }
 }
 
@@ -2417,21 +2470,15 @@ pub(crate) fn font_put(args: Vec<Value>) -> EvalResult {
 
 /// Context-aware variant of `list-fonts`.
 ///
-/// Accepts live frame designators in the optional FRAME slot.
+/// Accepts live frame designators in the optional FRAME slot. GNU's
+/// `Flist_fonts` (src/font.c) is the entity enumeration below `x-list-fonts`,
+/// so both share one implementation; the font-spec's `:otf` requirement is
+/// carried by `font_list_query` into the native entity filter.
 pub(crate) fn list_fonts(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    expect_min_args("list-fonts", &args, 1)?;
-    expect_max_args("list-fonts", &args, 4)?;
-    if !is_font_spec(&args[0]) {
-        return Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("font-spec"), args[0]],
-        ));
-    }
-    expect_optional_frame_designator_in_state(&eval.frame_manager(), args.get(1))?;
-    Ok(Value::NIL)
+    list_fonts_for_pattern(eval, args)
 }
 
 /// Enumerate the native entities used to resolve an XLFD pattern.
@@ -2808,6 +2855,8 @@ fn font_spec_resolve_request(
         ValueKind::Symbol(id) => FontWidth::from_symbol(resolve_sym(id)),
         _ => None,
     });
+    let otf = font_vector_get_flexible(&elems, "otf")
+        .and_then(|value| super::fontset::parse_stored_otf_spec(&value));
 
     Ok(neovm_eval::emacs_core::eval::FontSpecResolveRequest {
         selection: neovm_eval::emacs_core::eval::FontSpecSelection::Enumerate,
@@ -2818,6 +2867,7 @@ fn font_spec_resolve_request(
         weight,
         slant,
         width,
+        otf,
     })
 }
 
@@ -4436,17 +4486,192 @@ pub(crate) fn font_has_char_p(
     }
 }
 
-pub(crate) fn font_match_p(args: Vec<Value>) -> EvalResult {
-    expect_args("font-match-p", &args, 2)?;
-    for value in &args {
-        if !is_font_spec(value) {
-            return Err(signal(
-                LispCondition::WrongTypeArgument,
-                vec![Value::symbol("font-spec"), *value],
-            ));
+/// GNU `assq`: `(KEY . VALUE)` entries compared by `eq` on the key.
+fn font_alist_assq(list: Value, key: Value) -> Option<Value> {
+    let mut tail = list;
+    while tail.is_cons() {
+        let entry = tail.cons_car();
+        if entry.is_cons() && entry.cons_car() == key {
+            return Some(entry);
+        }
+        tail = tail.cons_cdr();
+    }
+    None
+}
+
+/// GNU `memq`: proper-list membership by `eq`.
+fn font_list_memq(list: Value, member: Value) -> bool {
+    let mut tail = list;
+    while tail.is_cons() {
+        if tail.cons_car() == member {
+            return true;
+        }
+        tail = tail.cons_cdr();
+    }
+    false
+}
+
+/// GNU `font_check_otf_features` (`src/font.c:2358-2395`) over the Lisp
+/// capability shape stored on an opened font object.
+fn font_check_otf_features_lisp(
+    script: Value,
+    langsys: Value,
+    features: Value,
+    table: Value,
+) -> bool {
+    let Some(script_entry) = font_alist_assq(table, script) else {
+        return false;
+    };
+    let lang_entries = script_entry.cons_cdr();
+    let lang_entry = if langsys.is_nil() {
+        // GNU prefers the nil (default) language system, then the first
+        // entry of the script's alist.
+        font_alist_assq(lang_entries, Value::NIL)
+            .or_else(|| lang_entries.is_cons().then(|| lang_entries.cons_car()))
+    } else {
+        let Some(entry) = font_alist_assq(lang_entries, langsys) else {
+            return false;
+        };
+        Some(entry)
+    };
+    let feature_tags = match lang_entry {
+        Some(entry) if entry.is_cons() => entry.cons_cdr(),
+        _ => Value::NIL,
+    };
+    let mut negative = false;
+    let mut tail = features;
+    while tail.is_cons() {
+        let feature = tail.cons_car();
+        if feature.is_nil() {
+            negative = true;
+        } else if font_list_memq(feature_tags, feature) == negative {
+            return false;
+        }
+        tail = tail.cons_cdr();
+    }
+    true
+}
+
+/// GNU `font_check_otf` (`src/font.c:2399-2425`): GSUB and GPOS feature
+/// lists are checked independently. A side whose feature list is nil is not
+/// checked at all.
+fn font_check_otf_lisp(spec: Value, capability: Value) -> bool {
+    if !spec.is_cons() {
+        return false;
+    }
+    // Opened font objects store `(opentype . (GSUB . GPOS))`, the shape
+    // `font-info` exposes. GNU's driver callback returns `(GSUB . GPOS)`.
+    let pair = if capability.is_cons() && capability.cons_car().is_bare_symbol_named("opentype") {
+        capability.cons_cdr()
+    } else {
+        capability
+    };
+    if !pair.is_cons() {
+        return false;
+    }
+    let gsub = pair.cons_car();
+    let gpos = pair.cons_cdr();
+    let script = spec.cons_car();
+    let mut rest = spec.cons_cdr();
+    let langsys = if rest.is_cons() {
+        let langsys = rest.cons_car();
+        rest = rest.cons_cdr();
+        langsys
+    } else {
+        Value::NIL
+    };
+    let gsub_features = if rest.is_cons() {
+        let features = rest.cons_car();
+        rest = rest.cons_cdr();
+        features
+    } else {
+        Value::NIL
+    };
+    let gpos_features = if rest.is_cons() {
+        rest.cons_car()
+    } else {
+        Value::NIL
+    };
+    (gsub_features.is_nil() || font_check_otf_features_lisp(script, langsys, gsub_features, gsub))
+        && (gpos_features.is_nil()
+            || font_check_otf_features_lisp(script, langsys, gpos_features, gpos))
+}
+
+/// GNU `font_match_p` (`src/font.c:2433-2540`) for the constraints this
+/// entry point can verify without the frame-dependent `font_score` port.
+///
+/// Name slots (`:foundry`, `:family`, `:adstyle`, `:registry`) must be `eq`
+/// when both sides carry a value. A spec that constrains weight, slant,
+/// width, size, dpi, avgwidth, spacing, lang, or script still returns nil:
+/// those arms need `font_score`/`script-representative-chars` and the
+/// preexisting stub did not evaluate them. With no such constraint the
+/// `:otf` arm is exact, and GNU applies it only to an opened font object.
+fn font_spec_matches_font(spec: &Value, font: &Value) -> bool {
+    let Some(spec_fields) = font_value_fields(spec) else {
+        return false;
+    };
+    let font_fields = font_value_fields(font);
+    for key in ["foundry", "family", "adstyle", "registry"] {
+        let Some(spec_value) = font_vector_get_flexible(spec_fields, key) else {
+            continue;
+        };
+        if spec_value.is_nil() {
+            continue;
+        }
+        let Some(font_value) = font_fields.and_then(|fields| font_vector_get_flexible(fields, key))
+        else {
+            continue;
+        };
+        if !font_value.is_nil() && spec_value != font_value {
+            return false;
         }
     }
-    Ok(Value::NIL)
+    for key in [
+        "weight",
+        "slant",
+        "width",
+        "size",
+        "dpi",
+        "avgwidth",
+        "average-width",
+        "avg-width",
+        "spacing",
+        "lang",
+        "script",
+    ] {
+        if font_vector_get_flexible(spec_fields, key).is_some_and(|value| !value.is_nil()) {
+            return false;
+        }
+    }
+    let otf = font_vector_get_flexible(spec_fields, "otf").filter(|value| !value.is_nil());
+    let Some(otf) = otf else {
+        return true;
+    };
+    let Some(data) = font.as_font_data() else {
+        return false;
+    };
+    font_check_otf_lisp(otf, data.capability)
+}
+
+pub(crate) fn font_match_p(args: Vec<Value>) -> EvalResult {
+    expect_args("font-match-p", &args, 2)?;
+    if !is_font_spec(&args[0]) {
+        return Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("font-spec"), args[0]],
+        ));
+    }
+    if !is_font(&args[1]) {
+        return Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("font"), args[1]],
+        ));
+    }
+    Ok(if font_spec_matches_font(&args[0], &args[1]) {
+        Value::T
+    } else {
+        Value::NIL
+    })
 }
 
 /// GNU `Ffont_shape_gstring`: validate through `composition_gstring_p`, honor

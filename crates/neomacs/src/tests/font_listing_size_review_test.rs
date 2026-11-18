@@ -46,6 +46,7 @@ fn font_query_preserves_explicit_empty_family_as_a_restriction() {
         weight: None,
         slant: None,
         width: None,
+        otf: None,
     };
     let omitted = font_listing_entity_query(&request);
     assert!(omitted.is_some());

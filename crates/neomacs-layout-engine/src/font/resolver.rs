@@ -14,7 +14,9 @@ pub(crate) use worker_policy::{
 
 use crate::font::policy::{
     CapturedFontFamilyPolicy, FontFamilyCandidate, FontFamilySource, GnuFontPolicy,
+    otf_representative_ranges, otf_spec_matches_for_listing,
 };
+use crate::font::probe::OtfCapability;
 use crate::font::selection::{
     CandidateSelectionScore, candidate_selection_score, candidate_style_selection_score,
 };
@@ -23,10 +25,10 @@ use crate::font_backend::{
     FontSelectionSize, PlatformFontCandidate, PlatformFontMatch, PlatformFontSize,
     RequiredFontCoverage, TextDirection,
 };
-use neomacs_display_protocol::font::{FontBackendKind, ResolvedFontIdentity};
+use neomacs_display_protocol::font::{FontBackendKind, FontFileAsset, ResolvedFontIdentity};
 use neovm_core::emacs_core::eval::FontSpecSelection;
 use neovm_core::emacs_core::fontset::{
-    FontSpecEntry, StoredFontSpec, fontset_generation, matching_entries_for_char,
+    FontSpecEntry, StoredFontSpec, StoredOtfSpec, fontset_generation, matching_entries_for_char,
 };
 use neovm_core::emacs_core::intern::intern;
 use neovm_core::face::{FontSlant, FontWeight, FontWidth};
@@ -46,6 +48,8 @@ pub struct FontEntityQuery {
     weight: Option<u16>,
     slant: Option<FontSlant>,
     width: Option<FontWidth>,
+    /// GNU `:otf`: enumerated entities must satisfy this OpenType requirement.
+    otf: Option<StoredOtfSpec>,
 }
 
 impl FontEntityQuery {
@@ -73,6 +77,11 @@ impl FontEntityQuery {
 
     pub fn with_postscript_name(mut self, postscript_name: impl Into<String>) -> Self {
         self.postscript_name = non_empty_query_text(postscript_name.into());
+        self
+    }
+
+    pub fn with_otf(mut self, otf: StoredOtfSpec) -> Self {
+        self.otf = Some(otf);
         self
     }
 
@@ -197,6 +206,10 @@ pub struct FontResolver {
             >,
         >,
     >,
+    /// GNU `:otf` matching reads each candidate's GSUB/GPOS capability; cache
+    /// one parsed capability per (file, face) so a fontset lookup pays it once.
+    /// The cache validates file identity, so a replaced font file is re-probed.
+    otf_capability_cache: Mutex<crate::font::probe::OtfCapabilityCache>,
     primary_cache: Mutex<HashMap<PrimaryCacheKey, Option<PlatformFontMatch>>>,
     char_cache: Mutex<HashMap<CharCacheKey, Option<PlatformFontMatch>>>,
     exact_cache: Mutex<HashMap<ResolvedFontIdentity, Option<PlatformFontMatch>>>,
@@ -209,6 +222,7 @@ impl FontResolver {
             worker_policy: None,
             materializer: neomacs_font_materializer::FontMaterializer::new().ok(),
             capability_cache: Mutex::new(HashMap::default()),
+            otf_capability_cache: Mutex::new(crate::font::probe::OtfCapabilityCache::default()),
             primary_cache: Mutex::new(HashMap::default()),
             char_cache: Mutex::new(HashMap::default()),
             exact_cache: Mutex::new(HashMap::default()),
@@ -263,19 +277,28 @@ impl FontResolver {
         let candidate_query = self.entity_candidate_query(query);
         let selected = match query.selection {
             FontSpecSelection::Enumerate => self.select_entity_candidates(
-                self.backend.list_candidates(&candidate_query),
+                self.filter_entity_candidates(
+                    query,
+                    self.backend.list_candidates(&candidate_query),
+                ),
                 query,
                 &candidate_query,
                 FontSpecSelection::Enumerate,
             ),
-            FontSpecSelection::DriverMatch => self.match_entity_driver(&candidate_query, query),
+            FontSpecSelection::DriverMatch => self
+                .match_entity_driver(&candidate_query, query)
+                .filter(|matched| self.driver_match_satisfies_otf(query, matched)),
             FontSpecSelection::OpenBySpec => self
                 .select_entity_candidates(
-                    self.backend.list_candidates(&candidate_query),
+                    self.filter_entity_candidates(
+                        query,
+                        self.backend.list_candidates(&candidate_query),
+                    ),
                     query,
                     &candidate_query,
                     FontSpecSelection::OpenBySpec,
                 )
+                .filter(|matched| self.driver_match_satisfies_otf(query, matched))
                 .or_else(|| {
                     // GNU font_load_for_lface first honors explicit listing
                     // constraints; on a miss, font_matching_entity replaces
@@ -285,6 +308,7 @@ impl FontResolver {
                     preferences.requested_slant = FontSlant::Normal;
                     preferences.requested_width = FontWidth::Normal;
                     self.match_entity_driver(&preferences, query)
+                        .filter(|matched| self.driver_match_satisfies_otf(query, matched))
                 }),
         }?;
         Some(ResolvedFontEntity {
@@ -351,7 +375,7 @@ impl FontResolver {
         }
         let candidate_query = self.entity_candidate_query(query);
         let policy = FontEntityMatchPolicy::for_backend(self.backend.kind());
-        let candidates = self.backend.list_candidates(&candidate_query)
+        let candidates = self.filter_entity_candidates(query, self.backend.list_candidates(&candidate_query))
             .into_iter()
             .filter(|candidate| {
                 let metadata = &candidate.matched.metadata;
@@ -489,11 +513,15 @@ impl FontResolver {
                 .map(neovm_core::face::FontWeight::from_css_weight),
             slant: query.slant,
             width: query.width,
+            otf: None,
             definition: None,
         };
         let constraints = GnuFontPolicy::constraints_for_entity(&spec);
         let representative = constraints.representative_char();
-        let charset_ranges = constraints.coverage().ranges().to_vec();
+        let mut charset_ranges = constraints.coverage().ranges().to_vec();
+        if let Some(otf) = query.otf.as_ref() {
+            charset_ranges.extend(otf_representative_ranges(otf, query.registry.as_deref()));
+        }
         let languages: Vec<String> = constraints
             .languages()
             .iter()
@@ -793,6 +821,7 @@ impl FontResolver {
                     weight: None,
                     slant: None,
                     width: None,
+                    otf: None,
                     definition: None,
                 },
             );
@@ -908,6 +937,10 @@ impl FontResolver {
             .get_mut()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clear();
+        self.otf_capability_cache
+            .get_mut()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -976,14 +1009,87 @@ impl FontResolver {
                 queried_family: family.as_family(),
                 size: policy.size,
             };
-            if let Some(matched) = select_best_candidate(
-                self.classify_unknown_candidate_sizes(self.backend.list_candidates(&query)),
-                &request,
-            ) {
+            let candidates = self.backend.list_candidates(&query);
+            // GNU `font_spec_match` rejects a font whose GSUB/GPOS capability
+            // does not satisfy the spec's `:otf` requirement before scoring
+            // (`src/font.c:2521-2533`). A font the driver cannot inspect has
+            // no capability and therefore does not match.
+            let candidates = match &policy.otf {
+                Some(otf) => candidates
+                    .into_iter()
+                    .filter(|candidate| self.candidate_satisfies_otf(otf, candidate))
+                    .collect(),
+                None => candidates,
+            };
+            if let Some(matched) =
+                select_best_candidate(self.classify_unknown_candidate_sizes(candidates), &request)
+            {
                 return Some(matched);
             }
         }
         None
+    }
+
+    /// GNU `font_spec_match`'s `:otf` arm: the candidate must advertise the
+    /// required script/language-system features. A candidate without a file
+    /// asset cannot be inspected and therefore fails the requirement.
+    fn candidate_satisfies_otf(&self, otf: &StoredOtfSpec, candidate: &FontCandidate) -> bool {
+        self.asset_satisfies_otf(otf, candidate.matched.locator.file())
+    }
+
+    /// Filter enumerated entities by the query's `:otf` requirement, the way
+    /// `font_spec_match` drops a font that cannot satisfy the spec.
+    fn filter_entity_candidates(
+        &self,
+        query: &FontEntityQuery,
+        candidates: Vec<FontCandidate>,
+    ) -> Vec<FontCandidate> {
+        let Some(otf) = query.otf.as_ref() else {
+            return candidates;
+        };
+        candidates
+            .into_iter()
+            .filter(|candidate| self.candidate_satisfies_otf(otf, candidate))
+            .collect()
+    }
+
+    fn driver_match_satisfies_otf(
+        &self,
+        query: &FontEntityQuery,
+        matched: &PlatformFontMatch,
+    ) -> bool {
+        query
+            .otf
+            .as_ref()
+            .is_none_or(|otf| self.asset_satisfies_otf(otf, matched.asset.file()))
+    }
+
+    fn asset_satisfies_otf(&self, otf: &StoredOtfSpec, asset: Option<&FontFileAsset>) -> bool {
+        let Some(asset) = asset else {
+            return false;
+        };
+        let Some(capability) = self.otf_capability(asset) else {
+            return false;
+        };
+        otf_spec_matches_for_listing(otf, &capability)
+    }
+
+    fn otf_capability(&self, asset: &FontFileAsset) -> Option<OtfCapability> {
+        self.otf_capability_for_file(asset.path(), asset.face_index())
+    }
+
+    /// The single production route for GSUB/GPOS capability probing. The
+    /// parsed tables live next to the resolver's other native observations so
+    /// `clear_caches` retires them with the font backend state.
+    pub(crate) fn otf_capability_for_file(
+        &self,
+        file: &str,
+        face_index: u32,
+    ) -> Option<OtfCapability> {
+        self.otf_capability_cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(file, face_index)
     }
 
     #[cfg(test)]
@@ -1005,6 +1111,10 @@ impl FontResolver {
             .get_mut()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clear();
+        self.otf_capability_cache
+            .get_mut()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
     }
 }
 
@@ -1021,6 +1131,8 @@ struct CapturedCharacterPolicy {
     slant: FontSlant,
     width: FontWidth,
     size: FontSelectionSize,
+    /// GNU `:otf`: candidates must satisfy this requirement to be selected.
+    otf: Option<StoredOtfSpec>,
 }
 
 impl CapturedCharacterPolicy {
@@ -1043,6 +1155,7 @@ impl CapturedCharacterPolicy {
             slant,
             width,
             size,
+            otf: None,
         }
         .with_spec(spec.into())
     }
@@ -1052,6 +1165,10 @@ impl CapturedCharacterPolicy {
     fn with_spec(mut self, spec: super::policy::FontPolicySpec<'_>) -> Self {
         let constraints = GnuFontPolicy::constraints_for_names(&spec, self.ch);
         self.charset_ranges = constraints.coverage().ranges().to_vec();
+        if let Some(otf) = spec.otf {
+            self.charset_ranges
+                .extend(otf_representative_ranges(otf, spec.registry.as_deref()));
+        }
         self.languages = constraints
             .languages()
             .iter()
@@ -1063,6 +1180,7 @@ impl CapturedCharacterPolicy {
             .unwrap_or(self.weight);
         self.slant = spec.slant.unwrap_or(self.slant);
         self.width = spec.width.unwrap_or(self.width);
+        self.otf = spec.otf.cloned();
         self
     }
 }
@@ -1279,3 +1397,7 @@ fn family_affinity_score(queried_family: Option<&str>, candidate_family: &str) -
 #[cfg(test)]
 #[path = "resolver/tests/resolver_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "resolver/tests/otf_fixture_test.rs"]
+mod otf_fixture_tests;

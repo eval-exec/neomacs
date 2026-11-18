@@ -1295,6 +1295,9 @@ fn font_entity_query(
     if let Some(width) = request.width {
         query = query.with_width(width);
     }
+    if let Some(otf) = request.otf.as_ref() {
+        query = query.with_otf(otf.clone());
+    }
     query
 }
 

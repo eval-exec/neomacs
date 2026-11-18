@@ -10,6 +10,7 @@ fn registry_spec(name: &str) -> FontSpecEntry {
         weight: None,
         slant: None,
         width: None,
+        otf: None,
         definition: None,
     })
 }
@@ -80,6 +81,7 @@ fn font_encoding_entry_distinguishes_nil_and_explicit_repertory() {
         weight: None,
         slant: None,
         width: None,
+        otf: None,
         definition: None,
     };
 
@@ -239,6 +241,7 @@ fn encoding_charset_filters_informational_patterns() {
             weight: None,
             slant: None,
             width: None,
+            otf: None,
             definition: Some(FontDefinitionMetadata {
                 encoding: intern("iso-8859-1"),
                 repertory: Some(FontRepertory::Charset(intern("iso-8859-1"))),
@@ -255,6 +258,7 @@ fn encoding_charset_filters_informational_patterns() {
             weight: None,
             slant: None,
             width: None,
+            otf: None,
             definition: Some(FontDefinitionMetadata {
                 encoding: intern("unicode-bmp"),
                 repertory: Some(FontRepertory::Charset(intern("unicode-bmp"))),
@@ -310,6 +314,7 @@ fn encoding_subset_charset_filters_informational_patterns() {
             weight: None,
             slant: None,
             width: None,
+            otf: None,
             definition: Some(FontDefinitionMetadata {
                 encoding: intern("iso-8859-2-test"),
                 repertory: Some(FontRepertory::Charset(intern("iso-8859-2-test"))),
@@ -326,6 +331,7 @@ fn encoding_subset_charset_filters_informational_patterns() {
             weight: None,
             slant: None,
             width: None,
+            otf: None,
             definition: Some(FontDefinitionMetadata {
                 encoding: intern("unicode-bmp"),
                 repertory: Some(FontRepertory::Charset(intern("unicode-bmp"))),
@@ -652,6 +658,7 @@ fn fontset_registry_pdump_uses_symbol_identity_for_charset_repertories() {
                         weight: None,
                         slant: None,
                         width: None,
+                        otf: None,
                         definition: Some(FontDefinitionMetadata {
                             encoding: repertory_sym,
                             repertory: Some(FontRepertory::Charset(repertory_sym)),
@@ -893,4 +900,54 @@ fn resetting_a_charset_registry_keeps_the_published_order() {
         registry_names(&matching_entries_for_char('é')),
         ["iso10646-1", "iso8859-1"]
     );
+}
+
+#[test]
+fn stored_otf_spec_preserves_gnu_langsys_and_feature_shape() {
+    crate::test_utils::init_test_tracing();
+    let spec = parse_stored_otf_spec(&Value::list(vec![
+        Value::symbol("arab"),
+        Value::symbol("URD "),
+        Value::list(vec![
+            Value::symbol("init"),
+            Value::NIL,
+            Value::symbol("liga"),
+        ]),
+        Value::NIL,
+    ]))
+    .expect("valid :otf shape");
+    assert_eq!(spec.script, "arab");
+    assert_eq!(spec.langsys, StoredOtfLangsys::Named("URD ".to_owned()));
+    assert_eq!(
+        spec.gsub,
+        Some(StoredOtfFeatures {
+            required: vec!["init".to_owned()],
+            forbidden: vec!["liga".to_owned()],
+        })
+    );
+    assert!(spec.gpos.is_none());
+}
+
+#[test]
+fn stored_otf_spec_marks_non_symbol_langsys_unmatchable() {
+    crate::test_utils::init_test_tracing();
+    // GNU's validator re-tests XCAR (val) for the second slot, so a string
+    // reaches font_check_otf; `assq_no_quit` can never `eq` it to a tag
+    // symbol, so every feature requirement rejects the font.
+    let spec = parse_stored_otf_spec(&Value::list(vec![
+        Value::symbol("arab"),
+        Value::string("URD "),
+        Value::list(vec![Value::symbol("init")]),
+    ]))
+    .expect("the validator quirk reaches the store");
+    assert_eq!(spec.langsys, StoredOtfLangsys::Unmatchable);
+    assert!(spec.gsub.is_some());
+
+    let nil_langsys = parse_stored_otf_spec(&Value::list(vec![
+        Value::symbol("arab"),
+        Value::NIL,
+        Value::list(vec![Value::symbol("init")]),
+    ]))
+    .expect("nil LANGSYS means the default langsys");
+    assert_eq!(nil_langsys.langsys, StoredOtfLangsys::Default);
 }

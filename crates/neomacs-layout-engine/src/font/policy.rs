@@ -4,8 +4,12 @@
 //! Fontconfig behavior. This module translates a stored Lisp font spec into a
 //! typed native-catalog query without naming any operating-system backend.
 
+use crate::font::probe::{OtfCapability, OtfScript};
 use neovm_core::emacs_core::font::FrozenFontFamilies;
-use neovm_core::emacs_core::fontset::{FontsetRenderingSpec, StoredFontSpec, native_font_name};
+use neovm_core::emacs_core::fontset::{
+    FontsetRenderingSpec, StoredFontSpec, StoredOtfFeatures, StoredOtfLangsys, StoredOtfSpec,
+    native_font_name,
+};
 use std::borrow::Cow;
 
 /// A fontset's explicit family constrains the search. Without one, GNU
@@ -201,11 +205,13 @@ impl NativeQueryConstraints {
 
 /// One borrowed naming view feeds both live and detached registry semantics.
 pub(super) struct FontPolicySpec<'a> {
-    registry: Option<Cow<'a, str>>,
+    pub(super) registry: Option<Cow<'a, str>>,
     language: Option<Cow<'a, str>>,
     pub(super) weight: Option<neovm_core::face::FontWeight>,
     pub(super) slant: Option<neovm_core::face::FontSlant>,
     pub(super) width: Option<neovm_core::face::FontWidth>,
+    /// GNU `:otf`: a candidate must advertise these OpenType features.
+    pub(super) otf: Option<&'a StoredOtfSpec>,
 }
 impl<'a> From<&'a StoredFontSpec> for FontPolicySpec<'a> {
     fn from(spec: &'a StoredFontSpec) -> Self {
@@ -215,6 +221,7 @@ impl<'a> From<&'a StoredFontSpec> for FontPolicySpec<'a> {
             weight: spec.weight,
             slant: spec.slant,
             width: spec.width,
+            otf: spec.otf.as_ref(),
         }
     }
 }
@@ -226,8 +233,361 @@ impl<'a> From<&'a FontsetRenderingSpec> for FontPolicySpec<'a> {
             weight: spec.weight,
             slant: spec.slant,
             width: spec.width,
+            otf: spec.otf.as_ref(),
         }
     }
+}
+
+/// GNU `font_check_otf_features` (`src/font.c:2358-2395`).
+///
+/// The named script must exist. With LANGSYS, that language system must exist;
+/// without one, the default (`nil`) language system is preferred and the
+/// first table entry is the fallback. Required features must all be present
+/// and forbidden features must all be absent; an empty feature table still
+/// satisfies a forbidden-only list, exactly as GNU's loop does.
+/// OpenType script tag -> the characters GNU's `script-representative-chars`
+/// lists for the script that `otf-script-alist` maps the tag to.
+///
+/// Generated from the effective GNU 31.1 `lisp/international/fontset.el`
+/// tables (a360712c) including the startup-added entries. `ftfont_spec_pattern`
+/// puts every listed character into the Fontconfig charset it lists for a
+/// `:otf` spec (`src/ftfont.c:785-798`), so a font must cover all of them.
+const OTF_SCRIPT_REPRESENTATIVE_CHARS: &[(&str, &[u32])] = &[
+    ("adlm", &[0x1e900, 0x1e943]),
+    ("aghb", &[0x10530]),
+    ("arab", &[0x628, 0x6c1]),
+    ("armn", &[0x531]),
+    ("avst", &[0x10b00]),
+    ("bali", &[0x1b13, 0x1b35, 0x1b5e]),
+    ("bass", &[0x16ad0]),
+    ("batk", &[0x1bc2, 0x1be7, 0x1bff]),
+    ("beng", &[0x995]),
+    ("berf", &[0x16ea0]),
+    ("bhks", &[0x11c00]),
+    ("bng2", &[0x995]),
+    ("bopo", &[0x3105]),
+    ("brah", &[0x11013, 0x11045, 0x11052, 0x11065]),
+    ("brai", &[0x2800]),
+    ("bugi", &[0x1a00, 0x1a1e]),
+    ("buhd", &[0x1740]),
+    ("byzm", &[0x1d000]),
+    ("cakm", &[0x11103, 0x11127]),
+    ("cans", &[0x14c0]),
+    ("cari", &[0x102a0]),
+    ("cham", &[0xaa00]),
+    ("cher", &[0x13b6]),
+    ("chrs", &[0x10fb0]),
+    ("copt", &[0x3e2, 0x2c80, 0x2cae]),
+    ("cpmn", &[0x12f90]),
+    ("cyrl", &[0x42f]),
+    ("dev2", &[0x915]),
+    ("deva", &[0x915]),
+    ("diak", &[0x11900]),
+    ("dogr", &[0x11800]),
+    ("dsrt", &[0x10400]),
+    ("dupl", &[0x1bc20]),
+    ("egyp", &[0x13000]),
+    ("elba", &[0x10500]),
+    ("elym", &[0x10fe0]),
+    ("ethi", &[0x1208]),
+    ("gara", &[0x10d50, 0x10d70, 0x10d4a, 0x10d41]),
+    ("geor", &[0x10d3]),
+    ("gjr2", &[0xa95]),
+    ("gong", &[0x11d60]),
+    ("gonm", &[0x11d00]),
+    ("goth", &[0x10330, 0x10348]),
+    ("gran", &[0x11315, 0x1133e, 0x11374]),
+    ("grek", &[0x3a9]),
+    ("gujr", &[0xa95]),
+    ("gukh", &[0x16100, 0x1611e, 0x16131]),
+    ("gur2", &[0xa15]),
+    ("guru", &[0xa15]),
+    ("hang", &[0xac00]),
+    ("hani", &[0x3410, 0x4e10, 0x5b57, 0xfe30, 0xf900]),
+    ("hano", &[0x1720]),
+    ("hebr", &[0x5d0]),
+    ("hmng", &[0x16b11]),
+    ("hmnp", &[0x1e100]),
+    ("ital", &[0x10300]),
+    ("jamo", &[0xac00]),
+    ("java", &[0xa98f, 0xa9b4, 0xa9ca]),
+    ("kana", &[0x304b]),
+    ("kawi", &[0x11f04, 0x11f41, 0x11f4f]),
+    ("khar", &[0x10a00]),
+    ("khmr", &[0x1780]),
+    ("khoj", &[0x11200]),
+    ("kits", &[0x18b00]),
+    ("knd2", &[0xc95]),
+    ("knda", &[0xc95]),
+    ("krai", &[0x16d43, 0x16d63, 0x16d71]),
+    ("kthi", &[0x1108d, 0x110b0, 0x110bd]),
+    ("lana", &[0x1a20, 0x1a55, 0x1a61, 0x1a80]),
+    ("lao ", &[0xea5]),
+    (
+        "latn",
+        &[0x41, 0x5a, 0x61, 0x7a, 0xc0, 0x100, 0x180, 0x1e00],
+    ),
+    ("lepc", &[0x1c00, 0x1c24, 0x1c40]),
+    ("limb", &[0x1901, 0x1920, 0x1936]),
+    ("lina", &[0x10600]),
+    ("linb", &[0x10000]),
+    ("lyci", &[0x10280]),
+    ("lydi", &[0x10920]),
+    ("mahj", &[0x11150]),
+    ("maka", &[0x11ee0, 0x11ef7]),
+    ("mani", &[0x10ac0]),
+    ("marc", &[0x11c72]),
+    ("medf", &[0x16e40]),
+    ("mend", &[0x1e810, 0x1e8a6]),
+    ("mlm2", &[0xd15]),
+    ("mlym", &[0xd15]),
+    ("modi", &[0x1160e, 0x11630, 0x11655]),
+    ("mong", &[0x1826]),
+    ("mroo", &[0x16a40]),
+    ("mtei", &[0xabc0, 0xabe3, 0xaae0, 0xaaf6]),
+    ("musc", &[0x1d100]),
+    ("mym2", &[0x1000]),
+    ("mymr", &[0x1000]),
+    ("nagm", &[0x1e4d0, 0x1e4eb, 0x1e4f0]),
+    ("nand", &[0x119a0]),
+    ("nbat", &[0x10880]),
+    ("newa", &[0x11400]),
+    ("nshu", &[0x1b170]),
+    ("ogam", &[0x168f]),
+    ("omao", &[0x1e5d0, 0x1e5f2]),
+    ("orkh", &[0x10c00, 0x10c01]),
+    ("ory2", &[0xb15]),
+    ("orya", &[0xb15]),
+    ("osge", &[0x104b0]),
+    ("osma", &[0x10480]),
+    ("ougr", &[0x10f70]),
+    ("palm", &[0x10860]),
+    ("pauc", &[0x11ac0]),
+    ("perm", &[0x10350]),
+    ("phnx", &[0x10900]),
+    ("rjng", &[0xa930, 0xa947, 0xa95f]),
+    ("rohg", &[0x10d00, 0x10d24, 0x10d39]),
+    ("runr", &[0x16a0]),
+    ("shaw", &[0x10450]),
+    ("shrd", &[0x11191, 0x111b3, 0x111cd]),
+    ("sidd", &[0x1158e, 0x115af, 0x115d4]),
+    ("sidt", &[0x10940]),
+    ("sind", &[0x112b0]),
+    ("sinh", &[0xd95]),
+    ("sogd", &[0x10f30]),
+    ("sogo", &[0x10f00]),
+    ("soyo", &[0x11a50]),
+    ("sund", &[0x1b8a, 0x1bab, 0x1cc4]),
+    ("sunu", &[0x11bc0, 0x11bf1]),
+    ("sylo", &[0xa807, 0xa823, 0xa82c]),
+    ("syrc", &[0x710]),
+    ("tagb", &[0x1760]),
+    ("takr", &[0x11680]),
+    ("tale", &[0x1950]),
+    ("talu", &[0x1980]),
+    ("taml", &[0xb95]),
+    ("tang", &[0x17000]),
+    ("tavt", &[0xaa80]),
+    ("tayo", &[0x1e6e0]),
+    ("tel2", &[0xc15]),
+    ("telu", &[0xc15]),
+    ("tfng", &[0x2d30, 0x2d60]),
+    ("tglg", &[0x1700]),
+    ("thaa", &[0x78c]),
+    ("thai", &[0xe17]),
+    ("tibt", &[0xf40]),
+    ("tirh", &[0x11481, 0x1148f, 0x114d0]),
+    ("tml2", &[0xb95]),
+    ("tnsa", &[0x16a70, 0x16ac0]),
+    ("todr", &[0x105c0, 0x105ed]),
+    ("tols", &[0x11db0]),
+    ("toto", &[0x1e290, 0x1e295, 0x1e2ad]),
+    ("tutg", &[0x11380, 0x113b8]),
+    ("ugar", &[0x10380]),
+    ("vai ", &[0xa500]),
+    ("vith", &[0x10570]),
+    ("wara", &[0x118a1]),
+    ("wcho", &[0x1e2c0, 0x1e2e8, 0x1e2ef]),
+    ("xpeo", &[0x103a0]),
+    ("xsux", &[0x12000]),
+    ("yezi", &[0x10e80]),
+    ("yi 	", &[0xa288]),
+    ("zanb", &[0x11a00]),
+];
+
+/// The representative characters GNU requires for a `:otf` spec's script.
+fn otf_script_representative_chars(script: &str) -> Option<&'static [u32]> {
+    OTF_SCRIPT_REPRESENTATIVE_CHARS
+        .binary_search_by(|(tag, _)| (*tag).cmp(script))
+        .ok()
+        .map(|index| OTF_SCRIPT_REPRESENTATIVE_CHARS[index].1)
+}
+
+/// Whether GNU's ftfont backend resolves this registry to a Fontconfig charset
+/// of its own (`ftfont_get_charset`). When it does, the spec's charset comes
+/// from the registry and the `:otf` representative characters are not added
+/// (`src/ftfont.c:710-720, 785-798`).
+fn registry_supplies_backend_charset(registry: Option<&str>) -> bool {
+    registry.is_some_and(|registry| {
+        !matches!(
+            registry.trim().to_ascii_lowercase().as_str(),
+            "ascii-0" | "iso10646-1" | "unicode-bmp"
+        )
+    })
+}
+
+/// The extra required coverage a `:otf` spec adds on GNU's list path: the
+/// `script-representative-chars` of the script `otf-script-alist` maps the tag
+/// to. Every listed character must be present in the font's charset.
+pub(super) fn otf_representative_ranges(
+    otf: &StoredOtfSpec,
+    registry: Option<&str>,
+) -> Vec<(u32, u32)> {
+    if registry_supplies_backend_charset(registry) {
+        return Vec::new();
+    }
+    otf_script_representative_chars(&otf.script)
+        .map(|chars| {
+            chars
+                .iter()
+                .map(|codepoint| (*codepoint, *codepoint))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+pub(super) fn otf_features_match(
+    script: &str,
+    langsys: &StoredOtfLangsys,
+    features: &StoredOtfFeatures,
+    table: &[OtfScript],
+) -> bool {
+    let Some(script_entry) = table.iter().find(|entry| entry.tag == script) else {
+        return false;
+    };
+    let lang = match langsys {
+        StoredOtfLangsys::Named(langsys) => script_entry
+            .lang_syses
+            .iter()
+            .find(|entry| entry.tag.as_deref() == Some(langsys.as_str())),
+        StoredOtfLangsys::Default => script_entry
+            .lang_syses
+            .iter()
+            .find(|entry| entry.tag.is_none())
+            .or_else(|| script_entry.lang_syses.first()),
+        // GNU's validator accepts a non-symbol LANGSYS, but `assq_no_quit`
+        // can never match it, so a feature requirement rejects every font.
+        StoredOtfLangsys::Unmatchable => return false,
+    };
+    let feature_tags: &[String] = match lang {
+        // A named language system GNU cannot find rejects the font.
+        None if matches!(langsys, StoredOtfLangsys::Named(_)) => return false,
+        Some(lang) => &lang.features,
+        None => &[],
+    };
+    if features
+        .required
+        .iter()
+        .any(|feature| !feature_tags.iter().any(|tag| tag == feature))
+    {
+        return false;
+    }
+    if features
+        .forbidden
+        .iter()
+        .any(|feature| feature_tags.iter().any(|tag| tag == feature))
+    {
+        return false;
+    }
+    true
+}
+
+/// GNU `font_check_otf` (`src/font.c:2399-2425`): GSUB and GPOS are checked
+/// independently against the font's capability.
+///
+/// This is the rule `Ffont_match_p` applies to an opened font object. The
+/// listing/selection path uses [`otf_spec_matches_for_listing`] instead, so
+/// this matcher is exercised by tests until the Lisp entry point is ported.
+#[cfg(test)]
+pub(super) fn otf_spec_matches(spec: &StoredOtfSpec, capability: &OtfCapability) -> bool {
+    if let Some(gsub) = &spec.gsub
+        && !otf_features_match(&spec.script, &spec.langsys, gsub, &capability.gsub)
+    {
+        return false;
+    }
+    if let Some(gpos) = &spec.gpos
+        && !otf_features_match(&spec.script, &spec.langsys, gpos, &capability.gpos)
+    {
+        return false;
+    }
+    true
+}
+
+/// GNU's backend-level `:otf` filter (`src/ftfont.c:1026-1041`,
+/// `hbotf_check_features`): both GSUB and GPOS must contain the script, a
+/// named language system must exist in each, and a specified feature list is
+/// checked against that table's language system. An omitted feature list
+/// still requires the script (and named language system) to exist. This is
+/// the rule `find-font`/`list-fonts` and fontset selection apply, and it
+/// differs from `font_check_otf` in two ways: a nil LANGSYS selects only the
+/// default language system (HarfBuzz does not fall back to the first), and a
+/// side without features is still checked for the script.
+pub(super) fn otf_listing_side_matches(
+    script: &str,
+    langsys: &StoredOtfLangsys,
+    features: Option<&StoredOtfFeatures>,
+    table: &[OtfScript],
+) -> bool {
+    let Some(script_entry) = table.iter().find(|entry| entry.tag == script) else {
+        return false;
+    };
+    let feature_tags: &[String] = match langsys {
+        StoredOtfLangsys::Unmatchable => return false,
+        StoredOtfLangsys::Named(langsys) => {
+            let Some(lang) = script_entry
+                .lang_syses
+                .iter()
+                .find(|entry| entry.tag.as_deref() == Some(langsys.as_str()))
+            else {
+                return false;
+            };
+            &lang.features
+        }
+        StoredOtfLangsys::Default => script_entry
+            .lang_syses
+            .iter()
+            .find(|entry| entry.tag.is_none())
+            .map_or(&[][..], |lang| lang.features.as_slice()),
+    };
+    let Some(features) = features else {
+        return true;
+    };
+    features
+        .required
+        .iter()
+        .all(|feature| feature_tags.iter().any(|tag| tag == feature))
+        && !features
+            .forbidden
+            .iter()
+            .any(|feature| feature_tags.iter().any(|tag| tag == feature))
+}
+
+pub(super) fn otf_spec_matches_for_listing(
+    spec: &StoredOtfSpec,
+    capability: &OtfCapability,
+) -> bool {
+    otf_listing_side_matches(
+        &spec.script,
+        &spec.langsys,
+        spec.gsub.as_ref(),
+        &capability.gsub,
+    ) && otf_listing_side_matches(
+        &spec.script,
+        &spec.langsys,
+        spec.gpos.as_ref(),
+        &capability.gpos,
+    )
 }
 
 pub struct GnuFontPolicy;

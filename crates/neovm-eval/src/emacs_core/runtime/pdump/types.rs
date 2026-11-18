@@ -1241,7 +1241,28 @@ pub struct DumpStoredFontSpec {
     pub weight: Option<u16>,
     pub slant: Option<DumpFontSlant>,
     pub width: Option<DumpFontWidth>,
+    /// GNU `:otf` requirement; `None` for a spec without one.
+    #[serde(default)]
+    pub otf: Option<DumpStoredOtfSpec>,
     pub definition: Option<DumpFontDefinitionMetadata>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct DumpStoredOtfSpec {
+    pub script: String,
+    pub langsys: Option<String>,
+    /// A non-symbol LANGSYS accepted by GNU's validator quirk; it can never
+    /// match a langsys tag, so any feature requirement rejects every font.
+    #[serde(default)]
+    pub langsys_unmatchable: bool,
+    pub gsub: Option<DumpStoredOtfFeatures>,
+    pub gpos: Option<DumpStoredOtfFeatures>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct DumpStoredOtfFeatures {
+    pub required: Vec<String>,
+    pub forbidden: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

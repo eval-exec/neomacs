@@ -17,3 +17,10 @@ binaries are stored in the Git repository. The cache is not per
 still download on a miss. A download or pin failure panics with the prefix
 `FIXTURE-FETCH:`, the URL, the pinned SHA-256, and the I/O error. Tests do
 not skip. Delete the cache directory to force a clean download.
+
+## Fixture licenses
+
+`LICENSES/` records the redistribution license and upstream pin for the
+fixtures used by compatibility tests. Noto Sans Arabic is SIL OFL 1.1
+(`LICENSES/OFL-1.1.txt`, `LICENSES/NotoSansArabic-NOTICE.md`); DejaVu faces
+ship under the Bitstream Vera license from the pinned DejaVu release.

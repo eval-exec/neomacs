@@ -17,8 +17,8 @@ pub(crate) use super::types::{
     DumpFontsetData, DumpFontsetRangeEntry, DumpFontsetRegistry, DumpInteractiveRegistry,
     DumpInteractiveSpec, DumpKmacroManager, DumpLispString, DumpMajorMode, DumpMinorMode,
     DumpModeCustomGroup, DumpModeCustomType, DumpModeCustomVariable, DumpModeRegistry,
-    DumpRectangleState, DumpRegisterContent, DumpRegisterManager, DumpStoredFontSpec, DumpSymId,
-    DumpValue, DumpVariableWatcherList,
+    DumpRectangleState, DumpRegisterContent, DumpRegisterManager, DumpStoredFontSpec,
+    DumpStoredOtfFeatures, DumpStoredOtfSpec, DumpSymId, DumpValue, DumpVariableWatcherList,
 };
 
 const RUNTIME_MANAGERS_MAGIC: [u8; 16] = *b"NEORUNTIME\0\0\0\0\0\0";
@@ -668,6 +668,66 @@ fn read_font_spec_entries(cursor: &mut Cursor<'_>) -> Result<Vec<DumpFontSpecEnt
     })
 }
 
+fn write_opt_stored_otf_spec(
+    out: &mut Vec<u8>,
+    spec: Option<&DumpStoredOtfSpec>,
+) -> Result<(), DumpError> {
+    match spec {
+        Some(spec) => {
+            write_bool(out, true);
+            write_string(out, &spec.script)?;
+            write_bool(out, spec.langsys_unmatchable);
+            write_opt_string(out, spec.langsys.as_deref())?;
+            write_opt_stored_otf_features(out, spec.gsub.as_ref())?;
+            write_opt_stored_otf_features(out, spec.gpos.as_ref())?;
+        }
+        None => write_bool(out, false),
+    }
+    Ok(())
+}
+
+fn write_opt_stored_otf_features(
+    out: &mut Vec<u8>,
+    features: Option<&DumpStoredOtfFeatures>,
+) -> Result<(), DumpError> {
+    match features {
+        Some(features) => {
+            write_bool(out, true);
+            write_string_vec(out, &features.required)?;
+            write_string_vec(out, &features.forbidden)?;
+        }
+        None => write_bool(out, false),
+    }
+    Ok(())
+}
+
+fn read_opt_stored_otf_spec(
+    cursor: &mut Cursor<'_>,
+) -> Result<Option<DumpStoredOtfSpec>, DumpError> {
+    if !cursor.read_bool("otf requirement present")? {
+        return Ok(None);
+    }
+    Ok(Some(DumpStoredOtfSpec {
+        script: cursor.read_string()?,
+        langsys_unmatchable: cursor.read_bool("otf langsys unmatchable")?,
+        langsys: read_opt_string(cursor)?,
+        gsub: read_opt_stored_otf_features(cursor)?,
+        gpos: read_opt_stored_otf_features(cursor)?,
+    }))
+}
+
+fn read_opt_stored_otf_features(
+    cursor: &mut Cursor<'_>,
+) -> Result<Option<DumpStoredOtfFeatures>, DumpError> {
+    if !cursor.read_bool("otf feature list present")? {
+        return Ok(None);
+    }
+    Ok(Some(DumpStoredOtfFeatures {
+        required: read_string_vec(cursor)?,
+        forbidden: read_string_vec(cursor)?,
+    }))
+}
+
 fn write_stored_font_spec(out: &mut Vec<u8>, spec: &DumpStoredFontSpec) -> Result<(), DumpError> {
     write_opt_sym(out, spec.family_sym);
     write_opt_string(out, spec.family.as_deref())?;
@@ -678,6 +738,7 @@ fn write_stored_font_spec(out: &mut Vec<u8>, spec: &DumpStoredFontSpec) -> Resul
     write_opt_u16(out, spec.weight);
     write_opt_font_slant(out, spec.slant);
     write_opt_font_width(out, spec.width);
+    write_opt_stored_otf_spec(out, spec.otf.as_ref())?;
     match &spec.definition {
         Some(definition) => {
             write_bool(out, true);
@@ -700,6 +761,7 @@ fn read_stored_font_spec(cursor: &mut Cursor<'_>) -> Result<DumpStoredFontSpec, 
         weight: read_opt_u16(cursor)?,
         slant: read_opt_font_slant(cursor)?,
         width: read_opt_font_width(cursor)?,
+        otf: read_opt_stored_otf_spec(cursor)?,
         definition: if cursor.read_bool("font definition metadata present")? {
             Some(DumpFontDefinitionMetadata {
                 encoding: read_sym(cursor)?,
