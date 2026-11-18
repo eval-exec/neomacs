@@ -1047,18 +1047,7 @@ impl CharsetRegistry {
     /// GNU `Fdefine_charset_internal` (charset.c:1163-1166): record NAME in
     /// the ISO designation table, overwriting any earlier entry.
     fn record_iso_designation(&mut self, name: SymId) {
-        let Some(info) = self.charsets.get(&name) else {
-            return;
-        };
-        if let Some(final_char) = info.iso_final_char
-            && (1..=3).contains(&info.dimension)
-            && (0..128).contains(&final_char)
-        {
-            let key = (
-                info.dimension,
-                code_space_is_96(&info.code_space),
-                final_char,
-            );
+        if let Some(key) = self.charsets.get(&name).and_then(iso_designation_key) {
             self.iso_charset_table.insert(key, name);
         }
     }
@@ -1066,23 +1055,29 @@ impl CharsetRegistry {
     /// Approximate the ISO designation table for a snapshot that does not
     /// carry it (older dumps).  Alias clones that `snapshot` materialized into
     /// `charsets` are skipped, and the physical charsets are ordered by id, so
-    /// the later definition wins.  `priority_identities` is not used:
-    /// `set-charset-priority` reorders it, which would flip winners.
+    /// for a shared designation the higher id wins.  Ids are not definition
+    /// order (an explicit `:emacs-mule-id` can sit below an earlier
+    /// auto-assigned id), so this can differ from GNU's last definition; live
+    /// registration and snapshots that carry the table keep the exact write
+    /// order.  `priority_identities` is not used: `set-charset-priority`
+    /// reorders it, which would flip winners.
     fn rebuild_iso_charset_table(&mut self) {
         let mut order: Vec<(i64, SymId)> = self
             .charsets
             .iter()
-            // A clone shares its target's id. A physical charset whose name
-            // was later reused as an alias keeps its own id, and GNU keeps its
+            // A clone is a copy of its alias target: same id and same
+            // designation. A physical charset whose name was later reused as
+            // an alias differs from the new target in at least one of them
+            // (ids can coincide through `:emacs-mule-id`), and GNU keeps its
             // designation (the table holds ids, `define-charset-alias` only
             // rebinds the name).
             .filter(|(name, info)| {
                 let target = self.resolve_name(**name);
                 target == **name
-                    || self
-                        .charsets
-                        .get(&target)
-                        .is_none_or(|target_info| target_info.id != info.id)
+                    || self.charsets.get(&target).is_none_or(|target_info| {
+                        target_info.id != info.id
+                            || iso_designation_key(target_info) != iso_designation_key(info)
+                    })
             })
             .map(|(name, info)| (info.id, *name))
             .collect();
@@ -3076,6 +3071,19 @@ pub fn builtin_get_unused_iso_final_char(args: Vec<Value>) -> EvalResult {
             })
         })
         .map_or(Value::NIL, Value::fixnum))
+}
+
+/// The `iso_charset_table` slot a charset definition writes
+/// (charset.c:1163-1166), or `None` when it has no usable ISO final char.
+fn iso_designation_key(info: &CharsetInfo) -> Option<IsoDesignationKey> {
+    let final_char = info.iso_final_char?;
+    ((1..=3).contains(&info.dimension) && (0..128).contains(&final_char)).then(|| {
+        (
+            info.dimension,
+            code_space_is_96(&info.code_space),
+            final_char,
+        )
+    })
 }
 
 /// GNU's `iso_chars_96` (charset.c:912): a charset is a 96-set when the
