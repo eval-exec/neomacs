@@ -325,7 +325,7 @@ pub struct CharsetInfoSnapshot {
 }
 
 /// A key of GNU's `iso_charset_table`: (dimension, chars-96?, final char).
-pub type IsoDesignationKey = (i64, bool, i64);
+pub(crate) type IsoDesignationKey = (i64, bool, i64);
 
 #[derive(Clone, Debug)]
 #[doc(hidden)]
@@ -476,7 +476,7 @@ pub struct CharsetRegistry {
     /// final char) -> charset name.  Written whenever a charset with an
     /// `:iso-final-char` is defined, so the last definition wins
     /// (charset.c:1163-1166), and never cleared.
-    iso_charset_table: rustc_hash::FxHashMap<(i64, bool, i64), SymId>,
+    iso_charset_table: rustc_hash::FxHashMap<IsoDesignationKey, SymId>,
     /// Next auto-assigned charset ID.
     next_id: i64,
 }
@@ -523,7 +523,7 @@ pub struct CharsetRegistry {
     /// final char) -> charset name.  Written whenever a charset with an
     /// `:iso-final-char` is defined, so the last definition wins
     /// (charset.c:1163-1166), and never cleared.
-    iso_charset_table: rustc_hash::FxHashMap<(i64, bool, i64), SymId>,
+    iso_charset_table: rustc_hash::FxHashMap<IsoDesignationKey, SymId>,
     /// Next auto-assigned charset ID.
     next_id: i64,
 }
