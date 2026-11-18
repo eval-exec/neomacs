@@ -19,6 +19,7 @@ const ARCH_PACKER_TEST_PRELUDE: &str = r####"
 (require 'thingatpt)
 
 (defvar neomacs-arch-packer-test-start-process nil)
+(defvar neomacs-arch-packer-test-shell nil)
 
 (defun neomacs-arch-packer-test-root (name)
   (file-name-as-directory
@@ -58,11 +59,52 @@ follow-up query from the action snapshot regardless of sentinel timing."
           (expand-file-name "async-child-init.el" root))
          (pacman (expand-file-name "pacman" bin))
          (pacaur (expand-file-name "pacaur" bin))
-         (sudo (expand-file-name "sudo" bin)))
+         (sudo (expand-file-name "sudo" bin))
+         (shell (expand-file-name "arch-packer-shell" bin)))
     (neomacs-arch-packer-test-cleanup root)
-    ;; The package hard-codes the FHS path /bin/bash.  This Nix development
-    ;; environment has real bash on PATH but no /bin/bash, so resolve only
-    ;; that missing path while preserving bash and every process argument.
+    ;; The package hard-codes the FHS path /bin/bash and drives it as an
+    ;; interactive shell: commands go in one line at a time and the package's
+    ;; process filter matches whole markers ("Pacman finished") inside a filter
+    ;; chunk.  A real interactive bash prints prompts and PS2 continuations and
+    ;; runs the multi-line exit-status probe; under load a chunk boundary can
+    ;; split a marker, and timeouts were observed on BOTH editors (GNU and
+    ;; Neomacs) in the full-suite and 12-way runs.  A fixture-owned shell keeps
+    ;; the same command grammar and the same fixture pacman/pacaur binaries,
+    ;; but emits each marker as one write, so the workflow does not depend on
+    ;; prompt scheduling.  It prints prompts because the package's
+    ;; open-shell-process relies on accept-process-output returning non-nil
+    ;; before it sends the first command.  Identical for both editors.
+    (neomacs-arch-packer-test-write-executable
+     shell
+     (concat
+      "#!/bin/sh\n"
+      "last=0\n"
+      "printf 'bash-5.3$ '\n"
+      "while IFS= read -r line; do\n"
+      "  case \"$line\" in\n"
+      "    'if ['*)\n"
+      "      while IFS= read -r continuation; do\n"
+      "        case \"$continuation\" in *';fi'*) break ;; esac\n"
+      "      done\n"
+      "      sleep 0.2\n"
+      "      if [ \"$last\" -ne 0 ]; then\n"
+      "        printf 'Pacman error\\n'\n"
+      "      else\n"
+      "        printf 'Pacman finished\\n'\n"
+      "      fi\n"
+      "      printf 'bash-5.3$ '\n"
+      "      ;;\n"
+      "    '')\n"
+      "      ;;\n"
+      "    *)\n"
+      "      cmd=${line%'; history -d $((HISTCMD-1))'}\n"
+      "      eval \"$cmd\"\n"
+      "      last=$?\n"
+      "      printf 'bash-5.3$ '\n"
+      "      ;;\n"
+      "  esac\n"
+      "done\n"))
+    (setq neomacs-arch-packer-test-shell shell)
     (setq neomacs-arch-packer-test-start-process
           (symbol-function 'start-process))
     (fset
@@ -75,11 +117,8 @@ follow-up query from the action snapshot regardless of sentinel timing."
         (if
             (and
              (string= process-name "arch-packer-process")
-             (string= program "/bin/bash")
-             (not (file-executable-p program)))
-            (or
-             (executable-find "bash")
-             program)
+             (string= program "/bin/bash"))
+            neomacs-arch-packer-test-shell
           program)
         program-args)))
     (make-directory bin t)
