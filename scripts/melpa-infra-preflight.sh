@@ -11,6 +11,36 @@ fi
 # build output; keep this in step with neomacs_infra::melpa_cache_root().
 target_root="${CARGO_TARGET_DIR:-$workspace_root/target}"
 scratch_parent="$target_root/melpa"
+
+# PEER 5832: the approved MELPA cache root must live inside a checkout.
+#
+# GNU `normal-backup-enable-predicate' (files.el) disables backups below the
+# temporary directory and /tmp, and checkout fixtures resolve their root by
+# walking ABOVE the sandbox for the outermost .git/.svn/.cvs.  A relocated
+# CARGO_TARGET_DIR outside the checkout therefore turns path-independent
+# contracts into host-dependent state -- the same skew, one layer earlier than
+# MelpaSandbox::new's require_checkout_root.  Refuse once here, before either
+# editor is launched, rather than failing per package with GNU==Neomacs
+# mismatches.  Match require_checkout_root's marker set and outermost-wins rule
+# (crates/neomacs-melpa-test-support/src/lib.rs).
+checkout_dir="$scratch_parent"
+checkout_root=
+while :; do
+  if [[ -e "$checkout_dir/.git" || -e "$checkout_dir/.svn" || -e "$checkout_dir/.cvs" ]]; then
+    checkout_root=$checkout_dir
+  fi
+  parent=$(dirname -- "$checkout_dir")
+  if [[ "$parent" == "$checkout_dir" ]]; then
+    break
+  fi
+  checkout_dir=$parent
+done
+if [[ -z "$checkout_root" ]]; then
+  echo "MELPA infrastructure preflight refused: sandbox $scratch_parent is not inside a checkout (no .git/.svn/.cvs above it); run the MELPA suite with CARGO_TARGET_DIR unset so the MELPA cache root, and every case root below it, lives inside the checkout. GNU backup policy and the checkout fixtures derive observable state from that path." >&2
+  exit 2
+fi
+echo "MELPA infrastructure preflight checkout: $checkout_root"
+
 mkdir -p "$scratch_parent"
 scratch_root=$(mktemp -d "$scratch_parent/preflight.XXXXXX")
 

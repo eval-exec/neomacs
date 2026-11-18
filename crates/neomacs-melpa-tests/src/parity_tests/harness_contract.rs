@@ -129,6 +129,73 @@ fn nextest_runs_melpa_infrastructure_preflight_once_before_parity_tests() {
     assert!(!preflight.contains("TMPDIR=/tmp"));
 }
 
+/// PEER 5832: a relocated CARGO_TARGET_DIR outside the checkout must fail once,
+/// up front, before either editor is launched. GNU's backup policy
+/// (`normal-backup-enable-predicate`) and the checkout fixtures derive
+/// observable state from the sandbox path, so an out-of-checkout cache root
+/// otherwise surfaces as per-package GNU==Neomacs mismatches (the same skew
+/// `require_checkout_root` refuses inside `MelpaSandbox`).
+#[cfg(unix)]
+#[test]
+fn preflight_refuses_a_cache_root_outside_the_checkout() {
+    fn inside_checkout(mut path: &Path) -> bool {
+        loop {
+            if [".git", ".svn", ".cvs"]
+                .iter()
+                .any(|marker| path.join(marker).exists())
+            {
+                return true;
+            }
+            match path.parent() {
+                Some(parent) if parent != path => path = parent,
+                _ => return false,
+            }
+        }
+    }
+
+    // The probe needs a temporary root with no checkout ancestor. If the host
+    // puts /tmp inside one, the preflight (correctly) accepts it, so there is
+    // no refusal to observe; say so rather than asserting a false negative.
+    if inside_checkout(Path::new("/tmp")) {
+        eprintln!("skipping: /tmp itself is inside a checkout on this host");
+        return;
+    }
+    let workspace = tempfile::Builder::new()
+        .prefix("melpa-preflight-outside-")
+        .tempdir_in("/tmp")
+        .expect("workspace tempdir outside any checkout");
+    let target = workspace.path().join("target");
+    let script = concat!(
+        env!("CARGO_WORKSPACE_DIR"),
+        "/scripts/melpa-infra-preflight.sh"
+    );
+    let output = Command::new("bash")
+        .arg(script)
+        .env("NEXTEST_WORKSPACE_ROOT", workspace.path())
+        .env("CARGO_TARGET_DIR", &target)
+        .env_remove("NEOMACS_BIN")
+        .output()
+        .expect("run the MELPA preflight");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "the out-of-checkout refusal must be the script's early exit; stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("is not inside a checkout"),
+        "the refusal must say what is wrong: {stderr}"
+    );
+    assert!(
+        stderr.contains("CARGO_TARGET_DIR"),
+        "the refusal must name the knob to fix: {stderr}"
+    );
+    assert!(
+        !stderr.contains("preflight passed") && !stderr.contains("launch"),
+        "the preflight must refuse before launching either editor: {stderr}"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn dependency_regeneration_preserves_every_source_lock_field() {

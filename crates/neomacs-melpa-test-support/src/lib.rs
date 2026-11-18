@@ -76,14 +76,59 @@ enum RuntimeDirectory {
     InSandbox(PathBuf),
 }
 
+/// Byte budget for the `XDG_RUNTIME_DIR/emacs/server` socket path.
+///
+/// The harness contract (`harness_contract`, PEER 5832) requires the path
+/// below `XDG_RUNTIME_DIR` to stay at most 100 bytes: GNU appends
+/// `emacs/<server-name>` before binding an AF_UNIX socket, and `sun_path` is
+/// 108 bytes on Linux (104 on some BSDs). Keep the same bound as the contract
+/// test so a deep `TMPDIR` cannot silently violate it.
+#[cfg(unix)]
+const SOCKET_PATH_BUDGET: usize = 100;
+
+/// `tempfile` appends six random bytes to the "nmr-" prefix; the contract
+/// checks `base/nmr-XXXXXX/emacs/server`.
+#[cfg(unix)]
+const RUNTIME_DIR_SUFFIX_BYTES: usize = 1 + "nmr-".len() + 6 + "/emacs/server".len();
+
+/// Base directory for the short `XDG_RUNTIME_DIR`.
+///
+/// Prefer the caller's `TMPDIR` scratch location when it leaves enough socket
+/// headroom; otherwise use `/tmp`. Refuse when neither does: falling back to
+/// the deep directory would make every editor fail to bind its server socket,
+/// which is exactly the class of host-dependent skew this harness refuses
+/// instead of recording.
+#[cfg(unix)]
+fn socket_safe_runtime_base() -> Result<PathBuf, String> {
+    let fits =
+        |base: &Path| base.as_os_str().len() + RUNTIME_DIR_SUFFIX_BYTES <= SOCKET_PATH_BUDGET;
+    let ambient = std::env::temp_dir();
+    if fits(&ambient) {
+        return Ok(ambient);
+    }
+    let slash_tmp = PathBuf::from("/tmp");
+    if fits(&slash_tmp) {
+        return Ok(slash_tmp);
+    }
+    Err(format!(
+        "MELPA harness has no socket-safe XDG_RUNTIME_DIR base: TMPDIR {} and \
+         /tmp leave less than the {SOCKET_PATH_BUDGET}-byte budget for \
+         `emacs/<server-name>` (AF_UNIX sun_path is 108 bytes). Set TMPDIR to a \
+         short path (CI uses a short workspace TMPDIR) or unset CARGO_TARGET_DIR \
+         and run from a shallower checkout.",
+        ambient.display()
+    ))
+}
+
 impl RuntimeDirectory {
     fn new(_case_root: &Path) -> Result<Self, String> {
         #[cfg(unix)]
         {
             // GNU Emacs appends `emacs/<server-name>` to XDG_RUNTIME_DIR
             // before binding an AF_UNIX socket. Avoid the deeper CASE_ROOT
-            // path, while honoring the caller's TMPDIR scratch location.
-            let base = std::env::temp_dir();
+            // path, while honoring the caller's TMPDIR scratch location when
+            // it is short enough and refusing a base that is not.
+            let base = socket_safe_runtime_base()?;
             let directory = tempfile::Builder::new()
                 .prefix("nmr-")
                 .tempdir_in(&base)
