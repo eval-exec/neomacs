@@ -4897,6 +4897,22 @@ fn oracle_batch_report(
     }
 }
 
+/// A sandbox for a differential parity probe.
+///
+/// The sandbox must live inside the checkout.  GNU `files.el' suppresses
+/// backups below `temporary-file-directory' and `/tmp'
+/// (`normal-backup-enable-predicate'), and checkout fixtures resolve their
+/// root by walking above the sandbox, so an out-of-checkout case root makes a
+/// path-independent contract depend on the host.  `MelpaSandbox::new` roots
+/// at the MELPA cache root, which is in-checkout exactly when
+/// `CARGO_TARGET_DIR` is unset; refuse the other case instead of silently
+/// recording a host-dependent result.
+fn parity_sandbox(label: &str) -> Result<MelpaSandbox, String> {
+    let sandbox = MelpaSandbox::new(label)?;
+    neomacs_melpa_test_support::require_checkout_root(sandbox.root())?;
+    Ok(sandbox)
+}
+
 const DIRECT_PROBE_SCHEMA: &str = "neomacs-melpa-direct-v1";
 const DIRECT_PROBE_MAX_BYTES: u64 = 2 * 1024 * 1024;
 const DIRECT_PROBE_LOG_MAX_BYTES: u64 = 1024 * 1024;
@@ -4909,7 +4925,7 @@ fn run_direct_editor_probe(
     setup: &str,
     probe: &str,
 ) -> Result<EvalOutcome, String> {
-    let sandbox = MelpaSandbox::new(&format!("{name}-direct-{}", runtime.name))?;
+    let sandbox = parity_sandbox(&format!("{name}-direct-{}", runtime.name))?;
     let script_path = sandbox.root().join("direct-probe.el");
     let outcome_path = sandbox.root().join("direct-outcome.el");
     let outcome_tmp_path = sandbox.root().join("direct-outcome.el.partial");
@@ -6050,7 +6066,7 @@ fn run_elisp_oracle_case(
         setup: &str,
         probe: &str,
     ) -> Result<EvalOutcome, String> {
-        let sandbox = MelpaSandbox::new(name)?;
+        let sandbox = parity_sandbox(name)?;
         let form = wrap_elisp_outcome_with_normalizer_bindings(
             setup,
             probe,
@@ -6094,7 +6110,7 @@ pub fn run_elisp_oracle_batch(
         setup: &str,
         cases: &[BatchProbe<'_>],
     ) -> Result<Vec<(String, EvalOutcome)>, String> {
-        let sandbox = MelpaSandbox::new(batch_name)?;
+        let sandbox = parity_sandbox(batch_name)?;
         let form = wrap_elisp_batch_outcomes_with_normalizer_bindings(
             setup,
             cases,

@@ -141,6 +141,11 @@ const MAX_SANDBOX_HOME: usize = 120;
 /// `/tmp' turns both into host-path-dependent state that the recorded
 /// snapshots did not see.
 ///
+/// The MELPA cache root follows `CARGO_TARGET_DIR`, so this is inside the
+/// checkout only when that variable is unset.  Differential parity probes do
+/// not rely on that silently: they call [`require_checkout_root`] and refuse
+/// an out-of-checkout base with an actionable message.
+///
 /// Package-TUI scenarios need a short HOME instead; see
 /// [`short_home_sandbox_base`].
 fn checkout_sandbox_base() -> PathBuf {
@@ -309,6 +314,57 @@ pub fn package_environment_at(root: &Path) -> Result<CanonicalEnvironment, Strin
             .map_err(|error| format!("create {}: {error}", directory.display()))?;
     }
     neomacs_infra::packages::install::package_environment_with_runtime(root, &home, &tmp, &runtime)
+}
+
+/// The outermost ancestor of `path` that carries a checkout marker.
+///
+/// The marker set and the "outermost wins" rule match the fixtures that read
+/// a checkout out of the sandbox path: auto-save-buffers-enhanced walks the
+/// whole ancestor chain and keeps the LAST `.git'/`.svn'/`.cvs' it sees
+/// (`auto-save-buffers-enhanced.el:288-305`), not the nearest one
+/// `locate-dominating-file` would return.
+pub fn outermost_checkout_root(path: &Path) -> Option<PathBuf> {
+    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let mut directory = if canonical.is_dir() {
+        canonical
+    } else {
+        canonical.parent()?.to_path_buf()
+    };
+    let mut outermost = None;
+    loop {
+        if [".git", ".svn", ".cvs"]
+            .iter()
+            .any(|marker| directory.join(marker).exists())
+        {
+            outermost = Some(directory.clone());
+        }
+        match directory.parent() {
+            Some(parent) if parent != directory => directory = parent.to_path_buf(),
+            _ => break,
+        }
+    }
+    outermost
+}
+
+/// Require `path` to live inside a checkout, for a caller whose observable
+/// behavior derives from the sandbox location.
+///
+/// GNU `files.el' disables backups below `temporary-file-directory' and
+/// `/tmp' (`normal-backup-enable-predicate'), and checkout fixtures resolve
+/// their root by walking above the sandbox.  A sandbox outside the checkout
+/// therefore makes a path-independent contract depend on the host.  The
+/// harness refuses such a layout instead of silently recording it.
+pub fn require_checkout_root(path: &Path) -> Result<PathBuf, String> {
+    outermost_checkout_root(path).ok_or_else(|| {
+        format!(
+            "sandbox {} is not inside a checkout (no .git/.svn/.cvs above it); \
+             run the MELPA suite with CARGO_TARGET_DIR unset so the MELPA cache \
+             root, and every case root below it, lives inside the checkout. \
+             GNU backup policy and the checkout fixtures derive observable state \
+             from that path.",
+            path.display()
+        )
+    })
 }
 
 pub fn sanitize_label(label: &str) -> String {

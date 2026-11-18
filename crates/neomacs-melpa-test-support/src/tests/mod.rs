@@ -106,4 +106,26 @@ fn melpa_sandbox_new_lives_below_the_melpa_cache_root() {
         sandbox.root().display(),
         cache_root.display()
     );
+    require_checkout_root(sandbox.root()).expect("an ordinary sandbox lives inside the checkout");
+    assert!(
+        outermost_checkout_root(sandbox.root()).is_some(),
+        "no checkout marker above {}",
+        sandbox.root().display()
+    );
+}
+
+/// With `CARGO_TARGET_DIR` naming a directory outside the checkout, the MELPA
+/// cache root -- and every case root below it -- is outside the checkout too.
+/// `require_checkout_root` must refuse that layout by name, because GNU
+/// backup policy and the checkout fixtures would otherwise derive their
+/// observable behavior from the host path.
+#[cfg(unix)]
+#[test]
+fn require_checkout_root_refuses_an_out_of_checkout_sandbox() {
+    let directory = tempfile::tempdir_in("/tmp").expect("create /tmp sandbox");
+    let message = require_checkout_root(directory.path()).expect_err("must refuse");
+    assert!(
+        message.contains("CARGO_TARGET_DIR"),
+        "the refusal must name the recipe: {message}"
+    );
 }
