@@ -1228,29 +1228,23 @@ fn encode_decode_big5_sjis_basic_identity() {
     );
 }
 
+/// The build registry defines no charset with a private final char
+/// ('0'..'?'), so every class starts at '0'. The values after loadup, where
+/// mule-conf.el occupies some of them (GNU: 54 51 50 48 48 48), come from the
+/// same table scan and are compared with GNU by the oracle test
+/// `oracle_prop_get_unused_iso_final_char_scans_the_designation_table`.
 #[test]
 fn get_unused_iso_final_char_known_values() {
     crate::test_utils::init_test_tracing();
-    assert_eq!(
-        builtin_get_unused_iso_final_char(vec![Value::fixnum(1), Value::fixnum(94)]).expect("1/94"),
-        Value::fixnum(54)
-    );
-    assert_eq!(
-        builtin_get_unused_iso_final_char(vec![Value::fixnum(1), Value::fixnum(96)]).expect("1/96"),
-        Value::fixnum(51)
-    );
-    assert_eq!(
-        builtin_get_unused_iso_final_char(vec![Value::fixnum(2), Value::fixnum(94)]).expect("2/94"),
-        Value::fixnum(50)
-    );
-    assert_eq!(
-        builtin_get_unused_iso_final_char(vec![Value::fixnum(2), Value::fixnum(96)]).expect("2/96"),
-        Value::fixnum(48)
-    );
-    assert_eq!(
-        builtin_get_unused_iso_final_char(vec![Value::fixnum(3), Value::fixnum(94)]).expect("3/94"),
-        Value::fixnum(48)
-    );
+    reset_charset_registry();
+    for (dimension, chars) in [(1, 94), (1, 96), (2, 94), (2, 96), (3, 94), (3, 96)] {
+        assert_eq!(
+            builtin_get_unused_iso_final_char(vec![Value::fixnum(dimension), Value::fixnum(chars)])
+                .expect("get-unused-iso-final-char"),
+            Value::fixnum(i64::from(b'0')),
+            "{dimension}/{chars}"
+        );
+    }
 }
 
 #[test]
@@ -1486,6 +1480,39 @@ fn iso_charset_keeps_a_charset_shadowed_by_an_alias_after_legacy_restore() {
     reset_charset_registry();
     restore_charset_registry(legacy);
     assert_eq!(lookup(), Value::symbol("latin-iso8859-1"));
+    reset_charset_registry();
+}
+
+/// GNU `Fget_unused_iso_final_char` (charset.c:1407-1425) scans
+/// `iso_charset_table` for the first free private final '0'..'?' and returns
+/// nil when all sixteen are taken (oracle: after `(declare-equiv-charset 1 94
+/// ?6 'ascii)` the stock 54 becomes 55; with '6'..'?' declared it is nil).
+#[test]
+fn get_unused_iso_final_char_scans_the_designation_table() {
+    crate::test_utils::init_test_tracing();
+    reset_charset_registry();
+    let unused = |d: i64, c: i64| {
+        builtin_get_unused_iso_final_char(vec![Value::fixnum(d), Value::fixnum(c)])
+            .expect("get-unused-iso-final-char")
+    };
+    let declare = |final_char: u8| {
+        builtin_declare_equiv_charset(vec![
+            Value::fixnum(1),
+            Value::fixnum(94),
+            Value::fixnum(i64::from(final_char)),
+            Value::symbol("ascii"),
+        ])
+        .expect("declare-equiv-charset")
+    };
+    let other_class = unused(1, 96);
+    for final_char in b'0'..b'?' {
+        declare(final_char);
+        assert_eq!(unused(1, 94), Value::fixnum(i64::from(final_char) + 1));
+    }
+    declare(b'?');
+    assert_eq!(unused(1, 94), Value::NIL);
+    // Each (DIMENSION, CHARS) class has its own slots.
+    assert_eq!(unused(1, 96), other_class);
     reset_charset_registry();
 }
 
