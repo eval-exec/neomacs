@@ -740,6 +740,7 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/file_name_expand.rs	fn	fn exp
 crates/neovm-eval/src/emacs_core/runtime/eval/data/file_name_expand.rs	fn	fn file_name_absolute_p
 crates/neovm-eval/src/emacs_core/runtime/eval/data/fontset_state.rs	enum	enum FontRepertory
 crates/neovm-eval/src/emacs_core/runtime/eval/data/fontset_state.rs	enum	enum FontSpecEntry
+crates/neovm-eval/src/emacs_core/runtime/eval/data/fontset_state.rs	enum	enum StoredOtfLangsys
 crates/neovm-eval/src/emacs_core/runtime/eval/data/fontset_state.rs	field	FontDefinitionMetadata field encoding
 crates/neovm-eval/src/emacs_core/runtime/eval/data/fontset_state.rs	field	FontDefinitionMetadata field repertory
 crates/neovm-eval/src/emacs_core/runtime/eval/data/fontset_state.rs	field	FontsetDataSnapshot field fallback
@@ -754,12 +755,21 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/fontset_state.rs	field	Fontse
 crates/neovm-eval/src/emacs_core/runtime/eval/data/fontset_state.rs	field	StoredFontSpec field definition
 crates/neovm-eval/src/emacs_core/runtime/eval/data/fontset_state.rs	field	StoredFontSpec field family
 crates/neovm-eval/src/emacs_core/runtime/eval/data/fontset_state.rs	field	StoredFontSpec field lang
+crates/neovm-eval/src/emacs_core/runtime/eval/data/fontset_state.rs	field	StoredFontSpec field otf
 crates/neovm-eval/src/emacs_core/runtime/eval/data/fontset_state.rs	field	StoredFontSpec field registry
 crates/neovm-eval/src/emacs_core/runtime/eval/data/fontset_state.rs	field	StoredFontSpec field slant
 crates/neovm-eval/src/emacs_core/runtime/eval/data/fontset_state.rs	field	StoredFontSpec field weight
 crates/neovm-eval/src/emacs_core/runtime/eval/data/fontset_state.rs	field	StoredFontSpec field width
+crates/neovm-eval/src/emacs_core/runtime/eval/data/fontset_state.rs	field	StoredOtfFeatures field forbidden
+crates/neovm-eval/src/emacs_core/runtime/eval/data/fontset_state.rs	field	StoredOtfFeatures field required
+crates/neovm-eval/src/emacs_core/runtime/eval/data/fontset_state.rs	field	StoredOtfSpec field gpos
+crates/neovm-eval/src/emacs_core/runtime/eval/data/fontset_state.rs	field	StoredOtfSpec field gsub
+crates/neovm-eval/src/emacs_core/runtime/eval/data/fontset_state.rs	field	StoredOtfSpec field langsys
+crates/neovm-eval/src/emacs_core/runtime/eval/data/fontset_state.rs	field	StoredOtfSpec field script
 crates/neovm-eval/src/emacs_core/runtime/eval/data/fontset_state.rs	struct	struct FontDefinitionMetadata
 crates/neovm-eval/src/emacs_core/runtime/eval/data/fontset_state.rs	struct	struct StoredFontSpec
+crates/neovm-eval/src/emacs_core/runtime/eval/data/fontset_state.rs	struct	struct StoredOtfFeatures
+crates/neovm-eval/src/emacs_core/runtime/eval/data/fontset_state.rs	struct	struct StoredOtfSpec
 crates/neovm-eval/src/emacs_core/runtime/eval/data/frame_alpha.rs	fn	fn component
 crates/neovm-eval/src/emacs_core/runtime/eval/data/frame_alpha.rs	fn	fn lower_limit
 crates/neovm-eval/src/emacs_core/runtime/eval/data/frame_alpha.rs	fn	fn pair
@@ -2431,6 +2441,7 @@ crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontSpecListQuery fie
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontSpecResolveRequest field family
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontSpecResolveRequest field frame_id
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontSpecResolveRequest field lang
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontSpecResolveRequest field otf
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontSpecResolveRequest field registry
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontSpecResolveRequest field selection
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontSpecResolveRequest field slant

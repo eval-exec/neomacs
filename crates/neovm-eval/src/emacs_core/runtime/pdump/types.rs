@@ -1243,26 +1243,26 @@ pub struct DumpStoredFontSpec {
     pub width: Option<DumpFontWidth>,
     /// GNU `:otf` requirement; `None` for a spec without one.
     #[serde(default)]
-    pub otf: Option<DumpStoredOtfSpec>,
+    pub(crate) otf: Option<DumpStoredOtfSpec>,
     pub definition: Option<DumpFontDefinitionMetadata>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct DumpStoredOtfSpec {
-    pub script: String,
-    pub langsys: Option<String>,
+pub(crate) struct DumpStoredOtfSpec {
+    pub(crate) script: String,
+    pub(crate) langsys: Option<String>,
     /// A non-symbol LANGSYS accepted by GNU's validator quirk; it can never
     /// match a langsys tag, so any feature requirement rejects every font.
     #[serde(default)]
-    pub langsys_unmatchable: bool,
-    pub gsub: Option<DumpStoredOtfFeatures>,
-    pub gpos: Option<DumpStoredOtfFeatures>,
+    pub(crate) langsys_unmatchable: bool,
+    pub(crate) gsub: Option<DumpStoredOtfFeatures>,
+    pub(crate) gpos: Option<DumpStoredOtfFeatures>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
-pub struct DumpStoredOtfFeatures {
-    pub required: Vec<String>,
-    pub forbidden: Vec<String>,
+pub(crate) struct DumpStoredOtfFeatures {
+    pub(crate) required: Vec<String>,
+    pub(crate) forbidden: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
