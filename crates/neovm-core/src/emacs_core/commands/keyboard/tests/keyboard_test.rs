@@ -156,6 +156,51 @@ fn an_idle_command_loop_finishes_a_paced_deferred_sweep() {
 }
 
 #[test]
+fn an_idle_sweep_stops_for_a_key_still_in_the_host_input_channel() {
+    use super::command_loop::CommandLoopHost;
+    use crate::emacs_core::eval::keyboard::{InputEvent, KeyEvent};
+    // GNU `detect_input_pending_run_timers` reads the OS input queue
+    // (`get_input_pending` -> `gobble_input`, keyboard.c), so a key the
+    // frontend has sent but the loop has not yet staged is pending input.
+    let (mut context, completed) = context_with_a_paced_deferred_sweep();
+    let publisher = crate::host_input::HostInputPublisher::install(&mut context);
+    publisher
+        .send(InputEvent::key_press(KeyEvent::char('x')))
+        .unwrap();
+    context.command_loop_1_idle_sweep();
+    assert!(
+        context.tagged_heap().sweep_in_progress(),
+        "a key still in the host input channel did not stop the idle sweep"
+    );
+    assert_eq!(context.gc_count_for_test(), completed);
+}
+
+#[test]
+fn an_idle_sweep_leaves_a_finished_input_stream_to_the_read() {
+    use super::command_loop::CommandLoopHost;
+    use crate::emacs_core::eval::keyboard::{InputEvent, KeyEvent};
+    // The read after the sweep takes the queued key before it can see the
+    // closed channel; the sweep must not reach that end first.
+    let (mut context, _) = context_with_a_paced_deferred_sweep();
+    let publisher = crate::host_input::HostInputPublisher::install(&mut context);
+    publisher
+        .send(InputEvent::key_press(KeyEvent::char('x')))
+        .unwrap();
+    drop(publisher);
+    context.command_loop_1_idle_sweep();
+    let receiver = context.input_rx().as_ref();
+    assert!(
+        receiver.is_some(),
+        "the idle sweep closed the input terminal"
+    );
+    assert_eq!(
+        receiver.map(|rx| rx.len()),
+        Some(1),
+        "the idle sweep took the key the read is owed"
+    );
+}
+
+#[test]
 fn the_command_loop_finishes_a_paced_deferred_sweep_before_its_first_input_wait() {
     use super::command_loop::CommandLoopHost;
     // GNU `read_char` collects before it waits when no input is pending
