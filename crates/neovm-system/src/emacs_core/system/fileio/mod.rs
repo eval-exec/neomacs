@@ -46,10 +46,8 @@ pub use neovm_eval::emacs_core::eval::data::file_coding::{
     WriteCodingFallback, coding_system_value_to_name, decode_file_name_lisp,
     resolve_write_coding_system_symbol,
 };
+pub(crate) use neovm_eval::emacs_core::eval::data::file_name_expand::current_user_home_bytes;
 pub(crate) use neovm_eval::emacs_core::eval::data::file_name_expand::expand_file_name_lisp_with_home;
-pub(crate) use neovm_eval::emacs_core::eval::data::file_name_expand::{
-    current_user_home_bytes, expand_file_name_with_home,
-};
 #[doc(hidden)]
 pub use neovm_eval::emacs_core::eval::data::file_name_expand::{
     default_directory_lisp_in_state, expand_file_name_lisp, resolve_filename_lisp_for_eval,
@@ -76,7 +74,9 @@ pub(crate) mod directory_stream;
 /// string type this conversion binds; the system layer re-exports it.
 pub use neovm_edit::emacs_core::file_name::lisp_file_name_to_path_buf;
 
+#[cfg(any(test, feature = "test-support"))]
 use neovm_edit::emacs_core::edit_host::EditHost;
+#[cfg(any(test, feature = "test-support"))]
 use neovm_text::emacs_core::text_host::TextHost;
 pub use neovm_value::system_vocab::file_names::substitute_in_file_name;
 use neovm_value::system_vocab::file_names::{
@@ -212,58 +212,39 @@ fn file_truename_lisp(
 
 /// Return the directory part of FILENAME, or None if there is no directory part.
 /// Like Emacs `file-name-directory`: includes the trailing slash.
+///
+/// Test-support adapter over [`lisp_file_name_directory`], the core the
+/// `file-name-directory` builtin calls.  It exists so the moved system tests
+/// can name a production path cross-crate; it holds no file-name logic of its
+/// own (B15-1: the old &str copy was false coverage).
+#[cfg(any(test, feature = "test-support"))]
 pub fn file_name_directory(filename: &str) -> Option<String> {
-    // Emacs: if the filename ends with /, the whole thing is the directory part
-    if filename
-        .as_bytes()
-        .last()
-        .is_some_and(|&byte| file_name_directory_separator_byte(byte))
-    {
-        return if filename.is_empty() {
-            None
-        } else {
-            Some(filename.to_string())
-        };
-    }
-    // Find the last /
-    filename
-        .bytes()
-        .rposition(file_name_directory_separator_byte)
-        .map(|pos| filename[..=pos].to_string())
+    let lisp = file_name_lisp_from_bytes(filename.as_bytes().to_vec(), !filename.is_ascii());
+    lisp_file_name_directory(&lisp).map(|dir| String::from_utf8_lossy(dir.as_bytes()).into_owned())
 }
 
 /// Return the non-directory part of FILENAME.
 /// Like Emacs `file-name-nondirectory`.
+///
+/// Test-support adapter over the production
+/// [`lisp_file_name_nondirectory`] core (B15-1: no duplicated logic).
+#[cfg(any(test, feature = "test-support"))]
 pub fn file_name_nondirectory(filename: &str) -> String {
-    // Emacs: if the filename ends with /, return ""
-    if filename
-        .as_bytes()
-        .last()
-        .is_some_and(|&byte| file_name_directory_separator_byte(byte))
-    {
-        return String::new();
-    }
-    match filename
-        .bytes()
-        .rposition(file_name_directory_separator_byte)
-    {
-        Some(pos) => filename[pos + 1..].to_string(),
-        None => filename.to_string(),
-    }
+    let lisp = file_name_lisp_from_bytes(filename.as_bytes().to_vec(), !filename.is_ascii());
+    String::from_utf8_lossy(lisp_file_name_nondirectory(&lisp).as_bytes()).into_owned()
 }
 
 /// Return the extension of FILENAME.
 /// When PERIOD is nil, returns extension without the leading dot, or nil if missing.
 /// Return FILENAME as a directory name (must end in `/`).
 /// Like Emacs `file-name-as-directory`.
+///
+/// Test-support adapter over the production
+/// [`lisp_file_name_as_directory`] core (B15-1: no duplicated logic).
+#[cfg(any(test, feature = "test-support"))]
 pub fn file_name_as_directory(filename: &str) -> String {
-    if filename.is_empty() {
-        "./".to_string()
-    } else if filename.ends_with('/') {
-        filename.to_string()
-    } else {
-        format!("{filename}/")
-    }
+    let lisp = file_name_lisp_from_bytes(filename.as_bytes().to_vec(), !filename.is_ascii());
+    String::from_utf8_lossy(lisp_file_name_as_directory(&lisp).as_bytes()).into_owned()
 }
 
 /// Return directory FILENAME in file-name form (without trailing slash).
@@ -288,27 +269,29 @@ pub fn directory_file_name(filename: &str) -> String {
 /// Concatenate file name components with separator insertion between
 /// non-empty components, skipping empty components.
 /// Like Emacs `file-name-concat` after filtering nil/empty args.
+///
+/// Test-support adapter over the production [`file_name_concat_lisp`] core
+/// (B15-1: no duplicated logic).
+#[cfg(any(test, feature = "test-support"))]
 pub fn file_name_concat(parts: &[&str]) -> String {
-    let mut iter = parts.iter().copied().filter(|s| !s.is_empty());
-    let Some(first) = iter.next() else {
-        return String::new();
-    };
-
-    let mut out = first.to_string();
-    for part in iter {
-        if !out.ends_with('/') {
-            out.push('/');
-        }
-        out.push_str(part);
-    }
-    out
+    let lisp_parts: Vec<_> = parts
+        .iter()
+        .map(|part| file_name_lisp_from_bytes(part.as_bytes().to_vec(), !part.is_ascii()))
+        .collect();
+    let refs: Vec<_> = lisp_parts.iter().collect();
+    String::from_utf8_lossy(file_name_concat_lisp(&refs).as_bytes()).into_owned()
 }
 
 /// Return true if NAME is a directory name (ends with a directory separator).
+///
+/// Test-support adapter over the production `directory-name-p` builtin
+/// (B15-1: no duplicated logic).
+#[cfg(any(test, feature = "test-support"))]
 pub fn directory_name_p(name: &str) -> bool {
-    name.as_bytes()
-        .last()
-        .is_some_and(|&byte| file_name_directory_separator_byte(byte))
+    matches!(
+        builtin_directory_name_p(vec![Value::string(name)]),
+        Ok(value) if value.is_truthy()
+    )
 }
 
 fn file_name_directory_separator_byte(byte: u8) -> bool {
@@ -347,57 +330,15 @@ pub fn file_exists_p(filename: &str) -> bool {
 }
 
 /// Return true if FILENAME is readable.
+#[cfg(any(test, feature = "test-support"))]
 pub fn file_readable_p(filename: &str) -> bool {
     file_readable_path(Path::new(filename))
-}
-
-/// Return true if FILENAME is writable.
-pub fn file_writable_p(filename: &str) -> bool {
-    file_writable_path(Path::new(filename))
-}
-
-/// Return true if FILENAME is an accessible directory.
-pub fn file_accessible_directory_p(filename: &str) -> bool {
-    let path = Path::new(filename);
-    if !path.is_dir() {
-        return false;
-    }
-
-    #[cfg(unix)]
-    {
-        let Ok(c_path) = CString::new(filename) else {
-            return false;
-        };
-        let mode = libc::R_OK | libc::X_OK;
-        unsafe { libc::access(c_path.as_ptr(), mode) == 0 }
-    }
-
-    #[cfg(not(unix))]
-    {
-        return fs::read_dir(path).is_ok();
-    }
-}
-
-/// Return true if FILENAME is executable by the current process.
-pub fn file_executable_p(filename: &str) -> bool {
-    #[cfg(unix)]
-    {
-        let Ok(c_path) = CString::new(filename) else {
-            return false;
-        };
-        unsafe { libc::access(c_path.as_ptr(), libc::X_OK) == 0 }
-    }
-
-    #[cfg(not(unix))]
-    {
-        return Path::new(filename).exists();
-    }
 }
 
 /// Return true if FILENAME is currently locked by Emacs lockfiles.
 ///
 /// NeoVM currently does not implement lockfile probing, so this returns nil.
-pub fn file_locked_p(_filename: &neovm_value::heap_types::LispString) -> bool {
+pub(crate) fn file_locked_p(_filename: &neovm_value::heap_types::LispString) -> bool {
     false
 }
 
@@ -447,49 +388,37 @@ fn file_system_info_path(path: &Path) -> std::io::Result<(i64, i64, i64)> {
 }
 
 /// Return true if FILENAME is a directory.
+///
+/// Test-support adapter over the production [`file_directory_path`] core the
+/// `file-directory-p` builtin calls (B15-1: no duplicated logic).
+#[cfg(any(test, feature = "test-support"))]
 pub fn file_directory_p(filename: &str) -> bool {
-    Path::new(filename).is_dir()
+    file_directory_path(Path::new(filename))
 }
 
 /// Return true if FILENAME is a regular file.
+///
+/// Test-support adapter over the production [`file_regular_path`] core the
+/// `file-regular-p` builtin calls (B15-1: no duplicated logic).
+#[cfg(any(test, feature = "test-support"))]
 pub fn file_regular_p(filename: &str) -> bool {
-    Path::new(filename).is_file()
+    file_regular_path(Path::new(filename))
 }
 
 /// Return true if FILENAME is a symbolic link.
 /// Return true if FILENAME is a symbolic link. Used by predicates that
 /// only need a yes/no answer (e.g. internal helpers); the public
 /// `file-symlink-p` builtin returns the link target instead.
+///
+/// Test-support adapter over the production [`file_symlink_target_lisp`]
+/// core the `file-symlink-p` builtin calls (B15-1: no duplicated logic).
+#[cfg(any(test, feature = "test-support"))]
 pub fn file_symlink_p(filename: &str) -> bool {
-    match fs::symlink_metadata(filename) {
-        Ok(meta) => meta.file_type().is_symlink(),
-        Err(_) => false,
-    }
+    let lisp = file_name_lisp_from_bytes(filename.as_bytes().to_vec(), !filename.is_ascii());
+    file_symlink_target_lisp(&lisp).is_some()
 }
 
-/// Return the symbolic link target of FILENAME as a String, mirroring
-/// GNU Emacs `Ffile_symlink_p` (`fileio.c:3160`):
-///
-///   "Return non-nil if file FILENAME is the name of a symbolic link.
-///    The value is the link target, as a string.
-///    Return nil if FILENAME does not exist or is not a symbolic link,
-///    or there was trouble determining whether the file is a symbolic link.
-///    This function does not check whether the link target exists."
-///
-/// The returned target is whatever the OS `readlink` syscall produces;
-/// it may be relative.  We do NOT canonicalize it (GNU's
-/// `emacs_readlinkat` likewise does not).
-pub fn file_symlink_target(filename: &str) -> Option<String> {
-    let meta = fs::symlink_metadata(filename).ok()?;
-    if !meta.file_type().is_symlink() {
-        return None;
-    }
-    fs::read_link(filename)
-        .ok()
-        .map(|p| p.to_string_lossy().into_owned())
-}
-
-pub fn file_symlink_target_lisp(
+pub(crate) fn file_symlink_target_lisp(
     filename: &neovm_value::heap_types::LispString,
 ) -> Option<neovm_value::heap_types::LispString> {
     let path = lisp_file_name_to_path_buf(filename);
@@ -500,33 +429,6 @@ pub fn file_symlink_target_lisp(
     fs::read_link(&path)
         .ok()
         .map(|target| path_to_lisp_file_name(&target))
-}
-
-/// Return true if FILENAME is on a case-insensitive filesystem.
-pub fn file_name_case_insensitive_p(filename: &str) -> bool {
-    file_name_case_insensitive_path(Path::new(filename))
-}
-
-/// Return true if FILE1 has a newer modification time than FILE2.
-pub fn file_newer_than_file_p(file1: &str, file2: &str) -> bool {
-    let meta1 = match fs::metadata(file1) {
-        Ok(meta) => meta,
-        Err(_) => return false,
-    };
-    let meta2 = match fs::metadata(file2) {
-        Ok(meta) => meta,
-        Err(_) => return true,
-    };
-
-    let mtime1 = match meta1.modified() {
-        Ok(time) => time,
-        Err(_) => return false,
-    };
-    let mtime2 = match meta2.modified() {
-        Ok(time) => time,
-        Err(_) => return true,
-    };
-    mtime1 > mtime2
 }
 
 fn file_newer_than_file_path(file1: &Path, file2: &Path) -> bool {
@@ -554,12 +456,13 @@ fn file_newer_than_file_path(file1: &Path, file2: &Path) -> bool {
 // File I/O operations
 // ===========================================================================
 
-/// Read the contents of FILENAME as a UTF-8 string.
-pub fn read_file_contents(filename: &str) -> std::io::Result<String> {
-    fs::read_to_string(filename)
-}
-
 /// Write CONTENT to FILENAME, optionally appending.
+///
+/// Test-support adapter over the production opening/writing core
+/// [`write_bytes_to_file_with_mode`] that `write-region` uses (`write_region`
+/// calls it with its encoded bytes); the helper only skips the coding step,
+/// so it is not a parallel writer implementation (B15-1).
+#[cfg(any(test, feature = "test-support"))]
 pub fn write_string_to_file(content: &str, filename: &str, append: bool) -> std::io::Result<()> {
     let mode = if append {
         FileWriteMode::Append
@@ -954,20 +857,12 @@ fn directory_files_with_decoder(
     Ok(result)
 }
 
-/// Create directory DIR.  If PARENTS is true, create parent directories as needed.
-pub fn make_directory(dir: &str, parents: bool) -> std::io::Result<()> {
-    if parents {
-        fs::create_dir_all(dir)
-    } else {
-        fs::create_dir(dir)
-    }
-}
-
 // ===========================================================================
 // File management
 // ===========================================================================
 
 /// Delete FILENAME.
+#[cfg(any(test, feature = "test-support"))]
 pub fn delete_file(filename: &str) -> std::io::Result<()> {
     unlink_file_path(Path::new(filename))
 }
@@ -986,6 +881,7 @@ pub fn unlink_file_path(path: &Path) -> std::io::Result<()> {
 }
 
 /// Rename file FROM to TO.
+#[cfg(any(test, feature = "test-support"))]
 pub fn rename_file(from: &str, to: &str) -> std::io::Result<()> {
     rename_path_with_cross_device_fallback(Path::new(from), Path::new(to), true, |from, to| {
         fs::rename(from, to)
@@ -1107,11 +1003,6 @@ fn copy_dir_recursive(from: &Path, to: &Path) -> std::io::Result<()> {
 /// Copy file FROM to TO.
 pub fn copy_file(from: &str, to: &str) -> std::io::Result<()> {
     fs::copy(from, to).map(|_| ())
-}
-
-/// Create an additional name (hard link) from OLDNAME to NEWNAME.
-pub fn add_name_to_file(oldname: &str, newname: &str) -> std::io::Result<()> {
-    fs::hard_link(oldname, newname)
 }
 
 // ===========================================================================
@@ -2596,7 +2487,7 @@ fn maybe_dispatch_resolved_file_handler(
     second_lookup: Option<&neovm_value::heap_types::LispString>,
     mut call_args: Vec<Value>,
 ) -> Result<Option<Value>, Flow> {
-    let operation_sym = Value::symbol(operation_name);
+    let operation_sym = Value::from_sym_id(intern(operation_name));
     if let Some(first) = first_lookup {
         let handler = find_file_name_handler_lisp_for_eval(eval, first, operation_sym);
         if !handler.is_nil() {
@@ -3034,9 +2925,8 @@ fn set_file_times_path(
     }
 }
 
-#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
-fn delete_file_compat(filename: &str) -> Result<(), Flow> {
+#[cfg(feature = "test-support")]
+pub fn delete_file_compat(filename: &str) -> Result<(), Flow> {
     match delete_file(filename) {
         Ok(()) => Ok(()),
         Err(err) if err.kind() == ErrorKind::NotFound => Ok(()),
@@ -4630,7 +4520,7 @@ pub fn dispatch_file_handler(
     let Some(filename) = eval.lisp_string(*first) else {
         return Ok(None);
     };
-    let operation_sym = Value::symbol(operation_name);
+    let operation_sym = Value::from_sym_id(intern(operation_name));
     let handler = find_file_name_handler_lisp_for_eval(eval, filename, operation_sym);
     if handler.is_nil() {
         return Ok(None);
@@ -6585,7 +6475,10 @@ pub fn builtin_insert_file_contents(
 
     // GNU `insert-file-contents' sets `last-coding-system-used' before
     // `after-insert-file-set-coding' derives `buffer-file-coding-system'.
-    eval.set_variable("last-coding-system-used", Value::symbol(&contents.coding));
+    eval.set_variable(
+        "last-coding-system-used",
+        Value::from_sym_id(intern((&contents.coding).as_ref())),
+    );
 
     let inserted_char_count = run_after_insert_file_pipeline(
         eval,

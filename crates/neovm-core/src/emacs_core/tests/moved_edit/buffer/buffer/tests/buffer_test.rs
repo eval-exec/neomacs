@@ -2710,12 +2710,12 @@ fn saved_labeled_restrictions_round_trip_and_drop_on_killed_buffer() {
         .expect("restriction state should save");
     // Outermost bounds plus the user label.
     let restrictions = saved
-        .labeled_restrictions
+        .labeled_restrictions()
         .as_slice()
         .expect("the labeled stack was saved");
     assert_eq!(restrictions.len(), 2);
     assert_eq!(saved.clone(), saved);
-    let copy = saved.labeled_restrictions.clone();
+    let copy = saved.labeled_restrictions().clone();
     assert_eq!(copy.into_inner().map(|stack| stack.len()), Some(2));
 
     // Restoring into a killed buffer discards the saved stack through the

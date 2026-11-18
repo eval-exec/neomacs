@@ -1423,15 +1423,16 @@ impl MatchGroup {
         CharRange::new(CharPos0::new(self.start), CharPos0::new(self.end))
     }
 
-    pub const fn emacs_byte_range(self) -> EmacsByteRange {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) const fn emacs_byte_range(self) -> EmacsByteRange {
         EmacsByteRange::new(EmacsBytePos::new(self.start), EmacsBytePos::new(self.end))
     }
 
-    pub const fn from_char_range(range: CharRange) -> Self {
+    pub(crate) const fn from_char_range(range: CharRange) -> Self {
         Self::new(range.start().get(), range.end().get())
     }
 
-    pub const fn from_emacs_byte_range(range: EmacsByteRange) -> Self {
+    pub(crate) const fn from_emacs_byte_range(range: EmacsByteRange) -> Self {
         Self::new(range.start().get(), range.end().get())
     }
 
@@ -1928,6 +1929,7 @@ impl StringSearchSuccess {
 // Emacs → Rust regex translation
 // ---------------------------------------------------------------------------
 
+#[cfg(test)]
 /// Translate basic Emacs regex syntax to Rust regex syntax.
 ///
 /// Key differences handled:
@@ -1944,7 +1946,7 @@ impl StringSearchSuccess {
 /// - Emacs `\s-` etc. (syntax classes)  →  simplified to `\s` (whitespace)
 /// - Emacs `\<` `\>` (word boundaries)  →  Rust `\b`
 /// - Emacs character classes inside `[...]` are kept as-is.
-pub fn translate_emacs_regex(pattern: &str) -> String {
+pub(crate) fn translate_emacs_regex(pattern: &str) -> String {
     fn next_char_at(s: &str, byte_idx: usize) -> Option<(char, usize)> {
         s.get(byte_idx..)
             .and_then(|tail| tail.chars().next().map(|ch| (ch, ch.len_utf8())))
@@ -2772,6 +2774,7 @@ pub fn buffer_regexp_syntax_dependency_and_span(
     Ok((dependency, span))
 }
 
+#[cfg(test)]
 fn string_char_match_data(searched_string: SearchedString, byte_md: EngineMatchData) -> MatchData {
     byte_md.publish_string(searched_string)
 }
@@ -4567,12 +4570,13 @@ pub fn looking_at_compiled_into(
     }
 }
 
+#[cfg(test)]
 /// Test whether STRING matches PATTERN starting at byte offset 0.
 ///
 /// Returns `true` if the regex matches at the beginning of STRING and updates
 /// match data using character positions, mirroring `looking-at` semantics on a
 /// string-backed source.
-pub fn looking_at_string(
+pub(crate) fn looking_at_string(
     pattern: &str,
     string: &str,
     case_fold: bool,
@@ -4615,6 +4619,7 @@ pub(crate) fn looking_at_lisp_pattern_length_with_syntax(
     .map(|(end, _regs)| neovm_value::emacs_char::byte_to_char_pos(text_bytes, end)))
 }
 
+#[cfg(test)]
 fn looking_at_string_with_syntax(
     pattern: &str,
     string: &str,
@@ -4658,6 +4663,7 @@ fn looking_at_string_with_syntax(
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 /// Match a regex against a string (not a buffer).
 ///
 /// `start` is the byte offset within `string` to begin matching.
@@ -4665,7 +4671,7 @@ fn looking_at_string_with_syntax(
 /// to the whole string, not `start`), or `None` if no match.
 /// Updates match data with capture groups in CHARACTER positions;
 /// stores the searched string.
-pub fn string_match_full_with_case_fold(
+pub(crate) fn string_match_full_with_case_fold(
     pattern: &str,
     string: &str,
     start: usize,
@@ -4675,9 +4681,10 @@ pub fn string_match_full_with_case_fold(
     string_match_full_with_case_fold_and_posix(pattern, string, start, case_fold, false, match_data)
 }
 
+#[cfg(any(test, feature = "test-support"))]
 /// POSIX longest-match variant of [`string_match_full_with_case_fold`]
 /// used by `posix-string-match`. See GNU `src/search.c:Fposix_string_match`.
-pub fn string_match_full_with_case_fold_and_posix(
+pub(crate) fn string_match_full_with_case_fold_and_posix(
     pattern: &str,
     string: &str,
     start: usize,
@@ -4913,6 +4920,7 @@ pub fn string_search_start_with_case_fold_source_lisp_pattern_posix_syntax(
     .map(|bytes| engine_match_byte_start(&bytes)))
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn string_match_full_with_case_fold_source_posix(
     pattern: &str,
     string: &str,
@@ -5034,8 +5042,10 @@ fn string_search_full_with_case_fold_source_compiled_syntax(
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 /// Match a regex against a string using Emacs default case-fold behavior.
-pub fn string_match_full(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn string_match_full(
     pattern: &str,
     string: &str,
     start: usize,
@@ -5140,10 +5150,12 @@ pub(crate) fn compute_buffer_replacement_with_syntax(
     Ok((buffer_start, buffer_end, replacement))
 }
 
+#[cfg(feature = "test-support")]
 /// Replace the last match in SOURCE (Emacs-bytes) and return the resulting
 /// Emacs-bytes. `source_multibyte` mirrors the source Lisp string's
 /// `STRING_MULTIBYTE` flag and governs how the result is reassembled.
-pub fn replace_match_string(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn replace_match_string(
     source: &[u8],
     source_multibyte: bool,
     newtext: &str,
@@ -5165,12 +5177,13 @@ pub fn replace_match_string(
     )
 }
 
+#[cfg(feature = "test-support")]
 /// Variant of [`replace_match_string`] that threads the syntax table
 /// and `case-symbols-as-words` into the case-preservation decision.
 /// For pure string replacement (no buffer in scope), pass `None` for
 /// the table to get GNU's standard-table baseline behavior.
 #[allow(clippy::too_many_arguments)] // public replacement options mirror Lisp replace-match semantics
-pub fn replace_match_string_with_syntax(
+pub(crate) fn replace_match_string_with_syntax(
     source: &[u8],
     source_multibyte: bool,
     newtext: &str,

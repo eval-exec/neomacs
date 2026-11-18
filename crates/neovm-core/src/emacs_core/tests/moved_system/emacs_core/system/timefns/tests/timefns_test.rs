@@ -5,6 +5,7 @@ use neovm_system::emacs_core::timefns::*;
 use neovm_value::error::Flow;
 use neovm_value::error::{FlowKind, FlowResultExt};
 use neovm_value::heap_types::LispString;
+use neovm_value::intern::intern;
 use neovm_value::value::Value;
 use neovm_value::value::ValueKind;
 use neovm_value::value::list_to_vec;
@@ -34,7 +35,7 @@ fn condition_case_print(result: Result<Value, Flow>) -> String {
     match result.kinded() {
         Ok(value) => neovm_eval::emacs_core::print::print_value(&value),
         Err(FlowKind::Signal(sig)) => {
-            let symbol = Value::symbol(sig.symbol_name());
+            let symbol = Value::from_sym_id(intern(sig.symbol_name()));
             let err_obj = if let Some(raw) = sig.raw_data {
                 Value::cons(symbol, raw)
             } else {
@@ -129,24 +130,6 @@ fn time_micros_sub() {
     let c = a.sub(b);
     assert_eq!(c.secs, 4);
     assert_eq!(c.usecs, 800_000);
-}
-
-#[test]
-fn time_micros_less_than() {
-    crate::test_utils::init_test_tracing();
-    let a = TimeMicros {
-        secs: 10,
-        usecs: 0,
-        psecs: 0,
-    };
-    let b = TimeMicros {
-        secs: 10,
-        usecs: 1,
-        psecs: 0,
-    };
-    assert!(a.less_than(b));
-    assert!(!b.less_than(a));
-    assert!(!a.less_than(a));
 }
 
 #[test]

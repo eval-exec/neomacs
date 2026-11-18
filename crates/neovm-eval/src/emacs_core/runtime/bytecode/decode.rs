@@ -21,7 +21,8 @@ use neovm_value::value::{Value, ValueKind};
 
 /// Errors that can occur during GNU bytecode decoding.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DecodeError {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) enum DecodeError {
     /// Unknown or unimplemented opcode byte.
     UnknownOpcode(u8, usize),
     /// Premature end of bytecode stream while reading operand.
@@ -76,7 +77,8 @@ impl std::error::Error for DecodeError {}
 /// GNU bytecode strings are unibyte — each char maps to one byte (0–255).
 /// After NeoVM's parser processes octal escapes, each char in the Rust string
 /// can be directly cast to `u8`.
-pub fn string_value_to_bytes(s: &str) -> Vec<u8> {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn string_value_to_bytes(s: &str) -> Vec<u8> {
     s.chars().map(|c| c as u8).collect()
 }
 
@@ -88,7 +90,8 @@ pub fn string_value_to_bytes(s: &str) -> Vec<u8> {
 ///
 /// Returns the decoded instruction sequence with jump targets resolved
 /// to instruction indices.
-pub fn decode_gnu_bytecode(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn decode_gnu_bytecode(
     bytecodes: &[u8],
     constants: &mut Vec<Value>,
 ) -> Result<Vec<Op>, DecodeError> {
@@ -102,7 +105,8 @@ pub fn decode_gnu_bytecode(
 /// constants. NeoVM executes decoded bytecode by instruction index, so
 /// GNU-decoded functions must preserve the original byte-offset ->
 /// instruction-index map for runtime translation of `Bswitch`.
-pub fn decode_gnu_bytecode_with_offset_map(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn decode_gnu_bytecode_with_offset_map(
     bytecodes: &[u8],
     constants: &mut Vec<Value>,
 ) -> Result<(Vec<Op>, Vec<GnuByteOffsetMapEntry>), DecodeError> {
@@ -120,7 +124,7 @@ pub fn decode_gnu_bytecode_with_offset_map(
 /// The deferred-decode path cannot lend its Lisp constants mutably merely to
 /// decode IR; the decoder is known not to extend the pool (asserted below),
 /// so the published pool length is enough to seal `Constant` indices.
-pub fn decode_gnu_bytecode_for_published_pool(
+pub(crate) fn decode_gnu_bytecode_for_published_pool(
     bytecodes: &[u8],
     published_constants_len: usize,
 ) -> Result<(Vec<Op>, Vec<GnuByteOffsetMapEntry>), DecodeError> {
@@ -1230,7 +1234,7 @@ fn fetch2(bytecodes: &[u8], pos: &mut usize, byte_offset: usize) -> Result<u16, 
 /// Add a symbol to the constants vector if not already present, return its index.
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 fn add_or_find_symbol(constants: &mut Vec<Value>, name: &str) -> u16 {
-    let sym = Value::symbol(name);
+    let sym = Value::from_sym_id(intern(name));
     for (i, c) in constants.iter().enumerate() {
         if let (Some(a), Some(b)) = (c.as_bare_symbol_id(), sym.as_bare_symbol_id())
             && a == b
@@ -1289,12 +1293,14 @@ fn buffer_op_info(byte: u8) -> (&'static str, u8) {
 /// Preserve GNU's full signed integer descriptor without allocating names.
 /// Mandatory is bits0..6, rest is bit7, and nonrest is the full signed value
 /// shifted right by8. Host-sized stack shape is checked only when needed.
-pub fn parse_arglist_descriptor(descriptor: i64) -> super::FunctionParams {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn parse_arglist_descriptor(descriptor: i64) -> super::FunctionParams {
     super::FunctionParams::Stack(descriptor.into())
 }
 
 /// Validate the outer slot domain. GNU defers cons contents to invocation.
-pub fn parse_arglist_value(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn parse_arglist_value(
     arglist: &Value,
 ) -> Result<super::FunctionParams, super::BytecodeSlotError> {
     super::FunctionParams::try_from(*arglist)

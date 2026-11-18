@@ -40,27 +40,6 @@ fn family_only_cjk_rule_is_a_rendering_candidate_without_a_registry() {
 }
 
 #[test]
-fn detached_capture_keeps_family_only_cjk_rendering_candidates() {
-    crate::test_utils::init_test_tracing();
-    reset_fontset_registry();
-    reset_charset_registry();
-    set_fontset_font(
-        &Value::T,
-        &Value::fixnum('中' as i64),
-        &Value::string("LXGWWenKai Nerd Font"),
-        None,
-        None,
-        None,
-        Some(&Value::NIL),
-    )
-    .expect("install the family-only fontset rule");
-    let (_, entries) = bounded_entries_for_char('中', 1)
-        .expect("rendering capture does not need charset metadata expansion");
-    assert!(matches!(&entries[..], [FontSpecEntry::Font(spec)]
-        if spec.family == Some(intern("LXGWWenKai Nerd Font")) && spec.definition.is_none()));
-}
-
-#[test]
 fn unmatched_family_font_spec_defaults_to_ascii_repertory_like_gnu() {
     crate::test_utils::init_test_tracing();
     reset_charset_registry();
@@ -472,18 +451,6 @@ fn repertory_target_ranges_support_subset_charsets() {
 }
 
 #[test]
-fn repertory_target_ranges_support_symbol_backed_charsets() {
-    crate::test_utils::init_test_tracing();
-    let ranges = repertory_target_ranges(&FontRepertory::Charset(intern("unicode-bmp")))
-        .expect("symbol-backed repertory ranges");
-    assert!(
-        ranges
-            .iter()
-            .any(|(from, to)| *from <= ('好' as u32) && ('好' as u32) <= *to)
-    );
-}
-
-#[test]
 fn parse_font_spec_entry_preserves_raw_unibyte_string_names() {
     crate::test_utils::init_test_tracing();
     let raw = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![
@@ -831,50 +798,6 @@ fn resolve_fontset_name_maps_a_font_name_to_the_default_fontset() {
     );
 }
 
-#[test]
-fn bounded_fontset_capture_preserves_order_and_stops_at_explicit_none() {
-    let mut data = FontsetData::default();
-    data.fallback = Some(
-        vec![
-            registry_spec("first"),
-            FontSpecEntry::ExplicitNone,
-            registry_spec("unreachable"),
-        ]
-        .into(),
-    );
-    assert_eq!(
-        data.bounded_entries_for_char('好' as u32, 2),
-        Some(vec![registry_spec("first"), FontSpecEntry::ExplicitNone])
-    );
-    assert_eq!(data.bounded_entries_for_char('好' as u32, 1), None);
-}
-
-#[test]
-fn bounded_fontset_capture_omits_repertory_metadata_without_expansion() {
-    let mut data = FontsetData::default();
-    let FontSpecEntry::Font(mut spec) = registry_spec("fixture") else {
-        unreachable!()
-    };
-    spec.definition = Some(FontDefinitionMetadata {
-        encoding: intern("ascii"),
-        repertory: Some(FontRepertory::CharTableRanges(vec![(0, 100); 128])),
-    });
-    data.fallback = Some(vec![FontSpecEntry::Font(spec.clone())].into());
-    assert_eq!(
-        data.bounded_entries_for_char('好' as u32, 1),
-        Some(vec![registry_spec("fixture")])
-    );
-    spec.definition = Some(FontDefinitionMetadata {
-        encoding: intern("ascii"),
-        repertory: Some(FontRepertory::Charset(intern("ascii"))),
-    });
-    data.fallback = Some(vec![FontSpecEntry::Font(spec)].into());
-    assert_eq!(
-        data.bounded_entries_for_char('好' as u32, 1),
-        Some(vec![registry_spec("fixture")])
-    );
-}
-
 fn registry_names(entries: &[FontSpecEntry]) -> Vec<String> {
     entries
         .iter()
@@ -912,7 +835,7 @@ fn rendering_tries_fontset_entries_in_charset_priority_order() {
         )
         .expect("install a registry entry");
     }
-    let set_priority = |charset: &str| {
+    let set_priority = |charset: &'static str| {
         neovm_text::test_support::authority::set_charset_priority_for_test(vec![Value::symbol(
             charset,
         )])

@@ -18,7 +18,7 @@ use crate::tagged::SymbolMode;
 use std::collections::HashMap;
 
 use super::error::{EvalResult, Flow, signal};
-use super::intern::{SymId, intern, intern_uninterned, resolve_sym};
+use super::intern::{SymId, intern, make_uninterned_symbol, resolve_sym};
 use super::value::{Value, ValueKind, list_to_vec};
 use crate::buffer::{EmacsBytePos, TextExtent};
 use crate::gc_trace::GcTrace;
@@ -149,7 +149,7 @@ fn obarray_insert_symbol(vec_val: Value, sym: Value) {
 fn obarray_intern(vec_val: Value, name: &str) -> Value {
     let vec_len = super::builtins::symbols::obarray_len(vec_val).unwrap_or(0);
     if vec_len == 0 {
-        return Value::symbol(intern_uninterned(name));
+        return Value::symbol(make_uninterned_symbol(name));
     }
     let bucket_idx = obarray_hash(name, vec_len);
     let bucket =
@@ -161,7 +161,7 @@ fn obarray_intern(vec_val: Value, name: &str) -> Value {
     }
 
     // Not found: create symbol and prepend to bucket chain
-    let sym = Value::symbol(intern_uninterned(name));
+    let sym = Value::symbol(make_uninterned_symbol(name));
     obarray_insert_symbol(vec_val, sym);
     sym
 }
@@ -500,7 +500,7 @@ pub(crate) fn builtin_clear_abbrev_table(
     expect_args("clear-abbrev-table", &args, 1)?;
     let vec_val = expect_abbrev_table(eval, &args[0])?;
     let header = table_header_symbol(vec_val)
-        .unwrap_or_else(|| Value::symbol(intern_uninterned(ABBREV_TABLE_HEADER_NAME)));
+        .unwrap_or_else(|| Value::symbol(make_uninterned_symbol(ABBREV_TABLE_HEADER_NAME)));
     let vec_len = super::builtins::symbols::obarray_len(vec_val).unwrap_or(0);
     let _ = super::builtins::symbols::replace_obarray_buckets(vec_val, vec![Value::NIL; vec_len]);
     let _ = vec_val.with_obarray_mut(|obj| obj.count = 0);

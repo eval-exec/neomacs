@@ -16,12 +16,6 @@ use neovm_value::error::{expect_args, expect_args_range};
 use neovm_value::value::ValueKind;
 use neovm_value::value::*;
 
-/// Reset cursor visibility state (called from `reset_display_thread_locals`).
-///
-/// Cursor visibility now lives on `WindowDisplayState::cursor_off_p`, so
-/// there is no longer any dispnew-specific thread-local state to clear.
-pub(crate) fn reset_dispnew_thread_locals() {}
-
 // ---------------------------------------------------------------------------
 // Argument helpers (local copies — originals are pub(crate) in display.rs)
 // ---------------------------------------------------------------------------

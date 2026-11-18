@@ -219,7 +219,9 @@ impl<'owner, 'era> RunAccess<'owner, 'era> {
     /// Call only after transferring any needed result into another root home.
     #[cold]
     #[inline(never)]
-    pub fn clear_root_slots(&mut self) -> Result<(), RegistrationError> {
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn clear_root_slots(&mut self) -> Result<(), RegistrationError> {
         self.owner.check_thread()?;
         let local = self.owner.local.as_mut().expect("resident owner roots");
         let next = local

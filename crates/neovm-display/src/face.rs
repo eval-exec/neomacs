@@ -9,7 +9,9 @@ mod dump_codes;
 pub mod realization;
 pub(crate) mod remapping;
 use neovm_value::value::{Value, ValueKind};
-pub use remapping::{FaceRemapEntry, FaceRemapping};
+#[cfg(test)]
+pub(crate) use remapping::FaceRemapEntry;
+pub(crate) use remapping::FaceRemapping;
 
 pub use neovm_eval::emacs_core::eval::data::face::*;
 #[allow(unused_imports)]

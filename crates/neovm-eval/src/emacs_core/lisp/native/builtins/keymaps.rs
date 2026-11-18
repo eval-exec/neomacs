@@ -331,8 +331,19 @@ fn define_key_in_rooted_keymap(
 ) -> EvalResult {
     let key = possibly_translate_key_sequence(eval, args[1])?;
     let mut events = expect_key_events(&key, symbol_mode)?;
+    // GNU `Fdefine_key` converts a Lucid event list such as `(control meta
+    // shift up)` to a single event symbol through `Fevent_convert_list`,
+    // whose `apply_modifiers` interns the derived name (src/keyboard.c:
+    // 7800-7830). `convert_lucid_event_list` builds the same name from a
+    // string, so publish membership here, at the definition boundary that
+    // makes the events Lisp-visible (PEER 5786 census: the C-/M-/S- function
+    // key families in `function-key-map`).
+    for event in &events {
+        eval.obarray.intern_member_symbols_in(*event);
+    }
     cache_key_event_symbol_properties(eval, &events)?;
     let def = normalize_keyboard_macro_definition(args[2], symbol_mode);
+    eval.obarray.intern_member_symbols_in(def);
     let remove = args.get(3).is_some_and(|v| v.is_truthy());
     // Expand meta-prefixed events to ESC + base, matching GNU Emacs
     // Fdefine_key's metized handling.
@@ -440,12 +451,18 @@ fn lookup_key_with_menu_compat_runtime(
         return Ok(found);
     }
 
+    // GNU `Fintern`s each converted name here (src/keymap.c:1386), so the
+    // lowercase and dashed variants become obarray members even when the
+    // lookup ultimately fails. The free `intern` only resolves a canonical
+    // name id; the member-producing funnel is the obarray's `intern_member`.
     let lower_events: Vec<Value> = events
         .iter()
         .map(|event| {
             event
                 .as_symbol_name(symbol_mode)
-                .map(|name| Value::symbol(name.to_lowercase()))
+                .map(|name| {
+                    Value::from_sym_id(eval.obarray_mut().intern_member(&name.to_lowercase()))
+                })
                 .unwrap_or(*event)
         })
         .collect();
@@ -460,7 +477,9 @@ fn lookup_key_with_menu_compat_runtime(
             event
                 .as_symbol_name(symbol_mode)
                 .filter(|name| name.contains(' '))
-                .map(|name| Value::symbol(name.replace(' ', "-")))
+                .map(|name| {
+                    Value::from_sym_id(eval.obarray_mut().intern_member(&name.replace(' ', "-")))
+                })
                 .unwrap_or(*event)
         })
         .collect();

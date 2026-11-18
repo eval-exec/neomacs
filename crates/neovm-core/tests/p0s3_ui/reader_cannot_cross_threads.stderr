@@ -58,7 +58,7 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
           which is required by `RootBatchReader<'static>: Send`
           `*mut HashTableObj: std::marker::Sync`
           which is required by `RootBatchReader<'static>: Send`
-          `*mut FinalizerObj: std::marker::Sync`
+          `*mut header::FinalizerObj: std::marker::Sync`
           which is required by `RootBatchReader<'static>: Send`
           `*mut *mut MarkerObj: std::marker::Sync`
           which is required by `RootBatchReader<'static>: Send`
@@ -108,7 +108,7 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
           which is required by `RootBatchReader<'static>: Send`
           `*mut MarkerObj: std::marker::Sync`
           which is required by `RootBatchReader<'static>: Send`
-          `*mut BignumObj: std::marker::Sync`
+          `*mut header::BignumObj: std::marker::Sync`
           which is required by `RootBatchReader<'static>: Send`
           `*const LispSymbol: std::marker::Sync`
           which is required by `RootBatchReader<'static>: Send`

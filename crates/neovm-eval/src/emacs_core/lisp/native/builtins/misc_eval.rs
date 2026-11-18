@@ -1831,7 +1831,7 @@ impl TryFrom<Value> for PrintOverrideKey {
         let parsed = key
             .as_bare_symbol_name()
             .and_then(|name| name.parse::<Self>().ok())
-            .filter(|setting| key == Value::symbol(setting.as_ref()));
+            .filter(|setting| key == Value::from_sym_id(intern(setting.as_ref())));
         parsed.ok_or_else(|| {
             signal(
                 LispCondition::WrongTypeArgument,

@@ -64,7 +64,7 @@ fn divergence_multi_buffer_markers_switch() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
     let expect =
-        expect_test::expect![[r#""OK (5 \"BUF2YYY-CONTENTXXX\" \"BUF2YYY-CONTENTXXX\" t)""#]];
+        expect_test::expect![[r#""OK (5 5 \"BUF2YYY-CONTENTXXX\" \"BUF2YYY-CONTENTXXX\" t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (insert "BUF1-CONTENT")
@@ -72,8 +72,9 @@ fn divergence_multi_buffer_markers_switch() {
         (buf2 (generate-new-buffer "*test-mbuf2*")))
     (with-current-buffer buf2
       (insert "BUF2-CONTENT")
-      (let ((m2 (set-marker (make-marker) 5 buf2))))
-      (insert "XXX"))
+      (let ((m2 (set-marker (make-marker) 5 buf2)))
+        (insert "XXX")
+        (marker-position m2)))
     (with-current-buffer buf2
       (goto-char 5)
       (insert "YYY"))
@@ -81,10 +82,10 @@ fn divergence_multi_buffer_markers_switch() {
       (with-current-buffer buf2
         (let ((p2 (marker-position
                     (car (delq nil (mapcar (lambda (m) (and (marker-buffer m) m))
-                                           (list m1))))))))
-          (list p1 (buffer-string)
+                                           (list m1)))))))
+          (list p1 p2 (buffer-string)
                 (with-current-buffer buf2 (buffer-string))
-                (kill-buffer buf2)))))) "#,
+                (kill-buffer buf2))))))) "#,
         expect,
     );
 }

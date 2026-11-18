@@ -440,9 +440,24 @@ fn glyphless_display() {
 #[test]
 fn multibyte_detection() {
     crate::test_utils::init_test_tracing();
-    assert!(!is_multibyte_string("hello"));
-    assert!(is_multibyte_string("héllo"));
-    assert!(is_multibyte_string("中文"));
+    assert!(
+        !neovm_value::value::Value::string("hello")
+            .as_lisp_string()
+            .expect("string")
+            .is_multibyte()
+    );
+    assert!(
+        neovm_value::value::Value::string("héllo")
+            .as_lisp_string()
+            .expect("string")
+            .is_multibyte()
+    );
+    assert!(
+        neovm_value::value::Value::string("中文")
+            .as_lisp_string()
+            .expect("string")
+            .is_multibyte()
+    );
 }
 
 #[test]
@@ -643,7 +658,10 @@ fn register_test_jis() -> neovm_value::intern::SymId {
 }
 
 fn charset_prop(charset: &str) -> Value {
-    Value::list(vec![Value::symbol("charset"), Value::symbol(charset)])
+    Value::list(vec![
+        Value::symbol("charset"),
+        Value::from_sym_id(neovm_value::intern::intern(charset)),
+    ])
 }
 
 #[cfg(test)]

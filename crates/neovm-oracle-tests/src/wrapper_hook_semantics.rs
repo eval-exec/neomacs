@@ -42,7 +42,7 @@ fn oracle_wrapper_hook_order_reentry_and_replacement() {
             (let ((left (funcall fun (* x 2)))
                   (right (funcall fun (* x 3))))
               (push (list 'b-after left right) log)
-              (+ left right)))))))
+              (+ left right))))))
     (list
      (subr--with-wrapper-hook-no-warnings hook (x)
        (push (list 'body x) log)
@@ -61,9 +61,9 @@ fn oracle_wrapper_hook_order_reentry_and_replacement() {
         (subr--with-wrapper-hook-no-warnings replace-hook (x)
           (push (list 'body x) log)
           'body)
-        (nreverse log)))))"#;
+        (nreverse log))))))"#;
 
-    let expect = expect_test::expect![[r#""ERR (void-variable hook)""#]];
+    let expect = expect_test::expect![[r#""ERR (void-variable x)""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 

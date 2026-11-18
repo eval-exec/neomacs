@@ -6,6 +6,7 @@ use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::function_slots::FunctionParamsExt as _;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::jit::compile::{self, Inline2Mode};
+use neovm_value::intern::intern;
 use neovm_value::value::LambdaParams;
 
 fn lexical(required: usize, ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {
@@ -44,7 +45,7 @@ fn map_caller(name: &str, callback: Value) -> ByteCodeFunction {
             Op::Call(2),
             Op::Return,
         ],
-        vec![Value::symbol(name), callback],
+        vec![Value::from_sym_id(intern(name)), callback],
     )
 }
 

@@ -39,11 +39,14 @@ impl BufferTextBackendKind {
         Self::iter()
     }
 
-    pub fn implemented_variants() -> impl Iterator<Item = Self> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn implemented_variants() -> impl Iterator<Item = Self> {
         Self::variants().filter(|kind| kind.is_implemented())
     }
 
-    pub fn non_gap_implemented_variants() -> impl Iterator<Item = Self> {
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn non_gap_implemented_variants() -> impl Iterator<Item = Self> {
         Self::implemented_variants().filter(|kind| !kind.is_gap_buffer())
     }
 
@@ -51,11 +54,11 @@ impl BufferTextBackendKind {
         self.into()
     }
 
-    pub const fn is_gap_buffer(self) -> bool {
+    pub(crate) const fn is_gap_buffer(self) -> bool {
         matches!(self, Self::GapBuffer)
     }
 
-    pub fn is_implemented(self) -> bool {
+    pub(crate) fn is_implemented(self) -> bool {
         self.implemented().is_some()
     }
 

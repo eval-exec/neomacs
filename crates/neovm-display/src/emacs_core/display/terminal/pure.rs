@@ -210,7 +210,7 @@ impl DeleteTerminalMode {
 /// comparison against this type: `t->type == output_initial`
 /// (src/terminal.c:499).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TerminalOutputMethod {
+pub(crate) enum TerminalOutputMethod {
     /// GNU `output_initial`: the bootstrap terminal used during daemon mode,
     /// batch mode and the early stages of startup, and which holds the initial
     /// frame.
@@ -607,7 +607,7 @@ pub(crate) fn terminal_runtime_attribute_capabilities() -> TtyAttributeCapabilit
     terminal_runtime().attribute_capabilities
 }
 
-/// Clear cached terminal thread-locals (called from `reset_display_thread_locals`).
+/// Clear cached terminal thread-locals (the eval lifecycle's heap-reset hook).
 #[doc(hidden)]
 pub fn reset_terminal_thread_locals() {
     ensure_current_terminal_registry();

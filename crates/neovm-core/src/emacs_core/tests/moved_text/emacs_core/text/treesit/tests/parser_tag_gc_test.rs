@@ -13,7 +13,7 @@ use super::*;
 use neovm_value::value::Value;
 use neovm_value::value::buffer_vocab::BufferId;
 
-use neovm_value::intern::intern_uninterned;
+use neovm_value::intern::make_uninterned_symbol;
 
 use neovm_value::tagged::gc::{TaggedHeap, set_tagged_heap};
 
@@ -40,7 +40,7 @@ fn native_parser_tag_survives(first: FirstCollection) {
     set_tagged_heap(&mut heap);
     let mut manager = TreeSitterManager::new();
     let language = Value::symbol("json");
-    let tag = Value::from_sym_id(intern_uninterned("native-parser-only-tag"));
+    let tag = Value::from_sym_id(make_uninterned_symbol("native-parser-only-tag"));
     let id = manager.insert_parser(
         Value::NIL,
         BufferId(7),

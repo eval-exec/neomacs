@@ -908,7 +908,7 @@ fn put_string_property(
     string: &mut LispString,
     start: usize,
     end: usize,
-    name: &str,
+    name: &'static str,
     value: Value,
 ) {
     let len = string.schars();

@@ -54,8 +54,8 @@ use neovm_value::display_vocab::{FontSlant, FontWeight, FontWidth, FrameFullscre
 use neovm_value::error::*;
 use neovm_value::gc_trace::GcTrace;
 use neovm_value::intern::{
-    SymId, WellKnown, format_symbol_name_for_diagnostic, intern, intern_uninterned,
-    is_canonical_id, is_keyword_id, resolve_sym, symbol_name_id,
+    SymId, WellKnown, format_symbol_name_for_diagnostic, intern, is_canonical_id, is_keyword_id,
+    make_uninterned_symbol, resolve_sym, symbol_name_id,
 };
 use neovm_value::kmacro::KmacroManager;
 use neovm_value::symbol::{CanonicalAccess, ConstantWrite, Obarray};
@@ -90,7 +90,7 @@ pub(crate) use world::WorldSlot;
 #[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 pub use world::sole_owner::SoleOwnerDriver;
-pub use world::{ContextShutdownError, ObarrayWriteAccess, OutstandingWorldViews, WorldEra};
+pub use world::{ContextShutdownError, ObarrayWriteAccess, WorldEra};
 pub(crate) use world::{OwnedRootRegistryView, WorldView};
 
 pub(crate) mod subr_abi;
@@ -99,7 +99,8 @@ pub(crate) mod subr_abi;
 // spelling.
 #[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
-pub use subr_abi::SubrValueExt;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) use subr_abi::SubrValueExt;
 #[cfg(not(any(test, feature = "test-support")))]
 use subr_abi::SubrValueExt;
 use subr_abi::{SubrFn, SubrObj};
@@ -874,6 +875,7 @@ pub(crate) const AUDITED_PURE_PRIMITIVES: &[&str] = &["setcar", "setcdr"];
 /// (buffer-change hooks, `word-boundary-function`, ...). Kept next to the
 /// pure list so both are one registration-time source of truth for the
 /// exhaustiveness test.
+#[cfg(test)]
 pub(crate) const AUDITED_REENTRANT_PRIMITIVES: &[&str] =
     &["insert", "delete-region", "indent-to", "forward-word"];
 
@@ -1462,7 +1464,7 @@ impl SpecBinding {
 
 /// A dynamic binding owned by one selected keyboard lifetime.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct KeyboardBinding {
+pub struct KeyboardBinding {
     sym_id: SymId,
     owner: neovm_value::forward::KeyboardBindingOwner,
     old_value: Value,
@@ -2151,12 +2153,12 @@ fn value_from_symbol_id(sym_id: SymId) -> Value {
 
 fn hidden_internal_interpreter_environment_symbol() -> SymId {
     static HIDDEN_SYMBOL: OnceLock<SymId> = OnceLock::new();
-    *HIDDEN_SYMBOL.get_or_init(|| intern_uninterned("internal-interpreter-environment"))
+    *HIDDEN_SYMBOL.get_or_init(|| make_uninterned_symbol("internal-interpreter-environment"))
 }
 
 fn hidden_load_read_stream_token() -> LoadReadStreamToken {
     static HIDDEN_SYMBOL: OnceLock<LoadReadStreamToken> = OnceLock::new();
-    *HIDDEN_SYMBOL.get_or_init(|| LoadReadStreamToken(intern_uninterned("get-file-char")))
+    *HIDDEN_SYMBOL.get_or_init(|| LoadReadStreamToken(make_uninterned_symbol("get-file-char")))
 }
 
 fn default_directory_symbol() -> SymId {
@@ -3359,7 +3361,7 @@ pub struct Context {
     interpreted_closure_filter_fn: Option<Value>,
     pub(crate) in_flight_registry: neovm_value::error::InFlightRegistryHandle,
     #[doc(hidden)]
-    pub cached_standard_case_table: Option<Value>,
+    pub(crate) cached_standard_case_table: Option<Value>,
     /// Edit-owned runtime state: the buffer manager and the insdel
     /// change-combining state. Embedded by value so field access stays one
     /// offset; stage-3 inversion keeps the evaluator above the edit domain.
@@ -4343,7 +4345,7 @@ pub(crate) fn finish_require_in_state(
     loaded_path: Option<&Path>,
 ) -> EvalResult {
     if features.contains(&sym_id) {
-        Ok(Value::symbol(name))
+        Ok(Value::from_sym_id(intern(name)))
     } else {
         let message = if let Some(path) = loaded_path {
             format!(
@@ -4978,7 +4980,8 @@ impl Context {
     }
 
     /// Whether lexical-binding is currently enabled.
-    pub fn lexical_binding(&self) -> bool {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn lexical_binding(&self) -> bool {
         lexenv_is_active(self.lexenv)
     }
 
@@ -5632,7 +5635,7 @@ impl Context {
     /// If `symbols-with-pos-enabled` and `val` is a symbol-with-pos,
     /// return the bare symbol. Otherwise return `val` unchanged.
     #[inline]
-    pub fn unwrap_symbol(&self, val: Value) -> Value {
+    pub(crate) fn unwrap_symbol(&self, val: Value) -> Value {
         self.symbol_mode().unwrap(val)
     }
 
@@ -5679,7 +5682,7 @@ impl Context {
     /// variable's own value answers instead (`thread_projection`).
     #[inline]
     #[doc(hidden)]
-    pub fn forwarded_buffer_obj_value(
+    pub(crate) fn forwarded_buffer_obj_value(
         &self,
         sym_id: SymId,
         sym: &neovm_value::symbol::LispSymbol,
@@ -5782,7 +5785,10 @@ impl Context {
     /// uninterned symbol identity, like Emacs's EQ-based Fassq on
     /// Vinternal_interpreter_environment).
     #[doc(hidden)]
-    pub fn lookup_symbol_value_by_id(&self, sym_id: SymId) -> Result<SymbolValueLookup, Flow> {
+    pub(crate) fn lookup_symbol_value_by_id(
+        &self,
+        sym_id: SymId,
+    ) -> Result<SymbolValueLookup, Flow> {
         // GNU eval.c checks the lexenv for the ORIGINAL symbol BEFORE
         // resolving variable aliases and does not rescan declared-special
         // flags on ordinary reads. Declared-special affects how bindings are
@@ -5812,7 +5818,7 @@ impl Context {
     }
 
     #[doc(hidden)]
-    pub fn find_symbol_value_by_id(&self, sym_id: SymId) -> Result<SymbolValueLookup, Flow> {
+    pub(crate) fn find_symbol_value_by_id(&self, sym_id: SymId) -> Result<SymbolValueLookup, Flow> {
         // Fast path — GNU `find_symbol_value`'s SYMBOL_PLAINVAL leaf: an
         // ordinary global with a bound plain cell answers from one slot
         // read. Aliases, localized/forwarded symbols, unbound cells (where
@@ -6852,7 +6858,11 @@ pub(crate) fn check_forwarded_unbind(
 impl Context {
     /// Call a registered subr value directly. Returns None if VALUE is not a
     /// fully registered subr.
-    pub fn dispatch_subr_value(&mut self, function: Value, args: Vec<Value>) -> Option<EvalResult> {
+    pub(crate) fn dispatch_subr_value(
+        &mut self,
+        function: Value,
+        args: Vec<Value>,
+    ) -> Option<EvalResult> {
         let sym_id = function.as_subr_id()?;
         let wrong_arity_callee = Value::from_sym_id(sym_id);
         self.dispatch_subr_value_internal(function, &args, wrong_arity_callee)
@@ -6861,7 +6871,12 @@ impl Context {
     /// Resolve a symbol identity to its canonical subr object and call it.
     /// Returns None if the symbol's canonical name has no registered subr.
     /// Supports uninterned symbols: falls back to canonical SymId via NameId lookup.
-    pub fn dispatch_subr_id(&mut self, sym_id: SymId, args: Vec<Value>) -> Option<EvalResult> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn dispatch_subr_id(
+        &mut self,
+        sym_id: SymId,
+        args: Vec<Value>,
+    ) -> Option<EvalResult> {
         // Try the sym_id directly first
         let resolved = if lookup_global_subr_entry(sym_id).is_some() {
             sym_id
@@ -6876,7 +6891,7 @@ impl Context {
         self.dispatch_subr_value(function, args)
     }
 
-    pub fn dispatch_subr(&mut self, name: &str, args: Vec<Value>) -> Option<EvalResult> {
+    pub(crate) fn dispatch_subr(&mut self, name: &str, args: Vec<Value>) -> Option<EvalResult> {
         self.dispatch_subr_id(intern(name), args)
     }
 
@@ -7586,9 +7601,9 @@ pub mod redisplay_hooks;
 pub use neovm_edit::emacs_core::redisplay_policy::RedisplayHookPolicyGuard;
 #[doc(hidden)]
 pub use neovm_edit::emacs_core::redisplay_policy::gnu_redisplay_hooks_enabled;
-pub use redisplay_hooks::{
-    RedisplayMiniGeometryRequest, RedisplayMiniGeometrySource, RedisplayMiniPreparationFailure,
-};
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) use redisplay_hooks::RedisplayMiniGeometrySource;
+pub use redisplay_hooks::{RedisplayMiniGeometryRequest, RedisplayMiniPreparationFailure};
 
 mod vm_shared;
 

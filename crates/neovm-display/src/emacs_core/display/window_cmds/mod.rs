@@ -11,6 +11,7 @@ mod split_request;
 pub(crate) use split_request::SiblingResize;
 
 use crate::window::DisplayFrameExt;
+use crate::window::DisplayFrameManagerCrateExt;
 use crate::window::DisplayFrameManagerExt;
 use crate::window::WindowChromeLine;
 use crate::window::body::{WindowBodyAxis, WindowBodyCellSize, WindowBodyUnit};

@@ -569,7 +569,7 @@ fn scenario(backing: DiagnosticBacking, owners: Owners, scenario: Scenario) {
             match record.job {
                 Job::Collected(report) => {
                     assert!(report.major);
-                    assert_eq!(report.frozen_owners, owners.count());
+                    assert_eq!(report.frozen_owners(), owners.count());
                     assert_eq!(report.epoch, record.epoch.0.get());
                     assert_eq!(report.cycle, before.0 + index + 1);
                 }

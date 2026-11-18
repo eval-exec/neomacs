@@ -444,7 +444,7 @@ fn div_cx100_mega_kbd_macro_register_rectangle_window_config() {
 #[test]
 fn div_cx100_mega_combination_eleven_subsystems_full_stress() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (void-variable buf)""#]];
+    let expect = expect_test::expect![[r#""ERR (args-out-of-range 1 1)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((timer-fired nil)
@@ -460,7 +460,7 @@ fn div_cx100_mega_combination_eleven_subsystems_full_stress() {
   (sit-for 0.01)
   (puthash "alpha" 1 ht)
   (puthash "beta" 2 ht)
-  (let ((buf (get-buffer-create " *neo-cx100-final-mega*"))))
+  (let ((buf (get-buffer-create " *neo-cx100-final-mega*")))
     (with-current-buffer buf
       (buffer-enable-undo)
       (setq-local neo-cx100-local-counter 0)
@@ -489,7 +489,7 @@ fn div_cx100_mega_combination_eleven_subsystems_full_stress() {
           (list state
                 (buffer-live-p buf)
                 (hash-table-count ht)
-                (aref rec 2))))))
+                (aref rec 2)))))))
 "##,
         expect,
     );

@@ -7,6 +7,7 @@ use crate::emacs_core::eval::Context;
 use crate::emacs_core::eval::{
     push_scratch_gc_root, restore_scratch_gc_roots, save_scratch_gc_roots,
 };
+use neovm_value::intern::intern;
 use std::marker::PhantomData;
 use std::rc::Rc;
 
@@ -72,7 +73,7 @@ fn summary(value: Value) -> String {
     let table = value.as_hash_table().unwrap();
     assert!(matches!(table.test, HashTableTest::Eq));
     let get = |name| {
-        let key = Value::symbol(name).to_hash_key(&table.test);
+        let key = Value::from_sym_id(intern(name)).to_hash_key(&table.test);
         table.data.get(&key).copied().unwrap_or(Value::NIL)
     };
     crate::emacs_core::print::print_value(&Value::list(vec![

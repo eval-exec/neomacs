@@ -73,7 +73,9 @@ pub struct AllStoppedFailure<'era> {
 }
 
 impl<'era> AllStoppedFailure<'era> {
-    pub fn into_stopped(self) -> AllStopped<'era> {
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn into_stopped(self) -> AllStopped<'era> {
         self.stopped
     }
 }
@@ -88,7 +90,7 @@ impl fmt::Debug for AllStoppedFailure<'_> {
 }
 
 impl<K: EraKeeper> EraCore<'_, K> {
-    pub fn try_stop(&self) -> Result<Option<AllStopped<'_>>, RendezvousError> {
+    pub(crate) fn try_stop(&self) -> Result<Option<AllStopped<'_>>, RendezvousError> {
         let registry = self.registry();
         keeper(registry)?;
         let mut gate = registry.lock().map_err(registration_error)?;
@@ -115,7 +117,7 @@ impl<K: EraKeeper> EraCore<'_, K> {
         }))
     }
 
-    pub fn stop(&self) -> Result<AllStopped<'_>, RendezvousError> {
+    pub(crate) fn stop(&self) -> Result<AllStopped<'_>, RendezvousError> {
         let registry = self.registry();
         keeper(registry)?;
         request(registry)?;

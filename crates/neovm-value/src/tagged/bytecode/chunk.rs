@@ -526,8 +526,7 @@ impl ByteCodeFunction {
     /// Test-only forge of the saved-image marker shape: no resident ops and
     /// the sealed marker set. Callers go through
     /// `neovm_value::test_support::authority::forge_pdump_marker_ops_for_test`.
-    #[cfg(any(test, feature = "test-support"))]
-    pub(crate) fn forge_pdump_marker_ops_for_test(&mut self) {
+    pub fn forge_pdump_marker_ops_for_test(&mut self) {
         self.ops.clear();
         self.ops_sealed = true;
     }
@@ -716,8 +715,12 @@ impl ByteCodeFunction {
     }
 
     /// Add a symbol name to the constant pool and return its index.
+    ///
+    /// The bytecode compiler has no obarray; the loader publishes the
+    /// constants through `intern_member_symbols_in` (its ByteCode branch),
+    /// which is where GNU's `intern`-on-read effect lands.
     pub fn add_symbol(&mut self, name: &str) -> u16 {
-        self.add_constant(Value::symbol(name))
+        self.add_constant(Value::from_sym_id(crate::intern::intern(name)))
     }
 
     /// Emit an instruction.

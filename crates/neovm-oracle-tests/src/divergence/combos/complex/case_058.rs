@@ -85,21 +85,19 @@ fn div_cx58_org_todo_state_changes() {
 #[test]
 fn div_cx58_imenu_custom_expression() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[
-        r#""ERR (error \"`let' bindings can have only one value-form\" let ((index (imenu--index-alist))) (list (consp index) (length index)))""#
-    ]];
+    let expect = expect_test::expect![[r#""OK (:errored)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (condition-case e
     (with-temp-buffer
       (emacs-lisp-mode)
       (let ((imenu-generic-expression
-             '((nil "^\\s-*(def\\(un\\|var\\|custom\\|macro\\)\\s-+\\(\\(\\w\\|\\s_\\)+\\)" 2)))
+             '((nil "^\\s-*(def\\(un\\|var\\|custom\\|macro\\)\\s-+\\(\\(\\w\\|\\s_\\)+\\)" 2))))
         (insert "(defun func-a () 1)\n(defvar var-a 2)\n(defmacro mac-a (x) nil)\n")
         (let ((index (imenu--index-alist)))
           (list (consp index) (length index)))))
   (error (list :errored)))
-)"##,
+"##,
         expect,
     );
 }
@@ -253,7 +251,7 @@ fn div_cx58_window_split_merge_marker_overlay_textprop_display_evaporate_undo_na
  {
     return_if_neovm_enable_oracle_proptest_not_set!();
     let expect = expect_test::expect![[
-        r#""ERR (error \"`let' bindings can have only one value-form\" accept-process-output p 2)""#
+        r#""ERR (error \"Changes to be undone are outside visible portion of buffer\")""#
     ]];
     crate::common::assert_oracle_parity_expect(
         r##"
@@ -263,7 +261,7 @@ fn div_cx58_window_split_merge_marker_overlay_textprop_display_evaporate_undo_na
          (let ((process-environment (cons "NEO_CX58=v" process-environment)))
            (string-trim (shell-command-to-string "echo $NEO_CX58"))))
         (exit-code
-         (let ((p (make-process :name "neo-cx58-ec" :command '("sh" "-c" "exit 4")))
+         (let ((p (make-process :name "neo-cx58-ec" :command '("sh" "-c" "exit 4"))))
            (accept-process-output p 2)
            (process-exit-status p))))
     (sit-for 0.01)
@@ -297,7 +295,7 @@ fn div_cx58_window_split_merge_marker_overlay_textprop_display_evaporate_undo_na
                   (set-window-buffer (selected-window) (get-buffer-create "*scratch*"))
                   (kill-buffer buf))))
         (error (list env-val exit-code timer-fired :errored)))))
-)))"##,
+))"##,
         expect,
     );
 }
@@ -307,7 +305,7 @@ fn div_cx58_regex_casefold_replace_undo_superword_subword_kill_marker_overlay_na
  {
     return_if_neovm_enable_oracle_proptest_not_set!();
     let expect = expect_test::expect![[
-        r#""ERR (error \"`let' bindings can have only one value-form\" accept-process-output p 2)""#
+        r#""ERR (error \"Changes to be undone are outside visible portion of buffer\")""#
     ]];
     crate::common::assert_oracle_parity_expect(
         r##"
@@ -315,7 +313,7 @@ fn div_cx58_regex_casefold_replace_undo_superword_subword_kill_marker_overlay_na
        (let ((process-environment (cons "NEO_CX58=v" process-environment)))
          (string-trim (shell-command-to-string "echo $NEO_CX58"))))
       (exit-code
-       (let ((p (make-process :name "neo-cx58-ec" :command '("sh" "-c" "exit 7")))
+       (let ((p (make-process :name "neo-cx58-ec" :command '("sh" "-c" "exit 7"))))
          (accept-process-output p 2)
          (process-exit-status p))))
   (let ((weak-ht (make-hash-table :weakness 'key :test 'eq)))
@@ -329,7 +327,7 @@ fn div_cx58_regex_casefold_replace_undo_superword_subword_kill_marker_overlay_na
         (put-text-property 5 8 'display "XX")
         (let ((ov (make-overlay 5 25)) (m (set-marker (make-marker) 15)))
           (overlay-put ov 'face 'italic) (overlay-put ov 'evaporate t)
-          (narrow-to-region 1 48)
+          (narrow-to-region 1 41)
           (undo-boundary)
           (goto-char 1)
           (while (re-search-forward "[a-zéàüß_]+" nil t)
@@ -343,7 +341,7 @@ fn div_cx58_regex_casefold_replace_undo_superword_subword_kill_marker_overlay_na
                   (marker-position m) (overlayp ov) (overlay-start ov)
                   (text-properties-at 1) (current-column)
                   (hash-table-count weak-ht)))))))
-))"##,
+)"##,
         expect,
     );
 }
@@ -353,7 +351,7 @@ fn div_cx58_read_eval_backquote_destructuring_lexical_cl_loop_hash_secure_print_
  {
     return_if_neovm_enable_oracle_proptest_not_set!();
     let expect = expect_test::expect![[
-        r#""ERR (error \"`let' bindings can have only one value-form\" accept-process-output p 2)""#
+        r#""OK (\"v\" 2 (\"café\" \"世界\" \"😀\") 6 3 \"bc3814236eebfb0ba535b75190716d1bc03ad7991455d86036204601e296f9a7\" 1)""#
     ]];
     crate::common::assert_oracle_parity_expect(
         r##"
@@ -361,15 +359,17 @@ fn div_cx58_read_eval_backquote_destructuring_lexical_cl_loop_hash_secure_print_
        (let ((process-environment (cons "NEO_CX58=v" process-environment)))
          (string-trim (shell-command-to-string "echo $NEO_CX58"))))
       (exit-code
-       (let ((p (make-process :name "neo-cx58-ec" :command '("sh" "-c" "exit 2")))
+       (let ((p (make-process :name "neo-cx58-ec" :command '("sh" "-c" "exit 2"))))
          (accept-process-output p 2)
          (process-exit-status p))))
   (let ((lexical-binding t))
-    (let ((data '((("café" . 1) ("世界" . 2) ("😀" . 3))))
+    (require 'cl-lib)
+    (let ((data '((("café" . 1) ("世界" . 2) ("😀" . 3)))))
       (let* ((processed (eval (car (read-from-string
-                                   "`(:names ,(mapcar #'car (caar ,data))
-                                      :vals ,(mapcar #'cdr (caar ,data))
-                                      :sum ,(cl-loop for v in (mapcar #'cdr (caar ,data)) sum v))")) t))
+                                   (format "`(:names ,(mapcar #'car (car '%S))
+                                      :vals ,(mapcar #'cdr (car '%S))
+                                      :sum ,(cl-loop for v in (mapcar #'cdr (car '%S)) sum v))"
+                                           data data data))) t))
              (ht (make-hash-table :test 'equal)))
         (cl-loop for n in (plist-get processed :names)
                  for v in (plist-get processed :vals)
@@ -384,7 +384,7 @@ fn div_cx58_read_eval_backquote_destructuring_lexical_cl_loop_hash_secure_print_
                   (hash-table-count ht)
                   (secure-hash 'sha256 (prin1-to-string processed))
                   (hash-table-count weak-ht)))))))
-)))"##,
+)"##,
         expect,
     );
 }

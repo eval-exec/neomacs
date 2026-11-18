@@ -130,7 +130,7 @@ fn slot_assignment(value: &Value) -> ModifierAssignment {
 ///
 /// Unbound variables read as nil, which GNU's DEFVAR_LISP initializers make
 /// equivalent to `none' for the keys that matter.
-pub fn modifier_policy_from_vars(eval: &Context) -> Result<ModifierPolicy, String> {
+pub(crate) fn modifier_policy_from_vars(eval: &Context) -> Result<ModifierPolicy, String> {
     let mut parts = ModifierPolicyParts {
         ..ModifierPolicyParts::default()
     };

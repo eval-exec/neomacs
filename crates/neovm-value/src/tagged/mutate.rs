@@ -10,10 +10,7 @@ use crate::value::LispHashTable;
 use crate::value::text_props::TextPropertyTable;
 
 use super::collection_reads::{StoreState, WriteProjection, record_projected_write_in_store};
-use super::gc::{
-    HeapWriteKind, note_heap_slot_write, note_heap_slot_write_in_store, note_heap_write,
-    with_store_state,
-};
+use super::gc::{HeapWriteKind, note_heap_slot_write_in_store, note_heap_write, with_store_state};
 use super::header::{
     BoolVectorObj, ByteCodeObj, ByteCodeSlotObject, ConsCell, HashTableObj, LambdaObj, MacroObj,
     MarkerObj, OverlayObj, RecordObj, StringObj, VecLikeHeader, VecLikeType, VectorObj, XwidgetObj,
@@ -22,7 +19,8 @@ use super::header::{
 use super::value::{TAG_MASK, TaggedValue};
 
 mod chartable;
-pub use chartable::{CharTableWrite, SubCharTableWrite};
+pub use chartable::CharTableWrite;
+pub(crate) use chartable::SubCharTableWrite;
 pub(crate) use chartable::{with_char_table_write, with_sub_char_table_write};
 
 /// Short-lived observations can depend on mutable Lisp collections nested
@@ -152,7 +150,8 @@ pub(super) fn reset_carrier_tls() {
 /// values. Bool-vectors have no Lisp children, so they need no pointer write
 /// barrier, but layout observations can depend on their contents.
 #[inline]
-pub fn with_bool_vector_mut<R>(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn with_bool_vector_mut<R>(
     value: TaggedValue,
     f: impl FnOnce(&mut super::header::BoolVectorObj) -> R,
 ) -> Option<R> {
@@ -493,7 +492,8 @@ pub(crate) fn set_record_slot_in_store(
 }
 
 #[inline]
-pub fn with_closure_slots_mut<R>(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn with_closure_slots_mut<R>(
     value: TaggedValue,
     f: impl FnOnce(&mut Vec<TaggedValue>) -> R,
 ) -> Option<R> {
@@ -530,39 +530,8 @@ pub fn replace_closure_slots(value: TaggedValue, slots: Vec<TaggedValue>) -> boo
 }
 
 #[inline]
-pub fn set_closure_slot(value: TaggedValue, index: usize, item: TaggedValue) -> bool {
-    LispCollectionRevision::changed(value);
-    match value.veclike_type() {
-        // Atomic stores, as for vector slots: a concurrent reader of the slot
-        // (the GC thread, once closures are traced there) sees a whole value.
-        Some(VecLikeType::Lambda) => unsafe {
-            let ptr = value.as_veclike_ptr().unwrap() as *mut LambdaObj;
-            let obj = &mut *ptr;
-            let _ = obj.parsed_params.take();
-            if index >= obj.data.len() {
-                return false;
-            }
-            note_heap_slot_write(value, HeapWriteKind::ClosureSlot, index, item);
-            obj.data.store_atomic(index, item);
-            true
-        },
-        Some(VecLikeType::Macro) => unsafe {
-            let ptr = value.as_veclike_ptr().unwrap() as *mut MacroObj;
-            let obj = &mut *ptr;
-            let _ = obj.parsed_params.take();
-            if index >= obj.data.len() {
-                return false;
-            }
-            note_heap_slot_write(value, HeapWriteKind::ClosureSlot, index, item);
-            obj.data.store_atomic(index, item);
-            true
-        },
-        _ => false,
-    }
-}
-
-#[inline]
-pub fn with_string_text_props_mut<R>(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn with_string_text_props_mut<R>(
     value: TaggedValue,
     f: impl FnOnce(&mut TextPropertyTable) -> R,
 ) -> Option<R> {
@@ -800,8 +769,7 @@ pub fn install_bytecode_slot_object(
 /// mid-cycle (e.g. self-referential print tests) keep snapshot marking sound.
 #[cfg(any(test, feature = "test-support"))]
 #[inline]
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
-pub(crate) fn with_bytecode_data_mut_for_test<R>(
+pub fn with_bytecode_data_mut_for_test<R>(
     value: TaggedValue,
     f: impl FnOnce(&mut ByteCodeFunction) -> R,
 ) -> Option<R> {
@@ -871,4 +839,49 @@ pub fn with_xwidget_view_mut<R>(
     #[cfg(any(test, debug_assertions, feature = "test-support"))]
     let _guard = HeapMutClosureGuard::enter();
     Some(f(unsafe { &mut *ptr }))
+}
+
+#[cfg(test)]
+pub(crate) mod b13_test_hooks {
+    use super::*;
+    pub(crate) fn set_closure_slot(value: TaggedValue, index: usize, item: TaggedValue) -> bool {
+        LispCollectionRevision::changed(value);
+        match value.veclike_type() {
+            // Atomic stores, as for vector slots: a concurrent reader of the slot
+            // (the GC thread, once closures are traced there) sees a whole value.
+            Some(VecLikeType::Lambda) => unsafe {
+                let ptr = value.as_veclike_ptr().unwrap() as *mut LambdaObj;
+                let obj = &mut *ptr;
+                let _ = obj.parsed_params.take();
+                if index >= obj.data.len() {
+                    return false;
+                }
+                crate::tagged::gc::gc_thread::b13_test_hooks::note_heap_slot_write(
+                    value,
+                    HeapWriteKind::ClosureSlot,
+                    index,
+                    item,
+                );
+                obj.data.store_atomic(index, item);
+                true
+            },
+            Some(VecLikeType::Macro) => unsafe {
+                let ptr = value.as_veclike_ptr().unwrap() as *mut MacroObj;
+                let obj = &mut *ptr;
+                let _ = obj.parsed_params.take();
+                if index >= obj.data.len() {
+                    return false;
+                }
+                crate::tagged::gc::gc_thread::b13_test_hooks::note_heap_slot_write(
+                    value,
+                    HeapWriteKind::ClosureSlot,
+                    index,
+                    item,
+                );
+                obj.data.store_atomic(index, item);
+                true
+            },
+            _ => false,
+        }
+    }
 }

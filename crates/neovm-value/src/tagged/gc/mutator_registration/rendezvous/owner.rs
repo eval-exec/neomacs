@@ -6,7 +6,9 @@ use crate::tagged::transport::PreparedParallelRootBatch;
 
 impl<'era> Mutator<'era> {
     /// Acquire the real request, never a relaxed attention hint. No wait here.
-    pub fn requested_epoch(&self) -> Result<Option<NonZeroU64>, RendezvousError> {
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn requested_epoch(&self) -> Result<Option<NonZeroU64>, RendezvousError> {
         self.check_thread()?;
         let gate = self.registry.lock()?;
         // request() publishes the phase and word under this same gate. Read
@@ -24,12 +26,12 @@ impl<'era> Mutator<'era> {
             _ => Ok(None),
         }
     }
-    pub fn request_collection(&self) -> Result<Request, RendezvousError> {
+    pub(crate) fn request_collection(&self) -> Result<Request, RendezvousError> {
         self.check_thread()?;
         request(self.registry)
     }
     /// StartingStopped cannot obtain a run slice until its bootstrap is opened.
-    pub fn wait_started(&mut self) -> Result<(), RendezvousError> {
+    pub(crate) fn wait_started(&mut self) -> Result<(), RendezvousError> {
         self.check_thread()?;
         let _park = self.registry.park_ticket();
         let mut gate = self.registry.lock()?;
@@ -52,7 +54,8 @@ impl<'era> Mutator<'era> {
             gate = wait(self.registry, gate)?;
         }
     }
-    pub fn wait_request(&self) -> Result<NonZeroU64, RendezvousError> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn wait_request(&self) -> Result<NonZeroU64, RendezvousError> {
         self.check_thread()?;
         let _park = self.registry.park_ticket();
         let mut gate = self.registry.lock()?;
@@ -93,14 +96,19 @@ impl<'era> Mutator<'era> {
     pub fn enter_native(&mut self, roots: &[SharedRoot]) -> Result<(), RendezvousError> {
         self.publish_roots(None, true, roots)
     }
-    pub fn park_once(&mut self, roots: &[SharedRoot]) -> Result<u64, RendezvousError> {
+    pub(crate) fn park_once(&mut self, roots: &[SharedRoot]) -> Result<u64, RendezvousError> {
         let epoch = self.wait_request()?;
         self.acknowledge(epoch, roots)?;
         self.restore_wait(false)
     }
     /// Publish terminated-owner roots before leaving. The canonical entry and
     /// its image remain retained and participate in later frozen memberships.
-    pub fn retire_rooted(mut self, roots: &[SharedRoot]) -> Result<(), RootedRetireFailure<'era>> {
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn retire_rooted(
+        mut self,
+        roots: &[SharedRoot],
+    ) -> Result<(), RootedRetireFailure<'era>> {
         let result = (|| {
             // Every Running/Resuming entry access shares the canonical gate.
             // An ungated mode probe could make another owner's post-restore
@@ -342,7 +350,9 @@ pub struct RootedRetireFailure<'era> {
     owner: Mutator<'era>,
 }
 impl<'era> RootedRetireFailure<'era> {
-    pub fn into_owner(self) -> Mutator<'era> {
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn into_owner(self) -> Mutator<'era> {
         self.owner
     }
 }

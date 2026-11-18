@@ -107,7 +107,7 @@ pub(super) fn binding_valid(
 /// metadata follow the paired registration/read lock; current function-cell
 /// ownership and Release epoch publication follow existing dispatch contracts.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn neovm_jit_sqrt_binding_valid(
+pub(crate) unsafe extern "C" fn neovm_jit_sqrt_binding_valid(
     ctx: *mut u8,
     symbol_bits: i64,
     expected_subr_bits: i64,

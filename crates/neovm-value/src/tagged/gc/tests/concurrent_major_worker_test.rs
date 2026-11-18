@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::heap_types::LispString;
-use crate::intern::intern_uninterned;
+use crate::intern::make_uninterned_symbol;
 use crate::tagged::bytecode::chunk::ByteCodeFunction;
 use crate::tagged::header::ImageResident;
 use crate::value::scratch_bridge::{
@@ -185,7 +185,7 @@ fn snapshot(heap: &mut TestHeap, vector: TaggedValue) -> crate::tagged::header::
 }
 
 fn symbol(label: &str) -> TaggedValue {
-    TaggedValue::from_sym_id(intern_uninterned(label))
+    TaggedValue::from_sym_id(make_uninterned_symbol(label))
 }
 
 fn assert_symbol_once(result: &ConcurrentMarkResult, symbol: TaggedValue) {

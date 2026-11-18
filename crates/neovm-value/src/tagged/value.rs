@@ -887,7 +887,8 @@ impl TaggedValue {
 
     /// Extract raw cons cell pointer without tag check.
     #[inline(always)]
-    pub fn xcons_ptr(self) -> *const ConsCell {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn xcons_ptr(self) -> *const ConsCell {
         debug_assert!(self.is_cons());
         super::collection_reads::observe(self);
         (self.0 & !TAG_MASK) as *const ConsCell
@@ -906,7 +907,8 @@ impl TaggedValue {
 
     /// Extract raw float object pointer. Returns None if not a float.
     #[inline(always)]
-    pub fn as_float_ptr(self) -> Option<*const FloatObj> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn as_float_ptr(self) -> Option<*const FloatObj> {
         if self.is_float() {
             Some((self.0 & !TAG_MASK) as *const FloatObj)
         } else {
@@ -1056,11 +1058,6 @@ impl TaggedValue {
 impl TaggedValue {
     // -- Compat constructors that allocate on the thread-local heap --
 
-    /// Create a symbol by interning a name string.
-    pub fn symbol_by_name(s: impl AsRef<str>) -> Self {
-        Self::from_sym_id(crate::intern::intern(s.as_ref()))
-    }
-
     /// Create a keyword by interning a name string.
     pub fn keyword_by_name(s: impl AsRef<str>) -> Self {
         Self::from_kw_id(crate::intern::intern(s.as_ref()))
@@ -1112,7 +1109,7 @@ impl TaggedValue {
 
     /// True if this value is a sub-char-table (GNU PVEC_SUB_CHAR_TABLE shape).
     #[inline]
-    pub fn is_sub_char_table(self) -> bool {
+    pub(crate) fn is_sub_char_table(self) -> bool {
         self.veclike_type() == Some(VecLikeType::SubCharTable)
     }
 

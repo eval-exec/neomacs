@@ -245,21 +245,22 @@ fn div_cx53_undo_redo_marker_overlay_textprop_display_evaporate_narrow_env_exitc
 fn div_cx53_read_eval_backquote_destructuring_splice_lexical_macro_multibyte_hash_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
     let expect = expect_test::expect![[
-        r#""ERR (error \"`let' bindings can have only one value-form\" let ((result (eval (car (read-from-string \"`(:names ,(mapcar #'car (caar ,data))\\n                                  :vals ,(mapcar #'cdr (caar ,data))\\n                                  :len ,(length (caar ,data)))\")) t))) (list (plist-get result :names) (plist-get result :vals) (plist-get result :len) (secure-hash 'md5 (prin1-to-string result))))""#
+        r#""OK ((\"café\" \"世界\" \"😀\") (1 2 3) 3 \"48a328beb08ef104a096dec8db9e7eaa\")""#
     ]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((lexical-binding t))
-  (let ((data '((("café" . 1) ("世界" . 2) ("😀" . 3))))
+  (let ((data '((("café" . 1) ("世界" . 2) ("😀" . 3)))))
     (let ((result (eval (car (read-from-string
-                               "`(:names ,(mapcar #'car (caar ,data))
-                                  :vals ,(mapcar #'cdr (caar ,data))
-                                  :len ,(length (caar ,data)))")) t)))
+                               (format "`(:names ,(mapcar #'car (car '%S))
+                                  :vals ,(mapcar #'cdr (car '%S))
+                                  :len ,(length (car '%S)))"
+                                      data data data))) t)))
       (list (plist-get result :names)
             (plist-get result :vals)
             (plist-get result :len)
             (secure-hash 'md5 (prin1-to-string result))))))
-)"##,
+"##,
         expect,
     );
 }

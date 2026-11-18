@@ -2221,10 +2221,13 @@ fn div_core_divergence_surface_quit_process_sentinel_message() {
                                  log)))))
     (set-process-query-on-exit-flag proc nil)
     (quit-process proc)
-    (let ((i 0))
-      (while (and (process-live-p proc) (< i 20))
-        (accept-process-output proc 0.05)
-        (setq i (1+ i))))
+    ;; The subject is the settled sentinel record.  The old 20 x 0.05s
+    ;; ceiling was itself the flake: measured at load 46, BOTH editors
+    ;; returned (run 0 nil) at the same rate when the child had not been
+    ;; harvested inside one second, so this is a wall-clock bound, not a
+    ;; status-publication divergence.  GNU's own observation then runs the
+    ;; sentinel, exactly as the settle helper does.
+    (neovm--oracle-settle-process proc 600)
     (let ((j 0))
       (while (and (null log) (< j 20))
         (accept-process-output proc 0.05)

@@ -123,7 +123,7 @@ fn round(
         report.major,
         "C5 qualifies full stop-all collection, not minors"
     );
-    assert_eq!(report.frozen_owners, 1);
+    assert_eq!(report.frozen_owners(), 1);
     let (live, text) = observed.unwrap().unwrap();
     eprintln!(
         "P3SYM_C5_NAME_GC_ROUND epoch={} cycle={} roots={} names={} live={live:?}",

@@ -227,7 +227,8 @@ impl SymbolFlags {
     /// projection.  One byte test, since `Plainval` and `Untrapped` are both
     /// the zero encoding.
     #[inline(always)]
-    pub fn is_plain_untrapped_unprojected(&self) -> bool {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn is_plain_untrapped_unprojected(&self) -> bool {
         self.load() & (Self::REDIRECT_MASK | Self::TRAPPED_WRITE_MASK | Self::RUNTIME_PROJECTED_BIT)
             == 0
     }
@@ -954,7 +955,7 @@ impl LispSymbol {
 /// }
 /// ```
 #[cfg(doctest)]
-pub struct ValueCellCompileContract;
+pub(crate) struct ValueCellCompileContract;
 
 // ===========================================================================
 // Writing a cell

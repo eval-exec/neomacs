@@ -4,6 +4,16 @@ use super::*;
 use crate::emacs_core::display_host::FontResolveRequest;
 use crate::emacs_core::font::*;
 use crate::face::{Color, FaceAttrValue, FaceHeight};
+
+/// Test view of the live family capture, matching the removed production
+/// wrapper's infallible shape. The registry is always readable in tests.
+fn alternative_font_families(family: &str) -> Vec<String> {
+    capture_alternative_font_families(family)
+        .expect("alternative family registry")
+        .iter()
+        .map(|name| name.to_string())
+        .collect()
+}
 use crate::test_utils::xfaces_upper_layer_helpers::LiveFrameFontDisplayHost;
 use crate::test_utils::xfaces_upper_layer_helpers::{
     ensure_selected_gui_frame, resolved_frame_font,
@@ -2972,8 +2982,22 @@ fn internal_set_alternative_font_registry_alist_downcases_values() {
         inner[1].as_runtime_string_owned().as_deref(),
         Some("gb18030.2000-1")
     );
+    // B15-1: assert the production store the builtin wrote, not the deleted
+    // test-only lookup model.
+    let state = crate::emacs_core::font::alternative_font_registry_alist_snapshot_for_test();
+    assert_eq!(state.len(), 1, "one registry entry is stored");
     assert_eq!(
-        alternative_font_registries("ISO10646-1"),
+        neovm_value::emacs_char::to_utf8_lossy(state[0].0.as_bytes()),
+        "iso10646-1"
+    );
+    let aliases: Vec<String> = state[0]
+        .1
+        .iter()
+        .map(|alias| neovm_value::emacs_char::to_utf8_lossy(alias.as_bytes()))
+        .collect();
+    // The production store keeps the primary spelling beside the aliases.
+    assert_eq!(
+        aliases,
         vec!["iso10646-1".to_string(), "gb18030.2000-1".to_string()]
     );
 }
@@ -2999,7 +3023,11 @@ fn internal_set_alternative_font_registry_alist_accepts_raw_unibyte_strings() {
             0xFF, b'a'
         ]))
     );
-    assert_eq!(alternative_font_registries(&expected), vec![expected]);
+    // B15-1: the stored raw bytes are the production write's result.
+    let _ = expected;
+    let state = crate::emacs_core::font::alternative_font_registry_alist_snapshot_for_test();
+    assert_eq!(state.len(), 1, "one registry entry is stored");
+    assert_eq!(state[0].0.as_bytes(), &[0xFF, b'a']);
 }
 
 #[test]

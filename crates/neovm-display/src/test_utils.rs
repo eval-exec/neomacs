@@ -2660,7 +2660,7 @@ pub mod mode_line_dynamic_symbols_test_upper_layer_helpers {
     use neovm_eval::emacs_core::eval::Context;
     use neovm_value::heap_types::{GnuDeclaredCharacterCount, LispString};
     use neovm_value::intern::{
-        intern_call_names, intern_uninterned, reset_intern_calls, restore_runtime_interner,
+        intern_call_names, make_uninterned_symbol, reset_intern_calls, restore_runtime_interner,
         unintern_canonical_id,
     };
     pub(crate) fn context(

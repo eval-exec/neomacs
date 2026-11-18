@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::heap_types::LispString;
-use crate::intern::{intern, intern_uninterned};
+use crate::intern::{intern, make_uninterned_symbol};
 use crate::symbol::Obarray;
 use crate::value::scratch_bridge::{
     push_scratch_gc_root, restore_scratch_gc_roots, save_scratch_gc_roots,
@@ -37,7 +37,7 @@ fn heap(enabled: bool) -> TaggedHeap {
 }
 
 fn symbol(name: &str) -> TaggedValue {
-    TaggedValue::from_sym_id(intern_uninterned(name))
+    TaggedValue::from_sym_id(make_uninterned_symbol(name))
 }
 
 fn id(value: TaggedValue) -> SymId {

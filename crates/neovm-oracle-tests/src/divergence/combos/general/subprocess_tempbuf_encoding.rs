@@ -7,10 +7,10 @@ use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 fn divergence_process_multibyte_to_temp_buffer() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (void-variable buf)""#]];
+    let expect = expect_test::expect![[r#""OK (0 5 t t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
-  (let ((buf (generate-new-buffer " test-mb-proc-xxx"))))
+  (let ((buf (generate-new-buffer " test-mb-proc-xxx")))
     (with-current-buffer buf
       (let ((proc (start-process "test-mb-xxx" buf "printf" "caf\xc3\xa9 r\xc3\xa9sum\xc3\xa9")))
         (set-process-query-on-exit-flag proc nil)
@@ -21,7 +21,7 @@ fn divergence_process_multibyte_to_temp_buffer() {
           (list (string-match "caf" output)
                 (string-match "r" output)
                 (>= len 5)
-                (= (length output) (+ (length output) 0))))))) "#,
+                (= (length output) (+ (length output) 0)))))))) "#,
         expect,
     );
 }
@@ -148,10 +148,10 @@ fn divergence_temp_buffer_with_overlays_markers() {
 fn divergence_process_coding_system_conversion() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (void-variable buf)""#]];
+    let expect = expect_test::expect![[r#""OK (0 t t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
-  (let ((buf (generate-new-buffer " test-coding-xxx"))))
+  (let ((buf (generate-new-buffer " test-coding-xxx")))
     (with-current-buffer buf
       (set-buffer-file-coding-system 'utf-8)
       (let ((proc (start-process "test-coding-xxx" buf "echo" "test-output")))
@@ -161,7 +161,7 @@ fn divergence_process_coding_system_conversion() {
           (kill-buffer buf)
           (list (string-match "test-output" output)
                 (stringp output)
-                (> (length output) 0)))))) "#,
+                (> (length output) 0))))))) "#,
         expect,
     );
 }
@@ -222,11 +222,11 @@ fn divergence_buffer_file_name_temp() {
 fn divergence_process_sentinel_with_buffer() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (void-variable buf)""#]];
+    let expect = expect_test::expect![[r#""OK (0 t t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (defvar test-sentinel-log-xxx nil)
-  (let ((buf (generate-new-buffer " test-sent-xxx"))))
+  (let ((buf (generate-new-buffer " test-sent-xxx")))
     (with-current-buffer buf
       (let ((proc (start-process "test-sent-xxx" buf "echo" "sentinel-test")))
         (set-process-query-on-exit-flag proc nil)
@@ -240,7 +240,7 @@ fn divergence_process_sentinel_with_buffer() {
           (kill-buffer buf)
           (list (string-match "sentinel-test" output)
                 (>= (length log) 1)
-                (stringp output)))))) "#,
+                (stringp output))))))) "#,
         expect,
     );
 }

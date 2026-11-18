@@ -21,7 +21,7 @@ fn settled_point(
 
 use crate::emacs_core::eval::data::command_loop::{
     KeyEchoState, KeyboardRuntime, PrefixArg, PresentedInteractions, PresentedMouseArea,
-    PresentedMouseObservation, PresentedMouseTarget,
+    PresentedMouseObservation, PresentedMouseTarget, ReadKeySequenceState,
 };
 use crate::emacs_core::eval::protocol::tty_host::TERMINAL_ID;
 use crate::emacs_core::eval::*;

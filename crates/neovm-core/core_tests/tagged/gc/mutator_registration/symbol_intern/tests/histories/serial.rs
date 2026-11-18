@@ -77,10 +77,10 @@ fn audit(scenario: Scenario) {
         ctx.eval_str(all).unwrap().as_fixnum(),
         Some(ctx.obarray().len() as i64)
     );
-    let mut gap = crate::intern::intern_uninterned("p3sym-c5-serial-gap");
+    let mut gap = crate::intern::make_uninterned_symbol("p3sym-c5-serial-gap");
     let target = (u64::from(gap.to_raw()) / 4096 + 2) * 4096 + 17;
     while u64::from(gap.to_raw()) + 1 < target {
-        gap = crate::intern::intern_uninterned("p3sym-c5-serial-gap");
+        gap = crate::intern::make_uninterned_symbol("p3sym-c5-serial-gap");
     }
     let before: BTreeSet<_> = ctx
         .obarray()

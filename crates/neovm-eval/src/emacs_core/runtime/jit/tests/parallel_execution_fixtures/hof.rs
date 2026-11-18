@@ -234,7 +234,7 @@ pub(crate) fn prepared_hof_fixture<P>(
             )
             .expect("HOF fixture real stopped collection");
             assert!(collection.major);
-            assert_eq!(collection.frozen_owners, 1);
+            assert_eq!(collection.frozen_owners(), 1);
             retry_owned(
                 Deadline::contention(),
                 stopped,

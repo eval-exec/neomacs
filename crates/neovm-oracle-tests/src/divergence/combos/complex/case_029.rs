@@ -267,20 +267,17 @@ fn div_cx29_buffer_hash_after_undo_match_original() {
 #[test]
 fn div_cx29_prin1_of_string_with_text_properties_circle() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[
-        r#""ERR (error \"`let' bindings can have only one value-form\" p (prin1-to-string (list s s s)) (back (car (read-from-string p))))""#
-    ]];
+    let expect = expect_test::expect![[r#""OK (t t (face bold mouse-face highlight))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let* ((s (propertize "café" 'face 'bold 'mouse-face 'highlight))
        (print-circle t)
-       (p (prin1-to-string (list s s s))
+       (p (prin1-to-string (list s s s)))
        (back (car (read-from-string p))))
-  (list (aref back 0)
-        (eq (aref back 0) (aref back 1))
-        (eq (aref back 0) (aref back 2))
-        (text-properties-at 0 (aref back 0))))
-)"##,
+  (list (eq (nth 0 back) (nth 1 back))
+        (eq (nth 0 back) (nth 2 back))
+        (text-properties-at 0 (nth 0 back))))
+"##,
         expect,
     );
 }

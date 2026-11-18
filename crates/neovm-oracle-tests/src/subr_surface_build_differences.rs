@@ -195,15 +195,31 @@ fn oracle_neither_editor_declares_the_names_ledger_190_deleted() {
     crate::common::assert_oracle_parity_expect(&form, expect);
 }
 
-/// Neither editor declares any xwidget subr on the reference profile.
+/// The xwidget subr surface follows the RUNNING build's feature.
 ///
 /// GNU compiles the whole of `src/xwidget.c` only under `HAVE_XWIDGETS`;
-/// this port keys the same names on its `xwidgets` cargo feature. In verify
-/// and live mode the GNU half is measured on the attested oracle, and the
-/// snapshot half measures the shipped neomacs binary.
+/// this port keys the same names on its `xwidgets` cargo feature. When the
+/// feature is absent (the reference profiles) neither editor declares the
+/// subrs; when it is present (the macOS product through `webview`) the
+/// catalog must declare them -- an internal-agreement claim, since the
+/// reference GNU oracle has no --with-xwidgets.
 #[test]
-fn oracle_neither_editor_declares_xwidget_subrs_without_the_feature() {
+fn oracle_xwidget_subr_surface_follows_the_running_feature() {
     return_if_neovm_enable_oracle_proptest_not_set!();
+
+    if crate::obarray_runtime_surface::neovm_advertises_xwidget_internal() {
+        let neovm = crate::common::run_neovm_eval(
+            "(list (and (fboundp 'make-xwidget) t)
+                   (and (fboundp 'xwidgetp) t)
+                   (and (fboundp 'xwidget-webkit-goto-uri) t))",
+        )
+        .expect("neomacs eval should run");
+        assert_eq!(
+            neovm, "OK (t t t)",
+            "a build that advertises xwidget-internal must declare the xwidget subrs"
+        );
+        return;
+    }
 
     let form = probe("start-kbd-macro", XWIDGET_SUBRS);
     let expect = expect_test::expect![[r#""OK (nil nil t)""#]];

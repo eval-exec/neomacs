@@ -151,6 +151,18 @@ impl Context {
         &self.obarray
     }
 
+    /// Publish an existing canonical `SymId` as an obarray member and return
+    /// it as a Value.
+    ///
+    /// Use when the id was resolved earlier (for example a priority list of
+    /// category ids) and GNU interns the name at publication. A non-canonical
+    /// `make-symbol` id is left uninterned, as in GNU.
+    #[inline]
+    pub(crate) fn intern_member_id_value(&mut self, id: SymId) -> Value {
+        self.obarray.ensure_interned_global_id(id);
+        Value::from_sym_id(id)
+    }
+
     /// R-b (PC11-F f1): the Context's tagged-heap view. The field this reads
     /// narrows to `pub(crate)`; cross-crate test code uses this accessor.
     #[doc(hidden)]
@@ -417,7 +429,8 @@ impl Context {
     /// lookup (buffer-local, then `buffer_defaults`) — the obarray value cell of
     /// a forwarded slot var is always nil, so the resolver must read the default
     /// slot directly.
-    pub fn buffer_default_value(&self, name: &str) -> Option<Value> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn buffer_default_value(&self, name: &str) -> Option<Value> {
         // GNU default read: BVAR (&buffer_defaults, slot) for a slot-backed
         // per-buffer variable (src/buffer.c:1116, 2289); for any other
         // variable the obarray default cell is GNU's Fdefault_value.
@@ -1774,7 +1787,8 @@ impl Context {
         let _ = self.clear_echo_area_message_with_hook(false);
     }
 
-    pub fn clear_current_message(&mut self) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn clear_current_message(&mut self) {
         self.cancel_key_echo_state();
         if self.clear_echo_area_message() == EchoMessageClearResult::PreserveEchoArea {}
     }

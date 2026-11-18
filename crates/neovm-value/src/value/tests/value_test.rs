@@ -1,7 +1,6 @@
 use super::*;
 use crate::heap_types::LispMarker;
-use crate::intern::{intern, intern_uninterned, resolve_sym};
-use crate::tagged::header::CLOSURE_ARGLIST;
+use crate::intern::{intern, make_uninterned_symbol};
 use crate::value::buffer_vocab::BufferId;
 use malachite::integer::Integer;
 use std::str::FromStr;
@@ -359,7 +358,7 @@ fn keyword_identity_is_consistent_across_constructors() {
 fn uninterned_colon_name_is_not_treated_as_keyword() {
     crate::test_utils::init_test_tracing();
     with_test_heap(|| {
-        let uninterned = Value::symbol(intern_uninterned(":vm-shadow-keyword"));
+        let uninterned = Value::symbol(make_uninterned_symbol(":vm-shadow-keyword"));
         assert!(!uninterned.is_bare_keyword());
         assert!(uninterned.as_bare_keyword_id().is_none());
 
@@ -533,46 +532,6 @@ fn repeated_shallow_equal_avoids_cycle_tracking_overhead() {
         assert!(
             elapsed < std::time::Duration::from_secs(2),
             "shallow equal should not allocate cycle tracking for every call; elapsed={elapsed:?}"
-        );
-    });
-}
-
-#[test]
-fn closure_slot_mutation_invalidates_cached_params() {
-    crate::test_utils::init_test_tracing();
-    with_test_heap(|| {
-        let closure = Value::make_lambda(LambdaData {
-            params: LambdaParams::simple(vec![intern("x")]).into(),
-            body: vec![Value::symbol("x")],
-            env: None,
-            docstring: None,
-            doc_form: None,
-            interactive: None,
-        });
-
-        assert_eq!(
-            closure
-                .closure_params()
-                .unwrap()
-                .required
-                .iter()
-                .map(|sym| resolve_sym(*sym))
-                .collect::<Vec<_>>(),
-            vec!["x"]
-        );
-
-        let new_arglist = Value::list(vec![Value::symbol("y"), Value::symbol("z")]);
-        assert!(closure.set_closure_slot(CLOSURE_ARGLIST, new_arglist));
-
-        assert_eq!(
-            closure
-                .closure_params()
-                .unwrap()
-                .required
-                .iter()
-                .map(|sym| resolve_sym(*sym))
-                .collect::<Vec<_>>(),
-            vec!["y", "z"]
         );
     });
 }

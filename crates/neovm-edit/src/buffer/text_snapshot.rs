@@ -22,7 +22,8 @@ use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 /// How [`super::buffer_text::BufferText`]'s snapshot clone holds the bytes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
-pub enum TextSnapshotMode {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) enum TextSnapshotMode {
     /// Deep-copy the text bytes into every snapshot (the old behaviour).
     Copy = 1,
     /// Share the bytes copy-on-write; the snapshot is O(1).
@@ -41,7 +42,7 @@ static TEXT_SNAPSHOT_MODE: AtomicU8 = AtomicU8::new(MODE_UNREAD);
 static BUFFER_TEXT_COW_COPIES: AtomicUsize = AtomicUsize::new(0);
 
 /// The mode a value of `NEOMACS_TEXT_SNAPSHOT` selects.
-pub fn parse_text_snapshot_knob(value: Option<&str>) -> TextSnapshotMode {
+pub(crate) fn parse_text_snapshot_knob(value: Option<&str>) -> TextSnapshotMode {
     let Some(value) = value.map(str::trim) else {
         return TextSnapshotMode::Share;
     };
@@ -69,13 +70,14 @@ thread_local! {
 /// layout engine), which is why it is not `cfg(test)`. The mode is read once
 /// per snapshot, never on a per-character path, so the check costs nothing
 /// measurable.
-pub fn set_text_snapshot_mode_override(mode: Option<TextSnapshotMode>) {
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn set_text_snapshot_mode_override(mode: Option<TextSnapshotMode>) {
     MODE_OVERRIDE.with(|cell| cell.set(mode));
 }
 
 /// The active mode. One relaxed byte load once the knob is read.
 #[inline]
-pub fn text_snapshot_mode() -> TextSnapshotMode {
+pub(crate) fn text_snapshot_mode() -> TextSnapshotMode {
     if let Some(mode) = MODE_OVERRIDE.with(|cell| cell.get()) {
         return mode;
     }

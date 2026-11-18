@@ -6,7 +6,7 @@
 
 use crate::neovm_bridge::{ForwardScrollMeasurement, LayoutBufferView, RustBufferAccess};
 use crate::scroll_policy::{
-    ForwardScroll, ScrollPolicy, count_lines_bounded, last_usable_row, line_start_above,
+    ForwardScroll, LineText, ScrollPolicy, count_lines_bounded, last_usable_row, line_start_above,
     line_start_below, top_margin,
 };
 use crate::types::{PartialBodyWalkStart, WindowKind, WindowParams};
@@ -394,10 +394,7 @@ impl BufferWindowSourceRequest {
             .requested_window_start
             .clamp(self.accessible_start, self.accessible_end);
         let measurement = self.forward_scroll_measurement(requested, access);
-        ResolvedWindowStart(self.resolve_window_start_with_measurement(
-            |charpos| access.byte_at(access.charpos_to_bytepos(charpos)),
-            measurement,
-        ))
+        ResolvedWindowStart(self.resolve_window_start_with_measurement(access, measurement))
     }
 
     fn forward_scroll_measurement<B: LayoutBufferView>(
@@ -588,16 +585,16 @@ impl BufferWindowSourceRequest {
     }
 
     #[cfg(test)]
-    fn resolve_window_start(self, byte_at_charpos: impl Fn(i64) -> Option<u8>) -> i64 {
+    fn resolve_window_start(self, text: impl LineText) -> i64 {
         self.resolve_window_start_with_measurement(
-            byte_at_charpos,
+            &text,
             ForwardScrollMeasurement::SourceLineEstimate,
         )
     }
 
     fn resolve_window_start_with_measurement(
         self,
-        byte_at_charpos: impl Fn(i64) -> Option<u8>,
+        text: &(impl LineText + ?Sized),
         forward_measurement: ForwardScrollMeasurement,
     ) -> i64 {
         let mut window_start = self.requested_window_start.max(self.accessible_start);
@@ -606,15 +603,14 @@ impl BufferWindowSourceRequest {
             let remaining_chars = self.accessible_end - window_start;
             if remaining_chars < self.max_rows as i64 && self.accessible_end > self.max_rows as i64
             {
-                window_start = self
-                    .line_start_above_point((self.max_rows as i64 / 2).max(1), &byte_at_charpos);
+                window_start = self.line_start_above_point((self.max_rows as i64 / 2).max(1), text);
             }
         }
 
         if self.point_charpos >= self.accessible_start
-            && self.point_is_above_top_margin(window_start, &byte_at_charpos)
+            && self.point_is_above_top_margin(window_start, text)
         {
-            let adjusted = self.backward_scroll_window_start(window_start, &byte_at_charpos);
+            let adjusted = self.backward_scroll_window_start(window_start, text);
             tracing::debug!(
                 "layout_window_rust: adjusted window_start {} -> {} (point={})",
                 self.requested_window_start,
@@ -625,7 +621,7 @@ impl BufferWindowSourceRequest {
         }
 
         if let Some(adjusted) =
-            self.forward_scroll_window_start(window_start, forward_measurement, &byte_at_charpos)
+            self.forward_scroll_window_start(window_start, forward_measurement, text)
         {
             tracing::debug!(
                 "layout_window_rust: forward-adjusted window_start {} -> {} (point={})",
@@ -642,18 +638,12 @@ impl BufferWindowSourceRequest {
     /// Whether point sits above the top scroll-margin row, which is where GNU
     /// starts scrolling backward — not at the window start itself (its
     /// `PT < CHARPOS (scroll_margin_pos)` test, src/xdisp.c:19580).
-    fn point_is_above_top_margin(
-        self,
-        window_start: i64,
-        byte_at_charpos: &impl Fn(i64) -> Option<u8>,
-    ) -> bool {
+    fn point_is_above_top_margin(self, window_start: i64, text: &(impl LineText + ?Sized)) -> bool {
         if self.point_charpos < window_start {
             return true;
         }
         let margin = top_margin(self.max_rows, self.scroll_margin);
-        margin > 0
-            && count_lines_bounded(window_start, self.point_charpos, margin, byte_at_charpos).0
-                < margin
+        margin > 0 && count_lines_bounded(window_start, self.point_charpos, margin, text).0 < margin
     }
 
     /// New window start when point moved UP out of the window, per GNU
@@ -664,13 +654,13 @@ impl BufferWindowSourceRequest {
     fn backward_scroll_window_start(
         self,
         window_start: i64,
-        byte_at_charpos: &impl Fn(i64) -> Option<u8>,
+        text: &(impl LineText + ?Sized),
     ) -> i64 {
         let (lines_back, bounded) = count_lines_bounded(
             self.point_charpos,
             window_start,
             self.scroll_policy.search_limit_lines(),
-            byte_at_charpos,
+            text,
         );
         let lines_above_point = self.scroll_policy.backward_scroll(
             lines_back,
@@ -678,7 +668,7 @@ impl BufferWindowSourceRequest {
             self.max_rows,
             self.scroll_margin,
         );
-        self.line_start_above_point(lines_above_point, byte_at_charpos)
+        self.line_start_above_point(lines_above_point, text)
     }
 
     /// New window start when point sits below the window, per GNU
@@ -698,7 +688,7 @@ impl BufferWindowSourceRequest {
         self,
         window_start: i64,
         measurement: ForwardScrollMeasurement,
-        byte_at_charpos: &impl Fn(i64) -> Option<u8>,
+        text: &(impl LineText + ?Sized),
     ) -> Option<i64> {
         if self.kind.is_minibuffer() {
             return None;
@@ -732,7 +722,7 @@ impl BufferWindowSourceRequest {
                     end,
                     self.point_charpos,
                     self.scroll_policy.search_limit_lines(),
-                    byte_at_charpos,
+                    text,
                 );
                 (self.max_rows as i64 + extra_lines, bounded)
             }
@@ -744,7 +734,7 @@ impl BufferWindowSourceRequest {
                     window_start,
                     self.point_charpos,
                     bottom_row + self.scroll_policy.search_limit_lines(),
-                    byte_at_charpos,
+                    text,
                 )
             }
         };
@@ -762,26 +752,17 @@ impl BufferWindowSourceRequest {
                 .forward_scroll(dy, bounded, self.max_rows, self.scroll_margin)
             {
                 ForwardScroll::Advance { lines } => {
-                    line_start_below(window_start, lines, self.accessible_end, byte_at_charpos)
+                    line_start_below(window_start, lines, self.accessible_end, text)
                 }
                 ForwardScroll::Recenter { lines_above_point } => {
-                    self.line_start_above_point(lines_above_point, byte_at_charpos)
+                    self.line_start_above_point(lines_above_point, text)
                 }
             },
         )
     }
 
-    fn line_start_above_point(
-        self,
-        lines_above: i64,
-        byte_at_charpos: &impl Fn(i64) -> Option<u8>,
-    ) -> i64 {
-        line_start_above(
-            self.point_charpos,
-            lines_above,
-            self.accessible_start,
-            byte_at_charpos,
-        )
+    fn line_start_above_point(self, lines_above: i64, text: &(impl LineText + ?Sized)) -> i64 {
+        line_start_above(self.point_charpos, lines_above, self.accessible_start, text)
     }
 }
 
