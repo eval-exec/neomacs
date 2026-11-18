@@ -169,6 +169,8 @@ impl FontsetRegistry {
         self.generation = self.generation.wrapping_add(1);
     }
 
+    /// One `set-fontset-font` call: every target gets ENTRY, and the
+    /// generation moves once so cached font selections are redone.
     fn update_targets(
         &mut self,
         name: &FontNameSpelling,
@@ -276,7 +278,12 @@ impl FontsetData {
         }
     }
 
-    fn update_targets(&mut self, targets: Vec<FontsetTarget>, entry: FontSpecEntry, add: FontsetAddMode) {
+    fn update_targets(
+        &mut self,
+        targets: Vec<FontsetTarget>,
+        entry: FontSpecEntry,
+        add: FontsetAddMode,
+    ) {
         let entry = StoredFontsetEntry::from(entry);
         let mut new_ranges = Vec::new();
         for target in targets {
@@ -304,8 +311,26 @@ impl FontsetData {
             return;
         }
 
-        // Sort and coalesce adjacent/overlapping new ranges
         new_ranges.sort_unstable_by_key(|&(from, _)| from);
+        // GNU `set-fontset-font` calls `fontset_add` once per target range,
+        // so a character that two targets cover gets an `append`ed or
+        // `prepend`ed entry twice.  Only `overwrite` is idempotent, so only it
+        // may merge overlapping targets.  Merging targets that merely touch
+        // is exact in every mode.  Sorted by start, any overlap shows up
+        // between neighbours.
+        let overlapping = new_ranges.windows(2).any(|pair| pair[1].0 <= pair[0].1);
+        match add {
+            FontsetAddMode::Append | FontsetAddMode::Prepend if overlapping => {
+                // The repeated entry is the same one, so the order of the
+                // per-target updates does not change the result.
+                for (from, to) in new_ranges {
+                    self.update_range(from, to, entry.clone(), add);
+                }
+                return;
+            }
+            FontsetAddMode::Overwrite | FontsetAddMode::Append | FontsetAddMode::Prepend => {}
+        }
+
         let mut coalesced: Vec<(u32, u32)> = Vec::with_capacity(new_ranges.len());
         for (from, to) in new_ranges {
             if let Some(last) = coalesced.last_mut() {
@@ -372,13 +397,14 @@ impl FontsetData {
                 cursor = overlap_to.saturating_add(1);
 
                 if old.to > n_to {
-                    // Part of old remains past n_to; update old in peekable
-                    let mut peek_mut = old_iter.peek_mut().unwrap();
-                    peek_mut.from = n_to + 1;
+                    // The rest of OLD lies past this target; a later target
+                    // or the final copy loop takes it.
+                    if let Some(rest) = old_iter.peek_mut() {
+                        rest.from = n_to + 1;
+                    }
                     break;
-                } else {
-                    old_iter.next();
                 }
+                old_iter.next();
             }
 
             if cursor <= n_to {
