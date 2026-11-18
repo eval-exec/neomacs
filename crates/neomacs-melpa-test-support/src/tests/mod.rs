@@ -60,7 +60,7 @@ fn neomacs_binary_attestation_refuses_an_unstamped_binary() {
 /// The package-TUI save stage renders `Write file: <home>/.gitignore` on a
 /// single 160-column row.  A deep workspace path used to push the sandbox
 /// HOME past that bound because the case root lived under the MELPA cache
-/// root; the harness now picks a base that fits.
+/// root; the package-TUI constructor picks a base that fits.
 #[test]
 fn melpa_sandbox_home_fits_the_package_tui_prompt_row() {
     for label in [
@@ -69,7 +69,7 @@ fn melpa_sandbox_home_fits_the_package_tui_prompt_row() {
         "helm-gitignore-generation-failure",
         "corfu",
     ] {
-        let base = sandbox_case_base(label);
+        let base = short_home_sandbox_base(label);
         let prefix_and_suffix = sanitize_label(label).len() + 1 + 6;
         let worst_home = base.as_os_str().len() + 1 + prefix_and_suffix + "/home".len();
         assert!(
@@ -78,7 +78,7 @@ fn melpa_sandbox_home_fits_the_package_tui_prompt_row() {
             base.display()
         );
 
-        let sandbox = MelpaSandbox::new(label).expect("create melpa sandbox");
+        let sandbox = MelpaSandbox::new_with_short_home(label).expect("create melpa sandbox");
         let prompt_width =
             "Write file: ".len() + sandbox.home.as_os_str().len() + "/.gitignore".len();
         assert!(
@@ -87,4 +87,23 @@ fn melpa_sandbox_home_fits_the_package_tui_prompt_row() {
             sandbox.home.display()
         );
     }
+}
+
+/// Every ordinary sandbox lives below the MELPA cache root inside the
+/// checkout.  Editor filesystem policy then cannot depend on the host's
+/// temporary directory: backups are not suppressed by
+/// `normal-backup-enable-predicate`, and checkout fixtures find an ancestor
+/// marker.  The host-path dependence this replaces made alarm-clock's backup
+/// and auto-save-buffers-enhanced's checkout case fail in both editors once a
+/// long batch label pushed the sandbox into `/tmp`.
+#[test]
+fn melpa_sandbox_new_lives_below_the_melpa_cache_root() {
+    let sandbox = MelpaSandbox::new("sandbox-layout-contract").expect("create melpa sandbox");
+    let cache_root = neomacs_infra::melpa_cache_root();
+    assert!(
+        sandbox.root().starts_with(&cache_root),
+        "sandbox {} is not below the MELPA cache root {}",
+        sandbox.root().display(),
+        cache_root.display()
+    );
 }

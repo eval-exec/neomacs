@@ -131,13 +131,31 @@ const MAX_SANDBOX_HOME: usize = 120;
 
 /// Base directory for a scenario's ephemeral case root.
 ///
-/// The sandbox root is disposable, so choose the MELPA cache root when its
-/// path leaves the HOME short enough for the package-TUI prompt row; a deep
-/// worktree or CI sandbox falls back to the system temporary directory (and,
-/// on Unix, `/tmp` as the last resort).  This is the same shape as the
+/// Every sandbox lives below the MELPA cache root, which is inside the
+/// checkout, so the editor derives the same filesystem context for a case on
+/// every host.  That matters because observable editor state depends on the
+/// sandbox path: `normal-backup-enable-predicate' (GNU `files.el') suppresses
+/// backups below `temporary-file-directory' and `/tmp', and the
+/// auto-save-buffers-enhanced checkout fixture resolves its root by walking
+/// above the sandbox for a `.git'/`.svn'/`.cvs' marker.  A sandbox under
+/// `/tmp' turns both into host-path-dependent state that the recorded
+/// snapshots did not see.
+///
+/// Package-TUI scenarios need a short HOME instead; see
+/// [`short_home_sandbox_base`].
+fn checkout_sandbox_base() -> PathBuf {
+    neomacs_infra::melpa_cache_root()
+}
+
+/// Base directory for the package-TUI scenarios, whose HOME is typed into a
+/// 160-column prompt row.
+///
+/// Choose the MELPA cache root when its path leaves the HOME short enough;
+/// a deep worktree or CI sandbox falls back to the system temporary directory
+/// (and, on Unix, `/tmp' as the last resort).  This is the same shape as the
 /// socket fixtures' sun_path handling: the harness, not the caller's path,
-/// picks a location the fixture can display and bind.
-fn sandbox_case_base(label: &str) -> PathBuf {
+/// picks a location the fixture can display and type.
+fn short_home_sandbox_base(label: &str) -> PathBuf {
     // tempfile appends six random characters to the prefix.
     let prefix_and_suffix = sanitize_label(label).len() + 1 + 6;
     let needed = prefix_and_suffix + "/home".len();
@@ -162,9 +180,20 @@ fn sandbox_case_base(label: &str) -> PathBuf {
 }
 
 impl MelpaSandbox {
-    /// Create a sandbox below the melpa cache root.
+    /// Create a sandbox below the melpa cache root inside the checkout.
     pub fn new(label: &str) -> Result<Self, String> {
-        let base = sandbox_case_base(label);
+        Self::with_base(label, checkout_sandbox_base())
+    }
+
+    /// Create a sandbox whose HOME fits the package-TUI prompt row.
+    ///
+    /// Only the PTY package scenarios that render `Write file: <home>/...'
+    /// need this shorter layout; every other caller uses [`Self::new`].
+    pub fn new_with_short_home(label: &str) -> Result<Self, String> {
+        Self::with_base(label, short_home_sandbox_base(label))
+    }
+
+    fn with_base(label: &str, base: PathBuf) -> Result<Self, String> {
         fs::create_dir_all(&base).map_err(|error| {
             format!(
                 "failed to create MELPA scratch directory {}: {error}",
