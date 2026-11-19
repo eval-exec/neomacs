@@ -214,19 +214,19 @@ impl TaggedHeap {
     /// Add one Context's slice to this heap's cycle bank.
     #[doc(hidden)]
     pub fn bank_cycle_elapsed(&mut self, slice: std::time::Duration) {
-        self.ephemeron_records.cycle_elapsed += slice;
+        self.cycle_time_bank.bank(slice);
     }
 
     /// Take the bank. The caller publishes it; the next cycle starts at zero.
     #[doc(hidden)]
     pub fn take_cycle_elapsed(&mut self) -> std::time::Duration {
-        std::mem::take(&mut self.ephemeron_records.cycle_elapsed)
+        self.cycle_time_bank.take()
     }
 
     /// Time banked for the cycle in progress.
     #[doc(hidden)]
     pub fn cycle_elapsed(&self) -> std::time::Duration {
-        self.ephemeron_records.cycle_elapsed
+        self.cycle_time_bank.peek()
     }
 
     /// Register cons cells whose storage is owned by the loaded pdump image.
@@ -432,13 +432,6 @@ pub(crate) struct EphemeronRecords {
     pub(crate) deleted_frame_ephemerons: FxHashMap<u64, Vec<TaggedValue>>,
     /// Frame ids whose ephemeron keys were unreachable in the last full cycle.
     pub(crate) reclaimed_frame_ids: Vec<u64>,
-    /// Time banked by every Context of this heap for the cycle in progress.
-    ///
-    /// Not an ephemeron. It lives on this trailing object so `TaggedHeap`
-    /// gains no field and `gc.rs` stays the facade. The call that completes
-    /// the cycle takes the sum and publishes it once. The next cycle starts
-    /// from zero. GNU keeps one process-wide `gc_elapsed` (`alloc.c`).
-    pub(crate) cycle_elapsed: std::time::Duration,
 }
 
 #[cfg(test)]

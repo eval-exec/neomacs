@@ -1083,6 +1083,8 @@ pub struct TaggedHeap {
     overlay_serial: crate::heap_types::OverlaySerialCounter,
     /// Retired-process and killed-buffer ephemeron records (memory_registry).
     ephemeron_records: memory_registry::EphemeronRecords,
+    /// Per-cycle collector-time bank. Trailing, so no pinned offset moves.
+    cycle_time_bank: cycle_time_bank::GcCycleTimeBank,
 }
 
 impl Default for TaggedHeap {
@@ -1218,6 +1220,7 @@ impl TaggedHeap {
             mapped_veclike_traces: 0,
             overlay_serial: crate::heap_types::OverlaySerialCounter::new(),
             ephemeron_records: memory_registry::EphemeronRecords::default(),
+            cycle_time_bank: cycle_time_bank::GcCycleTimeBank::default(),
             dirty_owner_bits: FxHashSet::default(),
             dirty_writes: Vec::new(),
             gc_collections: 0,
@@ -1861,23 +1864,6 @@ impl TaggedHeap {
         // extra saturating add.
         // A plain add: a usize of allocated bytes cannot overflow.
         self.current_mutator_gc_mut().bytes_since_gc += bytes;
-    }
-
-    /// Every byte this heap has ever allocated.
-    ///
-    /// Derived rather than counted: `bytes_banked_at_resets` is advanced by
-    /// [`Self::reset_bytes_since_gc`], the one place `bytes_since_gc` returns
-    /// to zero, so the sum is exact by construction.
-    #[doc(hidden)]
-    pub fn total_allocated_bytes(&self) -> u64 {
-        let delta = self.allocation_region_deltas();
-        self.mutators()
-            .map(|state| {
-                state
-                    .bytes_banked_at_resets
-                    .saturating_add(state.exact_bytes_since_gc(delta) as u64)
-            })
-            .fold(0, u64::saturating_add)
     }
 
     fn vector_storage_bytes<T>(values: &Vec<T>) -> usize {
@@ -2605,6 +2591,8 @@ mod mark_sweep;
 #[cfg(feature = "test-support")]
 pub mod mark_sweep;
 
+mod alloc_bytes;
+mod cycle_time_bank;
 #[cfg(feature = "gc-memory-telemetry")]
 mod memory_inventory;
 mod memory_registry;
