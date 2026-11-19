@@ -9,10 +9,10 @@
 pub use neovm_value::errors::*;
 
 use neovm_value::symbol::Obarray;
-use neovm_value::value::Value;
 use neovm_value::test_support::{
     emacs_core__errors__iter_symbol_list as iter_symbol_list,
     emacs_core__errors__put_error_properties as put_error_properties,
 };
+use neovm_value::value::Value;
 #[path = "../../core_tests/emacs_core/runtime/errors/tests/errors_test.rs"]
 mod tests;
