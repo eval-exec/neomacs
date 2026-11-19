@@ -5,4 +5,5 @@ mod quit_requester;
 pub(crate) mod source_entry;
 pub(crate) mod source_jit_backend;
 pub(crate) mod source_jit_cache;
+pub(crate) mod source_jit_compiler;
 mod text_caches;

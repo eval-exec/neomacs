@@ -1730,3 +1730,6 @@ pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
     neovm_value::tls_fingerprint::mix(h, PENDING_IDS.with(|slot| slot.borrow().len() as u64));
     neovm_value::tls_fingerprint::mix_debug(h, STATS.with(|slot| slot.get()));
 }
+
+/// Cold source-only background metadata retention.
+pub(crate) mod source_suspension;

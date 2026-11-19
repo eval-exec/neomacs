@@ -2015,3 +2015,20 @@ pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
     );
     neovm_value::tls_fingerprint::mix(h, UNBIND_SITES.with(|slot| slot.borrow().len() as u64));
 }
+
+/// Cold source boundary. Never clear pointers that belong to a live compile.
+#[cold]
+pub(crate) fn validate_source_compile_scope()
+-> Result<(), super::super::source_suspension::SourceScopeRefusal> {
+    use super::super::source_suspension::SourceScopeRefusal;
+    match ENV.with(Cell::get) {
+        CompileEnvState::Absent => Ok(()),
+        CompileEnvState::Sim(_) | CompileEnvState::Green(_) => {
+            Err(SourceScopeRefusal::CompileEnvironment)
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "inline_vars/tests/source_suspension_test.rs"]
+mod source_suspension_tests;

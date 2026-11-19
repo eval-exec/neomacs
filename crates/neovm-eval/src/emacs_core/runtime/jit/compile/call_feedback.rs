@@ -433,3 +433,31 @@ pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
         ACTIVE_FEEDBACK_HOLDS.with(|slot| slot.borrow().len() as u64),
     );
 }
+
+/// Cold source check. Do not consume holds from an unfinished lowering.
+#[cold]
+pub(crate) fn validate_source_compile_scope()
+-> Result<(), super::super::source_suspension::SourceScopeRefusal> {
+    use super::super::source_suspension::{SourceScopeRefusal, SourceScopeSlot};
+    ACTIVE_CALL_SOURCE.with(|source| {
+        ACTIVE_FEEDBACK_HOLDS.with(|holds| {
+            let source = source
+                .try_borrow_mut()
+                .map_err(|_| SourceScopeRefusal::Borrowed(SourceScopeSlot::CallSource))?;
+            let holds = holds
+                .try_borrow_mut()
+                .map_err(|_| SourceScopeRefusal::Borrowed(SourceScopeSlot::FeedbackHolds))?;
+            if source.is_some() {
+                return Err(SourceScopeRefusal::CallSource);
+            }
+            if !holds.is_empty() {
+                return Err(SourceScopeRefusal::FeedbackHolds);
+            }
+            Ok(())
+        })
+    })
+}
+
+#[cfg(test)]
+#[path = "tests/call_feedback_source_suspension_test.rs"]
+mod source_suspension_tests;

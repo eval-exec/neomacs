@@ -863,3 +863,24 @@ pub(crate) fn reset_carrier_tls() {
 pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
     neovm_value::tls_fingerprint::mix(h, ACTIVE_FUSED.with(|slot| slot.borrow().is_some() as u64));
 }
+
+/// Cold source check. Cloning a fused body would retain its managed constants.
+#[cold]
+pub(crate) fn validate_source_compile_scope()
+-> Result<(), super::source_suspension::SourceScopeRefusal> {
+    use super::source_suspension::{SourceScopeRefusal, SourceScopeSlot};
+    ACTIVE_FUSED.with(|slot| {
+        let body = slot
+            .try_borrow_mut()
+            .map_err(|_| SourceScopeRefusal::Borrowed(SourceScopeSlot::FusedBody))?;
+        if body.is_some() {
+            Err(SourceScopeRefusal::FusedBody)
+        } else {
+            Ok(())
+        }
+    })
+}
+
+#[cfg(test)]
+#[path = "tests/inline_source_suspension_test.rs"]
+mod source_suspension_tests;

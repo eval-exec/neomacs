@@ -61,6 +61,7 @@ pub(crate) enum SourceWithdrawalStep {
     WorldCarriers,
     JitCache,
     JitBackend,
+    JitCompiler,
 }
 
 impl SourceWithdrawalStep {
@@ -92,6 +93,7 @@ impl SourceWithdrawalStep {
             Self::WorldCarriers => "world-carriers",
             Self::JitCache => "jit-cache",
             Self::JitBackend => "jit-backend",
+            Self::JitCompiler => "jit-compiler",
         }
     }
 }
@@ -687,3 +689,46 @@ impl OwnedSourceCacheClosed {
 #[cfg(test)]
 #[path = "tests/owned_source_jit_backend_test.rs"]
 mod jit_backend_tests;
+
+type JitCompiler = Effect<JitBackend, super::source_jit_compiler::SourceJitCompiler>;
+
+/// Actual boxed source after the local cache and backend are retained and
+/// the compile scopes are closed. Root publication and strict GEN1 admission
+/// are still required. This type cannot send the Context.
+#[must_use]
+pub(crate) struct OwnedSourceCompilerClosed {
+    _frame: SourceFrame<JitCompiler>,
+}
+
+static_assertions::assert_not_impl_any!(OwnedSourceCompilerClosed: Send, Sync, Clone, Copy);
+
+impl OwnedSourceBackendClosed {
+    #[cold]
+    #[inline(never)]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "E2 L4 dormant JIT compiler closure; no production caller enters it"
+        )
+    )]
+    pub(crate) fn close_jit_compiler(
+        self,
+    ) -> Result<OwnedSourceCompilerClosed, SourceWithdrawalFailure> {
+        let frame = self._frame.advance_after_effect(
+            SourceWithdrawalStep::JitCompiler,
+            |_source, effects| {
+                // SAFETY: the original unsafe capture excluded every complete
+                // execution and collector or store frame. No execution or
+                // collecting drain has followed, and the original receipts
+                // and backing stay owned by this chain.
+                unsafe { super::source_jit_compiler::close(&effects._receipt) }
+            },
+        )?;
+        Ok(OwnedSourceCompilerClosed { _frame: frame })
+    }
+}
+
+#[cfg(test)]
+#[path = "tests/owned_source_jit_compiler_test.rs"]
+mod jit_compiler_tests;

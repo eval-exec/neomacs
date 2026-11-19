@@ -189,6 +189,8 @@ pub(crate) mod vframe;
 /// calls ([`cache::try_run_compiled`]). Only built with the `jit` feature.
 #[cfg(feature = "jit")]
 pub mod cache;
+#[cfg(feature = "jit")]
+pub(crate) mod source_suspension;
 
 /// Bytecode-level inlining (see the module docs).
 #[cfg(feature = "jit")]
