@@ -22,7 +22,7 @@ use std::cell::RefCell;
 use std::ops::ControlFlow;
 use std::rc::Rc;
 use std::sync::atomic::Ordering;
-use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 use types::*;
@@ -47,18 +47,7 @@ impl Drop for Commands {
     }
 }
 fn receive<T>(receiver: &Receiver<T>) -> Result<T, Error> {
-    contention::retry(
-        Deadline::contention(),
-        || receiver.try_recv(),
-        |error| match error {
-            TryRecvError::Empty => Retry::Busy,
-            TryRecvError::Disconnected => Retry::Refuse,
-        },
-    )
-    .map_err(|error| match error {
-        TryRecvError::Empty => Error::Deadline,
-        TryRecvError::Disconnected => Error::Channel,
-    })
+    receiver.recv().map_err(|_| Error::Channel)
 }
 #[derive(Clone, Copy)]
 enum Action {
