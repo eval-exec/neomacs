@@ -92,6 +92,7 @@ crates/neovm-text/src/emacs_core/text/coding/mod.rs	fn	fn impl CodingSystemManag
 crates/neovm-text/src/emacs_core/text/coding/mod.rs	fn	fn impl CodingSystemManager::is_known
 crates/neovm-text/src/emacs_core/text/coding/mod.rs	fn	fn impl CodingSystemManager::is_known_or_derived
 crates/neovm-text/src/emacs_core/text/coding/mod.rs	fn	fn impl CodingSystemManager::new
+crates/neovm-text/src/emacs_core/text/coding/mod.rs	fn	fn impl CodingSystemManager::release_preloaded_iso2022_safe_sets
 crates/neovm-text/src/emacs_core/text/coding/mod.rs	fn	fn impl CodingSystemManager::resolve
 crates/neovm-text/src/emacs_core/text/coding/mod.rs	fn	fn impl CodingSystemManager::trace_roots
 crates/neovm-text/src/emacs_core/text/coding/mod.rs	fn	fn impl EolType::name
