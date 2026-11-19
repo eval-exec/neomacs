@@ -18,6 +18,7 @@ use std::cell::RefCell;
 use std::mem::MaybeUninit;
 use std::sync::{Arc, Weak};
 
+mod activation;
 mod bounded_power;
 
 // ===========================================================================

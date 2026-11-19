@@ -29,7 +29,7 @@ fn pentry_e2_loan_compile_contracts() {
             fixture
                 .file_name()
                 .and_then(|name| name.to_str())
-                .is_some_and(|name| !name.starts_with("transfer_"))
+                .is_some_and(|name| !name.starts_with("transfer_") && !name.starts_with("receipt_"))
         })
     {
         cases.compile_fail(fixture);
@@ -385,6 +385,263 @@ fn pentry_e2_loan_transfer_compile_contracts() {
         fs::create_dir_all(&directory).expect("isolated constructor mutation directory");
         let path = directory.join(format!("{name}_mutation.rs"));
         fs::write(&path, mutated_body).expect("safe copy of the constructor call");
+        cases.pass(path);
+    }
+}
+
+#[test]
+#[cfg(feature = "contract-fixtures")]
+fn pentry_e2_receipt_compile_contracts() {
+    use std::fs;
+    use std::path::PathBuf;
+
+    let cases = trybuild::TestCases::new();
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fail = [
+        "receipt_detached_registry_detach_requires_unsafe.rs",
+        "receipt_detached_registry_has_no_constructor.rs",
+        "receipt_detached_registry_not_clone.rs",
+        "receipt_detached_registry_not_copy.rs",
+        "receipt_detached_registry_not_send.rs",
+        "receipt_detached_registry_not_sync.rs",
+        "receipt_detach_failure_has_no_constructor.rs",
+        "receipt_restore_failure_has_no_constructor.rs",
+        "receipt_quit_detach_requires_unsafe.rs",
+        "receipt_quit_activation_has_no_constructor.rs",
+        "receipt_quit_activation_not_clone.rs",
+        "receipt_quit_activation_not_copy.rs",
+        "receipt_quit_activation_not_send.rs",
+        "receipt_quit_activation_not_sync.rs",
+        "receipt_quit_restore_failure_has_no_constructor.rs",
+        "receipt_prepared_cache_has_no_constructor.rs",
+        "receipt_prepared_cache_not_clone.rs",
+        "receipt_prepared_cache_not_copy.rs",
+        "receipt_prepared_cache_not_send.rs",
+        "receipt_prepared_cache_not_sync.rs",
+        "receipt_integer_width_is_private.rs",
+        "receipt_in_flight_is_private.rs",
+    ];
+    for name in fail {
+        cases.compile_fail(manifest.join("tests/pentry_e2_loan_ui").join(name));
+    }
+
+    let bounds =
+        fs::read_to_string(manifest.join("tests/pentry_e2_loan_ui/support/loan_bounds.rs"))
+            .expect("loan bound helper");
+    let detachment =
+        fs::read_to_string(manifest.join("../neovm-value/src/heap_registry/detachment.rs"))
+            .expect("registry detachment");
+    let quit = fs::read_to_string(manifest.join("../neovm-value/src/quit/quit_detach.rs"))
+        .expect("quit detachment");
+    let retirement =
+        fs::read_to_string(manifest.join("../neovm-value/src/heap_registry/text_retirement.rs"))
+            .expect("text retirement");
+    let integer_width = fs::read_to_string(
+        manifest.join("../neovm-eval/src/emacs_core/lisp/native/builtins/arithmetic/activation.rs"),
+    )
+    .expect("integer-width activation");
+    let in_flight =
+        fs::read_to_string(manifest.join("../neovm-value/src/error/registry_detach.rs"))
+            .expect("in-flight detachment");
+    assert_eq!(
+        detachment.matches("pub unsafe fn detach(").count(),
+        1,
+        "generic detach stays one unsafe constructor"
+    );
+    assert_eq!(
+        quit.matches("pub unsafe fn detach_quit_activation(")
+            .count(),
+        1,
+        "quit detach stays one unsafe constructor"
+    );
+    let output = manifest.join("../../tmp/pentry-r2/e2-receipt-mutations");
+    let bound_mutations = [
+        (
+            "receipt_detached_registry_not_clone",
+            "impl<T: Clone> RequireClone<T> {",
+            "impl<T> RequireClone<T> {",
+        ),
+        (
+            "receipt_detached_registry_not_copy",
+            "impl<T: Copy> RequireCopy<T> {",
+            "impl<T> RequireCopy<T> {",
+        ),
+        (
+            "receipt_detached_registry_not_send",
+            "impl<T: Send> RequireSend<T> {",
+            "impl<T> RequireSend<T> {",
+        ),
+        (
+            "receipt_detached_registry_not_sync",
+            "impl<T: Sync> RequireSync<T> {",
+            "impl<T> RequireSync<T> {",
+        ),
+        (
+            "receipt_quit_activation_not_clone",
+            "impl<T: Clone> RequireClone<T> {",
+            "impl<T> RequireClone<T> {",
+        ),
+        (
+            "receipt_quit_activation_not_copy",
+            "impl<T: Copy> RequireCopy<T> {",
+            "impl<T> RequireCopy<T> {",
+        ),
+        (
+            "receipt_quit_activation_not_send",
+            "impl<T: Send> RequireSend<T> {",
+            "impl<T> RequireSend<T> {",
+        ),
+        (
+            "receipt_quit_activation_not_sync",
+            "impl<T: Sync> RequireSync<T> {",
+            "impl<T> RequireSync<T> {",
+        ),
+        (
+            "receipt_prepared_cache_not_clone",
+            "impl<T: Clone> RequireClone<T> {",
+            "impl<T> RequireClone<T> {",
+        ),
+        (
+            "receipt_prepared_cache_not_copy",
+            "impl<T: Copy> RequireCopy<T> {",
+            "impl<T> RequireCopy<T> {",
+        ),
+        (
+            "receipt_prepared_cache_not_send",
+            "impl<T: Send> RequireSend<T> {",
+            "impl<T> RequireSend<T> {",
+        ),
+        (
+            "receipt_prepared_cache_not_sync",
+            "impl<T: Sync> RequireSync<T> {",
+            "impl<T> RequireSync<T> {",
+        ),
+    ];
+    for (name, before, after) in bound_mutations {
+        assert_eq!(bounds.matches(before).count(), 1, "one bound for {name}");
+        assert!(!before.contains('\n') && !after.contains('\n'));
+        let directory = output.join(name);
+        fs::create_dir_all(&directory).expect("isolated mutation directory");
+        fs::write(
+            directory.join("loan_bounds.rs"),
+            bounds.replacen(before, after, 1),
+        )
+        .expect("mutated bound helper");
+        let fixture =
+            fs::read_to_string(manifest.join(format!("tests/pentry_e2_loan_ui/{name}.rs")))
+                .expect("negative fixture body");
+        let fixture = fixture.replace("support/loan_bounds.rs", "loan_bounds.rs");
+        let path = directory.join(format!("{name}_mutation.rs"));
+        fs::write(&path, fixture).expect("negative body against the mutated bound");
+        cases.pass(path);
+    }
+
+    let constructor_mutations = [
+        (
+            &detachment,
+            "receipt_detached_registry_detach_requires_unsafe",
+            "pub unsafe fn detach(",
+            "struct HeapRegistrySlot;\n\
+             struct DetachedRegistry;\n\
+             impl HeapRegistrySlot {\n    \
+             pub fn detach(&self) -> DetachedRegistry { DetachedRegistry }\n}\n\
+             fn main() { let _receipt = HeapRegistrySlot.detach(); }\n",
+        ),
+        (
+            &detachment,
+            "receipt_detached_registry_has_no_constructor",
+            "pub struct DetachedRegistry<T> {",
+            "struct DetachedRegistry;\n\
+             impl DetachedRegistry {\n    \
+             pub fn new() -> Self { Self }\n}\n\
+             fn main() { let _receipt = DetachedRegistry::new(); }\n",
+        ),
+        (
+            &detachment,
+            "receipt_detach_failure_has_no_constructor",
+            "pub struct RegistryDetachFailure<T> {",
+            "struct RegistryDetachFailure;\n\
+             impl RegistryDetachFailure {\n    \
+             pub fn new() -> Self { Self }\n}\n\
+             fn main() { let _failure = RegistryDetachFailure::new(); }\n",
+        ),
+        (
+            &detachment,
+            "receipt_restore_failure_has_no_constructor",
+            "pub struct RegistryRestoreFailure<T> {",
+            "struct RegistryRestoreFailure;\n\
+             impl RegistryRestoreFailure {\n    \
+             pub fn new() -> Self { Self }\n}\n\
+             fn main() { let _failure = RegistryRestoreFailure::new(); }\n",
+        ),
+        (
+            &quit,
+            "receipt_quit_detach_requires_unsafe",
+            "pub unsafe fn detach_quit_activation(",
+            "struct QuitRequest;\n\
+             struct DetachedQuitActivation;\n\
+             fn detach_quit_activation(_expected: &QuitRequest) -> DetachedQuitActivation {\n    \
+             DetachedQuitActivation\n}\n\
+             fn main() {\n    \
+             let request = QuitRequest;\n    \
+             let _receipt = detach_quit_activation(&request);\n}\n",
+        ),
+        (
+            &quit,
+            "receipt_quit_activation_has_no_constructor",
+            "pub struct DetachedQuitActivation {",
+            "struct DetachedQuitActivation;\n\
+             impl DetachedQuitActivation {\n    \
+             pub fn new() -> Self { Self }\n}\n\
+             fn main() { let _receipt = DetachedQuitActivation::new(); }\n",
+        ),
+        (
+            &quit,
+            "receipt_quit_restore_failure_has_no_constructor",
+            "pub struct QuitRestoreFailure {",
+            "struct QuitRestoreFailure;\n\
+             impl QuitRestoreFailure {\n    \
+             pub fn new() -> Self { Self }\n}\n\
+             fn main() { let _failure = QuitRestoreFailure::new(); }\n",
+        ),
+        (
+            &retirement,
+            "receipt_prepared_cache_has_no_constructor",
+            "pub struct PreparedValueCacheRetirement<'a> {",
+            "struct PreparedValueCacheRetirement;\n\
+             impl PreparedValueCacheRetirement {\n    \
+             pub fn new() -> Self { Self }\n}\n\
+             fn main() { let _prepared = PreparedValueCacheRetirement::new(); }\n",
+        ),
+        (
+            &integer_width,
+            "receipt_integer_width_is_private",
+            "pub(crate) struct DetachedIntegerWidthActivation {",
+            "pub struct DetachedIntegerWidthActivation;\n\
+             fn main() { let _receipt = DetachedIntegerWidthActivation; }\n",
+        ),
+        (
+            &in_flight,
+            "receipt_in_flight_is_private",
+            "pub(crate) struct DetachedInFlightRegistry {",
+            "pub struct DetachedInFlightRegistry;\n\
+             fn main() { let _receipt = DetachedInFlightRegistry; }\n",
+        ),
+    ];
+    for (product, name, before, mutated_body) in constructor_mutations {
+        assert!(
+            product.contains(before),
+            "constructor source for {name} must contain {before}"
+        );
+        assert!(!before.contains('\n'));
+        assert!(
+            !mutated_body.contains("unsafe"),
+            "mutation must drop the seal for {name}"
+        );
+        let directory = output.join(name);
+        fs::create_dir_all(&directory).expect("isolated constructor mutation directory");
+        let path = directory.join(format!("{name}_mutation.rs"));
+        fs::write(&path, mutated_body).expect("seal dropped on a local stub");
         cases.pass(path);
     }
 }

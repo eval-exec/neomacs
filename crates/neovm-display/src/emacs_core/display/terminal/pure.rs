@@ -28,6 +28,9 @@ thread_local! {
         HeapRegistrySlot::new(TerminalLispRegistry::default());
 }
 
+#[path = "lisp_state_detach.rs"]
+mod lisp_state_detach;
+
 fn ensure_current_terminal_registry() {
     let heap_identity =
         neovm_value::tagged::gc::current_tagged_heap_identity().unwrap_or_else(|| {

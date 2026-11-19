@@ -1441,3 +1441,5 @@ impl InFlightRootPin {
         self.slot
     }
 }
+
+mod registry_detach;

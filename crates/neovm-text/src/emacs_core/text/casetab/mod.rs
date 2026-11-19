@@ -18,6 +18,9 @@ thread_local! {
     static STANDARD_CASE_TABLE_HEAP: Cell<usize> = const { Cell::new(0) };
 }
 
+#[doc(hidden)]
+pub mod retirement;
+
 /// Clear cached thread-local case table (must be called when heap changes).
 pub fn reset_casetab_thread_locals() {
     STANDARD_CASE_TABLE_OBJECT.with(|slot| *slot.borrow_mut() = None);

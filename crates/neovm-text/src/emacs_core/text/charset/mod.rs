@@ -634,6 +634,26 @@ impl CharsetRegistry {
         reg
     }
 
+    /// Root-free detached placeholder. [`Self::new`] and [`Self::build`] still
+    /// install the standard charsets.
+    fn empty() -> Self {
+        Self {
+            charsets: rustc_hash::FxHashMap::default(),
+            bindings: rustc_hash::FxHashMap::default(),
+            plists: Vec::new(),
+            aliases: rustc_hash::FxHashMap::default(),
+            priority: Vec::new(),
+            priority_identities: Vec::new(),
+            emacs_mule_order: Vec::new(),
+            non_preferred_head: None,
+            preferred_identities: Vec::new(),
+            iso_charset_table: rustc_hash::FxHashMap::default(),
+            published_names: rustc_hash::FxHashMap::default(),
+            iso2022_members: rustc_hash::FxHashSet::default(),
+            next_id: 256,
+        }
+    }
+
     /// Method identity captured for `name`.
     ///
     /// GNU `CHECK_CHARSET_GET_ID` reads the id stored in the name's attribute
@@ -1932,6 +1952,8 @@ impl CharsetRegistry {
 // ---------------------------------------------------------------------------
 
 use neovm_value::heap_registry::{HeapRegistryHandle, HeapRegistrySlot};
+
+mod registry_detach;
 
 thread_local! {
     #[cfg_attr(feature = "test-support", visibility::make(pub))]

@@ -731,6 +731,9 @@ thread_local! {
     static REGEX_CACHE_COLLECTION_EPOCH: Cell<Option<usize>> = const { Cell::new(None) };
 }
 
+#[doc(hidden)]
+pub mod retirement;
+
 pub(crate) fn clear_regex_caches() {
     SEARCH_PATTERN_CACHE.with(|cache| cache.borrow_mut().clear());
     LISP_REGEX_PATTERN_CACHE.with(|cache| cache.borrow_mut().clear());

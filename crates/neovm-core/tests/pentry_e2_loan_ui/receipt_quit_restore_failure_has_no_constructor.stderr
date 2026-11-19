@@ -1,0 +1,5 @@
+error[E0599]: no associated function or constant named `new` found for struct `neovm_value::quit::quit_detach::QuitRestoreFailure` in the current scope
+ --> tests/pentry_e2_loan_ui/receipt_quit_restore_failure_has_no_constructor.rs
+  |
+  |     let _failure = QuitRestoreFailure::new();
+  |                                        ^^^ associated function or constant not found in `neovm_value::quit::quit_detach::QuitRestoreFailure`

@@ -981,6 +981,8 @@ thread_local! {
         HeapRegistrySlot::new(FaceAttrState::default());
 }
 
+mod font_detach;
+
 /// Invalidate the cached face-name list after the defined-face set changes.
 fn bump_face_set_generation() {
     FACE_ATTR_STATE.with(|slot| {

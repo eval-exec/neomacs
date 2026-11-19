@@ -168,6 +168,9 @@ thread_local! {
     static SYNTAX_CODE_OBJECTS_HEAP: Cell<usize> = const { Cell::new(0) };
 }
 
+#[doc(hidden)]
+pub mod retirement;
+
 /// Clear cached thread-local syntax table (must be called when heap changes).
 pub fn reset_syntax_thread_locals() {
     STANDARD_SYNTAX_TABLE_OBJECT.with(|slot| *slot.borrow_mut() = None);

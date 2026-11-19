@@ -44,6 +44,7 @@ mod heap_transfer_adapter;
 #[path = "world/tests/heap_transfer.rs"]
 mod heap_transfer_tests;
 mod slot;
+mod source_entry;
 // Crate-visible so the public test-support re-export in eval/mod.rs can name
 // the driver class directly. This stays crate-internal; the struct itself is
 // public only in the test-support cfg arm.

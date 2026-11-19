@@ -115,6 +115,10 @@ mod text_host;
 pub(crate) use self::lexenv_cache::LexenvAssqCache;
 pub(crate) use callback::{CheckedNativeCallback, native_callback_cache_enabled};
 pub(crate) mod parallel_entry;
+#[doc(hidden)]
+pub use parallel_entry::source_entry::{
+    SourceModuleObservation, install_source_module_scope_probe, source_module_observation,
+};
 #[allow(dead_code)] // Dormant E4-S0 executor substrate; E4 stage 1 consumes it.
 #[doc(hidden)]
 pub mod parallel_exec;
