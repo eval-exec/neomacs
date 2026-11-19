@@ -39,6 +39,7 @@ pkgs.mkShell {
     pkgs.wtype
     pkgs.xkbcomp
     pkgs.xdotool
+    pkgs.xorg.xmodmap
     pkgs.grim
     pkgs.sway
     # The native_scrolling 120 Hz suite calibrates a software Vulkan adapter
