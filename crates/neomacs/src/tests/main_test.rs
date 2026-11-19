@@ -2454,6 +2454,19 @@ fn install_synthetic_startup_display(eval: &mut Context) {
     eval.set_display_host(Box::new(StartupGuiDisplayHost { identity }));
 }
 
+/// A real frame for the configure_gnu_startup_state tests. A frame object
+/// exists only for a created frame (make_frame refuses an id the registry
+/// never minted), so these tests cannot pass a made-up FrameId.
+fn startup_state_test_frame(eval: &mut Context) -> FrameId {
+    let buffer = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    eval.frame_manager_mut()
+        .create_frame("startup-state", 800, 600, buffer)
+}
+
 fn bootstrap_runtime_gui_frame(eval: &mut Context) -> FrameId {
     install_synthetic_startup_display(eval);
     load_neomacs_gui_term_layer(eval);
@@ -5268,7 +5281,8 @@ fn configure_gnu_startup_state_marks_batch_mode_noninteractive() {
         no_build_details: false,
         rows_query_admission: neomacs_layout_engine::RowsQueryAdmission::Off,
     };
-    configure_gnu_startup_state(&mut eval, FrameId(9), &startup);
+    let frame = startup_state_test_frame(&mut eval);
+    configure_gnu_startup_state(&mut eval, frame, &startup);
 
     assert_eq!(
         eval.default_value_only_by_name("noninteractive"),
@@ -5300,7 +5314,8 @@ fn configure_gnu_startup_state_marks_batch_mode_noninteractive() {
 fn configure_gnu_startup_state_seeds_command_line_args_left_for_gnu_startup() {
     let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let startup = gui_startup_with_args(&["-Q", "-l", "/tmp/demo.el"]);
-    configure_gnu_startup_state(&mut eval, FrameId(42), &startup);
+    let frame = startup_state_test_frame(&mut eval);
+    configure_gnu_startup_state(&mut eval, frame, &startup);
 
     assert_eq!(
         eval.default_value_only_by_name("command-line-args-left"),
@@ -7737,7 +7752,8 @@ fn configure_gnu_startup_state_applies_explicit_no_build_details() {
     let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let mut startup = gui_startup();
     startup.no_build_details = true;
-    configure_gnu_startup_state(&mut eval, FrameId(42), &startup);
+    let frame = startup_state_test_frame(&mut eval);
+    configure_gnu_startup_state(&mut eval, frame, &startup);
     assert_eq!(
         eval.default_value_only_by_name("build-details"),
         Some(Value::NIL)
