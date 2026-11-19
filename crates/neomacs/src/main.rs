@@ -1117,7 +1117,12 @@ fn startup_dimensions(
             // GNU `init_tty` (term.c:4805-4814) replaces an ioctl side `<= 0`
             // with termcap `co`/`li`, and `vfatal`s below 3×3. The initial
             // terminal is the fatal call (dispnew.c:7348). `make-terminal-frame`
-            // does not use this size.
+            // does not use this size. The same call opens `/dev/tty` first
+            // and fatals if that open fails (term.c:4464-4470).
+            if let Some(diagnostic) = tty_init::initial_tty_open_failure() {
+                eprintln!("emacs: {diagnostic}");
+                std::process::exit(1);
+            }
             match tty_init::initial_tty_startup_cells() {
                 Ok(cells) => cells,
                 Err(error) => {

@@ -280,6 +280,58 @@ pub fn query_terminal_size_cells() -> Option<(u32, u32)> {
     query_terminal_size_cells_with(&TerminalSizeQuery::new()).map(legacy_terminal_columns_rows)
 }
 
+/// GNU `init_tty` picks this text when the controlling terminal cannot be
+/// used (`term.c:4464-4470`). `open_failed` is `fd < 0`. The other arm is an
+/// fd that opened and then failed `isatty`. `name` is `DEV_TTY`, `/dev/tty`
+/// (`keyboard.c:94`). The initial terminal passes `must_succeed`, so `vfatal`
+/// prints `emacs: ` and this string.
+pub(crate) fn initial_tty_open_diagnostic(open_failed: bool) -> &'static str {
+    if open_failed {
+        "Could not open file: /dev/tty"
+    } else {
+        "Not a tty device: /dev/tty"
+    }
+}
+
+/// `None` when `/dev/tty` opened and is a terminal.
+///
+/// GNU's initial terminal is `init_tty` with a null name, so it opens
+/// `dev_tty` and fatals on failure (`term.c:4404-4470`). A later
+/// `make-terminal-frame` does not use this check.
+pub(crate) fn initial_tty_open_failure() -> Option<&'static str> {
+    #[cfg(unix)]
+    {
+        match open_dev_tty() {
+            Err(_) => Some(initial_tty_open_diagnostic(true)),
+            Ok(file) => {
+                let fd = std::os::fd::AsRawFd::as_raw_fd(&file);
+                // SAFETY: `fd` is owned by `file` for this call. `isatty`
+                // does not retain it.
+                let is_tty = unsafe { libc::isatty(fd) } == 1;
+                if is_tty {
+                    None
+                } else {
+                    Some(initial_tty_open_diagnostic(false))
+                }
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        None
+    }
+}
+
+#[cfg(unix)]
+fn open_dev_tty() -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(libc::O_NOCTTY)
+        .open("/dev/tty")
+}
+
 /// Winsize for a root `make-terminal-frame` on the initial terminal.
 ///
 /// GNU `get_tty_size` (`src/sysdep.c:1396-1408`) is one `TIOCGWINSZ` on the

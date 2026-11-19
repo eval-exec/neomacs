@@ -288,6 +288,20 @@ fn positive_ioctl_wins_over_termcap() {
     );
 }
 
+/// GNU `init_tty` (`term.c:4466-4470`) selects the fatal text from whether
+/// the open itself failed.
+#[test]
+fn initial_tty_open_diagnostic_follows_the_fd() {
+    assert_eq!(
+        super::initial_tty_open_diagnostic(true),
+        "Could not open file: /dev/tty"
+    );
+    assert_eq!(
+        super::initial_tty_open_diagnostic(false),
+        "Not a tty device: /dev/tty"
+    );
+}
+
 /// GNU `get_tty_size` stores 0 when `TIOCGWINSZ` fails (`sysdep.c:1403-1404`).
 /// A pipe is not a terminal, so the ioctl fails. The result stays `(0, 0)`
 /// rather than a size from another source.
