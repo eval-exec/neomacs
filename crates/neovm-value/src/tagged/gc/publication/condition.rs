@@ -150,18 +150,25 @@ enum RefreshPlan {
     Replace(ConditionPayload),
 }
 
-/// One condition-snapshot ledger. The heap borrow is how Drop unregisters
-/// the id. The heap does not store an address of this owner. Forgetting the
-/// owner skips Drop and leaves the roots in place.
-pub(crate) struct PublishedConditionSnapshots<'heap> {
+/// One condition-snapshot ledger.
+///
+/// The heap is an argument to [`Self::mint`], [`Self::refresh`], and
+/// [`Self::unregister`]. This owner does not borrow it, so the obarray and a
+/// collection can reach the same heap through the TLS root while the publisher
+/// is alive. The heap stores the minted id, not an address of this owner.
+///
+/// [`Self::unregister`] removes the id. Drop without that call leaves the
+/// roots registered. A leaked id keeps the published heads alive, which is
+/// the safe failure of the heap-owned root table.
+pub(crate) struct PublishedConditionSnapshots {
     ledger: PublicationLedger<ConditionPayload>,
-    id: PublisherId,
-    heap: &'heap mut TaggedHeap,
+    /// `None` after [`Self::unregister`]. Drop does not remove the entry.
+    id: Option<PublisherId>,
 }
 
-impl<'heap> PublishedConditionSnapshots<'heap> {
+impl PublishedConditionSnapshots {
     pub(crate) fn mint(
-        heap: &'heap mut TaggedHeap,
+        heap: &mut TaggedHeap,
         obarray: &Obarray,
         limits: RetentionLimits,
     ) -> Result<Self, PublicationError<()>> {
@@ -170,7 +177,10 @@ impl<'heap> PublishedConditionSnapshots<'heap> {
         match PublicationLedger::create_noting(initial, limits, |payload| {
             heap.append_payload_roots(id, payload);
         }) {
-            Ok(ledger) => Ok(Self { ledger, id, heap }),
+            Ok(ledger) => Ok(Self {
+                ledger,
+                id: Some(id),
+            }),
             Err(error) => {
                 heap.unregister_payload_publisher(id);
                 Err(error)
@@ -180,12 +190,12 @@ impl<'heap> PublishedConditionSnapshots<'heap> {
 
     pub(crate) fn refresh(
         &mut self,
+        heap: &mut TaggedHeap,
         obarray: &Obarray,
     ) -> Result<PublicationChange<u64>, PublicationError<()>> {
         let next = ConditionPayload::capture(obarray);
-        let Self { ledger, id, heap } = self;
-        let id = *id;
-        let accounted = ledger.account(|admission| {
+        let id = self.id.expect("a live publisher is registered");
+        let accounted = self.ledger.account(|admission| {
             if admission.current().same_snapshot(&next) {
                 return Ok(RefreshPlan::Keep);
             }
@@ -201,27 +211,54 @@ impl<'heap> PublishedConditionSnapshots<'heap> {
         )
     }
 
+    /// Remove this publisher's roots.
+    ///
+    /// Drop without this call leaks the id. The collector still copies the
+    /// values, so the leak keeps heads alive and does not dangle.
+    pub(crate) fn unregister(mut self, heap: &mut TaggedHeap) {
+        if let Some(id) = self.id.take() {
+            heap.unregister_payload_publisher(id);
+        }
+    }
+
     pub(crate) fn view(&self) -> PublicationView<'_, ConditionPayload> {
         self.ledger.view()
     }
 
-    /// The table a view loaded. The address stays valid while this owner
-    /// retains the payload, including after that payload becomes a predecessor.
+    /// The table `view` loaded from this owner.
     ///
-    /// # Safety
-    /// `address` is `view().published_address()` from this owner, and this
-    /// owner is still alive.
+    /// The address is read from the view, whose lifetime is the owner's, so
+    /// no raw pointer crosses this API. The returned reference is tied to
+    /// this owner. The owner retains the box after the payload becomes a
+    /// predecessor, and the allocation does not move. `PublicationView` is
+    /// not `Copy` and borrows this owner, so a view cannot cross [`Self::refresh`].
     #[cfg(test)]
-    pub(crate) fn table_at(&self, address: *mut u8) -> &ConditionSnapshotTable {
-        let _retain = self;
-        // SAFETY: the caller passes an address this ledger published. The box
-        // allocation does not move when the payload joins the predecessor vector.
+    pub(crate) fn table_at<'a>(
+        &'a self,
+        view: &PublicationView<'_, ConditionPayload>,
+    ) -> &'a ConditionSnapshotTable {
+        let address = view.published_address();
+        // SAFETY: `view` names a box this owner published. Publication does
+        // not reclaim a payload, and moving that box into the predecessor
+        // vector does not move the allocation. This reference cannot outlive
+        // `self`, which retains the box.
         unsafe { &*address.cast::<ConditionSnapshotTable>() }
     }
 
     #[cfg(test)]
-    fn registry_len(&self) -> usize {
-        self.heap.payload_root_count_for_test(self.id)
+    fn registry_len(&self, heap: &TaggedHeap) -> usize {
+        let id = self.id.expect("a live publisher is registered");
+        heap.payload_root_count_for_test(id)
+    }
+
+    #[cfg(test)]
+    fn cons_head_at_epoch(&self, epoch: u64, symbol: SymId) -> Option<TaggedValue> {
+        self.ledger.with_retained(|current, predecessors| {
+            std::iter::once(current)
+                .chain(predecessors.iter())
+                .find(|payload| payload.table.epoch() == epoch)
+                .and_then(|payload| payload.table.cons_head(symbol))
+        })
     }
 
     #[cfg(test)]
@@ -242,9 +279,24 @@ impl<'heap> PublishedConditionSnapshots<'heap> {
     }
 }
 
-impl Drop for PublishedConditionSnapshots<'_> {
+impl Drop for PublishedConditionSnapshots {
     fn drop(&mut self) {
-        self.heap.unregister_payload_publisher(self.id);
+        let Some(id) = self.id.take() else {
+            return;
+        };
+        // The id stays in the heap table. This owner does not borrow the heap,
+        // so Drop cannot unregister it. Keeping the roots is the safe failure.
+        tracing::warn!(
+            target: "neovm::gc::publication",
+            ?id,
+            "published condition snapshots dropped without unregister; payload roots leak"
+        );
+        if !std::thread::panicking() {
+            debug_assert!(
+                false,
+                "PublishedConditionSnapshots dropped without unregister; payload roots leak"
+            );
+        }
     }
 }
 
@@ -253,7 +305,7 @@ mod tests {
     use super::*;
     use crate::intern::{intern, make_uninterned_symbol};
     use crate::symbol::plist_core::plist_get;
-    use crate::tagged::gc::set_tagged_heap;
+    use crate::tagged::gc::TestHeap;
     use crate::value::{HashTableTest, HashTableWeakness, LispHashTable};
 
     fn retired_once() -> RetentionLimits {
@@ -268,15 +320,9 @@ mod tests {
         heap.alloc_cons(prop, tail)
     }
 
-    fn install() -> TaggedHeap {
-        let mut heap = TaggedHeap::new();
-        set_tagged_heap(&mut heap);
-        heap
-    }
-
     #[test]
     fn overwritten_plist_head_survives_a_full_collection() {
-        let mut heap = install();
+        let mut heap = TestHeap::new();
         let mut obarray = Obarray::new();
         let symbol = make_uninterned_symbol("p10-a2-surviving-symbol");
         let bare = make_uninterned_symbol("p10-a2-fixnum-plist");
@@ -290,60 +336,74 @@ mod tests {
 
         let mut published =
             PublishedConditionSnapshots::mint(&mut heap, &obarray, retired_once()).unwrap();
-        let before = published.view().published_address();
-        let captured = published.table_at(before);
-        assert_eq!(captured.len(), obarray.iter_symbols().count());
-        assert_eq!(captured.epoch(), plist_epoch());
-        assert!(captured.cons_head(symbol).is_some());
-        let bare_entry = captured.snapshot(bare).unwrap();
-        assert_eq!(bare_entry.plist_head, TaggedValue::fixnum(5));
-        assert!(captured.cons_head(bare).is_none());
-        assert_eq!(published.registry_len(), 1);
-        assert_eq!(published.registry_len(), published.committed_root_count());
+        let (before_address, before_epoch) = {
+            let view = published.view();
+            let captured = published.table_at(&view);
+            assert_eq!(captured.len(), obarray.iter_symbols().count());
+            assert_eq!(captured.epoch(), plist_epoch());
+            assert!(captured.cons_head(symbol).is_some());
+            let bare_entry = captured.snapshot(bare).unwrap();
+            assert_eq!(bare_entry.plist_head, TaggedValue::fixnum(5));
+            assert!(captured.cons_head(bare).is_none());
+            assert_eq!(published.registry_len(&heap), 1);
+            assert_eq!(
+                published.registry_len(&heap),
+                published.committed_root_count()
+            );
 
-        obarray.set_symbol_plist_id(symbol, new_head);
-        published.heap.collect_exact(std::iter::once(new_head));
-        assert!(published.heap.owns_heap_value_for_test(old_head));
-        assert!(published.heap.owns_heap_value_for_test(new_head));
-        assert!(!published.heap.owns_heap_value_for_test(garbage));
-        assert_eq!(
-            plist_get(published.table_at(before).cons_head(symbol).unwrap(), &prop),
-            Some(TaggedValue::fixnum(42))
-        );
-        assert_eq!(obarray.symbol_plist_id(symbol), new_head);
+            obarray.set_symbol_plist_id(symbol, new_head);
+            heap.collect_exact(std::iter::once(new_head));
+            assert!(heap.owns_heap_value_for_test(old_head));
+            assert!(heap.owns_heap_value_for_test(new_head));
+            assert!(!heap.owns_heap_value_for_test(garbage));
+            assert_eq!(
+                plist_get(captured.cons_head(symbol).unwrap(), &prop),
+                Some(TaggedValue::fixnum(42))
+            );
+            assert_eq!(obarray.symbol_plist_id(symbol), new_head);
+            (view.published_address() as usize, captured.epoch())
+        };
 
-        let published_change = published.refresh(&obarray).unwrap();
+        let published_change = published.refresh(&mut heap, &obarray).unwrap();
         let PublicationChange::Published { generation, .. } = published_change else {
             panic!("the overwritten head must publish a new table");
         };
-        assert!(generation > published.table_at(before).epoch());
-        assert_eq!(
-            plist_get(published.table_at(before).cons_head(symbol).unwrap(), &prop),
-            Some(TaggedValue::fixnum(42))
-        );
-        let current = published.view().published_address();
-        assert_ne!(current, before);
+        assert!(generation > before_epoch);
         assert_eq!(
             plist_get(
-                published.table_at(current).cons_head(symbol).unwrap(),
+                published.cons_head_at_epoch(before_epoch, symbol).unwrap(),
                 &prop
             ),
-            Some(TaggedValue::fixnum(43))
+            Some(TaggedValue::fixnum(42))
         );
-        assert_eq!(published.registry_len(), 2);
-        assert_eq!(published.registry_len(), published.committed_root_count());
+        {
+            let view = published.view();
+            let current = published.table_at(&view);
+            assert_ne!(view.published_address() as usize, before_address);
+            assert!(current.epoch() > before_epoch);
+            assert_eq!(
+                plist_get(current.cons_head(symbol).unwrap(), &prop),
+                Some(TaggedValue::fixnum(43))
+            );
+        }
+        assert_eq!(published.registry_len(&heap), 2);
+        assert_eq!(
+            published.registry_len(&heap),
+            published.committed_root_count()
+        );
 
-        let unchanged = published.refresh(&obarray).unwrap();
+        let unchanged = published.refresh(&mut heap, &obarray).unwrap();
         assert_eq!(unchanged, PublicationChange::Unchanged { generation });
-        assert_eq!(published.registry_len(), 2);
+        assert_eq!(published.registry_len(&heap), 2);
         let words = size_of::<TaggedValue>();
         let quote = published.statistics().unwrap().retained_bytes.get();
-        assert!(quote >= published.registry_len() * words);
+        assert!(quote >= published.registry_len(&heap) * words);
+        published.unregister(&mut heap);
     }
 
     #[test]
     fn need_grace_keeps_the_previous_plist_head_across_a_collection() {
-        let mut heap = install();
+        let mut heap = TestHeap::new();
         let mut obarray = Obarray::new();
         let symbol = make_uninterned_symbol("p10-a2-need-grace-symbol");
         let prop = TaggedValue::from_sym_id(intern("p10-a2-need-grace-prop"));
@@ -354,46 +414,58 @@ mod tests {
 
         let mut published =
             PublishedConditionSnapshots::mint(&mut heap, &obarray, retired_once()).unwrap();
-        let first_address = published.view().published_address();
+        let first_epoch = {
+            let view = published.view();
+            published.table_at(&view).epoch()
+        };
         obarray.set_symbol_plist_id(symbol, second);
         assert!(matches!(
-            published.refresh(&obarray).unwrap(),
+            published.refresh(&mut heap, &obarray).unwrap(),
             PublicationChange::Published { .. }
         ));
-        let current = published.view().published_address();
+        let (current_address, current_epoch) = {
+            let view = published.view();
+            let current = published.table_at(&view);
+            (view.published_address() as usize, current.epoch())
+        };
         obarray.set_symbol_plist_id(symbol, refused);
-        let error = published.refresh(&obarray).unwrap_err();
+        let error = published.refresh(&mut heap, &obarray).unwrap_err();
         assert_eq!(
             error,
             PublicationError::NeedGrace(super::super::RetentionLimit::Retired)
         );
-        assert_eq!(published.view().published_address(), current);
-        assert_eq!(published.registry_len(), 2);
+        {
+            let view = published.view();
+            assert_eq!(view.published_address() as usize, current_address);
+            assert_eq!(published.table_at(&view).epoch(), current_epoch);
+        }
+        assert_eq!(published.registry_len(&heap), 2);
 
-        published.heap.collect_exact(std::iter::empty());
-        assert!(published.heap.owns_heap_value_for_test(first));
-        assert!(published.heap.owns_heap_value_for_test(second));
-        assert!(!published.heap.owns_heap_value_for_test(refused));
+        heap.collect_exact(std::iter::empty());
+        assert!(heap.owns_heap_value_for_test(first));
+        assert!(heap.owns_heap_value_for_test(second));
+        assert!(!heap.owns_heap_value_for_test(refused));
         assert_eq!(
             plist_get(
-                published.table_at(first_address).cons_head(symbol).unwrap(),
+                published.cons_head_at_epoch(first_epoch, symbol).unwrap(),
                 &prop
             ),
             Some(TaggedValue::fixnum(1))
         );
         assert_eq!(
             plist_get(
-                published.table_at(current).cons_head(symbol).unwrap(),
+                published.cons_head_at_epoch(current_epoch, symbol).unwrap(),
                 &prop
             ),
             Some(TaggedValue::fixnum(2))
         );
         obarray.set_symbol_plist_id(symbol, second);
+        published.unregister(&mut heap);
     }
 
     #[test]
     fn unregistering_the_publisher_makes_the_old_head_collectable() {
-        let mut heap = install();
+        let mut heap = TestHeap::new();
         let mut obarray = Obarray::new();
         let symbol = make_uninterned_symbol("p10-a2-unregistered-symbol");
         let prop = TaggedValue::from_sym_id(intern("p10-a2-unregistered-prop"));
@@ -414,26 +486,21 @@ mod tests {
         });
         obarray.set_symbol_plist_id(symbol, head);
 
+        let published =
+            PublishedConditionSnapshots::mint(&mut heap, &obarray, RetentionLimits::production())
+                .unwrap();
+        obarray.set_symbol_plist_id(symbol, TaggedValue::NIL);
+        heap.collect_exact(std::iter::once(table));
+        assert_eq!(table.as_hash_table().unwrap().data.len(), 1);
+        assert!(heap.owns_heap_value_for_test(head));
         {
-            let mut published = PublishedConditionSnapshots::mint(
-                &mut heap,
-                &obarray,
-                RetentionLimits::production(),
-            )
-            .unwrap();
-            obarray.set_symbol_plist_id(symbol, TaggedValue::NIL);
-            published.heap.collect_exact(std::iter::once(table));
-            assert_eq!(table.as_hash_table().unwrap().data.len(), 1);
-            assert!(published.heap.owns_heap_value_for_test(head));
-            let address = published.view().published_address();
+            let view = published.view();
             assert_eq!(
-                plist_get(
-                    published.table_at(address).cons_head(symbol).unwrap(),
-                    &prop
-                ),
+                plist_get(published.table_at(&view).cons_head(symbol).unwrap(), &prop),
                 Some(TaggedValue::fixnum(7))
             );
         }
+        published.unregister(&mut heap);
 
         heap.collect_exact(std::iter::once(table));
         assert_eq!(table.as_hash_table().unwrap().data.len(), 0);
@@ -442,9 +509,10 @@ mod tests {
 
     #[test]
     fn termination_reseed_traces_a_head_committed_after_concurrent_begin() {
-        let mut heap = install();
-        // SAFETY: this thread holds the only heap borrow. No other mutator runs.
+        let mut heap = TestHeap::new();
+        // SAFETY: this thread is the only mutator. No other mutator runs.
         unsafe { heap.publish_barrier_window_for_test() };
+        heap.install();
         let mut obarray = Obarray::new();
         let symbol = make_uninterned_symbol("p10-a2-reseed-symbol");
         let prop = TaggedValue::from_sym_id(intern("p10-a2-reseed-prop"));
@@ -454,41 +522,36 @@ mod tests {
         let mut published =
             PublishedConditionSnapshots::mint(&mut heap, &obarray, RetentionLimits::production())
                 .unwrap();
-        assert_eq!(published.registry_len(), 0);
-        published.heap.concurrent_begin();
-        let start_roots = published.heap.handshake.last_start_runtime_roots;
+        assert_eq!(published.registry_len(&heap), 0);
+        heap.concurrent_begin();
+        let start_roots = heap.handshake.last_start_runtime_roots;
         obarray.set_symbol_plist_id(symbol, head);
         assert!(matches!(
-            published.refresh(&obarray).unwrap(),
+            published.refresh(&mut heap, &obarray).unwrap(),
             PublicationChange::Published { .. }
         ));
-        assert_eq!(published.registry_len(), 1);
-        published.heap.launch_concurrent_mark();
-        while !published.heap.concurrent_mark_done() {
+        assert_eq!(published.registry_len(&heap), 1);
+        heap.launch_concurrent_mark();
+        while !heap.concurrent_mark_done() {
             std::thread::yield_now();
         }
-        published.heap.join_concurrent_mark();
-        published.heap.reseed_runtime_and_remembered_roots();
-        assert_eq!(
-            published.heap.handshake.last_term_runtime_roots,
-            start_roots + 1
-        );
-        let bytes_before = published.heap.live_bytes();
-        published.heap.incremental_drain_all();
-        published
-            .heap
-            .incremental_finish(bytes_before, std::time::Instant::now());
-        published.heap.finish_incremental_sweep_now();
-        assert!(!published.heap.sweep_in_progress());
-        assert!(published.heap.owns_heap_value_for_test(head));
-        assert!(!published.heap.owns_heap_value_for_test(garbage));
-        let address = published.view().published_address();
-        assert_eq!(
-            plist_get(
-                published.table_at(address).cons_head(symbol).unwrap(),
-                &prop
-            ),
-            Some(TaggedValue::fixnum(11))
-        );
+        heap.join_concurrent_mark();
+        heap.reseed_runtime_and_remembered_roots();
+        assert_eq!(heap.handshake.last_term_runtime_roots, start_roots + 1);
+        let bytes_before = heap.live_bytes();
+        heap.incremental_drain_all();
+        heap.incremental_finish(bytes_before, std::time::Instant::now());
+        heap.finish_incremental_sweep_now();
+        assert!(!heap.sweep_in_progress());
+        assert!(heap.owns_heap_value_for_test(head));
+        assert!(!heap.owns_heap_value_for_test(garbage));
+        {
+            let view = published.view();
+            assert_eq!(
+                plist_get(published.table_at(&view).cons_head(symbol).unwrap(), &prop),
+                Some(TaggedValue::fixnum(11))
+            );
+        }
+        published.unregister(&mut heap);
     }
 }

@@ -1,8 +1,8 @@
 //! Heap-owned plist heads for published payloads.
 //!
 //! The key is an id this heap mints. The collector reads the values and never
-//! a publisher address, so a leaked publisher keeps roots alive instead of
-//! leaving a dangling pointer. Drop of the publisher removes its id.
+//! a publisher address. Unregister removes the id. Dropping a publisher
+//! without unregister leaves the id in place, so the heads stay reachable.
 
 use crate::tagged::value::TaggedValue;
 use rustc_hash::FxHashMap;
