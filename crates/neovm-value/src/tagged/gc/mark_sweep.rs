@@ -1645,8 +1645,9 @@ impl TaggedHeap {
             .iter()
             .enumerate()
             .filter(|(idx, _)| {
-                self.killed_buffer_ephemerons.is_empty()
+                self.ephemeron_records.killed_buffer_ephemerons.is_empty()
                     || !self
+                        .ephemeron_records
                         .killed_buffer_ephemerons
                         .contains_key(&crate::value::buffer_vocab::BufferId(*idx as u64))
             })
@@ -1669,7 +1670,12 @@ impl TaggedHeap {
             .chain(
                 self.process_registry
                     .iter()
-                    .filter(|(id, _)| !self.retired_process_ephemerons.contains_key(id))
+                    .filter(|(id, _)| {
+                        !self
+                            .ephemeron_records
+                            .retired_process_ephemerons
+                            .contains_key(id)
+                    })
                     .map(|(_, value)| (*value, "process-registry")),
             )
             .chain(
@@ -1951,6 +1957,7 @@ impl TaggedHeap {
     /// repeats so chains of retired processes reach a fixpoint.
     fn mark_reached_retired_processes(&mut self) -> bool {
         let reached: Vec<_> = self
+            .ephemeron_records
             .retired_process_ephemerons
             .keys()
             .copied()
@@ -1962,6 +1969,7 @@ impl TaggedHeap {
             .collect();
         for id in &reached {
             let fields = self
+                .ephemeron_records
                 .retired_process_ephemerons
                 .remove(id)
                 .unwrap_or_default();
@@ -1974,10 +1982,10 @@ impl TaggedHeap {
 
     /// Drop registry roots for retired processes that no other root reached.
     fn reclaim_unreached_retired_processes(&mut self) {
-        let unreached = std::mem::take(&mut self.retired_process_ephemerons);
+        let unreached = std::mem::take(&mut self.ephemeron_records.retired_process_ephemerons);
         for id in unreached.into_keys() {
             self.process_registry.remove(&id);
-            self.reclaimed_process_ids.push(id);
+            self.ephemeron_records.reclaimed_process_ids.push(id);
         }
     }
 
@@ -1986,6 +1994,7 @@ impl TaggedHeap {
     /// repeats so chains of killed buffers reach a fixpoint.
     fn mark_reached_killed_buffers(&mut self) -> bool {
         let reached: Vec<_> = self
+            .ephemeron_records
             .killed_buffer_ephemerons
             .keys()
             .copied()
@@ -1995,7 +2004,11 @@ impl TaggedHeap {
             })
             .collect();
         for id in &reached {
-            let fields = self.killed_buffer_ephemerons.remove(id).unwrap_or_default();
+            let fields = self
+                .ephemeron_records
+                .killed_buffer_ephemerons
+                .remove(id)
+                .unwrap_or_default();
             for field in fields {
                 self.mark_or_push_child(field, "killed-buffer-field");
             }
@@ -2005,12 +2018,12 @@ impl TaggedHeap {
 
     /// Drop registry roots for killed buffers that no other root reached.
     fn reclaim_unreached_killed_buffers(&mut self) {
-        let unreached = std::mem::take(&mut self.killed_buffer_ephemerons);
+        let unreached = std::mem::take(&mut self.ephemeron_records.killed_buffer_ephemerons);
         for id in unreached.into_keys() {
             if let Some(slot) = self.buffer_registry.get_mut(id.0 as usize) {
                 *slot = None;
             }
-            self.reclaimed_buffer_ids.push(id);
+            self.ephemeron_records.reclaimed_buffer_ids.push(id);
         }
     }
 

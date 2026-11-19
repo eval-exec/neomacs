@@ -98,13 +98,13 @@ impl TaggedHeap {
         &mut self,
         killed: Vec<(crate::value::buffer_vocab::BufferId, Vec<TaggedValue>)>,
     ) {
-        self.killed_buffer_ephemerons = killed.into_iter().collect();
+        self.ephemeron_records.killed_buffer_ephemerons = killed.into_iter().collect();
     }
 
     /// Take the buffer ids reclaimed by the last full collection.
     #[doc(hidden)]
     pub fn take_reclaimed_buffer_ids(&mut self) -> Vec<crate::value::buffer_vocab::BufferId> {
-        std::mem::take(&mut self.reclaimed_buffer_ids)
+        std::mem::take(&mut self.ephemeron_records.reclaimed_buffer_ids)
     }
 
     pub(crate) fn window_value(&self, id: u64) -> Option<TaggedValue> {
@@ -149,13 +149,13 @@ impl TaggedHeap {
         &mut self,
         retired: Vec<(crate::heap_types::ProcessId, Vec<TaggedValue>)>,
     ) {
-        self.retired_process_ephemerons = retired.into_iter().collect();
+        self.ephemeron_records.retired_process_ephemerons = retired.into_iter().collect();
     }
 
     /// Take the process ids reclaimed by the last full collection.
     #[doc(hidden)]
     pub fn take_reclaimed_process_ids(&mut self) -> Vec<crate::heap_types::ProcessId> {
-        std::mem::take(&mut self.reclaimed_process_ids)
+        std::mem::take(&mut self.ephemeron_records.reclaimed_process_ids)
     }
 
     /// Register cons cells whose storage is owned by the loaded pdump image.
@@ -336,4 +336,21 @@ pub(crate) mod b13_test_hooks {
             self.dirty_writes.len()
         }
     }
+}
+
+/// Retired-process and killed-buffer records armed as ephemerons for the next
+/// explicit full collection, keyed on the process or buffer object, plus the
+/// ids that collection did not reach.
+#[derive(Default)]
+pub(crate) struct EphemeronRecords {
+    /// Retired process fields armed for the next stop-the-world full cycle.
+    pub(crate) retired_process_ephemerons:
+        FxHashMap<crate::heap_types::ProcessId, Vec<TaggedValue>>,
+    /// Process ids whose ephemeron keys were unreachable in the last full cycle.
+    pub(crate) reclaimed_process_ids: Vec<crate::heap_types::ProcessId>,
+    /// Killed-buffer fields armed for the next stop-the-world full cycle.
+    pub(crate) killed_buffer_ephemerons:
+        FxHashMap<crate::value::buffer_vocab::BufferId, Vec<TaggedValue>>,
+    /// Buffer ids whose ephemeron keys were unreachable in the last full cycle.
+    pub(crate) reclaimed_buffer_ids: Vec<crate::value::buffer_vocab::BufferId>,
 }
