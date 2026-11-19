@@ -259,8 +259,13 @@ fn pentry_e2b_observation_wrong_heap_restore_keeps_both_worlds() {
         let mut collector = stopped(&mut first);
         detached(&mut collector)
     };
+    let placeholder = ObservationIdentity::of(&receipt.placeholder);
     let mut second = fixture();
     let second_identity = current_identity();
+    assert!(
+        second_identity != placeholder,
+        "new heap must not adopt a reserved source sentinel"
+    );
     let failure = {
         let mut collector = stopped(&mut second);
         collector.restore_source_observations(receipt).unwrap_err()

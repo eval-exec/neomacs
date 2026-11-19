@@ -1,7 +1,7 @@
 warning: unreachable expression
  --> tests/pentry_e2_loan_ui/transfer_prepared_prepare_detached_requires_unsafe.rs
   |
-  |     let _prepared = PreparedHeapTransfer::prepare_detached(todo!(), todo!(), todo!());
+  |     let _prepared = PreparedHeapTransfer::prepare_detached(todo!(), todo!(), todo!(), todo!());
   |                                                            -------  ^^^^^^^ unreachable expression
   |                                                            |
   |                                                            any code following this expression is unreachable
@@ -11,7 +11,7 @@ warning: unreachable expression
 error[E0133]: call to unsafe function `neovm_value::tagged::gc::heap_transfer::PreparedHeapTransfer::prepare_detached` is unsafe and requires unsafe block
  --> tests/pentry_e2_loan_ui/transfer_prepared_prepare_detached_requires_unsafe.rs
   |
-  |     let _prepared = PreparedHeapTransfer::prepare_detached(todo!(), todo!(), todo!());
-  |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
+  |     let _prepared = PreparedHeapTransfer::prepare_detached(todo!(), todo!(), todo!(), todo!());
+  |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
   |
   = note: consult the function's documentation for information on how to avoid undefined behavior

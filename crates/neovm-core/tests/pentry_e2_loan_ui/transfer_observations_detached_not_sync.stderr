@@ -1,0 +1,34 @@
+error[E0599]: the associated function or constant `check` exists for struct `RequireSync<neovm_value::tagged::collection_reads::SourceObservationsDetached>`, but its trait bounds were not satisfied
+ --> tests/pentry_e2_loan_ui/transfer_observations_detached_not_sync.rs
+  |
+  |       loan_bounds::RequireSync::<SourceObservationsDetached>::check();
+  |                                                               ^^^^^ associated function or constant cannot be called due to unsatisfied trait bounds
+  |
+ ::: $WORKSPACE/crates/neovm-value/src/tagged/collection_reads/store_state/detachment.rs
+  |
+  |   pub struct SourceObservationsDetached {
+  |   ------------------------------------- doesn't satisfy `_: Sync`
+  |
+ ::: $RUST/alloc/src/rc.rs
+  |
+  | / pub struct Rc<
+  | |     T: ?Sized,
+  | |     #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global,
+  | | > {
+  | |_- doesn't satisfy `_: Sync`
+  |
+ ::: $RUST/core/src/ptr/non_null.rs
+  |
+  |   pub struct NonNull<T: PointeeSized> {
+  |   ----------------------------------- doesn't satisfy `_: Sync`
+  |
+ ::: tests/pentry_e2_loan_ui/support/loan_bounds.rs
+  |
+  |   pub struct RequireSync<T>(PhantomData<T>);
+  |   ------------------------- associated function or constant `check` not found for this struct
+  |
+  = note: the following trait bounds were not satisfied:
+          `NonNull<collection_reads::store_state::WorldObservations>: Sync`
+          which is required by `neovm_value::tagged::collection_reads::SourceObservationsDetached: Sync`
+          `Rc<collection_reads::store_state::WorldObservations>: Sync`
+          which is required by `neovm_value::tagged::collection_reads::SourceObservationsDetached: Sync`

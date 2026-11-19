@@ -998,9 +998,54 @@ mod store_state;
 // functions above, never the RefCell-bearing accessor (LEAD 10:5xZ).
 use store_state::with_state;
 pub(crate) use store_state::{
-    ObservationWorld, SourceObservationError, SourceObservationRestoreFailure,
-    SourceObservationsDetached, StoreState, clear_installed_store_heap, with_store,
+    ObservationWorld, SourceObservationRestoreFailure, StoreState, clear_installed_store_heap,
+    with_store,
 };
+#[doc(hidden)]
+pub use store_state::{SourceObservationError, SourceObservationsDetached};
+
+/// Address of the store protocol installed on this thread. Test census only.
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub fn installed_store_address() -> *const StoreState {
+    with_store(std::ptr::from_ref)
+}
+
+/// A detached observation owner installed as this thread's TLS sentinel.
+///
+/// No safe constructor. The guard keeps the extra `Rc` alive so a later census
+/// still sees it. Not `Send`, `Sync`, `Clone`, or `Copy`.
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub struct ObservationPlaceholderGuard {
+    _owner: ObservationWorld,
+    root: *const StoreState,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl ObservationPlaceholderGuard {
+    /// # Safety
+    /// The caller owns this thread's observation TLS and drops the guard
+    /// before a sole-owner census of a different owner must succeed.
+    #[doc(hidden)]
+    pub unsafe fn install() -> Self {
+        let owner = ObservationWorld::default();
+        owner.install(crate::tagged::gc::BarrierWindow::NONE);
+        let root = owner.root().as_ptr().cast_const();
+        Self {
+            _owner: owner,
+            root,
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn root(&self) -> *const StoreState {
+        self.root
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+static_assertions::assert_not_impl_any!(ObservationPlaceholderGuard: Send, Sync, Clone, Copy);
 
 mod compiled_journal;
 #[cfg(not(feature = "test-support"))]

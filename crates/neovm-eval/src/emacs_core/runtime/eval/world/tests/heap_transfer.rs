@@ -7,14 +7,21 @@
 
 use super::heap_transfer_adapter;
 use crate::emacs_core::eval::Context;
+use neovm_value::tagged::collection_reads::SourceObservationError;
 use neovm_value::tagged::gc::heap_transfer::{
-    PendingHeapReturn, PreparedHeapTransfer, TransferError,
+    PendingHeapReturn, PreparedHeapTransfer, RestoredHeapBacking, TransferError,
 };
 use neovm_value::tagged::gc::{
-    FrozenFunctionRoots, FrozenLegacyRoots, Gen1Admission, Gen1AdmissionError, PlainSymbolBacking,
+    EraWorldLoan, FrozenFunctionRoots, FrozenLegacyRoots, Gen1Admission, Gen1AdmissionError,
+    PlainSymbolBacking, WorldLoan,
 };
 use neovm_value::tagged::value::TaggedValue;
 use std::cell::RefCell;
+
+enum PreparationExpectation {
+    Prepared,
+    Refuse(SourceObservationError),
+}
 
 fn census_words(roots: &FrozenLegacyRoots) -> Vec<TaggedValue> {
     let mut words = Vec::new();
@@ -23,6 +30,14 @@ fn census_words(roots: &FrozenLegacyRoots) -> Vec<TaggedValue> {
 }
 
 fn with_prepared(body: impl FnOnce(PendingHeapReturn, PreparedHeapTransfer)) {
+    with_prepared_case(PreparationExpectation::Prepared, |_| {}, body);
+}
+
+fn with_prepared_case(
+    expected: PreparationExpectation,
+    before: impl for<'heap> FnOnce(&mut Gen1Admission<'heap>),
+    body: impl FnOnce(PendingHeapReturn, PreparedHeapTransfer),
+) {
     let _harness = crate::test_utils::unit_harness();
     let census = RefCell::new(Vec::new());
     let prepared = Context::with_test_symbol_functions_init_era(
@@ -48,7 +63,7 @@ fn with_prepared(body: impl FnOnce(PendingHeapReturn, PreparedHeapTransfer)) {
             let root = owner.parallel_heap_root_designator();
             heap_transfer_adapter::detach_source_heap(root.as_non_null());
             assert!(!neovm_value::tagged::gc::tagged_heap_is_installed());
-            let admission = match Gen1Admission::check(collector) {
+            let mut admission = match Gen1Admission::check(collector) {
                 Ok(admission) => admission,
                 Err(failure) => {
                     let (reason, returned) = failure.into_parts();
@@ -64,15 +79,44 @@ fn with_prepared(body: impl FnOnce(PendingHeapReturn, PreparedHeapTransfer)) {
                     return None;
                 }
             };
+            let observations = admission
+                .detach_source_observations()
+                .expect("actual source observation detachment");
             // SAFETY: this closed fixture owns the only source frame. Heap TLS
             // was detached and the roots are retained. The reference-free
             // result is returned out of every source loan frame before any
             // destination body executes. Dropping the collector here does not
             // end this era argument's protector; the callback return does.
-            let (pending, transfer) = unsafe {
-                heap_transfer_adapter::prepare_reference_free_transfer(admission, owner, roots)
-            }
-            .unwrap_or_else(|failure| panic!("detached preparation refused: {failure:?}"));
+            // The hook can only change observation metadata for refusal cases.
+            before(&mut admission);
+            let outcome = unsafe {
+                PreparedHeapTransfer::prepare_detached(
+                    admission,
+                    WorldLoan::from(owner),
+                    roots,
+                    observations,
+                )
+            };
+            let (pending, transfer) = match (expected, outcome) {
+                (PreparationExpectation::Prepared, Ok(prepared)) => prepared,
+                (PreparationExpectation::Refuse(expected_error), Err(failure)) => {
+                    let (reason, admission, loan, roots, receipt) = failure.into_parts();
+                    assert_eq!(reason, TransferError::Observations(expected_error));
+                    assert_eq!(admission.into_collector().heap_identity(), heap);
+                    assert_eq!(loan.parallel_heap_identity(), heap);
+                    assert_eq!(census_words(&roots).len(), 3);
+                    drop(receipt);
+                    drop(roots);
+                    drop(loan);
+                    return None;
+                }
+                (PreparationExpectation::Prepared, Err(failure)) => {
+                    panic!("detached preparation refused: {failure:?}")
+                }
+                (PreparationExpectation::Refuse(_), Ok(_)) => {
+                    panic!("invalid source observation state exported")
+                }
+            };
             assert_eq!(transfer.publication_root_count(), 1);
             Some((pending, transfer))
         },
@@ -284,5 +328,202 @@ fn pentry_e2b_heap_transfer_returned_collector_tls_restore_is_detached_before_re
         assert!(!neovm_value::tagged::gc::tagged_heap_is_installed());
         assert!(pending.is_poisoned());
         assert!(failure.retains_backing());
+    });
+}
+
+fn finish_restored(restored: RestoredHeapBacking) {
+    // SAFETY: original source thread. This fixture has no Context or
+    // activation to reattach. No collector borrow remains, and the restored
+    // words stay owned until publication retirement under serial access.
+    let (owner, roots, publication) =
+        unsafe { heap_transfer_adapter::recover_transferred_source(restored) }
+            .unwrap_or_else(|failure| panic!("source materialization: {:?}", failure.reason()));
+    assert!(owner.held_here());
+    let words = census_words(&roots);
+    assert_eq!(words.len(), 3);
+    assert_eq!(
+        words[0].as_str_owned().as_deref(),
+        Some("retained bootstrap root")
+    );
+    assert_eq!(words[1], TaggedValue::fixnum(73));
+    assert_eq!(words[2], TaggedValue::NIL);
+    publication
+        .try_finish()
+        .expect("source roots restored with no readers");
+    drop(roots);
+    drop(owner);
+}
+
+#[test]
+fn pentry_e2b_heap_transfer_export_refuses_stale_source_placeholder() {
+    with_prepared_case(
+        PreparationExpectation::Refuse(SourceObservationError::PlaceholderDisplaced),
+        |admission| admission.install_canonical_source_observations(),
+        |_, _| panic!("invalid source must never reach destination"),
+    );
+}
+
+#[test]
+fn pentry_e2b_heap_transfer_export_refuses_forgotten_original_rc() {
+    with_prepared_case(
+        PreparationExpectation::Refuse(SourceObservationError::EscapedOwner),
+        |admission| admission.leak_canonical_source_observation_owner(),
+        |_, _| panic!("escaped original owner must not be exported"),
+    );
+}
+
+#[test]
+fn pentry_e2b_heap_transfer_callback_observation_install_is_retired_before_reexport() {
+    with_prepared(|pending, transfer| {
+        // A destination thread cannot overwrite the source-local placeholder.
+        // TLS retirement must finish before the transfer is sent back.
+        let transfer = std::thread::spawn(move || {
+            let (transfer, ()) = transfer
+                .with_collector(|mut admission| {
+                    admission.install_canonical_source_observations();
+                    (admission.into_collector(), ())
+                })
+                .expect("canonical membership retired after callback frame");
+            assert!(transfer.is_prepared());
+            let (transfer, ()) = transfer
+                .with_collector(|mut admission| {
+                    assert_eq!(admission.validate_source_observation_export(), Ok(()));
+                    (admission.into_collector(), ())
+                })
+                .unwrap();
+            transfer
+        })
+        .join()
+        .expect("destination worker");
+        finish(pending, transfer);
+    });
+}
+
+#[test]
+fn pentry_e2b_heap_transfer_escaped_certificate_poison_prevents_reexport() {
+    with_prepared(|pending, transfer| {
+        let escaped = RefCell::new(None);
+        let failure = match transfer.with_collector(|mut admission| {
+            admission.install_canonical_source_observations();
+            let (_, certificate) = neovm_value::tagged::collection_reads::capture(|| ());
+            *escaped.borrow_mut() = Some(certificate.expect("real original certificate"));
+            (admission.into_collector(), ())
+        }) {
+            Ok(_) => panic!("live original certificate reexported"),
+            Err(failure) => failure,
+        };
+        assert_eq!(
+            failure.reason(),
+            TransferError::Observations(SourceObservationError::LiveCertificates)
+        );
+        assert!(pending.is_poisoned());
+        assert!(pending.retains_observations());
+        assert!(failure.retains_backing());
+        drop(escaped.take());
+    });
+}
+
+#[test]
+fn pentry_e2b_heap_transfer_forgotten_certificate_poison_prevents_reexport() {
+    with_prepared(|pending, transfer| {
+        let failure = match transfer.with_collector(|mut admission| {
+            admission.install_canonical_source_observations();
+            let (_, certificate) = neovm_value::tagged::collection_reads::capture(|| ());
+            std::mem::forget(certificate.expect("real original certificate"));
+            (admission.into_collector(), ())
+        }) {
+            Ok(_) => panic!("forgotten certificate reexported"),
+            Err(failure) => failure,
+        };
+        assert_eq!(
+            failure.reason(),
+            TransferError::Observations(SourceObservationError::LiveCertificates)
+        );
+        assert!(pending.is_poisoned());
+        assert!(failure.retains_backing());
+    });
+}
+
+#[test]
+fn pentry_e2b_heap_transfer_panic_retires_original_observation_rc() {
+    with_prepared(|pending, transfer| {
+        let original = std::cell::Cell::new(std::ptr::null());
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = transfer.with_collector::<()>(|mut admission| {
+                admission.install_canonical_source_observations();
+                original.set(neovm_value::tagged::collection_reads::installed_store_address());
+                panic!("ORIGINAL_OBSERVATION_INSTALL_PANIC");
+            });
+        }));
+        assert!(result.is_err());
+        assert!(pending.is_poisoned());
+        assert!(!original.get().is_null());
+        assert_ne!(
+            neovm_value::tagged::collection_reads::installed_store_address(),
+            original.get()
+        );
+        assert!(!neovm_value::tagged::gc::tagged_heap_is_installed());
+    });
+}
+
+#[test]
+fn pentry_e2b_heap_transfer_foreign_observation_owner_preserved_and_source_restore_refuses() {
+    with_prepared(|pending, transfer| {
+        // SAFETY: this fixture owns the thread's observation TLS. The guard
+        // drops at the end of the test, after the refusal is observed.
+        let foreign = unsafe {
+            neovm_value::tagged::collection_reads::ObservationPlaceholderGuard::install()
+        };
+        let expected = foreign.root();
+        let (transfer, ()) = transfer
+            .with_collector(|admission| (admission.into_collector(), ()))
+            .unwrap();
+        assert_eq!(
+            neovm_value::tagged::collection_reads::installed_store_address(),
+            expected
+        );
+        let returned = transfer.return_to_source().unwrap();
+        let restored = pending
+            .restore(returned)
+            .unwrap_or_else(|_| panic!("matching returned control"));
+        let failure = match unsafe { heap_transfer_adapter::recover_transferred_source(restored) } {
+            Ok(_) => panic!("displaced source placeholder accepted"),
+            Err(failure) => failure,
+        };
+        assert_eq!(
+            failure.reason(),
+            TransferError::Observations(SourceObservationError::PlaceholderDisplaced)
+        );
+        assert!(failure.retains_backing());
+        assert!(failure.retains_observations());
+        assert_eq!(
+            neovm_value::tagged::collection_reads::installed_store_address(),
+            expected
+        );
+    });
+}
+
+#[test]
+fn pentry_e2b_heap_transfer_source_certificate_refusal_owns_recovery_inputs() {
+    with_prepared(|pending, transfer| {
+        let (_, certificate) = neovm_value::tagged::collection_reads::capture(|| ());
+        let certificate = certificate.expect("real source placeholder certificate");
+        let returned = transfer.return_to_source().unwrap();
+        let restored = pending
+            .restore(returned)
+            .unwrap_or_else(|_| panic!("matching returned control"));
+        let failure = match unsafe { heap_transfer_adapter::recover_transferred_source(restored) } {
+            Ok(_) => panic!("borrowed source effect restored"),
+            Err(failure) => failure,
+        };
+        assert_eq!(
+            failure.reason(),
+            TransferError::Observations(SourceObservationError::LiveCertificates)
+        );
+        assert!(failure.retains_backing());
+        assert!(failure.retains_observations());
+        drop(certificate);
+        let (_reason, restored) = failure.into_restored();
+        finish_restored(restored);
     });
 }

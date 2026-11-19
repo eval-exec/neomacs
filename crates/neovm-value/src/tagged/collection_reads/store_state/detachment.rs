@@ -12,7 +12,8 @@ use std::cell::RefMut;
 use std::thread::ThreadId;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SourceObservationError {
+#[doc(hidden)]
+pub enum SourceObservationError {
     InstalledHeap,
     MissingOwner,
     AttachedStore,
@@ -40,8 +41,11 @@ impl ObservationIdentity {
     }
 }
 
+/// Confined placeholder receipt. No public constructor. Not `Send`, `Sync`,
+/// `Clone`, or `Copy`. The original observation `Rc` does not survive in it.
 #[must_use]
-pub(crate) struct SourceObservationsDetached {
+#[doc(hidden)]
+pub struct SourceObservationsDetached {
     heap: HeapIdentity,
     original: ObservationIdentity,
     placeholder: ObservationWorld,
@@ -52,14 +56,6 @@ static_assertions::assert_not_impl_any!(SourceObservationsDetached: Send, Sync, 
 #[must_use]
 pub(crate) struct SourceObservationRestoreFailure {
     pub(crate) reason: SourceObservationError,
-    /// The caller keeps this receipt and may retry. No product caller reads it yet.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the owned failure returns this receipt to its caller; observation tests read it"
-        )
-    )]
     pub(crate) receipt: SourceObservationsDetached,
 }
 impl std::fmt::Debug for SourceObservationRestoreFailure {
@@ -126,6 +122,9 @@ impl ObservationWorld {
         }
         // All allocation and Rc cloning precedes the borrowed-slot interval.
         let placeholder = Self::default();
+        // A later heap must not adopt a TLS sentinel whose Rc is retained by
+        // a pending source receipt. Reserve this allocation permanently.
+        placeholder.0.bound.set(true);
         let arriving = placeholder.clone();
         let departing = STATE.with(|slot| {
             let mut owner = slot
@@ -165,6 +164,49 @@ impl ObservationWorld {
         })
     }
 
+    /// Full store detachment refreshes an existing TLS pointer mirror.
+    /// Refuse its uncounted slot loans and a mismatched attached foreign owner
+    /// before that existing operation, rather than panic during unwind.
+    #[cold]
+    pub(in crate::tagged) fn preflight_source_store_retirement(
+        &self,
+    ) -> Result<(), SourceObservationError> {
+        STATE.with(|slot| {
+            let owner = slot
+                .owner
+                .try_borrow()
+                .map_err(|_| SourceObservationError::OwnerBorrowed)?;
+            if !Rc::ptr_eq(&owner.0, &self.0) && !owner.is_detached() {
+                return Err(SourceObservationError::WrongOwner);
+            }
+            if slot.store.get() != owner.root() {
+                return Err(SourceObservationError::StoreDisplaced);
+            }
+            Ok(())
+        })
+    }
+
+    /// Destination-local retirement: only remove our exact canonical TLS
+    /// membership; preserve an unrelated current owner. No original Rc is
+    /// retained in the discarded placeholder receipt.
+    #[cold]
+    pub(in crate::tagged) fn retire_source_membership(
+        &self,
+        heap: HeapIdentity,
+    ) -> Result<(), SourceObservationError> {
+        let current = STATE.with(|slot| {
+            let owner = slot
+                .owner
+                .try_borrow()
+                .map_err(|_| SourceObservationError::OwnerBorrowed)?;
+            Ok(Rc::ptr_eq(&owner.0, &self.0))
+        })?;
+        if current {
+            drop(self.detach_source(heap)?);
+        }
+        self.validate_source_export()
+    }
+
     /// Cold, instantaneous census for the actual heap export boundary. The
     /// detach effect may have become stale through later installation or a
     /// callback. Every export/re-export must validate again immediately before
@@ -195,11 +237,39 @@ impl SourceObservationsDetached {
         })
     }
 
+    /// A receipt is checked against actual canonical backing at export too;
+    /// possessing an earlier effect never exempts the sender from this census.
+    #[cold]
+    pub(in crate::tagged) fn validate_interval(
+        &self,
+        heap: HeapIdentity,
+        canonical: &ObservationWorld,
+    ) -> Result<(), SourceObservationError> {
+        self.with_interval(heap, canonical, |_, _| ())
+    }
+
     fn try_restore(
         &self,
         heap: HeapIdentity,
         canonical: &ObservationWorld,
     ) -> Result<(), SourceObservationError> {
+        let departing = self.with_interval(heap, canonical, |slot, owner| {
+            let departing = std::mem::replace(owner, canonical.clone());
+            slot.store.set(canonical.root());
+            ACTIVE.with(|active| active.set(false));
+            departing
+        })?;
+        drop(departing);
+        reset_recent_reads_for_heap_installation();
+        Ok(())
+    }
+
+    fn with_interval<R>(
+        &self,
+        heap: HeapIdentity,
+        canonical: &ObservationWorld,
+        body: impl FnOnce(&StateSlot, &mut ObservationWorld) -> R,
+    ) -> Result<R, SourceObservationError> {
         if self.thread != std::thread::current().id() {
             return Err(SourceObservationError::WrongThread);
         }
@@ -212,7 +282,7 @@ impl SourceObservationsDetached {
         if !canonical.is_detached() {
             return Err(SourceObservationError::AttachedStore);
         }
-        let departing = STATE.with(|slot| {
+        STATE.with(|slot| {
             let mut owner = slot
                 .owner
                 .try_borrow_mut()
@@ -237,14 +307,8 @@ impl SourceObservationsDetached {
             let _placeholder = idle_cold(&self.placeholder)?;
             exclusive_refs(canonical, RefOwners::HeapOnly)?;
             exclusive_refs(&self.placeholder, RefOwners::ReceiptAndTls)?;
-            let departing = std::mem::replace(&mut *owner, canonical.clone());
-            slot.store.set(canonical.root());
-            ACTIVE.with(|active| active.set(false));
-            Ok(departing)
-        })?;
-        drop(departing);
-        reset_recent_reads_for_heap_installation();
-        Ok(())
+            Ok(body(slot, &mut owner))
+        })
     }
 }
 

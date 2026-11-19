@@ -190,6 +190,17 @@ fn pentry_e2_loan_transfer_compile_contracts() {
         "transfer_restored_not_copy.rs",
         "transfer_restored_not_send.rs",
         "transfer_restored_not_sync.rs",
+        "transfer_observations_detached_has_no_constructor.rs",
+        "transfer_observations_detached_not_clone.rs",
+        "transfer_observations_detached_not_copy.rs",
+        "transfer_observations_detached_not_send.rs",
+        "transfer_observations_detached_not_sync.rs",
+        "transfer_observation_guard_has_no_constructor.rs",
+        "transfer_observation_guard_install_requires_unsafe.rs",
+        "transfer_observation_guard_not_clone.rs",
+        "transfer_observation_guard_not_copy.rs",
+        "transfer_observation_guard_not_send.rs",
+        "transfer_observation_guard_not_sync.rs",
     ];
     for name in fail {
         cases.compile_fail(manifest.join("tests/pentry_e2_loan_ui").join(name));
@@ -301,6 +312,46 @@ fn pentry_e2_loan_transfer_compile_contracts() {
             "impl<T: Sync> RequireSync<T> {",
             "impl<T> RequireSync<T> {",
         ),
+        (
+            "transfer_observations_detached_not_clone",
+            "impl<T: Clone> RequireClone<T> {",
+            "impl<T> RequireClone<T> {",
+        ),
+        (
+            "transfer_observations_detached_not_copy",
+            "impl<T: Copy> RequireCopy<T> {",
+            "impl<T> RequireCopy<T> {",
+        ),
+        (
+            "transfer_observations_detached_not_send",
+            "impl<T: Send> RequireSend<T> {",
+            "impl<T> RequireSend<T> {",
+        ),
+        (
+            "transfer_observations_detached_not_sync",
+            "impl<T: Sync> RequireSync<T> {",
+            "impl<T> RequireSync<T> {",
+        ),
+        (
+            "transfer_observation_guard_not_clone",
+            "impl<T: Clone> RequireClone<T> {",
+            "impl<T> RequireClone<T> {",
+        ),
+        (
+            "transfer_observation_guard_not_copy",
+            "impl<T: Copy> RequireCopy<T> {",
+            "impl<T> RequireCopy<T> {",
+        ),
+        (
+            "transfer_observation_guard_not_send",
+            "impl<T: Send> RequireSend<T> {",
+            "impl<T> RequireSend<T> {",
+        ),
+        (
+            "transfer_observation_guard_not_sync",
+            "impl<T: Sync> RequireSync<T> {",
+            "impl<T> RequireSync<T> {",
+        ),
     ];
     for (name, before, after) in bound_mutations {
         assert_eq!(bounds.matches(before).count(), 1, "one bound for {name}");
@@ -374,6 +425,61 @@ fn pentry_e2_loan_transfer_compile_contracts() {
     for (name, before, mutated_body) in constructor_mutations {
         assert!(
             product.contains(before),
+            "constructor source for {name} must contain {before}"
+        );
+        assert!(!before.contains('\n'));
+        assert!(
+            !mutated_body.contains("unsafe"),
+            "mutation must drop unsafe for {name}"
+        );
+        let directory = output.join(name);
+        fs::create_dir_all(&directory).expect("isolated constructor mutation directory");
+        let path = directory.join(format!("{name}_mutation.rs"));
+        fs::write(&path, mutated_body).expect("safe copy of the constructor call");
+        cases.pass(path);
+    }
+
+    // The observation receipt and the placeholder guard live outside
+    // heap_transfer.rs. Their needles are checked against the file that
+    // defines the type.
+    let detachment = fs::read_to_string(
+        manifest.join("../neovm-value/src/tagged/collection_reads/store_state/detachment.rs"),
+    )
+    .expect("observation detachment");
+    let reads = fs::read_to_string(manifest.join("../neovm-value/src/tagged/collection_reads.rs"))
+        .expect("collection reads");
+    let observation_constructors = [
+        (
+            "transfer_observations_detached_has_no_constructor",
+            "pub struct SourceObservationsDetached {",
+            detachment.as_str(),
+            "struct SourceObservationsDetached;\n\
+             impl SourceObservationsDetached {\n    \
+             pub fn new() -> Self { Self }\n}\n\
+             fn main() { let _receipt = SourceObservationsDetached::new(); }\n",
+        ),
+        (
+            "transfer_observation_guard_has_no_constructor",
+            "pub struct ObservationPlaceholderGuard {",
+            reads.as_str(),
+            "struct ObservationPlaceholderGuard;\n\
+             impl ObservationPlaceholderGuard {\n    \
+             pub fn new() -> Self { Self }\n}\n\
+             fn main() { let _guard = ObservationPlaceholderGuard::new(); }\n",
+        ),
+        (
+            "transfer_observation_guard_install_requires_unsafe",
+            "pub unsafe fn install()",
+            reads.as_str(),
+            "struct ObservationPlaceholderGuard;\n\
+             impl ObservationPlaceholderGuard {\n    \
+             pub fn install() -> Self { Self }\n}\n\
+             fn main() { let _guard = ObservationPlaceholderGuard::install(); }\n",
+        ),
+    ];
+    for (name, before, source, mutated_body) in observation_constructors {
+        assert!(
+            source.contains(before),
             "constructor source for {name} must contain {before}"
         );
         assert!(!before.contains('\n'));

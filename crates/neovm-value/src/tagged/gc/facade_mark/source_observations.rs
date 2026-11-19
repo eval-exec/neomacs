@@ -6,15 +6,8 @@ use crate::tagged::collection_reads::{
 };
 
 impl QuiescentCollector<'_> {
-    // No product caller enters this shell. Tests are the only entry until the
-    // owned source transaction is composed.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "dormant until the owned source transaction is composed; observation tests are the caller"
-        )
-    )]
+    // No product caller enters this shell. The transfer and its tests are the
+    // only callers until the owned source transaction is composed.
     #[cold]
     #[inline(never)]
     pub(crate) fn detach_source_observations(
@@ -32,10 +25,10 @@ impl QuiescentCollector<'_> {
     }
 
     #[cfg_attr(
-        not(test),
+        not(any(test, feature = "test-support")),
         expect(
             dead_code,
-            reason = "dormant until the owned source transaction is composed; observation tests are the caller"
+            reason = "export revalidation is the transfer test's census; production restore uses the receipt"
         )
     )]
     #[cold]
@@ -54,13 +47,6 @@ impl QuiescentCollector<'_> {
         owner.validate_source_export()
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "dormant until the owned source transaction is composed; observation tests are the caller"
-        )
-    )]
     #[cold]
     #[inline(never)]
     pub(crate) fn restore_source_observations(
@@ -80,5 +66,62 @@ impl QuiescentCollector<'_> {
             });
         };
         receipt.restore(self.heap_identity(), owner)
+    }
+
+    /// Displace the detached placeholder by installing this heap's canonical
+    /// observation owner. Transfer tests use this to refuse a stale export.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn install_canonical_source_observations(&mut self) {
+        self.heap
+            ._satb_layout_reserve
+            .observations()
+            .install(BarrierWindow::NONE);
+    }
+
+    /// Retain an extra strong owner of the canonical observation Rc. Transfer
+    /// tests use this to refuse an escaped owner. The clone is forgotten.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn leak_canonical_source_observation_owner(&mut self) {
+        std::mem::forget(self.heap._satb_layout_reserve.observations().clone());
+    }
+}
+
+impl TaggedHeap {
+    // Called only through the actual retained exclusive heap loan, or after
+    // all callback and collector argument frames ended under the local scope.
+    #[cold]
+    pub(in crate::tagged::gc) fn validate_source_observation_receipt(
+        &self,
+        receipt: &SourceObservationsDetached,
+    ) -> Result<(), SourceObservationError> {
+        let owner = self
+            ._satb_layout_reserve
+            .existing_observations()
+            .ok_or(SourceObservationError::MissingOwner)?;
+        receipt.validate_interval(self.heap_identity(), owner)
+    }
+
+    #[cold]
+    pub(in crate::tagged::gc) fn preflight_source_store_retirement(
+        &self,
+    ) -> Result<(), SourceObservationError> {
+        let owner = self
+            ._satb_layout_reserve
+            .existing_observations()
+            .ok_or(SourceObservationError::MissingOwner)?;
+        owner.preflight_source_store_retirement()
+    }
+
+    #[cold]
+    pub(in crate::tagged::gc) fn retire_source_observation_membership(
+        &self,
+    ) -> Result<(), SourceObservationError> {
+        let owner = self
+            ._satb_layout_reserve
+            .existing_observations()
+            .ok_or(SourceObservationError::MissingOwner)?;
+        owner.retire_source_membership(self.heap_identity())
     }
 }

@@ -44,7 +44,7 @@ pub(crate) fn detach_source_heap(root: NonNull<neovm_value::tagged::gc::TaggedHe
     )
 )]
 pub(crate) unsafe fn prepare_reference_free_transfer<'heap>(
-    admission: Gen1Admission<'heap>,
+    mut admission: Gen1Admission<'heap>,
     keeper: Baton,
     roots: FrozenLegacyRoots,
 ) -> Result<(PendingHeapReturn, PreparedHeapTransfer), PrepareFailure<'heap>> {
@@ -52,10 +52,20 @@ pub(crate) unsafe fn prepare_reference_free_transfer<'heap>(
         !tagged_heap_is_installed(),
         "source heap TLS must be detached before the reference-free constructor"
     );
+    let owner = WorldLoan::from(keeper);
+    let observations = match admission.detach_source_observations() {
+        Ok(observations) => observations,
+        Err(reason) => {
+            return Err(PrepareFailure::from_observation_detach(
+                reason, admission, owner, roots,
+            ));
+        }
+    };
     // SAFETY: the caller established the constructor's source-shell
     // precondition, including the ended collector frame once this result is
-    // returned out of that frame.
-    unsafe { PreparedHeapTransfer::prepare_detached(admission, WorldLoan::from(keeper), roots) }
+    // returned out of that frame. The observation receipt was detached after
+    // those frames and stays out of the Send transfer.
+    unsafe { PreparedHeapTransfer::prepare_detached(admission, owner, roots, observations) }
 }
 
 /// # Safety
