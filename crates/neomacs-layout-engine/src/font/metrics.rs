@@ -1277,6 +1277,39 @@ impl FontMetricsService {
         Some(opened)
     }
 
+    /// Open one exact listed/matched platform face, as `open-font` on a font
+    /// entity does.  The identity check refuses to silently return a
+    /// different face when the family-only materialization cannot reproduce
+    /// the caller's exact selector.
+    pub fn open_platform_match_font(
+        &mut self,
+        matched: &crate::font_backend::PlatformFontMatch,
+        pixel_size: u32,
+    ) -> Option<SelectedFontInfo> {
+        let font_size = pixel_size.max(1) as f32;
+        let family = matched.metadata.family.clone();
+        let weight = matched.weight().unwrap_or(400);
+        let italic = matched.slant().is_italic();
+        let platform = self.materialize_platform_match(matched.clone())?;
+        let handle = self.materialize_platform_selection(
+            Some(platform),
+            &family,
+            weight,
+            italic,
+            font_size,
+        )?;
+        if handle.font.identity != matched.identity {
+            return None;
+        }
+        Some(SelectedFontInfo {
+            foundry: matched.metadata.foundry.clone(),
+            resolved: handle.font,
+            slant: handle.selector_slant,
+            metrics: handle.px_metrics?,
+            glyph_code: None,
+        })
+    }
+
     #[must_use]
     pub(crate) const fn device_scale(&self) -> neomacs_display_protocol::geometry::DeviceScale {
         self.device_scale
@@ -2243,14 +2276,26 @@ impl FontMetricsService {
         // Only the semantic fallback path needs a representative-glyph probe.
         let resolved_family = self.resolve_family(&self.font_resolver.resolve_family(family), None);
         let platform = self.platform_primary_match(&resolved_family, weight, italic, font_size);
+        self.materialize_platform_selection(platform, &resolved_family, weight, italic, font_size)
+    }
+
+    /// Materialize one already-selected platform face (or the family fallback
+    /// when `platform` is None) at `font_size`.  Shared by face-primary
+    /// realization and `open-font`, so an entity opened through Lisp reaches
+    /// the same canonical interned record the layout engine uses.
+    fn materialize_platform_selection(
+        &mut self,
+        platform: Option<crate::font_backend::PlatformFontMatch>,
+        resolved_family: &str,
+        weight: u16,
+        italic: bool,
+        font_size: f32,
+    ) -> Option<LayoutFontHandle> {
         let spacing = platform
             .as_ref()
             .map(|matched| matched.metadata.fixed_spacing_policy())
             .unwrap_or_else(|| {
-                if self
-                    .font_resolver
-                    .family_prefers_monospace(&resolved_family)
-                {
+                if self.font_resolver.family_prefers_monospace(resolved_family) {
                     neomacs_display_protocol::font::FixedFontSpacing::MonospaceOrCharacterCell
                 } else {
                     neomacs_display_protocol::font::FixedFontSpacing::ProportionalOrDual
@@ -2264,7 +2309,7 @@ impl FontMetricsService {
         {
             return self.materialize_bitmap_font(
                 matched,
-                &resolved_family,
+                resolved_family,
                 weight,
                 font_size,
                 FontResolutionSource::FacePrimary,
@@ -2277,13 +2322,13 @@ impl FontMetricsService {
         let font_id = match platform_fontdb_face {
             Some(face) => face.id(),
             None => {
-                self.selected_font_id_and_space_width(&resolved_family, weight, italic, font_size)
+                self.selected_font_id_and_space_width(resolved_family, weight, italic, font_size)
                     .0?
             }
         };
         let effective_weight = crate::font::font_match::resolve_weight_in_family(
             &self.font_system,
-            &resolved_family,
+            resolved_family,
             weight,
             italic,
         );
@@ -2303,7 +2348,7 @@ impl FontMetricsService {
             file.as_deref(),
             face_index,
             postscript_name.clone(),
-            &resolved_family,
+            resolved_family,
         );
         let selected_asset = file
             .as_deref()
@@ -2380,7 +2425,7 @@ impl FontMetricsService {
         self.observe_opened_font_vertical_metrics(vertical);
         let font = self.font_instances.intern(identity, replay, font_size, || {
             FontInstanceProperties {
-                family: resolved_family,
+                family: resolved_family.to_owned(),
                 full_name: None,
                 postscript_name,
                 // Preserve the resolved CSS weight, not the container face's

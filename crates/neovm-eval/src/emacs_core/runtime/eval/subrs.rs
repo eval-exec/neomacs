@@ -3585,7 +3585,7 @@ crate::emacs_core::subr::define_subrs! {
     )),
     crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "open-font",
-        NativeFn::ContextVec(|ctx, args| builtin_open_font(args, ctx.symbol_mode())),
+        NativeFn::ContextVec(builtin_open_font),
         SubrArity::new(1, Some(3)),
     )),
     crate::emacs_core::subr::world_subr!(SubrSpec::new(

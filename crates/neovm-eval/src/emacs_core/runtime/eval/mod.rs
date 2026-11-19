@@ -2898,6 +2898,22 @@ pub struct ResolvedFontEntityMetrics {
     pub capability: Option<FontOtfCapability>,
 }
 
+/// Request to open one exact font entity for `open-font`.
+///
+/// The entity handle is the catalog identity `find-font`/`list-fonts`
+/// published; opening it must reuse that exact face rather than re-resolve
+/// the visible properties (a family can hold several selectable faces).
+#[derive(Clone, Debug, PartialEq)]
+pub struct FontOpenEntityRequest {
+    pub frame_id: neovm_value::display_vocab::FrameId,
+    pub handle: Option<neovm_value::display_vocab::FontEntityHandle>,
+    pub size: FontOpeningSize,
+    /// GNU's `font_open_entity` `pixel_size` argument as Lisp observes it in
+    /// the font object's `:size`. `None` lets the host substitute the pixel
+    /// size it actually opened (used for point sizes).
+    pub reported_size: Option<i64>,
+}
+
 /// One GSUB/GPOS side of an OpenType capability report: per script
 /// (table order), langsyses (`None` = default langsys, first) with their
 /// feature tags. Tags keep trailing spaces ("MKD ").

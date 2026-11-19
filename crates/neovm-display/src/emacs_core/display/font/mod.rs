@@ -2409,6 +2409,16 @@ pub(crate) fn font_get(args: Vec<Value>) -> EvalResult {
 
     match args[0].kind() {
         ValueKind::Veclike(VecLikeType::Vector | VecLikeType::Font) => {
+            // GNU Ffont_get only reads the font-spec property indices and the
+            // FONT_EXTRA_INDEX alist.  The object-only slots FONT_NAME_INDEX,
+            // FONT_FULLNAME_INDEX, and FONT_FILE_INDEX (src/font.h) are not
+            // properties, so `(font-get FONT-OBJECT :name/:full-name/:file)'
+            // is nil unless the entity's extra alist happened to carry them.
+            // Neo materializes those slots as fields for `font-info' and
+            // `font-xlfd-name'; hide them here to keep font-get contract-faithful.
+            if args[0].is_font_object() && font_object_only_slot(&args[1]) {
+                return Ok(Value::NIL);
+            }
             let elems =
                 font_value_fields(&args[0]).expect("validated font value exposes properties");
             let exact = font_vector_get(elems, &args[1]);
@@ -2433,6 +2443,19 @@ pub(crate) fn font_get(args: Vec<Value>) -> EvalResult {
         }
         _ => unreachable!("font check above guarantees property storage"),
     }
+}
+
+/// Keys that name a font-object-only vector slot (`FONT_NAME_INDEX`,
+/// `FONT_FULLNAME_INDEX`, `FONT_FILE_INDEX` in GNU src/font.h) rather than
+/// a font property.  GNU's `Ffont_get` never consults those slots.
+fn font_object_only_slot(key: &Value) -> bool {
+    let ValueKind::Symbol(id) = key.kind() else {
+        return false;
+    };
+    matches!(
+        resolve_sym(id).trim_start_matches(':'),
+        "name" | "full-name" | "file"
+    )
 }
 
 /// Opened font objects store `(opentype . (GSUB . GPOS))` for `font-info`;
@@ -3519,6 +3542,18 @@ pub fn opened_font_from_resolved_match(
     face: &RuntimeFace,
     matched: &neovm_eval::emacs_core::eval::ResolvedFontMatch,
 ) -> Value {
+    opened_font_from_resolved_match_with_size(face, matched, None, None)
+}
+
+/// As [`opened_font_from_resolved_match`], but lets `open-font` keep GNU's
+/// requested pixel operand in the object's `:size` even when the driver
+/// opened a different usable strike (entity size 0 or a negative request).
+fn opened_font_from_resolved_match_with_size(
+    face: &RuntimeFace,
+    matched: &neovm_eval::emacs_core::eval::ResolvedFontMatch,
+    pixel_size: Option<i64>,
+    spacing: Option<i32>,
+) -> Value {
     let opened = &matched.font;
     let canonical = &opened.resolved;
     let mut selected = face.clone();
@@ -3530,8 +3565,14 @@ pub fn opened_font_from_resolved_match(
     selected.weight = Some(FontWeight::from_css_weight(canonical.weight));
     selected.slant = Some(opened.slant);
     selected.width = Some(opened.width());
-    let mut fields =
-        font_object_property_fields(&selected, Some(i64::from(opened.metrics.pixel_size.max(1))));
+    let mut fields = font_object_property_fields(
+        &selected,
+        Some(pixel_size.unwrap_or_else(|| i64::from(opened.metrics.pixel_size.max(1)))),
+    );
+    if let Some(spacing) = spacing {
+        fields.push(Value::keyword("spacing"));
+        fields.push(Value::fixnum(i64::from(spacing)));
+    }
     if let Some(postscript_name) = &canonical.postscript_name {
         fields.push(Value::keyword("postscript-name"));
         fields.push(Value::string(postscript_name.clone()));
@@ -3557,6 +3598,54 @@ pub fn opened_font_from_resolved_match(
             .unwrap_or(Value::NIL),
         canonical.identity.clone(),
     )
+}
+
+/// Materialize the opaque opened-font object for `open-font`.
+///
+/// The host has already realized the exact entity; this is the display-side
+/// construction boundary, sharing the property/finish pipeline with
+/// [`opened_font_from_resolved_match`] so `font-get`, `query-font`, and
+/// `font-info` cannot drift between frame-selected and Lisp-opened fonts.
+#[doc(hidden)]
+pub fn font_object_from_opened(
+    opened: &neovm_eval::emacs_core::eval::ResolvedOpenedFont,
+    reported_size: i64,
+    spacing: Option<i32>,
+) -> Value {
+    let face = RuntimeFace::new("default");
+    let matched = neovm_eval::emacs_core::eval::ResolvedFontMatch {
+        font: opened.clone(),
+        glyph_code: None,
+    };
+    // Build the name/full-name from the strike the driver actually opened
+    // (GNU's XLFD uses font->pixel_size), then overwrite only the public
+    // `:size` slot with the operand GNU's `font_open_entity` stored there.
+    let object = opened_font_from_resolved_match_with_size(&face, &matched, None, spacing);
+    let actual_size = i64::from(opened.metrics.pixel_size.max(1));
+    if reported_size == actual_size {
+        return object;
+    }
+    let Some(data) = object.as_font_data() else {
+        return object;
+    };
+    let mut fields = data.fields.as_slice().to_vec();
+    let mut index = 1;
+    while index + 1 < fields.len() {
+        if fields[index]
+            .as_symbol_name(neovm_value::tagged::SymbolMode::Bare)
+            .is_some_and(|key| key.trim_start_matches(':') == "size")
+        {
+            fields[index + 1] = Value::fixnum(reported_size);
+            break;
+        }
+        index += 2;
+    }
+    Value::make_font(neovm_value::tagged::header::FontObjectData {
+        fields: neovm_value::tagged::header::LispValueVec::owned(fields),
+        metrics: data.metrics,
+        capability: data.capability,
+        identity: data.identity.clone(),
+    })
 }
 
 pub(crate) fn font_name_value(font_like: &Value) -> Option<Value> {

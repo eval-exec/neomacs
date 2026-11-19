@@ -2835,6 +2835,57 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         Ok(metrics.map(core_font_px_metrics))
     }
 
+    fn open_font_entity(
+        &mut self,
+        request: neovm_core::emacs_core::eval::FontOpenEntityRequest,
+    ) -> Result<Option<Value>, String> {
+        let Some(handle) = request.handle else {
+            return Ok(None);
+        };
+        let Some(matched) = self.font_entities.get(handle).cloned() else {
+            return Ok(None);
+        };
+        let pixel_size = self.font_sizing.font_opening_size_px(request.size).get();
+        let reported_size = request.reported_size.unwrap_or(i64::from(pixel_size));
+        let Some(selected) = self
+            .synchronized_font_metrics()
+            .open_platform_match_font(&matched, pixel_size)
+        else {
+            return Ok(None);
+        };
+        let capability = selected
+            .resolved
+            .identity
+            .file_path
+            .as_deref()
+            .and_then(|file| {
+                self.font_otf_capability(file, selected.resolved.identity.file_face_index())
+                    .ok()
+                    .flatten()
+            });
+        let opened = core_opened_font_from_selection(selected, |_, _| capability.clone());
+        Ok(Some(neovm_core::emacs_core::font::font_object_from_opened(
+            &opened,
+            reported_size,
+            matched.metadata.spacing,
+        )))
+    }
+
+    fn font_open_point_pixels(&mut self, points: f64) -> Result<Option<i64>, String> {
+        // GNU Fopen_font: POINT_TO_PIXEL (round-half-up, then C truncation
+        // toward zero) with the frame's integer resolution.  The zero -> 120
+        // rule is applied by the caller after this conversion.
+        if !points.is_finite() {
+            return Ok(None);
+        }
+        let dpi = f64::from(self.font_sizing.layout_dpi().trunc());
+        let pixels = (points * dpi / 72.0 + 0.5).trunc();
+        if !pixels.is_finite() || pixels < i64::MIN as f64 || pixels > i64::MAX as f64 {
+            return Ok(None);
+        }
+        Ok(Some(pixels as i64))
+    }
+
     fn probe_font_entity_metrics(
         &mut self,
         request: FontEntityMetricsRequest,

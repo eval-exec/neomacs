@@ -1460,11 +1460,12 @@ fn font_at_eval_prefers_backend_selected_font_match_when_available() {
             .as_bare_symbol_name(),
         Some("Noto Sans Mono CJK SC")
     );
-    assert_eq!(
+    // FONT_FILE_INDEX is an object-only slot in GNU (src/font.h), so
+    // `font-get' on a font-object does not return it; font-info does.
+    assert!(
         font_get(vec![font, Value::keyword("file")])
             .unwrap()
-            .as_utf8_str(),
-        Some("/tmp/NotoSansMonoCJKsc-Regular.otf")
+            .is_nil()
     );
     let info = font_info(&mut eval, vec![font]).unwrap();
     let values = info.as_vector_data().expect("font info vector");
@@ -1991,12 +1992,19 @@ fn opened_font_retains_exact_backend_identity_and_variations() {
         object.as_font_data().expect("native font payload").identity,
         identity
     );
-    assert_eq!(
+    // GNU's Ffont_get (src/font.c) reads only the font property indices and
+    // FONT_EXTRA_INDEX; the object-only FONT_FULLNAME_INDEX slot (src/font.h)
+    // is exposed through `font-info', not `font-get'.
+    assert!(
         font_get(vec![object, Value::keyword("full-name")])
             .unwrap()
-            .as_utf8_str(),
-        Some("Variable Sans Semibold")
+            .is_nil()
     );
+    let info = OpenedFont::decode(object)
+        .expect("opened font payload")
+        .info_vector();
+    let values = info.as_vector_data().expect("font info vector");
+    assert_eq!(values[1].as_utf8_str(), Some("Variable Sans Semibold"));
     assert_eq!(
         font_get(vec![object, Value::keyword("postscript-name")])
             .unwrap()

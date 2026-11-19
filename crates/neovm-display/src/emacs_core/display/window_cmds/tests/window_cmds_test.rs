@@ -4608,9 +4608,11 @@ fn gui_frame_font_parameter_exposes_font_name_not_font_object() {
     font_face.slant = Some(FontSlant::Normal);
     font_face.height = Some(crate::face::FaceHeight::Absolute(27));
     let font_object = crate::emacs_core::font::build_font_object(&font_face);
+    // `font-get' does not expose the object-only FONT_NAME_INDEX slot in GNU
+    // (src/font.c Ffont_get), so project the public frame parameter from the
+    // font object directly, exactly as `builtin_frame_parameter' does.
     let public_font_name =
-        crate::emacs_core::font::font_get(vec![font_object, Value::keyword("name")])
-            .expect("opened font name");
+        crate::emacs_core::font::font_name_value(&font_object).expect("opened font name");
     let public_font_name_text = public_font_name
         .as_utf8_str()
         .expect("opened font name string")

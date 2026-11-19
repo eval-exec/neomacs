@@ -2424,6 +2424,10 @@ crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontEntityMetricsRequ
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontEntityMetricsRequest field slant
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontEntityMetricsRequest field weight
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontEntityMetricsRequest field width
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontOpenEntityRequest field frame_id
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontOpenEntityRequest field handle
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontOpenEntityRequest field reported_size
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontOpenEntityRequest field size
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontOtfCapability field gpos
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontOtfCapability field gsub
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontPxProbeResult field ascent
@@ -2567,6 +2571,7 @@ crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	mod	mod process_hooks
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	mod	mod protocol
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	struct	struct Context
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	struct	struct FontEntityMetricsRequest
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	struct	struct FontOpenEntityRequest
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	struct	struct FontOtfCapability
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	struct	struct FontPxProbeResult
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	struct	struct FontSpecListQuery
