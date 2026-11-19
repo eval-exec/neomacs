@@ -54,10 +54,8 @@ pub use function_write_hooks::{
 #[doc(hidden)]
 pub mod symbol_table;
 
-// Symbol-table publication is the N3 adapter over this owner.
-mod publication;
-
 mod cache_root_scan;
+mod publication;
 #[doc(hidden)]
 pub use cache_root_scan::CacheRootScan;
 

@@ -625,12 +625,25 @@ fn note_plist_head_store() {
 /// The ONE production store of a symbol's plist head.
 ///
 /// Publishes the head through the cell's atomic contract and advances the
-/// universal clock.  The architecture guard requires `plist.store_atomic(` to
-/// appear in production only inside this function: the `put`/`setplist`
-/// primitives, `replace_symbol_plist_id`, construction (`publish_fill`) and
-/// pdump reconstruction (`from_dump`) all route through it.
+/// universal clock.  Before that store, the SATB barrier notes the cell's
+/// current head.  Construction callers start from nil: [`LispSymbol::empty`]
+/// builds the plist as `NIL`, and [`LispSymbol::from_dump`] installs `NIL`
+/// before this store, so the note is the existing nil no-op.  The runtime
+/// writers assert nothing about the pre-image.
+///
+/// [`SymbolPropertyRevision::changed`](crate::symbol::SymbolPropertyRevision::changed)
+/// stays at the four runtime writers (`put_property`, `put_property_id`,
+/// `replace_symbol_plist_id`, `set_symbol_plist_id`).  It is the memo TLS
+/// revision keyed by `SymId`.  Construction has no observers, and this
+/// function has no obarray and no id with which to fire it.
+///
+/// The architecture guard requires `plist.store_atomic(` to appear in
+/// production only inside this function: the `put`/`setplist` primitives,
+/// `replace_symbol_plist_id`, construction (`publish_fill`) and pdump
+/// reconstruction (`from_dump`) all route through it.
 #[inline]
 pub(crate) fn store_plist_head(symbol: &mut LispSymbol, plist: Value) {
+    crate::tagged::gc::note_root_overwrite(symbol.plist.get());
     symbol.plist.store_atomic(plist);
     note_plist_head_store();
 }
@@ -713,6 +726,7 @@ impl LispSymbol {
             interned_global: false,
             function_unbound: false,
         };
+        debug_assert!(sym.plist.get().is_nil());
         store_plist_head(&mut sym, plist);
         sym
     }
@@ -751,6 +765,7 @@ impl LispSymbol {
         self.flags = src.flags.clone();
         self.val = src.val.clone();
         self.function = src.function;
+        debug_assert!(self.plist.get().is_nil());
         store_plist_head(self, plist);
         self.interned_global = src.interned_global;
         self.function_unbound = src.function_unbound;

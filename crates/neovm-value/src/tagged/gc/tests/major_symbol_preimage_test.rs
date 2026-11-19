@@ -277,6 +277,29 @@ fn major_symbol_obarray_value_function_and_plist_writers_log_their_old_cells() {
     }
 }
 
+/// A runtime head store whose pre-image is a heap cons. The note is the one
+/// inside `store_plist_head`; the caller no longer logs it itself.
+#[test]
+fn runtime_plist_head_store_notes_a_heap_preimage_through_the_seam() {
+    let mut heap = heap(false);
+    set_tagged_heap(&mut heap);
+    let roots = ScratchRoots::new();
+    let mut obarray = Obarray::new();
+    let owner = intern("seam-plist-preimage-owner");
+    let car = symbol("seam-plist-preimage-car");
+    let cons = roots.keep(heap.alloc_cons(car, TaggedValue::fixnum(1)));
+    obarray.set_symbol_plist_id(owner, cons);
+    let _phase = MarkPhase::synthetic(&mut heap);
+    assert!(
+        satb(&heap).is_empty(),
+        "installing the head before the mark must not log"
+    );
+    obarray.set_symbol_plist_id(owner, TaggedValue::NIL);
+    assert_eq!(satb(&heap), [cons]);
+    assert!(heap.current_mutator_gc().major_symbol_preimages.is_empty());
+    assert!(obarray.symbol_plist_id(owner).is_nil());
+}
+
 #[test]
 fn major_symbol_owner_store_preimages_use_mutator_logs_and_preserve_legacy_repair() {
     for enabled in [false, true] {

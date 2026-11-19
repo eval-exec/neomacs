@@ -410,8 +410,6 @@ impl Obarray {
         let sym = self.ensure_symbol_id(symbol);
         let (new_plist, _changed) =
             plist_put(sym.plist.get(), Value::from_sym_id(intern(prop)), value)?;
-        // SATB: retain the plist cell's pre-image during a concurrent mark.
-        crate::tagged::gc::note_root_overwrite(sym.plist.get());
         store_plist_head(sym, new_plist);
         SymbolPropertyRevision::changed(symbol);
         Ok(())
@@ -430,8 +428,6 @@ impl Obarray {
         self.ensure_global_member_if_canonical(symbol);
         let sym = self.ensure_symbol_id(symbol);
         let (new_plist, _changed) = plist_put(sym.plist.get(), Value::from_sym_id(prop), value)?;
-        // SATB: retain the plist cell's pre-image during a concurrent mark.
-        crate::tagged::gc::note_root_overwrite(sym.plist.get());
         store_plist_head(sym, new_plist);
         SymbolPropertyRevision::changed(symbol);
         Ok(())
