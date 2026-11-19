@@ -117,6 +117,9 @@ case "$profile" in
             x11-utils
             x11-xkb-utils
             xdotool
+            # native_frame_focus::ime binds F13 with xmodmap for the X server's
+            # lifetime. xmodmap ships in x11-xserver-utils, not x11-xkb-utils.
+            x11-xserver-utils
             wmctrl
             kwin-x11
             # KWin's decoration plugin.  Without one KWin loads neither
@@ -141,7 +144,7 @@ case "$profile" in
             fcitx5-modules
             "${font_packages[@]}"
         )
-        required_commands=(glmark2 timeout xvfb-run gpg rg Xvfb xauth xdpyinfo xprop xwininfo xkbcomp xdotool wmctrl kwin_x11 dbus-run-session fc-match import weston sway wtype grim fcitx5)
+        required_commands=(glmark2 timeout xvfb-run gpg rg Xvfb xauth xdpyinfo xprop xwininfo xkbcomp xdotool xmodmap wmctrl kwin_x11 dbus-run-session fc-match import weston sway wtype grim fcitx5)
         requires_libfaketime=true
         install_nerd_fonts=true
         ;;

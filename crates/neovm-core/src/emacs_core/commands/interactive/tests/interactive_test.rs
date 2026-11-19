@@ -2504,6 +2504,29 @@ fn lookup_key_accepts_legacy_menu_symbol_case_and_spaces() {
     );
 }
 
+/// GNU's mixed-case menu fallback `Fintern`s every converted name
+/// (`src/keymap.c:1330-1432`, the two `Fintern` calls at `:1386` and
+/// `:1429`), so the lowercase and dashed variants become obarray members
+/// even though the binding itself is only a lookup target.  Neomacs'
+/// `intern_member` is that member-producing funnel; the free `intern`
+/// resolves a name id without touching the obarray.
+#[test]
+fn lookup_key_menu_case_and_space_fallback_interns_members() {
+    crate::test_utils::init_test_tracing();
+    assert_eq!(
+        eval_one(
+            r#"(let* ((m (make-sparse-keymap))
+                      (lower (intern (concat "fo" "o-bar"))))
+                 (define-key m (vector 'menu-bar 'fallback-test lower) 'ignore)
+                 (list (lookup-key m (vector 'menu-bar 'fallback-test
+                                             (intern (concat "Fo" "o Bar"))))
+                       (and (intern-soft (concat "foo" " bar")) t)
+                       (and (intern-soft (concat "fo" "o-bar")) t)))"#
+        ),
+        "OK (ignore t t)"
+    );
+}
+
 #[test]
 fn menu_bar_menu_at_x_y_uses_recursive_display_order_for_final_items() {
     crate::test_utils::init_test_tracing();

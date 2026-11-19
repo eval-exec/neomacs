@@ -4,11 +4,14 @@ pub(super) mod control;
 mod keeper;
 mod owner;
 mod resume;
+mod run_admission;
 
 pub use control::{Mode, Phase, Request};
-pub use keeper::{AllStopped, AllStoppedFailure};
+pub use keeper::AllStopped;
+pub use keeper::AllStoppedFailure;
 pub use owner::RootedRetireFailure;
-pub use resume::{ResumeGcImage, ResumeGcImageFailure};
+pub use resume::ResumeGcImage;
+pub use resume::ResumeGcImageFailure;
 
 use super::*;
 use crate::tagged::transport::{ParallelRootBatchError, ParallelRootIdentity, SharedRoot};

@@ -115,6 +115,10 @@ mod text_host;
 pub(crate) use self::lexenv_cache::LexenvAssqCache;
 pub(crate) use callback::{CheckedNativeCallback, native_callback_cache_enabled};
 pub(crate) mod parallel_entry;
+#[doc(hidden)]
+pub use parallel_entry::source_entry::{
+    SourceModuleObservation, install_source_module_scope_probe, source_module_observation,
+};
 #[allow(dead_code)] // Dormant E4-S0 executor substrate; E4 stage 1 consumes it.
 #[doc(hidden)]
 pub mod parallel_exec;
@@ -2239,6 +2243,13 @@ cached_symbol_id!(error_symbol, "error");
 cached_symbol_id!(quit_symbol, "quit");
 cached_symbol_id!(invalid_function_symbol, "invalid-function");
 cached_symbol_id!(error_conditions_symbol, "error-conditions");
+// Signal dispatch reads these on every signal (GNU reads the C variables).
+cached_symbol_id!(signal_hook_function_symbol, "signal-hook-function");
+cached_symbol_id!(inhibit_debugger_symbol, "inhibit-debugger");
+cached_symbol_id!(debug_on_signal_symbol, "debug-on-signal");
+cached_symbol_id!(debug_on_error_symbol, "debug-on-error");
+cached_symbol_id!(debug_on_quit_symbol, "debug-on-quit");
+cached_symbol_id!(debug_ignored_errors_symbol, "debug-ignored-errors");
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 fn is_lambda_like_symbol_id(id: SymId) -> bool {
@@ -2614,6 +2625,9 @@ pub struct FontSpecResolveRequest {
     pub weight: Option<FontWeight>,
     pub slant: Option<FontSlant>,
     pub width: Option<FontWidth>,
+    /// GNU `:otf` requirement. Font matching rejects a font whose
+    /// GSUB/GPOS capability does not satisfy it (`src/font.c:2521-2533`).
+    pub otf: Option<crate::emacs_core::eval::data::fontset_state::StoredOtfSpec>,
 }
 
 /// Listing constraints which must not alter the driver's single-font match
@@ -2893,6 +2907,22 @@ pub struct ResolvedFontEntityMetrics {
     pub metrics: FontPxProbeResult,
     pub file: Option<neovm_value::heap_types::LispString>,
     pub capability: Option<FontOtfCapability>,
+}
+
+/// Request to open one exact font entity for `open-font`.
+///
+/// The entity handle is the catalog identity `find-font`/`list-fonts`
+/// published; opening it must reuse that exact face rather than re-resolve
+/// the visible properties (a family can hold several selectable faces).
+#[derive(Clone, Debug, PartialEq)]
+pub struct FontOpenEntityRequest {
+    pub frame_id: neovm_value::display_vocab::FrameId,
+    pub handle: Option<neovm_value::display_vocab::FontEntityHandle>,
+    pub size: FontOpeningSize,
+    /// GNU's `font_open_entity` `pixel_size` argument as Lisp observes it in
+    /// the font object's `:size`. `None` lets the host substitute the pixel
+    /// size it actually opened (used for point sizes).
+    pub reported_size: Option<i64>,
 }
 
 /// One GSUB/GPOS side of an OpenType capability report: per script
@@ -3994,6 +4024,24 @@ pub struct Context {
     /// Appended after the pinned layout; only the Context size grows.
     #[doc(hidden)]
     pub frame_and_buffer_state: Option<Value>,
+    /// Collector time banked by `gc_collect_from_current_roots_body`: every
+    /// call of that body that starts, polls, terminates, minor-marks or
+    /// sweeps a cycle without completing it adds its duration here, and the
+    /// body call that completes a cycle publishes the sum into `gc-elapsed`
+    /// (GNU adds the whole `garbage_collect` duration, alloc.c). A cycle
+    /// drained by another `drain_to_quiescent` caller (thread admission,
+    /// green-thread switch or retirement, root registration) leaves its
+    /// banked time here until the next completed collection publishes it.
+    /// Appended after the pinned layout; only the Context size grows.
+    gc_cycle_elapsed: std::time::Duration,
+    /// Frame objects named by bare ids the keyboard still holds: queued
+    /// input, the last event frame, the mouse position, and a presented
+    /// pointer observation. Refreshed before an explicit collection arms
+    /// deleted frames. Appended after the pinned layout so the fields the
+    /// JIT and the bytecode loop load do not move. GNU keeps the same frames
+    /// alive because `recent_keys` stores the frame object
+    /// (`frame.c:2898-2901`).
+    retained_frame_pins: Vec<Value>,
 }
 
 // A mutex does not make the host hooks, Rc leases or TLS views transferable.
@@ -5465,6 +5513,18 @@ impl Context {
 
     /// Evaluate a Lisp expression string. Convenience for tests.
     /// Reads via the Value-native reader and evaluates via eval_sub.
+    /// GNU's reader interns every symbol token into the current obarray as it
+    /// reads it (`Fintern`, `src/lread.c:4674-4709`). The Value-native reader
+    /// allocates canonical ids only, so callers that read source materialize
+    /// the same obarray side effect here. Without this, a spelling the
+    /// profile does not DEFSYM at startup (`fontsize` on Linux, `access` on
+    /// macOS) answers `intern-soft` nil even though Lisp has just read it.
+    fn intern_read_form_symbols(&mut self, forms: &[Value]) {
+        for form in forms {
+            self.obarray_mut().intern_member_symbols_in(*form);
+        }
+    }
+
     pub fn eval_str(&mut self, source: &str) -> Result<Value, EvalError> {
         self.setup_thread_locals();
         let forms = super::value_reader::read_all(source, self.variables()).map_err(|e| {
@@ -5484,6 +5544,10 @@ impl Context {
         for form in &forms {
             self.push_specpdl_root(*form);
         }
+        // The reader interns as it reads (GNU `Fintern`); materialize that
+        // membership after the forms are rooted, because interning can
+        // allocate and collect.
+        self.intern_read_form_symbols(&forms);
         let mut result = Value::NIL;
         let mut error = None;
         for form in &forms {
@@ -5562,6 +5626,8 @@ impl Context {
         for form in &forms {
             self.push_specpdl_root(*form);
         }
+        // Reader interning happens after rooting: it can allocate and collect.
+        self.intern_read_form_symbols(&forms);
         let mut results = Vec::with_capacity(forms.len());
         for form in &forms {
             // Each form is one top-level evaluation: its root group ends when
@@ -7479,6 +7545,9 @@ mod macroexpand;
 
 mod admission;
 pub(crate) use admission::AdmissionError;
+#[doc(hidden)]
+pub mod activation;
+mod activation_owner;
 mod global_state;
 mod green;
 
@@ -7698,6 +7767,9 @@ mod var_fast_tests;
 #[path = "tests/watcher_redispatch_test.rs"]
 mod watcher_redispatch_tests;
 
+#[cfg(test)]
+#[path = "tests/gc_elapsed_whole_cycle_test.rs"]
+mod gc_elapsed_whole_cycle_tests;
 #[cfg(test)]
 #[path = "tests/gc_sweep_cap_test.rs"]
 mod gc_sweep_cap_tests;

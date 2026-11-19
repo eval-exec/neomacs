@@ -166,7 +166,7 @@ const GUI_PROBE: &str = r####"
     (unless (and (stringp sandbox) (> (length sandbox) 1)
                  (file-name-absolute-p sandbox)
                  approved
-                 (file-in-directory-p (file-truename sandbox)
+                 (neomacs-melpa-path-inside-p (file-truename sandbox)
                                       (file-truename approved)))
       (error "GGF351-GUI: unsafe sandbox root %S below %S" sandbox approved))
     (when (file-exists-p root)

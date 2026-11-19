@@ -13,12 +13,10 @@ use crate::tagged::transport::SharedRoot;
 use crate::tagged::value::TaggedValue as Value;
 use neovm_eval::test_support::authority::with_test_symbol_functions_init_era;
 use neovm_value::test_support::authority::{
-    self as contention, Deadline, Retry, prepare_name_symbol_for_test, retry_owned,
-    sym_name_call_begin_for_test, sym_name_fset_into_for_test,
+    prepare_name_symbol_for_test, sym_name_call_begin_for_test, sym_name_fset_into_for_test,
 };
 use std::cell::RefCell;
 use std::num::NonZeroU32;
-use std::ops::ControlFlow;
 use std::rc::Rc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -66,10 +64,6 @@ enum FrameState<'era> {
     Empty,
     Seeded(Homes<'era>),
 }
-enum BodyState<B> {
-    Ready(B),
-    Used,
-}
 enum Resources<'era> {
     Resident {
         owner: Mutator<'era>,
@@ -104,23 +98,15 @@ impl Drop for Guard<'_> {
                 frame,
             } => (|| {
                 drop(frame);
-                contention::retry(
-                    Deadline::contention(),
-                    || owner.run_access()?.clear_root_slots(),
-                    contention::registration,
-                )
-                .map_err(CleanupError::Registration)?;
+                // The body and its leases have unwound on this sole owner.
+                owner
+                    .run_access()
+                    .and_then(|mut run| run.clear_root_slots())
+                    .map_err(CleanupError::Registration)?;
                 drop(input);
-                retry_owned(
-                    Deadline::contention(),
-                    owner,
-                    |owner| owner.retire_rooted(&[]),
-                    |failed| match contention::rendezvous(&failed.reason) {
-                        Retry::Busy => ControlFlow::Continue(failed.into_owner()),
-                        Retry::Refuse => ControlFlow::Break(failed),
-                    },
-                )
-                .map_err(|failed| CleanupError::Retirement(failed.reason))
+                owner
+                    .retire_rooted(&[])
+                    .map_err(|failed| CleanupError::Retirement(failed.reason))
             })(),
         };
         *self.receipt.borrow_mut() = CleanupReceipt::Finished(result);
@@ -276,16 +262,8 @@ fn fixture(
             stopped.trace(|_, _| Ok(())).unwrap();
             stopped.complete().unwrap();
             let permit = era.register(1, 8).unwrap();
-            let owner = retry_owned(
-                Deadline::contention(),
-                permit,
-                |permit| permit.activate(era.heap_identity(), 1),
-                |failed| match contention::registration(&failed.reason) {
-                    Retry::Busy => ControlFlow::Continue(failed.into_permit()),
-                    Retry::Refuse => ControlFlow::Break(failed),
-                },
-            )
-            .unwrap();
+            // No participant competes with the only owner in this fixture.
+            let owner = permit.activate(era.heap_identity(), 1).unwrap();
             let receipt = Rc::new(RefCell::new(CleanupReceipt::Pending));
             let mut guard = Guard {
                 resources: Resources::Resident {
@@ -295,7 +273,6 @@ fn fixture(
                 },
                 receipt: Rc::clone(&receipt),
             };
-            let mut body_state = BodyState::Ready(body);
             let outcome =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     match &mut guard.resources {
@@ -305,41 +282,23 @@ fn fixture(
                             input,
                             frame,
                         } => {
-                            contention::retry(
-                                Deadline::contention(),
-                                || {
-                                    let mut run = owner.run_access()?;
-                                    *frame = FrameState::Seeded(Homes {
-                                        definition: run.root_slot(input).unwrap(),
-                                        replacement: run.root_slot(input).unwrap(),
-                                        answer: run.root_slot(input).unwrap(),
-                                        cache: FunctionCallCache::new(&mut run).unwrap(),
-                                        activation: FunctionActivation::new(&mut run).unwrap(),
-                                    });
-                                    let homes = match frame {
-                                        FrameState::Seeded(homes) => homes,
-                                        FrameState::Empty => panic!("C6 name frame not seeded"),
-                                    };
-                                    run.sym_value_into(&handles.target, &mut homes.definition)
-                                        .unwrap();
-                                    run.sym_value_into(
-                                        &handles.replacement,
-                                        &mut homes.replacement,
-                                    )
-                                    .unwrap();
-                                    match std::mem::replace(&mut body_state, BodyState::Used) {
-                                        BodyState::Ready(body) => {
-                                            body(&mut run, &handles, homes, facts)
-                                        }
-                                        BodyState::Used => {
-                                            panic!("C6 name fixture body repeated after progress")
-                                        }
-                                    }
-                                    Ok(())
-                                },
-                                contention::registration,
-                            )
-                            .unwrap();
+                            let mut run = owner.run_access().unwrap();
+                            *frame = FrameState::Seeded(Homes {
+                                definition: run.root_slot(input).unwrap(),
+                                replacement: run.root_slot(input).unwrap(),
+                                answer: run.root_slot(input).unwrap(),
+                                cache: FunctionCallCache::new(&mut run).unwrap(),
+                                activation: FunctionActivation::new(&mut run).unwrap(),
+                            });
+                            let homes = match frame {
+                                FrameState::Seeded(homes) => homes,
+                                FrameState::Empty => panic!("C6 name frame not seeded"),
+                            };
+                            run.sym_value_into(&handles.target, &mut homes.definition)
+                                .unwrap();
+                            run.sym_value_into(&handles.replacement, &mut homes.replacement)
+                                .unwrap();
+                            body(&mut run, &handles, homes, facts);
                         }
                     }
                 }));

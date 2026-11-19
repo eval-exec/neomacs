@@ -1607,6 +1607,7 @@ fn parking_traces_private_roots_without_world_cells() {
                     | "threads"
                     | "kmacro"
                     | "command_loop"
+                    | "retained_frame_pins"
                     | "modes"
             ))
         },

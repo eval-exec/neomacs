@@ -31,8 +31,17 @@
 //!    upper snapshot this way). The mutation test covers mention-without-call,
 //!    mention-without-build-script, an unknown name, a missing probe, the
 //!    cross-crate include form, and the green forms.
+//!
+//! 3. Stand-in feature edges (`host_cfg_standin_features_agree`): a
+//!    `HostCfgClass::is_active` arm `cfg!(feature = "NAME")` is compiled in
+//!    the crate that owns the predicate. A different crate that `include!`s a
+//!    file containing `feature = "NAME"` evaluates that gate in its own
+//!    feature set. Every feature list that enables `<owner>/NAME` must also
+//!    enable `<stand-in>/NAME`. The real tree is red while the generated
+//!    upper snapshot still carries `feature = "sqlite"` and `neovm-system`'s
+//!    sqlite feature enables `neovm-eval/sqlite` without `neovm-display/sqlite`.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use super::architecture_production_source_roots::workspace_root;
@@ -261,6 +270,253 @@ fn host_cfg_probe_violation(workspace: &Path) -> Result<(), String> {
     }
 }
 
+struct MemberManifest {
+    package: String,
+    directory: PathBuf,
+    features: BTreeMap<String, Vec<String>>,
+}
+
+fn canonical(path: &Path) -> Result<PathBuf, String> {
+    path.canonicalize()
+        .map_err(|error| format!("{}: {error}", path.display()))
+}
+
+fn member_manifest(workspace: &Path, relative: &str) -> Result<MemberManifest, String> {
+    let directory = workspace.join(relative);
+    let text = read(&directory.join("Cargo.toml"))?;
+    let manifest: toml::Value =
+        toml::from_str(&text).map_err(|error| format!("{relative}/Cargo.toml: {error}"))?;
+    let package = manifest
+        .get("package")
+        .and_then(|value| value.get("name"))
+        .and_then(toml::Value::as_str)
+        .ok_or_else(|| format!("{relative}: Cargo.toml has no package name"))?
+        .to_owned();
+    let mut features = BTreeMap::new();
+    if let Some(table) = manifest.get("features").and_then(toml::Value::as_table) {
+        for (name, value) in table {
+            let entries = value
+                .as_array()
+                .ok_or_else(|| format!("{relative}: feature `{name}` is not an array"))?;
+            let mut tokens = Vec::new();
+            for entry in entries {
+                let token = entry.as_str().ok_or_else(|| {
+                    format!("{relative}: feature `{name}` has a non-string entry")
+                })?;
+                tokens.push(token.to_owned());
+            }
+            features.insert(name.clone(), tokens);
+        }
+    }
+    Ok(MemberManifest {
+        package,
+        directory,
+        features,
+    })
+}
+
+/// `cfg!(feature = "NAME")` arms of the predicate. Whitespace around `=`
+/// is allowed; the feature name runs until the closing quote.
+fn host_cfg_feature_names(text: &str) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    let mut rest = text;
+    let marker = "cfg!(feature";
+    while let Some(index) = rest.find(marker) {
+        let after = rest[index + marker.len()..].trim_start();
+        let Some(after) = after.strip_prefix('=') else {
+            rest = &rest[index + marker.len()..];
+            continue;
+        };
+        let Some(after) = after.trim_start().strip_prefix('"') else {
+            rest = &rest[index + marker.len()..];
+            continue;
+        };
+        let Some(end) = after.find('"') else {
+            break;
+        };
+        if !after[..end].is_empty() {
+            names.insert(after[..end].to_owned());
+        }
+        rest = &after[end + 1..];
+    }
+    names
+}
+
+/// Predicate impl marker, split so this guard's source is not itself a
+/// predicate. The mutation fixture writes the same tokens into its file.
+fn predicate_impl_marker() -> String {
+    format!("{}{}", "impl Host", "CfgClass")
+}
+
+fn predicate_file(members: &[MemberManifest]) -> Result<PathBuf, String> {
+    let marker = predicate_impl_marker();
+    let mut found = Vec::new();
+    for member in members {
+        let mut files = Vec::new();
+        walk_rs_files(&member.directory.join("src"), &mut files)?;
+        for file in files {
+            let text = read(&file)?;
+            if text.contains(&marker)
+                && text.contains("fn is_active")
+                && !host_cfg_feature_names(&text).is_empty()
+            {
+                found.push(file);
+            }
+        }
+    }
+    match found.len() {
+        1 => Ok(found.remove(0)),
+        0 => Err("no HostCfgClass::is_active predicate in the workspace".to_owned()),
+        _ => Err(format!(
+            "more than one HostCfgClass::is_active predicate: {found:?}"
+        )),
+    }
+}
+
+fn owner_index(members: &[MemberManifest], predicate: &Path) -> Result<usize, String> {
+    let predicate = canonical(predicate)?;
+    let mut found = None;
+    for (index, member) in members.iter().enumerate() {
+        let directory = canonical(&member.directory)?;
+        if predicate.starts_with(&directory) {
+            if found.is_some() {
+                return Err(format!(
+                    "predicate {} is inside more than one member",
+                    predicate.display()
+                ));
+            }
+            found = Some(index);
+        }
+    }
+    found.ok_or_else(|| {
+        format!(
+            "predicate {} is outside every workspace member",
+            predicate.display()
+        )
+    })
+}
+
+/// `neovm-eval/sqlite` and the weak form `neovm-eval?/sqlite` both enable
+/// that package feature. `dep:` activations and other packages do not.
+fn token_enables(token: &str, package: &str, feature: &str) -> bool {
+    let Some((left, right)) = token.split_once('/') else {
+        return false;
+    };
+    let left = left.strip_suffix('?').unwrap_or(left);
+    left == package && right == feature
+}
+
+/// Crates other than the predicate owner that `include!` a file outside
+/// their own tree whose text gates `feature`. The attribute is compiled in
+/// the including crate, which is the stand-in.
+fn standins_by_feature(
+    members: &[MemberManifest],
+    owner_index: usize,
+    features: &BTreeSet<String>,
+) -> Result<BTreeMap<String, BTreeSet<String>>, String> {
+    let mut standins = BTreeMap::new();
+    for feature in features {
+        standins.insert(feature.clone(), BTreeSet::new());
+    }
+    for (index, member) in members.iter().enumerate() {
+        if index == owner_index {
+            continue;
+        }
+        let member_dir = canonical(&member.directory)?;
+        let mut pending = Vec::new();
+        walk_rs_files(&member.directory.join("src"), &mut pending)?;
+        let mut seen = BTreeSet::new();
+        while let Some(file) = pending.pop() {
+            if !seen.insert(file.clone()) {
+                continue;
+            }
+            let text = read(&file)?;
+            for included in included_files(&member.directory, &file, &text) {
+                if !included.is_file() {
+                    continue;
+                }
+                let included_dir = canonical(&included)?;
+                if included_dir.starts_with(&member_dir) {
+                    pending.push(included);
+                    continue;
+                }
+                let included_text = read(&included)?;
+                for feature in features {
+                    let needle = format!("feature = \"{feature}\"");
+                    if included_text.contains(&needle) {
+                        standins
+                            .entry(feature.clone())
+                            .or_default()
+                            .insert(member.package.clone());
+                    }
+                }
+                pending.push(included);
+            }
+        }
+    }
+    Ok(standins)
+}
+
+/// Part (3): a cfg-active `HostCfgClass` and the stand-in compiled from an
+/// `include!` of the same feature name must be one feature edge.
+fn host_cfg_standin_feature_violation(workspace: &Path) -> Result<(), String> {
+    let mut members = Vec::new();
+    for relative in workspace_members(workspace)? {
+        members.push(member_manifest(workspace, &relative)?);
+    }
+    let predicate = predicate_file(&members)?;
+    let feature_names = host_cfg_feature_names(&read(&predicate)?);
+    if feature_names.is_empty() {
+        return Err(format!(
+            "{}: HostCfgClass::is_active has no cfg!(feature = \"...\") arm",
+            predicate.display()
+        ));
+    }
+    let owner = owner_index(&members, &predicate)?;
+    let owner_package = members[owner].package.clone();
+    let standins = standins_by_feature(&members, owner, &feature_names)?;
+    let mut violations = Vec::new();
+    for (feature, standin_packages) in &standins {
+        for standin in standin_packages {
+            for member in &members {
+                for (feature_key, tokens) in &member.features {
+                    if !tokens
+                        .iter()
+                        .any(|token| token_enables(token, &owner_package, feature))
+                    {
+                        continue;
+                    }
+                    if member.package == *standin && feature_key == feature {
+                        continue;
+                    }
+                    if tokens
+                        .iter()
+                        .any(|token| token_enables(token, standin, feature))
+                    {
+                        continue;
+                    }
+                    violations.push(format!(
+                        "{package} feature `{feature_key}` enables `{owner_package}/{feature}` \
+                         without `{standin}/{feature}` (cfg(feature = \"{feature}\") in a file \
+                         {standin} include!s is compiled in {standin}, while HostCfgClass is \
+                         compiled in {owner_package})",
+                        package = member.package
+                    ));
+                }
+            }
+        }
+    }
+    if violations.is_empty() {
+        Ok(())
+    } else {
+        violations.sort();
+        Err(format!(
+            "cfg-active HostCfgClass with no matching stand-in feature:\n  {}",
+            violations.join("\n  ")
+        ))
+    }
+}
+
 /// Part (1): the four independent views of each shared host cfg must agree.
 #[test]
 fn host_cfg_views_agree_across_crates() {
@@ -317,6 +573,14 @@ fn host_cfg_views_agree_across_crates() {
 fn host_cfg_mentions_require_the_shared_probe() {
     host_cfg_probe_violation(&workspace_root())
         .unwrap_or_else(|error| panic!("HOST-CFG PROBE: {error}"));
+}
+
+/// Part (3) on the real workspace. Red while an included stand-in file still
+/// gates a predicate feature that an enabler turns on only for the owner.
+#[test]
+fn host_cfg_standin_features_agree() {
+    host_cfg_standin_feature_violation(&workspace_root())
+        .unwrap_or_else(|error| panic!("HOST-CFG STAND-IN: {error}"));
 }
 
 #[cfg(test)]
@@ -501,6 +765,79 @@ pub fn configure_all() {
             Some(&probe_build_rs(true, true)),
         );
         host_cfg_probe_violation(root).expect("relative include with the probe");
+    }
+
+    fn write_standin_workspace(root: &Path, system_sqlite: &str) {
+        std::fs::create_dir_all(root.join("neovm-eval/src")).expect("eval src");
+        std::fs::create_dir_all(root.join("neovm-display/src")).expect("display src");
+        std::fs::create_dir_all(root.join("neovm-system/src")).expect("system src");
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"neovm-eval\", \"neovm-display\", \"neovm-system\"]\nresolver = \"2\"\n",
+        )
+        .expect("root manifest");
+        std::fs::write(
+            root.join("neovm-eval/Cargo.toml"),
+            "[package]\nname = \"neovm-eval\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[features]\nsqlite = []\n",
+        )
+        .expect("eval manifest");
+        let kind = "HostCfgClass";
+        let predicate = format!(
+            "impl {kind} {{\n    pub const fn is_active(self) -> bool {{\n        \
+             match self {{\n            {kind}::Sqlite => cfg!(feature = \"sqlite\"),\n        \
+             }}\n    }}\n}}\n"
+        );
+        std::fs::write(root.join("neovm-eval/src/lib.rs"), predicate).expect("predicate");
+        std::fs::write(
+            root.join("neovm-eval/src/rows.rs"),
+            "#[cfg(feature = \"sqlite\")]\npub fn sqlite_open() {}\n",
+        )
+        .expect("stand-in rows");
+        std::fs::write(
+            root.join("neovm-display/Cargo.toml"),
+            "[package]\nname = \"neovm-display\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[features]\nsqlite = [\"neovm-eval/sqlite\"]\n",
+        )
+        .expect("display manifest");
+        std::fs::write(
+            root.join("neovm-display/src/lib.rs"),
+            "include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/../neovm-eval/src/rows.rs\"));\n",
+        )
+        .expect("display include");
+        std::fs::write(
+            root.join("neovm-system/Cargo.toml"),
+            format!(
+                "[package]\nname = \"neovm-system\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[features]\nsqlite = [{system_sqlite}]\n"
+            ),
+        )
+        .expect("system manifest");
+        std::fs::write(root.join("neovm-system/src/lib.rs"), "\n").expect("system lib");
+    }
+
+    /// Removing `neovm-display/sqlite` from the enabler that lists
+    /// `neovm-eval/sqlite` is the hole. The stand-in's own feature is not.
+    #[test]
+    fn host_cfg_standin_edge_removed_is_red() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+
+        write_standin_workspace(root, "\"neovm-eval/sqlite\", \"neovm-display/sqlite\"");
+        host_cfg_standin_feature_violation(root).expect("edge present");
+
+        write_standin_workspace(root, "\"neovm-eval/sqlite\"");
+        let error = host_cfg_standin_feature_violation(root).expect_err("edge removed");
+        assert!(error.contains("neovm-system"), "{error}");
+        assert!(error.contains("neovm-eval/sqlite"), "{error}");
+        assert!(error.contains("neovm-display/sqlite"), "{error}");
+        assert!(
+            error.contains("cfg-active HostCfgClass with no matching stand-in feature"),
+            "{error}"
+        );
+
+        write_standin_workspace(root, "\"neovm-eval/sqlite\", \"neovm-display/sqlite\"");
+        host_cfg_standin_feature_violation(root).expect("edge restored");
+
+        write_standin_workspace(root, "");
+        host_cfg_standin_feature_violation(root).expect("enabler does not turn the feature on");
     }
 }
 

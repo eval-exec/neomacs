@@ -1639,7 +1639,23 @@ impl WaitContextExt for neovm_eval::emacs_core::eval::Context {
         // before anything blocks, notify any status that changed while Lisp
         // was busy.  Here that means running `handle_child_signal`'s walk
         // first, because this port could not run it in the handler.
+        // A zero-timeout wait never reaches the blocking select. GNU still
+        // clears `read_output_skip` for that select (src/process.c:5702-5709)
+        // without reading the skipped channels, so the next accept reads them.
+        // Snapshot the ids first: the pass may arm a new skip on a channel it
+        // does read.
+        let zero_poll_skips = if matches!(request.deadline, WaitDeadline::Poll)
+            && request.target_process().is_none()
+        {
+            self.processes().skipping_adaptive_read_ids()
+        } else {
+            Vec::new()
+        };
         let mut outcome = self.service_wait_request_first_pass(&request)?;
+        if !zero_poll_skips.is_empty() {
+            self.processes_mut()
+                .clear_adaptive_read_skips(&zero_poll_skips);
+        }
         if let Some(completion) =
             self.complete_wait_after_required_minimum_drain(&request, outcome)?
         {
@@ -1671,6 +1687,17 @@ impl WaitContextExt for neovm_eval::emacs_core::eval::Context {
             }
 
             let wait_timeout = self.next_wait_request_timeout(&request, now);
+            // A zero-time block does not enter the poller, and its following
+            // service walks every live process. Leave the skip flags set
+            // across that walk so the deferred channels are not read in the
+            // same turn, then clear the snapshot. A positive wait clears the
+            // flags inside `block_for_wait_request` after the poll returns.
+            let zero_wait_skips =
+                if wait_timeout.duration.is_zero() && request.target_process().is_none() {
+                    self.processes().skipping_adaptive_read_ids()
+                } else {
+                    Vec::new()
+                };
             let activity = self.block_for_wait_request(&request, wait_timeout.duration)?;
             // Service cross-thread eval-tasks (e.g. a diagnostics profile
             // capture) here: a `Poller::notify()` wakes this inner block without
@@ -1701,6 +1728,10 @@ impl WaitContextExt for neovm_eval::emacs_core::eval::Context {
             )?;
             outcome = self.service_wait_request_block_activity(&request, activity, run_timers)?;
             outcome.absorb_process_activity(notified);
+            if !zero_wait_skips.is_empty() {
+                self.processes_mut()
+                    .clear_adaptive_read_skips(&zero_wait_skips);
+            }
 
             if let Some(completion) =
                 self.complete_wait_after_required_minimum_drain(&request, outcome)?
@@ -1806,7 +1837,21 @@ impl WaitContextExt for neovm_eval::emacs_core::eval::Context {
         // chance to run created workers and resume unblocked waiters.
         // Green and no-thread cases are a single flag test inside.
         self.sim_release_point(neovm_eval::emacs_core::threads::SimReleasePoint::Select)?;
-        match self.wait_block(request, wait_time) {
+        // GNU FD_CLRs skipping channels for this one select and bounds that
+        // select by the minimum `read_output_delay` (src/process.c:5684-5709).
+        // `next_wait_request_timeout` already applied the minimum. A
+        // level-triggered poller still reports a readable skipped fd at once,
+        // so the fd has to leave the poll set for the wait. N skippers share
+        // this one wait. The flags are cleared when it returns.
+        let defer_adaptive = request.services_process_output()
+            && request.target_process().is_none()
+            && !wait_time.is_zero();
+        let suspended = if defer_adaptive {
+            super::process::types::suspend_skipping_adaptive_reads(self.processes())
+        } else {
+            Vec::new()
+        };
+        let blocked = match self.wait_block(request, wait_time) {
             WaitBlock::Poll => Ok(WaitBlockActivity::poll()),
             WaitBlock::Poller(interest) => {
                 // Mirror GNU: while blocked reading a command key,
@@ -1821,13 +1866,9 @@ impl WaitContextExt for neovm_eval::emacs_core::eval::Context {
                 self.end_waiting_for_user_input(restore);
                 Ok(WaitBlockActivity::from_source_events(events))
             }
-            WaitBlock::HostInputChannel => {
-                let _ = self.wait_for_next_host_input_event(
-                    wait_time,
-                    request.sets_waiting_for_user_input(),
-                )?;
-                Ok(WaitBlockActivity::poll())
-            }
+            WaitBlock::HostInputChannel => self
+                .wait_for_next_host_input_event(wait_time, request.sets_waiting_for_user_input())
+                .map(|_| WaitBlockActivity::poll()),
             WaitBlock::ProcessOutputSleep => {
                 let events = self.processes().wait_for_process_events(wait_time);
                 Ok(WaitBlockActivity::from_source_events(events))
@@ -1836,7 +1877,14 @@ impl WaitContextExt for neovm_eval::emacs_core::eval::Context {
                 std::thread::sleep(wait_time);
                 Ok(WaitBlockActivity::ready_processes(Vec::new()))
             }
+        };
+        if defer_adaptive {
+            super::process::types::restore_skipping_adaptive_reads(
+                self.processes_mut(),
+                &suspended,
+            );
         }
+        blocked
     }
 
     /// Decode readiness only after the Green owner reacquired the Baton.

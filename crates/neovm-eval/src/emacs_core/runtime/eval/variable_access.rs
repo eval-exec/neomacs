@@ -587,9 +587,7 @@ impl Context {
     /// `DEFVAR_*` global, or a Lisp `symbol-value`, is the VISIBLE read and
     /// must use [`Self::builtin_var_value`] /
     /// [`Self::builtin_var_value_by_name`] / [`Self::builtin_var_value_cached`]
-    /// (or [`Self::special_variable_value_by_id`]) instead. The callers of
-    /// this accessor are counted and frozen by
-    /// `emacs_core/tests/architecture/default_value_only_ratchet_test.rs`.
+    /// (or [`Self::special_variable_value_by_id`]) instead.
     #[inline(always)]
     pub fn default_value_only(&self, id: SymId) -> Option<Value> {
         self.variables().value(id)

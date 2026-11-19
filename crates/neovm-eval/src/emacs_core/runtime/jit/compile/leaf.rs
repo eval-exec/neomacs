@@ -1316,8 +1316,12 @@ impl CompiledLeaf {
     ) -> i64 {
         debug_assert_eq!(self.entry_shape, EntryShape::RawMemory);
         // Raw entries bypass invoke_native_frame. Test witnesses still need
-        // their exact native extent, including optimized test binaries.
-        #[cfg(test)]
+        // their exact native extent, including optimized test binaries: a
+        // release workspace test build compiles this LIB without `cfg(test)`
+        // but with `test-support`, so that feature must keep the guard (the
+        // cache-side counter and its reader use the same gate; see the CFG
+        // CONTRACT at `jit::cache::NATIVE_DEPTH`).
+        #[cfg(any(test, debug_assertions, feature = "test-support"))]
         let _native_depth = super::super::cache::NativeDepthGuard::enter();
         debug_assert!(
             self.dynamic_prefix == 0 || !consts.is_null(),
@@ -1356,8 +1360,12 @@ impl CompiledLeaf {
     ) -> super::reg_abi::NativeRet {
         debug_assert_eq!(self.entry_shape, EntryShape::RawRegister);
         // Raw entries bypass invoke_native_frame. Test witnesses still need
-        // their exact native extent, including optimized test binaries.
-        #[cfg(test)]
+        // their exact native extent, including optimized test binaries: a
+        // release workspace test build compiles this LIB without `cfg(test)`
+        // but with `test-support`, so that feature must keep the guard (the
+        // cache-side counter and its reader use the same gate; see the CFG
+        // CONTRACT at `jit::cache::NATIVE_DEPTH`).
+        #[cfg(any(test, debug_assertions, feature = "test-support"))]
         let _native_depth = super::super::cache::NativeDepthGuard::enter();
         // SAFETY: the thunk of the entry's arity, and `args_ptr` addresses
         // that many words (the contract above).

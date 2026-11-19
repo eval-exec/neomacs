@@ -104,6 +104,14 @@ pub struct CollectionReport {
     pub(crate) total_allocated_bytes: u64,
 }
 
+#[cfg(feature = "test-support")]
+impl CollectionReport {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn frozen_owners(&self) -> usize {
+        self.frozen_owners
+    }
+}
+
 fn supported(heap: &TaggedHeap) -> Result<(), CollectionError> {
     supported_with_weak(heap, None)
 }

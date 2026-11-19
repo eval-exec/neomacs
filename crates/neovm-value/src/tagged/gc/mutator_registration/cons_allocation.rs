@@ -40,7 +40,8 @@ impl RunAccess<'_, '_> {
     /// The lasting single-cons primitive for rooted VM/frame or transport homes.
     /// All three homes are validated before any reservation or mutation.
     #[inline]
-    pub fn cons_into<C: RootedSlot, D: RootedSlot, R: RootedSlot>(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn cons_into<C: RootedSlot, D: RootedSlot, R: RootedSlot>(
         &mut self,
         car: &C,
         cdr: &D,

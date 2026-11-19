@@ -7,9 +7,15 @@
 //! Section version 2 keeps the version-1 header and appends the optional Mule
 //! order as a count followed by symbol ids. Version 3 adds the physical-ID
 //! order and authoritative alias pairs, preserving a definition even if an
-//! alias overwrites its public name. The reader accepts versions 1/2, whose
-//! missing metadata is reconstructed at registry load. No file-level
-//! pdump version or JIT ABI change is needed for this compatible section.
+//! alias overwrites its public name. Version 4 adds the ISO designation winners
+//! (`iso-charset` table) as a count of (dimension, chars-96?, final char,
+//! symbol) entries. Version 5 adds published charset names, binding slot ids,
+//! and the plist slots those ids index. Sharing is the slot id, so a dump does
+//! not need the Lisp cons to stay eq. Version 6 appends the ISO-2022 member
+//! list and the cached `charset-plist` object of each slot, including an atom
+//! that is not a pair list. The reader accepts versions 1/2/3/4/5, whose
+//! missing metadata is reconstructed at registry load. No file-level pdump
+//! version or JIT ABI change is needed for this compatible section.
 
 use bytemuck::{Pod, Zeroable};
 
@@ -22,7 +28,7 @@ pub(crate) use super::types::{
 };
 
 const CHARSET_MAGIC: [u8; 16] = *b"NEOCHARSET\0\0\0\0\0\0";
-const CHARSET_FORMAT_VERSION: u32 = 3;
+const CHARSET_FORMAT_VERSION: u32 = 6;
 const ABSENT_EMACS_MULE_ORDER: u64 = u64::MAX;
 
 #[repr(C)]
@@ -73,6 +79,31 @@ pub(crate) fn charset_section_bytes(registry: &DumpCharsetRegistry) -> Result<Ve
         }
         None => write_u64(&mut bytes, ABSENT_EMACS_MULE_ORDER),
     }
+    match &registry.iso_designation_syms {
+        Some(entries) => {
+            write_len(&mut bytes, entries.len(), "charset ISO designations")?;
+            for ((dimension, chars96, final_char), name) in entries {
+                write_u64(&mut bytes, *dimension as u64);
+                write_bool(&mut bytes, *chars96);
+                write_u64(&mut bytes, *final_char as u64);
+                write_u32(&mut bytes, name.0);
+            }
+        }
+        None => write_u64(&mut bytes, ABSENT_EMACS_MULE_ORDER),
+    }
+    write_optional_sym_pairs(
+        &mut bytes,
+        &registry.published_names,
+        "charset published names",
+    )?;
+    write_optional_bindings(&mut bytes, &registry.binding_slots)?;
+    write_optional_plist_slots(&mut bytes, &registry.plist_slots)?;
+    write_optional_symbols(
+        &mut bytes,
+        &registry.iso2022_members,
+        "charset iso-2022 members",
+    )?;
+    write_optional_plist_lisp(&mut bytes, &registry.plist_lisp)?;
 
     let payload_len = bytes.len() - HEADER_SIZE;
     let header = CharsetHeader {
@@ -156,6 +187,48 @@ pub(crate) fn load_charset_section(section: &[u8]) -> Result<DumpCharsetRegistry
     } else {
         (None, None)
     };
+    let iso_designation_syms = if header.version >= 4 {
+        let count = cursor.read_u64("charset ISO designation count")?;
+        if count == ABSENT_EMACS_MULE_ORDER {
+            None
+        } else {
+            let count = to_usize(count, "charset ISO designation count")?;
+            // dimension (8) + chars96 (1) + final char (8) + symbol (4).
+            if count > cursor.remaining() / 21 {
+                return Err(DumpError::ImageFormatError(
+                    "charset ISO designations exceed payload".into(),
+                ));
+            }
+            let mut entries = Vec::with_capacity(count);
+            for _ in 0..count {
+                let dimension = cursor.read_i64("charset ISO dimension")?;
+                let chars96 = cursor.read_bool("charset ISO chars-96 flag")?;
+                let final_char = cursor.read_i64("charset ISO final char")?;
+                let name = DumpSymId(cursor.read_u32("charset ISO designation name")?);
+                entries.push(((dimension, chars96, final_char), name));
+            }
+            Some(entries)
+        }
+    } else {
+        None
+    };
+    let (published_names, binding_slots, plist_slots) = if header.version >= 5 {
+        (
+            read_optional_sym_pairs(&mut cursor, "charset published names")?,
+            read_optional_bindings(&mut cursor)?,
+            read_optional_plist_slots(&mut cursor)?,
+        )
+    } else {
+        (None, None, None)
+    };
+    let (iso2022_members, plist_lisp) = if header.version >= 6 {
+        (
+            read_optional_symbols(&mut cursor, "charset iso-2022 members")?,
+            read_optional_plist_lisp(&mut cursor)?,
+        )
+    } else {
+        (None, None)
+    };
 
     if !cursor.is_empty() {
         return Err(DumpError::ImageFormatError(format!(
@@ -171,6 +244,12 @@ pub(crate) fn load_charset_section(section: &[u8]) -> Result<DumpCharsetRegistry
         emacs_mule_order_syms,
         priority_identity_syms,
         alias_syms,
+        iso_designation_syms,
+        published_names,
+        binding_slots,
+        plist_slots,
+        iso2022_members,
+        plist_lisp,
         next_id: header.next_id,
     })
 }
@@ -213,6 +292,190 @@ fn read_optional_symbols(
     Ok(Some(names))
 }
 
+fn write_optional_sym_pairs(
+    out: &mut Vec<u8>,
+    pairs: &Option<Vec<(DumpSymId, DumpSymId)>>,
+    what: &str,
+) -> Result<(), DumpError> {
+    match pairs {
+        Some(pairs) => {
+            write_len(out, pairs.len(), what)?;
+            for (left, right) in pairs {
+                write_u32(out, left.0);
+                write_u32(out, right.0);
+            }
+        }
+        None => write_u64(out, ABSENT_EMACS_MULE_ORDER),
+    }
+    Ok(())
+}
+
+fn read_optional_sym_pairs(
+    cursor: &mut Cursor<'_>,
+    what: &str,
+) -> Result<Option<Vec<(DumpSymId, DumpSymId)>>, DumpError> {
+    let count = cursor.read_u64(what)?;
+    if count == ABSENT_EMACS_MULE_ORDER {
+        return Ok(None);
+    }
+    let count = to_usize(count, what)?;
+    if count > cursor.remaining() / (2 * std::mem::size_of::<u32>()) {
+        return Err(DumpError::ImageFormatError(format!(
+            "{what} exceed charset payload"
+        )));
+    }
+    let mut pairs = Vec::with_capacity(count);
+    for _ in 0..count {
+        pairs.push((
+            DumpSymId(cursor.read_u32(what)?),
+            DumpSymId(cursor.read_u32(what)?),
+        ));
+    }
+    Ok(Some(pairs))
+}
+
+fn write_optional_bindings(
+    out: &mut Vec<u8>,
+    records: &Option<Vec<(DumpSymId, DumpSymId, u32)>>,
+) -> Result<(), DumpError> {
+    match records {
+        Some(records) => {
+            write_len(out, records.len(), "charset binding slots")?;
+            for (name, identity, slot) in records {
+                write_u32(out, name.0);
+                write_u32(out, identity.0);
+                write_u32(out, *slot);
+            }
+        }
+        None => write_u64(out, ABSENT_EMACS_MULE_ORDER),
+    }
+    Ok(())
+}
+
+fn read_optional_bindings(
+    cursor: &mut Cursor<'_>,
+) -> Result<Option<Vec<(DumpSymId, DumpSymId, u32)>>, DumpError> {
+    let count = cursor.read_u64("charset binding slots")?;
+    if count == ABSENT_EMACS_MULE_ORDER {
+        return Ok(None);
+    }
+    let count = to_usize(count, "charset binding slots")?;
+    if count > cursor.remaining() / (3 * std::mem::size_of::<u32>()) {
+        return Err(DumpError::ImageFormatError(
+            "charset binding slots exceed payload".into(),
+        ));
+    }
+    let mut records = Vec::with_capacity(count);
+    for _ in 0..count {
+        records.push((
+            DumpSymId(cursor.read_u32("charset binding name")?),
+            DumpSymId(cursor.read_u32("charset binding identity")?),
+            cursor.read_u32("charset binding slot")?,
+        ));
+    }
+    Ok(Some(records))
+}
+
+fn write_optional_plist_slots(
+    out: &mut Vec<u8>,
+    slots: &Option<Vec<Option<Vec<(DumpSymId, DumpValue)>>>>,
+) -> Result<(), DumpError> {
+    match slots {
+        Some(slots) => {
+            write_len(out, slots.len(), "charset plist slots")?;
+            for slot in slots {
+                match slot {
+                    Some(pairs) => {
+                        write_u8(out, 1);
+                        write_sym_value_pairs(out, pairs)?;
+                    }
+                    None => write_u8(out, 0),
+                }
+            }
+        }
+        None => write_u64(out, ABSENT_EMACS_MULE_ORDER),
+    }
+    Ok(())
+}
+
+fn write_optional_plist_lisp(
+    out: &mut Vec<u8>,
+    slots: &Option<Vec<Option<DumpValue>>>,
+) -> Result<(), DumpError> {
+    match slots {
+        Some(slots) => {
+            write_len(out, slots.len(), "charset plist lisp")?;
+            for slot in slots {
+                match slot {
+                    Some(value) => {
+                        write_u8(out, 1);
+                        write_value(out, value)?;
+                    }
+                    None => write_u8(out, 0),
+                }
+            }
+        }
+        None => write_u64(out, ABSENT_EMACS_MULE_ORDER),
+    }
+    Ok(())
+}
+
+fn read_optional_plist_lisp(
+    cursor: &mut Cursor<'_>,
+) -> Result<Option<Vec<Option<DumpValue>>>, DumpError> {
+    let count = cursor.read_u64("charset plist lisp")?;
+    if count == ABSENT_EMACS_MULE_ORDER {
+        return Ok(None);
+    }
+    let count = to_usize(count, "charset plist lisp")?;
+    if count > cursor.remaining() {
+        return Err(DumpError::ImageFormatError(
+            "charset plist lisp exceeds payload".into(),
+        ));
+    }
+    let mut slots = Vec::with_capacity(count);
+    for _ in 0..count {
+        match cursor.read_u8("charset plist lisp tag")? {
+            0 => slots.push(None),
+            1 => slots.push(Some(cursor.read_value()?)),
+            other => {
+                return Err(DumpError::ImageFormatError(format!(
+                    "unknown charset plist lisp tag {other}"
+                )));
+            }
+        }
+    }
+    Ok(Some(slots))
+}
+
+fn read_optional_plist_slots(
+    cursor: &mut Cursor<'_>,
+) -> Result<Option<Vec<Option<Vec<(DumpSymId, DumpValue)>>>>, DumpError> {
+    let count = cursor.read_u64("charset plist slots")?;
+    if count == ABSENT_EMACS_MULE_ORDER {
+        return Ok(None);
+    }
+    let count = to_usize(count, "charset plist slots")?;
+    if count > cursor.remaining() {
+        return Err(DumpError::ImageFormatError(
+            "charset plist slots exceed payload".into(),
+        ));
+    }
+    let mut slots = Vec::with_capacity(count);
+    for _ in 0..count {
+        match cursor.read_u8("charset plist slot tag")? {
+            0 => slots.push(None),
+            1 => slots.push(Some(read_sym_value_pairs(cursor)?)),
+            other => {
+                return Err(DumpError::ImageFormatError(format!(
+                    "unknown charset plist slot tag {other}"
+                )));
+            }
+        }
+    }
+    Ok(Some(slots))
+}
+
 fn read_header(section: &[u8]) -> Result<CharsetHeader, DumpError> {
     if section.len() < HEADER_SIZE {
         return Err(DumpError::ImageFormatError(format!(
@@ -226,7 +489,7 @@ fn read_header(section: &[u8]) -> Result<CharsetHeader, DumpError> {
             "charset section has bad magic".into(),
         ));
     }
-    if !matches!(header.version, 1 | 2 | CHARSET_FORMAT_VERSION) {
+    if !matches!(header.version, 1 | 2 | 3 | 4 | 5 | 6) {
         return Err(DumpError::UnsupportedVersion(header.version));
     }
     if header.header_size != HEADER_SIZE as u32 {
@@ -547,6 +810,12 @@ pub(crate) fn empty_charset_registry() -> DumpCharsetRegistry {
         emacs_mule_order_syms: None,
         priority_identity_syms: None,
         alias_syms: None,
+        iso_designation_syms: None,
+        published_names: None,
+        binding_slots: None,
+        plist_slots: None,
+        iso2022_members: None,
+        plist_lisp: None,
         next_id: 0,
     }
 }

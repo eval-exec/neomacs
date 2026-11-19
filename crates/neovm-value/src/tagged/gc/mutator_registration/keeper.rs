@@ -49,6 +49,18 @@ impl FrozenLegacyRoots {
     pub(crate) fn heap_identity(&self) -> HeapIdentity {
         self.heap
     }
+
+    pub(crate) fn words(&self) -> &[TaggedValue] {
+        &self.words
+    }
+
+    pub(crate) fn function_roots(&self) -> FrozenFunctionRoots {
+        if self.functions_quiescent {
+            FrozenFunctionRoots::Quiescent
+        } else {
+            FrozenFunctionRoots::MayBeActive
+        }
+    }
     /// Copies opaque words into `out`. Decoding still requires stopped
     /// authority for this heap. The stored vec stays private.
     #[cfg_attr(feature = "test-support", visibility::make(pub))]

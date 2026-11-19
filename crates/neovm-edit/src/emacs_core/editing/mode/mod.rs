@@ -346,12 +346,14 @@ impl ModeRegistry {
     // Major mode operations
     // -------------------------------------------------------------------
 
+    #[cfg(feature = "test-support")]
     /// Register a major mode definition.
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn register_major_mode(&mut self, name: &str, mode: MajorMode) {
         self.major_modes.insert(mode_symbol_id(name), mode);
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     /// Set the major mode for a buffer. Replaces any existing major mode.
     /// Returns an error if the mode is not registered.
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -374,6 +376,7 @@ impl ModeRegistry {
             .unwrap_or_else(|| mode_symbol_name(self.fundamental_mode))
     }
 
+    #[cfg(feature = "test-support")]
     /// Look up the best-matching mode for a filename via `auto-mode-alist`.
     /// Patterns are matched as suffix (ending) of the filename, like Emacs.
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -386,12 +389,14 @@ impl ModeRegistry {
         None
     }
 
+    #[cfg(feature = "test-support")]
     /// Return the `MajorMode` definition for a mode name, if registered.
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn get_major_mode_def(&self, mode_name: &str) -> Option<&MajorMode> {
         self.major_modes.get(&mode_symbol_id(mode_name))
     }
 
+    #[cfg(feature = "test-support")]
     /// Check whether `mode_name` is derived from `ancestor`.
     /// A mode derives from itself.
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -414,12 +419,14 @@ impl ModeRegistry {
     // Minor mode operations
     // -------------------------------------------------------------------
 
+    #[cfg(any(test, feature = "test-support"))]
     /// Register a minor mode definition.
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn register_minor_mode(&mut self, name: &str, mode: MinorMode) {
         self.minor_modes.insert(mode_symbol_id(name), mode);
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     /// Enable a minor mode in a specific buffer.
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn enable_minor_mode(
@@ -438,6 +445,7 @@ impl ModeRegistry {
         Ok(())
     }
 
+    #[cfg(feature = "test-support")]
     /// Disable a minor mode in a specific buffer.
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn disable_minor_mode(&mut self, buffer_id: u64, mode_name: &str) {
@@ -447,6 +455,7 @@ impl ModeRegistry {
         }
     }
 
+    #[cfg(feature = "test-support")]
     /// Toggle a minor mode in a specific buffer. Returns `Ok(true)` if the
     /// mode is now active, `Ok(false)` if it was disabled.
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -467,6 +476,7 @@ impl ModeRegistry {
         }
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     /// Check if a minor mode is active in a buffer (buffer-local or global).
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn is_minor_mode_active(&self, buffer_id: u64, mode_name: &str) -> bool {
@@ -505,6 +515,7 @@ impl ModeRegistry {
     // Global minor modes
     // -------------------------------------------------------------------
 
+    #[cfg(any(test, feature = "test-support"))]
     /// Enable a minor mode globally.
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn enable_global_minor_mode(&mut self, mode_name: &str) -> Result<(), String> {
@@ -529,6 +540,7 @@ impl ModeRegistry {
     // Auto-mode
     // -------------------------------------------------------------------
 
+    #[cfg(feature = "test-support")]
     /// Add an entry to the auto-mode-alist (pattern -> mode name).
     /// Patterns are suffix-matched against filenames (similar to Emacs
     /// `auto-mode-alist` regex patterns like `"\\.rs\\'"` which match file
@@ -543,6 +555,7 @@ impl ModeRegistry {
     // Custom variables / groups
     // -------------------------------------------------------------------
 
+    #[cfg(feature = "test-support")]
     /// Register a custom variable.
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn register_custom_variable(&mut self, name: &str, var: CustomVariable) {
@@ -558,18 +571,21 @@ impl ModeRegistry {
         self.custom_variables.insert(mode_symbol_id(name), var);
     }
 
+    #[cfg(feature = "test-support")]
     /// Register a custom group.
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn register_custom_group(&mut self, name: &str, group: CustomGroup) {
         self.custom_groups.insert(mode_symbol_id(name), group);
     }
 
+    #[cfg(feature = "test-support")]
     /// Look up a custom variable by name.
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn get_custom_variable(&self, name: &str) -> Option<&CustomVariable> {
         self.custom_variables.get(&mode_symbol_id(name))
     }
 
+    #[cfg(feature = "test-support")]
     /// Look up a custom group by name.
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn get_custom_group(&self, name: &str) -> Option<&CustomGroup> {
@@ -580,6 +596,7 @@ impl ModeRegistry {
     // Font-lock
     // -------------------------------------------------------------------
 
+    #[cfg(any(test, feature = "test-support"))]
     /// Return the font-lock keywords for a mode (walking the parent chain).
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn font_lock_keywords(&self, mode_name: &str) -> Option<&[FontLockKeyword]> {
@@ -735,6 +752,7 @@ impl Default for ModeRegistry {
 // Pattern matching helper
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "test-support")]
 /// Simple suffix-match for auto-mode-alist patterns.
 ///
 /// If `pattern` starts with '.', we check if `filename` ends with `pattern`.

@@ -321,6 +321,7 @@ pub fn undo_list_boundary(undo_list: &mut Value) {
 // entry 150 deleted; grouping the list for replay is `primitive-undo''s job
 // (lisp/simple.el:3645), and it is Lisp.  This module RECORDS.
 
+#[cfg(any(test, feature = "test-support"))]
 /// Check whether the most recent entry is a nil boundary.
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn undo_list_has_trailing_boundary(undo_list: &Value) -> bool {
@@ -470,7 +471,8 @@ impl UndoLimits {
     /// `None` means `undo-limit` or `undo-strong-limit` holds something GNU's
     /// `DEFVAR_INT` slot could never hold; there is no defensible number to
     /// truncate with in that state, so the caller leaves the list alone.
-    pub fn read(bindings: &impl UndoLimitBindings) -> Option<Self> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn read(bindings: &impl UndoLimitBindings) -> Option<Self> {
         let (GnuIntVariable::Int(limit), GnuIntVariable::Int(strong_limit)) = (
             GnuIntVariable::of(bindings.undo_limit()),
             GnuIntVariable::of(bindings.undo_strong_limit()),
@@ -525,7 +527,8 @@ pub(crate) fn undo_first_group_bytes(undo_list: Value) -> i64 {
 /// exceeds the limit" loop does not have: the most recent record is always
 /// kept whole, and every cut lands on a group edge, so an undo list is never
 /// left holding half of a command's changes.
-pub fn truncate_undo_list(undo_list: Value, limits: &UndoLimits) -> Value {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn truncate_undo_list(undo_list: Value, limits: &UndoLimits) -> Value {
     let mut size_so_far: i64 = 0;
     let mut prev = Value::NIL;
     let mut next = undo_list;

@@ -27,6 +27,7 @@ use strum::{EnumString, IntoStaticStr};
 mod desktop;
 #[doc(hidden)]
 pub use desktop::monitor_rect_in_display_pixels;
+mod selection_step;
 mod tooltip;
 #[doc(hidden)]
 pub use neovm_edit::emacs_core::edit_host::EditHost;

@@ -227,7 +227,8 @@ impl SymbolFlags {
     /// projection.  One byte test, since `Plainval` and `Untrapped` are both
     /// the zero encoding.
     #[inline(always)]
-    pub fn is_plain_untrapped_unprojected(&self) -> bool {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn is_plain_untrapped_unprojected(&self) -> bool {
         self.load() & (Self::REDIRECT_MASK | Self::TRAPPED_WRITE_MASK | Self::RUNTIME_PROJECTED_BIT)
             == 0
     }
@@ -599,11 +600,15 @@ pub enum DumpedCell {
 
 /// Universal plist-head publication clock (P10).
 ///
-/// Process-global rather than an `Obarray` field: the one head-store seam
-/// below must also run from cell construction and pdump reconstruction, which
-/// have no `Obarray`.  A bump before an era is published is harmless because
-/// nothing reads the clock yet; afterwards it is the snapshot-invalidation
-/// clock (P10-a2).  It is not TLS.
+/// A static rather than an `Obarray` field: the one head-store seam below
+/// must also run from cell construction and pdump reconstruction, which have
+/// no `Obarray`.  A runtime store bumps it.  A construction store does not.
+/// Production code does not read it yet; afterwards it is the
+/// snapshot-invalidation clock (P10-a2).  It is not TLS.
+///
+/// The construction equality assertion is sound because nextest gives each
+/// test its own process, and nothing in that test does a runtime store after
+/// `before` is read.
 static PLIST_EPOCH: AtomicU64 = AtomicU64::new(0);
 
 /// The current plist-head epoch.  One Acquire load is the per-signal freshness
@@ -621,17 +626,72 @@ fn note_plist_head_store() {
     PLIST_EPOCH.fetch_add(1, Ordering::Release);
 }
 
+/// Which plist-head store this is.
+///
+/// [`PlistStore::Runtime`] bumps the clock on every store. Same-head
+/// suppression is not this rule. [`PlistStore::Construction`] never bumps.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PlistStore {
+    Runtime,
+    Construction,
+}
+
 /// The ONE production store of a symbol's plist head.
 ///
-/// Publishes the head through the cell's atomic contract and advances the
-/// universal clock.  The architecture guard requires `plist.store_atomic(` to
-/// appear in production only inside this function: the `put`/`setplist`
-/// primitives, `replace_symbol_plist_id`, construction (`publish_fill`) and
-/// pdump reconstruction (`from_dump`) all route through it.
+/// Publishes the head through the cell's atomic contract.  A runtime store
+/// notes the pre-image through the SATB barrier before that store, then
+/// bumps the clock on every call.  Same-head suppression is not this rule.
+///
+/// A construction store does not bump, and it skips the note.
+/// [`LispSymbol::empty`] builds the plist as `NIL`, and
+/// [`LispSymbol::from_dump`] installs `NIL` before this store, so the
+/// pre-image is nil.  [`note_root_overwrite`](crate::tagged::gc::note_root_overwrite)
+/// returns immediately unless the pre-image is a heap object or a Symbol.
+/// Nil is neither, so the call would be a no-op.  The
+/// `debug_assert` on this arm is that proof in tests.  Skipping the call
+/// keeps the note, the concurrent-mark thread-local read, and that path's
+/// panic out of the cold publishers (`publish_fresh_slot`,
+/// `publish_fresh_slot_admitted`, `from_dump`).
+///
+/// [`SymbolPropertyRevision::changed`](crate::symbol::SymbolPropertyRevision::changed)
+/// stays at the four runtime writers (`put_property`, `put_property_id`,
+/// `replace_symbol_plist_id`, `set_symbol_plist_id`).  It is the memo TLS
+/// revision keyed by `SymId`.  Construction has no observers, and this
+/// function has no obarray and no id with which to fire it.
+///
+/// The architecture guard requires `plist.store_atomic(` to appear in
+/// production only inside this function: the `put`/`setplist` primitives,
+/// `replace_symbol_plist_id`, construction (`publish_fill`) and pdump
+/// reconstruction (`from_dump`) all route through it.
 #[inline]
-pub(crate) fn store_plist_head(symbol: &mut LispSymbol, plist: Value) {
+pub(crate) fn store_plist_head(symbol: &mut LispSymbol, plist: Value, kind: PlistStore) {
+    let previous = symbol.plist.get();
+    match kind {
+        PlistStore::Runtime => {
+            crate::tagged::gc::note_root_overwrite(previous);
+        }
+        PlistStore::Construction => {
+            debug_assert!(previous.is_nil());
+        }
+    }
     symbol.plist.store_atomic(plist);
-    note_plist_head_store();
+    match kind {
+        PlistStore::Runtime => note_plist_head_store(),
+        PlistStore::Construction => {}
+    }
+}
+
+/// Runtime head store: bump the clock on every call.
+#[inline]
+pub(crate) fn store_runtime_plist_head(symbol: &mut LispSymbol, plist: Value) {
+    store_plist_head(symbol, plist, PlistStore::Runtime);
+}
+
+/// Construction head store: publish the head, skip the nil SATB note, and
+/// leave the clock alone.
+#[inline]
+pub(crate) fn store_construction_plist_head(symbol: &mut LispSymbol, plist: Value) {
+    store_plist_head(symbol, plist, PlistStore::Construction);
 }
 
 impl LispSymbol {
@@ -712,7 +772,7 @@ impl LispSymbol {
             interned_global: false,
             function_unbound: false,
         };
-        store_plist_head(&mut sym, plist);
+        store_construction_plist_head(&mut sym, plist);
         sym
     }
 
@@ -750,7 +810,7 @@ impl LispSymbol {
         self.flags = src.flags.clone();
         self.val = src.val.clone();
         self.function = src.function;
-        store_plist_head(self, plist);
+        store_construction_plist_head(self, plist);
         self.interned_global = src.interned_global;
         self.function_unbound = src.function_unbound;
         // Terminal Release: publishes the arm writes above to the GC scan's

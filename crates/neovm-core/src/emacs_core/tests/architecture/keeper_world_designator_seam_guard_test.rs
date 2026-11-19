@@ -16,15 +16,27 @@ const OWNER: &str = "src/emacs_core/runtime/eval/world";
 enum Constructor {
     KeeperWorldDesignator,
     FrozenLegacyRoots,
+    WorldIdentity,
+    SymbolRootDesignators,
+    WorldLoan,
 }
 
 impl Constructor {
-    const ALL: [Self; 2] = [Self::KeeperWorldDesignator, Self::FrozenLegacyRoots];
+    const ALL: [Self; 5] = [
+        Self::KeeperWorldDesignator,
+        Self::FrozenLegacyRoots,
+        Self::WorldIdentity,
+        Self::SymbolRootDesignators,
+        Self::WorldLoan,
+    ];
 
     fn name(self) -> &'static str {
         match self {
             Self::KeeperWorldDesignator => "KeeperWorldDesignator",
             Self::FrozenLegacyRoots => "FrozenLegacyRoots",
+            Self::WorldIdentity => "WorldIdentity",
+            Self::SymbolRootDesignators => "SymbolRootDesignators",
+            Self::WorldLoan => "WorldLoan",
         }
     }
 }
@@ -111,6 +123,13 @@ fn keeper_world_designators_are_minted_only_by_the_world_owner() {
 #[test]
 fn frozen_legacy_roots_are_minted_only_by_the_world_owner() {
     assert_world_owner_constructor(Constructor::FrozenLegacyRoots);
+}
+
+#[test]
+fn era_world_loan_constructors_are_minted_only_by_the_world_owner() {
+    assert_world_owner_constructor(Constructor::WorldIdentity);
+    assert_world_owner_constructor(Constructor::SymbolRootDesignators);
+    assert_world_owner_constructor(Constructor::WorldLoan);
 }
 
 fn assert_synthetic_controls(constructor: Constructor) {

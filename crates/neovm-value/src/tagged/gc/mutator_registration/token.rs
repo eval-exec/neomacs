@@ -57,7 +57,8 @@ pub struct MutatorStartFailure<'era> {
     permit: MutatorPermit<'era>,
 }
 impl<'era> MutatorStartFailure<'era> {
-    pub fn into_permit(self) -> MutatorPermit<'era> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn into_permit(self) -> MutatorPermit<'era> {
         self.permit
     }
 }
@@ -244,7 +245,9 @@ pub struct MutatorFinishFailure<'era> {
     owner: Mutator<'era>,
 }
 impl<'era> MutatorFinishFailure<'era> {
-    pub fn into_owner(self) -> Mutator<'era> {
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn into_owner(self) -> Mutator<'era> {
         self.owner
     }
 }
@@ -382,7 +385,9 @@ impl<'era> Mutator<'era> {
         RegistrationError::Busy
     }
 
-    pub fn begin_publication(
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn begin_publication(
         &mut self,
         epoch: NonZeroU64,
     ) -> Result<OwnerPublication<'_, 'era>, RegistrationError> {
@@ -817,75 +822,7 @@ static_assertions::assert_not_impl_any!(RunAccess<'static, 'static>: Send, Sync,
 static_assertions::assert_impl_all!(YoungWorkerLoan<'static>: Send);
 static_assertions::assert_not_impl_any!(YoungWorkerLoan<'static>: Sync, Clone, Copy);
 
-fn cohort_assertion_text(payload: Box<dyn std::any::Any + Send>) -> String {
-    payload
-        .downcast_ref::<String>()
-        .cloned()
-        .or_else(|| payload.downcast_ref::<&str>().map(|text| text.to_string()))
-        .unwrap_or_else(|| "non-string cohort assertion".into())
-}
-
 impl<'era> Mutator<'era> {
-    /// Wait on the product's resume-debt event, then run `body` under an
-    /// Idle admission. The registry field stays `pub(super)`; this is the
-    /// cross-crate route for the re-homed eval cohort fixture. Behavior
-    /// matches the fixture's previous private `with_run`.
-    #[cfg(any(test, feature = "test-support"))]
-    #[doc(hidden)]
-    pub fn with_idle_run_for_test<R>(
-        &mut self,
-        mut body: impl FnMut(&mut RunAccess<'_, 'era>) -> Result<R, String>,
-    ) -> Result<R, String> {
-        let registry = self.registry;
-        let _park = registry.park_ticket();
-        let mut gate = registry
-            .lock_blocking()
-            .map_err(|error| format!("cohort admission gate: {error:?}"))?;
-        loop {
-            match gate.rendezvous.phase {
-                Phase::Idle => break,
-                Phase::DrainingResumes => {
-                    match self.run_access() {
-                        Err(RegistrationError::Busy) => {}
-                        Err(error) => return Err(format!("cohort drain refusal: {error:?}")),
-                        Ok(run) => {
-                            drop(gate);
-                            drop(run);
-                            return Err("cohort admitted during DrainingResumes".into());
-                        }
-                    }
-                    gate = registry
-                        .wait(gate)
-                        .map_err(|error| format!("cohort resume-debt wait: {error:?}"))?;
-                }
-                Phase::Stopping(_) | Phase::Tracing(_) | Phase::Poisoned => {
-                    return Err(format!(
-                        "cohort unexpected admission phase: {:?}",
-                        gate.rendezvous.phase
-                    ));
-                }
-            }
-        }
-        let admitted = self.run_access();
-        drop(gate);
-        drop(_park);
-        let mut run = admitted.map_err(|error| format!("cohort run admission: {error:?}"))?;
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body(&mut run)));
-        let closed = run.close_cons_region();
-        drop(run);
-        let result = match result {
-            Ok(result) => result,
-            Err(payload) => Err(cohort_assertion_text(payload)),
-        };
-        match closed {
-            Ok(()) => result,
-            Err(error) => Err(match result {
-                Ok(_) => format!("cohort close: {error:?}"),
-                Err(body) => format!("cohort close: {error:?}; body={body}"),
-            }),
-        }
-    }
-
     /// Hold the A8 probe suppressor across `body`. `Suppression` stays
     /// crate-private; dropping it restores the previous recording scope.
     #[cfg(any(test, feature = "test-support"))]

@@ -262,6 +262,7 @@ pub mod stats;
 
 #[cfg(feature = "jit")]
 pub(crate) use cache::note_seam_interp_fallback;
+#[cfg(feature = "jit")]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) use cache::try_run_compiled;
 /// T1-pre: the per-function runtime data now lives in the value layer. These

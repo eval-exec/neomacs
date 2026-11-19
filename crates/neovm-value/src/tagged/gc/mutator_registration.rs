@@ -66,6 +66,9 @@ mod keeper;
 pub use keeper::EraKeeper;
 #[doc(hidden)]
 pub use keeper::{FrozenFunctionRoots, FrozenLegacyRoots};
+mod world_loan;
+#[doc(hidden)]
+pub use world_loan::{EraWorldLoan, SymbolRootDesignators, WorldIdentity, WorldLoan};
 mod gate;
 mod image;
 mod native_extent;
@@ -77,7 +80,8 @@ mod weak_policy;
 pub use collection::{CollectionError, CollectionReport, MinorCollectionError};
 use gate::RegistryGuard;
 pub use root_slot::OwnerRootSlot;
-pub use run_slice::{RunSlice, SliceRoot};
+pub use run_slice::RunSlice;
+pub use run_slice::SliceRoot;
 #[cfg(all(
     feature = "test-support",
     not(test),
@@ -98,34 +102,41 @@ mod symbol_globals;
 #[cfg(feature = "test-support")]
 pub mod symbol_globals;
 mod symbol_intern;
+pub use symbol_authority::FunctionCallCache;
 #[cfg(any(test, feature = "test-support"))]
 pub use symbol_authority::FunctionOpKind;
+pub use symbol_authority::SymbolMut;
 pub(crate) use symbol_authority::SymbolReadToken;
+pub use symbol_authority::SymbolRef;
 #[doc(hidden)]
 pub use symbol_authority::SymbolWriteToken;
 pub use symbol_authority::{
-    FunctionActivation, FunctionCallCache, FunctionError, FunctionSelection, FunctionStep,
-    GlobalError, InitialInternError, KeeperSymbols, PlainSymbolBacking, SymbolHandle, SymbolMut,
-    SymbolRef,
+    FunctionActivation, FunctionError, FunctionSelection, KeeperSymbols, PlainSymbolBacking,
+    SymbolHandle,
 };
+pub use symbol_authority::{FunctionStep, GlobalError, InitialInternError};
 mod token;
 // The extent API ships ahead of its first production call site (the Green
 // mutex/condition release points); the re-export is for that integration.
+pub use native_extent::NativeReturn;
 #[allow(unused_imports)]
-pub use native_extent::{NativeReturn, NativeRoots};
-pub use rendezvous::{
-    AllStopped, AllStoppedFailure, Mode, Phase, Rendezvous, RendezvousError, Request,
-    ResumeGcImage, ResumeGcImageFailure, RootedRetireFailure, Snapshot,
-};
+pub use native_extent::NativeRoots;
+pub use rendezvous::Rendezvous;
+pub use rendezvous::ResumeGcImage;
+pub use rendezvous::{AllStopped, Mode, Phase, RendezvousError, Request, Snapshot};
+pub use rendezvous::{AllStoppedFailure, ResumeGcImageFailure, RootedRetireFailure};
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) use rendezvous::{OwnerRootAdmission, StoppedRootAdmission};
 
 pub use summaries::{RegistrationCensus, StoppedSummaries};
-pub use table_authority::{KeeperTableMut, SealedTableAccess, TableMut, TableRef};
-pub use token::{
-    Mutator, MutatorFinishFailure, MutatorPermit, MutatorStartFailure, OwnerPublication, RunAccess,
-    YoungWorkerLoan,
-};
+pub use table_authority::KeeperTableMut;
+pub use table_authority::SealedTableAccess;
+pub use table_authority::TableMut;
+pub use table_authority::TableRef;
+pub use token::MutatorPermit;
+pub use token::OwnerPublication;
+pub use token::{Mutator, RunAccess};
+pub use token::{MutatorFinishFailure, MutatorStartFailure, YoungWorkerLoan};
 
 use admission::{AdmissionWord, PhaseLine, admissions_quiescent};
 use std::cell::{Cell, RefCell};
@@ -142,14 +153,12 @@ use super::young_registry::{YoungRegistrationId, YoungRegistryError};
 use super::{HeapIdentity, QuiescentCollector};
 
 /// VIS row: copied entry-image presence for the re-homed native-extent oracle.
-#[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn entry_image_present_for_test(entry: &MutatorEntry) -> Result<bool, RendezvousError> {
     rendezvous::entry_state(entry).map(|state| state.image.is_some())
 }
 
 /// VIS row: copied entry image epoch for the re-homed native-extent oracle.
-#[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn entry_image_epoch_for_test(entry: &MutatorEntry) -> Result<u64, RendezvousError> {
     rendezvous::entry_state(entry).map(|state| state.rendezvous.image_epoch)

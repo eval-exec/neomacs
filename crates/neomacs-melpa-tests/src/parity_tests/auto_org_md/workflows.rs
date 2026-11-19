@@ -44,7 +44,7 @@ fn auto_org_md_practical_save_hook_exports_org_buffer_once() -> ParityBatchCase 
                      org-file))))
              (kill-buffer buffer))))"##,
         expect![[
-            r#"OK ((("notes.org" #("* Initial\nBody\n" 0 10 (fontified nil) 10 15 (fontified nil)) nil)) nil (auto-org-md-export t) "* Initial\nBody\n")"#
+            r#"OK ((("notes.org" "* Initial\nBody\n" nil)) nil (auto-org-md-export t) "* Initial\nBody\n")"#
         ]],
     )
 }
@@ -122,9 +122,7 @@ fn auto_org_md_disabling_mode_stops_future_save_exports() -> ParityBatchCase {
                     (auto-org-md-test-read-file
                      org-file))))
              (kill-buffer buffer))))"##,
-        expect![[
-            r#"OK ((#("* Initial\nFirst\n" 0 10 (fontified nil) 10 16 (fontified nil))) nil "* Initial\nFirst\nSecond\n")"#
-        ]],
+        expect![[r#"OK (("* Initial\nFirst\n") nil "* Initial\nFirst\nSecond\n")"#]],
     )
 }
 

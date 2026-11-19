@@ -70,6 +70,12 @@ impl BufferListLinks {
         // Do not clear next[id]: an outer cursor can still hold this cons.
     }
 
+    /// Whether an active cursor can still step onto ID: every node the links
+    /// ever held, including removed ones, until the last cursor drops.
+    pub(super) fn retains(&self, id: BufferId) -> bool {
+        self.next.contains_key(&id)
+    }
+
     #[inline(never)]
     pub(super) fn apply(&mut self, change: BufferOrderChange) {
         match change {

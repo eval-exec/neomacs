@@ -70,6 +70,7 @@ fn inherited_first_winner_never_resolves_unused_large_family_alternatives() {
         slant: FontSlant::Normal,
         width: FontWidth::Normal,
         size: selection_size(),
+        otf: None,
     };
     let winner = candidate(FIRST_WINNER, 400, FontSlant::Normal, 0);
     let expected = winner.matched.clone();

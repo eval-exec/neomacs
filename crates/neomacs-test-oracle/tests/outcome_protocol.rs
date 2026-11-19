@@ -1,6 +1,8 @@
 use neomacs_test_oracle::{
     BatchProbe, CapturedEvaluation, EvalOutcome, ExpectedOutcome, extract_marked_batch_protocol,
-    extract_marked_outcome, validate_batch_case_id, wrap_elisp_batch_outcomes, wrap_elisp_outcome,
+    extract_marked_outcome, validate_batch_case_id, wrap_elisp_batch_outcomes,
+    wrap_elisp_batch_outcomes_with_normalizer_bindings, wrap_elisp_outcome,
+    wrap_elisp_outcome_with_normalizer_bindings,
 };
 
 const MARKER: &str = "NEOMACS-TEST-OUTCOME:";
@@ -226,4 +228,57 @@ fn batch_case_ids_reject_colon_and_whitespace() {
     assert!(validate_batch_case_id("bad:id").is_err());
     assert!(validate_batch_case_id("bad id").is_err());
     assert!(validate_batch_case_id("").is_err());
+}
+
+/// The normalizer bindings must wrap only the printed normalization, never
+/// the probe.  An enclosing form would add one `eval' frame to the probe's
+/// dynamic depth, and a package that deliberately exhausts
+/// `max-lisp-eval-depth` (alt-codes expands a 383-clause pcase at the default
+/// 1600) then signals from bytecode.c's plain `error` instead of eval.c's
+/// `excessive-lisp-nesting`, which is a different contract.
+#[test]
+fn normalizer_bindings_do_not_change_a_probe_frame_budget() {
+    let probe_context = |source: &str| {
+        let start = source
+            .find("(condition-case neomacs--oracle-error")
+            .expect("the wrapper contains a probe condition-case");
+        let probe = source
+            .find("PROBE-FORM")
+            .expect("the wrapper contains the probe");
+        source[start..probe].to_string()
+    };
+
+    let plain = wrap_elisp_outcome_with_normalizer_bindings("", "PROBE-FORM", MARKER, "");
+    let bound = wrap_elisp_outcome_with_normalizer_bindings(
+        "",
+        "PROBE-FORM",
+        MARKER,
+        "(neomacs--test-oracle-strip-fontified t)",
+    );
+    assert_eq!(probe_context(&plain), probe_context(&bound));
+    assert!(bound.contains("(let ((neomacs--test-oracle-strip-fontified t))"));
+
+    let cases = [BatchProbe {
+        id: "frame-budget",
+        probe: "PROBE-FORM",
+    }];
+    let plain_batch = wrap_elisp_batch_outcomes_with_normalizer_bindings(
+        "",
+        &cases,
+        BEGIN_MARKER,
+        COMPLETE_MARKER,
+        MARKER,
+        "",
+    )
+    .expect("wrap plain batch");
+    let bound_batch = wrap_elisp_batch_outcomes_with_normalizer_bindings(
+        "",
+        &cases,
+        BEGIN_MARKER,
+        COMPLETE_MARKER,
+        MARKER,
+        "(neomacs--test-oracle-strip-fontified t)",
+    )
+    .expect("wrap bound batch");
+    assert_eq!(probe_context(&plain_batch), probe_context(&bound_batch));
 }

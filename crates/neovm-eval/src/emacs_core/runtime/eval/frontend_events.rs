@@ -96,6 +96,11 @@ impl FrontendEventQueue {
     }
 
     #[doc(hidden)]
+    pub fn iter(&self) -> impl Iterator<Item = &InputEvent> {
+        self.events.iter()
+    }
+
+    #[doc(hidden)]
     pub fn len(&self) -> usize {
         self.events.len()
     }

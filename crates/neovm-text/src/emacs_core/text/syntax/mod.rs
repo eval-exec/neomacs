@@ -168,6 +168,9 @@ thread_local! {
     static SYNTAX_CODE_OBJECTS_HEAP: Cell<usize> = const { Cell::new(0) };
 }
 
+#[doc(hidden)]
+pub mod retirement;
+
 /// Clear cached thread-local syntax table (must be called when heap changes).
 pub fn reset_syntax_thread_locals() {
     STANDARD_SYNTAX_TABLE_OBJECT.with(|slot| *slot.borrow_mut() = None);
@@ -548,7 +551,8 @@ pub(crate) struct SyntaxEntry {
 
 impl SyntaxEntry {
     /// Create a simple entry with no matching char or flags.
-    pub fn simple(class: SyntaxClass) -> Self {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn simple(class: SyntaxClass) -> Self {
         Self {
             class,
             matching_char: None,
@@ -815,6 +819,7 @@ impl SyntaxTable {
         }
     }
 
+    #[cfg(feature = "test-support")]
     /// Install an isolated copy of the standard chartable on `buf` so
     /// subsequent `modify_syntax_entry` calls don't leak into the
     /// shared standard. Returns the new `SyntaxTable`. Mirrors the
@@ -863,7 +868,8 @@ impl SyntaxTable {
     /// `SYNTAX_ENTRY(c)`. Falls back to the standard chartable when
     /// the wrapper is nil-backed (handled by `syntax_entry_at_char`).
     #[inline(always)]
-    pub fn get_entry(&self, ch: char) -> Option<SyntaxEntry> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn get_entry(&self, ch: char) -> Option<SyntaxEntry> {
         self.get_entry_code(ch as u32)
     }
 
@@ -914,7 +920,9 @@ impl SyntaxTable {
     /// the table is a `NIL` placeholder — the evaluator's
     /// `modify-syntax-entry` builtin routes through the chartable
     /// directly for that case.
-    pub fn modify_syntax_entry(&mut self, ch: char, entry: SyntaxEntry) {
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn modify_syntax_entry(&mut self, ch: char, entry: SyntaxEntry) {
         if self.chartable.is_nil() {
             return;
         }
@@ -940,6 +948,7 @@ impl Default for SyntaxTable {
 // Motion functions (operate on a Buffer + SyntaxTable)
 // ===========================================================================
 
+#[cfg(any(test, feature = "test-support"))]
 /// Move forward over `count` words.  Returns the resulting Emacs byte position.
 ///
 /// A "word" is a maximal run of characters with syntax class `Word`.
@@ -3012,6 +3021,7 @@ pub(crate) fn builtin_make_syntax_table(args: Vec<Value>) -> EvalResult {
     Ok(table)
 }
 
+#[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(copy-syntax-table &optional TABLE)` — return a fresh copy of TABLE.
 pub(crate) fn builtin_copy_syntax_table(args: Vec<Value>) -> EvalResult {

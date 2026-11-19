@@ -104,7 +104,7 @@ const PRELUDE: &str = r####"
     (and result
          (or (equal (directory-file-name result)
                     (directory-file-name lsp373-test-locate-root))
-             (file-in-directory-p result lsp373-test-locate-root))
+             (neomacs-melpa-path-inside-p result lsp373-test-locate-root))
          result)))
 
 (defun lsp373-test-client-handlers (client)

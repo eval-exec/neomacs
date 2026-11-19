@@ -257,3 +257,13 @@ pub(crate) fn fn_stamps_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| matches!(std::env::var("NEOVM_FN_STAMPS").as_deref(), Ok("1" | "on")))
 }
+
+#[cfg(test)]
+pub(crate) mod b13_test_hooks {
+    use super::*;
+    impl ChunkSide {
+        pub(crate) fn has_stamps(&self) -> bool {
+            !self.fn_stamps.load(Ordering::Acquire).is_null()
+        }
+    }
+}

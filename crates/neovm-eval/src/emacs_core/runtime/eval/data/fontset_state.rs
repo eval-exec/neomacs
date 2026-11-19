@@ -18,7 +18,50 @@ pub struct StoredFontSpec {
     pub weight: Option<FontWeight>,
     pub slant: Option<FontSlant>,
     pub width: Option<FontWidth>,
+    /// GNU `:otf` requirement (`src/font.c` `font_prop_validate_otf` shape):
+    /// `(SCRIPT [LANGSYS [GSUB-FEATURES [GPOS-FEATURES]]])`. A font must
+    /// advertise the named OpenType script/lang-system features or it does not
+    /// match the spec, exactly as GNU's `font_check_otf` decides.
+    pub otf: Option<StoredOtfSpec>,
     pub definition: Option<FontDefinitionMetadata>,
+}
+
+/// The OpenType script/lang-system/feature requirement of a `:otf` spec.
+///
+/// Tags are owned text because the layout engine compares them against the
+/// capability it reads from the font file, outside the evaluator.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredOtfSpec {
+    pub script: String,
+    pub langsys: StoredOtfLangsys,
+    pub gsub: Option<StoredOtfFeatures>,
+    pub gpos: Option<StoredOtfFeatures>,
+}
+
+/// The second element of a `:otf` spec.
+///
+/// GNU's `font_prop_validate_otf` re-tests `XCAR (val)` for the second slot
+/// (`src/font.c:678`), so a non-symbol LANGSYS is accepted by `font-spec`.
+/// `font_check_otf_features` then compares it with `eq` against langsys tag
+/// symbols, which can never match, so every feature requirement rejects all
+/// fonts. `Unmatchable` preserves that observable outcome.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum StoredOtfLangsys {
+    /// nil: prefer the default langsys, else the script's first langsys.
+    #[default]
+    Default,
+    Named(String),
+    Unmatchable,
+}
+
+/// One `:otf` feature list: `(FEATURE ... [nil FEATURE ...])`.
+///
+/// Features before the `nil` separator must be present; features after it must
+/// be absent (`src/font.c` `font_check_otf_features`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct StoredOtfFeatures {
+    pub required: Vec<String>,
+    pub forbidden: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -14,12 +14,13 @@ use neovm_edit::buffer::BufferId;
 
 use super::data::face::{Face, FaceHeight};
 use super::{
-    FontEntityMetricsRequest, FontListError, FontListFilter, FontOtfCapability, FontPxProbeResult,
-    FontSpecListQuery, FontSpecResolveRequest, GuiFrameHostRequest, GuiFrameHostSize,
-    ListedFontEntity, PopupMenuRequest, ResolvedFontEntityMetrics, ResolvedFontMatch,
-    ResolvedFontSpecMatch, ResolvedFrameFont, ResolvedSurface, ResolvedVideo, ResolvedWebKit,
-    ShaderSurfaceCreateRequest, ShaderSurfaceLanguage, ShaderSurfaceUniformInit,
-    SurfaceResolveRequest, VideoResolveRequest, WebKitResolveRequest,
+    FontEntityMetricsRequest, FontListError, FontListFilter, FontOpenEntityRequest,
+    FontOtfCapability, FontPxProbeResult, FontSpecListQuery, FontSpecResolveRequest,
+    GuiFrameHostRequest, GuiFrameHostSize, ListedFontEntity, PopupMenuRequest,
+    ResolvedFontEntityMetrics, ResolvedFontMatch, ResolvedFontSpecMatch, ResolvedFrameFont,
+    ResolvedSurface, ResolvedVideo, ResolvedWebKit, ShaderSurfaceCreateRequest,
+    ShaderSurfaceLanguage, ShaderSurfaceUniformInit, SurfaceResolveRequest, VideoResolveRequest,
+    WebKitResolveRequest,
 };
 use neomacs_display_protocol::font::ResolvedFontIdentity;
 use neomacs_display_protocol::{
@@ -576,6 +577,28 @@ pub trait DisplayHost {
         _request: FontCoverageRequest,
     ) -> Result<FontCoverage, String> {
         Ok(FontCoverage::NeedsOpening)
+    }
+    /// GNU `font_pixel_size` for a point size on the selected frame: the
+    /// frame's resolution converts points to pixels. `None` when the host has
+    /// no window frame (GNU returns 1 for a non-window frame).
+    fn font_opening_pixel_size(&mut self, _size: FontOpeningSize) -> Result<Option<u32>, String> {
+        Ok(None)
+    }
+    /// GNU `font_open_entity`: open the exact entity published by the font
+    /// catalog at `request.size` and return its opaque font-object Value.
+    /// `None` when the host is not graphical, the handle is stale, or the
+    /// driver cannot open that face.
+    fn open_font_entity(
+        &mut self,
+        _request: FontOpenEntityRequest,
+    ) -> Result<Option<neovm_value::value::Value>, String> {
+        Ok(None)
+    }
+    /// GNU `POINT_TO_PIXEL` for `open-font`'s float size argument: the frame
+    /// resolution turns points into an `intmax_t` pixel operand *before* the
+    /// zero-to-120 rule.  `None` when the host has no frame resolution.
+    fn font_open_point_pixels(&mut self, _points: f64) -> Result<Option<i64>, String> {
+        Ok(None)
     }
     fn probe_font_px_metrics(
         &mut self,

@@ -451,12 +451,18 @@ fn lookup_key_with_menu_compat_runtime(
         return Ok(found);
     }
 
+    // GNU `Fintern`s each converted name here (src/keymap.c:1386), so the
+    // lowercase and dashed variants become obarray members even when the
+    // lookup ultimately fails. The free `intern` only resolves a canonical
+    // name id; the member-producing funnel is the obarray's `intern_member`.
     let lower_events: Vec<Value> = events
         .iter()
         .map(|event| {
             event
                 .as_symbol_name(symbol_mode)
-                .map(|name| Value::from_sym_id(intern((name.to_lowercase()).as_ref())))
+                .map(|name| {
+                    Value::from_sym_id(eval.obarray_mut().intern_member(&name.to_lowercase()))
+                })
                 .unwrap_or(*event)
         })
         .collect();
@@ -471,7 +477,9 @@ fn lookup_key_with_menu_compat_runtime(
             event
                 .as_symbol_name(symbol_mode)
                 .filter(|name| name.contains(' '))
-                .map(|name| Value::from_sym_id(intern((name.replace(' ', "-")).as_ref())))
+                .map(|name| {
+                    Value::from_sym_id(eval.obarray_mut().intern_member(&name.replace(' ', "-")))
+                })
                 .unwrap_or(*event)
         })
         .collect();

@@ -28,6 +28,9 @@ thread_local! {
         HeapRegistrySlot::new(TerminalLispRegistry::default());
 }
 
+#[path = "lisp_state_detach.rs"]
+mod lisp_state_detach;
+
 fn ensure_current_terminal_registry() {
     let heap_identity =
         neovm_value::tagged::gc::current_tagged_heap_identity().unwrap_or_else(|| {
@@ -242,6 +245,13 @@ struct TerminalRecord {
     window_system: Option<neovm_value::display_vocab::WindowSystemKind>,
     deleted: bool,
     host: Option<Box<dyn TerminalHost>>,
+    /// This terminal's own winsize, installed once. `(0, 0)` is a failed
+    /// ioctl or a successful 0×0, which GNU `get_tty_size` stores either way
+    /// (`src/sysdep.c:1403-1408`). A different function is refused.
+    winsize_query: Option<fn() -> (u32, u32)>,
+    /// Cells reported when this terminal was opened. Used only when it has
+    /// no live query and its host has no input fd.
+    opened_cells: Option<(u32, u32)>,
 }
 
 impl TerminalRecord {
@@ -256,6 +266,8 @@ impl TerminalRecord {
             window_system: None,
             deleted: false,
             host: None,
+            winsize_query: None,
+            opened_cells: None,
         }
     }
 
@@ -386,6 +398,8 @@ impl TerminalManager {
             window_system,
             deleted: false,
             host: None,
+            winsize_query: None,
+            opened_cells: None,
         });
         self.terminals.last_mut().expect("terminal present")
     }
@@ -407,6 +421,84 @@ pub fn configure_terminal_runtime(config: impl Into<TerminalRuntimeConfig>) {
     // record. Publish it to the Context registry before a display callback
     // reactivates the owner and reconciles native records against that registry.
     terminal_handle_for_id(TERMINAL_ID);
+}
+
+/// Outcome of installing one terminal's winsize query.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WinsizeQueryInstall {
+    Installed,
+    AlreadyInstalled,
+}
+
+/// A terminal already has a different winsize query.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WinsizeQueryError {
+    DifferentQuery,
+}
+
+/// Install the initial terminal's winsize query on that terminal's record.
+///
+/// The same function is idempotent. A different function is refused and the
+/// resident query stays. This is not a process-global hook.
+#[doc(hidden)]
+pub fn set_initial_terminal_winsize_query(
+    query: fn() -> (u32, u32),
+) -> Result<WinsizeQueryInstall, WinsizeQueryError> {
+    with_terminal_manager(|slot| {
+        let mut manager = slot.borrow_mut();
+        let terminal = manager.ensure_initial_terminal();
+        match terminal.winsize_query {
+            None => {
+                terminal.winsize_query = Some(query);
+                Ok(WinsizeQueryInstall::Installed)
+            }
+            Some(installed) if std::ptr::fn_addr_eq(installed, query) => {
+                Ok(WinsizeQueryInstall::AlreadyInstalled)
+            }
+            Some(_) => Err(WinsizeQueryError::DifferentQuery),
+        }
+    })
+}
+
+/// Winsize of `terminal_id`'s own input.
+///
+/// Order: the query installed on this record, then the host's fd, then the
+/// size stored when the terminal was opened. `None` means this terminal has
+/// none of those. `(0, 0)` is a real answer and is not turned into `None`.
+pub(crate) fn terminal_winsize_cells(terminal_id: u64) -> Option<(u32, u32)> {
+    let stored = with_terminal_manager(|slot| {
+        let manager = slot.borrow();
+        let terminal = manager.get(terminal_id)?;
+        if !terminal.is_live() {
+            return None;
+        }
+        Some((
+            terminal.winsize_query,
+            terminal.opened_cells,
+            terminal.host.is_some(),
+        ))
+    })?;
+    if let Some(query) = stored.0 {
+        return Some(query());
+    }
+    if stored.2
+        && let Some(cells) = terminal_host_winsize_cells(terminal_id)
+    {
+        return Some(cells);
+    }
+    stored.1
+}
+
+fn terminal_host_winsize_cells(terminal_id: u64) -> Option<(u32, u32)> {
+    with_terminal_manager(|slot| {
+        let mut manager = slot.borrow_mut();
+        manager
+            .get_mut(terminal_id)
+            .and_then(|terminal| terminal.host.as_deref_mut())
+            .and_then(|host| host.tty_winsize_cells())
+    })
 }
 
 /// GNU `struct terminal.type` for a graphical backend. The backend symbols
@@ -550,6 +642,7 @@ pub(crate) fn install_opened_tty(
             None,
         );
         terminal.host = Some(opened.host);
+        terminal.opened_cells = Some((size.columns(), size.rows()));
     });
     if crate::face::realization::enabled() {
         // Color callbacks can reactivate the Context. Publish the opened

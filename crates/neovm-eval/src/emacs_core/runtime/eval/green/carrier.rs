@@ -36,6 +36,12 @@ pub(crate) fn live_carriers_for_test() -> usize {
     LIVE_CARRIERS.load(std::sync::atomic::Ordering::SeqCst)
 }
 
+/// Idle-carrier bound, for the oversubscription regression.
+#[cfg(test)]
+pub(crate) fn max_idle_carriers_for_test() -> usize {
+    MAX_IDLE_CARRIERS
+}
+
 /// Identity of one OS carrier. This is not a Lisp thread identity.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(super) struct CarrierId(u64);
@@ -71,14 +77,57 @@ impl std::fmt::Debug for SpawnRefusal {
 }
 
 /// The typed lifecycle of one live carrier.
+///
+/// The `JoinHandle` lives in the slot. Removing the slot drops the handle,
+/// which detaches the pthread, so an exited carrier releases its stack.
+/// `None` is only the window before [`CarrierPool::spawn`] stores the handle
+/// the new thread was created with.
 enum CarrierSlot {
     /// Parked, no Baton, no World state; blocked on its job channel.
-    Idle { job_tx: Sender<CarrierJob> },
+    Idle {
+        job_tx: Sender<CarrierJob>,
+        handle: Option<JoinHandle<()>>,
+    },
     /// Executing one Lisp job. The job itself carries the `ThreadKey`; the
     /// pool only needs to know the slot is not reusable.
-    Running,
-    /// Must not be reused; its thread is exiting.
+    Running { handle: Option<JoinHandle<()>> },
+    /// Must not be reused. A live thread is never left here: its handle is
+    /// dropped with the slot that owned it.
     Draining,
+}
+
+impl CarrierSlot {
+    fn owns_handle(&self) -> bool {
+        match self {
+            CarrierSlot::Idle { handle, .. } | CarrierSlot::Running { handle } => handle.is_some(),
+            CarrierSlot::Draining => false,
+        }
+    }
+
+    fn take_handle(self) -> Option<JoinHandle<()>> {
+        match self {
+            CarrierSlot::Idle { handle, .. } | CarrierSlot::Running { handle } => handle,
+            CarrierSlot::Draining => None,
+        }
+    }
+
+    /// Store `handle` if this slot still belongs to a live carrier.
+    /// A `Draining` slot has no thread to own it; the caller drops it.
+    fn store_handle(&mut self, handle: JoinHandle<()>) -> Result<(), JoinHandle<()>> {
+        match self {
+            CarrierSlot::Idle {
+                handle: slot_handle,
+                ..
+            }
+            | CarrierSlot::Running {
+                handle: slot_handle,
+            } => {
+                *slot_handle = Some(handle);
+                Ok(())
+            }
+            CarrierSlot::Draining => Err(handle),
+        }
+    }
 }
 
 /// The typed lifecycle of the pool itself.
@@ -92,7 +141,6 @@ enum PoolState {
 struct PoolInner {
     state: PoolState,
     slots: HashMap<CarrierId, CarrierSlot>,
-    handles: HashMap<CarrierId, JoinHandle<()>>,
     idle: Vec<CarrierId>,
     next_id: u64,
 }
@@ -103,7 +151,6 @@ impl PoolInner {
         Self {
             state: PoolState::Open,
             slots: HashMap::new(),
-            handles: HashMap::new(),
             idle: Vec::new(),
             next_id: 1,
         }
@@ -163,6 +210,22 @@ impl CarrierPool {
             .store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
+    /// Test-only: `(live slots, join handles still owned by the pool)`.
+    ///
+    /// An exited carrier must not remain in either count. After a round of
+    /// joins the only residents are the idle carriers, at most
+    /// [`MAX_IDLE_CARRIERS`], plus any job still in flight.
+    #[cfg(test)]
+    pub(crate) fn counts_for_test(&self) -> (usize, usize) {
+        let inner = self.shared.lock();
+        let handles = inner
+            .slots
+            .values()
+            .filter(|slot| slot.owns_handle())
+            .count();
+        (inner.slots.len(), handles)
+    }
+
     /// Test-only: the worker key of the last refused spawn, if any.
     #[cfg(test)]
     pub(crate) fn last_refusal_for_test(&self) -> Option<ThreadKey> {
@@ -194,12 +257,15 @@ impl CarrierPool {
             let Some(id) = inner.idle.pop() else {
                 return Err(job);
             };
-            let old = inner.slots.insert(id, CarrierSlot::Running);
-            match old {
-                Some(CarrierSlot::Idle { job_tx }) => (id, job_tx),
-                _ => {
+            match inner.slots.remove(&id) {
+                Some(CarrierSlot::Idle { job_tx, handle }) => {
+                    inner.slots.insert(id, CarrierSlot::Running { handle });
+                    (id, job_tx)
+                }
+                other => {
                     // An idle list entry must name an idle slot.
                     debug_assert!(false, "idle carrier {id:?} had a non-idle slot");
+                    drop(other);
                     inner.slots.insert(id, CarrierSlot::Draining);
                     return Err(job);
                 }
@@ -209,9 +275,9 @@ impl CarrierPool {
         match job_tx.send(job) {
             Ok(()) => Ok(()),
             Err(mpsc::SendError(job)) => {
-                // The idle carrier went away without parking again. Drop the
-                // reservation and let the caller spawn.
-                self.shared.lock().slots.insert(id, CarrierSlot::Draining);
+                // The idle carrier went away without parking again. Dropping
+                // the slot detaches its thread. The caller spawns a fresh one.
+                self.shared.lock().slots.remove(&id);
                 Err(job)
             }
         }
@@ -230,7 +296,9 @@ impl CarrierPool {
             );
             let id = CarrierId(inner.next_id);
             inner.next_id += 1;
-            inner.slots.insert(id, CarrierSlot::Running);
+            inner
+                .slots
+                .insert(id, CarrierSlot::Running { handle: None });
             id
         };
         #[cfg(test)]
@@ -268,7 +336,19 @@ impl CarrierPool {
             LIVE_CARRIERS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
         }) {
             Ok(handle) => {
-                self.shared.lock().handles.insert(id, handle);
+                // The carrier may have parked, or exited through the idle
+                // bound, before this insert. A gone slot means the thread is
+                // already on its way out: drop the handle to detach it.
+                // Joining here would wait on a thread that can call `park`
+                // while this lock is held.
+                let mut inner = self.shared.lock();
+                if let Some(slot) = inner.slots.get_mut(&id) {
+                    if let Err(handle) = slot.store_handle(handle) {
+                        drop(handle);
+                    }
+                } else {
+                    drop(handle);
+                }
                 Ok(())
             }
             Err(error) => {
@@ -289,7 +369,9 @@ impl CarrierPool {
         job: CarrierJob,
         error: std::io::Error,
     ) -> SpawnRefusal {
-        self.shared.lock().slots.insert(id, CarrierSlot::Draining);
+        // No OS thread was created. Drop the reservation so it cannot
+        // outlive the refused spawn.
+        self.shared.lock().slots.remove(&id);
         #[cfg(test)]
         {
             *self
@@ -312,12 +394,15 @@ impl CarrierPool {
             }
             inner.state = PoolState::Draining;
             // Closing each idle carrier's job channel wakes it with a recv
-            // error; the carrier loop then exits.
-            inner.slots.clear();
+            // error; the carrier loop then exits. Join outside this lock:
+            // a carrier blocked in `park` needs the lock to leave.
             inner.idle.clear();
-            std::mem::take(&mut inner.handles)
+            std::mem::take(&mut inner.slots)
+                .into_iter()
+                .filter_map(|(_, slot)| slot.take_handle())
+                .collect::<Vec<_>>()
         };
-        for (_, handle) in handles {
+        for handle in handles {
             let _ = handle.join();
         }
         self.shared.lock().state = PoolState::Closed;
@@ -331,11 +416,11 @@ impl Drop for CarrierPool {
         let mut inner = self.shared.lock();
         if inner.state != PoolState::Closed {
             inner.state = PoolState::Closed;
-            inner.slots.clear();
             inner.idle.clear();
-            // Handles are detached: those threads exit on their own once
-            // their channel closes. `drain` is the deterministic path.
-            inner.handles.clear();
+            // Dropping a slot drops its JoinHandle, which detaches the
+            // pthread. Those threads exit once their channel closes. `drain`
+            // is the path that joins them.
+            inner.slots.clear();
         }
     }
 }
@@ -353,13 +438,25 @@ impl PoolShared {
     #[doc(hidden)]
     pub fn park(&self, id: CarrierId) -> ParkResult {
         let mut inner = self.lock();
+        let handle = match inner.slots.remove(&id) {
+            Some(CarrierSlot::Running { handle }) => handle,
+            Some(other) => {
+                debug_assert!(false, "parking carrier {id:?} that was not running");
+                drop(other);
+                None
+            }
+            // `drain` already took the slot and will join the handle.
+            None => None,
+        };
         if inner.state == PoolState::Open && inner.idle.len() < MAX_IDLE_CARRIERS {
             let (job_tx, job_rx) = mpsc::channel();
-            inner.slots.insert(id, CarrierSlot::Idle { job_tx });
+            inner.slots.insert(id, CarrierSlot::Idle { job_tx, handle });
             inner.idle.push(id);
             ParkResult::Parked(job_rx)
         } else {
-            inner.slots.insert(id, CarrierSlot::Draining);
+            // Idle bound, or the pool is closing. Drop detaches. Do not join:
+            // this is the carrier thread, and the pool lock is held.
+            drop(handle);
             ParkResult::Exit
         }
     }

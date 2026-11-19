@@ -56,26 +56,36 @@ argument (why each weakened run trips only its own witness).
 
 ## The seam, in five lines
 
-1. `build.rs` copies `../../src/tagged/gc/symbol_table/publication.rs`
-   to `OUT_DIR/publication.inc`, stripping **only** the leading `//!`
-   block (E0753 in `include!` expansions) and the trailing
-   `#[cfg(test)] mod tests;` (E0583 — test crates set `cfg(test)`).
-2. `tests/ledger.rs` pastes it with `include!` next to a **same-module**
-   `mod std` shim, so the ledger's own `std::` imports resolve to Loom's
-   modeled cells (a shim in the *including* crate was compile-tested and
-   does not work — E0425). `tests/measurement.rs` pastes it with no
-   shim: real `std`.
+1. `build.rs` copies the N3 adapter
+   (`symbol_table/publication.rs`) to `OUT_DIR/publication.inc`, and the
+   generic owner (`gc/publication/mod.rs` and `ledger.rs`) to
+   `publication_types.inc` and `publication_ledger.inc`. It strips the
+   leading `//!` block (E0753) and each trailing `#[cfg(test)]` test
+   module (E0583 — test crates set `cfg(test)`). The owner's release
+   witness stays.
+2. The adapter imports its view's atomic through `super::sync` (`AtomicPtr`
+   and `Ordering` only). The owner imports its root and its mutex through
+   its own `super::sync`, nested at `crate::tagged::gc::publication`.
+   `tests/ledger.rs` binds the adapter seam to Loom atomics and the owner
+   seam to Loom `AtomicPtr`, `Mutex`, and `MutexGuard` (`TryLockError` stays
+   real `std`, because Loom's `try_lock` returns it). `tests/measurement.rs`
+   binds both seams to real `std`. Other `std::` paths stay the real
+   standard library.
 3. The descriptor vocabulary (`SymbolTableShape` and friends) comes from
    `tests/support/vocab.rs`, the named stand-in mirroring
-   `symbol_table.rs`'s descriptor half; the ledger never dereferences
+   `symbol_table.rs`'s descriptor half; the adapter never dereferences
    chunk entries, so modeled reads observe only publication ordering,
    retention and refusal.
-4. `build.rs` **asserts** the seam contract (the two `std` sync imports
-   present; no `super::sync` yet). Any edit to `publication.rs`'s header,
-   imports or trailing test module fails the model's build with a
-   re-anchor message — never edit `OUT_DIR` by hand.
-5. When the in-file `super::sync` seam lands (P9.1b), that detector
-   fires: drop the shim and bind to the file's own imports.
+4. `build.rs` **asserts** the seam contract (`use super::sync::` present;
+   no direct `use std::sync::`; the adapter names no `Mutex` and no
+   `Vec<`; `PublishedSymbolTables` wraps `PublicationLedger` and does not
+   own an `AtomicPtr`, `Mutex`, or `Vec`). A broken contract fails the
+   build with a re-anchor message — never edit `OUT_DIR` by hand.
+5. The in-file seam is the production module
+   `symbol_table/sync.rs` for the adapter view, and
+   `gc/publication/sync.rs` for the owner. Both re-export `std` and have
+   no `cfg(loom)` switch. A direct `std::sync` import in the adapter is a
+   failed re-anchor, not a local substitution.
 
 ## Layout
 

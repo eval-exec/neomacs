@@ -1336,7 +1336,9 @@ impl HashTableStorage {
     }
 
     /// `remove` counterpart of [`Self::get_by_value`].
-    pub fn remove_by_value(
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn remove_by_value(
         &mut self,
         value: Value,
         test: HashTableTest,
@@ -1637,7 +1639,8 @@ impl HashTableStorage {
     /// Remove every entry `keep(key, value)` rejects, in index order (the
     /// order [`Self::remove`] over [`Self::iter`] would free the slots in),
     /// without re-hashing or cloning a key.
-    pub fn retain_entries(&mut self, mut keep: impl FnMut(Value, Value) -> bool) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn retain_entries(&mut self, mut keep: impl FnMut(Value, Value) -> bool) {
         // Never a store for the weak tables the GC sweeps: they are never
         // planned. Here so a storage-level removal is safe on its own.
         self.switch_plan.invalidate();
@@ -1685,27 +1688,6 @@ impl HashTableStorage {
             free_slots.push(slot);
             false
         });
-    }
-
-    pub fn replace_pointer_key(&mut self, old_ptr: usize, new_ptr: usize, new_key: Value) {
-        // A user-test table never reaches here: both call sites guard on an
-        // `Eq`/`Eql` test, and a `define-hash-table-test` table is created
-        // with `Equal`. That matters because re-keying an entry in place
-        // would strand its old `HashKey` in `user_buckets`. Enforce the
-        // guarantee rather than rely on it.
-        debug_assert!(
-            self.user_hashes.is_empty(),
-            "replace_pointer_key on a table carrying user hashes would strand a bucket entry"
-        );
-        let Some(removed) = self.index.remove_key(&HashKey::Ptr(old_ptr)) else {
-            return;
-        };
-        let key = HashKey::Ptr(new_ptr);
-        self.index.insert_new(fx_hash_key(&key), key, removed.slot);
-        self.slots[removed.slot]
-            .as_mut()
-            .expect("hash index points to an empty entry slot")
-            .key = new_key;
     }
 
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -2493,10 +2475,6 @@ impl LispHashTable {
         self.data.slot_count()
     }
 
-    pub fn replace_pointer_key(&mut self, old_ptr: usize, new_ptr: usize, new_key: Value) {
-        self.data.replace_pointer_key(old_ptr, new_ptr, new_key);
-    }
-
     /// Rebuild from insertion-ordered `(hash_key, value, key_snapshot)`
     /// triples: one insert (one hash) per entry, no temporary maps. The
     /// pdump loader's path — its dump format stores entries pre-sorted.
@@ -2524,7 +2502,8 @@ impl LispHashTable {
 
     /// True when parked dump entries have not been hydrated yet.
     #[inline]
-    pub fn needs_hydration(&self) -> bool {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn needs_hydration(&self) -> bool {
         self.data.pending_entries().is_some()
     }
 
@@ -3093,16 +3072,50 @@ impl TaggedValue {
         })
     }
 
-    /// Allocate a frame reference.
+    /// Return the frame object for `id`.
+    ///
+    /// Frame creation ([`Self::mint_frame`]) is the only mint. A missing
+    /// registry entry means the frame was reclaimed or never created. This
+    /// lookup does not allocate and does not reinsert.
     pub fn make_frame(id: u64) -> Self {
+        with_tagged_heap(|h| match h.frame_value(id) {
+            Some(value) => value,
+            None => {
+                tracing::error!(
+                    frame_id = id,
+                    "make_frame refused a missing frame id; a missing registry entry means the frame was reclaimed or never existed"
+                );
+                debug_assert!(
+                    false,
+                    "make_frame({id}) on a missing frame registry entry (reclaimed or never existed)"
+                );
+                Value::NIL
+            }
+        })
+    }
+
+    /// The frame object when the registry still has `id`.
+    ///
+    /// Unlike [`Self::make_frame`], a missing entry returns `None` and does
+    /// not assert. Callers that can observe a deleted id use this so a
+    /// reclaimed id never reaches the refusal. A structure that keeps the id
+    /// must root the returned object or clear the id at delete.
+    pub fn registered_frame(id: u64) -> Option<Self> {
+        with_tagged_heap(|h| h.frame_value(id))
+    }
+
+    /// Mint the heap object for a frame at the moment the frame is created.
+    ///
+    /// Idempotent: an id that is already registered returns that object.
+    /// [`Self::make_frame`] is the later lookup and never mints.
+    pub fn mint_frame(id: u64) -> Self {
         with_tagged_heap(|h| {
             if let Some(value) = h.frame_value(id) {
-                value
-            } else {
-                let value = h.alloc_frame(id);
-                h.register_frame_value(id, value);
-                value
+                return value;
             }
+            let value = h.alloc_frame(id);
+            h.register_frame_value(id, value);
+            value
         })
     }
 
@@ -3315,7 +3328,8 @@ impl TaggedValue {
 
     /// Check if this is a GC-managed shader-surface handle.
     #[inline]
-    pub fn is_surface_handle(self) -> bool {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn is_surface_handle(self) -> bool {
         self.veclike_type() == Some(VecLikeType::SurfaceHandle)
     }
 
@@ -3520,11 +3534,6 @@ impl TaggedValue {
         }
     }
 
-    /// Mutate closure slots through the centralized tagged-runtime write path.
-    pub fn with_closure_slots_mut<R>(self, f: impl FnOnce(&mut Vec<Value>) -> R) -> Option<R> {
-        mutate::with_closure_slots_mut(self, f)
-    }
-
     /// Replace the entire closure slot vector through the centralized write path.
     pub fn replace_closure_slots(self, slots: Vec<Value>) -> bool {
         mutate::replace_closure_slots(self, slots)
@@ -3727,11 +3736,6 @@ impl TaggedValue {
         }
     }
 
-    /// Mutate xwidget-view data through the centralized tagged-runtime write path.
-    pub fn with_xwidget_view_mut<R>(self, f: impl FnOnce(&mut XwidgetViewObj) -> R) -> Option<R> {
-        mutate::with_xwidget_view_mut(self, f)
-    }
-
     /// Get the marker data from a marker value.
     pub fn as_marker_data(self) -> Option<&'static crate::heap_types::LispMarker> {
         if self.is_marker() {
@@ -3798,7 +3802,8 @@ impl TaggedValue {
     /// tagged-vector encoding answers false; `boolvec::is_bool_vector` asks
     /// about both.
     #[inline]
-    pub fn is_bool_vector_obj(self) -> bool {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn is_bool_vector_obj(self) -> bool {
         self.veclike_type() == Some(VecLikeType::BoolVector)
     }
 
@@ -3816,7 +3821,11 @@ impl TaggedValue {
     /// Mutate packed bits through the centralized collection journal.
     /// Bool-vectors contain no Lisp references and need no GC pointer barrier.
     #[inline]
-    pub fn with_bool_vector_mut<R>(self, f: impl FnOnce(&mut BoolVectorObj) -> R) -> Option<R> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn with_bool_vector_mut<R>(
+        self,
+        f: impl FnOnce(&mut BoolVectorObj) -> R,
+    ) -> Option<R> {
         mutate::with_bool_vector_mut(self, f)
     }
 
@@ -4004,7 +4013,9 @@ impl TaggedValue {
     }
 
     /// Replace the entire contents of a hash table value.
-    pub fn replace_hash_table(self, table: LispHashTable) -> bool {
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn replace_hash_table(self, table: LispHashTable) -> bool {
         self.with_hash_table_mut(|current| *current = table)
             .is_some()
     }
@@ -4039,6 +4050,7 @@ impl TaggedValue {
     /// production — see `mutate::with_bytecode_data_mut_for_test` for the
     /// invariant this gate enforces.
     #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn with_bytecode_data_mut_for_test<R>(
         self,
         f: impl FnOnce(&mut crate::tagged::bytecode::chunk::ByteCodeFunction) -> R,
@@ -5836,5 +5848,39 @@ impl HashTableStorage {
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn switch_epoch(&self) -> u64 {
         self.switch_epoch
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod b13_test_hooks {
+    use super::*;
+    impl TaggedValue {
+        pub(crate) fn replace_vectorlike_sequence_data(self, values: Vec<Value>) -> bool {
+            match self.veclike_type() {
+                Some(VecLikeType::Vector) => self.replace_vector_data(values),
+                Some(VecLikeType::Record) => self.replace_record_data(values),
+                _ => false,
+            }
+        }
+    }
+    impl HashTableStorage {
+        pub(crate) fn get_mut_by_value(
+            &mut self,
+            value: Value,
+            test: HashTableTest,
+            symbols_with_pos_enabled: bool,
+        ) -> Option<&mut Value> {
+            let slot = self.slot_by_value(value, test, symbols_with_pos_enabled)?;
+            self.slot_value_mut(slot)
+        }
+    }
+    impl HashTableWeakness {
+        pub(crate) fn option_from_gnu_code(code: u8) -> Option<Option<Self>> {
+            if code == 0 {
+                Some(None)
+            } else {
+                Self::from_gnu_code(code).map(Some)
+            }
+        }
     }
 }

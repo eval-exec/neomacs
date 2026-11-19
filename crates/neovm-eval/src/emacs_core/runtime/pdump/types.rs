@@ -1197,8 +1197,36 @@ pub struct DumpCharsetRegistry {
     pub priority_identity_syms: Option<Vec<DumpSymId>>,
     #[serde(default)]
     pub alias_syms: Option<Vec<(DumpSymId, DumpSymId)>>,
+    /// `iso-charset` designation winners; missing in sections before version 4.
+    #[serde(default)]
+    pub iso_designation_syms: Option<Vec<(DumpIsoDesignationKey, DumpSymId)>>,
+    /// `(identity, published CHARSET_NAME)` for a redefined table slot.
+    /// Missing before charset section version 5.
+    #[serde(default)]
+    pub published_names: Option<Vec<(DumpSymId, DumpSymId)>>,
+    /// `(name, identity, plist slot)`. Missing before version 5; restore then
+    /// infers sharing from plist contents.
+    #[serde(default)]
+    pub binding_slots: Option<Vec<(DumpSymId, DumpSymId, u32)>>,
+    /// Plist slots in index order. `None` inside the vec is unmaterialized.
+    /// The outer None means a section older than version 5.
+    #[serde(default)]
+    pub plist_slots: Option<Vec<Option<Vec<(DumpSymId, DumpValue)>>>>,
+    /// Identities that joined `Viso_2022_charset_list` on their first
+    /// definition. Missing before charset section version 6; restore then
+    /// treats every charset that still has an ISO final as a member.
+    #[serde(default)]
+    pub iso2022_members: Option<Vec<DumpSymId>>,
+    /// The `charset-plist` object cached in each slot, parallel to
+    /// `plist_slots`. Tag absence is an uncached slot. The outer None means
+    /// a section older than version 6, which rebuilds a list from the pairs.
+    #[serde(default)]
+    pub plist_lisp: Option<Vec<Option<DumpValue>>>,
     pub next_id: i64,
 }
+
+/// `(dimension, chars-96?, final char)`, the key of GNU's `iso_charset_table`.
+pub(crate) type DumpIsoDesignationKey = (i64, bool, i64);
 
 #[repr(u8)]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, IntoPrimitive, TryFromPrimitive)]
@@ -1241,7 +1269,28 @@ pub struct DumpStoredFontSpec {
     pub weight: Option<u16>,
     pub slant: Option<DumpFontSlant>,
     pub width: Option<DumpFontWidth>,
+    /// GNU `:otf` requirement; `None` for a spec without one.
+    #[serde(default)]
+    pub(crate) otf: Option<DumpStoredOtfSpec>,
     pub definition: Option<DumpFontDefinitionMetadata>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DumpStoredOtfSpec {
+    pub(crate) script: String,
+    pub(crate) langsys: Option<String>,
+    /// A non-symbol LANGSYS accepted by GNU's validator quirk; it can never
+    /// match a langsys tag, so any feature requirement rejects every font.
+    #[serde(default)]
+    pub(crate) langsys_unmatchable: bool,
+    pub(crate) gsub: Option<DumpStoredOtfFeatures>,
+    pub(crate) gpos: Option<DumpStoredOtfFeatures>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct DumpStoredOtfFeatures {
+    pub(crate) required: Vec<String>,
+    pub(crate) forbidden: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

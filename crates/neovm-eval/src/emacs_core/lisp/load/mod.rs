@@ -6660,6 +6660,11 @@ pub fn bootstrap_evaluator_for_loadup(
                 }
             }
         }
+        // Preloaded full-support systems keep live ISO-2022 membership.
+        // This runs before the dump early-return so both the source bootstrap
+        // and the in-memory dump evaluator drop those snapshots.
+        eval.coding_systems_mut()
+            .release_preloaded_iso2022_safe_sets();
         maybe_trace_bootstrap_macro_perf(&eval);
 
         if matches!(invocation, LoadupInvocation::Dump(_)) && eval.shutdown_request.is_some() {

@@ -11,70 +11,94 @@ use std::collections::HashSet;
 use std::sync::mpsc;
 use std::thread;
 
-fn retry_registration<T>(mut f: impl FnMut() -> Result<T, RegistrationError>) -> T {
-    loop {
-        match f() {
-            Ok(value) => return value,
-            Err(RegistrationError::Busy) => thread::yield_now(),
-            Err(error) => panic!("tails registration: {error:?}"),
-        }
-    }
-}
-fn retry<T>(mut f: impl FnMut() -> Result<T, RendezvousError>) -> T {
-    loop {
-        match f() {
-            Ok(value) => return value,
-            Err(RendezvousError::Busy) => thread::yield_now(),
-            Err(error) => panic!("tails protocol: {error:?}"),
-        }
-    }
-}
-fn activate<'era>(mut permit: MutatorPermit<'era>, heap: HeapIdentity, id: u64) -> Mutator<'era> {
-    loop {
-        match permit.activate(heap, id) {
-            Ok(owner) => return owner,
-            Err(failure) if failure.reason == RegistrationError::Busy => {
-                permit = failure.into_permit();
-                thread::yield_now();
-            }
-            Err(failure) => panic!("activate tails owner: {:?}", failure.reason),
-        }
-    }
+// Serial histories have no competing actor that could make admission Busy.
+// Any refusal must fail immediately rather than disappear inside a retry.
+fn activate<'era>(permit: MutatorPermit<'era>, heap: HeapIdentity, id: u64) -> Mutator<'era> {
+    permit.activate(heap, id).unwrap()
 }
 fn with_run<R>(owner: &mut Mutator<'_>, body: impl FnOnce(&mut RunAccess<'_, '_>) -> R) -> R {
-    loop {
-        match owner.run_access() {
-            Ok(mut run) => {
-                let result = body(&mut run);
-                retry_registration(|| run.close_cons_region());
-                return result;
+    run_body(owner.run_access().unwrap(), body)
+}
+fn run_body<R>(mut run: RunAccess<'_, '_>, body: impl FnOnce(&mut RunAccess<'_, '_>) -> R) -> R {
+    let result = body(&mut run);
+    // Owner-local tail rewind has no contended admission to retry.
+    run.close_cons_region().unwrap();
+    result
+}
+fn complete(stopped: AllStopped<'_>) {
+    stopped.complete().unwrap();
+}
+fn retire(owner: Mutator<'_>) {
+    owner.retire_rooted(&[]).unwrap();
+}
+
+// Keep the original concurrent schedules separate from strict serial helpers.
+// Their admission retry contracts are audited independently of these histories.
+mod contended {
+    use super::*;
+
+    pub(super) fn retry_registration<T>(mut f: impl FnMut() -> Result<T, RegistrationError>) -> T {
+        loop {
+            match f() {
+                Ok(value) => return value,
+                Err(RegistrationError::Busy) => thread::yield_now(),
+                Err(error) => panic!("tails registration: {error:?}"),
             }
-            Err(RegistrationError::Busy) => thread::yield_now(),
-            Err(error) => panic!("run tails owner: {error:?}"),
         }
     }
-}
-fn complete(mut stopped: AllStopped<'_>) {
-    loop {
-        match stopped.complete() {
-            Ok(()) => return,
-            Err(failure) if failure.reason == RendezvousError::Busy => {
-                stopped = failure.into_stopped();
-                thread::yield_now();
+    pub(super) fn retry<T>(mut f: impl FnMut() -> Result<T, RendezvousError>) -> T {
+        loop {
+            match f() {
+                Ok(value) => return value,
+                Err(RendezvousError::Busy) => thread::yield_now(),
+                Err(error) => panic!("tails protocol: {error:?}"),
             }
-            Err(failure) => panic!("complete tails stop: {:?}", failure.reason),
         }
     }
-}
-fn retire(mut owner: Mutator<'_>) {
-    loop {
-        match owner.retire_rooted(&[]) {
-            Ok(()) => return,
-            Err(failure) if failure.reason == RendezvousError::Busy => {
-                owner = failure.into_owner();
-                thread::yield_now();
+    pub(super) fn activate<'era>(
+        mut permit: MutatorPermit<'era>,
+        heap: HeapIdentity,
+        id: u64,
+    ) -> Mutator<'era> {
+        loop {
+            match permit.activate(heap, id) {
+                Ok(owner) => return owner,
+                Err(failure) if failure.reason == RegistrationError::Busy => {
+                    permit = failure.into_permit();
+                    thread::yield_now();
+                }
+                Err(failure) => panic!("activate tails owner: {:?}", failure.reason),
             }
-            Err(failure) => panic!("retire tails owner: {:?}", failure.reason),
+        }
+    }
+    pub(super) fn with_run<R>(
+        owner: &mut Mutator<'_>,
+        body: impl FnOnce(&mut RunAccess<'_, '_>) -> R,
+    ) -> R {
+        super::run_body(owner.run_access_after_resume_drain().unwrap(), body)
+    }
+    pub(super) fn complete(mut stopped: AllStopped<'_>) {
+        loop {
+            match stopped.complete() {
+                Ok(()) => return,
+                Err(failure) if failure.reason == RendezvousError::Busy => {
+                    stopped = failure.into_stopped();
+                    thread::yield_now();
+                }
+                Err(failure) => panic!("complete tails stop: {:?}", failure.reason),
+            }
+        }
+    }
+    pub(super) fn retire(mut owner: Mutator<'_>) {
+        loop {
+            match owner.retire_rooted(&[]) {
+                Ok(()) => return,
+                Err(failure) if failure.reason == RendezvousError::Busy => {
+                    owner = failure.into_owner();
+                    thread::yield_now();
+                }
+                Err(failure) => panic!("retire tails owner: {:?}", failure.reason),
+            }
         }
     }
 }
@@ -82,14 +106,13 @@ fn retire(mut owner: Mutator<'_>) {
 /// catalog, collect, complete and resume before finish retires the era.
 fn endgame(era: &ParallelHeapEra<'_>, owner: &mut Mutator<'_>, roots: &[SharedRoot]) {
     owner.enter_native(roots).unwrap();
-    let mut stopped = retry(|| era.stop());
-    retry_registration(|| era.return_cons_storage(&stopped));
-    retry(|| {
-        era.collect_stopped(
-            &mut stopped,
-            neovm_eval::test_support::authority::baton_collect_parallel_world_roots,
-        )
-    });
+    let mut stopped = era.stop().unwrap();
+    era.return_cons_storage(&stopped).unwrap();
+    era.collect_stopped(
+        &mut stopped,
+        neovm_eval::test_support::authority::baton_collect_parallel_world_roots,
+    )
+    .unwrap();
     complete(stopped);
     owner.leave_native().unwrap();
 }
@@ -205,18 +228,17 @@ fn publish_at_stop_returns_unhanded_suffix_exactly() {
             live0 + 1,
             "publication refunds exactly the unhanded suffix"
         );
-        let mut stopped = retry(|| era.stop());
-        retry_registration(|| era.return_cons_storage(&stopped));
-        retry(|| {
-            era.collect_stopped(
-                &mut stopped,
-                neovm_eval::test_support::authority::baton_collect_parallel_world_roots,
-            )
-        });
+        let mut stopped = era.stop().unwrap();
+        era.return_cons_storage(&stopped).unwrap();
+        era.collect_stopped(
+            &mut stopped,
+            neovm_eval::test_support::authority::baton_collect_parallel_world_roots,
+        )
+        .unwrap();
         // After resume the next carve works and stays disjoint from the
         // published live cell. The resumed catalog must be stopped and
         // returned once more before this era can finish.
-        retry_registration(|| era.resume_cons_storage(&stopped));
+        era.resume_cons_storage(&stopped).unwrap();
         complete(stopped);
         owner.leave_native().unwrap();
         let second = with_run(&mut owner, |run| run.cons(&cars[1], &nil).unwrap());
@@ -226,14 +248,13 @@ fn publish_at_stop_returns_unhanded_suffix_exactly() {
             "distinct live cells"
         );
         owner.enter_native(&[head.clone(), second.clone()]).unwrap();
-        let mut stopped = retry(|| era.stop());
-        retry_registration(|| era.return_cons_storage(&stopped));
-        retry(|| {
-            era.collect_stopped(
-                &mut stopped,
-                neovm_eval::test_support::authority::baton_collect_parallel_world_roots,
-            )
-        });
+        let mut stopped = era.stop().unwrap();
+        era.return_cons_storage(&stopped).unwrap();
+        era.collect_stopped(
+            &mut stopped,
+            neovm_eval::test_support::authority::baton_collect_parallel_world_roots,
+        )
+        .unwrap();
         complete(stopped);
         owner.leave_native().unwrap();
         drop((head, second));
@@ -248,6 +269,8 @@ fn publish_at_stop_returns_unhanded_suffix_exactly() {
 /// distinct and both publications leave one coherent catalog.
 #[test]
 fn two_owners_carve_disjoint_exclusive_tails() {
+    use contended::{activate, complete, retire, retry, retry_registration, with_run};
+
     Context::with_test_collection_era(roots, |era, (cars, nil)| {
         era.start_cons_storage().unwrap();
         let permits = [

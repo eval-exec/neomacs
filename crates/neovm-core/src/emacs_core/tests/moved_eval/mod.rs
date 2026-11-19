@@ -216,6 +216,9 @@ mod emacs_core_runtime_eval_tests_cconv_memo_test_rs;
 #[cfg(test)]
 #[path = "emacs_core/runtime/eval/tests/gc_forced_first_cycle_test.rs"]
 mod emacs_core_runtime_eval_tests_gc_forced_first_cycle_test_rs;
+#[cfg(test)]
+#[path = "emacs_core/runtime/eval/tests/killed_buffer_roots_test.rs"]
+mod emacs_core_runtime_eval_tests_killed_buffer_roots_test_rs;
 #[cfg(all(test, feature = "jit"))]
 #[path = "emacs_core/runtime/jit/tests/spec_frames_test.rs"]
 mod emacs_core_runtime_jit_tests_spec_frames_test_rs;

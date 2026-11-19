@@ -87,8 +87,8 @@ pub fn define_charset_alias_for_test(
 // ---------------------------------------------------------------------------
 // peer #816 VIS write-arm (neovm-text): construction fences and one setter
 // per widened field.  Consumer tests stay read-only over the widened fields;
-// every write goes through one of these functions, which carry an
-// AUTHORITY-ITEMS row and are the only cross-crate test route for their item.
+// every write goes through one of these functions, which are the only
+// cross-crate test route for their item.
 // ---------------------------------------------------------------------------
 
 use neovm_edit::buffer::EmacsBytePos;

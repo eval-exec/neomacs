@@ -15,12 +15,10 @@ use neovm_edit::buffer::{
 use neovm_edit::emacs_core::display_metrics::GuiFrameGeometryHints;
 use neovm_edit::emacs_core::display_metrics::{Rect, WindowId, WindowMargins};
 use neovm_edit::emacs_core::textprop::WindowBufferLookup;
-#[cfg(any(test, feature = "test-support"))]
-use neovm_value::display_vocab::WindowSystemKind;
 use neovm_value::display_vocab::{
     ChangeStamp, FRAME_ID_BASE, FrameId, FrameParam, FrameQueryParam, FrameVisibility,
     RenderFrameVisibility, SourcePreloadWindowRetirementRefusal, SplitDirection,
-    WindowHistoryState, WindowLayoutVariable,
+    WindowHistoryState, WindowLayoutVariable, WindowSystemKind,
 };
 use neovm_value::gc_trace::GcTrace;
 use neovm_value::intern::SymId;
@@ -3193,6 +3191,21 @@ pub struct PendingContentTransitionIntents {
     pub frames: PendingIntentLedger<FrameId>,
 }
 
+/// One deleted window's records, held aside while a full collection decides
+/// whether its owning frame object is still reachable.
+pub(crate) struct DeletedFrameWindowRecord {
+    pub(crate) window: WindowId,
+    pub(crate) record: DeletedWindowRecord,
+    pub(crate) parameters: Option<WindowParameters>,
+}
+
+/// Window records of one deleted frame, taken out of the traced maps for a
+/// single explicit full collection.
+pub(crate) struct DeletedFrameGcRecord {
+    pub(crate) frame_id: u64,
+    pub(crate) windows: Vec<DeletedFrameWindowRecord>,
+}
+
 /// What a deleted window remembers on the window object GNU keeps alive.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DeletedWindowRecord {
@@ -3472,6 +3485,44 @@ pub struct Frame {
     pub buried_buffer_list: Vec<BufferId>,
 }
 
+/// Output method kept for a frame after it leaves the live map.
+///
+/// GNU `delete_frame` clears `f->terminal` (frame.c:2940) and does not
+/// touch `output_method`. `Fframep` (frame.c:300-316) still switches on
+/// that field, so a deleted frame answers `t` or its window system.
+/// `frame-live-p` stays nil. The value is copied from the frame's own
+/// output-method field at deletion, not from a frame parameter.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DeletedFrameTombstone {
+    output: DeletedFrameOutput,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DeletedFrameOutput {
+    Text,
+    Window(WindowSystemKind),
+}
+
+impl DeletedFrameTombstone {
+    fn from_frame(frame: &Frame) -> Self {
+        let output = match frame
+            .effective_window_system()
+            .and_then(|value| WindowSystemKind::from_symbol_value(&value))
+        {
+            Some(kind) => DeletedFrameOutput::Window(kind),
+            None => DeletedFrameOutput::Text,
+        };
+        Self { output }
+    }
+
+    fn lisp_value(self) -> Value {
+        match self.output {
+            DeletedFrameOutput::Text => Value::T,
+            DeletedFrameOutput::Window(kind) => Value::symbol(kind.name()),
+        }
+    }
+}
+
 pub struct FrameManager {
     pub frames: HashMap<FrameId, Frame>,
     /// Called on each newly built Frame before it is inserted. The Lisp
@@ -3499,6 +3550,9 @@ pub struct FrameManager {
     /// window from the tree, so the buffer has to be recorded here instead --
     /// a set of ids alone cannot answer the question.
     pub deleted_windows: HashMap<WindowId, DeletedWindowRecord>,
+    /// Output method of each deleted frame, keyed by the frame id the Lisp
+    /// object still carries. Live lookup does not consult this map.
+    pub deleted_frames: HashMap<FrameId, DeletedFrameTombstone>,
     pub deleted_window_parameters: HashMap<WindowId, WindowParameters>,
     pub window_select_count: i64,
     pub next_navigation_intent_generation: std::num::NonZeroU64,
@@ -4420,6 +4474,7 @@ impl Default for FrameManager {
             window_sequence_origin: WindowSequenceOrigin(FIRST_WINDOW_ID),
             old_selected_window: None,
             deleted_windows: HashMap::default(),
+            deleted_frames: HashMap::default(),
             deleted_window_parameters: HashMap::default(),
             window_select_count: 0,
             next_navigation_intent_generation: std::num::NonZeroU64::MIN,
@@ -5493,6 +5548,13 @@ impl FrameManager {
             .sequence_number(window, WindowId(self.next_window_id))
     }
 
+    /// `framep` of a deleted frame. Live frames are not stored here.
+    pub fn deleted_frame_output(&self, id: FrameId) -> Option<Value> {
+        self.deleted_frames
+            .get(&id)
+            .map(|tombstone| tombstone.lisp_value())
+    }
+
     /// Get a frame by ID.
     pub fn get(&self, id: FrameId) -> Option<&Frame> {
         self.frames.get(&id)
@@ -6022,6 +6084,8 @@ impl FrameManager {
             })
             .flatten();
         if let Some(frame) = self.frames.remove(&id) {
+            self.deleted_frames
+                .insert(id, DeletedFrameTombstone::from_frame(&frame));
             let terminal_id = frame.terminal_id;
             self.pending_content_transition_intents.frames.remove(id);
             for wid in frame.window_list() {
@@ -7047,6 +7111,118 @@ impl FrameManager {
         a_z.cmp(&b_z).then_with(|| a.0.cmp(&b.0))
     }
 
+    /// Pull dead-frame window records out of the traced maps for one explicit
+    /// full collection.
+    ///
+    /// The set of frames is the tombstone map. Grouping `deleted_windows` by
+    /// owner would skip a deleted frame that has no window record, and that
+    /// frame would stay an unconditional registry root. A tombstone is armed
+    /// with whatever fields it has, including an empty list.
+    ///
+    /// A dead frame that owns any materialized window object is not armed.
+    /// GNU `mark_window` marks `w->frame`, and the window registry keeps that
+    /// window object for the session, so the frame stays an ordinary root and
+    /// its parameter records stay in the traced maps. Windows deleted from a
+    /// frame that is still live stay in the maps as well.
+    pub(crate) fn take_deleted_frames_for_gc(
+        &mut self,
+        window_materialized: impl Fn(u64) -> bool,
+    ) -> (Vec<(u64, Vec<Value>)>, Vec<DeletedFrameGcRecord>) {
+        let frame_ids: Vec<FrameId> = self.deleted_frames.keys().copied().collect();
+        let mut ephemerons = Vec::new();
+        let mut taken = Vec::new();
+        for frame_id in frame_ids {
+            if self.frames.contains_key(&frame_id) {
+                continue;
+            }
+            let windows: Vec<WindowId> = self
+                .deleted_windows
+                .iter()
+                .filter_map(|(wid, record)| (record.owner == Some(frame_id)).then_some(*wid))
+                .collect();
+            if windows.iter().any(|wid| window_materialized(wid.0)) {
+                continue;
+            }
+            let mut fields = Vec::new();
+            let mut records = Vec::new();
+            for wid in windows {
+                let Some(record) = self.deleted_windows.remove(&wid) else {
+                    continue;
+                };
+                let parameters = self.deleted_window_parameters.remove(&wid);
+                if let Some(params) = parameters.as_ref() {
+                    for (key, value) in params {
+                        fields.push(*key);
+                        fields.push(*value);
+                    }
+                }
+                records.push(DeletedFrameWindowRecord {
+                    window: wid,
+                    record,
+                    parameters,
+                });
+            }
+            ephemerons.push((frame_id.0, fields));
+            taken.push(DeletedFrameGcRecord {
+                frame_id: frame_id.0,
+                windows: records,
+            });
+        }
+        (ephemerons, taken)
+    }
+
+    /// Put an uncommitted batch back. A panicking collection calls this from
+    /// its drop guard so the records are not lost.
+    pub(crate) fn restore_deleted_frame_records(&mut self, taken: Vec<DeletedFrameGcRecord>) {
+        for frame in taken {
+            self.put_back_deleted_frame_windows(frame.windows);
+        }
+    }
+
+    fn put_back_deleted_frame_windows(&mut self, windows: Vec<DeletedFrameWindowRecord>) {
+        for window in windows {
+            self.deleted_windows.insert(window.window, window.record);
+            if let Some(parameters) = window.parameters {
+                self.deleted_window_parameters
+                    .insert(window.window, parameters);
+            }
+        }
+    }
+
+    /// Drop the output-method tombstone for a frame whose heap object this
+    /// collection reclaimed. `framep` then has nothing to answer with.
+    pub(crate) fn forget_reclaimed_frame(&mut self, frame_id: FrameId) {
+        self.deleted_frames.remove(&frame_id);
+    }
+
+    /// Apply one collection's reclaimed frame ids.
+    ///
+    /// Reached frames get their window records back. A reclaimed frame drops
+    /// `deleted_windows` and `deleted_window_parameters` only for windows that
+    /// have no materialized window object. A materialized window keeps its
+    /// records even if its frame id was reported reclaimed.
+    pub(crate) fn commit_reclaimed_deleted_frames(
+        &mut self,
+        taken: Vec<DeletedFrameGcRecord>,
+        reclaimed: &[u64],
+        window_materialized: impl Fn(u64) -> bool,
+    ) {
+        let reclaimed: HashSet<u64> = reclaimed.iter().copied().collect();
+        for frame in taken {
+            if reclaimed.contains(&frame.frame_id) {
+                self.forget_reclaimed_frame(FrameId(frame.frame_id));
+                let (keep, drop_these): (Vec<_>, Vec<_>) = frame
+                    .windows
+                    .into_iter()
+                    .partition(|window| window_materialized(window.window.0));
+                drop(drop_these);
+                self.put_back_deleted_frame_windows(keep);
+            } else {
+                self.put_back_deleted_frame_windows(frame.windows);
+            }
+        }
+    }
+
     /// What a window should remember once it is deleted.
     ///
     /// Mirrors GNU's `wset_old_buffer (w, w->contents)` in
@@ -7230,6 +7406,7 @@ impl FrameManager {
             window_sequence_origin: WindowSequenceOrigin(FIRST_WINDOW_ID),
             old_selected_window: None,
             deleted_windows: HashMap::default(),
+            deleted_frames: HashMap::default(),
             deleted_window_parameters: HashMap::default(),
             window_select_count: 0,
             next_navigation_intent_generation: std::num::NonZeroU64::MIN,

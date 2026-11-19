@@ -584,6 +584,27 @@ impl KBoard {
         self.mouse_pixel_position = Some(MousePixelPositionState { frame_id, x, y });
     }
 
+    /// Bare frame ids this keyboard keeps across a collection.
+    ///
+    /// GNU's `recent_keys` and the last-event frame hold the frame object
+    /// (`frame.c:2898-2901`). These slots hold the id. The runtime pins the
+    /// object before an explicit collection while the id is still here.
+    pub(crate) fn collect_retained_frame_ids(&self, out: &mut Vec<u64>) {
+        if let Some(frame_id) = self.internal_last_event_frame {
+            out.push(frame_id.0);
+        }
+        if let Some(state) = self.mouse_pixel_position
+            && let Some(frame_id) = state.frame_id
+        {
+            out.push(frame_id.0);
+        }
+        if let Some(observation) = self.presented_mouse_observation
+            && observation.frame_id != 0
+        {
+            out.push(observation.frame_id);
+        }
+    }
+
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn unread_key(&mut self, event: KeyEvent) {
         self.unread_event(event.to_emacs_event_value());
@@ -907,6 +928,32 @@ impl KeyboardRuntime {
             parked_kboards: HashMap::new(),
             kboard: KBoard::new(),
         }
+    }
+
+    /// Frame objects named by ids this keyboard still holds.
+    ///
+    /// Called before an explicit collection arms deleted frames. The lookup
+    /// happens here, not in `trace_roots`, so root enumeration does not
+    /// re-enter the heap. An id whose object is already gone is not pinned.
+    /// The caller stores the vector at the end of `Context` so the pin does
+    /// not shift the fields after `command_loop`.
+    pub(crate) fn retained_frame_pins(&self) -> Vec<Value> {
+        let mut ids = Vec::new();
+        for event in self.event_queue.iter() {
+            event.retained_frame_ids(&mut ids);
+        }
+        for event in self.pending_input_events.iter() {
+            event.retained_frame_ids(&mut ids);
+        }
+        self.kboard.collect_retained_frame_ids(&mut ids);
+        for kboard in self.parked_kboards.values() {
+            kboard.collect_retained_frame_ids(&mut ids);
+        }
+        ids.sort_unstable();
+        ids.dedup();
+        ids.into_iter()
+            .filter_map(Value::registered_frame)
+            .collect()
     }
 
     #[cfg_attr(feature = "test-support", visibility::make(pub))]

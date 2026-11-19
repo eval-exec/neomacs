@@ -36,9 +36,15 @@ pub(crate) use era::WorldProofEraExt;
 #[cfg(test)]
 pub(crate) use era::WorldProofEraFinishFailure;
 pub(crate) use era::prepare_keeper_backing;
+mod era_world_loan;
 mod function_write_hooks;
 mod green_owner;
+mod heap_transfer_adapter;
+#[cfg(test)]
+#[path = "world/tests/heap_transfer.rs"]
+mod heap_transfer_tests;
 mod slot;
+mod source_entry;
 // Crate-visible so the public test-support re-export in eval/mod.rs can name
 // the driver class directly. This stays crate-internal; the struct itself is
 // public only in the test-support cfg arm.
@@ -206,6 +212,17 @@ impl<T> DerefMut for WorldView<T> {
         // SAFETY: this unique view is exclusively borrowed. World exposes no
         // independent manager accessor and no safe second-view constructor.
         unsafe { self.ptr.as_mut() }
+    }
+}
+
+impl<T> WorldView<T> {
+    /// Provenance root for a pointer held across later borrows of this view.
+    ///
+    /// A pointer taken from `&mut *view` is a child tag. The next reborrow of
+    /// the view invalidates it. [`Self::heap_root`] is this root for the heap.
+    #[inline(always)]
+    pub(crate) fn provenance_root(&self) -> NonNull<T> {
+        self.ptr
     }
 }
 impl WorldView<neovm_value::tagged::gc::TaggedHeap> {

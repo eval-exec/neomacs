@@ -229,6 +229,10 @@ fn ccl_symbol_plist(symbol: SymId) -> Option<Value> {
     Some(unsafe { (hooks.symbol_plist)(hooks.raw, symbol) })
 }
 
+mod registry_detach;
+#[doc(hidden)]
+pub mod source_scope;
+
 thread_local! {
     static CCL_REGISTRY: HeapRegistrySlot<CclRegistry> = HeapRegistrySlot::new(CclRegistry::with_defaults());
 }

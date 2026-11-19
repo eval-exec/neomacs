@@ -1516,8 +1516,16 @@ fn vm_font_stub_tail_uses_direct_dispatch() {
                  (condition-case nil
                      (font-get-glyphs nil 0 1)
                    (wrong-type-argument t))
-                 (null (font-get-system-font))
-                 (null (font-get-system-normal-font))
+                 ;; GNU defines these only in src/xsettings.c (X11/GTK) and
+                 ;; src/haikufont.c; an NS build has no function cell, so the
+                 ;; host-keyed expectation is "absent" there (GNU 31.1 NS
+                 ;; oracle: fboundp nil for both).
+                 (if (fboundp 'font-get-system-font)
+                     (null (font-get-system-font))
+                   t)
+                 (if (fboundp 'font-get-system-normal-font)
+                     (null (font-get-system-normal-font))
+                   t)
                  (null (font-has-char-p (font-spec :family "Mono") ?a))
                  (null (font-info "Mono"))
                  (condition-case nil
@@ -1992,6 +2000,7 @@ fn vm_terminal_query_builtins_accept_live_frame_designators() {
 }
 
 #[test]
+#[cfg(not(target_os = "macos"))]
 fn vm_x_display_query_builtins_reject_non_window_system_frame_designators() {
     crate::test_utils::init_test_tracing();
     assert_eq!(
@@ -2020,6 +2029,7 @@ fn vm_x_display_query_builtins_reject_non_window_system_frame_designators() {
 }
 
 #[test]
+#[cfg(not(target_os = "macos"))]
 fn vm_x_display_stub_builtins_use_direct_dispatch() {
     crate::test_utils::init_test_tracing();
     assert_eq!(
@@ -2065,6 +2075,7 @@ fn vm_x_connection_builtins_use_shared_runtime_state() {
 }
 
 #[test]
+#[cfg(not(target_os = "macos"))]
 fn vm_x_frame_property_and_tty_stub_builtins_use_direct_dispatch() {
     crate::test_utils::init_test_tracing();
     assert_eq!(
@@ -2102,6 +2113,7 @@ fn vm_x_frame_property_and_tty_stub_builtins_use_direct_dispatch() {
 }
 
 #[test]
+#[cfg(not(target_os = "macos"))]
 fn vm_remaining_display_stub_tail_uses_direct_dispatch() {
     crate::test_utils::init_test_tracing();
     assert_eq!(
@@ -2449,4 +2461,82 @@ fn vm_prin1_to_string_prints_killed_buffers_in_nested_values_like_gnu() {
         ),
         "OK (t t)"
     );
+}
+
+/// Host-keyed NS registration contract (macOS only), replacing the X11 stub
+/// dispatch tests on this target. GNU 31.1 NS does NOT simply lack every
+/// x-* name: the X11-only DEFUNs are absent (xselect.c, xfns.c,
+/// xsettings.c), while several platform-neutral display functions and the
+/// tty-* family are present. This set is attested from the pinned GNU 31.1
+/// NS oracle on macmini (a360712c9d27):
+///   emacs --batch --eval '(prin1 (mapcar (lambda (n) (cons n (and (fboundp (intern n)) t))) NAMES))'
+/// and Neomacs' macOS function-cell set matches it name for name.
+#[cfg(target_os = "macos")]
+#[test]
+fn ns_display_stub_registration_matches_gnu_31_1_ns() {
+    let ctx = crate::test_utils::new_context();
+    let present = [
+        "display-supports-face-attributes-p",
+        "x-display-list",
+        "x-parse-geometry",
+        "x-focus-frame",
+        "x-show-tip",
+        "x-display-pixel-width",
+        "x-display-pixel-height",
+        "x-server-version",
+        "x-server-max-request-size",
+        "x-display-grayscale-p",
+        "x-display-backing-store",
+        "x-display-color-cells",
+        "x-display-mm-height",
+        "x-display-mm-width",
+        "x-display-planes",
+        "x-display-save-under",
+        "x-display-screens",
+        "x-display-visual-class",
+        "x-load-color-file",
+        "display--line-is-continued-p",
+        "display--update-for-mouse-movement",
+        "x-begin-drag",
+        "tty--output-buffer-size",
+        "tty--set-output-buffer-size",
+        "tty-display-pixel-height",
+        "tty-display-pixel-width",
+        "tty-frame-at",
+        "tty-frame-edges",
+        "tty-frame-geometry",
+        "tty-frame-list-z-order",
+        "tty-frame-restack",
+        "tty-suppress-bold-inverse-default-colors",
+    ];
+    let absent = [
+        "x-selection-exists-p",
+        "x-selection-owner-p",
+        "x-uses-old-gtk-dialog",
+        "x-disown-selection-internal",
+        "x-register-dnd-atom",
+        "x-get-atom-name",
+        "x-window-property",
+        "x-window-property-attributes",
+        "x-display-monitor-attributes-list",
+        "x-server-input-extension-version",
+        "x-display-set-last-user-time",
+        "x-double-buffered-p",
+        "x-menu-bar-open-internal",
+        "x-wm-set-size-hint",
+        "font-get-system-font",
+        "font-get-system-normal-font",
+    ];
+    for name in present {
+        assert!(
+            ctx.obarray().symbol_function(name).is_some(),
+            "{name} must have a function cell on the NS profile (GNU 31.1 NS)"
+        );
+    }
+    for name in absent {
+        assert!(
+            ctx.obarray().symbol_function(name).is_none(),
+            "{name} is an X11/GTK-only DEFUN or absent on NS (GNU 31.1 NS)"
+        );
+    }
 }

@@ -3518,7 +3518,9 @@ crate::emacs_core::subr::define_subrs! {
     ),
     crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "iso-charset",
-        NativeFn::ContextVec(|_ctx, args| builtin_iso_charset(args)),
+        NativeFn::ContextVec(|_ctx, args| {
+            neovm_text::emacs_core::charset::builtin_iso_charset(args)
+        }),
         SubrArity::new(3, Some(3)),
     )),
     crate::emacs_core::subr::world_subr!(SubrSpec::new(
@@ -3585,7 +3587,7 @@ crate::emacs_core::subr::define_subrs! {
     )),
     crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "open-font",
-        NativeFn::ContextVec(|ctx, args| builtin_open_font(args, ctx.symbol_mode())),
+        NativeFn::ContextVec(builtin_open_font),
         SubrArity::new(1, Some(3)),
     )),
     crate::emacs_core::subr::world_subr!(SubrSpec::new(

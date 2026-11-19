@@ -23,7 +23,7 @@ fn fresh_intern(kind: PlainSymbolBacking, query: Query, exact_epoch: bool) {
         let loser = homes.equal_name.word_for_test(run);
         let old_word = name;
         let charge = run.hot_bytes_since_gc_for_test().unwrap();
-        intern_retry(run, &homes.name, &mut homes.dst).expect("fresh initial_intern_into");
+        intern_once(run, &homes.name, &mut homes.dst).expect("fresh initial_intern_into");
         let word = homes.dst.word_for_test(run);
         let id = unsafe { Value::from_bits(word) }
             .as_bare_symbol_id()
@@ -69,9 +69,9 @@ fn fresh_intern(kind: PlainSymbolBacking, query: Query, exact_epoch: bool) {
         }
         let stable_registry = identity_census_for_test();
         let stable_charge = run.hot_bytes_since_gc_for_test().unwrap();
-        intern_retry(run, &homes.equal_name, &mut homes.dst).expect("existing winner lookup");
+        intern_once(run, &homes.equal_name, &mut homes.dst).expect("existing winner lookup");
         assert_eq!(homes.dst.word_for_test(run), word);
-        soft_retry(run, &homes.name, &mut homes.dst).expect("soft lookup of committed name");
+        soft_once(run, &homes.name, &mut homes.dst).expect("soft lookup of committed name");
         assert_eq!(homes.dst.word_for_test(run), word);
         assert_eq!(run.hot_bytes_since_gc_for_test().unwrap(), stable_charge);
         if exact_epoch {
@@ -103,7 +103,7 @@ fn existing_intern(kind: PlainSymbolBacking, query: Query) {
         let before = run.initial_facts_copy_for_test(id).unwrap();
         let table_before = run.symbol_table_census_for_test().unwrap().retained_bytes();
         let charge = run.hot_bytes_since_gc_for_test().unwrap();
-        intern_retry(run, &homes.name, &mut homes.dst).unwrap();
+        intern_once(run, &homes.name, &mut homes.dst).unwrap();
         assert_eq!(homes.dst.word_for_test(run), Value::from_sym_id(id).bits());
         let after = run.initial_facts_copy_for_test(id).unwrap();
         assert!(after.present() && after.member());
@@ -143,7 +143,7 @@ fn existing_intern(kind: PlainSymbolBacking, query: Query) {
                 "registry-ID gap remains absent in World"
             );
         }
-        intern_retry(run, &homes.equal_name, &mut homes.dst).unwrap();
+        intern_once(run, &homes.equal_name, &mut homes.dst).unwrap();
         let repeated = run.initial_facts_copy_for_test(id).unwrap();
         assert_eq!(
             (repeated.members(), repeated.epoch(), repeated.bytes()),
@@ -213,14 +213,14 @@ fn soft(kind: PlainSymbolBacking, query: Query) {
     fixture(kind, query, |run, homes| {
         let name = homes.name.word_for_test(run);
         let equal_name = homes.equal_name.word_for_test(run);
-        soft_retry(run, &homes.name, &mut homes.dst).expect("C5 real soft lookup");
+        soft_once(run, &homes.name, &mut homes.dst).expect("C5 real soft lookup");
         assert_eq!(homes.dst.word_for_test(run), expected.bits());
         assert_eq!(homes.name.word_for_test(run), name);
-        soft_retry(run, &homes.equal_name, &mut homes.dst).expect("C5 equal-spelling soft lookup");
+        soft_once(run, &homes.equal_name, &mut homes.dst).expect("C5 equal-spelling soft lookup");
         assert_eq!(homes.dst.word_for_test(run), expected.bits());
         assert_eq!(homes.equal_name.word_for_test(run), equal_name);
         let mut alias = homes.name.clone();
-        soft_retry(run, &homes.name, &mut alias).expect("C5 aliasing source and output");
+        soft_once(run, &homes.name, &mut alias).expect("C5 aliasing source and output");
         assert_eq!(homes.name.word_for_test(run), expected.bits());
     })
     .expect("C5 soft completed with clean teardown");
@@ -296,7 +296,7 @@ fn p3sym_c5_soft_invalid_name_leaves_output_unchanged() {
                 Err(InitialInternError::ExpectedString)
             );
             assert_eq!(homes.dst.word_for_test(run), before);
-            soft_retry(run, &homes.name, &mut homes.dst).unwrap();
+            soft_once(run, &homes.name, &mut homes.dst).unwrap();
             assert_eq!(homes.dst.word_for_test(run), Value::NIL.bits());
         },
     )
@@ -334,7 +334,7 @@ fn p3sym_c5_soft_busy_is_a_refusal_and_releases_the_reader() {
                     "Busy is not a NIL miss"
                 );
             });
-            soft_retry(run, &homes.name, &mut homes.dst).unwrap();
+            soft_once(run, &homes.name, &mut homes.dst).unwrap();
             assert!(!unsafe { Value::from_bits(homes.dst.word_for_test(run)) }.is_nil());
         },
     )
@@ -468,7 +468,7 @@ fn p3sym_c5_intern_busy_leaves_output_and_membership_unchanged() {
                 )
             );
             assert_eq!(homes.dst.word_for_test(run), output);
-            intern_retry(run, &homes.name, &mut homes.dst).unwrap();
+            intern_once(run, &homes.name, &mut homes.dst).unwrap();
         },
     )
     .unwrap();
@@ -485,7 +485,7 @@ fn p3sym_c5_existing_intern_can_replace_its_name_home() {
             let before = run.initial_facts_copy_for_test(id).unwrap();
             assert!(!before.member());
             let mut alias = homes.name.clone();
-            intern_retry(run, &homes.name, &mut alias).unwrap();
+            intern_once(run, &homes.name, &mut alias).unwrap();
             assert_eq!(homes.name.word_for_test(run), Value::from_sym_id(id).bits());
             assert_eq!(
                 run.initial_facts_copy_for_test(id).unwrap().members(),
@@ -515,10 +515,10 @@ fn p3sym_c5_existing_id_preserves_registry_epoch_and_count_child() {
     ] {
         fixture(kind, Query::Boundary, |run, homes| {
             let before = identity_census_for_test();
-            intern_retry(run, &homes.name, &mut homes.dst).unwrap();
+            intern_once(run, &homes.name, &mut homes.dst).unwrap();
             assert_eq!(identity_census_for_test(), before, "World growth neither issues a process ID nor invalidates a positive canonical identity");
-            intern_retry(run, &homes.equal_name, &mut homes.dst).unwrap();
-            soft_retry(run, &homes.equal_name, &mut homes.dst).unwrap();
+            intern_once(run, &homes.equal_name, &mut homes.dst).unwrap();
+            soft_once(run, &homes.equal_name, &mut homes.dst).unwrap();
             assert_eq!(identity_census_for_test(), before, "existing-name lookups never bump the registry epoch");
         }).unwrap();
     }

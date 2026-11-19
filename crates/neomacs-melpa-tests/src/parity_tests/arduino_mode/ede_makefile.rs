@@ -63,9 +63,7 @@ fn library_guessing_scans_real_includes_skips_local_headers_and_adds_utility_dir
                         (kill-buffer
                          (get-file-buffer sketch)))
                       (delete-directory root t)))"##,
-        expect![[
-            r#"OK (#("Wire" 0 4 (fontified nil)) #("Servo" 0 5 (fontified nil)) #("Servo/utility" 0 5 (fontified nil)))"#
-        ]],
+        expect![[r#"OK ("Wire" "Servo" "Servo/utility")"#]],
     )
 }
 

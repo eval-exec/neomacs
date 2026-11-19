@@ -59,7 +59,6 @@ pub enum CanonicalWrite {
 }
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use cell::plist_epoch;
-pub(crate) use cell::store_plist_head;
 use cell::{ArmMut, CellWrite, MarkGate, RevealedCell, read_symbol_children};
 #[doc(hidden)]
 pub use cell::{
@@ -67,6 +66,9 @@ pub use cell::{
     LISP_SYMBOL_INTERNED_GLOBAL_OFFSET, LISP_SYMBOL_SIZE, LISP_SYMBOL_VAL_OFFSET, ValueCell,
 };
 pub use cell::{LispSymbol, SymbolFlags};
+pub(crate) use cell::{
+    PlistStore, store_construction_plist_head, store_plist_head, store_runtime_plist_head,
+};
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use fn_stamps::force_fn_stamps_for_test;
 pub use function_cell_observer::FunctionCellObserver;
@@ -977,8 +979,7 @@ impl CanonicalDispatchCells {
     }
 
     #[inline(always)]
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    pub(crate) fn function_epoch(&self) -> u64 {
+    pub fn function_epoch(&self) -> u64 {
         self.function_epoch.load(Ordering::Acquire)
     }
 
@@ -997,8 +998,7 @@ impl CanonicalDispatchCells {
     }
 
     #[inline(always)]
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    pub(crate) fn debug_on_next_call_armed_fast(&self) -> bool {
+    pub fn debug_on_next_call_armed_fast(&self) -> bool {
         self.debug_on_next_call_cell_ref().get()
     }
 
@@ -2290,8 +2290,8 @@ impl Obarray {
     }
 
     /// Restore the dump-carried per-symbol flags without handing out the
-    /// symbol cell. This is the ONE cross-crate route for pdump restore
-    /// (`PROMOTION-LEDGER.tsv`), and it can only set the three flags the image
+    /// symbol cell. This is the ONE cross-crate route for pdump restore, and
+    /// it can only set the three flags the image
     /// carries; the raw by-id accessor stays crate-private.
     #[doc(hidden)]
     pub fn restore_dumped_symbol_flags(
@@ -2902,7 +2902,8 @@ impl Obarray {
     /// (`src/data.c:2112-2140`).  In the localized case GNU's swap-in leaves
     /// the current buffer's value in that same cell, so the cell is still the
     /// right thing to read.
-    pub fn bool_forwarder(&self, id: SymId) -> Option<&'static crate::forward::LispBoolFwd> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn bool_forwarder(&self, id: SymId) -> Option<&'static crate::forward::LispBoolFwd> {
         match self.slot(id)?.value_cell() {
             ValueCell::Forwarded(fwd) => fwd.as_bool_fwd(),
             ValueCell::Localized(_) => self.blv(id)?.fwd?.as_bool_fwd(),
@@ -2983,8 +2984,7 @@ impl Obarray {
     /// cell is unresolved (the stand-in reads armed), which only sends the
     /// caller to the reference path that resolves it; see the field.
     #[inline(always)]
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    pub(crate) fn debug_on_next_call_armed_fast(&self) -> bool {
+    pub fn debug_on_next_call_armed_fast(&self) -> bool {
         self.debug_on_next_call_cell_ref().get()
     }
 
@@ -4359,7 +4359,7 @@ impl Obarray {
     }
 
     /// Check if a symbol is bound (has a value cell).
-    pub(crate) fn canonical_boundp(&self, access: CanonicalAccess, name: &str) -> bool {
+    pub fn canonical_boundp(&self, access: CanonicalAccess, name: &str) -> bool {
         self.canonical_boundp_id(access, intern(name))
     }
 
@@ -4474,9 +4474,7 @@ impl Obarray {
             Value::list(flat)
         };
         let sym = self.ensure_symbol_id(symbol);
-        // SATB: retain the plist cell's pre-image during a concurrent mark.
-        crate::tagged::gc::note_root_overwrite(sym.plist.get());
-        store_plist_head(sym, new_plist);
+        store_runtime_plist_head(sym, new_plist);
         SymbolPropertyRevision::changed(symbol);
     }
 
@@ -4486,9 +4484,7 @@ impl Obarray {
     pub fn set_symbol_plist_id(&mut self, symbol: SymId, plist: Value) {
         self.ensure_global_member_if_canonical(symbol);
         let sym = self.ensure_symbol_id(symbol);
-        // SATB: retain the plist cell's pre-image during a concurrent mark.
-        crate::tagged::gc::note_root_overwrite(sym.plist.get());
-        store_plist_head(sym, plist);
+        store_runtime_plist_head(sym, plist);
         SymbolPropertyRevision::changed(symbol);
     }
 
@@ -4686,13 +4682,15 @@ impl Obarray {
     }
 
     /// Check whether a symbol is a buffer-local variable in the obarray.
-    pub fn is_buffer_local(&self, name: &str) -> bool {
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn is_buffer_local(&self, name: &str) -> bool {
         self.is_buffer_local_id(intern(name))
     }
 
     /// Check whether a symbol is a buffer-local variable by identity.
     /// Phase F: uses the redirect tag rather than the legacy value enum.
-    pub(crate) fn is_buffer_local_id(&self, id: SymId) -> bool {
+    pub fn is_buffer_local_id(&self, id: SymId) -> bool {
         self.slot(id)
             .is_some_and(|s| s.redirect() == SymbolRedirect::Localized)
     }
@@ -5442,5 +5440,27 @@ impl BlvDefaultCells {
     #[doc(hidden)]
     pub fn fwd(&self) -> Option<crate::forward::FwdRef> {
         self.fwd
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod b13_test_hooks {
+    use super::*;
+    impl Obarray {
+        pub(crate) fn function_epoch_exclusive(&mut self) -> u64 {
+            *self.dispatch_cells.function_epoch.get_mut()
+        }
+
+        pub(crate) fn chunk_has_fn_stamps_for_test(&self, id: SymId) -> bool {
+            self.symbols.chunk_has_fn_stamps(Self::slot_index(id))
+        }
+    }
+    impl CanonicalDispatchCells {}
+    impl SymbolChunks {
+        pub(crate) fn chunk_has_fn_stamps(&self, idx: usize) -> bool {
+            self.sides
+                .get(idx >> 12)
+                .is_some_and(|side| side.has_stamps())
+        }
     }
 }

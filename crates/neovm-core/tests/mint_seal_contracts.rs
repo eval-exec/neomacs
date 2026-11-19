@@ -8,8 +8,11 @@
 //! the goldens are re-blessed in the same commit. A fixture that starts to
 //! COMPILE at any point is a sealing bug, never a golden to re-bless.
 
+/// Named `*_compile_contracts` so the nextest overrides for trybuild
+/// runners (compiler memory wrapper, all test threads, 900s slow-timeout)
+/// apply to it as they do to every other contract binary.
 #[test]
-fn mint_seals_are_not_callable_from_outside_the_crate() {
+fn mint_seal_compile_contracts() {
     let cases = trybuild::TestCases::new();
     cases.compile_fail("tests/mint_seal_ui/*.rs");
 }

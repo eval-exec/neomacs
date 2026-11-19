@@ -79,9 +79,9 @@ const ORGIT_TEST_PRELUDE: &str = r##"
     (when (buffer-live-p buffer)
       (with-current-buffer buffer
         (when (or (and buffer-file-name
-                       (file-in-directory-p buffer-file-name root))
+                       (neomacs-melpa-path-inside-p buffer-file-name root))
                   (and (stringp default-directory)
-                       (file-in-directory-p default-directory root)))
+                       (neomacs-melpa-path-inside-p default-directory root)))
           (set-buffer-modified-p nil)
           (kill-buffer buffer))))))
 

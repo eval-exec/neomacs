@@ -1707,7 +1707,7 @@ fn internal_lisp_face_empty_p_rejects_non_nil_non_t_frame_designator() {
     assert!(result.is_err());
     let frame_result = call_font_builtin!(
         builtin_internal_lisp_face_empty_p,
-        vec![Value::symbol("default"), Value::make_frame(1)]
+        vec![Value::symbol("default"), Value::mint_frame(1)]
     );
     assert!(frame_result.is_err());
 }
@@ -1715,7 +1715,7 @@ fn internal_lisp_face_empty_p_rejects_non_nil_non_t_frame_designator() {
 #[test]
 fn internal_lisp_face_comparators_accept_frame_handles() {
     crate::test_utils::init_test_tracing();
-    let frame = Value::make_frame(FRAME_ID_BASE);
+    let frame = Value::mint_frame(FRAME_ID_BASE);
     let empty_result = call_font_builtin!(
         builtin_internal_lisp_face_empty_p,
         vec![Value::symbol("default"), frame]
@@ -1778,7 +1778,7 @@ fn internal_merge_in_global_face_rejects_non_frame_designator() {
     assert!(result.is_err());
     let frame_handle_result = call_font_builtin!(
         builtin_internal_merge_in_global_face,
-        vec![Value::symbol("default"), Value::make_frame(1)]
+        vec![Value::symbol("default"), Value::mint_frame(1)]
     );
     assert!(frame_handle_result.is_err());
 }
@@ -2389,17 +2389,17 @@ fn color_queries_validate_optional_device_arg() {
     assert!(builtin_color_defined_p(vec![Value::string("red"), Value::fixnum(1)]).is_err());
     assert!(builtin_color_values(vec![Value::string("red"), Value::fixnum(1)]).is_err());
     assert!(builtin_defined_colors(vec![Value::fixnum(1)]).is_err());
-    assert!(builtin_color_defined_p(vec![Value::string("red"), Value::make_frame(1)]).is_err());
-    assert!(builtin_color_values(vec![Value::string("red"), Value::make_frame(1)]).is_err());
-    assert!(builtin_defined_colors(vec![Value::make_frame(1)]).is_err());
+    assert!(builtin_color_defined_p(vec![Value::string("red"), Value::mint_frame(1)]).is_err());
+    assert!(builtin_color_values(vec![Value::string("red"), Value::mint_frame(1)]).is_err());
+    assert!(builtin_defined_colors(vec![Value::mint_frame(1)]).is_err());
     assert!(
-        builtin_color_defined_p(vec![Value::string("red"), Value::make_frame(FRAME_ID_BASE)])
+        builtin_color_defined_p(vec![Value::string("red"), Value::mint_frame(FRAME_ID_BASE)])
             .is_ok()
     );
     assert!(
-        builtin_color_values(vec![Value::string("red"), Value::make_frame(FRAME_ID_BASE)]).is_ok()
+        builtin_color_values(vec![Value::string("red"), Value::mint_frame(FRAME_ID_BASE)]).is_ok()
     );
-    assert!(builtin_defined_colors(vec![Value::make_frame(FRAME_ID_BASE)]).is_ok());
+    assert!(builtin_defined_colors(vec![Value::mint_frame(FRAME_ID_BASE)]).is_ok());
 }
 
 #[test]
@@ -2982,8 +2982,22 @@ fn internal_set_alternative_font_registry_alist_downcases_values() {
         inner[1].as_runtime_string_owned().as_deref(),
         Some("gb18030.2000-1")
     );
+    // B15-1: assert the production store the builtin wrote, not the deleted
+    // test-only lookup model.
+    let state = crate::emacs_core::font::alternative_font_registry_alist_snapshot_for_test();
+    assert_eq!(state.len(), 1, "one registry entry is stored");
     assert_eq!(
-        alternative_font_registries("ISO10646-1"),
+        neovm_value::emacs_char::to_utf8_lossy(state[0].0.as_bytes()),
+        "iso10646-1"
+    );
+    let aliases: Vec<String> = state[0]
+        .1
+        .iter()
+        .map(|alias| neovm_value::emacs_char::to_utf8_lossy(alias.as_bytes()))
+        .collect();
+    // The production store keeps the primary spelling beside the aliases.
+    assert_eq!(
+        aliases,
         vec!["iso10646-1".to_string(), "gb18030.2000-1".to_string()]
     );
 }
@@ -3009,7 +3023,11 @@ fn internal_set_alternative_font_registry_alist_accepts_raw_unibyte_strings() {
             0xFF, b'a'
         ]))
     );
-    assert_eq!(alternative_font_registries(&expected), vec![expected]);
+    // B15-1: the stored raw bytes are the production write's result.
+    let _ = expected;
+    let state = crate::emacs_core::font::alternative_font_registry_alist_snapshot_for_test();
+    assert_eq!(state.len(), 1, "one registry entry is stored");
+    assert_eq!(state[0].0.as_bytes(), &[0xFF, b'a']);
 }
 
 #[test]

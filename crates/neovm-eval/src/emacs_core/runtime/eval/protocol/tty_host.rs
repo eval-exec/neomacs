@@ -33,6 +33,16 @@ pub trait TerminalHost {
     fn write_bytes(&mut self, _bytes: &[u8]) -> Result<(), String> {
         Err("terminal host has no output stream".to_owned())
     }
+
+    /// Current winsize of this host's own input, GNU `get_tty_size` on
+    /// `FRAME_TTY(f)->input` (`src/sysdep.c:1396`).
+    ///
+    /// `Some((0, 0))` is a failed ioctl or a successful 0×0 report. `None`
+    /// means this host has no input fd, so the caller keeps the size stored
+    /// on the terminal when it was opened.
+    fn tty_winsize_cells(&mut self) -> Option<(u32, u32)> {
+        None
+    }
 }
 /// Validated identity of a text terminal a frontend must open for one frame.
 ///

@@ -62,6 +62,10 @@ fn region_commands_run_only_selection_and_replace_it_with_output() -> ParityBatc
     )
 }
 
+/// The child reads stdin through EOF. `read` alone can exit before Quickrun
+/// sends EOF, and GNU `process-send-eof` then errors "Process %s not running"
+/// (src/process.c:7454-7455). `ignore-errors` swallows that, and the default
+/// sentinel appends "Process quickrun-process-sh finished".
 fn arguments_default_directory_and_stdin_sidecar_reach_the_real_process() -> ParityBatchCase {
     ParityBatchCase::value(
         "arguments_default_directory_and_stdin_sidecar_reach_the_real_process",
@@ -80,7 +84,7 @@ fn arguments_default_directory_and_stdin_sidecar_reach_the_real_process() -> Par
         (with-current-buffer buffer
           (quickrun-add-command "parity/args"
             `((:command . "sh")
-              (:exec . "%c -c 'read line; echo dir=$PWD arg=$1 input=$line' sh %a")
+              (:exec . "%c -c 'read line; cat >/dev/null; echo dir=$PWD arg=$1 input=$line' sh %a")
               (:tempfile . nil)
               (:default-directory . ,root)))
           (let ((quickrun-option-cmdkey "parity/args")

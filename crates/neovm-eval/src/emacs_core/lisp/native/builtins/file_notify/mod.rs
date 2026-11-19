@@ -78,6 +78,8 @@ thread_local! {
     static FILE_NOTIFY_STATE: HeapRegistrySlot<FileNotifyState> = HeapRegistrySlot::new(FileNotifyState::default());
 }
 
+mod registry_detach;
+
 #[derive(Default)]
 pub(crate) struct FileNotifyState {
     backend: PlatformBackend,

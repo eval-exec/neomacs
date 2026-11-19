@@ -18,7 +18,7 @@ fn reservation_refusal(kind: PlainSymbolBacking, query: Query) {
         run.arm_initial_fault_for_test(InitialInternFault::ReservationAfterSpineMove)
             .unwrap();
         assert_eq!(
-            intern_retry(run, &homes.name, &mut homes.dst),
+            intern_once(run, &homes.name, &mut homes.dst),
             Err(InitialInternError::Authority(RegistrationError::Capacity))
         );
         let after = run.initial_facts_copy_for_test(id).unwrap();
@@ -80,13 +80,13 @@ fn reservation_refusal(kind: PlainSymbolBacking, query: Query) {
         );
         // The fault is one-shot. The same name now succeeds, then behaves
         // like an ordinary hit rather than publishing membership twice.
-        intern_retry(run, &homes.name, &mut homes.dst).unwrap();
+        intern_once(run, &homes.name, &mut homes.dst).unwrap();
         let committed = run.initial_facts_copy_for_test(id).unwrap();
         assert_eq!(
             (committed.members(), committed.epoch()),
             (before.members() + 1, before.epoch() + 1)
         );
-        intern_retry(run, &homes.equal_name, &mut homes.dst).unwrap();
+        intern_once(run, &homes.equal_name, &mut homes.dst).unwrap();
         assert_eq!(
             run.initial_facts_copy_for_test(id).unwrap().epoch(),
             committed.epoch()
@@ -165,7 +165,7 @@ fn p3sym_c5_partial_slot_publication_poisons_before_writer_release() {
                     run.arm_initial_fault_for_test(InitialInternFault::AfterSlotPublication)
                         .unwrap();
                     assert_eq!(
-                        intern_retry(&mut run, &name, &mut dst),
+                        intern_once(&mut run, &name, &mut dst),
                         Err(InitialInternError::Authority(RegistrationError::Poisoned))
                     );
                     assert_eq!(

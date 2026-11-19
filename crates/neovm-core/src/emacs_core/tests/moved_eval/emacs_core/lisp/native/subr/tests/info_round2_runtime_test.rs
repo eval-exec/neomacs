@@ -54,8 +54,25 @@ fn subr_arity_command_read_primitives_match_oracle() {
     assert_subr_arity("font-at", 1, Some(3));
     assert_subr_arity("font-face-attributes", 1, Some(2));
     assert_subr_arity("font-get-glyphs", 3, Some(4));
-    assert_subr_arity("font-get-system-font", 0, Some(0));
-    assert_subr_arity("font-get-system-normal-font", 0, Some(0));
+    // GNU defines these only in src/xsettings.c (X11/GTK) and src/haikufont.c;
+    // an NS build such as the macOS CI host compiles neither, so the names
+    // have no function cell there (src/nsfns.m, src/nsfont.m carry no such
+    // DEFUN).
+    #[cfg(not(target_os = "macos"))]
+    {
+        assert_subr_arity("font-get-system-font", 0, Some(0));
+        assert_subr_arity("font-get-system-normal-font", 0, Some(0));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let ctx = crate::test_utils::new_context();
+        for name in ["font-get-system-font", "font-get-system-normal-font"] {
+            assert!(
+                ctx.obarray().symbol_function(name).is_none(),
+                "{name} is a GTK/Haiku-only DEFUN and must be absent on NS"
+            );
+        }
+    }
     assert_subr_arity("font-has-char-p", 2, Some(3));
     assert_subr_arity("font-info", 1, Some(2));
     assert_subr_arity("font-match-p", 2, Some(2));
@@ -125,7 +142,21 @@ fn subr_arity_command_read_primitives_match_oracle() {
     assert_subr_arity("gnutls-peer-status-warning-describe", 1, Some(1));
     assert_subr_arity("gnutls-symmetric-decrypt", 4, Some(5));
     assert_subr_arity("gnutls-symmetric-encrypt", 4, Some(5));
+    // GNU defines this in src/xsmfns.c (X session management); an NS build
+    // compiles no such DEFUN, but keyboard.c still interns the symbol name,
+    // so the NS oracle shows a member with no function cell.
+    #[cfg(not(target_os = "macos"))]
     assert_subr_arity("handle-save-session", 1, Some(1));
+    #[cfg(target_os = "macos")]
+    {
+        let ctx = crate::test_utils::new_context();
+        assert!(
+            ctx.obarray()
+                .symbol_function("handle-save-session")
+                .is_none(),
+            "handle-save-session is an XSM-only DEFUN and must be absent on NS"
+        );
+    }
     assert_subr_arity("handle-switch-frame", 1, Some(1));
     assert_subr_arity("help--describe-vector", 7, Some(7));
     assert_subr_arity("init-image-library", 1, Some(1));
@@ -310,7 +341,17 @@ fn subr_arity_command_read_primitives_match_oracle() {
     assert_subr_arity("this-single-command-keys", 0, Some(0));
     assert_subr_arity("this-single-command-raw-keys", 0, Some(0));
     assert_subr_arity("thread--blocker", 1, Some(1));
+    // GNU defines this in src/xsettings.c (GTK/X11); the NS oracle has no
+    // function cell for it.
+    #[cfg(not(target_os = "macos"))]
     assert_subr_arity("tool-bar-get-system-style", 0, Some(0));
+    #[cfg(target_os = "macos")]
+    assert!(
+        crate::test_utils::new_context()
+            .obarray()
+            .symbol_function("tool-bar-get-system-style")
+            .is_none()
+    );
     assert_subr_arity("tool-bar-pixel-width", 0, Some(1));
     assert_subr_arity("translate-region-internal", 3, Some(3));
     assert_subr_arity("transpose-regions", 4, Some(5));
@@ -376,8 +417,23 @@ fn subr_arity_command_read_primitives_match_oracle() {
     assert_subr_arity("vertical-motion", 1, Some(3));
     assert_subr_arity("x-begin-drag", 1, Some(6));
     assert_subr_arity("x-create-frame", 1, Some(1));
-    assert_subr_arity("x-double-buffered-p", 0, Some(1));
-    assert_subr_arity("x-menu-bar-open-internal", 0, Some(1));
+    // X11-only DEFUNs (src/xfns.c, src/xmenu.c); absent on NS in both GNU
+    // 31.1 NS and Neomacs.
+    #[cfg(not(target_os = "macos"))]
+    {
+        assert_subr_arity("x-double-buffered-p", 0, Some(1));
+        assert_subr_arity("x-menu-bar-open-internal", 0, Some(1));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let ctx = crate::test_utils::new_context();
+        for name in ["x-double-buffered-p", "x-menu-bar-open-internal"] {
+            assert!(
+                ctx.obarray().symbol_function(name).is_none(),
+                "{name} is an X11-only DEFUN and must be absent on NS"
+            );
+        }
+    }
     assert_subr_arity("xw-color-defined-p", 1, Some(2));
     assert_subr_arity("xw-color-values", 1, Some(2));
     assert_subr_arity("xw-display-color-p", 0, Some(1));

@@ -26,7 +26,7 @@ jobs:
       - uses: ./.github/actions/setup-rust
         with:
           cache-key: ci-shared-runtime-linux-x86_64
-          cache-shared-key: linux-x86_64-release
+          cache-shared-key: linux-x86_64-release-2
           cache-save-if: "false"
       # Same product recipe and runtime archive as test-suite.yml, without
       # that workflow's unrelated ERT/package-install probes.

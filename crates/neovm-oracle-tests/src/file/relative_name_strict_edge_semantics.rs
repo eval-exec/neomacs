@@ -72,3 +72,50 @@ fn oracle_file_relative_name_local_remote_and_type_edges() {
     let expect = expect_test::expect![[r#""OK nil""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
+
+/// GNU's file-name-directory/nondirectory/as-directory/directory-file-name
+/// allocate fresh strings (`make_specified_string`, src/fileio.c:505,572,671,
+/// 762): text properties on the input never reach the result. Neomacs cloned
+/// the input on several no-op branches, which leaked the `directory` property
+/// company-c-headers attaches to its candidates into the location it builds
+/// with `file-name-nondirectory` (the company_c_headers MELPA batch divergence).
+/// `file-relative-name` then inherited the leaked property. This row pins the
+/// property-drop contract and the company-shaped chain on both editors.
+#[test]
+fn oracle_file_name_primitives_drop_input_text_properties() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let form = r#"
+(let* ((dir "/tmp/neomacs-oracle-fnprops/")
+       (candidate (propertize "sub/concept.hpp" 'directory dir))
+       (tail (substring candidate 4))
+       (head (substring candidate 0 3))
+       (location (concat (file-name-as-directory "/abs/include/")
+                         (file-name-nondirectory tail)))
+       (relative (file-relative-name
+                  (concat "/tmp/neomacs-oracle-fnprops/"
+                          (file-name-nondirectory tail))
+                  dir)))
+  (list
+   (file-name-nondirectory tail)
+   (text-properties-at 0 (file-name-nondirectory tail))
+   (file-name-directory (concat "/tmp/" tail))
+   (text-properties-at 0 (file-name-directory (concat "/tmp/" tail)))
+   (file-name-as-directory (concat "/tmp/" tail "/"))
+   (text-properties-at 0 (file-name-as-directory (concat "/tmp/" tail "/")))
+   (directory-file-name (concat "/tmp/" tail "///"))
+   (text-properties-at 0 (directory-file-name (concat "/tmp/" tail "///")))
+   location
+   (text-properties-at 0 location)
+   relative
+   (text-properties-at 0 relative)
+   ;; The input candidate still carries its property; only the fresh
+   ;; file-name-* results are plain.
+   (text-properties-at 0 head)))
+"#;
+
+    let expect = expect_test::expect![[
+        r#""OK (\"concept.hpp\" nil \"/tmp/\" nil \"/tmp/concept.hpp/\" nil \"/tmp/concept.hpp\" nil \"/abs/include/concept.hpp\" nil \"concept.hpp\" nil (directory \"/tmp/neomacs-oracle-fnprops/\"))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}

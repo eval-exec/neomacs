@@ -59,9 +59,6 @@ pub(crate) trait FatalSignalShutdown {
 
 // Command-loop and keyboard state lives in the evaluator data module
 // (stage-4 W2/E6b); these re-exports keep the historical keyboard paths.
-// One statement per visibility class: the layering guard counts each `use`
-// statement as an upward keyboard->eval site, and that ratchet may only
-// decrease, so all narrowed leaves share the single pub(crate) statement.
 pub(crate) use crate::emacs_core::eval::data::command_loop::{
     AUTO_SAVE_TIMEOUT, COMMAND_EXECUTE, ECHO_KEYSTROKES, ECHO_KEYSTROKES_HELP, EXECUTING_KBD_MACRO,
     HELP_CHAR, HELP_EVENT_LIST, INPUT_METHOD_FUNCTION, INTERNAL_TIMER_START_IDLE,
@@ -1537,6 +1534,78 @@ impl InputEvent {
         Self::KeyPress {
             key,
             emacs_frame_id,
+        }
+    }
+
+    /// Frame ids this transport event still names.
+    ///
+    /// The queue stores the id, not the frame object. GNU's keyboard buffer
+    /// stores the frame Lisp object, which is what keeps a deleted frame
+    /// alive (`frame.c` recent_keys). A zero id means "selected frame at
+    /// read time" and does not name a frame to retain.
+    pub(crate) fn retained_frame_ids(&self, out: &mut Vec<u64>) {
+        match self {
+            Self::Tracked { event, .. }
+            | Self::Observed { event, .. }
+            | Self::FrameSwitchDeferred(event) => event.retained_frame_ids(out),
+            Self::RawTtyBytes { target, .. }
+            | Self::TtyByte { target, .. }
+            | Self::TtyCharacter { target, .. } => {
+                if let TtyInputTarget::Frame(frame_id) = target {
+                    out.push(frame_id.0);
+                }
+            }
+            Self::KeyPress { emacs_frame_id, .. }
+            | Self::ToolBarClick { emacs_frame_id, .. }
+            | Self::PresentedPointer { emacs_frame_id, .. }
+            | Self::PresentationActivated { emacs_frame_id, .. }
+            | Self::PresentationDiscarded { emacs_frame_id, .. }
+            | Self::MenuBarClick { emacs_frame_id, .. }
+            | Self::Resize { emacs_frame_id, .. }
+            | Self::Focus { emacs_frame_id, .. }
+            | Self::WindowClose { emacs_frame_id, .. } => {
+                if *emacs_frame_id != 0 {
+                    out.push(*emacs_frame_id);
+                }
+            }
+            Self::MousePress {
+                target_frame_id, ..
+            }
+            | Self::MouseRelease {
+                target_frame_id, ..
+            }
+            | Self::MouseMove {
+                target_frame_id, ..
+            }
+            | Self::PresentedRegion {
+                target_frame_id, ..
+            }
+            | Self::MouseScroll {
+                target_frame_id, ..
+            }
+            | Self::PixelScroll {
+                target_frame_id, ..
+            } => {
+                if *target_frame_id != 0 {
+                    out.push(*target_frame_id);
+                }
+            }
+            Self::LayoutInvalidated
+            | Self::ImageStateChanged { .. }
+            | Self::MenuSelection { .. }
+            | Self::PresentationRetired { .. }
+            | Self::MonitorsChanged { .. }
+            | Self::SystemFontsChanged { .. }
+            | Self::SelectWindow { .. }
+            | Self::TtyHangup { .. }
+            | Self::ThreadEvent { .. }
+            | Self::DisplayReset
+            | Self::WebView(_)
+            | Self::SurfaceCreateFailed { .. }
+            | Self::FrameShaderFailed { .. }
+            | Self::TerminalCreateFailed { .. }
+            | Self::TerminalExited { .. }
+            | Self::TerminalTitleChanged { .. } => {}
         }
     }
 
@@ -5418,11 +5487,13 @@ impl crate::emacs_core::eval::Context {
                 self.command_loop.keyboard.kboard.last_help_echo_event = Some(event);
             }
             None => {
-                if let Some(fid) = frame_id {
+                if let Some(fid) = frame_id
+                    && let Some(frame) = Value::registered_frame(fid.0)
+                {
                     self.command_loop
                         .keyboard
                         .unread_event(Self::make_help_echo_event(
-                            Value::make_frame(fid.0),
+                            frame,
                             Value::NIL,
                             Value::NIL,
                             Value::NIL,
@@ -6076,8 +6147,11 @@ impl crate::emacs_core::eval::Context {
 
     #[doc(hidden)]
     pub fn event_frame_value(&self, emacs_frame_id: u64) -> Value {
+        // A queued toolbar click stores the id. The object is rooted while
+        // that id is held (`Context::retained_frame_pins`). A reclaimed id
+        // returns nil and does not call `make_frame`.
         self.event_frame_id(emacs_frame_id)
-            .map(|frame_id| Value::make_frame(frame_id.0))
+            .and_then(|frame_id| Value::registered_frame(frame_id.0))
             .unwrap_or(Value::NIL)
     }
 

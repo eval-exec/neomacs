@@ -41,7 +41,6 @@ fontdb.workspace = true
 tracing.workspace = true
 once_cell.workspace = true
 ttf-parser.workspace = true
-unicode-script.workspace = true
 strum.workspace = true
 num_enum.workspace = true
 
@@ -78,6 +77,10 @@ neovm-value = { workspace = true, features = ["test-support"] }
 # read eval items that are pub(crate) in production and pub only under
 # neovm-eval's test-support feature, so a per-crate test build enables it here.
 neovm-eval = { path = "../neovm-eval", default-features = false, features = ["test-support"] }
+# Downward edit test-support edge (B15-1): the COW snapshot tests drive the
+# thread-local snapshot-mode override only through neovm-edit's authority
+# fence, which exists in the test-support build.
+neovm-edit = { path = "../neovm-edit", default-features = false, features = ["test-support"] }
 serde_json.workspace = true
 tracing-test.workspace = true
 
