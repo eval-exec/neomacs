@@ -982,6 +982,8 @@ thread_local! {
 }
 
 mod font_detach;
+#[doc(hidden)]
+pub use font_detach::detach_font_registry;
 
 /// Invalidate the cached face-name list after the defined-face set changes.
 fn bump_face_set_generation() {

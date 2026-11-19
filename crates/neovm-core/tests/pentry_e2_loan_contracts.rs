@@ -526,6 +526,17 @@ fn pentry_e2_receipt_compile_contracts() {
         "receipt_prepared_cache_not_sync.rs",
         "receipt_integer_width_is_private.rs",
         "receipt_in_flight_is_private.rs",
+        "receipt_source_shell_in_flight_detach_requires_unsafe.rs",
+        "receipt_source_shell_in_flight_has_no_constructor.rs",
+        "receipt_source_shell_in_flight_not_clone.rs",
+        "receipt_source_shell_in_flight_not_copy.rs",
+        "receipt_source_shell_in_flight_not_send.rs",
+        "receipt_source_shell_in_flight_not_sync.rs",
+        "receipt_source_shell_in_flight_refusal_has_no_constructor.rs",
+        "receipt_source_shell_in_flight_refusal_not_clone.rs",
+        "receipt_source_shell_in_flight_refusal_not_copy.rs",
+        "receipt_source_shell_in_flight_refusal_not_send.rs",
+        "receipt_source_shell_in_flight_refusal_not_sync.rs",
     ];
     for name in fail {
         cases.compile_fail(manifest.join("tests/pentry_e2_loan_ui").join(name));
@@ -559,6 +570,13 @@ fn pentry_e2_receipt_compile_contracts() {
             .count(),
         1,
         "quit detach stays one unsafe constructor"
+    );
+    assert_eq!(
+        in_flight
+            .matches("pub unsafe fn detach_source_shell_in_flight(")
+            .count(),
+        1,
+        "source-shell in-flight detach stays one unsafe constructor"
     );
     let output = manifest.join("../../tmp/pentry-r2/e2-receipt-mutations");
     let bound_mutations = [
@@ -619,6 +637,46 @@ fn pentry_e2_receipt_compile_contracts() {
         ),
         (
             "receipt_prepared_cache_not_sync",
+            "impl<T: Sync> RequireSync<T> {",
+            "impl<T> RequireSync<T> {",
+        ),
+        (
+            "receipt_source_shell_in_flight_not_clone",
+            "impl<T: Clone> RequireClone<T> {",
+            "impl<T> RequireClone<T> {",
+        ),
+        (
+            "receipt_source_shell_in_flight_not_copy",
+            "impl<T: Copy> RequireCopy<T> {",
+            "impl<T> RequireCopy<T> {",
+        ),
+        (
+            "receipt_source_shell_in_flight_not_send",
+            "impl<T: Send> RequireSend<T> {",
+            "impl<T> RequireSend<T> {",
+        ),
+        (
+            "receipt_source_shell_in_flight_not_sync",
+            "impl<T: Sync> RequireSync<T> {",
+            "impl<T> RequireSync<T> {",
+        ),
+        (
+            "receipt_source_shell_in_flight_refusal_not_clone",
+            "impl<T: Clone> RequireClone<T> {",
+            "impl<T> RequireClone<T> {",
+        ),
+        (
+            "receipt_source_shell_in_flight_refusal_not_copy",
+            "impl<T: Copy> RequireCopy<T> {",
+            "impl<T> RequireCopy<T> {",
+        ),
+        (
+            "receipt_source_shell_in_flight_refusal_not_send",
+            "impl<T: Send> RequireSend<T> {",
+            "impl<T> RequireSend<T> {",
+        ),
+        (
+            "receipt_source_shell_in_flight_refusal_not_sync",
             "impl<T: Sync> RequireSync<T> {",
             "impl<T> RequireSync<T> {",
         ),
@@ -732,6 +790,38 @@ fn pentry_e2_receipt_compile_contracts() {
             "pub(crate) struct DetachedInFlightRegistry {",
             "pub struct DetachedInFlightRegistry;\n\
              fn main() { let _receipt = DetachedInFlightRegistry; }\n",
+        ),
+        (
+            &in_flight,
+            "receipt_source_shell_in_flight_detach_requires_unsafe",
+            "pub unsafe fn detach_source_shell_in_flight(",
+            "struct InFlightRegistryHandle;\n\
+             struct SourceShellInFlightReceipt;\n\
+             fn detach_source_shell_in_flight(\
+             _expected: &InFlightRegistryHandle,\
+             ) -> SourceShellInFlightReceipt {\n    \
+             SourceShellInFlightReceipt\n}\n\
+             fn main() {\n    \
+             let handle = InFlightRegistryHandle;\n    \
+             let _receipt = detach_source_shell_in_flight(&handle);\n}\n",
+        ),
+        (
+            &in_flight,
+            "receipt_source_shell_in_flight_has_no_constructor",
+            "pub struct SourceShellInFlightReceipt {",
+            "struct SourceShellInFlightReceipt;\n\
+             impl SourceShellInFlightReceipt {\n    \
+             pub fn new() -> Self { Self }\n}\n\
+             fn main() { let _receipt = SourceShellInFlightReceipt::new(); }\n",
+        ),
+        (
+            &in_flight,
+            "receipt_source_shell_in_flight_refusal_has_no_constructor",
+            "pub struct SourceShellInFlightRefusal {",
+            "struct SourceShellInFlightRefusal;\n\
+             impl SourceShellInFlightRefusal {\n    \
+             pub fn new() -> Self { Self }\n}\n\
+             fn main() { let _refusal = SourceShellInFlightRefusal::new(); }\n",
         ),
     ];
     for (product, name, before, mutated_body) in constructor_mutations {

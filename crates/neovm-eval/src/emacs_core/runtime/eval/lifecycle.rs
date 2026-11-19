@@ -22,9 +22,9 @@
 //! assertion: every call site runs only after construction/dump, so a missing
 //! descriptor means the construction seam itself is broken.
 
-use super::data::face_registry::FontRegistryHandle;
+use super::data::face_registry::{FaceAttrState, FontRegistryHandle};
 use super::data::fontset_state::FontsetRegistrySnapshot;
-use super::data::terminal_state::TerminalRegistryHandle;
+use super::data::terminal_state::{TerminalLispRegistry, TerminalRegistryHandle};
 use super::data::window_state::{Frame, FrameManager, MiniWindowResize, WindowTree};
 use super::*;
 #[doc(hidden)]
@@ -34,11 +34,26 @@ use neovm_edit::emacs_core::display_metrics::{WindowBodyCellSize, WindowId};
 use neovm_edit::emacs_core::textprop::WindowBufferLookup;
 use neovm_value::display_vocab::{FrameId, SplitDirection};
 use neovm_value::error::{EvalResult, Flow};
+use neovm_value::heap_registry::detachment::{DetachedRegistry, RegistryDetachFailure};
 use neovm_value::heap_types::LispString;
 use neovm_value::{HookInstallError, HookInstallStatus};
 use std::any::Any;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+
+/// Display-owned terminal slot, requested by the source shell.
+pub type TerminalRegistryDetach = fn(
+    &TerminalRegistryHandle,
+) -> Result<
+    DetachedRegistry<TerminalLispRegistry>,
+    RegistryDetachFailure<TerminalLispRegistry>,
+>;
+
+/// Display-owned face-attribute slot, requested by the source shell.
+pub type FontRegistryDetach =
+    fn(
+        &FontRegistryHandle,
+    ) -> Result<DetachedRegistry<FaceAttrState>, RegistryDetachFailure<FaceAttrState>>;
 
 /// Produce a placeholder for the World's carried thread-local state.
 pub(crate) type WorldStatePlaceholder = fn() -> Box<dyn Any>;
@@ -247,6 +262,7 @@ pub struct TerminalHooks {
     current_registry_handle: fn() -> TerminalRegistryHandle,
     install_registry_handle: fn(&TerminalRegistryHandle),
     install_owner_registry_handle: fn(&TerminalRegistryHandle),
+    detach_registry: TerminalRegistryDetach,
 }
 
 impl TerminalHooks {
@@ -267,6 +283,7 @@ impl TerminalHooks {
         current_registry_handle: fn() -> TerminalRegistryHandle,
         install_registry_handle: fn(&TerminalRegistryHandle),
         install_owner_registry_handle: fn(&TerminalRegistryHandle),
+        detach_registry: TerminalRegistryDetach,
     ) -> Self {
         Self {
             handle_value,
@@ -284,6 +301,7 @@ impl TerminalHooks {
             current_registry_handle,
             install_registry_handle,
             install_owner_registry_handle,
+            detach_registry,
         }
     }
 }
@@ -716,6 +734,11 @@ impl TerminalHooks {
     pub fn install_owner_registry_handle(&self) -> fn(&TerminalRegistryHandle) {
         self.install_owner_registry_handle
     }
+
+    #[doc(hidden)]
+    pub fn detach_registry(&self) -> TerminalRegistryDetach {
+        self.detach_registry
+    }
 }
 
 /// Face-attribute registry carrier state (E6 registry handle).  The registry
@@ -727,6 +750,7 @@ pub struct XfacesHooks {
     carrier_tls_fingerprint: Option<fn(&mut u64)>,
     current_registry_handle: fn() -> FontRegistryHandle,
     install_registry_handle: fn(&FontRegistryHandle),
+    detach_registry: FontRegistryDetach,
 }
 
 impl XfacesHooks {
@@ -736,12 +760,14 @@ impl XfacesHooks {
         carrier_tls_fingerprint: Option<fn(&mut u64)>,
         current_registry_handle: fn() -> FontRegistryHandle,
         install_registry_handle: fn(&FontRegistryHandle),
+        detach_registry: FontRegistryDetach,
     ) -> Self {
         Self {
             park_carrier_tls,
             carrier_tls_fingerprint,
             current_registry_handle,
             install_registry_handle,
+            detach_registry,
         }
     }
 
@@ -763,6 +789,11 @@ impl XfacesHooks {
     #[doc(hidden)]
     pub fn install_registry_handle(&self) -> fn(&FontRegistryHandle) {
         self.install_registry_handle
+    }
+
+    #[doc(hidden)]
+    pub fn detach_registry(&self) -> FontRegistryDetach {
+        self.detach_registry
     }
 }
 
@@ -1422,4 +1453,18 @@ pub fn current_font_registry_handle() -> FontRegistryHandle {
 /// Install HANDLE as the current face-attribute registry.
 pub fn install_font_registry_handle(handle: &FontRegistryHandle) {
     (lifecycle_hooks().xfaces().install_registry_handle())(handle)
+}
+
+/// Withdraw the display face slot after eval's own frames have returned.
+pub(crate) fn detach_font_registry_for_source_shell(
+    handle: &FontRegistryHandle,
+) -> Result<DetachedRegistry<FaceAttrState>, RegistryDetachFailure<FaceAttrState>> {
+    (lifecycle_hooks().xfaces().detach_registry())(handle)
+}
+
+/// Withdraw the display terminal slot after eval's own frames have returned.
+pub(crate) fn detach_terminal_registry_for_source_shell(
+    handle: &TerminalRegistryHandle,
+) -> Result<DetachedRegistry<TerminalLispRegistry>, RegistryDetachFailure<TerminalLispRegistry>> {
+    (lifecycle_hooks().terminal().detach_registry())(handle)
 }

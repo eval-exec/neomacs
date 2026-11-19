@@ -19,6 +19,7 @@ use std::mem::MaybeUninit;
 use std::sync::{Arc, Weak};
 
 mod activation;
+pub(crate) use activation::DetachedIntegerWidthActivation;
 mod bounded_power;
 
 // ===========================================================================

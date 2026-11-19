@@ -1954,6 +1954,8 @@ impl CharsetRegistry {
 use neovm_value::heap_registry::{HeapRegistryHandle, HeapRegistrySlot};
 
 mod registry_detach;
+#[doc(hidden)]
+pub use registry_detach::detach_charset_registry;
 
 thread_local! {
     #[cfg_attr(feature = "test-support", visibility::make(pub))]

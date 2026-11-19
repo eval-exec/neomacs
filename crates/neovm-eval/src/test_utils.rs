@@ -678,6 +678,7 @@ mod unit_runtime {
             s::terminal_current_registry_handle,
             s::terminal_install_registry_handle,
             s::terminal_install_owner_registry_handle,
+            s::terminal_detach_registry,
         ),
         FontsetHooks::new(
             s::fontset_alias_alist_startup_value,
@@ -718,6 +719,7 @@ mod unit_runtime {
             Some(s::xfaces_carrier_tls_fingerprint),
             s::xfaces_current_registry_handle,
             s::xfaces_install_registry_handle,
+            s::xfaces_detach_registry,
         ),
         s::timefns_reset,
         s::sqlite_reset,

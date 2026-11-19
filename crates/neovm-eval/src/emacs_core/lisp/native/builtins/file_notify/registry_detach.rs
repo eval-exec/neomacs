@@ -8,13 +8,6 @@ use neovm_value::heap_registry::detachment::{
 };
 
 #[cold]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "E2 L3 dormant cold detach; no production caller enters it"
-    )
-)]
 pub(crate) fn detach_file_notify_registry(
     handle: &HeapRegistryHandle<FileNotifyState>,
 ) -> Result<DetachedRegistry<FileNotifyState>, RegistryDetachFailure<FileNotifyState>> {

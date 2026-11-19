@@ -30,6 +30,8 @@ thread_local! {
 
 #[path = "lisp_state_detach.rs"]
 mod lisp_state_detach;
+#[doc(hidden)]
+pub use lisp_state_detach::detach_terminal_registry;
 
 fn ensure_current_terminal_registry() {
     let heap_identity =

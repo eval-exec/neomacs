@@ -277,5 +277,16 @@ pub fn clear_quit_requested_for_test() {
     QUIT_REQUESTED_TLS.with(|cell| *cell.borrow_mut() = None);
 }
 
+/// Hold a reader on the quit slot for the closure. The source-shell refusal
+/// test uses this to prove a live loan retains the original Context.
+#[doc(hidden)]
+#[cfg(any(test, feature = "test-support"))]
+pub fn with_quit_requested_slot_borrowed_for_test<R>(body: impl FnOnce() -> R) -> R {
+    QUIT_REQUESTED_TLS.with(|slot| {
+        let _reader = slot.borrow();
+        body()
+    })
+}
+
 #[doc(hidden)]
 pub mod quit_detach;
