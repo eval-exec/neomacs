@@ -133,12 +133,7 @@ fn two_owners_pause_before_ack_and_while_restoring_across_two_epochs_body<
                         resuming.send(index).unwrap();
                         receive(&apply_rx);
                         apply(image);
-                        retry(|| {
-                            owner
-                                .run_access()
-                                .map(|_| ())
-                                .map_err(RendezvousError::from)
-                        });
+                        owner.run_access_after_resume_drain().unwrap();
                         running.send(index).unwrap();
                     }
                     retire(owner, &input);
@@ -149,9 +144,9 @@ fn two_owners_pause_before_ack_and_while_restoring_across_two_epochs_body<
             }
             let mut first_roots = None;
             for round in 1..=2 {
-                let epoch = active(retry(|| rendezvous.request()));
+                let epoch = active(rendezvous.request().unwrap());
                 assert_eq!(epoch.get(), round);
-                assert_eq!(active(retry(|| rendezvous.request())), epoch);
+                assert_eq!(active(rendezvous.request().unwrap()), epoch);
                 assert!(era.try_stop().unwrap().is_none());
                 for sender in &prepare {
                     sender.send(()).unwrap();
@@ -159,7 +154,7 @@ fn two_owners_pause_before_ack_and_while_restoring_across_two_epochs_body<
                 for _ in 0..2 {
                     receive(&publishing_rx);
                 }
-                let snapshot = retry(|| rendezvous.snapshot());
+                let snapshot = rendezvous.snapshot().unwrap();
                 assert!(
                     snapshot
                         .owners
@@ -177,17 +172,17 @@ fn two_owners_pause_before_ack_and_while_restoring_across_two_epochs_body<
                 for _ in 0..2 {
                     receive(&acked_rx);
                 }
-                let mut stopped = retry(|| era.stop());
+                let mut stopped = era.stop().unwrap();
                 assert_eq!(stopped.epoch(), epoch);
                 assert!(matches!(era.try_stop(), Err(RendezvousError::Busy)));
-                let words = trace_owners(&mut stopped, &keys);
+                let words = trace_owners_at(ObservationAdmission::Once, &mut stopped, &keys);
                 if let Some(expected) = &first_roots {
                     assert_eq!(&words, expected);
                 } else {
                     first_roots = Some(words);
                 }
-                complete(stopped);
-                assert_eq!(retry(|| rendezvous.snapshot()).debt.len(), 2);
+                stopped.complete().unwrap();
+                assert_eq!(rendezvous.snapshot().unwrap().debt.len(), 2);
                 if round == 1 {
                     assert_eq!(rendezvous.request(), Ok(Request::Queued));
                 }
@@ -197,7 +192,7 @@ fn two_owners_pause_before_ack_and_while_restoring_across_two_epochs_body<
                 for _ in 0..2 {
                     receive(&resuming_rx);
                 }
-                let snapshot = retry(|| rendezvous.snapshot());
+                let snapshot = rendezvous.snapshot().unwrap();
                 assert_eq!(snapshot.phase, Phase::DrainingResumes);
                 assert!(
                     snapshot
@@ -217,7 +212,7 @@ fn two_owners_pause_before_ack_and_while_restoring_across_two_epochs_body<
             for handle in handles {
                 handle.join().unwrap();
             }
-            assert_eq!(retry(|| rendezvous.snapshot()).completed_epoch, 2);
+            assert_eq!(rendezvous.snapshot().unwrap().completed_epoch, 2);
         });
         finish_era(era);
     });
@@ -265,7 +260,7 @@ fn stale_ack_identity_generation_duplicate_and_missing_image_are_refused_body<
         let saved_roots = entry.state.lock().unwrap().roots.take().unwrap();
         assert!(matches!(era.try_stop(), Err(RendezvousError::Publication)));
         entry.state.lock().unwrap().roots = Some(saved_roots);
-        let mut stopped = retry(|| era.stop());
+        let mut stopped = era.stop().unwrap();
         let mut wrong = key;
         wrong.generation = NonZeroU64::new(key.generation.get() + 1).unwrap();
         assert!(matches!(
@@ -276,12 +271,12 @@ fn stale_ack_identity_generation_duplicate_and_missing_image_are_refused_body<
             stopped.with_root_reader(wrong, |_reader| panic!("stale reader admitted")),
             Err(RendezvousError::Identity)
         ));
-        trace_owners(&mut stopped, &[key]);
+        trace_owners_at(ObservationAdmission::Once, &mut stopped, &[key]);
         assert_eq!(
             stopped.trace(|_, _| Ok(())),
             Err(RendezvousError::Publication)
         );
-        complete(stopped);
+        stopped.complete().unwrap();
         owner.begin_restore(false).unwrap().apply().unwrap();
         assert!(matches!(
             owner.begin_restore(false),
@@ -317,9 +312,9 @@ fn live_worker_loan_blocks_ack_and_preserves_running_owner_body<
         );
         owner.return_young_loan(loan).unwrap();
         owner.acknowledge(epoch, &roots[..1]).unwrap();
-        let mut stopped = retry(|| era.stop());
-        trace_owners(&mut stopped, &[key]);
-        complete(stopped);
+        let mut stopped = era.stop().unwrap();
+        trace_owners_at(ObservationAdmission::Once, &mut stopped, &[key]);
+        stopped.complete().unwrap();
         owner.begin_restore(false).unwrap().apply().unwrap();
         owner.retire_rooted(&roots[..1]).unwrap();
         finish_era(era);
@@ -432,17 +427,17 @@ fn native_idle_restore_debt_queues_request_before_any_new_epoch_body<
         let rv = era.rendezvous();
         let response = owner.begin_restore(true).unwrap();
         assert_eq!(response.epoch(), 0);
-        assert_eq!(retry(|| rv.snapshot()).owners, vec![(key, Mode::Resuming)]);
+        assert_eq!(rv.snapshot().unwrap().owners, vec![(key, Mode::Resuming)]);
         assert_eq!(rv.request(), Ok(Request::Queued));
-        assert_eq!(retry(|| rv.snapshot()).request_epoch, 0);
+        assert_eq!(rv.snapshot().unwrap().request_epoch, 0);
         response.apply().unwrap();
         assert_eq!(entry.state.lock().unwrap().rendezvous.image_takes, 1);
         let epoch = active(rv.request().unwrap());
         assert_eq!(epoch.get(), 1);
         owner.acknowledge(epoch, &roots[..1]).unwrap();
-        let mut stopped = retry(|| era.stop());
-        trace_owners(&mut stopped, &[key]);
-        complete(stopped);
+        let mut stopped = era.stop().unwrap();
+        trace_owners_at(ObservationAdmission::Once, &mut stopped, &[key]);
+        stopped.complete().unwrap();
         owner.begin_restore(false).unwrap().apply().unwrap();
         owner.retire_rooted(&roots[..1]).unwrap();
         finish_era(era);
@@ -513,7 +508,12 @@ fn retiring_image_and_starting_owner_keep_exact_frozen_membership_body<
             .unwrap();
         let key = owner.key();
         let entry = owner.entry();
-        seed(&mut owner, 641);
+        {
+            let mut run = owner.run_access().unwrap();
+            let local = run.state();
+            local.hot.remset.push(TaggedValue::fixnum(641));
+            local.hot.bytes_since_gc = 641;
+        }
         let epoch = active(era.rendezvous().request().unwrap());
         let mut late = era
             .register(642, 1)
@@ -523,18 +523,21 @@ fn retiring_image_and_starting_owner_keep_exact_frozen_membership_body<
         assert!(matches!(late.run_access(), Err(RegistrationError::Busy)));
         owner.retire_rooted(&roots[..1]).unwrap();
         assert_eq!(era.rendezvous().snapshot().unwrap().frozen, vec![key]);
-        let mut stopped = retry(|| era.stop());
+        let mut stopped = era.stop().unwrap();
         assert_eq!(stopped.epoch(), epoch);
         stopped
             .trace(|guard, _proof| {
-                assert_eq!(read_words(guard, key).len(), 1);
+                assert_eq!(
+                    read_words_at(ObservationAdmission::Once, guard, key).len(),
+                    1
+                );
                 guard.with_owner_image(key, |image| {
                     assert_eq!(image.summary().remembered_words, 1)
                 })?;
                 Ok(())
             })
             .unwrap();
-        complete(stopped);
+        stopped.complete().unwrap();
         late.wait_started().unwrap();
         assert!(late.run_access().is_ok());
         assert!(entry.state.lock().unwrap().rendezvous.retiring);
@@ -746,7 +749,12 @@ fn a6_ht_b9_table_scope_body_error_stays_terminal_after_image_mutation_body<
             .activate(era.heap_identity(), 1912)
             .unwrap();
         let key = owner.key();
-        seed(&mut owner, 1912);
+        {
+            let mut run = owner.run_access().unwrap();
+            let local = run.state();
+            local.hot.remset.push(TaggedValue::fixnum(1912));
+            local.hot.bytes_since_gc = 1912;
+        }
         owner.enter_native(&roots[..1]).unwrap();
         let rv = era.rendezvous();
         let mut stopped = era.stop().unwrap();
@@ -823,7 +831,7 @@ fn a6_ht_b9_table_scope_keeper_gate_reentry_refuses_without_retry_body<
             .unwrap();
         assert_eq!(body_calls, 0);
         assert_eq!(busy_observed, 0, "same-keeper gate reentry must not retry");
-        complete(stopped);
+        stopped.complete().unwrap();
         finish_era(era);
     });
 }
