@@ -4,6 +4,7 @@
 
 use super::{ACTIVE_ENVS, MODULE_CTX};
 use neovm_eval::emacs_core::eval::{SourceModuleObservation, install_source_module_scope_probe};
+use neovm_value::{HookInstallError, HookInstallStatus};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SourceModuleScope {
@@ -37,22 +38,17 @@ fn observe_for_eval() -> SourceModuleObservation {
     }
 }
 
-/// Store the process-wide probe. A binary that links neovm-system and later
-/// runs a live source-entry caller must call this; an unregistered probe
-/// reads Inactive.
+static CANONICAL_SOURCE_MODULE_PROBE: fn() -> SourceModuleObservation = observe_for_eval;
+
+/// Publish the process-wide probe. Core's eval-hook boot calls this beside
+/// the sqlite finalizer hook, so a runtime that links neovm-system does not
+/// stay unregistered. The same function again is `AlreadyInstalled`. A
+/// different function is `HookInstallError::DifferentTable`.
+#[doc(hidden)]
 #[cold]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "E2 L3 dormant module-scope probe install; no production caller enters it"
-    )
-)]
-pub(crate) fn register_source_module_scope_probe() {
-    // SAFETY: `observe_for_eval` only reads the existing module TLS. The
-    // function pointer remains valid for the process. This stores no new
-    // TLS slot and names no World.
-    unsafe { install_source_module_scope_probe(observe_for_eval) }
+#[must_use = "handle a conflicting source-module probe publication"]
+pub fn register_source_module_scope_probe() -> Result<HookInstallStatus, HookInstallError> {
+    install_source_module_scope_probe(&CANONICAL_SOURCE_MODULE_PROBE)
 }
 
 #[cfg(test)]
@@ -69,7 +65,7 @@ mod tests {
     #[test]
     fn pentry_e2b_source_entry_module_raw_context_without_env_is_active() {
         clear();
-        register_source_module_scope_probe();
+        register_source_module_scope_probe().expect("canonical source-module probe");
         MODULE_CTX.with(|slot| {
             slot.set(std::ptr::without_provenance_mut::<Context>(1));
         });
@@ -84,7 +80,7 @@ mod tests {
     #[test]
     fn pentry_e2b_source_entry_module_env_without_context_is_active() {
         clear();
-        register_source_module_scope_probe();
+        register_source_module_scope_probe().expect("canonical source-module probe");
         ACTIVE_ENVS.with(|slot| {
             slot.borrow_mut().push(ActiveModuleEnvEntry {
                 env_priv: std::ptr::null_mut(),
@@ -102,7 +98,7 @@ mod tests {
     #[test]
     fn pentry_e2b_source_entry_module_env_reader_is_borrowed() {
         clear();
-        register_source_module_scope_probe();
+        register_source_module_scope_probe().expect("canonical source-module probe");
         ACTIVE_ENVS.with(|slot| {
             let view = slot.borrow();
             assert!(view.is_empty());
@@ -117,7 +113,7 @@ mod tests {
     #[test]
     fn pentry_e2b_source_entry_module_env_writer_is_borrowed() {
         clear();
-        register_source_module_scope_probe();
+        register_source_module_scope_probe().expect("canonical source-module probe");
         ACTIVE_ENVS.with(|slot| {
             let view = slot.borrow_mut();
             assert!(view.is_empty());
@@ -127,5 +123,23 @@ mod tests {
             );
             assert!(view.is_empty());
         });
+    }
+
+    #[test]
+    fn pentry_e2b_source_entry_different_module_probe_is_refused() {
+        register_source_module_scope_probe().expect("canonical source-module probe");
+        fn other() -> SourceModuleObservation {
+            SourceModuleObservation::Active
+        }
+        static OTHER: fn() -> SourceModuleObservation = other;
+        assert_eq!(
+            install_source_module_scope_probe(&OTHER),
+            Err(neovm_value::HookInstallError::DifferentTable)
+        );
+        clear();
+        assert_eq!(
+            source_module_observation(),
+            SourceModuleObservation::Inactive
+        );
     }
 }

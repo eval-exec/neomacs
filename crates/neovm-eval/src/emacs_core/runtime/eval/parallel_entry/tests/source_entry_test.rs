@@ -9,6 +9,7 @@ use neovm_text::emacs_core::ccl::with_ccl_obarray;
 use neovm_value::value::Value;
 
 fn source() -> Context {
+    super::install_inactive_source_module_probe_for_test();
     let mut source = Context::new_minimal_vm_harness(crate::test_utils::unit_harness());
     source.setup_thread_locals();
     source
@@ -24,6 +25,10 @@ fn ready_result(source: &Context) -> Result<(), SourceEntryRefusal> {
 
 #[test]
 fn pentry_e2b_source_entry_module_refusal_maps_each_observation() {
+    assert_eq!(
+        module_refusal(SourceModuleObservation::Unregistered),
+        Err(SourceEntryRefusal::ModuleProbeUnregistered)
+    );
     assert_eq!(module_refusal(SourceModuleObservation::Inactive), Ok(()));
     assert_eq!(
         module_refusal(SourceModuleObservation::Active),
@@ -36,7 +41,32 @@ fn pentry_e2b_source_entry_module_refusal_maps_each_observation() {
 }
 
 #[test]
-fn pentry_e2b_source_entry_unregistered_module_probe_is_inactive() {
+fn pentry_e2b_source_entry_unregistered_module_probe_refuses() {
+    assert_eq!(
+        super::observation_from_installed(None),
+        SourceModuleObservation::Unregistered
+    );
+    assert_eq!(
+        module_refusal(super::observation_from_installed(None)),
+        Err(SourceEntryRefusal::ModuleProbeUnregistered)
+    );
+}
+
+#[test]
+fn pentry_e2b_source_entry_same_module_probe_is_idempotent_and_a_different_one_is_refused() {
+    super::install_inactive_source_module_probe_for_test();
+    assert_eq!(
+        super::install_source_module_scope_probe(&super::INACTIVE_SOURCE_MODULE_PROBE_FOR_TEST),
+        Ok(neovm_value::HookInstallStatus::AlreadyInstalled)
+    );
+    fn other() -> SourceModuleObservation {
+        SourceModuleObservation::Active
+    }
+    static OTHER: fn() -> SourceModuleObservation = other;
+    assert_eq!(
+        super::install_source_module_scope_probe(&OTHER),
+        Err(neovm_value::HookInstallError::DifferentTable)
+    );
     assert_eq!(
         super::source_module_observation(),
         SourceModuleObservation::Inactive

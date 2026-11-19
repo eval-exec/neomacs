@@ -2,13 +2,15 @@
 //! The result cannot certify later TLS state. It never clears a scoped
 //! pointer or a root, and it returns no mutation or permission.
 //!
-//! The module-scope probe is a process-wide function pointer. An unregistered
-//! probe reads Inactive, so an eval-only test matches a binary that has not
-//! installed the system observer. A future live caller in a binary that links
-//! neovm-system must install that probe; this module does not.
+//! The module-scope probe is one process-wide function, published once
+//! through `neovm_value::hook_publication`. An unregistered probe is
+//! `Unregistered` and refuses. The same function published again is
+//! `AlreadyInstalled`. A different function is `HookInstallError::DifferentTable`.
+//! This module does not install the system observer. Core's eval-hook boot
+//! does, beside the sqlite finalizer hook.
 
 use super::super::{Context, SCRATCH_GC_ROOTS};
-use std::sync::atomic::{AtomicPtr, Ordering};
+use std::sync::OnceLock;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SourceEntryRefusal {
@@ -16,6 +18,7 @@ pub(crate) enum SourceEntryRefusal {
     GcInhibited,
     CollectionDriver,
     CallbackAccounting,
+    ModuleProbeUnregistered,
     ModuleScope,
     ModuleSlotBorrowed,
     CclVariableScope,
@@ -33,45 +36,74 @@ pub(crate) enum SourceEntryRefusal {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[doc(hidden)]
 pub enum SourceModuleObservation {
+    Unregistered,
     Inactive,
     Active,
     Borrowed,
 }
 
-static SOURCE_MODULE_PROBE: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
+static SOURCE_MODULE_PROBE: OnceLock<fn() -> SourceModuleObservation> = OnceLock::new();
+static SOURCE_MODULE_PROBE_IDENTITY: OnceLock<&'static fn() -> SourceModuleObservation> =
+    OnceLock::new();
 
-/// Install the process-wide module-scope probe.
+/// Publish the process-wide module-scope probe.
 ///
-/// # Safety
-///
-/// `probe` only reads the existing module thread-locals. It remains valid for
-/// the process. The store is not a TLS slot and it names no World. Tests in
-/// one process must not install differing probes.
+/// Identity is the static address of `probe`, the same rule as the other
+/// one-time hooks. The cell holds the function itself. There is no transmute
+/// and no new thread-local.
 #[doc(hidden)]
-pub unsafe fn install_source_module_scope_probe(probe: fn() -> SourceModuleObservation) {
-    SOURCE_MODULE_PROBE.store(probe as *mut (), Ordering::Release);
+#[must_use = "handle a conflicting source-module probe publication"]
+pub fn install_source_module_scope_probe(
+    probe: &'static fn() -> SourceModuleObservation,
+) -> Result<neovm_value::HookInstallStatus, neovm_value::HookInstallError> {
+    neovm_value::publish_hook_table(&SOURCE_MODULE_PROBE, &SOURCE_MODULE_PROBE_IDENTITY, probe)
+}
+
+fn observation_from_installed(
+    installed: Option<&fn() -> SourceModuleObservation>,
+) -> SourceModuleObservation {
+    match installed {
+        Some(probe) => probe(),
+        None => SourceModuleObservation::Unregistered,
+    }
 }
 
 #[doc(hidden)]
 pub fn source_module_observation() -> SourceModuleObservation {
-    let pointer = SOURCE_MODULE_PROBE.load(Ordering::Acquire);
-    if pointer.is_null() {
-        return SourceModuleObservation::Inactive;
-    }
-    // SAFETY: `install_source_module_scope_probe` stored a function pointer of
-    // this exact signature, and that function remains valid for the process.
-    // The transmute runs only on the load side. No TLS slot is created.
-    let probe = unsafe { std::mem::transmute::<*mut (), fn() -> SourceModuleObservation>(pointer) };
-    probe()
+    observation_from_installed(SOURCE_MODULE_PROBE.get())
 }
 
 pub(crate) fn module_refusal(
     observation: SourceModuleObservation,
 ) -> Result<(), SourceEntryRefusal> {
     match observation {
+        SourceModuleObservation::Unregistered => Err(SourceEntryRefusal::ModuleProbeUnregistered),
         SourceModuleObservation::Inactive => Ok(()),
         SourceModuleObservation::Active => Err(SourceEntryRefusal::ModuleScope),
         SourceModuleObservation::Borrowed => Err(SourceEntryRefusal::ModuleSlotBorrowed),
+    }
+}
+
+/// Eval-only tests have no core boot, so they publish this Inactive probe
+/// themselves. The system observer is a different function and must not be
+/// installed from this crate.
+#[cfg(test)]
+fn inactive_source_module_probe_for_test() -> SourceModuleObservation {
+    SourceModuleObservation::Inactive
+}
+
+#[cfg(test)]
+pub(crate) static INACTIVE_SOURCE_MODULE_PROBE_FOR_TEST: fn() -> SourceModuleObservation =
+    inactive_source_module_probe_for_test;
+
+#[cfg(test)]
+pub(crate) fn install_inactive_source_module_probe_for_test() {
+    match install_source_module_scope_probe(&INACTIVE_SOURCE_MODULE_PROBE_FOR_TEST) {
+        Ok(
+            neovm_value::HookInstallStatus::Installed
+            | neovm_value::HookInstallStatus::AlreadyInstalled,
+        ) => {}
+        Err(error) => panic!("inactive source-module test probe refused: {error:?}"),
     }
 }
 
