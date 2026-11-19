@@ -6,6 +6,7 @@ use neovm_eval::test_support::authority::WorldProofEra as ParallelHeapEra;
 use neovm_eval::test_support::authority::with_test_symbol_backing_era;
 use std::num::NonZeroU64;
 use std::sync::atomic::Ordering;
+use std::sync::mpsc::TryRecvError;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Round {
