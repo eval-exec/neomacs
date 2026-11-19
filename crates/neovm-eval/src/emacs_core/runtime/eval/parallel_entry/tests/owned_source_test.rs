@@ -245,6 +245,64 @@ fn pentry_e2b_owned_source_foreign_heap_refusal_preserves_current_owner() {
 }
 
 #[test]
+fn pentry_e2b_owned_source_chain_order_includes_hook_routed_slots() {
+    let Some(source) = gen1_source() else {
+        return;
+    };
+    let _ = super::super::super::lifecycle::take_source_shell_trace();
+    capture(source).expect("twelve slots, including both display hooks");
+    assert_eq!(
+        super::super::super::lifecycle::take_source_shell_trace(),
+        [
+            "keeper",
+            "ccl",
+            "charset",
+            "font",
+            "font-hook",
+            "terminal",
+            "terminal-hook",
+            "hash-test",
+            "file-notify",
+            "window-configuration",
+            "dynamic-module",
+            "in-flight",
+            "integer-width",
+            "quit",
+        ]
+    );
+}
+
+#[test]
+fn pentry_e2b_owned_source_unregistered_font_hook_refuses() {
+    let source = source();
+    let _ = super::super::super::lifecycle::take_source_shell_trace();
+    let error =
+        super::super::super::lifecycle::invoke_font_registry_detach(None, &source.font_registry);
+    assert!(matches!(
+        error,
+        Err(super::super::super::lifecycle::SourceShellHookRefusal::Unregistered)
+    ));
+    assert!(super::super::super::lifecycle::take_source_shell_trace().is_empty());
+    assert!(!source.tagged_heap.facade_mark_is_excluded());
+}
+
+#[test]
+fn pentry_e2b_owned_source_unregistered_terminal_hook_refuses() {
+    let source = source();
+    let _ = super::super::super::lifecycle::take_source_shell_trace();
+    let error = super::super::super::lifecycle::invoke_terminal_registry_detach(
+        None,
+        &source.terminal_registry,
+    );
+    assert!(matches!(
+        error,
+        Err(super::super::super::lifecycle::SourceShellHookRefusal::Unregistered)
+    ));
+    assert!(super::super::super::lifecycle::take_source_shell_trace().is_empty());
+    assert!(!source.tagged_heap.facade_mark_is_excluded());
+}
+
+#[test]
 fn pentry_e2b_owned_source_original_registry_data_survives_withdrawal() {
     let Some(source) = gen1_source() else {
         return;

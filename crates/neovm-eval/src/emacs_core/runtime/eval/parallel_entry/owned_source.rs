@@ -47,6 +47,26 @@ pub(crate) enum SourceWithdrawalStep {
     Quit,
 }
 
+impl SourceWithdrawalStep {
+    #[cfg(test)]
+    fn trace_label(self) -> &'static str {
+        match self {
+            Self::Keeper => "keeper",
+            Self::Ccl => "ccl",
+            Self::Charset => "charset",
+            Self::Font => "font",
+            Self::Terminal => "terminal",
+            Self::HashTest => "hash-test",
+            Self::FileNotify => "file-notify",
+            Self::WindowConfiguration => "window-configuration",
+            Self::DynamicModule => "dynamic-module",
+            Self::InFlight => "in-flight",
+            Self::IntegerWidth => "integer-width",
+            Self::Quit => "quit",
+        }
+    }
+}
+
 /// This branch alone carries the still-ordinary source back to its caller.
 /// No effect, drain, collector loan, or World exclusion has begun.
 #[must_use]
@@ -133,6 +153,8 @@ impl<R: 'static> SourceFrame<R> {
         step: SourceWithdrawalStep,
         apply: for<'source> fn(&'source mut Context) -> Result<T, E>,
     ) -> Result<SourceFrame<Effect<R, T>>, SourceWithdrawalFailure> {
+        #[cfg(test)]
+        super::super::lifecycle::record_source_shell_trace(step.trace_label());
         match apply(&mut self.source) {
             Ok(receipt) => Ok(SourceFrame {
                 source: self.source,
