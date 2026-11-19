@@ -1391,9 +1391,10 @@ jobs:
         run: ./scripts/test-doom-install.sh
 
   # Standalone Loom models are not workspace members: each has its own
-  # Cargo.toml and Cargo.lock, and two of them live under tests/ rather than
-  # crates/. scripts/ci/run-loom-models.sh globs both homes, prints the list,
-  # and fails closed if fewer than its floor are found. Push, pull_request and
+  # Cargo.toml and Cargo.lock. Three live under tests/ (ctrace-slot-loom,
+  # p74-cell-loom, pentry-keeper-loom); the rest live under crates/.
+  # scripts/ci/run-loom-models.sh globs both homes, prints the list, and fails
+  # closed if fewer than its floor are found. Push, pull_request and
   # workflow_dispatch use preemption bound 2. This workflow's Sunday 05:17 UTC
   # schedule is the bound-3 run. The script fetches --locked inside each crate.
   loom-models:

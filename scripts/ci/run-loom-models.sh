@@ -8,8 +8,8 @@
 #   crates/*/tests/*loom*/Cargo.toml
 #   tests/*loom*/Cargo.toml
 # The list and count print before any crate runs. The count must be at least
-# FLOOR. Floor is 9 on main e4cd6b50cf. Raise it to 10 when
-# tests/pentry-keeper-loom lands in E2 slice L0.
+# FLOOR. Floor is 10: tests/pentry-keeper-loom is on main (cd575451b5) and
+# the tests/*loom* glob picks it up. Its bound variable is PENTRY_PREEMPTIONS.
 #
 # Each crate's README.md or run.sh names its preemption variable
 # (*PREEMPTIONS). The script exports a variable only when that crate's Rust
@@ -29,7 +29,7 @@
 #   loom-models: N pass (B bounded, E exhaustive, V native), F fail, W warn
 set -euo pipefail
 
-readonly FLOOR=9
+readonly FLOOR=10
 
 usage() {
     echo "usage: BOUND=<n> $0" >&2
@@ -71,7 +71,7 @@ discover_crates() {
 }
 
 # Sets CLASS_MODE, CLASS_BOUND, CLASS_VAR, and CLASS_EXPORT (array).
-# CLASS_MODE is env, fixed, or unsupported.
+# CLASS_MODE is bounded, exhaustive, native, or unbound.
 classify() {
     local dir=$1
     local -a scan=() vars=() honored=() literals=()
@@ -224,22 +224,16 @@ run_one() {
         "${child_env[@]}" \
         cargo fetch --locked --manifest-path "$manifest" >>"$log" 2>&1
     fetch_rc=$?
+    # cargo nextest directly. A crate run.sh may pin `taskset -c 0-3,14-31`
+    # (tests/pentry-keeper-loom), which is not a valid mask on a 4-vCPU
+    # runner. The preemption variable is exported above; run.sh is only scanned.
     if ((fetch_rc == 0)); then
-        if [[ -x $dir/run.sh ]]; then
-            env -u RUST_LOG -u CARGO_TARGET_DIR \
-                -u LOOM_MAX_PREEMPTIONS -u LOOM_MAX_BRANCHES -u LOOM_MAX_DURATION \
-                -u LOOM_MAX_PERMUTATIONS -u LOOM_CHECKPOINT_INTERVAL -u LOOM_CHECKPOINT_FILE \
-                -u LOOM_LOG \
-                "${child_env[@]}" \
-                "$dir/run.sh" --locked --test-threads=1 --no-fail-fast >>"$log" 2>&1
-        else
-            env -u RUST_LOG -u CARGO_TARGET_DIR \
-                -u LOOM_MAX_PREEMPTIONS -u LOOM_MAX_BRANCHES -u LOOM_MAX_DURATION \
-                -u LOOM_MAX_PERMUTATIONS -u LOOM_CHECKPOINT_INTERVAL -u LOOM_CHECKPOINT_FILE \
-                -u LOOM_LOG \
-                "${child_env[@]}" \
-                cargo nextest run --manifest-path "$manifest" --locked --test-threads=1 --no-fail-fast >>"$log" 2>&1
-        fi
+        env -u RUST_LOG -u CARGO_TARGET_DIR \
+            -u LOOM_MAX_PREEMPTIONS -u LOOM_MAX_BRANCHES -u LOOM_MAX_DURATION \
+            -u LOOM_MAX_PERMUTATIONS -u LOOM_CHECKPOINT_INTERVAL -u LOOM_CHECKPOINT_FILE \
+            -u LOOM_LOG \
+            "${child_env[@]}" \
+            cargo nextest run --manifest-path "$manifest" --locked --test-threads=1 --no-fail-fast >>"$log" 2>&1
         run_rc=$?
     else
         run_rc=$fetch_rc
