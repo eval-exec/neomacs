@@ -235,12 +235,7 @@ fn worker<'era>(
     Receipt::Retired { body, cleanup }
 }
 fn census(era: &ParallelHeapEra<'_>) -> Collections {
-    let mut stopped = contention::retry(
-        Deadline::contention(),
-        || era.stop(),
-        contention::rendezvous,
-    )
-    .unwrap();
+    let mut stopped = era.stop().unwrap();
     let collections = era
         .with_stopped_heap_for_test(&stopped, |heap| Collections(heap.gc_collections()))
         .unwrap();

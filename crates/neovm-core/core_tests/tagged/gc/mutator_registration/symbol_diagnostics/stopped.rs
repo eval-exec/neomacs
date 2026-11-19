@@ -222,14 +222,10 @@ fn worker(
                 return Err(Error::Protocol);
             }
             // Inspect the restored home BEFORE another read can overwrite it.
-            let word = contention::retry(
-                Deadline::contention(),
-                || {
-                    let run = owner.run_access()?;
-                    Ok(Checksum(home.word_for_test(&run)))
-                },
-                contention::registration,
-            )?;
+            let word = {
+                let run = owner.run_access_after_resume_drain()?;
+                Checksum(home.word_for_test(&run))
+            };
             observations.push(Restored {
                 round,
                 epoch: response,
