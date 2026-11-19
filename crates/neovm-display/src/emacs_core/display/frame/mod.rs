@@ -2514,7 +2514,11 @@ pub fn builtin_framep(
     Ok(frame.effective_window_system().unwrap_or(Value::T))
 }
 
-/// `(frame-live-p OBJ)` -> t if OBJ is a live frame object or frame id.
+/// `(frame-live-p OBJ)` -> the `framep` value of a live frame, else nil.
+///
+/// GNU `Fframe_live_p` (frame.c:334-337) returns `Fframep` when the object
+/// is a live frame and nil otherwise. A termcap frame is `t`. A GUI frame
+/// is its output-method symbol, the same value `builtin_framep` returns.
 #[doc(hidden)]
 pub fn builtin_frame_live_p(
     eval: &mut neovm_eval::emacs_core::eval::Context,
@@ -2532,7 +2536,10 @@ pub fn builtin_frame_live_p(
         ValueKind::Veclike(VecLikeType::Frame) => args[0].as_frame_id().unwrap(),
         _ => return Ok(Value::NIL),
     };
-    Ok(Value::bool_val(frames.get(FrameId(id)).is_some()))
+    let Some(frame) = frames.get(FrameId(id)) else {
+        return Ok(Value::NIL);
+    };
+    Ok(frame.effective_window_system().unwrap_or(Value::T))
 }
 
 pub(crate) fn live_frame_buffer_parameter_ids(

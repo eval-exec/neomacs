@@ -4308,6 +4308,37 @@ fn framep_returns_window_system_symbol_for_gui_frames() {
     assert_eq!(result, Value::symbol("x"));
 }
 
+/// GNU `Fframe_live_p` (frame.c:326-337) returns `Fframep` for a live frame.
+/// A GUI frame's `framep` is the output-method symbol, so `frame-live-p`
+/// must return that symbol and not a bare `t`.
+#[test]
+fn frame_live_p_returns_framep_for_a_live_gui_frame() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
+    let frame_id = super::ensure_selected_frame_id(&mut ev);
+    ev.frame_manager_mut()
+        .get_mut(frame_id)
+        .expect("selected frame")
+        .install_backend_less_gui_kind(WindowSystemKind::X);
+    let frame = Value::make_frame(frame_id.0);
+
+    let live = crate::emacs_core::frame::builtin_frame_live_p(&mut ev, &vec![frame]).unwrap();
+    let framep = crate::emacs_core::frame::builtin_framep(&mut ev, vec![frame]).unwrap();
+    assert_eq!(framep, Value::symbol("x"));
+    assert_eq!(live, framep);
+
+    ev.frame_manager_mut()
+        .get_mut(frame_id)
+        .expect("selected frame")
+        .install_backend_less_gui_kind(WindowSystemKind::Neo);
+    let live = crate::emacs_core::frame::builtin_frame_live_p(&mut ev, &vec![frame]).unwrap();
+    assert_eq!(live, Value::symbol("neo"));
+    assert_eq!(
+        crate::emacs_core::frame::builtin_frame_live_p(&mut ev, &[Value::fixnum(999999)]).unwrap(),
+        Value::NIL
+    );
+}
+
 #[test]
 fn framep_false() {
     crate::test_utils::init_test_tracing();
