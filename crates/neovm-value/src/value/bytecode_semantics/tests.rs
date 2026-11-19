@@ -1,6 +1,6 @@
 use super::*;
 
-fn key(_: Value, _: usize, _: &mut Vec<usize>, _: bool) -> HashKey {
+fn key(_: Value, _: usize, _: &mut Vec<usize>, _: bool, _: &mut usize) -> HashKey {
     HashKey::Int(11)
 }
 fn equal(
@@ -46,7 +46,7 @@ fn bytecode_semantics_publication_retains_original_operations_after_refusal() {
     );
     let installed = payload.get().unwrap();
     assert!(matches!(
-        installed.to_equal_key(Value::NIL, 0, &mut Vec::new(), false),
+        installed.to_equal_key(Value::NIL, 0, &mut Vec::new(), false, &mut usize::MAX),
         HashKey::Int(11)
     ));
     assert!(installed.equal(

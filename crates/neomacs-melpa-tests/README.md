@@ -216,13 +216,16 @@ font. While these known divergences are open:
 - every ETAF-mounted buffer line here (previews, panels, the desktop canvas)
   starts with U+200B.
 
-One crash is recorded rather than pinned: mounting either etaf-algo-lab
-workspace aborts Neomacs with an allocation failure while GNU renders it. The
-2026-11-19 core dump shows unbounded recursion in
-`neovm_value`'s `to_equal_key_depth_swp` (equal hash keys of a shared
-structure); both laboratories abort at 4, 8 and 32 GB limits, so it is
-unbounded work, not a memory budget. `etaf_algo_lab_real_gui_workspace_matches_gnu`
-stays as the ignored reproducer.
+The etaf-algo-lab crash surfaced 2026-11-19 is fixed. Mounting either
+laboratory used to abort Neomacs with an allocation failure while GNU renders
+it; the core dump showed unbounded recursion in `neovm_value`'s
+`to_equal_key_depth_swp`, the stored equal key of a shared structure (the
+laboratories abort at 4, 8 and 32 GB limits, so it was unbounded work, not a
+memory budget). The stored-key walk is now node-budgeted and membership still
+compares live key objects, so GNU's observable behavior is unchanged.
+`etaf_algo_lab_real_gui_workspace_matches_gnu` now runs as a normal test and
+pins the remaining observations above, plus 594 vs 581 pixels for the same 34
+body lines.
 
 Each test fails when its divergence is fixed; flip it to a single
 `assert_eq` and delete the note.

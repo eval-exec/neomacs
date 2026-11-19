@@ -2537,8 +2537,26 @@ pub fn build_hash_table_literal_value(
         table.user_cmp_function = None;
         table.user_hash_function = None;
         for (key_value, val_value) in entries {
-            let key = key_value.to_hash_key(&table.test);
-            table.insert(key, key_value, val_value);
+            // Membership is decided by the live key object (as `puthash`
+            // does), not by the stored key: a budgeted stored key can share a
+            // truncated prefix with an unequal key.
+            match table
+                .data
+                .try_probe_for_insert(key_value, table.test, false)
+            {
+                Ok(HashProbe::Found(slot)) => {
+                    if let Some(stored) = table.data.slot_value_mut(slot) {
+                        *stored = val_value;
+                    }
+                }
+                Ok(HashProbe::Absent(hash)) => {
+                    let key = key_value.to_hash_key_for_insert(table.test, false);
+                    table.data.insert_absent(hash, key, key_value, val_value);
+                }
+                // Literal tables have no user hash/comparison function, so
+                // the probe has nothing to signal.
+                Err(_) => {}
+            }
         }
     });
     table_value
@@ -2658,6 +2676,23 @@ fn canonical_keyword_name(name: &str) -> String {
         format!(":{name}")
     }
 }
+
+/// Sentinel for a stored structural key whose node budget was exhausted.
+///
+/// `Cycle` is already reserved for structural back-references, and
+/// `switch_plan::flatten` rejects every `Cycle` (a plan needs exact keys), so
+/// this value can never be treated as a real key by an exact-key consumer.
+/// An index of `u32::MAX` cannot arise from a real back-reference: it would
+/// require more than four billion objects on the path.
+pub(crate) const TRUNCATED_KEY_CYCLE: u32 = u32::MAX;
+
+/// Node budget for the structural key stored beside an equal-table entry.
+///
+/// The stored key feeds iteration, dumping and switch-plan compilation; it is
+/// not what decides equal-table membership.  Ordinary keys are far below this
+/// bound; a shared DAG's unfolded key tree stops here instead of expanding
+/// exponentially with depth.
+const EQUAL_KEY_NODE_BUDGET: usize = 4096;
 
 // ---------------------------------------------------------------------------
 // Convenience constructors on TaggedValue
@@ -4086,6 +4121,41 @@ impl TaggedValue {
         }
     }
 
+    /// Structural `equal` key with a hard node budget.
+    ///
+    /// See [`Self::to_equal_key_depth_budgeted`]: the walk emits
+    /// [`TRUNCATED_KEY_CYCLE`] once `max_nodes` key nodes have been built.
+    pub fn to_equal_key_bounded(
+        &self,
+        max_nodes: usize,
+        symbols_with_pos_enabled: bool,
+    ) -> HashKey {
+        let mut budget = max_nodes;
+        self.to_equal_key_depth_budgeted(0, &mut Vec::new(), symbols_with_pos_enabled, &mut budget)
+    }
+
+    /// The materialized key filed beside a new entry of a table with `test`.
+    ///
+    /// An equal table decides membership with `equal_value_hash` plus a live
+    /// `equal`; the stored key exists for iteration, dumping and switch
+    /// plans.  It is therefore budgeted: a shared DAG can otherwise unfold
+    /// into an exponential key tree at insertion.  Exact-key consumers reject
+    /// a truncated key, and every ordinary key is unchanged.
+    pub fn to_hash_key_for_insert(
+        self,
+        test: HashTableTest,
+        symbols_with_pos_enabled: bool,
+    ) -> HashKey {
+        match test {
+            HashTableTest::Equal => {
+                self.to_equal_key_bounded(EQUAL_KEY_NODE_BUDGET, symbols_with_pos_enabled)
+            }
+            HashTableTest::Eq | HashTableTest::Eql => {
+                self.to_hash_key_swp(&test, symbols_with_pos_enabled)
+            }
+        }
+    }
+
     /// EQ hash key with optional symbol-with-pos transparency.
     pub(crate) fn to_eq_key_swp(&self, symbols_with_pos_enabled: bool) -> HashKey {
         if symbols_with_pos_enabled && self.is_symbol_with_pos() {
@@ -4169,9 +4239,36 @@ impl TaggedValue {
         seen: &mut Vec<usize>,
         symbols_with_pos_enabled: bool,
     ) -> HashKey {
+        let mut budget = usize::MAX;
+        self.to_equal_key_depth_budgeted(depth, seen, symbols_with_pos_enabled, &mut budget)
+    }
+
+    /// [`Self::to_equal_key_depth_swp`] with a hard node budget.
+    ///
+    /// A structural key unfolds a DAG into a tree, so its size is exponential
+    /// in depth even though the object graph is small.  GNU bounds its equal
+    /// hash (`SXHASH_MAX_DEPTH`/`SXHASH_MAX_LEN`); the stored key used for
+    /// iteration, dumping and switch plans had no such bound, so a 30-level
+    /// shared pair of conses expands to 2^30 key nodes.  Once `budget` is
+    /// exhausted the walk emits [`TRUNCATED_KEY_CYCLE`], which exact-key
+    /// consumers (the switch plan) reject.  Equal-table membership is decided
+    /// by `equal_value_hash` plus a live `equal`, so truncation cannot change
+    /// a lookup answer.
+    #[doc(hidden)]
+    pub fn to_equal_key_depth_budgeted(
+        self,
+        depth: usize,
+        seen: &mut Vec<usize>,
+        symbols_with_pos_enabled: bool,
+        budget: &mut usize,
+    ) -> HashKey {
         if depth > 200 {
             return self.to_eq_key();
         }
+        if *budget == 0 {
+            return HashKey::Cycle(TRUNCATED_KEY_CYCLE);
+        }
+        *budget -= 1;
         match self.kind() {
             ValueKind::Nil => HashKey::Nil,
             ValueKind::T => HashKey::True,
@@ -4183,18 +4280,20 @@ impl TaggedValue {
             ValueKind::Veclike(VecLikeType::SymbolWithPos) => {
                 let swp = self.as_symbol_with_pos().unwrap();
                 if symbols_with_pos_enabled {
-                    return swp.sym.to_equal_key_depth_swp(
+                    return swp.sym.to_equal_key_depth_budgeted(
                         depth + 1,
                         seen,
                         symbols_with_pos_enabled,
+                        budget,
                     );
                 }
                 HashKey::SymbolWithPos(
                     Box::new(swp.sym.to_eq_key()),
-                    Box::new(swp.pos.to_equal_key_depth_swp(
+                    Box::new(swp.pos.to_equal_key_depth_budgeted(
                         depth + 1,
                         seen,
                         symbols_with_pos_enabled,
+                        budget,
                     )),
                 )
             }
@@ -4211,8 +4310,18 @@ impl TaggedValue {
                 seen.push(ptr);
                 let car = self.cons_car();
                 let cdr = self.cons_cdr();
-                let car_key = car.to_equal_key_depth_swp(depth + 1, seen, symbols_with_pos_enabled);
-                let cdr_key = cdr.to_equal_key_depth_swp(depth + 1, seen, symbols_with_pos_enabled);
+                let car_key = car.to_equal_key_depth_budgeted(
+                    depth + 1,
+                    seen,
+                    symbols_with_pos_enabled,
+                    budget,
+                );
+                let cdr_key = cdr.to_equal_key_depth_budgeted(
+                    depth + 1,
+                    seen,
+                    symbols_with_pos_enabled,
+                    budget,
+                );
                 seen.pop();
                 HashKey::EqualCons(Box::new(car_key), Box::new(cdr_key))
             }
@@ -4241,10 +4350,11 @@ impl TaggedValue {
                 keys.push(HashKey::Text(view.hash_tag().into()));
                 view.append_shape_hash_keys(&mut keys);
                 for index in 0..view.len() {
-                    keys.push(view.slot(index).to_equal_key_depth_swp(
+                    keys.push(view.slot(index).to_equal_key_depth_budgeted(
                         depth + 1,
                         seen,
                         symbols_with_pos_enabled,
+                        budget,
                     ));
                 }
                 seen.pop();
@@ -4258,10 +4368,11 @@ impl TaggedValue {
                         overlay.buffer.map(|buffer| buffer.0),
                         start,
                         end,
-                        overlay.plist.to_equal_key_depth_swp(
+                        overlay.plist.to_equal_key_depth_budgeted(
                             depth + 1,
                             seen,
                             symbols_with_pos_enabled,
+                            budget,
                         ),
                     )))
                 } else {
@@ -4279,6 +4390,7 @@ impl TaggedValue {
                     depth + 1,
                     seen,
                     symbols_with_pos_enabled,
+                    budget,
                 );
                 seen.pop();
                 key
@@ -4294,6 +4406,7 @@ impl TaggedValue {
                     depth + 1,
                     seen,
                     crate::tagged::SymbolMode::from(symbols_with_pos_enabled),
+                    budget,
                 );
                 seen.pop();
                 key
@@ -5103,6 +5216,7 @@ fn closure_to_equal_key(
     depth: usize,
     seen: &mut Vec<usize>,
     symbol_mode: crate::tagged::SymbolMode,
+    budget: &mut usize,
 ) -> HashKey {
     let symbols_with_pos_enabled = match symbol_mode {
         crate::tagged::SymbolMode::Bare => false,
@@ -5118,12 +5232,14 @@ fn closure_to_equal_key(
 
     let mut slots = vec![
         HashKey::Text("lambda".into()),
-        arglist.to_equal_key_depth_swp(depth + 1, seen, symbols_with_pos_enabled),
+        arglist.to_equal_key_depth_budgeted(depth + 1, seen, symbols_with_pos_enabled, budget),
         value.closure_body_value().map_or(HashKey::Nil, |body| {
-            body.to_equal_key_depth_swp(depth + 1, seen, symbols_with_pos_enabled)
+            body.to_equal_key_depth_budgeted(depth + 1, seen, symbols_with_pos_enabled, budget)
         }),
         match value.closure_env().unwrap_or(None) {
-            Some(env) => env.to_equal_key_depth_swp(depth + 1, seen, symbols_with_pos_enabled),
+            Some(env) => {
+                env.to_equal_key_depth_budgeted(depth + 1, seen, symbols_with_pos_enabled, budget)
+            }
             None => HashKey::Text("dynamic".into()),
         },
     ];
@@ -5136,7 +5252,12 @@ fn closure_to_equal_key(
         // string value (valid UTF-8 -> text key, eight-bit -> eq key) instead of
         // the retired storage form, whose in-Unicode sentinels would collide a
         // real Private-Use glyph with a raw byte in the equal hash key.
-        let doc = doc_value.to_equal_key_depth_swp(depth + 1, seen, symbols_with_pos_enabled);
+        let doc = doc_value.to_equal_key_depth_budgeted(
+            depth + 1,
+            seen,
+            symbols_with_pos_enabled,
+            budget,
+        );
         slots.push(doc);
     }
 
