@@ -1080,10 +1080,8 @@ pub struct TaggedHeap {
     /// is N-mutator ready. Appended after the frozen store ABI fields, so no
     /// pinned offset moves.
     overlay_serial: crate::heap_types::OverlaySerialCounter,
-    /// Retired process fields armed for the next stop-the-world full cycle.
-    retired_process_ephemerons: FxHashMap<crate::heap_types::ProcessId, Vec<TaggedValue>>,
-    /// Process ids whose ephemeron keys were unreachable in the last full cycle.
-    reclaimed_process_ids: Vec<crate::heap_types::ProcessId>,
+    /// Retired-process and killed-buffer ephemeron records (memory_registry).
+    ephemeron_records: memory_registry::EphemeronRecords,
 }
 
 impl Default for TaggedHeap {
@@ -1218,8 +1216,7 @@ impl TaggedHeap {
             #[cfg(any(test, feature = "test-support"))]
             mapped_veclike_traces: 0,
             overlay_serial: crate::heap_types::OverlaySerialCounter::new(),
-            retired_process_ephemerons: FxHashMap::default(),
-            reclaimed_process_ids: Vec::new(),
+            ephemeron_records: memory_registry::EphemeronRecords::default(),
             dirty_owner_bits: FxHashSet::default(),
             dirty_writes: Vec::new(),
             gc_collections: 0,

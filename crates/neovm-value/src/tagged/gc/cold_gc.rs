@@ -274,8 +274,7 @@ const _: () = {
             == 4576
                 + size_of::<super::super::collection_reads::StoreState>()
                 + size_of::<crate::heap_types::OverlaySerialCounter>()
-                + size_of::<FxHashMap<crate::heap_types::ProcessId, Vec<TaggedValue>>>()
-                + size_of::<Vec<crate::heap_types::ProcessId>>()
+                + size_of::<super::memory_registry::EphemeronRecords>()
     );
     assert!(align_of::<TaggedHeap>() == 8);
     assert!(offset_of!(TaggedHeap, mutator_gc) == 24);

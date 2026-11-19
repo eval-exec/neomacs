@@ -3090,6 +3090,21 @@ impl Buffer {
         self.name = name;
     }
 
+    /// Visit the Lisp values a killed buffer still holds: what a killed
+    /// buffer object keeps queryable while Lisp can reach it.
+    pub(crate) fn trace_killed_roots_with(&self, visit: &mut dyn FnMut(Value)) {
+        visit(self.name);
+        visit(self.last_name);
+        self.text.trace_text_prop_roots_with(visit);
+        visit(self.undo_state.list());
+        self.overlays.trace_roots_with(visit);
+        for slot in &self.slots {
+            visit(*slot);
+        }
+        visit(self.local_var_alist.as_lisp_alist());
+        visit(self.keymap);
+    }
+
     /// Mirror the final object-state mutations in GNU `Fkill_buffer`:
     /// reset local state first, then move `name` to `last_name` and leave
     /// the buffer object addressable but not live.
@@ -7518,6 +7533,58 @@ impl BufferManager {
         Some(killed_ids)
     }
 
+    /// Take killed buffers out of the root walk for an explicit full
+    /// collection. Returns the Lisp values each one holds, keyed by id, for
+    /// the heap to mark only once the buffer object is reached, and the
+    /// records to hand back to [`Self::restore_reached_killed_buffers`].
+    ///
+    /// A killed buffer an active buffer-list cursor can still step onto
+    /// stays a root: the cursor holds its id, not its object, where GNU's
+    /// walk holds the removed cons and so the buffer.
+    #[doc(hidden)]
+    pub fn take_killed_buffers_for_gc(
+        &mut self,
+    ) -> (Vec<(BufferId, Vec<Value>)>, Vec<(BufferId, Buffer)>) {
+        let storage = self.storage_mut();
+        let links = storage
+            .buffer_order_observer
+            .as_ref()
+            .and_then(Weak::upgrade);
+        let (cursor_held, killed): (Vec<(BufferId, Buffer)>, Vec<(BufferId, Buffer)>) =
+            mem::take(&mut storage.dead_buffers)
+                .into_iter()
+                .partition(|(id, _)| {
+                    links
+                        .as_ref()
+                        .is_some_and(|links| links.borrow().retains(*id))
+                });
+        storage.dead_buffers.extend(cursor_held);
+        let ephemerons = killed
+            .iter()
+            .map(|(id, buffer)| {
+                let mut values = Vec::new();
+                buffer.trace_killed_roots_with(&mut |value| values.push(value));
+                (*id, values)
+            })
+            .collect();
+        (ephemerons, killed)
+    }
+
+    /// Put back the killed buffers the collection reached and drop the ones
+    /// whose buffer object it freed.
+    #[doc(hidden)]
+    pub fn restore_reached_killed_buffers(
+        &mut self,
+        killed: Vec<(BufferId, Buffer)>,
+        reclaimed: &[BufferId],
+    ) {
+        let dead_buffers = &mut self.storage_mut().dead_buffers;
+        dead_buffers.extend(killed);
+        for id in reclaimed {
+            dead_buffers.remove(id);
+        }
+    }
+
     /// Return the last known name for a dead buffer id, if available.
     pub fn dead_buffer_last_name_value(&self, id: BufferId) -> Option<Value> {
         self.dead_buffers.get(&id).map(Buffer::last_name_value)
@@ -9079,16 +9146,7 @@ impl GcTrace for BufferManager {
             }
         }
         for buffer in self.dead_buffers.values() {
-            visit(buffer.name);
-            visit(buffer.last_name);
-            buffer.text.trace_text_prop_roots_with(visit);
-            visit(buffer.undo_state.list());
-            buffer.overlays.trace_roots_with(visit);
-            for slot in &buffer.slots {
-                visit(*slot);
-            }
-            visit(buffer.local_var_alist.as_lisp_alist());
-            visit(buffer.keymap);
+            buffer.trace_killed_roots_with(visit);
         }
         // Phase 10D: `buffer_defaults` holds the global default
         // values for every per-buffer slot. Mirrors GNU's

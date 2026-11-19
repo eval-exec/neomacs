@@ -1643,8 +1643,15 @@ impl TaggedHeap {
         let roots: Vec<(TaggedValue, &'static str)> = self
             .buffer_registry
             .iter()
-            .flatten()
-            .map(|value| (*value, "buffer-registry"))
+            .enumerate()
+            .filter(|(idx, _)| {
+                self.ephemeron_records.killed_buffer_ephemerons.is_empty()
+                    || !self
+                        .ephemeron_records
+                        .killed_buffer_ephemerons
+                        .contains_key(&crate::value::buffer_vocab::BufferId(*idx as u64))
+            })
+            .filter_map(|(_, value)| value.map(|value| (value, "buffer-registry")))
             .chain(
                 self.window_registry
                     .values()
@@ -1663,7 +1670,12 @@ impl TaggedHeap {
             .chain(
                 self.process_registry
                     .iter()
-                    .filter(|(id, _)| !self.retired_process_ephemerons.contains_key(id))
+                    .filter(|(id, _)| {
+                        !self
+                            .ephemeron_records
+                            .retired_process_ephemerons
+                            .contains_key(id)
+                    })
                     .map(|(_, value)| (*value, "process-registry")),
             )
             .chain(
@@ -1709,23 +1721,20 @@ impl TaggedHeap {
         //    so heap access is exclusive (no concurrency hazard here). --
         let mark_t0 = std::time::Instant::now();
         self.mark_all_on_gc_thread();
-        while self.mark_reached_retired_processes() {
-            self.mark_all();
-        }
+        self.mark_reached_ephemeron_records_to_fixpoint();
         // Queue doomed finalizers before the weak sweep (GNU
         // `queue_doomed_finalizers` runs before
         // `mark_and_sweep_weak_table_contents` in `garbage_collect`): their
         // functions are re-marked so both the weak sweep and the object sweep
         // see them as live.
         self.mark_and_queue_doomed_finalizers();
-        while self.mark_reached_retired_processes() {
-            self.mark_all();
-        }
+        self.mark_reached_ephemeron_records_to_fixpoint();
         // Resolve weak hash tables now that the main mark has drained. Both the
         // sync and concurrent paths converge here with the mutator stopped, so
         // this is single-threaded and path-agnostic.
         self.mark_and_sweep_weak_tables();
         self.reclaim_unreached_retired_processes();
+        self.reclaim_unreached_killed_buffers();
         let mark_us = mark_t0.elapsed().as_micros() as u64;
 
         // The mark has drained and the sweep has not started: the one moment
@@ -1854,9 +1863,7 @@ impl TaggedHeap {
             }
         }
 
-        while self.mark_reached_retired_processes() {
-            self.mark_all();
-        }
+        self.mark_reached_ephemeron_records_to_fixpoint();
 
         if self.weak_hash_tables.is_empty() {
             return;
@@ -1901,6 +1908,7 @@ impl TaggedHeap {
                 };
             }
             marked |= self.mark_reached_retired_processes();
+            marked |= self.mark_reached_killed_buffers();
             // Drain whatever those surviving entries reached, then re-check.
             self.mark_all();
             if !marked {
@@ -1930,11 +1938,26 @@ impl TaggedHeap {
         }
     }
 
+    /// Mark retired-process and killed-buffer fields to one joint fixpoint.
+    /// A field of either kind can reach the key object of the other, so the
+    /// two ephemeron sets are drained together rather than one after another.
+    fn mark_reached_ephemeron_records_to_fixpoint(&mut self) {
+        loop {
+            let processes = self.mark_reached_retired_processes();
+            let buffers = self.mark_reached_killed_buffers();
+            if !(processes || buffers) {
+                break;
+            }
+            self.mark_all();
+        }
+    }
+
     /// Mark fields of retired processes whose process objects were reached.
     /// Returns true when it adds work to the gray queue; the caller drains and
     /// repeats so chains of retired processes reach a fixpoint.
     fn mark_reached_retired_processes(&mut self) -> bool {
         let reached: Vec<_> = self
+            .ephemeron_records
             .retired_process_ephemerons
             .keys()
             .copied()
@@ -1946,6 +1969,7 @@ impl TaggedHeap {
             .collect();
         for id in &reached {
             let fields = self
+                .ephemeron_records
                 .retired_process_ephemerons
                 .remove(id)
                 .unwrap_or_default();
@@ -1958,10 +1982,48 @@ impl TaggedHeap {
 
     /// Drop registry roots for retired processes that no other root reached.
     fn reclaim_unreached_retired_processes(&mut self) {
-        let unreached = std::mem::take(&mut self.retired_process_ephemerons);
+        let unreached = std::mem::take(&mut self.ephemeron_records.retired_process_ephemerons);
         for id in unreached.into_keys() {
             self.process_registry.remove(&id);
-            self.reclaimed_process_ids.push(id);
+            self.ephemeron_records.reclaimed_process_ids.push(id);
+        }
+    }
+
+    /// Mark fields of killed buffers whose buffer objects were reached.
+    /// Returns true when it adds work to the gray queue; the caller drains and
+    /// repeats so chains of killed buffers reach a fixpoint.
+    fn mark_reached_killed_buffers(&mut self) -> bool {
+        let reached: Vec<_> = self
+            .ephemeron_records
+            .killed_buffer_ephemerons
+            .keys()
+            .copied()
+            .filter(|id| {
+                self.buffer_value(*id)
+                    .is_some_and(|value| self.is_value_marked(value))
+            })
+            .collect();
+        for id in &reached {
+            let fields = self
+                .ephemeron_records
+                .killed_buffer_ephemerons
+                .remove(id)
+                .unwrap_or_default();
+            for field in fields {
+                self.mark_or_push_child(field, "killed-buffer-field");
+            }
+        }
+        !reached.is_empty()
+    }
+
+    /// Drop registry roots for killed buffers that no other root reached.
+    fn reclaim_unreached_killed_buffers(&mut self) {
+        let unreached = std::mem::take(&mut self.ephemeron_records.killed_buffer_ephemerons);
+        for id in unreached.into_keys() {
+            if let Some(slot) = self.buffer_registry.get_mut(id.0 as usize) {
+                *slot = None;
+            }
+            self.ephemeron_records.reclaimed_buffer_ids.push(id);
         }
     }
 
