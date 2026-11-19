@@ -12,35 +12,35 @@ mod sealed {
 /// Exactly the resources acquired before a failed preparation step. A failed
 /// drain has no live collector, but its census and mark exclusion still belong
 /// to this failure. Field order releases the census before its keeper.
-pub(super) enum PreparationResources {
+pub(super) enum PreparationResources<K = Baton> {
     BeforeKeeper,
-    Keeper(Baton),
+    Keeper(K),
     Census {
         // Retained so Drop releases the census before the keeper. The closed
         // policy wraps the enum in ManuallyDrop and does not read the fields.
         #[allow(dead_code)]
         frozen: FrozenLegacyRoots,
         #[allow(dead_code)]
-        keeper: Baton,
+        keeper: K,
     },
 }
 
 pub(super) trait PreparationPolicy: sealed::Sealed {
-    type Failure<'source>;
+    type Failure<'source, K>;
 
     fn begin(source: &mut Context) -> SerialRecovery;
-    fn fail<'source>(
+    fn fail<'source, K>(
         source: &'source mut Context,
         recovery: SerialRecovery,
-        resources: PreparationResources,
+        resources: PreparationResources<K>,
         reason: OwnedParallelError,
-    ) -> Self::Failure<'source>;
+    ) -> Self::Failure<'source, K>;
 }
 
 pub(super) struct RecoverSerial;
 impl sealed::Sealed for RecoverSerial {}
 impl PreparationPolicy for RecoverSerial {
-    type Failure<'source> = OwnedParallelError;
+    type Failure<'source, K> = OwnedParallelError;
 
     fn begin(source: &mut Context) -> SerialRecovery {
         // This may run finalizers and post-gc-hook. It belongs exclusively to
@@ -49,12 +49,12 @@ impl PreparationPolicy for RecoverSerial {
         source.retire_empty_dead_windows_table()
     }
 
-    fn fail<'source>(
+    fn fail<'source, K>(
         source: &'source mut Context,
         recovery: SerialRecovery,
-        resources: PreparationResources,
+        resources: PreparationResources<K>,
         reason: OwnedParallelError,
-    ) -> Self::Failure<'source> {
+    ) -> Self::Failure<'source, K> {
         drop(resources);
         source.recover_serial_context(recovery);
         reason
@@ -64,7 +64,7 @@ impl PreparationPolicy for RecoverSerial {
 pub(super) struct ClosedSource;
 impl sealed::Sealed for ClosedSource {}
 impl PreparationPolicy for ClosedSource {
-    type Failure<'source> = ClosedPreparationFailure<'source>;
+    type Failure<'source, K> = ClosedPreparationFailure<'source, K>;
 
     fn begin(_source: &mut Context) -> SerialRecovery {
         // Never reclaim the weak table here: exact Context GC runs Lisp.
@@ -74,12 +74,12 @@ impl PreparationPolicy for ClosedSource {
         SerialRecovery::Unchanged
     }
 
-    fn fail<'source>(
+    fn fail<'source, K>(
         source: &'source mut Context,
         recovery: SerialRecovery,
-        resources: PreparationResources,
+        resources: PreparationResources<K>,
         reason: OwnedParallelError,
-    ) -> Self::Failure<'source> {
+    ) -> Self::Failure<'source, K> {
         ClosedPreparationFailure {
             _source: source,
             _recovery: recovery,
@@ -96,13 +96,22 @@ impl PreparationPolicy for ClosedSource {
 /// must separately retain the whole source shell on failure, drop, forget,
 /// or panic.
 #[must_use]
-pub(super) struct ClosedPreparationFailure<'source> {
+pub(super) struct ClosedPreparationFailure<'source, K = Baton> {
     _source: &'source mut Context,
     _recovery: SerialRecovery,
-    _resources: std::mem::ManuallyDrop<PreparationResources>,
+    _resources: std::mem::ManuallyDrop<PreparationResources<K>>,
     reason: OwnedParallelError,
 }
 static_assertions::assert_not_impl_any!(ClosedPreparationFailure<'static>: Send, Sync, Clone, Copy);
+
+impl<K> ClosedPreparationFailure<'_, K> {
+    /// End this local source borrow without recovery. Acquired resources stay
+    /// retained. The caller's armed shell keeps the original Context and, when
+    /// `K` is a borrow, the keeper it already holds.
+    pub(super) fn retain_resources(self) -> OwnedParallelError {
+        self.reason
+    }
+}
 
 #[cfg(test)]
 #[path = "tests/policy_tests.rs"]

@@ -1,3 +1,4 @@
+use super::super::super::super::Baton;
 use super::super::super::factory::{AdmissionFailure, AdmissionPlan, ProductionPlan};
 use super::super::super::{OwnedParallelError, is_empty_weak_value_eql};
 use super::super::PreparedAdmission;
@@ -118,7 +119,7 @@ fn pentry_e2b_closed_preparation_failure_before_keeper_never_installs_tls() {
     let failure = ClosedSource::fail(
         &mut source,
         SerialRecovery::Unchanged,
-        PreparationResources::BeforeKeeper,
+        PreparationResources::<Baton>::BeforeKeeper,
         OwnedParallelError::Poisoned,
     );
     assert_eq!(failure.reason, OwnedParallelError::Poisoned);
@@ -134,7 +135,7 @@ fn pentry_e2b_recovering_preparation_failure_still_installs_tls() {
     let reason = RecoverSerial::fail(
         &mut source,
         SerialRecovery::Unchanged,
-        PreparationResources::BeforeKeeper,
+        PreparationResources::<Baton>::BeforeKeeper,
         OwnedParallelError::Poisoned,
     );
     assert_eq!(reason, OwnedParallelError::Poisoned);

@@ -1,9 +1,10 @@
 //! Actual boxed source ownership while selected host slots are withdrawn.
 //! In-place bindings are parked before host activations leave. Text-cache
-//! retirement is the later `retire_text` step. No heap transfer, observation
-//! export, source restoration, or Lisp entry is implemented here. Every armed
-//! payload retains on Drop, forget, and unwind. Only a pre-effect refusal
-//! returns an ordinary Context.
+//! retirement and the closed census share that same shell: the census borrows
+//! the keeper the shell already holds. No heap transfer, observation export,
+//! source restoration, or Lisp entry is implemented here. Every armed payload
+//! retains on Drop, forget, and unwind. Only a pre-effect refusal returns an
+//! ordinary Context.
 
 use super::super::Context;
 use super::super::lifecycle::{
@@ -53,6 +54,7 @@ pub(crate) enum SourceWithdrawalStep {
     Category,
     Regex,
     StringPosition,
+    HeapPreparation,
 }
 
 impl SourceWithdrawalStep {
@@ -78,6 +80,7 @@ impl SourceWithdrawalStep {
             Self::Category => "category",
             Self::Regex => "regex",
             Self::StringPosition => "string-position",
+            Self::HeapPreparation => "heap-preparation",
         }
     }
 }
@@ -170,7 +173,16 @@ impl<R: 'static> SourceFrame<R> {
     ) -> Result<SourceFrame<Effect<R, T>>, SourceWithdrawalFailure> {
         #[cfg(test)]
         super::super::lifecycle::record_source_shell_trace(step.trace_label());
-        match apply(&mut self.source) {
+        let result = apply(&mut self.source);
+        self.retain_step_result(step, result)
+    }
+
+    fn retain_step_result<T: 'static, E: std::fmt::Debug + 'static>(
+        self,
+        step: SourceWithdrawalStep,
+        result: Result<T, E>,
+    ) -> Result<SourceFrame<Effect<R, T>>, SourceWithdrawalFailure> {
+        match result {
             Ok(receipt) => Ok(SourceFrame {
                 source: self.source,
                 effects: Effect {
@@ -189,7 +201,36 @@ impl<R: 'static> SourceFrame<R> {
     }
 }
 
-type Keeper = Effect<NoEffects, Baton>;
+struct Keeper(ManuallyDrop<Baton>);
+
+trait HasKeeper {
+    fn keeper(&self) -> &Baton;
+}
+
+impl HasKeeper for Keeper {
+    fn keeper(&self) -> &Baton {
+        &self.0
+    }
+}
+
+impl<R: HasKeeper, T> HasKeeper for Effect<R, T> {
+    fn keeper(&self) -> &Baton {
+        self._previous.keeper()
+    }
+}
+
+impl<R: HasKeeper + 'static> SourceFrame<R> {
+    fn advance_with_keeper<T: 'static, E: std::fmt::Debug + 'static>(
+        mut self,
+        step: SourceWithdrawalStep,
+        apply: for<'source, 'keeper> fn(&'source mut Context, &'keeper Baton) -> Result<T, E>,
+    ) -> Result<SourceFrame<Effect<R, T>>, SourceWithdrawalFailure> {
+        #[cfg(test)]
+        super::super::lifecycle::record_source_shell_trace(step.trace_label());
+        let result = apply(&mut self.source, self.effects.keeper());
+        self.retain_step_result(step, result)
+    }
+}
 type Parked = Effect<Keeper, super::super::owner_mirrors::ParkedOwner>;
 type Ccl = Effect<Parked, DetachedRegistry<CclRegistry>>;
 type Charset = Effect<Ccl, DetachedRegistry<CharsetRegistry>>;
@@ -208,8 +249,8 @@ type Quit = Effect<IntegerWidth, DetachedQuitActivation>;
 /// selected receipts. In-place bindings are parked before their host
 /// activations are withdrawn. The exact chain type prevents missing,
 /// duplicate, or reordered receipt families from constructing this wrapper.
-/// It grants no World or heap access. Text caches, heap and store TLS, and
-/// JIT still need their own closed source transaction.
+/// It grants no World or heap access. Observation ownership and JIT still
+/// need their own closed source transaction.
 #[must_use]
 pub(crate) struct OwnedSourceRegistries {
     _frame: SourceFrame<Quit>,
@@ -253,6 +294,13 @@ impl OwnedSourceRegistries {
             effects: NoEffects,
         };
         let frame = frame.advance(SourceWithdrawalStep::Keeper, Context::issue_green_baton)?;
+        // Later steps borrow this retained keeper. The wrap moves the receipt
+        // and does not drop the baton or issue another one.
+        let SourceFrame { source, effects } = frame;
+        let frame = SourceFrame {
+            source,
+            effects: Keeper(effects._receipt),
+        };
         let frame = frame.advance(SourceWithdrawalStep::OwnerBindings, |source| {
             Ok::<_, std::convert::Infallible>(source.park_owner())
         })?;
@@ -333,13 +381,6 @@ static_assertions::assert_not_impl_any!(OwnedSourceTextRetired: Send, Sync, Clon
 impl OwnedSourceRegistries {
     #[cold]
     #[inline(never)]
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "E2 L4 dormant text retirement; no production caller enters it"
-        )
-    )]
     pub(crate) fn retire_text(self) -> Result<OwnedSourceTextRetired, SourceWithdrawalFailure> {
         // No collector, callback, or user code runs between these steps.
         // Recheck the actual source: thread-local activation can change
@@ -384,6 +425,56 @@ impl OwnedSourceRegistries {
     }
 }
 
+#[derive(Debug)]
+enum SourceCensusRefusal {
+    Entry(SourceEntryRefusal),
+    Heap(super::super::world::OwnedParallelError),
+}
+
+type HeapDrained = Effect<StringPosition, neovm_value::tagged::gc::FrozenLegacyRoots>;
+
+/// Source-local result of the one closed census. It owns the original root
+/// words and grants no heap loan. Observation ownership, the remaining World
+/// carriers, and JIT state still need their own withdrawal before any transport.
+#[must_use]
+pub(crate) struct OwnedSourceHeapDrained {
+    _frame: SourceFrame<HeapDrained>,
+}
+
+static_assertions::assert_not_impl_any!(OwnedSourceHeapDrained: Send, Sync, Clone, Copy);
+
+impl OwnedSourceRegistries {
+    #[cold]
+    #[inline(never)]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "E2 L4 dormant source census; no production caller enters it"
+        )
+    )]
+    pub(crate) fn prepare_census(self) -> Result<OwnedSourceHeapDrained, SourceWithdrawalFailure> {
+        // Retirement and census stay contiguous. A caller cannot hand an old
+        // retirement record back after a cache-only root was repopulated.
+        self.retire_text()?.close_heap_tls()
+    }
+}
+
+impl OwnedSourceTextRetired {
+    fn close_heap_tls(self) -> Result<OwnedSourceHeapDrained, SourceWithdrawalFailure> {
+        let frame = self._frame.advance_with_keeper(
+            SourceWithdrawalStep::HeapPreparation,
+            |source, keeper| {
+                validate_serial_source_entry(source).map_err(SourceCensusRefusal::Entry)?;
+                source
+                    .close_owned_source_heap_tls(keeper)
+                    .map_err(SourceCensusRefusal::Heap)
+            },
+        )?;
+        Ok(OwnedSourceHeapDrained { _frame: frame })
+    }
+}
+
 #[cfg(test)]
 #[path = "tests/owned_source_test.rs"]
 mod tests;
@@ -391,3 +482,7 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/owned_source_retirement_test.rs"]
 mod retirement_tests;
+
+#[cfg(test)]
+#[path = "tests/owned_source_census_test.rs"]
+mod census_tests;
