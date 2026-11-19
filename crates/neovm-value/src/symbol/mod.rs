@@ -57,7 +57,6 @@ pub enum CanonicalWrite {
     /// The cell is a thread projection: the owner-aware caller routes it.
     Projected,
 }
-#[cfg(any(test, feature = "test-support"))]
 pub(crate) use cell::plist_epoch;
 use cell::{ArmMut, CellWrite, MarkGate, RevealedCell, read_symbol_children};
 #[doc(hidden)]

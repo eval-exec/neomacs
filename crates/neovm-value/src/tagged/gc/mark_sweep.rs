@@ -1702,6 +1702,13 @@ impl TaggedHeap {
                     .iter()
                     .map(|value| (*value, "doomed-finalizer-function")),
             )
+            .chain(
+                self.published_payload_roots
+                    .values()
+                    .flatten()
+                    .copied()
+                    .map(|value| (value, "published-payload-root")),
+            )
             .collect();
 
         // Handshake instrumentation: enumeration volume + wall cost, routed to

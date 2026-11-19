@@ -140,6 +140,36 @@ impl<P: PublicationPayload> PublicationLedger<P> {
         Ok(store)
     }
 
+    /// [`Self::create`] plus `note_roots` on the payload that becomes current,
+    /// before the Release store. A quote refusal does not call `note_roots`.
+    ///
+    /// `create` itself stays the no-hook path so symbol publication does not
+    /// monomorphize a root callback.
+    pub(crate) fn create_noting(
+        initial: P,
+        limits: RetentionLimits,
+        note_roots: impl FnOnce(&P),
+    ) -> Result<Self, PublicationError<P::Error>> {
+        if initial.retained_bytes().get() > limits.bytes.get() {
+            return Err(PublicationError::NeedGrace(RetentionLimit::RetainedBytes));
+        }
+        let address = initial.published_address();
+        note_roots(&initial);
+        let store = Self {
+            root: AtomicPtr::new(std::ptr::null_mut()),
+            metadata: Mutex::new(Metadata {
+                current: initial,
+                predecessors: Vec::new(),
+                #[cfg(any(test, feature = "test-support"))]
+                limit_override: None,
+            }),
+            limits,
+            _not_send: PhantomData,
+        };
+        store.root.store(address, Ordering::Release);
+        Ok(store)
+    }
+
     /// One Acquire load. Later publications do not change this view.
     pub(crate) fn view(&self) -> PublicationView<'_, P> {
         PublicationView {
@@ -331,6 +361,32 @@ impl<P: PublicationPayload, T> OpenPublication<'_, P, T> {
             Commit::Replace(next) => Ok(commit_replacement(store, &mut metadata, next)),
         }
     }
+
+    /// [`Self::finish`] that notes the replacement before the Release store.
+    /// `Commit::Keep` does not call `note_roots`.
+    pub(crate) fn finish_noting(
+        self,
+        decide: impl FnOnce(T, &P) -> Result<Commit<P>, PublicationError<P::Error>>,
+        note_roots: impl FnOnce(&P),
+    ) -> Result<PublicationChange<P::Generation>, PublicationError<P::Error>> {
+        let OpenPublication {
+            store,
+            mut metadata,
+            body,
+            _thread,
+        } = self;
+        match decide(body, &metadata.current)? {
+            Commit::Keep => Ok(PublicationChange::Unchanged {
+                generation: metadata.current.generation(),
+            }),
+            Commit::Replace(next) => Ok(commit_replacement_noting(
+                store,
+                &mut metadata,
+                next,
+                note_roots,
+            )),
+        }
+    }
 }
 
 fn commit_replacement<P: PublicationPayload>(
@@ -341,6 +397,27 @@ fn commit_replacement<P: PublicationPayload>(
     let charged = next.retained_bytes();
     let generation = next.generation();
     let pointer = next.published_address();
+    let previous = mem::replace(&mut metadata.current, next);
+    metadata.predecessors.push(previous);
+    store.release_retained(pointer, &metadata.predecessors);
+    PublicationChange::Published {
+        generation,
+        charged,
+    }
+}
+
+/// [`commit_replacement`] after `note_roots` has seen the new current payload.
+/// The note runs only on this replacement path, before the Release store.
+fn commit_replacement_noting<P: PublicationPayload>(
+    store: &PublicationLedger<P>,
+    metadata: &mut Metadata<P>,
+    next: P,
+    note_roots: impl FnOnce(&P),
+) -> PublicationChange<P::Generation> {
+    let charged = next.retained_bytes();
+    let generation = next.generation();
+    let pointer = next.published_address();
+    note_roots(&next);
     let previous = mem::replace(&mut metadata.current, next);
     metadata.predecessors.push(previous);
     store.release_retained(pointer, &metadata.predecessors);

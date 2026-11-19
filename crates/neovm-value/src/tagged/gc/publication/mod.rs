@@ -1,11 +1,18 @@
 //! Generic publication types.
 //!
-//! Monomorphized inputs for one retention owner. No `Value`, `Context`,
-//! `World`, interner, or GC tracing lives here. Symbol-table publication is
-//! the N3 adapter over this owner. It is not a second protocol.
+//! Monomorphized inputs for one retention owner. No `Context`, `World`, or
+//! interner lives here. A payload may enumerate `TaggedValue` heads through
+//! [`PublicationPayload::for_each_root`]; the heap registry stores those
+//! words. This module does not trace them, and the collector takes no lock
+//! and holds no publisher address. Symbol-table publication is the N3
+//! adapter over this owner. It is not a second protocol.
 
+mod condition;
 mod ledger;
+mod roots;
 mod sync;
+
+pub(super) use roots::PublishedPayloadRoots;
 
 // The compile-fail fixture names the view. The N3 adapter names the
 // transaction types. Both stay crate-private.
@@ -146,6 +153,13 @@ pub(crate) trait PublicationPayload: Sized {
     }
 
     fn generation(&self) -> Self::Generation;
+
+    /// Heads the publisher appends when this payload becomes current.
+    ///
+    /// The default is empty, so a payload with no heap heads does not
+    /// register a root-table id. The collector never calls this. Symbol
+    /// publication keeps the default.
+    fn for_each_root(&self, _visit: &mut dyn FnMut(crate::tagged::value::TaggedValue)) {}
 
     fn prepare(current: &Self) -> Result<PayloadPlan<Self>, Self::Error>;
 }

@@ -1085,6 +1085,8 @@ pub struct TaggedHeap {
     ephemeron_records: memory_registry::EphemeronRecords,
     /// Per-cycle collector-time bank. Trailing, so no pinned offset moves.
     cycle_time_bank: cycle_time_bank::GcCycleTimeBank,
+    /// Heads published by payload owners, keyed by a minted id.
+    published_payload_roots: publication::PublishedPayloadRoots,
 }
 
 impl Default for TaggedHeap {
@@ -1093,10 +1095,7 @@ impl Default for TaggedHeap {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Post-mark ownership verification gate (DIVERGENCES.md 162)
-// ---------------------------------------------------------------------------
-//
+// Post-mark ownership verification gate (DIVERGENCES.md 162).
 // `verify_marked_objects_owned` was written for the missing-root class and
 // then never called ("dead code written for exactly this failure", 161's own
 // residual list). It is O(live objects) per collection, so it stays off by
@@ -1221,6 +1220,7 @@ impl TaggedHeap {
             overlay_serial: crate::heap_types::OverlaySerialCounter::new(),
             ephemeron_records: memory_registry::EphemeronRecords::default(),
             cycle_time_bank: cycle_time_bank::GcCycleTimeBank::default(),
+            published_payload_roots: publication::PublishedPayloadRoots::default(),
             dirty_owner_bits: FxHashSet::default(),
             dirty_writes: Vec::new(),
             gc_collections: 0,
