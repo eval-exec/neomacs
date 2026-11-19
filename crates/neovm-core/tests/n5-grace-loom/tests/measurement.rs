@@ -49,11 +49,18 @@ pub use vocab::{
 };
 use vocab::{SymbolChunkCount, SymbolChunkSlots, SymbolSlotCount};
 
+/// Production re-export at the same parent seam the Loom target binds.
+/// This target is native: the cells are real `std` synchronization.
+mod sync {
+    pub use std::sync::atomic::{AtomicPtr, Ordering};
+    pub use std::sync::{Mutex, MutexGuard, TryLockError};
+}
+
 // The real ledger's whole API compiles here; the parts this model does
 // not call are dead code by design (read-only consumption).
 #[allow(dead_code)]
 mod ledger_native {
-    //! The real `publication.rs` against real `std`: native, not modeled.
+    //! The real `publication.rs` against the production `std` sync backend.
     include!(concat!(env!("OUT_DIR"), "/publication.inc"));
 }
 use ledger_native::{

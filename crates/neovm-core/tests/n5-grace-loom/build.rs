@@ -14,12 +14,11 @@
 //! harness, the ledger's own test-gated items (the limit override) remain
 //! compiled and the override defaults to production limits, unchanged.
 //!
-//! A boundary substitution was tested and refuted on 2026-10-31: a local
-//! `mod std` in the *including* crate does not capture `std::` paths inside a
-//! `#[path]`-included module (they resolve to the extern prelude; compile
-//! test E0425). The capture works only when the paste target and the shim
-//! share the module, which is why the model uses `include!` of this stripped
-//! copy with a sibling `mod std` shim (tests/ledger.rs).
+//! Synchronization is the parent `sync` module (`use super::sync::`), not a
+//! `std` path. The Loom target and the native target each define that module
+//! above the include. `include!` remains because a `#[path]` module cannot
+//! carry the stripped `//!` header (E0753) or the consumer's `cfg(test)`
+//! test-module declaration (E0583).
 use std::env;
 use std::fs;
 use std::path::Path;
@@ -30,34 +29,30 @@ fn main() {
     let original = fs::read_to_string(source).expect("read the real publication.rs");
     let stripped = strip_leading_inner_docs(&original);
     let stripped = strip_trailing_test_mod(&stripped);
-    if !stripped.starts_with("use super::{") {
+    // rustfmt places `use super::sync::` ahead of the vocabulary `use super::{`.
+    if !stripped.starts_with("use super::sync::") {
         panic!(
-            "the stripped copy must begin with the super import block; \
+            "the stripped copy must begin with the super::sync import; \
              publication.rs changed its header - re-anchor this seam"
         );
     }
-    // Seam contract: the ledger imports its synchronization directly from
-    // std, so the loom shim (tests/ledger.rs `mod std`) is the seam. When
-    // P9.1b lands the in-file `super::sync` seam, delete this substitution
-    // and bind the model to the file's own imports.
     assert!(
-        !stripped.contains("use super::sync::"),
-        "publication.rs now carries the in-file sync seam: drop this \
-         build-time seam and include the file's own imports"
+        stripped.contains("use super::{"),
+        "publication.rs dropped its vocabulary import from super; \
+         re-anchor this seam"
     );
-    for expected in [
-        "use std::sync::atomic::{AtomicPtr, Ordering};",
-        "use std::sync::{Mutex, MutexGuard, TryLockError};",
-    ] {
-        assert!(
-            stripped.contains(expected),
-            "publication.rs no longer imports `{expected}`: the loom seam \
-             must be re-anchored (N5 design rev 2 section 2.2)"
-        );
-    }
-    // Names the included file reaches outside the original sync imports.
-    // The model supplies them from the stand-in, the crate-root stubs, and
-    // the std shim. Removing one of them is a re-anchor, not a silent drop.
+    // Seam contract: synchronization comes from the parent `sync` module.
+    // The Loom target binds that module to Loom; the native target binds it
+    // to the production re-export. A direct `std::sync` import would skip
+    // the seam and model real atomics.
+    assert!(
+        !stripped.contains("use std::sync::"),
+        "publication.rs imports `std::sync` directly: the grace model would \
+         miss those operations. Keep synchronization on `super::sync`"
+    );
+    // Names the included file reaches outside the sync import.
+    // The model supplies them from the stand-in and from real std.
+    // Removing one of them is a re-anchor, not a silent drop.
     for expected in [
         "std::iter::once",
         "std::rc::Rc",

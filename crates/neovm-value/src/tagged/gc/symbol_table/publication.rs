@@ -3,14 +3,13 @@
 //! This metadata lock does not replace the symbol authority required by the
 //! backing transaction. No table is reclaimed here: a later stop-bound receipt
 //! must establish that every generated activation has returned first.
+use super::sync::{AtomicPtr, Mutex, MutexGuard, Ordering, TryLockError};
 use super::{
     OwnedSymbolTable, PointerTableGeneration, PreparedSymbolTable, PublishedSymbolTable,
     SymbolChunkAddress, SymbolTableShape, TableError,
 };
 use std::marker::PhantomData;
 use std::mem::size_of;
-use std::sync::atomic::{AtomicPtr, Ordering};
-use std::sync::{Mutex, MutexGuard, TryLockError};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct RetainedTableBytes(usize);
