@@ -1354,6 +1354,17 @@ jobs:
               --no-fail-fast
           "
 
+      # Failure-only. A green run keeps no screenshots. The directory holds
+      # the linux-x11 stderr, stdout, json, and png from the GUI harness.
+      - name: Upload xwidget GUI artifacts
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: xwidget-webview-linux-x11-${{ github.run_id }}-${{ github.run_attempt }}
+          path: target/neomacs-gui-tests/linux-x11/
+          if-no-files-found: warn
+          retention-days: 1
+
   doom-install-compatibility:
     name: doom install compatibility (linux x86_64)
     if: ${{ !cancelled() && github.event_name != 'schedule' && (github.event_name != 'workflow_dispatch' || github.event.inputs.job == 'all') && (needs.neomacs-test-runtime.result == 'success') }}
