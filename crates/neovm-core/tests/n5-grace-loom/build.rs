@@ -55,6 +55,24 @@ fn main() {
              must be re-anchored (N5 design rev 2 section 2.2)"
         );
     }
+    // Names the included file reaches outside the original sync imports.
+    // The model supplies them from the stand-in, the crate-root stubs, and
+    // the std shim. Removing one of them is a re-anchor, not a silent drop.
+    for expected in [
+        "std::iter::once",
+        "std::rc::Rc",
+        "super::SymbolChunkIndex",
+        "crate::intern::NameId",
+        "crate::symbol::LispSymbol",
+        ".as_slice()",
+        "generation.0",
+    ] {
+        assert!(
+            stripped.contains(expected),
+            "publication.rs no longer contains `{expected}`: the loom seam \
+             must be re-anchored (N5 design rev 2 section 2.2)"
+        );
+    }
     let out =
         Path::new(&env::var("OUT_DIR").expect("OUT_DIR set by cargo")).join("publication.inc");
     fs::write(&out, stripped).expect("write the stripped ledger copy");

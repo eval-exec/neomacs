@@ -36,12 +36,16 @@
 //!   limit with `NeedGrace(RetiredTables)`, interning continues through
 //!   the current table (`Unchanged`), and nothing is charged for the
 //!   count refusal.
+#[path = "support/intern.rs"]
+pub mod intern;
+#[path = "support/symbol.rs"]
+pub mod symbol;
 #[path = "support/vocab.rs"]
 mod vocab;
 
 pub use vocab::{
     OwnedSymbolTable, PointerTableGeneration, PreparedSymbolTable, PublishedSymbolTable,
-    SymbolChunkAddress, SymbolTableShape, TableError,
+    SymbolChunkAddress, SymbolChunkIndex, SymbolTableShape, TableError,
 };
 use vocab::{SymbolChunkCount, SymbolChunkSlots, SymbolSlotCount};
 
