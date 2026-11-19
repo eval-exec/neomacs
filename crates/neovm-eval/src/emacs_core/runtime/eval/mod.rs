@@ -7533,6 +7533,9 @@ mod macroexpand;
 
 mod admission;
 pub(crate) use admission::AdmissionError;
+#[doc(hidden)]
+pub mod activation;
+mod activation_owner;
 mod global_state;
 mod green;
 
