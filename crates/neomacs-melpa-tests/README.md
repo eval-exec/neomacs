@@ -36,6 +36,9 @@ phase-specific failures.
   batch model for their comprehensive API corpora. Named logical cases cover
   normal, empty, boundary, mutation, evaluation-count, Unicode, and signal
   behavior without paying a process pair for every snapshot.
+- `src/parity_tests/etaf_*` and `src/gui_parity_tests/etaf_*` cover the pinned
+  `emacs-taf` ecosystem: a load/API-surface test for every package, behavioural
+  batches for the pure engines and readers, and real-GUI page/panel probes.
 - Inline `expect-test` snapshots pin the complete normalized `OK` value or
   `ERR` signal. The harness reports differential, outcome-kind, GNU Emacs
   snapshot, and Neomacs snapshot failures together instead of short-circuiting
@@ -186,6 +189,34 @@ cargo nextest run -p neomacs-melpa-tests \
 
 Review every snapshot diff before committing it. Divergent GNU Emacs and
 Neomacs outcomes fail before `expect-test` can update the snapshot.
+
+## ETAF ecosystem corpus
+
+The pinned `emacs-taf` packages are the project's largest real-world divergence
+surface. `parity_tests/etaf_ecosystem` loads every package (32 modules) and
+compares the feature plus the package-prefixed `fboundp`/`boundp` surface;
+batch modules cover `ecss` (cascade/specificity/layers/var), `ebox`
+(render/flex/mutation), `ekp` (layout plans/justification), `etaf`
+(refs/Data/animation/View), `etaf-ui` (color/QR/icons/editor) and the
+`etaf-md`/`etaf-org-preview` headless readers. `gui_parity_tests/etaf_*` adds
+real X11 probes for the md/org pages and the posframe child frame.
+
+The GUI probes pin both editors' exact observations on a fixed
+DejaVu Sans Mono 10pt face, so the pixel values do not move with the host's
+font. While these known divergences are open:
+
+- `frame-live-p` returns the terminal type (`x`) in GNU and `t` here;
+- a posframe anchored at `(cells 1 1)` lands at top 17 in GNU and top 68 here;
+- one default line is 17 px in GNU and 18 px here (a 12-line page is 245 vs
+  256 px tall);
+- a face set to `:height 100` reports 101 in GNU and 100 here, and scaled
+  heading heights differ by 2;
+- a bare frame's default palette is #f7f7f7/#000000 in GNU and
+  #eff0f2/#1F2328 here;
+- preview and panel buffer lines here start with U+200B.
+
+Each test fails when its divergence is fixed; flip it to a single
+`assert_eq` and delete the note.
 
 When MELPA publishes a new version, update only the hard-coded version next to
 the package name in `DASH_MELPA_PIN`, `S_MELPA_PIN`, or the relevant package
