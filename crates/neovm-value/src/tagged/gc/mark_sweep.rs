@@ -5,6 +5,12 @@
 
 use super::*;
 
+/// Weak-table entries the weak pass's fixpoint has examined, summed over
+/// every table and round (test-only cost probe).
+#[cfg(any(test, feature = "test-support"))]
+pub(super) static WEAK_ENTRY_VISITS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
 /// Where [`TaggedHeap::for_each_veclike_child`] sends children: one at a
 /// time, or a run at once, which a vector collects with one reservation.
 pub(super) trait ChildSink {
@@ -1829,9 +1835,22 @@ impl TaggedHeap {
         // collectible table from the registry before freeing its storage.
         // Young tables join this cycle's worklist through `trace_veclike` /
         // `register_weak_hash_table_for_sweep`.
-        for &tptr in &self.always_swept_weak_tables {
-            if self.weak_hash_tables_set.insert(tptr) {
-                self.weak_hash_tables.push(tptr);
+        //
+        // A minor seeds none of them. Every minor survivor is promoted, so an
+        // old table can gain a young key or value only through a store, and
+        // the store logs the table (`remember_owner`); the remembered seed
+        // then registered it above. At the end of the first partition cycle,
+        // `scan_permanents_for_young_children` remembers every tenured table
+        // that holds a collectible child, so the next minor registers those
+        // the same way. An unwritten old table holds only old, permanent or
+        // immediate children, all black by generation here
+        // (`is_value_marked`): each entry survives and marks nothing, so
+        // scanning it cannot change the result.
+        if !self.is_minor_collection() {
+            for &tptr in &self.always_swept_weak_tables {
+                if self.weak_hash_tables_set.insert(tptr) {
+                    self.weak_hash_tables.push(tptr);
+                }
             }
         }
 
@@ -1862,6 +1881,8 @@ impl TaggedHeap {
                     tables.inspect(tptr, |ht| {
                         let weakness = ht.weakness;
                         for entry in ht.data.entries_in_slot_order() {
+                            #[cfg(any(test, feature = "test-support"))]
+                            WEAK_ENTRY_VISITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             let (key, value) = (entry.key, entry.value);
                             let key_survives = self.is_value_marked(key);
                             let value_survives = self.is_value_marked(value);

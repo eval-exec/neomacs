@@ -2944,6 +2944,10 @@ mod generational_tests;
 #[path = "gc/tests/birth_logs_test.rs"]
 mod birth_logs_tests;
 
+#[cfg(test)]
+#[path = "gc/tests/weak_table_minor_test.rs"]
+mod weak_table_minor_tests;
+
 #[cfg(feature = "test-support")]
 #[path = "gc/tests/generational_major_test.rs"]
 mod generational_major_tests;
