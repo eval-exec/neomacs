@@ -478,6 +478,71 @@ impl Drop for LocalHeapScope {
     }
 }
 
+/// Armed before preparation may call a retention or publication hook.
+/// An unwind retains every owning input. Drop does not recover them.
+struct RetainedBootstrapParts {
+    owner: std::mem::ManuallyDrop<WorldLoan>,
+    roots: std::mem::ManuallyDrop<FrozenLegacyRoots>,
+    observations: std::mem::ManuallyDrop<SourceObservationsDetached>,
+}
+
+impl RetainedBootstrapParts {
+    fn new(
+        owner: WorldLoan,
+        roots: FrozenLegacyRoots,
+        observations: SourceObservationsDetached,
+    ) -> Self {
+        Self {
+            owner: std::mem::ManuallyDrop::new(owner),
+            roots: std::mem::ManuallyDrop::new(roots),
+            observations: std::mem::ManuallyDrop::new(observations),
+        }
+    }
+
+    fn into_parts(self) -> (WorldLoan, FrozenLegacyRoots, SourceObservationsDetached) {
+        let Self {
+            owner,
+            roots,
+            observations,
+        } = self;
+        (
+            std::mem::ManuallyDrop::into_inner(owner),
+            std::mem::ManuallyDrop::into_inner(roots),
+            std::mem::ManuallyDrop::into_inner(observations),
+        )
+    }
+}
+
+struct RetainedPreparation<'heap> {
+    admission: std::mem::ManuallyDrop<Gen1Admission<'heap>>,
+    parts: RetainedBootstrapParts,
+}
+
+impl<'heap> RetainedPreparation<'heap> {
+    fn into_parts(
+        self,
+    ) -> (
+        Gen1Admission<'heap>,
+        WorldLoan,
+        FrozenLegacyRoots,
+        SourceObservationsDetached,
+    ) {
+        let Self { admission, parts } = self;
+        let (owner, roots, observations) = parts.into_parts();
+        (
+            std::mem::ManuallyDrop::into_inner(admission),
+            owner,
+            roots,
+            observations,
+        )
+    }
+}
+
+pub(crate) mod source_preparation;
+
+#[doc(hidden)]
+pub use source_preparation::ClosedSourcePrepareFailure;
+
 impl PreparedHeapTransfer {
     /// # Safety
     /// The caller has consumed the actual sole serial owner into an
@@ -501,31 +566,39 @@ impl PreparedHeapTransfer {
     /// counts cannot discover them. Observation ownership is checked here from
     /// the receipt the caller detached after its own frames returned. That
     /// receipt stays in [`PendingHeapReturn`], never in the `Send` transfer.
+    ///
+    /// The admission, loan, census, and receipt are armed before any retention
+    /// or publication hook. A panic in that hook retains them. A typed refusal
+    /// returns them to the caller.
     #[doc(hidden)]
     pub unsafe fn prepare_detached<'heap>(
-        mut admission: Gen1Admission<'heap>,
+        admission: Gen1Admission<'heap>,
         owner: WorldLoan,
         roots: FrozenLegacyRoots,
         observations: SourceObservationsDetached,
     ) -> Result<(PendingHeapReturn, Self), PrepareFailure<'heap>> {
+        let mut armed = RetainedPreparation {
+            admission: std::mem::ManuallyDrop::new(admission),
+            parts: RetainedBootstrapParts::new(owner, roots, observations),
+        };
         let validation = (|| {
-            let heap = admission.collector_mut().registration_heap_mut();
-            if heap.heap_identity() != owner.parallel_heap_identity()
-                || roots.heap_identity() != heap.heap_identity()
+            let heap = armed.admission.collector_mut().registration_heap_mut();
+            if heap.heap_identity() != armed.parts.owner.parallel_heap_identity()
+                || armed.parts.roots.heap_identity() != heap.heap_identity()
             {
                 return Err(TransferError::WrongHeap);
             }
-            if !owner.held_here() {
+            if !armed.parts.owner.held_here() {
                 return Err(TransferError::WrongThread);
             }
             if tagged_heap_is_installed() {
                 return Err(TransferError::InstalledTls);
             }
-            let root = owner.heap_root_designator();
+            let root = armed.parts.owner.heap_root_designator();
             if root.as_non_null().as_ptr() != std::ptr::from_mut(heap) {
                 return Err(TransferError::WrongRoot);
             }
-            heap.validate_source_observation_receipt(&observations)
+            heap.validate_source_observation_receipt(&armed.parts.observations)
                 .map_err(TransferError::Observations)?;
             let generation = NEXT_TRANSFER
                 .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
@@ -535,15 +608,19 @@ impl PreparedHeapTransfer {
             let generation = NonZeroU64::new(generation).ok_or(TransferError::Exhausted)?;
             let mut words = Vec::new();
             words
-                .try_reserve_exact(roots.words().len())
+                .try_reserve_exact(armed.parts.roots.words().len())
                 .map_err(|_| TransferError::Capacity)?;
             words.extend(
-                roots
+                armed
+                    .parts
+                    .roots
                     .words()
                     .iter()
                     .map(|value| OpaqueRootWord(value.bits())),
             );
-            let epoch = owner
+            let epoch = armed
+                .parts
+                .owner
                 .parallel_epoch_retention()
                 .map_err(|_| TransferError::Roots)?;
             let prepared = PreparedRootBatch::reserve_retained(heap, epoch, words.len())
@@ -551,8 +628,8 @@ impl PreparedHeapTransfer {
             // SAFETY: the consumed sole owner and the actual GEN1 admission
             // retain every original input. No collection or callback occurs
             // during publication.
-            let finalized =
-                unsafe { prepared.finalize(roots.words()) }.map_err(|_| TransferError::Roots)?;
+            let finalized = unsafe { prepared.finalize(armed.parts.roots.words()) }
+                .map_err(|_| TransferError::Roots)?;
             let publication = finalized
                 .publish_finalized_root_batch()
                 .map_err(|_| TransferError::Roots)?;
@@ -566,6 +643,7 @@ impl PreparedHeapTransfer {
         let (root, generation, publication, words) = match validation {
             Ok(value) => value,
             Err(reason) => {
+                let (admission, owner, roots, observations) = armed.into_parts();
                 return Err(PrepareFailure {
                     reason,
                     admission,
@@ -575,6 +653,7 @@ impl PreparedHeapTransfer {
                 });
             }
         };
+        let (admission, owner, roots, observations) = armed.into_parts();
         let identity = TransferIdentity {
             heap: admission.heap_identity(),
             generation,

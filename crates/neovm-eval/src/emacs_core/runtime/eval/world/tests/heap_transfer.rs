@@ -9,14 +9,17 @@ use super::heap_transfer_adapter;
 use crate::emacs_core::eval::Context;
 use neovm_value::tagged::collection_reads::SourceObservationError;
 use neovm_value::tagged::gc::heap_transfer::{
-    PendingHeapReturn, PreparedHeapTransfer, RestoredHeapBacking, TransferError,
+    HeapRootDesignator, PendingHeapReturn, PreparedHeapTransfer, RestoredHeapBacking, TransferError,
 };
 use neovm_value::tagged::gc::{
-    EraWorldLoan, FrozenFunctionRoots, FrozenLegacyRoots, Gen1Admission, Gen1AdmissionError,
-    PlainSymbolBacking, WorldLoan,
+    AllStopped, EraWorldLoan, FacadeEpochRetention, FacadeMarkExclusionError, FrozenFunctionRoots,
+    FrozenLegacyRoots, Gen1Admission, Gen1AdmissionError, HeapIdentity, PlainSymbolBacking,
+    RegistrationError, RendezvousError, SymbolRootDesignators, WorldLoan,
 };
+use neovm_value::tagged::header::MarkerObj;
 use neovm_value::tagged::value::TaggedValue;
 use std::cell::RefCell;
+use std::sync::Arc;
 
 enum PreparationExpectation {
     Prepared,
@@ -526,4 +529,235 @@ fn pentry_e2b_heap_transfer_source_certificate_refusal_owns_recovery_inputs() {
         let (_reason, restored) = failure.into_restored();
         finish_restored(restored);
     });
+}
+
+/// Return every collector and era argument frame before reconstructing the
+/// closed source. The caller holds `unit_harness` for the whole loan.
+fn closed_source_inputs() -> (
+    WorldLoan,
+    FrozenLegacyRoots,
+    neovm_value::tagged::collection_reads::SourceObservationsDetached,
+) {
+    let census = RefCell::new(Vec::new());
+    Context::with_test_symbol_functions_init_era(
+        PlainSymbolBacking::Unprojected,
+        |obarray, ids| {
+            let private = TaggedValue::string("closed-source-transfer-root");
+            obarray.seed_value_id(ids[0], private);
+            census
+                .borrow_mut()
+                .extend([private, TaggedValue::fixnum(73), TaggedValue::NIL]);
+        },
+        |era, _| {
+            let (mut collector, owner) = era.finish().expect("closed source fixture finishes");
+            let heap = collector.heap_identity();
+            // SAFETY: the private test frame above was captured before the
+            // collector loan, no Context or activation remains, and World
+            // storage still retains every word through this closed fixture.
+            let roots = unsafe {
+                FrozenLegacyRoots::new(heap, census.take(), FrozenFunctionRoots::Quiescent)
+            };
+            let root = owner.parallel_heap_root_designator();
+            heap_transfer_adapter::detach_source_heap(root.as_non_null());
+            assert!(!neovm_value::tagged::gc::tagged_heap_is_installed());
+            let observations = collector
+                .detach_source_observations()
+                .expect("actual source observation detachment");
+            drop(collector);
+            (WorldLoan::from(owner), roots, observations)
+        },
+    )
+}
+
+fn prepare_closed_fixture() -> Option<(PendingHeapReturn, PreparedHeapTransfer)> {
+    let (owner, roots, observations) = closed_source_inputs();
+    // SAFETY: every original source collector and era argument frame returned
+    // from `closed_source_inputs` first. No source view, TLS slot, or heap
+    // mutation remains. The owner, census, and receipt retain that same
+    // closed quiescent allocation.
+    match unsafe { PreparedHeapTransfer::prepare_closed_source(owner, roots, observations) } {
+        Ok(prepared) => Some(prepared),
+        Err(failure) => {
+            assert_eq!(failure.reason(), TransferError::GenerationalRequired);
+            None
+        }
+    }
+}
+
+fn finish_closed_source(pending: PendingHeapReturn, transfer: PreparedHeapTransfer) {
+    let returned = transfer.return_to_source().expect("reference-free return");
+    let restored = pending
+        .restore(returned)
+        .unwrap_or_else(|failure| panic!("source restore: {:?}", failure.reason()));
+    // SAFETY: original source thread. This fixture has no Context or
+    // activation to reattach. No collector borrow remains, and the restored
+    // words stay owned until publication retirement under serial access.
+    let (owner, roots, publication) =
+        unsafe { heap_transfer_adapter::recover_transferred_source(restored) }
+            .unwrap_or_else(|failure| panic!("source materialization: {:?}", failure.reason()));
+    assert!(owner.held_here());
+    let words = census_words(&roots);
+    assert_eq!(words.len(), 3);
+    assert_eq!(
+        words[0].as_str_owned().as_deref(),
+        Some("closed-source-transfer-root")
+    );
+    assert_eq!(words[1], TaggedValue::fixnum(73));
+    assert_eq!(words[2], TaggedValue::NIL);
+    publication
+        .try_finish()
+        .expect("closed source publication has no readers");
+    drop(roots);
+    drop(owner);
+}
+
+#[test]
+fn pentry_e2b_heap_transfer_closed_source_roundtrip() {
+    let _harness = crate::test_utils::unit_harness();
+    let Some((pending, transfer)) = prepare_closed_fixture() else {
+        return;
+    };
+    finish_closed_source(pending, transfer);
+}
+
+#[test]
+fn pentry_e2b_heap_transfer_closed_source_actual_os_thread_loans() {
+    let _harness = crate::test_utils::unit_harness();
+    let Some((pending, transfer)) = prepare_closed_fixture() else {
+        return;
+    };
+    let transfer = std::thread::spawn(move || {
+        let (transfer, heap) = transfer
+            .with_collector(|admission| {
+                let collector = admission.into_collector();
+                let heap = collector.heap_identity();
+                (collector, heap)
+            })
+            .expect("destination-local GEN1 loan");
+        assert_eq!(heap, transfer.heap_identity());
+        transfer
+    })
+    .join()
+    .expect("service thread");
+    assert!(!neovm_value::tagged::gc::tagged_heap_is_installed());
+    finish_closed_source(pending, transfer);
+}
+
+#[test]
+fn pentry_e2b_heap_transfer_closed_source_drop_poison_retains_publication() {
+    let _harness = crate::test_utils::unit_harness();
+    let Some((pending, transfer)) = prepare_closed_fixture() else {
+        return;
+    };
+    drop(transfer);
+    assert!(pending.is_poisoned());
+    drop(pending);
+}
+
+#[test]
+fn pentry_e2b_heap_transfer_closed_source_foreign_tls_refusal_keeps_original_inputs() {
+    let _harness = crate::test_utils::unit_harness();
+    let (owner, roots, observations) = closed_source_inputs();
+    let expected = owner.parallel_heap_identity();
+    let unrelated =
+        neovm_value::tagged::gc::AliasableBox::new(neovm_value::tagged::gc::TaggedHeap::new());
+    neovm_value::tagged::gc::set_tagged_heap_root(unrelated.root());
+    // SAFETY: the original source frames remain closed and retained. A
+    // different TLS activation is introduced only to prove the refusal runs
+    // before any heap dereference.
+    let outcome =
+        unsafe { PreparedHeapTransfer::prepare_closed_source(owner, roots, observations) };
+    let current = neovm_value::tagged::gc::tagged_heap_is_current(&unrelated);
+    neovm_value::tagged::gc::clear_tagged_heap_if_installed(&unrelated);
+    let failure = match outcome {
+        Err(failure) => failure,
+        Ok(_) => panic!("foreign TLS was accepted"),
+    };
+    assert_eq!(failure.reason(), TransferError::InstalledTls);
+    assert_eq!(failure.retained_owner_heap_identity(), expected);
+    assert_eq!(failure.retained_root_word_count(), 3);
+    assert!(current);
+}
+
+struct PanickingRetention {
+    inner: WorldLoan,
+    _probe: Arc<()>,
+}
+
+// SAFETY: every identity and backing operation delegates to the same actual
+// owner. The retention hook panics before producing a new right. Preparation
+// must retain this original adapter during unwinding.
+unsafe impl EraWorldLoan for PanickingRetention {
+    fn held_here(&self) -> bool {
+        self.inner.held_here()
+    }
+
+    fn parallel_heap_identity(&self) -> HeapIdentity {
+        self.inner.parallel_heap_identity()
+    }
+
+    fn parallel_epoch_retention(&self) -> Result<FacadeEpochRetention, FacadeMarkExclusionError> {
+        panic!("CLOSED_SOURCE_RETENTION_HOOK_UNWIND")
+    }
+
+    fn symbol_root_designators(&self) -> SymbolRootDesignators {
+        self.inner.symbol_root_designators()
+    }
+
+    fn check_symbol_root_designators(
+        &self,
+        roots: &SymbolRootDesignators,
+    ) -> Result<(), RegistrationError> {
+        self.inner.check_symbol_root_designators(roots)
+    }
+
+    fn collect_parallel_world_roots(
+        &self,
+        stopped: &mut AllStopped<'_>,
+        out: &mut Vec<TaggedValue>,
+    ) -> Result<Vec<*mut *mut MarkerObj>, RendezvousError> {
+        self.inner.collect_parallel_world_roots(stopped, out)
+    }
+
+    fn into_retained_owner(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
+        Box::new(self.inner).into_retained_owner()
+    }
+
+    fn adopt_current_thread(&self) {
+        self.inner.adopt_current_thread()
+    }
+
+    fn heap_root_designator(&self) -> HeapRootDesignator {
+        self.inner.heap_root_designator()
+    }
+}
+
+#[test]
+fn pentry_e2b_heap_transfer_closed_source_unwind_retains_actual_owner() {
+    let _harness = crate::test_utils::unit_harness();
+    let (owner, roots, observations) = closed_source_inputs();
+    let probe = Arc::new(());
+    let weak = Arc::downgrade(&probe);
+    let owner = WorldLoan::new(PanickingRetention {
+        inner: owner,
+        _probe: probe,
+    });
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        // SAFETY: every actual source frame ended, on the same original
+        // backing, with no intervening heap operation. The fault changes only
+        // the retention hook.
+        unsafe { PreparedHeapTransfer::prepare_closed_source(owner, roots, observations) }
+    }));
+    match outcome {
+        Err(payload) => assert_eq!(
+            payload.downcast_ref::<&str>().copied(),
+            Some("CLOSED_SOURCE_RETENTION_HOOK_UNWIND")
+        ),
+        Ok(Err(failure)) => assert_eq!(failure.reason(), TransferError::GenerationalRequired),
+        Ok(Ok(_)) => panic!("retention hook did not execute"),
+    }
+    assert!(
+        weak.upgrade().is_some(),
+        "unwind or refusal must retain the original owner"
+    );
 }
