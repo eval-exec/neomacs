@@ -12368,7 +12368,7 @@ fn mouse_position_in_root_frame_walks_parent_frames() {
 fn mouse_position_in_root_frame_rejects_a_frame_that_no_longer_exists() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
-    eval.store_variable_by_name("issue660-dead-frame", Value::make_frame(999_999));
+    eval.store_variable_by_name("issue660-dead-frame", Value::mint_frame(999_999));
     eval.eval_str(
         "(setq mouse-position-function
                (lambda (_pos) (cons issue660-dead-frame (cons 5 6))))",
@@ -12399,7 +12399,7 @@ fn mouse_position_in_root_frame_rejects_a_missing_ancestor_frame() {
         // Neomacs delete-frame does not yet soft-delete a parent's children
         // the way GNU does (src/frame.c:2645-2664), so a surviving child can
         // still reference a frame that is no longer in the store.
-        frame.parent_frame = Value::make_frame(999_999);
+        frame.parent_frame = Value::mint_frame(999_999);
     }
     eval.store_variable_by_name("issue660-orphan-frame", Value::make_frame(child_id.0));
     eval.eval_str(
@@ -12604,7 +12604,7 @@ fn dispatch_builtin_pure_handles_window_placeholders_but_defers_frame_selection(
         dispatch_builtin_pure("handle-save-session", vec![Value::symbol("event")]),
     );
 
-    assert!(dispatch_builtin_pure("handle-switch-frame", vec![Value::make_frame(1)]).is_none());
+    assert!(dispatch_builtin_pure("handle-switch-frame", vec![Value::mint_frame(1)]).is_none());
 
     let divider = dispatch_builtin_pure("window-bottom-divider-width", vec![])
         .expect("window-bottom-divider-width should resolve")

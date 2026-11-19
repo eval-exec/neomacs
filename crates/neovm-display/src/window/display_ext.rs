@@ -2201,6 +2201,10 @@ impl DisplayFrameManagerExt for FrameManager {
         // Frame ids are not reused. Drop a tombstone anyway so a wrapped id
         // cannot answer `framep` with a previous frame's output method.
         self.deleted_frames.remove(&frame_id);
+        // The heap object exists from the moment the frame does.
+        // `Value::make_frame` never mints: a later missing registry entry
+        // means the id was reclaimed or never created.
+        let _frame_object = Value::mint_frame(frame_id.0);
 
         let window_id = self.next_window_id();
         let bounds = Rect::new(0.0, 0.0, width as f32, height as f32);

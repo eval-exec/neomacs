@@ -3191,6 +3191,21 @@ pub struct PendingContentTransitionIntents {
     pub frames: PendingIntentLedger<FrameId>,
 }
 
+/// One deleted window's records, held aside while a full collection decides
+/// whether its owning frame object is still reachable.
+pub(crate) struct DeletedFrameWindowRecord {
+    pub(crate) window: WindowId,
+    pub(crate) record: DeletedWindowRecord,
+    pub(crate) parameters: Option<WindowParameters>,
+}
+
+/// Window records of one deleted frame, taken out of the traced maps for a
+/// single explicit full collection.
+pub(crate) struct DeletedFrameGcRecord {
+    pub(crate) frame_id: u64,
+    pub(crate) windows: Vec<DeletedFrameWindowRecord>,
+}
+
 /// What a deleted window remembers on the window object GNU keeps alive.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DeletedWindowRecord {
@@ -7094,6 +7109,118 @@ impl FrameManager {
         let a_z = self.frames.get(&a).map(|frame| frame.z_order).unwrap_or(0);
         let b_z = self.frames.get(&b).map(|frame| frame.z_order).unwrap_or(0);
         a_z.cmp(&b_z).then_with(|| a.0.cmp(&b.0))
+    }
+
+    /// Pull dead-frame window records out of the traced maps for one explicit
+    /// full collection.
+    ///
+    /// The set of frames is the tombstone map. Grouping `deleted_windows` by
+    /// owner would skip a deleted frame that has no window record, and that
+    /// frame would stay an unconditional registry root. A tombstone is armed
+    /// with whatever fields it has, including an empty list.
+    ///
+    /// A dead frame that owns any materialized window object is not armed.
+    /// GNU `mark_window` marks `w->frame`, and the window registry keeps that
+    /// window object for the session, so the frame stays an ordinary root and
+    /// its parameter records stay in the traced maps. Windows deleted from a
+    /// frame that is still live stay in the maps as well.
+    pub(crate) fn take_deleted_frames_for_gc(
+        &mut self,
+        window_materialized: impl Fn(u64) -> bool,
+    ) -> (Vec<(u64, Vec<Value>)>, Vec<DeletedFrameGcRecord>) {
+        let frame_ids: Vec<FrameId> = self.deleted_frames.keys().copied().collect();
+        let mut ephemerons = Vec::new();
+        let mut taken = Vec::new();
+        for frame_id in frame_ids {
+            if self.frames.contains_key(&frame_id) {
+                continue;
+            }
+            let windows: Vec<WindowId> = self
+                .deleted_windows
+                .iter()
+                .filter_map(|(wid, record)| (record.owner == Some(frame_id)).then_some(*wid))
+                .collect();
+            if windows.iter().any(|wid| window_materialized(wid.0)) {
+                continue;
+            }
+            let mut fields = Vec::new();
+            let mut records = Vec::new();
+            for wid in windows {
+                let Some(record) = self.deleted_windows.remove(&wid) else {
+                    continue;
+                };
+                let parameters = self.deleted_window_parameters.remove(&wid);
+                if let Some(params) = parameters.as_ref() {
+                    for (key, value) in params {
+                        fields.push(*key);
+                        fields.push(*value);
+                    }
+                }
+                records.push(DeletedFrameWindowRecord {
+                    window: wid,
+                    record,
+                    parameters,
+                });
+            }
+            ephemerons.push((frame_id.0, fields));
+            taken.push(DeletedFrameGcRecord {
+                frame_id: frame_id.0,
+                windows: records,
+            });
+        }
+        (ephemerons, taken)
+    }
+
+    /// Put an uncommitted batch back. A panicking collection calls this from
+    /// its drop guard so the records are not lost.
+    pub(crate) fn restore_deleted_frame_records(&mut self, taken: Vec<DeletedFrameGcRecord>) {
+        for frame in taken {
+            self.put_back_deleted_frame_windows(frame.windows);
+        }
+    }
+
+    fn put_back_deleted_frame_windows(&mut self, windows: Vec<DeletedFrameWindowRecord>) {
+        for window in windows {
+            self.deleted_windows.insert(window.window, window.record);
+            if let Some(parameters) = window.parameters {
+                self.deleted_window_parameters
+                    .insert(window.window, parameters);
+            }
+        }
+    }
+
+    /// Drop the output-method tombstone for a frame whose heap object this
+    /// collection reclaimed. `framep` then has nothing to answer with.
+    pub(crate) fn forget_reclaimed_frame(&mut self, frame_id: FrameId) {
+        self.deleted_frames.remove(&frame_id);
+    }
+
+    /// Apply one collection's reclaimed frame ids.
+    ///
+    /// Reached frames get their window records back. A reclaimed frame drops
+    /// `deleted_windows` and `deleted_window_parameters` only for windows that
+    /// have no materialized window object. A materialized window keeps its
+    /// records even if its frame id was reported reclaimed.
+    pub(crate) fn commit_reclaimed_deleted_frames(
+        &mut self,
+        taken: Vec<DeletedFrameGcRecord>,
+        reclaimed: &[u64],
+        window_materialized: impl Fn(u64) -> bool,
+    ) {
+        let reclaimed: HashSet<u64> = reclaimed.iter().copied().collect();
+        for frame in taken {
+            if reclaimed.contains(&frame.frame_id) {
+                self.forget_reclaimed_frame(FrameId(frame.frame_id));
+                let (keep, drop_these): (Vec<_>, Vec<_>) = frame
+                    .windows
+                    .into_iter()
+                    .partition(|window| window_materialized(window.window.0));
+                drop(drop_these);
+                self.put_back_deleted_frame_windows(keep);
+            } else {
+                self.put_back_deleted_frame_windows(frame.windows);
+            }
+        }
     }
 
     /// What a window should remember once it is deleted.

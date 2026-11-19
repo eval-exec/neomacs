@@ -3072,16 +3072,50 @@ impl TaggedValue {
         })
     }
 
-    /// Allocate a frame reference.
+    /// Return the frame object for `id`.
+    ///
+    /// Frame creation ([`Self::mint_frame`]) is the only mint. A missing
+    /// registry entry means the frame was reclaimed or never created. This
+    /// lookup does not allocate and does not reinsert.
     pub fn make_frame(id: u64) -> Self {
+        with_tagged_heap(|h| match h.frame_value(id) {
+            Some(value) => value,
+            None => {
+                tracing::error!(
+                    frame_id = id,
+                    "make_frame refused a missing frame id; a missing registry entry means the frame was reclaimed or never existed"
+                );
+                debug_assert!(
+                    false,
+                    "make_frame({id}) on a missing frame registry entry (reclaimed or never existed)"
+                );
+                Value::NIL
+            }
+        })
+    }
+
+    /// The frame object when the registry still has `id`.
+    ///
+    /// Unlike [`Self::make_frame`], a missing entry returns `None` and does
+    /// not assert. Callers that can observe a deleted id use this so a
+    /// reclaimed id never reaches the refusal. A structure that keeps the id
+    /// must root the returned object or clear the id at delete.
+    pub fn registered_frame(id: u64) -> Option<Self> {
+        with_tagged_heap(|h| h.frame_value(id))
+    }
+
+    /// Mint the heap object for a frame at the moment the frame is created.
+    ///
+    /// Idempotent: an id that is already registered returns that object.
+    /// [`Self::make_frame`] is the later lookup and never mints.
+    pub fn mint_frame(id: u64) -> Self {
         with_tagged_heap(|h| {
             if let Some(value) = h.frame_value(id) {
-                value
-            } else {
-                let value = h.alloc_frame(id);
-                h.register_frame_value(id, value);
-                value
+                return value;
             }
+            let value = h.alloc_frame(id);
+            h.register_frame_value(id, value);
+            value
         })
     }
 

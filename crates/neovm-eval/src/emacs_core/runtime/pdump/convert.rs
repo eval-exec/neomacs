@@ -1254,7 +1254,7 @@ impl<'a> LoadDecoder<'a> {
             .state
             .frames
             .entry(id)
-            .or_insert_with(|| Value::make_frame(id))
+            .or_insert_with(|| Value::mint_frame(id))
     }
 
     #[doc(hidden)]

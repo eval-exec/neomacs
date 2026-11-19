@@ -1663,8 +1663,15 @@ impl TaggedHeap {
             )
             .chain(
                 self.frame_registry
-                    .values()
-                    .map(|value| (*value, "frame-registry")),
+                    .iter()
+                    .filter(|(id, _)| {
+                        self.ephemeron_records.deleted_frame_ephemerons.is_empty()
+                            || !self
+                                .ephemeron_records
+                                .deleted_frame_ephemerons
+                                .contains_key(*id)
+                    })
+                    .map(|(_, value)| (*value, "frame-registry")),
             )
             .chain(
                 self.timer_registry
@@ -1739,6 +1746,7 @@ impl TaggedHeap {
         self.mark_and_sweep_weak_tables();
         self.reclaim_unreached_retired_processes();
         self.reclaim_unreached_killed_buffers();
+        self.reclaim_unreached_deleted_frames();
         let mark_us = mark_t0.elapsed().as_micros() as u64;
 
         // The mark has drained and the sweep has not started: the one moment
@@ -1913,6 +1921,7 @@ impl TaggedHeap {
             }
             marked |= self.mark_reached_retired_processes();
             marked |= self.mark_reached_killed_buffers();
+            marked |= self.mark_reached_deleted_frames();
             // Drain whatever those surviving entries reached, then re-check.
             self.mark_all();
             if !marked {
@@ -1942,14 +1951,16 @@ impl TaggedHeap {
         }
     }
 
-    /// Mark retired-process and killed-buffer fields to one joint fixpoint.
-    /// A field of either kind can reach the key object of the other, so the
-    /// two ephemeron sets are drained together rather than one after another.
+    /// Mark retired-process, killed-buffer, and deleted-frame fields to one
+    /// joint fixpoint. A field of any kind can reach the key object of
+    /// another, so the three ephemeron sets are drained together rather than
+    /// one after another.
     fn mark_reached_ephemeron_records_to_fixpoint(&mut self) {
         loop {
             let processes = self.mark_reached_retired_processes();
             let buffers = self.mark_reached_killed_buffers();
-            if !(processes || buffers) {
+            let frames = self.mark_reached_deleted_frames();
+            if !(processes || buffers || frames) {
                 break;
             }
             self.mark_all();
@@ -2028,6 +2039,42 @@ impl TaggedHeap {
                 *slot = None;
             }
             self.ephemeron_records.reclaimed_buffer_ids.push(id);
+        }
+    }
+
+    /// Mark fields of deleted frames whose frame objects were reached.
+    /// Returns true when it adds work to the gray queue; the caller drains and
+    /// repeats so a chain that alternates kinds reaches one fixpoint.
+    fn mark_reached_deleted_frames(&mut self) -> bool {
+        let reached: Vec<_> = self
+            .ephemeron_records
+            .deleted_frame_ephemerons
+            .keys()
+            .copied()
+            .filter(|id| {
+                self.frame_value(*id)
+                    .is_some_and(|value| self.is_value_marked(value))
+            })
+            .collect();
+        for id in &reached {
+            let fields = self
+                .ephemeron_records
+                .deleted_frame_ephemerons
+                .remove(id)
+                .unwrap_or_default();
+            for field in fields {
+                self.mark_or_push_child(field, "deleted-frame-field");
+            }
+        }
+        !reached.is_empty()
+    }
+
+    /// Drop registry roots for deleted frames that no other root reached.
+    fn reclaim_unreached_deleted_frames(&mut self) {
+        let unreached = std::mem::take(&mut self.ephemeron_records.deleted_frame_ephemerons);
+        for id in unreached.into_keys() {
+            self.frame_registry.remove(&id);
+            self.ephemeron_records.reclaimed_frame_ids.push(id);
         }
     }
 

@@ -214,6 +214,17 @@ impl<T> DerefMut for WorldView<T> {
         unsafe { self.ptr.as_mut() }
     }
 }
+
+impl<T> WorldView<T> {
+    /// Provenance root for a pointer held across later borrows of this view.
+    ///
+    /// A pointer taken from `&mut *view` is a child tag. The next reborrow of
+    /// the view invalidates it. [`Self::heap_root`] is this root for the heap.
+    #[inline(always)]
+    pub(crate) fn provenance_root(&self) -> NonNull<T> {
+        self.ptr
+    }
+}
 impl WorldView<neovm_value::tagged::gc::TaggedHeap> {
     /// The heap's provenance root.
     ///

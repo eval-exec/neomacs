@@ -6,6 +6,51 @@
 use super::*;
 use neovm_value::tagged::gc::MarkPhase;
 
+/// Restores deleted-frame window records if the explicit collection unwinds
+/// before the success path commits them.
+///
+/// Buffer and process restores are not wrapped. This guard is the frames-only
+/// follow-up: a panic puts every taken record back and disarms the heap map
+/// so the next cycle does not treat those frames as ephemerons.
+struct DeletedFrameGcGuard {
+    frames: *mut super::data::window_state::FrameManager,
+    heap: *mut neovm_value::tagged::gc::TaggedHeap,
+    taken: Vec<super::data::window_state::DeletedFrameGcRecord>,
+    committed: bool,
+}
+
+impl Drop for DeletedFrameGcGuard {
+    fn drop(&mut self) {
+        if self.committed {
+            return;
+        }
+        // SAFETY: both pointers address this collection's Context, and Drop
+        // runs before that `&mut self` ends, including on unwind. The
+        // pointers are not used while a conflicting reference is live.
+        unsafe {
+            (*self.heap).abandon_deleted_frame_ephemerons();
+            (*self.frames).restore_deleted_frame_records(std::mem::take(&mut self.taken));
+        }
+    }
+}
+
+impl DeletedFrameGcGuard {
+    /// Record reclaimed ids, put reached records back, and defuse the guard.
+    ///
+    /// `commit` does not panic: it only moves maps. It is marked committed
+    /// first so a later unwind cannot restore records the collection already
+    /// decided.
+    fn commit(&mut self, reclaimed: Vec<u64>, window_materialized: impl Fn(u64) -> bool) {
+        self.committed = true;
+        let taken = std::mem::take(&mut self.taken);
+        // SAFETY: `frames` addresses the Context that owns this guard, and
+        // the collection borrow has finished.
+        unsafe {
+            (*self.frames).commit_reclaimed_deleted_frames(taken, &reclaimed, window_materialized);
+        }
+    }
+}
+
 /// Labels for the structured GC diagnostics; text compatibility stays in the
 /// event message for existing pause-analysis tools.
 #[derive(Clone, Copy)]
@@ -1413,6 +1458,10 @@ impl Context {
                         return;
                     }
                 }
+                // Pin frame objects named by bare ids (queued input, the last
+                // event frame, mouse position) before this collection can
+                // reclaim a deleted frame. The pins are ordinary roots.
+                self.command_loop.keyboard.refresh_retained_frame_pins();
                 // Arm killed-buffer ephemerons before begin_stw_collection
                 // seeds the buffer registry as an internal root.
                 let (ephemerons, killed_buffers) = self.edit.buffers.take_killed_buffers_for_gc();
@@ -1422,12 +1471,34 @@ impl Context {
                 let (ephemerons, retired_processes) =
                     self.processes.take_retired_processes_for_gc();
                 (*heap_ptr).arm_retired_process_ephemerons(ephemerons);
+                // Arm deleted-frame ephemerons before begin_stw_collection
+                // seeds the frame registry as an internal root. A frame that
+                // owns a materialized window is not armed: the window
+                // registry root keeps that frame alive.
+                // The stored provenance root, not `&mut *self.frames`: the
+                // guard's pointer has to stay valid across the later
+                // reborrows of this view inside seeding and the sweep.
+                let frames_ptr = self.frames.provenance_root().as_ptr();
+                let (frame_ephemerons, taken_frames) = self
+                    .frames
+                    .take_deleted_frames_for_gc(|id| (*heap_ptr).window_object_registered(id));
+                (*heap_ptr).arm_deleted_frame_ephemerons(frame_ephemerons);
+                let mut frame_guard = DeletedFrameGcGuard {
+                    frames: frames_ptr,
+                    heap: heap_ptr,
+                    taken: taken_frames,
+                    committed: false,
+                };
                 // Disarms a concurrent first cycle drained above, so this
                 // cycle traces the whole image before it promotes (see
                 // `begin_stw_collection`).
                 (*heap_ptr).begin_stw_collection();
                 self.seed_registered_mutator_roots_world_stopped(heap_ptr);
                 (*heap_ptr).complete_collection();
+                let reclaimed_frames = (*heap_ptr).take_reclaimed_frame_ids();
+                frame_guard.commit(reclaimed_frames, |id| {
+                    (*heap_ptr).window_object_registered(id)
+                });
                 let reclaimed_processes = (*heap_ptr).take_reclaimed_process_ids();
                 self.processes
                     .restore_reached_retired_processes(retired_processes, reclaimed_processes);

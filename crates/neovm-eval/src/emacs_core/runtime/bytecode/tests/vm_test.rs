@@ -1701,6 +1701,9 @@ fn vm_fillarray_alias_call_preserves_original_roots() {
 fn vm_redefined_fillarray_preserves_pending_structural_key_table() {
     let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
     eval.setup_thread_locals();
+    // Hydration looks the frame key up. `make_frame` does not mint, so the
+    // parked id has to already name a frame object.
+    let _parked_frame = Value::mint_frame(72);
     let original = Value::string("abc");
     let replacement = Value::string("xyz");
     let table = Value::hash_table(HashTableTest::Equal);

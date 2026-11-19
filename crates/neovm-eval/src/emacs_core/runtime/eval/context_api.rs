@@ -1901,6 +1901,12 @@ impl Context {
     /// selected most recently.
     #[doc(hidden)]
     pub fn observe_keyboard_input_frame(&mut self, frame_id: neovm_value::display_vocab::FrameId) {
+        // A key event stores a bare id. The queue pins the object while the
+        // event is unread. Once the object is gone, recording the id would
+        // leave a (D) hold that the next `make_frame` would refuse.
+        let Some(frame_value) = Value::registered_frame(frame_id.0) else {
+            return;
+        };
         self.select_input_frame_kboard(frame_id);
 
         let selected_frame = self.frames.selected_frame().map(|frame| frame.id);
@@ -1927,7 +1933,8 @@ impl Context {
         // observed updates the former and previously re-interned it.
         static LAST_EVENT_FRAME: WellKnown = WellKnown::LastEventFrame;
         static SWITCH_FRAME: WellKnown = WellKnown::SwitchFrame;
-        let frame_value = Value::make_frame(frame_id.0);
+        // `frame_value` was resolved above. The symbol value is the root
+        // GNU's `Vlast_event_frame` is; the bare id is pinned beside it.
         self.store_variable(LAST_EVENT_FRAME.id(), frame_value);
         if switching || self.command_loop.keyboard.has_unread_selection_event() {
             self.command_loop

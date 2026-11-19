@@ -158,6 +158,39 @@ impl TaggedHeap {
         std::mem::take(&mut self.ephemeron_records.reclaimed_process_ids)
     }
 
+    /// True when `make_window` has registered a window object for `id`.
+    ///
+    /// The window registry is an unconditional root. A deleted frame that
+    /// owns any such window stays a root too: GNU `mark_window` marks
+    /// `w->frame`.
+    #[doc(hidden)]
+    pub fn window_object_registered(&self, id: u64) -> bool {
+        self.window_registry.contains_key(&id)
+    }
+
+    /// Arm deleted-frame fields as ephemerons for the next full collection.
+    #[doc(hidden)]
+    pub fn arm_deleted_frame_ephemerons(&mut self, deleted: Vec<(u64, Vec<TaggedValue>)>) {
+        self.ephemeron_records.deleted_frame_ephemerons = deleted.into_iter().collect();
+    }
+
+    /// Take the frame ids reclaimed by the last full collection.
+    #[doc(hidden)]
+    pub fn take_reclaimed_frame_ids(&mut self) -> Vec<u64> {
+        std::mem::take(&mut self.ephemeron_records.reclaimed_frame_ids)
+    }
+
+    /// Drop an uncommitted deleted-frame arm.
+    ///
+    /// A collection that panics before its restore commits must not leave
+    /// the frames unrooted, and must not leave reclaimed ids for a later
+    /// cycle to apply. Registry entries are left as they are.
+    #[doc(hidden)]
+    pub fn abandon_deleted_frame_ephemerons(&mut self) {
+        self.ephemeron_records.deleted_frame_ephemerons.clear();
+        self.ephemeron_records.reclaimed_frame_ids.clear();
+    }
+
     /// Register cons cells whose storage is owned by the loaded pdump image.
     ///
     /// # Safety
@@ -338,9 +371,13 @@ pub(crate) mod b13_test_hooks {
     }
 }
 
-/// Retired-process and killed-buffer records armed as ephemerons for the next
-/// explicit full collection, keyed on the process or buffer object, plus the
-/// ids that collection did not reach.
+/// Retired-process, killed-buffer, and deleted-frame records armed as
+/// ephemerons for the next explicit full collection, keyed on the process,
+/// buffer, or frame object, plus the ids that collection did not reach.
+///
+/// There is no durable set of reclaimed frame ids. Frame creation mints the
+/// object, and a later missing `frame_registry` entry means reclaimed or
+/// never created.
 #[derive(Default)]
 pub(crate) struct EphemeronRecords {
     /// Retired process fields armed for the next stop-the-world full cycle.
@@ -353,6 +390,10 @@ pub(crate) struct EphemeronRecords {
         FxHashMap<crate::value::buffer_vocab::BufferId, Vec<TaggedValue>>,
     /// Buffer ids whose ephemeron keys were unreachable in the last full cycle.
     pub(crate) reclaimed_buffer_ids: Vec<crate::value::buffer_vocab::BufferId>,
+    /// Deleted-frame fields armed for the next stop-the-world full cycle.
+    pub(crate) deleted_frame_ephemerons: FxHashMap<u64, Vec<TaggedValue>>,
+    /// Frame ids whose ephemeron keys were unreachable in the last full cycle.
+    pub(crate) reclaimed_frame_ids: Vec<u64>,
 }
 
 #[cfg(test)]
