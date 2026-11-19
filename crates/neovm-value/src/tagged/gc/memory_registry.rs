@@ -354,3 +354,7 @@ pub(crate) struct EphemeronRecords {
     /// Buffer ids whose ephemeron keys were unreachable in the last full cycle.
     pub(crate) reclaimed_buffer_ids: Vec<crate::value::buffer_vocab::BufferId>,
 }
+
+#[cfg(test)]
+#[path = "tests/ephemeron_cross_kind_test.rs"]
+mod ephemeron_cross_kind_tests;
