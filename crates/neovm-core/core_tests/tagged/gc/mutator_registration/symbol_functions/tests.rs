@@ -5,10 +5,8 @@ use crate::tagged::gc::{Mutator, PlainSymbolBacking};
 use crate::tagged::transport::SharedRoot;
 use crate::tagged::value::TaggedValue as Value;
 use neovm_eval::test_support::authority::with_test_symbol_functions_init_era;
-use neovm_value::test_support::authority::{self as contention, Deadline, Retry, retry_owned};
 use std::cell::RefCell;
 use std::num::NonZeroU32;
-use std::ops::ControlFlow;
 
 /// Test-side wrapper for raw-bit value construction. Every call site
 /// constructs a value from bits whose provenance the surrounding fixture
@@ -48,16 +46,11 @@ impl Drop for FixtureGuard<'_> {
                 .clear_root_slots()
                 .map_err(|e| format!("C4 cleanup clear: {e:?}"))?;
             drop(self.input.take());
-            retry_owned(
-                Deadline::contention(),
-                owner,
-                |owner| owner.retire_rooted(&[]),
-                |failed| match contention::rendezvous(&failed.reason) {
-                    Retry::Busy => ControlFlow::Continue(failed.into_owner()),
-                    Retry::Refuse => ControlFlow::Break(failed),
-                },
-            )
-            .map_err(|failed| format!("C4 cleanup retirement: {failed:?}"))
+            // This fixture has one owner and all body loans have unwound.
+            // An unexpected refusal must remain visible on its first attempt.
+            owner
+                .retire_rooted(&[])
+                .map_err(|failed| format!("C4 cleanup retirement: {failed:?}"))
         })();
         *self.cleanup.borrow_mut() = Some(cleanup);
     }
