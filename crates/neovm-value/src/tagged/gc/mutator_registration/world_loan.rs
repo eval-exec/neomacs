@@ -95,8 +95,12 @@ impl SymbolRootDesignators {
 /// `into_retained_owner` transfers that same unique owner, without
 /// replacement, duplication, or an early drop. A forwarding implementation
 /// may wrap another implementor only when it delegates every method to that
-/// same owner. This is not a constructor from identity words. Only the eval
-/// World owner and the forwarding adapter in this module implement it.
+/// same owner. `adopt_current_thread` records the calling thread as the
+/// holder and does not release backing or reenter heap code.
+/// `heap_root_designator` is the original allocation root this owner retains,
+/// never a pointer derived from a collector loan. This is not a constructor
+/// from identity words. Only the eval World owner and the forwarding adapter
+/// in this module implement it.
 #[doc(hidden)]
 pub unsafe trait EraWorldLoan: Send + 'static {
     fn held_here(&self) -> bool;
@@ -115,6 +119,8 @@ pub unsafe trait EraWorldLoan: Send + 'static {
         out: &mut Vec<TaggedValue>,
     ) -> Result<Vec<*mut *mut MarkerObj>, RendezvousError>;
     fn into_retained_owner(self: Box<Self>) -> Box<dyn Any + Send>;
+    fn adopt_current_thread(&self);
+    fn heap_root_designator(&self) -> crate::tagged::gc::heap_transfer::HeapRootDesignator;
 }
 
 /// Affine retention of one implementor. Not a manager view and not a heap view.
@@ -173,6 +179,14 @@ unsafe impl EraWorldLoan for WorldLoan {
 
     fn into_retained_owner(self: Box<Self>) -> Box<dyn Any + Send> {
         self.0.into_retained_owner()
+    }
+
+    fn adopt_current_thread(&self) {
+        self.0.adopt_current_thread()
+    }
+
+    fn heap_root_designator(&self) -> crate::tagged::gc::heap_transfer::HeapRootDesignator {
+        self.0.heap_root_designator()
     }
 }
 

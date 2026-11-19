@@ -2,6 +2,7 @@
 //! the cold loan adapter. No manager reference crosses this seam.
 
 use super::Baton;
+use neovm_value::tagged::gc::heap_transfer::HeapRootDesignator;
 use neovm_value::tagged::gc::{
     AllStopped, EraWorldLoan, HeapIdentity, RegistrationError, RendezvousError,
     SymbolRootDesignators, WorldLoan,
@@ -52,6 +53,14 @@ unsafe impl EraWorldLoan for Baton {
     fn into_retained_owner(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
         self
     }
+
+    fn adopt_current_thread(&self) {
+        self.enter();
+    }
+
+    fn heap_root_designator(&self) -> HeapRootDesignator {
+        self.parallel_heap_root_designator()
+    }
 }
 
 impl From<Baton> for WorldLoan {
@@ -65,9 +74,10 @@ impl Baton {
     /// [`WorldLoan::new`]. A foreign owner is leaked and then reported:
     /// dropping it could free backing the caller still treats as borrowed.
     ///
-    /// Dormant until a later slice admits through the loan. The round-trip
-    /// tests are the caller in this crate.
-    #[allow(dead_code)]
+    /// `recover_transferred_source` calls this from the always-compiled
+    /// adapter, so the function is live in the library build. The adapter
+    /// itself stays dormant: nothing on the production admission path
+    /// reaches it.
     pub(super) fn from_world_loan(loan: WorldLoan) -> Self {
         match EraWorldLoan::into_retained_owner(Box::new(loan)).downcast::<Self>() {
             Ok(baton) => *baton,

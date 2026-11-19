@@ -16,3 +16,8 @@ pub struct RequireSync<T>(PhantomData<T>);
 impl<T: Sync> RequireSync<T> {
     pub fn check() {}
 }
+
+pub struct RequireSend<T>(PhantomData<T>);
+impl<T: Send> RequireSend<T> {
+    pub fn check() {}
+}

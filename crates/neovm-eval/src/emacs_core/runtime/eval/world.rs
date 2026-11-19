@@ -39,6 +39,10 @@ pub(crate) use era::prepare_keeper_backing;
 mod era_world_loan;
 mod function_write_hooks;
 mod green_owner;
+mod heap_transfer_adapter;
+#[cfg(test)]
+#[path = "world/tests/heap_transfer.rs"]
+mod heap_transfer_tests;
 mod slot;
 // Crate-visible so the public test-support re-export in eval/mod.rs can name
 // the driver class directly. This stays crate-internal; the struct itself is

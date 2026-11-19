@@ -405,10 +405,10 @@ jobs:
       # The runners are compiled only with the `contract-fixtures` feature
       # (41eaff923a moved them off #[ignore]). Without it the test targets
       # build empty and nextest runs nothing, so the job also counts
-      # the runners that actually passed: p0s3 1, p1rv 3, thread_safety 13
-      # (its own, sole-owner, p2ht, pentry, pentry E2 loan, nmjit N1, three
-      # host-effect tests, intern-shared, P15, split T2 and
-      # obarray_view_swap_compile_contracts),
+      # the runners that actually passed: p0s3 1, p1rv 3, thread_safety 14
+      # (its own, sole-owner, p2ht, pentry, pentry E2 loan, pentry E2 heap
+      # transfer, nmjit N1, three host-effect tests, intern-shared, P15,
+      # split T2 and obarray_view_swap_compile_contracts),
       # chartable_write 1, mint_seal 1 (the mint-seal trybuild fixtures), and
       # retained_leaf 1 (the retained-leaf trybuild fixtures);
       # check_compile_contracts.py enforces these per-target counts and the

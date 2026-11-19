@@ -377,6 +377,25 @@ mod function_boundary;
 mod intern_boundary;
 
 impl Baton {
+    /// The heap's original `AliasableBox` provenance root, retained by this
+    /// held Baton. It is not a collector reborrow. Reconstructing a heap loan
+    /// from it while another loan of the same allocation is live is forbidden;
+    /// that obligation is the unsafe constructor's contract.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn parallel_heap_root_designator(
+        &self,
+    ) -> neovm_value::tagged::gc::heap_transfer::HeapRootDesignator {
+        assert!(self.held_here(), "heap root designator requires the holder");
+        // SAFETY: this held Baton retains the World. `tagged_heap.root()` is
+        // the original provenance root, not a pointer derived from a collector.
+        unsafe {
+            neovm_value::tagged::gc::heap_transfer::HeapRootDesignator::from_original(
+                self.world.tagged_heap.root(),
+            )
+        }
+    }
+
     /// Original allocation designators only. No aggregate manager borrow.
     ///
     /// Each call mints a fresh identity token from the live allocation.

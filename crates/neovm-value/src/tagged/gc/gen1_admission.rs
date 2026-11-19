@@ -69,7 +69,19 @@ impl<'heap> Gen1Admission<'heap> {
         Ok(Self { collector })
     }
 
-    pub(in crate::tagged::gc) fn into_collector(self) -> QuiescentCollector<'heap> {
+    pub(in crate::tagged::gc) fn collector_mut(&mut self) -> &mut QuiescentCollector<'heap> {
+        &mut self.collector
+    }
+
+    pub(in crate::tagged::gc) fn heap_identity(&self) -> super::HeapIdentity {
+        self.collector.heap_identity()
+    }
+
+    /// Hand the exclusive loan back to the caller. The reference-free
+    /// transfer's destination callback returns this loan so the transfer can
+    /// check it is the same allocation. There is no second constructor.
+    #[doc(hidden)]
+    pub fn into_collector(self) -> QuiescentCollector<'heap> {
         self.collector
     }
 }
