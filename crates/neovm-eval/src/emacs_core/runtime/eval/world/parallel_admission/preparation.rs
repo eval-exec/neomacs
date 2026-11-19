@@ -7,6 +7,10 @@ use super::factory::AdmissionPlan;
 use super::{AdmissionScope, Context, OwnedParallelError, map_rendezvous, map_start};
 use neovm_value::tagged::gc::{QuiescentCollector, clear_tagged_heap_root_if_installed};
 
+#[path = "preparation/policy.rs"]
+mod policy;
+use policy::{ClosedSource, PreparationPolicy, PreparationResources};
+
 /// Resource recovery work, not a permission to reactivate a Context. The
 /// consuming source adapter must separately validate its actual return right.
 #[derive(Debug)]
@@ -66,20 +70,47 @@ impl Context {
     pub(super) fn prepare_owned_admission(
         &mut self,
     ) -> Result<PreparedAdmission<'_>, OwnedParallelError> {
-        let recovery = self.retire_empty_dead_windows_table();
+        self.prepare_admission_with::<policy::RecoverSerial>()
+    }
+
+    /// Closed, nonrecovering prerequisite for the consuming source adapter.
+    /// This borrowed transaction does not own or suspend the source Context.
+    /// The adapter must arm its owned fail-closed shell before invoking it.
+    /// Dropping a failure is not permission to resume. No product caller
+    /// enters this path.
+    #[allow(dead_code)]
+    fn prepare_closed_source(
+        &mut self,
+    ) -> Result<PreparedAdmission<'_>, policy::ClosedPreparationFailure<'_>> {
+        self.prepare_admission_with::<ClosedSource>()
+    }
+
+    /// The one census/drain definition. Only sealed static policies choose
+    /// preclean and failure behavior. No runtime mode flag is introduced.
+    fn prepare_admission_with<P: PreparationPolicy>(
+        &mut self,
+    ) -> Result<PreparedAdmission<'_>, P::Failure<'_>> {
+        let recovery = P::begin(self);
         let keeper = match self.issue_green_baton() {
             Ok(keeper) => keeper,
             Err(error) => {
-                self.recover_serial_context(recovery);
-                return Err(map_start(error));
+                return Err(P::fail(
+                    self,
+                    recovery,
+                    PreparationResources::BeforeKeeper,
+                    map_start(error),
+                ));
             }
         };
         let frozen = match self.capture_parallel_legacy_roots(&keeper) {
             Ok(frozen) => frozen,
             Err(error) => {
-                drop(keeper);
-                self.recover_serial_context(recovery);
-                return Err(map_rendezvous(error));
+                return Err(P::fail(
+                    self,
+                    recovery,
+                    PreparationResources::Keeper(keeper),
+                    map_rendezvous(error),
+                ));
             }
         };
         let heap = self.tagged_heap.heap_root().as_ptr();
@@ -87,7 +118,8 @@ impl Context {
         // concurrent mark and private roots were captured above. The legacy
         // TLS facade stays installed for this drain so its reseed still sees
         // the thread-local census; it is uninstalled before the body runs.
-        // The body cannot reach the Context or the heap.
+        // The body cannot reach the Context or the heap. Static failure policy
+        // does not change this existing local collector loan boundary.
         let drained = unsafe {
             (*heap).drain_to_quiescent(|heap| {
                 self.seed_registered_mutator_roots_world_stopped(heap);
@@ -96,10 +128,12 @@ impl Context {
         let collector = match drained {
             Ok(collector) => collector,
             Err(_) => {
-                drop(frozen);
-                drop(keeper);
-                self.recover_serial_context(recovery);
-                return Err(OwnedParallelError::Start);
+                return Err(P::fail(
+                    self,
+                    recovery,
+                    PreparationResources::Census { frozen, keeper },
+                    OwnedParallelError::Start,
+                ));
             }
         };
         clear_tagged_heap_root_if_installed(self.tagged_heap.heap_root());
