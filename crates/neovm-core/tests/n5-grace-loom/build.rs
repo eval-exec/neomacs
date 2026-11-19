@@ -25,7 +25,7 @@ use std::fs;
 use std::path::Path;
 
 fn main() {
-    let source = Path::new("../../src/tagged/gc/symbol_table/publication.rs");
+    let source = Path::new("../../../neovm-value/src/tagged/gc/symbol_table/publication.rs");
     println!("cargo:rerun-if-changed={}", source.display());
     let original = fs::read_to_string(source).expect("read the real publication.rs");
     let stripped = strip_leading_inner_docs(&original);
