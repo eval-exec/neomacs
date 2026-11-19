@@ -1363,7 +1363,7 @@ jobs:
           name: xwidget-webview-linux-x11-${{ github.run_id }}-${{ github.run_attempt }}
           path: target/neomacs-gui-tests/linux-x11/
           if-no-files-found: warn
-          retention-days: 1
+          retention-days: 3
 
   doom-install-compatibility:
     name: doom install compatibility (linux x86_64)
