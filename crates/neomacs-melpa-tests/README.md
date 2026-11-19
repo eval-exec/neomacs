@@ -213,7 +213,16 @@ font. While these known divergences are open:
   heading heights differ by 2;
 - a bare frame's default palette is #f7f7f7/#000000 in GNU and
   #eff0f2/#1F2328 here;
-- preview and panel buffer lines here start with U+200B.
+- every ETAF-mounted buffer line here (previews, panels, the desktop canvas)
+  starts with U+200B.
+
+One crash is recorded rather than pinned: mounting either etaf-algo-lab
+workspace aborts Neomacs with an allocation failure while GNU renders it. The
+2026-11-19 core dump shows unbounded recursion in
+`neovm_value`'s `to_equal_key_depth_swp` (equal hash keys of a shared
+structure); both laboratories abort at 4, 8 and 32 GB limits, so it is
+unbounded work, not a memory budget. `etaf_algo_lab_real_gui_workspace_matches_gnu`
+stays as the ignored reproducer.
 
 Each test fails when its divergence is fixed; flip it to a single
 `assert_eq` and delete the note.

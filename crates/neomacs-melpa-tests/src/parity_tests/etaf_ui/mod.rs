@@ -98,6 +98,88 @@ fn etaf_ui_batch() {
 "####,
             expect![[r#"OK ("hello" "world" t "world")"#]],
         ),
+        // Theme tokens map a small palette onto the catalog's semantic roles
+        // and derive omitted roles from surface/text lightness.
+        ParityBatchCase::value(
+            "theme_tokens",
+            r####"
+(let ((tokens (etaf-ui-theme-tokens '(:bg "#FFFFFF" :fg "#000000"))))
+  (list (plist-get tokens :ui-panel-bg)
+        (plist-get tokens :ui-border)
+        (plist-get tokens :ui-muted-fg)
+        (plist-get tokens :ui-accent)
+        (plist-get tokens :ui-success-fg)
+        (plist-get tokens :ui-info-fg)
+        (condition-case err
+            (etaf-ui-theme-tokens '(:fg "#000000"))
+          (error (list (car err) (cdr err))))))
+"####,
+            expect![[
+                r##"OK ("#FFFFFF" "#D1D1D1" "#595959" "#000000" "#1A7F37" "#000000" (wrong-type-argument (stringp :bg nil)))"##
+            ]],
+        ),
+        // Icon sets can be registered, replaced and removed.
+        ParityBatchCase::value(
+            "icon_sets",
+            r####"
+(let ((spec '(:kind font :family "Monospace" :height 0.5
+              :glyphs ((play . "p")))))
+  (etaf-ui-icon-set-register 'test-icons spec)
+  (let ((registered (and (memq 'test-icons (etaf-ui-icon-sets)) t))
+        (names (etaf-ui-icon-names 'test-icons))
+        (readback (etaf-ui-icon-set-spec 'test-icons)))
+    (etaf-ui-icon-set-register
+     'test-icons '(:kind font :family "Monospace" :height 0.5
+                   :glyphs ((pause . "P"))))
+    (let ((replaced (etaf-ui-icon-names 'test-icons)))
+      (etaf-ui-icon-set-remove 'test-icons)
+      (list registered names readback replaced
+            (etaf-ui-icon-set-spec 'test-icons)
+            (etaf-ui-icon-set-remove 'test-icons)))))
+"####,
+            expect![[
+                r#"OK (t (play) (:kind font :family "Monospace" :height 0.5 :glyphs ((play . "p"))) (pause) nil nil)"#
+            ]],
+        ),
+        // The shipped Markdown parser exposes title, outline, block types,
+        // footnotes, features, extension predicates and highlighting.
+        ParityBatchCase::value(
+            "markdown_parse",
+            r####"
+(let ((document
+       (etaf-ui-markdown-parse
+        "---\ntitle: Doc\n---\n\n# Intro\n\nText[^a].\n\n## Part\n\n[^a]: note\n")))
+  (list (plist-get document :title)
+        (plist-get document :outline)
+        (mapcar (lambda (block) (plist-get block :type))
+                (plist-get document :children))
+        (plist-get document :footnotes)
+        (plist-get document :features)
+        (etaf-ui-markdown-extension-p 'gfm)
+        (etaf-ui-markdown-highlight-code "elisp" "(+ 1 2)")))
+"####,
+            expect![[
+                r#"OK ("Doc" ((1 "Intro" "intro") (2 "Part" "part")) (heading paragraph heading) ((:type footnote-def :label "a" :number 1 :children ((:type paragraph :text "note" :children ((:type text :text "note")))))) (:front-matter t :tables t :task-lists t :strikethrough t :autolinks t :footnotes t :alerts t :extensions (definition-list subscript superscript abbreviation math emoji mark icon kbd badge)) nil ((:text "(+ 1 2)" :props nil)))"#
+            ]],
+        ),
+        // SVG helpers emit compact escaped markup and reject invalid scenes.
+        ParityBatchCase::value(
+            "svg_builders",
+            r####"
+(list (etaf-ui-svg-rect 1 2 3 4 :rx 2 :fill "#FFF")
+      (etaf-ui-svg-circle 0 0 4.5)
+      (etaf-ui-svg-line 0 0 10 0 :stroke "#123" :stroke-width 0.85)
+      (etaf-ui-svg-path "M0 0 L1 1")
+      (etaf-ui-svg-group "<circle r='1'/>" :transform "translate(1,2)")
+      (etaf-ui-svg-text 1 2 "车 & <将>")
+      (condition-case err
+          (etaf-ui-svg-rect 0 0 -1 2)
+        (error (list (car err) (cdr err)))))
+"####,
+            expect![[
+                r#"OK ("<rect x='1' y='2' width='3' height='4' rx='2' fill='#FFF'/>" "<circle cx='0' cy='0' r='4.5'/>" "<line x1='0' y1='0' x2='10' y2='0' stroke='#123' stroke-width='0.85'/>" "<path d='M0 0 L1 1'/>" "<g transform='translate(1,2)'><circle r='1'/></g>" "<text x='1' y='2'>车 &amp; &lt;将&gt;</text>" (etaf-ui-svg-error ("Rectangle width must be a positive number, got -1")))"#
+            ]],
+        ),
     ];
     let thread = std::thread::current();
     let test_name = thread.name().unwrap_or("etaf-ui parity batch");
