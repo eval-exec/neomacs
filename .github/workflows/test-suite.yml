@@ -551,7 +551,9 @@ jobs:
         uses: ./.github/actions/setup-rust
         with:
           cache-key: ci-shared-runtime-linux-x86_64
-          cache-shared-key: linux-x86_64-release
+          # Host compilers only. linux-x86_64-release was written by the
+          # xwidget nix shell, whose PKG_CONFIG poisons a restored target.
+          cache-shared-key: linux-x86_64-release-2
           cache-save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build fresh release runtime
@@ -1332,10 +1334,9 @@ jobs:
         uses: ./.github/actions/setup-rust
         with:
           cache-key: ci-xwidget-webview-gui
-          # Reuse the shared release dependency build; the webview feature
-          # changes the feature fingerprint of the crates that expose it, so
-          # only those and their dependents rebuild.
-          cache-shared-key: linux-x86_64-release
+          # Nix WPE shell. A shared key with the host release jobs restored
+          # this PKG_CONFIG into their target and broke the packaged runtime.
+          cache-shared-key: linux-x86_64-release-nix-wpe
           cache-save-if: ${{ github.ref == 'refs/heads/main' }}
           install-nextest: true
       - name: Set up Nix for the pinned WPE WebKit toolchain
