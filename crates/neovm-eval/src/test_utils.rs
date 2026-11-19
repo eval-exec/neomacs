@@ -552,6 +552,11 @@ mod unit_runtime {
                         let class = crate::host_cfg::HostCfgClass::from_label(row.cfg)
                             .unwrap_or_else(|| panic!("unknown plan cfg label {:?}", row.cfg));
                         if !class.is_active() {
+                            // Eval-owned feature classes are compiled in every
+                            // build. Activity still decides registration.
+                            if class.standin_ignores_feature_cfg() {
+                                upper.remove(row.name);
+                            }
                             continue;
                         }
                         let (upper_min, upper_max, function) =
@@ -3811,19 +3816,19 @@ mod snapshot_consistency {
             "upper_bootstrap_vars.generated.rs is stale; run `cargo xtask upper-snapshots`"
         );
 
-        // The host-active slice of the snapshot is exactly the compiled
-        // registration table, in the same order.
+        // Compiled stand-ins are the host-active rows plus the eval-owned
+        // feature classes, which are compiled in every build. Registration
+        // still follows is_active. Order is the snapshot order.
         let compiled = upper_subrs_for_snapshot_test();
-        let active: Vec<_> = rows
+        let present: Vec<_> = rows
             .iter()
             .filter(|row| {
-                HostCfgClass::from_label(&row.cfg)
-                    .expect("snapshot cfg label")
-                    .is_active()
+                let class = HostCfgClass::from_label(&row.cfg).expect("snapshot cfg label");
+                class.is_active() || class.standin_ignores_feature_cfg()
             })
             .collect();
-        assert_eq!(active.len(), compiled.len());
-        for (row, compiled) in active.iter().zip(compiled.iter()) {
+        assert_eq!(present.len(), compiled.len());
+        for (row, compiled) in present.iter().zip(compiled.iter()) {
             assert_eq!(
                 (row.name.as_str(), row.min, row.max),
                 (compiled.0, compiled.1, compiled.2),
