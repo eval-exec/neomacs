@@ -31,12 +31,6 @@ pub(super) fn builtin(operation: HofOperation) -> SubrEntry {
     crate::emacs_core::eval::subr_abi::builtin_hof_entry_for_test(operation)
 }
 
-#[derive(Debug)]
-enum ReconcileError {
-    Stop(RendezvousError),
-    Function(FunctionError),
-}
-
 pub(super) enum FixtureParameters {
     Nullary,
     Unary(neovm_value::intern::SymId),
@@ -206,10 +200,10 @@ pub(crate) fn prepared_hof_fixture<P>(
                 .expect("return HOF cons storage");
             stopped
                 .symbols()
-                .map_err(ReconcileError::Stop)
+                .map_err(|error| format!("stop: {error:?}"))
                 .and_then(|mut symbols| {
                     era.reconcile_functions(&mut symbols)
-                        .map_err(ReconcileError::Function)
+                        .map_err(|error| format!("function: {error:?}"))
                 })
                 .expect("HOF function reconciliation");
             let collection = era

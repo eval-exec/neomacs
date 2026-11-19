@@ -45,11 +45,6 @@ enum Event {
     Paused(usize, CohortPhase),
     Failed(usize, String),
 }
-#[derive(Debug)]
-enum ReconcileError {
-    Stop(RendezvousError),
-    Function(FunctionError),
-}
 #[must_use = "release every waiting worker before joining the scoped cohort"]
 struct Commands(Vec<Sender<Command>>);
 impl Drop for Commands {
@@ -443,10 +438,10 @@ fn prepared_cohort<P: Send>(
                             .expect("cohort return storage");
                         stopped
                             .symbols()
-                            .map_err(ReconcileError::Stop)
+                            .map_err(|error| format!("stop: {error:?}"))
                             .and_then(|mut symbols| {
                                 era.reconcile_functions(&mut symbols)
-                                    .map_err(ReconcileError::Function)
+                                    .map_err(|error| format!("function: {error:?}"))
                             })
                             .expect("cohort reconcile");
                         let report = era
