@@ -1389,3 +1389,28 @@ jobs:
 
       - name: Install unmodified Doom with Neomacs
         run: ./scripts/test-doom-install.sh
+
+  # Standalone Loom models are not workspace members: each has its own
+  # Cargo.toml and Cargo.lock, and two of them live under tests/ rather than
+  # crates/. scripts/ci/run-loom-models.sh globs both homes, prints the list,
+  # and fails closed if fewer than its floor are found. Push, pull_request and
+  # workflow_dispatch use preemption bound 2. This workflow's Sunday 05:17 UTC
+  # schedule is the bound-3 run. The script fetches --locked inside each crate.
+  loom-models:
+    name: standalone loom models (linux x86_64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: 1
+      BOUND: ${{ github.event_name == 'schedule' && '3' || '2' }}
+    steps:
+      - *checkout
+      - name: Set up Rust tooling
+        uses: ./.github/actions/setup-rust
+        with:
+          cache-key: ci-loom-models-linux-x86_64
+          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
+          install-nextest: true
+      - name: Run standalone loom models
+        run: bash scripts/ci/run-loom-models.sh
