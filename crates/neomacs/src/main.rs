@@ -1062,6 +1062,7 @@ fn startup_dimensions(
     frontend: FrontendKind,
     frame_metrics: BootstrapFrameMetrics,
     noninteractive: bool,
+    daemon: bool,
 ) -> (u32, u32) {
     match frontend {
         FrontendKind::Gui => {
@@ -1106,10 +1107,10 @@ fn startup_dimensions(
             (width.max(200), height.max(100))
         }
         FrontendKind::Tty => {
-            if noninteractive {
-                // GNU `make_frame` seeds the initial non-window frame with
-                // total size 80x25, then gives the root window 24 lines plus
-                // a one-line minibuffer.
+            // GNU `make_frame` seeds the initial non-window frame with total
+            // size 80x25. A daemon never reaches `init_tty`
+            // (`dispnew.c:7222-7237`), so it uses that seed too.
+            if !tty_init::initial_tty_fatal_checks_apply(noninteractive, daemon) {
                 return (80, 25);
             }
             // TTY frames use 1x1 character cells (GNU Emacs frame.c:1184-1185),
@@ -1900,7 +1901,7 @@ impl DisplayHost for PrimaryWindowDisplayHost {
             let error = startup_frame::StartupFrameError::NoUsableFont.to_string();
             return Err(error);
         };
-        let (width, height) = startup_dimensions(FrontendKind::Gui, font.metrics(), false);
+        let (width, height) = startup_dimensions(FrontendKind::Gui, font.metrics(), false, false);
         let selected = font.into_selected();
         let height_tenths = startup
             .display
@@ -5225,8 +5226,12 @@ pub fn run(mode: RuntimeMode) {
     // TTY geometry is in character cells and performs no native font lookup.
     // GUI geometry is prepared once on the evaluator thread instead.
     let frame_metrics = BootstrapFrameMetrics::TTY;
-    let (width, height) =
-        startup_dimensions(startup.frontend, frame_metrics, startup.noninteractive);
+    let (width, height) = startup_dimensions(
+        startup.frontend,
+        frame_metrics,
+        startup.noninteractive,
+        startup.daemon.is_some(),
+    );
 
     // 2. Initialize the evaluator from the canonical bootstrap surface.
     //    GNU loads the dumped bootstrap image here, then lets the outer

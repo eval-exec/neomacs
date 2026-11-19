@@ -4,7 +4,8 @@ use super::super::frame_layout::{
 use super::super::image_catalog::{AsyncImageCatalog, wait_for_image_metadata};
 use super::super::tty_frontend::{TtyPopupDisplayHost, TtyTerminalHost};
 use super::super::tty_init::{
-    default_controlling_tty_name, detect_tty_background_mode, should_enable_live_tty_io,
+    default_controlling_tty_name, detect_tty_background_mode, initial_tty_fatal_checks_apply,
+    should_enable_live_tty_io,
 };
 use super::super::{
     BOOTSTRAP_CORE_FEATURES, BootstrapDisplayConfig, DumpImageKind, EarlyCliAction, FontSizing,
@@ -5359,7 +5360,7 @@ fn bootstrap_buffers_seed_frame_with_renderer_metrics() {
 #[test]
 fn startup_dimensions_gui_matches_gnu_default_text_grid() {
     let metrics = bootstrap_frame_metrics();
-    let (width, height) = startup_dimensions(FrontendKind::Gui, metrics, false);
+    let (width, height) = startup_dimensions(FrontendKind::Gui, metrics, false, false);
     // GNU's default GUI frame is 80 text columns wide and 35 counted text rows
     // tall (its frame-height is deterministically one less than the nominal 36-row
     // geometry). The requested window reserves the scroll bar + both 8px fringes on
@@ -5384,7 +5385,19 @@ fn startup_dimensions_gui_matches_gnu_default_text_grid() {
 fn startup_dimensions_noninteractive_tty_matches_gnu_initial_frame() {
     let metrics = bootstrap_frame_metrics_for_frontend(FrontendKind::Tty);
     assert_eq!(
-        startup_dimensions(FrontendKind::Tty, metrics, true),
+        startup_dimensions(FrontendKind::Tty, metrics, true, false),
+        (80, 25)
+    );
+}
+
+#[test]
+fn startup_dimensions_daemon_skips_the_initial_tty_fatal_checks() {
+    let metrics = bootstrap_frame_metrics_for_frontend(FrontendKind::Tty);
+    assert!(!initial_tty_fatal_checks_apply(false, true));
+    assert!(!initial_tty_fatal_checks_apply(true, false));
+    assert!(initial_tty_fatal_checks_apply(false, false));
+    assert_eq!(
+        startup_dimensions(FrontendKind::Tty, metrics, false, true),
         (80, 25)
     );
 }

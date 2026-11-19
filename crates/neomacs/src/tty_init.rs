@@ -567,6 +567,14 @@ pub fn should_enable_live_tty_io(startup: &StartupOptions) -> bool {
     startup.frontend == FrontendKind::Tty && !startup.noninteractive && startup.daemon.is_none()
 }
 
+/// GNU `init_display` returns before `init_tty` when `IS_DAEMON`
+/// (`dispnew.c:7222-7237`). The initial `/dev/tty` open, winsize, and
+/// termcap `co`/`li` check are that `init_tty` path (`term.c:4464-4470`,
+/// `4800-4814`). `--daemon` and `--fg-daemon` both skip it. Batch does too.
+pub(crate) fn initial_tty_fatal_checks_apply(noninteractive: bool, daemon: bool) -> bool {
+    !noninteractive && !daemon
+}
+
 #[cfg(test)]
 #[path = "tests/tty_init_test.rs"]
 mod tty_init_test;
