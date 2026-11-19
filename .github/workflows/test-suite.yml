@@ -545,6 +545,8 @@ jobs:
       TMPDIR: ${{ github.workspace }}/tmp
     steps:
       - *checkout
+      - name: THROW AWAY force a runtime failure
+        run: exit 1
       - *prepare_workspace_tmp
       - uses: ./.github/actions/install-build-deps
       - name: Set up Rust tooling
