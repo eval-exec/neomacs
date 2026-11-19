@@ -52,7 +52,8 @@ fn with_run<R>(owner: &mut Mutator<'_>, body: impl FnOnce(&mut RunAccess<'_, '_>
         match owner.run_access() {
             Ok(mut run) => {
                 let result = body(&mut run);
-                retry_registration(|| run.close_cons_region());
+                // Owner-local tail rewind has no contended admission to retry.
+                run.close_cons_region().unwrap();
                 return result;
             }
             Err(RegistrationError::Busy) => thread::yield_now(),
@@ -765,7 +766,8 @@ fn return_cons_storage_preserves_busy_stop_validation_for_retry<K, W>(
             assert_eq!(refusal, Err(RegistrationError::Busy));
             assert!(!registry.park.poisoned.load(Ordering::Acquire));
         });
-        retry_registration(|| era.return_cons_storage(&stopped));
+        // The competing gate holder has joined; any refusal is now a defect.
+        era.return_cons_storage(&stopped).unwrap();
         era.collect_stopped(&mut stopped, world_roots).unwrap();
         era.with_stopped_heap_for_test(&stopped, |heap| check_pair(heap, &root, 1701))
             .unwrap();

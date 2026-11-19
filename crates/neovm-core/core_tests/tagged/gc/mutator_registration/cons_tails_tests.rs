@@ -46,7 +46,8 @@ fn with_run<R>(owner: &mut Mutator<'_>, body: impl FnOnce(&mut RunAccess<'_, '_>
         match owner.run_access() {
             Ok(mut run) => {
                 let result = body(&mut run);
-                retry_registration(|| run.close_cons_region());
+                // Owner-local tail rewind has no contended admission to retry.
+                run.close_cons_region().unwrap();
                 return result;
             }
             Err(RegistrationError::Busy) => thread::yield_now(),
