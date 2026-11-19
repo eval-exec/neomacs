@@ -28,6 +28,7 @@ on:
           - neomacs-test-runtime
           - neomacs-xwidget-webview-gui
           - doom-install-compatibility-macos
+          - loom-models
   schedule:
     - cron: "17 5 * * 0"
 
@@ -1401,7 +1402,7 @@ jobs:
   # second crate of that size. Each Sunday job has a 360-minute timeout.
   loom-models:
     name: standalone loom models bound 2 (linux x86_64)
-    if: github.event_name != 'schedule'
+    if: ${{ github.event_name != 'schedule' && (github.event_name != 'workflow_dispatch' || github.event.inputs.job == 'all' || github.event.inputs.job == 'loom-models') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     env:
