@@ -4,10 +4,11 @@
 #
 # A self-check fails when a step in those two files is neither run below nor
 # listed, with a reason, as covered elsewhere. It also fails when a new
-# workflow file appears and is not listed as outside this pair. GitHub will
-# not workflow_dispatch a file that is not on the default branch (HTTP 404);
-# the Windows recipe therefore dispatches build-gate.yml, which is already
-# on main, via `gh workflow run --ref`.
+# workflow file appears and is not listed as outside this pair. The default
+# run prints the lead's staging commands and exits that stage NOT RUN
+# (required-pending). It pushes only when PARITY_STAGING_PUSH=lead.
+# build-gate.yml is on the default branch, so `gh workflow run --ref` is
+# valid there. A workflow file that exists only on the staging ref is 404.
 #
 # Usage:
 #   scripts/ci/local-ci-parity.sh
@@ -374,9 +375,29 @@ run_local() {
     run_named "Check advisories, licenses, bans, and sources" step_deny
 }
 
+staging_commands() {
+    local n=${1:-<N>}
+    cat <<EOF
+git push origin HEAD:refs/heads/staging/batch-${n}
+gh workflow run build-gate.yml --ref staging/batch-${n}
+gh workflow run test-suite.yml --ref staging/batch-${n} -f job=neomacs-xwidget-webview-gui
+EOF
+}
+
+print_staging_pending() {
+    local n=${1:-<N>}
+    printf 'msvc-staging: NOT RUN (required-pending)\n'
+    printf 'The landing owner runs, with PARITY_STAGING_PUSH=lead:\n'
+    staging_commands "$n"
+}
+
 msvc_staging() {
     local n=${1:-}
     [[ $# -eq 1 && $n =~ ^[0-9]+$ ]] || die "usage: scripts/ci/local-ci-parity.sh msvc-staging <batch-number>"
+    if [[ ${PARITY_STAGING_PUSH:-} != lead ]]; then
+        print_staging_pending "$n"
+        exit 2
+    fi
     if ! git diff --quiet || ! git diff --cached --quiet; then
         die "worktree is dirty; commit before pushing a staging ref"
     fi
@@ -392,7 +413,9 @@ msvc_staging() {
         git push origin "HEAD:refs/heads/${ref}"
     fi
     # build-gate.yml is on the default branch, so this dispatch is valid.
+    # test-suite.yml is too; its job input selects the xwidget job alone.
     gh workflow run build-gate.yml --ref "$ref"
+    gh workflow run test-suite.yml --ref "$ref" -f job=neomacs-xwidget-webview-gui
     local run_id="" attempt=0
     while [[ $attempt -lt 30 ]]; do
         attempt=$((attempt + 1))
@@ -418,6 +441,8 @@ main() {
         "")
             check_coverage_from_tables "$root/.github/workflows"
             run_local
+            print_staging_pending "<N>"
+            exit 2
             ;;
         --check-coverage)
             check_coverage_from_tables "${2:-$root/.github/workflows}"
