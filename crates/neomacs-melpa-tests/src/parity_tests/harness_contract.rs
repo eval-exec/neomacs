@@ -145,6 +145,37 @@ fn nextest_runs_melpa_infrastructure_preflight_once_before_parity_tests() {
 /// observable state from the sandbox path, so an out-of-checkout cache root
 /// otherwise surfaces as per-package GNU==Neomacs mismatches (the same skew
 /// `require_checkout_root` refuses inside `MelpaSandbox`).
+
+/// Spawn the MELPA preflight through the package canonical environment.
+///
+/// The script launches GNU Emacs and Neomacs. Spawning it from a raw bash
+/// command would hide those editor spawns from the architecture tripwire.
+/// `env` in the script overrides HOME and the XDG roots for each probe and
+/// inherits the rest, so the probes keep this profile's pins.
+#[cfg(unix)]
+fn pinned_preflight(scratch: &Path, script: &str) -> neomacs_test_env::PinnedCommand {
+    let home = scratch.join("canonical-home");
+    let tmp = scratch.join("canonical-tmp");
+    let runtime = scratch.join("canonical-runtime");
+    for directory in [&home, &tmp, &runtime] {
+        fs::create_dir_all(directory).expect("canonical package roots");
+    }
+    let environment = neomacs_test_env::CanonicalEnvironment::package(
+        &home,
+        &tmp,
+        neomacs_test_env::PackagePaths {
+            scratch_root: scratch.to_path_buf(),
+            workspace_root: workspace_root(),
+            runtime_dir: runtime,
+            melpa_cache_root: scratch.to_path_buf(),
+        },
+    )
+    .expect("MELPA package environment");
+    let mut command = environment.command("bash");
+    command.arg(script);
+    command
+}
+
 #[cfg(unix)]
 #[test]
 fn preflight_refuses_a_cache_root_outside_the_checkout() {
@@ -179,8 +210,7 @@ fn preflight_refuses_a_cache_root_outside_the_checkout() {
         env!("CARGO_WORKSPACE_DIR"),
         "/scripts/melpa-infra-preflight.sh"
     );
-    let output = Command::new("bash")
-        .arg(script)
+    let output = pinned_preflight(workspace.path(), script)
         .env("NEXTEST_WORKSPACE_ROOT", workspace.path())
         .env("CARGO_TARGET_DIR", &target)
         .env_remove("NEOMACS_BIN")
@@ -251,8 +281,7 @@ fn preflight_accepts_a_logical_target_symlink_when_cargo_target_dir_is_unset() {
         env!("CARGO_WORKSPACE_DIR"),
         "/scripts/melpa-infra-preflight.sh"
     );
-    let output = Command::new("bash")
-        .arg(script)
+    let output = pinned_preflight(checkout.path(), script)
         .env("NEXTEST_WORKSPACE_ROOT", checkout.path())
         .env("NEOMACS_MELPA_PREFLIGHT_CHECK_ONLY", "1")
         .env_remove("CARGO_TARGET_DIR")
@@ -334,9 +363,8 @@ fn run_melpa_preflight(
         env!("CARGO_WORKSPACE_DIR"),
         "/scripts/melpa-infra-preflight.sh"
     );
-    let mut command = Command::new("bash");
+    let mut command = pinned_preflight(workspace, script);
     command
-        .arg(script)
         .env("NEXTEST_WORKSPACE_ROOT", workspace)
         .env_remove("NEOMACS_BIN");
     match cargo_target_dir {
