@@ -1286,20 +1286,20 @@ jobs:
         uses: ./.github/actions/setup-nix
       - name: Build the webview runtime
         run: |
-          nix develop --accept-flake-config --command bash -c '
+          nix develop --accept-flake-config --command bash -c "
             set -euo pipefail
-            cd "${GITHUB_WORKSPACE:-$PWD}"
+            cd \"${GITHUB_WORKSPACE:-$PWD}\"
             CC=gcc CXX=g++ cargo xtask fresh-build --release --features webview
-          '
+          "
       - name: Run the xwidget page-composition regression
         run: |
-          nix develop --accept-flake-config --command bash -c '
+          nix develop --accept-flake-config --command bash -c "
             set -euo pipefail
-            cd "${GITHUB_WORKSPACE:-$PWD}"
+            cd \"${GITHUB_WORKSPACE:-$PWD}\"
             cargo nextest run -p neomacs-gui-tests \
-              -E "test(~oversized_xwidget_) or test(~static_xwidget_)" \
+              -E 'test(~oversized_xwidget_) or test(~static_xwidget_)' \
               --no-fail-fast
-          '
+          "
 
   doom-install-compatibility:
     name: doom install compatibility (linux x86_64)
