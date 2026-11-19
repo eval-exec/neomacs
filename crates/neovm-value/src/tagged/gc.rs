@@ -54,6 +54,10 @@ pub use function_write_hooks::{
 #[doc(hidden)]
 pub mod symbol_table;
 
+// Dormant until symbol-table publication moves onto this owner.
+#[allow(dead_code)]
+mod publication;
+
 mod cache_root_scan;
 #[doc(hidden)]
 pub use cache_root_scan::CacheRootScan;
