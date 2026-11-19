@@ -2689,7 +2689,7 @@ pub(crate) use collection_observed::collection_observed;
 pub(crate) use collection_observed::collection_observed_metadata;
 pub(crate) use collection_observed::{
     advance_collection_observation_epoch, clear_noncons_collection_observed_metadata,
-    mark_collection_observed,
+    mark_collection_observed, reclaimed_collection_observation_count,
 };
 use collection_observed::{
     clear_cons_observed_block, clear_cons_observed_dead, has_noncons_collection_observations,
