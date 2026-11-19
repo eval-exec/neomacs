@@ -6515,6 +6515,15 @@ pub(crate) fn swap_world_state(slot: &mut dyn std::any::Any) {
     LOSSAGE_SIZE.with(|size| std::mem::swap(&mut *size.borrow_mut(), slot));
 }
 
+/// Hold the lossage slot borrowed so a source-carrier swap refuses.
+#[cfg(test)]
+pub(crate) fn with_source_lossage_reader_for_test<R>(body: impl FnOnce() -> R) -> R {
+    LOSSAGE_SIZE.with(|slot| {
+        let _reader = slot.borrow();
+        body()
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Argument helpers
 // ---------------------------------------------------------------------------

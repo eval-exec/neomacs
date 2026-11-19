@@ -58,6 +58,7 @@ pub(crate) enum SourceWithdrawalStep {
     HeapPreparation,
     ObservationEntry,
     Observations,
+    WorldCarriers,
 }
 
 impl SourceWithdrawalStep {
@@ -86,6 +87,7 @@ impl SourceWithdrawalStep {
             Self::HeapPreparation => "heap-preparation",
             Self::ObservationEntry => "observation-entry",
             Self::Observations => "observations",
+            Self::WorldCarriers => "world-carriers",
         }
     }
 }
@@ -179,6 +181,17 @@ impl<R: 'static> SourceFrame<R> {
         #[cfg(test)]
         super::super::lifecycle::record_source_shell_trace(step.trace_label());
         let result = apply(&mut self.source);
+        self.retain_step_result(step, result)
+    }
+
+    fn advance_after_effect<T: 'static, E: std::fmt::Debug + 'static>(
+        mut self,
+        step: SourceWithdrawalStep,
+        apply: for<'source, 'effect> fn(&'source mut Context, &'effect R) -> Result<T, E>,
+    ) -> Result<SourceFrame<Effect<R, T>>, SourceWithdrawalFailure> {
+        #[cfg(test)]
+        super::super::lifecycle::record_source_shell_trace(step.trace_label());
+        let result = apply(&mut self.source, &self.effects);
         self.retain_step_result(step, result)
     }
 
@@ -530,6 +543,41 @@ impl OwnedSourceRegistries {
     }
 }
 
+type WorldCarriers = Effect<ObservationClosed, super::super::green::SourceWorldCarriers>;
+
+/// Local source plus the twelve native World payloads after their TLS withdrawal.
+/// Observations stay on the collector receipt. No payload is Send. JIT withdrawal
+/// still comes later. No production caller enters it.
+#[must_use]
+pub(crate) struct OwnedSourceCarriersClosed {
+    _frame: SourceFrame<WorldCarriers>,
+}
+
+static_assertions::assert_not_impl_any!(OwnedSourceCarriersClosed: Send, Sync, Clone, Copy);
+
+impl OwnedSourceObservationClosed {
+    #[cold]
+    #[inline(never)]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "E2 L4 dormant carrier withdrawal; no production caller enters it"
+        )
+    )]
+    pub(crate) fn withdraw_carriers(
+        self,
+    ) -> Result<OwnedSourceCarriersClosed, SourceWithdrawalFailure> {
+        let frame = self._frame.advance_after_effect(
+            SourceWithdrawalStep::WorldCarriers,
+            |_source, effects| {
+                super::super::green::SourceWorldCarriers::withdraw(&effects._receipt.1)
+            },
+        )?;
+        Ok(OwnedSourceCarriersClosed { _frame: frame })
+    }
+}
+
 #[cfg(test)]
 #[path = "tests/owned_source_test.rs"]
 mod tests;
@@ -545,3 +593,7 @@ mod census_tests;
 #[cfg(test)]
 #[path = "tests/owned_source_observations_test.rs"]
 mod observation_tests;
+
+#[cfg(test)]
+#[path = "tests/owned_source_carriers_test.rs"]
+mod carrier_tests;

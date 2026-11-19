@@ -33,6 +33,7 @@ pub use api::{green_make_thread, green_world};
 pub(crate) use bootstrap::GreenBootstrap;
 #[cfg(debug_assertions)]
 pub(crate) use bootstrap::debug_assert_native_tables_open;
+pub(crate) use carried::SourceWorldCarriers;
 pub(crate) use scheduler::{ConditionId, MutexId, ThreadKey, Wait};
 #[doc(hidden)]
 pub use switch::{GreenSeat, SelectTurn};

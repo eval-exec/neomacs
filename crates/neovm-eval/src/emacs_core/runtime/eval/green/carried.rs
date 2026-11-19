@@ -15,74 +15,98 @@ type Placeholder = fn() -> Box<dyn Any>;
 /// Exchange a piece with this OS thread's thread-locals.
 type Swap = fn(&mut dyn Any);
 
-/// Every carried piece of World state, with its GNU anchor.
-const CARRIERS: &[(Placeholder, Swap)] = &[
+#[path = "carried/source.rs"]
+mod source;
+pub(crate) use source::SourceWorldCarriers;
+
+// One declaration emits the original Green function-pointer table, unchanged
+// in order and callbacks, and a cold source-only sidecar. No metadata enters
+// a CarriedState, a Context, or a TLS slot. The macro is placeholder and
+// swap only: no preflight.
+macro_rules! declare_world_carriers {
+    ($($id:ident => ($placeholder:path, $swap:path $(,)?)),+ $(,)?) => {
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+        enum CarrierId { $($id),+ }
+        const CARRIERS: &[(Placeholder, Swap)] = &[$(($placeholder, $swap)),+];
+        const SOURCE_DECLARATIONS: &[source::CarrierDeclaration] = &[$(
+            source::CarrierDeclaration {
+                id: CarrierId::$id,
+                placeholder: $placeholder,
+                swap: $swap,
+            }
+        ),+];
+    };
+}
+
+// Every carried piece, in the original Green order.
+declare_world_carriers! {
     // composite.c `composition_table`.
-    (
+    Composition => (
         neovm_text::emacs_core::composite::world_state_placeholder,
         neovm_text::emacs_core::composite::swap_world_state,
     ),
     // process.c process names (`Vprocess_alist`).
-    (
+    Processes => (
         crate::emacs_core::eval::data::process_state::world_state_placeholder,
         crate::emacs_core::eval::data::process_state::swap_world_state,
     ),
     // sqlite.c connections and statements (Lisp objects, global).
-    (
+    Sqlite => (
         crate::emacs_core::eval::lifecycle::sqlite_world_state_placeholder,
         crate::emacs_core::eval::lifecycle::sqlite_swap_world_state,
     ),
     // dbusbind.c buses and registered fds.
-    (
+    Dbus => (
         crate::emacs_core::eval::lifecycle::dbusbind_world_state_placeholder,
         crate::emacs_core::eval::lifecycle::dbusbind_swap_world_state,
     ),
     // The clipboard, the primary selection and the monitor list.
-    (
+    Selection => (
         crate::emacs_core::builtins::selection_world_state_placeholder,
         crate::emacs_core::builtins::swap_selection_world_state,
     ),
     // keyboard.c `lossage_limit`.
-    (
+    Lossage => (
         crate::emacs_core::builtins::symbols::world_state_placeholder,
         crate::emacs_core::builtins::symbols::swap_world_state,
     ),
     // undo.c's compaction latch.
-    (
+    Undo => (
         neovm_edit::emacs_core::undo::world_state_placeholder,
         neovm_edit::emacs_core::undo::swap_world_state,
     ),
     // terminal.c `terminal_list`.
-    (
+    Terminal => (
         crate::emacs_core::eval::lifecycle::terminal_world_state_placeholder,
         crate::emacs_core::eval::lifecycle::terminal_swap_world_state,
     ),
     // alloc.c consing counters (`memory-use-counts`).
-    (
+    AllocationCounts => (
         neovm_value::value::world_state_placeholder,
         neovm_value::value::swap_world_state,
     ),
     // World-owned collection revision, journal and capture state.
-    (
+    // Withdrawn by the collector, not by this local catalog.
+    Observations => (
         neovm_value::tagged::collection_reads::world_state_placeholder,
         neovm_value::tagged::collection_reads::swap_world_state,
     ),
     // Property-list write revision (observation).
-    (
+    PropertyRevision => (
         neovm_value::symbol::property_revision_world_state_placeholder,
         neovm_value::symbol::swap_property_revision_world_state,
     ),
     // Display-table and window-parameter layout epochs.
-    (
+    DisplayEpochs => (
         crate::emacs_core::eval::data::window_state::world_state_placeholder,
         crate::emacs_core::eval::data::window_state::swap_world_state,
     ),
     // The time-zone rule (GNU's TZ, process-wide).
-    (
+    TimeZone => (
         crate::emacs_core::eval::lifecycle::timefns_world_state_placeholder,
         crate::emacs_core::eval::lifecycle::timefns_swap_world_state,
     ),
-];
+}
 
 /// The World's thread-local state while its holder is parked, and the
 /// placeholders the running holder's thread-locals gave up for it otherwise.
@@ -142,6 +166,12 @@ impl CarriedState {
         }
     }
 }
+
+#[cfg(target_pointer_width = "64")]
+const _: () = {
+    assert!(std::mem::size_of::<(Placeholder, Swap)>() == 16);
+    assert!(std::mem::size_of::<CarriedState>() == 32);
+};
 
 #[cfg(test)]
 mod carriers_round_trip {
