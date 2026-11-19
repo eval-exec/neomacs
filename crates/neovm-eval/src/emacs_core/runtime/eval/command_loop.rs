@@ -1795,10 +1795,10 @@ impl Context {
         }
         self.gc_pending = false;
         self.gc_count += 1;
-        // The whole collection, not only this last call: earlier calls of the
-        // cycle banked their time in `gc_cycle_elapsed`.
-        let elapsed = std::mem::take(&mut self.gc_cycle_elapsed) + start.elapsed();
-        self.update_gc_runtime_stats(elapsed);
+        // The whole collection, not only this last call. Earlier calls, from
+        // this Context or another that shares the heap, banked their time on
+        // the heap. This take publishes that sum once.
+        self.publish_completed_cycle(start.elapsed());
         self.sync_gc_threshold_from_runtime_settings();
         // Destroy the GPU objects of shader-surface handles this cycle swept.
         // Every completed collection funnels through this block (explicit
@@ -1822,10 +1822,18 @@ impl Context {
         }
     }
 
-    /// Bank the time of a collector call that leaves its cycle unfinished;
-    /// the call that completes the cycle publishes the sum to `gc-elapsed`.
+    /// Bank the time of a collector call that leaves its cycle unfinished.
+    ///
+    /// The bank is the heap's, so every Context of this heap adds to one
+    /// sum. The call that completes the cycle publishes that sum once.
     fn bank_gc_cycle_time(&mut self, start: std::time::Instant) {
-        self.gc_cycle_elapsed += start.elapsed();
+        self.tagged_heap.bank_cycle_elapsed(start.elapsed());
+    }
+
+    /// Publish the heap's bank plus this call, then leave the bank at zero.
+    pub(crate) fn publish_completed_cycle(&mut self, this_call: std::time::Duration) {
+        let elapsed = self.tagged_heap.take_cycle_elapsed() + this_call;
+        self.update_gc_runtime_stats(elapsed);
     }
 
     /// Seed every evaluator/context root into the collector's gray queue and

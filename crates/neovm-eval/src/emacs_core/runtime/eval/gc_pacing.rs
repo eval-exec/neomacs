@@ -6,6 +6,17 @@
 use super::*;
 use neovm_value::tagged::gc::MarkPhase;
 
+#[cfg(test)]
+thread_local! {
+    static GC_ELAPSED_PUBLISHES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has published `gc-elapsed`.
+#[cfg(test)]
+pub(super) fn gc_elapsed_publish_count_for_test() -> u64 {
+    GC_ELAPSED_PUBLISHES.with(std::cell::Cell::get)
+}
+
 impl Context {
     /// Enumerate every live `Value` reference in the evaluator and all
     /// sub-managers without materializing a single temporary root vector.
@@ -810,6 +821,8 @@ impl Context {
 
     #[doc(hidden)]
     pub fn update_gc_runtime_stats(&mut self, elapsed: std::time::Duration) {
+        #[cfg(test)]
+        GC_ELAPSED_PUBLISHES.with(|count| count.set(count.get() + 1));
         self.store_variable(gcs_done_symbol(), Value::fixnum(self.gc_count as i64));
 
         let old_elapsed = self
