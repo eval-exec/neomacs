@@ -36,6 +36,18 @@ fn growth(kind: PlainSymbolBacking) -> std::thread::Result<()> {
     })
 }
 
+fn retired_publication_manifest() -> Result<(), String> {
+    growth(PlainSymbolBacking::Unprojected).map_err(|_| {
+        "actual descriptor replacement/retirement assertion failed after cleanup".to_owned()
+    })
+}
+
+#[test]
+fn nmjit_n3_retired_publication_manifest() {
+    retired_publication_manifest()
+        .expect("actual descriptor replacement/retirement assertion failed after cleanup");
+}
+
 #[test]
 fn nmjit_n3_actual_growth_retains_old_descriptor_and_chunk_provenance() {
     growth(PlainSymbolBacking::Unprojected).unwrap();
