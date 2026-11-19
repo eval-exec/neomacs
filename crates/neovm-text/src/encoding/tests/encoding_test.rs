@@ -2,7 +2,7 @@ use super::*;
 
 use crate::emacs_core::coding::EolConversion;
 
-use neovm_value::error::FlowKind;
+use neovm_value::error::{FlowKind, FlowResultExt as _};
 
 use neovm_value::value::{Value, get_string_text_properties_for_value};
 
@@ -480,6 +480,7 @@ fn decode_iso2022_attaches_charset_property_for_designated_charset() {
         initial: [Some(ascii), None, None, None],
         request: vec![],
         reg_usage: (0, 1),
+        safe_charsets: None,
         flags: enumflags2::BitFlags::from_flag(crate::emacs_core::coding::IsoFlag::SevenBits)
             | crate::emacs_core::coding::IsoFlag::Designation,
     };
@@ -515,6 +516,7 @@ fn iso2022_encoding_boundary_controls_final_ascii_reset() {
         initial: [Some(intern("ascii")), None, None, None],
         request: vec![],
         reg_usage: (0, 1),
+        safe_charsets: None,
         flags: enumflags2::BitFlags::from_flag(crate::emacs_core::coding::IsoFlag::SevenBits)
             | crate::emacs_core::coding::IsoFlag::Designation
             | crate::emacs_core::coding::IsoFlag::AsciiAtEol,
@@ -554,6 +556,7 @@ fn decode_euc_attaches_charset_property() {
         ],
         request: vec![],
         reg_usage: (0, 1),
+        safe_charsets: None,
         flags: enumflags2::BitFlags::empty(),
     };
     // ASCII 'A' then one GR character (0xA4 0xB3 -> GL 0x24 0x33).
@@ -844,6 +847,7 @@ fn iso2022_designation_uses_table_identity_and_replays_unsafe() {
         initial: [Some(intern("ascii")), None, None, None],
         request: vec![],
         reg_usage: (0, 0),
+        safe_charsets: None,
         flags: enumflags2::BitFlags::from_flag(IsoFlag::SevenBits)
             | IsoFlag::Designation
             | IsoFlag::AsciiAtEol,
@@ -1097,6 +1101,7 @@ fn iso2022_emits_96_set_from_code_space_width() {
         initial: [Some(intern("ascii")), None, None, None],
         request: vec![],
         reg_usage: (0, 0),
+        safe_charsets: None,
         flags: enumflags2::BitFlags::from_flag(IsoFlag::SevenBits)
             | IsoFlag::Designation
             | IsoFlag::AsciiAtEol,
@@ -1137,6 +1142,7 @@ fn iso2022_rejects_a_charset_the_coding_system_does_not_list() {
         initial: [Some(intern("ascii")), None, None, None],
         request: vec![],
         reg_usage: (0, 0),
+        safe_charsets: None,
         flags: enumflags2::BitFlags::from_flag(IsoFlag::SevenBits) | IsoFlag::Designation,
     };
     let decode = |list: &[neovm_value::intern::SymId]| {
@@ -1187,6 +1193,7 @@ fn iso2022_reads_three_positions_of_a_dimension_three_charset() {
         initial: [Some(intern("ascii")), None, None, None],
         request: vec![],
         reg_usage: (0, 0),
+        safe_charsets: None,
         flags: enumflags2::BitFlags::from_flag(IsoFlag::SevenBits) | IsoFlag::Designation,
     };
     let decode = |bytes: &[u8]| {
@@ -1228,6 +1235,7 @@ fn iso2022_rejects_a_control_continuation_before_assembly() {
         initial: [Some(intern("ascii")), None, None, None],
         request: vec![],
         reg_usage: (0, 0),
+        safe_charsets: None,
         flags: enumflags2::BitFlags::from_flag(IsoFlag::SevenBits) | IsoFlag::Designation,
     };
     let decode = |bytes: &[u8]| {
@@ -1395,6 +1403,592 @@ fn iso2022_define_captures_charset_identity() {
     assert_eq!(emacs_char_codes(&decoded.bytes), vec![193]);
 }
 
+/// Full support copies `Viso_2022_charset_list` when the coding system is
+/// defined (`coding.c:11020-11068`). `setup_iso_safe_charsets` then keeps that
+/// safe set (`coding.c:2856-2917`), so a charset defined with a final
+/// afterwards is rejected. A member captured at define time stays decodable
+/// after its final is cleared. The stored `:charset-list` stays the symbol.
+#[test]
+fn iso2022_full_support_freezes_members_at_define_time() {
+    crate::test_utils::init_test_tracing();
+    use crate::emacs_core::charset::reset_charset_registry;
+    use crate::emacs_core::coding::{
+        CodingSystemManager, IsoFlag, builtin_define_coding_system_internal, iso2022_spec,
+    };
+    use neovm_value::intern::resolve_sym;
+    use neovm_value::tagged::value::SymbolMode;
+
+    let _reset = CharsetReset;
+    reset_charset_registry();
+    define_offset_charset_maybe_final("cr-early", 1, &[33, 126], Some(b'Z'), 200);
+    let flags = enumflags2::BitFlags::from_flag(IsoFlag::SevenBits)
+        | IsoFlag::Designation
+        | IsoFlag::AsciiAtEol
+        | IsoFlag::AsciiAtCntl;
+    let mut mgr = CodingSystemManager::new();
+    builtin_define_coding_system_internal(
+        &mut mgr,
+        vec![
+            Value::symbol("cr-iso-early"),
+            Value::char('Q'),
+            Value::symbol("iso-2022"),
+            Value::symbol("iso-2022"),
+            Value::T,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::fixnum('?' as i64),
+            Value::NIL,
+            Value::NIL,
+            Value::symbol("unix"),
+            Value::vector(vec![
+                Value::symbol("ascii"),
+                Value::NIL,
+                Value::NIL,
+                Value::NIL,
+            ]),
+            Value::cons(Value::fixnum(0), Value::fixnum(0)),
+            Value::NIL,
+            Value::fixnum(i64::from(flags.bits())),
+        ],
+        SymbolMode::Bare,
+    )
+    .unwrap();
+    let info = mgr.get("cr-iso-early").expect("coding system");
+    assert_eq!(
+        info.charset_list
+            .iter()
+            .map(|id| resolve_sym(*id))
+            .collect::<Vec<_>>(),
+        vec!["iso-2022"]
+    );
+    let spec = iso2022_spec(info, SymbolMode::Bare).expect("iso spec");
+    let list = info.charset_list.clone();
+    define_offset_charset_maybe_final("cr-early", 1, &[33, 126], None, 500);
+    define_offset_charset_maybe_final("cr-after", 1, &[33, 126], Some(b'Q'), 900);
+    let decode = |bytes: &[u8]| {
+        emacs_char_codes(
+            &decode_via_iso2022(
+                bytes,
+                &spec,
+                &list,
+                &mut Iso2022DecodeState::default(),
+                DosEolLookahead::NotRequired,
+            )
+            .bytes,
+        )
+    };
+    assert_eq!(decode(b"\x1b(ZA"), vec![532]);
+    assert_eq!(decode(b"\x1b(QA"), vec![27, 40, 81, 65]);
+}
+
+fn charset_define_args(
+    name: &'static str,
+    code_space: &[i64],
+    final_char: Value,
+    max_code: Option<i64>,
+    mule_id: Option<i64>,
+    offset: i64,
+) -> Vec<Value> {
+    let mut args = vec![Value::NIL; 17];
+    args[0] = Value::symbol(name);
+    args[1] = Value::fixnum(1);
+    args[2] = Value::vector(code_space.iter().copied().map(Value::fixnum).collect());
+    if let Some(max_code) = max_code {
+        args[4] = Value::fixnum(max_code);
+    }
+    args[5] = final_char;
+    if let Some(mule_id) = mule_id {
+        args[7] = Value::fixnum(mule_id);
+    }
+    args[11] = Value::fixnum(offset);
+    args[16] = Value::list(vec![
+        Value::symbol(":name"),
+        Value::symbol(name),
+        Value::symbol(":code-offset"),
+        Value::fixnum(offset),
+    ]);
+    args
+}
+
+fn install_iso2022(
+    mgr: &mut crate::emacs_core::coding::CodingSystemManager,
+    name: &'static str,
+    charset_list: Value,
+    initial: Vec<Value>,
+    reg_usage: (i64, i64),
+    single_shift: bool,
+) -> (
+    crate::emacs_core::coding::Iso2022Spec,
+    Vec<neovm_value::intern::SymId>,
+) {
+    use crate::emacs_core::coding::{IsoFlag, builtin_define_coding_system_internal, iso2022_spec};
+    use neovm_value::tagged::value::SymbolMode;
+
+    let mut flags = enumflags2::BitFlags::from_flag(IsoFlag::SevenBits) | IsoFlag::Designation;
+    if single_shift {
+        flags |= IsoFlag::SingleShift;
+    }
+    builtin_define_coding_system_internal(
+        mgr,
+        vec![
+            Value::symbol(name),
+            Value::char('Q'),
+            Value::symbol("iso-2022"),
+            charset_list,
+            Value::T,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::fixnum('?' as i64),
+            Value::NIL,
+            Value::NIL,
+            Value::symbol("unix"),
+            Value::vector(initial),
+            Value::cons(Value::fixnum(reg_usage.0), Value::fixnum(reg_usage.1)),
+            Value::NIL,
+            Value::fixnum(i64::from(flags.bits())),
+        ],
+        SymbolMode::Bare,
+    )
+    .unwrap();
+    let info = mgr.get(name).expect("coding system");
+    let spec = iso2022_spec(info, SymbolMode::Bare).expect("iso spec");
+    let list = info.charset_list.clone();
+    (spec, list)
+}
+
+fn assert_signal(result: neovm_value::error::EvalResult, symbol: &str, data: Vec<Value>) {
+    match result.kinded() {
+        Err(FlowKind::Signal(sig)) => {
+            assert_eq!(sig.symbol_name(), symbol);
+            assert_eq!(sig.data, data);
+        }
+        other => panic!("expected {symbol} signal, got {other:?}"),
+    }
+}
+
+/// `charset.c:967-975` rejects a final outside `'0'..=127` before any
+/// registry write. `nil` is stored and does not join. A failed redefinition
+/// leaves the previous mapping in place.
+#[test]
+fn iso2022_rejects_an_invalid_final_before_mutation() {
+    crate::test_utils::init_test_tracing();
+    use crate::emacs_core::charset::{
+        builtin_define_charset_internal, charset_decode_char, charset_defined_identity,
+        charset_iso2022_member, reset_charset_registry,
+    };
+    use neovm_value::intern::intern;
+
+    let _reset = CharsetReset;
+    reset_charset_registry();
+    let define = |name: &'static str, final_char: Value| {
+        builtin_define_charset_internal(charset_define_args(
+            name,
+            &[33, 126],
+            final_char,
+            None,
+            None,
+            200,
+        ))
+    };
+    assert_signal(
+        define("cr-bad", Value::fixnum(-1)),
+        "error",
+        vec![Value::string("Invalid iso-final-char: -1")],
+    );
+    assert!(charset_defined_identity(intern("cr-bad")).is_none());
+    assert_signal(
+        define("cr-47", Value::fixnum(47)),
+        "error",
+        vec![Value::string("Invalid iso-final-char: 47")],
+    );
+    assert_signal(
+        define("cr-128", Value::fixnum(128)),
+        "error",
+        vec![Value::string("Invalid iso-final-char: 128")],
+    );
+    assert_signal(
+        define("cr-float", Value::make_float(1.0)),
+        "wrong-type-argument",
+        vec![Value::symbol("fixnump"), Value::make_float(1.0)],
+    );
+
+    define("cr-nil", Value::NIL).unwrap();
+    let nil_id = charset_defined_identity(intern("cr-nil")).expect("nil final stored");
+    assert!(!charset_iso2022_member(nil_id));
+    define("cr-zero", Value::fixnum(i64::from(b'0'))).unwrap();
+    assert!(charset_iso2022_member(
+        charset_defined_identity(intern("cr-zero")).unwrap()
+    ));
+    define("cr-127", Value::fixnum(127)).unwrap();
+    assert!(charset_iso2022_member(
+        charset_defined_identity(intern("cr-127")).unwrap()
+    ));
+
+    define("cr-keep", Value::fixnum(i64::from(b'Z'))).unwrap();
+    assert_signal(
+        define("cr-keep", Value::fixnum(-1)),
+        "error",
+        vec![Value::string("Invalid iso-final-char: -1")],
+    );
+    assert_eq!(charset_decode_char(intern("cr-keep"), 65), Some(232));
+}
+
+/// `coding.c:11017-11031` matches the marker symbols before charset lookup.
+/// An alias of `iso-2022` does not turn the marker into that charset, and the
+/// same guard covers `emacs-mule`.
+#[test]
+fn iso2022_marker_is_not_captured_as_a_charset() {
+    crate::test_utils::init_test_tracing();
+    use crate::emacs_core::charset::{builtin_define_charset_alias, reset_charset_registry};
+    use crate::emacs_core::coding::{CodingSystemManager, builtin_define_coding_system_internal};
+    use neovm_value::intern::resolve_sym;
+    use neovm_value::tagged::value::SymbolMode;
+
+    let _reset = CharsetReset;
+    reset_charset_registry();
+    builtin_define_charset_alias(vec![Value::symbol("iso-2022"), Value::symbol("ascii")]).unwrap();
+    builtin_define_charset_alias(vec![Value::symbol("emacs-mule"), Value::symbol("ascii")])
+        .unwrap();
+    let mut mgr = CodingSystemManager::new();
+    let (spec, list) = install_iso2022(
+        &mut mgr,
+        "cr-iso-mark",
+        Value::symbol("iso-2022"),
+        vec![Value::symbol("ascii"), Value::NIL, Value::NIL, Value::NIL],
+        (0, 0),
+        false,
+    );
+    assert_eq!(
+        list.iter().map(|id| resolve_sym(*id)).collect::<Vec<_>>(),
+        vec!["iso-2022"]
+    );
+    assert!(spec.safe_charsets.is_some());
+    let decoded = decode_via_iso2022(
+        b"\x1b,AA",
+        &spec,
+        &list,
+        &mut Iso2022DecodeState::default(),
+        DosEolLookahead::NotRequired,
+    );
+    assert_eq!(emacs_char_codes(&decoded.bytes), vec![193]);
+
+    let mut bad = vec![Value::NIL; 13];
+    bad[0] = Value::symbol("cr-not-iso");
+    bad[1] = Value::char('U');
+    bad[2] = Value::symbol("utf-8");
+    bad[3] = Value::symbol("iso-2022");
+    assert_signal(
+        builtin_define_coding_system_internal(&mut mgr, bad, SymbolMode::Bare),
+        "error",
+        vec![Value::string("Invalid charset-list")],
+    );
+
+    let mut mule = vec![Value::NIL; 13];
+    mule[0] = Value::symbol("cr-mule-mark");
+    mule[1] = Value::char('M');
+    mule[2] = Value::symbol("emacs-mule");
+    mule[3] = Value::symbol("emacs-mule");
+    builtin_define_coding_system_internal(&mut mgr, mule, SymbolMode::Bare).unwrap();
+    let mule_list = &mgr.get("cr-mule-mark").unwrap().charset_list;
+    assert_eq!(
+        mule_list
+            .iter()
+            .map(|id| resolve_sym(*id))
+            .collect::<Vec<_>>(),
+        vec!["emacs-mule"]
+    );
+}
+
+/// Two charsets may share an `:emacs-mule-id` (`charset.c:11048`). Each
+/// coding system captures its own name, so each escape decodes on its own
+/// system and is replayed on the other.
+#[test]
+fn iso2022_duplicate_mule_id_keeps_each_charset() {
+    crate::test_utils::init_test_tracing();
+    use crate::emacs_core::charset::{builtin_define_charset_internal, reset_charset_registry};
+    use crate::emacs_core::coding::CodingSystemManager;
+
+    let _reset = CharsetReset;
+    reset_charset_registry();
+    for (name, final_char, offset) in [("cr-a", b'Z', 200), ("cr-b", b'Y', 400)] {
+        builtin_define_charset_internal(charset_define_args(
+            name,
+            &[33, 126],
+            Value::fixnum(i64::from(final_char)),
+            None,
+            Some(200),
+            offset,
+        ))
+        .unwrap();
+    }
+    let mut mgr = CodingSystemManager::new();
+    let (spec_a, list_a) = install_iso2022(
+        &mut mgr,
+        "cr-iso-a",
+        Value::list(vec![Value::symbol("ascii"), Value::symbol("cr-a")]),
+        vec![Value::symbol("ascii"), Value::NIL, Value::NIL, Value::NIL],
+        (0, 0),
+        false,
+    );
+    let (spec_b, list_b) = install_iso2022(
+        &mut mgr,
+        "cr-iso-b",
+        Value::list(vec![Value::symbol("ascii"), Value::symbol("cr-b")]),
+        vec![Value::symbol("ascii"), Value::NIL, Value::NIL, Value::NIL],
+        (0, 0),
+        false,
+    );
+    let decode = |spec: &crate::emacs_core::coding::Iso2022Spec,
+                  list: &[neovm_value::intern::SymId],
+                  bytes: &[u8]| {
+        emacs_char_codes(
+            &decode_via_iso2022(
+                bytes,
+                spec,
+                list,
+                &mut Iso2022DecodeState::default(),
+                DosEolLookahead::NotRequired,
+            )
+            .bytes,
+        )
+    };
+    assert_eq!(decode(&spec_a, &list_a, b"\x1b(ZA"), vec![232]);
+    assert_eq!(decode(&spec_b, &list_b, b"\x1b(YA"), vec![432]);
+    assert_eq!(decode(&spec_b, &list_b, b"\x1b(ZA"), vec![27, 40, 90, 65]);
+    assert_eq!(decode(&spec_a, &list_a, b"\x1b(YA"), vec![27, 40, 89, 65]);
+}
+
+/// A restricted list snapshots every listed identity (`coding.c:11064-11068`).
+/// Clearing the final and widening the code space afterwards still decodes
+/// with the new mapping. The reg-usage width check does not revoke it.
+#[test]
+fn iso2022_restricted_list_keeps_define_time_eligibility() {
+    crate::test_utils::init_test_tracing();
+    use crate::emacs_core::charset::{builtin_define_charset_internal, reset_charset_registry};
+    use crate::emacs_core::coding::CodingSystemManager;
+
+    let _reset = CharsetReset;
+    reset_charset_registry();
+    builtin_define_charset_internal(charset_define_args(
+        "cr-94",
+        &[33, 126],
+        Value::fixnum(i64::from(b'Z')),
+        None,
+        None,
+        200,
+    ))
+    .unwrap();
+    let mut mgr = CodingSystemManager::new();
+    let (spec, list) = install_iso2022(
+        &mut mgr,
+        "cr-iso-r",
+        Value::list(vec![Value::symbol("ascii"), Value::symbol("cr-94")]),
+        vec![Value::symbol("ascii"), Value::NIL, Value::NIL, Value::NIL],
+        (0, 4),
+        false,
+    );
+    builtin_define_charset_internal(charset_define_args(
+        "cr-94",
+        &[32, 127],
+        Value::NIL,
+        None,
+        None,
+        500,
+    ))
+    .unwrap();
+    let decoded = emacs_char_codes(
+        &decode_via_iso2022(
+            b"\x1b(ZA",
+            &spec,
+            &list,
+            &mut Iso2022DecodeState::default(),
+            DosEolLookahead::NotRequired,
+        )
+        .bytes,
+    );
+    assert_eq!(decoded, vec![533]);
+}
+
+/// A 96-set listed at define time is safe even when `reg96` is 4
+/// (`coding.c:11064-11068`). Encode still uses the 96-set escape on G0.
+#[test]
+fn iso2022_listed_96_set_stays_safe_when_reg96_is_unset() {
+    crate::test_utils::init_test_tracing();
+    use crate::emacs_core::charset::{builtin_define_charset_internal, reset_charset_registry};
+    use crate::emacs_core::coding::CodingSystemManager;
+
+    let _reset = CharsetReset;
+    reset_charset_registry();
+    builtin_define_charset_internal(charset_define_args(
+        "cr-96",
+        &[32, 127],
+        Value::fixnum(i64::from(b'Q')),
+        None,
+        None,
+        900,
+    ))
+    .unwrap();
+    let mut mgr = CodingSystemManager::new();
+    let (spec, list) = install_iso2022(
+        &mut mgr,
+        "cr-iso-96",
+        Value::list(vec![Value::symbol("ascii"), Value::symbol("cr-96")]),
+        vec![Value::symbol("ascii"), Value::NIL, Value::NIL, Value::NIL],
+        (0, 4),
+        false,
+    );
+    let decoded = emacs_char_codes(
+        &decode_via_iso2022(
+            b"\x1b,QA",
+            &spec,
+            &list,
+            &mut Iso2022DecodeState::default(),
+            DosEolLookahead::NotRequired,
+        )
+        .bytes,
+    );
+    assert_eq!(decoded, vec![933]);
+    let encoded = encode_via_iso2022(
+        &neovm_value::heap_types::LispString::from_emacs_bytes(
+            neovm_value::emacs_char::EmacsChar::from_code(933)
+                .unwrap()
+                .to_emacs_bytes(),
+        ),
+        &spec,
+        &list,
+        EncodingBoundary::CompleteText,
+        &mut CodingEncoderState::default(),
+    );
+    assert_eq!(encoded, b"\x1b,QA");
+}
+
+/// `coding.c:3721-3725` rejects a single-shift lead in C0 before reading the
+/// rest of the character. A graphic lead still decodes.
+#[test]
+fn iso2022_single_shift_rejects_a_control_lead() {
+    crate::test_utils::init_test_tracing();
+    use crate::emacs_core::charset::reset_charset_registry;
+    use crate::emacs_core::coding::CodingSystemManager;
+
+    let _reset = CharsetReset;
+    reset_charset_registry();
+    define_offset_charset("cr-ss", 2, &[0, 255, 0, 255], b'Y', 0, None);
+    let mut mgr = CodingSystemManager::new();
+    let (spec, list) = install_iso2022(
+        &mut mgr,
+        "cr-iso-ss",
+        Value::symbol("iso-2022"),
+        vec![
+            Value::symbol("ascii"),
+            Value::NIL,
+            Value::symbol("cr-ss"),
+            Value::NIL,
+        ],
+        (0, 0),
+        true,
+    );
+    let decode = |bytes: &[u8]| {
+        emacs_char_codes(
+            &decode_via_iso2022(
+                bytes,
+                &spec,
+                &list,
+                &mut Iso2022DecodeState::default(),
+                DosEolLookahead::NotRequired,
+            )
+            .bytes,
+        )
+    };
+    assert_eq!(decode(b"\x1bN!!"), vec![0x2121]);
+    assert_eq!(decode(b"\x1bN\n!"), vec![27, 78, 10, 33]);
+}
+
+/// A complete graphic unit with no mapping emits every consumed byte and
+/// leaves G0 on that charset (`coding.c:3916-3926`).
+#[test]
+fn iso2022_unmapped_graphic_keeps_g0() {
+    crate::test_utils::init_test_tracing();
+    use crate::emacs_core::charset::{builtin_define_charset_internal, reset_charset_registry};
+    use crate::emacs_core::coding::CodingSystemManager;
+
+    let _reset = CharsetReset;
+    reset_charset_registry();
+    builtin_define_charset_internal(charset_define_args(
+        "cr-map",
+        &[33, 126],
+        Value::fixnum(i64::from(b'Z')),
+        Some(65),
+        None,
+        200,
+    ))
+    .unwrap();
+    let mut mgr = CodingSystemManager::new();
+    let (spec, list) = install_iso2022(
+        &mut mgr,
+        "cr-iso-map",
+        Value::list(vec![Value::symbol("ascii"), Value::symbol("cr-map")]),
+        vec![Value::symbol("cr-map"), Value::NIL, Value::NIL, Value::NIL],
+        (0, 0),
+        false,
+    );
+    let decoded = emacs_char_codes(
+        &decode_via_iso2022(
+            b"~A",
+            &spec,
+            &list,
+            &mut Iso2022DecodeState::default(),
+            DosEolLookahead::NotRequired,
+        )
+        .bytes,
+    );
+    assert_eq!(decoded, vec![126, 232]);
+}
+
+/// Loadup drops the full-support snapshot and leaves an explicit list frozen.
+#[test]
+fn release_preloaded_iso2022_drops_only_the_full_support_snapshot() {
+    crate::test_utils::init_test_tracing();
+    use crate::emacs_core::charset::reset_charset_registry;
+    use crate::emacs_core::coding::CodingSystemManager;
+    use neovm_value::tagged::value::SymbolMode;
+
+    let _reset = CharsetReset;
+    reset_charset_registry();
+    define_offset_charset_maybe_final("cr-early", 1, &[33, 126], Some(b'Z'), 200);
+    let mut mgr = CodingSystemManager::new();
+    let (full, _) = install_iso2022(
+        &mut mgr,
+        "cr-iso-full",
+        Value::symbol("iso-2022"),
+        vec![Value::symbol("ascii"), Value::NIL, Value::NIL, Value::NIL],
+        (0, 0),
+        false,
+    );
+    let (restricted, _) = install_iso2022(
+        &mut mgr,
+        "cr-iso-kept",
+        Value::list(vec![Value::symbol("ascii"), Value::symbol("cr-early")]),
+        vec![Value::symbol("ascii"), Value::NIL, Value::NIL, Value::NIL],
+        (0, 0),
+        false,
+    );
+    assert!(full.safe_charsets.is_some());
+    assert!(restricted.safe_charsets.is_some());
+    mgr.release_preloaded_iso2022_safe_sets();
+    let full =
+        crate::emacs_core::coding::iso2022_spec(mgr.get("cr-iso-full").unwrap(), SymbolMode::Bare)
+            .unwrap();
+    let restricted =
+        crate::emacs_core::coding::iso2022_spec(mgr.get("cr-iso-kept").unwrap(), SymbolMode::Bare)
+            .unwrap();
+    assert!(full.safe_charsets.is_none());
+    assert!(restricted.safe_charsets.is_some());
+}
+
 /// A charset that joined `Viso_2022_charset_list` stays decodable after a
 /// redefinition clears its final (`charset.c:1163-1168`). One that never had
 /// a final, and one that gained a final only on a later definition, replay.
@@ -1412,6 +2006,7 @@ fn iso2022_membership_follows_the_first_definition() {
             initial: [Some(intern("ascii")), None, None, None],
             request: vec![],
             reg_usage: (0, 0),
+            safe_charsets: None,
             flags: enumflags2::BitFlags::from_flag(IsoFlag::SevenBits) | IsoFlag::Designation,
         };
         emacs_char_codes(
@@ -1468,6 +2063,7 @@ fn iso2022_single_shift_reads_the_graphic_in_the_same_character() {
         initial: [Some(intern("ascii")), None, Some(intern("cr-3d")), None],
         request: vec![],
         reg_usage: (0, 0),
+        safe_charsets: None,
         flags: enumflags2::BitFlags::from_flag(IsoFlag::SevenBits)
             | IsoFlag::Designation
             | IsoFlag::SingleShift,

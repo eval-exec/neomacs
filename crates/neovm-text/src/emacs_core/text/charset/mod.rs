@@ -1011,7 +1011,11 @@ impl CharsetRegistry {
         // that first definition with an ISO final joins `Viso_2022_charset_list`.
         let new_definition =
             !self.bindings.contains_key(&name) && !self.charsets.contains_key(&name);
-        let joined = new_definition && iso_final.is_some() && !keep_public_identity;
+        // `charset.c:967-975` rejects a final outside `'0'..=127` before any
+        // registry write. `nil` is stored as "no final" and does not join.
+        let joined = new_definition
+            && iso_final.is_some_and(|final_char| (i64::from(b'0')..=127).contains(&final_char))
+            && !keep_public_identity;
         self.charsets.insert(name, info);
         if joined {
             self.iso2022_members.insert(name);
@@ -2256,6 +2260,19 @@ pub(crate) fn charset_sym_by_id(id: i64) -> Option<SymId> {
     })
 }
 
+/// Physical charset key stored on `name`'s binding.
+///
+/// GNU `CHECK_CHARSET_GET_CHARSET` reads that name's attribute vector
+/// (`coding.c:11048`). Two charsets may share an `:emacs-mule-id`, so the
+/// key is the binding, not a search by id.
+pub(crate) fn charset_defined_identity(name: SymId) -> Option<SymId> {
+    CHARSET_REGISTRY.with(|slot| {
+        let reg = slot.borrow();
+        let identity = reg.resolve_name(name);
+        reg.charsets.contains_key(&identity).then_some(identity)
+    })
+}
+
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Decode a raw code point in `charset` to an Emacs character code, or `None`.
 pub(crate) fn charset_decode_char(charset: SymId, code: i64) -> Option<i64> {
@@ -2638,6 +2655,41 @@ pub(crate) fn charset_table_shape(charset: SymId) -> Option<(i64, bool)> {
 /// a member (`charset.c:1167-1168`).
 pub(crate) fn charset_iso2022_member(charset: SymId) -> bool {
     CHARSET_REGISTRY.with(|slot| slot.borrow().iso2022_members.contains(&charset))
+}
+
+/// Identities currently in `Viso_2022_charset_list`, in a stable order.
+///
+/// Decode only tests membership. Encode re-sorts the intersection by charset
+/// id, the same order as [`iso2022_full_charset_candidates`].
+pub(crate) fn charset_iso2022_members() -> Vec<SymId> {
+    CHARSET_REGISTRY.with(|slot| {
+        let reg = slot.borrow();
+        let mut out: Vec<SymId> = reg.iso2022_members.iter().copied().collect();
+        out.sort_by_key(|name| resolve_sym(*name));
+        out
+    })
+}
+
+/// [`iso2022_full_charset_candidates`] limited to identities captured when a
+/// full-support coding system was defined.
+pub(crate) fn iso2022_encode_candidates_among(allowed: &[SymId]) -> Vec<SymId> {
+    CHARSET_REGISTRY.with(|slot| {
+        let reg = slot.borrow();
+        let allowed: rustc_hash::FxHashSet<SymId> = allowed.iter().copied().collect();
+        let jisx0208_1978 = lookup_interned("japanese-jisx0208-1978");
+        let mut out: Vec<(i64, SymId)> = reg
+            .charsets
+            .iter()
+            .filter(|(name, info)| {
+                info.iso_final_char.is_some()
+                    && Some(**name) != jisx0208_1978
+                    && allowed.contains(*name)
+            })
+            .map(|(name, info)| (info.id, *name))
+            .collect();
+        out.sort_by_key(|(id, _)| *id);
+        out.into_iter().map(|(_, name)| name).collect()
+    })
 }
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -3451,8 +3503,30 @@ fn builtin_define_charset_internal_with_symbols(args: Vec<Value>, mode: SymbolMo
         decode_code_arg(&args[4])
     };
 
-    // arg[5]: iso-final-char (char or nil)
-    let iso_final_char = opt_int(&args[5]);
+    // arg[5]: iso-final-char. `nil` is "no final". A fixnum must be
+    // `'0'..=127` (`charset.c:967-975`). Anything else is `fixnump`.
+    // The check is before `define_charset`, so a bad final leaves the
+    // previous definition untouched.
+    let iso_final_char = match args[5].kind() {
+        ValueKind::Nil => None,
+        ValueKind::Fixnum(final_char) => {
+            if !(i64::from(b'0')..=127).contains(&final_char) {
+                return Err(signal(
+                    "error",
+                    vec![Value::string(format!(
+                        "Invalid iso-final-char: {final_char}"
+                    ))],
+                ));
+            }
+            Some(final_char)
+        }
+        _ => {
+            return Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("fixnump"), args[5]],
+            ));
+        }
+    };
 
     // arg[6]: iso-revision (int or nil)
     let iso_revision = opt_int(&args[6]);
