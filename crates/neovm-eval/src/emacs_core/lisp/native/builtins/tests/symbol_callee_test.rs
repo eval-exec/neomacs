@@ -36,7 +36,7 @@ fn bytecode(target: Option<Value>) -> Value {
 }
 
 /// NAME's function cell set to [`bytecode`] of TARGET; returns the symbol.
-fn named(ctx: &mut Context, name: &str, target: Option<Value>) -> Value {
+fn named(ctx: &mut Context, name: &'static str, target: Option<Value>) -> Value {
     let function = bytecode(target);
     ctx.obarray_mut().set_symbol_function(name, function);
     Value::symbol(name)
