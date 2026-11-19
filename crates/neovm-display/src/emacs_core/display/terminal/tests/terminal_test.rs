@@ -1239,5 +1239,81 @@ fn frame_initial_p(eval: &mut Context, designator: Value) -> Result<Value, Strin
     builtin_frame_initial_p(eval, vec![designator]).map_err(|flow| format!("{flow:?}"))
 }
 
+/// GNU `Fmake_terminal_frame` sizes a root frame from `TIOCGWINSZ`, then
+/// `adjust_frame_size`'s safe floor (`frame.c:1861-1863`, `frame.c:562-570`).
+/// Attested on the pinned oracle, menu bar on, 0x0 pty: the new frame is live,
+/// `frame-width` 2, `frame-height` 3. The selected frame is a different size
+/// so a copy of that record cannot satisfy the assertion.
+#[test]
+fn make_terminal_frame_on_zero_winsize_stays_live_at_the_safe_floor() {
+    let _winsize = TtyWinsizeGuard::set((0, 0));
+    let mut eval = tty_root_frame_context();
+    let scratch = eval.edit.buffers.create_buffer("*scratch*");
+    eval.edit.buffers.set_current(scratch);
+    eval.frame_manager_mut().create_frame("F1", 40, 12, scratch);
+
+    let made = crate::emacs_core::frame::builtin_make_terminal_frame(&mut eval, vec![Value::NIL])
+        .expect("a 0x0 winsize must not panic");
+    let made = made_frame(&eval, made);
+    assert_eq!(made.width, 2);
+    assert_eq!(
+        crate::emacs_core::window_cmds::frame_realized_lines(made),
+        3
+    );
+    assert_eq!(made.height, 4);
+}
+
+/// An 80x24 winsize is above the floor. Attested `frame-height` is 23 because
+/// the menu bar occupies one of the 24 rows (`frame.c:1862`).
+#[test]
+fn make_terminal_frame_on_eighty_by_twenty_four_keeps_the_winsize() {
+    let _winsize = TtyWinsizeGuard::set((80, 24));
+    let mut eval = tty_root_frame_context();
+    let scratch = eval.edit.buffers.create_buffer("*scratch*");
+    eval.edit.buffers.set_current(scratch);
+    eval.frame_manager_mut().create_frame("F1", 40, 12, scratch);
+
+    let made = crate::emacs_core::frame::builtin_make_terminal_frame(&mut eval, vec![Value::NIL])
+        .expect("80x24 make-frame");
+    let made = made_frame(&eval, made);
+    assert_eq!(made.width, 80);
+    assert_eq!(made.height, 24);
+    assert_eq!(
+        crate::emacs_core::window_cmds::frame_realized_lines(made),
+        23
+    );
+}
+
+struct TtyWinsizeGuard;
+
+impl TtyWinsizeGuard {
+    fn set(size: (u32, u32)) -> Self {
+        crate::emacs_core::frame::set_tty_winsize_for_test(Some(size));
+        Self
+    }
+}
+
+impl Drop for TtyWinsizeGuard {
+    fn drop(&mut self) {
+        crate::emacs_core::frame::set_tty_winsize_for_test(None);
+    }
+}
+
+fn tty_root_frame_context() -> Context {
+    crate::test_utils::init_test_tracing();
+    reset_terminal_thread_locals();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    super::pure::mark_selected_terminal_usable_for_test(&eval);
+    eval.set_variable("noninteractive", Value::NIL);
+    eval.set_variable("menu-bar-mode", Value::T);
+    eval.set_variable("tab-bar-mode", Value::NIL);
+    eval
+}
+
+fn made_frame(eval: &Context, made: Value) -> &crate::window::Frame {
+    let id = crate::window::FrameId(made.as_frame_id().expect("frame id"));
+    eval.frame_manager().get(id).expect("new frame is live")
+}
+
 #[path = "gc_heap_ownership_test.rs"]
 mod gc_heap_ownership;

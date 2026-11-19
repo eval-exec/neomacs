@@ -5224,6 +5224,12 @@ pub fn run(mode: RuntimeMode) {
     if tty_init::should_enable_live_tty_io(&startup) {
         reset_terminal_host();
         configure_terminal_runtime(tty_init::detect_tty_runtime(&startup));
+        // Root `make-terminal-frame` re-reads the winsize (`frame.c:1861`).
+        // A successful 0x0 is a size, not a missing query. The new root
+        // frame clamps it. The initial frame keeps the size startup stored.
+        neovm_core::emacs_core::frame::set_initial_tty_winsize_query(
+            tty_init::initial_tty_winsize_cells,
+        );
         // GNU `init_sys_modes' (src/sysdep.c:1130) publishes the terminal's
         // ERASE character here, read from the termios it saved before touching
         // the terminal modes. Do the same while stdout is still cooked and

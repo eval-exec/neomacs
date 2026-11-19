@@ -278,6 +278,18 @@ pub fn query_terminal_size_cells() -> Option<(u32, u32)> {
     query_terminal_size_cells_with(&TerminalSizeQuery::new()).map(legacy_terminal_columns_rows)
 }
 
+/// Winsize for a root `make-terminal-frame` on the initial terminal.
+///
+/// GNU `get_tty_size` (`src/sysdep.c:1403-1408`) stores 0 when the ioctl fails
+/// and also stores a successful 0x0 report. This always returns `Some`: a
+/// failed query is `(0, 0)`, which the frame clamp turns into a live frame.
+pub fn initial_tty_winsize_cells() -> Option<(u32, u32)> {
+    match TerminalSizeQuery::new().query() {
+        Ok(size) => Some((u32::from(size.columns()), u32::from(size.rows()))),
+        Err(_) => Some((0, 0)),
+    }
+}
+
 fn legacy_terminal_columns_rows(size: TerminalCellSize) -> (u32, u32) {
     (u32::from(size.columns()), u32::from(size.rows()))
 }
