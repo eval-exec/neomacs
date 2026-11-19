@@ -41,31 +41,6 @@ use neovm_value::error::{EvalResult, LispCondition, signal, signal_error_with_ar
 use neovm_value::error::{expect_args, expect_max_args, expect_min_args};
 use neovm_value::intern::{intern, resolve_sym};
 use neovm_value::value::{Value, ValueKind, VecLikeType};
-use std::sync::Mutex;
-
-/// Installed by the interactive TTY frontend. `Some((0, 0))` is a successful
-/// zero winsize, which GNU `get_tty_size` also stores (`src/sysdep.c:1396`).
-/// `None` means the ioctl failed; the make-frame path then uses 0, as GNU does.
-static INITIAL_TTY_WINSIZE: Mutex<Option<fn() -> Option<(u32, u32)>>> = Mutex::new(None);
-
-#[cfg(test)]
-std::thread_local! {
-    static TTY_WINSIZE_FOR_TEST: std::cell::Cell<Option<(u32, u32)>> =
-        const { std::cell::Cell::new(None) };
-}
-
-/// Record the initial terminal's winsize query. Later calls replace it.
-#[doc(hidden)]
-pub fn set_initial_tty_winsize_query(query: fn() -> Option<(u32, u32)>) {
-    *INITIAL_TTY_WINSIZE
-        .lock()
-        .unwrap_or_else(|err| err.into_inner()) = Some(query);
-}
-
-#[cfg(test)]
-pub(crate) fn set_tty_winsize_for_test(size: Option<(u32, u32)>) {
-    TTY_WINSIZE_FOR_TEST.with(|slot| slot.set(size));
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum IconifyFrameAction {
@@ -1507,22 +1482,10 @@ fn clamped_tty_root_cells(cols: u32, rows: u32, menu: u32, tab: u32) -> (u32, u3
 }
 
 fn root_tty_winsize(terminal_id: u64, stored: (u32, u32)) -> (u32, u32) {
-    #[cfg(test)]
-    if let Some(size) = TTY_WINSIZE_FOR_TEST.with(|slot| slot.get()) {
-        return size;
-    }
-    // The installed query is the initial terminal's input, the same fd GNU
-    // uses for the first tty. A secondary terminal keeps the size its host
-    // already published on the selected frame.
-    if terminal_id == 0 {
-        let guard = INITIAL_TTY_WINSIZE
-            .lock()
-            .unwrap_or_else(|err| err.into_inner());
-        if let Some(query) = *guard {
-            return query().unwrap_or((0, 0));
-        }
-    }
-    stored
+    // GNU reads `get_tty_size(fileno(FRAME_TTY(f)->input))` (`frame.c:1861`).
+    // `(0, 0)` is that answer. A terminal with no query, no host fd, and no
+    // open size has nothing else to read, so the frame cells remain.
+    super::terminal::pure::terminal_winsize_cells(terminal_id).unwrap_or(stored)
 }
 
 fn tty_root_bar_lines(

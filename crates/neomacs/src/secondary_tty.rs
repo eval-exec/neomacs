@@ -167,6 +167,21 @@ impl SecondaryTtyRegistry {
         Err("additional text terminals are not supported on this platform".to_string())
     }
 
+    /// GNU `get_tty_size` on this terminal's fd. `(0, 0)` is a failed ioctl
+    /// or a real 0×0. `None` means this registry has no session for the id.
+    #[cfg(unix)]
+    fn winsize_cells(&self, terminal_id: u64) -> Option<(u32, u32)> {
+        use std::os::fd::AsRawFd;
+        let sessions = self.sessions.lock().ok()?;
+        let session = sessions.get(&terminal_id)?;
+        Some(raw_winsize(session.device.file.as_raw_fd()))
+    }
+
+    #[cfg(not(unix))]
+    fn winsize_cells(&self, _terminal_id: u64) -> Option<(u32, u32)> {
+        None
+    }
+
     fn remove(&self, terminal_id: u64) -> Result<(), String> {
         let session = self
             .sessions
@@ -280,6 +295,10 @@ impl TerminalHost for SecondaryTtyHost {
 
     fn write_bytes(&mut self, bytes: &[u8]) -> Result<(), String> {
         self.registry.write(self.terminal_id, bytes)
+    }
+
+    fn tty_winsize_cells(&mut self) -> Option<(u32, u32)> {
+        self.registry.winsize_cells(self.terminal_id)
     }
 }
 
@@ -548,6 +567,17 @@ fn bounded_tty_size(columns: u32, rows: u32) -> Option<TtyFrameSize> {
     let columns = columns.min(MAX_SECONDARY_TTY_CELLS);
     let rows = rows.min(MAX_SECONDARY_TTY_CELLS / columns.max(1));
     TtyFrameSize::new(columns, rows)
+}
+
+/// Unclamped `TIOCGWINSZ`. Failure and a successful 0×0 are both `(0, 0)`.
+#[cfg(unix)]
+fn raw_winsize(fd: std::os::fd::RawFd) -> (u32, u32) {
+    let mut size = unsafe { std::mem::zeroed::<libc::winsize>() };
+    if unsafe { libc::ioctl(fd, libc::TIOCGWINSZ as _, &mut size) } == 0 {
+        (u32::from(size.ws_col), u32::from(size.ws_row))
+    } else {
+        (0, 0)
+    }
 }
 
 #[cfg(unix)]

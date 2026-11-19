@@ -1002,6 +1002,80 @@ fn make_terminal_frame_without_a_device_reuses_the_selected_secondary_terminal()
     );
 }
 
+/// A second root frame on a secondary terminal reads that terminal's fd,
+/// not the cells stored on the frame the open path created.
+#[test]
+fn make_terminal_frame_on_a_secondary_terminal_reads_that_terminals_winsize() {
+    crate::test_utils::init_test_tracing();
+    reset_terminal_thread_locals();
+    configure_terminal_runtime(TerminalRuntimeConfig::window_system(
+        neomacs_display_protocol::GraphicalDisplayIdentity::named(
+            neomacs_display_protocol::GraphicalBackend::X11,
+            ":0",
+        )
+        .unwrap(),
+    ));
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let scratch = eval.edit.buffers.create_buffer("*scratch*");
+    eval.edit.buffers.set_current(scratch);
+    eval.set_tty_frame_host_factory(Box::new(ReportingWinsizeFactory));
+    let params = Value::list(vec![
+        Value::cons(Value::symbol("tty"), Value::string("/dev/pts/42")),
+        Value::cons(Value::symbol("tty-type"), Value::string("xterm-256color")),
+    ]);
+    let first = crate::emacs_core::frame::builtin_make_terminal_frame(&mut eval, vec![params])
+        .expect("open secondary terminal");
+    let first_id = crate::window::FrameId(first.as_frame_id().expect("first frame id"));
+    let (first_terminal, first_size) = {
+        let first_frame = eval.frame_manager().get(first_id).expect("first frame");
+        (
+            first_frame.terminal_id,
+            (first_frame.width, first_frame.height),
+        )
+    };
+    assert_eq!(first_size, (132, 43));
+
+    let second = crate::emacs_core::frame::builtin_make_terminal_frame(&mut eval, vec![Value::NIL])
+        .expect("reuse selected secondary terminal");
+    let second_id = crate::window::FrameId(second.as_frame_id().expect("second frame id"));
+    let second_frame = eval.frame_manager().get(second_id).expect("second frame");
+    assert_eq!(second_frame.terminal_id, first_terminal);
+    assert_eq!((second_frame.width, second_frame.height), (20, 10));
+}
+
+struct ReportingWinsizeHost;
+
+impl TerminalHost for ReportingWinsizeHost {
+    fn suspend_tty(&mut self) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn resume_tty(&mut self) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn delete_terminal(&mut self) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn tty_winsize_cells(&mut self) -> Option<(u32, u32)> {
+        Some((20, 10))
+    }
+}
+
+struct ReportingWinsizeFactory;
+
+impl TtyFrameHostFactory for ReportingWinsizeFactory {
+    fn open_tty(&mut self, _request: TtyFrameOpenRequest) -> Result<OpenedTtyFrameHost, String> {
+        Ok(OpenedTtyFrameHost::new(
+            TtyFrameSize::new(132, 43).expect("open size"),
+            neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities::full_with_color_cells(256),
+            127,
+            Box::new(ReportingWinsizeHost),
+        ))
+    }
+}
+
 #[test]
 fn make_terminal_frame_reuses_an_active_tty_already_open_on_the_named_device() {
     crate::test_utils::init_test_tracing();
@@ -1239,6 +1313,22 @@ fn frame_initial_p(eval: &mut Context, designator: Value) -> Result<Value, Strin
     builtin_frame_initial_p(eval, vec![designator]).map_err(|flow| format!("{flow:?}"))
 }
 
+fn winsize_zero() -> (u32, u32) {
+    (0, 0)
+}
+
+fn winsize_eighty_by_twenty_four() -> (u32, u32) {
+    (80, 24)
+}
+
+fn winsize_other() -> (u32, u32) {
+    (7, 9)
+}
+
+fn install_initial_winsize(query: fn() -> (u32, u32)) {
+    set_initial_terminal_winsize_query(query).expect("install the terminal's winsize query");
+}
+
 /// GNU `Fmake_terminal_frame` sizes a root frame from `TIOCGWINSZ`, then
 /// `adjust_frame_size`'s safe floor (`frame.c:1861-1863`, `frame.c:562-570`).
 /// Attested on the pinned oracle, menu bar on, 0x0 pty: the new frame is live,
@@ -1246,8 +1336,8 @@ fn frame_initial_p(eval: &mut Context, designator: Value) -> Result<Value, Strin
 /// so a copy of that record cannot satisfy the assertion.
 #[test]
 fn make_terminal_frame_on_zero_winsize_stays_live_at_the_safe_floor() {
-    let _winsize = TtyWinsizeGuard::set((0, 0));
     let mut eval = tty_root_frame_context();
+    install_initial_winsize(winsize_zero);
     let scratch = eval.edit.buffers.create_buffer("*scratch*");
     eval.edit.buffers.set_current(scratch);
     eval.frame_manager_mut().create_frame("F1", 40, 12, scratch);
@@ -1263,12 +1353,33 @@ fn make_terminal_frame_on_zero_winsize_stays_live_at_the_safe_floor() {
     assert_eq!(made.height, 4);
 }
 
+/// Menu bar off, 0x0 pty. Attested GNU `frame-width` 2, `frame-height` 2.
+#[test]
+fn make_terminal_frame_on_zero_winsize_without_a_menu_bar_uses_the_text_floor() {
+    let mut eval = tty_root_frame_context();
+    eval.set_variable("menu-bar-mode", Value::NIL);
+    install_initial_winsize(winsize_zero);
+    let scratch = eval.edit.buffers.create_buffer("*scratch*");
+    eval.edit.buffers.set_current(scratch);
+    eval.frame_manager_mut().create_frame("F1", 40, 12, scratch);
+
+    let made = crate::emacs_core::frame::builtin_make_terminal_frame(&mut eval, vec![Value::NIL])
+        .expect("a 0x0 winsize must not panic");
+    let made = made_frame(&eval, made);
+    assert_eq!(made.width, 2);
+    assert_eq!(
+        crate::emacs_core::window_cmds::frame_realized_lines(made),
+        2
+    );
+    assert_eq!(made.height, 2);
+}
+
 /// An 80x24 winsize is above the floor. Attested `frame-height` is 23 because
 /// the menu bar occupies one of the 24 rows (`frame.c:1862`).
 #[test]
 fn make_terminal_frame_on_eighty_by_twenty_four_keeps_the_winsize() {
-    let _winsize = TtyWinsizeGuard::set((80, 24));
     let mut eval = tty_root_frame_context();
+    install_initial_winsize(winsize_eighty_by_twenty_four);
     let scratch = eval.edit.buffers.create_buffer("*scratch*");
     eval.edit.buffers.set_current(scratch);
     eval.frame_manager_mut().create_frame("F1", 40, 12, scratch);
@@ -1284,19 +1395,24 @@ fn make_terminal_frame_on_eighty_by_twenty_four_keeps_the_winsize() {
     );
 }
 
-struct TtyWinsizeGuard;
-
-impl TtyWinsizeGuard {
-    fn set(size: (u32, u32)) -> Self {
-        crate::emacs_core::frame::set_tty_winsize_for_test(Some(size));
-        Self
-    }
-}
-
-impl Drop for TtyWinsizeGuard {
-    fn drop(&mut self) {
-        crate::emacs_core::frame::set_tty_winsize_for_test(None);
-    }
+/// The query is publish-once on the terminal record. The same function is
+/// idempotent. A different function is a typed refusal.
+#[test]
+fn a_different_initial_winsize_query_is_refused() {
+    crate::test_utils::init_test_tracing();
+    reset_terminal_thread_locals();
+    assert_eq!(
+        set_initial_terminal_winsize_query(winsize_zero),
+        Ok(WinsizeQueryInstall::Installed)
+    );
+    assert_eq!(
+        set_initial_terminal_winsize_query(winsize_zero),
+        Ok(WinsizeQueryInstall::AlreadyInstalled)
+    );
+    assert_eq!(
+        set_initial_terminal_winsize_query(winsize_other),
+        Err(WinsizeQueryError::DifferentQuery)
+    );
 }
 
 fn tty_root_frame_context() -> Context {

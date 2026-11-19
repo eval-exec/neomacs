@@ -219,7 +219,8 @@ use neovm_core::emacs_core::load::{
 use neovm_core::emacs_core::print_value_with_eval;
 use neovm_core::emacs_core::terminal::pure::{
     TerminalRuntimeConfig, configure_terminal_runtime, ensure_terminal_runtime_owner,
-    reset_terminal_host, reset_terminal_runtime, set_terminal_host,
+    reset_terminal_host, reset_terminal_runtime, set_initial_terminal_winsize_query,
+    set_terminal_host,
 };
 use neovm_core::emacs_core::value::list_length;
 use neovm_core::emacs_core::{
@@ -5224,12 +5225,14 @@ pub fn run(mode: RuntimeMode) {
     if tty_init::should_enable_live_tty_io(&startup) {
         reset_terminal_host();
         configure_terminal_runtime(tty_init::detect_tty_runtime(&startup));
-        // Root `make-terminal-frame` re-reads the winsize (`frame.c:1861`).
-        // A successful 0x0 is a size, not a missing query. The new root
-        // frame clamps it. The initial frame keeps the size startup stored.
-        neovm_core::emacs_core::frame::set_initial_tty_winsize_query(
-            tty_init::initial_tty_winsize_cells,
-        );
+        // Root `make-terminal-frame` re-reads this terminal's winsize
+        // (`frame.c:1861`). The query lives on the initial terminal's
+        // record. The same function may be installed again; a different
+        // one is refused. The initial frame keeps the size startup stored.
+        if let Err(error) = set_initial_terminal_winsize_query(tty_init::initial_tty_winsize_cells)
+        {
+            tracing::error!("initial terminal winsize query refused: {error:?}");
+        }
         // GNU `init_sys_modes' (src/sysdep.c:1130) publishes the terminal's
         // ERASE character here, read from the termios it saved before touching
         // the terminal modes. Do the same while stdout is still cooked and
