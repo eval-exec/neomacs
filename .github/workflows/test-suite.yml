@@ -1514,15 +1514,18 @@ jobs:
         run: bash scripts/ci/run-loom-models.sh --crate "${{ matrix.crate }}"
 
   # A red packaged runtime skips every job that needs it, and those jobs
-  # never appear on the run page. This job always runs and names the gated
-  # suites that did not run. It fails on push, pull request, and job=all
-  # when one of them was skipped or cancelled. A single-job
-  # workflow_dispatch is the exception: those suites are not selected.
+  # never appear on the run page. This job names the gated suites that did
+  # not run. !cancelled() still runs when a dependency failed or was
+  # skipped, and it does not run after cancel-in-progress kills the run.
+  # always() would mark every superseded run red. It fails on push, pull
+  # request, and job=all when one of them was skipped or cancelled. A
+  # single-job dispatch fails only for the suite that input names.
+  # neomacs-display-tests is the gated suite that can be selected alone.
   # The weekly schedule excludes these suites with its own if, so a skip
   # there is not a dependency failure.
   suite-skip-summary:
     name: gated suite skip summary
-    if: always()
+    if: ${{ !cancelled() }}
     needs:
       - neovm-core-tests
       - neovm-oracle-tests
@@ -1553,10 +1556,6 @@ jobs:
           if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$DISPATCH_JOB" != "all" ]; then
             single_dispatch=1
           fi
-          expected=yes
-          if [ "$single_dispatch" -eq 1 ] || [ "$EVENT_NAME" = "schedule" ]; then
-            expected=no
-          fi
           missing=0
           if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
             {
@@ -1578,6 +1577,12 @@ jobs:
           for entry in "$@"; do
             name="${entry%% *}"
             result="${entry#* }"
+            expected=yes
+            if [ "$EVENT_NAME" = "schedule" ]; then
+              expected=no
+            elif [ "$single_dispatch" -eq 1 ] && [ "$DISPATCH_JOB" != "$name" ]; then
+              expected=no
+            fi
             echo "suite ${name}: result=${result} expected=${expected}"
             if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
               echo "| ${name} | ${result} | ${expected} |" >> "$GITHUB_STEP_SUMMARY"
