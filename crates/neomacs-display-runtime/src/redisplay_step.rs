@@ -5,8 +5,6 @@
 //! direct bodies, and each function here is a one-arm call of that body.
 //! There is no thread test, TLS read, env read, or second algorithm.
 
-#![allow(dead_code)]
-
 use std::time::Duration;
 
 use neomacs_layout_engine::RowsQueryPolicy;
@@ -19,6 +17,10 @@ use neovm_core::window::{FrameId, WindowId, WindowLayoutQueryOutcome, WindowLayo
 use crate::redisplay::{FrameLayoutPurpose, PreparedFrameDisplay, RedisplayRuntime};
 
 /// Serial installer. Owned drivers are not constructible in this slice.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "dormant until hosted activation (S2 step 2)")
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RedisplayInstaller {
     InlineSerialMain,
@@ -31,12 +33,17 @@ pub(crate) enum RedisplayStep<T> {
 }
 
 impl<T> RedisplayStep<T> {
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "dormant until hosted activation (S2 step 2)")
+    )]
     pub(crate) fn into_direct(self) -> T {
         let RedisplayStep::Done(value) = self;
         value
     }
 }
 
+#[expect(dead_code, reason = "dormant until hosted activation (S2 step 2)")]
 pub(crate) fn resolved_scroll_preview(
     installer: RedisplayInstaller,
     runtime: &RedisplayRuntime,
@@ -52,6 +59,10 @@ pub(crate) fn resolved_scroll_preview(
     }
 }
 
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "dormant until hosted activation (S2 step 2)")
+)]
 pub(crate) fn maintain_scroll_coverage(
     installer: RedisplayInstaller,
     runtime: &RedisplayRuntime,
@@ -64,6 +75,7 @@ pub(crate) fn maintain_scroll_coverage(
     }
 }
 
+#[expect(dead_code, reason = "dormant until hosted activation (S2 step 2)")]
 pub(crate) fn shape_gstring(
     installer: RedisplayInstaller,
     runtime: &RedisplayRuntime,
@@ -77,6 +89,7 @@ pub(crate) fn shape_gstring(
     }
 }
 
+#[expect(dead_code, reason = "dormant until hosted activation (S2 step 2)")]
 pub(crate) fn prepare_frame(
     installer: RedisplayInstaller,
     runtime: &RedisplayRuntime,
@@ -91,6 +104,7 @@ pub(crate) fn prepare_frame(
     }
 }
 
+#[expect(dead_code, reason = "dormant until hosted activation (S2 step 2)")]
 pub(crate) fn prepare_minibuffer_geometry(
     installer: RedisplayInstaller,
     runtime: &RedisplayRuntime,
@@ -104,6 +118,7 @@ pub(crate) fn prepare_minibuffer_geometry(
     }
 }
 
+#[expect(dead_code, reason = "dormant until hosted activation (S2 step 2)")]
 pub(crate) fn query_window(
     installer: RedisplayInstaller,
     runtime: &RedisplayRuntime,
@@ -119,6 +134,7 @@ pub(crate) fn query_window(
     }
 }
 
+#[expect(dead_code, reason = "dormant until hosted activation (S2 step 2)")]
 pub(crate) fn query_window_with_policy(
     installer: RedisplayInstaller,
     runtime: &RedisplayRuntime,
@@ -136,6 +152,10 @@ pub(crate) fn query_window_with_policy(
 }
 
 /// Display-runtime serial entries whose lowering must match the parent.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "dormant until hosted activation (S2 step 2)")
+)]
 pub(crate) const SERIAL_REDISPLAY_ENTRIES: &[&str] = &[
     "resolved_scroll_preview",
     "maintain_scroll_coverage",
