@@ -1357,11 +1357,12 @@ jobs:
               --no-fail-fast
           "
       - name: Run neomacs-webview lib tests with the webview feature
+        if: ${{ !cancelled() }}
         run: |
           nix develop --accept-flake-config --command bash -c "
             set -euo pipefail
             cd \"${GITHUB_WORKSPACE:-$PWD}\"
-            cargo nextest run -p neomacs-webview --features webview --lib
+            CC=gcc CXX=g++ cargo nextest run -p neomacs-webview --features webview --lib
           "
 
       # Failure-only. A green run keeps no screenshots. The directory holds
