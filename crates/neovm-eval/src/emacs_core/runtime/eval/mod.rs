@@ -2239,6 +2239,13 @@ cached_symbol_id!(error_symbol, "error");
 cached_symbol_id!(quit_symbol, "quit");
 cached_symbol_id!(invalid_function_symbol, "invalid-function");
 cached_symbol_id!(error_conditions_symbol, "error-conditions");
+// Signal dispatch reads these on every signal (GNU reads the C variables).
+cached_symbol_id!(signal_hook_function_symbol, "signal-hook-function");
+cached_symbol_id!(inhibit_debugger_symbol, "inhibit-debugger");
+cached_symbol_id!(debug_on_signal_symbol, "debug-on-signal");
+cached_symbol_id!(debug_on_error_symbol, "debug-on-error");
+cached_symbol_id!(debug_on_quit_symbol, "debug-on-quit");
+cached_symbol_id!(debug_ignored_errors_symbol, "debug-ignored-errors");
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 fn is_lambda_like_symbol_id(id: SymId) -> bool {

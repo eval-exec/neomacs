@@ -3290,13 +3290,7 @@ impl<'a> Vm<'a> {
     #[doc(hidden)]
     pub fn collect_flow_roots(flow: &Flow, out: &mut Vec<Value>) {
         match flow.kind() {
-            FlowRef::Signal(sig) => {
-                out.push(Value::from_sym_id(sig.symbol));
-                out.extend(sig.data.iter().copied());
-                if let Some(raw) = sig.raw_data {
-                    out.push(raw);
-                }
-            }
+            FlowRef::Signal(sig) => Self::collect_signal_roots(sig, out),
             FlowRef::Throw(thrown) => {
                 out.push(thrown.tag);
                 out.push(thrown.value);
@@ -3308,6 +3302,14 @@ impl<'a> Vm<'a> {
             // Carries only an exit code and a restart flag: no Lisp values to
             // keep alive.
             FlowRef::Shutdown(_) => {}
+        }
+    }
+
+    fn collect_signal_roots(sig: &neovm_value::error::SignalData, out: &mut Vec<Value>) {
+        out.push(Value::from_sym_id(sig.symbol));
+        out.extend(sig.data.iter().copied());
+        if let Some(raw) = sig.raw_data {
+            out.push(raw);
         }
     }
 
@@ -10143,7 +10145,7 @@ impl<'a> Vm<'a> {
                 // GC.  We must root the current frame so values survive
                 // collection.
                 let mut sig_extra = Vec::new();
-                Self::collect_flow_roots(&Flow::signal_boxed(sig.clone()), &mut sig_extra);
+                Self::collect_signal_roots(&sig, &mut sig_extra);
                 let sig = match self.with_frame_roots(_func, &sig_extra, |vm| {
                     vm.ctx.dispatch_signal_if_needed(sig)
                 }) {
