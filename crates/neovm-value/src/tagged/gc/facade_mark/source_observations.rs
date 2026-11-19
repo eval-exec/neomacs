@@ -6,11 +6,14 @@ use crate::tagged::collection_reads::{
 };
 
 impl QuiescentCollector<'_> {
-    // No product caller enters this shell. The transfer and its tests are the
-    // only callers until the owned source transaction is composed.
+    /// Withdraw this heap's observation owner through the exclusive collector.
+    /// Eval's dormant source shell calls this after its own frames return, then
+    /// drops the collector before the receipt leaves that frame. Transfer
+    /// admission uses the same body. No production caller enters it.
+    #[doc(hidden)]
     #[cold]
     #[inline(never)]
-    pub(crate) fn detach_source_observations(
+    pub fn detach_source_observations(
         &mut self,
     ) -> Result<SourceObservationsDetached, SourceObservationError> {
         if tagged_heap_is_installed() {

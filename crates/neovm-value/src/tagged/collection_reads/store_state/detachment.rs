@@ -222,6 +222,15 @@ impl ObservationWorld {
 }
 
 impl SourceObservationsDetached {
+    /// Test census only. This compares identities and grants no owner handle.
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    #[doc(hidden)]
+    pub(crate) fn original_is_current_for_test(&self) -> bool {
+        super::super::STATE
+            .with(|slot| ObservationIdentity::of(&slot.owner.borrow()) == self.original)
+    }
+
     /// Local restoration effect only. An owned source adapter must keep this
     /// private until its separate matching return control has been validated.
     #[cold]

@@ -1,7 +1,8 @@
 //! Actual boxed source ownership while selected host slots are withdrawn.
 //! In-place bindings are parked before host activations leave. Text-cache
 //! retirement and the closed census share that same shell: the census borrows
-//! the keeper the shell already holds. No heap transfer, observation export,
+//! the keeper the shell already holds. Observation withdrawal uses that same
+//! collector frame and returns only the local receipt. No heap transfer, observation export,
 //! source restoration, or Lisp entry is implemented here. Every armed payload
 //! retains on Drop, forget, and unwind. Only a pre-effect refusal returns an
 //! ordinary Context.
@@ -55,6 +56,8 @@ pub(crate) enum SourceWithdrawalStep {
     Regex,
     StringPosition,
     HeapPreparation,
+    ObservationEntry,
+    Observations,
 }
 
 impl SourceWithdrawalStep {
@@ -81,6 +84,8 @@ impl SourceWithdrawalStep {
             Self::Regex => "regex",
             Self::StringPosition => "string-position",
             Self::HeapPreparation => "heap-preparation",
+            Self::ObservationEntry => "observation-entry",
+            Self::Observations => "observations",
         }
     }
 }
@@ -249,8 +254,8 @@ type Quit = Effect<IntegerWidth, DetachedQuitActivation>;
 /// selected receipts. In-place bindings are parked before their host
 /// activations are withdrawn. The exact chain type prevents missing,
 /// duplicate, or reordered receipt families from constructing this wrapper.
-/// It grants no World or heap access. Observation ownership and JIT still
-/// need their own closed source transaction.
+/// It grants no World or heap access. JIT still needs its own closed source
+/// transaction. Observation withdrawal is the next method on this shell.
 #[must_use]
 pub(crate) struct OwnedSourceRegistries {
     _frame: SourceFrame<Quit>,
@@ -475,6 +480,56 @@ impl OwnedSourceTextRetired {
     }
 }
 
+#[derive(Debug)]
+struct ObservationEntryChecked;
+type ObservationEntry = Effect<StringPosition, ObservationEntryChecked>;
+type ObservationClosed = Effect<
+    ObservationEntry,
+    (
+        neovm_value::tagged::gc::FrozenLegacyRoots,
+        neovm_value::tagged::collection_reads::SourceObservationsDetached,
+    ),
+>;
+
+/// Owns the original source, the final census, and the observation TLS receipt.
+/// The collector and the original observation `Rc` do not leave the finish frame.
+/// World carriers and JIT withdrawal come later. No production caller enters it.
+#[must_use]
+pub(crate) struct OwnedSourceObservationClosed {
+    _frame: SourceFrame<ObservationClosed>,
+}
+
+static_assertions::assert_not_impl_any!(OwnedSourceObservationClosed: Send, Sync, Clone, Copy);
+
+impl OwnedSourceRegistries {
+    #[cold]
+    #[inline(never)]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "E2 L4 dormant observation withdrawal; no production caller enters it"
+        )
+    )]
+    pub(crate) fn withdraw_observations(
+        self,
+    ) -> Result<OwnedSourceObservationClosed, SourceWithdrawalFailure> {
+        // Retirement, the entry recheck, the census, and observation withdrawal
+        // stay one transaction. No caller callback runs between them.
+        let retired = self.retire_text()?;
+        let frame = retired
+            ._frame
+            .advance(SourceWithdrawalStep::ObservationEntry, |source| {
+                validate_serial_source_entry(source).map(|()| ObservationEntryChecked)
+            })?;
+        let frame = frame.advance_with_keeper(
+            SourceWithdrawalStep::Observations,
+            Context::withdraw_owned_source_observations,
+        )?;
+        Ok(OwnedSourceObservationClosed { _frame: frame })
+    }
+}
+
 #[cfg(test)]
 #[path = "tests/owned_source_test.rs"]
 mod tests;
@@ -486,3 +541,7 @@ mod retirement_tests;
 #[cfg(test)]
 #[path = "tests/owned_source_census_test.rs"]
 mod census_tests;
+
+#[cfg(test)]
+#[path = "tests/owned_source_observations_test.rs"]
+mod observation_tests;

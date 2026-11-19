@@ -11,6 +11,9 @@ use std::borrow::Borrow;
 #[path = "preparation/policy.rs"]
 mod policy;
 use policy::{ClosedSource, PreparationPolicy, PreparationResources};
+#[path = "preparation/finish_source.rs"]
+mod finish_source;
+use finish_source::{CensusOnly, FinishSource, WithdrawObservations};
 
 /// Resource recovery work, not a permission to reactivate a Context. The
 /// consuming source adapter must separately validate its actual return right.
@@ -97,11 +100,38 @@ impl Context {
         &mut self,
         keeper: &Baton,
     ) -> Result<FrozenLegacyRoots, OwnedParallelError> {
+        self.finish_owned_source_heap::<CensusOnly>(keeper)
+    }
+
+    /// Consume the same local collector frame through observation withdrawal.
+    /// The collector and the original observation `Rc` do not leave this frame.
+    /// No production caller enters it.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn withdraw_owned_source_observations(
+        &mut self,
+        keeper: &Baton,
+    ) -> Result<
+        (
+            FrozenLegacyRoots,
+            neovm_value::tagged::collection_reads::SourceObservationsDetached,
+        ),
+        finish_source::ObservationFailure,
+    > {
+        self.finish_owned_source_heap::<WithdrawObservations>(keeper)
+    }
+
+    // Only this child module defines finish policies. No caller callback or
+    // runtime switch can run inside the source collector frame.
+    fn finish_owned_source_heap<F: FinishSource>(
+        &mut self,
+        keeper: &Baton,
+    ) -> Result<F::Output, F::Failure> {
         let prepared = match self
             .prepare_admission_using::<ClosedSource, _>(SerialRecovery::Unchanged, keeper)
         {
             Ok(prepared) => prepared,
-            Err(failure) => return Err(failure.retain_resources()),
+            Err(failure) => return Err(F::preparation_failure(failure.retain_resources())),
         };
         let PreparedAdmission {
             collector,
@@ -109,10 +139,7 @@ impl Context {
             frozen,
             recovery: _,
         } = prepared;
-        // The collector and its factory frame end here, before any caller can
-        // form another local heap loan.
-        drop(collector);
-        Ok(frozen)
+        F::finish(collector, frozen)
     }
 
     /// The one census/drain definition. Only sealed static policies choose
