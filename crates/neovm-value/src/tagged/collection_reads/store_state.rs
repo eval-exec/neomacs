@@ -483,3 +483,9 @@ pub(crate) fn clear_installed_store_heap(_heap: *mut TaggedHeap) {
         );
     });
 }
+
+// Dormant cold source effects; no existing store/installation path calls them.
+mod detachment;
+pub(crate) use detachment::{
+    SourceObservationError, SourceObservationRestoreFailure, SourceObservationsDetached,
+};

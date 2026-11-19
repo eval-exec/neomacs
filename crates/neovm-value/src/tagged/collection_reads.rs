@@ -998,7 +998,8 @@ mod store_state;
 // functions above, never the RefCell-bearing accessor (LEAD 10:5xZ).
 use store_state::with_state;
 pub(crate) use store_state::{
-    ObservationWorld, StoreState, clear_installed_store_heap, with_store,
+    ObservationWorld, SourceObservationError, SourceObservationRestoreFailure,
+    SourceObservationsDetached, StoreState, clear_installed_store_heap, with_store,
 };
 
 mod compiled_journal;

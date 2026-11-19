@@ -18,7 +18,23 @@ pub(super) struct CertificatePool {
     count: usize,
 }
 
+/// Cold handoff census; no additional counter is maintained by acquisition.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CertificateAvailability {
+    Idle,
+    Leased,
+}
+
 impl CertificatePool {
+    #[cold]
+    pub(super) fn availability(&self) -> CertificateAvailability {
+        if self.count == self.free.len() {
+            CertificateAvailability::Idle
+        } else {
+            CertificateAvailability::Leased
+        }
+    }
+
     pub(super) fn acquire(
         &mut self,
         reads: &CaptureReads,
