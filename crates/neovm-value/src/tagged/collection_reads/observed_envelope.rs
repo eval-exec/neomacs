@@ -7,7 +7,7 @@
 
 use super::super::gc::{
     BarrierWindow, CompiledObservationGate, collection_observation_epoch,
-    collection_observed_metadata,
+    collection_observed_metadata, reclaimed_collection_observation_count,
 };
 use super::super::header::ConsCell;
 use super::super::value::{TAG_CONS, TAG_MASK, TAG_VECLIKE};
@@ -17,10 +17,15 @@ use std::collections::BTreeSet;
 use std::mem::size_of;
 
 const EMPTY_BOUNDS: (usize, usize) = (usize::MAX, 0);
-const MAX_RECLAMATION_RETRIES: usize = 3;
+// Prune once the marks cleared since the last validation reach this fraction
+// of the ledger. Each O(ledger) scan is then paid for by at least
+// len / PRUNE_DEBT_RATIO real clears, and at most that many entries are dead.
+const PRUNE_DEBT_RATIO: u64 = 4;
 
 pub(super) struct ObservedEnvelope {
     // Complete lifetime publication ledger, including non-inline subtypes.
+    // Between prunes it may also hold identities whose marks were cleared;
+    // membership checks consult exact metadata before trusting an entry.
     owners: FxHashSet<usize>,
     // Cached native-store eligibility from live publication. A Buffer/Window/
     // Frame/Bytecode/String owner is still marked/replay-qualified in `owners`,
@@ -30,6 +35,8 @@ pub(super) struct ObservedEnvelope {
     // slot stores use these bounds independently of observed Cons addresses.
     slot_addresses: SortedAddressLedger,
     epoch: Option<u64>,
+    // Global cleared-mark count acquired before the last full validation.
+    validated_reclaimed: u64,
     dump: BarrierWindow,
     full: (usize, usize),
     below: (usize, usize),
@@ -49,6 +56,8 @@ pub(super) struct ObservedEnvelope {
     single_cons: usize,
     #[cfg(any(test, feature = "test-support"))]
     geometry_rebuilds: usize,
+    #[cfg(any(test, feature = "test-support"))]
+    validated_identities: usize,
 }
 
 /// Frozen size of the envelope as it was when the thread-local `StateSlot`
@@ -91,6 +100,7 @@ impl ObservedEnvelope {
             addresses: SortedAddressLedger::new(),
             slot_addresses: SortedAddressLedger::new(),
             epoch: Some(collection_observation_epoch()),
+            validated_reclaimed: reclaimed_collection_observation_count(),
             dump: BarrierWindow::NONE,
             full: EMPTY_BOUNDS,
             below: EMPTY_BOUNDS,
@@ -102,6 +112,8 @@ impl ObservedEnvelope {
             single_cons: 0,
             #[cfg(any(test, feature = "test-support"))]
             geometry_rebuilds: 0,
+            #[cfg(any(test, feature = "test-support"))]
+            validated_identities: 0,
         }
     }
 
@@ -119,36 +131,48 @@ impl ObservedEnvelope {
         self.refresh_reclaimed(dump)
     }
 
-    /// The scanner cannot accept a completed concurrent clearing batch under
-    /// its old epoch. Ordinary stop-the-world/cooperative batches are stable
-    /// on their first pass. Continuous other-mutator reclamation is bounded:
-    /// retain a conservative surviving superset and leave the epoch dirty so
-    /// the next cold access retries. A false bit only removes a dead identity,
-    /// never a live rooted dependency whose sticky mark survives collection.
+    /// Acknowledge a reclamation epoch. Every sweep slice that clears a mark
+    /// advances the epoch, so validating the whole ledger here would make an
+    /// incremental sweep cost O(slices * ledger). Instead prune only once the
+    /// marks cleared since the last validation reach a fixed fraction of the
+    /// ledger: each scan is charged to that many real clears, and the dead
+    /// entries it can retain meanwhile are bounded by the same fraction.
+    /// Retained dead entries are harmless: they only widen the gate, and
+    /// `already_published` and the publishing caller of `insert` check exact
+    /// metadata before trusting one.
     #[cold]
     #[inline(never)]
     fn refresh_reclaimed(&mut self, dump: BarrierWindow) -> bool {
-        let mut changed = false;
-        for _ in 0..MAX_RECLAMATION_RETRIES {
-            let before = collection_observation_epoch();
-            let old_len = self.owners.len();
-            self.owners
-                .retain(|&bits| collection_observed_metadata(bits));
-            // Other heaps share the reclamation epoch. Validate all local
-            // identities, but keep the ordered buffers and bounds when none of
-            // them died; an unrelated sweep must not rebuild this ledger.
-            if self.owners.len() != old_len || self.dump != dump {
+        let reclaimed = reclaimed_collection_observation_count();
+        let debt = reclaimed.wrapping_sub(self.validated_reclaimed);
+        if debt.saturating_mul(PRUNE_DEBT_RATIO) < self.owners.len() as u64 {
+            self.epoch = Some(collection_observation_epoch());
+            if self.dump != dump {
                 self.rebuild(dump);
-                changed = true;
+                return true;
             }
-            let after = collection_observation_epoch();
-            if before == after {
-                self.epoch = Some(after);
-                return changed;
-            }
+            return false;
         }
-        self.epoch = None;
-        changed
+        // Acquire the count and epoch before scanning: a clear published
+        // after them is either seen by this scan or counted as later debt.
+        let epoch = collection_observation_epoch();
+        let old_len = self.owners.len();
+        #[cfg(any(test, feature = "test-support"))]
+        {
+            self.validated_identities += old_len;
+        }
+        self.owners
+            .retain(|&bits| collection_observed_metadata(bits));
+        self.validated_reclaimed = reclaimed;
+        self.epoch = Some(epoch);
+        // Other heaps share the reclamation epoch. Keep the ordered buffers
+        // and bounds when none of this ledger's identities died; an unrelated
+        // sweep must not rebuild this ledger.
+        if self.owners.len() != old_len || self.dump != dump {
+            self.rebuild(dump);
+            return true;
+        }
+        false
     }
 
     /// Insert even when another mutator already set the process-wide mark.
@@ -209,7 +233,9 @@ impl ObservedEnvelope {
     /// before reuse/resumption; this Acquire check rejects every such change.
     #[inline]
     pub(super) fn already_published(&self, bits: usize) -> bool {
-        self.epoch == Some(collection_observation_epoch()) && self.owners.contains(&bits)
+        self.epoch == Some(collection_observation_epoch())
+            && self.owners.contains(&bits)
+            && collection_observed_metadata(bits)
     }
 
     /// Compare with an epoch already acquired by the current pointer read.
@@ -225,6 +251,16 @@ impl ObservedEnvelope {
     #[cfg(any(test, feature = "test-support"))]
     pub(super) fn geometry_rebuilds_for_test(&self) -> usize {
         self.geometry_rebuilds
+    }
+
+    #[cfg(test)]
+    pub(super) fn validated_identities_for_test(&self) -> usize {
+        self.validated_identities
+    }
+
+    #[cfg(test)]
+    pub(super) fn owner_count_for_test(&self) -> usize {
+        self.owners.len()
     }
 
     pub(super) fn ranges(&self) -> [BarrierWindow; 2] {
