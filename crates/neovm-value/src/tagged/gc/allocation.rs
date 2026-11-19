@@ -139,6 +139,7 @@ impl TaggedHeap {
     /// `float_arena.owns`) and are NOT `link_object`ed — the intrusive lists
     /// sweep with `free_gc_object`/`Box::from_raw`, which would corrupt the
     /// heap on a page pointer. The page sweep is the only float reclaimer.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn alloc_float(&mut self, value: f64) -> TaggedValue {
         self.alloc_float_inline(value)
     }
