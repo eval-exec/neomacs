@@ -59,9 +59,6 @@ pub(crate) trait FatalSignalShutdown {
 
 // Command-loop and keyboard state lives in the evaluator data module
 // (stage-4 W2/E6b); these re-exports keep the historical keyboard paths.
-// One statement per visibility class: the layering guard counts each `use`
-// statement as an upward keyboard->eval site, and that ratchet may only
-// decrease, so all narrowed leaves share the single pub(crate) statement.
 pub(crate) use crate::emacs_core::eval::data::command_loop::{
     AUTO_SAVE_TIMEOUT, COMMAND_EXECUTE, ECHO_KEYSTROKES, ECHO_KEYSTROKES_HELP, EXECUTING_KBD_MACRO,
     HELP_CHAR, HELP_EVENT_LIST, INPUT_METHOD_FUNCTION, INTERNAL_TIMER_START_IDLE,

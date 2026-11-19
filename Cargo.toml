@@ -465,8 +465,7 @@ opt-level = 2
 # these overrides the interpreter-heavy test families run at opt-level 0 in
 # every test build: measured on the macmini (test profile), the mapc
 # resumed-chain oracle's falsify body went 2.58 s -> 24.0 s, and the macOS CI
-# job crossed nextest's 600 s per-test timeout at 470f484c21.  A guard
-# (test_profile_codegen_guard_test.rs) keeps the set complete.
+# job crossed nextest's 600 s per-test timeout at 470f484c21.
 [profile.test.package.neovm-eval]
 opt-level = 2
 

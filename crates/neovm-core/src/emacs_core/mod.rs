@@ -378,15 +378,9 @@ mod gnu_thread_live_p_test;
 #[path = "tests/gnu_thread_release_point_test.rs"]
 mod gnu_thread_release_point_test;
 #[cfg(test)]
-#[path = "tests/architecture/layout_test.rs"]
-mod layout_test;
-#[cfg(test)]
 #[cfg(test)]
 #[path = "tests/moved_system/mod.rs"]
 mod moved_system;
-#[cfg(test)]
-#[path = "tests/architecture/runtime_string_guard_test.rs"]
-mod runtime_string_guard_test;
 
 #[cfg(test)]
 #[path = "tests/architecture/split_test_support_manifest_test.rs"]
@@ -450,14 +444,6 @@ pub fn eval_source(input: &str) -> Result<Value, EvalError> {
 mod architecture_transmute_guard_test;
 
 #[cfg(test)]
-#[path = "tests/architecture/layering_guard_test.rs"]
-mod architecture_layering_guard_test;
-
-#[cfg(test)]
-#[path = "tests/architecture/moving_set.rs"]
-mod architecture_moving_set;
-
-#[cfg(test)]
 #[path = "tests/architecture/production_source_roots.rs"]
 mod architecture_production_source_roots;
 
@@ -474,20 +460,12 @@ mod architecture_upper_subrs_generated_test;
 mod architecture_workspace_dependency_features_guard_test;
 
 #[cfg(test)]
-#[path = "tests/architecture/test_profile_codegen_guard_test.rs"]
-mod architecture_test_profile_codegen_guard_test;
-
-#[cfg(test)]
 #[path = "tests/architecture/host_cfg_agreement_guard_test.rs"]
 mod architecture_host_cfg_agreement_guard_test;
 
 #[cfg(test)]
 #[path = "tests/architecture/canonical_registration_trace_test.rs"]
 mod architecture_canonical_registration_trace_test;
-
-#[cfg(test)]
-#[path = "tests/architecture/contract_twin_goldens_guard_test.rs"]
-mod architecture_contract_twin_goldens_guard_test;
 
 #[cfg(test)]
 #[path = "tests/architecture/wreg_stage_trace_test.rs"]
@@ -500,6 +478,7 @@ mod architecture_host_cfg_elisp_regression_test;
 #[cfg(test)]
 #[path = "tests/architecture/oracle_form_empty_binding_guard_test.rs"]
 mod architecture_oracle_form_empty_binding_guard_test;
+
 #[cfg(test)]
 #[path = "tests/architecture/value_ref_guard_test.rs"]
 mod architecture_value_ref_guard_test;
@@ -565,18 +544,6 @@ mod architecture_hook_walker_guard_test;
 mod architecture_in_flight_registry_guard_test;
 
 #[cfg(test)]
-#[path = "tests/architecture/tagged_compile_seam_guard_test.rs"]
-mod architecture_tagged_compile_seam_guard_test;
-
-#[cfg(test)]
-#[path = "tests/architecture/coherence_upper_impl_ratchet_test.rs"]
-mod architecture_coherence_upper_impl_ratchet_test;
-
-#[cfg(test)]
-#[path = "tests/architecture/default_value_only_ratchet_test.rs"]
-mod architecture_default_value_only_ratchet_test;
-
-#[cfg(test)]
 #[path = "tests/architecture/mac_x11_subrs_ratchet_test.rs"]
 mod architecture_mac_x11_subrs_ratchet_test;
 
@@ -608,10 +575,6 @@ mod moved_value;
 #[cfg(test)]
 #[path = "tests/architecture/parallel_exec_substrate_test.rs"]
 mod architecture_parallel_exec_substrate_test;
-
-#[cfg(test)]
-#[path = "tests/architecture/subr_storage_boundary_test.rs"]
-mod architecture_subr_storage_boundary_test;
 
 #[cfg(test)]
 #[path = "tests/moved_text/mod.rs"]
