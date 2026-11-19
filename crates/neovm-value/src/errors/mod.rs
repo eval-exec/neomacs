@@ -34,8 +34,12 @@ use crate::value::*;
 /// Set `error-conditions` and `error-message` properties on `name` in the
 /// obarray.  `conditions` is the full list of condition symbols (including
 /// `name` itself, its parents, and their transitive ancestors).
-fn put_error_properties<I, S>(obarray: &mut Obarray, name: &str, message: &str, conditions: I)
-where
+pub(crate) fn put_error_properties<I, S>(
+    obarray: &mut Obarray,
+    name: &str,
+    message: &str,
+    conditions: I,
+) where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
 {
@@ -82,7 +86,7 @@ fn build_conditions_from_obarray(obarray: &Obarray, name: &str, parents: &[&str]
 }
 
 /// Iterate over a Value list, yielding symbol names.
-fn iter_symbol_list(value: &Value, symbol_mode: SymbolMode) -> Vec<String> {
+pub(crate) fn iter_symbol_list(value: &Value, symbol_mode: SymbolMode) -> Vec<String> {
     let mut result = Vec::new();
     if let Some(items) = list_to_vec(value) {
         for item in items {

@@ -1439,6 +1439,10 @@ impl TaggedHeap {
     }
 
     /// Direct children of a mapped vectorlike object (read-only) for the verifier.
+    ///
+    /// `test-support` publishes this read so a core test can check the same
+    /// edge the collector walks. Product builds keep it `pub(super)`.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn collect_veclike_children(&self, ptr: *mut VecLikeHeader) -> Vec<TaggedValue> {
         let mut out = Vec::new();
         Self::for_each_veclike_child(self.collector_tables(), ptr, &mut out);

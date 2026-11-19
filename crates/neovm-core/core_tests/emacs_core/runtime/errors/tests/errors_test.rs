@@ -10,9 +10,25 @@ fn init_runtime_errors(context: &mut crate::emacs_core::eval::Context) {
     // replaces storage or exports a raw manager/interior reference.
     unsafe {
         context
-            .obarray
+            .obarray_view_mut()
             .with_legacy_value_write(init_standard_errors);
     }
+}
+
+/// The string-name helper was removed. These tests still name conditions as
+/// strings; intern them and use the identity-aware match. Assertions stay.
+fn signal_matches_hierarchical(
+    obarray: &neovm_value::symbol::Obarray,
+    signal: &str,
+    condition: &str,
+    symbol_mode: crate::tagged::SymbolMode,
+) -> bool {
+    signal_matches_hierarchical_sym(
+        obarray,
+        neovm_value::intern::intern(signal),
+        neovm_value::intern::intern(condition),
+        symbol_mode,
+    )
 }
 
 fn bootstrap_context() -> crate::emacs_core::Context {
@@ -130,7 +146,7 @@ fn define_error_basic() {
 
     // Check plist.
     let conds = evaluator
-        .obarray
+        .obarray()
         .get_property("my-error", "error-conditions")
         .unwrap();
     let items = iter_symbol_list(&conds, crate::tagged::SymbolMode::Bare);
@@ -138,7 +154,7 @@ fn define_error_basic() {
     assert!(items.contains(&"error".to_string()));
 
     let msg = evaluator
-        .obarray
+        .obarray()
         .get_property("my-error", "error-message")
         .unwrap();
     assert_eq!(msg.as_utf8_str(), Some("My error"));
@@ -152,13 +168,13 @@ fn define_error_with_parent() {
     assert!(result.is_ok());
 
     assert!(signal_matches_hierarchical(
-        &evaluator.obarray,
+        evaluator.obarray(),
         "my-file-error",
         "file-error",
         crate::tagged::SymbolMode::Bare
     ));
     assert!(signal_matches_hierarchical(
-        &evaluator.obarray,
+        evaluator.obarray(),
         "my-file-error",
         "error",
         crate::tagged::SymbolMode::Bare
@@ -174,19 +190,19 @@ fn define_error_with_parent_list() {
     assert!(result.is_ok());
 
     assert!(signal_matches_hierarchical(
-        &evaluator.obarray,
+        evaluator.obarray(),
         "multi-error",
         "file-error",
         crate::tagged::SymbolMode::Bare
     ));
     assert!(signal_matches_hierarchical(
-        &evaluator.obarray,
+        evaluator.obarray(),
         "multi-error",
         "arith-error",
         crate::tagged::SymbolMode::Bare
     ));
     assert!(signal_matches_hierarchical(
-        &evaluator.obarray,
+        evaluator.obarray(),
         "multi-error",
         "error",
         crate::tagged::SymbolMode::Bare
@@ -425,7 +441,7 @@ fn builtin_error_message_string_message_only_symbol_is_printable_like_gnu() {
     crate::test_utils::init_test_tracing();
     let mut evaluator = crate::test_utils::new_context();
     evaluator
-        .obarray
+        .obarray_mut()
         .put_property(
             "neomacs-message-only",
             "error-message",
@@ -480,14 +496,16 @@ fn builtin_error_message_string_ignores_dotted_error_data_tails() {
     // SAFETY: this fixture publishes only error properties using the same
     // noncalling native property path; neither canonical dispatch word changes.
     unsafe {
-        evaluator.obarray.with_legacy_value_write(|obarray| {
-            put_error_properties(
-                obarray,
-                "iter-end-of-sequence",
-                "Iteration terminated",
-                vec!["iter-end-of-sequence"],
-            );
-        });
+        evaluator
+            .obarray_view_mut()
+            .with_legacy_value_write(|obarray| {
+                put_error_properties(
+                    obarray,
+                    "iter-end-of-sequence",
+                    "Iteration terminated",
+                    vec!["iter-end-of-sequence"],
+                );
+            });
     }
 
     let generator_eof = Value::cons(Value::symbol("iter-end-of-sequence"), Value::symbol(":eof"));
@@ -773,7 +791,7 @@ fn builtin_error_message_string_formats_buffer_handles_with_names() {
     let mut evaluator = crate::test_utils::new_context();
     init_runtime_errors(&mut evaluator);
 
-    let live_id = evaluator.buffers.create_buffer("*ems-live*");
+    let live_id = evaluator.edit_mut().buffers.create_buffer("*ems-live*");
     let live_err = Value::list(vec![
         Value::symbol("args-out-of-range"),
         Value::make_buffer(live_id),
@@ -786,8 +804,8 @@ fn builtin_error_message_string_formats_buffer_handles_with_names() {
         Some("Args out of range: #<buffer *ems-live*>, 0")
     );
 
-    let dead_id = evaluator.buffers.create_buffer("*ems-dead*");
-    assert!(evaluator.buffers.kill_buffer(dead_id));
+    let dead_id = evaluator.edit_mut().buffers.create_buffer("*ems-dead*");
+    assert!(evaluator.edit_mut().buffers.kill_buffer(dead_id));
     let dead_err = Value::list(vec![
         Value::symbol("args-out-of-range"),
         Value::make_buffer(dead_id),

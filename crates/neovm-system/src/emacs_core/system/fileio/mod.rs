@@ -8204,3 +8204,7 @@ mod auto_save_failure_time_tests {
         assert_eq!(auto_save_failure_time_after_attempt(50, 10), None);
     }
 }
+
+#[cfg(test)]
+#[path = "tests/write_coding_choice_test.rs"]
+mod write_coding_choice_test;

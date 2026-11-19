@@ -25,6 +25,27 @@ pub fn heap_types__LispString__has_owned_storage(s: &LispString) -> bool {
     crate::heap_types::__test_support::lisp_string_has_owned_storage(s)
 }
 
+/// Names the errors facade already imports. The helpers stay `pub(crate)` on
+/// the errors module; this is the test-support route into them.
+pub fn emacs_core__errors__iter_symbol_list(
+    value: &crate::value::Value,
+    symbol_mode: crate::tagged::SymbolMode,
+) -> Vec<String> {
+    crate::errors::iter_symbol_list(value, symbol_mode)
+}
+
+pub fn emacs_core__errors__put_error_properties<I, S>(
+    obarray: &mut crate::symbol::Obarray,
+    name: &str,
+    message: &str,
+    conditions: I,
+) where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    crate::errors::put_error_properties(obarray, name, message, conditions);
+}
+
 /// Value-4 re-home. The B8 bodies stay in `restricted_lisp` and name no
 /// evaluator type. Eval's `#[test]` wrappers implement these traits for
 /// `Context`. Absent under gc-memory-telemetry, where `restricted_lisp` is.
