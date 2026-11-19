@@ -66,8 +66,9 @@ pub(crate) struct GreenRuntime {
     pub(super) outgoing_constant_error:
         std::cell::Cell<Option<(ThreadKey, neovm_value::intern::SymId)>>,
     /// The bounded carrier OS-thread pool (S-track). Carriers share its
-    /// `Arc` while idle; it owns every carrier's join handle. Visible to the
-    /// Green module and its children only, matching `CarrierPool`.
+    /// `Arc` while idle; each live slot owns that carrier's join handle.
+    /// Visible to the Green module and its children only, matching
+    /// `CarrierPool`.
     carriers: carrier::CarrierPool,
 
     /// The standard case table, one for every thread as in GNU:
@@ -299,6 +300,11 @@ impl Context {
     /// Copied owner-park count. The registry stays inside Green.
     pub(crate) fn parked_owner_len_for_test(&self) -> usize {
         self.with_green_runtime(|runtime| runtime.parked.borrow().len())
+    }
+
+    /// Carrier pool `(slot count, join-handle count)`.
+    pub(crate) fn carrier_pool_counts_for_test(&self) -> (usize, usize) {
+        self.with_green_runtime(|runtime| runtime.carriers.counts_for_test())
     }
 
     /// Whether every parked owner and host record is gone.
