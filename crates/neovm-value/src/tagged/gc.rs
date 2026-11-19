@@ -2780,12 +2780,10 @@ pub mod mutator_registration;
 #[cfg(any(test, feature = "test-support"))]
 use census::CensusRecord;
 use census::{CensusCycleKind, GenCensus, census_remset_probe_on};
-#[doc(hidden)]
-pub use facade_mark::heap_transfer;
 pub use facade_mark::{
     CollectorQuiescenceError, ConcurrentMarkAdmissionError, ConcurrentMarkCapture,
     ConcurrentMarkPermit, FacadeEpochRetention, FacadeMarkExclusion, FacadeMarkExclusionError,
-    QuiescentCollector,
+    QuiescentCollector, heap_transfer,
 };
 pub use mutator_registration::FunctionCallCache;
 pub use mutator_registration::KeeperTableMut;
