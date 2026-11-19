@@ -48,6 +48,13 @@ pkgs.mkShell {
     # missing (P2 baseline closure, native_scrolling rows).
     pkgs.xvfb-run
     pkgs.glmark2
+    # The xwidget job runs the GUI harness inside this shell. The harness
+    # execs xauth, Xvfb, and xdpyinfo by name. A host copy loads this
+    # shell's libpthread and dies because the host libc has no
+    # GLIBC_ABI_DT_X86_64_PLT. These bins are linked to the same glibc.
+    pkgs.xauth
+    pkgs.xorg-server
+    pkgs.xdpyinfo
   ];
 
   buildInputs =
