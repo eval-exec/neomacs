@@ -1212,6 +1212,16 @@ pub struct DumpCharsetRegistry {
     /// The outer None means a section older than version 5.
     #[serde(default)]
     pub plist_slots: Option<Vec<Option<Vec<(DumpSymId, DumpValue)>>>>,
+    /// Identities that joined `Viso_2022_charset_list` on their first
+    /// definition. Missing before charset section version 6; restore then
+    /// treats every charset that still has an ISO final as a member.
+    #[serde(default)]
+    pub iso2022_members: Option<Vec<DumpSymId>>,
+    /// The `charset-plist` object cached in each slot, parallel to
+    /// `plist_slots`. Tag absence is an uncached slot. The outer None means
+    /// a section older than version 6, which rebuilds a list from the pairs.
+    #[serde(default)]
+    pub plist_lisp: Option<Vec<Option<DumpValue>>>,
     pub next_id: i64,
 }
 

@@ -1244,6 +1244,250 @@ fn iso2022_rejects_a_control_continuation_before_assembly() {
     };
     assert_eq!(decode(b"\x1b(XA\x1b(B"), vec![b'A' as u32]);
     assert_eq!(decode(b"\x1b(X!!"), vec![0x2121]);
+    // coding.c:3946-3961 resets G0 to ASCII after the rejected byte, so the
+    // two bangs are ASCII rather than one character of `cr-open`.
+    assert_eq!(decode(b"\x1b(XA\n!!"), vec![65, 10, 33, 33]);
+}
+
+fn define_offset_charset_maybe_final(
+    name: &'static str,
+    dimension: i64,
+    code_space: &[i64],
+    final_char: Option<u8>,
+    offset: i64,
+) {
+    use crate::emacs_core::charset::builtin_define_charset_internal;
+    let mut args = vec![Value::NIL; 17];
+    args[0] = Value::symbol(name);
+    args[1] = Value::fixnum(dimension);
+    args[2] = Value::vector(code_space.iter().copied().map(Value::fixnum).collect());
+    if let Some(final_char) = final_char {
+        args[5] = Value::fixnum(i64::from(final_char));
+    }
+    args[11] = Value::fixnum(offset);
+    args[16] = Value::list(vec![
+        Value::symbol(":name"),
+        Value::symbol(name),
+        Value::symbol(":code-offset"),
+        Value::fixnum(offset),
+    ]);
+    builtin_define_charset_internal(args).unwrap();
+}
+
+/// GNU `Fset_charset_plist` stores the argument object (`charset.c:1314-1322`).
+/// An atom is not a pair list, and a snapshot must still return that object
+/// from both names that share the vector.
+#[test]
+fn charset_snapshot_keeps_an_atom_plist() {
+    crate::test_utils::init_test_tracing();
+    use crate::emacs_core::charset::{
+        builtin_charset_plist, builtin_define_charset_alias, reset_charset_registry,
+        restore_charset_registry, set_charset_plist_value, snapshot_charset_registry,
+    };
+    use neovm_value::intern::intern;
+    use neovm_value::value::eq_value;
+
+    let _reset = CharsetReset;
+    reset_charset_registry();
+    define_offset_charset("cr-atom", 1, &[33, 126], b'Q', 200, None);
+    builtin_define_charset_alias(vec![
+        Value::symbol("cr-atom-alias"),
+        Value::symbol("cr-atom"),
+    ])
+    .unwrap();
+    set_charset_plist_value(intern("cr-atom"), Vec::new(), Value::fixnum(42));
+    let owned = builtin_charset_plist(vec![Value::symbol("cr-atom")]).unwrap();
+    let alias = builtin_charset_plist(vec![Value::symbol("cr-atom-alias")]).unwrap();
+    assert_eq!(owned.as_int(), Some(42));
+    assert!(eq_value(&owned, &alias));
+
+    let snapshot = snapshot_charset_registry();
+    reset_charset_registry();
+    restore_charset_registry(snapshot);
+    let owned = builtin_charset_plist(vec![Value::symbol("cr-atom")]).unwrap();
+    let alias = builtin_charset_plist(vec![Value::symbol("cr-atom-alias")]).unwrap();
+    assert_eq!(owned.as_int(), Some(42));
+    assert_eq!(alias.as_int(), Some(42));
+    assert!(eq_value(&owned, &alias));
+}
+
+/// `coding.c:11041-11057` and `11260-11293` capture charset ids when the
+/// coding system is defined. Rebinding the alias afterwards does not change
+/// the list, the initial vector, or the request alist.
+#[test]
+fn iso2022_define_captures_charset_identity() {
+    crate::test_utils::init_test_tracing();
+    use crate::emacs_core::charset::{builtin_define_charset_alias, reset_charset_registry};
+    use crate::emacs_core::coding::{
+        CodingSystemManager, IsoFlag, builtin_define_coding_system_internal, iso2022_spec,
+    };
+    use neovm_value::intern::resolve_sym;
+    use neovm_value::tagged::value::SymbolMode;
+
+    let _reset = CharsetReset;
+    reset_charset_registry();
+    builtin_define_charset_alias(vec![
+        Value::symbol("latin-probe"),
+        Value::symbol("latin-iso8859-1"),
+    ])
+    .unwrap();
+    let flags = enumflags2::BitFlags::from_flag(IsoFlag::SevenBits)
+        | IsoFlag::Designation
+        | IsoFlag::AsciiAtEol
+        | IsoFlag::AsciiAtCntl;
+    let mut mgr = CodingSystemManager::new();
+    builtin_define_coding_system_internal(
+        &mut mgr,
+        vec![
+            Value::symbol("cr-iso-alias"),
+            Value::char('A'),
+            Value::symbol("iso-2022"),
+            Value::list(vec![Value::symbol("ascii"), Value::symbol("latin-probe")]),
+            Value::T,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::fixnum('?' as i64),
+            Value::NIL,
+            Value::NIL,
+            Value::symbol("unix"),
+            Value::vector(vec![
+                Value::symbol("ascii"),
+                Value::symbol("latin-probe"),
+                Value::NIL,
+                Value::NIL,
+            ]),
+            Value::cons(Value::fixnum(0), Value::fixnum(0)),
+            Value::list(vec![Value::cons(
+                Value::symbol("latin-probe"),
+                Value::fixnum(1),
+            )]),
+            Value::fixnum(i64::from(flags.bits())),
+        ],
+        SymbolMode::Bare,
+    )
+    .unwrap();
+    let info = mgr.get("cr-iso-alias").expect("coding system");
+    let spec = iso2022_spec(info, SymbolMode::Bare).expect("iso spec");
+    assert_eq!(
+        info.charset_list
+            .iter()
+            .map(|id| resolve_sym(*id))
+            .collect::<Vec<_>>(),
+        vec!["ascii", "latin-iso8859-1"]
+    );
+    assert_eq!(
+        spec.initial[1].map(resolve_sym).as_deref(),
+        Some("latin-iso8859-1")
+    );
+    assert_eq!(resolve_sym(spec.request[0].0), "latin-iso8859-1");
+    let list = info.charset_list.clone();
+    builtin_define_charset_alias(vec![Value::symbol("latin-probe"), Value::symbol("ascii")])
+        .unwrap();
+    let decoded = decode_via_iso2022(
+        b"\x1b,AA",
+        &spec,
+        &list,
+        &mut Iso2022DecodeState::default(),
+        DosEolLookahead::NotRequired,
+    );
+    assert_eq!(emacs_char_codes(&decoded.bytes), vec![193]);
+}
+
+/// A charset that joined `Viso_2022_charset_list` stays decodable after a
+/// redefinition clears its final (`charset.c:1163-1168`). One that never had
+/// a final, and one that gained a final only on a later definition, replay.
+#[test]
+fn iso2022_membership_follows_the_first_definition() {
+    crate::test_utils::init_test_tracing();
+    use crate::emacs_core::charset::{builtin_declare_equiv_charset, reset_charset_registry};
+    use crate::emacs_core::coding::{Iso2022Spec, IsoFlag};
+    use neovm_value::intern::intern;
+
+    let _reset = CharsetReset;
+    reset_charset_registry();
+    let full = |bytes: &[u8]| {
+        let spec = Iso2022Spec {
+            initial: [Some(intern("ascii")), None, None, None],
+            request: vec![],
+            reg_usage: (0, 0),
+            flags: enumflags2::BitFlags::from_flag(IsoFlag::SevenBits) | IsoFlag::Designation,
+        };
+        emacs_char_codes(
+            &decode_via_iso2022(
+                bytes,
+                &spec,
+                &[intern("iso-2022")],
+                &mut Iso2022DecodeState::default(),
+                DosEolLookahead::NotRequired,
+            )
+            .bytes,
+        )
+    };
+
+    define_offset_charset_maybe_final("cr-z", 1, &[33, 126], Some(b'Z'), 200);
+    define_offset_charset_maybe_final("cr-z", 1, &[33, 126], None, 500);
+    assert_eq!(full(b"\x1b(ZA"), vec![532]);
+
+    define_offset_charset_maybe_final("cr-never", 1, &[33, 126], None, 700);
+    builtin_declare_equiv_charset(vec![
+        Value::fixnum(1),
+        Value::fixnum(94),
+        Value::fixnum(i64::from(b'Y')),
+        Value::symbol("cr-never"),
+    ])
+    .unwrap();
+    assert_eq!(full(b"\x1b(YA"), vec![27, 40, 89, 65]);
+
+    define_offset_charset_maybe_final("cr-late", 1, &[33, 126], None, 800);
+    define_offset_charset_maybe_final("cr-late", 1, &[33, 126], Some(b'W'), 800);
+    assert_eq!(full(b"\x1b(WA"), vec![27, 40, 87, 65]);
+}
+
+/// SS2 and the following graphic bytes are one character (`coding.c:3711-3726`).
+/// A short read leaves the escape unconsumed.
+#[test]
+fn iso2022_single_shift_reads_the_graphic_in_the_same_character() {
+    crate::test_utils::init_test_tracing();
+    use crate::emacs_core::charset::reset_charset_registry;
+    use crate::emacs_core::coding::{Iso2022Spec, IsoFlag};
+    use neovm_value::intern::intern;
+
+    let _reset = CharsetReset;
+    reset_charset_registry();
+    define_offset_charset(
+        "cr-3d",
+        3,
+        &[33, 126, 33, 126, 33, 126],
+        b'Y',
+        0x300000,
+        None,
+    );
+    let spec = Iso2022Spec {
+        initial: [Some(intern("ascii")), None, Some(intern("cr-3d")), None],
+        request: vec![],
+        reg_usage: (0, 0),
+        flags: enumflags2::BitFlags::from_flag(IsoFlag::SevenBits)
+            | IsoFlag::Designation
+            | IsoFlag::SingleShift,
+    };
+    let decode = |bytes: &[u8]| {
+        decode_via_iso2022(
+            bytes,
+            &spec,
+            &[intern("iso-2022")],
+            &mut Iso2022DecodeState::default(),
+            DosEolLookahead::NotRequired,
+        )
+    };
+    let full = decode(b"\x1bN!!!");
+    assert_eq!(emacs_char_codes(&full.bytes), vec![0x300000]);
+    let short = decode(b"\x1bN!!");
+    assert!(emacs_char_codes(&short.bytes).is_empty());
+    assert_eq!(short.consumed.bytes(), 0);
+    let continued = decode(b"\x1bN!!!");
+    assert_eq!(emacs_char_codes(&continued.bytes), vec![0x300000]);
 }
 
 fn plist_mark(name: &'static str) -> Option<i64> {
@@ -1310,9 +1554,10 @@ fn charset_snapshot_keeps_captured_plist_slots() {
     define_offset_charset("cr-equal", 1, &[33, 126], b'1', 70, Some(4));
     builtin_define_charset_alias(vec![Value::symbol("cr-equal-p"), Value::symbol("cr-equal")])
         .unwrap();
-    define_offset_charset("cr-equal", 1, &[33, 126], b'0', 80, Some(4));
+    define_offset_charset("cr-equal", 1, &[33, 126], b'1', 70, Some(4));
     let before = builtin_charset_plist(vec![Value::symbol("cr-equal-p")]).unwrap();
     let after = builtin_charset_plist(vec![Value::symbol("cr-equal")]).unwrap();
+    assert!(neovm_value::value::equal_value(&before, &after, 0));
     assert!(!eq_value(&before, &after));
 
     let snapshot = snapshot_charset_registry();
@@ -1327,6 +1572,11 @@ fn charset_snapshot_keeps_captured_plist_slots() {
     assert!(eq_value(
         &builtin_charset_plist(vec![Value::symbol("cr-share-p")]).unwrap(),
         &builtin_charset_plist(vec![Value::symbol("cr-share-q")]).unwrap(),
+    ));
+    assert!(neovm_value::value::equal_value(
+        &builtin_charset_plist(vec![Value::symbol("cr-equal-p")]).unwrap(),
+        &builtin_charset_plist(vec![Value::symbol("cr-equal")]).unwrap(),
+        0,
     ));
     assert!(!eq_value(
         &builtin_charset_plist(vec![Value::symbol("cr-equal-p")]).unwrap(),

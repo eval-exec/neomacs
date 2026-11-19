@@ -351,6 +351,15 @@ pub struct CharsetRegistrySnapshot {
     /// Plist slots in index order. `None` inside the vec is an unmaterialized
     /// slot. The outer None means the snapshot has no slot table.
     pub plist_slots: Option<Vec<Option<Vec<(SymId, Value)>>>>,
+    /// The `charset-plist` object cached in each slot, parallel to
+    /// `plist_slots`. An atom such as `42` is not a pair list. None on
+    /// sections before version 6: restore rebuilds a list from the pairs.
+    pub plist_lisp: Option<Vec<Option<Value>>>,
+    /// Identities that joined `Viso_2022_charset_list` on their first
+    /// definition (`charset.c:1167-1168`). A later definition does not add or
+    /// remove that membership. None on older snapshots: every charset that
+    /// still has an ISO final is treated as a member.
+    pub iso2022_members: Option<Vec<SymId>>,
     pub next_id: i64,
     /// Index into `priority` of the first non-preferred charset, mirroring GNU's
     /// `Vcharset_non_preferred_head` (charset.c:85). `char_charset` returns the
@@ -523,6 +532,10 @@ pub struct CharsetRegistry {
     /// `CHARSET_NAME` of a table slot whose published symbol differs from the
     /// stable map key. `iso-charset` and decoded charset properties read it.
     published_names: rustc_hash::FxHashMap<SymId, SymId>,
+    /// Identities appended to GNU `Viso_2022_charset_list` when they were
+    /// first defined with an ISO final (`charset.c:1167-1168`). Redefinition
+    /// does not add or remove an identity.
+    iso2022_members: rustc_hash::FxHashSet<SymId>,
     /// Next auto-assigned charset ID.
     next_id: i64,
 }
@@ -574,6 +587,8 @@ pub struct CharsetRegistry {
     /// `CHARSET_NAME` of a table slot whose published symbol differs from the
     /// stable map key. See the production-struct comment.
     published_names: rustc_hash::FxHashMap<SymId, SymId>,
+    /// See the production-struct comment.
+    iso2022_members: rustc_hash::FxHashSet<SymId>,
     /// Next auto-assigned charset ID.
     next_id: i64,
 }
@@ -602,6 +617,7 @@ impl CharsetRegistry {
             preferred_identities: Vec::new(),
             iso_charset_table: rustc_hash::FxHashMap::default(),
             published_names: rustc_hash::FxHashMap::default(),
+            iso2022_members: rustc_hash::FxHashSet::default(),
             next_id: 256, // start above the Emacs built-in range
         };
         reg.init_standard_charsets(materialize_plists);
@@ -983,6 +999,7 @@ impl CharsetRegistry {
         Self::prepare_defined_plist(&mut info);
         let name = info.name;
         let supplementary_p = info.supplementary_p;
+        let iso_final = info.iso_final_char;
         // A low-level register of a name that is already an alias keeps a
         // separate table entry under that name (the Mule redefinition
         // fallback). The public binding stays on the identity captured before
@@ -990,7 +1007,15 @@ impl CharsetRegistry {
         // the new key does not become a second ordered-list member.
         let prior = self.resolve_name(name);
         let keep_public_identity = prior != name && self.charsets.contains_key(&prior);
+        // GNU `new_definition_p` is a hash miss (`charset.c:1114-1148`). Only
+        // that first definition with an ISO final joins `Viso_2022_charset_list`.
+        let new_definition =
+            !self.bindings.contains_key(&name) && !self.charsets.contains_key(&name);
+        let joined = new_definition && iso_final.is_some() && !keep_public_identity;
         self.charsets.insert(name, info);
+        if joined {
+            self.iso2022_members.insert(name);
+        }
         if !keep_public_identity {
             self.bind_new_slot(name);
         }
@@ -1471,9 +1496,14 @@ impl CharsetRegistry {
             .map(|(&name, binding)| (name, binding.identity, binding.plist))
             .collect();
         binding_slots.sort_by(|left, right| resolve_sym(left.0).cmp(resolve_sym(right.0)));
-        let plist_slots = (0..self.plists.len())
+        let plist_slots: Vec<_> = (0..self.plists.len())
             .map(|index| self.slot_for_snapshot(index as u32))
             .collect();
+        let plist_lisp = (0..self.plists.len())
+            .map(|index| self.plists.get(index).and_then(|slot| slot.lisp))
+            .collect();
+        let mut iso2022_members: Vec<_> = self.iso2022_members.iter().copied().collect();
+        iso2022_members.sort_by_key(|name| resolve_sym(*name));
 
         CharsetRegistrySnapshot {
             charsets,
@@ -1485,6 +1515,8 @@ impl CharsetRegistry {
             published_names: Some(published_names),
             binding_slots: Some(binding_slots),
             plist_slots: Some(plist_slots),
+            plist_lisp: Some(plist_lisp),
+            iso2022_members: Some(iso2022_members),
             next_id: self.next_id,
             non_preferred_head: self.non_preferred_head,
         }
@@ -1546,20 +1578,24 @@ impl CharsetRegistry {
         // character. Every `resolve_name` caller is correct again afterwards.
         let name_key = neovm_value::intern::intern(":name");
         let published_names = snapshot.published_names.unwrap_or_default();
+        let plist_lisp = snapshot.plist_lisp.unwrap_or_default();
         let (plists, bindings, aliases) = if let (Some(slots), Some(records)) =
             (snapshot.plist_slots, snapshot.binding_slots)
         {
             // Version 5 stores the slot id on each binding. Equal plist
             // contents must not join two vectors, and a captured vector stays
             // shared after the target is redefined with different pairs.
+            // Version 6 also stores the cached Lisp object, so an atom plist
+            // survives and names that share the slot stay `eq`.
             let plists = slots
                 .into_iter()
-                .map(|slot| PlistSlot {
+                .enumerate()
+                .map(|(index, slot)| PlistSlot {
                     plist: match slot {
                         Some(pairs) => CharsetPlist::Set(pairs),
                         None => CharsetPlist::Unmaterialized,
                     },
-                    lisp: None,
+                    lisp: plist_lisp.get(index).copied().flatten(),
                 })
                 .collect();
             let mut bindings = rustc_hash::FxHashMap::default();
@@ -1646,6 +1682,14 @@ impl CharsetRegistry {
 
         let legacy_identities = snapshot.priority_identities.is_none();
         let iso_designations = snapshot.iso_designations;
+        let iso2022_members = match snapshot.iso2022_members {
+            Some(names) => names.into_iter().collect(),
+            None => charsets
+                .iter()
+                .filter(|(_, info)| info.iso_final_char.is_some())
+                .map(|(name, _)| *name)
+                .collect(),
+        };
         let mut registry = Self {
             charsets,
             bindings,
@@ -1658,6 +1702,7 @@ impl CharsetRegistry {
             preferred_identities: Vec::new(),
             iso_charset_table: rustc_hash::FxHashMap::default(),
             published_names: published_names.into_iter().collect(),
+            iso2022_members,
             next_id: snapshot.next_id,
         };
         match iso_designations {
@@ -2571,6 +2616,28 @@ pub(crate) fn charset_iso2022_designation_physical(charset: SymId) -> Option<(i6
             code_space_is_96(&info.code_space),
         ))
     })
+}
+
+/// Dimension and 96-set width of the table slot `charset` names.
+///
+/// Unlike [`charset_iso2022_designation_physical`], this does not require a
+/// current ISO final. GNU keeps the old `iso_charset_table` entry and the
+/// `Viso_2022_charset_list` membership when a redefinition clears the final
+/// (`charset.c:1163-1168`) and decodes with the new mapping.
+pub(crate) fn charset_table_shape(charset: SymId) -> Option<(i64, bool)> {
+    CHARSET_REGISTRY.with(|slot| {
+        let reg = slot.borrow();
+        let info = reg.charsets.get(&charset)?;
+        Some((info.dimension, code_space_is_96(&info.code_space)))
+    })
+}
+
+/// True when this identity joined `Viso_2022_charset_list` on its first
+/// definition. A charset that never had an ISO final, including one later
+/// pointed at by `declare-equiv-charset` or redefined with a final, is not
+/// a member (`charset.c:1167-1168`).
+pub(crate) fn charset_iso2022_member(charset: SymId) -> bool {
+    CHARSET_REGISTRY.with(|slot| slot.borrow().iso2022_members.contains(&charset))
 }
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]

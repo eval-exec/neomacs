@@ -4563,7 +4563,7 @@ fn decode_via_iso2022(
 ) -> DecodedSource {
     use crate::emacs_core::charset::{
         charset_by_iso_final, charset_decode_char, charset_decode_char_physical,
-        charset_iso2022_designation, charset_iso2022_designation_physical,
+        charset_dimension_by_sym, charset_iso2022_member, charset_table_shape,
     };
     use crate::emacs_core::coding::IsoFlag;
     // GNU `DECODE_DESIGNATION` (coding.c:3186-3217) accepts a final only when
@@ -4584,14 +4584,23 @@ fn decode_via_iso2022(
         spec: &crate::emacs_core::coding::Iso2022Spec,
         charset_list: &[SymId],
     ) -> bool {
+        // GNU `setup_iso_safe_charsets` keys the safe set by the charset id
+        // captured when the coding system was defined (`coding.c:11048-11057`,
+        // `2852-2914`). Full support is membership of `Viso_2022_charset_list`,
+        // which a later redefinition does not revoke. The current ISO final
+        // is not that membership.
         let full = charset_list.len() == 1 && resolve_sym(charset_list[0]) == "iso-2022";
-        if !full && !charset_list.contains(&cs) {
+        if full {
+            if !charset_iso2022_member(cs) {
+                return false;
+            }
+        } else if !charset_list.contains(&cs) {
             return false;
         }
         if spec.request.iter().any(|(name, _)| *name == cs) {
             return true;
         }
-        let Some((_, _, chars_96)) = charset_iso2022_designation_physical(cs) else {
+        let Some((_, chars_96)) = charset_table_shape(cs) else {
             return false;
         };
         let reg = if chars_96 {
@@ -4600,6 +4609,81 @@ fn decode_via_iso2022(
             spec.reg_usage.0
         };
         reg < 4
+    }
+    // GNU `invalid_code` in the ISO decoder resets invocation 0 and
+    // designation 0 to ASCII after emitting one byte (`coding.c:3946-3961`).
+    // The shared `invalid_code` only rewinds and emits; the reset is ISO state.
+    fn iso2022_reject(
+        unit: &mut UnitReader<'_>,
+        sink: &mut DecodeSink,
+        state: &mut Iso2022DecodeState,
+        ascii: SymId,
+    ) -> Result<(), NoMoreSource> {
+        state.gl = 0;
+        state.designation[0] = Some(ascii);
+        invalid_code(unit, sink)
+    }
+    // GNU reads an SS2/SS3 character in the same loop iteration as the
+    // escape (`coding.c:3711-3726`, `3888-3913`). `src_base` stays on the
+    // escape, so a short read leaves the escape unconsumed and a finished
+    // string emits those bytes. The shift is not a flag that outlives the
+    // character.
+    fn iso2022_shift_charset(
+        unit: &mut UnitReader<'_>,
+        sink: &mut DecodeSink,
+        state: &mut Iso2022DecodeState,
+        ascii: SymId,
+        reg: usize,
+        enabled: bool,
+    ) -> Result<(), NoMoreSource> {
+        let Some(cs) = state.designation[reg] else {
+            return iso2022_reject(unit, sink, state, ascii);
+        };
+        if !enabled {
+            return iso2022_reject(unit, sink, state, ascii);
+        }
+        let shape = charset_table_shape(cs);
+        let Some(dim) = shape
+            .map(|(dim, _)| dim)
+            .or_else(|| charset_dimension_by_sym(cs))
+        else {
+            return iso2022_reject(unit, sink, state, ascii);
+        };
+        let positions: usize = if dim <= 1 {
+            1
+        } else if dim == 2 {
+            2
+        } else {
+            3
+        };
+        let c1 = unit.byte()?;
+        let code = if positions == 1 {
+            i64::from(c1 & 0x7F)
+        } else {
+            let c2 = unit.byte()?;
+            if !iso2022_continuation_ok(c1, c2) {
+                return iso2022_reject(unit, sink, state, ascii);
+            }
+            if positions == 2 {
+                (i64::from(c1 & 0x7F) << 8) | i64::from(c2 & 0x7F)
+            } else {
+                let c3 = unit.byte()?;
+                if !iso2022_continuation_ok(c1, c3) {
+                    return iso2022_reject(unit, sink, state, ascii);
+                }
+                (i64::from(c1 & 0x7F) << 16) | (i64::from(c2 & 0x7F) << 8) | i64::from(c2 & 0x7F)
+            }
+        };
+        let decoded = if shape.is_some() {
+            charset_decode_char_physical(cs, code)
+        } else {
+            charset_decode_char(cs, code)
+        };
+        if let Some(ch) = decoded {
+            sink.push(ch as u32, Some(cs));
+            return Ok(());
+        }
+        iso2022_reject(unit, sink, state, ascii)
     }
     // GNU coding.c:3898-3910. A continuation below 0x20, in 0x80..0xA0, or on
     // the other high-bit plane is `invalid_code`, which replays the first
@@ -4623,7 +4707,6 @@ fn decode_via_iso2022(
         charset_list: &[SymId],
     ) -> Result<(), NoMoreSource> {
         if let Some((cs, _)) = charset_by_iso_final(i64::from(final_byte), dimension, chars_96)
-            && charset_iso2022_designation_physical(cs).is_some()
             && iso2022_charset_is_safe(cs, spec, charset_list)
         {
             state.designation[reg] = Some(cs);
@@ -4655,13 +4738,9 @@ fn decode_via_iso2022(
             // is left whole for the next one.
             let e = unit.byte()?;
             match e {
-                0x4E => {
-                    state.single_shift = Some(2);
-                    return Ok(());
-                }
-                0x4F => {
-                    state.single_shift = Some(3);
-                    return Ok(());
+                0x4E | 0x4F => {
+                    let reg = if e == 0x4E { 2 } else { 3 };
+                    return iso2022_shift_charset(unit, sink, state, ascii, reg, single_shift);
                 }
                 0x6E => {
                     state.gl = 2;
@@ -4742,31 +4821,23 @@ fn decode_via_iso2022(
         if b == 0x0E {
             // Shift-out also requires G1 to be designated (src/coding.c:3605).
             if !locking_shift || state.designation[1].is_none() {
-                return invalid_code(unit, sink);
+                return iso2022_reject(unit, sink, state, ascii);
             }
             state.gl = 1;
             return Ok(());
         }
         if b == 0x0F {
             if !locking_shift {
-                return invalid_code(unit, sink);
+                return iso2022_reject(unit, sink, state, ascii);
             }
             state.gl = 0;
             return Ok(());
         }
         if !seven && b == 0x8E {
-            if !single_shift {
-                return invalid_code(unit, sink);
-            }
-            state.single_shift = Some(2);
-            return Ok(());
+            return iso2022_shift_charset(unit, sink, state, ascii, 2, single_shift);
         }
         if !seven && b == 0x8F {
-            if !single_shift {
-                return invalid_code(unit, sink);
-            }
-            state.single_shift = Some(3);
-            return Ok(());
+            return iso2022_shift_charset(unit, sink, state, ascii, 3, single_shift);
         }
         if b < 0x20 || b == 0x7F {
             sink.push(u32::from(b), None);
@@ -4790,12 +4861,14 @@ fn decode_via_iso2022(
             return Ok(());
         }
         if let Some(cs) = charset {
-            // The register holds the table slot. Resolve only when that name
-            // is not itself a physical charset (a pure alias used as an
-            // initial designation).
-            let physical = charset_iso2022_designation_physical(cs);
-            let resolved = physical.or_else(|| charset_iso2022_designation(cs));
-            if let Some((_, dim, _)) = resolved {
+            // The register holds the table slot. A cleared ISO final still
+            // has a shape (`charset.c:1163-1168`). An initial alias that is
+            // not itself a table slot falls back to the resolved identity.
+            let shape = charset_table_shape(cs);
+            let dim = shape
+                .map(|(dim, _)| dim)
+                .or_else(|| charset_dimension_by_sym(cs));
+            if let Some(dim) = dim {
                 // GNU reads two extra bytes when `CHARSET_DIMENSION > 2`
                 // (coding.c:3892-3913). The 3-byte formula validates `c3` and
                 // then uses `c2` twice: `c1 = (c1 << 16) | (c2 << 8) | c2`.
@@ -4815,21 +4888,21 @@ fn decode_via_iso2022(
                 } else {
                     let c2 = unit.byte()?;
                     if !iso2022_continuation_ok(c1, c2) {
-                        return invalid_code(unit, sink);
+                        return iso2022_reject(unit, sink, state, ascii);
                     }
                     if positions == 2 {
                         (i64::from(c1 & 0x7F) << 8) | i64::from(c2 & 0x7F)
                     } else {
                         let c3 = unit.byte()?;
                         if !iso2022_continuation_ok(c1, c3) {
-                            return invalid_code(unit, sink);
+                            return iso2022_reject(unit, sink, state, ascii);
                         }
                         (i64::from(c1 & 0x7F) << 16)
                             | (i64::from(c2 & 0x7F) << 8)
                             | i64::from(c2 & 0x7F)
                     }
                 };
-                let decoded = if physical.is_some() {
+                let decoded = if shape.is_some() {
                     charset_decode_char_physical(cs, code)
                 } else {
                     charset_decode_char(cs, code)
@@ -4838,7 +4911,7 @@ fn decode_via_iso2022(
                     sink.push(ch as u32, Some(cs));
                     return Ok(());
                 }
-                return invalid_code(unit, sink);
+                return iso2022_reject(unit, sink, state, ascii);
             }
         }
         if b < 0x80 {
