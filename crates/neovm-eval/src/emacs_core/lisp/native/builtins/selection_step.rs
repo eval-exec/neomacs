@@ -292,4 +292,109 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn inline_serial_populated_cache_matches_the_direct_body() {
+        // The unit runtime has no display host, so these calls take the cache
+        // branch. A symbol argument stores Some(text); NIL stores None.
+        let heap = neovm_value::tagged::gc::TestHeap::new();
+        let clear_heap = heap.root();
+        let mut direct_ctx = Context::new(crate::test_utils::unit_runtime());
+        let mut step_ctx = Context::new(crate::test_utils::unit_runtime());
+
+        super::super::reset_stubs_thread_locals();
+        let direct_set = super::super::direct_neomacs_clipboard_set(
+            &mut direct_ctx,
+            vec![Value::symbol("clip")],
+        );
+        let direct_cached = super::super::cached_clipboard_text();
+        let direct_get = super::super::direct_neomacs_clipboard_get(&mut direct_ctx, vec![]);
+        super::super::reset_stubs_thread_locals();
+        let via_set = clipboard_set(
+            SelectionInstaller::InlineSerialMain,
+            &mut step_ctx,
+            vec![Value::symbol("clip")],
+        )
+        .into_direct();
+        let via_cached = super::super::cached_clipboard_text();
+        let via_get = clipboard_get(SelectionInstaller::InlineSerialMain, &mut step_ctx, vec![])
+            .into_direct();
+        assert!(direct_cached.is_some());
+        assert_eq!(direct_cached, via_cached);
+        assert_same_batch(direct_set, via_set);
+        assert_same_batch(direct_get, via_get);
+
+        super::super::reset_stubs_thread_locals();
+        let direct_set = super::super::direct_neomacs_primary_selection_set(
+            &mut direct_ctx,
+            vec![Value::symbol("prim")],
+        );
+        let direct_owner =
+            super::super::direct_neomacs_primary_selection_owner(&mut direct_ctx, vec![]);
+        let direct_cached = super::super::cached_primary_selection_text();
+        let direct_get =
+            super::super::direct_neomacs_primary_selection_get(&mut direct_ctx, vec![]);
+        super::super::reset_stubs_thread_locals();
+        let via_set = primary_selection_set(
+            SelectionInstaller::InlineSerialMain,
+            &mut step_ctx,
+            vec![Value::symbol("prim")],
+        )
+        .into_direct();
+        let via_owner =
+            primary_selection_owner(SelectionInstaller::InlineSerialMain, &mut step_ctx, vec![])
+                .into_direct();
+        let via_cached = super::super::cached_primary_selection_text();
+        let via_get =
+            primary_selection_get(SelectionInstaller::InlineSerialMain, &mut step_ctx, vec![])
+                .into_direct();
+        assert!(direct_cached.is_some());
+        assert_eq!(direct_cached, via_cached);
+        match &via_owner {
+            Ok(value) => assert_eq!(value, &Value::symbol("this-process")),
+            Err(_) => panic!("populated primary cache reports this-process"),
+        }
+        assert_same_batch(direct_set, via_set);
+        assert_same_batch(direct_owner, via_owner);
+        assert_same_batch(direct_get, via_get);
+
+        super::super::reset_stubs_thread_locals();
+        let direct_set = super::super::direct_neomacs_primary_selection_set(
+            &mut direct_ctx,
+            vec![Value::symbol("prim")],
+        );
+        let direct_clear =
+            super::super::direct_neomacs_primary_selection_set(&mut direct_ctx, vec![Value::NIL]);
+        let direct_owner =
+            super::super::direct_neomacs_primary_selection_owner(&mut direct_ctx, vec![]);
+        let direct_cached = super::super::cached_primary_selection_text();
+        super::super::reset_stubs_thread_locals();
+        let via_set = primary_selection_set(
+            SelectionInstaller::InlineSerialMain,
+            &mut step_ctx,
+            vec![Value::symbol("prim")],
+        )
+        .into_direct();
+        let via_clear = primary_selection_set(
+            SelectionInstaller::InlineSerialMain,
+            &mut step_ctx,
+            vec![Value::NIL],
+        )
+        .into_direct();
+        let via_owner =
+            primary_selection_owner(SelectionInstaller::InlineSerialMain, &mut step_ctx, vec![])
+                .into_direct();
+        let via_cached = super::super::cached_primary_selection_text();
+        assert_eq!(direct_cached, None);
+        assert_eq!(direct_cached, via_cached);
+        match &via_owner {
+            Ok(value) => assert_eq!(value, &Value::symbol("none")),
+            Err(_) => panic!("cleared primary cache reports none"),
+        }
+        assert_same_batch(direct_set, via_set);
+        assert_same_batch(direct_clear, via_clear);
+        assert_same_batch(direct_owner, via_owner);
+
+        neovm_value::tagged::gc::clear_tagged_heap_root_if_installed(clear_heap);
+    }
 }
