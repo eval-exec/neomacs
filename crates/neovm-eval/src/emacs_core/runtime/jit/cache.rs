@@ -43,6 +43,8 @@ use neovm_value::value::Value;
 mod opt_evidence;
 pub(crate) use opt_evidence::has_ready_opt_osr;
 mod osr_wait;
+#[path = "cache/source_detachment.rs"]
+pub(crate) mod source_detachment;
 
 /// Why a body is interpreted for now although it is hot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

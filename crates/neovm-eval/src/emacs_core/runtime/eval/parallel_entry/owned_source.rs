@@ -59,6 +59,7 @@ pub(crate) enum SourceWithdrawalStep {
     ObservationEntry,
     Observations,
     WorldCarriers,
+    JitCache,
 }
 
 impl SourceWithdrawalStep {
@@ -88,6 +89,7 @@ impl SourceWithdrawalStep {
             Self::ObservationEntry => "observation-entry",
             Self::Observations => "observations",
             Self::WorldCarriers => "world-carriers",
+            Self::JitCache => "jit-cache",
         }
     }
 }
@@ -290,9 +292,10 @@ impl OwnedSourceRegistries {
     )]
     /// # Safety
     ///
-    /// This is the actual sole serial source, with no live collector, mutator,
-    /// or borrowed or raw heap or store view, and no enclosing with_store
-    /// frame. Those frames must have returned before the first keeper drain
+    /// This is the actual sole serial source, with no active Lisp, native, VM,
+    /// or compile frame, no live collector or mutator, and no borrowed or raw
+    /// heap or store view or enclosing with_store frame. Those frames must
+    /// have returned before the first keeper drain
     /// here. Context ownership and the entry observations cannot prove that
     /// residual fact. After success or retained failure, ordinary source
     /// execution and GC must remain closed until the remaining withdrawal and
@@ -597,3 +600,46 @@ mod observation_tests;
 #[cfg(test)]
 #[path = "tests/owned_source_carriers_test.rs"]
 mod carrier_tests;
+
+type JitCache = Effect<WorldCarriers, super::source_jit_cache::SourceJitCache>;
+
+/// Retains the original source-local legacy caches. Persistent backend and
+/// pending-flow TLS still need their own withdrawal. This is not a complete
+/// JIT or transport right.
+#[must_use]
+pub(crate) struct OwnedSourceCacheClosed {
+    _frame: SourceFrame<JitCache>,
+}
+
+static_assertions::assert_not_impl_any!(OwnedSourceCacheClosed: Send, Sync, Clone, Copy);
+
+impl OwnedSourceCarriersClosed {
+    #[cold]
+    #[inline(never)]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "E2 L4 dormant JIT cache withdrawal; no production caller enters it"
+        )
+    )]
+    pub(crate) fn withdraw_jit_cache(
+        self,
+    ) -> Result<OwnedSourceCacheClosed, SourceWithdrawalFailure> {
+        let frame = self
+            ._frame
+            .advance(SourceWithdrawalStep::JitCache, |source| {
+                // SAFETY: the original unsafe capture required the actual sole
+                // source with all active native, VM, and compile frames ended.
+                // No source execution, callback, or collecting drain follows
+                // its final census. The original Box, census, and prior
+                // receipts remain owned on every exit.
+                unsafe { super::source_jit_cache::withdraw(source) }
+            })?;
+        Ok(OwnedSourceCacheClosed { _frame: frame })
+    }
+}
+
+#[cfg(test)]
+#[path = "tests/owned_source_jit_cache_test.rs"]
+mod jit_cache_tests;
