@@ -811,13 +811,6 @@ pub struct KeyboardRuntime {
     pub event_queue: VecDeque<InputEvent>,
     /// Input already received from the host but not yet returned by `read_char`.
     pub pending_input_events: FrontendEventQueue,
-    /// Frame objects named by queued input, the last event frame, the mouse
-    /// position, or a presented pointer observation.
-    ///
-    /// Refreshed before each explicit collection from those bare ids, then
-    /// traced here. GNU keeps the same frames alive because the keyboard
-    /// buffer stores the frame object (`frame.c:2898-2901`).
-    retained_frame_pins: Vec<Value>,
     /// Terminal id for the currently active `kboard`.
     active_terminal_id: u64,
     /// Parked keyboard-local state for terminals that are not currently active.
@@ -931,19 +924,20 @@ impl KeyboardRuntime {
         Self {
             event_queue: VecDeque::new(),
             pending_input_events: FrontendEventQueue::default(),
-            retained_frame_pins: Vec::new(),
             active_terminal_id: crate::emacs_core::eval::protocol::tty_host::TERMINAL_ID,
             parked_kboards: HashMap::new(),
             kboard: KBoard::new(),
         }
     }
 
-    /// Pin the frame objects named by ids this keyboard still holds.
+    /// Frame objects named by ids this keyboard still holds.
     ///
     /// Called before an explicit collection arms deleted frames. The lookup
     /// happens here, not in `trace_roots`, so root enumeration does not
     /// re-enter the heap. An id whose object is already gone is not pinned.
-    pub(crate) fn refresh_retained_frame_pins(&mut self) {
+    /// The caller stores the vector at the end of `Context` so the pin does
+    /// not shift the fields after `command_loop`.
+    pub(crate) fn retained_frame_pins(&self) -> Vec<Value> {
         let mut ids = Vec::new();
         for event in self.event_queue.iter() {
             event.retained_frame_ids(&mut ids);
@@ -957,10 +951,9 @@ impl KeyboardRuntime {
         }
         ids.sort_unstable();
         ids.dedup();
-        self.retained_frame_pins = ids
-            .into_iter()
+        ids.into_iter()
             .filter_map(Value::registered_frame)
-            .collect();
+            .collect()
     }
 
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -1334,7 +1327,6 @@ impl neovm_value::gc_trace::GcTrace for KeyboardRuntime {
         for kboard in self.parked_kboards.values() {
             kboard.trace_roots(roots);
         }
-        roots.extend(self.retained_frame_pins.iter().copied());
     }
 }
 

@@ -357,6 +357,7 @@ impl Context {
             cached_standard_case_table: None,
             frame_and_buffer_state: None,
             gc_cycle_elapsed: std::time::Duration::ZERO,
+            retained_frame_pins: Vec::new(),
         };
         ev.setup_thread_locals();
 

@@ -6148,8 +6148,8 @@ impl crate::emacs_core::eval::Context {
     #[doc(hidden)]
     pub fn event_frame_value(&self, emacs_frame_id: u64) -> Value {
         // A queued toolbar click stores the id. The object is rooted while
-        // that id is held (`KeyboardRuntime::retained_frame_pins`). A
-        // reclaimed id returns nil and does not call `make_frame`.
+        // that id is held (`Context::retained_frame_pins`). A reclaimed id
+        // returns nil and does not call `make_frame`.
         self.event_frame_id(emacs_frame_id)
             .and_then(|frame_id| Value::registered_frame(frame_id.0))
             .unwrap_or(Value::NIL)

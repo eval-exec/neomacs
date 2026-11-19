@@ -4034,6 +4034,14 @@ pub struct Context {
     /// banked time here until the next completed collection publishes it.
     /// Appended after the pinned layout; only the Context size grows.
     gc_cycle_elapsed: std::time::Duration,
+    /// Frame objects named by bare ids the keyboard still holds: queued
+    /// input, the last event frame, the mouse position, and a presented
+    /// pointer observation. Refreshed before an explicit collection arms
+    /// deleted frames. Appended after the pinned layout so the fields the
+    /// JIT and the bytecode loop load do not move. GNU keeps the same frames
+    /// alive because `recent_keys` stores the frame object
+    /// (`frame.c:2898-2901`).
+    retained_frame_pins: Vec<Value>,
 }
 
 // A mutex does not make the host hooks, Rc leases or TLS views transferable.

@@ -1461,7 +1461,7 @@ impl Context {
                 // Pin frame objects named by bare ids (queued input, the last
                 // event frame, mouse position) before this collection can
                 // reclaim a deleted frame. The pins are ordinary roots.
-                self.command_loop.keyboard.refresh_retained_frame_pins();
+                self.retained_frame_pins = self.command_loop.keyboard.retained_frame_pins();
                 // Arm killed-buffer ephemerons before begin_stw_collection
                 // seeds the buffer registry as an internal root.
                 let (ephemerons, killed_buffers) = self.edit.buffers.take_killed_buffers_for_gc();

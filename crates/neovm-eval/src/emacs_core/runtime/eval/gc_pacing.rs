@@ -535,6 +535,10 @@ impl Context {
             self.rectangle.trace_roots_with(visit);
             group("command_loop");
             neovm_value::gc_trace::GcTrace::trace_roots_with(&*self.command_loop, visit);
+            group("retained_frame_pins");
+            for value in &self.retained_frame_pins {
+                visit(*value);
+            }
             group("modes");
             self.modes.trace_roots_with(visit);
             group("frames");

@@ -68,6 +68,11 @@ fn every_context_offset_is_mains() {
     // The collection-time accumulator (`gc_cycle_elapsed`, a Duration) is
     // appended after `frame_and_buffer_state`: the size grows by 16 and no
     // pinned offset moves.
+    //
+    // Deleted-frame keyboard pins (`retained_frame_pins`, a `Vec<Value>`,
+    // 24 bytes) are appended after `gc_cycle_elapsed`. No earlier offset
+    // moves. The debug total below grows by 24, and the release total grows
+    // by the same 24.
     assert_eq!(size_of::<NativeStackProbe>(), 16);
     const TEST_EXTRA: usize =
         INTERACTIVE_EXTRA + MINIBUFFER_EXTRA + WAIT_GATE_EXTRA + OBSERVATION_EXTRA;
@@ -88,13 +93,13 @@ fn every_context_offset_is_mains() {
     #[cfg(debug_assertions)]
     assert_eq!(
         size_of::<Context>(),
-        44664 + TEST_EXTRA,
+        44688 + TEST_EXTRA,
         "Context size (debug with test instrumentation)"
     );
     #[cfg(not(debug_assertions))]
     assert_eq!(
         size_of::<Context>(),
-        44656 + TEST_EXTRA,
+        44680 + TEST_EXTRA,
         "Context size (release with test instrumentation)"
     );
     let table: &[(usize, usize, &str)] = &[
@@ -736,6 +741,11 @@ fn every_context_offset_is_mains() {
             44640,
             offset_of!(Context, gc_cycle_elapsed),
             "gc_cycle_elapsed",
+        ),
+        (
+            44656,
+            offset_of!(Context, retained_frame_pins),
+            "retained_frame_pins",
         ),
     ];
     // Adjust only for independently pinned test/debug storage. Boundaries
