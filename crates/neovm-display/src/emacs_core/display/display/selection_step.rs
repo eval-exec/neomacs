@@ -122,6 +122,9 @@ mod tests {
         );
         let stubs =
             include_str!("../../../../../neovm-eval/src/emacs_core/lisp/native/builtins/stubs.rs");
+        let clipboard_step = include_str!(
+            "../../../../../neovm-eval/src/emacs_core/lisp/native/builtins/selection_step.rs"
+        );
         for name in [
             "builtin_neomacs_clipboard_set",
             "builtin_neomacs_clipboard_get",
@@ -134,9 +137,13 @@ mod tests {
                 "missing clipboard stub {name}"
             );
         }
+        let clipboard_driver = clipboard_step.split("#[cfg(test)]").next().expect("driver");
         assert!(
-            !stubs.contains("selection_step") && !stubs.contains("SelectionInstaller"),
-            "clipboard stubs stay direct until slice 3"
+            stubs.contains("mod selection_step;")
+                && clipboard_driver.contains("SelectionInstaller::InlineSerialMain")
+                && !clipboard_driver.contains("OwnedRouted")
+                && !clipboard_driver.contains("std::env"),
+            "clipboard stubs stay on the inline serial arm"
         );
     }
 
