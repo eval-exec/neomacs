@@ -230,4 +230,66 @@ mod tests {
             .into_direct();
         assert_same_batch(direct, via);
     }
+
+    #[test]
+    fn serial_lowering_is_only_the_direct_call() {
+        let step = include_str!("selection_step.rs");
+        let driver = step.split("#[cfg(test)]").next().expect("driver");
+        let arms = [
+            (
+                "fn clipboard_set(",
+                "SelectionStep::Done(direct_neomacs_clipboard_set(ctx, args))",
+            ),
+            (
+                "fn clipboard_get(",
+                "SelectionStep::Done(direct_neomacs_clipboard_get(ctx, args))",
+            ),
+            (
+                "fn primary_selection_set(",
+                "SelectionStep::Done(direct_neomacs_primary_selection_set(ctx, args))",
+            ),
+            (
+                "fn primary_selection_get(",
+                "SelectionStep::Done(direct_neomacs_primary_selection_get(ctx, args))",
+            ),
+            (
+                "fn primary_selection_owner(",
+                "SelectionStep::Done(direct_neomacs_primary_selection_owner(ctx, args))",
+            ),
+        ];
+        assert_eq!(driver.matches("match installer").count(), arms.len());
+        assert_eq!(arms.len(), SERIAL_CLIPBOARD_ENTRIES.len());
+        for (signature, call) in arms {
+            let start = driver.find(signature).expect(signature);
+            let rest = &driver[start..];
+            let close = rest.find("\n}").expect("function end");
+            let function = &rest[..=close + 1];
+            assert_eq!(function.matches("=>").count(), 1, "{signature}");
+            assert!(
+                function.contains(call) && !function.contains("if "),
+                "{signature} must lower to {call}"
+            );
+        }
+        let stubs = include_str!("stubs.rs");
+        for name in SERIAL_CLIPBOARD_ENTRIES {
+            let marker = format!("pub fn {name}(");
+            let start = stubs.find(&marker).expect(name);
+            let rest = &stubs[start..];
+            let direct_at = rest.find("\nfn direct_").expect("direct body");
+            let stub = &rest[..direct_at];
+            let direct_rest = &rest[direct_at..];
+            let direct_close = direct_rest.find("\n}").expect("direct end");
+            let direct = &direct_rest[..=direct_close + 1];
+            assert!(
+                stub.contains(".into_direct()")
+                    && stub.contains("SelectionInstaller::InlineSerialMain")
+                    && !stub.contains("expect_args"),
+                "{name} lowers through the inline step"
+            );
+            assert!(
+                direct.contains("expect_args") && !direct.contains("SelectionInstaller"),
+                "{name} direct body stays the previous function"
+            );
+        }
+    }
 }

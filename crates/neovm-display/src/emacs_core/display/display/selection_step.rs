@@ -5,8 +5,9 @@
 //! [`builtin_gui_set_selection`] stay the direct bodies, and each function
 //! here is a one-arm call of that body. Both still return today's batch
 //! result. There is no thread test, TLS read, env read, clipboard read, or
-//! second algorithm. `builtin_handle_switch_frame` (R37) and the five
-//! clipboard and primary-selection stubs stay direct.
+//! second algorithm. `builtin_handle_switch_frame` (R37) stays direct.
+//! The clipboard stubs call their own inline step, whose only arm is their
+//! direct body.
 
 use neovm_value::error::EvalResult;
 use neovm_value::value::Value;
@@ -174,6 +175,55 @@ mod tests {
             let direct = super::super::builtin_gui_set_selection(args.clone());
             let via = gui_set_selection(SelectionInstaller::InlineSerialMain, args).into_direct();
             assert_same_batch(direct, via);
+        }
+    }
+
+    #[test]
+    fn serial_lowering_is_only_the_direct_call() {
+        let step = include_str!("selection_step.rs");
+        let driver = step.split("#[cfg(test)]").next().expect("driver");
+        let arms = [
+            (
+                "fn gui_get_selection(",
+                "SelectionStep::Done(builtin_gui_get_selection(args))",
+            ),
+            (
+                "fn gui_set_selection(",
+                "SelectionStep::Done(builtin_gui_set_selection(args))",
+            ),
+        ];
+        assert_eq!(driver.matches("match installer").count(), arms.len());
+        assert!(
+            !driver.contains("std::env")
+                && !driver.contains("NEOVM_THREADS")
+                && !driver.contains("thread_local")
+                && !driver.contains(".with(")
+                && !driver.contains("OwnedRouted")
+                && !driver.contains("OwnedLocal"),
+            "the selection step adds no route, TLS read, or env test"
+        );
+        for (signature, call) in arms {
+            let start = driver.find(signature).expect(signature);
+            let rest = &driver[start..];
+            let close = rest.find("\n}").expect("function end");
+            let function = &rest[..=close + 1];
+            assert_eq!(function.matches("=>").count(), 1, "{signature}");
+            assert!(
+                function.contains(call) && !function.contains("if "),
+                "{signature} must lower to {call}"
+            );
+        }
+        let source = include_str!("mod.rs");
+        for name in SERIAL_SELECTION_ENTRIES {
+            let marker = format!("fn {name}(");
+            let start = source.find(&marker).expect(name);
+            let rest = &source[start..];
+            let close = rest.find("\n}").expect("entry end");
+            let function = &rest[..=close + 1];
+            assert!(
+                !function.contains("selection_step") && !function.contains("SelectionInstaller"),
+                "{name} stays the direct function"
+            );
         }
     }
 }
