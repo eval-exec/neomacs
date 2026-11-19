@@ -75,7 +75,7 @@ mod tests {
     use super::super::activation::{ActivationAuthority, SelectionPhase};
     use super::Context;
 
-    fn authority() -> ActivationAuthority {
+    fn activation_gate() -> ActivationAuthority {
         ActivationAuthority::mint_for_test()
     }
 
@@ -90,7 +90,7 @@ mod tests {
     #[test]
     fn local_activation_lives_on_the_owner_slab() {
         let mut ctx = Context::new(crate::test_utils::unit_runtime());
-        ctx.activate_selection_local(&authority()).unwrap();
+        ctx.activate_selection_local(&activation_gate()).unwrap();
         assert!(!ctx.owner.is_dormant());
         assert_eq!(ctx.selection_phase(), SelectionPhase::Local);
         ctx.rollback_selection_local().unwrap();
@@ -105,7 +105,7 @@ mod tests {
             ctx.join_selection_routed(),
             Err(super::super::activation::JoinError::NotRouted)
         ));
-        ctx.activate_selection_routed(&authority()).unwrap();
+        ctx.activate_selection_routed(&activation_gate()).unwrap();
         assert_eq!(ctx.selection_phase(), SelectionPhase::Routed);
         let joined = ctx.join_selection_routed().unwrap();
         assert_eq!(ctx.selection_phase(), SelectionPhase::AwaitingRollback);

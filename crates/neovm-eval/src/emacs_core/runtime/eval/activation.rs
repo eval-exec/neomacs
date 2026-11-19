@@ -276,7 +276,7 @@ impl SelectionActivation {
 mod tests {
     use super::*;
 
-    fn authority() -> ActivationAuthority {
+    fn activation_gate() -> ActivationAuthority {
         ActivationAuthority::mint_for_test()
     }
 
@@ -289,7 +289,7 @@ mod tests {
     #[test]
     fn local_activation_and_rollback_clear_the_arm() {
         let mut arm = SelectionActivation::dormant();
-        arm.activate_local(&authority()).unwrap();
+        arm.activate_local(&activation_gate()).unwrap();
         assert_eq!(arm.phase(), SelectionPhase::Local);
         arm.rollback_local().unwrap();
         assert_eq!(arm.phase(), SelectionPhase::Uninstalled);
@@ -298,31 +298,31 @@ mod tests {
     #[test]
     fn second_activation_is_refused_until_rollback() {
         let mut arm = SelectionActivation::dormant();
-        arm.activate_local(&authority()).unwrap();
+        arm.activate_local(&activation_gate()).unwrap();
         assert_eq!(
-            arm.activate_routed(&authority()),
+            arm.activate_routed(&activation_gate()),
             Err(ActivateError::AlreadyInstalled)
         );
         assert_eq!(
-            arm.activate_local(&authority()),
+            arm.activate_local(&activation_gate()),
             Err(ActivateError::AlreadyInstalled)
         );
         assert!(matches!(arm.join_routed(), Err(JoinError::NotRouted)));
         arm.rollback_local().unwrap();
-        arm.activate_routed(&authority()).unwrap();
+        arm.activate_routed(&activation_gate()).unwrap();
         assert_eq!(arm.phase(), SelectionPhase::Routed);
     }
 
     #[test]
     fn routed_rollback_consumes_the_joined_handle() {
         let mut arm = SelectionActivation::dormant();
-        arm.activate_routed(&authority()).unwrap();
+        arm.activate_routed(&activation_gate()).unwrap();
         assert_eq!(arm.rollback_local(), Err(RollbackError::NotLocal));
         assert_eq!(arm.phase(), SelectionPhase::Routed);
         let joined = arm.join_routed().unwrap();
         assert_eq!(arm.phase(), SelectionPhase::AwaitingRollback);
         assert_eq!(
-            arm.activate_local(&authority()),
+            arm.activate_local(&activation_gate()),
             Err(ActivateError::AlreadyInstalled)
         );
         assert!(matches!(arm.join_routed(), Err(JoinError::NotRouted)));
@@ -335,8 +335,8 @@ mod tests {
     fn foreign_joined_handle_does_not_clear_another_owner() {
         let mut first = SelectionActivation::dormant();
         let mut second = SelectionActivation::dormant();
-        first.activate_routed(&authority()).unwrap();
-        second.activate_routed(&authority()).unwrap();
+        first.activate_routed(&activation_gate()).unwrap();
+        second.activate_routed(&activation_gate()).unwrap();
         let first_joined = first.join_routed().unwrap();
         let second_joined = second.join_routed().unwrap();
         let (error, returned) = first.rollback_routed(second_joined).unwrap_err();
@@ -351,9 +351,9 @@ mod tests {
     #[test]
     fn live_routed_worker_has_no_rollback_proof() {
         let mut arm = SelectionActivation::dormant();
-        arm.activate_routed(&authority()).unwrap();
+        arm.activate_routed(&activation_gate()).unwrap();
         let mut other = SelectionActivation::dormant();
-        other.activate_routed(&authority()).unwrap();
+        other.activate_routed(&activation_gate()).unwrap();
         let foreign = other.join_routed().unwrap();
         let (error, foreign) = arm.rollback_routed(foreign).unwrap_err();
         assert_eq!(error, RollbackError::NotAwaitingRollback);
