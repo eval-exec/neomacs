@@ -51,6 +51,7 @@ use crate::emacs_core::jit::stats::{self, CompilePhase, enter_phase};
 use super::code_arena::CodeArena;
 
 pub(crate) mod batch;
+pub(crate) mod source_detachment;
 pub(crate) mod split;
 
 /// Leaves defined into one module before it is replaced (bounds the

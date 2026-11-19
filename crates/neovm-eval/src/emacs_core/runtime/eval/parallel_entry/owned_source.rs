@@ -60,6 +60,7 @@ pub(crate) enum SourceWithdrawalStep {
     Observations,
     WorldCarriers,
     JitCache,
+    JitBackend,
 }
 
 impl SourceWithdrawalStep {
@@ -90,6 +91,7 @@ impl SourceWithdrawalStep {
             Self::Observations => "observations",
             Self::WorldCarriers => "world-carriers",
             Self::JitCache => "jit-cache",
+            Self::JitBackend => "jit-backend",
         }
     }
 }
@@ -643,3 +645,45 @@ impl OwnedSourceCarriersClosed {
 #[cfg(test)]
 #[path = "tests/owned_source_jit_cache_test.rs"]
 mod jit_cache_tests;
+
+type JitBackend = Effect<JitCache, super::source_jit_backend::SourceJitBackend>;
+
+/// Retains the actual local persistent backend after the cache. Background
+/// and frontend scope state still precede a complete JIT or TLS suspension.
+#[must_use]
+pub(crate) struct OwnedSourceBackendClosed {
+    _frame: SourceFrame<JitBackend>,
+}
+
+static_assertions::assert_not_impl_any!(OwnedSourceBackendClosed: Send, Sync, Clone, Copy);
+
+impl OwnedSourceCacheClosed {
+    #[cold]
+    #[inline(never)]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "E2 L4 dormant JIT backend withdrawal; no production caller enters it"
+        )
+    )]
+    pub(crate) fn withdraw_jit_backend(
+        self,
+    ) -> Result<OwnedSourceBackendClosed, SourceWithdrawalFailure> {
+        let frame = self._frame.advance_after_effect(
+            SourceWithdrawalStep::JitBackend,
+            |_source, effects| {
+                // SAFETY: the original unsafe capture excludes all execution
+                // and heap or store frames. The exact cache and the root and
+                // source backing stay in this chain, and no execution or
+                // collection has followed.
+                unsafe { super::source_jit_backend::withdraw(&effects._receipt) }
+            },
+        )?;
+        Ok(OwnedSourceBackendClosed { _frame: frame })
+    }
+}
+
+#[cfg(test)]
+#[path = "tests/owned_source_jit_backend_test.rs"]
+mod jit_backend_tests;
