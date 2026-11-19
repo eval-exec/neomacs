@@ -602,9 +602,9 @@ pub enum DumpedCell {
 ///
 /// Process-global rather than an `Obarray` field: the one head-store seam
 /// below must also run from cell construction and pdump reconstruction, which
-/// have no `Obarray`.  A bump before an era is published is harmless because
-/// nothing reads the clock yet; afterwards it is the snapshot-invalidation
-/// clock (P10-a2).  It is not TLS.
+/// have no `Obarray`.  A runtime store bumps it.  A construction store does
+/// not.  Production code does not read it yet; afterwards it is the
+/// snapshot-invalidation clock (P10-a2).  It is not TLS.
 static PLIST_EPOCH: AtomicU64 = AtomicU64::new(0);
 
 /// The current plist-head epoch.  One Acquire load is the per-signal freshness
@@ -622,14 +622,25 @@ fn note_plist_head_store() {
     PLIST_EPOCH.fetch_add(1, Ordering::Release);
 }
 
+/// Which plist-head store this is.
+///
+/// [`PlistStore::Runtime`] bumps the clock on every store. Same-head
+/// suppression is not this rule. [`PlistStore::Construction`] never bumps.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PlistStore {
+    Runtime,
+    Construction,
+}
+
 /// The ONE production store of a symbol's plist head.
 ///
-/// Publishes the head through the cell's atomic contract and advances the
-/// universal clock.  Before that store, the SATB barrier notes the cell's
-/// current head.  Construction callers start from nil: [`LispSymbol::empty`]
-/// builds the plist as `NIL`, and [`LispSymbol::from_dump`] installs `NIL`
-/// before this store, so the note is the existing nil no-op.  The runtime
-/// writers assert nothing about the pre-image.
+/// Publishes the head through the cell's atomic contract.  Before that
+/// store, the SATB barrier notes the cell's current head, for both kinds.
+/// Construction callers start from nil: [`LispSymbol::empty`] builds the
+/// plist as `NIL`, and [`LispSymbol::from_dump`] installs `NIL` before this
+/// store, so the note is the existing nil no-op.  A construction store then
+/// debug-asserts that pre-image and does not bump.  A runtime store bumps
+/// on every call.
 ///
 /// [`SymbolPropertyRevision::changed`](crate::symbol::SymbolPropertyRevision::changed)
 /// stays at the four runtime writers (`put_property`, `put_property_id`,
@@ -642,10 +653,28 @@ fn note_plist_head_store() {
 /// `replace_symbol_plist_id`, construction (`publish_fill`) and pdump
 /// reconstruction (`from_dump`) all route through it.
 #[inline]
-pub(crate) fn store_plist_head(symbol: &mut LispSymbol, plist: Value) {
-    crate::tagged::gc::note_root_overwrite(symbol.plist.get());
+pub(crate) fn store_plist_head(symbol: &mut LispSymbol, plist: Value, kind: PlistStore) {
+    let previous = symbol.plist.get();
+    crate::tagged::gc::note_root_overwrite(previous);
     symbol.plist.store_atomic(plist);
-    note_plist_head_store();
+    match kind {
+        PlistStore::Runtime => note_plist_head_store(),
+        PlistStore::Construction => {
+            debug_assert!(previous.is_nil());
+        }
+    }
+}
+
+/// Runtime head store: bump the clock on every call.
+#[inline]
+pub(crate) fn store_runtime_plist_head(symbol: &mut LispSymbol, plist: Value) {
+    store_plist_head(symbol, plist, PlistStore::Runtime);
+}
+
+/// Construction head store: publish the head and leave the clock alone.
+#[inline]
+pub(crate) fn store_construction_plist_head(symbol: &mut LispSymbol, plist: Value) {
+    store_plist_head(symbol, plist, PlistStore::Construction);
 }
 
 impl LispSymbol {
@@ -726,8 +755,7 @@ impl LispSymbol {
             interned_global: false,
             function_unbound: false,
         };
-        debug_assert!(sym.plist.get().is_nil());
-        store_plist_head(&mut sym, plist);
+        store_construction_plist_head(&mut sym, plist);
         sym
     }
 
@@ -765,8 +793,7 @@ impl LispSymbol {
         self.flags = src.flags.clone();
         self.val = src.val.clone();
         self.function = src.function;
-        debug_assert!(self.plist.get().is_nil());
-        store_plist_head(self, plist);
+        store_construction_plist_head(self, plist);
         self.interned_global = src.interned_global;
         self.function_unbound = src.function_unbound;
         // Terminal Release: publishes the arm writes above to the GC scan's

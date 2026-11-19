@@ -18,7 +18,7 @@ use crate::value::scratch_bridge::{
 };
 use crate::value::{Value, eq_value, eq_value_swp};
 
-use super::{Obarray, SymbolPlistSnapshot, SymbolPropertyRevision, store_plist_head};
+use super::{Obarray, SymbolPlistSnapshot, SymbolPropertyRevision, store_runtime_plist_head};
 
 #[cfg(any(test, feature = "test-support"))]
 thread_local! {
@@ -410,7 +410,7 @@ impl Obarray {
         let sym = self.ensure_symbol_id(symbol);
         let (new_plist, _changed) =
             plist_put(sym.plist.get(), Value::from_sym_id(intern(prop)), value)?;
-        store_plist_head(sym, new_plist);
+        store_runtime_plist_head(sym, new_plist);
         SymbolPropertyRevision::changed(symbol);
         Ok(())
     }
@@ -428,7 +428,7 @@ impl Obarray {
         self.ensure_global_member_if_canonical(symbol);
         let sym = self.ensure_symbol_id(symbol);
         let (new_plist, _changed) = plist_put(sym.plist.get(), Value::from_sym_id(prop), value)?;
-        store_plist_head(sym, new_plist);
+        store_runtime_plist_head(sym, new_plist);
         SymbolPropertyRevision::changed(symbol);
         Ok(())
     }

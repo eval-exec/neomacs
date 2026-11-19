@@ -59,7 +59,6 @@ pub enum CanonicalWrite {
 }
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use cell::plist_epoch;
-pub(crate) use cell::store_plist_head;
 use cell::{ArmMut, CellWrite, MarkGate, RevealedCell, read_symbol_children};
 #[doc(hidden)]
 pub use cell::{
@@ -67,6 +66,9 @@ pub use cell::{
     LISP_SYMBOL_INTERNED_GLOBAL_OFFSET, LISP_SYMBOL_SIZE, LISP_SYMBOL_VAL_OFFSET, ValueCell,
 };
 pub use cell::{LispSymbol, SymbolFlags};
+pub(crate) use cell::{
+    PlistStore, store_construction_plist_head, store_plist_head, store_runtime_plist_head,
+};
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use fn_stamps::force_fn_stamps_for_test;
 pub use function_cell_observer::FunctionCellObserver;
@@ -4350,7 +4352,7 @@ impl Obarray {
             Value::list(flat)
         };
         let sym = self.ensure_symbol_id(symbol);
-        store_plist_head(sym, new_plist);
+        store_runtime_plist_head(sym, new_plist);
         SymbolPropertyRevision::changed(symbol);
     }
 
@@ -4360,7 +4362,7 @@ impl Obarray {
     pub fn set_symbol_plist_id(&mut self, symbol: SymId, plist: Value) {
         self.ensure_global_member_if_canonical(symbol);
         let sym = self.ensure_symbol_id(symbol);
-        store_plist_head(sym, plist);
+        store_runtime_plist_head(sym, plist);
         SymbolPropertyRevision::changed(symbol);
     }
 
