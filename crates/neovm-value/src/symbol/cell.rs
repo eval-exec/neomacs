@@ -600,11 +600,15 @@ pub enum DumpedCell {
 
 /// Universal plist-head publication clock (P10).
 ///
-/// Process-global rather than an `Obarray` field: the one head-store seam
-/// below must also run from cell construction and pdump reconstruction, which
-/// have no `Obarray`.  A runtime store bumps it.  A construction store does
-/// not.  Production code does not read it yet; afterwards it is the
+/// A static rather than an `Obarray` field: the one head-store seam below
+/// must also run from cell construction and pdump reconstruction, which have
+/// no `Obarray`.  A runtime store bumps it.  A construction store does not.
+/// Production code does not read it yet; afterwards it is the
 /// snapshot-invalidation clock (P10-a2).  It is not TLS.
+///
+/// The construction equality assertion is sound because nextest gives each
+/// test its own process, and nothing in that test does a runtime store after
+/// `before` is read.
 static PLIST_EPOCH: AtomicU64 = AtomicU64::new(0);
 
 /// The current plist-head epoch.  One Acquire load is the per-signal freshness
@@ -671,8 +675,9 @@ pub(crate) fn store_plist_head(symbol: &mut LispSymbol, plist: Value, kind: Plis
         }
     }
     symbol.plist.store_atomic(plist);
-    if let PlistStore::Runtime = kind {
-        note_plist_head_store();
+    match kind {
+        PlistStore::Runtime => note_plist_head_store(),
+        PlistStore::Construction => {}
     }
 }
 

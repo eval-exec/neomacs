@@ -3,10 +3,9 @@
 //! Construction and pdump reconstruction take the seam and do not bump.
 //! The architecture guard pins the one-site rule; these tests pin the clock.
 //!
-//! The clock is process-global, so a test that expects a bump only asserts
-//! that it moved forward: other tests in the same binary may bump it
-//! concurrently.  The construction test asserts equality and is isolated
-//! in `.config/nextest.toml` so a parallel runtime store cannot move it.
+//! The construction test asserts equality.  That assertion is sound because
+//! nextest gives each test its own process, and nothing in that test does a
+//! runtime store after `before` is read.
 
 use crate::intern::intern;
 use crate::symbol::{

@@ -38,13 +38,6 @@ test-threads = 24
 # bootstrap time while still catching real hangs.
 slow-timeout = { period = "600s", terminate-after = 1, grace-period = "0s" }
 
-# The plist clock is one process-global atomic. This test asserts a
-# construction store leaves it unchanged, so it cannot share the binary
-# with a runtime head store.
-[[profile.default.overrides]]
-filter = 'package(neovm-value) and test(construction_and_pdump_head_stores_take_the_seam)'
-threads-required = "num-test-threads"
-
 # Apply memory limit to all tests EXCEPT the real GUI smoke, GUI clients and
 # child-frame animation cases: those spawn a full GUI neomacs (wgpu + Vulkan
 # software rasterizer). llvmpipe's virtual address-space reservations depend on
