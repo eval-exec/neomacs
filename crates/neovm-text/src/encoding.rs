@@ -8,10 +8,10 @@
 //! |---|---|---|
 //! | `NEOVM_EMACS_MULE_PREPARED` | off | Prepare emacs-mule encoder candidates once per conversion, honoring charset priority. |
 
-use crate::emacs_core::coding::EolType;
 use crate::emacs_core::coding::read_detection::{
     adjusted_coding_name, runtime_codec_name, runtime_coding_eol,
 };
+use crate::emacs_core::coding::{EolType, Iso2022Spec};
 use crate::emacs_core::text_host::TextHost;
 use neovm_value::error::LispCondition;
 use neovm_value::error::{expect_args, expect_args_range, expect_min_args};
@@ -4579,11 +4579,7 @@ fn decode_via_iso2022(
     // own 94/96 width has a register below 4. The escape's width is not the
     // charset's width: `ESC ( Z` can name `latin-iso8859-1`, and `iso-2022-jp`
     // still rejects it because that charset is not in the list.
-    fn iso2022_charset_is_safe(
-        cs: SymId,
-        spec: &crate::emacs_core::coding::Iso2022Spec,
-        charset_list: &[SymId],
-    ) -> bool {
+    fn iso2022_charset_is_safe(cs: SymId, spec: &Iso2022Spec, charset_list: &[SymId]) -> bool {
         // GNU `setup_iso_safe_charsets` keys the safe set by the charset id
         // captured when the coding system was defined (`coding.c:11048-11057`,
         // `2852-2914`). Full support is membership of `Viso_2022_charset_list`,
@@ -4703,7 +4699,7 @@ fn decode_via_iso2022(
         final_byte: u8,
         dimension: i64,
         chars_96: bool,
-        spec: &crate::emacs_core::coding::Iso2022Spec,
+        spec: &Iso2022Spec,
         charset_list: &[SymId],
     ) -> Result<(), NoMoreSource> {
         if let Some((cs, _)) = charset_by_iso_final(i64::from(final_byte), dimension, chars_96)
