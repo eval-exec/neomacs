@@ -250,11 +250,12 @@ fn pentry_e2b_owned_source_chain_order_includes_hook_routed_slots() {
         return;
     };
     let _ = super::super::super::lifecycle::take_source_shell_trace();
-    capture(source).expect("twelve slots, including both display hooks");
+    capture(source).expect("owner parked before the host slots, including both display hooks");
     assert_eq!(
         super::super::super::lifecycle::take_source_shell_trace(),
         [
             "keeper",
+            "owner-bindings",
             "ccl",
             "charset",
             "font",

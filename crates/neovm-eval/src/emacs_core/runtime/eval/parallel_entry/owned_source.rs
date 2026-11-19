@@ -1,8 +1,9 @@
 //! Actual boxed source ownership while selected host slots are withdrawn.
-//! No heap transfer, observation export, owner parking, source restoration,
-//! or Lisp entry is implemented here. Every armed payload retains on
-//! Drop, forget, and unwind. Only a pre-effect refusal returns an ordinary
-//! Context.
+//! In-place bindings are parked before host activations leave. Text-cache
+//! retirement is the later `retire_text` step. No heap transfer, observation
+//! export, source restoration, or Lisp entry is implemented here. Every armed
+//! payload retains on Drop, forget, and unwind. Only a pre-effect refusal
+//! returns an ordinary Context.
 
 use super::super::Context;
 use super::super::lifecycle::{
@@ -34,6 +35,7 @@ use std::mem::ManuallyDrop;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SourceWithdrawalStep {
     Keeper,
+    OwnerBindings,
     Ccl,
     Charset,
     Font,
@@ -45,6 +47,12 @@ pub(crate) enum SourceWithdrawalStep {
     InFlight,
     IntegerWidth,
     Quit,
+    TextEntry,
+    CaseTable,
+    Syntax,
+    Category,
+    Regex,
+    StringPosition,
 }
 
 impl SourceWithdrawalStep {
@@ -52,6 +60,7 @@ impl SourceWithdrawalStep {
     fn trace_label(self) -> &'static str {
         match self {
             Self::Keeper => "keeper",
+            Self::OwnerBindings => "owner-bindings",
             Self::Ccl => "ccl",
             Self::Charset => "charset",
             Self::Font => "font",
@@ -63,6 +72,12 @@ impl SourceWithdrawalStep {
             Self::InFlight => "in-flight",
             Self::IntegerWidth => "integer-width",
             Self::Quit => "quit",
+            Self::TextEntry => "text-entry",
+            Self::CaseTable => "case-table",
+            Self::Syntax => "syntax",
+            Self::Category => "category",
+            Self::Regex => "regex",
+            Self::StringPosition => "string-position",
         }
     }
 }
@@ -175,7 +190,8 @@ impl<R: 'static> SourceFrame<R> {
 }
 
 type Keeper = Effect<NoEffects, Baton>;
-type Ccl = Effect<Keeper, DetachedRegistry<CclRegistry>>;
+type Parked = Effect<Keeper, super::super::owner_mirrors::ParkedOwner>;
+type Ccl = Effect<Parked, DetachedRegistry<CclRegistry>>;
 type Charset = Effect<Ccl, DetachedRegistry<CharsetRegistry>>;
 type Font = Effect<Charset, DetachedRegistry<FaceAttrState>>;
 type Terminal = Effect<Font, DetachedRegistry<TerminalLispRegistry>>;
@@ -188,11 +204,12 @@ type InFlight = Effect<DynamicModule, SourceShellInFlightReceipt>;
 type IntegerWidth = Effect<InFlight, DetachedIntegerWidthActivation>;
 type Quit = Effect<IntegerWidth, DetachedQuitActivation>;
 
-/// Owns the actual Context, World exclusion, and all eleven selected receipts.
-/// The exact chain type prevents missing, duplicate, or reordered receipt
-/// families from constructing this wrapper. It grants no World or heap access.
-/// Text caches, source bindings, heap and store TLS, and JIT still need their
-/// own closed source transaction.
+/// Owns the actual Context, World exclusion, the parked owner, and all eleven
+/// selected receipts. In-place bindings are parked before their host
+/// activations are withdrawn. The exact chain type prevents missing,
+/// duplicate, or reordered receipt families from constructing this wrapper.
+/// It grants no World or heap access. Text caches, heap and store TLS, and
+/// JIT still need their own closed source transaction.
 #[must_use]
 pub(crate) struct OwnedSourceRegistries {
     _frame: SourceFrame<Quit>,
@@ -236,6 +253,9 @@ impl OwnedSourceRegistries {
             effects: NoEffects,
         };
         let frame = frame.advance(SourceWithdrawalStep::Keeper, Context::issue_green_baton)?;
+        let frame = frame.advance(SourceWithdrawalStep::OwnerBindings, |source| {
+            Ok::<_, std::convert::Infallible>(source.park_owner())
+        })?;
         let frame = frame.advance(SourceWithdrawalStep::Ccl, |source| {
             detach_ccl_registry(&source.ccl_registry)
         })?;
@@ -278,6 +298,96 @@ impl OwnedSourceRegistries {
     }
 }
 
+// These records carry an observed effect only. Their distinct concrete types
+// require every family in the final chain. They do not certify that later
+// code has left a slot empty. No saved cache word is restored.
+#[derive(Debug)]
+struct TextEntryChecked;
+#[derive(Debug)]
+struct CaseRetired(neovm_value::heap_registry::text_retirement::TextCacheRetirement);
+#[derive(Debug)]
+struct SyntaxRetired(neovm_value::heap_registry::text_retirement::TextCacheRetirement);
+#[derive(Debug)]
+struct CategoryRetired(neovm_value::heap_registry::text_retirement::TextCacheRetirement);
+#[derive(Debug)]
+struct RegexRetired(neovm_value::heap_registry::text_retirement::TextCacheRetirement);
+#[derive(Debug)]
+struct StringPositionRetired(neovm_value::heap_registry::text_retirement::TextCacheRetirement);
+type TextEntry = Effect<Quit, TextEntryChecked>;
+type Case = Effect<TextEntry, CaseRetired>;
+type Syntax = Effect<Case, SyntaxRetired>;
+type Category = Effect<Syntax, CategoryRetired>;
+type Regex = Effect<Category, RegexRetired>;
+type StringPosition = Effect<Regex, StringPositionRetired>;
+
+/// Actual source and prior receipts after all five disposable text families
+/// have been retired. Canonical tables remain rooted in the boxed Context.
+/// No heap loan, final census, TLS export, or parallel authority exists yet.
+#[must_use]
+pub(crate) struct OwnedSourceTextRetired {
+    _frame: SourceFrame<StringPosition>,
+}
+
+static_assertions::assert_not_impl_any!(OwnedSourceTextRetired: Send, Sync, Clone, Copy);
+
+impl OwnedSourceRegistries {
+    #[cold]
+    #[inline(never)]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "E2 L4 dormant text retirement; no production caller enters it"
+        )
+    )]
+    pub(crate) fn retire_text(self) -> Result<OwnedSourceTextRetired, SourceWithdrawalFailure> {
+        // No collector, callback, or user code runs between these steps.
+        // Recheck the actual source: thread-local activation can change
+        // without moving this Box.
+        let frame = self
+            ._frame
+            .advance(SourceWithdrawalStep::TextEntry, |source| {
+                validate_serial_source_entry(source).map(|()| TextEntryChecked)
+            })?;
+        let frame = frame.advance(SourceWithdrawalStep::CaseTable, |source| {
+            neovm_text::emacs_core::casetab::retirement::retire_casetab_for_heap(
+                source.tagged_heap.heap_identity(),
+            )
+            .map(CaseRetired)
+        })?;
+        let frame = frame.advance(SourceWithdrawalStep::Syntax, |source| {
+            neovm_text::emacs_core::syntax::retirement::retire_syntax_for_heap(
+                source.tagged_heap.heap_identity(),
+            )
+            .map(SyntaxRetired)
+        })?;
+        let frame = frame.advance(SourceWithdrawalStep::Category, |source| {
+            neovm_text::emacs_core::category::retirement::retire_category_for_heap(
+                source.tagged_heap.heap_identity(),
+            )
+            .map(CategoryRetired)
+        })?;
+        let frame = frame.advance(SourceWithdrawalStep::Regex, |source| {
+            neovm_text::emacs_core::regex::retirement::retire_regex_for_heap(
+                source.tagged_heap.heap_identity(),
+            )
+            .map(RegexRetired)
+        })?;
+        let frame = frame.advance(SourceWithdrawalStep::StringPosition, |source| {
+            Ok::<_, std::convert::Infallible>(StringPositionRetired(
+                neovm_value::string_pos_cache::retire_string_pos_cache_for_heap(
+                    source.tagged_heap.heap_identity(),
+                ),
+            ))
+        })?;
+        Ok(OwnedSourceTextRetired { _frame: frame })
+    }
+}
+
 #[cfg(test)]
 #[path = "tests/owned_source_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/owned_source_retirement_test.rs"]
+mod retirement_tests;
