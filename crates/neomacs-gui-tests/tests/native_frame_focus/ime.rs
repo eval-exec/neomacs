@@ -27,20 +27,6 @@ fn fcitx5_fullwidth_punctuation_is_text_and_f13_stays_a_key() {
     fs::create_dir_all(&artifacts).unwrap();
     let session = DisplayHarness::Xvfb.start_session(&artifacts).unwrap();
     wait_for_x11(session.env()).unwrap();
-    // Xvfb's evdev map has no F13, so `xdotool key F13` borrows keycode 8,
-    // injects the chord, and reverts the map in the same burst. Both editors
-    // lose that race when they read the KeyPress together with the revert.
-    // Bind F13 onto keycode 191 for the life of this server so xdotool sends
-    // an existing keycode and does not remap. The f13 assertion is unchanged.
-    let bound = Command::new("xmodmap")
-        .args(["-e", "keycode 191 = F13"])
-        .envs(session.env().iter().map(|(k, v)| (k.as_str(), v.as_str())))
-        .output()
-        .expect("xmodmap");
-    assert!(
-        bound.status.success(),
-        "permanent F13 binding failed: {bound:?}"
-    );
     let config = artifacts.join("config");
     fs::create_dir_all(config.join("fcitx5/conf")).unwrap();
     fs::write(
@@ -115,6 +101,19 @@ fn fcitx5_fullwidth_punctuation_is_text_and_f13_stays_a_key() {
         );
         thread::sleep(Duration::from_millis(20));
     }
+    // fcitx5 startup restores Xvfb's evdev map, which clears an earlier F13
+    // binding. Bind after it is ready and before the editor starts. Xvfb has
+    // no F13, so `xdotool key F13` would borrow keycode 8, inject, and revert.
+    // Both editors lose that race. The f13 assertion is unchanged.
+    let bound = Command::new("xmodmap")
+        .args(["-e", "keycode 191 = F13"])
+        .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+        .output()
+        .expect("xmodmap");
+    assert!(
+        bound.status.success(),
+        "permanent F13 binding failed: {bound:?}"
+    );
     let binary = std::env::var_os("NEOMACS_GUI_TEST_BINARY")
         .map(PathBuf::from)
         .unwrap_or_else(|| root.join("target/release/neomacs"));
