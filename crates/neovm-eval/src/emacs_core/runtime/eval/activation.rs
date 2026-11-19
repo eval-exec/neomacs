@@ -27,6 +27,44 @@ impl ActivationCapability {
     }
 }
 
+/// Right to flip an owner's installed arm. Only this module can mint it.
+/// Startup or hosted admission will hold the one value. A builtin cannot.
+#[derive(Debug)]
+#[doc(hidden)]
+pub struct ActivationAuthority {
+    _confined: PhantomData<Rc<()>>,
+}
+
+static_assertions::assert_not_impl_any!(ActivationAuthority: Send, Sync, Clone, Copy);
+
+impl ActivationAuthority {
+    /// # Safety
+    /// The caller is this module and keeps the value off every builtin path.
+    /// Production has no caller until the runtime activation path is reviewed.
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "startup or hosted admission will mint this once; builtins cannot call it"
+        )
+    )]
+    unsafe fn mint() -> Self {
+        Self {
+            _confined: PhantomData,
+        }
+    }
+
+    fn accept(&self) {
+        let _ = self._confined;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn mint_for_test() -> Self {
+        // SAFETY: this function exists only in test builds.
+        unsafe { Self::mint() }
+    }
+}
+
 /// Local owned driver. Constructible only through [`SelectionActivation::activate_local`].
 #[derive(Debug)]
 #[doc(hidden)]
@@ -155,7 +193,8 @@ impl SelectionActivation {
     }
 
     #[doc(hidden)]
-    pub fn activate_local(&mut self) -> Result<(), ActivateError> {
+    pub fn activate_local(&mut self, authority: &ActivationAuthority) -> Result<(), ActivateError> {
+        authority.accept();
         if !matches!(self.arm, InstalledArm::Uninstalled) {
             return Err(ActivateError::AlreadyInstalled);
         }
@@ -164,7 +203,11 @@ impl SelectionActivation {
     }
 
     #[doc(hidden)]
-    pub fn activate_routed(&mut self) -> Result<(), ActivateError> {
+    pub fn activate_routed(
+        &mut self,
+        authority: &ActivationAuthority,
+    ) -> Result<(), ActivateError> {
+        authority.accept();
         if !matches!(self.arm, InstalledArm::Uninstalled) {
             return Err(ActivateError::AlreadyInstalled);
         }
@@ -233,6 +276,10 @@ impl SelectionActivation {
 mod tests {
     use super::*;
 
+    fn authority() -> ActivationAuthority {
+        ActivationAuthority::mint_for_test()
+    }
+
     #[test]
     fn dormant_arm_is_uninstalled() {
         let arm = SelectionActivation::dormant();
@@ -242,7 +289,7 @@ mod tests {
     #[test]
     fn local_activation_and_rollback_clear_the_arm() {
         let mut arm = SelectionActivation::dormant();
-        arm.activate_local().unwrap();
+        arm.activate_local(&authority()).unwrap();
         assert_eq!(arm.phase(), SelectionPhase::Local);
         arm.rollback_local().unwrap();
         assert_eq!(arm.phase(), SelectionPhase::Uninstalled);
@@ -251,24 +298,33 @@ mod tests {
     #[test]
     fn second_activation_is_refused_until_rollback() {
         let mut arm = SelectionActivation::dormant();
-        arm.activate_local().unwrap();
-        assert_eq!(arm.activate_routed(), Err(ActivateError::AlreadyInstalled));
-        assert_eq!(arm.activate_local(), Err(ActivateError::AlreadyInstalled));
+        arm.activate_local(&authority()).unwrap();
+        assert_eq!(
+            arm.activate_routed(&authority()),
+            Err(ActivateError::AlreadyInstalled)
+        );
+        assert_eq!(
+            arm.activate_local(&authority()),
+            Err(ActivateError::AlreadyInstalled)
+        );
         assert!(matches!(arm.join_routed(), Err(JoinError::NotRouted)));
         arm.rollback_local().unwrap();
-        arm.activate_routed().unwrap();
+        arm.activate_routed(&authority()).unwrap();
         assert_eq!(arm.phase(), SelectionPhase::Routed);
     }
 
     #[test]
     fn routed_rollback_consumes_the_joined_handle() {
         let mut arm = SelectionActivation::dormant();
-        arm.activate_routed().unwrap();
+        arm.activate_routed(&authority()).unwrap();
         assert_eq!(arm.rollback_local(), Err(RollbackError::NotLocal));
         assert_eq!(arm.phase(), SelectionPhase::Routed);
         let joined = arm.join_routed().unwrap();
         assert_eq!(arm.phase(), SelectionPhase::AwaitingRollback);
-        assert_eq!(arm.activate_local(), Err(ActivateError::AlreadyInstalled));
+        assert_eq!(
+            arm.activate_local(&authority()),
+            Err(ActivateError::AlreadyInstalled)
+        );
         assert!(matches!(arm.join_routed(), Err(JoinError::NotRouted)));
         arm.rollback_routed(joined).unwrap();
         assert_eq!(arm.phase(), SelectionPhase::Uninstalled);
@@ -279,8 +335,8 @@ mod tests {
     fn foreign_joined_handle_does_not_clear_another_owner() {
         let mut first = SelectionActivation::dormant();
         let mut second = SelectionActivation::dormant();
-        first.activate_routed().unwrap();
-        second.activate_routed().unwrap();
+        first.activate_routed(&authority()).unwrap();
+        second.activate_routed(&authority()).unwrap();
         let first_joined = first.join_routed().unwrap();
         let second_joined = second.join_routed().unwrap();
         let (error, returned) = first.rollback_routed(second_joined).unwrap_err();
@@ -295,9 +351,9 @@ mod tests {
     #[test]
     fn live_routed_worker_has_no_rollback_proof() {
         let mut arm = SelectionActivation::dormant();
-        arm.activate_routed().unwrap();
+        arm.activate_routed(&authority()).unwrap();
         let mut other = SelectionActivation::dormant();
-        other.activate_routed().unwrap();
+        other.activate_routed(&authority()).unwrap();
         let foreign = other.join_routed().unwrap();
         let (error, foreign) = arm.rollback_routed(foreign).unwrap_err();
         assert_eq!(error, RollbackError::NotAwaitingRollback);

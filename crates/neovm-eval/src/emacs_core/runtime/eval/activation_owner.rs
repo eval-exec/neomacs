@@ -1,13 +1,14 @@
 //! `&mut Context` transitions for the dormant selection arm.
 //!
 //! The arm lives on this owner's slab. A dormant slot is uninstalled and
-//! stays uninstalled until one of these methods runs. The clipboard stubs
-//! do not call them, and they do not read `NEOVM_THREADS`, the environment,
-//! or TLS.
+//! stays uninstalled until an [`ActivationAuthority`] holder runs activation.
+//! The clipboard stubs do not call these methods, and they do not read
+//! `NEOVM_THREADS`, the environment, or TLS.
 
 use super::Context;
 use super::activation::{
-    ActivateError, JoinError, JoinedDrainedWorker, RollbackError, SelectionPhase,
+    ActivateError, ActivationAuthority, JoinError, JoinedDrainedWorker, RollbackError,
+    SelectionPhase,
 };
 
 impl Context {
@@ -22,17 +23,23 @@ impl Context {
     }
 
     #[doc(hidden)]
-    pub fn activate_selection_local(&mut self) -> Result<(), ActivateError> {
+    pub fn activate_selection_local(
+        &mut self,
+        authority: &ActivationAuthority,
+    ) -> Result<(), ActivateError> {
         self.ensure_owner_slab()
             .selection_activation
-            .activate_local()
+            .activate_local(authority)
     }
 
     #[doc(hidden)]
-    pub fn activate_selection_routed(&mut self) -> Result<(), ActivateError> {
+    pub fn activate_selection_routed(
+        &mut self,
+        authority: &ActivationAuthority,
+    ) -> Result<(), ActivateError> {
         self.ensure_owner_slab()
             .selection_activation
-            .activate_routed()
+            .activate_routed(authority)
     }
 
     #[doc(hidden)]
@@ -65,8 +72,12 @@ impl Context {
 
 #[cfg(test)]
 mod tests {
-    use super::super::activation::SelectionPhase;
+    use super::super::activation::{ActivationAuthority, SelectionPhase};
     use super::Context;
+
+    fn authority() -> ActivationAuthority {
+        ActivationAuthority::mint_for_test()
+    }
 
     #[test]
     fn fresh_context_does_not_allocate_an_owner_slab() {
@@ -79,7 +90,7 @@ mod tests {
     #[test]
     fn local_activation_lives_on_the_owner_slab() {
         let mut ctx = Context::new(crate::test_utils::unit_runtime());
-        ctx.activate_selection_local().unwrap();
+        ctx.activate_selection_local(&authority()).unwrap();
         assert!(!ctx.owner.is_dormant());
         assert_eq!(ctx.selection_phase(), SelectionPhase::Local);
         ctx.rollback_selection_local().unwrap();
@@ -94,7 +105,7 @@ mod tests {
             ctx.join_selection_routed(),
             Err(super::super::activation::JoinError::NotRouted)
         ));
-        ctx.activate_selection_routed().unwrap();
+        ctx.activate_selection_routed(&authority()).unwrap();
         assert_eq!(ctx.selection_phase(), SelectionPhase::Routed);
         let joined = ctx.join_selection_routed().unwrap();
         assert_eq!(ctx.selection_phase(), SelectionPhase::AwaitingRollback);

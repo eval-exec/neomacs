@@ -1,0 +1,15 @@
+error[E0061]: this method takes 1 argument but 0 arguments were supplied
+ --> tests/host_effect_ui/activate_without_authority.rs:6:24
+  |
+6 |     let _flipped = arm.activate_local();
+  |                        ^^^^^^^^^^^^^^-- argument #1 of type `&ActivationAuthority` is missing
+  |
+note: method defined here
+ --> tests/host_effect_ui/support/../../../../neovm-eval/src/emacs_core/runtime/eval/activation.rs
+  |
+  |     pub fn activate_local(&mut self, authority: &ActivationAuthority) -> Result<(), ActivateError> {
+  |            ^^^^^^^^^^^^^^            -------------------------------
+help: provide the argument
+  |
+6 |     let _flipped = arm.activate_local(/* &ActivationAuthority */);
+  |                                       ++++++++++++++++++++++++++
