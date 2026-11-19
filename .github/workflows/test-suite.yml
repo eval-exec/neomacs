@@ -1512,3 +1512,83 @@ jobs:
           install-nextest: true
       - name: Run one loom model at bound 3
         run: bash scripts/ci/run-loom-models.sh --crate "${{ matrix.crate }}"
+
+  # A red packaged runtime skips every job that needs it, and those jobs
+  # never appear on the run page. This job always runs and names the gated
+  # suites that did not run. It fails on push, pull request, and job=all
+  # when one of them was skipped or cancelled. A single-job
+  # workflow_dispatch is the exception: those suites are not selected.
+  # The weekly schedule excludes these suites with its own if, so a skip
+  # there is not a dependency failure.
+  suite-skip-summary:
+    name: gated suite skip summary
+    if: always()
+    needs:
+      - neovm-core-tests
+      - neovm-oracle-tests
+      - neomacs-tui-tests
+      - neomacs-melpa-tests
+      - neomacs-display-tests
+      - neomacs-prefix-face-tui-parity
+      - neomacs-gui-tests
+      - doom-install-compatibility
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Fail when a gated suite did not run
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_JOB: ${{ github.event.inputs.job }}
+          R_CORE: ${{ needs.neovm-core-tests.result }}
+          R_ORACLE: ${{ needs.neovm-oracle-tests.result }}
+          R_TUI: ${{ needs.neomacs-tui-tests.result }}
+          R_MELPA: ${{ needs.neomacs-melpa-tests.result }}
+          R_DISPLAY: ${{ needs.neomacs-display-tests.result }}
+          R_PREFIX: ${{ needs.neomacs-prefix-face-tui-parity.result }}
+          R_GUI: ${{ needs.neomacs-gui-tests.result }}
+          R_DOOM: ${{ needs.doom-install-compatibility.result }}
+        run: |
+          set -euo pipefail
+          single_dispatch=0
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$DISPATCH_JOB" != "all" ]; then
+            single_dispatch=1
+          fi
+          expected=yes
+          if [ "$single_dispatch" -eq 1 ] || [ "$EVENT_NAME" = "schedule" ]; then
+            expected=no
+          fi
+          missing=0
+          if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+            {
+              echo "## Gated suite results"
+              echo
+              echo "| suite | result | expected |"
+              echo "| --- | --- | --- |"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          set -- \
+            "neovm-core-tests ${R_CORE}" \
+            "neovm-oracle-tests ${R_ORACLE}" \
+            "neomacs-tui-tests ${R_TUI}" \
+            "neomacs-melpa-tests ${R_MELPA}" \
+            "neomacs-display-tests ${R_DISPLAY}" \
+            "neomacs-prefix-face-tui-parity ${R_PREFIX}" \
+            "neomacs-gui-tests ${R_GUI}" \
+            "doom-install-compatibility ${R_DOOM}"
+          for entry in "$@"; do
+            name="${entry%% *}"
+            result="${entry#* }"
+            echo "suite ${name}: result=${result} expected=${expected}"
+            if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+              echo "| ${name} | ${result} | ${expected} |" >> "$GITHUB_STEP_SUMMARY"
+            fi
+            if [ "$expected" = "yes" ] && { [ "$result" = "skipped" ] || [ "$result" = "cancelled" ]; }; then
+              echo "DID NOT RUN: ${name}"
+              missing=1
+            fi
+          done
+          if [ "$missing" -eq 1 ]; then
+            echo "gated suites did not run because a dependency failed"
+            exit 1
+          fi
+          echo "every expected gated suite ran"
