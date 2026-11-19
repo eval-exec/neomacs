@@ -1305,7 +1305,10 @@ jobs:
   # nix-wpe-webkit cache supplies WebKit WPE 2.52.x) and drives both tests
   # with NEOMACS_GUI_TEST_WEBVIEW=1, including the deterministic magenta WPE
   # pixel proof. Verified locally against a webview fresh-build: both pass
-  # in ~4.05 s each (2026-11-18, WPE WebKit 2.52.3).
+  # in ~4.05 s each (2026-11-18, WPE WebKit 2.52.3). The same WPE shell runs
+  # `cargo nextest run -p neomacs-webview --features webview --lib`: the
+  # Linux create/load/destroy regression is compiled only with that feature,
+  # and the test sets G_DEBUG=fatal-criticals itself.
   neomacs-xwidget-webview-gui:
     name: xwidget webview page composition (linux x86_64, X11)
     if: ${{ github.event_name != 'schedule' && (github.event_name != 'workflow_dispatch' || github.event.inputs.job == 'all' || github.event.inputs.job == 'neomacs-xwidget-webview-gui') }}
@@ -1352,6 +1355,13 @@ jobs:
             cargo nextest run -p neomacs-gui-tests \
               -E 'test(~oversized_xwidget_) or test(~static_xwidget_)' \
               --no-fail-fast
+          "
+      - name: Run neomacs-webview lib tests with the webview feature
+        run: |
+          nix develop --accept-flake-config --command bash -c "
+            set -euo pipefail
+            cd \"${GITHUB_WORKSPACE:-$PWD}\"
+            cargo nextest run -p neomacs-webview --features webview --lib
           "
 
       # Failure-only. A green run keeps no screenshots. The directory holds
