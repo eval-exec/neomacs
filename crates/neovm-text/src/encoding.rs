@@ -4384,7 +4384,7 @@ fn encode_via_iso2022(
 ) -> Vec<u8> {
     use crate::emacs_core::charset::{
         charset_encode_char, charset_encode_char_physical, charset_iso2022_designation,
-        charset_iso2022_designation_physical,
+        charset_iso2022_designation_physical, iso2022_encode_candidates_among,
     };
     use crate::emacs_core::coding::IsoFlag;
     let seven = spec.flags.contains(IsoFlag::SevenBits);
@@ -4397,8 +4397,15 @@ fn encode_via_iso2022(
     // FULL_SUPPORT coding systems store `:charset-list` as the symbol
     // `iso-2022`; substitute the full ISO-2022 charset candidate set.
     let full_support = charset_list.len() == 1 && resolve_sym(charset_list[0]) == "iso-2022";
+    // A define-time snapshot keeps the members that were safe then. A cleared
+    // final drops out of the encode set and stays decodable. No snapshot
+    // (preloaded 7bit, a hand-built spec) still walks the live candidate set.
     let candidates: Vec<SymId> = if full_support {
-        crate::emacs_core::charset::iso2022_full_charset_candidates()
+        if let Some(safe) = &spec.safe_charsets {
+            iso2022_encode_candidates_among(safe)
+        } else {
+            crate::emacs_core::charset::iso2022_full_charset_candidates()
+        }
     } else {
         charset_list.to_vec()
     };
@@ -4580,11 +4587,17 @@ fn decode_via_iso2022(
     // charset's width: `ESC ( Z` can name `latin-iso8859-1`, and `iso-2022-jp`
     // still rejects it because that charset is not in the list.
     fn iso2022_charset_is_safe(cs: SymId, spec: &Iso2022Spec, charset_list: &[SymId]) -> bool {
-        // GNU `setup_iso_safe_charsets` keys the safe set by the charset id
-        // captured when the coding system was defined (`coding.c:11048-11057`,
-        // `2852-2914`). Full support is membership of `Viso_2022_charset_list`,
-        // which a later redefinition does not revoke. The current ISO final
-        // is not that membership.
+        // GNU writes a safe byte for every listed id at define time
+        // (`coding.c:11064-11068`) and `setup_iso_safe_charsets` returns
+        // immediately when that string already exists (`coding.c:2876-2877`).
+        // The reg-usage filter does not run. A missing snapshot is the live
+        // membership path used by hand-built specs and preloaded 7bit.
+        if let Some(safe) = &spec.safe_charsets {
+            return safe.contains(&cs);
+        }
+        // Full support is membership of `Viso_2022_charset_list`, which a
+        // later redefinition does not revoke. The current ISO final is not
+        // that membership.
         let full = charset_list.len() == 1 && resolve_sym(charset_list[0]) == "iso-2022";
         if full {
             if !charset_iso2022_member(cs) {
@@ -4624,6 +4637,26 @@ fn decode_via_iso2022(
     // escape, so a short read leaves the escape unconsumed and a finished
     // string emits those bytes. The shift is not a flag that outlives the
     // character.
+    // A finished graphic or single-shift unit with no mapping emits every
+    // consumed byte and leaves G0 alone (`coding.c:3916-3926`). `invalid_code`
+    // is the other path: one byte, then ASCII in G0.
+    fn iso2022_replay_consumed(unit: &UnitReader<'_>, sink: &mut DecodeSink) {
+        for &byte in &unit.bytes[unit.start..unit.pos] {
+            if byte < 0x80 {
+                sink.push(u32::from(byte), None);
+            } else {
+                sink.push_raw(byte);
+            }
+        }
+    }
+    // coding.c:3721-3725. Level 4 is not represented. Without it, an 8-bit
+    // coding system accepts only a GR lead; a 7-bit system also accepts GL.
+    fn iso2022_shift_lead_ok(lead: u8, seven: bool) -> bool {
+        if lead < 0x20 || (lead >= 0x80 && lead < 0xA0) {
+            return false;
+        }
+        seven || lead >= 0x80
+    }
     fn iso2022_shift_charset(
         unit: &mut UnitReader<'_>,
         sink: &mut DecodeSink,
@@ -4631,6 +4664,7 @@ fn decode_via_iso2022(
         ascii: SymId,
         reg: usize,
         enabled: bool,
+        seven: bool,
     ) -> Result<(), NoMoreSource> {
         let Some(cs) = state.designation[reg] else {
             return iso2022_reject(unit, sink, state, ascii);
@@ -4653,6 +4687,9 @@ fn decode_via_iso2022(
             3
         };
         let c1 = unit.byte()?;
+        if !iso2022_shift_lead_ok(c1, seven) {
+            return iso2022_reject(unit, sink, state, ascii);
+        }
         let code = if positions == 1 {
             i64::from(c1 & 0x7F)
         } else {
@@ -4679,7 +4716,8 @@ fn decode_via_iso2022(
             sink.push(ch as u32, Some(cs));
             return Ok(());
         }
-        iso2022_reject(unit, sink, state, ascii)
+        iso2022_replay_consumed(unit, sink);
+        Ok(())
     }
     // GNU coding.c:3898-3910. A continuation below 0x20, in 0x80..0xA0, or on
     // the other high-bit plane is `invalid_code`, which replays the first
@@ -4736,7 +4774,15 @@ fn decode_via_iso2022(
             match e {
                 0x4E | 0x4F => {
                     let reg = if e == 0x4E { 2 } else { 3 };
-                    return iso2022_shift_charset(unit, sink, state, ascii, reg, single_shift);
+                    return iso2022_shift_charset(
+                        unit,
+                        sink,
+                        state,
+                        ascii,
+                        reg,
+                        single_shift,
+                        seven,
+                    );
                 }
                 0x6E => {
                     state.gl = 2;
@@ -4830,10 +4876,10 @@ fn decode_via_iso2022(
             return Ok(());
         }
         if !seven && b == 0x8E {
-            return iso2022_shift_charset(unit, sink, state, ascii, 2, single_shift);
+            return iso2022_shift_charset(unit, sink, state, ascii, 2, single_shift, seven);
         }
         if !seven && b == 0x8F {
-            return iso2022_shift_charset(unit, sink, state, ascii, 3, single_shift);
+            return iso2022_shift_charset(unit, sink, state, ascii, 3, single_shift, seven);
         }
         if b < 0x20 || b == 0x7F {
             sink.push(u32::from(b), None);
@@ -4907,7 +4953,10 @@ fn decode_via_iso2022(
                     sink.push(ch as u32, Some(cs));
                     return Ok(());
                 }
-                return iso2022_reject(unit, sink, state, ascii);
+                // coding.c:3916-3926. The bytes of a complete unmapped unit
+                // are emitted and G0 stays on this charset.
+                iso2022_replay_consumed(unit, sink);
+                return Ok(());
             }
         }
         if b < 0x80 {

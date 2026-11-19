@@ -506,3 +506,190 @@ fn oracle_prop_iso_2022_single_shift_is_one_character() {
     let expect = expect_test::expect![[r#""OK ((3145728) (27 78 33 33))""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
+
+#[test]
+fn oracle_prop_iso_2022_full_support_freezes_at_define_time() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // coding.c:11020-11068 copies Viso_2022_charset_list when the system is
+    // defined. A later final is not safe. A member captured then stays
+    // decodable after its final is cleared (charset.c:1163-1168).
+    let form = r#"(progn
+        (define-charset 'cr-early "early"
+          :dimension 1 :code-space [33 126] :iso-final-char ?Z :code-offset 200)
+        (define-coding-system 'cr-iso-early "early"
+          :coding-type 'iso-2022 :mnemonic ?Q :charset-list 'iso-2022
+          :designation [(ascii t) nil nil nil]
+          :flags '(7-bit designation))
+        (define-charset 'cr-early "early2"
+          :dimension 1 :code-space [33 126] :code-offset 500)
+        (define-charset 'cr-after "after"
+          :dimension 1 :code-space [33 126] :iso-final-char ?Q :code-offset 900)
+        (list
+          (string-to-list (decode-coding-string "\e(ZA" 'cr-iso-early))
+          (string-to-list (decode-coding-string "\e(QA" 'cr-iso-early))
+          (decode-char 'cr-after 65)
+          (decode-char 'cr-early 65)))"#;
+    let expect = expect_test::expect![[r#""OK ((532) (27 40 81 65) 932 532)""#]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+#[test]
+fn oracle_prop_iso_2022_restricted_list_keeps_define_time_width() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // coding.c:11064-11068 marks every listed id safe. Redefining the charset
+    // as a 96-set with no final does not revoke that, and decode uses the
+    // new mapping.
+    let form = r#"(progn
+        (define-charset 'cr-94 "n"
+          :dimension 1 :code-space [33 126] :iso-final-char ?Z :code-offset 200)
+        (define-coding-system 'cr-iso-r "r"
+          :coding-type 'iso-2022 :mnemonic ?R :charset-list '(ascii cr-94)
+          :designation [(ascii 94) nil nil nil]
+          :flags '(7-bit designation))
+        (define-charset 'cr-94 "n2"
+          :dimension 1 :code-space [32 127] :code-offset 500)
+        (list
+          (charset-iso-final-char 'cr-94)
+          (iso-charset 1 94 ?Z)
+          (string-to-list (decode-coding-string "\e(ZA" 'cr-iso-r))
+          (decode-char 'cr-94 65)))"#;
+    let expect = expect_test::expect![[r#""OK (-1 cr-94 (533) 533)""#]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+#[test]
+fn oracle_prop_iso_2022_listed_96_set_is_safe() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // The reg-usage filter in setup_iso_safe_charsets does not run when the
+    // safe string was filled at define time (coding.c:2876-2877). Encode of
+    // the 96-set still uses the 96-form on G0.
+    let form = r#"(progn
+        (define-charset 'cr-96 "n"
+          :dimension 1 :code-space [32 127] :iso-final-char ?Q :code-offset 900)
+        (define-coding-system 'cr-iso-96 "r"
+          :coding-type 'iso-2022 :mnemonic ?R :charset-list '(ascii cr-96)
+          :designation [(ascii 94) nil nil nil]
+          :flags '(7-bit designation))
+        (list
+          (string-to-list (decode-coding-string "\e,QA" 'cr-iso-96))
+          (string-to-list
+            (encode-coding-string (string (decode-char 'cr-96 65)) 'cr-iso-96))))"#;
+    let expect = expect_test::expect![[r#""OK ((933) (27 44 81 65))""#]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+#[test]
+fn oracle_prop_iso_2022_marker_ignores_a_charset_alias() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // coding.c:11020 checks EQ against the symbol `iso-2022` before charset
+    // lookup, so an alias of that name does not replace the marker.
+    let form = r#"(progn
+        (define-charset-alias 'iso-2022 'ascii)
+        (define-coding-system 'cr-iso-mark "m"
+          :coding-type 'iso-2022 :mnemonic ?M :charset-list 'iso-2022
+          :designation [(ascii t) nil nil nil]
+          :flags '(7-bit designation))
+        (list
+          (eq (plist-get (coding-system-plist 'cr-iso-mark) :charset-list) 'iso-2022)
+          (plist-get (coding-system-plist 'cr-iso-mark) :category)
+          (string-to-list (decode-coding-string "\e,AA" 'cr-iso-mark))))"#;
+    let expect = expect_test::expect![[r#""OK (t coding-category-iso-7 (193))""#]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+#[test]
+fn oracle_prop_iso_2022_shared_mule_id_keeps_each_name() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // CHECK_CHARSET_GET_CHARSET (coding.c:11048) reads the name's own
+    // attribute vector. A shared :emacs-mule-id does not merge the two.
+    let form = r#"(progn
+        (define-charset 'cr-a "a"
+          :dimension 1 :code-space [33 126] :iso-final-char ?Z
+          :emacs-mule-id 200 :code-offset 200)
+        (define-charset 'cr-b "b"
+          :dimension 1 :code-space [33 126] :iso-final-char ?Y
+          :emacs-mule-id 200 :code-offset 400)
+        (define-coding-system 'cr-iso-a "a"
+          :coding-type 'iso-2022 :mnemonic ?A :charset-list '(ascii cr-a)
+          :designation [(ascii t) nil nil nil]
+          :flags '(7-bit designation))
+        (define-coding-system 'cr-iso-b "b"
+          :coding-type 'iso-2022 :mnemonic ?B :charset-list '(ascii cr-b)
+          :designation [(ascii t) nil nil nil]
+          :flags '(7-bit designation))
+        (list
+          (string-to-list (decode-coding-string "\e(ZA" 'cr-iso-a))
+          (string-to-list (decode-coding-string "\e(YA" 'cr-iso-b))
+          (string-to-list (decode-coding-string "\e(ZA" 'cr-iso-b))
+          (string-to-list (decode-coding-string "\e(YA" 'cr-iso-a))))"#;
+    let expect = expect_test::expect![[r#""OK ((232) (432) (27 40 90 65) (27 40 89 65))""#]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+#[test]
+fn oracle_prop_iso_2022_single_shift_rejects_a_control_lead() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // coding.c:3721-3725 rejects a C0 lead before the rest of the character
+    // is read. The escape is emitted and G0 returns to ASCII.
+    let form = r#"(progn
+        (define-charset 'cr-ss "ss"
+          :dimension 2 :code-space [0 255 0 255] :iso-final-char ?Y :code-offset 0)
+        (define-coding-system 'cr-iso-ss2 "ss"
+          :coding-type 'iso-2022 :mnemonic ?S :charset-list '(ascii cr-ss)
+          :designation [(ascii t) nil cr-ss nil]
+          :flags '(7-bit designation single-shift))
+        (list
+          (string-to-list (decode-coding-string "\eN!!" 'cr-iso-ss2))
+          (string-to-list (decode-coding-string "\eN\n!" 'cr-iso-ss2))))"#;
+    let expect = expect_test::expect![[r#""OK ((8481) (27 78 10 33))""#]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+#[test]
+fn oracle_prop_iso_2022_unmapped_graphic_keeps_g0() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // coding.c:3916-3926 emits every byte of an unmapped unit and does not
+    // reset G0, so the next byte stays on the same charset.
+    let form = r#"(progn
+        (define-charset 'cr-map "m"
+          :dimension 1 :code-space [33 126] :max-code 65
+          :iso-final-char ?Z :code-offset 200)
+        (define-coding-system 'cr-iso-map "m"
+          :coding-type 'iso-2022 :mnemonic ?M :charset-list '(ascii cr-map)
+          :designation [cr-map nil nil nil]
+          :flags '(7-bit designation))
+        (string-to-list (decode-coding-string "~A" 'cr-iso-map)))"#;
+    let expect = expect_test::expect![[r#""OK (126 232)""#]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+#[test]
+fn oracle_prop_iso_final_char_range() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // charset.c:967-975. nil is stored as "no final". A fixnum must be in
+    // '0'..127. Anything else is signalled before the charset is created.
+    let form = r#"(mapcar
+        (lambda (final)
+          (let ((name (intern (format "cr-fin-%S" final))))
+            (condition-case err
+                (progn
+                  (define-charset name "f"
+                    :dimension 1 :code-space [33 126]
+                    :iso-final-char final :code-offset 10)
+                  (list 'ok (charset-iso-final-char name)))
+              (wrong-type-argument (cons 'wrong-type-argument (cdr err)))
+              (error (list 'error (error-message-string err))))))
+        '(-1 nil 47 48 127 128 1.0))"#;
+    let expect = expect_test::expect![[
+        r#""OK ((error \"Invalid iso-final-char: -1\") (ok -1) (error \"Invalid iso-final-char: 47\") (ok 48) (ok 127) (error \"Invalid iso-final-char: 128\") (wrong-type-argument fixnump 1.0))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
