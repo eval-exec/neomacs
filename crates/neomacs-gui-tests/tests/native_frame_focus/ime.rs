@@ -3,6 +3,16 @@ use super::*;
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Stdio};
 
+fn keycode_191_is_f13(pke: &str) -> bool {
+    pke.lines().any(|line| {
+        let mut parts = line.split_whitespace();
+        parts.next() == Some("keycode")
+            && parts.next() == Some("191")
+            && parts.next() == Some("=")
+            && parts.next() == Some("F13")
+    })
+}
+
 struct ChildGuard(Child);
 impl Drop for ChildGuard {
     fn drop(&mut self) {
@@ -259,6 +269,29 @@ fn fcitx5_fullwidth_punctuation_is_text_and_f13_stays_a_key() {
                 thread::sleep(Duration::from_millis(20));
             }
             focus_window(&env, &window)?;
+            // fcitx5 can restore the evdev map again when an input context is
+            // activated or closed. Read the map here, immediately before the
+            // injection, so a missing binding is a harness error and cannot
+            // be reported as an f13 product miss.
+            let keymap = Command::new("xmodmap")
+                .args(["-pke"])
+                .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+                .output()
+                .map_err(|error| format!("xmodmap -pke: {error}"))?;
+            if !keymap.status.success() {
+                return Err(format!(
+                    "xmodmap -pke: {}",
+                    String::from_utf8_lossy(&keymap.stderr)
+                ));
+            }
+            let pke = String::from_utf8_lossy(&keymap.stdout);
+            if !keycode_191_is_f13(&pke) {
+                let line = pke
+                    .lines()
+                    .find(|line| line.split_whitespace().nth(1) == Some("191"))
+                    .unwrap_or("(keycode 191 absent)");
+                return Err(format!("F13 binding lost before injection: {line}"));
+            }
             xdotool(&env, &["key", "F13"])?;
             expect_buffers(
                 &artifacts,
@@ -294,4 +327,16 @@ fn fcitx5_fullwidth_punctuation_is_text_and_f13_stays_a_key() {
             "committed text must reach redisplay"
         );
     }
+}
+
+#[test]
+fn keycode_191_line_is_f13_only_when_the_first_keysym_is_f13() {
+    assert!(keycode_191_is_f13(
+        "keycode   8 =\nkeycode 191 = F13 NoSymbol F13\n"
+    ));
+    assert!(!keycode_191_is_f13(
+        "keycode 191 = XF86Tools NoSymbol XF86Tools\n"
+    ));
+    assert!(!keycode_191_is_f13("keycode 19 = F13\n"));
+    assert!(!keycode_191_is_f13("(keycode 191 absent)\n"));
 }
