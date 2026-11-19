@@ -292,21 +292,18 @@ pub unsafe fn with_stopped_tables_for_test<'a, 'era, R, K: crate::tagged::gc::Er
     result
 }
 
-/// FENCE (peer-signed A composite; peer #1482 condition 3 audit): wait on
-/// the registry's resume-debt event, then hand the body a run admitted under
-/// the same predicate gate. The Mutator's registry field, the park ticket,
-/// the registry guard, the live phase word and the resume wait never cross;
-/// the caller sees only `RunAccess`. This is a verbatim move of the fixture's
-/// historical `with_run`; every error string and the close/panic ordering are
-/// preserved.
+/// FENCE (peer-signed A composite; peer #1482 condition 3 audit): hand the
+/// body a run admitted by `Mutator::run_access_after_resume_drain`. The
+/// registry field, park ticket, predicate gate and resume wait stay inside
+/// that cold API. The caller sees only `RunAccess`. Body, panic and
+/// cons-region close ordering stay here; a close error is never a reason to
+/// repeat the body.
 pub fn with_registry_admission_gate_for_test<'era, R>(
     owner: &mut super::Mutator<'era>,
     mut body: impl FnMut(
         &mut crate::tagged::gc::mutator_registration::RunAccess<'_, 'era>,
     ) -> Result<R, String>,
 ) -> Result<R, String> {
-    use super::rendezvous::Phase;
-
     fn failure(payload: Box<dyn std::any::Any + Send>) -> String {
         payload
             .downcast_ref::<String>()
@@ -315,47 +312,9 @@ pub fn with_registry_admission_gate_for_test<'era, R>(
             .unwrap_or_else(|| "non-string cohort assertion".into())
     }
 
-    let registry = owner.registry;
-    let _park = registry.park_ticket();
-    let mut gate = registry
-        .lock_blocking()
-        .map_err(|error| format!("cohort admission gate: {error:?}"))?;
-    loop {
-        match gate.rendezvous.phase {
-            Phase::Idle => break,
-            Phase::DrainingResumes => {
-                // Check the specified non-blocking refusal while its actual
-                // predicate is locked. Busy in any other phase is not retried.
-                match owner.run_access() {
-                    Err(crate::tagged::gc::mutator_registration::RegistrationError::Busy) => {}
-                    Err(error) => return Err(format!("cohort drain refusal: {error:?}")),
-                    Ok(run) => {
-                        drop(gate);
-                        drop(run);
-                        return Err("cohort admitted during DrainingResumes".into());
-                    }
-                }
-                // The final ResumeGcImage::try_apply -> finish_debt opens Idle
-                // and notifies this same condvar. wait atomically releases the
-                // predicate mutex, including the product's poison wake path.
-                gate = registry
-                    .wait(gate)
-                    .map_err(|error| format!("cohort resume-debt wait: {error:?}"))?;
-            }
-            Phase::Stopping(_) | Phase::Tracing(_) | Phase::Poisoned => {
-                return Err(format!(
-                    "cohort unexpected admission phase: {:?}",
-                    gate.rendezvous.phase
-                ));
-            }
-        }
-    }
-    // Admit under the predicate gate so another owner cannot start restoring
-    // between the Idle observation and run_access. The body takes no gate.
-    let admitted = owner.run_access();
-    drop(gate);
-    drop(_park);
-    let mut run = admitted.map_err(|error| format!("cohort run admission: {error:?}"))?;
+    let mut run = owner
+        .run_access_after_resume_drain()
+        .map_err(|error| format!("cohort run admission: {error:?}"))?;
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body(&mut run)));
     // A close error is terminal evidence, never a reason to repeat the body or
     // the close. Normal local-region closure requires no registry mutex.

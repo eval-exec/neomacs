@@ -82,7 +82,7 @@ fn receive<T>(receiver: &Receiver<T>) -> Result<T, String> {
             .map_err(|error| format!("cohort wait: {error:?}"))
     }
 }
-/// Wait on the product's resume-debt event, never on the body's outcome.
+/// Admit through `run_access_after_resume_drain`, never by polling the body.
 /// The predicate gate covers admission only and is released before the body;
 /// concurrent native code, publication, and symbol writers remain concurrent.
 fn with_run<'era, R>(

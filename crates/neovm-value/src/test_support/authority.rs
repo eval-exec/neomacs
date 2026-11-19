@@ -430,10 +430,10 @@ pub fn registry_first_chunk_word_for_test<'heap, K: crate::tagged::gc::EraKeeper
     crate::tagged::gc::mutator_registration::test_fences::registry_first_chunk_word_for_test(era)
 }
 
-/// FENCE (peer-signed A composite; peer #1482 condition 3 audit): wait on
-/// the registry's resume-debt event, then run `body` with a run admitted
-/// under the predicate gate. The Mutator registry field, park ticket,
-/// registry guard, live phase word and resume wait never cross.
+/// FENCE (peer-signed A composite; peer #1482 condition 3 audit): run `body`
+/// on a slice admitted by `Mutator::run_access_after_resume_drain`. The
+/// Mutator registry field, park ticket, registry guard, live phase word and
+/// resume wait stay inside that cold API.
 pub fn with_registry_admission_gate_for_test<'era, R>(
     owner: &mut crate::tagged::gc::mutator_registration::Mutator<'era>,
     body: impl FnMut(
