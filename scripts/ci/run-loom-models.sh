@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 # Discover every standalone Loom crate and run it at one preemption bound.
 #
-#   BOUND=2 bash scripts/ci/run-loom-models.sh   # default; push CI
-#   BOUND=3 bash scripts/ci/run-loom-models.sh   # Sunday schedule of test-suite.yml
+#   BOUND=2 bash scripts/ci/run-loom-models.sh          # push / PR / dispatch
+#   bash scripts/ci/run-loom-models.sh --list           # JSON array of crate paths
+#   BOUND=3 bash scripts/ci/run-loom-models.sh --crate tests/p74-cell-loom
+#
+# The Sunday workflow runs --list, then one job per crate with --crate.
+# Push, pull_request, and workflow_dispatch run every crate in one job.
 #
 # Discovery globs (peer #7096), relative to the repo root:
 #   crates/*/tests/*loom*/Cargo.toml
@@ -32,20 +36,32 @@ set -euo pipefail
 readonly FLOOR=10
 
 usage() {
-    echo "usage: BOUND=<n> $0" >&2
+    echo "usage: BOUND=<n> $0 [--crate REL]" >&2
+    echo "       $0 --list" >&2
     echo "BOUND defaults to 2 and must be a positive integer." >&2
+    echo "--crate runs one discovered crate. --list prints a JSON array." >&2
 }
 
-if [[ $# -ne 0 ]]; then
+CRATE_ONLY=
+LIST_ONLY=0
+if [[ $# -eq 0 ]]; then
+    :
+elif [[ $# -eq 1 && $1 == --list ]]; then
+    LIST_ONLY=1
+elif [[ $# -eq 2 && $1 == --crate && -n $2 && $2 != -* ]]; then
+    CRATE_ONLY=$2
+else
     usage
     exit 2
 fi
 
-if [[ ! ${BOUND:-2} =~ ^[1-9][0-9]*$ ]]; then
-    usage
-    exit 2
+if [[ $LIST_ONLY -eq 0 ]]; then
+    if [[ ! ${BOUND:-2} =~ ^[1-9][0-9]*$ ]]; then
+        usage
+        exit 2
+    fi
+    readonly BOUND=${BOUND:-2}
 fi
-readonly BOUND=${BOUND:-2}
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 cd "$root"
@@ -295,13 +311,48 @@ main() {
     local rel pass
 
     mapfile -t crates < <(discover_crates)
-    echo "loom-discover count=${#crates[@]} floor=$FLOOR"
-    for rel in "${crates[@]+"${crates[@]}"}"; do
-        echo "loom-crate $rel"
-    done
+    if [[ $LIST_ONLY -eq 1 ]]; then
+        echo "loom-discover count=${#crates[@]} floor=$FLOOR" >&2
+        for rel in "${crates[@]+"${crates[@]}"}"; do
+            echo "loom-crate $rel" >&2
+        done
+    else
+        echo "loom-discover count=${#crates[@]} floor=$FLOOR"
+        for rel in "${crates[@]+"${crates[@]}"}"; do
+            echo "loom-crate $rel"
+        done
+    fi
     if ((${#crates[@]} < FLOOR)); then
         echo "loom-discover FAIL count ${#crates[@]} < floor $FLOOR" >&2
         exit 1
+    fi
+    if [[ $LIST_ONLY -eq 1 ]]; then
+        local json="[" sep=""
+        for rel in "${crates[@]}"; do
+            json+="$sep\"$rel\""
+            sep=,
+        done
+        json+="]"
+        echo "$json"
+        exit 0
+    fi
+
+    local -a selected=()
+    if [[ -n $CRATE_ONLY ]]; then
+        local found=0
+        for rel in "${crates[@]}"; do
+            if [[ $rel == "$CRATE_ONLY" ]]; then
+                found=1
+                break
+            fi
+        done
+        if ((found == 0)); then
+            echo "loom-crate FAIL not discovered: $CRATE_ONLY" >&2
+            exit 1
+        fi
+        selected=("$CRATE_ONLY")
+    else
+        selected=("${crates[@]}")
     fi
 
     PASS_BOUNDED=0
@@ -309,7 +360,7 @@ main() {
     PASS_NATIVE=0
     FAIL_N=0
     WARN_N=0
-    for rel in "${crates[@]}"; do
+    for rel in "${selected[@]}"; do
         run_one "$rel" || true
     done
     pass=$((PASS_BOUNDED + PASS_EXHAUSTIVE + PASS_NATIVE))

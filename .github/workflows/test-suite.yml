@@ -1395,16 +1395,19 @@ jobs:
   # p74-cell-loom, pentry-keeper-loom); the rest live under crates/.
   # scripts/ci/run-loom-models.sh globs both homes, prints the list, and fails
   # closed if fewer than its floor are found. Push, pull_request and
-  # workflow_dispatch use preemption bound 2. This workflow's Sunday 05:17 UTC
-  # schedule is the bound-3 run. The script fetches --locked inside each crate.
+  # workflow_dispatch run every crate once, at preemption bound 2, in one job.
+  # The Sunday 05:17 UTC schedule is bound 3, one job per discovered crate:
+  # one p1rv test took 2788s, so a shared 180-minute job cannot cover a
+  # second crate of that size. Each Sunday job has a 360-minute timeout.
   loom-models:
-    name: standalone loom models (linux x86_64)
+    name: standalone loom models bound 2 (linux x86_64)
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     env:
       CARGO_TERM_COLOR: always
       RUST_BACKTRACE: 1
-      BOUND: ${{ github.event_name == 'schedule' && '3' || '2' }}
+      BOUND: "2"
     steps:
       - *checkout
       - name: Set up Rust tooling
@@ -1415,3 +1418,47 @@ jobs:
           install-nextest: true
       - name: Run standalone loom models
         run: bash scripts/ci/run-loom-models.sh
+
+  loom-models-discover:
+    name: list standalone loom models
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      crates: ${{ steps.list.outputs.crates }}
+    steps:
+      - *checkout
+      - id: list
+        name: Discover loom crates
+        run: |
+          crates=$(bash scripts/ci/run-loom-models.sh --list)
+          {
+            echo "crates<<EOF"
+            echo "$crates"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+  loom-models-bound3:
+    name: loom bound 3 ${{ matrix.crate }}
+    needs: loom-models-discover
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        crate: ${{ fromJSON(needs.loom-models-discover.outputs.crates) }}
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: 1
+      BOUND: "3"
+    steps:
+      - *checkout
+      - name: Set up Rust tooling
+        uses: ./.github/actions/setup-rust
+        with:
+          cache-key: ci-loom-models-b3-${{ strategy.job-index }}
+          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
+          install-nextest: true
+      - name: Run one loom model at bound 3
+        run: bash scripts/ci/run-loom-models.sh --crate "${{ matrix.crate }}"
