@@ -57,6 +57,9 @@ pub enum RootedRendezvousCase {
     KeeperStartingOwnerWaitsRefuseUntilBootstrapOpens,
     AlreadyPublishedOwnerWaitRequestRefuses,
     KeeperResumeDebtRefusesNextStopUntilOwnerApplies,
+    FirstRestoredOwnerWaitsForTheFinalPeerDebt,
+    PoisonWakesARestoredOwnerWaitingForPeerDebt,
+    StopAndUnrestoredOwnerRefuseInsteadOfWaitingForThemselves,
 }
 
 impl RootedRendezvousCase {
@@ -93,6 +96,9 @@ impl RootedRendezvousCase {
         Self::KeeperStartingOwnerWaitsRefuseUntilBootstrapOpens,
         Self::AlreadyPublishedOwnerWaitRequestRefuses,
         Self::KeeperResumeDebtRefusesNextStopUntilOwnerApplies,
+        Self::FirstRestoredOwnerWaitsForTheFinalPeerDebt,
+        Self::PoisonWakesARestoredOwnerWaitingForPeerDebt,
+        Self::StopAndUnrestoredOwnerRefuseInsteadOfWaitingForThemselves,
     ];
 }
 

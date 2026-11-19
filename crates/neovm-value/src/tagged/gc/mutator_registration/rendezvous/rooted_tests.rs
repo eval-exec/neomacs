@@ -944,5 +944,20 @@ pub(crate) fn run_rooted_mutator_case<K: EraKeeper + std::fmt::Debug + 'static>(
         RootedRendezvousCase::KeeperResumeDebtRefusesNextStopUntilOwnerApplies => {
             self_wait::keeper_resume_debt_refuses_next_stop_until_owner_applies_body(rooted_era)
         }
+        RootedRendezvousCase::FirstRestoredOwnerWaitsForTheFinalPeerDebt => {
+            super::run_admission::first_restored_owner_waits_for_the_final_peer_debt_body(
+                rooted_era,
+            )
+        }
+        RootedRendezvousCase::PoisonWakesARestoredOwnerWaitingForPeerDebt => {
+            super::run_admission::poison_wakes_a_restored_owner_waiting_for_peer_debt_body(
+                rooted_era,
+            )
+        }
+        RootedRendezvousCase::StopAndUnrestoredOwnerRefuseInsteadOfWaitingForThemselves => {
+            super::run_admission::stop_and_unrestored_owner_refuse_instead_of_waiting_for_themselves_body(
+                rooted_era,
+            )
+        }
     }
 }
