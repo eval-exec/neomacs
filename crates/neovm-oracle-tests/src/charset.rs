@@ -313,7 +313,7 @@ fn oracle_prop_iso_2022_emits_96_set_from_code_space_width() {
             (iso-charset 1 96 ?W) (iso-charset 1 94 ?W)
             (string-to-list (encode-coding-string (char-to-string ch) 'cr-iso-wide)))))"#;
     let expect =
-        expect_test::expect![[r#""OK (57344 unicode cr-wide nil (27 44 87 33 27 40 66))""#]];
+        expect_test::expect![[r#""OK (57344 unicode-bmp cr-wide nil (27 44 87 33 27 40 66))""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 
@@ -350,7 +350,7 @@ fn oracle_prop_iso_2022_dimension_three_uses_c2_twice() {
         (mapcar (lambda (s) (list (string-to-list s) (length s)))
           (list (decode-coding-string "\e(Y!!!" 'cr-iso-3d)
             (decode-coding-string "\e(Y!!A" 'cr-iso-3d))))"#;
-    let expect = expect_test::expect![[r#""OK ((((3145728) 1) ((3145728) 1)))""#]];
+    let expect = expect_test::expect![[r#""OK (((3145728) 1) ((3145728) 1))""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 
