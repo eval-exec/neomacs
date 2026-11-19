@@ -7765,6 +7765,9 @@ mod var_fast_tests;
 mod watcher_redispatch_tests;
 
 #[cfg(test)]
+#[path = "tests/ephemeron_unwind_guard_test.rs"]
+mod ephemeron_unwind_guard_tests;
+#[cfg(test)]
 #[path = "tests/gc_elapsed_whole_cycle_test.rs"]
 mod gc_elapsed_whole_cycle_tests;
 #[cfg(test)]

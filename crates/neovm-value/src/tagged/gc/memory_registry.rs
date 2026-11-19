@@ -180,15 +180,35 @@ impl TaggedHeap {
         std::mem::take(&mut self.ephemeron_records.reclaimed_frame_ids)
     }
 
-    /// Drop an uncommitted deleted-frame arm.
+    /// Drop an uncommitted explicit-collection arm.
     ///
     /// A collection that panics before its restore commits must not leave
-    /// the frames unrooted, and must not leave reclaimed ids for a later
-    /// cycle to apply. Registry entries are left as they are.
+    /// killed buffers, retired processes, or deleted frames unrooted, and
+    /// must not leave reclaimed ids for a later cycle to apply. Registry
+    /// entries are left as they are. One function clears every kind so the
+    /// three disarms cannot drift.
     #[doc(hidden)]
-    pub fn abandon_deleted_frame_ephemerons(&mut self) {
+    pub fn abandon_explicit_ephemerons(&mut self) {
+        self.ephemeron_records.retired_process_ephemerons.clear();
+        self.ephemeron_records.reclaimed_process_ids.clear();
+        self.ephemeron_records.killed_buffer_ephemerons.clear();
+        self.ephemeron_records.reclaimed_buffer_ids.clear();
         self.ephemeron_records.deleted_frame_ephemerons.clear();
         self.ephemeron_records.reclaimed_frame_ids.clear();
+    }
+
+    /// True when no explicit-collection ephemeron map or reclaimed-id list
+    /// is armed. A pure reader: it writes nothing.
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn explicit_ephemeron_arm_is_clear(&self) -> bool {
+        let records = &self.ephemeron_records;
+        records.retired_process_ephemerons.is_empty()
+            && records.reclaimed_process_ids.is_empty()
+            && records.killed_buffer_ephemerons.is_empty()
+            && records.reclaimed_buffer_ids.is_empty()
+            && records.deleted_frame_ephemerons.is_empty()
+            && records.reclaimed_frame_ids.is_empty()
     }
 
     /// Register cons cells whose storage is owned by the loaded pdump image.

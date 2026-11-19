@@ -3504,6 +3504,15 @@ enum DeletedFrameOutput {
 }
 
 impl DeletedFrameTombstone {
+    /// Text tombstone for an eval-crate test that arms a deleted frame
+    /// without the display frame builder.
+    #[cfg(test)]
+    pub(crate) fn text_for_test() -> Self {
+        Self {
+            output: DeletedFrameOutput::Text,
+        }
+    }
+
     fn from_frame(frame: &Frame) -> Self {
         let output = match frame
             .effective_window_system()
