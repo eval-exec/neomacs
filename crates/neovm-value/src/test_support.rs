@@ -9,8 +9,7 @@
 //! The owning lanes fill this module after the peer signs the item table.
 
 /// Signed Prep-D R6 TA2 authority fence (peer 05:5xZ-b / 06:0xZ). Nameable
-/// only from `crates/neovm-core/core_tests/**`; every item is one
-/// AUTHORITY-ITEMS.tsv row signed before code.
+/// only from `crates/neovm-core/core_tests/**`.
 pub mod authority;
 
 use crate::heap_types::LispString;

@@ -2209,8 +2209,8 @@ impl Obarray {
     }
 
     /// Restore the dump-carried per-symbol flags without handing out the
-    /// symbol cell. This is the ONE cross-crate route for pdump restore
-    /// (`PROMOTION-LEDGER.tsv`), and it can only set the three flags the image
+    /// symbol cell. This is the ONE cross-crate route for pdump restore, and
+    /// it can only set the three flags the image
     /// carries; the raw by-id accessor stays crate-private.
     #[doc(hidden)]
     pub fn restore_dumped_symbol_flags(

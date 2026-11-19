@@ -3,7 +3,7 @@
 //!
 //! The module is `pub(crate)`; `neovm_value::test_support::authority` is the
 //! only public re-export path, so a compile-fail fixture that names an
-//! original item keeps failing. Each item has one AUTHORITY-ITEMS row.
+//! original item keeps failing.
 //! The module also carries two VIS re-exports (the catalog-waits observer fn
 //! and its snapshot type); each public route site has a TEST-SUPPORT-VIS
 //! `use` row, and no second fn definition exists.

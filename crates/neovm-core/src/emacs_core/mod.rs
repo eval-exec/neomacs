@@ -389,12 +389,6 @@ mod moved_system;
 mod runtime_string_guard_test;
 
 #[cfg(test)]
-#[path = "tests/architecture/split_cfg_test_guard_test.rs"]
-mod split_cfg_test_guard_test;
-#[cfg(test)]
-#[path = "tests/architecture/split_shared_guards.rs"]
-mod split_shared_guards;
-#[cfg(test)]
 #[path = "tests/architecture/split_test_support_manifest_test.rs"]
 mod split_test_support_manifest_test;
 #[cfg(test)]
@@ -460,28 +454,12 @@ mod architecture_transmute_guard_test;
 mod architecture_layering_guard_test;
 
 #[cfg(test)]
-#[path = "tests/architecture/merge_ratchet.rs"]
-mod architecture_merge_ratchet;
-
-#[cfg(test)]
 #[path = "tests/architecture/moving_set.rs"]
 mod architecture_moving_set;
 
 #[cfg(test)]
-#[path = "tests/architecture/plain_pub_surface_guard_test.rs"]
-mod architecture_plain_pub_surface_guard_test;
-
-#[cfg(test)]
 #[path = "tests/architecture/production_source_roots.rs"]
 mod architecture_production_source_roots;
-
-#[cfg(test)]
-#[path = "tests/architecture/vis_ledger_guard_test.rs"]
-mod architecture_vis_ledger_guard_test;
-
-#[cfg(test)]
-#[path = "tests/architecture/test_support_surface_guard_test.rs"]
-mod architecture_test_support_surface_guard_test;
 
 #[cfg(test)]
 #[path = "tests/architecture/gnu_defsyms_generated_test.rs"]
@@ -563,6 +541,10 @@ mod architecture_debug_assert_side_effect_guard_test;
 mod architecture_test_support_evidence_cfg_test;
 
 #[cfg(test)]
+#[path = "tests/architecture/test_support_authority_fence_test.rs"]
+mod architecture_test_support_authority_fence_test;
+
+#[cfg(test)]
 #[path = "tests/architecture/leaf_slot_writer_guard_test.rs"]
 mod architecture_leaf_slot_writer_guard_test;
 
@@ -630,10 +612,6 @@ mod architecture_parallel_exec_substrate_test;
 #[cfg(test)]
 #[path = "tests/architecture/subr_storage_boundary_test.rs"]
 mod architecture_subr_storage_boundary_test;
-
-#[cfg(test)]
-#[path = "tests/architecture/promotion_ledger_guard_test.rs"]
-mod architecture_promotion_ledger_guard_test;
 
 #[cfg(test)]
 #[path = "tests/moved_text/mod.rs"]

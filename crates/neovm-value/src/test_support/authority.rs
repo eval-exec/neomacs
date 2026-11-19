@@ -2,8 +2,7 @@
 //!
 //! This module may be named only from `crates/neovm-core/core_tests/**`; the
 //! architecture TA2 guard rejects every `src/**` or `tests/**` reference.
-//! Each FENCE item here is one row of `AUTHORITY-ITEMS.tsv`, signed before
-//! code. The fence re-exports existing drivers and hooks with their bodies and
+//! The fence re-exports existing drivers and hooks with their bodies and
 //! contracts unchanged, and never widens an original path, so a compile-fail
 //! fixture that names the original item keeps failing. This module also
 //! carries VIS re-exports (the catalog-waits observer fn and its snapshot
@@ -66,8 +65,8 @@ thread_local! {
 /// identities with `RegistrationError::WrongHeap`. A foreign word is safe to
 /// carry, but it never roots the foreign object in this heap.
 ///
-/// The TLS store is the fence's authority: AUTHORITY-ITEMS row
-/// `TestHeapScope::install`. `set_tagged_heap` itself gains no new row.
+/// The TLS store is the fence's authority: `TestHeapScope::install`.
+/// `set_tagged_heap` itself gains no new route.
 pub struct TestHeapScope {
     /// The slot value before this scope installed; `None` means the thread had
     /// no heap (the common case in a re-homed test).

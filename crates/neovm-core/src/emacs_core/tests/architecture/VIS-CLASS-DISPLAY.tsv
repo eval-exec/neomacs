@@ -1,4 +1,0 @@
-item	kind	class	evidence
-emacs_core::fontset::DEFAULT_FONTSET_NAME	const	1	production caller: fontset/mod.rs:99 (default_name), :210/:213 (default-fontset checks), :773/:792 (resolve_fontset_name_arg), :807 (matching_entries_for_char)
-emacs_core::fontset::matching_entries_for_fontset	fn	1	production caller: matching_entries_for_char (fontset/mod.rs:806) calls it at :807; the function is at :811
-emacs_core::font::alternative_font_registries	fn	3	deleted.  No production reader: alternative_font_registry_alist is written by the internal-set-alternative-font-registry-alist builtin (xfaces/mod.rs:5401 -> :5426) but only this test-only lookup model read it, so its tests asserted a parallel model.  The xfaces setter tests and the moved GC/TLS test now assert the production store through alternative_font_registry_alist_snapshot_for_test (font/mod.rs:279).

@@ -68,9 +68,6 @@ const NON_EDITOR_PROGRAMS: &[&str] = &[
     // Compression fixture input (`source_startup_silences_jka_compr`):
     // produces the `.el.gz` under test, never spawns an editor.
     "gzip",
-    // Cargo metadata queries in the architecture guards: the build tool,
-    // not an editor.
-    "cargo",
 ];
 
 /// A reviewed spawn whose program is a variable but is not an editor.
