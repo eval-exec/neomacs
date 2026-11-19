@@ -7025,6 +7025,12 @@ pub(crate) fn load_charset_registry(decoder: &mut LoadDecoder, dcr: &DumpCharset
             .iso2022_members
             .as_ref()
             .map(|names| names.iter().map(load_sym_id).collect()),
+        // The dump does not carry the in-session Viso epoch. A reload starts
+        // at 0 with an empty bind map, so the first use keeps the dumped
+        // safe vector.
+        iso2022_epoch: 0,
+        iso2022_coding_epochs: Vec::new(),
+        iso2022_coding_members: Vec::new(),
         next_id: dcr.next_id,
         // The binary dump does not carry GNU's `Vcharset_non_preferred_head`
         // boundary; a freshly loaded session reproduces GNU's dumped default

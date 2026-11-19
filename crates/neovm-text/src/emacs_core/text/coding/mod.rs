@@ -904,6 +904,11 @@ const UNDECIDED_KEY_PREFER_UTF8: i64 = i64::MIN + 12;
 /// Charset identities marked safe when an ISO-2022 system is defined
 /// (`coding.c:11064-11068`). Missing means live membership.
 const ISO2022_KEY_SAFE_CHARSETS: i64 = i64::MIN + 13;
+/// `t` when the original `:charset-list` argument was the symbol `iso-2022`
+/// (`coding.c:11298-11299`). An explicit one-element list of a charset that
+/// happens to be named `iso-2022` stores nil. Missing on an old dump falls
+/// back to the symbol-name test.
+const ISO2022_KEY_FULL: i64 = i64::MIN + 14;
 
 fn definition_property(info: &CodingSystemInfo, key: SymId) -> Option<Value> {
     let mut plist = *info.int_properties.get(&PLIST_VERBATIM_KEY)?;
@@ -1053,12 +1058,17 @@ pub(crate) enum IsoFlag {
     Composition = 0x2000,
     UseRoman = 0x8000,
     UseOldjis = 0x10000,
+    /// `8-bit-level-4` (`mule.el:658-662`, `CODING_ISO_FLAG_LEVEL_4`).
+    /// An 8-bit single-shift accepts a GL lead. The default 8-bit level is
+    /// 4A and accepts a GR lead.
+    Level4 = 0x20000,
 }
 
 /// The ISO-2022 designation state of a coding system: the charset initially
 /// loaded into each graphic register G0-G3 (`initial`), the charset->register
 /// map consulted while encoding (`request`), and the control `flags`.
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
+#[derive(Clone)]
 pub(crate) struct Iso2022Spec {
     pub initial: [Option<SymId>; 4],
     pub request: Vec<(SymId, u8)>,
@@ -1070,6 +1080,9 @@ pub(crate) struct Iso2022Spec {
     /// Identities safe at define time. `None` is live membership: a hand-built
     /// spec, an old dump, or a preloaded full-support system after loadup.
     pub(crate) safe_charsets: Option<Vec<SymId>>,
+    /// The original argument was the symbol `iso-2022`, not a one-element
+    /// list of a charset with that name (`coding.c:11020-11024`).
+    pub(crate) full_support: bool,
 }
 
 impl Iso2022Spec {
@@ -1141,6 +1154,7 @@ pub(crate) fn iso2022_spec(info: &CodingSystemInfo, mode: SymbolMode) -> Option<
         reg_usage,
         flags: enumflags2::BitFlags::from_bits_truncate(flags_bits as u32),
         safe_charsets: stored_iso2022_safe_charsets(info, mode),
+        full_support: coding_is_iso2022_full_support(info),
     })
 }
 
@@ -1148,27 +1162,81 @@ pub(crate) fn iso2022_spec(info: &CodingSystemInfo, mode: SymbolMode) -> Option<
 /// that coding system listed no charset.
 fn stored_iso2022_safe_charsets(info: &CodingSystemInfo, mode: SymbolMode) -> Option<Vec<SymId>> {
     let stored = info.int_properties.get(&ISO2022_KEY_SAFE_CHARSETS)?;
-    Some(
-        stored
-            .as_vector_data()
-            .map(|slots| {
-                slots
-                    .iter()
-                    .filter_map(|elem| elem.as_symbol_id(mode))
-                    .collect()
-            })
-            .unwrap_or_default(),
-    )
+    let names: Vec<SymId> = stored
+        .as_vector_data()
+        .map(|slots| {
+            slots
+                .iter()
+                .filter_map(|elem| elem.as_symbol_id(mode))
+                .collect()
+        })
+        .unwrap_or_default();
+    if coding_is_iso2022_full_support(info) {
+        Some(crate::emacs_core::charset::iso2022_refresh_full_support(
+            info.name, &names,
+        ))
+    } else {
+        Some(names)
+    }
 }
 
-fn iso2022_safe_charset_value(charset_list: &[SymId]) -> Value {
-    let full = charset_list.len() == 1 && resolve_sym(charset_list[0]) == "iso-2022";
+fn iso2022_safe_charset_value(charset_list: &[SymId], full: bool) -> Value {
     let names = if full {
         crate::emacs_core::charset::charset_iso2022_members()
     } else {
         charset_list.to_vec()
     };
     Value::vector(names.into_iter().map(Value::from_sym_id).collect())
+}
+
+/// GNU `error("Can't handle charset `%s'")` after `format-message` quote
+/// substitution. This path has no obarray, so the batch default is curve.
+fn cant_handle_charset(name: &str) -> Flow {
+    let message = requote_c_error_message(
+        &format!("Can't handle charset `{name}'"),
+        TextQuotingStyle::Curve,
+    );
+    signal("error", vec![Value::string(message)])
+}
+
+/// Explicit `:charset-list` entries (`coding.c:11041-11060`).
+///
+/// Each entry must be a defined charset. An iso-2022 list rejects a charset
+/// with no final, and an emacs-mule list rejects a charset with no mule id.
+/// The bare `iso-2022` / `emacs-mule` symbols do not come through here.
+fn explicit_charset_entries(
+    items: &[Value],
+    mode: SymbolMode,
+    coding_type: &str,
+) -> Result<Vec<SymId>, Flow> {
+    let mut out = Vec::with_capacity(items.len());
+    for item in items {
+        let Some(symbol) = item.as_symbol_id(mode) else {
+            return Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("charsetp"), *item],
+            ));
+        };
+        let Some(identity) = crate::emacs_core::charset::charset_defined_identity(symbol) else {
+            return Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("charsetp"), Value::from_sym_id(symbol)],
+            ));
+        };
+        if coding_type == "iso-2022" {
+            match crate::emacs_core::charset::charset_iso_final_of(identity) {
+                Some(final_char) if final_char >= 0 => {}
+                _ => return Err(cant_handle_charset(resolve_sym(identity))),
+            }
+        } else if coding_type == "emacs-mule" {
+            match crate::emacs_core::charset::charset_emacs_mule_id_of(identity) {
+                Some(mule_id) if mule_id >= 0 => {}
+                _ => return Err(cant_handle_charset(resolve_sym(identity))),
+            }
+        }
+        out.push(identity);
+    }
+    Ok(out)
 }
 
 pub use crate::encoding::CodingSystemInfo;
@@ -1711,12 +1779,10 @@ impl CodingSystemManager {
     /// system defined after this call freezes at define time.
     pub fn release_preloaded_iso2022_safe_sets(&mut self) {
         self.invalidate_lookup_cache();
-        let Some(marker) = lookup_interned("iso-2022") else {
-            return;
-        };
         for info in self.systems.values_mut() {
-            if info.charset_list.len() == 1 && info.charset_list[0] == marker {
+            if coding_is_iso2022_full_support(info) {
                 info.int_properties.remove(&ISO2022_KEY_SAFE_CHARSETS);
+                crate::emacs_core::charset::iso2022_forget_full_support(info.name);
             }
         }
     }
@@ -2583,9 +2649,15 @@ fn coding_explicit_ascii_compat(info: &CodingSystemInfo) -> Option<bool> {
         .map(|v| v.is_truthy())
 }
 
-/// Whether `:charset-list` is the FULL_SUPPORT marker symbol `iso-2022`.
+/// Whether the original `:charset-list` argument was the symbol `iso-2022`.
+///
+/// A missing flag keeps the name test so a dump from before the flag, and
+/// the loadup release of `iso-2022-7bit`, still count as full support.
 fn coding_is_iso2022_full_support(info: &CodingSystemInfo) -> bool {
-    info.charset_list.len() == 1 && resolve_sym(info.charset_list[0]) == "iso-2022"
+    match info.int_properties.get(&ISO2022_KEY_FULL) {
+        Some(flag) => flag.is_truthy(),
+        None => info.charset_list.len() == 1 && resolve_sym(info.charset_list[0]) == "iso-2022",
+    }
 }
 
 /// Compute the detector category symbol for a coding system, mirroring GNU's
@@ -4028,28 +4100,28 @@ pub fn builtin_define_coding_system_internal(
     // `emacs-mule` before any charset lookup (`coding.c:11017-11031`), so an
     // alias of that name cannot swallow the marker. An explicit list stores
     // each name's own attribute vector (`coding.c:11041-11057`).
-    let charset_list = if let Some(id) = args[3].as_symbol_id(mode).filter(|_| !args[3].is_nil()) {
-        let marker = resolve_sym(id);
-        if marker == "iso-2022" || marker == "emacs-mule" {
-            let coding_name = resolve_sym(coding_type);
-            let marker_matches = (marker == "iso-2022" && coding_name == "iso-2022")
-                || (marker == "emacs-mule" && coding_name == "emacs-mule");
-            if !marker_matches {
-                return Err(signal("error", vec![Value::string("Invalid charset-list")]));
+    let (charset_list, iso2022_full) =
+        if let Some(id) = args[3].as_symbol_id(mode).filter(|_| !args[3].is_nil()) {
+            let marker = resolve_sym(id);
+            if marker == "iso-2022" || marker == "emacs-mule" {
+                let coding_name = resolve_sym(coding_type);
+                let marker_matches = (marker == "iso-2022" && coding_name == "iso-2022")
+                    || (marker == "emacs-mule" && coding_name == "emacs-mule");
+                if !marker_matches {
+                    return Err(signal("error", vec![Value::string("Invalid charset-list")]));
+                }
+                (vec![id], marker == "iso-2022")
+            } else {
+                (vec![captured_charset_symbol(id)], false)
             }
-            vec![id]
+        } else if let Some(items) = neovm_value::value::list_to_vec(&args[3]) {
+            (
+                explicit_charset_entries(&items, mode, resolve_sym(coding_type))?,
+                false,
+            )
         } else {
-            vec![captured_charset_symbol(id)]
-        }
-    } else if let Some(items) = neovm_value::value::list_to_vec(&args[3]) {
-        items
-            .iter()
-            .filter_map(|v| v.as_symbol_id(mode))
-            .map(captured_charset_symbol)
-            .collect()
-    } else {
-        Vec::new()
-    };
+            (Vec::new(), false)
+        };
 
     // arg[4]: ascii-compatible-p
     let ascii_compatible_p = args[4].is_truthy();
@@ -4160,9 +4232,15 @@ pub fn builtin_define_coding_system_internal(
         // 96-set whose reg-usage register is 4. The reg filter inside
         // `setup_iso_safe_charsets` does not run on this path.
         info.int_properties.insert(
-            ISO2022_KEY_SAFE_CHARSETS,
-            iso2022_safe_charset_value(&info.charset_list),
+            ISO2022_KEY_FULL,
+            if iso2022_full { Value::T } else { Value::NIL },
         );
+        let safe = iso2022_safe_charset_value(&info.charset_list, iso2022_full);
+        info.int_properties.insert(ISO2022_KEY_SAFE_CHARSETS, safe);
+        if iso2022_full {
+            let members = crate::emacs_core::charset::charset_iso2022_members();
+            crate::emacs_core::charset::iso2022_note_full_support(info.name, &members);
+        }
     }
 
     // arg[13..16] (CCL only): decoder program, encoder program, and the
