@@ -3,3 +3,9 @@ error: cannot construct `Mutator<'_>` with struct literal syntax due to private 
   |
 4 |     Mutator {}
   |     ^^^^^^^
+  |
+help: you might have meant to use the `with_a8_probes_suppressed_for_test` associated function
+  |
+4 -     Mutator {}
+4 +     Mutator::with_a8_probes_suppressed_for_test(_)
+  |

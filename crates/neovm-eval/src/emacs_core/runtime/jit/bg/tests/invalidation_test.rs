@@ -16,6 +16,7 @@ use crate::emacs_core::jit::compile::force_deopt_for_test;
 use crate::emacs_core::jit::stats::epoch::{EpochCounters, SpecRevalidation};
 use crate::emacs_core::jit::try_run_compiled;
 use neovm_value::intern::SymId;
+use neovm_value::intern::intern;
 use neovm_value::value::{LambdaParams, Value, ValueKind};
 
 fn deferred_held() {
@@ -32,7 +33,7 @@ fn done() {
 }
 
 fn sym(name: &str) -> (Value, SymId) {
-    let s = Value::symbol(name);
+    let s = Value::from_sym_id(intern(name));
     let ValueKind::Symbol(id) = s.kind() else {
         panic!("symbol")
     };

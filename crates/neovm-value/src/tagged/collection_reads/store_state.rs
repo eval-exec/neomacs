@@ -311,12 +311,14 @@ impl ObservationWorld {
 
 // Preserve the original TLS allocation and pointer-slot displacement until
 // the explicitly separate TLS-removal experiment. No reserve is accessed.
+// Every field is a frozen layout: the live envelope is heap-side State and
+// may change size without moving this thread-local block.
 #[repr(C)]
 struct LegacyStateLayout {
     captures: Vec<Capture>,
     writes: Box<[usize; JOURNAL_SIZE]>,
     policy: JournalPolicy,
-    observed: observed_envelope::ObservedEnvelope,
+    observed: observed_envelope::LegacyEnvelopeLayout,
 }
 
 #[repr(C)]

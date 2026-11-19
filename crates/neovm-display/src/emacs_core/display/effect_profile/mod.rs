@@ -64,7 +64,7 @@ pub fn effect_name_from_lisp(
     Ok(name.to_owned())
 }
 
-pub fn effect_set_operation_from_lisp(
+pub(crate) fn effect_set_operation_from_lisp(
     effect: Value,
     properties: &[Value],
     scope: EffectScope,
@@ -108,7 +108,7 @@ pub fn effect_operation_from_lisp(
     effect_set_operation_from_lisp(*effect, properties, scope)
 }
 
-pub fn effect_operations_from_lisp(
+pub(crate) fn effect_operations_from_lisp(
     profile: Value,
     scope: EffectScope,
 ) -> Result<Vec<EffectOperation>, EffectProfileError> {

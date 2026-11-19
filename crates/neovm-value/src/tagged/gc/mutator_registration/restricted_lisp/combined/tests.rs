@@ -41,23 +41,14 @@ impl Drop for FixtureGuard<'_> {
                 // Root handles drop before clearing the actual resident census;
                 // dropping a Rust handle alone does not clear its bank word.
                 drop(homes);
-                contention::retry(
-                    Deadline::contention(),
-                    || owner.run_access()?.clear_root_slots(),
-                    contention::registration,
-                )
-                .map_err(CleanupError::Registration)?;
+                owner
+                    .run_access()
+                    .and_then(|mut run| run.clear_root_slots())
+                    .map_err(CleanupError::Registration)?;
                 drop(seed);
-                retry_owned(
-                    Deadline::contention(),
-                    owner,
-                    |owner| owner.retire_rooted(&[]),
-                    |failed| match contention::rendezvous(&failed.reason) {
-                        Retry::Busy => ControlFlow::Continue(failed.into_owner()),
-                        Retry::Refuse => ControlFlow::Break(failed),
-                    },
-                )
-                .map_err(|failed| CleanupError::Retirement(failed.reason))
+                owner
+                    .retire_rooted(&[])
+                    .map_err(|failed| CleanupError::Retirement(failed.reason))
             })(),
         };
         // Nonpanicking protocol cleanup records a separate outcome. The body
@@ -113,16 +104,7 @@ fn fixture<H: CombinedParts>(
         let permit = era
             .register(1, usize::try_from(capacity.0.get()).unwrap())
             .unwrap();
-        let owner = retry_owned(
-            Deadline::contention(),
-            permit,
-            |permit| permit.activate(era.heap_identity(), 1),
-            |failed| match contention::registration(&failed.reason) {
-                Retry::Busy => ControlFlow::Continue(failed.into_permit()),
-                Retry::Refuse => ControlFlow::Break(failed),
-            },
-        )
-        .unwrap();
+        let owner = permit.activate(era.heap_identity(), 1).unwrap();
         let receipt = Rc::new(RefCell::new(CleanupReceipt::Pending));
         let mut guard = FixtureGuard {
             resources: Resources::Resident {
@@ -137,33 +119,21 @@ fn fixture<H: CombinedParts>(
                 Resources::Released => panic!("C6 fixture released before its body"),
                 Resources::Resident { owner, seed, homes } => {
                     for _ in 0..capacity.0.get() {
-                        contention::retry(
-                            Deadline::contention(),
-                            || {
-                                let mut run = owner.run_access()?;
-                                homes.push(run.root_slot(seed)?);
-                                Ok(())
-                            },
-                            contention::registration,
-                        )
-                        .unwrap();
+                        let mut run = owner.run_access().unwrap();
+                        homes.push(run.root_slot(seed).unwrap());
                     }
                     match body {
                         FixtureBody::Request => {
-                            let answer = contention::retry(
-                                Deadline::contention(),
-                                || {
-                                    let mut run =
-                                        owner.run_access().map_err(PreparationError::Authority)?;
-                                    PreparationChecks::running(
-                                        running,
-                                        &mut run,
-                                        &symbol,
-                                        &mut homes[0],
-                                    )
-                                },
-                                classify,
-                            );
+                            let answer = (|| {
+                                let mut run =
+                                    owner.run_access().map_err(PreparationError::Authority)?;
+                                PreparationChecks::running(
+                                    running,
+                                    &mut run,
+                                    &symbol,
+                                    &mut homes[0],
+                                )
+                            })();
                             assert_eq!(
                                 answer,
                                 running_expected(running),

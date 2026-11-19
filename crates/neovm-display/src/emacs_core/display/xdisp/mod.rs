@@ -467,7 +467,7 @@ fn integer_or_marker_value_in_buffers(
     neovm_edit::emacs_core::position::fix_position_with_buffers(buffers, &arg)
 }
 
-fn expect_fixnum_arg(name: &str, arg: &Value) -> Result<(), Flow> {
+fn expect_fixnum_arg(name: &'static str, arg: &Value) -> Result<(), Flow> {
     match arg.kind() {
         ValueKind::Fixnum(_) => Ok(()),
         _other => Err(signal(
@@ -9040,8 +9040,7 @@ fn resolve_presented_buffer_position(
             | GeometryQueryError::MissingMaterializedGeometry(_),
         ) => Ok(PresentedBufferPosition::Unavailable),
         Err(
-            error @ (GeometryQueryError::MissingRegion { .. }
-            | GeometryQueryError::CoordinateNotVisible { .. }
+            error @ (GeometryQueryError::CoordinateNotVisible { .. }
             | GeometryQueryError::VisualAnchorUnavailable(_)
             | GeometryQueryError::InvalidGeometry(_)),
         ) => Err(error),

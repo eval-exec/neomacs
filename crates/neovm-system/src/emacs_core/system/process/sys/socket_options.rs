@@ -46,7 +46,7 @@ fn setsockopt_raw<T>(
 
 /// `SO_DONTROUTE`: bypass the routing table (send only to directly reachable
 /// hosts). socket2 does not wrap this option.
-pub fn set_socket_dontroute(fd: RawFd, enabled: bool) -> std::io::Result<()> {
+pub(crate) fn set_socket_dontroute(fd: RawFd, enabled: bool) -> std::io::Result<()> {
     let raw: libc::c_int = if enabled { 1 } else { 0 };
     setsockopt_raw(fd, libc::SOL_SOCKET, libc::SO_DONTROUTE, &raw)
 }
@@ -54,7 +54,7 @@ pub fn set_socket_dontroute(fd: RawFd, enabled: bool) -> std::io::Result<()> {
 /// `SO_LINGER`: when `onoff` is set, block `close` until queued data is flushed
 /// or `linger` seconds elapse; when clear, `close` returns immediately and
 /// `linger` is ignored.
-pub fn set_socket_linger(fd: RawFd, onoff: bool, linger: i32) -> std::io::Result<()> {
+pub(crate) fn set_socket_linger(fd: RawFd, onoff: bool, linger: i32) -> std::io::Result<()> {
     let raw = libc::linger {
         l_onoff: if onoff { 1 } else { 0 },
         l_linger: linger as libc::c_int,
@@ -65,7 +65,7 @@ pub fn set_socket_linger(fd: RawFd, onoff: bool, linger: i32) -> std::io::Result
 /// `SO_PRIORITY`: set the protocol-defined queueing priority of packets sent on
 /// the socket. Linux/Android only, mirroring GNU's `#ifdef SO_PRIORITY`.
 #[cfg(any(target_os = "linux", target_os = "android"))]
-pub fn set_socket_priority(fd: RawFd, priority: i32) -> std::io::Result<()> {
+pub(crate) fn set_socket_priority(fd: RawFd, priority: i32) -> std::io::Result<()> {
     let raw = priority as libc::c_int;
     setsockopt_raw(fd, libc::SOL_SOCKET, libc::SO_PRIORITY, &raw)
 }

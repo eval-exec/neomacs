@@ -107,7 +107,8 @@ use CoupledFeature::{
 /// `src/msdos.c` and `src/dosfns.c` provide nothing, and `lisp/cus-start.el:901`
 /// asks `(eq system-type 'ms-dos)` instead.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum CoupledFeature {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) enum CoupledFeature {
     /// `Fprovide (Qx)`, `src/xfns.c:10498`, inside the `HAVE_X_WINDOWS` arm of
     /// `src/emacs.c:2373-2385` that runs `syms_of_xterm`, `syms_of_xfns`,
     /// `syms_of_xmenu`, `syms_of_xsettings`, `syms_of_xsmfns` and
@@ -283,6 +284,7 @@ const NS_SURFACE: &str = "ledger 189/199 surface split: GNU's HAVE_NS objects de
 /// excusing a gap.  Issue 300 tracks the remaining divergences.  On Linux the
 /// WPE path still leaves ledger 190's missing subrs open, the feature is not
 /// provided, and the rows remain policy.
+#[cfg(feature = "xwidgets")]
 const XWIDGET_LAYER: &str = "ledger 190/192: xwidget.rs implements GNU's xwidget subrs over WPE/WebKit \
      (Linux, xwidget-internal NotBuilt) or a native WKWebView (macOS with the `webview' \
      feature, provided)";
@@ -308,15 +310,17 @@ const XSETTINGS_ORACLE_PIN: &str = "ledger 199: font-use-system-font is (car byt
 /// across `src/*.c` and `src/*.m`, each site's enclosing `#if`/`#ifdef` stack
 /// matched against the `Fprovide` calls in the same block, and the file-level
 /// guard taken from `src/emacs.c`'s own `syms_of_*` dispatch.  234 names
-/// survive that filter; this build binds 74 of them, each with a policy.  A
+/// survive that filter; this build binds 74 of them, each with a policy (71
+/// without the `xwidgets` feature, whose three rows are then `Absent`).  A
 /// build that links libdbus (`neomacs_have_dbus`) has `dbusbind`, so its nine
 /// `dbusbind.c` names are real variables there and their rows compile out:
-/// 225 rows, the same 74 bound.
+/// 225 rows, the same bound count.
 /// Kept one row per line, like `defvar_object::gnu_table` and
 /// `var_docs::gnu_table`: the rows are generated, and a row that reads as one
 /// line diffs as one line when the derivation is re-run.
 #[rustfmt::skip]
-pub static PROVIDE_COUPLED_VARIABLES: &[ProvideCoupledVariable] = &[
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) static PROVIDE_COUPLED_VARIABLES: &[ProvideCoupledVariable] = &[
     absent("android-build-fingerprint", &[Android], "androidterm.c:7026"),
     absent("android-build-manufacturer", &[Android], "androidterm.c:7032"),
     absent("android-display-planes", &[Android], "androidterm.c:7036"),
@@ -557,9 +561,22 @@ pub static PROVIDE_COUPLED_VARIABLES: &[ProvideCoupledVariable] = &[
     bound_by("x-window-top-right-corner-cursor", &[Android, X], "androidfns.c:3631 xfns.c:10397", X_SURFACE).ns_absent(),
     bound_by("x-window-vertical-drag-cursor", &[Android, W32, X], "androidfns.c:3611 w32fns.c:11831 xfns.c:10369", X_SURFACE).ns_absent(),
     bound_by("xft-settings", &[DynamicSetting], "xsettings.c:1402", XSETTINGS_ORACLE_PIN).ns_absent(),
+    // GNU ties `syms_of_xwidget` to `HAVE_XWIDGETS`; the port ties the same
+    // variables to the `xwidgets` cargo feature. Without it the source set is
+    // not compiled, so the names are absent from the obarray (xwidget-list
+    // and xwidget-view-list are uninterned in the reference GNU too).
+    #[cfg(feature = "xwidgets")]
     bound_by("xwidget-list", &[XwidgetInternal], "xwidget.c:3988", XWIDGET_LAYER),
+    #[cfg(not(feature = "xwidgets"))]
+    absent("xwidget-list", &[XwidgetInternal], "xwidget.c:3988"),
+    #[cfg(feature = "xwidgets")]
     bound_by("xwidget-view-list", &[XwidgetInternal], "xwidget.c:3992", XWIDGET_LAYER),
+    #[cfg(not(feature = "xwidgets"))]
+    absent("xwidget-view-list", &[XwidgetInternal], "xwidget.c:3992"),
+    #[cfg(feature = "xwidgets")]
     bound_by("xwidget-webkit-disable-javascript", &[XwidgetInternal], "xwidget.c:3996", XWIDGET_LAYER),
+    #[cfg(not(feature = "xwidgets"))]
+    absent("xwidget-webkit-disable-javascript", &[XwidgetInternal], "xwidget.c:3996"),
 ];
 
 /// The row for `name`, if GNU's coupling makes it impossible in this build.

@@ -397,7 +397,7 @@ impl Context {
         }
 
         let hook = self
-            .builtin_var_value_by_name("signal-hook-function")
+            .builtin_var_value(signal_hook_function_symbol())
             .unwrap_or(Value::NIL);
         if hook.is_nil() {
             return Ok(());
@@ -470,14 +470,14 @@ impl Context {
             | neovm_value::error::SignalDelivery::HookSuppressed => {}
         }
         if self
-            .builtin_var_value_by_name("inhibit-debugger")
+            .builtin_var_value(inhibit_debugger_symbol())
             .is_some_and(|value| !value.is_nil())
         {
             return Ok(());
         }
 
         let debug_on_signal = self
-            .builtin_var_value_by_name("debug-on-signal")
+            .builtin_var_value(debug_on_signal_symbol())
             .is_some_and(|value| !value.is_nil());
         let should_consider_debugger = debug_on_signal
             || matched_clause.is_none()
@@ -493,10 +493,10 @@ impl Context {
             &Value::from_sym_id(quit_symbol()),
             self.symbol_mode(),
         ) {
-            self.builtin_var_value_by_name("debug-on-quit")
+            self.builtin_var_value(debug_on_quit_symbol())
                 .unwrap_or(Value::NIL)
         } else {
-            self.builtin_var_value_by_name("debug-on-error")
+            self.builtin_var_value(debug_on_error_symbol())
                 .unwrap_or(Value::NIL)
         };
         if !wants_debugger(&debug_setting, &conditions, self.symbol_mode()) {
@@ -532,7 +532,7 @@ impl Context {
     #[doc(hidden)]
     pub fn skip_debugger(&mut self, sig: &SignalData, conditions: &Value) -> Result<bool, Flow> {
         let ignored = self
-            .builtin_var_value_by_name("debug-ignored-errors")
+            .builtin_var_value(debug_ignored_errors_symbol())
             .unwrap_or(Value::NIL);
         let Some(entries) = list_to_vec(&ignored) else {
             return Ok(false);

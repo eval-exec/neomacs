@@ -82,8 +82,17 @@ mod fill_column_stipple;
 #[path = "font_coverage.rs"]
 mod font_coverage;
 
+#[path = "font_fallback_composite_ink.rs"]
+mod font_fallback_composite_ink;
+
 #[path = "font_name_pattern_resize.rs"]
 mod font_name_pattern_resize;
+
+#[path = "font_open_gui_oracle.rs"]
+mod font_open_gui_oracle;
+
+#[path = "font_otf_spec_selection.rs"]
+mod font_otf_spec_selection;
 
 #[path = "fontset_han_repertory.rs"]
 mod fontset_han_repertory;

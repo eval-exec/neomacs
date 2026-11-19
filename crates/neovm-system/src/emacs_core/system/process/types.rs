@@ -9,6 +9,7 @@ use super::*;
 use neovm_eval::host_effect::wake::{
     ControlDestination, ControlNudge, ControlNudgeOutcome, NotificationLatch,
 };
+use neovm_value::intern::intern;
 use neovm_value::tagged::value::SymbolMode;
 
 use super::NetworkSocketIo;
@@ -1122,7 +1123,7 @@ impl ProcessDecodedRun {
 /// Deriving it at read time, as this type does, is that same function with no
 /// cache left to invalidate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ProcessOutputSink {
+pub(crate) enum ProcessOutputSink {
     /// The internal default filter is inserting into a live UNIBYTE buffer, so
     /// character-code conversion is dropped and only the EOL conversion of the
     /// resolved coding survives.
@@ -1163,7 +1164,7 @@ impl ProcessOutputSink {
 /// (`setup_process_coding_systems`, :8380-8400, which does not consult
 /// `fast-read-process-output' at all), this says whether the decode happens.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ProcessReadBranch {
+pub(crate) enum ProcessReadBranch {
     /// `read_and_insert_process_output` (src/process.c:6459-6460) reached with a
     /// LIVE buffer to insert into, which is where `fast-read-process-output'
     /// and the default filter send a read (:6557-6558).
@@ -2716,7 +2717,7 @@ pub(super) fn serial_expect_fixnum(value: Value) -> Result<i64, Flow> {
 }
 
 pub(super) fn serial_value_eq_symbol(value: Value, symbol: &str) -> bool {
-    neovm_value::value::eq_value(&value, &Value::symbol(symbol))
+    neovm_value::value::eq_value(&value, &Value::from_sym_id(intern(symbol)))
 }
 
 /// GNU `serial_open`, src/sysdep.c:2980-2990 (termios) / src/w32.c:11098
@@ -4324,6 +4325,40 @@ pub trait SystemProcessExt {
     fn processes_with_unnotified_status_change(&self) -> Vec<ProcessId>;
 }
 
+/// Drop read interest for skipping adaptive-read channels for one wait.
+///
+/// The poller is level-triggered, so leaving a readable skipped fd
+/// registered makes `poller.wait` return immediately and the service loop
+/// spins. Child-status and write sources stay registered: GNU `FD_CLR`s
+/// only the process channel (src/process.c:5701). A filter of `t` is
+/// already out of the read set; restoring interest must not put it back.
+///
+/// These are free functions because [`ProcessManager`] lives in `neovm-eval`
+/// and the poller registration lives on [`SystemProcessExt`].
+pub(crate) fn suspend_skipping_adaptive_reads(processes: &ProcessManager) -> Vec<ProcessId> {
+    let ids = processes.skipping_adaptive_read_ids();
+    for &id in &ids {
+        let accepts = processes.get(id).is_some_and(process_filter_accepts_output);
+        if accepts {
+            processes.set_process_output_read_interest(id, false);
+        }
+    }
+    ids
+}
+
+/// Put suspended read fds back and clear the skip flags. GNU clears
+/// `read_output_skip` before `pselect` returns, so the next pass reads
+/// whatever arrived during the one shared delay (src/process.c:5702-5709).
+pub(crate) fn restore_skipping_adaptive_reads(processes: &mut ProcessManager, ids: &[ProcessId]) {
+    for &id in ids {
+        let accepts = processes.get(id).is_some_and(process_filter_accepts_output);
+        if accepts {
+            processes.set_process_output_read_interest(id, true);
+        }
+    }
+    processes.clear_adaptive_read_skips(ids);
+}
+
 impl SystemProcessExt for ProcessManager {
     fn register_readable_source(
         poller: &polling::Poller,
@@ -4461,7 +4496,11 @@ impl SystemProcessExt for ProcessManager {
 
         // EOF/EIO removed this PTY from the read set independently of its
         // filter. A filter change must not rearm a drain-only descriptor.
+        // Nor may anything rearm a stopped connection: GNU adds a read
+        // descriptor only while `p->command' is not t (src/process.c:1393-1397,
+        // :3751, :6166) and `continue-process' clears it first.
         let enabled = enabled
+            && !process_stopped_for_io(proc)
             && proc
                 .live_io
                 .pty_reader
@@ -6417,7 +6456,9 @@ impl SystemProcessExt for ProcessManager {
             return Ok(());
         }
 
-        if !process_filter_accepts_output(proc) {
+        // GNU `connect_network_socket` (src/process.c:3751-3753): a `:stop t`
+        // connection is opened but not read until `continue-process'.
+        if process_stopped_for_io(proc) || !process_filter_accepts_output(proc) {
             return Ok(());
         }
         if let Some(poller) = self.wait_backend.poller() {
@@ -8250,7 +8291,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
         )
         .expect("inherited coding is registered");
         if let Some(proc) = self.processes_mut().get_mut(id) {
-            proc.coding_encode = Value::symbol(&inherited);
+            proc.coding_encode = Value::from_sym_id(intern((&inherited).as_ref()));
             proc.encoding_state = state;
         }
     }
@@ -8931,8 +8972,16 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
                 continue;
             }
             if target_process.is_none()
-                && self.processes_mut().clear_adaptive_read_skip_if_needed(pid)
+                && self
+                    .processes()
+                    .get(pid)
+                    .is_some_and(process_defers_adaptive_read)
             {
+                // GNU `wait_reading_process_output` (src/process.c:5690-5709)
+                // FD_CLRs a skipping channel and does not read it on this
+                // pass. The wait excludes that fd and bounds one timeout by
+                // the minimum delay. Sleeping here would stall timers,
+                // keyboard input, and every other process once per skipper.
                 continue;
             }
 

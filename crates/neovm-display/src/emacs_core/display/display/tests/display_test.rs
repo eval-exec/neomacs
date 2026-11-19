@@ -5,7 +5,7 @@ mod resources_test;
 use super::*;
 use crate::emacs_core::dispnew::pure::{
     builtin_internal_show_cursor, builtin_internal_show_cursor_p, builtin_open_termscript,
-    builtin_redraw_frame, builtin_send_string_to_terminal, reset_dispnew_thread_locals,
+    builtin_redraw_frame, builtin_send_string_to_terminal,
 };
 use crate::emacs_core::terminal::pure::{
     TerminalOutputMethod, builtin_controlling_tty_p, builtin_frame_terminal, builtin_resume_tty,
@@ -808,7 +808,6 @@ fn eval_send_string_to_terminal_accepts_live_frame_designator() {
 #[test]
 fn internal_show_cursor_tracks_visibility_state() {
     crate::test_utils::init_test_tracing();
-    reset_dispnew_thread_locals();
     let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let default_visible = builtin_internal_show_cursor_p(&mut eval, vec![]).unwrap();
     assert_eq!(default_visible, Value::T);
@@ -855,7 +854,6 @@ fn eval_internal_show_cursor_p_accepts_live_window_designator() {
 #[test]
 fn eval_internal_show_cursor_tracks_per_window_state() {
     crate::test_utils::init_test_tracing();
-    reset_dispnew_thread_locals();
     let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let _ = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     let selected =
@@ -2484,7 +2482,7 @@ fn x_geometry_fonts_and_resource_batch_semantics() {
 #[test]
 fn x_property_and_frame_arg_batch_semantics() {
     crate::test_utils::init_test_tracing();
-    for args in [vec![], vec![Value::NIL], vec![Value::make_frame(1)]] {
+    for args in [vec![], vec![Value::NIL], vec![Value::mint_frame(1)]] {
         match builtin_x_backspace_delete_keys_p(args).kinded() {
             Err(FlowKind::Signal(sig)) => {
                 assert_eq!(sig.symbol_name(), "error");
@@ -2606,7 +2604,7 @@ fn x_coordinate_sync_and_message_batch_semantics() {
     for args in [
         vec![Value::NIL],
         vec![Value::NIL, Value::NIL],
-        vec![Value::make_frame(1)],
+        vec![Value::mint_frame(1)],
         vec![Value::fixnum(1), Value::NIL],
         vec![Value::string("x"), Value::NIL],
         vec![term, Value::NIL],
@@ -2637,7 +2635,7 @@ fn x_coordinate_sync_and_message_batch_semantics() {
         }
         other => panic!("expected error signal, got {other:?}"),
     }
-    match builtin_x_translate_coordinates(vec![Value::make_frame(1)]).kinded() {
+    match builtin_x_translate_coordinates(vec![Value::mint_frame(1)]).kinded() {
         Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
@@ -2703,7 +2701,7 @@ fn x_coordinate_sync_and_message_batch_semantics() {
         }
         other => panic!("expected error signal, got {other:?}"),
     }
-    match builtin_x_frame_list_z_order(vec![Value::make_frame(1)]).kinded() {
+    match builtin_x_frame_list_z_order(vec![Value::mint_frame(1)]).kinded() {
         Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
@@ -2765,7 +2763,7 @@ fn x_coordinate_sync_and_message_batch_semantics() {
         other => panic!("expected error signal, got {other:?}"),
     }
     match builtin_x_send_client_message(vec![
-        Value::make_frame(1),
+        Value::mint_frame(1),
         Value::NIL,
         Value::NIL,
         Value::NIL,
@@ -2866,7 +2864,7 @@ fn x_popup_dialog_and_menu_batch_semantics() {
         }
         other => panic!("expected wrong-type-argument signal, got {other:?}"),
     }
-    match builtin_x_popup_dialog_batch(vec![Value::make_frame(1), Value::NIL]).kinded() {
+    match builtin_x_popup_dialog_batch(vec![Value::mint_frame(1), Value::NIL]).kinded() {
         Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("stringp"), Value::NIL]);
@@ -2874,7 +2872,7 @@ fn x_popup_dialog_and_menu_batch_semantics() {
         other => panic!("expected wrong-type-argument signal, got {other:?}"),
     }
     match builtin_x_popup_dialog_batch(vec![
-        Value::make_frame(1),
+        Value::mint_frame(1),
         Value::list(vec![Value::string("A")]),
     ])
     .kinded()
@@ -2887,7 +2885,7 @@ fn x_popup_dialog_and_menu_batch_semantics() {
     }
     assert!(
         builtin_x_popup_dialog_batch(vec![
-            Value::make_frame(1),
+            Value::mint_frame(1),
             Value::list(vec![
                 Value::string("Title"),
                 Value::cons(Value::string("Yes"), Value::T),
@@ -2909,7 +2907,7 @@ fn x_popup_dialog_and_menu_batch_semantics() {
     );
     assert!(
         builtin_x_popup_dialog_batch(vec![
-            Value::make_frame(1),
+            Value::mint_frame(1),
             Value::list(vec![Value::string("A"), Value::fixnum(1)]),
         ])
         .unwrap()
@@ -2939,7 +2937,7 @@ fn x_popup_dialog_and_menu_batch_semantics() {
         other => panic!("expected wrong-number-of-arguments signal, got {other:?}"),
     }
 
-    let assert_wta = |result: EvalResult, pred: &str, arg: Value| match result.kinded() {
+    let assert_wta = |result: EvalResult, pred: &'static str, arg: Value| match result.kinded() {
         Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol(pred), arg]);
@@ -2962,7 +2960,7 @@ fn x_popup_dialog_and_menu_batch_semantics() {
             .is_nil()
     );
     for pos in [
-        Value::make_frame(1),
+        Value::mint_frame(1),
         Value::string("x"),
         Value::fixnum(1),
         term,
@@ -3376,15 +3374,16 @@ fn x_popup_menu_accepts_keymap_menus_like_gnu() {
 fn x_clipboard_input_context_batch_semantics() {
     crate::test_utils::init_test_tracing();
     let term = terminal_handle_value();
-    let frame = Value::make_frame(1);
+    let frame = Value::mint_frame(1);
 
-    let assert_wrong_type = |result: EvalResult, pred: &str, arg: Value| match result.kinded() {
-        Err(FlowKind::Signal(sig)) => {
-            assert_eq!(sig.symbol_name(), "wrong-type-argument");
-            assert_eq!(sig.data, vec![Value::symbol(pred), arg]);
-        }
-        other => panic!("expected wrong-type-argument signal, got {other:?}"),
-    };
+    let assert_wrong_type =
+        |result: EvalResult, pred: &'static str, arg: Value| match result.kinded() {
+            Err(FlowKind::Signal(sig)) => {
+                assert_eq!(sig.symbol_name(), "wrong-type-argument");
+                assert_eq!(sig.data, vec![Value::symbol(pred), arg]);
+            }
+            other => panic!("expected wrong-type-argument signal, got {other:?}"),
+        };
     let assert_error = |result: EvalResult, msg: &str| match result.kinded() {
         Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
@@ -3482,13 +3481,14 @@ fn x_clipboard_input_context_batch_semantics() {
 #[test]
 fn x_selection_property_tip_batch_semantics() {
     crate::test_utils::init_test_tracing();
-    let assert_wrong_type = |result: EvalResult, pred: &str, arg: Value| match result.kinded() {
-        Err(FlowKind::Signal(sig)) => {
-            assert_eq!(sig.symbol_name(), "wrong-type-argument");
-            assert_eq!(sig.data, vec![Value::symbol(pred), arg]);
-        }
-        other => panic!("expected wrong-type-argument signal, got {other:?}"),
-    };
+    let assert_wrong_type =
+        |result: EvalResult, pred: &'static str, arg: Value| match result.kinded() {
+            Err(FlowKind::Signal(sig)) => {
+                assert_eq!(sig.symbol_name(), "wrong-type-argument");
+                assert_eq!(sig.data, vec![Value::symbol(pred), arg]);
+            }
+            other => panic!("expected wrong-type-argument signal, got {other:?}"),
+        };
     let assert_error = |result: EvalResult, msg: &str| match result.kinded() {
         Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
@@ -3773,7 +3773,7 @@ fn x_frame_mouse_and_dnd_batch_semantics() {
     for args in [
         vec![],
         vec![Value::NIL],
-        vec![Value::make_frame(1)],
+        vec![Value::mint_frame(1)],
         vec![Value::NIL, Value::NIL],
     ] {
         match builtin_x_export_frames(args).kinded() {
@@ -3837,7 +3837,7 @@ fn x_frame_mouse_and_dnd_batch_semantics() {
     assert!(builtin_x_frame_edges(vec![]).unwrap().is_nil());
     assert!(builtin_x_frame_edges(vec![Value::NIL]).unwrap().is_nil());
     assert!(
-        builtin_x_frame_edges(vec![Value::make_frame(1)])
+        builtin_x_frame_edges(vec![Value::mint_frame(1)])
             .unwrap()
             .is_nil()
     );
@@ -3874,7 +3874,7 @@ fn x_frame_mouse_and_dnd_batch_semantics() {
     assert!(builtin_x_frame_geometry(vec![]).unwrap().is_nil());
     assert!(builtin_x_frame_geometry(vec![Value::NIL]).unwrap().is_nil());
     assert!(
-        builtin_x_frame_geometry(vec![Value::make_frame(1)])
+        builtin_x_frame_geometry(vec![Value::mint_frame(1)])
             .unwrap()
             .is_nil()
     );
@@ -3936,7 +3936,7 @@ fn x_frame_mouse_and_dnd_batch_semantics() {
 
     for args in [
         vec![Value::NIL],
-        vec![Value::make_frame(1)],
+        vec![Value::mint_frame(1)],
         vec![Value::fixnum(1)],
         vec![terminal_handle_value()],
         vec![Value::NIL, Value::NIL],
@@ -5299,13 +5299,15 @@ fn tty_frame_uses_terminal_capabilities_even_with_a_frontend_host() {
     // screen-256color: bold, dim, underline and standout, but no `sitm' and no
     // `smxx'.
     crate::emacs_core::terminal::pure::configure_terminal_runtime(
-        crate::emacs_core::terminal::pure::TerminalRuntimeConfig::interactive(Some("screen-256color".to_string()), neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities::full_with_color_cells(256))
-        .with_attribute_capabilities(TtyAttributeCapabilities {
-            italic_sequence: None,
-            strike_through_sequence: None,
-            styled_underline: None,
-            ..TtyAttributeCapabilities::full()
-        }),
+        crate::emacs_core::terminal::pure::TerminalRuntimeConfig::interactive(
+            Some("screen-256color".to_string()),
+            TtyAttributeCapabilities {
+                italic_sequence: None,
+                strike_through_sequence: None,
+                styled_underline: None,
+                ..TtyAttributeCapabilities::full()
+            },
+        ),
     );
 
     let supported = |eval: &mut neovm_eval::emacs_core::eval::Context, attrs: Vec<Value>| -> bool {

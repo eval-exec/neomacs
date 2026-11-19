@@ -192,7 +192,10 @@ fn string_match_multibyte_charset_range_matches_interior_character() {
     crate::test_utils::init_test_tracing();
     let pattern = lisp_pat("[À-Å]");
     let compiled = regex_emacs::regex_compile_lisp_with_translation(&pattern, false, None).unwrap();
-    assert_eq!(compiled.multibyte_charsets.get(&0), Some(&vec![('À', 'Å')]));
+    assert_eq!(
+        compiled.multibyte_charsets().get(&0),
+        Some(&vec![('À', 'Å')])
+    );
     let folded = regex_emacs::regex_compile_lisp_with_translation(
         &pattern,
         false,
@@ -201,7 +204,7 @@ fn string_match_multibyte_charset_range_matches_interior_character() {
     .unwrap();
     assert!(
         folded
-            .multibyte_charsets
+            .multibyte_charsets()
             .get(&0)
             .is_some_and(|ranges| ranges.contains(&('à', 'å'))),
         "case-folded range should include GNU's translated image"
@@ -1204,7 +1207,7 @@ fn regex_bench_literal_100kb() {
     });
 
     let cp = regex_bench_compile(needle, false);
-    assert!(cp.fastmap_accurate && !cp.uses_syntax);
+    assert!(cp.fastmap_accurate() && !cp.uses_syntax);
     let t_engine = regex_bench_min(iters, || {
         let syn = DefaultSyntaxLookup;
         assert!(regex_emacs::re_search(&cp, bytes, 0, bytes.len() as isize, &syn, 0).is_some());
@@ -1713,27 +1716,30 @@ fn regex_fastmap_syntax_pattern_gates() {
     // fastmap; the leading exactn provides the single candidate byte.
     let cp = regex_bench_compile("(defun\\_>", false);
     assert!(cp.uses_syntax, "\\_> consults syntax at match time");
-    assert!(!cp.used_syntax, "no table content is baked for \\_>");
-    assert!(cp.fastmap_accurate && !cp.can_be_null, "fastmap stays live");
+    assert!(!cp.used_syntax(), "no table content is baked for \\_>");
+    assert!(
+        cp.fastmap_accurate() && !cp.can_be_null(),
+        "fastmap stays live"
+    );
     assert!(cp.fastmap[b'(' as usize]);
     assert!(!cp.fastmap[b'd' as usize]);
 
     // Zero-width `\<` contributes the following atom (GNU: "not
     // succeeded yet", keep walking).
     let cp = regex_bench_compile("\\<defun", false);
-    assert!(!cp.can_be_null);
+    assert!(!cp.can_be_null());
     assert!(cp.fastmap[b'd' as usize]);
     assert!(!cp.fastmap[b'e' as usize]);
 
     // Leading `\w` (syntaxspec): GNU analyze_first aborts ("This match
     // depends on text properties") -> can_be_null -> no skip.
     let cp = regex_bench_compile("\\w+", false);
-    assert!(cp.can_be_null, "leading syntaxspec disables the skip");
+    assert!(cp.can_be_null(), "leading syntaxspec disables the skip");
 
     // Fixed POSIX class: fastmap = ASCII members + multibyte leads; no
     // syntax-table axis.
     let cp = regex_bench_compile("[[:digit:]]x", false);
-    assert!(!cp.can_be_null && !cp.used_syntax);
+    assert!(!cp.can_be_null() && !cp.used_syntax());
     assert!(cp.fastmap[b'5' as usize]);
     assert!(!cp.fastmap[b'a' as usize]);
     assert!(cp.fastmap[0xC3], "class charsets admit multibyte leads");
@@ -1741,7 +1747,7 @@ fn regex_fastmap_syntax_pattern_gates() {
     // Syntax-dependent POSIX class: `used_syntax` (GNU
     // regex-emacs.c:2096-2101) + standard-table ASCII word members.
     let cp = regex_bench_compile("[[:word:]]+z", false);
-    assert!(cp.used_syntax && !cp.can_be_null);
+    assert!(cp.used_syntax() && !cp.can_be_null());
     assert!(cp.fastmap[b'a' as usize] && cp.fastmap[b'0' as usize]);
     assert!(
         !cp.fastmap[b'-' as usize],
@@ -1755,7 +1761,7 @@ fn regex_fastmap_syntax_pattern_gates() {
 
     // keyword-colon: `\_<` passes through to the exactn `:`.
     let cp = regex_bench_compile("\\_<:\\(?:\\w\\|\\s_\\|\\\\.\\)+\\_>", false);
-    assert!(!cp.can_be_null);
+    assert!(!cp.can_be_null());
     assert!(cp.fastmap[b':' as usize]);
     assert!(!cp.fastmap[b'a' as usize]);
 }

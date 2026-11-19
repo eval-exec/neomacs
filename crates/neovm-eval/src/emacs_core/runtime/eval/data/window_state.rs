@@ -15,12 +15,10 @@ use neovm_edit::buffer::{
 use neovm_edit::emacs_core::display_metrics::GuiFrameGeometryHints;
 use neovm_edit::emacs_core::display_metrics::{Rect, WindowId, WindowMargins};
 use neovm_edit::emacs_core::textprop::WindowBufferLookup;
-#[cfg(any(test, feature = "test-support"))]
-use neovm_value::display_vocab::WindowSystemKind;
 use neovm_value::display_vocab::{
     ChangeStamp, FRAME_ID_BASE, FrameId, FrameParam, FrameQueryParam, FrameVisibility,
     RenderFrameVisibility, SourcePreloadWindowRetirementRefusal, SplitDirection,
-    WindowHistoryState, WindowLayoutVariable,
+    WindowHistoryState, WindowLayoutVariable, WindowSystemKind,
 };
 use neovm_value::gc_trace::GcTrace;
 use neovm_value::intern::SymId;
@@ -109,11 +107,6 @@ impl ChromeDirty {
         self.all_generation
     }
 
-    /// Whether WINDOW carries its own mark (GNU `w->update_mode_line`).
-    pub fn is_window_marked(&self, window: WindowId) -> bool {
-        self.windows.contains(&window)
-    }
-
     /// Whether WINDOW must re-generate its chrome this redisplay.
     pub fn is_dirty(&self, window: WindowId) -> bool {
         self.windows.contains(&window)
@@ -127,7 +120,8 @@ impl ChromeDirty {
     /// this answers the question for windows redisplay has already visited.
     /// [`Self::is_dirty`] is the per-window authority and does treat an
     /// unknown window as dirty.
-    pub fn is_any_dirty(&self) -> bool {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn is_any_dirty(&self) -> bool {
         !self.windows.is_empty()
             || self
                 .acknowledged
@@ -145,13 +139,6 @@ impl ChromeDirty {
     pub fn note_chrome_generated(&mut self, window: WindowId) {
         self.windows.remove(&window);
         self.acknowledged.insert(window, self.all_generation);
-    }
-
-    /// Drop a deleted window's acknowledgement so the table does not grow
-    /// without bound across a session's window churn.
-    pub fn forget_window(&mut self, window: WindowId) {
-        self.windows.remove(&window);
-        self.acknowledged.remove(&window);
     }
 }
 
@@ -362,7 +349,7 @@ pub struct CharTableLayoutRevision(u64);
 
 impl CharTableLayoutRevision {
     /// Wrap one evaluator-thread char-table mutation counter value.
-    pub const fn from_counter(counter: u64) -> Self {
+    pub(crate) const fn from_counter(counter: u64) -> Self {
         Self(counter)
     }
 }
@@ -380,15 +367,15 @@ pub struct WindowLayoutInputState {
     pub preserve_vscroll_p: bool,
     pub glyph_matrix_row_scale: neomacs_display_protocol::glyph_matrix_capacity::GlyphMatrixInput,
     pub margins: WindowMargins,
-    pub display_table_identity: usize,
+    pub(crate) display_table_identity: usize,
     pub char_table_mutation_epoch: CharTableLayoutRevision,
     pub window_parameters_generation: u64,
     pub left_fringe_width: i32,
     pub right_fringe_width: i32,
     pub fringes_outside_margins: bool,
-    pub left_scroll_bar_width: i64,
-    pub right_scroll_bar_width: i64,
-    pub horizontal_scroll_bar_height: i64,
+    pub(crate) left_scroll_bar_width: i64,
+    pub(crate) right_scroll_bar_width: i64,
+    pub(crate) horizontal_scroll_bar_height: i64,
 }
 
 /// Zero-based glyph-matrix row coordinate.
@@ -453,11 +440,13 @@ impl WindowEndRecord {
         )
     }
 
-    pub const fn char_offset_from_z(self) -> CharLen {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) const fn char_offset_from_z(self) -> CharLen {
         self.char_offset_from_z
     }
 
-    pub const fn byte_offset_from_z(self) -> EmacsByteLen {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) const fn byte_offset_from_z(self) -> EmacsByteLen {
         self.byte_offset_from_z
     }
 
@@ -482,7 +471,8 @@ impl WindowEndRecord {
     }
 
     /// Recover the byte companion of [`Self::charpos_from_z`].
-    pub const fn bytepos_from_z(self, buffer_z_byte: EmacsBytePos) -> EmacsBytePos {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) const fn bytepos_from_z(self, buffer_z_byte: EmacsBytePos) -> EmacsBytePos {
         buffer_z_byte.saturating_sub_len(self.byte_offset_from_z)
     }
 }
@@ -519,7 +509,8 @@ impl WindowEndState {
     }
 
     /// Recover the byte companion of [`Self::charpos_from_z`].
-    pub fn bytepos_from_z(self, buffer_z_byte: EmacsBytePos) -> EmacsBytePos {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn bytepos_from_z(self, buffer_z_byte: EmacsBytePos) -> EmacsBytePos {
         self.record()
             .map_or(buffer_z_byte, |record| record.bytepos_from_z(buffer_z_byte))
     }
@@ -921,12 +912,6 @@ impl WindowDisplayState {
         self.redisplay_output.as_ref()
     }
 
-    pub fn clear_cursor_state(&mut self) {
-        self.cursor = None;
-        self.clear_output_cursor_state();
-        self.clear_physical_cursor_state();
-    }
-
     /// Start a new output pass for this window.
     ///
     /// The last committed output cursor remains authoritative until redisplay
@@ -1011,21 +996,6 @@ impl WindowVisibleBufferSpan {
 
     pub const fn end(self) -> LispCharPos1 {
         self.end
-    }
-
-    /// Convert the inclusive redisplay span into GNU's Lisp-visible
-    /// `window-end` position.
-    ///
-    /// Published row ends normally identify the last displayed character, so
-    /// `window-end` is the following insertion position. Redisplay also
-    /// publishes Z itself for a visible EOB insertion slot; that boundary is
-    /// already a Lisp position and must not be advanced past `point-max`.
-    pub fn lisp_window_end(self, buffer_z: LispCharPos1) -> LispCharPos1 {
-        if self.end >= buffer_z {
-            buffer_z
-        } else {
-            LispCharPos1::new(self.end.as_i64().saturating_add(1))
-        }
     }
 }
 
@@ -1729,7 +1699,7 @@ pub enum PresentationPositions {
 
 /// Immutable numeric descriptors and maps with one thread-safe vector cache.
 /// Concurrent readers publish once; no Lisp state or snapshot object is retained.
-pub(crate) struct DeferredPositions {
+pub struct DeferredPositions {
     pub(crate) rows: DisplayPointRows,
     pub(crate) body_rows: HashMap<i64, PresentedBodyRowSnapshot>,
     pub(crate) row_heights: HashMap<i64, i64>,
@@ -1991,16 +1961,6 @@ impl Window {
         }
     }
 
-    /// Mutable counterpart of [`Window::children`], for the structural edits
-    /// -- push, remove, reorder -- that [`WindowTree`] performs on behalf of
-    /// split and delete.  `None` for a leaf, which has no child list to edit.
-    pub fn children_mut(&mut self) -> Option<&mut Vec<WindowId>> {
-        match self {
-            Window::Leaf { .. } => None,
-            Window::Internal { children, .. } => Some(children),
-        }
-    }
-
     /// Character-line top edge. GNU `w->top_line` (`WINDOW_TOP_EDGE_LINE`).
     pub fn top_line(&self) -> i64 {
         match self {
@@ -2223,14 +2183,6 @@ impl Window {
         }
     }
 
-    /// Set the lower bound for automatic horizontal scrolling
-    /// (`w->min_hscroll`). No-op for internal nodes.
-    pub fn set_min_hscroll(&mut self, value: usize) {
-        if let Window::Leaf { min_hscroll, .. } = self {
-            *min_hscroll = value;
-        }
-    }
-
     /// Whether automatic horizontal scrolling is currently suspended
     /// (`w->suspend_auto_hscroll`).
     pub fn suspend_auto_hscroll(&self) -> bool {
@@ -2360,7 +2312,8 @@ impl Window {
         }
     }
 
-    pub fn redisplay_output(&self) -> Option<&WindowRedisplayOutput> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn redisplay_output(&self) -> Option<&WindowRedisplayOutput> {
         self.display()?.redisplay_output()
     }
 
@@ -2489,13 +2442,6 @@ impl Window {
         }
     }
 
-    /// Stamp this window with the epoch that has just been recorded.
-    pub fn set_change_stamp(&mut self, stamp: ChangeStamp) {
-        if let Window::Leaf { change_stamp, .. } = self {
-            *change_stamp = Some(stamp);
-        }
-    }
-
     pub fn buffer_id(&self) -> Option<BufferId> {
         match self {
             Window::Leaf { buffer_id, .. } => Some(*buffer_id),
@@ -2564,7 +2510,8 @@ impl Window {
     }
 
     /// Stored byte-position `window-end` for this leaf window.
-    pub fn window_end_bytepos(&self, buffer_z_byte: EmacsBytePos) -> Option<EmacsBytePos> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn window_end_bytepos(&self, buffer_z_byte: EmacsBytePos) -> Option<EmacsBytePos> {
         match self {
             Window::Leaf { window_end, .. } => Some(window_end.bytepos_from_z(buffer_z_byte)),
             Window::Internal { .. } => None,
@@ -2775,7 +2722,8 @@ impl WindowTree {
         self.nodes.values()
     }
 
-    pub fn nodes_mut(&mut self) -> impl Iterator<Item = &mut Window> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn nodes_mut(&mut self) -> impl Iterator<Item = &mut Window> {
         self.nodes.values_mut()
     }
 
@@ -3111,7 +3059,8 @@ impl WindowPresentationSnapshot {
     }
 
     /// A snapshot kept only as renderer and interaction geometry.
-    pub fn geometry_only(snapshot: WindowDisplaySnapshot) -> Self {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn geometry_only(snapshot: WindowDisplaySnapshot) -> Self {
         Self::GeometryOnly(std::sync::Arc::new(snapshot))
     }
 
@@ -3240,6 +3189,21 @@ pub struct PendingIntentLedger<Scope> {
 pub struct PendingContentTransitionIntents {
     pub windows: PendingIntentLedger<WindowId>,
     pub frames: PendingIntentLedger<FrameId>,
+}
+
+/// One deleted window's records, held aside while a full collection decides
+/// whether its owning frame object is still reachable.
+pub(crate) struct DeletedFrameWindowRecord {
+    pub(crate) window: WindowId,
+    pub(crate) record: DeletedWindowRecord,
+    pub(crate) parameters: Option<WindowParameters>,
+}
+
+/// Window records of one deleted frame, taken out of the traced maps for a
+/// single explicit full collection.
+pub(crate) struct DeletedFrameGcRecord {
+    pub(crate) frame_id: u64,
+    pub(crate) windows: Vec<DeletedFrameWindowRecord>,
 }
 
 /// What a deleted window remembers on the window object GNU keeps alive.
@@ -3521,6 +3485,44 @@ pub struct Frame {
     pub buried_buffer_list: Vec<BufferId>,
 }
 
+/// Output method kept for a frame after it leaves the live map.
+///
+/// GNU `delete_frame` clears `f->terminal` (frame.c:2940) and does not
+/// touch `output_method`. `Fframep` (frame.c:300-316) still switches on
+/// that field, so a deleted frame answers `t` or its window system.
+/// `frame-live-p` stays nil. The value is copied from the frame's own
+/// output-method field at deletion, not from a frame parameter.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DeletedFrameTombstone {
+    output: DeletedFrameOutput,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DeletedFrameOutput {
+    Text,
+    Window(WindowSystemKind),
+}
+
+impl DeletedFrameTombstone {
+    fn from_frame(frame: &Frame) -> Self {
+        let output = match frame
+            .effective_window_system()
+            .and_then(|value| WindowSystemKind::from_symbol_value(&value))
+        {
+            Some(kind) => DeletedFrameOutput::Window(kind),
+            None => DeletedFrameOutput::Text,
+        };
+        Self { output }
+    }
+
+    fn lisp_value(self) -> Value {
+        match self.output {
+            DeletedFrameOutput::Text => Value::T,
+            DeletedFrameOutput::Window(kind) => Value::symbol(kind.name()),
+        }
+    }
+}
+
 pub struct FrameManager {
     pub frames: HashMap<FrameId, Frame>,
     /// Called on each newly built Frame before it is inserted. The Lisp
@@ -3548,6 +3550,9 @@ pub struct FrameManager {
     /// window from the tree, so the buffer has to be recorded here instead --
     /// a set of ids alone cannot answer the question.
     pub deleted_windows: HashMap<WindowId, DeletedWindowRecord>,
+    /// Output method of each deleted frame, keyed by the frame id the Lisp
+    /// object still carries. Live lookup does not consult this map.
+    pub deleted_frames: HashMap<FrameId, DeletedFrameTombstone>,
     pub deleted_window_parameters: HashMap<WindowId, WindowParameters>,
     pub window_select_count: i64,
     pub next_navigation_intent_generation: std::num::NonZeroU64,
@@ -3863,12 +3868,9 @@ impl WindowDisplaySnapshot {
         &mut self.points
     }
 
-    pub fn clear_point_rows(&mut self) {
-        self.point_rows = None;
-    }
-
     /// Replace the flat points and invalidate any previous shared representation.
-    pub fn set_points(&mut self, points: Vec<DisplayPointSnapshot>) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn set_points(&mut self, points: Vec<DisplayPointSnapshot>) {
         self.point_rows = None;
         self.points = points;
     }
@@ -3887,13 +3889,13 @@ impl WindowDisplaySnapshot {
 
     /// Convert a redisplay Y relative to the window top into GNU's text-area
     /// coordinate space used by text `posn` values.
-    pub fn text_area_relative_y(&self, window_relative_y: i64) -> i64 {
+    pub(crate) fn text_area_relative_y(&self, window_relative_y: i64) -> i64 {
         window_relative_y.saturating_sub(self.top_chrome_height())
     }
 
     /// Convert a redisplay row relative to the window top into GNU's text-area
     /// row used by text `posn` values.
-    pub fn text_area_relative_row(&self, window_relative_row: i64) -> i64 {
+    pub(crate) fn text_area_relative_row(&self, window_relative_row: i64) -> i64 {
         window_relative_row.saturating_sub(self.top_chrome_rows())
     }
 
@@ -4113,7 +4115,8 @@ impl WindowDisplaySnapshot {
     /// Making it a variant rather than a `None` is what forces
     /// [`Self::point_at_coords`] to decide, instead of reporting GNU's ZV
     /// answer as no answer at all.
-    pub fn row_at_y(&self, y: i64) -> WindowSnapshotRowAtY<'_> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn row_at_y(&self, y: i64) -> WindowSnapshotRowAtY<'_> {
         if let Some(row) = self
             .rows
             .iter()
@@ -4420,7 +4423,7 @@ impl PendingGuiResize {
         }
     }
 
-    pub fn after_native_observation(mut self, width: u32, height: u32) -> Option<Self> {
+    pub(crate) fn after_native_observation(mut self, width: u32, height: u32) -> Option<Self> {
         if let GuiResizeDelivery::Requested {
             width: target_width,
             height: target_height,
@@ -4471,6 +4474,7 @@ impl Default for FrameManager {
             window_sequence_origin: WindowSequenceOrigin(FIRST_WINDOW_ID),
             old_selected_window: None,
             deleted_windows: HashMap::default(),
+            deleted_frames: HashMap::default(),
             deleted_window_parameters: HashMap::default(),
             window_select_count: 0,
             next_navigation_intent_generation: std::num::NonZeroU64::MIN,
@@ -4833,7 +4837,8 @@ impl WindowRegions {
     pub const fn right_margin_columns(self) -> i64 {
         self.right_margin_columns
     }
-    pub fn matches_transport(self, regions: &PresentedWindowRegions) -> bool {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn matches_transport(self, regions: &PresentedWindowRegions) -> bool {
         Self::from_transport(regions).is_ok_and(|other| other == self)
     }
     pub const fn left_margin(self) -> Option<PixelRect<FrameLogicalSpace>> {
@@ -4934,7 +4939,7 @@ impl WindowChromeLine {
 
 impl WindowPart {
     /// The chrome line this part is, if it is one.
-    pub const fn chrome_line(self) -> Option<WindowChromeLine> {
+    pub(crate) const fn chrome_line(self) -> Option<WindowChromeLine> {
         match self {
             Self::TabLine => Some(WindowChromeLine::TabLine),
             Self::HeaderLine => Some(WindowChromeLine::HeaderLine),
@@ -4952,7 +4957,8 @@ impl WindowPart {
     /// witness, but only by holding a classification that says "text area",
     /// so no route reaches the buffer-position lookup with a mode-line or
     /// header-line coordinate.
-    pub const fn text_area_coordinate(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) const fn text_area_coordinate(
         self,
         text_area_x: i64,
         window_y: i64,
@@ -5501,7 +5507,8 @@ impl Frame {
     /// [`WindowPresentationSnapshot::LiveWindow`]. Keeping the domain attached
     /// to the snapshot prevents a hit and an unrelated boolean from drifting
     /// apart as they pass through interaction code.
-    pub fn active_window_presentation(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn active_window_presentation(
         &self,
         window: WindowId,
     ) -> Option<&WindowPresentationSnapshot> {
@@ -5528,16 +5535,24 @@ impl Frame {
     /// GNU's tree (`make_frame` links them, src/frame.c) and so is visited by
     /// the same walk. That is why a Y one row below a window with no mode line
     /// answers the MINIBUFFER's position rather than nothing.
-    pub fn coordinate_hit(&self, x: i64, y: i64) -> Option<FrameCoordinateHit> {
+    pub(crate) fn coordinate_hit(&self, x: i64, y: i64) -> Option<FrameCoordinateHit> {
         self.coordinate_hit_with(x, y, None)
     }
 }
 
 impl FrameManager {
     /// The only conversion from native identity to GNU's printable sequence.
-    pub fn window_sequence_number(&self, window: WindowId) -> WindowSequenceNumber {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn window_sequence_number(&self, window: WindowId) -> WindowSequenceNumber {
         self.window_sequence_origin
             .sequence_number(window, WindowId(self.next_window_id))
+    }
+
+    /// `framep` of a deleted frame. Live frames are not stored here.
+    pub fn deleted_frame_output(&self, id: FrameId) -> Option<Value> {
+        self.deleted_frames
+            .get(&id)
+            .map(|tombstone| tombstone.lisp_value())
     }
 
     /// Get a frame by ID.
@@ -5855,7 +5870,8 @@ impl Frame {
             .is_some()
     }
 
-    pub fn retire_display_presentation(&mut self, presentation: PresentationId) -> bool {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn retire_display_presentation(&mut self, presentation: PresentationId) -> bool {
         if self
             .presentation_state
             .active
@@ -6000,7 +6016,8 @@ impl FrameManager {
     /// (`pdumper.c:2996-3002`) and recreates the initial root at sequence one
     /// (`window.c:9143-9178`). Keep native IDs and deleted-window records intact:
     /// an escaped preload handle must never alias the runtime's new root.
-    pub fn retire_source_preload_window_sequences(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn retire_source_preload_window_sequences(
         &mut self,
     ) -> Result<(), SourcePreloadWindowRetirementRefusal> {
         if !self.frames.is_empty() {
@@ -6067,6 +6084,8 @@ impl FrameManager {
             })
             .flatten();
         if let Some(frame) = self.frames.remove(&id) {
+            self.deleted_frames
+                .insert(id, DeletedFrameTombstone::from_frame(&frame));
             let terminal_id = frame.terminal_id;
             self.pending_content_transition_intents.frames.remove(id);
             for wid in frame.window_list() {
@@ -6207,7 +6226,7 @@ impl FrameManager {
     /// Commit the global selected-window history at GNU's window-change
     /// recording boundary. Selection itself must not advance this history:
     /// callers can observe the previous window until the next redisplay.
-    pub fn record_selected_window_after_redisplay(&mut self) -> Option<WindowId> {
+    pub(crate) fn record_selected_window_after_redisplay(&mut self) -> Option<WindowId> {
         let selected = self.selected_frame().map(|frame| frame.selected_window);
         self.old_selected_window = selected;
         selected
@@ -6792,14 +6811,14 @@ impl Frame {
         self.parameters.remove(&key)
     }
 
-    pub fn default_left_fringe_width(&self) -> i64 {
+    pub(crate) fn default_left_fringe_width(&self) -> i64 {
         self.known_parameter(FrameParam::LeftFringe)
             .and_then(|v| v.as_int())
             .unwrap_or(8)
             .max(0)
     }
 
-    pub fn default_right_fringe_width(&self) -> i64 {
+    pub(crate) fn default_right_fringe_width(&self) -> i64 {
         self.known_parameter(FrameParam::RightFringe)
             .and_then(|v| v.as_int())
             .unwrap_or(8)
@@ -7058,7 +7077,7 @@ impl FrameManager {
             .filter(|parent| self.frames.contains_key(parent))
     }
 
-    pub fn frame_ancestors_visible_p(&self, id: FrameId) -> bool {
+    pub(crate) fn frame_ancestors_visible_p(&self, id: FrameId) -> bool {
         let mut current = Some(id);
         let mut seen = HashSet::default();
         while let Some(frame_id) = current {
@@ -7090,6 +7109,118 @@ impl FrameManager {
         let a_z = self.frames.get(&a).map(|frame| frame.z_order).unwrap_or(0);
         let b_z = self.frames.get(&b).map(|frame| frame.z_order).unwrap_or(0);
         a_z.cmp(&b_z).then_with(|| a.0.cmp(&b.0))
+    }
+
+    /// Pull dead-frame window records out of the traced maps for one explicit
+    /// full collection.
+    ///
+    /// The set of frames is the tombstone map. Grouping `deleted_windows` by
+    /// owner would skip a deleted frame that has no window record, and that
+    /// frame would stay an unconditional registry root. A tombstone is armed
+    /// with whatever fields it has, including an empty list.
+    ///
+    /// A dead frame that owns any materialized window object is not armed.
+    /// GNU `mark_window` marks `w->frame`, and the window registry keeps that
+    /// window object for the session, so the frame stays an ordinary root and
+    /// its parameter records stay in the traced maps. Windows deleted from a
+    /// frame that is still live stay in the maps as well.
+    pub(crate) fn take_deleted_frames_for_gc(
+        &mut self,
+        window_materialized: impl Fn(u64) -> bool,
+    ) -> (Vec<(u64, Vec<Value>)>, Vec<DeletedFrameGcRecord>) {
+        let frame_ids: Vec<FrameId> = self.deleted_frames.keys().copied().collect();
+        let mut ephemerons = Vec::new();
+        let mut taken = Vec::new();
+        for frame_id in frame_ids {
+            if self.frames.contains_key(&frame_id) {
+                continue;
+            }
+            let windows: Vec<WindowId> = self
+                .deleted_windows
+                .iter()
+                .filter_map(|(wid, record)| (record.owner == Some(frame_id)).then_some(*wid))
+                .collect();
+            if windows.iter().any(|wid| window_materialized(wid.0)) {
+                continue;
+            }
+            let mut fields = Vec::new();
+            let mut records = Vec::new();
+            for wid in windows {
+                let Some(record) = self.deleted_windows.remove(&wid) else {
+                    continue;
+                };
+                let parameters = self.deleted_window_parameters.remove(&wid);
+                if let Some(params) = parameters.as_ref() {
+                    for (key, value) in params {
+                        fields.push(*key);
+                        fields.push(*value);
+                    }
+                }
+                records.push(DeletedFrameWindowRecord {
+                    window: wid,
+                    record,
+                    parameters,
+                });
+            }
+            ephemerons.push((frame_id.0, fields));
+            taken.push(DeletedFrameGcRecord {
+                frame_id: frame_id.0,
+                windows: records,
+            });
+        }
+        (ephemerons, taken)
+    }
+
+    /// Put an uncommitted batch back. A panicking collection calls this from
+    /// its drop guard so the records are not lost.
+    pub(crate) fn restore_deleted_frame_records(&mut self, taken: Vec<DeletedFrameGcRecord>) {
+        for frame in taken {
+            self.put_back_deleted_frame_windows(frame.windows);
+        }
+    }
+
+    fn put_back_deleted_frame_windows(&mut self, windows: Vec<DeletedFrameWindowRecord>) {
+        for window in windows {
+            self.deleted_windows.insert(window.window, window.record);
+            if let Some(parameters) = window.parameters {
+                self.deleted_window_parameters
+                    .insert(window.window, parameters);
+            }
+        }
+    }
+
+    /// Drop the output-method tombstone for a frame whose heap object this
+    /// collection reclaimed. `framep` then has nothing to answer with.
+    pub(crate) fn forget_reclaimed_frame(&mut self, frame_id: FrameId) {
+        self.deleted_frames.remove(&frame_id);
+    }
+
+    /// Apply one collection's reclaimed frame ids.
+    ///
+    /// Reached frames get their window records back. A reclaimed frame drops
+    /// `deleted_windows` and `deleted_window_parameters` only for windows that
+    /// have no materialized window object. A materialized window keeps its
+    /// records even if its frame id was reported reclaimed.
+    pub(crate) fn commit_reclaimed_deleted_frames(
+        &mut self,
+        taken: Vec<DeletedFrameGcRecord>,
+        reclaimed: &[u64],
+        window_materialized: impl Fn(u64) -> bool,
+    ) {
+        let reclaimed: HashSet<u64> = reclaimed.iter().copied().collect();
+        for frame in taken {
+            if reclaimed.contains(&frame.frame_id) {
+                self.forget_reclaimed_frame(FrameId(frame.frame_id));
+                let (keep, drop_these): (Vec<_>, Vec<_>) = frame
+                    .windows
+                    .into_iter()
+                    .partition(|window| window_materialized(window.window.0));
+                drop(drop_these);
+                self.put_back_deleted_frame_windows(keep);
+            } else {
+                self.put_back_deleted_frame_windows(frame.windows);
+            }
+        }
     }
 
     /// What a window should remember once it is deleted.
@@ -7200,7 +7331,7 @@ impl Frame {
             .saturating_add(self.tab_bar_height) as f32
     }
 
-    pub fn default_vertical_scroll_bar_side(&self) -> Option<&'static str> {
+    pub(crate) fn default_vertical_scroll_bar_side(&self) -> Option<&'static str> {
         let raw = self
             .known_parameter(FrameParam::VerticalScrollBars)
             .unwrap_or_else(|| {
@@ -7218,7 +7349,7 @@ impl Frame {
         }
     }
 
-    pub fn default_vertical_scroll_bar_width(&self) -> i64 {
+    pub(crate) fn default_vertical_scroll_bar_width(&self) -> i64 {
         i64::from(frame_config_scroll_bar_width(self))
     }
 }
@@ -7275,6 +7406,7 @@ impl FrameManager {
             window_sequence_origin: WindowSequenceOrigin(FIRST_WINDOW_ID),
             old_selected_window: None,
             deleted_windows: HashMap::default(),
+            deleted_frames: HashMap::default(),
             deleted_window_parameters: HashMap::default(),
             window_select_count: 0,
             next_navigation_intent_generation: std::num::NonZeroU64::MIN,
@@ -7300,7 +7432,7 @@ impl Frame {
 
 impl FrameManager {
     /// Install the hook run on every newly created frame.
-    pub fn set_frame_init_hook(&mut self, hook: fn(&mut Frame)) {
+    pub(crate) fn set_frame_init_hook(&mut self, hook: fn(&mut Frame)) {
         self.frame_init_hook = Some(hook);
     }
 }

@@ -12,7 +12,8 @@
 /// Non-positive pids are rejected (0 and negatives address process groups under
 /// `kill`, not a single process).
 #[cfg(unix)]
-pub fn process_is_alive(pid: i64) -> bool {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn process_is_alive(pid: i64) -> bool {
     let Ok(pid) = libc::pid_t::try_from(pid) else {
         return false;
     };
@@ -36,7 +37,8 @@ pub fn process_is_alive(pid: i64) -> bool {
 /// `ERROR_ACCESS_DENIED`); that native probe is left for a Windows build. The
 /// `/proc` heuristic is retained meanwhile (always false off Linux).
 #[cfg(not(unix))]
-pub fn process_is_alive(pid: i64) -> bool {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn process_is_alive(pid: i64) -> bool {
     if pid <= 0 {
         return false;
     }

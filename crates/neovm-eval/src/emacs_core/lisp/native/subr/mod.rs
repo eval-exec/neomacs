@@ -631,6 +631,67 @@ pub fn take_registered_subr_trace_for_test() -> Vec<SubrRegistration> {
     REGISTERED_SUBR_TRACE.with(|trace| trace.borrow_mut().take().unwrap_or_default())
 }
 
+/// W-REG (R1 carry-forward): one installed registration stage — the owning
+/// crate, the typed segment id, and the number of registration rows the
+/// stage installed.
+///
+/// The core-side W-REG gate compares this sequence with the owner manifest,
+/// so a missing or present-but-uninstalled segment is named directly with
+/// its crate and row count before the frozen-trace diff runs.
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[doc(hidden)]
+pub struct SubrStageRegistration {
+    pub owner: &'static str,
+    pub segment: &'static str,
+    pub rows: usize,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+thread_local! {
+    /// `None` = disarmed; mirrors `REGISTERED_SUBR_TRACE`. Only stage calls
+    /// made while a test arms the trace are recorded.
+    static REGISTERED_STAGE_TRACE: std::cell::RefCell<Option<Vec<SubrStageRegistration>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Record one installed stage at its registrar. A no-op while disarmed.
+///
+/// Public (doc-hidden) because the owning crate's `register_stage` calls it;
+/// the item only exists under the test-support surface.
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub fn record_registered_subr_stage_for_test(
+    owner: &'static str,
+    segment: &'static str,
+    rows: usize,
+) {
+    REGISTERED_STAGE_TRACE.with(|trace| {
+        if let Some(trace) = trace.borrow_mut().as_mut() {
+            trace.push(SubrStageRegistration {
+                owner,
+                segment,
+                rows,
+            });
+        }
+    });
+}
+
+/// Arm the stage trace with an empty vector (from now on, stages record).
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub fn reset_registered_subr_stage_trace_for_test() {
+    REGISTERED_STAGE_TRACE.with(|trace| *trace.borrow_mut() = Some(Vec::new()));
+}
+
+/// Drain the stage trace and disarm it. An unarmed trace yields an empty
+/// vector.
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub fn take_registered_subr_stage_trace_for_test() -> Vec<SubrStageRegistration> {
+    REGISTERED_STAGE_TRACE.with(|trace| trace.borrow_mut().take().unwrap_or_default())
+}
+
 const fn is_subrs_source_file(path: &str) -> bool {
     const NAME: &[u8] = b"subrs.rs";
     let bytes = path.as_bytes();
@@ -654,6 +715,30 @@ const fn is_subrs_source_file(path: &str) -> bool {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! define_subrs {
+    // W-REG crate-private form: the catalog and its registrar stay inside the
+    // owning crate so that moving a registration row into that crate adds no
+    // cross-crate `SUBRS`/`register_subrs` public symbols. The crate exposes
+    // its stage table (and one test-support accessor) instead.
+    (crate_private, $($spec:expr),+ $(,)?) => {
+        #[doc(hidden)]
+        pub(crate) const SUBRS: $crate::emacs_core::subr::SubrBatch =
+            $crate::emacs_core::subr::SubrBatch::new(
+                module_path!(),
+                &[$($spec),+],
+            );
+
+        // Apply cfg attributes to array elements before deriving declarations.
+        const _: () = $crate::emacs_core::subr::effect_schema::assert_valid(
+            &$crate::emacs_core::subr::WorldSubr::batch_declarations(&[$($spec),+]),
+        );
+
+        #[doc(hidden)]
+        pub(crate) fn register_subrs(
+            ctx: &mut $crate::emacs_core::eval::Context,
+        ) {
+            SUBRS.install(ctx);
+        }
+    };
     ($($spec:expr),+ $(,)?) => {
         #[doc(hidden)]
         pub const SUBRS: $crate::emacs_core::subr::SubrBatch =
@@ -663,10 +748,6 @@ macro_rules! define_subrs {
             );
 
         // Apply cfg attributes to array elements before deriving declarations.
-        // The duplicate scan is a bounded quadratic loop; the evaluator batch
-        // is large enough to pass rustc's const-eval progress threshold, which
-        // reports long evaluations, not non-terminating ones.
-        #[allow(long_running_const_eval)]
         const _: () = $crate::emacs_core::subr::effect_schema::assert_valid(
             &$crate::emacs_core::subr::WorldSubr::batch_declarations(&[$($spec),+]),
         );

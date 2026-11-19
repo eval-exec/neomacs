@@ -8,6 +8,7 @@
 
 use crate::neovm_bridge::{BufferFaceRemapping, FaceResolver, LayoutBufferView, ResolvedFace};
 use neovm_core::emacs_core::Value;
+use neovm_core::emacs_core::intern::intern;
 
 /// Face capability for frame-owned chrome.
 pub(crate) struct FrameFaces<'a, FS: crate::neovm_bridge::FaceServices = FaceResolver> {
@@ -90,7 +91,7 @@ impl<'a, FS: crate::neovm_bridge::FaceServices> WindowFaces<'a, FS> {
         base: &ResolvedFace,
         face_name: &str,
     ) -> ResolvedFace {
-        self.resolve_face_value_over(base, &Value::symbol(face_name))
+        self.resolve_face_value_over(base, &Value::from_sym_id(intern(face_name)))
             .unwrap_or_else(|| base.clone())
     }
 

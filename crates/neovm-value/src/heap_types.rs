@@ -1003,7 +1003,8 @@ impl LispString {
     }
 
     /// True for GNU's `size_byte == -3`: unibyte bytes that must not move.
-    pub fn is_immovable(&self) -> bool {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn is_immovable(&self) -> bool {
         self.size_byte == SIZE_BYTE_UNIBYTE_IMMOVABLE
     }
 
@@ -1058,7 +1059,8 @@ impl LispString {
         !self.intervals.load(Ordering::Acquire).is_null()
     }
 
-    pub fn clear_intervals(&mut self) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn clear_intervals(&mut self) {
         // SATB (enforced): log the children being dropped BEFORE unlinking —
         // a concurrently-claimed interval-free string is never re-traced this
         // cycle, so this log is the only thing keeping the dropped children
@@ -1250,7 +1252,8 @@ impl LispString {
     /// makes. [`Self::mutate_bytes`] would pop and re-push the trailing NUL
     /// and recount a multibyte string's characters (a scan of the whole
     /// string per `aset`).
-    pub fn set_byte_same_char_count(&mut self, byte_pos: usize, byte: u8) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn set_byte_same_char_count(&mut self, byte_pos: usize, byte: u8) {
         debug_assert!(byte_pos < self.sbytes(), "byte position in range");
         debug_assert!(
             !self.is_multibyte() || (byte < 0x80 && self.as_bytes()[byte_pos] < 0x80),
@@ -1672,7 +1675,7 @@ pub enum OverlaySerialSource {
 /// is atomic so the World is ready for several mutators; ordering between
 /// distinct serials only needs the atomic read-modify-write, hence `Relaxed`.
 #[derive(Debug, Default)]
-pub struct OverlaySerialCounter(std::sync::atomic::AtomicU64);
+pub(crate) struct OverlaySerialCounter(std::sync::atomic::AtomicU64);
 
 impl OverlaySerialCounter {
     pub const fn new() -> Self {
@@ -1682,7 +1685,7 @@ impl OverlaySerialCounter {
     /// Issue the next creation serial. The counter stores the last issued
     /// value; a `fetch_add` therefore yields the successor.
     #[inline]
-    pub fn mint(&self) -> OverlaySerial {
+    pub(crate) fn mint(&self) -> OverlaySerial {
         let next = self
             .0
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
@@ -1810,7 +1813,7 @@ impl MarkerBuffer {
     }
 
     #[inline]
-    pub const fn is_attached(self) -> bool {
+    pub(crate) const fn is_attached(self) -> bool {
         self.0.is_some()
     }
 
@@ -1842,10 +1845,10 @@ const MARKER_LINK_LAST_POSITION_VALID: usize = 0b010;
 const MARKER_LINK_CHAINED: usize = 0b100;
 
 impl MarkerLink {
-    pub const NONE: Self = Self(0);
+    pub(crate) const NONE: Self = Self(0);
 
     #[inline]
-    pub fn from_ptr(next: *mut crate::tagged::header::MarkerObj) -> Self {
+    pub(crate) fn from_ptr(next: *mut crate::tagged::header::MarkerObj) -> Self {
         debug_assert_eq!(
             next as usize & MARKER_LINK_FLAG_BITS,
             0,
@@ -1855,7 +1858,7 @@ impl MarkerLink {
     }
 
     #[inline]
-    pub const fn next_ptr(self) -> *mut crate::tagged::header::MarkerObj {
+    pub(crate) const fn next_ptr(self) -> *mut crate::tagged::header::MarkerObj {
         (self.0 & !MARKER_LINK_FLAG_BITS) as *mut _
     }
 
@@ -1882,7 +1885,7 @@ impl MarkerLink {
     }
 
     #[inline]
-    pub fn with_next(self, next: *mut crate::tagged::header::MarkerObj) -> Self {
+    pub(crate) fn with_next(self, next: *mut crate::tagged::header::MarkerObj) -> Self {
         debug_assert_eq!(
             next as usize & MARKER_LINK_FLAG_BITS,
             0,
@@ -1892,7 +1895,7 @@ impl MarkerLink {
     }
 
     #[inline]
-    pub const fn with_insertion_type(self, value: bool) -> Self {
+    pub(crate) const fn with_insertion_type(self, value: bool) -> Self {
         if value {
             Self(self.0 | MARKER_LINK_INSERTION_TYPE)
         } else {
@@ -1901,7 +1904,7 @@ impl MarkerLink {
     }
 
     #[inline]
-    pub const fn with_last_position_valid(self, value: bool) -> Self {
+    pub(crate) const fn with_last_position_valid(self, value: bool) -> Self {
         if value {
             Self(self.0 | MARKER_LINK_LAST_POSITION_VALID)
         } else {
@@ -1910,7 +1913,7 @@ impl MarkerLink {
     }
 
     #[inline]
-    pub const fn with_chained(self, value: bool) -> Self {
+    pub(crate) const fn with_chained(self, value: bool) -> Self {
         if value {
             Self(self.0 | MARKER_LINK_CHAINED)
         } else {

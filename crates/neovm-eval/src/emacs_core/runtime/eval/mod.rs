@@ -54,8 +54,8 @@ use neovm_value::display_vocab::{FontSlant, FontWeight, FontWidth, FrameFullscre
 use neovm_value::error::*;
 use neovm_value::gc_trace::GcTrace;
 use neovm_value::intern::{
-    SymId, WellKnown, format_symbol_name_for_diagnostic, intern, intern_uninterned,
-    is_canonical_id, is_keyword_id, resolve_sym, symbol_name_id,
+    SymId, WellKnown, format_symbol_name_for_diagnostic, intern, is_canonical_id, is_keyword_id,
+    make_uninterned_symbol, resolve_sym, symbol_name_id,
 };
 use neovm_value::kmacro::KmacroManager;
 use neovm_value::symbol::{CanonicalAccess, ConstantWrite, Obarray};
@@ -90,7 +90,7 @@ pub(crate) use world::WorldSlot;
 #[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 pub use world::sole_owner::SoleOwnerDriver;
-pub use world::{ContextShutdownError, ObarrayWriteAccess, OutstandingWorldViews, WorldEra};
+pub use world::{ContextShutdownError, ObarrayWriteAccess, WorldEra};
 pub(crate) use world::{OwnedRootRegistryView, WorldView};
 
 pub(crate) mod subr_abi;
@@ -99,7 +99,8 @@ pub(crate) mod subr_abi;
 // spelling.
 #[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
-pub use subr_abi::SubrValueExt;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) use subr_abi::SubrValueExt;
 #[cfg(not(any(test, feature = "test-support")))]
 use subr_abi::SubrValueExt;
 use subr_abi::{SubrFn, SubrObj};
@@ -114,6 +115,10 @@ mod text_host;
 pub(crate) use self::lexenv_cache::LexenvAssqCache;
 pub(crate) use callback::{CheckedNativeCallback, native_callback_cache_enabled};
 pub(crate) mod parallel_entry;
+#[doc(hidden)]
+pub use parallel_entry::source_entry::{
+    SourceModuleObservation, install_source_module_scope_probe, source_module_observation,
+};
 #[allow(dead_code)] // Dormant E4-S0 executor substrate; E4 stage 1 consumes it.
 #[doc(hidden)]
 pub mod parallel_exec;
@@ -316,17 +321,28 @@ fn initial_feature_names() -> Vec<&'static str> {
     neovm_value::system_vocab::c_features::initial_feature_names()
 }
 
-fn initial_features_value() -> Value {
+fn initial_features_value(obarray: &mut Obarray) -> Value {
     Value::list(
         initial_feature_names()
             .into_iter()
-            .map(Value::symbol)
+            .map(|name| {
+                let id = intern(name);
+                obarray.ensure_interned_global_id(id);
+                Value::from_sym_id(id)
+            })
             .collect(),
     )
 }
 
-fn initial_feature_ids() -> Vec<SymId> {
-    initial_feature_names().into_iter().map(intern).collect()
+fn initial_feature_ids(obarray: &mut Obarray) -> Vec<SymId> {
+    initial_feature_names()
+        .into_iter()
+        .map(|name| {
+            let id = intern(name);
+            obarray.ensure_interned_global_id(id);
+            id
+        })
+        .collect()
 }
 
 /// GNU's `echo_buffer[2]`: the two buffers the echo area is allowed to display
@@ -863,6 +879,7 @@ pub(crate) const AUDITED_PURE_PRIMITIVES: &[&str] = &["setcar", "setcdr"];
 /// (buffer-change hooks, `word-boundary-function`, ...). Kept next to the
 /// pure list so both are one registration-time source of truth for the
 /// exhaustiveness test.
+#[cfg(test)]
 pub(crate) const AUDITED_REENTRANT_PRIMITIVES: &[&str] =
     &["insert", "delete-region", "indent-to", "forward-word"];
 
@@ -1451,7 +1468,7 @@ impl SpecBinding {
 
 /// A dynamic binding owned by one selected keyboard lifetime.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct KeyboardBinding {
+pub struct KeyboardBinding {
     sym_id: SymId,
     owner: neovm_value::forward::KeyboardBindingOwner,
     old_value: Value,
@@ -2140,12 +2157,12 @@ fn value_from_symbol_id(sym_id: SymId) -> Value {
 
 fn hidden_internal_interpreter_environment_symbol() -> SymId {
     static HIDDEN_SYMBOL: OnceLock<SymId> = OnceLock::new();
-    *HIDDEN_SYMBOL.get_or_init(|| intern_uninterned("internal-interpreter-environment"))
+    *HIDDEN_SYMBOL.get_or_init(|| make_uninterned_symbol("internal-interpreter-environment"))
 }
 
 fn hidden_load_read_stream_token() -> LoadReadStreamToken {
     static HIDDEN_SYMBOL: OnceLock<LoadReadStreamToken> = OnceLock::new();
-    *HIDDEN_SYMBOL.get_or_init(|| LoadReadStreamToken(intern_uninterned("get-file-char")))
+    *HIDDEN_SYMBOL.get_or_init(|| LoadReadStreamToken(make_uninterned_symbol("get-file-char")))
 }
 
 fn default_directory_symbol() -> SymId {
@@ -2226,6 +2243,13 @@ cached_symbol_id!(error_symbol, "error");
 cached_symbol_id!(quit_symbol, "quit");
 cached_symbol_id!(invalid_function_symbol, "invalid-function");
 cached_symbol_id!(error_conditions_symbol, "error-conditions");
+// Signal dispatch reads these on every signal (GNU reads the C variables).
+cached_symbol_id!(signal_hook_function_symbol, "signal-hook-function");
+cached_symbol_id!(inhibit_debugger_symbol, "inhibit-debugger");
+cached_symbol_id!(debug_on_signal_symbol, "debug-on-signal");
+cached_symbol_id!(debug_on_error_symbol, "debug-on-error");
+cached_symbol_id!(debug_on_quit_symbol, "debug-on-quit");
+cached_symbol_id!(debug_ignored_errors_symbol, "debug-ignored-errors");
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 fn is_lambda_like_symbol_id(id: SymId) -> bool {
@@ -2254,7 +2278,12 @@ struct CoreEvalSymbols {
 }
 
 fn install_core_eval_symbols(obarray: &mut Obarray, reset_runtime_values: bool) -> CoreEvalSymbols {
-    obarray.intern("internal-interpreter-environment");
+    // The evaluation environment lives on the process-interned HIDDEN symbol
+    // below; the spelling must not be an obarray member. GNU creates
+    // `Qinternal_interpreter_environment` in `syms_of_eval` and immediately
+    // `Funintern`s it (`src/eval.c:4597`), so `(intern-soft
+    // "internal-interpreter-environment")` is nil at startup. This used to
+    // call `obarray.intern(...)` here and re-expose it.
     let internal_interpreter_environment_symbol = hidden_internal_interpreter_environment_symbol();
     obarray.seed_value_id(internal_interpreter_environment_symbol, Value::NIL);
     obarray.make_special_id(internal_interpreter_environment_symbol);
@@ -2596,6 +2625,9 @@ pub struct FontSpecResolveRequest {
     pub weight: Option<FontWeight>,
     pub slant: Option<FontSlant>,
     pub width: Option<FontWidth>,
+    /// GNU `:otf` requirement. Font matching rejects a font whose
+    /// GSUB/GPOS capability does not satisfy it (`src/font.c:2521-2533`).
+    pub otf: Option<crate::emacs_core::eval::data::fontset_state::StoredOtfSpec>,
 }
 
 /// Listing constraints which must not alter the driver's single-font match
@@ -2875,6 +2907,22 @@ pub struct ResolvedFontEntityMetrics {
     pub metrics: FontPxProbeResult,
     pub file: Option<neovm_value::heap_types::LispString>,
     pub capability: Option<FontOtfCapability>,
+}
+
+/// Request to open one exact font entity for `open-font`.
+///
+/// The entity handle is the catalog identity `find-font`/`list-fonts`
+/// published; opening it must reuse that exact face rather than re-resolve
+/// the visible properties (a family can hold several selectable faces).
+#[derive(Clone, Debug, PartialEq)]
+pub struct FontOpenEntityRequest {
+    pub frame_id: neovm_value::display_vocab::FrameId,
+    pub handle: Option<neovm_value::display_vocab::FontEntityHandle>,
+    pub size: FontOpeningSize,
+    /// GNU's `font_open_entity` `pixel_size` argument as Lisp observes it in
+    /// the font object's `:size`. `None` lets the host substitute the pixel
+    /// size it actually opened (used for point sizes).
+    pub reported_size: Option<i64>,
 }
 
 /// One GSUB/GPOS side of an OpenType capability report: per script
@@ -3343,7 +3391,7 @@ pub struct Context {
     interpreted_closure_filter_fn: Option<Value>,
     pub(crate) in_flight_registry: neovm_value::error::InFlightRegistryHandle,
     #[doc(hidden)]
-    pub cached_standard_case_table: Option<Value>,
+    pub(crate) cached_standard_case_table: Option<Value>,
     /// Edit-owned runtime state: the buffer manager and the insdel
     /// change-combining state. Embedded by value so field access stays one
     /// offset; stage-3 inversion keeps the evaluator above the edit domain.
@@ -3976,6 +4024,24 @@ pub struct Context {
     /// Appended after the pinned layout; only the Context size grows.
     #[doc(hidden)]
     pub frame_and_buffer_state: Option<Value>,
+    /// Collector time banked by `gc_collect_from_current_roots_body`: every
+    /// call of that body that starts, polls, terminates, minor-marks or
+    /// sweeps a cycle without completing it adds its duration here, and the
+    /// body call that completes a cycle publishes the sum into `gc-elapsed`
+    /// (GNU adds the whole `garbage_collect` duration, alloc.c). A cycle
+    /// drained by another `drain_to_quiescent` caller (thread admission,
+    /// green-thread switch or retirement, root registration) leaves its
+    /// banked time here until the next completed collection publishes it.
+    /// Appended after the pinned layout; only the Context size grows.
+    gc_cycle_elapsed: std::time::Duration,
+    /// Frame objects named by bare ids the keyboard still holds: queued
+    /// input, the last event frame, the mouse position, and a presented
+    /// pointer observation. Refreshed before an explicit collection arms
+    /// deleted frames. Appended after the pinned layout so the fields the
+    /// JIT and the bytecode loop load do not move. GNU keeps the same frames
+    /// alive because `recent_keys` stores the frame object
+    /// (`frame.c:2898-2901`).
+    retained_frame_pins: Vec<Value>,
 }
 
 // A mutex does not make the host hooks, Rc leases or TLS views transferable.
@@ -4327,7 +4393,7 @@ pub(crate) fn finish_require_in_state(
     loaded_path: Option<&Path>,
 ) -> EvalResult {
     if features.contains(&sym_id) {
-        Ok(Value::symbol(name))
+        Ok(Value::from_sym_id(intern(name)))
     } else {
         let message = if let Some(path) = loaded_path {
             format!(
@@ -4962,7 +5028,8 @@ impl Context {
     }
 
     /// Whether lexical-binding is currently enabled.
-    pub fn lexical_binding(&self) -> bool {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn lexical_binding(&self) -> bool {
         lexenv_is_active(self.lexenv)
     }
 
@@ -5446,6 +5513,18 @@ impl Context {
 
     /// Evaluate a Lisp expression string. Convenience for tests.
     /// Reads via the Value-native reader and evaluates via eval_sub.
+    /// GNU's reader interns every symbol token into the current obarray as it
+    /// reads it (`Fintern`, `src/lread.c:4674-4709`). The Value-native reader
+    /// allocates canonical ids only, so callers that read source materialize
+    /// the same obarray side effect here. Without this, a spelling the
+    /// profile does not DEFSYM at startup (`fontsize` on Linux, `access` on
+    /// macOS) answers `intern-soft` nil even though Lisp has just read it.
+    fn intern_read_form_symbols(&mut self, forms: &[Value]) {
+        for form in forms {
+            self.obarray_mut().intern_member_symbols_in(*form);
+        }
+    }
+
     pub fn eval_str(&mut self, source: &str) -> Result<Value, EvalError> {
         self.setup_thread_locals();
         let forms = super::value_reader::read_all(source, self.variables()).map_err(|e| {
@@ -5465,6 +5544,10 @@ impl Context {
         for form in &forms {
             self.push_specpdl_root(*form);
         }
+        // The reader interns as it reads (GNU `Fintern`); materialize that
+        // membership after the forms are rooted, because interning can
+        // allocate and collect.
+        self.intern_read_form_symbols(&forms);
         let mut result = Value::NIL;
         let mut error = None;
         for form in &forms {
@@ -5543,6 +5626,8 @@ impl Context {
         for form in &forms {
             self.push_specpdl_root(*form);
         }
+        // Reader interning happens after rooting: it can allocate and collect.
+        self.intern_read_form_symbols(&forms);
         let mut results = Vec::with_capacity(forms.len());
         for form in &forms {
             // Each form is one top-level evaluation: its root group ends when
@@ -5616,7 +5701,7 @@ impl Context {
     /// If `symbols-with-pos-enabled` and `val` is a symbol-with-pos,
     /// return the bare symbol. Otherwise return `val` unchanged.
     #[inline]
-    pub fn unwrap_symbol(&self, val: Value) -> Value {
+    pub(crate) fn unwrap_symbol(&self, val: Value) -> Value {
         self.symbol_mode().unwrap(val)
     }
 
@@ -5663,7 +5748,7 @@ impl Context {
     /// variable's own value answers instead (`thread_projection`).
     #[inline]
     #[doc(hidden)]
-    pub fn forwarded_buffer_obj_value(
+    pub(crate) fn forwarded_buffer_obj_value(
         &self,
         sym_id: SymId,
         sym: &neovm_value::symbol::LispSymbol,
@@ -5766,7 +5851,10 @@ impl Context {
     /// uninterned symbol identity, like Emacs's EQ-based Fassq on
     /// Vinternal_interpreter_environment).
     #[doc(hidden)]
-    pub fn lookup_symbol_value_by_id(&self, sym_id: SymId) -> Result<SymbolValueLookup, Flow> {
+    pub(crate) fn lookup_symbol_value_by_id(
+        &self,
+        sym_id: SymId,
+    ) -> Result<SymbolValueLookup, Flow> {
         // GNU eval.c checks the lexenv for the ORIGINAL symbol BEFORE
         // resolving variable aliases and does not rescan declared-special
         // flags on ordinary reads. Declared-special affects how bindings are
@@ -5796,7 +5884,7 @@ impl Context {
     }
 
     #[doc(hidden)]
-    pub fn find_symbol_value_by_id(&self, sym_id: SymId) -> Result<SymbolValueLookup, Flow> {
+    pub(crate) fn find_symbol_value_by_id(&self, sym_id: SymId) -> Result<SymbolValueLookup, Flow> {
         // Fast path — GNU `find_symbol_value`'s SYMBOL_PLAINVAL leaf: an
         // ordinary global with a bound plain cell answers from one slot
         // read. Aliases, localized/forwarded symbols, unbound cells (where
@@ -6836,7 +6924,11 @@ pub(crate) fn check_forwarded_unbind(
 impl Context {
     /// Call a registered subr value directly. Returns None if VALUE is not a
     /// fully registered subr.
-    pub fn dispatch_subr_value(&mut self, function: Value, args: Vec<Value>) -> Option<EvalResult> {
+    pub(crate) fn dispatch_subr_value(
+        &mut self,
+        function: Value,
+        args: Vec<Value>,
+    ) -> Option<EvalResult> {
         let sym_id = function.as_subr_id()?;
         let wrong_arity_callee = Value::from_sym_id(sym_id);
         self.dispatch_subr_value_internal(function, &args, wrong_arity_callee)
@@ -6845,7 +6937,12 @@ impl Context {
     /// Resolve a symbol identity to its canonical subr object and call it.
     /// Returns None if the symbol's canonical name has no registered subr.
     /// Supports uninterned symbols: falls back to canonical SymId via NameId lookup.
-    pub fn dispatch_subr_id(&mut self, sym_id: SymId, args: Vec<Value>) -> Option<EvalResult> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn dispatch_subr_id(
+        &mut self,
+        sym_id: SymId,
+        args: Vec<Value>,
+    ) -> Option<EvalResult> {
         // Try the sym_id directly first
         let resolved = if lookup_global_subr_entry(sym_id).is_some() {
             sym_id
@@ -6860,7 +6957,7 @@ impl Context {
         self.dispatch_subr_value(function, args)
     }
 
-    pub fn dispatch_subr(&mut self, name: &str, args: Vec<Value>) -> Option<EvalResult> {
+    pub(crate) fn dispatch_subr(&mut self, name: &str, args: Vec<Value>) -> Option<EvalResult> {
         self.dispatch_subr_id(intern(name), args)
     }
 
@@ -7448,6 +7545,9 @@ mod macroexpand;
 
 mod admission;
 pub(crate) use admission::AdmissionError;
+#[doc(hidden)]
+pub mod activation;
+mod activation_owner;
 mod global_state;
 mod green;
 
@@ -7570,9 +7670,9 @@ pub mod redisplay_hooks;
 pub use neovm_edit::emacs_core::redisplay_policy::RedisplayHookPolicyGuard;
 #[doc(hidden)]
 pub use neovm_edit::emacs_core::redisplay_policy::gnu_redisplay_hooks_enabled;
-pub use redisplay_hooks::{
-    RedisplayMiniGeometryRequest, RedisplayMiniGeometrySource, RedisplayMiniPreparationFailure,
-};
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) use redisplay_hooks::RedisplayMiniGeometrySource;
+pub use redisplay_hooks::{RedisplayMiniGeometryRequest, RedisplayMiniPreparationFailure};
 
 mod vm_shared;
 
@@ -7664,6 +7764,9 @@ mod var_fast_tests;
 #[path = "tests/watcher_redispatch_test.rs"]
 mod watcher_redispatch_tests;
 
+#[cfg(test)]
+#[path = "tests/gc_elapsed_whole_cycle_test.rs"]
+mod gc_elapsed_whole_cycle_tests;
 #[cfg(test)]
 #[path = "tests/gc_sweep_cap_test.rs"]
 mod gc_sweep_cap_tests;

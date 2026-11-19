@@ -192,6 +192,9 @@ fn owner_allows(path: &str, owner: NativeOwner) -> bool {
             path == format!("{frontend}frame_layout.rs")
                 || path == format!("{frontend}main.rs")
                 || path == format!("{display}redisplay.rs")
+                // S2 step-2 dormant RedisplayStep executor (DESIGN.md rev3).
+                // Exact file, not a directory: a declared caller of RedisplayRuntime.
+                || path == "neomacs-display-runtime/src/redisplay_step.rs"
                 || path.starts_with(&format!("{display}redisplay/"))
         }
         NativeOwner::CommandTransport => {

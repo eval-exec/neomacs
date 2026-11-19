@@ -77,7 +77,7 @@ fn context(shape: Shape, name: &str, projected: bool) -> Context {
                 .define_bool_variable(name, true, ByteBooleanVars::ErasedByLreadInit);
         }
         Shape::Obj => {
-            ev.obarray.intern(name);
+            ev.obarray.intern_member(name);
             ev.obarray
                 .install_objfwd(intern(name), alloc_objfwd(Value::fixnum(5)));
         }
@@ -209,7 +209,12 @@ fn bytecode_script(name: &str) -> ByteCodeFunction {
         Op::List(2),
         Op::Return,
     ];
-    f.constants = vec![Value::symbol(name), Value::fixnum(50), Value::fixnum(51)].into();
+    f.constants = vec![
+        Value::from_sym_id(intern(name)),
+        Value::fixnum(50),
+        Value::fixnum(51),
+    ]
+    .into();
     f.max_stack = StackDepth::for_test(4);
     f
 }

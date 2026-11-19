@@ -151,7 +151,7 @@ fn symbol_write_window_holds_flags_then_interned_global() {
 fn intern_creates_symbol() {
     crate::test_utils::init_test_tracing();
     let mut ob = Obarray::new();
-    ob.intern("foo");
+    ob.intern_member("foo");
     assert!(ob.intern_soft("foo").is_some());
     assert!(ob.intern_soft("bar").is_none());
 }
@@ -265,7 +265,7 @@ fn t_and_nil_are_preinterned() {
 fn interning_keyword_materializes_gnu_self_evaluating_symbol_state() {
     crate::test_utils::init_test_tracing();
     let mut ob = Obarray::new();
-    ob.intern(":vm-keyword");
+    ob.intern_member(":vm-keyword");
     assert!(ob.is_constant(":vm-keyword"));
     assert!(ob.is_special(":vm-keyword"));
     assert_eq!(
@@ -1037,8 +1037,8 @@ fn clone_obarray_deep_copies_blvs() {
 fn uninterned_keyword_and_nil_names_are_not_canonical_constants() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
-    let nil_id = crate::emacs_core::intern::intern_uninterned("nil");
-    let kw_id = crate::emacs_core::intern::intern_uninterned(":vm-k");
+    let nil_id = crate::emacs_core::intern::make_uninterned_symbol("nil");
+    let kw_id = crate::emacs_core::intern::make_uninterned_symbol(":vm-k");
 
     assert!(!eval.obarray().is_constant_id(nil_id));
     assert!(!eval.obarray().is_constant_id(kw_id));

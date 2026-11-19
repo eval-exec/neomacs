@@ -51,9 +51,9 @@ pub(crate) use super::authority_word::{
 /// immutable-after-creation test, and whether the table was made by
 /// `define-hash-table-test` (lookups must run its test/hash functions).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct TableDescription {
+pub(crate) struct TableDescription {
     pub test: crate::value::HashTableTest,
-    pub user_defined: bool,
+    pub(crate) user_defined: bool,
 }
 
 /// The §3.1 nesting count taken around one user test/hash callback.
@@ -65,7 +65,7 @@ pub struct TableDescription {
 /// The count enter is a direct atomic RMW on the shared byte, never routed
 /// through the serial edit body, so it flips no Lisp-visible contents and
 /// leaves `switch_epoch` untouched. RAII Drop counts back down; `!Send`.
-pub struct UserTestHold {
+pub(crate) struct UserTestHold {
     table: *mut HashTableObj,
     _thread: PhantomData<Rc<()>>,
 }
@@ -260,7 +260,7 @@ impl<'access> TableRef<'access> {
     /// is editing (writers only proceed after this count drains). Copy
     /// whole tagged words out; revalidation across user code is the
     /// caller's `switch_epoch` protocol, not this word.
-    pub fn read<R>(&self, f: impl FnOnce(&HashTableStorage) -> R) -> R {
+    pub(crate) fn read<R>(&self, f: impl FnOnce(&HashTableStorage) -> R) -> R {
         // SAFETY: the lease keeps the rooted table alive; the count taken
         // at mint excludes any concurrent writer for the whole walk.
         let storage = unsafe { &(*self.table).table.data };
@@ -290,7 +290,7 @@ impl<'access> TableRef<'access> {
     /// The shell configuration a sealed read may observe (B3): the test and
     /// whether lookups run user-defined functions. Both are fixed at
     /// creation, so this races nothing a writer may edit.
-    pub fn describe(&self) -> TableDescription {
+    pub(crate) fn describe(&self) -> TableDescription {
         let table = self.guarded_table();
         TableDescription {
             test: table.test,
@@ -301,7 +301,7 @@ impl<'access> TableRef<'access> {
     /// The §3.1 nesting count as the mutating ops read it (GNU's mutability
     /// check): nonzero means some owner is inside this table's test or hash
     /// function and a mutation must refuse.
-    pub fn user_test_depth(&self) -> u8 {
+    pub(crate) fn user_test_depth(&self) -> u8 {
         self.guarded_table().test_depth.load(Ordering::Acquire)
     }
 
@@ -309,7 +309,7 @@ impl<'access> TableRef<'access> {
     /// no authority: drop the minting lease (and every other lease on this
     /// table) before running the callback, then let this Drop release the
     /// count when the window closes.
-    pub fn hold_user_test(&self) -> Result<UserTestHold, RegistrationError> {
+    pub(crate) fn hold_user_test(&self) -> Result<UserTestHold, RegistrationError> {
         UserTestHold::take(self.table)
     }
 }
@@ -355,7 +355,7 @@ impl<'access> TableMut<'access> {
     /// GNU's mutability check on the writer side (§3.1): `true` when this
     /// table's nesting count is nonzero and the edit must refuse instead.
     /// Read it before `edit`, mirroring where the serial builtins check.
-    pub fn user_test_mutation_refused(&self) -> bool {
+    pub(crate) fn user_test_mutation_refused(&self) -> bool {
         self.guarded_table().test_depth.load(Ordering::Acquire) != 0
     }
 

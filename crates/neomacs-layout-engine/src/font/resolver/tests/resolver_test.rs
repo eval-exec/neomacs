@@ -962,6 +962,7 @@ fn captured_character_policy_selects_on_a_thread_without_evaluator_state() {
         weight: Some(FontWeight::from_css_weight(700)),
         slant: Some(FontSlant::Italic),
         width: Some(FontWidth::Normal),
+        otf: None,
         definition: Some(neovm_core::emacs_core::fontset::FontDefinitionMetadata {
             encoding: intern("unicode"),
             repertory: Some(
@@ -1344,7 +1345,7 @@ fn entity_listing_restricts_the_driver_before_enumeration() {
     for driver in [
         intern("neomacs-missing-driver"),
         intern("ns"),
-        neovm_core::emacs_core::intern::intern_uninterned("ftcrhb"),
+        neovm_core::emacs_core::intern::make_uninterned_symbol("ftcrhb"),
     ] {
         let foreign = FontEntityListConstraints {
             driver: Some(driver),

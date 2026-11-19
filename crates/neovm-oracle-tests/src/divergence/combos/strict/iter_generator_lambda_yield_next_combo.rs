@@ -49,11 +49,11 @@ fn div_v8_iter_close_and_exhaustion() {
            (gen (funcall (iter-lambda ()
                            (unwind-protect
                                (iter-yield 'first)
-                             (setq closed t)))))))
+                             (setq closed t))))))
       (let ((first (iter-next gen)))
         (iter-close gen)
         (list first closed)))
-  (error (list 'caught (car err)))"##;
-    let expect = expect_test::expect![[r#""ERR (void-variable err)""#]];
+  (error (list 'caught (car err))))"##;
+    let expect = expect_test::expect![[r#""OK (first t)""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }

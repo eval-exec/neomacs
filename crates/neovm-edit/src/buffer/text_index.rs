@@ -271,7 +271,8 @@ pub(crate) fn event_count(event: TextLineIndexEvent) -> u64 {
 }
 
 /// Verify-mode disagreements since the process started.
-pub fn text_line_index_mismatches() -> u64 {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn text_line_index_mismatches() -> u64 {
     MISMATCHES.load(Ordering::Relaxed)
 }
 

@@ -56,8 +56,12 @@ fn test_update_row_ascii_width() {
 
     // Each ASCII character should have width=1
     for x in 0..5 {
-        assert_eq!(grid.get_cell(x, 0).unwrap().width, 1,
-            "ASCII char at column {} should have width 1", x);
+        assert_eq!(
+            grid.get_cell(x, 0).unwrap().width,
+            1,
+            "ASCII char at column {} should have width 1",
+            x
+        );
     }
     // Verify text content
     assert_eq!(grid.get_cell(0, 0).unwrap().text, "H");
@@ -70,8 +74,8 @@ fn test_update_row_cjk_unified_ideographs() {
     // '中' = U+4E2D, '文' = U+6587
     let mut grid = CharacterGrid::new(20, 5);
     let cells = vec![
-        ("\u{4E2D}".to_string(), None),  // 中
-        ("\u{6587}".to_string(), None),  // 文
+        ("\u{4E2D}".to_string(), None), // 中
+        ("\u{6587}".to_string(), None), // 文
     ];
     grid.update_row(0, 0, &cells);
 
@@ -90,8 +94,8 @@ fn test_update_row_fullwidth_forms() {
     // 'Ａ' = U+FF21, 'Ｂ' = U+FF22
     let mut grid = CharacterGrid::new(20, 5);
     let cells = vec![
-        ("\u{FF21}".to_string(), None),  // Ａ
-        ("\u{FF22}".to_string(), None),  // Ｂ
+        ("\u{FF21}".to_string(), None), // Ａ
+        ("\u{FF22}".to_string(), None), // Ｂ
     ];
     grid.update_row(0, 0, &cells);
 
@@ -108,8 +112,8 @@ fn test_update_row_hangul_syllables() {
     // '한' = U+D55C, '글' = U+AE00
     let mut grid = CharacterGrid::new(20, 5);
     let cells = vec![
-        ("\u{D55C}".to_string(), None),  // 한
-        ("\u{AE00}".to_string(), None),  // 글
+        ("\u{D55C}".to_string(), None), // 한
+        ("\u{AE00}".to_string(), None), // 글
     ];
     grid.update_row(0, 0, &cells);
 
@@ -125,10 +129,10 @@ fn test_update_row_column_advance() {
     // Verify that column positions advance by the character's width
     let mut grid = CharacterGrid::new(20, 5);
     let cells = vec![
-        ("\u{4E2D}".to_string(), None),  // 中 (width=2, occupies col 0-1)
-        ("A".to_string(), None),          // A  (width=1, occupies col 2)
-        ("\u{D55C}".to_string(), None),  // 한 (width=2, occupies col 3-4)
-        ("B".to_string(), None),          // B  (width=1, occupies col 5)
+        ("\u{4E2D}".to_string(), None), // 中 (width=2, occupies col 0-1)
+        ("A".to_string(), None),        // A  (width=1, occupies col 2)
+        ("\u{D55C}".to_string(), None), // 한 (width=2, occupies col 3-4)
+        ("B".to_string(), None),        // B  (width=1, occupies col 5)
     ];
     grid.update_row(0, 0, &cells);
 
@@ -163,8 +167,8 @@ fn test_update_row_mixed_ascii_and_wide() {
     let cells = vec![
         ("H".to_string(), None),
         ("i".to_string(), None),
-        ("\u{4E2D}".to_string(), None),  // 中
-        ("\u{6587}".to_string(), None),  // 文
+        ("\u{4E2D}".to_string(), None), // 中
+        ("\u{6587}".to_string(), None), // 文
         ("o".to_string(), None),
         ("k".to_string(), None),
     ];
@@ -197,7 +201,7 @@ fn test_update_row_col_start_offset() {
     // Verify that col_start offsets wide character placement
     let mut grid = CharacterGrid::new(20, 5);
     let cells = vec![
-        ("\u{4E2D}".to_string(), None),  // 中 (width=2)
+        ("\u{4E2D}".to_string(), None), // 中 (width=2)
     ];
     grid.update_row(0, 5, &cells);
 

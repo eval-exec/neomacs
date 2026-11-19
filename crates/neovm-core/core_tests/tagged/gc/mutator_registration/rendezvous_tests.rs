@@ -121,6 +121,9 @@ shells! {
     keeper_starting_owner_waits_refuse_until_bootstrap_opens => KeeperStartingOwnerWaitsRefuseUntilBootstrapOpens,
     already_published_owner_wait_request_refuses => AlreadyPublishedOwnerWaitRequestRefuses,
     keeper_resume_debt_refuses_next_stop_until_owner_applies => KeeperResumeDebtRefusesNextStopUntilOwnerApplies,
+    first_restored_owner_waits_for_the_final_peer_debt => FirstRestoredOwnerWaitsForTheFinalPeerDebt,
+    poison_wakes_a_restored_owner_waiting_for_peer_debt => PoisonWakesARestoredOwnerWaitingForPeerDebt,
+    stop_and_unrestored_owner_refuse_instead_of_waiting_for_themselves => StopAndUnrestoredOwnerRefuseInsteadOfWaitingForThemselves,
 }
 
 #[test]

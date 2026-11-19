@@ -258,6 +258,46 @@ impl Fixture {
         assert_eq!(self.eval(name, "(+ 20 22)"), "42");
     }
 
+    /// `--fg-daemon` with no controlling terminal. GNU `init_display` returns
+    /// before `init_tty` when `IS_DAEMON` (`dispnew.c:7222-7237`), so the
+    /// initial `/dev/tty` fatal never runs.
+    fn foreground_without_controlling_tty(&mut self, name: &str) {
+        use std::os::unix::process::CommandExt;
+        let mut command = self.editor();
+        let stderr_path = self.path("daemon-stderr");
+        let stderr = fs::File::create(&stderr_path).unwrap();
+        command
+            .arg(format!("--fg-daemon={name}"))
+            .arg("-Q")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::from(stderr));
+        // SAFETY: setsid is async-signal-safe and runs only in this owned
+        // child, before exec. It drops the controlling terminal.
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        self.daemon = Some(command.spawn().unwrap());
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while !self.socket(name).exists() {
+            if let Some(status) = self.daemon.as_mut().unwrap().try_wait().unwrap() {
+                panic!(
+                    "daemon exited before readiness: {status}; stderr={}; log={}",
+                    fs::read_to_string(&stderr_path).unwrap_or_default(),
+                    fs::read_to_string(self.path("runtime.log")).unwrap_or_default()
+                );
+            }
+            assert!(Instant::now() < deadline, "daemon never became ready");
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        assert_eq!(self.eval(name, "(+ 20 22)"), "42");
+    }
+
     fn write_init(&self, body: &str) {
         let marker = self.path("owned-pid");
         fs::write(
@@ -1413,6 +1453,13 @@ fn signal_terminal_cleanup(pgo: bool) {
             "daemon ran optional compiler during shutdown"
         );
     }
+}
+
+#[test]
+fn fg_daemon_reaches_readiness_without_a_controlling_tty() {
+    let mut fixture = Fixture::new();
+    fixture.foreground_without_controlling_tty("notty");
+    fixture.eval("notty", "(kill-emacs)");
 }
 
 #[test]

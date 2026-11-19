@@ -1,7 +1,6 @@
 use super::pure::{
-    KEY_CHAR_CODE_MASK, KEY_CHAR_CTRL, basic_char_code, describe_single_key_value,
-    event_modifier_bit, event_modifier_prefix, key_sequence_values, resolve_control_code,
-    symbol_has_modifier_prefix,
+    KEY_CHAR_CTRL, describe_single_key_value, event_modifier_bit, event_modifier_prefix,
+    key_sequence_values, reorder_event_symbol_modifiers, resolve_control_code,
 };
 use crate::emacs_core::value::Value;
 
@@ -34,10 +33,28 @@ fn key_sequence_values_accept_string_and_list() {
 #[test]
 fn symbol_modifier_helpers() {
     crate::test_utils::init_test_tracing();
-    assert!(symbol_has_modifier_prefix("C-x"));
-    assert!(!symbol_has_modifier_prefix("foo"));
     assert_eq!(event_modifier_bit("control"), Some(KEY_CHAR_CTRL));
     assert!(event_modifier_prefix(KEY_CHAR_CTRL).starts_with("C-"));
+
+    // The production consumer of the modifier-prefix recognizer is
+    // `reorder_event_symbol_modifiers` (keymap_lookup.rs:468,2246). A
+    // reversed prefix order must canonicalize to GNU's A,C,H,M,S,s order,
+    // which exercises every prefix the old test-only predicate listed.
+    let bare = crate::tagged::value::SymbolMode::Bare;
+    for (input, canonical) in [("M-C-a", "C-M-a"), ("S-H-a", "H-S-a"), ("s-A-a", "A-s-a")] {
+        assert_eq!(
+            reorder_event_symbol_modifiers(Value::symbol(input), bare),
+            Value::symbol(canonical),
+            "{input} must reorder to the canonical modifier spelling"
+        );
+    }
+    for name in ["C-x", "M-x", "S-left", "s-a", "H-a", "A-a", "foo", "left"] {
+        assert_eq!(
+            reorder_event_symbol_modifiers(Value::symbol(name), bare),
+            Value::symbol(name),
+            "{name} is already canonical and must pass through"
+        );
+    }
 }
 
 #[test]
@@ -49,10 +66,31 @@ fn control_code_resolution() {
 }
 
 #[test]
-fn basic_char_code_masks() {
+fn event_basic_type_matches_gnu_for_integer_events() {
     crate::test_utils::init_test_tracing();
-    let bits = 0x123456;
-    assert!(basic_char_code(bits) <= KEY_CHAR_CODE_MASK);
+    let mut eval = crate::test_utils::runtime_startup_context();
+
+    // The old value-side `basic_char_code` model was a copy of GNU
+    // `event-basic-type`'s numeric branch (lisp/subr.el:1865-1883). Exercise
+    // the production path instead: the loaded Elisp function itself, with
+    // expectations read from the pinned GNU 31.1 oracle:
+    // (event-basic-type 0/1/26/27/31/65/999) => (64 97 122 91 95 97 999).
+    for (arg, expected) in [
+        (0, 64),
+        (1, 97),
+        (26, 122),
+        (27, 91),
+        (31, 95),
+        (65, 97),
+        (999, 999),
+    ] {
+        assert_eq!(
+            eval.eval_str(&format!("(event-basic-type {arg})"))
+                .expect("event-basic-type"),
+            Value::fixnum(expected),
+            "(event-basic-type {arg}) must match GNU"
+        );
+    }
 }
 
 #[test]

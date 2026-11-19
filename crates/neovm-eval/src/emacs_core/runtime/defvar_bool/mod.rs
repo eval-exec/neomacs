@@ -78,7 +78,7 @@ pub struct GnuBoolVariable {
     /// always past that point, so construction applies `running` (its
     /// batch-shaped value) and the `neomacs` binary restates it from its own
     /// argv and locale.
-    pub main_value: Option<bool>,
+    pub(crate) main_value: Option<bool>,
     /// Whether the byte optimizer is told about the coercion.
     pub byte_boolean_vars: ByteBooleanVars,
     /// The GNU reference surfaces whose build declares this row. Most rows
@@ -396,7 +396,7 @@ pub fn register_bootstrap_vars(obarray: &mut Obarray) {
 /// This must run after [`register_bootstrap_vars`] -- writing through a
 /// forwarder that does not exist yet would leave a plain cell that the later
 /// `DEFVAR_BOOL` then discards.
-pub fn apply_post_main_batch_defaults(obarray: &mut Obarray) {
+pub(crate) fn apply_post_main_batch_defaults(obarray: &mut Obarray) {
     let surface = platform_surface();
     for var in GNU_BOOL_VARIABLES {
         if !var.surfaces.contains(surface) {

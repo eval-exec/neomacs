@@ -41,15 +41,15 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 /// Produce a placeholder for the World's carried thread-local state.
-pub type WorldStatePlaceholder = fn() -> Box<dyn Any>;
+pub(crate) type WorldStatePlaceholder = fn() -> Box<dyn Any>;
 /// Swap the World's carried thread-local state with a parked slot.
-pub type WorldStateSwap = fn(&mut dyn Any);
+pub(crate) type WorldStateSwap = fn(&mut dyn Any);
 /// Apply one loaded dynamic-module function.
-pub type ApplyModuleFunction = fn(&mut Context, Value, Vec<Value>) -> EvalResult;
+pub(crate) type ApplyModuleFunction = fn(&mut Context, Value, Vec<Value>) -> EvalResult;
 /// Whether a native module call is in progress on this thread.
-pub type ModuleCallActive = fn() -> bool;
+pub(crate) type ModuleCallActive = fn() -> bool;
 /// Enumerate the active module-call frames' Value roots.
-pub type CollectModuleGcRoots = fn(&mut Vec<Value>, usize);
+pub(crate) type CollectModuleGcRoots = fn(&mut Vec<Value>, usize);
 
 /// Dynamic-module lifecycle bodies (carrier hooks, module load,
 /// module-call dispatch and the active-frame root enumeration).
@@ -350,9 +350,7 @@ impl CommandSeamHooks {
 /// core window body-unit rules) but operate on eval-owned window state.
 #[derive(Clone, Copy)]
 pub struct WindowTreeHooks {
-    char_property_window_lookup: fn(Option<&FrameManager>, WindowId) -> WindowBufferLookup,
     window_resize_check: fn(&WindowTree, WindowId, SplitDirection, WindowBodyCellSize) -> bool,
-    window_resize_apply: fn(&mut WindowTree, WindowId, bool, f32, f32),
     apply_mini_window_resize: fn(&mut Frame, MiniWindowResize),
     frame_resize_pixelwise: fn(&mut Frame, &BufferManager, u32, u32),
     frame_parameter_entry: fn(&mut Context, Value, Value) -> EvalResult,
@@ -361,17 +359,13 @@ pub struct WindowTreeHooks {
 impl WindowTreeHooks {
     /// Build the window-tree operation group.
     pub const fn new(
-        char_property_window_lookup: fn(Option<&FrameManager>, WindowId) -> WindowBufferLookup,
         window_resize_check: fn(&WindowTree, WindowId, SplitDirection, WindowBodyCellSize) -> bool,
-        window_resize_apply: fn(&mut WindowTree, WindowId, bool, f32, f32),
         apply_mini_window_resize: fn(&mut Frame, MiniWindowResize),
         frame_resize_pixelwise: fn(&mut Frame, &BufferManager, u32, u32),
         frame_parameter_entry: fn(&mut Context, Value, Value) -> EvalResult,
     ) -> Self {
         Self {
-            char_property_window_lookup,
             window_resize_check,
-            window_resize_apply,
             apply_mini_window_resize,
             frame_resize_pixelwise,
             frame_parameter_entry,
@@ -540,7 +534,7 @@ impl LifecycleHooks {
     }
 
     /// Window-tree operations.
-    pub fn window_tree(&self) -> WindowTreeHooks {
+    pub(crate) fn window_tree(&self) -> WindowTreeHooks {
         self.window_tree
     }
 
@@ -623,7 +617,7 @@ impl DbusbindHooks {
 
 impl FileIoHooks {
     #[doc(hidden)]
-    pub fn expand_file_name_entry(&self) -> fn(&mut Context, Vec<Value>) -> EvalResult {
+    pub(crate) fn expand_file_name_entry(&self) -> fn(&mut Context, Vec<Value>) -> EvalResult {
         self.expand_file_name_entry
     }
 
@@ -774,12 +768,14 @@ impl XfacesHooks {
 
 impl CommandSeamHooks {
     #[doc(hidden)]
-    pub fn window_configuration_capture(&self) -> fn(&mut Context, Vec<Value>) -> EvalResult {
+    pub(crate) fn window_configuration_capture(
+        &self,
+    ) -> fn(&mut Context, Vec<Value>) -> EvalResult {
         self.window_configuration_capture
     }
 
     #[doc(hidden)]
-    pub fn window_configuration_restore(
+    pub(crate) fn window_configuration_restore(
         &self,
     ) -> fn(&mut Context, Value, WindowConfigurationRestoreOptions) -> EvalResult {
         self.window_configuration_restore
@@ -810,17 +806,19 @@ impl CommandSeamHooks {
     }
 
     #[doc(hidden)]
-    pub fn try_completion(&self) -> fn(&mut Context, Vec<Value>) -> EvalResult {
+    pub(crate) fn try_completion(&self) -> fn(&mut Context, Vec<Value>) -> EvalResult {
         self.try_completion
     }
 
     #[doc(hidden)]
-    pub fn all_completions(&self) -> fn(&mut Context, Vec<Value>) -> EvalResult {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn all_completions(&self) -> fn(&mut Context, Vec<Value>) -> EvalResult {
         self.all_completions
     }
 
     #[doc(hidden)]
-    pub fn test_completion(&self) -> fn(&mut Context, Vec<Value>) -> EvalResult {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn test_completion(&self) -> fn(&mut Context, Vec<Value>) -> EvalResult {
         self.test_completion
     }
 
@@ -842,22 +840,10 @@ impl CommandSeamHooks {
 
 impl WindowTreeHooks {
     #[doc(hidden)]
-    pub fn char_property_window_lookup(
-        &self,
-    ) -> fn(Option<&FrameManager>, WindowId) -> WindowBufferLookup {
-        self.char_property_window_lookup
-    }
-
-    #[doc(hidden)]
     pub fn window_resize_check(
         &self,
     ) -> fn(&WindowTree, WindowId, SplitDirection, WindowBodyCellSize) -> bool {
         self.window_resize_check
-    }
-
-    #[doc(hidden)]
-    pub fn window_resize_apply(&self) -> fn(&mut WindowTree, WindowId, bool, f32, f32) {
-        self.window_resize_apply
     }
 
     #[doc(hidden)]
@@ -908,13 +894,13 @@ fn lifecycle_hooks() -> &'static LifecycleHooks {
 }
 
 /// Clear the dynamic-module carrier thread-local state on a carrier park.
-pub fn reset_dynamic_module_carrier_tls() {
+pub(crate) fn reset_dynamic_module_carrier_tls() {
     (lifecycle_hooks().dynamic_module().reset())();
 }
 
 /// Debug-only fingerprint of the dynamic-module carrier state.
 #[cfg(debug_assertions)]
-pub fn dynamic_module_carrier_tls_fingerprint(h: &mut u64) {
+pub(crate) fn dynamic_module_carrier_tls_fingerprint(h: &mut u64) {
     if let Some(fingerprint) = lifecycle_hooks().dynamic_module().fingerprint() {
         fingerprint(h);
     }
@@ -971,7 +957,7 @@ pub fn sqlite_world_state_placeholder() -> Box<dyn Any> {
 }
 
 /// Swap SQLite's carried World state with a parked slot.
-pub fn sqlite_swap_world_state(slot: &mut dyn Any) {
+pub(crate) fn sqlite_swap_world_state(slot: &mut dyn Any) {
     (lifecycle_hooks().sqlite().swap())(slot)
 }
 
@@ -981,7 +967,7 @@ pub fn dbusbind_world_state_placeholder() -> Box<dyn Any> {
 }
 
 /// Swap D-Bus's carried World state with a parked slot.
-pub fn dbusbind_swap_world_state(slot: &mut dyn Any) {
+pub(crate) fn dbusbind_swap_world_state(slot: &mut dyn Any) {
     (lifecycle_hooks().dbusbind().world.swap())(slot)
 }
 
@@ -991,7 +977,7 @@ pub fn timefns_world_state_placeholder() -> Box<dyn Any> {
 }
 
 /// Swap the time-zone rule's carried World state with a parked slot.
-pub fn timefns_swap_world_state(slot: &mut dyn Any) {
+pub(crate) fn timefns_swap_world_state(slot: &mut dyn Any) {
     (lifecycle_hooks().timefns().swap())(slot)
 }
 
@@ -1041,12 +1027,12 @@ pub fn install_host_environment_snapshot(ctx: &mut Context) {
 }
 
 /// Install `shell-file-name` from the host.
-pub fn shell_file_name_install(ctx: &mut Context) {
+pub(crate) fn shell_file_name_install(ctx: &mut Context) {
     (lifecycle_hooks().boot.shell_file_name_install)(ctx)
 }
 
 /// Install the dump-time `shell-file-name` default.
-pub fn shell_file_name_install_dump_default(ctx: &mut Context) {
+pub(crate) fn shell_file_name_install_dump_default(ctx: &mut Context) {
     (lifecycle_hooks().boot.shell_file_name_install_dump_default)(ctx)
 }
 
@@ -1077,12 +1063,12 @@ pub fn dynamic_module_apply_module_function(
 }
 
 /// Whether a native module call is in progress on this thread.
-pub fn dynamic_module_call_active() -> bool {
+pub(crate) fn dynamic_module_call_active() -> bool {
     (lifecycle_hooks().dynamic_module().module_call_active())()
 }
 
 /// Enumerate the active module-call frames' Value roots.
-pub fn collect_dynamic_module_active_gc_roots(roots: &mut Vec<Value>, heap_identity: usize) {
+pub(crate) fn collect_dynamic_module_active_gc_roots(roots: &mut Vec<Value>, heap_identity: usize) {
     (lifecycle_hooks().dynamic_module().collect_gc_roots())(roots, heap_identity)
 }
 
@@ -1097,7 +1083,7 @@ pub fn dbusbind_has_active_watches() -> bool {
 }
 
 /// Reset D-Bus's thread-local connection state at pdump reconstruct.
-pub fn reset_dbusbind_thread_locals() {
+pub(crate) fn reset_dbusbind_thread_locals() {
     (lifecycle_hooks().dbusbind().reset_thread_locals())()
 }
 
@@ -1107,7 +1093,7 @@ pub fn reset_sqlite_thread_locals() {
 }
 
 /// The `expand-file-name` Lisp entry (handler-aware body stays in core).
-pub fn expand_file_name_entry(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+pub(crate) fn expand_file_name_entry(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
     (lifecycle_hooks().fileio().expand_file_name_entry())(ctx, args)
 }
 
@@ -1185,13 +1171,13 @@ pub fn delete_terminal_noelisp_owned(
 
 /// Capture a window configuration through the core `current-window-configuration`
 /// entry.
-pub fn window_configuration_capture(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+pub(crate) fn window_configuration_capture(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
     (lifecycle_hooks().command().window_configuration_capture())(ctx, args)
 }
 
 /// Restore a window configuration through the core `set-window-configuration`
 /// entry.
-pub fn window_configuration_restore(
+pub(crate) fn window_configuration_restore(
     ctx: &mut Context,
     configuration: Value,
     options: WindowConfigurationRestoreOptions,
@@ -1222,17 +1208,19 @@ pub fn get_char_property(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
 }
 
 /// The `try-completion` entry.
-pub fn try_completion(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+pub(crate) fn try_completion(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
     (lifecycle_hooks().command().try_completion())(ctx, args)
 }
 
 /// The `all-completions` entry.
-pub fn all_completions(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn all_completions(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
     (lifecycle_hooks().command().all_completions())(ctx, args)
 }
 
 /// The `test-completion` entry.
-pub fn test_completion(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn test_completion(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
     (lifecycle_hooks().command().test_completion())(ctx, args)
 }
 
@@ -1251,19 +1239,6 @@ pub fn where_is_internal(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
     (lifecycle_hooks().command().where_is_internal())(ctx, args)
 }
 
-/// The edit layer's char-property WINDOW lookup for a caller that owns frames.
-///
-/// The slot resolves once; the returned closure keeps the original factory
-/// shape so the text-property entry call sites are unchanged.
-pub fn char_property_window_lookup(
-    frames: Option<&FrameManager>,
-) -> impl Fn(WindowId) -> WindowBufferLookup + '_ {
-    let lookup = lifecycle_hooks()
-        .window_tree()
-        .char_property_window_lookup();
-    move |window| lookup(frames, window)
-}
-
 /// Validate a staged pixel resize plan (core window body-unit rules).
 pub fn window_resize_check(
     tree: &WindowTree,
@@ -1277,7 +1252,8 @@ pub fn window_resize_check(
 /// Resize a frame from a native size observation under the core window
 /// body-unit rules (PC2 service; per native resize event, never per Lisp
 /// step).
-pub fn resize_frame_pixelwise_with_buffer_constraints(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn resize_frame_pixelwise_with_buffer_constraints(
     frame: &mut Frame,
     buffers: &BufferManager,
     width: u32,
@@ -1296,23 +1272,6 @@ pub fn frame_parameter_entry(eval: &mut Context, frame: Value, key: Value) -> Ev
     (lifecycle_hooks().window_tree().frame_parameter_entry())(eval, frame, key)
 }
 
-/// Apply a staged pixel resize plan.
-pub fn window_resize_apply(
-    tree: &mut WindowTree,
-    id: WindowId,
-    horflag: bool,
-    char_width: f32,
-    char_height: f32,
-) {
-    (lifecycle_hooks().window_tree().window_resize_apply())(
-        tree,
-        id,
-        horflag,
-        char_width,
-        char_height,
-    )
-}
-
 /// The frame-init face hook used by the runtime FrameManager.
 pub fn frame_init_hook() -> fn(&mut Frame) {
     lifecycle_hooks().boot.init_frame_lisp_faces
@@ -1324,7 +1283,7 @@ pub fn prepare_runtime_faces(ctx: &mut Context, frame_id: FrameId) -> bool {
 }
 
 /// Synchronize the runtime face table from the frame's Lisp faces.
-pub fn sync_runtime_face_table(ctx: &mut Context, frame_id: FrameId) {
+pub(crate) fn sync_runtime_face_table(ctx: &mut Context, frame_id: FrameId) {
     (lifecycle_hooks().boot.sync_runtime_face_table)(ctx, frame_id)
 }
 
@@ -1339,7 +1298,7 @@ pub fn clear_font_cache_state() {
 }
 
 /// GNU `Fframe_terminal (selected_frame)` for the KBOARD forwarding arm.
-pub fn frame_terminal_value(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+pub(crate) fn frame_terminal_value(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
     (lifecycle_hooks().terminal().frame_terminal())(ctx, args)
 }
 
@@ -1373,7 +1332,7 @@ pub fn reset_fontset_registry() {
 }
 
 /// Snapshot the display fontset registry for pdump.
-pub fn fontset_registry_snapshot() -> FontsetRegistrySnapshot {
+pub(crate) fn fontset_registry_snapshot() -> FontsetRegistrySnapshot {
     (lifecycle_hooks().fontset().snapshot())()
 }
 
@@ -1394,7 +1353,8 @@ pub fn terminal_park_carrier_tls() {
 
 /// Debug-only fingerprint of the terminal registry carrier state.
 #[cfg(debug_assertions)]
-pub fn terminal_carrier_tls_fingerprint(h: &mut u64) {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn terminal_carrier_tls_fingerprint(h: &mut u64) {
     if let Some(fingerprint) = lifecycle_hooks().terminal().carrier_tls_fingerprint() {
         fingerprint(h);
     }
@@ -1447,7 +1407,8 @@ pub fn xfaces_park_carrier_tls() {
 
 /// Debug-only fingerprint of the face-attribute registry carrier state.
 #[cfg(any(test, debug_assertions, feature = "test-support"))]
-pub fn xfaces_carrier_tls_fingerprint(h: &mut u64) {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn xfaces_carrier_tls_fingerprint(h: &mut u64) {
     if let Some(fingerprint) = lifecycle_hooks().xfaces().carrier_tls_fingerprint() {
         fingerprint(h);
     }

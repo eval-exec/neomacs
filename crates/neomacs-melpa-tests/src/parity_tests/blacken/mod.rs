@@ -104,7 +104,7 @@ const PRELUDE: &str = r####"
   (or (member (buffer-name buffer) blacken374-test-fixed-buffer-names)
       (string-prefix-p " *blacken374-" (buffer-name buffer))
       (let ((file (buffer-file-name buffer)))
-        (and file (file-in-directory-p file root)))))
+        (and file (neomacs-melpa-path-inside-p file root)))))
 
 (defun blacken374-test-run-case (name thunk)
   (when (seq-some #'get-buffer blacken374-test-fixed-buffer-names)

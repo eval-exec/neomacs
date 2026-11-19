@@ -185,7 +185,7 @@ fn div_cx59_weak_hash_all_weakness_types_eviction_marker_key_cons_value_mega() {
 fn div_cx59_subword_superword_toggle_word_ops_undo_marker_overlay_narrow_env_exitcode_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
     let expect = expect_test::expect![[
-        r#""ERR (error \"`let' bindings can have only one value-form\" accept-process-output p 2)""#
+        r#""ERR (error \"Changes to be undone are outside visible portion of buffer\")""#
     ]];
     crate::common::assert_oracle_parity_expect(
         r##"
@@ -193,7 +193,7 @@ fn div_cx59_subword_superword_toggle_word_ops_undo_marker_overlay_narrow_env_exi
        (let ((process-environment (cons "NEO_CX59=v" process-environment)))
          (string-trim (shell-command-to-string "echo $NEO_CX59"))))
       (exit-code
-       (let ((p (make-process :name "neo-cx59-ec" :command '("sh" "-c" "exit 6")))
+       (let ((p (make-process :name "neo-cx59-ec" :command '("sh" "-c" "exit 6"))))
          (accept-process-output p 2)
          (process-exit-status p))))
   (condition-case e
@@ -217,7 +217,7 @@ fn div_cx59_subword_superword_toggle_word_ops_undo_marker_overlay_narrow_env_exi
                       (overlayp ov) (overlay-start ov)
                       (text-properties-at 1))))))
     (error (list env-val exit-code :errored))))
-))"##,
+)"##,
         expect,
     );
 }

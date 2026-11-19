@@ -1,18 +1,31 @@
 error[E0599]: the associated function or constant `transfer` exists for struct `ThreadTransfer<ConcurrentMarkCapture<'static>>`, but its trait bounds were not satisfied
  --> tests/p0s3_ui/capture_cannot_cross_threads.rs:8:55
   |
-8 |     ThreadTransfer::<ConcurrentMarkCapture<'static>>::transfer(capture);
-  |                                                       ^^^^^^^^ associated function or constant cannot be called on `ThreadTransfer<ConcurrentMarkCapture<'static>>` due to unsatisfied trait bounds
+8 |       ThreadTransfer::<ConcurrentMarkCapture<'static>>::transfer(capture);
+  |                                                         ^^^^^^^^ associated function or constant cannot be called on `ThreadTransfer<ConcurrentMarkCapture<'static>>` due to unsatisfied trait bounds
   |
  ::: $WORKSPACE/crates/neovm-value/src/tagged/gc/facade_mark.rs
   |
-  | pub struct ConcurrentMarkCapture<'heap> {
-  | --------------------------------------- doesn't satisfy `ConcurrentMarkCapture<'static>: Send`
+  |   pub struct ConcurrentMarkCapture<'heap> {
+  |   --------------------------------------- doesn't satisfy `ConcurrentMarkCapture<'static>: Send`
+  |
+ ::: $RUST/core/src/ptr/non_null.rs
+  |
+  |   pub struct NonNull<T: PointeeSized> {
+  |   ----------------------------------- doesn't satisfy `NonNull<[Cell<usize>; 8192]>: Send`
+  |
+ ::: $RUST/alloc/src/rc.rs
+  |
+  | / pub struct Rc<
+  | |     T: ?Sized,
+  | |     #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global,
+  | | > {
+  | |_- doesn't satisfy `Rc<()>: Send`, `Rc<Cell<*const ()>>: Send`, `Rc<Cell<Vec<TaggedValue>>>: Send` or `_: Send`
   |
  ::: tests/p0s3_ui/../thread_safety_ui/support/thread_bounds.rs
   |
-  | pub struct ThreadTransfer<T>(PhantomData<T>);
-  | ---------------------------- associated function or constant `transfer` not found for this struct
+  |   pub struct ThreadTransfer<T>(PhantomData<T>);
+  |   ---------------------------- associated function or constant `transfer` not found for this struct
   |
   = note: the following trait bounds were not satisfied:
           `Rc<()>: Send`
@@ -21,7 +34,7 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
           which is required by `ConcurrentMarkCapture<'static>: Send`
           `*mut HashTableObj: Send`
           which is required by `ConcurrentMarkCapture<'static>: Send`
-          `*mut FinalizerObj: Send`
+          `*mut header::FinalizerObj: Send`
           which is required by `ConcurrentMarkCapture<'static>: Send`
           `*mut *mut MarkerObj: Send`
           which is required by `ConcurrentMarkCapture<'static>: Send`
@@ -57,7 +70,7 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
           which is required by `ConcurrentMarkCapture<'static>: Send`
           `*mut MarkerObj: Send`
           which is required by `ConcurrentMarkCapture<'static>: Send`
-          `*mut BignumObj: Send`
+          `*mut header::BignumObj: Send`
           which is required by `ConcurrentMarkCapture<'static>: Send`
           `NonNull<[Cell<usize>; 8192]>: Send`
           which is required by `ConcurrentMarkCapture<'static>: Send`

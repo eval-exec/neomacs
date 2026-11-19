@@ -31,6 +31,10 @@ pub enum HostCfgClass {
     Dbus,
     Lcms2,
     Sqlite,
+    /// GNU's `--with-xwidgets': `xwidget.c` and `syms_of_xwidget` compile only
+    /// when the option is given (`configure.ac:4456-4497`), so the xwidget
+    /// subrs exist only in such a build. No reference profile enables it.
+    Xwidgets,
     VmProfile,
     /// Every window-system surface except the macOS NS one.  GNU's W32 and X11
     /// builds both define these names (e.g. w32fns.c's x-change-window-property),
@@ -45,7 +49,7 @@ pub enum HostCfgClass {
 
 impl HostCfgClass {
     /// Every class, in the label vocabulary's declaration order.
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::Always,
         Self::Macos,
         Self::Windows,
@@ -53,6 +57,7 @@ impl HostCfgClass {
         Self::Dbus,
         Self::Lcms2,
         Self::Sqlite,
+        Self::Xwidgets,
         Self::VmProfile,
         Self::NotMacos,
         Self::X11Only,
@@ -68,6 +73,7 @@ impl HostCfgClass {
             Self::Dbus => "dbus",
             Self::Lcms2 => "lcms2",
             Self::Sqlite => "sqlite",
+            Self::Xwidgets => "xwidgets",
             Self::VmProfile => "vm-profile",
             Self::NotMacos => "not-macos",
             Self::X11Only => "x11-only",
@@ -85,12 +91,26 @@ impl HostCfgClass {
             "dbus" => Self::Dbus,
             "lcms2" => Self::Lcms2,
             "sqlite" => Self::Sqlite,
+            "xwidgets" => Self::Xwidgets,
             "vm-profile" => Self::VmProfile,
             "not-macos" => Self::NotMacos,
             "x11-only" => Self::X11Only,
             _ => return None,
         })
     }
+
+    /// Eval owns these cargo features. Their absent-layer stand-ins are
+    /// compiled in every build, with no `#[cfg(feature)]`, so an including
+    /// crate cannot disagree with this predicate. [`Self::is_active`] is the
+    /// only selector.
+    pub const fn standin_ignores_feature_cfg(self) -> bool {
+        matches!(self, Self::Sqlite | Self::Xwidgets | Self::VmProfile)
+    }
+
+    /// Comment prefix the upper-subr generator writes for
+    /// [`Self::standin_ignores_feature_cfg`] classes. The snapshot parser
+    /// reads `// host-cfg: <label>` back. It is not a rustc cfg.
+    pub const STANDIN_CFG_COMMENT_PREFIX: &str = "// host-cfg: ";
 
     /// Whether the label vocabulary is self-consistent: every class in
     /// [`Self::ALL`] parses back from its own [`Self::label`].

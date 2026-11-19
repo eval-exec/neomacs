@@ -785,7 +785,7 @@ pub fn builtin_unlock_file(
 }
 
 #[doc(hidden)]
-pub fn builtin_file_locked_p(
+pub(crate) fn builtin_file_locked_p(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {

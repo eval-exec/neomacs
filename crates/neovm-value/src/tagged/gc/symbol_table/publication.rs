@@ -1,16 +1,21 @@
 //! Immutable pointer publication with uniquely owned, unreclaimed predecessors.
 //!
-//! This metadata lock does not replace the symbol authority required by the
-//! backing transaction. No table is reclaimed here: a later stop-bound receipt
-//! must establish that every generated activation has returned first.
+//! This file is the N3 adapter. The retention owner, its metadata lock, and
+//! the predecessor vector live in the generic publication ledger. This lock
+//! does not replace the symbol authority required by the backing transaction.
+//! No table is reclaimed here: a later stop-bound receipt must establish that
+//! every generated activation has returned first.
+use super::sync::{AtomicPtr, Ordering};
 use super::{
     OwnedSymbolTable, PointerTableGeneration, PreparedSymbolTable, PublishedSymbolTable,
     SymbolChunkAddress, SymbolTableShape, TableError,
 };
+use crate::tagged::gc::publication::{
+    Commit, OpenPublication, PublicationError, PublicationLedger, RetainedBytes, RetentionLimit,
+    RetentionLimits, RetiredCount,
+};
 use std::marker::PhantomData;
 use std::mem::size_of;
-use std::sync::atomic::{AtomicPtr, Ordering};
-use std::sync::{Mutex, MutexGuard, TryLockError};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct RetainedTableBytes(usize);
@@ -132,13 +137,6 @@ impl TableStatistics {
     }
 }
 
-struct TableLedger {
-    current: OwnedSymbolTable,
-    retired: Vec<OwnedSymbolTable>,
-    #[cfg(any(test, feature = "test-support"))]
-    test_limits: TestTableLimits,
-}
-
 fn table_bytes(shape: SymbolTableShape) -> Result<usize, TableError> {
     shape
         .chunks
@@ -148,30 +146,78 @@ fn table_bytes(shape: SymbolTableShape) -> Result<usize, TableError> {
         .ok_or(TableError::Capacity)
 }
 
-impl TableLedger {
-    fn capacity_bytes(&self) -> RetainedTableBytes {
-        // Vec's allocated capacity is bounded by isize::MAX bytes. Saturation
-        // keeps this accessor total even if that allocation invariant changes.
-        RetainedTableBytes(
-            self.retired
-                .capacity()
-                .saturating_mul(size_of::<OwnedSymbolTable>()),
-        )
+fn core_limits(limits: TableLimits) -> RetentionLimits {
+    RetentionLimits::new(
+        RetainedBytes::new(limits.bytes.get()),
+        RetiredCount::new(limits.retired.get()),
+    )
+}
+
+fn map_publication_error(error: PublicationError<TableError>) -> TablePublicationError {
+    match error {
+        PublicationError::Payload(error) => TablePublicationError::Table(error),
+        PublicationError::Capacity => TablePublicationError::Table(TableError::Capacity),
+        PublicationError::NeedGrace(RetentionLimit::RetainedBytes) => {
+            TablePublicationError::NeedGrace(TableLimit::RetainedBytes)
+        }
+        PublicationError::NeedGrace(RetentionLimit::Retired) => {
+            TablePublicationError::NeedGrace(TableLimit::RetiredTables)
+        }
+        PublicationError::Busy => TablePublicationError::Busy,
+        PublicationError::Poisoned => TablePublicationError::Poisoned,
+    }
+}
+
+fn map_change(
+    change: crate::tagged::gc::publication::PublicationChange<PointerTableGeneration>,
+) -> PublicationChange {
+    match change {
+        crate::tagged::gc::publication::PublicationChange::Unchanged { generation } => {
+            PublicationChange::Unchanged { generation }
+        }
+        crate::tagged::gc::publication::PublicationChange::Published {
+            generation,
+            charged,
+        } => PublicationChange::Published {
+            generation,
+            charged: RetainedTableBytes::new(charged.get()),
+        },
+    }
+}
+
+/// Sealed payload. The quote is the descriptor plus its chunk-address array.
+/// Vector storage is `size_of` of this handle, one slot per reserved predecessor.
+struct SymbolPublication {
+    table: OwnedSymbolTable,
+}
+
+impl crate::tagged::gc::publication::PublicationPayload for SymbolPublication {
+    type Error = TableError;
+    type Generation = PointerTableGeneration;
+
+    fn published_address(&self) -> *mut u8 {
+        self.table.as_ptr().cast()
     }
 
-    fn retained_bytes(&self) -> Result<RetainedTableBytes, TableError> {
-        let mut bytes = self
-            .retired
-            .capacity()
-            .checked_mul(size_of::<OwnedSymbolTable>())
-            .and_then(|bytes| bytes.checked_add(table_bytes(self.current.table().shape).ok()?))
-            .ok_or(TableError::Capacity)?;
-        for table in &self.retired {
-            bytes = bytes
-                .checked_add(table_bytes(table.table().shape)?)
-                .ok_or(TableError::Capacity)?;
-        }
-        Ok(RetainedTableBytes(bytes))
+    fn retained_bytes(&self) -> RetainedBytes {
+        // A live table's shape was accepted, so this quote already fit.
+        RetainedBytes::new(table_bytes(self.table.table().shape).unwrap_or(usize::MAX))
+    }
+
+    fn storage_overhead() -> usize {
+        size_of::<OwnedSymbolTable>()
+    }
+
+    fn generation(&self) -> Self::Generation {
+        self.table.table().generation
+    }
+
+    fn prepare(
+        _current: &Self,
+    ) -> Result<crate::tagged::gc::publication::PayloadPlan<Self>, Self::Error> {
+        // Growth goes through `PublicationLedger::account`. The trait's
+        // one-step prepare cannot see chunk addresses, which arrive at publish.
+        Ok(crate::tagged::gc::publication::PayloadPlan::Unchanged)
     }
 }
 
@@ -199,9 +245,7 @@ pub(crate) enum TestLimitProbe {
 /// One owner of every descriptor ever published during this era.
 #[must_use = "retain the publication owner until all table users have returned"]
 pub(crate) struct PublishedSymbolTables {
-    published: AtomicPtr<PublishedSymbolTable>,
-    ledger: Mutex<TableLedger>,
-    limits: TableLimits,
+    ledger: PublicationLedger<SymbolPublication>,
 }
 
 // SAFETY: the unique raw owners name immutable allocation metadata only. Chunk
@@ -219,57 +263,34 @@ impl PublishedSymbolTables {
         initial: OwnedSymbolTable,
         limits: TableLimits,
     ) -> Result<Self, TablePublicationError> {
-        if table_bytes(initial.table().shape)? > limits.bytes.0 {
+        if table_bytes(initial.table().shape)? > limits.bytes.get() {
             return Err(TablePublicationError::NeedGrace(TableLimit::RetainedBytes));
         }
-        let pointer = initial.as_ptr();
-        let owner = Self {
-            published: AtomicPtr::new(std::ptr::null_mut()),
-            ledger: Mutex::new(TableLedger {
-                current: initial,
-                retired: Vec::new(),
-                #[cfg(any(test, feature = "test-support"))]
-                test_limits: TestTableLimits::Production,
-            }),
-            limits,
-        };
-        // Ownership and initialization precede even the initial publication.
-        owner.published.store(pointer, Ordering::Release);
-        Ok(owner)
+        let ledger =
+            PublicationLedger::create(SymbolPublication { table: initial }, core_limits(limits))
+                .map_err(map_publication_error)?;
+        Ok(Self { ledger })
     }
 
     /// Borrow the publication slot while the era retains all predecessors.
     /// The view cannot be sent away from the bounded activation that owns it.
     pub(crate) fn publication(&self) -> PublicationView<'_> {
         PublicationView {
-            slot: &self.published,
+            slot: self.ledger.slot(),
             owner: PhantomData,
         }
     }
 
     pub(crate) fn view(&self) -> TableView<'_> {
-        let pointer = self.published.load(Ordering::Acquire);
-        // SAFETY: construction publishes a fully initialized owned allocation
-        // before returning Self. Every replacement is ledger-owned before its
-        // Release store; predecessors stay owned until Self is dropped. This
-        // borrow prevents that Drop, including while the metadata lock poisons.
-        let table = unsafe { &*pointer };
-        TableView {
-            table,
-            owner: PhantomData,
-        }
+        published_table(self.ledger.slot().load(Ordering::Acquire))
     }
 
     pub(crate) fn stats(&self) -> Result<TableStatistics, TablePublicationError> {
-        let ledger = match self.ledger.try_lock() {
-            Ok(ledger) => ledger,
-            Err(TryLockError::WouldBlock) => return Err(TablePublicationError::Busy),
-            Err(TryLockError::Poisoned(_)) => return Err(TablePublicationError::Poisoned),
-        };
+        let statistics = self.ledger.statistics().map_err(map_publication_error)?;
         Ok(TableStatistics {
-            generation: ledger.current.table().generation,
-            retired: RetiredTableCount(ledger.retired.len()),
-            retained_bytes: ledger.retained_bytes()?,
+            generation: statistics.generation,
+            retired: RetiredTableCount::new(statistics.retired.get()),
+            retained_bytes: RetainedTableBytes::new(statistics.retained_bytes.get()),
         })
     }
 
@@ -282,13 +303,13 @@ impl PublishedSymbolTables {
         &self,
         limits: TestTableLimits,
     ) -> Result<(), TablePublicationError> {
-        let mut ledger = match self.ledger.try_lock() {
-            Ok(ledger) => ledger,
-            Err(TryLockError::WouldBlock) => return Err(TablePublicationError::Busy),
-            Err(TryLockError::Poisoned(_)) => return Err(TablePublicationError::Poisoned),
+        let limits = match limits {
+            TestTableLimits::Production => None,
+            TestTableLimits::Override(limits) => Some(core_limits(limits)),
         };
-        ledger.test_limits = limits;
-        Ok(())
+        self.ledger
+            .set_limit_override(limits)
+            .map_err(map_publication_error)
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -337,125 +358,78 @@ impl PublishedSymbolTables {
         address: usize,
         slot: usize,
     ) -> crate::intern::NameId {
-        let ledger = match self.ledger.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        let owned = std::iter::once(&ledger.current)
-            .chain(ledger.retired.iter())
-            .find(|table| table.as_ptr() as usize == address)
-            .unwrap_or_else(|| panic!("retained symbol table {address:#x}"));
-        let table = owned.table();
-        assert!(slot < table.slots().get());
-        let span = table.chunk_slots().get();
-        let chunk = table
-            .chunk(super::SymbolChunkIndex::from(slot / span))
-            .unwrap_or_else(|| panic!("symbol table chunk"));
-        // SAFETY: the caller retains the matching cell reader, or the era is
-        // poisoned and the writer has returned. The slot bound and the chunk
-        // come from this same retained descriptor. No symbol reference escapes.
-        unsafe {
-            (&*chunk
-                .as_ptr()
-                .cast::<crate::symbol::LispSymbol>()
-                .add(slot % span))
-                .name()
-        }
+        self.with_owners_for_test(|current, predecessors| {
+            let owned = std::iter::once(current)
+                .chain(predecessors.iter())
+                .map(|owner| &owner.table)
+                .find(|table| table.as_ptr() as usize == address)
+                .unwrap_or_else(|| panic!("retained symbol table {address:#x}"));
+            let table = owned.table();
+            assert!(slot < table.slots().get());
+            let span = table.chunk_slots().get();
+            let chunk = table
+                .chunk(super::SymbolChunkIndex::from(slot / span))
+                .unwrap_or_else(|| panic!("symbol table chunk"));
+            // SAFETY: the caller retains the matching cell reader, or the era is
+            // poisoned and the writer has returned. The slot bound and the chunk
+            // come from this same retained descriptor. No symbol reference escapes.
+            unsafe {
+                (&*chunk
+                    .as_ptr()
+                    .cast::<crate::symbol::LispSymbol>()
+                    .add(slot % span))
+                    .name()
+            }
+        })
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    fn with_owners_for_test<R>(
+        &self,
+        body: impl FnOnce(&SymbolPublication, &[SymbolPublication]) -> R,
+    ) -> R {
+        self.ledger.with_retained(body)
     }
 
     pub(crate) fn try_prepare(&self, shape: SymbolTableShape) -> TablePreparationAccounting<'_> {
-        let ledger = match self.ledger.try_lock() {
-            Ok(ledger) => ledger,
-            Err(TryLockError::WouldBlock) => {
-                return TablePreparationAccounting {
-                    result: Err(TablePublicationError::Busy),
-                    charged: RetainedTableBytes(0),
-                };
-            }
-            Err(TryLockError::Poisoned(poisoned)) => {
-                drop(poisoned.into_inner());
-                return TablePreparationAccounting {
-                    result: Err(TablePublicationError::Poisoned),
-                    charged: RetainedTableBytes(0),
-                };
-            }
-        };
-        let initial_capacity = ledger.capacity_bytes();
-        let prepared = self.prepare_locked(ledger, shape);
-        match prepared {
-            Ok(prepared) => {
-                let charged = RetainedTableBytes(
-                    prepared
-                        .ledger
-                        .capacity_bytes()
-                        .0
-                        .saturating_sub(initial_capacity.0),
-                );
-                TablePreparationAccounting {
-                    result: Ok(prepared),
-                    charged,
-                }
-            }
-            Err((error, capacity)) => TablePreparationAccounting {
-                result: Err(error),
-                charged: RetainedTableBytes(capacity.0.saturating_sub(initial_capacity.0)),
+        let accounted = self
+            .ledger
+            .account(|admission| prepare_shape(admission, shape));
+        TablePreparationAccounting {
+            result: match accounted.result {
+                Ok(open) => Ok(PreparedTablePublication { open }),
+                Err(error) => Err(map_publication_error(error)),
             },
+            charged: RetainedTableBytes::new(accounted.charged.get()),
         }
     }
+}
 
-    fn prepare_locked<'owner>(
-        &'owner self,
-        mut ledger: MutexGuard<'owner, TableLedger>,
-        shape: SymbolTableShape,
-    ) -> Result<PreparedTablePublication<'owner>, (TablePublicationError, RetainedTableBytes)> {
-        let limits = self.limits;
-        #[cfg(any(test, feature = "test-support"))]
-        let limits = match ledger.test_limits {
-            TestTableLimits::Production => limits,
-            TestTableLimits::Override(limits) => limits,
-        };
-        let prepare = (|| {
-            let current = ledger.current.table();
-            if shape.chunk_slots != current.shape.chunk_slots
-                || shape.chunks.0 < current.shape.chunks.0
-                || shape.slots.0 < current.shape.slots.0
-            {
-                return Err(TablePublicationError::Table(TableError::Shape));
-            }
-            if shape == current.shape {
-                return Ok(Replacement::Unchanged);
-            }
-            let generation = current.generation.checked_successor()?;
-            if ledger.retired.len() >= limits.retired.0 {
-                return Err(TablePublicationError::NeedGrace(TableLimit::RetiredTables));
-            }
-            // Reserve BEFORE the backing may mutate. A successful reserve is
-            // retained and charged even if a later byte limit refuses growth.
-            ledger
-                .retired
-                .try_reserve(1)
-                .map_err(|_| TablePublicationError::Table(TableError::Capacity))?;
-            let needed = ledger
-                .retained_bytes()?
-                .0
-                .checked_add(table_bytes(shape)?)
-                .ok_or(TablePublicationError::Table(TableError::Capacity))?;
-            if needed > limits.bytes.0 {
-                return Err(TablePublicationError::NeedGrace(TableLimit::RetainedBytes));
-            }
-            Ok(Replacement::Prepared(PreparedSymbolTable::new(
-                shape, generation,
-            )?))
-        })();
-        match prepare {
-            Ok(replacement) => Ok(PreparedTablePublication {
-                owner: self,
-                ledger,
-                replacement,
-            }),
-            Err(error) => Err((error, ledger.capacity_bytes())),
-        }
+fn prepare_shape(
+    admission: &mut crate::tagged::gc::publication::Admission<'_, SymbolPublication>,
+    shape: SymbolTableShape,
+) -> Result<Replacement, PublicationError<TableError>> {
+    let current = admission.current().table.table();
+    if shape.chunk_slots != current.shape.chunk_slots
+        || shape.chunks.0 < current.shape.chunks.0
+        || shape.slots.0 < current.shape.slots.0
+    {
+        return Err(PublicationError::Payload(TableError::Shape));
     }
+    if shape == current.shape {
+        return Ok(Replacement::Unchanged);
+    }
+    let generation = current
+        .generation
+        .checked_successor()
+        .map_err(PublicationError::Payload)?;
+    // Reserve BEFORE the backing may mutate. A successful reserve is retained
+    // and charged even if a later byte limit refuses growth.
+    let extra = table_bytes(shape).map_err(PublicationError::Payload)?;
+    admission.admit(RetainedBytes::new(extra))?;
+    Ok(Replacement::Prepared(
+        PreparedSymbolTable::new(shape, generation).map_err(PublicationError::Payload)?,
+    ))
 }
 
 /// Transparent borrowed atomic slot for consumers of the explicit descriptor
@@ -465,23 +439,28 @@ impl PublishedSymbolTables {
 #[must_use = "retain this borrow until every descriptor use returns"]
 #[doc(hidden)]
 pub struct PublicationView<'owner> {
-    slot: &'owner AtomicPtr<PublishedSymbolTable>,
+    slot: &'owner AtomicPtr<u8>,
     owner: PhantomData<std::rc::Rc<()>>,
 }
 impl PublicationView<'_> {
     pub(crate) fn load(&self) -> TableView<'_> {
-        let pointer = self.slot.load(Ordering::Acquire);
-        // SAFETY: only PublishedSymbolTables constructs this borrow. It
-        // publishes initialized owners before Release and retains every
-        // predecessor until all view/activation borrows have ended.
-        TableView {
-            table: unsafe { &*pointer },
-            owner: PhantomData,
-        }
+        published_table(self.slot.load(Ordering::Acquire))
     }
 }
 const _: () = assert!(size_of::<PublicationView<'static>>() == size_of::<*const ()>());
 static_assertions::assert_not_impl_any!(PublicationView<'static>: Send, Sync, Clone, Copy);
+
+fn published_table<'owner>(pointer: *mut u8) -> TableView<'owner> {
+    // SAFETY: construction publishes a fully initialized owned allocation
+    // before returning the owner. Every replacement is retained before its
+    // Release store; predecessors stay owned until that owner is dropped.
+    // The caller ties this borrow to that owner, including while the
+    // metadata lock is poisoned. The loaded word is the descriptor root.
+    TableView {
+        table: unsafe { &*pointer.cast::<PublishedSymbolTable>() },
+        owner: PhantomData,
+    }
+}
 
 /// A view never outlives the owner and never loans chunk ownership.
 pub(crate) struct TableView<'owner> {
@@ -509,55 +488,47 @@ pub(crate) struct TablePreparationAccounting<'owner> {
 
 #[must_use = "publish after backing commit, or drop the unexposed replacement"]
 pub(crate) struct PreparedTablePublication<'owner> {
-    owner: &'owner PublishedSymbolTables,
-    ledger: MutexGuard<'owner, TableLedger>,
-    replacement: Replacement,
+    open: OpenPublication<'owner, SymbolPublication, Replacement>,
 }
 
 impl PreparedTablePublication<'_> {
     /// Address conversion and initialization allocate nothing. The caller must
     /// already hold the independent backing WRITER authority for this commit.
     pub(crate) fn publish(
-        mut self,
+        self,
         addresses: impl IntoIterator<Item = SymbolChunkAddress>,
     ) -> Result<PublicationChange, TablePublicationError> {
-        let next = match self.replacement {
-            Replacement::Unchanged => {
-                let mut addresses = addresses.into_iter();
-                for old in self.ledger.current.table().chunks.as_slice() {
-                    if addresses.next() != Some(*old) {
-                        return Err(TablePublicationError::Table(TableError::Shape));
+        let mut addresses = addresses.into_iter();
+        self.open
+            .finish(|replacement, current| match replacement {
+                Replacement::Unchanged => {
+                    for old in current.table.table().chunks.as_slice() {
+                        if addresses.next() != Some(*old) {
+                            return Err(PublicationError::Payload(TableError::Shape));
+                        }
                     }
+                    if addresses.next().is_some() {
+                        return Err(PublicationError::Payload(TableError::Shape));
+                    }
+                    Ok(Commit::Keep)
                 }
-                if addresses.next().is_some() {
-                    return Err(TablePublicationError::Table(TableError::Shape));
+                Replacement::Prepared(prepared) => {
+                    let next = prepared
+                        .initialize(addresses)
+                        .map_err(PublicationError::Payload)?;
+                    if !next
+                        .table()
+                        .chunks
+                        .as_slice()
+                        .starts_with(current.table.table().chunks.as_slice())
+                    {
+                        return Err(PublicationError::Payload(TableError::Shape));
+                    }
+                    Ok(Commit::Replace(SymbolPublication { table: next }))
                 }
-                return Ok(PublicationChange::Unchanged {
-                    generation: self.ledger.current.table().generation,
-                });
-            }
-            Replacement::Prepared(prepared) => prepared.initialize(addresses)?,
-        };
-        if !next
-            .table()
-            .chunks
-            .as_slice()
-            .starts_with(self.ledger.current.table().chunks.as_slice())
-        {
-            return Err(TablePublicationError::Table(TableError::Shape));
-        }
-        let charged = RetainedTableBytes(table_bytes(next.table().shape)?);
-        let pointer = next.as_ptr();
-        let generation = next.table().generation;
-        let previous = std::mem::replace(&mut self.ledger.current, next);
-        // Preparation reserved this slot. No owner is dropped or allocated on
-        // this path, and both allocations are owned before Release publication.
-        self.ledger.retired.push(previous);
-        self.owner.published.store(pointer, Ordering::Release);
-        Ok(PublicationChange::Published {
-            generation,
-            charged,
-        })
+            })
+            .map(map_change)
+            .map_err(map_publication_error)
     }
 }
 

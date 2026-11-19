@@ -68,7 +68,9 @@ fn independent_parameter_child_survives(collection: Collection) {
     let mut heap = TaggedHeap::new();
     // SAFETY: serial fixture setup; no young-generation objects or
     // remembered-set state exist under the new mode.
-    unsafe { neovm_value::test_support::authority::set_generational_enabled_for_test(&mut heap, true) };
+    unsafe {
+        neovm_value::test_support::authority::set_generational_enabled_for_test(&mut heap, true)
+    };
     // SAFETY: serial fixture; the heap is exclusively borrowed by the test
     // thread and no other mutator or compiled leaf runs.
     unsafe { neovm_value::test_support::authority::publish_barrier_window_for_test(&mut heap) };

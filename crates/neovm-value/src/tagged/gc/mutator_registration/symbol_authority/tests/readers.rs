@@ -1,12 +1,13 @@
 //! Metadata-only overlap: no stop or collection is requested while readers
-//! are held. Polling uses the shared elapsed deadline; no blocking primitive
-//! or native transition spans a live symbol loan. Disconnect aborts the peer.
+//! are held. Both leases remain live through the harness channel exchange;
+//! no native transition or product callback runs during it. Disconnect aborts
+//! the peer, and the outer test watchdog detects a missing event.
 use super::*;
 use crate::tagged::gc::mutator_registration::symbol_functions::retry::{
     self as contention, Deadline, Retry, retry_owned,
 };
 use std::ops::ControlFlow;
-use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::sync::mpsc::{self, Receiver, Sender};
 
 #[derive(Clone, Copy)]
 pub(super) enum Scenario {
@@ -32,7 +33,6 @@ struct Endpoint {
 enum Error {
     Registration(RegistrationError),
     PeerClosed,
-    Deadline,
     Phase,
     ControlledRefusal,
 }
@@ -68,18 +68,7 @@ fn exchange(endpoint: &Endpoint, expected: Message) -> Result<(), Error> {
         .send
         .send(expected)
         .map_err(|_| Error::PeerClosed)?;
-    let message = contention::retry(
-        Deadline::contention(),
-        || endpoint.receive.try_recv(),
-        |error| match error {
-            TryRecvError::Empty => Retry::Busy,
-            TryRecvError::Disconnected => Retry::Refuse,
-        },
-    )
-    .map_err(|error| match error {
-        TryRecvError::Empty => Error::Deadline,
-        TryRecvError::Disconnected => Error::PeerClosed,
-    })?;
+    let message = endpoint.receive.recv().map_err(|_| Error::PeerClosed)?;
     match (expected, message) {
         (Message::Ready, Message::Ready) | (Message::Checked, Message::Checked) => Ok(()),
         (Message::Ready, Message::Checked) | (Message::Checked, Message::Ready) => {
@@ -126,9 +115,7 @@ fn observe(
         },
         |error| match error {
             Error::Registration(error) => contention::registration(error),
-            Error::PeerClosed | Error::Deadline | Error::Phase | Error::ControlledRefusal => {
-                Retry::Refuse
-            }
+            Error::PeerClosed | Error::Phase | Error::ControlledRefusal => Retry::Refuse,
         },
     )
 }

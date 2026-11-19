@@ -175,7 +175,7 @@ def get_environment(path):
 
 (defun pippel407-test-write-file (root relative contents &optional executable)
   (let ((file (expand-file-name relative root)))
-    (unless (and (file-in-directory-p file root)
+    (unless (and (neomacs-melpa-path-inside-p file root)
                  (not (equal file (directory-file-name root))))
       (error "Unsafe Pippel fixture path: %s" file))
     (make-directory (file-name-directory file) t)

@@ -170,7 +170,7 @@ pub fn init_frame_lisp_faces(frame: &mut crate::window::Frame) {
     for face_name in all_defined_face_names_sorted_by_id_desc().iter() {
         insert_frame_face_hash_entry_if_absent(
             table,
-            Value::symbol(face_name.as_str()),
+            Value::from_sym_id(intern(face_name)),
             make_lisp_face_vector_for_frame(face_name.as_str()),
         );
     }
@@ -202,7 +202,7 @@ pub(crate) fn seed_face_new_frame_defaults_table(table: Value) {
         .filter_map(|face_name| {
             let face_id = face_id_for_name(face_name.as_str())?;
             Some((
-                Value::symbol(face_name.as_str()),
+                Value::from_sym_id(intern(face_name)),
                 Value::cons(Value::fixnum(face_id), make_lisp_face_vector()),
             ))
         })
@@ -231,7 +231,7 @@ pub(crate) fn ensure_face_new_frame_defaults_entry(
     // that made `internal-lisp-face-p` the top self-time hotspot. A genuine miss
     // for the single requested face is still handled by the create-on-miss path
     // below, so dropping the blanket re-seed changes no results.
-    let key = Value::symbol(face_name);
+    let key = Value::from_sym_id(intern(face_name));
     if let Some(entry) = lookup_frame_face_hash_entry(table, key) {
         return Some(entry);
     }
@@ -275,7 +275,7 @@ pub fn remove_face_new_frame_defaults_entry(
     if table.is_hash_table() {
         // Face keys are plain interned symbols; symbols_with_pos is irrelevant.
         let _ = neovm_eval::emacs_core::builtins::collections::builtin_remhash_values(
-            Value::symbol(face_name),
+            Value::from_sym_id(intern(face_name)),
             table,
             false,
         );
@@ -981,6 +981,8 @@ thread_local! {
         HeapRegistrySlot::new(FaceAttrState::default());
 }
 
+mod font_detach;
+
 /// Invalidate the cached face-name list after the defined-face set changes.
 fn bump_face_set_generation() {
     FACE_ATTR_STATE.with(|slot| {
@@ -1375,7 +1377,7 @@ fn resolve_face_designator(
             (
                 FaceDesignatorKind::String,
                 ResolvedFaceName(
-                    Value::symbol(&name)
+                    Value::from_sym_id(intern((&name).as_ref()))
                         .as_symbol_id(symbol_mode)
                         .expect("interned face name must be a symbol"),
                 ),
@@ -2532,7 +2534,10 @@ pub(crate) fn lookup_frame_lisp_face_vector(
     face_name: &str,
 ) -> Option<Value> {
     let table = eval.frame_manager().get(frame_id)?.face_hash_table();
-    crate::emacs_core::xfaces::lookup_frame_face_hash_entry(table, Value::symbol(face_name))
+    crate::emacs_core::xfaces::lookup_frame_face_hash_entry(
+        table,
+        Value::from_sym_id(intern(face_name)),
+    )
 }
 
 /// Symbol-keyed frame face lookup for callers that already hold the interned
@@ -2648,7 +2653,7 @@ pub(crate) fn ensure_frame_lisp_face_vector(
     ensure_frame_lisp_face_vector_by_symbol(
         eval,
         frame_id,
-        Value::symbol(face_name),
+        Value::from_sym_id(intern(face_name)),
         face_name,
         initial,
     )
@@ -4240,7 +4245,7 @@ pub fn builtin_internal_get_lisp_face_attribute(
     };
 
     let face = resolve_face_name_for_domain(eval, &args[0], defaults_frame)?;
-    // Keep the queried object. `Value::symbol(name)` would be the current
+    // Keep the queried object. `Value::from_sym_id(intern(name))` would be the current
     // intern, and a miss would insert that other key into the eq table.
     let face_sym = face.symbol();
     let face_is_canonical = neovm_value::intern::is_canonical_id(face.0);
@@ -4399,10 +4404,13 @@ fn resolved_lface_in_frame(
     frame_id: FrameId,
     face_name: &str,
 ) -> Option<(Value, Value)> {
-    let resolved =
-        resolve_face_designator(eval, Value::symbol(face_name), FaceAliasCyclePolicy::Signal)
-            .ok()?
-            .name()?;
+    let resolved = resolve_face_designator(
+        eval,
+        Value::from_sym_id(intern(face_name)),
+        FaceAliasCyclePolicy::Signal,
+    )
+    .ok()?
+    .name()?;
     let name = resolved.symbol();
     // Both tables store the lface vector as the hash value. A non-vector value
     // cannot be compared slot-wise and is not proven equal.
@@ -4630,7 +4638,7 @@ pub(crate) fn builtin_face_list(args: Vec<Value>) -> EvalResult {
     Ok(Value::list(
         all_defined_face_names_sorted_by_id_desc()
             .iter()
-            .map(|name| Value::symbol(name.as_str()))
+            .map(|name| Value::from_sym_id(intern(name)))
             .collect(),
     ))
 }
@@ -5346,7 +5354,10 @@ pub fn builtin_internal_set_font_selection_order(args: Vec<Value>) -> EvalResult
 /// `(internal-set-alternative-font-family-alist ALIST)` -- normalize string
 /// entries to symbols and return the normalized list.
 #[doc(hidden)]
-pub fn builtin_internal_set_alternative_font_family_alist(args: Vec<Value>) -> EvalResult {
+pub fn builtin_internal_set_alternative_font_family_alist(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
     expect_args("internal-set-alternative-font-family-alist", &args, 1)?;
     let entries = proper_list_to_vec_or_listp_error(&args[0])?;
     let mut normalized = Vec::with_capacity(entries.len());
@@ -5358,11 +5369,13 @@ pub fn builtin_internal_set_alternative_font_family_alist(args: Vec<Value>) -> E
         for member in members {
             match member.kind() {
                 ValueKind::String => {
-                    // Issue #131: intern the family name faithfully (real Emacs
-                    // bytes) rather than via the PUA-sentinel storage form.
-                    let sym = neovm_value::intern::intern_lisp_string(
-                        member.as_lisp_string().expect("checked string"),
-                    );
+                    // GNU's setter is `XSETCAR (tail2, Fintern (XCAR (tail2),
+                    // Qnil))' (`src/xfaces.c:5877`): it interns each family
+                    // STRING into `Vobarray', which is why loading faces.el
+                    // makes "Sans Serif" an obarray member. Intern the real
+                    // Emacs bytes (issue #131) and mark the membership the
+                    // same Fintern does.
+                    let sym = eval.obarray_mut().intern_member_lisp_value(member);
                     converted.push(Value::from_sym_id(sym));
                     names.push(sym);
                 }

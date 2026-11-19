@@ -29,6 +29,7 @@ pub use neovm_value::display_vocab::ImageType;
 use neovm_value::error::LispCondition;
 use neovm_value::error::{EvalResult, Flow, signal};
 use neovm_value::error::{expect_args, expect_args_range, expect_max_args, expect_min_args};
+use neovm_value::intern::intern;
 use neovm_value::value::*;
 use strum::{EnumString, IntoStaticStr};
 
@@ -796,7 +797,7 @@ pub(crate) fn builtin_create_image(args: Vec<Value>) -> EvalResult {
         match args[1].as_bare_symbol_name() {
             Some(name) => {
                 let normalized = normalize_image_type_name(name).unwrap_or(name);
-                Value::symbol(normalized)
+                Value::from_sym_id(intern(normalized))
             }
             None => {
                 let rendered = neovm_eval::emacs_core::print::print_value(&args[1]);
@@ -816,7 +817,7 @@ pub(crate) fn builtin_create_image(args: Vec<Value>) -> EvalResult {
                 .map(str::to_string)
         };
         match inferred {
-            Some(name) => Value::symbol(name),
+            Some(name) => Value::from_sym_id(intern((name).as_ref())),
             None => Value::NIL,
         }
     };
@@ -1489,7 +1490,7 @@ fn image_embedded_metadata_to_lisp(
         ("loop-delay", metadata.loop_delay()),
     ] {
         if let Some(delay) = delay {
-            plist.push(Value::symbol(name));
+            plist.push(Value::from_sym_id(intern(name)));
             plist.push(match delay {
                 crate::emacs_core::image_catalog::ImageFrameDelay::UseDefault => Value::T,
                 crate::emacs_core::image_catalog::ImageFrameDelay::Milliseconds { .. } => {
@@ -1667,7 +1668,7 @@ pub(crate) fn builtin_image_type(args: Vec<Value>) -> EvalResult {
         ));
     };
 
-    Ok(Value::symbol(resolved))
+    Ok(Value::from_sym_id(intern((resolved).as_ref())))
 }
 
 /// A native image transform a window-system frame can perform.
@@ -1681,7 +1682,7 @@ pub(crate) fn builtin_image_type(args: Vec<Value>) -> EvalResult {
 /// treat this as a promise and stop supplying their own fallback.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, EnumString, IntoStaticStr)]
 #[strum(serialize_all = "kebab-case")]
-pub enum ImageTransform {
+pub(crate) enum ImageTransform {
     /// Resize to `:scale` / `:width` / `:height`. Implemented by
     /// `ImageScalePolicy` and `ImageRealization` in the layout engine.
     Scale,

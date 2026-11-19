@@ -27,6 +27,7 @@ use crate::emacs_core::jit::compile::param_shape::JitParamShape;
 use cranelift_codegen::settings::{self, Configurable};
 use cranelift_module::{Linkage, Module, default_libcall_names};
 use cranelift_object::{ObjectBuilder, ObjectModule};
+use neovm_value::intern::intern;
 
 use super::backend::BackendError;
 use super::compile::{CompileError, DeoptCells};
@@ -757,7 +758,7 @@ const RELOC_NOT_IN_POOL: u32 = u32::MAX;
 pub(crate) struct AotSpecSite {
     /// The baked [`SpecCalleeKind::to_spec_disc`] value (0..DISC_COUNT). The loader
     /// arms ONLY when the live re-classification yields this same discriminant.
-    pub kind_disc: u8,
+    pub(crate) kind_disc: u8,
     /// Reserved (0): a per-kind sub-discriminant for future variants (e.g. a
     /// `PredKind` split). Currently unused; salted into the ABI via the format.
     pub which: u8,
@@ -766,7 +767,7 @@ pub(crate) struct AotSpecSite {
     pub nargs: u16,
     /// Index into the leaf's reloc vector where the callee symbol lives; the loader
     /// reads `reloc_data[callee_reloc_idx].as_bare_symbol_id()` to recover the SymId.
-    pub callee_reloc_idx: u32,
+    pub(crate) callee_reloc_idx: u32,
 }
 
 /// On-disk byte width of one [`AotSpecSite`] (kind_disc:1 + which:1 + nargs:2 +
@@ -782,15 +783,15 @@ const MAX_SPEC_SITES: u32 = 64 * 1024;
 pub(crate) struct AotDescriptor {
     pub meta: super::compile::AotLeafMeta,
     /// Concatenated per-slot recipes (R1c-3); rebuilt into the reloc Vec at load.
-    pub reloc_recipe: Vec<u8>,
+    pub(crate) reloc_recipe: Vec<u8>,
     /// Number of reloc slots (recipes) in `reloc_recipe`.
-    pub reloc_count: u32,
+    pub(crate) reloc_count: u32,
     /// R2 increment B2: the `Op::Call` spec sites, in slot order (empty for a MIR
     /// leaf or a baseline leaf with no armed spec site).
-    pub spec_sites: Vec<AotSpecSite>,
+    pub(crate) spec_sites: Vec<AotSpecSite>,
     /// v3: per reloc slot, its index in the constant pool, or
     /// [`RELOC_NOT_IN_POOL`] (`reloc_count` entries).
-    pub pool_indices: Vec<u32>,
+    pub(crate) pool_indices: Vec<u32>,
 }
 
 /// Each reloc value's index in `constants` by identity (the pool is part of
@@ -1503,15 +1504,15 @@ fn baseline_is_aot_runnable(ops: &[Op]) -> bool {
 /// Stats from a multi-leaf preload build: how many candidates collapsed to how
 /// many unique objects (logged so dedup is never a silent drop).
 #[derive(Debug, Clone, Copy, Default)]
-pub struct PreloadBuildStats {
+pub(crate) struct PreloadBuildStats {
     /// Candidates offered to the builder.
     pub candidates: usize,
     /// Candidates that prepared successfully (in the AOT subset).
     pub prepared: usize,
     /// DISTINCT content hashes actually emitted into the object.
-    pub unique_emitted: usize,
+    pub(crate) unique_emitted: usize,
     /// Candidates dropped because they were outside the AOT subset.
-    pub skipped_unsupported: usize,
+    pub(crate) skipped_unsupported: usize,
     /// Candidates collapsed onto an already-emitted identical body (dedup).
     pub deduped: usize,
 }
@@ -1526,7 +1527,7 @@ pub struct PreloadBuildStats {
 /// emitted ONCE; every function with that body binds the same entry at load (the
 /// native code is identical, so it serves all of them). Returns the object bytes
 /// + [`PreloadBuildStats`] (no silent drops — candidates/unique/deduped/skipped).
-pub fn build_preload_object(
+pub(crate) fn build_preload_object(
     leaves: &[LoadupLeaf],
     // R2 increment B2: the LIVE (dump-time) obarray, so spec-bearing loadup bodies
     // bake their `Op::Call` spec fast paths + descriptor entries. `None` → CBSym-only.
@@ -1946,7 +1947,7 @@ fn manifest_interlock_ok(parsed: &ParsedPreloadManifest) -> bool {
 /// what startup marking streams. Dedup'd bodies (distinct names, identical
 /// body) each get their own member line sharing the hash. `ctx` is the final
 /// pdump loaded in-process (the loadup closure). Returns the build stats.
-pub fn build_and_link_preload(
+pub(crate) fn build_and_link_preload(
     ctx: &crate::emacs_core::eval::Context,
     out_dir: &std::path::Path,
 ) -> Result<PreloadBuildStats, CompileError> {
@@ -2012,10 +2013,10 @@ pub fn build_and_link_preload(
 
 /// Env var that ENABLES the dump-time preload producer (set by
 /// `cargo xtask fresh-build --aot-preload` on the `--temacs=pdump` invocation).
-pub const PRELOAD_ENABLE_ENV: &str = "NEOVM_AOT_PRELOAD";
+pub(crate) const PRELOAD_ENABLE_ENV: &str = "NEOVM_AOT_PRELOAD";
 /// Env var that puts the producer in DRY-RUN mode: enumerate + log candidates +
 /// dedup stats, but do NOT link/write the `.so`/manifest.
-pub const PRELOAD_DRY_RUN_ENV: &str = "NEOVM_AOT_PRELOAD_DRY_RUN";
+pub(crate) const PRELOAD_DRY_RUN_ENV: &str = "NEOVM_AOT_PRELOAD_DRY_RUN";
 
 /// R2-B1 (resolution B): the dump-time preload hook, called from
 /// `builtin_dump_emacs_portable` right after the FINAL pdump is written, with
@@ -2212,7 +2213,7 @@ pub fn testkit_emit_baseline_and_place_so(
 /// the content-hash inputs are ops/constants/arity) and the bytecode source the
 /// emitter needs. Borrowed from the obarray-held `ByteCodeFunction` (`'static`
 /// via the heap), so this carries refs, not copies.
-pub struct LoadupLeaf {
+pub(crate) struct LoadupLeaf {
     pub name: String,
     pub ops: &'static [Op],
     pub constants: &'static [Value],
@@ -2230,7 +2231,7 @@ pub struct LoadupLeaf {
 /// The D0 gate compiles with the LIVE obarray (increment B2), so a spec-bearing
 /// body is admitted via the same BASELINE tier the preload producer uses (matching
 /// emitted sets). Returns the candidates in obarray order (deterministic per image).
-pub fn enumerate_loadup_leaves(
+pub(crate) fn enumerate_loadup_leaves(
     ctx: &crate::emacs_core::eval::Context,
     d0_filter: bool,
 ) -> Vec<LoadupLeaf> {
@@ -2273,7 +2274,7 @@ pub fn enumerate_loadup_leaves(
 /// MIR-lowerable, passes `mir_is_aot_runnable`, and every const is recipe-able).
 /// This is the SAME gate the runtime load path uses, so a candidate emitted here
 /// will load there.
-pub fn is_d0_aot_candidate(
+pub(crate) fn is_d0_aot_candidate(
     ops: &[Op],
     constants: &[Value],
     arity: usize,
@@ -2468,7 +2469,7 @@ pub fn testkit_call_bearing_selftest(
         f
     };
     let sym = |name: &str| -> (Value, SymId) {
-        let s = Value::symbol(name);
+        let s = Value::from_sym_id(intern(name));
         let ValueKind::Symbol(id) = s.kind() else {
             unreachable!("symbol");
         };
@@ -4370,14 +4371,14 @@ fn load_unit(content_hash: u128) -> Option<std::sync::Arc<super::compile::Loaded
 
 /// Path of the preload `.so` beside `exe` (same dir as the pdump, by
 /// construction — the dump-time producer wrote it next to `neomacs`).
-pub fn preload_so_path_for_executable(exe: &std::path::Path) -> std::path::PathBuf {
+pub(crate) fn preload_so_path_for_executable(exe: &std::path::Path) -> std::path::PathBuf {
     exe.parent()
         .unwrap_or_else(|| std::path::Path::new("."))
         .join(PRELOAD_SO_NAME)
 }
 
 /// Path of the preload manifest beside `exe`.
-pub fn preload_manifest_path_for_executable(exe: &std::path::Path) -> std::path::PathBuf {
+pub(crate) fn preload_manifest_path_for_executable(exe: &std::path::Path) -> std::path::PathBuf {
     exe.parent()
         .unwrap_or_else(|| std::path::Path::new("."))
         .join(PRELOAD_MANIFEST_NAME)
@@ -5522,7 +5523,8 @@ pub(crate) fn drain_aot_pgo_to_dir(
 /// three module seams: no `builder.symbol` (shims are `Linkage::Import`, host-
 /// exported), `Linkage::Export` (vs `Local`) for the entry, and `finish().emit()`
 /// (vs `finalize_definitions`/`get_finalized_function`).
-pub fn build_object_for_leaf(
+#[cfg(test)]
+pub(crate) fn build_object_for_leaf(
     m: &mir::MirFunction,
     entry_name: &str,
 ) -> Result<Vec<u8>, CompileError> {

@@ -8,14 +8,23 @@
 //! |---|---|---|
 //! | `NEOVM_EMACS_MULE_PREPARED` | off | Prepare emacs-mule encoder candidates once per conversion, honoring charset priority. |
 
-use crate::emacs_core::coding::EolType;
 use crate::emacs_core::coding::read_detection::{
     adjusted_coding_name, runtime_codec_name, runtime_coding_eol,
 };
+use crate::emacs_core::coding::{EolType, Iso2022Spec};
 use crate::emacs_core::text_host::TextHost;
 use neovm_value::error::LispCondition;
 use neovm_value::error::{expect_args, expect_args_range, expect_min_args};
 use neovm_value::intern::{SymId, intern, resolve_sym};
+/// Resolve a runtime coding-system spelling to its canonical symbol value.
+/// Coding-system names reach Lisp through the member publication in the
+/// coding manager (record_coding_system_name / lisp_visible_names); these
+/// argument and result conversions resolve those same ids and never create
+/// a fresh Lisp-visible name.
+fn coding_symbol_value(name: &str) -> Value {
+    Value::from_sym_id(intern(name))
+}
+
 use std::collections::HashMap;
 // encoding.rs: sentinel imports removed; using emacs_char + LispString directly
 use encoding_rs::{BIG5, GBK};
@@ -299,8 +308,9 @@ pub fn string_width(s: &str) -> usize {
     s.chars().map(char_width).sum()
 }
 
+#[cfg(test)]
 /// Whether a character is printable (not a control char).
-pub fn is_printable(c: char) -> bool {
+pub(crate) fn is_printable(c: char) -> bool {
     let cp = c as u32;
     cp >= 0x20 && cp != 0x7f && !(0x80..=0x9f).contains(&cp)
 }
@@ -308,24 +318,6 @@ pub fn is_printable(c: char) -> bool {
 /// Whether a character is a whitespace character.
 pub fn is_whitespace(c: char) -> bool {
     matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0b' | '\x0c')
-}
-
-/// Whether a character is a word constituent (alphanumeric + underscore).
-pub fn is_word_char(c: char) -> bool {
-    c.is_alphanumeric() || c == '_'
-}
-
-/// Whether a string is all ASCII.
-pub fn is_ascii_string(s: &str) -> bool {
-    s.bytes().all(|b| b < 128)
-}
-
-/// Whether a string is multibyte (contains non-ASCII).
-pub fn is_multibyte_string(s: &str) -> bool {
-    s.chars().any(|ch| {
-        let cp = ch as u32;
-        cp > 0x7f && !(UNIBYTE_BYTE_SENTINEL_MIN..=UNIBYTE_BYTE_SENTINEL_MAX).contains(&cp)
-    })
 }
 
 /// Resolve the EOL conversion type of a coding-system NAME.
@@ -1513,7 +1505,7 @@ fn charset_property_runs(
     vec![StringTextPropertyRun {
         start,
         end: char_count,
-        plist: Value::list(vec![Value::symbol("charset"), Value::symbol(charset)]),
+        plist: Value::list(vec![Value::symbol("charset"), coding_symbol_value(charset)]),
     }]
 }
 
@@ -1538,8 +1530,9 @@ pub fn byte_to_char_pos(s: &str, byte_pos: usize) -> usize {
 // Glyphless character representation
 // ---------------------------------------------------------------------------
 
+#[cfg(test)]
 /// How to display a glyphless (control/non-printable) character.
-pub fn glyphless_char_display(c: char) -> String {
+pub(crate) fn glyphless_char_display(c: char) -> String {
     let cp = c as u32;
     if cp < 0x20 {
         format!("^{}", (cp + 0x40) as u8 as char)
@@ -1886,7 +1879,7 @@ fn transformed_region_string_in_context<H: TextHost>(
         ctx,
         vec![
             Value::heap_string(source),
-            Value::symbol(coding),
+            coding_symbol_value(coding),
             Value::NIL,
             Value::NIL,
         ],
@@ -3971,7 +3964,7 @@ fn run_coding_with_conversion_hook<H: TextHost>(
             ))
         };
         let decoded = builtin_decode_coding_string_with_known(
-            vec![source_arg, Value::symbol(&body)],
+            vec![source_arg, coding_symbol_value(&body)],
             |_| true,
             ctx.eol_conversion(),
             neovm_value::tagged::SymbolMode::Bare,
@@ -4389,7 +4382,10 @@ fn encode_via_iso2022(
     boundary: EncodingBoundary,
     state: &mut CodingEncoderState,
 ) -> Vec<u8> {
-    use crate::emacs_core::charset::{charset_encode_char, charset_iso2022_designation};
+    use crate::emacs_core::charset::{
+        charset_encode_char, charset_encode_char_physical, charset_iso2022_designation,
+        charset_iso2022_designation_physical, iso2022_encode_candidates_among,
+    };
     use crate::emacs_core::coding::IsoFlag;
     let seven = spec.flags.contains(IsoFlag::SevenBits);
     let single_shift = spec.flags.contains(IsoFlag::SingleShift);
@@ -4401,8 +4397,15 @@ fn encode_via_iso2022(
     // FULL_SUPPORT coding systems store `:charset-list` as the symbol
     // `iso-2022`; substitute the full ISO-2022 charset candidate set.
     let full_support = charset_list.len() == 1 && resolve_sym(charset_list[0]) == "iso-2022";
+    // A define-time snapshot keeps the members that were safe then. A cleared
+    // final drops out of the encode set and stays decodable. No snapshot
+    // (preloaded 7bit, a hand-built spec) still walks the live candidate set.
     let candidates: Vec<SymId> = if full_support {
-        crate::emacs_core::charset::iso2022_full_charset_candidates()
+        if let Some(safe) = &spec.safe_charsets {
+            iso2022_encode_candidates_among(safe)
+        } else {
+            crate::emacs_core::charset::iso2022_full_charset_candidates()
+        }
     } else {
         charset_list.to_vec()
     };
@@ -4467,9 +4470,21 @@ fn encode_via_iso2022(
             // id-ordered set (with -1978 already dropped).
             let mut found = None;
             for &cs in &candidates {
-                if let Some((_, dim, c96)) = charset_iso2022_designation(cs)
-                    && let Some(code) = charset_encode_char(cs, i64::from(c))
-                {
+                // FULL_SUPPORT walks `Viso_2022_charset_list` by id. That list
+                // holds table slots, so an alias of the public name does not
+                // retarget the encoder. A concrete `:charset-list` is public
+                // names and still resolves once.
+                let desig_of = if full_support {
+                    charset_iso2022_designation_physical(cs)
+                } else {
+                    charset_iso2022_designation(cs)
+                };
+                let encoded = if full_support {
+                    charset_encode_char_physical(cs, i64::from(c))
+                } else {
+                    charset_encode_char(cs, i64::from(c))
+                };
+                if let (Some((_, dim, c96)), Some(code)) = (desig_of, encoded) {
                     found = Some((cs, code, dim, c96));
                     break;
                 }
@@ -4483,7 +4498,12 @@ fn encode_via_iso2022(
             .position(|&d| d == Some(charset))
             .unwrap_or_else(|| spec.encode_register(chars_96));
         if desig[reg] != Some(charset) {
-            if let Some((fc, d, c96)) = charset_iso2022_designation(charset) {
+            let escape_desig = if full_support {
+                charset_iso2022_designation_physical(charset)
+            } else {
+                charset_iso2022_designation(charset)
+            };
+            if let Some((fc, d, c96)) = escape_desig {
                 out.extend(iso2022_designation_escape(reg, fc, d, c96, long_form));
             }
             desig[reg] = Some(charset);
@@ -4544,13 +4564,193 @@ fn encode_via_iso2022(
 fn decode_via_iso2022(
     bytes: &[u8],
     spec: &crate::emacs_core::coding::Iso2022Spec,
+    charset_list: &[SymId],
     state: &mut Iso2022DecodeState,
     eol: DosEolLookahead,
 ) -> DecodedSource {
     use crate::emacs_core::charset::{
-        charset_by_iso_final, charset_decode_char, charset_iso2022_designation,
+        charset_by_iso_final, charset_decode_char, charset_decode_char_physical,
+        charset_dimension_by_sym, charset_iso2022_member, charset_table_shape,
     };
     use crate::emacs_core::coding::IsoFlag;
+    // GNU `DECODE_DESIGNATION` (coding.c:3186-3217) accepts a final only when
+    // the table id is safe. A charset joins `Viso_2022_charset_list` only when
+    // it has an ISO final (charset.c:1163-1168), so a declared charset with no
+    // final is written to the table and still replayed. Failure is
+    // `invalid_code` (coding.c:3946-3961): rewind, emit one byte, and put
+    // ASCII back in G0. The charset names stay on the use above: a new
+    // `charset::` path here is an upward layering edge.
+    // GNU `setup_iso_safe_charsets` (coding.c:2856-2917). Full support is the
+    // single symbol `iso-2022`. Otherwise the charset must be named by the
+    // list. A listed charset is safe when the request names it, or when its
+    // own 94/96 width has a register below 4. The escape's width is not the
+    // charset's width: `ESC ( Z` can name `latin-iso8859-1`, and `iso-2022-jp`
+    // still rejects it because that charset is not in the list.
+    fn iso2022_charset_is_safe(cs: SymId, spec: &Iso2022Spec, charset_list: &[SymId]) -> bool {
+        // GNU writes a safe byte for every listed id at define time
+        // (`coding.c:11064-11068`) and `setup_iso_safe_charsets` returns
+        // immediately when that string already exists (`coding.c:2876-2877`).
+        // The reg-usage filter does not run. A missing snapshot is the live
+        // membership path used by hand-built specs and preloaded 7bit.
+        if let Some(safe) = &spec.safe_charsets {
+            return safe.contains(&cs);
+        }
+        // Full support is membership of `Viso_2022_charset_list`, which a
+        // later redefinition does not revoke. The current ISO final is not
+        // that membership.
+        let full = charset_list.len() == 1 && resolve_sym(charset_list[0]) == "iso-2022";
+        if full {
+            if !charset_iso2022_member(cs) {
+                return false;
+            }
+        } else if !charset_list.contains(&cs) {
+            return false;
+        }
+        if spec.request.iter().any(|(name, _)| *name == cs) {
+            return true;
+        }
+        let Some((_, chars_96)) = charset_table_shape(cs) else {
+            return false;
+        };
+        let reg = if chars_96 {
+            spec.reg_usage.1
+        } else {
+            spec.reg_usage.0
+        };
+        reg < 4
+    }
+    // GNU `invalid_code` in the ISO decoder resets invocation 0 and
+    // designation 0 to ASCII after emitting one byte (`coding.c:3946-3961`).
+    // The shared `invalid_code` only rewinds and emits; the reset is ISO state.
+    fn iso2022_reject(
+        unit: &mut UnitReader<'_>,
+        sink: &mut DecodeSink,
+        state: &mut Iso2022DecodeState,
+        ascii: SymId,
+    ) -> Result<(), NoMoreSource> {
+        state.gl = 0;
+        state.designation[0] = Some(ascii);
+        invalid_code(unit, sink)
+    }
+    // GNU reads an SS2/SS3 character in the same loop iteration as the
+    // escape (`coding.c:3711-3726`, `3888-3913`). `src_base` stays on the
+    // escape, so a short read leaves the escape unconsumed and a finished
+    // string emits those bytes. The shift is not a flag that outlives the
+    // character.
+    // A finished graphic or single-shift unit with no mapping emits every
+    // consumed byte and leaves G0 alone (`coding.c:3916-3926`). `invalid_code`
+    // is the other path: one byte, then ASCII in G0.
+    fn iso2022_replay_consumed(unit: &UnitReader<'_>, sink: &mut DecodeSink) {
+        for &byte in &unit.bytes[unit.start..unit.pos] {
+            if byte < 0x80 {
+                sink.push(u32::from(byte), None);
+            } else {
+                sink.push_raw(byte);
+            }
+        }
+    }
+    // coding.c:3721-3725. Level 4 is not represented. Without it, an 8-bit
+    // coding system accepts only a GR lead; a 7-bit system also accepts GL.
+    fn iso2022_shift_lead_ok(lead: u8, seven: bool) -> bool {
+        if lead < 0x20 || (lead >= 0x80 && lead < 0xA0) {
+            return false;
+        }
+        seven || lead >= 0x80
+    }
+    fn iso2022_shift_charset(
+        unit: &mut UnitReader<'_>,
+        sink: &mut DecodeSink,
+        state: &mut Iso2022DecodeState,
+        ascii: SymId,
+        reg: usize,
+        enabled: bool,
+        seven: bool,
+    ) -> Result<(), NoMoreSource> {
+        let Some(cs) = state.designation[reg] else {
+            return iso2022_reject(unit, sink, state, ascii);
+        };
+        if !enabled {
+            return iso2022_reject(unit, sink, state, ascii);
+        }
+        let shape = charset_table_shape(cs);
+        let Some(dim) = shape
+            .map(|(dim, _)| dim)
+            .or_else(|| charset_dimension_by_sym(cs))
+        else {
+            return iso2022_reject(unit, sink, state, ascii);
+        };
+        let positions: usize = if dim <= 1 {
+            1
+        } else if dim == 2 {
+            2
+        } else {
+            3
+        };
+        let c1 = unit.byte()?;
+        if !iso2022_shift_lead_ok(c1, seven) {
+            return iso2022_reject(unit, sink, state, ascii);
+        }
+        let code = if positions == 1 {
+            i64::from(c1 & 0x7F)
+        } else {
+            let c2 = unit.byte()?;
+            if !iso2022_continuation_ok(c1, c2) {
+                return iso2022_reject(unit, sink, state, ascii);
+            }
+            if positions == 2 {
+                (i64::from(c1 & 0x7F) << 8) | i64::from(c2 & 0x7F)
+            } else {
+                let c3 = unit.byte()?;
+                if !iso2022_continuation_ok(c1, c3) {
+                    return iso2022_reject(unit, sink, state, ascii);
+                }
+                (i64::from(c1 & 0x7F) << 16) | (i64::from(c2 & 0x7F) << 8) | i64::from(c2 & 0x7F)
+            }
+        };
+        let decoded = if shape.is_some() {
+            charset_decode_char_physical(cs, code)
+        } else {
+            charset_decode_char(cs, code)
+        };
+        if let Some(ch) = decoded {
+            sink.push(ch as u32, Some(cs));
+            return Ok(());
+        }
+        iso2022_replay_consumed(unit, sink);
+        Ok(())
+    }
+    // GNU coding.c:3898-3910. A continuation below 0x20, in 0x80..0xA0, or on
+    // the other high-bit plane is `invalid_code`, which replays the first
+    // graphic byte and leaves the rest of the unit unread.
+    fn iso2022_continuation_ok(lead: u8, next: u8) -> bool {
+        if next < 0x20 || (next >= 0x80 && next < 0xA0) {
+            return false;
+        }
+        (lead & 0x80) == (next & 0x80)
+    }
+    fn iso2022_designate_or_replay(
+        unit: &mut UnitReader<'_>,
+        sink: &mut DecodeSink,
+        state: &mut Iso2022DecodeState,
+        ascii: SymId,
+        reg: usize,
+        final_byte: u8,
+        dimension: i64,
+        chars_96: bool,
+        spec: &Iso2022Spec,
+        charset_list: &[SymId],
+    ) -> Result<(), NoMoreSource> {
+        if let Some((cs, _)) = charset_by_iso_final(i64::from(final_byte), dimension, chars_96)
+            && iso2022_charset_is_safe(cs, spec, charset_list)
+        {
+            state.designation[reg] = Some(cs);
+            return Ok(());
+        }
+        state.designation[reg] = None;
+        state.gl = 0;
+        state.designation[0] = Some(ascii);
+        invalid_code(unit, sink)
+    }
     let seven = spec.flags.contains(IsoFlag::SevenBits);
     // GNU honours the shifts only when the coding system asks for them
     // (src/coding.c:3604-3625); otherwise the byte is `invalid_code' and comes
@@ -4572,13 +4772,17 @@ fn decode_via_iso2022(
             // is left whole for the next one.
             let e = unit.byte()?;
             match e {
-                0x4E => {
-                    state.single_shift = Some(2);
-                    return Ok(());
-                }
-                0x4F => {
-                    state.single_shift = Some(3);
-                    return Ok(());
+                0x4E | 0x4F => {
+                    let reg = if e == 0x4E { 2 } else { 3 };
+                    return iso2022_shift_charset(
+                        unit,
+                        sink,
+                        state,
+                        ascii,
+                        reg,
+                        single_shift,
+                        seven,
+                    );
                 }
                 0x6E => {
                     state.gl = 2;
@@ -4603,27 +4807,50 @@ fn decode_via_iso2022(
                             return Ok(());
                         }
                     };
-                    if let Some((cs, _)) = charset_by_iso_final(i64::from(final_byte), 2, chars_96)
-                    {
-                        state.designation[reg] = Some(cs);
-                    }
-                    return Ok(());
+                    return iso2022_designate_or_replay(
+                        unit,
+                        sink,
+                        state,
+                        ascii,
+                        reg,
+                        final_byte,
+                        2,
+                        chars_96,
+                        spec,
+                        charset_list,
+                    );
                 }
                 0x28..=0x2B => {
                     let reg = usize::from(e - 0x28);
                     let final_byte = unit.byte()?;
-                    if let Some((cs, _)) = charset_by_iso_final(i64::from(final_byte), 1, false) {
-                        state.designation[reg] = Some(cs);
-                    }
-                    return Ok(());
+                    return iso2022_designate_or_replay(
+                        unit,
+                        sink,
+                        state,
+                        ascii,
+                        reg,
+                        final_byte,
+                        1,
+                        false,
+                        spec,
+                        charset_list,
+                    );
                 }
                 0x2C..=0x2F => {
                     let reg = usize::from(e - 0x2C);
                     let final_byte = unit.byte()?;
-                    if let Some((cs, _)) = charset_by_iso_final(i64::from(final_byte), 1, true) {
-                        state.designation[reg] = Some(cs);
-                    }
-                    return Ok(());
+                    return iso2022_designate_or_replay(
+                        unit,
+                        sink,
+                        state,
+                        ascii,
+                        reg,
+                        final_byte,
+                        1,
+                        true,
+                        spec,
+                        charset_list,
+                    );
                 }
                 _ => {
                     unit.rewind();
@@ -4636,31 +4863,23 @@ fn decode_via_iso2022(
         if b == 0x0E {
             // Shift-out also requires G1 to be designated (src/coding.c:3605).
             if !locking_shift || state.designation[1].is_none() {
-                return invalid_code(unit, sink);
+                return iso2022_reject(unit, sink, state, ascii);
             }
             state.gl = 1;
             return Ok(());
         }
         if b == 0x0F {
             if !locking_shift {
-                return invalid_code(unit, sink);
+                return iso2022_reject(unit, sink, state, ascii);
             }
             state.gl = 0;
             return Ok(());
         }
         if !seven && b == 0x8E {
-            if !single_shift {
-                return invalid_code(unit, sink);
-            }
-            state.single_shift = Some(2);
-            return Ok(());
+            return iso2022_shift_charset(unit, sink, state, ascii, 2, single_shift, seven);
         }
         if !seven && b == 0x8F {
-            if !single_shift {
-                return invalid_code(unit, sink);
-            }
-            state.single_shift = Some(3);
-            return Ok(());
+            return iso2022_shift_charset(unit, sink, state, ascii, 3, single_shift, seven);
         }
         if b < 0x20 || b == 0x7F {
             sink.push(u32::from(b), None);
@@ -4683,21 +4902,62 @@ fn decode_via_iso2022(
             sink.push(u32::from(b & 0x7F), None);
             return Ok(());
         }
-        if let Some(cs) = charset
-            && let Some((_, dim, _)) = charset_iso2022_designation(cs)
-        {
-            let dim = dim.clamp(1, 2) as usize;
-            unit.rewind();
-            let position = unit.take(dim)?;
-            let mut code = 0i64;
-            for byte in position {
-                code = (code << 8) | i64::from(byte & 0x7F);
-            }
-            if let Some(ch) = charset_decode_char(cs, code) {
-                sink.push(ch as u32, Some(cs));
+        if let Some(cs) = charset {
+            // The register holds the table slot. A cleared ISO final still
+            // has a shape (`charset.c:1163-1168`). An initial alias that is
+            // not itself a table slot falls back to the resolved identity.
+            let shape = charset_table_shape(cs);
+            let dim = shape
+                .map(|(dim, _)| dim)
+                .or_else(|| charset_dimension_by_sym(cs));
+            if let Some(dim) = dim {
+                // GNU reads two extra bytes when `CHARSET_DIMENSION > 2`
+                // (coding.c:3892-3913). The 3-byte formula validates `c3` and
+                // then uses `c2` twice: `c1 = (c1 << 16) | (c2 << 8) | c2`.
+                // The attested oracle decodes both `!!!` and `!!A` as the
+                // charset's code-offset.
+                let positions: usize = if dim <= 1 {
+                    1
+                } else if dim == 2 {
+                    2
+                } else {
+                    3
+                };
+                unit.rewind();
+                let c1 = unit.byte()?;
+                let code = if positions == 1 {
+                    i64::from(c1 & 0x7F)
+                } else {
+                    let c2 = unit.byte()?;
+                    if !iso2022_continuation_ok(c1, c2) {
+                        return iso2022_reject(unit, sink, state, ascii);
+                    }
+                    if positions == 2 {
+                        (i64::from(c1 & 0x7F) << 8) | i64::from(c2 & 0x7F)
+                    } else {
+                        let c3 = unit.byte()?;
+                        if !iso2022_continuation_ok(c1, c3) {
+                            return iso2022_reject(unit, sink, state, ascii);
+                        }
+                        (i64::from(c1 & 0x7F) << 16)
+                            | (i64::from(c2 & 0x7F) << 8)
+                            | i64::from(c2 & 0x7F)
+                    }
+                };
+                let decoded = if shape.is_some() {
+                    charset_decode_char_physical(cs, code)
+                } else {
+                    charset_decode_char(cs, code)
+                };
+                if let Some(ch) = decoded {
+                    sink.push(ch as u32, Some(cs));
+                    return Ok(());
+                }
+                // coding.c:3916-3926. The bytes of a complete unmapped unit
+                // are emitted and G0 stays on this charset.
+                iso2022_replay_consumed(unit, sink);
                 return Ok(());
             }
-            return invalid_code(unit, sink);
         }
         if b < 0x80 {
             sink.push(u32::from(b), None);
@@ -4791,7 +5051,7 @@ fn builtin_coding_string_in_context<H: TextHost>(
             // Downstream helpers re-read `args[1]` rather than `coding` (see the
             // `undecided` rewrite below), so the resolved system has to be put
             // back there too or the codec still selects on the alias name.
-            args[1] = Value::symbol(&coding);
+            args[1] = coding_symbol_value(&coding);
         }
     }
     let destination = coding_string_destination(args.get(3).copied(), coding_symbol_mode)?;
@@ -4861,14 +5121,14 @@ fn builtin_coding_string_in_context<H: TextHost>(
             Some(CodingReadSelection::IdentityOnly(candidate)) => {
                 coding = candidate.to_owned();
                 reported_coding = coding.clone();
-                args[1] = Value::symbol(&coding);
+                args[1] = coding_symbol_value(&coding);
                 effective_decoder = EffectiveDecoder::RetainedUndecided;
             }
             Some(CodingReadSelection::Rebase(selected)) => {
                 reported_coding = selected.to_owned();
                 coding = runtime_codec_name(ctx.coding_systems(), selected)
                     .unwrap_or_else(|| selected.to_owned());
-                args[1] = Value::symbol(&coding);
+                args[1] = coding_symbol_value(&coding);
                 effective_decoder = EffectiveDecoder::Configured;
             }
         }
@@ -4944,7 +5204,7 @@ fn builtin_coding_string_in_context<H: TextHost>(
         // The hook already supplied text; select its codec without running
         // the same callback a second time.
         let base = apply_explicit_eol_suffix(&base_type, coding_name_eol(&coding));
-        args[1] = Value::symbol(&base);
+        args[1] = coding_symbol_value(&base);
         coding = base;
     }
     // A coding system whose conversion is implemented by an elisp
@@ -5027,7 +5287,7 @@ fn builtin_coding_string_in_context<H: TextHost>(
         if entry.reports_coding_result() {
             ctx.set_variable_by_name(
                 "last-coding-system-used",
-                Value::symbol(canonical_context_coding_name(&reported_coding)),
+                coding_symbol_value(&canonical_context_coding_name(&reported_coding)),
             );
         }
         let Some(buffer_id) = destination else {
@@ -5069,7 +5329,7 @@ fn builtin_coding_string_in_context<H: TextHost>(
             // The fall-through arm re-reads `args[1]`, so the name has to be
             // spent there too or `encode_lisp_string` would expand a second
             // time and emit CR CR LF.
-            args[1] = Value::symbol(&coding);
+            args[1] = coding_symbol_value(&coding);
             // NOCOPY promises the caller's own string object back.  A source
             // that needed EOL expansion is a fresh object already, so the
             // promise no longer applies and the identity fast path downstream
@@ -5095,13 +5355,13 @@ fn builtin_coding_string_in_context<H: TextHost>(
         let spent = coding_name_with_eol_spent(&coding);
         if spent != coding.as_str() {
             coding = spent.into_owned();
-            args[1] = Value::symbol(&coding);
+            args[1] = coding_symbol_value(&coding);
         }
         if effective_decoder == EffectiveDecoder::RetainedUndecided {
             // A nil priority target changed only coding->id. Its decoder is
             // still the original undecided coding's raw-text decoder.
             coding = "raw-text".to_owned();
-            args[1] = Value::symbol(&coding);
+            args[1] = coding_symbol_value(&coding);
         }
     }
     let source_string = || {
@@ -5230,10 +5490,11 @@ fn builtin_coding_string_in_context<H: TextHost>(
                 decode_via_ccl(&source_bytes, spec, &coding, ctx.symbol_mode())?,
                 &source_bytes,
             ))
-        } else if let Some((spec, _)) = &full_iso {
+        } else if let Some((spec, charsets)) = &full_iso {
             Some(decode_via_iso2022(
                 &source_bytes,
                 spec,
+                charsets,
                 run.decoder_state(&mut scratch).iso_2022_mut(),
                 dos_eol,
             ))
@@ -5331,7 +5592,7 @@ fn builtin_coding_string_in_context<H: TextHost>(
     if entry.reports_coding_result() {
         ctx.set_variable_by_name(
             "last-coding-system-used",
-            Value::symbol(canonical_context_coding_name(&reported_coding)),
+            coding_symbol_value(&canonical_context_coding_name(&reported_coding)),
         );
     }
 
@@ -5657,7 +5918,7 @@ pub fn decode_file_bytes_in_context<H: TextHost>(
     ));
     let decoded = builtin_coding_string_in_context(
         ctx,
-        vec![source, Value::symbol(coding)],
+        vec![source, coding_symbol_value(coding)],
         CodingDirection::Decode,
         EncodingBoundary::CompleteText,
         // `insert-file-contents` reaches `decode_coding_gap` (src/coding.c:7905),
@@ -5727,7 +5988,7 @@ pub fn decode_process_run_in_context<H: TextHost>(
     let mut run = CodingRun::process_read(state, block);
     let decoded = builtin_coding_string_in_context(
         ctx,
-        vec![source, Value::symbol(coding)],
+        vec![source, coding_symbol_value(coding)],
         CodingDirection::Decode,
         EncodingBoundary::CompleteText,
         CodingEntry::ProcessRun,

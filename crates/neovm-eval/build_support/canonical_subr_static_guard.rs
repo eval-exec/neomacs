@@ -441,9 +441,44 @@ fn production_sources(root: &Path) -> Result<Vec<String>, String> {
     let directory = root.join("crates/neovm-eval/src");
     let mut out = vec![];
     walk(root, &directory, &mut out)?;
+    // W-REG: registration batches move into the owning crates that can depend
+    // on eval. Their descriptor homes are `subrs.rs` files, so the one-home
+    // corpus grows with exactly those files; unrelated crate sources do not
+    // join the scan. No such files exist until the first row-moving commit.
+    for crate_dir in ["crates/neovm-system/src", "crates/neovm-display/src"] {
+        let directory = root.join(crate_dir);
+        if directory.is_dir() {
+            walk_batch_sources(root, &directory, &mut out)?;
+        }
+    }
     out.sort();
     out.dedup();
     Ok(out)
+}
+
+/// Walk an owner crate for `subrs.rs` batch files (W-REG descriptor homes).
+fn walk_batch_sources(root: &Path, directory: &Path, out: &mut Vec<String>) -> Result<(), String> {
+    for entry in std::fs::read_dir(directory)
+        .map_err(|e| fail(format!("source directory {}: {e}", directory.display())))?
+    {
+        let entry = entry.map_err(|e| fail(e.to_string()))?;
+        let p = entry.path();
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if p.is_dir() {
+            if name != "tests" && name != "test_support" {
+                walk_batch_sources(root, &p, out)?;
+            }
+        } else if name == "subrs.rs" {
+            out.push(
+                p.strip_prefix(root)
+                    .map_err(|e| fail(e.to_string()))?
+                    .to_string_lossy()
+                    .replace('\\', "/"),
+            );
+        }
+    }
+    Ok(())
 }
 fn factory_literal(
     root: &Path,

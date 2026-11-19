@@ -367,12 +367,10 @@ fn oracle_prop_automata_cfg_cyk_parser() {
                                                 (let ((r1 (intern (substring (symbol-name rhs) 0 1)))
                                                       (r2 (intern (substring (symbol-name rhs) 1))))
                                                   (and (memq r1 left-syms)
-                                                       (memq r2 right-syms)
-                                                       (progn
-                                                         (unless (memq (car rule) syms)
-                                                           (setq syms (cons (car rule) syms)))
-                                                         t))))))
+                                                       (memq r2 right-syms))))))
                               ;; Also check 3-char rhs like "A-S1" -> won't match, need better representation
+                              (unless (memq (car rule) syms)
+                                (setq syms (cons (car rule) syms))))
                               ))
                           (setq k (1+ k))))
                       (puthash (cons i j) syms table))
@@ -420,8 +418,8 @@ fn oracle_prop_automata_cfg_cyk_parser() {
         (funcall 'neovm--test-anbn-check "abab"))
     (makunbound 'neovm--test-cyk-rules)
     (fmakunbound 'neovm--test-cyk-parse)
-    (fmakunbound 'neovm--test-anbn-check))))"#;
-    let expect = expect_test::expect![[r#""ERR (wrong-number-of-arguments fset 4)""#]];
+    (fmakunbound 'neovm--test-anbn-check)))"#;
+    let expect = expect_test::expect![[r#""OK (t t t t nil nil nil nil nil nil)""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 

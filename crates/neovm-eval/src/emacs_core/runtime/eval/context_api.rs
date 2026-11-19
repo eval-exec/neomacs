@@ -151,6 +151,18 @@ impl Context {
         &self.obarray
     }
 
+    /// Publish an existing canonical `SymId` as an obarray member and return
+    /// it as a Value.
+    ///
+    /// Use when the id was resolved earlier (for example a priority list of
+    /// category ids) and GNU interns the name at publication. A non-canonical
+    /// `make-symbol` id is left uninterned, as in GNU.
+    #[inline]
+    pub(crate) fn intern_member_id_value(&mut self, id: SymId) -> Value {
+        self.obarray.ensure_interned_global_id(id);
+        Value::from_sym_id(id)
+    }
+
     /// R-b (PC11-F f1): the Context's tagged-heap view. The field this reads
     /// narrows to `pub(crate)`; cross-crate test code uses this accessor.
     #[doc(hidden)]
@@ -417,7 +429,8 @@ impl Context {
     /// lookup (buffer-local, then `buffer_defaults`) — the obarray value cell of
     /// a forwarded slot var is always nil, so the resolver must read the default
     /// slot directly.
-    pub fn buffer_default_value(&self, name: &str) -> Option<Value> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn buffer_default_value(&self, name: &str) -> Option<Value> {
         // GNU default read: BVAR (&buffer_defaults, slot) for a slot-backed
         // per-buffer variable (src/buffer.c:1116, 2289); for any other
         // variable the obarray default cell is GNU's Fdefault_value.
@@ -1774,7 +1787,8 @@ impl Context {
         let _ = self.clear_echo_area_message_with_hook(false);
     }
 
-    pub fn clear_current_message(&mut self) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn clear_current_message(&mut self) {
         self.cancel_key_echo_state();
         if self.clear_echo_area_message() == EchoMessageClearResult::PreserveEchoArea {}
     }
@@ -1796,12 +1810,7 @@ impl Context {
 
     #[doc(hidden)]
     pub fn route_keyboard_input_to_frame(&mut self, emacs_frame_id: u64) {
-        let frame_id = if emacs_frame_id == 0 {
-            self.frames.selected_frame().map(|frame| frame.id)
-        } else {
-            Some(neovm_value::display_vocab::FrameId(emacs_frame_id))
-        };
-        if let Some(frame_id) = frame_id {
+        if let Some(frame_id) = self.keyboard_input_frame(emacs_frame_id) {
             self.observe_keyboard_input_frame(frame_id);
         } else {
             self.command_loop
@@ -1810,14 +1819,58 @@ impl Context {
         }
     }
 
+    /// Make current the kboard `route_keyboard_input_to_frame` would select,
+    /// without recording the event frame or raising a switch-frame.  GNU
+    /// `kbd_buffer_get_event` returns the event's kboard on every read, also
+    /// when it re-reads an event it left queued behind a switch-frame.
+    pub(super) fn select_keyboard_input_kboard(&mut self, emacs_frame_id: u64) {
+        if let Some(frame_id) = self.keyboard_input_frame(emacs_frame_id) {
+            self.select_input_frame_kboard(frame_id);
+        } else {
+            self.command_loop
+                .keyboard
+                .select_terminal(crate::emacs_core::eval::protocol::tty_host::TERMINAL_ID);
+        }
+    }
+
+    fn keyboard_input_frame(
+        &self,
+        emacs_frame_id: u64,
+    ) -> Option<neovm_value::display_vocab::FrameId> {
+        if emacs_frame_id == 0 {
+            self.frames.selected_frame().map(|frame| frame.id)
+        } else {
+            Some(neovm_value::display_vocab::FrameId(emacs_frame_id))
+        }
+    }
+
     #[doc(hidden)]
     pub fn route_tty_keyboard_input(
         &mut self,
         target: crate::emacs_core::eval::keyboard::TtyInputTarget,
     ) {
+        if let Some(frame_id) = self.tty_keyboard_input_frame(target) {
+            self.observe_keyboard_input_frame(frame_id);
+        }
+    }
+
+    /// TTY counterpart of `select_keyboard_input_kboard`.
+    pub(super) fn select_tty_keyboard_input_kboard(
+        &mut self,
+        target: crate::emacs_core::eval::keyboard::TtyInputTarget,
+    ) {
+        if let Some(frame_id) = self.tty_keyboard_input_frame(target) {
+            self.select_input_frame_kboard(frame_id);
+        }
+    }
+
+    fn tty_keyboard_input_frame(
+        &self,
+        target: crate::emacs_core::eval::keyboard::TtyInputTarget,
+    ) -> Option<neovm_value::display_vocab::FrameId> {
         use crate::emacs_core::eval::keyboard::TtyInputTarget;
 
-        let frame_id = match target {
+        match target {
             TtyInputTarget::SelectedFrame => self.frames.selected_frame().map(|frame| frame.id),
             TtyInputTarget::Frame(frame_id) => self
                 .frames
@@ -1830,9 +1883,14 @@ impl Context {
                 .filter(|frame| frame.terminal_id == terminal_id)
                 .map(|frame| frame.id)
                 .or_else(|| self.frames.top_frame_on_terminal(terminal_id)),
-        };
-        if let Some(frame_id) = frame_id {
-            self.observe_keyboard_input_frame(frame_id);
+        }
+    }
+
+    fn select_input_frame_kboard(&mut self, frame_id: neovm_value::display_vocab::FrameId) {
+        if let Some(frame) = self.frames.get(frame_id) {
+            self.command_loop
+                .keyboard
+                .select_terminal(frame.terminal_id);
         }
     }
 
@@ -1843,11 +1901,13 @@ impl Context {
     /// selected most recently.
     #[doc(hidden)]
     pub fn observe_keyboard_input_frame(&mut self, frame_id: neovm_value::display_vocab::FrameId) {
-        if let Some(frame) = self.frames.get(frame_id) {
-            self.command_loop
-                .keyboard
-                .select_terminal(frame.terminal_id);
-        }
+        // A key event stores a bare id. The queue pins the object while the
+        // event is unread. Once the object is gone, recording the id would
+        // leave a (D) hold that the next `make_frame` would refuse.
+        let Some(frame_value) = Value::registered_frame(frame_id.0) else {
+            return;
+        };
+        self.select_input_frame_kboard(frame_id);
 
         let selected_frame = self.frames.selected_frame().map(|frame| frame.id);
         let last_event_frame = self
@@ -1855,7 +1915,15 @@ impl Context {
             .keyboard
             .kboard
             .internal_last_event_frame();
-        let switching = Some(frame_id) != last_event_frame && Some(frame_id) != selected_frame;
+        let selected_terminal_differs = self
+            .frames
+            .get(frame_id)
+            .zip(selected_frame.and_then(|selected_id| self.frames.get(selected_id)))
+            .is_some_and(|(input_frame, selected_frame)| {
+                input_frame.terminal_id != selected_frame.terminal_id
+            });
+        let switching = Some(frame_id) != selected_frame
+            && (Some(frame_id) != last_event_frame || selected_terminal_differs);
         self.command_loop
             .keyboard
             .kboard
@@ -1865,7 +1933,8 @@ impl Context {
         // observed updates the former and previously re-interned it.
         static LAST_EVENT_FRAME: WellKnown = WellKnown::LastEventFrame;
         static SWITCH_FRAME: WellKnown = WellKnown::SwitchFrame;
-        let frame_value = Value::make_frame(frame_id.0);
+        // `frame_value` was resolved above. The symbol value is the root
+        // GNU's `Vlast_event_frame` is; the bare id is pinned beside it.
         self.store_variable(LAST_EVENT_FRAME.id(), frame_value);
         if switching || self.command_loop.keyboard.has_unread_selection_event() {
             self.command_loop

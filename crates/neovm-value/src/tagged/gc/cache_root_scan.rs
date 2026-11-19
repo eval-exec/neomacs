@@ -11,8 +11,7 @@
 /// forward a token but cannot build one - and therefore cannot construct a
 /// diagnostic snapshot.  It stays crate-private: no consumer ever names it
 /// (they match the variant with `..` and construct through
-/// [`CacheRootScan::snapshot`]), so a crate-private type keeps it out of the
-/// shrink-only public-hidden promotion ledger.
+/// [`CacheRootScan::snapshot`]).
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct SnapshotToken {
     _private: (),

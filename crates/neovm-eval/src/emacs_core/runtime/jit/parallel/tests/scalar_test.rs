@@ -50,6 +50,12 @@ pub(crate) fn compiled_entry_manifest() -> Result<(), String> {
     )
 }
 
+#[test]
+fn nmjit_n4_compiled_entry_manifest() {
+    let _harness = crate::test_utils::unit_harness();
+    compiled_entry_manifest().unwrap();
+}
+
 fn samples() -> [ImmediateResult; 6] {
     [
         ImmediateResult::Nil,

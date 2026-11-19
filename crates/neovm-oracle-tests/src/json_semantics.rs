@@ -61,3 +61,44 @@ fn oracle_json_serialize_default_null_and_false_sentinels_like_gnu() {
     ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
+
+/// GNU 31.1 has no `json-serialize-error`: serializer failures use plain
+/// `error` or `wrong-type-argument` conditions. The depth limit is
+/// `json_out_nest`'s `maxdepth = 50` (the 51st container errors), and the
+/// symbol is not interned at boot.
+#[test]
+fn oracle_json_serialize_error_conditions_match_gnu() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let form = r#"
+(let ((nested (lambda (n) (let ((v 1)) (dotimes (_ n) (setq v (vector v))) v))))
+  (list
+   (condition-case e (length (json-serialize (funcall nested 50)))
+     (error (list (car e) (cdr e))))
+   (condition-case e (json-serialize (funcall nested 51))
+     (error (list (car e) (cdr e))))
+   (condition-case e (json-serialize 0.0e+NaN)
+     (error (list (car e) (cdr e))))
+   (condition-case e (json-serialize 1.0e+INF)
+     (error (list (car e) (cdr e))))
+   (condition-case e (json-serialize '(1 2))
+     (error (list (car e) (cdr e))))
+   (condition-case e (json-serialize '(a . 1))
+     (error (list (car e) (cdr e))))
+   (condition-case e (json-serialize '((a . 1) . 2))
+     (error (list (car e) (cdr e))))
+   (condition-case e (json-serialize (make-marker))
+     (error (list (car e) (cdr e))))
+   (intern-soft "json-serialize-error")
+   (and (intern-soft "json-error") t)
+   (condition-case e (with-temp-buffer (json-insert (funcall nested 51)))
+     (error (list (car e) (cdr e))))
+   (condition-case e (with-temp-buffer (json-insert 0.0e+NaN))
+     (error (list (car e) (cdr e))))))
+"#;
+
+    let expect = expect_test::expect![[
+        r#""OK (101 (error (\"Maximum JSON serialization depth exceeded\")) (error (\"JSON does not allow Inf or NaN\" 0.0e+NaN)) (error (\"JSON does not allow Inf or NaN\" 1.0e+INF)) (wrong-type-argument (symbolp 1)) (wrong-type-argument (consp 1)) (wrong-type-argument (listp ((a . 1) . 2))) (wrong-type-argument (json-value-p #<marker in no buffer>)) nil t (error (\"Maximum JSON serialization depth exceeded\")) (error (\"JSON does not allow Inf or NaN\" 0.0e+NaN)))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}

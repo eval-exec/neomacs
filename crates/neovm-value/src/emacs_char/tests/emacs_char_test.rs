@@ -1,4 +1,5 @@
 use super::*;
+use crate::emacs_char::b13_test_hooks::{multibyte_chars_in_text, utf8_to_emacs};
 
 // -----------------------------------------------------------------------
 // ASCII roundtrip
@@ -590,20 +591,6 @@ fn char_resolve_meta_preserved() {
 // -----------------------------------------------------------------------
 
 #[test]
-fn raw_prev_char_len_ascii() {
-    let s = b"abc";
-    assert_eq!(raw_prev_char_len(s, 3), 1);
-    assert_eq!(raw_prev_char_len(s, 2), 1);
-}
-
-#[test]
-fn raw_prev_char_len_multibyte() {
-    let mut buf = [0u8; MAX_MULTIBYTE_LENGTH];
-    let n = char_string(0x4E2D, &mut buf); // 3-byte CJK char
-    assert_eq!(raw_prev_char_len(&buf, n), n);
-}
-
-#[test]
 fn string_char_advance_walks_through() {
     let mut buf = Vec::new();
     let mut tmp = [0u8; MAX_MULTIBYTE_LENGTH];
@@ -621,19 +608,6 @@ fn string_char_advance_walks_through() {
     );
     assert_eq!(string_char_advance(&buf, &mut pos).code(), b'B' as u32);
     assert_eq!(pos, buf.len());
-}
-
-#[test]
-fn chars_in_text_counts() {
-    // Build "A中" + raw 0xFF + "B" → 4 chars, encoded with mixed widths.
-    let mut buf = Vec::new();
-    let mut tmp = [0u8; MAX_MULTIBYTE_LENGTH];
-    for c in [b'A' as u32, 0x4E2D, byte8_to_char(0xFF), b'B' as u32] {
-        let n = char_string(c, &mut tmp);
-        buf.extend_from_slice(&tmp[..n]);
-    }
-    assert_eq!(chars_in_text(&buf, true), 4);
-    assert_eq!(chars_in_text(&buf, false), buf.len());
 }
 
 // -----------------------------------------------------------------------
@@ -699,56 +673,6 @@ fn parse_str_as_multibyte_counts() {
 // string_count_byte8 / string_escape_byte8 / strwidth
 // -----------------------------------------------------------------------
 
-#[test]
-fn string_count_byte8_unibyte() {
-    assert_eq!(string_count_byte8(b"abc", false), 0);
-    assert_eq!(string_count_byte8(&[b'a', 0x80, 0xFF], false), 2);
-}
-
-#[test]
-fn string_count_byte8_multibyte() {
-    let mut input = Vec::new();
-    let mut tmp = [0u8; MAX_MULTIBYTE_LENGTH];
-    for c in [
-        b'A' as u32,
-        0x4E2D,
-        byte8_to_char(0xFF),
-        byte8_to_char(0x80),
-        b'B' as u32,
-    ] {
-        let n = char_string(c, &mut tmp);
-        input.extend_from_slice(&tmp[..n]);
-    }
-    assert_eq!(string_count_byte8(&input, true), 2);
-}
-
-#[test]
-fn string_escape_byte8_unibyte() {
-    let out = string_escape_byte8(&[b'a', 0xFF, b'b'], false);
-    assert_eq!(out, b"a\\377b");
-}
-
-#[test]
-fn string_escape_byte8_multibyte() {
-    let mut input = Vec::new();
-    let mut tmp = [0u8; MAX_MULTIBYTE_LENGTH];
-    for c in [b'A' as u32, byte8_to_char(0xFF), b'B' as u32] {
-        let n = char_string(c, &mut tmp);
-        input.extend_from_slice(&tmp[..n]);
-    }
-    let out = string_escape_byte8(&input, true);
-    assert_eq!(out, b"A\\377B");
-}
-
-#[test]
-fn strwidth_basic() {
-    assert_eq!(strwidth(b"abc", false), 3);
-    // CJK char (3 bytes UTF-8) is double-width.
-    let mut buf = [0u8; MAX_MULTIBYTE_LENGTH];
-    let n = char_string(0x4E2D, &mut buf);
-    assert_eq!(strwidth(&buf[..n], true), 2);
-}
-
 // -----------------------------------------------------------------------
 // Unicode general-category predicates
 // -----------------------------------------------------------------------
@@ -772,16 +696,6 @@ fn alphanumericp_includes_nd() {
 }
 
 #[test]
-fn graphicp_excludes_separators_and_controls() {
-    assert!(graphicp(UnicodeCategory::UppercaseLetter as i64));
-    assert!(!graphicp(UnicodeCategory::SpaceSeparator as i64));
-    assert!(!graphicp(UnicodeCategory::LineSeparator as i64));
-    assert!(!graphicp(UnicodeCategory::Control as i64));
-    assert!(!graphicp(UnicodeCategory::Surrogate as i64));
-    assert!(!graphicp(UnicodeCategory::Unassigned as i64));
-}
-
-#[test]
 fn printablep_excludes_only_cc_cs_cn() {
     assert!(printablep(UnicodeCategory::SpaceSeparator as i64));
     assert!(printablep(UnicodeCategory::UppercaseLetter as i64));
@@ -796,13 +710,6 @@ fn graphic_base_p_excludes_marks() {
     assert!(!graphic_base_p(UnicodeCategory::NonspacingMark as i64));
     assert!(!graphic_base_p(UnicodeCategory::SpacingMark as i64));
     assert!(!graphic_base_p(UnicodeCategory::Format as i64));
-}
-
-#[test]
-fn blankp_only_zs() {
-    assert!(blankp(UnicodeCategory::SpaceSeparator as i64));
-    assert!(!blankp(UnicodeCategory::LineSeparator as i64));
-    assert!(!blankp(UnicodeCategory::Control as i64));
 }
 
 #[test]

@@ -85,7 +85,7 @@ pub struct TextPositionAnchor {
 /// the last conversion, and markers.  This type keeps that paired state
 /// explicit so callers cannot update one coordinate without the other.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TextPositionBounds {
+pub(crate) struct TextPositionBounds {
     below: TextPositionAnchor,
     above: TextPositionAnchor,
 }
@@ -96,7 +96,7 @@ pub struct TextPositionBounds {
 /// `(char, byte)` pair among many; keeping it behind this wrapper avoids
 /// exposing gap-shaped APIs to the generic conversion logic.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub struct TextPositionHint {
+pub(crate) struct TextPositionHint {
     anchor: Option<TextPositionAnchor>,
 }
 
@@ -107,7 +107,7 @@ pub struct TextPositionHint {
 /// such as piece trees and ropes should answer from their own subtree metrics
 /// instead of forcing the semantic layer to scan chunks linearly.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub enum TextPositionLookup {
+pub(crate) enum TextPositionLookup {
     #[default]
     AnchorScan,
     BackendIndex,
@@ -176,19 +176,23 @@ impl TextPositionHint {
         Self { anchor: None }
     }
 
-    pub const fn from_anchor(anchor: TextPositionAnchor) -> Self {
+    pub(crate) const fn from_anchor(anchor: TextPositionAnchor) -> Self {
         Self {
             anchor: Some(anchor),
         }
     }
 
-    pub fn consider_char_anchor(self, bounds: &mut TextPositionBounds, target: CharPos0) {
+    pub(crate) fn consider_char_anchor(self, bounds: &mut TextPositionBounds, target: CharPos0) {
         if let Some(anchor) = self.anchor {
             bounds.consider_char_anchor(target, anchor);
         }
     }
 
-    pub fn consider_byte_anchor(self, bounds: &mut TextPositionBounds, target: EmacsBytePos) {
+    pub(crate) fn consider_byte_anchor(
+        self,
+        bounds: &mut TextPositionBounds,
+        target: EmacsBytePos,
+    ) {
         if let Some(anchor) = self.anchor {
             bounds.consider_byte_anchor(target, anchor);
         }
@@ -196,7 +200,7 @@ impl TextPositionHint {
 }
 
 impl TextPositionLookup {
-    pub const fn uses_backend_index(self) -> bool {
+    pub(crate) const fn uses_backend_index(self) -> bool {
         matches!(self, Self::BackendIndex)
     }
 }
@@ -217,7 +221,7 @@ impl TextPositionBounds {
         self.above
     }
 
-    pub fn consider_char_anchor(&mut self, target: CharPos0, anchor: TextPositionAnchor) {
+    pub(crate) fn consider_char_anchor(&mut self, target: CharPos0, anchor: TextPositionAnchor) {
         if anchor.char_pos() <= target && anchor.char_pos() > self.below.char_pos() {
             self.below = anchor;
         }
@@ -226,7 +230,11 @@ impl TextPositionBounds {
         }
     }
 
-    pub fn consider_byte_anchor(&mut self, target: EmacsBytePos, anchor: TextPositionAnchor) {
+    pub(crate) fn consider_byte_anchor(
+        &mut self,
+        target: EmacsBytePos,
+        anchor: TextPositionAnchor,
+    ) {
         if anchor.emacs_byte_pos() <= target
             && anchor.emacs_byte_pos() > self.below.emacs_byte_pos()
         {
@@ -261,7 +269,7 @@ impl TextPositionBounds {
 
     /// The byte position of `target` by interpolation, when the bracketing
     /// span is all single-byte (see [`Self::span_is_single_byte`]).
-    pub fn interpolate_char(self, target: CharPos0) -> Option<EmacsBytePos> {
+    pub(crate) fn interpolate_char(self, target: CharPos0) -> Option<EmacsBytePos> {
         if !self.span_is_single_byte() {
             return None;
         }
@@ -273,7 +281,7 @@ impl TextPositionBounds {
 
     /// The char position of `target` by interpolation, when the bracketing
     /// span is all single-byte (see [`Self::span_is_single_byte`]).
-    pub fn interpolate_byte(self, target: EmacsBytePos) -> Option<CharPos0> {
+    pub(crate) fn interpolate_byte(self, target: EmacsBytePos) -> Option<CharPos0> {
         if !self.span_is_single_byte() {
             return None;
         }
@@ -281,31 +289,31 @@ impl TextPositionBounds {
         Some(CharPos0::new(self.below.char_pos().get() + offset))
     }
 
-    pub fn char_below_distance(self, target: CharPos0) -> CharLen {
+    pub(crate) fn char_below_distance(self, target: CharPos0) -> CharLen {
         target.saturating_offset_from(self.below.char_pos())
     }
 
-    pub fn char_above_distance(self, target: CharPos0) -> CharLen {
+    pub(crate) fn char_above_distance(self, target: CharPos0) -> CharLen {
         self.above.char_pos().saturating_offset_from(target)
     }
 
-    pub fn byte_below_distance(self, target: EmacsBytePos) -> EmacsByteLen {
+    pub(crate) fn byte_below_distance(self, target: EmacsBytePos) -> EmacsByteLen {
         target.saturating_offset_from(self.below.emacs_byte_pos())
     }
 
-    pub fn byte_above_distance(self, target: EmacsBytePos) -> EmacsByteLen {
+    pub(crate) fn byte_above_distance(self, target: EmacsBytePos) -> EmacsByteLen {
         self.above.emacs_byte_pos().saturating_offset_from(target)
     }
 
-    pub fn char_target_is_near(self, target: CharPos0, distance: CharLen) -> bool {
+    pub(crate) fn char_target_is_near(self, target: CharPos0, distance: CharLen) -> bool {
         self.char_above_distance(target) < distance || self.char_below_distance(target) < distance
     }
 
-    pub fn byte_target_is_near(self, target: EmacsBytePos, distance: EmacsByteLen) -> bool {
+    pub(crate) fn byte_target_is_near(self, target: EmacsBytePos, distance: EmacsByteLen) -> bool {
         self.byte_above_distance(target) < distance || self.byte_below_distance(target) < distance
     }
 
-    pub fn nearest_char_anchor(self, target: CharPos0) -> TextPositionAnchor {
+    pub(crate) fn nearest_char_anchor(self, target: CharPos0) -> TextPositionAnchor {
         if self.char_below_distance(target) <= self.char_above_distance(target) {
             self.below
         } else {
@@ -313,7 +321,7 @@ impl TextPositionBounds {
         }
     }
 
-    pub fn nearest_byte_anchor(self, target: EmacsBytePos) -> TextPositionAnchor {
+    pub(crate) fn nearest_byte_anchor(self, target: EmacsBytePos) -> TextPositionAnchor {
         if self.byte_below_distance(target) <= self.byte_above_distance(target) {
             self.below
         } else {
@@ -321,12 +329,12 @@ impl TextPositionBounds {
         }
     }
 
-    pub fn min_char_walk(self, target: CharPos0) -> CharLen {
+    pub(crate) fn min_char_walk(self, target: CharPos0) -> CharLen {
         self.char_below_distance(target)
             .min(self.char_above_distance(target))
     }
 
-    pub fn min_byte_walk(self, target: EmacsBytePos) -> EmacsByteLen {
+    pub(crate) fn min_byte_walk(self, target: EmacsBytePos) -> EmacsByteLen {
         self.byte_below_distance(target)
             .min(self.byte_above_distance(target))
     }
@@ -374,7 +382,7 @@ impl AccessibleEmacsByteRange {
         self.start() <= pos && pos < self.end()
     }
 
-    pub fn contains_preceding_char_boundary(self, pos: EmacsBytePos) -> bool {
+    pub(crate) fn contains_preceding_char_boundary(self, pos: EmacsBytePos) -> bool {
         self.start() < pos && pos <= self.end()
     }
 
@@ -420,28 +428,8 @@ impl AccessibleCharRange {
         self.start() <= pos && pos < self.end()
     }
 
-    pub fn contains_boundary(self, pos: CharPos0) -> bool {
-        self.start() <= pos && pos <= self.end()
-    }
-
     pub fn clamp(self, pos: CharPos0) -> CharPos0 {
         pos.clamp(self.start(), self.end())
-    }
-}
-
-/// Buffer-dependent Lisp character-position conversions.
-///
-/// The value layer owns the position vocabulary; converting to an internal
-/// byte position needs the buffer's text, so that one method stays here as an
-/// extension trait (the value type cannot name `BufferText`).
-pub trait LispCharPos1BufferExt {
-    /// Convert to 0-based internal byte position.
-    fn to_byte_pos(self, text: &super::BufferText) -> EmacsBytePos;
-}
-
-impl LispCharPos1BufferExt for LispCharPos1 {
-    fn to_byte_pos(self, text: &super::BufferText) -> EmacsBytePos {
-        EmacsBytePos::from_lisp(self, text)
     }
 }
 
@@ -500,9 +488,6 @@ impl DisplayColumn {
 
 // Transitional aliases for older call sites. New code should use the explicit
 // coordinate-space names above.
-pub type CharPos = CharPos0;
-pub type BytePos = EmacsBytePos;
-pub type LispPos = LispCharPos1;
 
 #[cfg(test)]
 #[path = "position/tests/position_test.rs"]

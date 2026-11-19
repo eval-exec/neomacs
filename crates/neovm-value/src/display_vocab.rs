@@ -384,17 +384,12 @@ pub enum FontWeight {
 impl FontWeight {
     pub const THIN: Self = Self::Thin;
     pub const ULTRA_LIGHT: Self = Self::UltraLight;
-    pub const EXTRA_LIGHT: Self = Self::ExtraLight;
-    pub const LIGHT: Self = Self::Light;
-    pub const SEMI_LIGHT: Self = Self::SemiLight;
     pub const NORMAL: Self = Self::Normal;
     pub const MEDIUM: Self = Self::Medium;
     pub const SEMI_BOLD: Self = Self::SemiBold;
     pub const BOLD: Self = Self::Bold;
     pub const EXTRA_BOLD: Self = Self::ExtraBold;
-    pub const ULTRA_BOLD: Self = Self::UltraBold;
     pub const BLACK: Self = Self::Black;
-    pub const ULTRA_HEAVY: Self = Self::UltraHeavy;
 
     pub fn from_symbol(name: &str) -> Option<Self> {
         name.parse().ok()
@@ -413,44 +408,6 @@ impl FontWeight {
             751..=850 => Self::ExtraBold,
             851..=925 => Self::Black,
             _ => Self::UltraHeavy,
-        }
-    }
-
-    pub fn from_gnu_style_code(code: i64) -> Option<Self> {
-        let code = u16::try_from(code).ok()?;
-        let numeric = code >> 8;
-        let row = (code >> 4) & 0x0f;
-        let alias = code & 0x0f;
-        match (numeric, row, alias) {
-            (0, 0, 0) => Some(Self::Thin),
-            (40, 1, 0) => Some(Self::UltraLight),
-            (40, 1, 1) => Some(Self::Ultralight),
-            (40, 1, 2) => Some(Self::ExtraLight),
-            (40, 1, 3) => Some(Self::Extralight),
-            (50, 2, 0) => Some(Self::Light),
-            (55, 3, 0) => Some(Self::SemiLight),
-            (55, 3, 1) => Some(Self::Semilight),
-            (55, 3, 2) => Some(Self::Demilight),
-            (80, 4, 0) => Some(Self::Regular),
-            (80, 4, 1) => Some(Self::Normal),
-            (80, 4, 2) => Some(Self::Unspecified),
-            (80, 4, 3) => Some(Self::Book),
-            (100, 5, 0) => Some(Self::Medium),
-            (180, 6, 0) => Some(Self::SemiBold),
-            (180, 6, 1) => Some(Self::Semibold),
-            (180, 6, 2) => Some(Self::Demibold),
-            (180, 6, 3) => Some(Self::DemiBold),
-            (180, 6, 4) => Some(Self::Demi),
-            (200, 7, 0) => Some(Self::Bold),
-            (205, 8, 0) => Some(Self::ExtraBold),
-            (205, 8, 1) => Some(Self::Extrabold),
-            (205, 8, 2) => Some(Self::UltraBold),
-            (205, 8, 3) => Some(Self::Ultrabold),
-            (210, 9, 0) => Some(Self::Black),
-            (210, 9, 1) => Some(Self::Heavy),
-            (250, 10, 0) => Some(Self::UltraHeavy),
-            (250, 10, 1) => Some(Self::Ultraheavy),
-            _ => None,
         }
     }
 
@@ -1383,7 +1340,7 @@ impl ImageFilenameType {
         self.into()
     }
 
-    pub fn available_type(self) -> Option<ImageType> {
+    pub(crate) fn available_type(self) -> Option<ImageType> {
         ImageType::from_symbol_name(self.name())
     }
 }
@@ -1462,7 +1419,7 @@ pub const FONT_WIDTH_STYLE_TABLE: &[(i64, &[&str])] = &[
     (200, &["ultra-expanded", "ultraexpanded", "wide"]),
 ];
 
-pub fn font_style_table(entries: &[(i64, &[&str])]) -> Value {
+pub fn font_style_table(entries: &[(i64, &'static [&'static str])]) -> Value {
     Value::vector(
         entries
             .iter()

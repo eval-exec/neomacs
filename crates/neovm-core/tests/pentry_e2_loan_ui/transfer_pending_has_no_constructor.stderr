@@ -1,0 +1,5 @@
+error[E0599]: no associated function or constant named `new` found for struct `neovm_value::tagged::gc::heap_transfer::PendingHeapReturn` in the current scope
+ --> tests/pentry_e2_loan_ui/transfer_pending_has_no_constructor.rs
+  |
+  |     let _value = PendingHeapReturn::new();
+  |                                     ^^^ associated function or constant not found in `neovm_value::tagged::gc::heap_transfer::PendingHeapReturn`

@@ -85,6 +85,9 @@ mod chartable_concurrent_write_tests;
 #[path = "../../core_tests/tagged/gc/tests/concurrent_hash_user_guard_test.rs"]
 mod concurrent_hash_user_guard_test;
 
+#[cfg(test)]
+#[path = "../../core_tests/tagged/gc/tests/bytecode_parameter_roots.rs"]
+mod bytecode_parameter_roots;
 /// Concurrent leaf-claim rows re-homed out of value. The shell supplies the
 /// edit marker-chain host. Assertions stay in the value bodies.
 #[cfg(all(test, not(feature = "gc-memory-telemetry")))]

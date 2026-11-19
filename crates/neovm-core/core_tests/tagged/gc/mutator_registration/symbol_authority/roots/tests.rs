@@ -1,6 +1,6 @@
 use super::*;
 use crate::emacs_core::eval::Context;
-use crate::emacs_core::intern::{intern, intern_uninterned};
+use crate::emacs_core::intern::{intern, make_uninterned_symbol};
 use crate::emacs_core::symbol::ObarraySymbolCellSkipGuard;
 use crate::tagged::gc::mutator_registration::era_fixtures::EraFixtureExt;
 use crate::tagged::gc::{CollectionReport, RegistrationError};
@@ -106,7 +106,7 @@ fn root_families(backing: PlainSymbolBacking) {
             obarray.set_symbol_plist_id(ids[0], plist);
             roots.push(ExpectedRoot::new(RootFamily::Plist, plist));
             // Nonmember storage is present without deleting any canonical name.
-            let nonmember = intern_uninterned("c6-root-nonmember");
+            let nonmember = make_uninterned_symbol("c6-root-nonmember");
             let value = TaggedValue::string("C6 present nonmember");
             obarray.seed_value_id(nonmember, value);
             assert!(!obarray.is_global_member(nonmember));
@@ -256,7 +256,7 @@ fn root_families(backing: PlainSymbolBacking) {
             } in receipts
             {
                 assert!(report.major);
-                assert_eq!(report.frozen_owners, 0);
+                assert_eq!(report.frozen_owners(), 0);
                 assert!(
                     census
                         .iter()

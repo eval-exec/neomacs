@@ -25,6 +25,7 @@ test-support = ["neovm-value/test-support", "neovm-text/test-support", "dep:visi
 # crate, so display must declare the feature and forward it to eval so the
 # compiled table and host_cfg::HostCfgClass agree in one build view.
 sqlite = ["neovm-eval/sqlite"]
+xwidgets = ["neovm-eval/xwidgets"]
 
 [build-dependencies]
 # Host-cfg probe shared by core/system/value/eval/display (build_support/host_cfg.rs).
@@ -41,7 +42,6 @@ libc.workspace = true
 neomacs-display-protocol.workspace = true
 neomacs-video-model.workspace = true
 num_enum.workspace = true
-regex.workspace = true
 rustc-hash.workspace = true
 smallvec.workspace = true
 static_assertions.workspace = true

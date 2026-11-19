@@ -8,10 +8,10 @@
 //! because the obarray field is `pub(crate)`. Buffer state is the public
 //! `edit.buffers` field. The auto-save failure-time round trip also asserts
 //! the dumped image field, through the existing `dump_evaluator` surface.
+use neovm_value::intern::intern;
 
 use neovm_edit::buffer::LispCharPos1;
 use neovm_value::heap_types::LispMarker;
-use neovm_value::intern::intern;
 use neovm_value::value::Value;
 
 fn test_ob() -> neovm_value::symbol::Obarray {
@@ -1033,8 +1033,18 @@ fn pdump_round_trip_keeps_the_well_known_symbol_table_identity() {
         // mapping and the fixed id all agree after load.
         assert_eq!(resolve_sym(id), variant.name(), "{variant:?}");
         assert!(is_canonical_id(id), "{variant:?}");
-        assert!(
+        // A fixed id is not membership: a spelling this profile's GNU build
+        // does not compile (`fontsize` is nsfns.m-only) keeps its identity
+        // but stays out of the dumped obarray, while a cited boot-extra
+        // spelling (wheel-down via lisp/loadup.el + lisp/mouse.el) is a member
+        // on every platform. The round trip must preserve the same set.
+        let expected_member =
+            neovm_value::intern::is_gnu_defsym_spelling_boot_member_for_this_profile(
+                variant.name(),
+            );
+        assert_eq!(
             loaded.obarray().is_global_member(id),
+            expected_member,
             "{variant:?} keeps GNU's initial-obarray membership across the dump"
         );
         assert_eq!(lookup_interned(variant.name()), Some(id), "{variant:?}");

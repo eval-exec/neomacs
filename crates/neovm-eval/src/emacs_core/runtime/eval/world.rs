@@ -36,9 +36,15 @@ pub(crate) use era::WorldProofEraExt;
 #[cfg(test)]
 pub(crate) use era::WorldProofEraFinishFailure;
 pub(crate) use era::prepare_keeper_backing;
+mod era_world_loan;
 mod function_write_hooks;
 mod green_owner;
+mod heap_transfer_adapter;
+#[cfg(test)]
+#[path = "world/tests/heap_transfer.rs"]
+mod heap_transfer_tests;
 mod slot;
+mod source_entry;
 // Crate-visible so the public test-support re-export in eval/mod.rs can name
 // the driver class directly. This stays crate-internal; the struct itself is
 // public only in the test-support cfg arm.
@@ -206,6 +212,17 @@ impl<T> DerefMut for WorldView<T> {
         // SAFETY: this unique view is exclusively borrowed. World exposes no
         // independent manager accessor and no safe second-view constructor.
         unsafe { self.ptr.as_mut() }
+    }
+}
+
+impl<T> WorldView<T> {
+    /// Provenance root for a pointer held across later borrows of this view.
+    ///
+    /// A pointer taken from `&mut *view` is a child tag. The next reborrow of
+    /// the view invalidates it. [`Self::heap_root`] is this root for the heap.
+    #[inline(always)]
+    pub(crate) fn provenance_root(&self) -> NonNull<T> {
+        self.ptr
     }
 }
 impl WorldView<neovm_value::tagged::gc::TaggedHeap> {
@@ -925,12 +942,12 @@ macro_rules! obarray_method_proxies {
 
 obarray_method_proxies! {
     data; public_access;
-    pub fn intern(name: &str) -> String;
-    pub fn intern_lisp_string(name: &LispString) -> SymId;
-    pub fn intern_lisp_value(name_value: neovm_value::tagged::value::TaggedValue) -> SymId;
+    pub fn intern_member(name: &str) -> SymId;
+    pub fn intern_member_lisp_string(name: &LispString) -> SymId;
+    pub fn intern_member_lisp_value(name_value: neovm_value::tagged::value::TaggedValue) -> SymId;
     pub fn ensure_interned_global_id(id: SymId);
     #[doc(hidden)]
-    pub fn materialize_read_symbols(value: Value);
+    pub fn intern_member_symbols_in(value: Value);
     #[cfg(any(test, feature = "test-support"))]
     pub fn set_symbol_value(name: &str, value: Value);
     pub fn seed_value(name: &str, value: Value);
@@ -960,20 +977,19 @@ obarray_method_proxies! {
             buffer_defaults: Option<&[Value]>,
         ) -> Option<Value>;
     pub fn for_each_value_cell_mut(f: impl FnMut(&mut Value));
-    // Audited closed operation, test-support surface: core tests unbind a
-    // fixture variable through this adapter method instead of a mutable deref.
-    #[cfg(any(test, feature = "test-support"))]
-    pub(crate) fn makunbound(name: &str);
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn makunbound_id(id: SymId);
     pub fn makunbound_canonical_by_name(access: CanonicalAccess,
             name: &str,
         );
     pub fn makunbound_canonical(access: CanonicalAccess, id: SymId);
+    // Macro-input declaration: obarray_method_proxies! emits the audited
+    // ObarrayView/ObarrayWriteAccess proxies from this list; the proxies are
+    // called from Context::store_variable (variable_access.rs). Deleting the
+    // line removes them (E0596), so the lint's `never used` is about the
+    // declaration, not the routed operation.
+    #[allow(dead_code)]
     pub(crate) fn set_canonical_value_routed(id: SymId,
             value: Value,
         ) -> neovm_value::symbol::CanonicalWrite;
-    pub(crate) fn makunbound_canonical_routed(id: SymId) -> neovm_value::symbol::CanonicalWrite;
     pub fn put_property(name: &str, prop: &str, value: Value) -> Result<(), Flow>;
     pub fn put_property_id(symbol: SymId,
             prop: SymId,

@@ -1,0 +1,5 @@
+error[E0599]: no associated function or constant named `new` found for struct `neovm_value::quit::quit_detach::DetachedQuitActivation` in the current scope
+ --> tests/pentry_e2_loan_ui/receipt_quit_activation_has_no_constructor.rs
+  |
+  |     let _receipt = DetachedQuitActivation::new();
+  |                                            ^^^ associated function or constant not found in `neovm_value::quit::quit_detach::DetachedQuitActivation`

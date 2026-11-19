@@ -196,32 +196,43 @@ fn https_url_el_auth_uses_the_exact_entry_after_a_wildcard_entry() -> ParityBatc
             (insert "* Protected operations\n- Console: ")
             (kill-new url)
             (call-interactively #'org-cliplink)
-            (let* ((url-process
-                    (seq-find
-                     (lambda (process) (not (memq process processes-before)))
-                     (process-list)))
-                   (package-sentinel
-                    (and url-process (process-sentinel url-process))))
-              (unless (and url-process package-sentinel)
+            (let ((url-process
+                   (seq-find
+                    (lambda (process) (not (memq process processes-before)))
+                    (process-list))))
+              (unless url-process
                 (error "url.el did not create its request process"))
-              ;; Delegate to url.el's real sentinel and retain any editor
-              ;; error as parity data so one broken request cannot abort the
-              ;; remaining shared-batch workflows.
-              (set-process-sentinel
-               url-process
-               (lambda (process event)
-                 (condition-case error-data
-                     (funcall package-sentinel process event)
-                   (error
-                    (setq transport-error
-                          (neomacs-org-cliplink-test-normalize-origin
-                           (error-message-string error-data) base-url))))))
+              ;; Do NOT replace url.el's process sentinel here.  A non-blocking
+              ;; url.el process stays `connect' until the sentinel it installed
+              ;; observes the connection opening and sends the HTTP request;
+              ;; installing a wrapper in that window races the hand-off, and
+              ;; under load GNU was observed with the TLS handshake complete
+              ;; (server trace: accepted/handshake) but no request ever sent,
+              ;; plus a later "Args out of range" inside the delegated sentinel.
+              ;; The success contract is the rendered Org link, which the real
+              ;; sentinel produces; request completion is a process-state wait.
               (neomacs-org-cliplink-test-wait-for
                (lambda ()
-                 (or transport-error
-                     (string-match-p
-                      "Private Deployment" (buffer-string))))
-               "the authenticated HTTPS Org link or transport error")
+                 (or (string-match-p
+                      "Private Deployment" (buffer-string))
+                     (not (process-live-p url-process))))
+               "the authenticated HTTPS Org link or request completion")
+              (unless (string-match-p "Private Deployment" (buffer-string))
+                (setq transport-error
+                      (format "request process %s"
+                              (process-status url-process))))
+              ;; Drop the request process before the probe returns.  url.el can
+              ;; leave a sentinel event queued behind the rendered result; under
+              ;; load it was delivered after the harness had torn the probe down
+              ;; and GNU signalled "Args out of range" inside
+              ;; url-http-sentinel (exit 255 during RestartProbe).  Deleting the
+              ;; process discards a pending status event; the response text is
+              ;; already in the buffer.
+              ;; Silence the sentinel first: delete-process would otherwise run
+              ;; url.el's sentinel with a "deleted" event on the teardown buffer.
+              (when url-process
+                (set-process-sentinel url-process #'ignore)
+                (ignore-errors (delete-process url-process)))
               (goto-char (point-max))
               (list
                :transport-error transport-error

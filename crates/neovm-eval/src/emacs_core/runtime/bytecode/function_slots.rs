@@ -18,7 +18,7 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum BytecodeSlotOrigin {
+pub(crate) enum BytecodeSlotOrigin {
     Constructor,
     Reader,
     Direct,
@@ -27,7 +27,7 @@ pub enum BytecodeSlotOrigin {
 impl BytecodeSlotOrigin {
     #[cold]
     #[inline(never)]
-    pub fn invalid_flow(self) -> Flow {
+    pub(crate) fn invalid_flow(self) -> Flow {
         let (condition, text) = match self {
             Self::Constructor => (LispCondition::Error, "Invalid byte-code object"),
             Self::Reader => (LispCondition::InvalidReadSyntax, "Invalid byte-code object"),
@@ -124,7 +124,7 @@ impl StackParamShapeExt for StackParamShape {
 
 /// Why a call cannot enter a descriptor-shaped frame.
 #[derive(Debug, thiserror::Error)]
-pub enum CallShapeError {
+pub(crate) enum CallShapeError {
     /// GNU signals `wrong-number-of-arguments` with `(mandatory . nonrest)`.
     #[error("argument count outside the descriptor's arity")]
     Arity,
@@ -358,7 +358,7 @@ impl StackDepthErrorExt for StackDepthError {
 /// GNU reader/direct-call code string. Those two boundaries accept a
 /// multibyte legacy string and normalize it, unlike make-byte-code.
 #[derive(Clone, Copy, Debug)]
-pub struct BytecodeString {
+pub(crate) struct BytecodeString {
     value: Value,
     _mutator: PhantomData<Rc<()>>,
 }
@@ -379,7 +379,7 @@ impl TryFrom<Value> for BytecodeString {
 }
 
 impl BytecodeString {
-    pub fn into_unibyte(self, origin: BytecodeSlotOrigin) -> Result<UnibyteCode, Flow> {
+    pub(crate) fn into_unibyte(self, origin: BytecodeSlotOrigin) -> Result<UnibyteCode, Flow> {
         let normalized = if self.value.string_is_multibyte() {
             crate::emacs_core::misc::builtin_string_as_unibyte(vec![self.value])
                 .map_err(|_| origin.invalid_flow())?
@@ -392,7 +392,7 @@ impl BytecodeString {
 
 /// Validated code handle; borrowed bytes remain tied to this typed view.
 #[derive(Clone, Copy, Debug)]
-pub struct UnibyteCode {
+pub(crate) struct UnibyteCode {
     value: Value,
     _mutator: PhantomData<Rc<()>>,
 }
@@ -427,7 +427,7 @@ impl UnibyteCode {
 
 /// Ordinary vector handle. Elements are data and never reinterpreted by shape.
 #[derive(Clone, Copy, Debug)]
-pub struct ConstantsVector {
+pub(crate) struct ConstantsVector {
     value: Value,
     _mutator: PhantomData<Rc<()>>,
 }
@@ -477,7 +477,7 @@ impl BytecodeSlotErrorExt for BytecodeSlotError {
 /// A decoded view of the four constructor slots. The original handles are
 /// retained by the closure slots; constant elements are never rewritten here.
 #[derive(Clone, Debug)]
-pub struct CompiledSlots {
+pub(crate) struct CompiledSlots {
     pub params: FunctionParams,
     pub code: UnibyteCode,
     pub constants: ConstantsVector,

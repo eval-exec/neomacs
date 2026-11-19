@@ -15,10 +15,10 @@ pub(super) enum PreservePoint {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct ScrollPolicy {
-    pub context_lines: i64,
-    pub auto_vscroll: bool,
+    pub(crate) context_lines: i64,
+    pub(crate) auto_vscroll: bool,
     pub preserve: PreservePoint,
-    pub continues_scroll: bool,
+    pub(crate) continues_scroll: bool,
     scroll_margin: ScrollMargin,
 }
 
@@ -29,7 +29,7 @@ impl ScrollPolicy {
 
     /// A captured window retains its own buffer-local viewport policy when
     /// layout Lisp switches the current buffer or selected window.
-    pub fn capture_for_buffer(eval: &Context, buffer: BufferId) -> Self {
+    pub(crate) fn capture_for_buffer(eval: &Context, buffer: BufferId) -> Self {
         Self::from_values(eval, |name| {
             eval.variables()
                 .value_in_buffer_by_name(eval.edit.buffers.get(buffer), name)
@@ -69,7 +69,7 @@ impl ScrollPolicy {
         }
     }
 
-    pub fn margin_pixels(self, height: i64, line_height: i64) -> i64 {
+    pub(crate) fn margin_pixels(self, height: i64, line_height: i64) -> i64 {
         self.scroll_margin.pixels(height, line_height)
     }
 }

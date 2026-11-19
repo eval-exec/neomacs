@@ -62,6 +62,62 @@ fn carrier_pool_reuses_the_os_thread_with_fresh_lisp_identity() {
     );
 }
 
+/// More than [`MAX_IDLE_CARRIERS`] jobs overlap, for several rounds. Joining
+/// every Lisp thread parks each carrier first, so nothing is in flight: the
+/// pool may keep only the idle carriers. Exited carriers used to stay
+/// `Draining` with their `JoinHandle`s, which retains the pthread stack.
+#[test]
+fn carrier_pool_bounds_slots_and_handles_after_oversubscribed_rounds() {
+    let mut main = green(false);
+    let max = super::carrier::max_idle_carriers_for_test();
+    let width = max + 16;
+    let rounds = 4;
+    for round in 0..rounds {
+        let src = format!(
+            "(condition-case err \
+               (progn \
+                 (defvar cp-ex-n 0) \
+                 (defvar cp-ex-started 0) \
+                 (defvar cp-ex-lock nil) \
+                 (setq cp-ex-n {width}) \
+                 (setq cp-ex-started 0) \
+                 (setq cp-ex-lock (make-mutex)) \
+                 (let ((i 0) (threads nil)) \
+                   (while (< i cp-ex-n) \
+                     (setq threads \
+                       (cons (make-thread \
+                               (lambda () \
+                                 (mutex-lock cp-ex-lock) \
+                                 (setq cp-ex-started (1+ cp-ex-started)) \
+                                 (mutex-unlock cp-ex-lock) \
+                                 (let ((done nil)) \
+                                   (while (not done) \
+                                     (mutex-lock cp-ex-lock) \
+                                     (setq done (>= cp-ex-started cp-ex-n)) \
+                                     (mutex-unlock cp-ex-lock) \
+                                     (if done nil (thread-yield)))) \
+                                 1)) \
+                             threads)) \
+                     (setq i (1+ i))) \
+                   (while threads \
+                     (thread-join (car threads)) \
+                     (setq threads (cdr threads)))) \
+                 cp-ex-started) \
+               (error (prin1-to-string err)))"
+        );
+        assert_eq!(
+            eval(&mut main, &src),
+            width.to_string(),
+            "round {round} did not release every worker"
+        );
+        let (slots, handles) = main.carrier_pool_counts_for_test();
+        assert!(
+            slots <= max && handles <= max,
+            "round {round}: exited carriers stayed in the pool: slots={slots} handles={handles} bound={max}"
+        );
+    }
+}
+
 #[test]
 fn carrier_pool_drains_every_carrier_at_teardown() {
     let before = super::carrier::live_carriers_for_test();

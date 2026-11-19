@@ -25,6 +25,7 @@ mod menus;
 mod presentation;
 mod presentation_feedback;
 pub mod redisplay;
+mod redisplay_step;
 pub mod thread_comm;
 mod tooltips;
 pub mod tty_input;

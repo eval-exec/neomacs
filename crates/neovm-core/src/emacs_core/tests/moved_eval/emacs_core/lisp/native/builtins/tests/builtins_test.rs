@@ -3,6 +3,7 @@ use neovm_edit::buffer::{CharRange, EmacsByteRange, LispCharPos1};
 use neovm_eval::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use neovm_eval::emacs_core::eval::SubrValueExt;
 use neovm_value::error::{FlowKind, FlowRef, FlowResultExt as _};
+use neovm_value::intern::intern;
 fn test_ob() -> neovm_value::symbol::Obarray {
     neovm_value::symbol::Obarray::new()
 }
@@ -57,8 +58,7 @@ use neovm_edit::emacs_core::editfns::{
     builtin_delete_and_extract_region, builtin_delete_region, builtin_erase_buffer,
 };
 use neovm_text::emacs_core::regex::compute_buffer_replacement_with_syntax;
-use neovm_value::intern::intern;
-use neovm_value::intern::intern_uninterned;
+use neovm_value::intern::make_uninterned_symbol;
 use neovm_value::strings_core::lisp_string_char_codes;
 use neovm_value::value::{
     HashTableTest, LambdaData, LambdaParams, StringTextPropertyRun, Value, ValueKind,
@@ -76,7 +76,7 @@ use tree_sitter::Language;
 fn empty_function_cell_does_not_synthesize_builtin_alias() {
     crate::test_utils::init_test_tracing();
     let mut obarray = neovm_value::symbol::Obarray::new();
-    obarray.intern("string<");
+    obarray.intern_member("string<");
     let symbol = neovm_value::intern::intern("string<");
 
     assert_eq!(
@@ -6275,7 +6275,7 @@ fn define_hash_table_test_alias_is_thread_local() {
         // can construct the alias values.
         let _ctx = crate::test_utils::new_context();
         let _ = builtin_define_hash_table_test(vec![
-            Value::symbol(alias_name),
+            Value::from_sym_id(intern(alias_name)),
             Value::symbol("eq"),
             Value::symbol("sxhash-eq"),
         ])
@@ -6300,7 +6300,7 @@ fn define_hash_table_test_alias_redefinition_updates_mapping() {
         &mut ctx,
         "define-hash-table-test",
         vec![
-            Value::symbol(alias_name),
+            Value::from_sym_id(intern(alias_name)),
             Value::symbol("eq"),
             Value::symbol("sxhash-eq"),
         ],
@@ -6310,13 +6310,16 @@ fn define_hash_table_test_alias_redefinition_updates_mapping() {
     let first = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
         &mut ctx,
         "make-hash-table",
-        vec![Value::keyword(":test"), Value::symbol(alias_name)],
+        vec![
+            Value::keyword(":test"),
+            Value::from_sym_id(intern(alias_name)),
+        ],
     )
     .expect("make-hash-table should resolve")
     .expect("make-hash-table should evaluate");
     let first_name = neovm_value::hashtab::builtin_hash_table_test(vec![first])
         .expect("hash-table-test should evaluate for initial alias mapping");
-    assert_eq!(first_name, Value::symbol(alias_name));
+    assert_eq!(first_name, Value::from_sym_id(intern(alias_name)));
 
     if !first.is_hash_table() {
         panic!("expected hash table");
@@ -6330,7 +6333,7 @@ fn define_hash_table_test_alias_redefinition_updates_mapping() {
         &mut ctx,
         "define-hash-table-test",
         vec![
-            Value::symbol(alias_name),
+            Value::from_sym_id(intern(alias_name)),
             Value::symbol("equal"),
             Value::symbol("sxhash-equal"),
         ],
@@ -6340,13 +6343,16 @@ fn define_hash_table_test_alias_redefinition_updates_mapping() {
     let second = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
         &mut ctx,
         "make-hash-table",
-        vec![Value::keyword(":test"), Value::symbol(alias_name)],
+        vec![
+            Value::keyword(":test"),
+            Value::from_sym_id(intern(alias_name)),
+        ],
     )
     .expect("make-hash-table should resolve after alias redefinition")
     .expect("make-hash-table should evaluate after alias redefinition");
     let second_name = neovm_value::hashtab::builtin_hash_table_test(vec![second])
         .expect("hash-table-test should evaluate after alias redefinition");
-    assert_eq!(second_name, Value::symbol(alias_name));
+    assert_eq!(second_name, Value::from_sym_id(intern(alias_name)));
 
     if !second.is_hash_table() {
         panic!("expected hash table");
@@ -7229,14 +7235,9 @@ fn pure_dispatch_native_comp_surface_matches_no_native_comp_build() {
 #[test]
 fn pure_dispatch_open_overlay_placeholders_match_compat_contracts() {
     crate::test_utils::init_test_tracing();
-    let open_font = dispatch_builtin_pure(
-        "open-font",
-        vec![Value::vector(vec![Value::keyword("font-entity")])],
-    )
-    .expect("builtin open-font should resolve")
-    .expect("builtin open-font should evaluate");
-    assert!(open_font.is_nil());
-
+    // open-font is evaluator-backed now: it needs a live frame and the
+    // display host's exact entity catalog, so it is covered by the GUI
+    // oracle test rather than this pure-dispatch placeholder table.
     let open_dribble = dispatch_builtin_pure("open-dribble-file", vec![Value::string("x.log")])
         .expect("builtin open-dribble-file should resolve")
         .expect("builtin open-dribble-file should evaluate");
@@ -8800,11 +8801,12 @@ fn pure_dispatch_def_keymap_placeholder_cluster_matches_compat_contracts() {
 
     let iso_charset = dispatch_builtin_pure(
         "iso-charset",
-        vec![Value::fixnum(1), Value::fixnum(2), Value::fixnum(3)],
+        vec![Value::fixnum(1), Value::fixnum(94), Value::fixnum(66)],
     )
     .expect("builtin iso-charset should resolve")
     .expect("builtin iso-charset should evaluate");
-    assert!(iso_charset.is_nil());
+    // GNU: (iso-charset 1 94 ?B) => ascii.
+    assert_eq!(iso_charset, Value::symbol("ascii"));
 
     let keyelt = dispatch_builtin_pure("keymap--get-keyelt", vec![Value::NIL, Value::NIL])
         .expect("builtin keymap--get-keyelt should resolve")
@@ -10874,7 +10876,7 @@ fn replace_match_string_preserves_source_and_replacement_text_properties_like_gn
             start,
             end,
             Value::symbol("face"),
-            Value::symbol(face),
+            Value::from_sym_id(intern(face)),
         );
         neovm_value::value::set_string_text_properties_table_for_value(value, table);
     }
@@ -10889,7 +10891,7 @@ fn replace_match_string_preserves_source_and_replacement_text_properties_like_gn
         assert_eq!(interval.end, end);
         assert_eq!(
             interval.properties.get(&Value::symbol("face")),
-            Some(&Value::symbol(face))
+            Some(&Value::from_sym_id(intern(face)))
         );
     }
 
@@ -12366,7 +12368,7 @@ fn mouse_position_in_root_frame_walks_parent_frames() {
 fn mouse_position_in_root_frame_rejects_a_frame_that_no_longer_exists() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
-    eval.store_variable_by_name("issue660-dead-frame", Value::make_frame(999_999));
+    eval.store_variable_by_name("issue660-dead-frame", Value::mint_frame(999_999));
     eval.eval_str(
         "(setq mouse-position-function
                (lambda (_pos) (cons issue660-dead-frame (cons 5 6))))",
@@ -12397,7 +12399,7 @@ fn mouse_position_in_root_frame_rejects_a_missing_ancestor_frame() {
         // Neomacs delete-frame does not yet soft-delete a parent's children
         // the way GNU does (src/frame.c:2645-2664), so a surviving child can
         // still reference a frame that is no longer in the store.
-        frame.parent_frame = Value::make_frame(999_999);
+        frame.parent_frame = Value::mint_frame(999_999);
     }
     eval.store_variable_by_name("issue660-orphan-frame", Value::make_frame(child_id.0));
     eval.eval_str(
@@ -12602,7 +12604,7 @@ fn dispatch_builtin_pure_handles_window_placeholders_but_defers_frame_selection(
         dispatch_builtin_pure("handle-save-session", vec![Value::symbol("event")]),
     );
 
-    assert!(dispatch_builtin_pure("handle-switch-frame", vec![Value::make_frame(1)]).is_none());
+    assert!(dispatch_builtin_pure("handle-switch-frame", vec![Value::mint_frame(1)]).is_none());
 
     let divider = dispatch_builtin_pure("window-bottom-divider-width", vec![])
         .expect("window-bottom-divider-width should resolve")
@@ -13983,7 +13985,7 @@ fn prin1_to_string_reuses_print_number_table_positive_label() {
 fn prin1_to_string_preserves_gensym_lambda_parameter_identity_like_gnu() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
-    let sym = neovm_value::intern::intern_uninterned("stack");
+    let sym = neovm_value::intern::make_uninterned_symbol("stack");
     let lambda = Value::make_lambda(LambdaData {
         params: LambdaParams::simple(vec![sym]).into(),
         body: vec![Value::from_sym_id(sym)],
@@ -14124,7 +14126,7 @@ fn prin1_loaddefs_docstring_layout_matches_gnu_print_form() {
 fn prin1_to_string_respects_print_gensym_binding() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
-    let sym = Value::symbol(intern_uninterned("vm-print-gensym"));
+    let sym = Value::symbol(make_uninterned_symbol("vm-print-gensym"));
 
     let default_text = dispatch_builtin(&mut eval, "prin1-to-string", vec![sym])
         .expect("prin1-to-string should resolve")
@@ -14143,7 +14145,7 @@ fn prin1_to_string_preserves_raw_unibyte_symbol_bytes() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
     let raw_name = neovm_value::heap_types::LispString::from_unibyte(vec![0xFF, b'a']);
-    let sym = Value::symbol(neovm_value::intern::intern_uninterned_lisp_string(
+    let sym = Value::symbol(neovm_value::intern::make_uninterned_symbol_lisp_string(
         &raw_name,
     ));
 
@@ -14545,7 +14547,7 @@ fn error_message_string_preserves_percent_s_handle_semantics() {
             other => panic!("expected signal flow, got: {other:?}"),
         };
         let mut err_data = Vec::with_capacity(data.len() + 1);
-        err_data.push(Value::symbol(symbol));
+        err_data.push(Value::from_sym_id(symbol));
         err_data.extend(data);
         let rendered = dispatch_builtin(eval, "error-message-string", vec![Value::list(err_data)])
             .expect("error-message-string should resolve")
@@ -14599,7 +14601,10 @@ fn message_box_wrappers_render_opaque_handles_in_eval_dispatch() {
         match err.into_kind() {
             FlowKind::Signal(sig) => {
                 assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
-                assert_eq!(sig.data, vec![Value::symbol(symbol), Value::fixnum(0)]);
+                assert_eq!(
+                    sig.data,
+                    vec![Value::from_sym_id(intern(symbol)), Value::fixnum(0)]
+                );
             }
             other => panic!("expected signal, got: {other:?}"),
         }
@@ -16710,7 +16715,7 @@ fn functionp_eval_matches_symbol_and_lambda_form_semantics() {
         .expect("functionp should accept throw symbol");
     assert!(throw_symbol.is_truthy());
     for name in ["funcall", "defalias", "provide", "require"] {
-        let result = builtin_functionp(&mut eval, vec![Value::symbol(name)])
+        let result = builtin_functionp(&mut eval, vec![Value::from_sym_id(intern(name))])
             .unwrap_or_else(|_| panic!("functionp should accept {name} symbol"));
         assert!(result.is_truthy(), "expected {name} to satisfy functionp");
     }
@@ -16858,21 +16863,21 @@ fn fmakunbound_masks_builtin_special_and_evaluator_callables() {
         .expect("functionp should accept symbol");
     assert!(throw_functionp.is_nil());
     for name in ["funcall", "defalias", "provide", "require"] {
-        builtin_fmakunbound(&mut eval, vec![Value::symbol(name)])
+        builtin_fmakunbound(&mut eval, vec![Value::from_sym_id(intern(name))])
             .unwrap_or_else(|_| panic!("fmakunbound should accept {name}"));
-        let bound = builtin_fboundp(&mut eval, vec![Value::symbol(name)])
+        let bound = builtin_fboundp(&mut eval, vec![Value::from_sym_id(intern(name))])
             .unwrap_or_else(|_| panic!("fboundp should accept {name}"));
         assert!(
             bound.is_nil(),
             "expected {name} to be unbound after fmakunbound"
         );
-        let fn_cell = builtin_symbol_function(&mut eval, vec![Value::symbol(name)])
+        let fn_cell = builtin_symbol_function(&mut eval, vec![Value::from_sym_id(intern(name))])
             .unwrap_or_else(|_| panic!("symbol-function should accept {name}"));
         assert!(
             fn_cell.is_nil(),
             "expected symbol-function {name} to be nil"
         );
-        let functionp = builtin_functionp(&mut eval, vec![Value::symbol(name)])
+        let functionp = builtin_functionp(&mut eval, vec![Value::from_sym_id(intern(name))])
             .unwrap_or_else(|_| panic!("functionp should accept {name}"));
         assert!(
             functionp.is_nil(),
@@ -17357,7 +17362,7 @@ fn indirect_function_resolves_deep_alias_chain_without_depth_cutoff() {
         let target = if idx == depth - 1 {
             Value::symbol("car")
         } else {
-            Value::symbol(format!("vm-test-deep-alias-{}", idx + 1))
+            Value::from_sym_id(intern((format!("vm-test-deep-alias-{}", idx + 1)).as_ref()))
         };
         eval.obarray_mut().set_symbol_function(&name, target);
     }
@@ -17559,7 +17564,7 @@ fn boundp_buffer_local_lookup_uses_symbol_identity() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
 
-    let uninterned = neovm_value::intern::intern_uninterned("vm-bound-shadow");
+    let uninterned = neovm_value::intern::make_uninterned_symbol("vm-bound-shadow");
     let interned = intern("vm-bound-shadow");
     let current = eval
         .edit

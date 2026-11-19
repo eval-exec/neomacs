@@ -54,6 +54,7 @@ pub enum Fault {
     RefoldNativeImage,
     DropRetiringLog,
     RemoveFrozenOwner,
+    OmitDebtNotification,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -471,7 +472,12 @@ impl Rendezvous {
                 }
             }
         }
-        self.wake.notify_all();
+        // One abstract resume-debt signaling edge. Production currently has
+        // redundant notifications in finish_debt and its callers; this fault
+        // omits the entire abstract edge, not just one redundant product line.
+        if self.fault != Fault::OmitDebtNotification {
+            self.wake.notify_all();
+        }
     }
 
     pub fn begin_restore(&self, key: Key, native_return: bool) -> Result<usize, Refusal> {
@@ -627,6 +633,57 @@ pub struct Owner<'r> {
 }
 
 impl Owner<'_> {
+    pub fn run_access_after_resume_drain(&self) -> Result<RunAccess<'_>, Refusal> {
+        self.run_access_observing_wait(|| {})
+    }
+
+    /// The observer forces a dangerous wait interleaving in a model history.
+    /// It runs at most once under the predicate mutex, before atomic wait;
+    /// production admission has no corresponding callback or field.
+    pub fn run_access_observing_wait(
+        &self,
+        on_wait: impl FnOnce(),
+    ) -> Result<RunAccess<'_>, Refusal> {
+        let mut on_wait = Some(on_wait);
+        let mut s = self.runtime.control.lock().unwrap();
+        loop {
+            Rendezvous::live(&s)?;
+            let i = Rendezvous::index(&s, self.key)?;
+            let e = &s.entries[i];
+            // An owner must restore itself before waiting for other owners.
+            // Otherwise its own debt could never be discharged while parked.
+            if e.mode != Mode::Running || e.image_resident || !e.restored {
+                return Err(Refusal::Busy);
+            }
+            if e.run_loan || e.worker_loan {
+                return Err(Refusal::Loan);
+            }
+            match s.phase {
+                Phase::Idle => {
+                    assert_eq!(s.debt, 0, "RUN_BEFORE_RESUME_DRAIN");
+                    s.entries[i].run_loan = true;
+                    // Admission is selected while the gate remains held. The
+                    // real API invokes unchanged run_access under this gate;
+                    // the existing admission model proves its atomic pair.
+                    drop(s);
+                    return Ok(RunAccess {
+                        runtime: self.runtime,
+                        key: self.key,
+                        _thread: PhantomData,
+                    });
+                }
+                Phase::DrainingResumes => {
+                    if let Some(observe) = on_wait.take() {
+                        observe();
+                    }
+                    s = self.runtime.wake.wait(s).unwrap();
+                }
+                Phase::Stopping(_) | Phase::Tracing(_) => return Err(Refusal::Busy),
+                Phase::Poisoned => return Err(Refusal::Poisoned),
+            }
+        }
+    }
+
     pub fn allocate(&self) -> Result<(), Refusal> {
         {
             let mut s = self.runtime.control.lock().unwrap();
@@ -691,6 +748,22 @@ impl Owner<'_> {
         thread::yield_now();
         self.runtime.finish_restore(self.key)?;
         Ok(image)
+    }
+}
+
+/// A model-only admitted run loan; no VM data or real RunAccess is included.
+pub struct RunAccess<'r> {
+    runtime: &'r Rendezvous,
+    key: Key,
+    _thread: PhantomData<Rc<()>>,
+}
+
+impl Drop for RunAccess<'_> {
+    fn drop(&mut self) {
+        let mut s = self.runtime.control.lock().unwrap();
+        let e = &mut s.entries[self.key.slot];
+        assert!(e.run_loan, "RUN_LOAN_LOST");
+        e.run_loan = false;
     }
 }
 
@@ -767,5 +840,6 @@ impl Drop for AllStopped<'_> {
 }
 
 static_assertions::assert_not_impl_any!(Owner<'static>: Send, Sync, Clone, Copy);
+static_assertions::assert_not_impl_any!(RunAccess<'static>: Send, Sync, Clone, Copy);
 static_assertions::assert_not_impl_any!(AllStopped<'static>: Send, Sync, Clone, Copy);
 static_assertions::assert_impl_all!(Key: Send, Sync, Copy);

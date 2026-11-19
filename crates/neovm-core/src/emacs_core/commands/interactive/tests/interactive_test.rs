@@ -3,6 +3,7 @@ use crate::emacs_core::error::{FlowKind, FlowRef};
 use crate::emacs_core::eval::SubrValueExt;
 use crate::emacs_core::eval::VariableView;
 use crate::emacs_core::symbol::CanonicalAccess;
+use neovm_value::intern::intern;
 fn test_ob() -> crate::emacs_core::symbol::Obarray {
     crate::emacs_core::symbol::Obarray::new()
 }
@@ -966,8 +967,8 @@ fn commandp_true_for_registered_rust_editing_commands() {
                 .is_some_and(|function| function.is_subr()),
             "{name} must be a registered Rust subr"
         );
-        let result =
-            builtin_commandp_interactive(&mut ev, &[Value::symbol(name)]).expect("commandp call");
+        let result = builtin_commandp_interactive(&mut ev, &[Value::from_sym_id(intern(name))])
+            .expect("commandp call");
         assert!(result.is_truthy(), "expected commandp true for {name}");
     }
 }
@@ -1066,7 +1067,7 @@ fn simple_commands_are_real_lisp_functions_after_bootstrap() {
             ),
             "expected {name} startup function cell to be loaded, not an autoload"
         );
-        let command = builtin_commandp_interactive(&mut ev, &[Value::symbol(name)])
+        let command = builtin_commandp_interactive(&mut ev, &[Value::from_sym_id(intern(name))])
             .unwrap_or_else(|err| panic!("commandp should accept {name}: {err:?}"));
         assert!(command.is_truthy(), "expected commandp true for {name}");
     }
@@ -1097,7 +1098,7 @@ fn replace_commands_are_real_lisp_functions_after_bootstrap() {
             ),
             "expected {name} startup function cell to be loaded, not an autoload"
         );
-        let command = builtin_commandp_interactive(&mut ev, &[Value::symbol(name)])
+        let command = builtin_commandp_interactive(&mut ev, &[Value::from_sym_id(intern(name))])
             .unwrap_or_else(|err| panic!("commandp should accept {name}: {err:?}"));
         assert!(command.is_truthy(), "expected commandp true for {name}");
     }
@@ -1124,7 +1125,7 @@ fn subr_key_binding_commands_are_real_lisp_functions_after_bootstrap() {
             !function.is_subr(),
             "expected {name} startup function cell to be a GNU Lisp function, not a Rust subr"
         );
-        let command = builtin_commandp_interactive(&mut ev, &[Value::symbol(name)])
+        let command = builtin_commandp_interactive(&mut ev, &[Value::from_sym_id(intern(name))])
             .unwrap_or_else(|err| panic!("commandp should accept {name}: {err:?}"));
         assert!(command.is_truthy(), "expected commandp true for {name}");
     }
@@ -1219,7 +1220,7 @@ fn mode_and_mark_commands_are_real_lisp_functions_after_bootstrap() {
             ),
             "expected {name} startup function cell to be loaded, not an autoload"
         );
-        let command = builtin_commandp_interactive(&mut ev, &[Value::symbol(name)])
+        let command = builtin_commandp_interactive(&mut ev, &[Value::from_sym_id(intern(name))])
             .unwrap_or_else(|err| panic!("commandp should accept {name}: {err:?}"));
         assert!(command.is_truthy(), "expected commandp true for {name}");
     }
@@ -1365,8 +1366,8 @@ fn commandp_true_for_additional_registered_rust_commands() {
                 .is_some_and(|function| function.is_subr()),
             "{name} must be a registered Rust subr"
         );
-        let result =
-            builtin_commandp_interactive(&mut ev, &[Value::symbol(name)]).expect("commandp call");
+        let result = builtin_commandp_interactive(&mut ev, &[Value::from_sym_id(intern(name))])
+            .expect("commandp call");
         assert!(result.is_truthy(), "expected commandp true for {name}");
     }
     // Same gate as `subrs.rs` (`#[cfg(not(any(windows, target_os = "macos")))]`).
@@ -1380,8 +1381,8 @@ fn commandp_true_for_additional_registered_rust_commands() {
                 .is_some_and(|function| function.is_subr()),
             "{name} must be a registered Rust subr"
         );
-        let result =
-            builtin_commandp_interactive(&mut ev, &[Value::symbol(name)]).expect("commandp call");
+        let result = builtin_commandp_interactive(&mut ev, &[Value::from_sym_id(intern(name))])
+            .expect("commandp call");
         assert!(result.is_truthy(), "expected commandp true for {name}");
     }
     #[cfg(any(windows, target_os = "macos"))]
@@ -1444,8 +1445,8 @@ fn commandp_true_for_loaded_lisp_commands_after_bootstrap() {
             !function.is_subr(),
             "expected {name} startup function cell to remain a GNU Lisp command"
         );
-        let result =
-            builtin_commandp_interactive(&mut ev, &[Value::symbol(name)]).expect("commandp call");
+        let result = builtin_commandp_interactive(&mut ev, &[Value::from_sym_id(intern(name))])
+            .expect("commandp call");
         assert!(result.is_truthy(), "expected commandp true for {name}");
     }
 }
@@ -2500,6 +2501,29 @@ fn lookup_key_accepts_legacy_menu_symbol_case_and_spaces() {
                        (lookup-key m (vector 'menu-bar (intern "Some Menu")))))"#
         ),
         "OK (ignore ignore)"
+    );
+}
+
+/// GNU's mixed-case menu fallback `Fintern`s every converted name
+/// (`src/keymap.c:1330-1432`, the two `Fintern` calls at `:1386` and
+/// `:1429`), so the lowercase and dashed variants become obarray members
+/// even though the binding itself is only a lookup target.  Neomacs'
+/// `intern_member` is that member-producing funnel; the free `intern`
+/// resolves a name id without touching the obarray.
+#[test]
+fn lookup_key_menu_case_and_space_fallback_interns_members() {
+    crate::test_utils::init_test_tracing();
+    assert_eq!(
+        eval_one(
+            r#"(let* ((m (make-sparse-keymap))
+                      (lower (intern (concat "fo" "o-bar"))))
+                 (define-key m (vector 'menu-bar 'fallback-test lower) 'ignore)
+                 (list (lookup-key m (vector 'menu-bar 'fallback-test
+                                             (intern (concat "Fo" "o Bar"))))
+                       (and (intern-soft (concat "foo" " bar")) t)
+                       (and (intern-soft (concat "fo" "o-bar")) t)))"#
+        ),
+        "OK (ignore t t)"
     );
 }
 
@@ -6189,7 +6213,10 @@ fn where_is_preferred_modifier_accepts_gnu_solitary_names() {
         ("A", KEY_CHAR_ALT),
         ("alt", KEY_CHAR_ALT),
     ] {
-        obarray.set_symbol_value("where-is-preferred-modifier", Value::symbol(name));
+        obarray.set_symbol_value(
+            "where-is-preferred-modifier",
+            Value::from_sym_id(intern(name)),
+        );
         assert_eq!(
             WhereIsPreferredModifier::snapshot(
                 VariableView::canonical(CanonicalAccess::TEST, &obarray),

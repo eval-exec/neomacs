@@ -23,6 +23,7 @@ use neovm_value::display_vocab::WindowSystemKind;
 use neovm_value::error::signal;
 use neovm_value::error::{FlowKind, FlowRef, FlowResultExt};
 use neovm_value::heap_types::LispString;
+use neovm_value::intern::intern;
 use neovm_value::value::Value;
 use reap::ChildStatusChange;
 use std::cell::RefCell;
@@ -389,7 +390,7 @@ fn gnu_timer_before(delay: Duration, callback: &str) -> Value {
         Value::fixnum(secs & 0xFFFF),
         Value::fixnum(when.subsec_micros() as i64),
         Value::NIL,
-        Value::symbol(callback),
+        Value::from_sym_id(intern(callback)),
         Value::NIL,
         Value::NIL,
         Value::fixnum(0),
@@ -411,7 +412,7 @@ fn gnu_timer_after(delay: Duration, callback: &str) -> Value {
         Value::fixnum(secs & 0xFFFF),
         Value::fixnum(when.subsec_micros() as i64),
         Value::NIL,
-        Value::symbol(callback),
+        Value::from_sym_id(intern(callback)),
         Value::NIL,
         Value::NIL,
         Value::fixnum(0),
@@ -1513,8 +1514,14 @@ fn connection_process_mutators_keep_childp_plist_in_sync() {
         builtin_set_process_sentinel_impl(&mut pm, vec![Value::make_process(id), Value::NIL])
             .expect("set-process-sentinel");
 
-    assert_eq!(filter, Value::symbol(DEFAULT_PROCESS_FILTER_SYMBOL));
-    assert_eq!(sentinel, Value::symbol(DEFAULT_PROCESS_SENTINEL_SYMBOL));
+    assert_eq!(
+        filter,
+        Value::from_sym_id(intern(DEFAULT_PROCESS_FILTER_SYMBOL))
+    );
+    assert_eq!(
+        sentinel,
+        Value::from_sym_id(intern(DEFAULT_PROCESS_SENTINEL_SYMBOL))
+    );
 
     let contact = builtin_process_contact_impl(&pm, vec![Value::make_process(id), Value::T])
         .expect("process-contact t");
@@ -1526,12 +1533,12 @@ fn connection_process_mutators_keep_childp_plist_in_sync() {
     assert_eq!(
         builtins::builtin_plist_get(vec![contact, Value::keyword(":filter")])
             .expect("plist-get :filter"),
-        Value::symbol(DEFAULT_PROCESS_FILTER_SYMBOL)
+        Value::from_sym_id(intern(DEFAULT_PROCESS_FILTER_SYMBOL))
     );
     assert_eq!(
         builtins::builtin_plist_get(vec![contact, Value::keyword(":sentinel")])
             .expect("plist-get :sentinel"),
-        Value::symbol(DEFAULT_PROCESS_SENTINEL_SYMBOL)
+        Value::from_sym_id(intern(DEFAULT_PROCESS_SENTINEL_SYMBOL))
     );
 }
 
@@ -9649,6 +9656,111 @@ fn make_network_process_stop_client_still_allows_send_like_gnu() {
     );
 }
 
+/// The keys the process manager's poller reports ready right now.
+#[cfg(unix)]
+fn ready_poller_keys(pm: &ProcessManager) -> Vec<usize> {
+    let poller = pm.wait_backend.poller().expect("poller");
+    let mut events = polling::Events::new();
+    poller
+        .wait(&mut events, Some(Duration::ZERO))
+        .expect("poll without blocking");
+    events.iter().map(|event| event.key).collect()
+}
+
+/// A network process whose socket holds unread input, registered for reading.
+#[cfg(unix)]
+fn readable_network_process(
+    pm: &mut ProcessManager,
+    name: &str,
+    stopped: bool,
+) -> (u64, std::os::unix::net::UnixStream) {
+    use std::io::Write;
+
+    let id = pm.create_process_with_kind(
+        name.into(),
+        Value::NIL,
+        "network".into(),
+        vec![],
+        ProcessKindWithoutDevice::Network,
+        crate::emacs_core::process::ProcessCodingSystems::gnu_make_process_initial(),
+    );
+    let (socket, mut peer) = std::os::unix::net::UnixStream::pair().expect("socket pair");
+    let proc = pm.get_mut(id).expect("connection record");
+    proc.live_io.network_socket =
+        Some(neovm_eval::emacs_core::eval::data::process_state::NetworkSocket::UnixStream(socket));
+    if stopped {
+        // What `make-network-process :stop t` stores before it registers.
+        proc.command = Value::T;
+    }
+    pm.register_socket_fd(id).expect("register the connection");
+    peer.write_all(b"unread").expect("leave input unread");
+    (id, peer)
+}
+
+/// GNU `Fstop_process` drops a connection's descriptor from the read set
+/// (`delete_read_fd`, src/process.c:7273-7275), nothing re-adds it while
+/// `p->command' is t (`Fset_process_filter` :1390-1397), and
+/// `Fcontinue_process` adds it back (:7301-7305).  A stopped connection
+/// left registered level-triggered with unread input makes every wait
+/// return at once with nothing to read, so the wait spins to its deadline.
+#[cfg(unix)]
+#[test]
+fn stopped_connection_with_unread_input_is_not_polled_until_continued() {
+    crate::test_utils::init_test_tracing();
+    let _ctx = crate::test_utils::new_context();
+    let mut pm = ProcessManager::new();
+    let buffers = neovm_edit::buffer::BufferManager::new();
+    let (id, _peer) = readable_network_process(&mut pm, "stopped-connection", false);
+    let process = Value::make_process(id);
+    let key = id as usize;
+    assert!(
+        ready_poller_keys(&pm).contains(&key),
+        "a running connection is polled"
+    );
+
+    builtin_stop_process_impl(&mut pm, &buffers, vec![process]).expect("stop-process");
+    assert!(
+        !ready_poller_keys(&pm).contains(&key),
+        "stop-process left the connection's descriptor in the read set"
+    );
+    builtin_set_process_filter_impl(&mut pm, vec![process, Value::T]).expect("filter t");
+    builtin_set_process_filter_impl(&mut pm, vec![process, Value::NIL]).expect("filter nil");
+    assert!(
+        !ready_poller_keys(&pm).contains(&key),
+        "resuming the filter re-armed a stopped connection's reads"
+    );
+
+    builtin_continue_process_impl(&mut pm, &buffers, vec![process]).expect("continue-process");
+    assert!(
+        ready_poller_keys(&pm).contains(&key),
+        "continue-process did not resume reading"
+    );
+}
+
+/// GNU `connect_network_socket` does not add a `:stop t` connection to the
+/// read set (src/process.c:3751-3753); `continue-process` starts reading it.
+#[cfg(unix)]
+#[test]
+fn connection_created_stopped_is_not_polled_until_continued() {
+    crate::test_utils::init_test_tracing();
+    let _ctx = crate::test_utils::new_context();
+    let mut pm = ProcessManager::new();
+    let buffers = neovm_edit::buffer::BufferManager::new();
+    let (id, _peer) = readable_network_process(&mut pm, "created-stopped", true);
+    let key = id as usize;
+    assert!(
+        !ready_poller_keys(&pm).contains(&key),
+        "a `:stop t` connection was registered for reading"
+    );
+
+    builtin_continue_process_impl(&mut pm, &buffers, vec![Value::make_process(id)])
+        .expect("continue-process");
+    assert!(
+        ready_poller_keys(&pm).contains(&key),
+        "continue-process did not start reading a `:stop t` connection"
+    );
+}
+
 #[test]
 fn make_network_process_datagram_udp_loopback_like_gnu() {
     crate::test_utils::init_test_tracing();
@@ -11029,6 +11141,325 @@ fn adaptive_read_buffering_updates_delay_with_gnu_thresholds() {
     update_process_adaptive_read_buffering(process, 1024, true);
     assert_eq!(process.read_output_delay, Duration::ZERO);
     assert!(!process.read_output_skip);
+}
+
+/// GNU `process-adaptive-read-buffering` semantics: after a short read,
+/// `wait_reading_process_output` (src/process.c:5681-5717, :6270-6305) removes
+/// the process from the select set and bounds that wait by
+/// `read_output_delay` (20 ms after the first sub-256-byte read, +20 ms per
+/// later short read, capped at 70 ms; the select timeout is capped at 50 ms).
+/// The child therefore gets time to queue more output before the next read,
+/// and the filter sees fewer, larger chunks.
+///
+/// Measured on the pinned GNU oracle with a child writing eight 7-byte lines
+/// 2 ms apart: `process-adaptive-read-buffering` nil delivered 8 chunks every
+/// run, t delivered 4 chunks (7 14 28 7 / 7 14 21 14 patterns). Before the
+/// read-side delay existed, Neomacs delivered 8 chunks with t as well, which
+/// fed the rustic/app_monochrome compilation-parse races: compile.el's
+/// `compilation--ensure-parse` advances its parsed marker before parsing, so a
+/// chunk boundary inside a multi-line diagnostic can strand the message
+/// property. The assertion here is the delivery contract, not a chunk-size
+/// pin: with 10 ms gaps, t must coalesce (fewer filter calls than nil) and
+/// neither run may lose bytes.
+#[test]
+fn adaptive_read_buffering_coalesces_spaced_short_writes_like_gnu() {
+    let result = runtime_startup_eval_one(
+        r#"
+(let (rows)
+  (dolist (adaptive '(nil t))
+    (setq process-adaptive-read-buffering adaptive)
+    (let ((chunks nil)
+          (done nil))
+      (let ((process
+             (make-process
+              :name "adaptive-coalesce-probe"
+              :command '("sh" "-c"
+                         "i=0; while [ $i -lt 8 ]; do printf 'line-%s\n' $i; sleep 0.01; i=$((i+1)); done")
+              :buffer nil
+              :connection-type 'pipe
+              :noquery t
+              :filter (lambda (_process string) (push (length string) chunks))
+              :sentinel (lambda (_process _event) (setq done t)))))
+        (let ((deadline (+ (float-time) 10)))
+          (while (and (not done) (< (float-time) deadline))
+            (accept-process-output nil 0.05)))
+        (when (process-live-p process) (delete-process process)))
+      (push (list adaptive (length chunks) (apply #'+ chunks)) rows)))
+  (setq process-adaptive-read-buffering nil)
+  (let* ((ordered (nreverse rows))
+         (nil-row (nth 0 ordered))
+         (t-row (nth 1 ordered))
+         (nil-count (nth 1 nil-row))
+         (t-count (nth 1 t-row)))
+    ;; The five flags stay the contract. The five integers after them are
+    ;; nil-count, t-count, nil-bytes, t-bytes, and (- nil-count t-count).
+    (list (< t-count nil-count)
+          (= (nth 2 nil-row) 56)
+          (= (nth 2 t-row) 56)
+          (>= nil-count 2)
+          (>= t-count 1)
+          nil-count
+          t-count
+          (nth 2 nil-row)
+          (nth 2 t-row)
+          (- nil-count t-count))))
+"#,
+    );
+
+    let body = result
+        .strip_prefix("OK (")
+        .and_then(|rest| rest.strip_suffix(')'))
+        .unwrap_or(result.as_str());
+    let mut words = body.split_whitespace();
+    let flags: Vec<&str> = words.by_ref().take(5).collect();
+    let raw: Vec<&str> = words.collect();
+    assert_eq!(
+        flags.as_slice(),
+        ["t", "t", "t", "t", "t"].as_slice(),
+        "nil-count={} t-count={} nil-bytes={} t-bytes={} nil-minus-t={} raw={result}",
+        raw.first().copied().unwrap_or("?"),
+        raw.get(1).copied().unwrap_or("?"),
+        raw.get(2).copied().unwrap_or("?"),
+        raw.get(3).copied().unwrap_or("?"),
+        raw.get(4).copied().unwrap_or("?"),
+    );
+}
+
+struct KillChildren(Vec<u32>);
+
+impl Drop for KillChildren {
+    fn drop(&mut self) {
+        for pid in &self.0 {
+            let _ = std::process::Command::new("kill")
+                .args(["-KILL", &pid.to_string()])
+                .status();
+        }
+    }
+}
+
+fn arm_skipping_sleeper(ev: &mut Context, name: &str, delay_ms: u64) -> (ProcessId, u32) {
+    let sh = find_bin("sh");
+    let value = ev
+        .eval_str(&format!(
+            r#"(make-process :name "{name}" :buffer nil :connection-type 'pipe :noquery t :command '("{sh}" "-c" "read _"))"#
+        ))
+        .unwrap_or_else(|err| panic!("spawn {name}: {err:?}"));
+    let id = value.as_process_id().expect("process id");
+    {
+        let proc = ev.processes_mut().get_mut(id).expect("process record");
+        proc.adaptive_read_buffering = 1;
+        proc.read_output_delay = Duration::from_millis(delay_ms);
+        proc.read_output_skip = true;
+    }
+    let pid = ev
+        .processes()
+        .get(id)
+        .and_then(|proc| proc.os_pid)
+        .expect("child pid");
+    (id, pid)
+}
+
+/// Two skipping processes cost one wait bounded by the shorter delay.
+///
+/// GNU `FD_CLR`s every skipping channel and sets the select timeout to the
+/// minimum `read_output_delay` (src/process.c:5690-5709). Sleeping once per
+/// process in the service loop makes the wait entry itself cost the sum.
+#[test]
+fn adaptive_read_two_skippers_share_one_wait() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = crate::emacs_core::eval_hook_installers::new_context();
+    ev.eval_str("(setq process-adaptive-read-buffering t)")
+        .expect("enable adaptive read buffering");
+    let (_slow, slow_pid) = arm_skipping_sleeper(&mut ev, "adaptive-skip-slow", 50);
+    let (_fast, fast_pid) = arm_skipping_sleeper(&mut ev, "adaptive-skip-fast", 40);
+    let _kill = KillChildren(vec![slow_pid, fast_pid]);
+
+    let entered = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let slot = std::sync::Arc::clone(&entered);
+    let started = Instant::now();
+    ev.processes_mut()
+        .before_next_backend_wait_for_test(move |entry| {
+            *slot.lock().expect("wait entry") =
+                Some((started.elapsed(), entry.requested_timeout()));
+        });
+    builtin_accept_process_output(&mut ev, vec![Value::NIL, Value::make_float(0.25)])
+        .expect("accept-process-output");
+
+    let (elapsed, timeout) = entered
+        .lock()
+        .expect("wait entry")
+        .expect("the accept entered one backend wait");
+    assert!(
+        elapsed < Duration::from_millis(75),
+        "two skippers delayed the wait entry by {elapsed:?}; GNU spends one delay inside the wait"
+    );
+    assert_eq!(
+        timeout,
+        Duration::from_millis(40),
+        "the shared wait is the minimum skip delay"
+    );
+}
+
+/// Output from a process that is not skipping is serviced before the adaptive
+/// delay of the skippers ends (src/process.c:5701 leaves every other fd in
+/// the select set).
+#[test]
+fn adaptive_read_other_process_output_wakes_before_delay() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = crate::emacs_core::eval_hook_installers::new_context();
+    ev.eval_str("(setq process-adaptive-read-buffering t)")
+        .expect("enable adaptive read buffering");
+    ev.eval_str("(setq adaptive-peer-text \"\")")
+        .expect("peer text");
+    let sh = find_bin("sh");
+    let peer = ev
+        .eval_str(&format!(
+            r#"(make-process :name "adaptive-peer" :buffer nil :connection-type 'pipe :noquery t :filter (lambda (_ text) (setq adaptive-peer-text (concat adaptive-peer-text text))) :command '("{sh}" "-c" "IFS= read -r line; printf '%s\\n' \"$line\""))"#
+        ))
+        .expect("spawn peer");
+    let peer_id = peer.as_process_id().expect("peer id");
+    let peer_pid = ev
+        .processes()
+        .get(peer_id)
+        .and_then(|proc| proc.os_pid)
+        .expect("peer pid");
+    let mut peer_input = ev
+        .processes()
+        .get(peer_id)
+        .expect("peer")
+        .live_io
+        .child
+        .stdin()
+        .expect("peer stdin")
+        .try_clone()
+        .expect("clone peer stdin");
+    let (_slow, slow_pid) = arm_skipping_sleeper(&mut ev, "adaptive-peer-skip-a", 50);
+    let (_fast, fast_pid) = arm_skipping_sleeper(&mut ev, "adaptive-peer-skip-b", 50);
+    let _kill = KillChildren(vec![peer_pid, slow_pid, fast_pid]);
+
+    ev.processes_mut()
+        .before_next_backend_wait_for_test(move |_entry| {
+            use std::io::Write;
+            peer_input.write_all(b"ready\n").expect("write peer stdin");
+            peer_input.flush().expect("flush peer stdin");
+        });
+    let started = Instant::now();
+    let outcome = builtin_accept_process_output(&mut ev, vec![Value::NIL, Value::make_float(0.25)])
+        .expect("accept-process-output");
+    let elapsed = started.elapsed();
+    let peer_text = ev
+        .eval_symbol("adaptive-peer-text")
+        .expect("peer text variable");
+    assert_eq!(
+        peer_text.as_runtime_string_owned().as_deref(),
+        Some("ready\n"),
+        "peer text {peer_text:?} as {:?} after {elapsed:?} outcome {outcome:?}",
+        peer_text.as_runtime_string_owned()
+    );
+    assert!(
+        elapsed < Duration::from_millis(75),
+        "peer output waited out the skippers: {elapsed:?}"
+    );
+}
+
+/// A timer due during the adaptive delay fires on that deadline. GNU runs
+/// `timer_check` and lets the timer shorten the select (src/process.c:5489
+/// and :5720-5729); a per-process sleep in front of the wait holds the timer
+/// until every skipper has slept.
+#[test]
+fn adaptive_read_timer_fires_during_skip_delay() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = crate::emacs_core::eval_hook_installers::new_context();
+    ev.eval_str(
+        r#"(progn
+            (setq process-adaptive-read-buffering t)
+            (fset 'timer-event-handler
+                  (lambda (timer)
+                    (setq timer-list (delq timer timer-list))
+                    (apply (aref timer 5) (aref timer 6))))
+            (fset 'adaptive-timer-fired
+                  (lambda ()
+                    (setq adaptive-timer-ran t)
+                    (setq adaptive-timer-delay (- (float-time) adaptive-timer-start))
+                    (setq adaptive-timer-on-time
+                          (let ((delay adaptive-timer-delay))
+                            (and (> delay 0.005) (< delay 0.060))))))
+            (setq adaptive-timer-on-time nil)
+            (setq adaptive-timer-ran nil)
+            (setq adaptive-timer-delay nil))"#,
+    )
+    .expect("timer handler");
+    let (_slow, slow_pid) = arm_skipping_sleeper(&mut ev, "adaptive-timer-skip-a", 50);
+    let (_fast, fast_pid) = arm_skipping_sleeper(&mut ev, "adaptive-timer-skip-b", 50);
+    let _kill = KillChildren(vec![slow_pid, fast_pid]);
+    ev.eval_str("(setq adaptive-timer-start (float-time))")
+        .expect("timer start");
+    ev.set_variable(
+        "timer-list",
+        Value::list(vec![gnu_timer_after(
+            Duration::from_millis(20),
+            "adaptive-timer-fired",
+        )]),
+    );
+
+    let started = Instant::now();
+    let outcome = builtin_accept_process_output(&mut ev, vec![Value::NIL, Value::make_float(0.25)])
+        .expect("accept-process-output");
+    let elapsed = started.elapsed();
+    let on_time = ev
+        .eval_symbol("adaptive-timer-on-time")
+        .expect("timer stamp");
+    let ran = ev.eval_symbol("adaptive-timer-ran").expect("timer ran");
+    let delay = ev.eval_symbol("adaptive-timer-delay").expect("timer delay");
+    assert_eq!(
+        on_time,
+        Value::T,
+        "timer did not fire inside the adaptive delay (ran={ran:?} delay={delay:?} elapsed={elapsed:?} outcome={outcome:?})"
+    );
+}
+
+/// Pending keyboard input wakes a command wait that is also deferring
+/// skipping processes. GNU skips the select when input is already pending
+/// and keeps the keyboard fd in the set otherwise (src/process.c:5656-5671
+/// and :5623-5624). The input harness publishes one key when the backend
+/// wait is entered.
+#[test]
+fn adaptive_read_command_input_wakes_during_skip_delay() {
+    use crate::test_utils::input_wait::{InputGateOwner, WaitWitness};
+    crate::test_utils::init_test_tracing();
+    let mut ev = crate::emacs_core::eval_hook_installers::new_context();
+    ev.eval_str("(setq process-adaptive-read-buffering t)")
+        .expect("enable adaptive read buffering");
+    let (_slow, slow_pid) = arm_skipping_sleeper(&mut ev, "adaptive-key-skip-a", 50);
+    let (_fast, fast_pid) = arm_skipping_sleeper(&mut ev, "adaptive-key-skip-b", 50);
+    let _kill = KillChildren(vec![slow_pid, fast_pid]);
+
+    let input_owner = InputGateOwner::install(&mut ev);
+    let (gate, publication) = input_owner.gate(vec![
+        neovm_eval::emacs_core::eval::keyboard::InputEvent::key_press(
+            neovm_eval::emacs_core::eval::keyboard::KeyEvent::char('z'),
+        ),
+    ]);
+    gate.arm(&mut ev, WaitWitness::InputWaitEntered);
+
+    let started = Instant::now();
+    let completion = ev.wait_for_command_input(Some(Instant::now() + Duration::from_secs(1)));
+    let elapsed = started.elapsed();
+    assert_eq!(
+        publication
+            .finish()
+            .expect("keyboard wait was entered")
+            .witness,
+        WaitWitness::InputWaitEntered
+    );
+    assert_eq!(
+        completion.expect("command input"),
+        CommandInputWaitOutcome::InputPending
+    );
+    assert!(
+        elapsed < Duration::from_millis(75),
+        "keyboard input waited out the skippers: {elapsed:?}"
+    );
 }
 
 #[test]
@@ -18637,4 +19068,261 @@ fn retained_raw_dos_decoder_holds_cr_across_process_reads() {
         result,
         "OK (((nil nil (4194243 4194217) (4194243 4194217 10) neovm-retained-fixed nil) (nil t (4194243 4194217) (4194243 4194217 10) neovm-retained-fixed nil)) ((t nil (4194243 4194217) (4194243 4194217 10) neovm-retained-hook-fixed ((2 (4194243 4194217)) (1 (10)))) (t t (4194243 4194217) (4194243 4194217 10) neovm-retained-hook-fixed ((2 (4194243 4194217)) (1 (10))))))"
     );
+}
+
+/// Run `body` lexically after defining `retired-wait`, which services process
+/// output until `(symbol-value FLAG)` is non-nil or about ten seconds pass.
+/// The forms use primitives only, so they need no bootstrap Lisp.
+fn eval_lexical_with_retired_wait(ev: &mut Context, body: &str) -> String {
+    let source = format!(
+        r#"(eval '(progn
+                   (fset 'retired-wait
+                         (lambda (flag)
+                           (let ((tries 0))
+                             (while (and (null (symbol-value flag)) (< tries 200))
+                               (accept-process-output nil 0.05)
+                               (setq tries (1+ tries))))
+                           (symbol-value flag)))
+                   {body})
+                 t)"#
+    );
+    format_eval_result(&ev.eval_str(&source))
+}
+
+#[test]
+fn garbage_collect_reclaims_a_dead_process_nothing_refers_to() {
+    crate::test_utils::init_test_tracing();
+    let true_bin = find_bin("true");
+    let mut ev = crate::test_utils::new_context();
+    let setup = eval_lexical_with_retired_wait(
+        &mut ev,
+        &format!(
+            r#"(setq retired-payloads (make-hash-table :test 'eq :weakness 'key)
+                     retired-done nil)
+               (let* ((payload (make-list 64 'x))
+                      (p (make-process
+                          :name "retired-reclaim"
+                          :buffer nil
+                          :command (list "{true_bin}")
+                          :connection-type 'pipe
+                          :sentinel (lambda (_p _m)
+                                      payload
+                                      (setq retired-done t)))))
+                 (puthash payload t retired-payloads)
+                 (set-process-plist p (list 'payload payload))
+                 (set-process-filter p (lambda (_p _s) payload))
+                 (list (retired-wait 'retired-done)
+                       (process-status p)
+                       (null (get-process "retired-reclaim"))
+                       (hash-table-count retired-payloads)))"#
+        ),
+    );
+    assert_eq!(setup, "OK (t exit t 1)");
+    assert_eq!(ev.processes().deleted_processes.len(), 1);
+
+    let after = ev.eval_str("(progn (garbage-collect) (hash-table-count retired-payloads))");
+    assert_eq!(format_eval_result(&after), "OK 0");
+    assert_eq!(ev.processes().deleted_processes.len(), 0);
+}
+
+#[test]
+fn a_dead_process_lisp_still_holds_keeps_every_field_across_garbage_collect() {
+    crate::test_utils::init_test_tracing();
+    let true_bin = find_bin("true");
+    let mut ev = crate::test_utils::new_context();
+    let result = eval_lexical_with_retired_wait(
+        &mut ev,
+        &format!(
+            r#"(setq retired-done nil)
+               (setq retired-held
+                     (make-process
+                      :name "retired-held"
+                      :buffer nil
+                      :command (list "{true_bin}")
+                      :connection-type 'pipe
+                      :sentinel (lambda (_p _m) (setq retired-done t))))
+               (set-process-filter retired-held (lambda (_p _s) 'filter))
+               (set-process-plist retired-held (list 'payload (list 'kept "payload")))
+               (retired-wait 'retired-done)
+               (list (process-status retired-held)
+                     (process-exit-status retired-held)
+                     (process-name retired-held)
+                     (plist-get (process-plist retired-held) 'payload)
+                     (funcall (process-filter retired-held) nil nil)
+                     (functionp (process-sentinel retired-held))
+                     (eq retired-held retired-held))"#
+        ),
+    );
+    assert_eq!(
+        result,
+        r#"OK (exit 0 "retired-held" (kept "payload") filter t t)"#
+    );
+    let orphan = eval_lexical_with_retired_wait(
+        &mut ev,
+        &format!(
+            r#"(setq retired-orphan-done nil)
+               (let* ((payload (make-list 32 'orphan))
+                      (p (make-process
+                          :name "retired-orphan"
+                          :buffer nil
+                          :command (list "{true_bin}")
+                          :connection-type 'pipe
+                          :sentinel (lambda (_p _m)
+                                      payload
+                                      (setq retired-orphan-done t)))))
+                 (set-process-plist p (list 'payload payload))
+                 (retired-wait 'retired-orphan-done))
+               t"#
+        ),
+    );
+    assert_eq!(orphan, "OK t");
+    let after = ev.eval_str("(progn (garbage-collect) t)");
+    assert_eq!(format_eval_result(&after), "OK t");
+    let fields_after = ev.eval_str(
+        r#"(list (process-status retired-held)
+                 (process-exit-status retired-held)
+                 (process-name retired-held)
+                 (plist-get (process-plist retired-held) 'payload)
+                 (funcall (process-filter retired-held) nil nil)
+                 (functionp (process-sentinel retired-held))
+                 (eq retired-held retired-held))"#,
+    );
+    assert_eq!(format_eval_result(&fields_after), result);
+    assert_eq!(ev.processes().deleted_processes.len(), 1);
+}
+
+#[test]
+fn garbage_collect_reclaims_a_dead_process_whose_own_fields_refer_to_it() {
+    crate::test_utils::init_test_tracing();
+    let true_bin = find_bin("true");
+    let mut ev = crate::test_utils::new_context();
+    let setup = eval_lexical_with_retired_wait(
+        &mut ev,
+        &format!(
+            r#"(setq retired-payloads (make-hash-table :test 'eq :weakness 'key)
+                     retired-done nil)
+               (let* ((payload (make-list 64 'x))
+                      (cell (list nil))
+                      (p (make-process
+                          :name "retired-cycle"
+                          :buffer nil
+                          :command (list "{true_bin}")
+                          :connection-type 'pipe
+                          :sentinel (lambda (_p _m)
+                                      (list payload cell)
+                                      (setq retired-done t)))))
+                 ;; The sentinel's closure and the plist both reach P.
+                 (setcar cell p)
+                 (set-process-plist p (list 'self p))
+                 (puthash payload t retired-payloads)
+                 (retired-wait 'retired-done))"#
+        ),
+    );
+    assert_eq!(setup, "OK t");
+    assert_eq!(ev.processes().deleted_processes.len(), 1);
+
+    let after = ev.eval_str("(progn (garbage-collect) (hash-table-count retired-payloads))");
+    assert_eq!(format_eval_result(&after), "OK 0");
+    assert_eq!(ev.processes().deleted_processes.len(), 0);
+}
+
+#[test]
+fn a_dead_process_reached_only_through_another_dead_process_is_kept_with_it() {
+    crate::test_utils::init_test_tracing();
+    let true_bin = find_bin("true");
+    let mut ev = crate::test_utils::new_context();
+    let result = eval_lexical_with_retired_wait(
+        &mut ev,
+        &format!(
+            r#"(setq retired-done-inner nil retired-done-outer nil
+                     retired-orphan-done nil
+                     retired-orphans (make-hash-table :test 'eq :weakness 'key))
+               (let ((inner (make-process
+                             :name "retired-inner"
+                             :buffer nil
+                             :command (list "{true_bin}")
+                             :connection-type 'pipe
+                             :sentinel (lambda (_p _m) (setq retired-done-inner t)))))
+                 (set-process-plist inner (list 'payload (list "inner payload")))
+                 (retired-wait 'retired-done-inner)
+                 (setq retired-outer
+                       (make-process
+                        :name "retired-outer"
+                        :buffer nil
+                        :command (list "{true_bin}")
+                        :connection-type 'pipe
+                        :sentinel (lambda (_p _m) (setq retired-done-outer t))))
+                 ;; INNER is reachable only through OUTER's plist.
+                 (set-process-plist retired-outer (list 'inner inner))
+                 (retired-wait 'retired-done-outer)
+                 (let* ((payload (make-list 32 'orphan))
+                        (orphan (make-process
+                                 :name "retired-unrelated"
+                                 :buffer nil
+                                 :command (list "{true_bin}")
+                                 :connection-type 'pipe
+                                 :sentinel (lambda (_p _m)
+                                             payload
+                                             (setq retired-orphan-done t)))))
+                   (puthash payload t retired-orphans)
+                   (set-process-plist orphan (list 'payload payload))
+                   (retired-wait 'retired-orphan-done)))
+               (garbage-collect)
+               (let ((inner (plist-get (process-plist retired-outer) 'inner)))
+                 (list (process-name inner)
+                       (process-status inner)
+                       (plist-get (process-plist inner) 'payload)
+                       (hash-table-count retired-orphans)))"#
+        ),
+    );
+    assert_eq!(result, r#"OK ("retired-inner" exit ("inner payload") 0)"#);
+    assert_eq!(ev.processes().deleted_processes.len(), 2);
+
+    let after = ev.eval_str("(progn (setq retired-outer nil) (garbage-collect) t)");
+    assert_eq!(format_eval_result(&after), "OK t");
+    assert_eq!(ev.processes().deleted_processes.len(), 0);
+}
+
+#[test]
+fn a_thousand_short_lived_processes_leave_nothing_retired_after_garbage_collect() {
+    crate::test_utils::init_test_tracing();
+    let true_bin = find_bin("true");
+    let mut ev = crate::test_utils::new_context();
+    let result = eval_lexical_with_retired_wait(
+        &mut ev,
+        &format!(
+            r#"(setq retired-payloads (make-hash-table :test 'eq :weakness 'key)
+                     retired-finished 0)
+               (let ((batch 0))
+                 (while (< batch 20)
+                   (let ((batch-done nil) (pending 50) (i 0) (tries 0))
+                     (while (< i 50)
+                       (let* ((payload (make-list 32 'x))
+                              (p (make-process
+                                  :name "retired-burst"
+                                  :buffer nil
+                                  :command (list "{true_bin}")
+                                  :connection-type 'pipe
+                                  :sentinel (lambda (_p _m)
+                                              payload
+                                              (setq retired-finished (1+ retired-finished))
+                                              (setq pending (1- pending))
+                                              (if (= pending 0)
+                                                  (setq batch-done t))))))
+                         (puthash payload t retired-payloads)
+                         (set-process-plist p (list 'payload payload)))
+                       (setq i (1+ i)))
+                     (while (and (null batch-done) (< tries 400))
+                       (accept-process-output nil 0.05)
+                       (setq tries (1+ tries))))
+                   (setq batch (1+ batch))))
+               (list retired-finished (hash-table-count retired-payloads))"#
+        ),
+    );
+    assert_eq!(result, "OK (1000 1000)");
+    assert_eq!(ev.processes().deleted_processes.len(), 1000);
+
+    let after = ev.eval_str("(progn (garbage-collect) (hash-table-count retired-payloads))");
+    assert_eq!(format_eval_result(&after), "OK 0");
+    assert_eq!(ev.processes().deleted_processes.len(), 0);
 }

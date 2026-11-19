@@ -156,11 +156,11 @@ fn native_canonical_cache_does_not_grant_local_obarray_membership() {
     let name = "gdj-native-lookup-cache-local-membership";
     let mut first = crate::symbol::Obarray::new();
     let mut second = crate::symbol::Obarray::new();
-    first.intern(name);
+    first.intern_member(name);
     assert!(lookup_interned(name).is_some());
     assert!(first.intern_soft(name).is_some());
     assert!(second.intern_soft(name).is_none());
-    second.intern(name);
+    second.intern_member(name);
     assert!(second.intern_soft(name).is_some());
 }
 

@@ -21,6 +21,12 @@ note: required because it's used within this closure
   |                            ^^^^^^^
 note: required by a bound in `spawn`
  --> $RUST/std/src/thread/functions.rs
+  |
+  | pub fn spawn<F, T>(f: F) -> JoinHandle<T>
+  |        ----- required by a bound in this function
+...
+  |     F: Send + 'static,
+  |        ^^^^ required by this bound in `spawn`
 
 error[E0277]: `Rc<()>` cannot be sent between threads safely
  --> tests/p2ht_ui/keeper_table_mut_cannot_cross_threads.rs:7:28
@@ -35,6 +41,9 @@ error[E0277]: `Rc<()>` cannot be sent between threads safely
   = help: within `{closure@$DIR/tests/p2ht_ui/keeper_table_mut_cannot_cross_threads.rs:7:28: 7:35}`, the trait `Send` is not implemented for `Rc<()>`
 note: required because it appears within the type `PhantomData<Rc<()>>`
  --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
 note: required because it appears within the type `KeeperTableMut<'_>`
  --> $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_registration/table_authority.rs
   |
@@ -47,6 +56,12 @@ note: required because it's used within this closure
   |                            ^^^^^^^
 note: required by a bound in `spawn`
  --> $RUST/std/src/thread/functions.rs
+  |
+  | pub fn spawn<F, T>(f: F) -> JoinHandle<T>
+  |        ----- required by a bound in this function
+...
+  |     F: Send + 'static,
+  |        ^^^^ required by this bound in `spawn`
 
 error[E0277]: `*const ()` cannot be sent between threads safely
  --> tests/p2ht_ui/keeper_table_mut_cannot_cross_threads.rs:7:28
@@ -61,6 +76,9 @@ error[E0277]: `*const ()` cannot be sent between threads safely
   = help: within `{closure@$DIR/tests/p2ht_ui/keeper_table_mut_cannot_cross_threads.rs:7:28: 7:35}`, the trait `Send` is not implemented for `*const ()`
 note: required because it appears within the type `PhantomData<*const ()>`
  --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
 note: required because it appears within the type `TaggedValue`
  --> $WORKSPACE/crates/neovm-value/src/tagged/value.rs
   |
@@ -78,3 +96,9 @@ note: required because it's used within this closure
   |                            ^^^^^^^
 note: required by a bound in `spawn`
  --> $RUST/std/src/thread/functions.rs
+  |
+  | pub fn spawn<F, T>(f: F) -> JoinHandle<T>
+  |        ----- required by a bound in this function
+...
+  |     F: Send + 'static,
+  |        ^^^^ required by this bound in `spawn`

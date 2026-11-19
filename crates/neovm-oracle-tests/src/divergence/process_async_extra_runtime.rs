@@ -177,7 +177,9 @@ fn divergence_proc_binary_filter_multibyte() {
     (set-process-query-on-exit-flag proc nil)
     (process-send-string proc (unibyte-string 0 1 2 255 254 10))
     (process-send-eof proc)
-    (while (process-live-p proc) (accept-process-output proc 1))
+    ;; A terminal status does not imply the final filter bytes arrived;
+    ;; the post-terminal observation drains them (GNU proc.c).
+    (neovm--oracle-settle-process proc 600)
     (list (length acc) (multibyte-string-p acc) (append (string-to-unibyte acc) nil))))"##,
         expect,
     );

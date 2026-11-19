@@ -9,7 +9,7 @@ use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 
 #[derive(Debug)]
-pub enum ChildExitNotification {
+pub(crate) enum ChildExitNotification {
     Exited(usize),
     // Also constructed by portable tests of Darwin's pre-zombie ordering.
     #[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
@@ -18,7 +18,7 @@ pub enum ChildExitNotification {
 }
 
 #[derive(Debug)]
-pub struct ChildExitEvent {
+pub(crate) struct ChildExitEvent {
     #[cfg(target_os = "linux")]
     queue: OwnedFd,
     #[cfg(target_os = "linux")]

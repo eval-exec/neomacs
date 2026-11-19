@@ -350,7 +350,7 @@ fn font_c_pure_primitives_validate_and_project_font_values() {
         Value::NIL
     );
 
-    let err = font_match_p(vec![Value::NIL, font_spec]).unwrap_err();
+    let err = call_font_match_p(vec![Value::NIL, font_spec]).unwrap_err();
     assert!(
         if matches!(err.kind(), FlowRef::Signal(sig) if sig.symbol_name() == "wrong-type-argument")
         {
@@ -1460,11 +1460,12 @@ fn font_at_eval_prefers_backend_selected_font_match_when_available() {
             .as_bare_symbol_name(),
         Some("Noto Sans Mono CJK SC")
     );
-    assert_eq!(
+    // FONT_FILE_INDEX is an object-only slot in GNU (src/font.h), so
+    // `font-get' on a font-object does not return it; font-info does.
+    assert!(
         font_get(vec![font, Value::keyword("file")])
             .unwrap()
-            .as_utf8_str(),
-        Some("/tmp/NotoSansMonoCJKsc-Regular.otf")
+            .is_nil()
     );
     let info = font_info(&mut eval, vec![font]).unwrap();
     let values = info.as_vector_data().expect("font info vector");
@@ -1991,12 +1992,19 @@ fn opened_font_retains_exact_backend_identity_and_variations() {
         object.as_font_data().expect("native font payload").identity,
         identity
     );
-    assert_eq!(
+    // GNU's Ffont_get (src/font.c) reads only the font property indices and
+    // FONT_EXTRA_INDEX; the object-only FONT_FULLNAME_INDEX slot (src/font.h)
+    // is exposed through `font-info', not `font-get'.
+    assert!(
         font_get(vec![object, Value::keyword("full-name")])
             .unwrap()
-            .as_utf8_str(),
-        Some("Variable Sans Semibold")
+            .is_nil()
     );
+    let info = OpenedFont::decode(object)
+        .expect("opened font payload")
+        .info_vector();
+    let values = info.as_vector_data().expect("font info vector");
+    assert_eq!(values[1].as_utf8_str(), Some("Variable Sans Semibold"));
     assert_eq!(
         font_get(vec![object, Value::keyword("postscript-name")])
             .unwrap()
@@ -2526,35 +2534,6 @@ fn font_put_wrong_arity() {
     assert!(font_put(vec![Value::NIL, Value::NIL]).is_err());
 }
 
-#[test]
-fn bounded_family_alternatives_preserve_order_and_refuse_excess_payload() {
-    crate::test_utils::init_test_tracing();
-    crate::emacs_core::xfaces::builtin_internal_set_alternative_font_family_alist(vec![
-        Value::list(vec![Value::list(vec![
-            Value::string("Fixture"),
-            Value::string("Second"),
-            Value::string("Third"),
-        ])]),
-    ])
-    .unwrap();
-    assert_eq!(
-        super::bounded_alternative_font_families("fixture", 8, 256),
-        Some(super::alternative_font_families("fixture"))
-    );
-    assert_eq!(
-        super::bounded_alternative_font_families("fixture", 2, 256),
-        None
-    );
-    assert_eq!(
-        super::bounded_alternative_font_families("fixture", 8, 8),
-        None
-    );
-    assert_eq!(
-        super::bounded_alternative_font_families("Absent", 0, 256),
-        None
-    );
-}
-
 // GNU font.c:4634-4700 keeps the font driver's shape method installed when
 // shaping returns nil. composite.c:982-989 can call it again on later runs.
 #[derive(Clone, Copy, Debug)]
@@ -2766,7 +2745,7 @@ fn x_list_fonts_returns_sized_catalog_names_and_filters_ignored_fonts_before_lim
     let names = list_to_vec(&names).unwrap();
     assert_eq!(names.len(), 1);
     assert!(names[0].as_utf8_str().unwrap().contains("-bold-"));
-    let uninterned = Value::from_sym_id(neovm_value::intern::intern_uninterned("ftcrhb"));
+    let uninterned = Value::from_sym_id(neovm_value::intern::make_uninterned_symbol("ftcrhb"));
     let driver_spec = font_spec(vec![Value::keyword("type"), uninterned]).unwrap();
     let entities =
         list_fonts_for_pattern(&mut eval, vec![driver_spec, Value::NIL, Value::fixnum(1)]).unwrap();
@@ -2809,6 +2788,75 @@ fn x_list_fonts_returns_sized_catalog_names_and_filters_ignored_fonts_before_lim
             )]
         )
         .is_err()
+    );
+}
+
+#[test]
+fn list_fonts_forwards_the_otf_requirement_and_returns_entities() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    ensure_selected_gui_frame(&mut eval);
+    let queries = Rc::new(RefCell::new(Vec::new()));
+    let listed = neovm_eval::emacs_core::eval::ListedFontEntity {
+        driver: Some(intern("ftcrhb")),
+        font: ResolvedFontSpecMatch {
+            coverage_handle: None,
+            family: LispString::from_utf8("Hack"),
+            foundry: Some(LispString::from_utf8("SRC")),
+            registry: Some(LispString::from_utf8("iso10646-1")),
+            file: None,
+            weight: Some(FontWeight::NORMAL),
+            slant: Some(FontSlant::Normal),
+            width: Some(FontWidth::Normal),
+            spacing: Some(100),
+            postscript_name: None,
+        },
+        pixel_size: Some(0),
+        average_width: Some(0),
+    };
+    eval.set_display_host(Box::new(ListingFontDisplayHost {
+        queries: Rc::clone(&queries),
+        fonts: vec![listed],
+    }));
+    let otf = Value::list(vec![
+        Value::symbol("arab"),
+        Value::NIL,
+        Value::list(vec![Value::symbol("init")]),
+    ]);
+    let spec = font_spec(vec![
+        Value::keyword("family"),
+        Value::string("Hack"),
+        Value::keyword("otf"),
+        otf,
+    ])
+    .unwrap();
+    // GNU `list-fonts` is the entity enumeration `find-font` uses, so the
+    // public builtin must reach the same host path and carry `:otf`.
+    let entities = list_fonts(&mut eval, vec![spec]).unwrap();
+    assert_eq!(list_to_vec(&entities).unwrap().len(), 1);
+    let captured = queries.borrow();
+    assert_eq!(
+        captured[0].specification.otf,
+        Some(
+            neovm_eval::emacs_core::eval::data::fontset_state::StoredOtfSpec {
+                script: "arab".to_owned(),
+                langsys:
+                    neovm_eval::emacs_core::eval::data::fontset_state::StoredOtfLangsys::Default,
+                gsub: Some(
+                    neovm_eval::emacs_core::eval::data::fontset_state::StoredOtfFeatures {
+                        required: vec!["init".to_owned()],
+                        forbidden: Vec::new(),
+                    }
+                ),
+                gpos: None,
+            }
+        )
+    );
+    drop(captured);
+    assert!(
+        list_fonts(&mut eval, vec![spec, Value::NIL, Value::fixnum(0)])
+            .unwrap()
+            .is_nil()
     );
 }
 
@@ -3166,4 +3214,543 @@ fn listing_complete_xlfd_point_field_overflow_matches_64_bit_glibc() {
         ("9223372036854775808", None),
         ("9999999999999999999999999999999999999999", None),
     ]);
+}
+
+// --- GNU `font_prop_validate_otf` (src/font.c:666-700) ---
+
+fn otf_spec_value(script: &'static str, rest: Vec<Value>) -> Value {
+    let mut items = vec![Value::symbol(script)];
+    items.extend(rest);
+    Value::list(items)
+}
+
+fn otf_feature_list(features: &[&'static str]) -> Value {
+    Value::list(features.iter().map(|tag| Value::symbol(*tag)).collect())
+}
+
+fn assert_invalid_otf(value: Value) {
+    let error = font_spec(vec![Value::keyword("otf"), value]).unwrap_err();
+    let neovm_value::error::FlowRef::Signal(signal) = error.kind() else {
+        panic!("expected a signal for malformed :otf");
+    };
+    assert_eq!(signal.symbol, intern("error"));
+    assert_eq!(signal.data.len(), 2);
+    assert_eq!(signal.data[0].as_utf8_str(), Some("invalid font property"));
+    let pair = signal.data[1];
+    assert!(pair.is_cons());
+    assert_eq!(pair.cons_car(), Value::keyword("otf"));
+    assert_eq!(pair.cons_cdr(), value);
+}
+
+#[test]
+fn font_spec_otf_accepts_every_gnu_shape() {
+    crate::test_utils::init_test_tracing();
+    let gsub = otf_feature_list(&["init", "medi"]);
+    let gpos = otf_feature_list(&["kern"]);
+    let accepted = vec![
+        otf_spec_value("arab", vec![]),
+        otf_spec_value("arab", vec![Value::NIL]),
+        otf_spec_value("arab", vec![Value::symbol("URD "), gsub.clone()]),
+        otf_spec_value("arab", vec![Value::NIL, gsub.clone(), gpos.clone()]),
+        otf_spec_value("arab", vec![Value::NIL, Value::NIL, gpos.clone()]),
+        // `nil` separates required from forbidden features.
+        otf_spec_value(
+            "arab",
+            vec![
+                Value::NIL,
+                Value::list(vec![
+                    Value::symbol("init"),
+                    Value::NIL,
+                    Value::symbol("liga"),
+                ]),
+            ],
+        ),
+    ];
+    for value in accepted {
+        let spec = font_spec(vec![Value::keyword("otf"), value]).expect("GNU-valid :otf");
+        assert_eq!(
+            font_get(vec![spec, Value::keyword("otf")]).unwrap(),
+            value,
+            "font-get must return the stored :otf value unchanged"
+        );
+    }
+}
+
+#[test]
+fn font_spec_otf_rejects_malformed_shapes_with_gnu_error_data() {
+    crate::test_utils::init_test_tracing();
+    let symbol_item = Value::list(vec![Value::symbol("init")]);
+    let malformed = vec![
+        Value::fixnum(1),
+        Value::list(vec![Value::string("arab")]),
+        Value::cons(Value::symbol("arab"), Value::symbol("tail")),
+        otf_spec_value(
+            "arab",
+            vec![Value::NIL, Value::list(vec![Value::string("init")])],
+        ),
+        otf_spec_value("arab", vec![Value::NIL, Value::fixnum(1)]),
+        otf_spec_value(
+            "arab",
+            vec![
+                Value::NIL,
+                Value::cons(Value::symbol("init"), Value::symbol("tail")),
+            ],
+        ),
+        otf_spec_value("arab", vec![Value::NIL, symbol_item, Value::fixnum(1)]),
+    ];
+    for value in malformed {
+        assert_invalid_otf(value);
+    }
+}
+
+#[test]
+fn font_spec_otf_reproduces_the_second_slot_validation_quirk() {
+    crate::test_utils::init_test_tracing();
+    // GNU re-tests XCAR (val) instead of the LANGSYS element, so a non-symbol
+    // LANGSYS is accepted by `font-spec` even though no font can match it.
+    for langsys in [
+        Value::string("URD "),
+        Value::fixnum(7),
+        Value::list(vec![Value::symbol("x")]),
+    ] {
+        let value = otf_spec_value("arab", vec![langsys, otf_feature_list(&["init"])]);
+        font_spec(vec![Value::keyword("otf"), value])
+            .expect("GNU accepts a non-symbol LANGSYS through the XCAR quirk");
+    }
+}
+
+#[test]
+fn font_spec_otf_accepts_nil() {
+    crate::test_utils::init_test_tracing();
+    // GNU's font_prop_validate returns a nil VAL before any validator runs.
+    let spec = font_spec(vec![Value::keyword("otf"), Value::NIL]).expect("nil :otf is accepted");
+    assert!(
+        font_get(vec![spec, Value::keyword("otf")])
+            .unwrap()
+            .is_nil()
+    );
+    let empty = font_spec(Vec::new()).unwrap();
+    assert!(
+        font_put(vec![empty, Value::keyword("otf"), Value::NIL])
+            .unwrap()
+            .is_nil()
+    );
+}
+
+#[test]
+fn font_put_otf_validates_like_font_spec() {
+    crate::test_utils::init_test_tracing();
+    let spec = font_spec(Vec::new()).unwrap();
+    let value = otf_spec_value("arab", vec![Value::NIL, otf_feature_list(&["init"])]);
+    assert_eq!(
+        font_put(vec![spec, Value::keyword("otf"), value]).unwrap(),
+        value
+    );
+    let spec = font_spec(Vec::new()).unwrap();
+    let error = font_put(vec![
+        spec,
+        Value::keyword("otf"),
+        Value::list(vec![Value::fixnum(1)]),
+    ])
+    .unwrap_err();
+    let neovm_value::error::FlowRef::Signal(signal) = error.kind() else {
+        panic!("expected invalid font property signal");
+    };
+    assert_eq!(signal.symbol, intern("error"));
+    assert_eq!(signal.data.len(), 2);
+}
+
+// --- GNU `font_match_p` (`src/font.c:2433-2540`) :otf arm ---
+
+fn call_font_match_p(args: Vec<Value>) -> EvalResult {
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    font_match_p(&mut eval, args)
+}
+
+fn otf_side(
+    entries: &[(&str, &[(Option<&str>, &[&str])])],
+) -> neovm_eval::emacs_core::eval::OtfSideCapability {
+    entries
+        .iter()
+        .map(|(script, lang_syses)| {
+            (
+                (*script).to_owned(),
+                lang_syses
+                    .iter()
+                    .map(|(tag, features)| {
+                        (
+                            tag.map(str::to_owned),
+                            features.iter().map(|tag| (*tag).to_owned()).collect(),
+                        )
+                    })
+                    .collect(),
+            )
+        })
+        .collect()
+}
+
+fn opened_font_with_capability(capability: FontOtfCapability) -> Value {
+    let fields = font_object_property_fields(&RuntimeFace::new("default"), Some(16));
+    finish_opened_font(
+        fields,
+        None,
+        None,
+        OpenedFontMetrics::fallback(16),
+        otf_capability_to_lisp(&capability),
+        neomacs_display_protocol::font::ResolvedFontIdentity::from_memory(
+            neomacs_display_protocol::font::FontBackendKind::Fontconfig,
+            "test:otf".to_string(),
+            0,
+            None,
+        ),
+    )
+}
+
+fn arab_capability() -> FontOtfCapability {
+    FontOtfCapability {
+        gsub: otf_side(&[(
+            "arab",
+            &[(None, &["init", "fina"]), (Some("URD "), &["fina", "rtlm"])],
+        )]),
+        gpos: otf_side(&[("arab", &[(None, &["kern"])])]),
+    }
+}
+
+#[test]
+fn font_match_p_checks_gsub_and_gpos_features_on_opened_fonts() {
+    crate::test_utils::init_test_tracing();
+    let font = opened_font_with_capability(arab_capability());
+    let cases = [
+        (
+            Value::list(vec![
+                Value::symbol("arab"),
+                Value::NIL,
+                Value::list(vec![Value::symbol("init")]),
+            ]),
+            true,
+        ),
+        (
+            Value::list(vec![
+                Value::symbol("arab"),
+                Value::NIL,
+                Value::list(vec![Value::symbol("zzzz")]),
+            ]),
+            false,
+        ),
+        (
+            Value::list(vec![
+                Value::symbol("zzzz"),
+                Value::NIL,
+                Value::list(vec![Value::symbol("init")]),
+            ]),
+            false,
+        ),
+        (
+            Value::list(vec![
+                Value::symbol("arab"),
+                Value::NIL,
+                Value::NIL,
+                Value::list(vec![Value::symbol("kern")]),
+            ]),
+            true,
+        ),
+        (
+            Value::list(vec![
+                Value::symbol("arab"),
+                Value::NIL,
+                Value::NIL,
+                Value::list(vec![Value::symbol("mark")]),
+            ]),
+            false,
+        ),
+        // A forbidden feature present in GSUB rejects the font.
+        (
+            Value::list(vec![
+                Value::symbol("arab"),
+                Value::NIL,
+                Value::list(vec![
+                    Value::symbol("init"),
+                    Value::NIL,
+                    Value::symbol("fina"),
+                ]),
+            ]),
+            false,
+        ),
+        // A forbidden feature absent from GSUB still matches.
+        (
+            Value::list(vec![
+                Value::symbol("arab"),
+                Value::NIL,
+                Value::list(vec![
+                    Value::symbol("init"),
+                    Value::NIL,
+                    Value::symbol("zzzz"),
+                ]),
+            ]),
+            true,
+        ),
+        // A named langsys must exist and carries its own features.
+        (
+            Value::list(vec![
+                Value::symbol("arab"),
+                Value::symbol("URD "),
+                Value::list(vec![Value::symbol("rtlm")]),
+            ]),
+            true,
+        ),
+        (
+            Value::list(vec![
+                Value::symbol("arab"),
+                Value::symbol("ZZZ "),
+                Value::list(vec![Value::symbol("init")]),
+            ]),
+            false,
+        ),
+    ];
+    for (otf, expected) in cases {
+        let spec = font_spec(vec![Value::keyword("otf"), otf]).unwrap();
+        assert_eq!(
+            call_font_match_p(vec![spec, font]).unwrap(),
+            if expected { Value::T } else { Value::NIL },
+            "{otf:?}"
+        );
+    }
+}
+
+#[test]
+fn font_match_p_applies_otf_only_to_opened_font_objects() {
+    crate::test_utils::init_test_tracing();
+    let entity = build_font_entity_for_spec_match(&ResolvedFontSpecMatch {
+        coverage_handle: None,
+        family: LispString::from_utf8("Hack"),
+        foundry: None,
+        registry: Some(LispString::from_utf8("iso10646-1")),
+        file: None,
+        weight: Some(FontWeight::NORMAL),
+        slant: Some(FontSlant::Normal),
+        width: Some(FontWidth::Normal),
+        spacing: None,
+        postscript_name: None,
+    });
+    let otf_only = font_spec(vec![
+        Value::keyword("otf"),
+        Value::list(vec![Value::symbol("arab")]),
+    ])
+    .unwrap();
+    // GNU requires FONT_OBJECT_P for the :otf arm.
+    assert!(call_font_match_p(vec![otf_only, entity]).unwrap().is_nil());
+
+    let named = font_spec(vec![Value::keyword("family"), Value::string("Hack")]).unwrap();
+    assert_eq!(call_font_match_p(vec![named, entity]).unwrap(), Value::T);
+    let other = font_spec(vec![Value::keyword("family"), Value::string("Other")]).unwrap();
+    assert!(call_font_match_p(vec![other, entity]).unwrap().is_nil());
+    assert_eq!(
+        call_font_match_p(vec![font_spec(Vec::new()).unwrap(), entity]).unwrap(),
+        Value::T
+    );
+}
+
+#[test]
+fn font_match_p_rejects_a_missing_capability_for_otf_specs() {
+    crate::test_utils::init_test_tracing();
+    let font = build_font_object(&RuntimeFace::new("default"));
+    let spec = font_spec(vec![
+        Value::keyword("otf"),
+        Value::list(vec![Value::symbol("arab"), Value::NIL, Value::NIL]),
+    ])
+    .unwrap();
+    assert!(call_font_match_p(vec![spec, font]).unwrap().is_nil());
+}
+
+#[test]
+fn font_match_p_validates_font_arguments_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let spec = font_spec(Vec::new()).unwrap();
+    let error = call_font_match_p(vec![spec, Value::fixnum(1)]).unwrap_err();
+    let neovm_value::error::FlowRef::Signal(signal) = error.kind() else {
+        panic!("expected wrong-type-argument");
+    };
+    assert_eq!(signal.symbol, intern("wrong-type-argument"));
+    assert_eq!(signal.data[0], Value::symbol("font"));
+    let error = call_font_match_p(vec![Value::fixnum(1), spec]).unwrap_err();
+    let neovm_value::error::FlowRef::Signal(signal) = error.kind() else {
+        panic!("expected wrong-type-argument");
+    };
+    assert_eq!(signal.symbol, intern("wrong-type-argument"));
+    assert_eq!(signal.data[0], Value::symbol("font-spec"));
+}
+
+#[test]
+fn font_get_returns_the_driver_capability_for_opened_fonts() {
+    crate::test_utils::init_test_tracing();
+    let capability = arab_capability();
+    let font = opened_font_with_capability(capability.clone());
+    let expected = otf_capability_to_lisp(&capability).cons_cdr();
+    assert_eq!(
+        font_get(vec![font, Value::keyword("otf")]).unwrap(),
+        expected
+    );
+    let plain = build_font_object(&RuntimeFace::new("default"));
+    assert!(
+        font_get(vec![plain, Value::keyword("otf")])
+            .unwrap()
+            .is_nil()
+    );
+    let stored = Value::list(vec![Value::symbol("arab")]);
+    let spec = font_spec(vec![Value::keyword("otf"), stored]).unwrap();
+    assert_eq!(font_get(vec![spec, Value::keyword("otf")]).unwrap(), stored);
+}
+
+#[test]
+fn find_font_named_langsys_request_neither_errors_nor_crashes() {
+    crate::test_utils::init_test_tracing();
+    // GNU Emacs 31.1 segfaults when find-font/list-fonts reaches
+    // `hbotf_check_features` with a named LANGSYS (an out-of-bounds read at
+    // src/ftfont.c:3054-3066), so the form is GNU-UNDEFINED with no parity
+    // row. The contract is that the named language system is carried into
+    // matching unchanged: a symbol stays a named langsys, while the
+    // validator's non-symbol quirk can never `eq` a tag and makes the
+    // requirement unmatchable. Neomacs must build that request without
+    // crashing or signalling; the resolver then returns the matching font or
+    // nil (covered by the layout-engine fixture test).
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let spec = font_spec(vec![
+        Value::keyword("otf"),
+        Value::list(vec![
+            Value::symbol("arab"),
+            Value::symbol("URD "),
+            Value::list(vec![Value::symbol("rtlm")]),
+        ]),
+    ])
+    .unwrap();
+    let request =
+        font_spec_resolve_request(&mut eval, &spec, None).expect("named LANGSYS must not error");
+    let otf = request.otf.expect("the requirement reaches the request");
+    assert!(matches!(
+        otf.langsys,
+        neovm_eval::emacs_core::eval::data::fontset_state::StoredOtfLangsys::Named(ref tag)
+            if tag == "URD "
+    ));
+
+    let quirk = font_spec(vec![
+        Value::keyword("otf"),
+        Value::list(vec![
+            Value::symbol("arab"),
+            Value::string("URD "),
+            Value::list(vec![Value::symbol("rtlm")]),
+        ]),
+    ])
+    .unwrap();
+    let request = font_spec_resolve_request(&mut eval, &quirk, None)
+        .expect("the validator quirk must not error");
+    assert!(matches!(
+        request.otf.expect("requirement").langsys,
+        neovm_eval::emacs_core::eval::data::fontset_state::StoredOtfLangsys::Unmatchable
+    ));
+}
+
+fn named_entity(family: &str, weight: FontWeight, size: i64) -> Value {
+    let entity = build_font_entity_for_spec_match(&ResolvedFontSpecMatch {
+        coverage_handle: None,
+        family: LispString::from_utf8(family),
+        foundry: None,
+        registry: Some(LispString::from_utf8("iso10646-1")),
+        file: None,
+        weight: Some(weight),
+        slant: Some(FontSlant::Normal),
+        width: Some(FontWidth::Normal),
+        spacing: None,
+        postscript_name: None,
+    });
+    font_put_entity_field(entity, "size", Value::fixnum(size));
+    entity
+}
+
+#[test]
+fn font_match_p_scores_style_at_gnu_granularity_and_size_exactly() {
+    crate::test_utils::init_test_tracing();
+    let entity = named_entity("Hack", FontWeight::NORMAL, 16);
+    // GNU font_score compares the style-table code (the stored value shifted
+    // right by its alias bits); the same row matches, a different row rejects.
+    let same = font_spec(vec![
+        Value::keyword("family"),
+        Value::string("Hack"),
+        Value::keyword("weight"),
+        Value::symbol("regular"),
+    ])
+    .unwrap();
+    assert_eq!(call_font_match_p(vec![same, entity]).unwrap(), Value::T);
+    let different = font_spec(vec![
+        Value::keyword("family"),
+        Value::string("Hack"),
+        Value::keyword("weight"),
+        Value::symbol("bold"),
+    ])
+    .unwrap();
+    assert!(call_font_match_p(vec![different, entity]).unwrap().is_nil());
+
+    // A positive entity size is scored exactly: any different pixel size is
+    // a positive score, and a factor-of-two difference is rejected outright.
+    for (size, expected) in [(16, true), (13, false), (40, false)] {
+        let spec = font_spec(vec![
+            Value::keyword("family"),
+            Value::string("Hack"),
+            Value::keyword("size"),
+            Value::fixnum(size),
+        ])
+        .unwrap();
+        assert_eq!(
+            call_font_match_p(vec![spec, entity]).unwrap(),
+            if expected { Value::T } else { Value::NIL },
+            "size {size}"
+        );
+    }
+}
+
+#[test]
+fn font_match_p_lang_arm_uses_the_fonts_lang_extra() {
+    crate::test_utils::init_test_tracing();
+    let entity = named_entity("Hack", FontWeight::NORMAL, 0);
+    let spec = |lang: Value| {
+        font_spec(vec![
+            Value::keyword("family"),
+            Value::string("Hack"),
+            Value::keyword("lang"),
+            lang,
+        ])
+        .unwrap()
+    };
+    // The entity has no :lang extra, so GNU's assq miss rejects the spec.
+    assert!(
+        call_font_match_p(vec![spec(Value::symbol("ja")), entity])
+            .unwrap()
+            .is_nil()
+    );
+    // GNU's single-symbol branch tests `memq (val, XCDR (val2))`, so the
+    // font's stored language value must have the languages in its cdr.
+    font_put_entity_field(
+        entity,
+        "lang",
+        Value::list(vec![Value::NIL, Value::symbol("ja")]),
+    );
+    // A single spec symbol must be `memq` in the font's language cdr.
+    assert_eq!(
+        call_font_match_p(vec![spec(Value::symbol("ja")), entity]).unwrap(),
+        Value::T
+    );
+    assert!(
+        call_font_match_p(vec![spec(Value::symbol("en")), entity])
+            .unwrap()
+            .is_nil()
+    );
+    // GNU validates :lang with font_prop_validate_symbol, so a list is not a
+    // valid font-spec value even though font_spec_match has a list arm for
+    // internally built specs.
+    assert!(
+        font_spec(vec![
+            Value::keyword("lang"),
+            Value::list(vec![Value::symbol("ja")])
+        ])
+        .is_err()
+    );
 }

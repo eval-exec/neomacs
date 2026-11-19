@@ -91,8 +91,65 @@ const fn same_kind(left: CatalogKind, right: CatalogKind) -> bool {
     }
 }
 
+/// Duplicate-scan table size for [`validate`]: a power of two, so a masked
+/// hash indexes it directly and the probe advances one slot at a time.
+///
+/// The duplicate check runs in const evaluation for every batch this schema
+/// validates, and comparing each entry with every earlier one made the check
+/// quadratic in batch size. An open-addressed index table keeps it linear.
+/// The table serves both callers: a compiled `define_subrs!` batch (the
+/// evaluator's is the largest, around 860 declarations) and the full-source
+/// inventory scanner, which validates every parsed record across the
+/// workspace in one call (around 2100 today). The quarter-load capacity
+/// check therefore admits up to 4096 entries; the scanner's growth is the
+/// size that will reach it first.
+const DUPLICATE_SCAN_SLOTS: usize = 16384;
+
+/// The marker for an unoccupied scan slot. Every other slot holds an entry
+/// index, which the capacity check keeps far below `usize::MAX`.
+const EMPTY_DUPLICATE_SLOT: usize = usize::MAX;
+
+/// The kind tag folded into each scan hash, so one name serving two kinds --
+/// a primitive and an opcode, say -- stays two legal declarations. The values
+/// are arbitrary distinct constants: a hit is only a candidate, and the exact
+/// `same_kind`/`same_name` comparison decides, so the tags steer hash spread,
+/// never correctness.
+const fn duplicate_scan_kind_tag(kind: CatalogKind) -> u64 {
+    match kind {
+        CatalogKind::Primitive => 0x9d,
+        CatalogKind::Opcode => 0x5b,
+        CatalogKind::Leaf => 0x27,
+        CatalogKind::Alias => 0x71,
+    }
+}
+
+/// FNV-1a over `name`, seeded with the kind tag.
+const fn duplicate_scan_hash(kind: CatalogKind, name: &str) -> u64 {
+    let bytes = name.as_bytes();
+    let mut hash = 14695981039346656037 ^ duplicate_scan_kind_tag(kind);
+    let mut index = 0;
+    while index < bytes.len() {
+        hash ^= bytes[index] as u64;
+        hash = hash.wrapping_mul(1099511628211);
+        index += 1;
+    }
+    hash
+}
+
 /// A declaration is classified exactly once within its registry namespace.
+///
+/// Duplicates are found through the scan table above: probe from the hashed
+/// slot, compare an occupied slot's entry exactly, take the first empty slot.
+/// Holding batches under a quarter of the table keeps that a handful of steps
+/// per entry, so validation stays linear in the number of entries. The
+/// entrywise order is kept -- an entry is classified before it is compared
+/// with earlier ones -- so which error a malformed batch reports does not
+/// depend on the scan.
 pub const fn validate(entries: &[SchemaEntry<'_>]) -> Result<(), SchemaError> {
+    if entries.len() > DUPLICATE_SCAN_SLOTS / 4 {
+        panic!("primitive inventory: duplicate scan capacity exceeded");
+    }
+    let mut slots = [EMPTY_DUPLICATE_SLOT; DUPLICATE_SCAN_SLOTS];
     let mut current = 0;
     while current < entries.len() {
         match entries[current].classification {
@@ -101,14 +158,21 @@ pub const fn validate(entries: &[SchemaEntry<'_>]) -> Result<(), SchemaError> {
                 Authority::Scalar | Authority::Sealed | Authority::World,
             ) => {}
         }
-        let mut earlier = 0;
-        while earlier < current {
-            if same_kind(entries[current].kind, entries[earlier].kind)
-                && same_name(entries[current].name, entries[earlier].name)
+        let entry = entries[current];
+        let mut slot = (duplicate_scan_hash(entry.kind, entry.name)
+            & (DUPLICATE_SCAN_SLOTS as u64 - 1)) as usize;
+        loop {
+            let occupied = slots[slot];
+            if occupied == EMPTY_DUPLICATE_SLOT {
+                slots[slot] = current;
+                break;
+            }
+            if same_kind(entries[occupied].kind, entry.kind)
+                && same_name(entries[occupied].name, entry.name)
             {
                 return Err(SchemaError::DuplicateRegistration);
             }
-            earlier += 1;
+            slot = (slot + 1) & (DUPLICATE_SCAN_SLOTS - 1);
         }
         current += 1;
     }
@@ -142,7 +206,7 @@ pub const fn assert_valid(entries: &[SchemaEntry<'_>]) {
 /// typed so a Sealed entry states *which* authority E1 grants it; there is no
 /// boolean "is sealed" flag and no string-keyed authority vocabulary.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SealedAuthority {
+pub(crate) enum SealedAuthority {
     /// One field of one cons cell (read).
     ConsFieldRead,
     /// One field of one cons cell (write, with the generational barrier).
@@ -159,7 +223,7 @@ pub enum SealedAuthority {
 
 /// The two dispositions of the Return opcode (E4 peer required change 1).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ReturnDisposition {
+pub(crate) enum ReturnDisposition {
     OwnerLocal,
     #[allow(dead_code)]
     // E4's executor selects this arm at runtime; the cold catalog admits the split.
@@ -168,7 +232,7 @@ pub enum ReturnDisposition {
 
 /// The Plain variable opcode access admitted through an `EffectivePlainKey`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PlainVarAccess {
+pub(crate) enum PlainVarAccess {
     Ref,
     Set,
     Bind,
@@ -177,7 +241,7 @@ pub enum PlainVarAccess {
 
 /// The operand split of the R6 numeric arithmetic set.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ArithOperands {
+pub(crate) enum ArithOperands {
     Numeric,
     #[allow(dead_code)] // R6: a marker operand escapes; the executor selects this arm at runtime.
     MarkerInvolved,
@@ -186,7 +250,7 @@ pub enum ArithOperands {
 /// The P3 canonical parallel class of one E1 entry. World is the default for
 /// every registration that carries no explicit evidence-bearing declaration.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ParallelClass {
+pub(crate) enum ParallelClass {
     World,
     Sealed(SealedAuthority),
     Scalar,
@@ -195,7 +259,7 @@ pub enum ParallelClass {
 /// The typed per-entry variant refining a World-class P3 entry (E4 R1/R6).
 /// The canonical P3 verdict stays World; the variant names the executor split.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ParallelVariant {
+pub(crate) enum ParallelVariant {
     Return(ReturnDisposition),
     PlainVar(PlainVarAccess),
     Arith(ArithOperands),
@@ -205,7 +269,7 @@ pub enum ParallelVariant {
 /// `kind`/`name` must match a scanned registration. Aliases never appear here:
 /// they inherit their resolved target's class, exactly as in P3.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ParallelDeclaration {
+pub(crate) struct ParallelDeclaration {
     pub kind: CatalogKind,
     pub name: &'static str,
     pub class: ParallelClass,
@@ -214,7 +278,7 @@ pub struct ParallelDeclaration {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ParallelSchemaError {
+pub(crate) enum ParallelSchemaError {
     /// Every claim carries a source-review evidence note.
     MissingEvidence,
     /// A World-class declaration must carry a typed variant; otherwise it
@@ -232,7 +296,7 @@ pub enum ParallelSchemaError {
 /// (names exist, designations, exact counts) belong to the architecture gate,
 /// which has the scanned registrations; this const check is shared with the
 /// source scanner and needs no catalog context.
-pub const fn validate_parallel(
+pub(crate) const fn validate_parallel(
     declarations: &[ParallelDeclaration],
 ) -> Result<(), ParallelSchemaError> {
     let mut current = 0;
@@ -266,7 +330,7 @@ pub const fn validate_parallel(
 
 /// Const failure messages are also the parallel architecture-gate diagnostics.
 #[allow(dead_code)] // Runtime const catalogs/fixtures; the scanner calls validate_parallel.
-pub const fn assert_parallel_valid(declarations: &[ParallelDeclaration]) {
+pub(crate) const fn assert_parallel_valid(declarations: &[ParallelDeclaration]) {
     match validate_parallel(declarations) {
         Ok(()) => {}
         Err(ParallelSchemaError::MissingEvidence) => {
@@ -304,7 +368,7 @@ pub const fn assert_parallel_valid(declarations: &[ParallelDeclaration]) {
 /// fast-path re-entrancy: `mod` is `World` for admission and `CannotReenter`
 /// for the JIT's baked arithmetic intrinsic.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum FastPathReentry {
+pub(crate) enum FastPathReentry {
     /// Machine arithmetic over values already in registers: cannot call
     /// Lisp, grow eval depth, allocate or serve attention at the site.
     /// Signaling (`arith-error`) exits compiled code through the slow path.
@@ -320,7 +384,7 @@ pub enum FastPathReentry {
 /// lowering asks the generated table, and the pin test compares the JIT's
 /// own inlining set against it. Ascending name order; the generated lookup
 /// binary-searches its sorted projection.
-pub const INLINED_NATIVE_OPS: [&str; 5] = ["logand", "logior", "lognot", "logxor", "mod"];
+pub(crate) const INLINED_NATIVE_OPS: [&str; 5] = ["logand", "logior", "lognot", "logxor", "mod"];
 
 /// The executor arm of one admitted entry (E4-DESIGN §2/§3.1).
 ///
@@ -328,7 +392,7 @@ pub const INLINED_NATIVE_OPS: [&str; 5] = ["logand", "logior", "lognot", "logxor
 /// names the typed R1/R6 refinement whose runtime guard may still select the
 /// World escape. A table miss is therefore exactly `World(WorldSplit::Escape)`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ParallelArm {
+pub(crate) enum ParallelArm {
     /// Runs inline in the executor: no authority, no heap payload access.
     Scalar,
     /// Runs through the typed single-object sealed authority.
@@ -340,7 +404,7 @@ pub enum ParallelArm {
 
 /// The typed disposition of a World-class entry.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum WorldSplit {
+pub(crate) enum WorldSplit {
     /// Always takes the serial escape (every unlisted registration).
     Escape,
     /// `Op::Return`: owner-local unwind, or serial cleanup when the frame
@@ -355,7 +419,7 @@ pub enum WorldSplit {
 
 /// One generated dispatch row: the arm and the folded re-entry axis.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DispatchSlot {
+pub(crate) struct DispatchSlot {
     pub arm: ParallelArm,
     pub reentry: FastPathReentry,
 }
@@ -364,7 +428,7 @@ pub struct DispatchSlot {
 /// canonical World entry only (the same rule `validate_parallel` enforces on
 /// declarations; the gate applies it to resolved rows too).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum DispatchShapeError {
+pub(crate) enum DispatchShapeError {
     VariantOnNonWorldClass,
 }
 
@@ -372,7 +436,7 @@ pub enum DispatchShapeError {
 /// arm. The generated table, the closed-world gate and the E4 accessors share
 /// this function; an impossible combination is a typed error, never a
 /// silently chosen arm.
-pub const fn dispatch_arm(
+pub(crate) const fn dispatch_arm(
     class: ParallelClass,
     variant: Option<ParallelVariant>,
 ) -> Result<ParallelArm, DispatchShapeError> {
@@ -392,5 +456,109 @@ pub const fn dispatch_arm(
         (ParallelClass::Sealed(_) | ParallelClass::Scalar, Some(_)) => {
             Err(DispatchShapeError::VariantOnNonWorldClass)
         }
+    }
+}
+
+#[cfg(test)]
+mod validate_tests {
+    use super::*;
+
+    fn world(name: &str) -> SchemaEntry<'_> {
+        SchemaEntry::classified(CatalogKind::Primitive, name, Authority::World)
+    }
+
+    #[test]
+    fn distinct_names_pass_and_a_duplicate_is_rejected() {
+        assert_eq!(validate(&[]), Ok(()));
+        assert_eq!(validate(&[world("test-alpha"), world("test-beta")]), Ok(()));
+        assert_eq!(
+            validate(&[world("test-alpha"), world("test-alpha")]),
+            Err(SchemaError::DuplicateRegistration)
+        );
+        // A duplicate stays a duplicate when the two registrations request
+        // different authorities; the compile fixtures prove the same rule for
+        // the panic path.
+        assert_eq!(
+            validate(&[
+                SchemaEntry::classified(CatalogKind::Primitive, "test-alpha", Authority::World),
+                SchemaEntry::classified(CatalogKind::Primitive, "test-alpha", Authority::Sealed),
+            ]),
+            Err(SchemaError::DuplicateRegistration)
+        );
+    }
+
+    #[test]
+    fn one_name_may_serve_several_kinds() {
+        assert_eq!(
+            validate(&[
+                SchemaEntry::classified(CatalogKind::Primitive, "test-alpha", Authority::World),
+                SchemaEntry::classified(CatalogKind::Opcode, "test-alpha", Authority::World),
+                SchemaEntry::classified(CatalogKind::Leaf, "test-alpha", Authority::World),
+                SchemaEntry::classified(CatalogKind::Alias, "test-alpha", Authority::World),
+            ]),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn classification_is_decided_before_a_later_entrys_duplicate() {
+        // The entrywise order -- classify an entry, then compare it with
+        // earlier ones -- must survive the table scan.
+        assert_eq!(
+            validate(&[
+                world("test-alpha"),
+                world("test-alpha"),
+                SchemaEntry::primitive("test-alpha", Classification::Unclassified),
+            ]),
+            Err(SchemaError::DuplicateRegistration)
+        );
+        assert_eq!(
+            validate(&[
+                world("test-alpha"),
+                SchemaEntry::primitive("test-alpha", Classification::Unclassified),
+            ]),
+            Err(SchemaError::UnclassifiedPrimitive)
+        );
+    }
+
+    #[test]
+    fn a_hash_collision_probes_past_the_occupied_slot() {
+        // Two distinct same-kind names hashing to one slot: the probe must
+        // move on and both must register, and a real duplicate behind the
+        // colliding occupant must still be reported.
+        let kept = "test-kept";
+        let kept_slot =
+            duplicate_scan_hash(CatalogKind::Primitive, kept) & (DUPLICATE_SCAN_SLOTS as u64 - 1);
+        let mut probe = 0u64;
+        let colliding = loop {
+            let name = format!("test-c{probe}");
+            probe += 1;
+            assert!(probe < 1 << 24, "no colliding probe name found");
+            if duplicate_scan_hash(CatalogKind::Primitive, &name)
+                & (DUPLICATE_SCAN_SLOTS as u64 - 1)
+                == kept_slot
+            {
+                break name;
+            }
+        };
+        let entries = vec![
+            SchemaEntry::classified(CatalogKind::Primitive, kept, Authority::World),
+            SchemaEntry::classified(CatalogKind::Primitive, &colliding, Authority::World),
+        ];
+        assert_eq!(validate(&entries), Ok(()));
+        let mut entries = entries;
+        entries.push(SchemaEntry::classified(
+            CatalogKind::Primitive,
+            kept,
+            Authority::World,
+        ));
+        assert_eq!(validate(&entries), Err(SchemaError::DuplicateRegistration));
+    }
+
+    #[test]
+    #[should_panic(expected = "duplicate scan capacity exceeded")]
+    fn an_oversized_batch_fails_loudly_instead_of_scanning_partially() {
+        let entries = vec![world("test-capacity"); DUPLICATE_SCAN_SLOTS / 4 + 1];
+        let _ = validate(&entries);
     }
 }

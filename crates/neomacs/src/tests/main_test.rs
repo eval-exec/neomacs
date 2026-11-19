@@ -4,7 +4,8 @@ use super::super::frame_layout::{
 use super::super::image_catalog::{AsyncImageCatalog, wait_for_image_metadata};
 use super::super::tty_frontend::{TtyPopupDisplayHost, TtyTerminalHost};
 use super::super::tty_init::{
-    default_controlling_tty_name, detect_tty_background_mode, should_enable_live_tty_io,
+    default_controlling_tty_name, detect_tty_background_mode, initial_tty_fatal_checks_apply,
+    should_enable_live_tty_io,
 };
 use super::super::{
     BOOTSTRAP_CORE_FEATURES, BootstrapDisplayConfig, DumpImageKind, EarlyCliAction, FontSizing,
@@ -52,7 +53,7 @@ use neovm_core::emacs_core::display_host::{
 };
 use neovm_core::emacs_core::error::EvalError;
 use neovm_core::emacs_core::eval::{
-    PopupMenuEntry, PopupMenuRequest, ShaderSurfaceLanguage, ShaderSurfaceUniformInit,
+    DisplayHost, PopupMenuEntry, PopupMenuRequest, ShaderSurfaceLanguage, ShaderSurfaceUniformInit,
     VideoResolveRequest, VideoResolveSource, WebKitResolveRequest, WebKitResolveSource,
 };
 use neovm_core::emacs_core::image_catalog::{AxisSize, ImageRotation, ImageSizeSpec};
@@ -93,6 +94,19 @@ mod platform_fonts;
 #[path = "frame_snapshot_policy_test.rs"]
 mod frame_snapshot_policy;
 
+/// The synthetic display every GUI startup fixture bootstraps.
+///
+/// A fixture models a session that started on this display, so the frame's
+/// `display` parameter, the Lisp `DISPLAY` environment and the native host's
+/// connection identity must all agree with it.
+fn gui_display_identity() -> neomacs_display_protocol::GraphicalDisplayIdentity {
+    neomacs_display_protocol::GraphicalDisplayIdentity::named(
+        neomacs_display_protocol::GraphicalBackend::X11,
+        ":42",
+    )
+    .expect("constant synthetic display name")
+}
+
 fn gui_display() -> BootstrapDisplayConfig {
     let observation = neomacs_display_protocol::DisplayObservation::X11(
         neomacs_display_protocol::X11DisplayObservation::new(
@@ -104,11 +118,7 @@ fn gui_display() -> BootstrapDisplayConfig {
     bootstrap_gui_display_config(
         Interactivity::Interactive,
         gui_frame_font_scale_from_observation(observation),
-        neomacs_display_protocol::GraphicalDisplayIdentity::named(
-            neomacs_display_protocol::GraphicalBackend::X11,
-            ":42",
-        )
-        .unwrap(),
+        gui_display_identity(),
     )
 }
 
@@ -2391,7 +2401,75 @@ fn raw_dump_loadup_invocation_owns_mode_and_build_argv() {
     );
 }
 
+/// Stand-in native connection for the GUI startup fixtures.
+///
+/// Production's `PrimaryWindowDisplayHost` owns the display connection the
+/// process really opened; a test evaluator has none. GNU's
+/// `window-system-initialization` still calls `x-open-connection` for the
+/// display the session started on, and since the admission rule in
+/// `builtin_x_open_connection` requires the host to own that connection, the
+/// fixture must supply it or startup aborts before the behaviours under test
+/// run.
+struct StartupGuiDisplayHost {
+    identity: neomacs_display_protocol::GraphicalDisplayIdentity,
+}
+
+impl DisplayHost for StartupGuiDisplayHost {
+    fn graphical_connection_identity(
+        &self,
+        display: Option<&str>,
+    ) -> Result<Option<neomacs_display_protocol::GraphicalDisplayIdentity>, String> {
+        match display {
+            // pgtk's nil display opens the owned default (src/pgtkfns.c:2140).
+            None | Some("") => Ok(Some(self.identity.clone())),
+            Some(name) if name == self.identity.terminal_name() => Ok(Some(self.identity.clone())),
+            Some(name) => Err(format!(
+                "synthetic startup display {} refused foreign display {name}",
+                self.identity.terminal_name()
+            )),
+        }
+    }
+
+    fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn resize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+/// Give a GUI startup fixture the display connection its bootstrap declares.
+fn install_synthetic_startup_display(eval: &mut Context) {
+    let identity = gui_display_identity();
+    // GNU resolves DISPLAY from `process-environment` first
+    // (src/callproc.c:1716-1746), so the ambient value would otherwise win
+    // over the frame's synthetic display and x-open-connection would ask for
+    // a foreign name, which the host correctly refuses.
+    eval.eval_str(&format!(
+        r#"(setenv "DISPLAY" "{}")"#,
+        identity.terminal_name()
+    ))
+    .expect("pin the fixture's synthetic display in process-environment");
+    eval.set_variable("x-display-name", Value::string(identity.terminal_name()));
+    eval.set_display_host(Box::new(StartupGuiDisplayHost { identity }));
+}
+
+/// A real frame for the configure_gnu_startup_state tests. A frame object
+/// exists only for a created frame (make_frame refuses an id the registry
+/// never minted), so these tests cannot pass a made-up FrameId.
+fn startup_state_test_frame(eval: &mut Context) -> FrameId {
+    let buffer = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    eval.frame_manager_mut()
+        .create_frame("startup-state", 800, 600, buffer)
+}
+
 fn bootstrap_runtime_gui_frame(eval: &mut Context) -> FrameId {
+    install_synthetic_startup_display(eval);
     load_neomacs_gui_term_layer(eval);
     let _bootstrap = bootstrap_buffers(eval, 960, 640, gui_display());
     eval.frame_manager()
@@ -2828,8 +2906,6 @@ fn primary_image_catalog_lookup_returns_pending_without_waiting_for_render_threa
     let ImageLookup::Pending(image) = lookup else {
         panic!("new image lookup should be pending");
     };
-    assert_eq!(image.placement().width(), 50);
-    assert_eq!(image.placement().height(), 50);
     match cmd_rx.try_recv().expect("queued image load") {
         RenderCommand::Asset(AssetCommand::ImageLoadFile { size, frame, .. }) => {
             assert_eq!(
@@ -2840,18 +2916,64 @@ fn primary_image_catalog_lookup_returns_pending_without_waiting_for_render_threa
         }
         other => panic!("expected ImageLoadFile, got {other:?}"),
     }
+    // The load token is the pending identity. The slot's layout is the header
+    // probe's separate subject -- it may settle between the two lookups -- so
+    // this assertion is on the token, not on the whole pending image.
+    let duplicate = unbounded_lookup(&host.image_catalog, request.clone());
+    let ImageLookup::Pending(duplicate) = duplicate else {
+        panic!("duplicate lookup should stay pending");
+    };
     assert_eq!(
-        unbounded_lookup(&host.image_catalog, request.clone()),
-        ImageLookup::Pending(image.clone()),
-        "duplicate lookup should reuse the same pending image"
+        duplicate.load(),
+        image.load(),
+        "duplicate lookup should reuse the same pending load token"
     );
     assert!(
         cmd_rx.try_recv().is_err(),
         "duplicate lookup must not enqueue a second decode"
     );
+}
+
+/// The pending slot's layout is the header's subject, not the token's: a live
+/// header probe may settle it at any point during another lookup. Assert the
+/// layout update deterministically instead: a source with no readable header
+/// keeps the placeholder, and this test publishes the decode-completion
+/// terminal itself (the render thread would in a live session), so neither
+/// side races the assertion.
+#[test]
+fn primary_image_catalog_pending_layout_updates_when_the_decode_completes() {
+    let (cmd_tx, _cmd_rx) = neomacs_display_runtime::thread_comm::RenderCommandSender::unbounded();
+    let image_metadata = Arc::new(ImageRenderState::default());
+    let catalog = test_image_catalog(&cmd_tx, Arc::clone(&image_metadata));
+    let request = ImageResolveRequest {
+        spec: test_image_spec_identity("pending-layout"),
+        source: ImageResolveSource::Data(ImageDataSource::Isolated(EncodedBytes::new(
+            b"not an image".to_vec(),
+        ))),
+        identity: test_file_image_identity("pending-layout"),
+        size: ImageSizeSpec::new(AxisSize::AtMost(50), AxisSize::AtMost(50)),
+        rotation: ImageRotation::None,
+        colors: ImageColorContext::default(),
+        mask: Default::default(),
+        frame: ImageFrameIndex::new(3),
+        animation: ImageAnimationPolicy::disabled(),
+        realization: Default::default(),
+    };
+
+    let lookup = unbounded_lookup(&catalog, request.clone());
+    let ImageLookup::Pending(pending) = lookup else {
+        panic!("headerless source lookup should be pending");
+    };
+    assert_eq!(pending.placement().width(), 50);
+    assert_eq!(pending.placement().height(), 50);
+    assert_eq!(
+        unbounded_lookup(&catalog, request.clone()),
+        ImageLookup::Pending(pending.clone()),
+        "a headerless pending lookup keeps the placeholder and its token"
+    );
 
     image_metadata.publish_terminal(
-        image.load(),
+        pending.load(),
         ImageDecodeTerminal::Ready(ResolvedImageMetadata::layout_is_image_pixels(
             25,
             50,
@@ -2861,7 +2983,7 @@ fn primary_image_catalog_lookup_returns_pending_without_waiting_for_render_threa
         )),
     );
 
-    let ImageLookup::Ready(image) = unbounded_lookup(&host.image_catalog, request) else {
+    let ImageLookup::Ready(image) = unbounded_lookup(&catalog, request) else {
         panic!("decoded image lookup should be ready");
     };
     assert_eq!(image.metadata.layout.dimensions(), (25, 50));
@@ -4727,6 +4849,7 @@ fn cl_generic_context_dispatch_uses_neo_window_system_method() {
 fn pdump_preserves_neo_term_generic_methods() {
     let mut eval = create_bootstrap_evaluator_cached_with_features(&["neomacs"])
         .expect("cached bootstrap evaluator");
+    install_synthetic_startup_display(&mut eval);
     load_neomacs_gui_term_layer(&mut eval);
 
     let pre = eval
@@ -4816,6 +4939,7 @@ fn neo_win_registers_neo_display_format() {
 fn neo_window_system_initialization_preserves_gnu_clipboard_policy_and_user_customization() {
     let mut eval = create_bootstrap_evaluator_cached_with_features(&["neomacs"])
         .expect("cached bootstrap evaluator");
+    install_synthetic_startup_display(&mut eval);
 
     let rendered = eval
         .eval_str(
@@ -5158,7 +5282,8 @@ fn configure_gnu_startup_state_marks_batch_mode_noninteractive() {
         no_build_details: false,
         rows_query_admission: neomacs_layout_engine::RowsQueryAdmission::Off,
     };
-    configure_gnu_startup_state(&mut eval, FrameId(9), &startup);
+    let frame = startup_state_test_frame(&mut eval);
+    configure_gnu_startup_state(&mut eval, frame, &startup);
 
     assert_eq!(
         eval.default_value_only_by_name("noninteractive"),
@@ -5190,7 +5315,8 @@ fn configure_gnu_startup_state_marks_batch_mode_noninteractive() {
 fn configure_gnu_startup_state_seeds_command_line_args_left_for_gnu_startup() {
     let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let startup = gui_startup_with_args(&["-Q", "-l", "/tmp/demo.el"]);
-    configure_gnu_startup_state(&mut eval, FrameId(42), &startup);
+    let frame = startup_state_test_frame(&mut eval);
+    configure_gnu_startup_state(&mut eval, frame, &startup);
 
     assert_eq!(
         eval.default_value_only_by_name("command-line-args-left"),
@@ -5234,7 +5360,7 @@ fn bootstrap_buffers_seed_frame_with_renderer_metrics() {
 #[test]
 fn startup_dimensions_gui_matches_gnu_default_text_grid() {
     let metrics = bootstrap_frame_metrics();
-    let (width, height) = startup_dimensions(FrontendKind::Gui, metrics, false);
+    let (width, height) = startup_dimensions(FrontendKind::Gui, metrics, false, false);
     // GNU's default GUI frame is 80 text columns wide and 35 counted text rows
     // tall (its frame-height is deterministically one less than the nominal 36-row
     // geometry). The requested window reserves the scroll bar + both 8px fringes on
@@ -5259,7 +5385,19 @@ fn startup_dimensions_gui_matches_gnu_default_text_grid() {
 fn startup_dimensions_noninteractive_tty_matches_gnu_initial_frame() {
     let metrics = bootstrap_frame_metrics_for_frontend(FrontendKind::Tty);
     assert_eq!(
-        startup_dimensions(FrontendKind::Tty, metrics, true),
+        startup_dimensions(FrontendKind::Tty, metrics, true, false),
+        (80, 25)
+    );
+}
+
+#[test]
+fn startup_dimensions_daemon_skips_the_initial_tty_fatal_checks() {
+    let metrics = bootstrap_frame_metrics_for_frontend(FrontendKind::Tty);
+    assert!(!initial_tty_fatal_checks_apply(false, true));
+    assert!(!initial_tty_fatal_checks_apply(true, false));
+    assert!(initial_tty_fatal_checks_apply(false, false));
+    assert_eq!(
+        startup_dimensions(FrontendKind::Tty, metrics, false, true),
         (80, 25)
     );
 }
@@ -7627,7 +7765,8 @@ fn configure_gnu_startup_state_applies_explicit_no_build_details() {
     let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let mut startup = gui_startup();
     startup.no_build_details = true;
-    configure_gnu_startup_state(&mut eval, FrameId(42), &startup);
+    let frame = startup_state_test_frame(&mut eval);
+    configure_gnu_startup_state(&mut eval, frame, &startup);
     assert_eq!(
         eval.default_value_only_by_name("build-details"),
         Some(Value::NIL)

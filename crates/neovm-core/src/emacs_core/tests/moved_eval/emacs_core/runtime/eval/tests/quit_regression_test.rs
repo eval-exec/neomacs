@@ -663,7 +663,10 @@ fn excursion_scope_panic_recovery_does_not_seed_standard_case_table() {
                     .context()
                     .obarray_view_mut()
                     .set_symbol_value_id(symbol, value),
-                None => scope.context().obarray_view_mut().makunbound_id(symbol),
+                None => scope
+                    .context()
+                    .obarray_view_mut()
+                    .makunbound_canonical(neovm_value::symbol::CanonicalAccess::TEST, symbol),
             }
             // Capture after the scope's point marker and normal buffer switch
             // have allocated. Only fallback work is measured below.
@@ -714,7 +717,10 @@ fn excursion_scope_normal_finish_retains_standard_case_table_seeding() {
         .context()
         .set_current_buffer_unrecorded(other)
         .unwrap();
-    scope.context().obarray_view_mut().makunbound_id(symbol);
+    scope
+        .context()
+        .obarray_view_mut()
+        .makunbound_canonical(neovm_value::symbol::CanonicalAccess::TEST, symbol);
     assert!(scope.finish(Ok(Value::NIL)).is_ok());
     assert_eq!(ctx.edit.buffers.current_buffer_id(), Some(original));
     assert!(ctx.obarray().symbol_value_id_copied(symbol).is_some());

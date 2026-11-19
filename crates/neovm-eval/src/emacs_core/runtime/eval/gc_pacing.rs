@@ -535,6 +535,10 @@ impl Context {
             self.rectangle.trace_roots_with(visit);
             group("command_loop");
             neovm_value::gc_trace::GcTrace::trace_roots_with(&*self.command_loop, visit);
+            group("retained_frame_pins");
+            for value in &self.retained_frame_pins {
+                visit(*value);
+            }
             group("modes");
             self.modes.trace_roots_with(visit);
             group("frames");
@@ -613,7 +617,7 @@ impl Context {
     ///
     /// # Errors
     /// A missing installed heap or an installed heap from another evaluator.
-    pub unsafe fn share_values_array<const N: usize>(
+    pub(crate) unsafe fn share_values_array<const N: usize>(
         &self,
         values: [Value; N],
     ) -> Result<
@@ -837,7 +841,8 @@ impl Context {
     }
 
     /// Set the maximum eval recursion depth.
-    pub fn set_max_depth(&mut self, depth: usize) {
+    #[cfg(test)]
+    pub(crate) fn set_max_depth(&mut self, depth: usize) {
         self.max_depth = depth;
     }
 

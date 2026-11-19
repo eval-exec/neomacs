@@ -1,0 +1,24 @@
+[package]
+name = "pentry-keeper-loom"
+version = "0.0.0"
+edition = "2024"
+publish = false
+license = "GPL-3.0-or-later"
+autotests = false
+
+# Protocol models and compile fixtures only; no production workspace dependency.
+[workspace]
+
+[dev-dependencies]
+loom = "=0.7.2"
+static_assertions = "=1.1.0"
+trybuild = "=1.0.121"
+tempfile = "=3.27.0"
+
+[[test]]
+name = "keeper"
+path = "tests/keeper.rs"
+
+[[test]]
+name = "lifetime_contracts"
+path = "tests/lifetime_contracts.rs"

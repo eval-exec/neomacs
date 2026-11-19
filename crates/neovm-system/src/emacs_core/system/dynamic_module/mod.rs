@@ -32,7 +32,7 @@ use neovm_value::value::Value;
 // C-compatible types matching GNU emacs-module.h
 // ============================================================================
 
-pub type emacs_function = unsafe extern "C" fn(
+pub(crate) type emacs_function = unsafe extern "C" fn(
     env: *mut emacs_env,
     nargs: isize,
     args: *mut emacs_value,
@@ -41,7 +41,8 @@ pub type emacs_function = unsafe extern "C" fn(
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum emacs_funcall_exit {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) enum emacs_funcall_exit {
     Return = 0,
     Signal = 1,
     Throw = 2,
@@ -49,22 +50,22 @@ pub enum emacs_funcall_exit {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum emacs_process_input_result {
+pub(crate) enum emacs_process_input_result {
     Continue = 0,
     Quit = 1,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-pub struct emacs_time {
+pub(crate) struct emacs_time {
     pub tv_sec: libc::time_t,
     pub tv_nsec: libc::c_long,
 }
 
-pub type emacs_limb_t = u64;
+pub(crate) type emacs_limb_t = u64;
 
 #[allow(non_upper_case_globals)]
-pub const emacs_variadic_function: isize = -2;
+pub(crate) const emacs_variadic_function: isize = -2;
 
 // ============================================================================
 // emacs_env — the vtable struct
@@ -73,32 +74,32 @@ pub const emacs_variadic_function: isize = -2;
 #[repr(C)]
 pub struct emacs_env {
     pub size: isize,
-    pub private_members: *mut emacs_env_private,
+    pub(crate) private_members: *mut emacs_env_private,
 
     // Memory management
-    pub make_global_ref:
+    pub(crate) make_global_ref:
         Option<unsafe extern "C" fn(env: *mut emacs_env, value: emacs_value) -> emacs_value>,
-    pub free_global_ref:
+    pub(crate) free_global_ref:
         Option<unsafe extern "C" fn(env: *mut emacs_env, global_value: emacs_value)>,
 
     // Non-local exits
-    pub non_local_exit_check:
+    pub(crate) non_local_exit_check:
         Option<unsafe extern "C" fn(env: *mut emacs_env) -> emacs_funcall_exit>,
-    pub non_local_exit_clear: Option<unsafe extern "C" fn(env: *mut emacs_env)>,
-    pub non_local_exit_get: Option<
+    pub(crate) non_local_exit_clear: Option<unsafe extern "C" fn(env: *mut emacs_env)>,
+    pub(crate) non_local_exit_get: Option<
         unsafe extern "C" fn(
             env: *mut emacs_env,
             symbol: *mut emacs_value,
             data: *mut emacs_value,
         ) -> emacs_funcall_exit,
     >,
-    pub non_local_exit_signal:
+    pub(crate) non_local_exit_signal:
         Option<unsafe extern "C" fn(env: *mut emacs_env, symbol: emacs_value, data: emacs_value)>,
-    pub non_local_exit_throw:
+    pub(crate) non_local_exit_throw:
         Option<unsafe extern "C" fn(env: *mut emacs_env, tag: emacs_value, value: emacs_value)>,
 
     // Function registration
-    pub make_function: Option<
+    pub(crate) make_function: Option<
         unsafe extern "C" fn(
             env: *mut emacs_env,
             min_arity: isize,
@@ -122,16 +123,18 @@ pub struct emacs_env {
 
     // Type conversion
     pub type_of: Option<unsafe extern "C" fn(env: *mut emacs_env, arg: emacs_value) -> emacs_value>,
-    pub is_not_nil: Option<unsafe extern "C" fn(env: *mut emacs_env, arg: emacs_value) -> bool>,
+    pub(crate) is_not_nil:
+        Option<unsafe extern "C" fn(env: *mut emacs_env, arg: emacs_value) -> bool>,
     pub eq:
         Option<unsafe extern "C" fn(env: *mut emacs_env, a: emacs_value, b: emacs_value) -> bool>,
-    pub extract_integer: Option<unsafe extern "C" fn(env: *mut emacs_env, arg: emacs_value) -> i64>,
+    pub(crate) extract_integer:
+        Option<unsafe extern "C" fn(env: *mut emacs_env, arg: emacs_value) -> i64>,
     pub make_integer: Option<unsafe extern "C" fn(env: *mut emacs_env, n: i64) -> emacs_value>,
     pub extract_float: Option<unsafe extern "C" fn(env: *mut emacs_env, arg: emacs_value) -> f64>,
     pub make_float: Option<unsafe extern "C" fn(env: *mut emacs_env, d: f64) -> emacs_value>,
 
     // Strings
-    pub copy_string_contents: Option<
+    pub(crate) copy_string_contents: Option<
         unsafe extern "C" fn(
             env: *mut emacs_env,
             value: emacs_value,
@@ -147,24 +150,24 @@ pub struct emacs_env {
         ) -> emacs_value,
     >,
     // User pointer
-    pub make_user_ptr: Option<
+    pub(crate) make_user_ptr: Option<
         unsafe extern "C" fn(
             env: *mut emacs_env,
             fin: Option<unsafe extern "C" fn(*mut c_void)>,
             ptr: *mut c_void,
         ) -> emacs_value,
     >,
-    pub get_user_ptr:
+    pub(crate) get_user_ptr:
         Option<unsafe extern "C" fn(env: *mut emacs_env, arg: emacs_value) -> *mut c_void>,
-    pub set_user_ptr:
+    pub(crate) set_user_ptr:
         Option<unsafe extern "C" fn(env: *mut emacs_env, arg: emacs_value, ptr: *mut c_void)>,
-    pub get_user_finalizer: Option<
+    pub(crate) get_user_finalizer: Option<
         unsafe extern "C" fn(
             env: *mut emacs_env,
             uptr: emacs_value,
         ) -> Option<unsafe extern "C" fn(*mut c_void)>,
     >,
-    pub set_user_finalizer: Option<
+    pub(crate) set_user_finalizer: Option<
         unsafe extern "C" fn(
             env: *mut emacs_env,
             arg: emacs_value,
@@ -173,10 +176,10 @@ pub struct emacs_env {
     >,
 
     // Vectors
-    pub vec_get: Option<
+    pub(crate) vec_get: Option<
         unsafe extern "C" fn(env: *mut emacs_env, vector: emacs_value, index: isize) -> emacs_value,
     >,
-    pub vec_set: Option<
+    pub(crate) vec_set: Option<
         unsafe extern "C" fn(
             env: *mut emacs_env,
             vector: emacs_value,
@@ -184,21 +187,22 @@ pub struct emacs_env {
             value: emacs_value,
         ),
     >,
-    pub vec_size: Option<unsafe extern "C" fn(env: *mut emacs_env, vector: emacs_value) -> isize>,
+    pub(crate) vec_size:
+        Option<unsafe extern "C" fn(env: *mut emacs_env, vector: emacs_value) -> isize>,
 
     // Quit/input
-    pub should_quit: Option<unsafe extern "C" fn(env: *mut emacs_env) -> bool>,
-    pub process_input:
+    pub(crate) should_quit: Option<unsafe extern "C" fn(env: *mut emacs_env) -> bool>,
+    pub(crate) process_input:
         Option<unsafe extern "C" fn(env: *mut emacs_env) -> emacs_process_input_result>,
 
     // Time
-    pub extract_time:
+    pub(crate) extract_time:
         Option<unsafe extern "C" fn(env: *mut emacs_env, arg: emacs_value) -> emacs_time>,
-    pub make_time:
+    pub(crate) make_time:
         Option<unsafe extern "C" fn(env: *mut emacs_env, time: emacs_time) -> emacs_value>,
 
     // Big integer
-    pub extract_big_integer: Option<
+    pub(crate) extract_big_integer: Option<
         unsafe extern "C" fn(
             env: *mut emacs_env,
             arg: emacs_value,
@@ -207,7 +211,7 @@ pub struct emacs_env {
             magnitude: *mut emacs_limb_t,
         ) -> bool,
     >,
-    pub make_big_integer: Option<
+    pub(crate) make_big_integer: Option<
         unsafe extern "C" fn(
             env: *mut emacs_env,
             sign: std::ffi::c_int,
@@ -217,13 +221,13 @@ pub struct emacs_env {
     >,
 
     // Function finalizer
-    pub get_function_finalizer: Option<
+    pub(crate) get_function_finalizer: Option<
         unsafe extern "C" fn(
             env: *mut emacs_env,
             arg: emacs_value,
         ) -> Option<unsafe extern "C" fn(*mut c_void)>,
     >,
-    pub set_function_finalizer: Option<
+    pub(crate) set_function_finalizer: Option<
         unsafe extern "C" fn(
             env: *mut emacs_env,
             arg: emacs_value,
@@ -237,11 +241,11 @@ pub struct emacs_env {
     >,
 
     // Interactive
-    pub make_interactive:
+    pub(crate) make_interactive:
         Option<unsafe extern "C" fn(env: *mut emacs_env, function: emacs_value, spec: emacs_value)>,
 
     // Unibyte string, added at the end of GNU emacs_env_31.
-    pub make_unibyte_string: Option<
+    pub(crate) make_unibyte_string: Option<
         unsafe extern "C" fn(
             env: *mut emacs_env,
             str: *const std::ffi::c_char,
@@ -254,15 +258,15 @@ pub struct emacs_env {
 // Runtime structs
 // ============================================================================
 
-pub struct emacs_runtime_private {
+pub(crate) struct emacs_runtime_private {
     pub env: *mut emacs_env,
 }
 
 #[repr(C)]
-pub struct emacs_runtime {
+pub(crate) struct emacs_runtime {
     pub size: isize,
-    pub private_members: *mut emacs_runtime_private,
-    pub get_environment:
+    pub(crate) private_members: *mut emacs_runtime_private,
+    pub(crate) get_environment:
         Option<unsafe extern "C" fn(runtime: *mut emacs_runtime) -> *mut emacs_env>,
 }
 
@@ -274,22 +278,24 @@ pub struct emacs_runtime {
 const VALUE_FRAME_SIZE: usize = 512;
 
 #[repr(C)]
-pub struct emacs_value_frame {
+pub(crate) struct emacs_value_frame {
     pub objects: [emacs_value_tag; VALUE_FRAME_SIZE],
     pub offset: usize,
     pub next: *mut emacs_value_frame,
 }
 
-pub struct emacs_value_storage {
-    pub initial: emacs_value_frame,
-    pub current: *mut emacs_value_frame,
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) struct emacs_value_storage {
+    pub(crate) initial: emacs_value_frame,
+    pub(crate) current: *mut emacs_value_frame,
 }
 
 // ============================================================================
 // emacs_env_private
 // ============================================================================
 
-pub struct emacs_env_private {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) struct emacs_env_private {
     pub pending_non_local_exit: emacs_funcall_exit,
     pub non_local_exit_symbol: Value,
     pub non_local_exit_data: Value,
@@ -338,7 +344,7 @@ impl ModuleLibrary {
 /// the module's init function runs, so they are freed when loading returns,
 /// as on the failure paths. The environment holds evaluator-local values; it
 /// never belonged in this process-wide registry.
-pub struct LoadedModule {
+pub(crate) struct LoadedModule {
     #[allow(dead_code)]
     library: &'static ModuleLibrary,
 }
@@ -351,6 +357,11 @@ thread_local! {
     static ACTIVE_ENVS: std::cell::RefCell<Vec<ActiveModuleEnvEntry>> =
         const { std::cell::RefCell::new(Vec::new()) };
 }
+
+mod source_scope;
+
+#[doc(hidden)]
+pub use source_scope::register_source_module_scope_probe;
 
 #[derive(Clone, Copy)]
 struct ActiveModuleEnvEntry {

@@ -131,7 +131,7 @@ const XCSCOPE_TEST_PRELUDE: &str = r####"
 (defun xcscope-test-kill-project-buffers (project)
   (dolist (buffer (buffer-list))
     (let ((file (buffer-file-name buffer)))
-      (when (and file (file-in-directory-p file project))
+      (when (and file (neomacs-melpa-path-inside-p file project))
         (with-current-buffer buffer
           (set-buffer-modified-p nil))
         (kill-buffer buffer)))))

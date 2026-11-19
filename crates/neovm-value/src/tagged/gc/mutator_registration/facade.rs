@@ -4,9 +4,9 @@
 pub use super::symbol_authority::{PreparedHofBuiltin, PreparedUnaryFunction};
 #[doc(hidden)]
 pub use super::{
-    CellRead, CellReadError, EraAdmissionFailure, EraKeeper, ExecutionActivation,
+    CellRead, CellReadError, EraAdmissionFailure, EraKeeper, EraWorldLoan, ExecutionActivation,
     FrozenFunctionRoots, FrozenLegacyRoots, HofError, HofScratch, HofSingleton, ImmediateResult,
-    ImmediateResultError, SymbolWriteToken,
+    ImmediateResultError, SymbolRootDesignators, SymbolWriteToken, WorldIdentity, WorldLoan,
 };
 pub(crate) use super::{
     EraFinishFailure, OwnerRootAdmission, StoppedRootAdmission, SymbolReadToken,

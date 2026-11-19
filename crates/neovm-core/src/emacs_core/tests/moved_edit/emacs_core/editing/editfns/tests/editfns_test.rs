@@ -189,7 +189,7 @@ fn combine_after_change_special_case_uses_gnu_symbol_identity() {
         before_sym,
         Value::list(vec![
             Value::T,
-            Value::symbol(neovm_value::intern::intern_uninterned(
+            Value::symbol(neovm_value::intern::make_uninterned_symbol(
                 "syntax-ppss-flush-cache",
             )),
         ]),

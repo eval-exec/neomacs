@@ -81,12 +81,9 @@ impl<'era> Mutation<'era> {
     pub(super) fn seed(scenario: Scenario, role: Role, owner: &mut Mutator<'era>) -> Self {
         match Extension::for_worker(scenario, role) {
             Extension::MutableOwner => {
-                let home = contention::retry(
-                    Deadline::contention(),
-                    || owner.run_access()?.private_nil_root(),
-                    contention::registration,
-                )
-                .unwrap();
+                // Initial seeding precedes the controller's first request;
+                // this is only the owner's preallocated NIL root bank.
+                let home = owner.run_access().unwrap().private_nil_root().unwrap();
                 Self::Reserved(home)
             }
             Extension::None => Self::Disabled,
@@ -268,12 +265,7 @@ where
     K: crate::tagged::gc::mutator_registration::EraKeeper,
     W: WorldRoots<K>,
 {
-    let mut stopped = contention::retry(
-        Deadline::contention(),
-        || era.stop(),
-        contention::rendezvous,
-    )
-    .unwrap();
+    let mut stopped = era.stop().unwrap();
     let mut placement = placement.borrow_mut();
     placement.return_for_finish(era, &stopped);
     let regular = placement.cycle();

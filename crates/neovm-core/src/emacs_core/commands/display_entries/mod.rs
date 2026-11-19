@@ -4,6 +4,7 @@
 //! and the command loop's pointer snapshot.  Under R0 the bodies stay core-side;
 //! the window/frame records and the display engine remain core-owned and the
 //! evaluator context is reached through the core facade.
+use neovm_value::intern::intern;
 
 use crate::emacs_core::builtins::expect_string_lossy;
 use crate::emacs_core::builtins::strings::builtin_string_to_number;
@@ -154,9 +155,12 @@ fn current_mouse_position_value(
     let selected_frame = selected_frame_value(eval);
     let (frame_value, x, y) = match eval.command_loop().keyboard.mouse_pixel_position() {
         Some(state) => {
+            // The position stores a bare id. The keyboard pins that object
+            // for as long as the id is held, so a deleted frame still
+            // answers here. A reclaimed id does not call `make_frame`.
             let frame_value = state
                 .frame_id
-                .map(|frame_id| Value::make_frame(frame_id.0))
+                .and_then(|frame_id| Value::registered_frame(frame_id.0))
                 .unwrap_or(Value::NIL);
             let (x, y) = if pixel_units {
                 (Value::fixnum(state.x), Value::fixnum(state.y))
@@ -336,7 +340,7 @@ pub(crate) fn builtin_xw_display_color_p_ctx(
 
 fn tty_display_dimension(
     ctx: &mut crate::emacs_core::eval::Context,
-    name: &str,
+    name: &'static str,
     args: &[Value],
 ) -> Result<(i64, i64), Flow> {
     expect_args_range(name, args, 0, 1)?;
@@ -830,7 +834,9 @@ pub(crate) fn builtin_internal_set_lisp_face_attribute_from_resource(
             ":bold" | ":italic" => {
                 face_boolean_x_resource_value(&resource_value, true)?.expect("signal=true")
             }
-            ":weight" | ":slant" | ":width" => Value::symbol(&resource_value),
+            ":weight" | ":slant" | ":width" => {
+                Value::from_sym_id(intern((&resource_value).as_ref()))
+            }
             ":inverse-video" | ":extend" => {
                 face_boolean_x_resource_value(&resource_value, true)?.expect("signal=true")
             }

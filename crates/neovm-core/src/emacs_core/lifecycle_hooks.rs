@@ -75,20 +75,6 @@ fn register_platform_bootstrap_vars(obarray: &mut crate::emacs_core::symbol::Oba
 #[cfg(not(windows))]
 fn register_platform_bootstrap_vars(_obarray: &mut crate::emacs_core::symbol::Obarray) {}
 
-/// Core-side char-property window lookup (the lookup body itself lives with
-/// the window state in eval data; eval receives a plain fn pointer).
-fn char_property_window_lookup(
-    frames: Option<&crate::window::FrameManager>,
-    window: neovm_edit::emacs_core::display_metrics::WindowId,
-) -> crate::emacs_core::textprop::WindowBufferLookup {
-    match frames {
-        Some(frames) => {
-            crate::emacs_core::eval::data::window_state::char_property_window_buffer(frames, window)
-        }
-        None => crate::emacs_core::textprop::WindowBufferLookup::NotAvailable,
-    }
-}
-
 /// Configure the terminal runtime for a graphical display identity.
 fn configure_window_system_runtime(identity: neomacs_display_protocol::GraphicalDisplayIdentity) {
     use crate::emacs_core::terminal::pure::{TerminalRuntimeConfig, configure_terminal_runtime};
@@ -224,9 +210,7 @@ static CANONICAL_LIFECYCLE_HOOKS: LifecycleHooks = LifecycleHooks::new(
         crate::emacs_core::interactive::builtin_where_is_internal,
     ),
     WindowTreeHooks::new(
-        char_property_window_lookup,
         crate::window::window_resize_check,
-        crate::window::window_resize_apply,
         apply_mini_window_resize,
         crate::window::resize_pixelwise_with_buffer_constraints,
         frame_parameter_entry,

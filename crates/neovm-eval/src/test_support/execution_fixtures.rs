@@ -2,7 +2,7 @@
 //!
 //! The Context-free home adapter lives here, beside the era-building fixtures,
 //! and is built ONLY from value's published primitives: the existing
-//! `OwnerRootSlot::word_for_test` route (AUTHORITY-ITEMS row 27), the
+//! `OwnerRootSlot::word_for_test` fence route, the
 //! `read_cell_home` / `cell_home_is_cons` VIS primitives, and the
 //! `nil_root_for_test` fence. Every call site keeps its
 //! `ExecutionTestHomes::*` shape.

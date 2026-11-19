@@ -1533,7 +1533,8 @@ fn builtin_call_process_region_impl(
 }
 
 #[doc(hidden)]
-pub fn builtin_call_process(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn builtin_call_process(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -1698,7 +1699,8 @@ pub(crate) fn builtin_process_lines_handling_status(
 }
 
 #[doc(hidden)]
-pub fn builtin_call_process_region(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn builtin_call_process_region(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {

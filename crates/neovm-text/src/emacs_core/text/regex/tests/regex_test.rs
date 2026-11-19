@@ -1809,7 +1809,7 @@ fn literal_gap_test_buffer(text: &str) -> Buffer {
 
 /// Park the gap at byte POS the way an edit leaves it: insert a char there
 /// and delete it again.  Point is kept.
-fn park_gap_at(buf: &mut Buffer, pos: usize) {
+fn park_gap_at_keeping_point(buf: &mut Buffer, pos: usize) {
     use neovm_edit::buffer::EmacsBytePos;
     let point = buf.point_emacs_byte_pos();
     buf.goto_emacs_byte_pos(EmacsBytePos::new(pos));
@@ -1870,7 +1870,7 @@ fn literal_search_hits(
     let mut hits = Vec::new();
     loop {
         if let Some(gap) = gap {
-            park_gap_at(buf, gap);
+            park_gap_at_keeping_point(buf, gap);
         }
         let Some(hit) = literal_search_at(buf, direction, pattern, point, bound, case_fold) else {
             return hits;
@@ -1958,7 +1958,7 @@ fn literal_search_loop_with_gap_in_span_copies_nothing() {
         (LiteralDirection::Backward, 10),
     ] {
         let mut buf = literal_gap_test_buffer(&text);
-        park_gap_at(&mut buf, parked);
+        park_gap_at_keeping_point(&mut buf, parked);
         assert_eq!(ascii_gap_byte(&buf), parked);
         let copied_before = super::SEARCH_COPIED_BYTES.load(Ordering::Relaxed);
         let mut gap = ascii_gap_byte(&buf);
@@ -2023,4 +2023,293 @@ fn literal_search_after_edit_keeps_gap_at_the_edit() {
     }
     let copied = super::SEARCH_COPIED_BYTES.load(Ordering::Relaxed) - copied_before;
     assert_eq!(copied, 0, "bytes copied out of the buffer");
+fn backward_search_buffer(text: &str) -> Buffer {
+    let mut buf = Buffer::new(
+        BufferId(1),
+        Value::string("backward-search"),
+        neovm_edit::buffer::shared::SavedPointBeforeCommand::new_editor_global(),
+    );
+    buf.insert(text);
+    buf
+}
+
+fn byte_pos(pos: usize) -> neovm_edit::buffer::EmacsBytePos {
+    neovm_edit::buffer::EmacsBytePos::new(pos)
+}
+
+/// Where the gap starts, read through the only view a search has of it: a
+/// range is one piece exactly when the gap does not lie strictly inside it.
+/// A gap at the buffer start reads as the buffer end; both are an edge.
+fn gap_start(buf: &Buffer) -> usize {
+    let (mut lo, mut hi) = (0, buf.total_emacs_byte_end_pos().get());
+    while lo < hi {
+        let mid = lo + (hi - lo).div_ceil(2);
+        if buf.has_contiguous_emacs_byte_range(EmacsByteRange::new(byte_pos(0), byte_pos(mid))) {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    lo
+}
+
+/// Park the gap at POS the way an edit does: insert a character there and
+/// delete it again.
+fn park_gap_at(buf: &mut Buffer, pos: usize) {
+    buf.goto_emacs_byte_pos(byte_pos(pos));
+    buf.insert("Q");
+    buf.delete_emacs_byte_range(EmacsByteRange::new(byte_pos(pos), byte_pos(pos + 1)));
+}
+
+/// Search backward from POINT with each of the three buffer entry points,
+/// assert that they agree, and return the match start.
+fn backward_search_all_entries(
+    buf: &mut Buffer,
+    pattern: &str,
+    point: usize,
+    bound: Option<usize>,
+) -> Option<usize> {
+    let pattern = LispString::from_utf8(pattern);
+    let context = BufferRegexpMatchContext::new(
+        crate::emacs_core::syntax::SyntaxProperties::Ignore,
+        crate::emacs_core::regex_emacs::WordBoundaryLookup::default(),
+    );
+    let mut regs = SearchRegisters::default();
+    buf.goto_emacs_byte_pos(byte_pos(point));
+    let lisp = re_search_backward_lisp_with_posix_into(
+        buf, &pattern, bound, true, false, false, context, &mut regs,
+    )
+    .unwrap()
+    .map(|pos| pos.get());
+    buf.goto_emacs_byte_pos(byte_pos(point));
+    let syntax = buffer_syntax_lookup(buf);
+    let compiled = compile_lisp_pattern_with_posix_translation(
+        &pattern,
+        false,
+        false,
+        buf.get_multibyte(),
+        None,
+        &syntax,
+    )
+    .unwrap();
+    let precompiled =
+        re_search_backward_compiled_into(buf, &compiled, bound, true, context, &mut regs)
+            .unwrap()
+            .map(|pos| pos.get());
+    buf.goto_emacs_byte_pos(byte_pos(point));
+    let raw = re_search_backward(buf, &pattern, bound, true, false)
+        .unwrap()
+        .map(|found| found.into_parts().1.get());
+    buf.goto_emacs_byte_pos(byte_pos(point));
+    assert_eq!(
+        (lisp, precompiled),
+        (raw, raw),
+        "{pattern:?} from {point} bound {bound:?}"
+    );
+    raw
+}
+
+#[test]
+fn re_search_backward_after_an_edit_moves_the_gap_by_a_character_not_the_buffer() {
+    crate::test_utils::init_test_tracing();
+    // What a `looking-back' hook does after each keystroke in a 1 MB buffer:
+    // type a character mid-buffer, then search back to the line start.  The
+    // search reads [line start, point] and the character after point; after
+    // the insert the gap sits at point, so that stretch is one piece but for
+    // one character.  Asking for the whole region instead pushed the gap to
+    // a region edge and the next insert dragged it back: 100 rounds moved
+    // about 100 MB.
+    let line = "abcdefg ijklmno qrstuvw yzabcde ghijklm opqrstu wxyzabc efghijk mnopq\n";
+    let mut buf = backward_search_buffer(&line.repeat(1_000_000 / line.len()));
+    let line_start = (buf.total_emacs_byte_end_pos().get() / 2 / line.len()) * line.len();
+    // The first edit brings the gap from the buffer end to the edit point;
+    // that move is the edit's, so the count starts after it.
+    park_gap_at(&mut buf, line_start + 10);
+    let pattern = LispString::from_utf8("\\(?:^[^\n]*x\\)\\=");
+    let context = BufferRegexpMatchContext::new(
+        crate::emacs_core::syntax::SyntaxProperties::Ignore,
+        crate::emacs_core::regex_emacs::WordBoundaryLookup::default(),
+    );
+    let syntax = buffer_syntax_lookup(&buf);
+    let compiled = compile_lisp_pattern_with_posix_translation(
+        &pattern,
+        false,
+        false,
+        buf.get_multibyte(),
+        None,
+        &syntax,
+    )
+    .unwrap();
+    let mut regs = SearchRegisters::default();
+    let mut gap = gap_start(&buf);
+    let mut travelled = 0;
+    let mut note_gap = |buf: &Buffer| {
+        let now = gap_start(buf);
+        travelled += now.abs_diff(gap);
+        gap = now;
+    };
+    for round in 0..100 {
+        buf.insert("x");
+        note_gap(&buf);
+        let point = buf.point_emacs_byte_pos();
+        let found = match round % 3 {
+            0 => re_search_backward_lisp_with_posix_into(
+                &mut buf,
+                &pattern,
+                Some(line_start),
+                true,
+                false,
+                false,
+                context,
+                &mut regs,
+            )
+            .unwrap(),
+            1 => re_search_backward_compiled_into(
+                &mut buf,
+                &compiled,
+                Some(line_start),
+                true,
+                context,
+                &mut regs,
+            )
+            .unwrap(),
+            _ => re_search_backward(&mut buf, &pattern, Some(line_start), true, false)
+                .unwrap()
+                .map(|found| found.into_parts().1),
+        };
+        assert_eq!(
+            found.map(|pos| pos.get()),
+            Some(line_start),
+            "round {round}"
+        );
+        note_gap(&buf);
+        buf.goto_emacs_byte_pos(point);
+    }
+    assert!(
+        travelled < 10_000,
+        "100 backward searches after an edit moved the gap over {travelled} bytes"
+    );
+}
+
+#[test]
+fn re_search_backward_answers_the_same_with_the_gap_parked_at_point() {
+    crate::test_utils::init_test_tracing();
+    // Every assertion that reads past the match: `\`' (only at the region
+    // start), `^', `\b' and `\B' at BOUND (the character before it), `$',
+    // `\b', `\>' and `\=' at point (the character after it), `\''.  Each
+    // case runs twice, once on a buffer that was never edited (gap at the
+    // end) and once with an edit parking the gap at point.
+    let text = "abc def\nghi jkl\nmno\n";
+    let cases: &[(&str, usize, Option<usize>, Option<usize>)] = &[
+        ("\\`", 12, None, Some(0)),
+        ("\\`", 12, Some(8), None),
+        ("\\`ghi", 12, Some(8), None),
+        ("^g", 12, Some(8), Some(8)),
+        ("^h", 12, Some(9), None),
+        ("\\bh", 12, Some(9), None),
+        ("\\Bh", 12, Some(9), Some(9)),
+        ("f$", 7, Some(4), Some(6)),
+        ("e$", 6, Some(4), None),
+        ("def$", 7, None, Some(4)),
+        ("c\\b", 3, Some(0), Some(2)),
+        ("b\\b", 2, Some(0), None),
+        ("abc\\>", 3, None, Some(0)),
+        ("ab\\>", 2, None, None),
+        ("i \\=", 12, None, Some(10)),
+        ("\\=", 12, Some(8), Some(12)),
+        ("l\\'", 15, None, None),
+        ("o\n\\'", 20, Some(16), Some(18)),
+        ("ghi jkl", 20, None, Some(8)),
+        ("ghi jkl", 14, None, None),
+    ];
+    for &(pattern, point, bound, expected) in cases {
+        let mut buf = backward_search_buffer(text);
+        assert_eq!(
+            backward_search_all_entries(&mut buf, pattern, point, bound),
+            expected,
+            "unedited: {pattern:?} from {point} bound {bound:?}"
+        );
+        park_gap_at(&mut buf, point);
+        assert_eq!(
+            backward_search_all_entries(&mut buf, pattern, point, bound),
+            expected,
+            "gap at point: {pattern:?} from {point} bound {bound:?}"
+        );
+    }
+
+    // A match that begins before the gap and ends after it, BOUND nil.
+    let mut buf = backward_search_buffer(text);
+    park_gap_at(&mut buf, 10);
+    assert_eq!(
+        backward_search_all_entries(&mut buf, "ghi jkl", 20, None),
+        Some(8)
+    );
+
+    // COUNT > 1 repeats the search from each match start.
+    let mut buf = backward_search_buffer(text);
+    park_gap_at(&mut buf, 20);
+    let mut point = 20;
+    let mut starts = Vec::new();
+    for _ in 0..3 {
+        point = backward_search_all_entries(&mut buf, "[a-z]+", point, None).unwrap();
+        starts.push(point);
+    }
+    assert_eq!(starts, [18, 17, 16]);
+
+    // Narrowed: `\`' and `\'' are the region's edges, wherever the gap is.
+    let mut buf = backward_search_buffer(text);
+    buf.narrow_to_emacs_byte_range(EmacsByteRange::new(byte_pos(4), byte_pos(15)));
+    park_gap_at(&mut buf, 12);
+    assert_eq!(
+        backward_search_all_entries(&mut buf, "\\`d", 12, None),
+        Some(4)
+    );
+    assert_eq!(
+        backward_search_all_entries(&mut buf, "\\`", 12, Some(5)),
+        None
+    );
+    assert_eq!(
+        backward_search_all_entries(&mut buf, "^g", 12, Some(8)),
+        Some(8)
+    );
+    park_gap_at(&mut buf, 15);
+    assert_eq!(
+        backward_search_all_entries(&mut buf, "l\\'", 15, None),
+        Some(14)
+    );
+    assert_eq!(
+        backward_search_all_entries(&mut buf, "\\`def", 15, None),
+        Some(4)
+    );
+}
+
+#[test]
+fn re_search_backward_keeps_the_whole_multibyte_character_after_point() {
+    crate::test_utils::init_test_tracing();
+    // Two-byte characters: λ0 μ2 ν4 SPC6 ξ7 ο9 π11 NL13.  Word boundaries at
+    // point read the whole of π, at BOUND the whole of ξ.
+    let text = "λμν ξοπ\n";
+    let cases: &[(&str, usize, Option<usize>, Option<usize>)] = &[
+        ("ο\\b", 11, Some(7), None),
+        ("ο\\B", 11, Some(7), Some(9)),
+        ("ο\\>", 11, Some(7), None),
+        ("π$", 13, Some(7), Some(11)),
+        ("\\bο", 13, Some(9), None),
+        ("\\Bο", 13, Some(9), Some(9)),
+        ("\\bξ", 13, Some(7), Some(7)),
+    ];
+    for &(pattern, point, bound, expected) in cases {
+        let mut buf = backward_search_buffer(text);
+        assert_eq!(
+            backward_search_all_entries(&mut buf, pattern, point, bound),
+            expected,
+            "unedited: {pattern:?} from {point} bound {bound:?}"
+        );
+        park_gap_at(&mut buf, point);
+        assert_eq!(
+            backward_search_all_entries(&mut buf, pattern, point, bound),
+            expected,
+            "gap at point: {pattern:?} from {point} bound {bound:?}"
+        );
+    }
 }

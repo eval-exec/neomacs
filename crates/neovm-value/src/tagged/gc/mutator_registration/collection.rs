@@ -100,8 +100,16 @@ pub struct CollectionReport {
     pub live_bytes: usize,
     /// Post-sweep global charged live balance, retained canonically in owner 0.
     pub allocated_count: usize,
-    pub memory_use_counts: [u64; MEMORY_USE_COUNT_LEN],
-    pub total_allocated_bytes: u64,
+    pub(crate) memory_use_counts: [u64; MEMORY_USE_COUNT_LEN],
+    pub(crate) total_allocated_bytes: u64,
+}
+
+#[cfg(feature = "test-support")]
+impl CollectionReport {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn frozen_owners(&self) -> usize {
+        self.frozen_owners
+    }
 }
 
 fn supported(heap: &TaggedHeap) -> Result<(), CollectionError> {

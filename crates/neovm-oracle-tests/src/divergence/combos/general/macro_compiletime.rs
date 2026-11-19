@@ -144,10 +144,10 @@ fn divergence_eval_form_with_macros() {
     `(if ,cond (progn ,@body)))
   (let ((forms '((test-when-xxx t 'yes 'ok)
                   (test-when-xxx nil 'no)
-                  (when t 'builtin-when)))))
+                  (when t 'builtin-when))))
   (list (eval '(test-when-xxx (> 5 3) 'result))
         (eval '(test-when-xxx nil 'not-this))
-        (macroexpand-all '(test-when-xxx (> 5 3) 'result)))) "#,
+        (macroexpand-all '(test-when-xxx (> 5 3) 'result)))))  "#,
         expect,
     );
 }

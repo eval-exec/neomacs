@@ -27,17 +27,12 @@ use strum::{EnumString, IntoStaticStr};
 mod desktop;
 #[doc(hidden)]
 pub use desktop::monitor_rect_in_display_pixels;
+mod selection_step;
 mod tooltip;
 #[doc(hidden)]
 pub use neovm_edit::emacs_core::edit_host::EditHost;
 #[doc(hidden)]
 pub use tooltip::{builtin_x_hide_tip_eval, builtin_x_show_tip_eval};
-
-/// Clear cached thread-local display values (must be called when heap changes).
-pub fn reset_display_thread_locals() {
-    super::terminal::pure::reset_terminal_thread_locals();
-    super::dispnew::pure::reset_dispnew_thread_locals();
-}
 
 // ---------------------------------------------------------------------------
 // Argument helpers
@@ -255,7 +250,7 @@ fn expect_display_designator_eval(
 
 fn expect_optional_display_designator_eval(
     eval: &mut neovm_eval::emacs_core::eval::Context,
-    name: &str,
+    name: &'static str,
     args: &[Value],
 ) -> Result<(), Flow> {
     expect_max_args(name, args, 1)?;
@@ -449,7 +444,7 @@ const GUI_X_VISUAL_CLASS: &str = "true-color";
 
 fn gui_x_query_target_eval(
     eval: &mut neovm_eval::emacs_core::eval::Context,
-    name: &str,
+    name: &'static str,
     args: &[Value],
 ) -> Result<bool, Flow> {
     expect_max_args(name, args, 1)?;
@@ -585,7 +580,7 @@ fn parse_x_geometry(spec: &str) -> Option<Value> {
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 fn display_optional_capability_p_eval(
     eval: &mut neovm_eval::emacs_core::eval::Context,
-    name: &str,
+    name: &'static str,
     args: &[Value],
 ) -> EvalResult {
     expect_max_args(name, args, 1)?;
@@ -605,7 +600,7 @@ fn display_optional_capability_p_eval(
     }
 }
 
-fn x_optional_display_query_error(name: &str, args: &[Value]) -> EvalResult {
+fn x_optional_display_query_error(name: &'static str, args: &[Value]) -> EvalResult {
     expect_max_args(name, args, 1)?;
     match args.first() {
         None => Err(x_windows_not_initialized_error()),
@@ -633,7 +628,7 @@ fn x_optional_display_query_error(name: &str, args: &[Value]) -> EvalResult {
 
 fn x_optional_display_query_error_eval(
     eval: &mut neovm_eval::emacs_core::eval::Context,
-    name: &str,
+    name: &'static str,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args(name, &args, 1)?;
@@ -3206,7 +3201,7 @@ pub fn builtin_x_display_visual_class(
     args: Vec<Value>,
 ) -> EvalResult {
     if gui_x_query_target_eval(eval, "x-display-visual-class", &args)? {
-        return Ok(Value::symbol(GUI_X_VISUAL_CLASS));
+        return Ok(Value::from_sym_id(intern(GUI_X_VISUAL_CLASS)));
     }
     x_optional_display_query_error_eval(eval, "x-display-visual-class", args)
 }

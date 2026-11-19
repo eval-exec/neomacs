@@ -1,4 +1,5 @@
 use super::*;
+use neovm_value::intern::intern;
 
 #[test]
 fn void_default_signals_after_callback_and_records_on_unwind() {
@@ -40,7 +41,8 @@ fn void_default_signals_after_callback_and_records_on_unwind() {
     // 1799-1808). Use an ordinary Lisp variable to exercise the same generic
     // default reader without manufacturing an invalid built-in value cell.
     let void_hook = "d5-void-default-hook";
-    neovm_eval::test_support::authority::makunbound_for_test(&mut eval, void_hook);
+    eval.eval_str("(makunbound 'd5-void-default-hook)")
+        .expect("makunbound the ordinary fixture variable");
     assert!(
         neovm_eval::emacs_core::data::test_support::default_value_by_id(
             &eval,
@@ -89,7 +91,7 @@ fn void_default_signals_after_callback_and_records_on_unwind() {
         signal.symbol,
         crate::emacs_core::intern::intern("void-variable")
     );
-    assert_eq!(signal.data, vec![Value::symbol(void_hook)]);
+    assert_eq!(signal.data, vec![Value::from_sym_id(intern(void_hook))]);
     assert_eq!(
         eval.obarray().symbol_value_copied("d5-default-hook-calls"),
         Some(Value::fixnum(1))

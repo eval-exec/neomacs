@@ -126,7 +126,7 @@ const PRELUDE: &str = r####"
 (defun bc425-test-write (relative contents)
   (let ((file (expand-file-name relative bc425-test-root)))
     (unless (and bc425-test-root-owned
-                 (file-in-directory-p file bc425-test-root))
+                 (neomacs-melpa-path-inside-p file bc425-test-root))
       (error "Refusing Bash Completion write outside owned root: %S" file))
     (make-directory (file-name-directory file) t)
     (let ((coding-system-for-write 'utf-8-unix)

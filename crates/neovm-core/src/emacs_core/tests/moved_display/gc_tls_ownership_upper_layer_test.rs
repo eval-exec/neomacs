@@ -26,9 +26,13 @@ fn gc_tls_ownership_font_registry_names_do_not_retain_unrooted_properties() {
     );
     drop(state);
     ctx.gc_collect_exact();
+    // B15-1: the production store written by the builtin survives an exact
+    // GC; the deleted test-only lookup model was not a production reader.
+    let after = crate::emacs_core::font::alternative_font_registry_alist_snapshot_for_test();
+    assert_eq!(after.len(), 1, "registry entry survives an exact GC");
     assert_eq!(
-        crate::emacs_core::font::alternative_font_registries("iso-10646-1"),
-        vec!["iso-10646-1"]
+        neovm_value::emacs_char::to_utf8_lossy(after[0].0.as_bytes()),
+        "iso-10646-1"
     );
     builtin_internal_set_alternative_font_registry_alist(vec![Value::NIL]).unwrap();
 }

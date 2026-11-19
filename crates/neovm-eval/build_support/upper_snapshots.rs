@@ -132,6 +132,9 @@ fn parse_cfg(attr: &str) -> Result<String, String> {
     if compact.contains("feature=\"sqlite\"") {
         return Ok("sqlite".to_owned());
     }
+    if compact.contains("feature=\"xwidgets\"") {
+        return Ok("xwidgets".to_owned());
+    }
     Err(format!("unknown snapshot cfg attribute: {attr}"))
 }
 
@@ -186,6 +189,20 @@ pub fn parse_upper_subrs(source: &str) -> Result<Vec<UpperSubrRow>, String> {
         }
         if trimmed.starts_with("#[cfg(") {
             pending_cfg = Some(parse_cfg(trimmed)?);
+            continue;
+        }
+        if let Some(label) =
+            trimmed.strip_prefix(host_cfg::HostCfgClass::STANDIN_CFG_COMMENT_PREFIX)
+        {
+            let label = label.trim();
+            let class = host_cfg::HostCfgClass::from_label(label)
+                .ok_or_else(|| format!("unknown host-cfg comment label {label:?}"))?;
+            if !class.standin_ignores_feature_cfg() {
+                return Err(format!(
+                    "host-cfg comment {label:?} is not an eval-owned feature class"
+                ));
+            }
+            pending_cfg = Some(label.to_owned());
             continue;
         }
         if trimmed == "];" {

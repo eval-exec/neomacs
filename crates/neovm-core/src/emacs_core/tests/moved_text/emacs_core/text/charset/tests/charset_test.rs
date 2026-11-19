@@ -465,7 +465,10 @@ fn define_charset_internal_validates_name_arg() {
         match err.into_kind() {
             FlowKind::Signal(sig) => {
                 assert_eq!(sig.symbol_name(), "wrong-type-argument");
-                assert_eq!(sig.data, vec![Value::symbol(predicate), operand]);
+                assert_eq!(
+                    sig.data,
+                    vec![Value::from_sym_id(intern(predicate)), operand]
+                );
             }
             other => panic!("expected wrong-type-argument signal, got {other:?}"),
         }
@@ -1225,29 +1228,23 @@ fn encode_decode_big5_sjis_basic_identity() {
     );
 }
 
+/// The build registry defines no charset with a private final char
+/// ('0'..'?'), so every class starts at '0'. The values after loadup, where
+/// mule-conf.el occupies some of them (GNU: 54 51 50 48 48 48), come from the
+/// same table scan and are compared with GNU by the oracle test
+/// `oracle_prop_get_unused_iso_final_char_scans_the_designation_table`.
 #[test]
 fn get_unused_iso_final_char_known_values() {
     crate::test_utils::init_test_tracing();
-    assert_eq!(
-        builtin_get_unused_iso_final_char(vec![Value::fixnum(1), Value::fixnum(94)]).expect("1/94"),
-        Value::fixnum(54)
-    );
-    assert_eq!(
-        builtin_get_unused_iso_final_char(vec![Value::fixnum(1), Value::fixnum(96)]).expect("1/96"),
-        Value::fixnum(51)
-    );
-    assert_eq!(
-        builtin_get_unused_iso_final_char(vec![Value::fixnum(2), Value::fixnum(94)]).expect("2/94"),
-        Value::fixnum(50)
-    );
-    assert_eq!(
-        builtin_get_unused_iso_final_char(vec![Value::fixnum(2), Value::fixnum(96)]).expect("2/96"),
-        Value::fixnum(48)
-    );
-    assert_eq!(
-        builtin_get_unused_iso_final_char(vec![Value::fixnum(3), Value::fixnum(94)]).expect("3/94"),
-        Value::fixnum(48)
-    );
+    reset_charset_registry();
+    for (dimension, chars) in [(1, 94), (1, 96), (2, 94), (2, 96), (3, 94), (3, 96)] {
+        assert_eq!(
+            builtin_get_unused_iso_final_char(vec![Value::fixnum(dimension), Value::fixnum(chars)])
+                .expect("get-unused-iso-final-char"),
+            Value::fixnum(i64::from(b'0')),
+            "{dimension}/{chars}"
+        );
+    }
 }
 
 #[test]
@@ -1261,6 +1258,379 @@ fn get_unused_iso_final_char_validates_dimension_and_chars() {
     let bad_chars = builtin_get_unused_iso_final_char(vec![Value::fixnum(1), Value::fixnum(0)])
         .expect_err("chars 0 should error");
     assert!(matches!(bad_chars.kind(), FlowRef::Signal(_)));
+}
+
+fn iso_charset_error_message(args: Vec<Value>) -> String {
+    match builtin_iso_charset(args).kinded() {
+        Err(FlowKind::Signal(sig)) => {
+            assert_eq!(sig.symbol_name(), "error");
+            sig.data
+                .first()
+                .and_then(Value::as_lisp_string)
+                .map(|message| String::from_utf8_lossy(message.as_bytes()).into_owned())
+                .unwrap_or_default()
+        }
+        other => panic!("expected an error signal, got {other:?}"),
+    }
+}
+
+fn iso_charset_wrong_type(args: Vec<Value>) -> (Value, Value) {
+    match builtin_iso_charset(args).kinded() {
+        Err(FlowKind::Signal(sig)) => {
+            assert_eq!(sig.symbol_name(), "wrong-type-argument");
+            (sig.data[0], sig.data[1])
+        }
+        other => panic!("expected wrong-type-argument, got {other:?}"),
+    }
+}
+
+#[test]
+fn iso_charset_known_designations() {
+    crate::test_utils::init_test_tracing();
+    let lookup = |d: i64, c: i64, f: i64| {
+        builtin_iso_charset(vec![Value::fixnum(d), Value::fixnum(c), Value::fixnum(f)])
+            .expect("iso-charset")
+    };
+    // GNU: (iso-charset 1 94 ?B) => ascii, (iso-charset 1 96 ?A) =>
+    // latin-iso8859-1, (iso-charset 1 94 ?Z) => nil, no 3-dimension sets.
+    assert_eq!(lookup(1, 94, 66), Value::symbol("ascii"));
+    assert_eq!(lookup(1, 96, 65), Value::symbol("latin-iso8859-1"));
+    assert_eq!(lookup(1, 94, 90), Value::NIL);
+    assert_eq!(lookup(3, 94, 66), Value::NIL);
+}
+
+/// GNU's `iso_charset_table` is written on every definition, so the last
+/// definition of a designation wins whatever the charset ids are (neomacs
+/// ids come from `:emacs-mule-id` or a counter, not definition order).
+#[test]
+fn iso_charset_last_definition_wins_regardless_of_id() {
+    crate::test_utils::init_test_tracing();
+    reset_charset_registry();
+    let define = |name: &'static str, mule_id: Option<i64>| {
+        let mut args = vec![Value::NIL; 17];
+        args[0] = Value::symbol(name);
+        args[1] = Value::fixnum(1);
+        args[2] = Value::vector(vec![Value::fixnum(32), Value::fixnum(127)]);
+        args[5] = Value::fixnum(i64::from(b'}'));
+        args[7] = mule_id.map_or(Value::NIL, Value::fixnum);
+        builtin_define_charset_internal(args).unwrap();
+    };
+    let lookup = || {
+        builtin_iso_charset(vec![
+            Value::fixnum(1),
+            Value::fixnum(96),
+            Value::fixnum(i64::from(b'}')),
+        ])
+        .expect("iso-charset")
+    };
+    // The later definition gets the lower id here and still wins.
+    define("test-iso-first", None);
+    assert_eq!(lookup(), Value::symbol("test-iso-first"));
+    define("test-iso-second", Some(200));
+    assert_eq!(lookup(), Value::symbol("test-iso-second"));
+    reset_charset_registry();
+}
+
+/// A snapshot/restore round trip must keep each designation's winner. The
+/// winner is write history (the later definition), not `set-charset-priority`
+/// order, so reordering priority after a shared designation must not flip it.
+#[test]
+fn iso_charset_winner_survives_snapshot_restore_after_priority_change() {
+    crate::test_utils::init_test_tracing();
+    reset_charset_registry();
+    let define = |name: &'static str| {
+        let mut args = vec![Value::NIL; 17];
+        args[0] = Value::symbol(name);
+        args[1] = Value::fixnum(1);
+        args[2] = Value::vector(vec![Value::fixnum(32), Value::fixnum(127)]);
+        args[5] = Value::fixnum(i64::from(b'|'));
+        builtin_define_charset_internal(args).unwrap();
+    };
+    let lookup = || {
+        builtin_iso_charset(vec![
+            Value::fixnum(1),
+            Value::fixnum(96),
+            Value::fixnum(i64::from(b'|')),
+        ])
+        .expect("iso-charset")
+    };
+    define("test-iso-rt-a");
+    define("test-iso-rt-b");
+    assert_eq!(lookup(), Value::symbol("test-iso-rt-b"));
+    builtin_set_charset_priority(vec![
+        Value::symbol("test-iso-rt-b"),
+        Value::symbol("test-iso-rt-a"),
+    ])
+    .unwrap();
+    assert_eq!(lookup(), Value::symbol("test-iso-rt-b"));
+    let snapshot = snapshot_charset_registry();
+    reset_charset_registry();
+    restore_charset_registry(snapshot);
+    assert_eq!(lookup(), Value::symbol("test-iso-rt-b"));
+    // Older snapshots and dumps carry no table; the rebuild must agree.
+    let mut legacy = snapshot_charset_registry();
+    legacy.iso_designations = None;
+    reset_charset_registry();
+    restore_charset_registry(legacy);
+    assert_eq!(lookup(), Value::symbol("test-iso-rt-b"));
+    reset_charset_registry();
+}
+
+/// Snapshots materialize alias clones named by the alias; restore must not
+/// let one take over a designation from the physical charset.
+#[test]
+fn iso_charset_ignores_alias_clones_after_snapshot_restore() {
+    crate::test_utils::init_test_tracing();
+    reset_charset_registry();
+    builtin_define_charset_alias(vec![
+        Value::symbol("test-iso-ascii-alias"),
+        Value::symbol("ascii"),
+    ])
+    .unwrap();
+    let lookup = || {
+        builtin_iso_charset(vec![
+            Value::fixnum(1),
+            Value::fixnum(94),
+            Value::fixnum(i64::from(b'B')),
+        ])
+        .expect("iso-charset")
+    };
+    assert_eq!(lookup(), Value::symbol("ascii"));
+    let snapshot = snapshot_charset_registry();
+    reset_charset_registry();
+    restore_charset_registry(snapshot);
+    assert_eq!(lookup(), Value::symbol("ascii"));
+    // Older snapshots and dumps carry no table; the rebuild must agree.
+    let mut legacy = snapshot_charset_registry();
+    legacy.iso_designations = None;
+    reset_charset_registry();
+    restore_charset_registry(legacy);
+    assert_eq!(lookup(), Value::symbol("ascii"));
+    reset_charset_registry();
+}
+
+/// GNU `Fdeclare_equiv_charset` writes the designation that `iso-charset`
+/// reads (oracle: `(progn (declare-equiv-charset 1 94 ?B 'unicode)
+/// (iso-charset 1 94 ?B))` => `unicode`; declared through an alias of
+/// `latin-iso8859-1` => `latin-iso8859-1`).
+#[test]
+fn declare_equiv_charset_sets_the_iso_charset_designation() {
+    crate::test_utils::init_test_tracing();
+    reset_charset_registry();
+    let lookup = || {
+        builtin_iso_charset(vec![
+            Value::fixnum(1),
+            Value::fixnum(94),
+            Value::fixnum(i64::from(b'B')),
+        ])
+        .expect("iso-charset")
+    };
+    let declare = |charset: &'static str| {
+        builtin_declare_equiv_charset(vec![
+            Value::fixnum(1),
+            Value::fixnum(94),
+            Value::fixnum(i64::from(b'B')),
+            Value::symbol(charset),
+        ])
+        .expect("declare-equiv-charset")
+    };
+    assert_eq!(lookup(), Value::symbol("ascii"));
+    assert_eq!(declare("unicode"), Value::NIL);
+    assert_eq!(lookup(), Value::symbol("unicode"));
+    builtin_define_charset_alias(vec![
+        Value::symbol("test-equiv-alias"),
+        Value::symbol("latin-iso8859-1"),
+    ])
+    .unwrap();
+    assert_eq!(declare("test-equiv-alias"), Value::NIL);
+    assert_eq!(lookup(), Value::symbol("latin-iso8859-1"));
+    let snapshot = snapshot_charset_registry();
+    reset_charset_registry();
+    restore_charset_registry(snapshot);
+    assert_eq!(lookup(), Value::symbol("latin-iso8859-1"));
+    reset_charset_registry();
+}
+
+/// `define-charset-alias` only rebinds a name; GNU's table holds ids, so a
+/// charset whose name becomes an alias keeps its designation (oracle: after
+/// `(define-charset-alias 'latin-iso8859-1 'ascii)`, `(iso-charset 1 96 ?A)`
+/// => `latin-iso8859-1`). The rebuild for snapshots without the table must
+/// keep it as well.
+#[test]
+fn iso_charset_keeps_a_charset_shadowed_by_an_alias_after_legacy_restore() {
+    crate::test_utils::init_test_tracing();
+    reset_charset_registry();
+    let lookup = || {
+        builtin_iso_charset(vec![
+            Value::fixnum(1),
+            Value::fixnum(96),
+            Value::fixnum(i64::from(b'A')),
+        ])
+        .expect("iso-charset")
+    };
+    assert_eq!(lookup(), Value::symbol("latin-iso8859-1"));
+    builtin_define_charset_alias(vec![
+        Value::symbol("latin-iso8859-1"),
+        Value::symbol("ascii"),
+    ])
+    .unwrap();
+    assert_eq!(lookup(), Value::symbol("latin-iso8859-1"));
+    let mut legacy = snapshot_charset_registry();
+    legacy.iso_designations = None;
+    reset_charset_registry();
+    restore_charset_registry(legacy);
+    assert_eq!(lookup(), Value::symbol("latin-iso8859-1"));
+    reset_charset_registry();
+}
+
+/// GNU `Fget_unused_iso_final_char` (charset.c:1407-1425) scans
+/// `iso_charset_table` for the first free private final '0'..'?' and returns
+/// nil when all sixteen are taken (oracle: after `(declare-equiv-charset 1 94
+/// ?6 'ascii)` the stock 54 becomes 55; with '6'..'?' declared it is nil).
+#[test]
+fn get_unused_iso_final_char_scans_the_designation_table() {
+    crate::test_utils::init_test_tracing();
+    reset_charset_registry();
+    let unused = |d: i64, c: i64| {
+        builtin_get_unused_iso_final_char(vec![Value::fixnum(d), Value::fixnum(c)])
+            .expect("get-unused-iso-final-char")
+    };
+    let declare = |final_char: u8| {
+        builtin_declare_equiv_charset(vec![
+            Value::fixnum(1),
+            Value::fixnum(94),
+            Value::fixnum(i64::from(final_char)),
+            Value::symbol("ascii"),
+        ])
+        .expect("declare-equiv-charset")
+    };
+    let other_class = unused(1, 96);
+    for final_char in b'0'..b'?' {
+        declare(final_char);
+        assert_eq!(unused(1, 94), Value::fixnum(i64::from(final_char) + 1));
+    }
+    declare(b'?');
+    assert_eq!(unused(1, 94), Value::NIL);
+    // Each (DIMENSION, CHARS) class has its own slots.
+    assert_eq!(unused(1, 96), other_class);
+    reset_charset_registry();
+}
+
+/// ISO-2022 detection and decoding resolve `ESC ( F` through the same table
+/// as `iso-charset` (GNU coding.c:3193 `DECODE_DESIGNATION`), so a later
+/// definition and `declare-equiv-charset` both take over the designation
+/// (oracle: after `(declare-equiv-charset 1 94 ?Z 'latin-jisx0201)`,
+/// `ESC ( Z \` decodes to the yen sign in `latin-jisx0201`; the build
+/// registry has no `latin-jisx0201`, so this declares `latin-iso8859-1`).
+#[test]
+fn iso_2022_designation_lookup_follows_the_designation_table() {
+    crate::test_utils::init_test_tracing();
+    reset_charset_registry();
+    let final_z = i64::from(b'Z');
+    assert_eq!(charset_by_iso_final(final_z, 1, false), None);
+    builtin_declare_equiv_charset(vec![
+        Value::fixnum(1),
+        Value::fixnum(94),
+        Value::fixnum(final_z),
+        Value::symbol("latin-iso8859-1"),
+    ])
+    .expect("declare-equiv-charset");
+    assert_eq!(
+        charset_by_iso_final(final_z, 1, false),
+        Some((intern("latin-iso8859-1"), 1))
+    );
+
+    let define = |name: &'static str, mule_id: Option<i64>| {
+        let mut args = vec![Value::NIL; 17];
+        args[0] = Value::symbol(name);
+        args[1] = Value::fixnum(1);
+        args[2] = Value::vector(vec![Value::fixnum(32), Value::fixnum(127)]);
+        args[5] = Value::fixnum(i64::from(b'~'));
+        args[7] = mule_id.map_or(Value::NIL, Value::fixnum);
+        builtin_define_charset_internal(args).unwrap();
+    };
+    // The later definition wins although it has the lower id.
+    define("test-iso-decode-first", None);
+    define("test-iso-decode-second", Some(201));
+    assert_eq!(
+        charset_by_iso_final(i64::from(b'~'), 1, true),
+        Some((intern("test-iso-decode-second"), 1))
+    );
+    reset_charset_registry();
+}
+
+/// Ids can coincide through `:emacs-mule-id`, so an equal id alone does not
+/// mark a materialized alias clone in a snapshot without the designation
+/// table: a physical charset whose name became an alias of a charset with the
+/// same id keeps its own designation.
+#[test]
+fn iso_charset_legacy_restore_keeps_an_aliased_charset_sharing_the_target_id() {
+    crate::test_utils::init_test_tracing();
+    reset_charset_registry();
+    let define = |name: &'static str, final_char: u8| {
+        let mut args = vec![Value::NIL; 17];
+        args[0] = Value::symbol(name);
+        args[1] = Value::fixnum(1);
+        args[2] = Value::vector(vec![Value::fixnum(32), Value::fixnum(127)]);
+        args[5] = Value::fixnum(i64::from(final_char));
+        args[7] = Value::fixnum(202);
+        builtin_define_charset_internal(args).unwrap();
+    };
+    let lookup = |final_char: u8| {
+        builtin_iso_charset(vec![
+            Value::fixnum(1),
+            Value::fixnum(96),
+            Value::fixnum(i64::from(final_char)),
+        ])
+        .expect("iso-charset")
+    };
+    define("test-iso-same-id-a", b'{');
+    define("test-iso-same-id-b", b'|');
+    builtin_define_charset_alias(vec![
+        Value::symbol("test-iso-same-id-a"),
+        Value::symbol("test-iso-same-id-b"),
+    ])
+    .unwrap();
+    assert_eq!(lookup(b'{'), Value::symbol("test-iso-same-id-a"));
+    assert_eq!(lookup(b'|'), Value::symbol("test-iso-same-id-b"));
+    let mut legacy = snapshot_charset_registry();
+    legacy.iso_designations = None;
+    reset_charset_registry();
+    restore_charset_registry(legacy);
+    assert_eq!(lookup(b'{'), Value::symbol("test-iso-same-id-a"));
+    assert_eq!(lookup(b'|'), Value::symbol("test-iso-same-id-b"));
+    reset_charset_registry();
+}
+
+#[test]
+fn iso_charset_validates_arguments_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let (a, b, c) = (Value::fixnum(1), Value::fixnum(94), Value::fixnum(66));
+    assert_eq!(
+        iso_charset_error_message(vec![Value::fixnum(0), b, c]),
+        "Invalid DIMENSION 0, it should be 1, 2, or 3"
+    );
+    assert_eq!(
+        iso_charset_error_message(vec![a, Value::fixnum(1), c]),
+        "Invalid CHARS 1, it should be 94 or 96"
+    );
+    assert_eq!(
+        iso_charset_error_message(vec![a, b, Value::fixnum(47)]),
+        "Invalid FINAL-CHAR \u{2018}/\u{2019}, it should be \u{2018}0\u{2019}..\u{2018}~\u{2019}"
+    );
+    assert_eq!(
+        iso_charset_wrong_type(vec![Value::NIL, b, c]),
+        (Value::symbol("fixnump"), Value::NIL)
+    );
+    assert_eq!(
+        iso_charset_wrong_type(vec![a, b, Value::fixnum(-1)]),
+        (Value::symbol("characterp"), Value::fixnum(-1))
+    );
+    // Type errors win over range errors, as in GNU.
+    assert_eq!(
+        iso_charset_wrong_type(vec![Value::fixnum(4), Value::fixnum(95), Value::fixnum(-1)]).0,
+        Value::symbol("characterp")
+    );
 }
 
 #[test]
@@ -1299,6 +1669,17 @@ fn declare_equiv_charset_validates_and_accepts_valid_tuple() {
             Value::fixnum(1),
             Value::fixnum(94),
             Value::symbol("A"),
+            Value::symbol("ascii"),
+        ])
+        .is_err()
+    );
+    // GNU shares `check_iso_charset_parameter`: FINAL-CHAR outside `0'..`~'
+    // is an error too (oracle: "Invalid FINAL-CHAR ‘/’, ...").
+    assert!(
+        builtin_declare_equiv_charset(vec![
+            Value::fixnum(1),
+            Value::fixnum(94),
+            Value::fixnum(i64::from(b'/')),
             Value::symbol("ascii"),
         ])
         .is_err()

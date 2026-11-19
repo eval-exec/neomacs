@@ -563,6 +563,23 @@ impl LayoutBufferView for LayoutBufferSnapshot {
             .indexed_newline_count(range, neovm_core::buffer::LineIndexBuild::IfLarge)
     }
 
+    fn layout_nth_newline_emacs_byte(
+        &self,
+        from: EmacsBytePos,
+        limit: EmacsBytePos,
+        n: usize,
+    ) -> (EmacsBytePos, usize) {
+        self.text_snapshot.nth_newline_emacs_byte(from, limit, n)
+    }
+
+    fn layout_prev_newline_emacs_byte(
+        &self,
+        from: EmacsBytePos,
+        floor: EmacsBytePos,
+    ) -> Option<EmacsBytePos> {
+        self.text_snapshot.prev_newline_emacs_byte(from, floor)
+    }
+
     fn layout_text_props_is_empty(&self) -> bool {
         self.text_snapshot.text_props_is_empty()
     }

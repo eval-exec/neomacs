@@ -141,7 +141,7 @@ fn div_u4_face_remapping_and_text_scale_combo() {
               (c2 (face-remap-add-relative 'default :weight 'bold)))
           (text-scale-set 1)
           (let ((result (list text-scale-mode-amount
-                              (length face-remapping-alist)))
+                              (length face-remapping-alist))))
             (face-remap-remove-relative c1)
             (face-remap-remove-relative c2)
             (text-scale-set 0)
@@ -149,9 +149,7 @@ fn div_u4_face_remapping_and_text_scale_combo() {
                     (list text-scale-mode-amount
                           (length face-remapping-alist)))))
     (kill-buffer b))))
-)"##;
-    let expect = expect_test::expect![[
-        r#""ERR (error \"`let' bindings can have only one value-form\" append result (list text-scale-mode-amount (length face-remapping-alist)))""#
-    ]];
+"##;
+    let expect = expect_test::expect![[r#""OK t""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }

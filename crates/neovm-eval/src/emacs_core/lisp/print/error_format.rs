@@ -1082,7 +1082,7 @@ pub fn print_value_bytes_with_eval(
 /// `Fprin1_to_string` printing into the multibyte `Vprin1_to_string_buffer`).
 /// `print_prepare` binds `print-escape-nonascii' for a multibyte target, so a
 /// unibyte string's raw high bytes are octal-escaped rather than emitted raw.
-pub fn print_value_bytes_escaped_with_eval(
+pub(crate) fn print_value_bytes_escaped_with_eval(
     eval: &crate::emacs_core::eval::Context,
     value: &Value,
 ) -> Vec<u8> {

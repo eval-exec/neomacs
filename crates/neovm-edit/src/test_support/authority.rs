@@ -131,3 +131,12 @@ pub fn save_point_before_command_for_test(
 ) {
     buffer.save_point_before_command_raw(buffer_id, point);
 }
+
+/// B15-1 wave-3 FENCE: thread-local snapshot-mode override for the moved
+/// layout-engine COW tests. The raw setter stays pub(crate) and
+/// cfg(any(test, feature)); this fence is the only cross-crate write route.
+pub fn set_text_snapshot_mode_override_for_test(
+    mode: Option<crate::buffer::text_snapshot::TextSnapshotMode>,
+) {
+    crate::buffer::text_snapshot::set_text_snapshot_mode_override(mode);
+}

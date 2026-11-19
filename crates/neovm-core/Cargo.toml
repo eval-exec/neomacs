@@ -128,6 +128,7 @@ default = ["jit", "sqlite"]
 # Diagnostic inventory walks and JSONL records; absent from ordinary builds.
 gc-memory-telemetry = ["dep:serde_json", "neovm-value/gc-memory-telemetry", "neovm-eval/gc-memory-telemetry", "neovm-display/gc-memory-telemetry"]
 sqlite = ["dep:rusqlite", "neovm-value/sqlite", "neovm-eval/sqlite", "neovm-system/sqlite", "neovm-display/sqlite"]
+xwidgets = ["neovm-eval/xwidgets", "neovm-display/xwidgets", "neovm-value/xwidgets"]
 # Static-link the crate's bundled libdbus instead of pkg-config `dbus-1`.
 # Production/Nix builds leave this off and use the system library.  The
 # transport (and its dbus dependency) lives in neovm-system since stage 6,
@@ -139,7 +140,10 @@ sound = ["neovm-display/sound"]
 # `xwidget-internal` is provided: the evaluator cannot see
 # `neomacs-webview`'s feature directly, and advertising the layer without the
 # backend leaves `xwidget-webkit-browse-url` failing at creation.
-webview = ["neovm-value/webview"]
+# The macOS inline-webview backend implies the GNU keyed xwidget surface
+# (`xwidgets`, our HAVE_XWIDGETS): a build that advertises xwidget-internal
+# must also declare make-xwidget and bind xwidget-list.
+webview = ["neovm-value/webview", "xwidgets"]
 # The Linux display runtime enables this when it links its native GSettings
 # adapter. Bare evaluator builds must not advertise a native subscription.
 # The system-vocabulary table moved to neovm-value, so the same capability has
@@ -195,8 +199,19 @@ perf-probes = ["neovm-value/perf-probes", "neovm-eval/perf-probes"]
 # The postgate compiles them with
 # `cargo check -p neovm-core --features contract-fixtures --tests`.
 contract-fixtures = ["neovm-eval/contract-fixtures"]
+# Empty marker, never enabled on core itself: the contract fixtures mount
+# sibling product sources (host_effect_ui includes neovm-eval's wake modules
+# by #[path]), and those sources legitimately gate test hooks on
+# `feature = "test-support"`. The fixture crates are trybuild scratch bins
+# whose manifest copies THIS [features] table, so the cfg must be declared
+# here or rustc reports unexpected_cfg(test-support) in the fixture stderr.
+# Core's real test-support enablement stays on the dev edges below (A2).
+test-support = []
 
 [dev-dependencies]
+# W-GEN: the architecture freshness guard runs the same ledger generator
+# xtask uses; a dev edge keeps it out of product builds.
+neovm-gnu-ledgers.workspace = true
 # Peer ruling A2 + TEST-SUPPORT-DESIGN rev 2: a provider's test surface is
 # enabled only by a dev edge from a crate above it, never for normal builds.
 # Each edge below enables one lower provider's surface for core's test units.
@@ -232,7 +247,6 @@ proc-macro2 = { version = "1", features = ["span-locations"] }
 [build-dependencies]
 flate2.workspace = true
 pkg-config.workspace = true
-sha2.workspace = true
 
 [[test]]
 name = "thread_safety_contracts"

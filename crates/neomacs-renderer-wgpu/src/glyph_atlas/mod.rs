@@ -1081,6 +1081,74 @@ impl WgpuGlyphAtlas {
             });
         }
 
+        // Subpixel masks carry coverage in R,G,B and leave A at zero
+        // (zeno's rasterizer writes only the three coverage channels).  They
+        // must be composited per channel; treating the fourth byte as alpha
+        // silently drops every glyph in the run and leaves an empty atlas
+        // entry (the blank-Arabic-composition bug).
+        if any_subpixel && !any_color {
+            let mut composite = vec![0u8; (total_w * total_h * 4) as usize];
+            for glyph in &sub_glyphs {
+                let ox = (glyph.bearing_x - min_x).round() as i32;
+                let oy = (-glyph.bearing_y - min_y).round() as i32;
+                for py in 0..glyph.height {
+                    for px in 0..glyph.width {
+                        let dx = ox + px as i32;
+                        let dy = oy + py as i32;
+                        if dx < 0 || dy < 0 || dx >= total_w as i32 || dy >= total_h as i32 {
+                            continue;
+                        }
+                        let dst_idx = ((dy as u32 * total_w + dx as u32) * 4) as usize;
+                        let (src_r, src_g, src_b) = match glyph.pixel_kind {
+                            GlyphPixelKind::AlphaMask => {
+                                let src_idx = (py * glyph.width + px) as usize;
+                                let Some(&coverage) = glyph.pixel_data.get(src_idx) else {
+                                    continue;
+                                };
+                                (coverage, coverage, coverage)
+                            }
+                            GlyphPixelKind::SubpixelRgba => {
+                                let src_idx = ((py * glyph.width + px) * 4) as usize;
+                                let Some(channels) = glyph.pixel_data.get(src_idx..src_idx + 3)
+                                else {
+                                    continue;
+                                };
+                                (channels[0], channels[1], channels[2])
+                            }
+                            GlyphPixelKind::ColorRgba => {
+                                unreachable!("color glyphs are handled by the RGBA color branch")
+                            }
+                        };
+                        let coverage = src_r.max(src_g).max(src_b) as u32;
+                        if coverage == 0 {
+                            continue;
+                        }
+                        let inv = 255 - coverage;
+                        for (channel, src) in [src_r, src_g, src_b].into_iter().enumerate() {
+                            let dst = composite[dst_idx + channel] as u32;
+                            composite[dst_idx + channel] = (u32::from(src) + dst * inv / 255) as u8;
+                        }
+                    }
+                }
+            }
+            // Keep A a valid coverage value, matching normalize_subpixel_mask's
+            // 3-byte conversion.  The subpixel sampler uses R,G,B; A is only
+            // carried for the RGBA texture layout.
+            for pixel in composite.chunks_exact_mut(4) {
+                pixel[3] = pixel[0].max(pixel[1]).max(pixel[2]);
+            }
+            return Some(RasterizeResult {
+                width: total_w,
+                height: total_h,
+                pixel_data: composite,
+                bearing_x: min_x,
+                bearing_y: -min_y,
+                pixel_kind: GlyphPixelKind::SubpixelRgba,
+                advance_width: total_advance,
+                sampling,
+            });
+        }
+
         // Composite all sub-glyphs into a single RGBA buffer
         let bpp = 4u32; // always RGBA for composited result
         let mut composite = vec![0u8; (total_w * total_h * bpp) as usize];
@@ -1098,27 +1166,45 @@ impl WgpuGlyphAtlas {
                     }
                     let dst_idx = ((dy as u32 * total_w + dx as u32) * bpp) as usize;
                     if glyph.pixel_kind != GlyphPixelKind::AlphaMask {
-                        // RGBA source
+                        // RGBA source.  A color glyph's fourth byte is alpha;
+                        // a subpixel mask's fourth byte is unused (zero), so
+                        // derive its coverage from the three channels.
                         let src_idx = ((py * glyph.width + px) * 4) as usize;
                         if src_idx + 3 < glyph.pixel_data.len() {
-                            let sa = glyph.pixel_data[src_idx + 3] as u32;
+                            let (sr, sg, sb, sa) = match glyph.pixel_kind {
+                                GlyphPixelKind::ColorRgba => (
+                                    glyph.pixel_data[src_idx],
+                                    glyph.pixel_data[src_idx + 1],
+                                    glyph.pixel_data[src_idx + 2],
+                                    glyph.pixel_data[src_idx + 3],
+                                ),
+                                GlyphPixelKind::SubpixelRgba => {
+                                    let (r, g, b) = (
+                                        glyph.pixel_data[src_idx],
+                                        glyph.pixel_data[src_idx + 1],
+                                        glyph.pixel_data[src_idx + 2],
+                                    );
+                                    (r, g, b, r.max(g).max(b))
+                                }
+                                GlyphPixelKind::AlphaMask => unreachable!(),
+                            };
                             if sa > 0 {
                                 // Alpha composite (premultiplied)
                                 let da = composite[dst_idx + 3] as u32;
-                                let inv_sa = 255 - sa;
-                                composite[dst_idx] = ((glyph.pixel_data[src_idx] as u32 * sa
+                                let inv_sa = 255 - u32::from(sa);
+                                composite[dst_idx] = ((u32::from(sr) * u32::from(sa)
                                     + composite[dst_idx] as u32 * inv_sa)
                                     / 255)
                                     as u8;
-                                composite[dst_idx + 1] =
-                                    ((glyph.pixel_data[src_idx + 1] as u32 * sa
-                                        + composite[dst_idx + 1] as u32 * inv_sa)
-                                        / 255) as u8;
-                                composite[dst_idx + 2] =
-                                    ((glyph.pixel_data[src_idx + 2] as u32 * sa
-                                        + composite[dst_idx + 2] as u32 * inv_sa)
-                                        / 255) as u8;
-                                composite[dst_idx + 3] = (sa + da * inv_sa / 255) as u8;
+                                composite[dst_idx + 1] = ((u32::from(sg) * u32::from(sa)
+                                    + composite[dst_idx + 1] as u32 * inv_sa)
+                                    / 255)
+                                    as u8;
+                                composite[dst_idx + 2] = ((u32::from(sb) * u32::from(sa)
+                                    + composite[dst_idx + 2] as u32 * inv_sa)
+                                    / 255)
+                                    as u8;
+                                composite[dst_idx + 3] = (u32::from(sa) + da * inv_sa / 255) as u8;
                             }
                         }
                     } else {
@@ -1152,11 +1238,7 @@ impl WgpuGlyphAtlas {
             pixel_data: composite,
             bearing_x: min_x,
             bearing_y: -min_y,
-            pixel_kind: if any_color || (sub_glyphs.len() > 1 && !any_subpixel) {
-                GlyphPixelKind::ColorRgba
-            } else {
-                GlyphPixelKind::SubpixelRgba
-            },
+            pixel_kind: GlyphPixelKind::ColorRgba,
             advance_width: total_advance,
             sampling,
         })
@@ -2124,7 +2206,9 @@ impl WgpuGlyphAtlas {
         let scale = self.scale_factor;
         let mut sub_glyphs: Vec<SampledSubGlyph> = Vec::new();
         for glyph in glyphs {
-            let font = self.frame_fonts.get(&glyph.resolved_font_id)?.clone();
+            let Some(font) = self.frame_fonts.get(&glyph.resolved_font_id).cloned() else {
+                return None;
+            };
             match &font.replay {
                 FontReplay::Swash { .. } => {
                     let font_id = self.local_fontdb_id_for(glyph.resolved_font_id)?;
@@ -2205,16 +2289,40 @@ impl WgpuGlyphAtlas {
         enable_subpixel: bool,
     ) -> Option<Vec<RasterizeResult>> {
         let face = face?;
-        let glyphs = self.frame_shaped_clusters.get(&face.id)?.get(text)?.clone();
+        let lookup = self
+            .frame_shaped_clusters
+            .get(&face.id)
+            .and_then(|by_text| by_text.get(text))
+            .cloned();
+        let glyphs = lookup?;
         let font_size = effective_font_size(Some(face.font_size), self.default_font_size);
-        self.rasterize_resolved_cluster(
+        let rasterized = self.rasterize_resolved_cluster(
             &glyphs,
             Some(face),
             font_size,
             x_bin,
             y_bin,
             enable_subpixel,
-        )
+        );
+        // A layout-published cluster that rasterizes to no ink at all is a
+        // rendering failure, not an empty glyph: don't silently leave the
+        // cell blank.  Fall through to `rasterize_text`, which can find a
+        // covering font through cosmic-text's fallback, and make the failure
+        // visible in the log.
+        if rasterized.as_ref().is_some_and(|results| {
+            results
+                .iter()
+                .all(|result| result.pixel_data.iter().all(|&byte| byte == 0))
+        }) {
+            tracing::warn!(
+                text,
+                face_id = face.id.get(),
+                glyph_count = glyphs.len(),
+                "composed glyph rasterization produced no ink; re-shaping cluster"
+            );
+            return None;
+        }
+        rasterized
     }
 
     /// Update the scale factor and clear the cache so glyphs are
@@ -2986,6 +3094,18 @@ impl WgpuGlyphAtlas {
                     .map(|result| vec![result])
             })
             .ok_or(GlyphAtlasError::RasterizeFailed)?;
+        if text.chars().any(|ch| !ch.is_whitespace())
+            && results
+                .iter()
+                .all(|result| result.pixel_data.iter().all(|&byte| byte == 0))
+        {
+            tracing::warn!(
+                text,
+                face_id = face_id.get(),
+                "composed glyph rasterization produced no ink; refusing to cache an empty atlas entry"
+            );
+            return Err(GlyphAtlasError::RasterizeFailed);
+        }
 
         let mut handles = Vec::with_capacity(results.len());
         for result in results {

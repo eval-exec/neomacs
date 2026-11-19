@@ -3419,9 +3419,9 @@ dependencies = [
 
 [[package]]
 name = "libz-sys"
-version = "1.1.31"
+version = "1.1.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff20308ecabd635a2dc1dd5834a86c462cca20efba1d5d3ddab1f8aea3455cb2"
+checksum = "fee3f59f4321dab0c78d828942e7aa09d0bd8ad6e78a501977e6bf3d02938045"
 dependencies = [
  "cc",
  "libc",
@@ -3922,6 +3922,7 @@ dependencies = [
  "neomacs-video-model",
  "neomacs-webview",
  "neovm-core",
+ "neovm-eval",
  "num_enum",
  "objc2",
  "objc2-app-kit",
@@ -4027,6 +4028,8 @@ dependencies = [
  "neomacs-font-materializer",
  "neomacs-test-fonts",
  "neovm-core",
+ "neovm-edit",
+ "neovm-eval",
  "neovm-value",
  "num_enum",
  "objc2-core-foundation",
@@ -4041,7 +4044,6 @@ dependencies = [
  "tracing",
  "tracing-test",
  "ttf-parser",
- "unicode-script",
  "winapi",
  "wio",
  "yeslogic-fontconfig-sys",
@@ -4058,7 +4060,6 @@ dependencies = [
  "neomacs-test-env",
  "neomacs-test-oracle",
  "serde_json",
- "sha2",
  "tempfile",
  "wait-timeout",
 ]
@@ -4236,7 +4237,6 @@ dependencies = [
  "objc2-core-video",
  "objc2-foundation",
  "objc2-metal",
- "thiserror 2.0.20",
  "tracing",
  "url",
  "wgpu",
@@ -4331,6 +4331,7 @@ dependencies = [
  "neovm-display-identity",
  "neovm-edit",
  "neovm-eval",
+ "neovm-gnu-ledgers",
  "neovm-host-abi",
  "neovm-system",
  "neovm-text",
@@ -4400,7 +4401,6 @@ dependencies = [
  "neovm-value",
  "num_enum",
  "pkg-config",
- "regex",
  "rodio",
  "rustc-hash 2.1.3",
  "smallvec",
@@ -4458,7 +4458,6 @@ dependencies = [
  "enum-map",
  "enumflags2",
  "errno",
- "flate2",
  "fs4",
  "getrandom 0.4.3",
  "hashbrown 0.17.0",
@@ -4514,6 +4513,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "neovm-gnu-ledgers"
+version = "0.0.20"
+
+[[package]]
 name = "neovm-host-abi"
 version = "0.0.20"
 
@@ -4558,7 +4561,6 @@ dependencies = [
  "pkg-config",
  "polling",
  "portable-pty",
- "regex",
  "rusqlite",
  "rustc-hash 2.1.3",
  "rustix 1.1.6",
@@ -9507,6 +9509,7 @@ version = "0.0.20"
 dependencies = [
  "flate2",
  "neomacs-test-env",
+ "neovm-gnu-ledgers",
  "proc-macro2",
  "rayon",
  "resvg",

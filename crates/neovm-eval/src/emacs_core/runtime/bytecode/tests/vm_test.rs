@@ -1701,6 +1701,9 @@ fn vm_fillarray_alias_call_preserves_original_roots() {
 fn vm_redefined_fillarray_preserves_pending_structural_key_table() {
     let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
     eval.setup_thread_locals();
+    // Hydration looks the frame key up. `make_frame` does not mint, so the
+    // parked id has to already name a frame object.
+    let _parked_frame = Value::mint_frame(72);
     let original = Value::string("abc");
     let replacement = Value::string("xyz");
     let table = Value::hash_table(HashTableTest::Equal);
@@ -5677,7 +5680,7 @@ fn vm_func_arity_and_obarray_queries_use_shared_obarray_state() {
                   (obarrayp (obarray-make 3))
                   (obarrayp [1 2 3])))"#,
             |eval| {
-                eval.obarray_mut().intern("vm-soft-target");
+                eval.obarray_mut().intern_member("vm-soft-target");
             },
         ),
         "OK ((1 . 1) vm-soft-target nil t nil)"
@@ -7257,4 +7260,130 @@ fn vm_aref_aset_answer_and_signal_like_gnu() {
         .eval_str("(let ((ct (make-char-table 'test))) (aset ct #x3fffff 'z) (list ct #x3fffff))")
         .expect("arguments evaluate");
     assert_eq!(run_array_opcode(&mut eval, &aref, args), "OK z");
+}
+
+/// `(condition-case nil (signal 'arith-error DATA) (arith-error RESULT))` as
+/// compiled bytecode.  DATA_OPS leaves the signal data on the stack.
+fn vm_signal_caught_by_condition_case(
+    data_ops: impl FnOnce(&mut ByteCodeFunction) -> Vec<Op>,
+) -> ByteCodeFunction {
+    let mut func = ByteCodeFunction::new(LambdaParams::simple(vec![]));
+    let conditions = func.add_constant(Value::symbol("arith-error"));
+    let error_symbol = func.add_constant(Value::symbol("arith-error"));
+    let signal_subr = func.add_symbol("signal");
+    let data = data_ops(&mut func);
+    // The handler resumes at the final `Return` with the binding on the stack.
+    let handler = u32::try_from(4 + data.len()).expect("small function");
+    func.ops = vec![
+        Op::Constant(conditions),
+        Op::PushConditionCaseRaw(handler),
+        Op::Constant(error_symbol),
+    ];
+    func.ops.extend(data);
+    func.ops
+        .extend([Op::CallBuiltin(signal_subr, 2), Op::Return]);
+    func.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+    func
+}
+
+#[test]
+fn vm_caught_signal_dispatch_interns_no_variable_names() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let func = vm_signal_caught_by_condition_case(|func| {
+        vec![Op::Constant(func.add_constant(Value::NIL))]
+    });
+    let run = |eval: &mut Context| {
+        let mut vm = new_vm(eval);
+        vm.execute(&func, vec![])
+            .expect("the handler catches the signal")
+    };
+
+    // Warm: the first signal may intern the condition and variable symbols.
+    assert_eq!(
+        crate::emacs_core::format_eval_result(&Ok(run(&mut eval))),
+        "OK (arith-error)"
+    );
+
+    neovm_value::intern::reset_intern_calls();
+    assert_eq!(
+        crate::emacs_core::format_eval_result(&Ok(run(&mut eval))),
+        "OK (arith-error)"
+    );
+    assert_eq!(
+        neovm_value::intern::intern_calls(),
+        0,
+        "a warm caught signal must read its control variables by symbol id, interned: {:?}",
+        neovm_value::intern::intern_call_names(),
+    );
+}
+
+#[test]
+fn vm_signal_dispatch_honours_dynamically_bound_inhibit_debugger() {
+    crate::test_utils::init_test_tracing();
+    with_vm_eval_full_context_state(
+        "(let ((debug-on-error t)
+               (debug-on-signal t)
+               (called nil)
+               (debugger (lambda (&rest _args)
+                           (setq called (cons 'debugger called)))))
+           (list (let ((inhibit-debugger t))
+                   (condition-case nil
+                       (signal 'arith-error nil)
+                     (arith-error 'handled)))
+                 called
+                 (condition-case nil
+                     (signal 'arith-error nil)
+                   (arith-error 'handled))
+                 called))",
+        false,
+        |result, _eval| {
+            assert_eq!(
+                crate::emacs_core::format_eval_result(&result),
+                "OK (handled nil handled (debugger))"
+            );
+        },
+    );
+}
+
+#[test]
+fn vm_signal_payload_survives_gc_in_signal_hook_function() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    eval.eval_str(
+        "(setq signal-hook-function
+               (lambda (sym data)
+                 (garbage-collect)
+                 (setq vm-signal-hook-seen (list sym data))))",
+    )
+    .expect("install signal-hook-function");
+    // DATA is built at run time, so only the in-flight signal roots it.
+    let func = vm_signal_caught_by_condition_case(|func| {
+        let make_string = func.add_symbol("make-string");
+        let cons = func.add_symbol("cons");
+        let list = func.add_symbol("list");
+        vec![
+            Op::Constant(func.add_constant(Value::fixnum(3))),
+            Op::Constant(func.add_constant(Value::fixnum(i64::from(b'x')))),
+            Op::CallBuiltin(make_string, 2),
+            Op::Constant(func.add_constant(Value::fixnum(1))),
+            Op::Constant(func.add_constant(Value::fixnum(2))),
+            Op::CallBuiltin(cons, 2),
+            Op::CallBuiltin(list, 2),
+        ]
+    });
+    let gcs_before = eval.gc_count;
+    let result = {
+        let mut vm = new_vm(&mut eval);
+        vm.execute(&func, vec![]).map_err(map_flow)
+    };
+    assert!(eval.gc_count > gcs_before, "the hook must force a GC");
+    assert_eq!(
+        crate::emacs_core::format_eval_result(&result),
+        "OK (arith-error \"xxx\" (1 . 2))"
+    );
+    assert_eq!(
+        crate::emacs_core::format_eval_result(&eval.eval_str("vm-signal-hook-seen")),
+        "OK (arith-error (\"xxx\" (1 . 2)))"
+    );
 }

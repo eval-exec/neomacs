@@ -52,7 +52,8 @@ fn combo_eieio_temp_buffer_insert_from_main() {
         (push (list "edit" (tc-snips ctx) (marker-position m)) results)
         (with-temp-buffer
           (insert "TEMP-CONTENT")
-          (let ((temp-sub (buffer-string))))
+          (let ((temp-sub (buffer-string)))
+            (push temp-sub (tc-snips ctx))))
         (push (list "temp-scope" (tc-snips ctx) (marker-position m)) results)
         (setq results (reverse results))
         (goto-char (point-max))
@@ -65,7 +66,7 @@ fn combo_eieio_temp_buffer_insert_from_main() {
               (marker-position m)
               (overlay-start ov) (overlay-end ov)
               my-tb-log)))
-    (kill-buffer buf))))"#,
+    (kill-buffer buf)))"#,
         expect,
     );
 }

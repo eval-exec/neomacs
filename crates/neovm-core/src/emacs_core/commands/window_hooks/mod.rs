@@ -244,6 +244,12 @@ fn run_window_default_hook_value(
         return Ok(Value::NIL);
     }
 
+    // The plan stored this id while the frame was live. A later hook can
+    // delete it. The window object passed to a local hook keeps the frame
+    // registered; a reclaimed id must not reach `make_frame`.
+    let Some(frame_value) = Value::registered_frame(frame_id.0) else {
+        return Ok(Value::NIL);
+    };
     let saved = save_hook_caller_context(eval);
     let result = (|| -> EvalResult {
         let selected_window = eval
@@ -261,7 +267,7 @@ fn run_window_default_hook_value(
             eval,
             hook_sym,
             global_hook_value,
-            &[Value::make_frame(frame_id.0)],
+            &[frame_value],
             false,
         )?;
         Ok(Value::NIL)

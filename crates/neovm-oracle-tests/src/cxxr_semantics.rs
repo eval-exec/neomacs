@@ -12,7 +12,7 @@ fn oracle_prop_gnu_subr_cxxr_nested_car_cdr_contracts() {
     let form = r#"(let ((x '((((aaaa . aaad) . (aada . aadd))
             . ((adaa . adad) . (adda . addd)))
            . (((daaa . daad) . (dada . dadd))
-              . ((ddaa . ddad) . (ddda . dddd)))))))
+              . ((ddaa . ddad) . (ddda . dddd))))))
   (list
    (mapcar (lambda (fn) (list fn (funcall fn x)))
            '(caar cadr cdar cddr
@@ -27,7 +27,9 @@ fn oracle_prop_gnu_subr_cxxr_nested_car_cdr_contracts() {
              (cddr '(a . b))
              (cadr '(a . b))
              (caar 42)
-             (caddr '(a . b)))))"#;
-    let expect = expect_test::expect![[r#""ERR (void-variable x)""#]];
+             (caddr '(a . b))))))"#;
+    let expect = expect_test::expect![[
+        r#""OK (((caar ((aaaa . aaad) aada . aadd)) (cadr ((daaa . daad) dada . dadd)) (cdar ((adaa . adad) adda . addd)) (cddr ((ddaa . ddad) ddda . dddd)) (caaar (aaaa . aaad)) (caadr (daaa . daad)) (cadar (adaa . adad)) (caddr (ddaa . ddad)) (cdaar (aada . aadd)) (cdadr (dada . dadd)) (cddar (adda . addd)) (cdddr (ddda . dddd)) (caaaar aaaa) (caaadr daaa) (caadar adaa) (caaddr ddaa) (cadaar aada) (cadadr dada) (caddar adda) (cadddr ddda) (cdaaar aaad) (cdaadr daad) (cdadar adad) (cdaddr ddad) (cddaar aadd) (cddadr dadd) (cdddar addd) (cddddr dddd)) (nil nil (error wrong-type-argument) (error wrong-type-argument) (error wrong-type-argument) (error wrong-type-argument)))""#
+    ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }

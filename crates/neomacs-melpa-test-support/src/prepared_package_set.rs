@@ -13,6 +13,33 @@ pub enum PackageActivation {
     InstalledAutoloads,
 }
 
+/// Containment check for MELPA fixtures.
+///
+/// `file-in-directory-p` (lisp/files.el) finishes by calling `file-equal-p`
+/// on the shared root. That compares the full `file-attributes` list,
+/// including mtime, so a directory shared by parallel cases (the MELPA
+/// cache, `temporary-file-directory`) can change between the two stats and
+/// the predicate returns nil for a path that is inside. Fixtures call this
+/// function instead. A file-name handler still goes through
+/// `file-in-directory-p`.
+const MELPA_PATH_INSIDE_ELISP: &str = r#"(defun neomacs-melpa-path-inside-p (file dir)
+  "Return non-nil if DIR is a parent directory of FILE.
+DIR must exist.  A directory contains itself.  Names are compared
+after `file-truename', matching `file-in-directory-p' in lisp/files.el
+without the `file-equal-p' mtime check on the shared root."
+  (let ((handler (or (find-file-name-handler file 'file-in-directory-p)
+                     (find-file-name-handler dir 'file-in-directory-p))))
+    (if handler
+        (file-in-directory-p file dir)
+      (when (file-directory-p dir)
+        (let* ((true-file (file-truename file))
+               (true-dir (file-name-as-directory (file-truename dir)))
+               (true-file (if (file-directory-p true-file)
+                              (file-name-as-directory true-file)
+                            true-file)))
+          (or (string-equal true-file true-dir)
+              (string-prefix-p true-dir true-file)))))))"#;
+
 pub fn package_activation_elisp(activation: PackageActivation) -> &'static str {
     match activation {
         PackageActivation::SourceFile => r#"(load (getenv "NEOMACS_PACKAGE_SOURCE") nil t t)"#,
@@ -199,6 +226,7 @@ impl PreparedPackageSet {
             .collect::<Vec<_>>()
             .join(" ");
         let activation = package_activation_elisp(self.activation);
+        let path_inside = MELPA_PATH_INSIDE_ELISP;
         let (suffixes_prelude, load_suffixes_form) = match self.load_suffixes {
             // An installed GNU ships its Lisp compressed (`make install` runs
             // the sources through GZIP_PROG; `pcase.el.gz`), so decompression
@@ -238,6 +266,7 @@ impl PreparedPackageSet {
                          package-load-list
                          (list 'all {package_load_list}){load_suffixes_form})
                    (package-initialize)
+                   {path_inside}
                    {}
                    {})"##,
             self.prelude, activation

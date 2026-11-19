@@ -90,6 +90,18 @@ pub struct GnuCFeature {
     pub here: HereDecision,
 }
 
+#[cfg(feature = "test-support")]
+impl GnuCFeature {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn gnu_site(&self) -> &'static str {
+        self.gnu_site
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn gnu_guard(&self) -> GnuGuard {
+        self.gnu_guard
+    }
+}
+
 /// GNU 31.0.90 (`0ee48ac4df2`) makes **35** `Fprovide` calls in `src/*.c` and
 /// `src/*.m`, naming **29** distinct features, plus the `emacs` seed: **30
 /// rows**.  A name provided from more than one window-system backend cites the
@@ -146,12 +158,20 @@ pub fn gnu_c_features() -> [GnuCFeature; 30] {
             //
             // Linux keeps the old answer: its WPE path renders through
             // dma-buf and ledger 190's 13 missing subrs are still open there.
+            // The predicate is the `xwidgets` cargo feature -- the port's
+            // key for GNU's `HAVE_XWIDGETS` -- and nothing else. The macOS
+            // `webview` feature implies it, so the shipped macOS build
+            // advertises the layer only together with the catalog and the
+            // variables it needs; a build without `xwidgets` advertises
+            // neither. `xwidget.el' does not `require' this feature (its
+            // `(require 'xwidget-internal)' is commented out at line 32), so
+            // what it decides is whether a configuration reaches for the
+            // layer at all.
             here: DetectedAtBuildTime {
-                cfg: "neomacs_have_wkwebview -- crates/neovm-core/build.rs detect_wkwebview(): \
-                      macOS AND the `webview' feature, which compiles \
-                      crates/neomacs-webview/src/platform/macos (a real WKWebView placed \
-                      with GNU's own algorithm from src/xwidget.c); see issue 300",
-                present: cfg!(neomacs_have_wkwebview),
+                cfg: "feature = \"xwidgets\" -- the single key shared with the xwidget subr \
+                      catalog and boot variables (GNU HAVE_XWIDGETS, configure.ac:4455-4507); \
+                      the macOS `webview` feature implies it",
+                present: cfg!(feature = "xwidgets"),
             },
         },
         GnuCFeature {

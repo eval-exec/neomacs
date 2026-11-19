@@ -61,3 +61,25 @@ backrefs/shy-groups/intervals/non-greedy/word-boundaries/`\ca`/`\&`/`\1`.
 ## Files
 `divergence_audit_{casefiddle,editfns,fileio,regex,quotes_casefold}.rs`,
 `divergence_casefold_matrix.rs`.
+
+## GNU-UNDEFINED — `find-font`/`list-fonts` with a named OpenType LANGSYS
+
+Not a parity row: GNU Emacs 31.1 reads out of bounds here, so there is no
+GNU result to compare against.
+
+- Form: `(find-font (font-spec :otf '(arab "ZZZ " (init))))` (a named
+  language system, as opposed to nil or only feature lists).
+- GNU path: `font_list_entities` -> `ftfont_list` -> `hbotf_check_features`
+  (`src/ftfont.c:3054-3066`). When `language_tag != 0`, the language-tag scan
+  is bounded by `script_count` but indexes `language_tags`, and the resulting
+  out-of-range `language_index` reaches HarfBuzz. The attested 31.1 oracle
+  segfaults on the form.
+- Contract Neomacs implements: the named language system must exist in the
+  table being checked; if it does, its own feature list is used, otherwise no
+  font matches. This is the behaviour of `font_check_otf_features`
+  (`src/font.c:2358-2395`) and the clear intent of `hbotf_check_features`.
+- Neo-only regressions:
+  `neomacs_layout_engine::font::resolver::otf_fixture_tests::otf_named_langsys_form_matches_without_crashing`
+  and
+  `neovm_display::emacs_core::font::tests::find_font_named_langsys_request_neither_errors_nor_crashes`.
+- Do not file upstream; the lead is raising this with the user.

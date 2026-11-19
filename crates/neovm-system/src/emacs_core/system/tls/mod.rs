@@ -26,7 +26,7 @@ pub fn gnutls_available_capabilities() -> &'static [&'static str] {
 }
 
 #[doc(hidden)]
-pub fn builtin_neomacs_tls_available_p(args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_neomacs_tls_available_p(args: Vec<Value>) -> EvalResult {
     expect_args("neomacs-tls-available-p", &args, 0)?;
     Ok(Value::T)
 }
@@ -241,7 +241,11 @@ pub(crate) fn gnutls_peer_status_to_value(status: &TlsPeerStatus) -> Value {
     if !status.warnings.is_empty() {
         entries.push(Value::keyword(":warnings"));
         entries.push(Value::list(
-            status.warnings.iter().map(Value::keyword).collect(),
+            status
+                .warnings
+                .iter()
+                .map(|name| Value::keyword(*name))
+                .collect(),
         ));
     }
 

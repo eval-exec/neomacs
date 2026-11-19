@@ -70,10 +70,6 @@ pub(crate) fn register_manager(
     register_select_handle(manager.green_select_handle()?)
 }
 
-pub(super) fn select_notify(token: SelectHandleToken) {
-    let _ = with_select(token, GreenSelectHandle::notify);
-}
-
 pub(super) fn select_nudge(
     token: SelectHandleToken,
     destination: ControlDestination,

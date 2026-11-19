@@ -345,7 +345,7 @@ impl<'a> VariableView<'a> {
 
     /// [`Self::boundp`] by name.
     #[inline]
-    pub fn boundp_by_name(self, name: &str) -> bool {
+    pub(crate) fn boundp_by_name(self, name: &str) -> bool {
         self.boundp(intern(name))
     }
 
@@ -431,7 +431,7 @@ impl<'a> VariableStore<'a> {
 
     /// [`Self::store`] by name (interning it).
     #[inline]
-    pub fn store_by_name(&mut self, name: &str, value: Value) {
+    pub(crate) fn store_by_name(&mut self, name: &str, value: Value) {
         self.store(intern(name), value);
     }
 
@@ -587,9 +587,7 @@ impl Context {
     /// `DEFVAR_*` global, or a Lisp `symbol-value`, is the VISIBLE read and
     /// must use [`Self::builtin_var_value`] /
     /// [`Self::builtin_var_value_by_name`] / [`Self::builtin_var_value_cached`]
-    /// (or [`Self::special_variable_value_by_id`]) instead. The callers of
-    /// this accessor are counted and frozen by
-    /// `emacs_core/tests/architecture/default_value_only_ratchet_test.rs`.
+    /// (or [`Self::special_variable_value_by_id`]) instead.
     #[inline(always)]
     pub fn default_value_only(&self, id: SymId) -> Option<Value> {
         self.variables().value(id)
@@ -682,14 +680,6 @@ impl Context {
         let id = intern(name);
         if self.obarray.set_canonical_value_routed(id, value) == CanonicalWrite::Projected {
             self.store_owner_variable(id, value);
-        }
-    }
-
-    /// Make the variable void the way [`Self::store_variable`] writes it.
-    #[inline(never)]
-    pub fn makunbound_variable(&mut self, id: SymId) {
-        if self.obarray.makunbound_canonical_routed(id) == CanonicalWrite::Projected {
-            self.makunbound_owner_variable(id);
         }
     }
 }

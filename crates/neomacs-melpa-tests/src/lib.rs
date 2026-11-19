@@ -17,21 +17,32 @@ use neomacs_melpa_test_support::{
 };
 pub use neomacs_melpa_test_support::{
     EmacsRuntime, LockedPackageSource, MelpaSandbox, PackageActivation, PreparedPackageSet,
-    PreparedSourceInstall, SHALLOW_GIT_FETCH_ARGS, SourceBuild, locked_melpa_install_plan,
-    locked_melpa_source, locked_melpa_sources, neomacs_binary, package_activation_elisp,
-    preflight_locked_melpa_packages, prepare_cached_locked_melpa_package,
-    prepare_cached_tree_sitter_grammar, prepare_cached_tree_sitter_grammar_from_subdirectory,
-    workspace_root,
+    PreparedSourceInstall, SHALLOW_GIT_FETCH_ARGS, SourceBuild, cached_tree_sitter_grammar,
+    extra_tree_sitter_grammar_pin, locked_melpa_install_plan, locked_melpa_source,
+    locked_melpa_sources, neomacs_binary, package_activation_elisp,
+    preflight_locked_melpa_packages, prepare_cached_locked_melpa_package, workspace_root,
 };
 use neomacs_test_oracle::{
     BatchProbe, EvalOutcome, ExpectedOutcome, extract_marked_batch_protocol,
     extract_marked_outcome, oracle_normalizer_elisp, validate_batch_case_id,
-    wrap_elisp_batch_outcomes, wrap_elisp_outcome,
+    wrap_elisp_batch_outcomes_with_normalizer_bindings,
+    wrap_elisp_outcome_with_normalizer_bindings,
 };
 
 const RESULT_MARKER: &str = "NEOMACS-MELPA-RESULT:";
 const OUTCOME_MARKER: &str = "NEOMACS-MELPA-OUTCOME:";
 const BATCH_BEGIN_MARKER: &str = "NEOMACS-MELPA-BEGIN:";
+
+/// The normalizer contract every MELPA probe opts into, for GNU Emacs and
+/// Neomacs alike.
+///
+/// Redisplay adds or omits a nil-valued `fontified` text property on strings
+/// depending on whether a jit-lock/redisplay step happened to run before the
+/// probe's value was printed; a snapshot cannot pin that, and the two editors
+/// do not run the same redisplay internals in batch.  Strip only that
+/// property (see `neomacs--test-oracle-strip-fontified`); `(fontified t)` is
+/// font-lock evidence that highlighting probes assert and stays.
+const MELPA_NORMALIZER_BINDINGS: &str = "(neomacs--test-oracle-strip-fontified t)";
 pub use neomacs_melpa_test_support::{
     GNU_ELPA_LABEL, GnuElpaPackage, prepare_cached_gnu_elpa_package,
 };
@@ -4886,6 +4897,22 @@ fn oracle_batch_report(
     }
 }
 
+/// A sandbox for a differential parity probe.
+///
+/// The sandbox must live inside the checkout.  GNU `files.el' suppresses
+/// backups below `temporary-file-directory' and `/tmp'
+/// (`normal-backup-enable-predicate'), and checkout fixtures resolve their
+/// root by walking above the sandbox, so an out-of-checkout case root makes a
+/// path-independent contract depend on the host.  `MelpaSandbox::new` roots
+/// at the MELPA cache root, which is in-checkout exactly when
+/// `CARGO_TARGET_DIR` is unset; refuse the other case instead of silently
+/// recording a host-dependent result.
+fn parity_sandbox(label: &str) -> Result<MelpaSandbox, String> {
+    let sandbox = MelpaSandbox::new(label)?;
+    neomacs_melpa_test_support::require_checkout_root(sandbox.root())?;
+    Ok(sandbox)
+}
+
 const DIRECT_PROBE_SCHEMA: &str = "neomacs-melpa-direct-v1";
 const DIRECT_PROBE_MAX_BYTES: u64 = 2 * 1024 * 1024;
 const DIRECT_PROBE_LOG_MAX_BYTES: u64 = 1024 * 1024;
@@ -4898,7 +4925,7 @@ fn run_direct_editor_probe(
     setup: &str,
     probe: &str,
 ) -> Result<EvalOutcome, String> {
-    let sandbox = MelpaSandbox::new(&format!("{name}-direct-{}", runtime.name))?;
+    let sandbox = parity_sandbox(&format!("{name}-direct-{}", runtime.name))?;
     let script_path = sandbox.root().join("direct-probe.el");
     let outcome_path = sandbox.root().join("direct-outcome.el");
     let outcome_tmp_path = sandbox.root().join("direct-outcome.el.partial");
@@ -4984,6 +5011,9 @@ fn direct_probe_script(
   (let ((direct-case-id {case_id})
         (direct-outcome-file {outcome_path})
         (direct-outcome-tmp {outcome_tmp_path})
+        ;; MELPA probes record the documented normalizer contract for both
+        ;; editors; see MELPA_NORMALIZER_BINDINGS.
+        (neomacs--test-oracle-strip-fontified t)
         direct-kind
         direct-value)
     (condition-case direct-error
@@ -6036,8 +6066,13 @@ fn run_elisp_oracle_case(
         setup: &str,
         probe: &str,
     ) -> Result<EvalOutcome, String> {
-        let sandbox = MelpaSandbox::new(name)?;
-        let form = wrap_elisp_outcome(setup, probe, OUTCOME_MARKER);
+        let sandbox = parity_sandbox(name)?;
+        let form = wrap_elisp_outcome_with_normalizer_bindings(
+            setup,
+            probe,
+            OUTCOME_MARKER,
+            MELPA_NORMALIZER_BINDINGS,
+        );
         let phase = run_outcome_phase(runtime, &sandbox, name, ScenarioPhase::RestartProbe, &form)?;
         extract_marked_outcome(&phase.stderr, OUTCOME_MARKER).map_err(|error| {
             format!(
@@ -6075,13 +6110,14 @@ pub fn run_elisp_oracle_batch(
         setup: &str,
         cases: &[BatchProbe<'_>],
     ) -> Result<Vec<(String, EvalOutcome)>, String> {
-        let sandbox = MelpaSandbox::new(batch_name)?;
-        let form = wrap_elisp_batch_outcomes(
+        let sandbox = parity_sandbox(batch_name)?;
+        let form = wrap_elisp_batch_outcomes_with_normalizer_bindings(
             setup,
             cases,
             BATCH_BEGIN_MARKER,
             BATCH_COMPLETE_MARKER,
             OUTCOME_MARKER,
+            MELPA_NORMALIZER_BINDINGS,
         )?;
         let phase = run_outcome_phase(
             runtime,
@@ -6215,7 +6251,12 @@ pub fn run_quickstart_scenario(
         runtime,
         scenario,
         install_form(source, &scenario.package_names(), quickstart_setup),
-        wrap_elisp_outcome("", &quickstart_probe, OUTCOME_MARKER),
+        wrap_elisp_outcome_with_normalizer_bindings(
+            "",
+            &quickstart_probe,
+            OUTCOME_MARKER,
+            MELPA_NORMALIZER_BINDINGS,
+        ),
         ScenarioPhase::QuickstartProbe,
     )
 }
@@ -6763,7 +6804,12 @@ fn probe_form(probe: &str) -> String {
            (require 'package)
            (setq package-user-dir (expand-file-name ".emacs.d/elpa" (getenv "HOME")))
            (package-initialize)"##;
-    wrap_elisp_outcome(setup, probe, OUTCOME_MARKER)
+    wrap_elisp_outcome_with_normalizer_bindings(
+        setup,
+        probe,
+        OUTCOME_MARKER,
+        MELPA_NORMALIZER_BINDINGS,
+    )
 }
 
 fn extract_marker(stdout: &str, marker: &str) -> Option<String> {

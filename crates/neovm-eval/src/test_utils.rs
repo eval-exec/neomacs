@@ -552,6 +552,11 @@ mod unit_runtime {
                         let class = crate::host_cfg::HostCfgClass::from_label(row.cfg)
                             .unwrap_or_else(|| panic!("unknown plan cfg label {:?}", row.cfg));
                         if !class.is_active() {
+                            // Eval-owned feature classes are compiled in every
+                            // build. Activity still decides registration.
+                            if class.standin_ignores_feature_cfg() {
+                                upper.remove(row.name);
+                            }
                             continue;
                         }
                         let (upper_min, upper_max, function) =
@@ -703,9 +708,7 @@ mod unit_runtime {
             s::command_where_is_internal,
         ),
         WindowTreeHooks::new(
-            s::window_tree_char_property_window_lookup,
             s::window_tree_window_resize_check,
-            s::window_tree_window_resize_apply,
             s::window_tree_apply_mini_window_resize,
             s::window_tree_frame_resize_pixelwise,
             s::window_tree_frame_parameter_entry,
@@ -738,8 +741,6 @@ mod unit_runtime {
     }
 
     static PROCESS: ProcessHooks = ProcessHooks::new(
-        s::process_unlink,
-        s::process_delete,
         unit_process_shutdown_noop,
         s::process_open_channel,
         s::process_print_handle,
@@ -747,72 +748,47 @@ mod unit_runtime {
         s::process_terminate_and_defer_reaping,
     );
 
-    /// The eval unit runtime installs NO OS-signal source: `unit_harness`
-    /// never runs core's `os_signal::install`, so there is no signal handler,
-    /// no signal self-pipe, no command loop, and no SIGINT/SIGTERM delivery
-    /// path into this evaluator. GNU's exact answer for that state is "no
-    /// signal pending".
+    /// GNU's `pending_signals` (src/keyboard.c:105), read exactly as the
+    /// production slot reads it: one load of the evaluator's
+    /// `ASYNC_ATTENTION` word's `OsSignal` bit (system `os_signal::pending`).
     ///
-    /// This answers `false` EVEN WHEN a test raises `ASYNC_ATTENTION`'s
-    /// OsSignal bit: that raw bit is a safe-point control, not an installed
-    /// source, so there is nothing pending to process and no drain is
-    /// attempted. Only an installed source (a self-pipe read fd) would make a
-    /// pending signal possible.
-    ///
-    /// The premise is asserted dynamically once per process: a POSIX signal
-    /// source is the only thing that installs the self-pipe, so the
-    /// descriptor's read end must be absent; installing one trips the assert.
+    /// The eval unit runtime installs no OS-signal source (`unit_harness`
+    /// never runs core's `os_signal::install`), so in product use the bit
+    /// stays clear and the answer is false. A test that raises the bit is
+    /// controlling the same word production reads, NOT a different predicate:
+    /// the slot must never answer differently from production for the same
+    /// state (peer 5786). What to do with the raised bit is the drain's job,
+    /// exactly as on the production path.
     fn unit_os_signal_pending() -> bool {
-        static PREMISE: std::sync::OnceLock<()> = std::sync::OnceLock::new();
-        PREMISE
-            .get_or_init(|| assert_no_signal_source_installed(s::input_signal_wake_pipe_read_fd()));
-        false
+        crate::emacs_core::eval::ASYNC_ATTENTION
+            .is_raised(crate::emacs_core::eval::AsyncSource::OsSignal)
     }
 
-    /// Panic unless the descriptor carries NO OS-signal source. A POSIX
-    /// signal source is what installs the self-pipe, so a `Some(read_fd)`
-    /// here would mean a source exists and the no-signal answer is a lie.
-    fn assert_no_signal_source_installed(read_fd: Option<i32>) {
-        assert!(
-            read_fd.is_none(),
-            "ABSENT layer: an OS-signal source is installed in the unit runtime \
-             (self-pipe read fd {read_fd:?}); the no-signal answer would hide it"
-        );
-    }
-
-    #[cfg(test)]
-    mod os_signal_pending_premise {
-        use super::assert_no_signal_source_installed;
-
-        /// 6170 condition: installing a self-pipe (a real read fd) in the
-        /// unit runtime must trip the no-source premise assert.
-        #[test]
-        fn installing_a_self_pipe_trips_the_no_source_assert() {
-            let payload = std::panic::catch_unwind(|| assert_no_signal_source_installed(Some(7)))
-                .expect_err("a planted self-pipe must trip the premise");
-            let message = payload
-                .downcast_ref::<String>()
-                .map(String::as_str)
-                .or_else(|| payload.downcast_ref::<&str>().copied())
-                .unwrap_or("");
-            assert!(
-                message.contains("OS-signal source is installed"),
-                "unexpected premise panic: {message}"
-            );
-        }
-
-        /// The descriptor's absent read end is the covered state.
-        #[test]
-        fn the_absent_read_end_satisfies_the_premise() {
-            assert_no_signal_source_installed(None);
-        }
+    /// The exact empty fold of GNU's `process_pending_signals`
+    /// (`os_signal::drain_pending_os_signals`), for a runtime with no signal
+    /// source:
+    ///
+    /// 1. clear the pending flag first -- production's first statement takes
+    ///    the same `ASYNC_ATTENTION` bit, so a delivery cannot make every
+    ///    later safe point take the cold path;
+    /// 2. consume a captured termination signal -- structurally absent here
+    ///    (`input_take_termination_signal` is ASSERT-EMPTY `None`);
+    /// 3. walk the per-signal `PENDING` slots -- no handler exists to fill
+    ///    them, so the fold has nothing to deliver.
+    ///
+    /// Nothing else is skipped: the unit runtime has no source that could
+    /// produce a delivery, so the fold is exact rather than a stub.
+    fn unit_drain_pending_os_signals(_ctx: &mut Context) -> Result<(), neovm_value::error::Flow> {
+        crate::emacs_core::eval::ASYNC_ATTENTION
+            .take(crate::emacs_core::eval::AsyncSource::OsSignal);
+        Ok(())
     }
 
     static INPUT: InputHooks = InputHooks::new(
         s::input_interrupt_for_input_event_if_requested,
         unit_os_signal_pending,
         s::input_take_termination_signal,
-        s::input_drain_pending_os_signals,
+        unit_drain_pending_os_signals,
         SignalWakeSource::SelfPipe {
             read_fd: s::input_signal_wake_pipe_read_fd,
             drain: s::input_drain_signal_wake_pipe,
@@ -968,6 +944,23 @@ mod unit_runtime {
         duration: std::time::Duration,
         timer_deadline: crate::emacs_core::eval::GnuTimerTimestamp,
     ) -> Result<(), neovm_value::error::Flow> {
+        // F-4: this unit body is the exact wait only while the runtime has no
+        // other wake source: no live process can queue a wait notification,
+        // and no wait-notifier poller is registered. Assert both premises.
+        let live = ctx.processes().live_process_ids();
+        assert!(
+            live.is_empty(),
+            "ABSENT layer: unit wait reached with live processes ({live:?}); \
+             the Green/select sleep would ignore process output"
+        );
+        // PEER 5796: the OS-signal self-pipe half was vacuous (that slot is
+        // the constant-None absent-layer value). A notifier-source assert
+        // cannot be written from the poller field either: the unit runtime
+        // does own a poller, but its handle is reachable only through the
+        // `process.wait_notifier` hook, which is still a refusal stand-in
+        // here, so nothing can publish a wake. The empty process table above
+        // already covers the only other source (process output). The
+        // process-table assert is therefore the real premise.
         match ctx.green_select_switch(duration)? {
             crate::emacs_core::eval::SelectTurn::Switched => Ok(()),
             crate::emacs_core::eval::SelectTurn::Block(wait_time) => {
@@ -3823,19 +3816,19 @@ mod snapshot_consistency {
             "upper_bootstrap_vars.generated.rs is stale; run `cargo xtask upper-snapshots`"
         );
 
-        // The host-active slice of the snapshot is exactly the compiled
-        // registration table, in the same order.
+        // Compiled stand-ins are the host-active rows plus the eval-owned
+        // feature classes, which are compiled in every build. Registration
+        // still follows is_active. Order is the snapshot order.
         let compiled = upper_subrs_for_snapshot_test();
-        let active: Vec<_> = rows
+        let present: Vec<_> = rows
             .iter()
             .filter(|row| {
-                HostCfgClass::from_label(&row.cfg)
-                    .expect("snapshot cfg label")
-                    .is_active()
+                let class = HostCfgClass::from_label(&row.cfg).expect("snapshot cfg label");
+                class.is_active() || class.standin_ignores_feature_cfg()
             })
             .collect();
-        assert_eq!(active.len(), compiled.len());
-        for (row, compiled) in active.iter().zip(compiled.iter()) {
+        assert_eq!(present.len(), compiled.len());
+        for (row, compiled) in present.iter().zip(compiled.iter()) {
             assert_eq!(
                 (row.name.as_str(), row.min, row.max),
                 (compiled.0, compiled.1, compiled.2),
@@ -4219,6 +4212,135 @@ mod plan_consistency {
             "the plan's upper names differ from the H3 snapshot"
         );
     }
+
+    /// W-REG mechanical H3 gate (lead ruling): expanding the step plan in
+    /// order must yield exactly the canonical name sequence. After a row move
+    /// the plan's step kinds/ids/positions may be regenerated, but the
+    /// expanded sequence may not change.
+    #[test]
+    fn the_expanded_plan_yields_the_names_sequence() {
+        let names = parse_names(NAMES);
+        let steps = parse_plan(PLAN);
+        let mut expanded = Vec::new();
+        for step in &steps {
+            expanded.extend(
+                names[step.first - 1..step.first - 1 + step.count]
+                    .iter()
+                    .map(|row| {
+                        (
+                            row.name.clone(),
+                            row.min,
+                            row.max,
+                            row.layer.clone(),
+                            row.cfg.clone(),
+                        )
+                    }),
+            );
+        }
+        let expected: Vec<_> = names
+            .iter()
+            .map(|row| {
+                (
+                    row.name.clone(),
+                    row.min,
+                    row.max,
+                    row.layer.clone(),
+                    row.cfg.clone(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            expanded, expected,
+            "expanding the canonical step plan does not reproduce the name sequence"
+        );
+    }
+
+    /// W-REG mechanical H3 gate (peer criterion): the upper ledger is
+    /// semantically identical to the canonical plan's non-eval rows: same
+    /// name set, arity, layer and cfg. Ledger order may change with the
+    /// direct/batch partition; the semantic mapping may not.
+    #[test]
+    fn the_upper_ledger_matches_the_canonical_names_set_and_fields() {
+        let names = parse_names(NAMES);
+        let mut ledger = std::collections::BTreeMap::new();
+        for row in parse_names(SNAPSHOT) {
+            assert!(
+                ledger
+                    .insert(row.name.clone(), (row.min, row.max, row.layer, row.cfg),)
+                    .is_none(),
+                "duplicate upper ledger name {:?}",
+                row.name
+            );
+        }
+        let mut canonical = 0usize;
+        for row in &names {
+            if row.layer == "eval" {
+                continue;
+            }
+            canonical += 1;
+            let Some((min, max, layer, cfg)) = ledger.get(&row.name) else {
+                panic!(
+                    "canonical upper name {:?} is missing from the H3 ledger",
+                    row.name
+                );
+            };
+            assert_eq!(
+                (*min, *max, layer.as_str(), cfg.as_str()),
+                (row.min, row.max, row.layer.as_str(), row.cfg.as_str()),
+                "H3 ledger row for {:?} is not arity/layer/cfg identical to the plan",
+                row.name
+            );
+        }
+        assert_eq!(
+            ledger.len(),
+            canonical,
+            "the H3 ledger has names the canonical plan does not carry"
+        );
+    }
+
+    /// W-REG R0 loud-failure gate: the owner manifest must either resolve a
+    /// registrar or fail with the module, owning crate, segment id and the
+    /// parsed row counts of the known segments.
+    #[test]
+    fn the_owner_manifest_names_or_rejects_every_registrar() {
+        let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        assert_eq!(
+            generator::owner_manifest_probe_for_test(
+                &repo_root,
+                "crate::emacs_core::sqlite",
+                None,
+            )
+            .expect("known sqlite registrar"),
+            ("neovm-system", "sqlite")
+        );
+
+        let error = generator::owner_manifest_probe_for_test(
+            &repo_root,
+            "crate::emacs_core::sqlite",
+            Some("NoSuchSegment"),
+        )
+        .expect_err("unknown segment must fail");
+        for needle in [
+            "NoSuchSegment",
+            "crate::emacs_core::sqlite",
+            "neovm-system",
+            "rows)",
+        ] {
+            assert!(
+                error.contains(needle),
+                "segment diagnostic is missing {needle:?}: {error}"
+            );
+        }
+
+        let error =
+            generator::owner_manifest_probe_for_test(&repo_root, "no::such::registrar", None)
+                .expect_err("unknown registrar must fail");
+        assert!(
+            error.contains("unknown batch registrar `no::such::registrar`"),
+            "{error}"
+        );
+        assert!(error.contains("owner manifest"), "{error}");
+    }
 }
 
 /// Eval-side T6 pin: a fresh unit-runtime context registers exactly the
@@ -4521,6 +4643,73 @@ mod absent_module_call_state {
                 .or_else(|| payload.downcast_ref::<&str>().copied())
                 .expect("named ABSENT panic");
             assert!(text.contains(marker), "panic was {text}, wanted {marker}");
+        }
+    }
+}
+
+/// W-REG semantic baselines.
+///
+/// The effect inventory (`effect_inventory.inc`) is generated data whose dense
+/// row indices are allowed to shift when a registration row moves into its
+/// owning crate. What must NOT change is the semantic mapping from a subr name
+/// to its kind, authority, E4 parallel class, variant and alias target. This
+/// module pins that mapping through the runtime lookup
+/// (`effect_catalog::inventory()`), never by dense index, against a checked-in
+/// pre-move baseline.
+#[cfg(test)]
+mod wreg_effect_baseline {
+    use crate::emacs_core::subr::effect_catalog;
+
+    const BASELINE: &str =
+        include_str!("emacs_core/lisp/native/subr/effect_inventory.semantic-baseline.tsv");
+
+    fn runtime_rows() -> Vec<String> {
+        let mut rows: Vec<String> = effect_catalog::inventory()
+            .iter()
+            .map(|entry| {
+                format!(
+                    "{:?}\t{}\t{:?}\t{:?}\t{:?}\t{:?}",
+                    entry.kind,
+                    entry.name,
+                    entry.authority,
+                    entry.class,
+                    entry.variant,
+                    entry.target,
+                )
+            })
+            .collect();
+        rows.sort();
+        rows
+    }
+
+    fn baseline_rows() -> Vec<&'static str> {
+        BASELINE
+            .lines()
+            .filter(|line| {
+                !line.is_empty() && !line.starts_with('#') && !line.starts_with("kind\t")
+            })
+            .collect()
+    }
+
+    #[test]
+    fn effect_inventory_semantic_mapping_matches_the_pre_move_baseline() {
+        assert_eq!(
+            runtime_rows(),
+            baseline_rows(),
+            "the effect inventory's name -> kind/authority/E4-class/variant/target \
+             mapping changed; dense indices may shift, the semantic mapping may not"
+        );
+    }
+
+    /// Fixture generator. Run with
+    /// `cargo nextest run -p neovm-eval --lib -E 'test(print_effect_inventory_semantic_baseline)' --run-ignored ignored-only --no-capture`
+    /// and replace the baseline file with the printed lines (header included).
+    #[test]
+    #[ignore = "fixture generator; prints the checked-in semantic baseline"]
+    fn print_effect_inventory_semantic_baseline() {
+        println!("kind\tname\tauthority\tclass\tvariant\ttarget");
+        for row in runtime_rows() {
+            println!("{row}");
         }
     }
 }

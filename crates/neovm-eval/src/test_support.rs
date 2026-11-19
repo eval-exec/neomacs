@@ -3,10 +3,10 @@
 //! `authority` is the TA2 fence (peer rulings 06:0xZ, S-1/S-2, 07:3xZ
 //! Variant B and 10:1xZ Option B'): the items in it are V1 constructors and
 //! fixture entry points that stay unwidened at their original paths, and the
-//! `split_shared_guards` TA2 scan restricts every reference to
-//! `crates/neovm-core/core_tests/**` (a fully test-gated `src` file may name
-//! a LOWER crate's fence, B2). Nothing here may be called from product code
-//! or from another crate's ungated `src/`.
+//! core `test_support_authority_fence_test` TA2 scan restricts every
+//! reference to `crates/neovm-core/core_tests/**` (a fully test-gated `src`
+//! file may name a LOWER crate's fence, B2). Nothing here may be called from
+//! product code or from another crate's ungated `src/`.
 
 /// Hosted execution-fixture helpers (SHAPE (B), LEAD 10:4xZ): the
 /// Context-free execution home adapter, built only from value primitives.
@@ -32,7 +32,7 @@ fn c5_jit_epoch_total() -> u64 {
     crate::emacs_core::jit::stats::epoch::EpochCounters::snapshot().total()
 }
 
-/// TA2 authority fence. Exactly the signed AUTHORITY-ITEMS rows live here.
+/// TA2 authority fence.
 pub mod authority {
     // PEER5726: private leaf contracts execute with core canonical factories.
     #[cfg(all(feature = "test-support", feature = "vm-profile"))]
@@ -280,13 +280,6 @@ pub mod authority {
     /// A-prime.
     pub fn reset_file_notify_thread_locals_for_test() {
         crate::emacs_core::builtins::file_notify::reset_file_notify_thread_locals();
-    }
-
-    /// CG-1 fence (peer 11-08): GNU `makunbound` on the context's obarray
-    /// through the audited writer proxy.  The adapter method is `pub(crate)`;
-    /// this fence is the only cross-crate test route.
-    pub fn makunbound_for_test(context: &mut Context, name: &str) {
-        context.obarray_mut().makunbound(name);
     }
 
     /// CG-1 fence (peer 11-08): raise the whole-table function clock through
