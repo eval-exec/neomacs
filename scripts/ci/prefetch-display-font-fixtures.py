@@ -25,12 +25,16 @@ import sys
 import tarfile
 import tempfile
 import zipfile
-from urllib.request import urlopen
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 PIN_SOURCE = Path("crates/neomacs-test-fonts/src/lib.rs")
 ARCHIVE_LIMIT = 64 * 1024 * 1024
 FILE_LIMIT = 32 * 1024 * 1024
 IO_TIMEOUT_SECONDS = 60
+# archive.ubuntu.com answers 403 to urllib's default User-Agent
+# ("Python-urllib/x.y") and 200 to any other agent. The pin URL is unchanged.
+USER_AGENT = "neomacs-font-fixtures"
 
 STRING_CONST = re.compile(
     r"""\bconst\s+([A-Z][A-Z0-9_]*)\s*:\s*&str\s*=\s*"([^"\\\r\n]*)"\s*;""",
@@ -175,11 +179,15 @@ def all_match(root: Path, pins: dict) -> bool:
 
 
 def fetch_bytes(url: str, limit: int, fetch=None) -> bytes:
-    if fetch is not None:
-        data = fetch(url)
-    else:
-        with urlopen(url, timeout=IO_TIMEOUT_SECONDS) as response:
-            data = response.read(limit + 1)
+    try:
+        if fetch is not None:
+            data = fetch(url)
+        else:
+            request = Request(url, headers={"User-Agent": USER_AGENT})
+            with urlopen(request, timeout=IO_TIMEOUT_SECONDS) as response:
+                data = response.read(limit + 1)
+    except (HTTPError, URLError, TimeoutError, OSError) as error:
+        raise PinError(f"url={url}: {error}") from error
     if not isinstance(data, (bytes, bytearray)):
         raise PinError(f"url={url}: download did not return bytes")
     data = bytes(data)
