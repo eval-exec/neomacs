@@ -1,6 +1,7 @@
 //! Issue #458: real fcitx5 commits must stay text, including keysym collisions.
 use super::*;
 use std::io::{BufRead, BufReader};
+use std::os::unix::fs::PermissionsExt;
 use std::process::{Child, Stdio};
 
 fn keycode_191_is_f13(pke: &str) -> bool {
@@ -11,6 +12,181 @@ fn keycode_191_is_f13(pke: &str) -> bool {
             && parts.next() == Some("=")
             && parts.next() == Some("F13")
     })
+}
+
+const IME_STAGES: &[(&str, char)] = &[
+    ("ffca", 'ￊ'),
+    ("ff0d", '－'),
+    ("ff66", 'ｦ'),
+    ("4e2d", '中'),
+    ("3042", 'あ'),
+    ("d55c", '한'),
+];
+
+fn ime_stage_index(stage: &str) -> Option<usize> {
+    let hex = stage.strip_prefix("ime-")?;
+    IME_STAGES.iter().position(|(item, _)| *item == hex)
+}
+
+/// Primary text the stage must grow. Punctuation is already committed.
+fn primary_before_ime_stage(stage: &str) -> Option<String> {
+    let index = ime_stage_index(stage)?;
+    let mut text = String::from("，（）；");
+    for (_, character) in IME_STAGES.iter().take(index) {
+        text.push(*character);
+    }
+    Some(text)
+}
+
+fn release_flag(line: &str) -> Option<u8> {
+    if !line.contains("KeyEvent:") {
+        return None;
+    }
+    let rest = line.split_once("Release:")?.1;
+    match rest.as_bytes().first() {
+        Some(b'0') => Some(0),
+        Some(b'1') => Some(1),
+        _ => None,
+    }
+}
+
+fn result_flag(line: &str) -> Option<u8> {
+    let rest = line.split_once("result:")?.1;
+    match rest.as_bytes().first() {
+        Some(b'0') => Some(0),
+        Some(b'1') => Some(1),
+        _ => None,
+    }
+}
+
+struct FcitxPress {
+    trigger: bool,
+    return_key: bool,
+    result: u8,
+}
+
+fn keycode_of(line: &str) -> Option<u8> {
+    let rest = line.split_once("keycode:")?.1.trim_start();
+    let digits: String = rest.chars().take_while(|ch| ch.is_ascii_digit()).collect();
+    digits.parse().ok()
+}
+
+/// `None` when a key press has no handling line or no keycode. Releases are
+/// ignored, so they can follow the last press without changing the shape.
+fn fcitx_presses(log: &str) -> Option<Vec<FcitxPress>> {
+    let lines: Vec<&str> = log.lines().collect();
+    let mut presses = Vec::new();
+    for (index, line) in lines.iter().enumerate() {
+        let Some(0) = release_flag(line) else {
+            continue;
+        };
+        let result = lines.get(index + 1).and_then(|next| result_flag(next))?;
+        let keycode = keycode_of(line)?;
+        presses.push(FcitxPress {
+            trigger: keycode == 30 && line.contains("Key(Control+Shift+U"),
+            return_key: keycode == 36,
+            result,
+        });
+    }
+    Some(presses)
+}
+
+/// Shape A: this stage's trigger is the last press and its result is 1.
+/// Shape B: this stage's trigger was never logged, and the log ends at or
+/// before the previous stage's Return (no uncommitted non-trigger press
+/// after that Return).
+fn fcitx_logged_no_keys_from_this_stage(log: &str, stage_index: usize) -> bool {
+    let Some(presses) = fcitx_presses(log) else {
+        return false;
+    };
+    if presses.is_empty() {
+        return false;
+    }
+    let trigger_count = presses.iter().filter(|press| press.trigger).count();
+    if trigger_count == stage_index + 1 {
+        let last = &presses[presses.len() - 1];
+        return last.trigger && last.result == 1;
+    }
+    if stage_index == 0 || trigger_count != stage_index {
+        return false;
+    }
+    let Some(return_at) = presses.iter().rposition(|press| press.return_key) else {
+        return false;
+    };
+    !presses[return_at + 1..]
+        .iter()
+        .any(|press| !press.trigger && !press.return_key)
+}
+
+fn trace_tail(text: &str, lines: usize) -> String {
+    let all: Vec<&str> = text.lines().collect();
+    let start = all.len().saturating_sub(lines);
+    all[start..].join("\n")
+}
+
+/// `Some` only when fcitx logged no key from this stage after the trigger,
+/// xdotool delivered the hex and Return, and the editor buffer did not change.
+/// `None` stays a hard failure. The label does not name the XIM layer.
+fn external_fcitx5_no_keys_after_trigger_report(
+    fcitx_log: &str,
+    stage: &str,
+    injection_ok: bool,
+    buffer_unchanged: bool,
+) -> Option<String> {
+    if !injection_ok || !buffer_unchanged {
+        return None;
+    }
+    let stage_index = ime_stage_index(stage)?;
+    if !fcitx_logged_no_keys_from_this_stage(fcitx_log, stage_index) {
+        return None;
+    }
+    Some(format!(
+        "EXTERNAL-FCITX5-NO-KEYS-AFTER-TRIGGER\nstage: {stage}\nfcitx key_trace tail:\n{}",
+        trace_tail(fcitx_log, 40)
+    ))
+}
+
+fn read_log(path: &Path) -> String {
+    match fs::read(path) {
+        Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+        Err(_) => String::new(),
+    }
+}
+
+fn classify_gnu_ime_failure(
+    is_neomacs: bool,
+    artifacts: &Path,
+    observation: Result<(), String>,
+) -> Result<(), String> {
+    let Err(error) = observation else {
+        return Ok(());
+    };
+    if is_neomacs || !error.starts_with("ime-") || error.contains("xdotool") {
+        return Err(error);
+    }
+    let stage = error.split(':').next().unwrap_or("");
+    let unchanged = primary_before_ime_stage(stage)
+        .is_some_and(|before| editor_buffer_unchanged(artifacts, &before));
+    match external_fcitx5_no_keys_after_trigger_report(
+        &read_log(&artifacts.join("fcitx.log")),
+        stage,
+        true,
+        unchanged,
+    ) {
+        Some(report) => Err(format!("{report}\n{error}")),
+        None => Err(error),
+    }
+}
+
+fn editor_buffer_unchanged(artifacts: &Path, primary: &str) -> bool {
+    let Ok(bytes) = fs::read(artifacts.join("state.json")) else {
+        return false;
+    };
+    let Ok(state) = serde_json::from_slice::<Value>(&bytes) else {
+        return false;
+    };
+    state.get("primary").and_then(Value::as_str) == Some(primary)
+        && state.get("secondary").and_then(Value::as_str) == Some("")
 }
 
 struct ChildGuard(Child);
@@ -57,7 +233,6 @@ fn fcitx5_fullwidth_punctuation_is_text_and_f13_stays_a_key() {
     .unwrap();
     let runtime = artifacts.join("runtime");
     fs::create_dir(&runtime).unwrap();
-    use std::os::unix::fs::PermissionsExt;
     fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700)).unwrap();
     let mut env = session.env().to_vec();
     env.extend([
@@ -79,13 +254,22 @@ fn fcitx5_fullwidth_punctuation_is_text_and_f13_stays_a_key() {
         .read_line(&mut address)
         .unwrap();
     env.push(("DBUS_SESSION_BUS_ADDRESS".into(), address.trim().into()));
+    let binary = std::env::var_os("NEOMACS_GUI_TEST_BINARY")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| root.join("target/release/neomacs"));
+    let is_neomacs = binary.file_name().is_some_and(|name| name == "neomacs");
     let log = fs::File::create(artifacts.join("fcitx.log")).unwrap();
+    // key_trace is GNU-only. The Neo arm's fcitx command stays the same.
+    let mut fcitx_args = vec![
+        "-D",
+        "--disable=wayland,notificationitem,notifications,kimpanel",
+    ];
+    if !is_neomacs {
+        fcitx_args.extend(["--verbose", "key_trace=5"]);
+    }
     let _fcitx = ChildGuard(
         Command::new("fcitx5")
-            .args([
-                "-D",
-                "--disable=wayland,notificationitem,notifications,kimpanel",
-            ])
+            .args(&fcitx_args)
             .envs(env.iter().map(|(k, v)| (k, v)))
             .stdout(Stdio::null())
             .stderr(log)
@@ -124,10 +308,6 @@ fn fcitx5_fullwidth_punctuation_is_text_and_f13_stays_a_key() {
         bound.status.success(),
         "permanent F13 binding failed: {bound:?}"
     );
-    let binary = std::env::var_os("NEOMACS_GUI_TEST_BINARY")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| root.join("target/release/neomacs"));
-    let is_neomacs = binary.file_name().is_some_and(|name| name == "neomacs");
     let mut plan = GuiTestPlan::new(
         GuiBackend::LinuxX11,
         &root,
@@ -306,6 +486,8 @@ fn fcitx5_fullwidth_punctuation_is_text_and_f13_stays_a_key() {
         (run.join().unwrap(), observation)
     });
     let run = run.unwrap();
+    // Still fails. The classification is printed, and it is not a retry or a skip.
+    let observation = classify_gnu_ime_failure(is_neomacs, &artifacts, observation);
     assert!(
         observation.is_ok(),
         "{observation:?}; artifacts: {}",
@@ -339,4 +521,75 @@ fn keycode_191_line_is_f13_only_when_the_first_keysym_is_f13() {
     ));
     assert!(!keycode_191_is_f13("keycode 19 = F13\n"));
     assert!(!keycode_191_is_f13("(keycode 191 absent)\n"));
+}
+
+fn completed_unicode_stage() -> &'static str {
+    "\
+KeyEvent: Key(Control+Shift+U states=5) Release:0 keycode: 30
+KeyEvent handling time: 0ms result:1
+KeyEvent: Key(f states=0) Release:0 keycode: 41
+KeyEvent handling time: 0ms result:1
+KeyEvent: Key(Return states=0) Release:0 keycode: 36
+KeyEvent handling time: 0ms result:1
+"
+}
+
+#[test]
+fn external_fcitx5_no_keys_after_trigger_uses_key_trace_injection_and_buffer() {
+    // Shape A. Four earlier commits, then the captured 3042 tail: the last
+    // press is that stage's trigger at result:1, and only releases follow.
+    let shape_a_tail = "\
+D2026-11-19 09:47:54.132569 instance.cpp:948] KeyEvent: Key(Control+Shift+U states=5) rawKey: Key(Control+Shift+U states=5) origKey: Key(Control+Shift+U states=5) Release:0 keycode: 30 program: emacs-31.1
+D2026-11-19 09:47:54.133393 inputcontext.cpp:342] KeyEvent handling time: 0ms result:1
+D2026-11-19 09:47:54.135636 instance.cpp:948] KeyEvent: Key(Control+Shift+Shift_L states=5) rawKey: Key(Control+Shift+Shift_L states=5) origKey: Key(Control+Shift+Shift_L states=5) Release:1 keycode: 50 program: emacs-31.1
+D2026-11-19 09:47:54.135723 inputcontext.cpp:342] KeyEvent handling time: 0ms result:0
+D2026-11-19 09:47:54.150910 instance.cpp:948] KeyEvent: Key(u states=0) rawKey: Key(u states=0) origKey: Key(u states=0) Release:1 keycode: 30 program: emacs-31.1
+D2026-11-19 09:47:54.151058 inputcontext.cpp:342] KeyEvent handling time: 0ms result:0
+";
+    let shape_a = completed_unicode_stage().repeat(4) + shape_a_tail;
+    let report = external_fcitx5_no_keys_after_trigger_report(&shape_a, "ime-3042", true, true)
+        .expect("shape A");
+    assert!(report.starts_with("EXTERNAL-FCITX5-NO-KEYS-AFTER-TRIGGER"));
+    assert!(report.contains("Key(Control+Shift+U"));
+    assert!(report.contains("stage: ime-3042"));
+
+    // Shape B. The log ends at the previous stage's Return, so ime-4e2d's
+    // trigger was never logged.
+    let shape_b = completed_unicode_stage().repeat(3);
+    let report_b = external_fcitx5_no_keys_after_trigger_report(&shape_b, "ime-4e2d", true, true)
+        .expect("shape B");
+    assert!(report_b.starts_with("EXTERNAL-FCITX5-NO-KEYS-AFTER-TRIGGER"));
+
+    // Near-miss: fcitx logged a hex press after this stage's trigger.
+    let hex_after_trigger = shape_b.clone()
+        + "\
+KeyEvent: Key(Control+Shift+U states=5) Release:0 keycode: 30
+KeyEvent handling time: 0ms result:1
+KeyEvent: Key(4 states=0) Release:0 keycode: 13
+KeyEvent handling time: 0ms result:1
+";
+    assert!(
+        external_fcitx5_no_keys_after_trigger_report(&hex_after_trigger, "ime-4e2d", true, true)
+            .is_none()
+    );
+
+    // Near-miss: the trigger was logged but not consumed.
+    let not_consumed = shape_a.replacen(
+        "KeyEvent handling time: 0ms result:1\nD2026-11-19 09:47:54.135636",
+        "KeyEvent handling time: 0ms result:0\nD2026-11-19 09:47:54.135636",
+        1,
+    );
+    assert!(
+        external_fcitx5_no_keys_after_trigger_report(&not_consumed, "ime-3042", true, true)
+            .is_none()
+    );
+
+    // Near-miss: the buffer grew, including literal hex. xdotool failed.
+    assert!(
+        external_fcitx5_no_keys_after_trigger_report(&shape_a, "ime-3042", true, false).is_none()
+    );
+    assert!(
+        external_fcitx5_no_keys_after_trigger_report(&shape_a, "ime-3042", false, true).is_none()
+    );
+    assert!(external_fcitx5_no_keys_after_trigger_report("", "ime-3042", true, true).is_none());
 }
