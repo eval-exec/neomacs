@@ -35,6 +35,8 @@ fn overlapping_registry() -> DumpCharsetRegistry {
         published_names: None,
         binding_slots: None,
         plist_slots: None,
+        iso2022_members: None,
+        plist_lisp: None,
         next_id: 922,
     }
 }
@@ -43,7 +45,7 @@ fn overlapping_registry() -> DumpCharsetRegistry {
 fn charset_section_mule_order_round_trip_keeps_definition_chronology() {
     let registry = overlapping_registry();
     let bytes = charset_section_bytes(&registry).expect("encode overlapping registry");
-    assert_eq!(read_header(&bytes).expect("header").version, 5);
+    assert_eq!(read_header(&bytes).expect("header").version, 6);
     let decoded = load_charset_section(&bytes).expect("decode overlapping registry");
     assert_eq!(
         decoded.emacs_mule_order_syms,
@@ -75,13 +77,14 @@ fn charset_section_accepts_legacy_and_derives_mule_priority() {
         &bytes[bytes.len() - 8..],
         &ABSENT_EMACS_MULE_ORDER.to_ne_bytes()
     );
-    // Versions 2 through 5 each end with an ABSENT marker when the optional
+    // Versions 2 through 6 each end with an ABSENT marker when the optional
     // metadata is missing: mule order, identities, aliases, ISO winners,
-    // published names, binding slots, plist slots.
-    bytes.truncate(bytes.len() - 56);
-    let mut header = read_header(&bytes).expect("version-5 header");
+    // published names, binding slots, plist slots, ISO-2022 members, plist
+    // lisp.
+    bytes.truncate(bytes.len() - 72);
+    let mut header = read_header(&bytes).expect("version-6 header");
     header.version = 1;
-    header.payload_len -= 56;
+    header.payload_len -= 72;
     bytes[..HEADER_SIZE].copy_from_slice(bytemuck::bytes_of(&header));
     let decoded = load_charset_section(&bytes).expect("read legacy charset section");
     assert!(decoded.emacs_mule_order_syms.is_none());
@@ -121,8 +124,9 @@ fn charset_section_accepts_version_two_without_identity_alias_metadata() {
     let mut bytes = charset_section_bytes(&registry).expect("encode registry");
     // v3 adds count + two identity symbols and count + one alias pair; v4
     // adds count + one ISO designation entry (8 + 1 + 8 + 4 bytes).
-    // v3 identities and aliases, v4 ISO entry, and three v5 ABSENT markers.
-    let trailer_len = 8 + 2 * 4 + 8 + 2 * 4 + 8 + 21 + 24;
+    // v3 identities and aliases, v4 ISO entry, three v5 ABSENT markers, and
+    // two v6 ABSENT markers.
+    let trailer_len = 8 + 2 * 4 + 8 + 2 * 4 + 8 + 21 + 24 + 16;
     bytes.truncate(bytes.len() - trailer_len);
     let mut header = read_header(&bytes).expect("version-4 header");
     header.version = 2;
@@ -143,8 +147,8 @@ fn charset_section_accepts_version_two_without_identity_alias_metadata() {
 fn charset_section_accepts_version_three_without_iso_designations() {
     let registry = overlapping_registry();
     let mut bytes = charset_section_bytes(&registry).expect("encode registry");
-    // v4 ISO entry plus three v5 ABSENT markers.
-    let trailer_len = 8 + 21 + 24;
+    // v4 ISO entry, three v5 ABSENT markers, and two v6 ABSENT markers.
+    let trailer_len = 8 + 21 + 24 + 16;
     bytes.truncate(bytes.len() - trailer_len);
     let mut header = read_header(&bytes).expect("version-4 header");
     header.version = 3;
@@ -160,10 +164,10 @@ fn charset_section_accepts_version_three_without_iso_designations() {
 fn charset_section_accepts_version_four_without_plist_slot_ids() {
     let registry = overlapping_registry();
     let mut bytes = charset_section_bytes(&registry).expect("encode registry");
-    // Three ABSENT markers: published names, binding slots, plist slots.
-    let trailer_len = 24;
+    // Three v5 ABSENT markers plus two v6 ABSENT markers.
+    let trailer_len = 24 + 16;
     bytes.truncate(bytes.len() - trailer_len);
-    let mut header = read_header(&bytes).expect("version-5 header");
+    let mut header = read_header(&bytes).expect("version-6 header");
     header.version = 4;
     header.payload_len -= trailer_len as u64;
     bytes[..HEADER_SIZE].copy_from_slice(bytemuck::bytes_of(&header));
@@ -172,6 +176,24 @@ fn charset_section_accepts_version_four_without_plist_slot_ids() {
     assert!(decoded.published_names.is_none());
     assert!(decoded.binding_slots.is_none());
     assert!(decoded.plist_slots.is_none());
+}
+
+#[test]
+fn charset_section_accepts_version_five_without_member_or_lisp_trailer() {
+    let registry = overlapping_registry();
+    let mut bytes = charset_section_bytes(&registry).expect("encode registry");
+    // Two ABSENT markers: ISO-2022 members and cached plist objects.
+    let trailer_len = 16;
+    bytes.truncate(bytes.len() - trailer_len);
+    let mut header = read_header(&bytes).expect("version-6 header");
+    header.version = 5;
+    header.payload_len -= trailer_len as u64;
+    bytes[..HEADER_SIZE].copy_from_slice(bytemuck::bytes_of(&header));
+    let decoded = load_charset_section(&bytes).expect("read version-5 section");
+    assert_eq!(decoded.iso_designation_syms, registry.iso_designation_syms);
+    assert!(decoded.iso2022_members.is_none());
+    assert!(decoded.plist_lisp.is_none());
+    assert!(decoded.published_names.is_none());
 }
 
 #[test]

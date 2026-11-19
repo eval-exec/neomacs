@@ -11,9 +11,11 @@
 //! (`iso-charset` table) as a count of (dimension, chars-96?, final char,
 //! symbol) entries. Version 5 adds published charset names, binding slot ids,
 //! and the plist slots those ids index. Sharing is the slot id, so a dump does
-//! not need the Lisp cons to stay eq. The reader accepts versions 1/2/3/4,
-//! whose missing metadata is reconstructed at registry load. No file-level
-//! pdump version or JIT ABI change is needed for this compatible section.
+//! not need the Lisp cons to stay eq. Version 6 appends the ISO-2022 member
+//! list and the cached `charset-plist` object of each slot, including an atom
+//! that is not a pair list. The reader accepts versions 1/2/3/4/5, whose
+//! missing metadata is reconstructed at registry load. No file-level pdump
+//! version or JIT ABI change is needed for this compatible section.
 
 use bytemuck::{Pod, Zeroable};
 
@@ -26,7 +28,7 @@ pub(crate) use super::types::{
 };
 
 const CHARSET_MAGIC: [u8; 16] = *b"NEOCHARSET\0\0\0\0\0\0";
-const CHARSET_FORMAT_VERSION: u32 = 5;
+const CHARSET_FORMAT_VERSION: u32 = 6;
 const ABSENT_EMACS_MULE_ORDER: u64 = u64::MAX;
 
 #[repr(C)]
@@ -96,6 +98,12 @@ pub(crate) fn charset_section_bytes(registry: &DumpCharsetRegistry) -> Result<Ve
     )?;
     write_optional_bindings(&mut bytes, &registry.binding_slots)?;
     write_optional_plist_slots(&mut bytes, &registry.plist_slots)?;
+    write_optional_symbols(
+        &mut bytes,
+        &registry.iso2022_members,
+        "charset iso-2022 members",
+    )?;
+    write_optional_plist_lisp(&mut bytes, &registry.plist_lisp)?;
 
     let payload_len = bytes.len() - HEADER_SIZE;
     let header = CharsetHeader {
@@ -213,6 +221,14 @@ pub(crate) fn load_charset_section(section: &[u8]) -> Result<DumpCharsetRegistry
     } else {
         (None, None, None)
     };
+    let (iso2022_members, plist_lisp) = if header.version >= 6 {
+        (
+            read_optional_symbols(&mut cursor, "charset iso-2022 members")?,
+            read_optional_plist_lisp(&mut cursor)?,
+        )
+    } else {
+        (None, None)
+    };
 
     if !cursor.is_empty() {
         return Err(DumpError::ImageFormatError(format!(
@@ -232,6 +248,8 @@ pub(crate) fn load_charset_section(section: &[u8]) -> Result<DumpCharsetRegistry
         published_names,
         binding_slots,
         plist_slots,
+        iso2022_members,
+        plist_lisp,
         next_id: header.next_id,
     })
 }
@@ -380,6 +398,56 @@ fn write_optional_plist_slots(
     Ok(())
 }
 
+fn write_optional_plist_lisp(
+    out: &mut Vec<u8>,
+    slots: &Option<Vec<Option<DumpValue>>>,
+) -> Result<(), DumpError> {
+    match slots {
+        Some(slots) => {
+            write_len(out, slots.len(), "charset plist lisp")?;
+            for slot in slots {
+                match slot {
+                    Some(value) => {
+                        write_u8(out, 1);
+                        write_value(out, value)?;
+                    }
+                    None => write_u8(out, 0),
+                }
+            }
+        }
+        None => write_u64(out, ABSENT_EMACS_MULE_ORDER),
+    }
+    Ok(())
+}
+
+fn read_optional_plist_lisp(
+    cursor: &mut Cursor<'_>,
+) -> Result<Option<Vec<Option<DumpValue>>>, DumpError> {
+    let count = cursor.read_u64("charset plist lisp")?;
+    if count == ABSENT_EMACS_MULE_ORDER {
+        return Ok(None);
+    }
+    let count = to_usize(count, "charset plist lisp")?;
+    if count > cursor.remaining() {
+        return Err(DumpError::ImageFormatError(
+            "charset plist lisp exceeds payload".into(),
+        ));
+    }
+    let mut slots = Vec::with_capacity(count);
+    for _ in 0..count {
+        match cursor.read_u8("charset plist lisp tag")? {
+            0 => slots.push(None),
+            1 => slots.push(Some(cursor.read_value()?)),
+            other => {
+                return Err(DumpError::ImageFormatError(format!(
+                    "unknown charset plist lisp tag {other}"
+                )));
+            }
+        }
+    }
+    Ok(Some(slots))
+}
+
 fn read_optional_plist_slots(
     cursor: &mut Cursor<'_>,
 ) -> Result<Option<Vec<Option<Vec<(DumpSymId, DumpValue)>>>>, DumpError> {
@@ -421,7 +489,7 @@ fn read_header(section: &[u8]) -> Result<CharsetHeader, DumpError> {
             "charset section has bad magic".into(),
         ));
     }
-    if !matches!(header.version, 1 | 2 | 3 | 4 | 5) {
+    if !matches!(header.version, 1 | 2 | 3 | 4 | 5 | 6) {
         return Err(DumpError::UnsupportedVersion(header.version));
     }
     if header.header_size != HEADER_SIZE as u32 {
@@ -746,6 +814,8 @@ pub(crate) fn empty_charset_registry() -> DumpCharsetRegistry {
         published_names: None,
         binding_slots: None,
         plist_slots: None,
+        iso2022_members: None,
+        plist_lisp: None,
         next_id: 0,
     }
 }

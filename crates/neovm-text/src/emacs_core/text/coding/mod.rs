@@ -3890,6 +3890,53 @@ pub(crate) fn builtin_find_coding_system(
     }
 }
 
+/// GNU `CHECK_CHARSET_GET_CHARSET` (`coding.c:11048`, `11269`, `11290`) stores
+/// the charset id from the attribute vector captured at definition. `iso-2022`
+/// and an unknown symbol are not charsets and stay as given.
+fn captured_charset_symbol(symbol: SymId) -> SymId {
+    use crate::emacs_core::charset::{charset_id_of, charset_sym_by_id};
+    charset_id_of(symbol)
+        .and_then(charset_sym_by_id)
+        .unwrap_or(symbol)
+}
+
+fn capture_charset_in_value(value: Value, mode: SymbolMode) -> Value {
+    match value.as_symbol_id(mode) {
+        Some(symbol) => Value::from_sym_id(captured_charset_symbol(symbol)),
+        None => value,
+    }
+}
+
+fn capture_iso2022_initial(value: Value, mode: SymbolMode) -> Value {
+    let Some(slots) = value.as_vector_data() else {
+        return value;
+    };
+    Value::vector(
+        slots
+            .iter()
+            .copied()
+            .map(|slot| capture_charset_in_value(slot, mode))
+            .collect(),
+    )
+}
+
+fn capture_iso2022_request(value: Value, mode: SymbolMode) -> Value {
+    let Some(pairs) = neovm_value::value::list_to_vec(&value) else {
+        return value;
+    };
+    Value::list(
+        pairs
+            .into_iter()
+            .map(|pair| {
+                Value::cons(
+                    capture_charset_in_value(pair.cons_car(), mode),
+                    pair.cons_cdr(),
+                )
+            })
+            .collect(),
+    )
+}
+
 /// `(define-coding-system-internal NAME MNEMONIC CODING-TYPE CHARSET-LIST
 ///    ASCII-COMPAT DECODE-TL ENCODE-TL POST-READ PRE-WRITE DEFAULT-CHAR
 ///    FOR-UNIBYTE PLIST EOL-TYPE &rest TYPE-SPECIFIC-ATTRS)`
@@ -3923,11 +3970,17 @@ pub fn builtin_define_coding_system_internal(
         )
     })?;
 
-    // arg[3]: charset-list (list of symbols, or special symbol like 'iso-2022)
+    // arg[3]: charset-list (list of symbols, or special symbol like 'iso-2022).
+    // GNU replaces each charset with the id in its attribute vector
+    // (`coding.c:11041-11057`). The symbol `iso-2022` is not a charset.
     let charset_list = if let Some(id) = args[3].as_symbol_id(mode).filter(|_| !args[3].is_nil()) {
-        vec![id]
+        vec![captured_charset_symbol(id)]
     } else if let Some(items) = neovm_value::value::list_to_vec(&args[3]) {
-        items.iter().filter_map(|v| v.as_symbol_id(mode)).collect()
+        items
+            .iter()
+            .filter_map(|v| v.as_symbol_id(mode))
+            .map(captured_charset_symbol)
+            .collect()
     } else {
         Vec::new()
     };
@@ -4030,9 +4083,11 @@ pub fn builtin_define_coding_system_internal(
     // request-alist, flags-bitmask].  Stash them so the ISO-2022 codec can read
     // the G0-G3 designations; see `iso2022_spec`.
     if resolve_sym(coding_type) == "iso-2022" && args.len() > 16 {
-        info.int_properties.insert(ISO2022_KEY_INITIAL, args[13]);
+        info.int_properties
+            .insert(ISO2022_KEY_INITIAL, capture_iso2022_initial(args[13], mode));
         info.int_properties.insert(ISO2022_KEY_REG_USAGE, args[14]);
-        info.int_properties.insert(ISO2022_KEY_REQUEST, args[15]);
+        info.int_properties
+            .insert(ISO2022_KEY_REQUEST, capture_iso2022_request(args[15], mode));
         info.int_properties.insert(ISO2022_KEY_FLAGS, args[16]);
     }
 

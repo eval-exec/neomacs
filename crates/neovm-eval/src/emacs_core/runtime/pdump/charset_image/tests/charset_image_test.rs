@@ -61,6 +61,8 @@ fn charset_section_round_trips_registry_state() {
         published_names: Some(vec![(DumpSymId(8), DumpSymId(12))]),
         binding_slots: Some(vec![(DumpSymId(12), DumpSymId(8), 1)]),
         plist_slots: Some(vec![None, Some(vec![(DumpSymId(5), DumpValue::Int(6))])]),
+        iso2022_members: Some(vec![DumpSymId(8)]),
+        plist_lisp: Some(vec![None, Some(DumpValue::Int(42))]),
         next_id: 11,
     };
 

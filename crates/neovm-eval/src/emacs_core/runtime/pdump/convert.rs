@@ -4547,6 +4547,25 @@ pub(crate) fn dump_charset_registry(encoder: &mut DumpEncoder) -> DumpCharsetReg
                 })
                 .collect()
         }),
+        // Version 6 writes the member list and the cached plist objects even
+        // when both are empty. An absent trailer would make an old reader
+        // derive membership from the current ISO final.
+        iso2022_members: Some(
+            snapshot
+                .iso2022_members
+                .unwrap_or_default()
+                .into_iter()
+                .map(dump_sym_id)
+                .collect(),
+        ),
+        plist_lisp: Some(
+            snapshot
+                .plist_lisp
+                .unwrap_or_default()
+                .into_iter()
+                .map(|slot| slot.map(|value| encoder.dump_value(&value)))
+                .collect(),
+        ),
         next_id: snapshot.next_id,
     }
 }
@@ -6996,6 +7015,16 @@ pub(crate) fn load_charset_registry(decoder: &mut LoadDecoder, dcr: &DumpCharset
                 })
                 .collect()
         }),
+        plist_lisp: dcr.plist_lisp.as_ref().map(|slots| {
+            slots
+                .iter()
+                .map(|slot| slot.as_ref().map(|value| decoder.load_value(value)))
+                .collect()
+        }),
+        iso2022_members: dcr
+            .iso2022_members
+            .as_ref()
+            .map(|names| names.iter().map(load_sym_id).collect()),
         next_id: dcr.next_id,
         // The binary dump does not carry GNU's `Vcharset_non_preferred_head`
         // boundary; a freshly loaded session reproduces GNU's dumped default
