@@ -302,11 +302,6 @@ impl Context {
         self.with_green_runtime(|runtime| runtime.parked.borrow().len())
     }
 
-    /// Carrier pool `(slot count, join-handle count)`.
-    pub(crate) fn carrier_pool_counts_for_test(&self) -> (usize, usize) {
-        self.with_green_runtime(|runtime| runtime.carriers.counts_for_test())
-    }
-
     /// Whether every parked owner and host record is gone.
     pub(crate) fn parked_owners_empty_for_test(&self) -> bool {
         self.with_green_runtime(|runtime| runtime.parked.borrow().is_empty())
@@ -375,6 +370,17 @@ impl Context {
                     vec![neovm_value::value::Value::string(error.to_string())],
                 )
             })
+    }
+}
+
+#[cfg(test)]
+impl Context {
+    /// Carrier pool `(slot count, join-handle count)`.
+    ///
+    /// `cfg(test)` only. The test-support build does not call it, and
+    /// `CarrierPool::counts_for_test` is not part of that feature.
+    pub(crate) fn carrier_pool_counts_for_test(&self) -> (usize, usize) {
+        self.with_green_runtime(|runtime| runtime.carriers.counts_for_test())
     }
 }
 
