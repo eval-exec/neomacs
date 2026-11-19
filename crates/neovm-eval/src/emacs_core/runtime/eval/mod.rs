@@ -4020,6 +4020,16 @@ pub struct Context {
     /// Appended after the pinned layout; only the Context size grows.
     #[doc(hidden)]
     pub frame_and_buffer_state: Option<Value>,
+    /// Collector time banked by `gc_collect_from_current_roots_body`: every
+    /// call of that body that starts, polls, terminates, minor-marks or
+    /// sweeps a cycle without completing it adds its duration here, and the
+    /// body call that completes a cycle publishes the sum into `gc-elapsed`
+    /// (GNU adds the whole `garbage_collect` duration, alloc.c). A cycle
+    /// drained by another `drain_to_quiescent` caller (thread admission,
+    /// green-thread switch or retirement, root registration) leaves its
+    /// banked time here until the next completed collection publishes it.
+    /// Appended after the pinned layout; only the Context size grows.
+    gc_cycle_elapsed: std::time::Duration,
 }
 
 // A mutex does not make the host hooks, Rc leases or TLS views transferable.
@@ -7739,6 +7749,9 @@ mod var_fast_tests;
 #[path = "tests/watcher_redispatch_test.rs"]
 mod watcher_redispatch_tests;
 
+#[cfg(test)]
+#[path = "tests/gc_elapsed_whole_cycle_test.rs"]
+mod gc_elapsed_whole_cycle_tests;
 #[cfg(test)]
 #[path = "tests/gc_sweep_cap_test.rs"]
 mod gc_sweep_cap_tests;

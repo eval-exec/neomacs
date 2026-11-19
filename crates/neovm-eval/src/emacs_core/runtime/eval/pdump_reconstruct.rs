@@ -356,6 +356,7 @@ impl Context {
             in_flight_registry: neovm_value::error::current_in_flight_registry_handle(),
             cached_standard_case_table: None,
             frame_and_buffer_state: None,
+            gc_cycle_elapsed: std::time::Duration::ZERO,
         };
         ev.setup_thread_locals();
 
