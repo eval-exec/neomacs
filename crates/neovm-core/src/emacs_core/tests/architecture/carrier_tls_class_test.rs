@@ -78,8 +78,11 @@ const TLS_CLASSIFICATION: &[(&str, &str, TlsClass)] = &[
     // switch.rs retires/parks the old job before the NEXT job's deferred reset.
     // Deferred reuse asserts zero before clearing; PARK must preserve depth.
     // MustReset: cache::reset_carrier_tls asserts zero before its zero store
-    // at deferred reuse. Static and store share cfg(any(test, debug_assertions));
-    // ordinary Green waits retain the live native frame on the same carrier.
+    // at deferred reuse. Static and store share the same gate
+    // (any(test, debug_assertions, feature = "test-support")) so a release
+    // workspace test build records the F5 native-depth witness and still
+    // clears it between jobs; ordinary Green waits retain the live native
+    // frame on the same carrier.
     (
         "neovm-eval/src/emacs_core/runtime/jit/cache.rs",
         "NATIVE_DEPTH",
@@ -1311,6 +1314,15 @@ const TLS_CLASSIFICATION: &[(&str, &str, TlsClass)] = &[
         "TEST_HEAP_GRAVEYARD",
         TlsClass::SourceOnly,
     ),
+    // Test-support package harness (tui package_harness.rs): the caught-panic
+    // report annotates where the panic started, which a message-less payload
+    // cannot say for itself.  SourceOnly: instrumentation only, holds no Lisp
+    // Value, and this test-support crate is not part of the shipped binary.
+    (
+        "neomacs-tui-tests/src/package_harness.rs",
+        "PANIC_ORIGIN",
+        TlsClass::SourceOnly,
+    ),
     (BINARY_CENSUS, "TEXT", TlsClass::CarrierIntrinsic),
     (BINARY_CENSUS, "THREAD", TlsClass::CarrierIntrinsic),
     (
@@ -1517,7 +1529,7 @@ const ENCLOSING_TEST_GATES: &[EnclosingTestGate] = &[
     EnclosingTestGate {
         root_file: "neovm-eval/src/lib.rs",
         file: "neovm-eval/src/emacs_core/runtime/jit/aot.rs",
-        line: 5790,
+        line: 5791,
         cfg: "#[cfg(any(test, feature = \"test-support\"))]",
         module: "emacs_core::jit::aot::test_support",
         resolved_files: &[

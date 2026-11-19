@@ -7,6 +7,9 @@ pub use neovm_value::error::{expect_args, expect_args_range, expect_fixnum};
 use neovm_value::tagged::SymbolMode;
 use neovm_value::value::{ValueKind, VecLikeType};
 
+#[path = "selection_step.rs"]
+mod selection_step;
+
 // =========================================================================
 // fontset.c gap-fill stubs
 // =========================================================================
@@ -120,6 +123,18 @@ pub fn builtin_neomacs_clipboard_set(
     ctx: &mut crate::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    selection_step::clipboard_set(
+        selection_step::SelectionInstaller::InlineSerialMain,
+        ctx,
+        args,
+    )
+    .into_direct()
+}
+
+fn direct_neomacs_clipboard_set(
+    ctx: &mut crate::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
     expect_args("neomacs-clipboard-set", &args, 1)?;
     let text = match args[0].kind() {
         ValueKind::Nil => None,
@@ -142,6 +157,18 @@ pub fn builtin_neomacs_clipboard_get(
     ctx: &mut crate::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    selection_step::clipboard_get(
+        selection_step::SelectionInstaller::InlineSerialMain,
+        ctx,
+        args,
+    )
+    .into_direct()
+}
+
+fn direct_neomacs_clipboard_get(
+    ctx: &mut crate::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
     expect_args("neomacs-clipboard-get", &args, 0)?;
     let text = if let Some(host) = ctx.display_host.as_mut() {
         host.clipboard_text()
@@ -154,6 +181,18 @@ pub fn builtin_neomacs_clipboard_get(
 
 #[doc(hidden)]
 pub fn builtin_neomacs_primary_selection_set(
+    ctx: &mut crate::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    selection_step::primary_selection_set(
+        selection_step::SelectionInstaller::InlineSerialMain,
+        ctx,
+        args,
+    )
+    .into_direct()
+}
+
+fn direct_neomacs_primary_selection_set(
     ctx: &mut crate::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -179,6 +218,18 @@ pub fn builtin_neomacs_primary_selection_get(
     ctx: &mut crate::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    selection_step::primary_selection_get(
+        selection_step::SelectionInstaller::InlineSerialMain,
+        ctx,
+        args,
+    )
+    .into_direct()
+}
+
+fn direct_neomacs_primary_selection_get(
+    ctx: &mut crate::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
     expect_args("neomacs-primary-selection-get", &args, 0)?;
     let text = if let Some(host) = ctx.display_host.as_mut() {
         host.primary_selection_text()
@@ -191,6 +242,18 @@ pub fn builtin_neomacs_primary_selection_get(
 
 #[doc(hidden)]
 pub fn builtin_neomacs_primary_selection_owner(
+    ctx: &mut crate::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    selection_step::primary_selection_owner(
+        selection_step::SelectionInstaller::InlineSerialMain,
+        ctx,
+        args,
+    )
+    .into_direct()
+}
+
+fn direct_neomacs_primary_selection_owner(
     ctx: &mut crate::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {

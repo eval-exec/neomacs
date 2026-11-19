@@ -401,6 +401,53 @@ fn coding_system_subsidiaries_are_obarray_members() {
     }
 }
 
+/// PEER 5799 W2: GNU's `define-coding-system-alias` also creates the
+/// alias's `-unix`/`-dos`/`-mac` subsidiaries and maps each to the base's
+/// corresponding subsidiary (`Fdefine_coding_system_alias`,
+/// src/coding.c:11581-11606). They are Lisp-visible coding systems and
+/// obarray members with the base name and matching eol type.
+#[test]
+fn coding_system_alias_subsidiaries_are_created_and_members() {
+    let mut ctx = crate::test_utils::new_context();
+    ctx.eval_str("(define-coding-system-alias 'peer-5799-alias 'utf-8)")
+        .expect("alias definition");
+    for name in [
+        "peer-5799-alias",
+        "peer-5799-alias-unix",
+        "peer-5799-alias-dos",
+        "peer-5799-alias-mac",
+    ] {
+        assert!(
+            ctx.obarray().is_global_member(intern(name)),
+            "{name} must be an obarray member"
+        );
+    }
+    let result = ctx
+        .eval_str(
+            r#"(list
+                 (and (memq 'peer-5799-alias-unix coding-system-list) t)
+                 (coding-system-base 'peer-5799-alias-unix)
+                 (coding-system-eol-type 'peer-5799-alias-unix)
+                 (coding-system-base 'peer-5799-alias-dos)
+                 (coding-system-eol-type 'peer-5799-alias-dos)
+                 (coding-system-base 'peer-5799-alias-mac)
+                 (coding-system-eol-type 'peer-5799-alias-mac))"#,
+        )
+        .expect("alias subsidiary queries");
+    assert_eq!(
+        list_to_vec(&result),
+        Some(vec![
+            Value::T,
+            Value::symbol("utf-8"),
+            Value::fixnum(0),
+            Value::symbol("utf-8"),
+            Value::fixnum(1),
+            Value::symbol("utf-8"),
+            Value::fixnum(2),
+        ])
+    );
+}
+
 fn positioned(ctx: &mut Context, name: &str) -> Value {
     // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
     unsafe { ctx.tagged_heap_mut() }

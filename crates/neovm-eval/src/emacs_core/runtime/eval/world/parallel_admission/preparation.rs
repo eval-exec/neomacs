@@ -1,0 +1,164 @@
+//! The single cold local census/drain/TLS-detach transaction shared by
+//! scoped admission and the later consuming source-shell adapter. This is
+//! still a local collector loan, never a transport or a stopped interval.
+
+use super::super::{Baton, FrozenLegacyRoots};
+use super::factory::AdmissionPlan;
+use super::{AdmissionScope, Context, OwnedParallelError, map_rendezvous, map_start};
+use neovm_value::tagged::gc::{QuiescentCollector, clear_tagged_heap_root_if_installed};
+
+/// Resource recovery work, not a permission to reactivate a Context. The
+/// consuming source adapter must separately validate its actual return right.
+#[derive(Debug)]
+pub(crate) enum SerialRecovery {
+    Unchanged,
+    RecreateDeadWindows,
+}
+
+/// Borrows the actual source Context exclusively for the collector lifetime.
+/// No ordinary source access is possible while this local preparation lives.
+#[must_use]
+pub(super) struct PreparedAdmission<'heap> {
+    collector: QuiescentCollector<'heap>,
+    keeper: Baton,
+    frozen: FrozenLegacyRoots,
+    recovery: SerialRecovery,
+}
+
+static_assertions::assert_not_impl_any!(PreparedAdmission<'static>: Send, Sync, Clone, Copy);
+
+impl PreparedAdmission<'_> {
+    /// End the complete local factory/callback frame before returning the
+    /// resource recovery plan. No failure temporary can retain a source loan
+    /// while the caller reinstalls ordinary Context access.
+    pub(super) fn run<P: AdmissionPlan, R>(
+        self,
+        plan: P,
+        body: impl for<'heap> FnOnce(
+            P::Projection<'heap>,
+            AdmissionScope<'heap>,
+        ) -> (QuiescentCollector<'heap>, Baton, R),
+    ) -> (SerialRecovery, Result<R, OwnedParallelError>) {
+        let Self {
+            collector,
+            keeper,
+            frozen,
+            recovery,
+        } = self;
+        let projection = match plan.admit(collector, keeper, frozen) {
+            Ok(projection) => projection,
+            Err(failure) => {
+                let reason = failure.reason;
+                drop(failure.collector);
+                drop(failure.keeper);
+                return (recovery, Err(reason));
+            }
+        };
+        let (collector, keeper, output) =
+            body(projection, AdmissionScope(std::marker::PhantomData));
+        drop(collector);
+        drop(keeper);
+        (recovery, Ok(output))
+    }
+}
+
+impl Context {
+    pub(super) fn prepare_owned_admission(
+        &mut self,
+    ) -> Result<PreparedAdmission<'_>, OwnedParallelError> {
+        let recovery = self.retire_empty_dead_windows_table();
+        let keeper = match self.issue_green_baton() {
+            Ok(keeper) => keeper,
+            Err(error) => {
+                self.recover_serial_context(recovery);
+                return Err(map_start(error));
+            }
+        };
+        let frozen = match self.capture_parallel_legacy_roots(&keeper) {
+            Ok(frozen) => frozen,
+            Err(error) => {
+                drop(keeper);
+                self.recover_serial_context(recovery);
+                return Err(map_rendezvous(error));
+            }
+        };
+        let heap = self.tagged_heap.heap_root().as_ptr();
+        // SAFETY: this thread is the sole serial owner. The keeper excludes
+        // concurrent mark and private roots were captured above. The legacy
+        // TLS facade stays installed for this drain so its reseed still sees
+        // the thread-local census; it is uninstalled before the body runs.
+        // The body cannot reach the Context or the heap.
+        let drained = unsafe {
+            (*heap).drain_to_quiescent(|heap| {
+                self.seed_registered_mutator_roots_world_stopped(heap);
+            })
+        };
+        let collector = match drained {
+            Ok(collector) => collector,
+            Err(_) => {
+                drop(frozen);
+                drop(keeper);
+                self.recover_serial_context(recovery);
+                return Err(OwnedParallelError::Start);
+            }
+        };
+        clear_tagged_heap_root_if_installed(self.tagged_heap.heap_root());
+        Ok(PreparedAdmission {
+            collector,
+            keeper,
+            frozen,
+            recovery,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pentry_e2b_shared_preparation_ends_source_loan_before_recovery() {
+        let mut source = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
+        source.setup_thread_locals();
+        source.set_variable(
+            "window-dead-windows-table",
+            neovm_value::tagged::value::TaggedValue::NIL,
+        );
+        source.gc_collect_exact();
+        let heap = source.tagged_heap.heap_identity();
+        let generational = source.tagged_heap.tagged_heap_generational_enabled();
+        let PreparedAdmission {
+            collector,
+            keeper,
+            frozen,
+            recovery,
+        } = source
+            .prepare_owned_admission()
+            .expect("actual local preparation");
+        assert_eq!(collector.heap_identity(), heap);
+        assert_eq!(keeper.parallel_heap_identity(), heap);
+        assert_eq!(frozen.heap_identity(), heap);
+        assert!(keeper.held_here());
+        assert!(!neovm_value::tagged::gc::tagged_heap_is_installed());
+        drop(frozen);
+        drop(collector);
+        drop(keeper);
+        source.recover_serial_context(recovery);
+        assert!(neovm_value::tagged::gc::tagged_heap_is_current(
+            &source.tagged_heap
+        ));
+        assert_eq!(
+            source.tagged_heap.tagged_heap_generational_enabled(),
+            generational
+        );
+        let pair = neovm_value::tagged::value::TaggedValue::cons(
+            neovm_value::tagged::value::TaggedValue::fixnum(47),
+            neovm_value::tagged::value::TaggedValue::NIL,
+        );
+        assert!(source.tagged_heap.owns_heap_value_for_test(pair));
+        assert_eq!(
+            pair.cons_car(),
+            neovm_value::tagged::value::TaggedValue::fixnum(47)
+        );
+    }
+}

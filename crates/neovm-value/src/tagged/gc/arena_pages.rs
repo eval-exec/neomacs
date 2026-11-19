@@ -1631,7 +1631,7 @@ impl DrainKinds {
 
     /// Sum of all buckets — equals the deferred-entry count it was built from.
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    pub fn total(&self) -> usize {
+    pub(crate) fn total(&self) -> usize {
         self.string
             + self.vector
             + self.record
@@ -1781,26 +1781,26 @@ pub struct HeapLayoutStats {
 #[doc(hidden)]
 pub struct SweepStats {
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    pub sweep_us: u64,
+    pub(crate) sweep_us: u64,
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    pub slice_count: usize,
+    pub(crate) slice_count: usize,
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    pub cons_blocks_swept: usize,
+    pub(crate) cons_blocks_swept: usize,
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    pub noncons_freed: usize,
+    pub(crate) noncons_freed: usize,
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    pub lifetime_sweep_us: u64,
+    pub(crate) lifetime_sweep_us: u64,
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    pub lifetime_slices: usize,
+    pub(crate) lifetime_slices: usize,
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    pub lifetime_cons_blocks_swept: usize,
+    pub(crate) lifetime_cons_blocks_swept: usize,
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    pub lifetime_noncons_freed: usize,
+    pub(crate) lifetime_noncons_freed: usize,
     /// Values `join_concurrent_mark` folded into the termination gray queue:
     /// the GC thread's parked non-cons buffer and the residual SATB log.
     pub last_termination_deferred: usize,
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    pub max_termination_deferred: usize,
+    pub(crate) max_termination_deferred: usize,
     pub last_termination_satb: usize,
     /// Owner-resident words folded at the last successful concurrent termination,
     /// excluding already published handoff chunks. A subset of SATB above.
@@ -1849,6 +1849,22 @@ pub struct SweepStats {
     /// `incremental_drain_all` is the only accumulation.
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
     pub mark_us: u64,
+}
+
+#[cfg(feature = "test-support")]
+impl SweepStats {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn mark_us(&self) -> u64 {
+        self.mark_us
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn max_termination_kinds(&self) -> DrainKinds {
+        self.max_termination_kinds
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn termination_count(&self) -> usize {
+        self.termination_count
+    }
 }
 
 /// One root group's cost inside a `seed_all_context_roots` call:
@@ -2001,6 +2017,42 @@ pub struct HandshakeStats {
     pub probe_cons_blocks: usize,
     /// Live buffers (= marker chain-head slots installed).
     pub probe_buffer_count: usize,
+}
+
+#[cfg(feature = "test-support")]
+impl HandshakeStats {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn start_count(&self) -> usize {
+        self.start_count
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn term_count(&self) -> usize {
+        self.term_count
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn last_start_floatsnap_us(&self) -> u64 {
+        self.last_start_floatsnap_us
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn last_start_vecbasesnap_us(&self) -> u64 {
+        self.last_start_vecbasesnap_us
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn last_start_bcsnap_us(&self) -> u64 {
+        self.last_start_bcsnap_us
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn probe_mapped_remembered(&self) -> usize {
+        self.probe_mapped_remembered
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn probe_vector_snapshot_len(&self) -> usize {
+        self.probe_vector_snapshot_len
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn probe_cons_blocks(&self) -> usize {
+        self.probe_cons_blocks
+    }
 }
 
 impl HandshakeStats {

@@ -2788,127 +2788,127 @@ fn upper_subr_0684(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::neomacs-video-begin-measurement-epoch");
 }
 
-#[cfg(feature = "xwidgets")]
+// host-cfg: xwidgets
 fn upper_subr_0685(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::make-xwidget");
 }
 
-#[cfg(feature = "xwidgets")]
+// host-cfg: xwidgets
 fn upper_subr_0686(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::xwidgetp");
 }
 
-#[cfg(feature = "xwidgets")]
+// host-cfg: xwidgets
 fn upper_subr_0687(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::xwidget-view-p");
 }
 
-#[cfg(feature = "xwidgets")]
+// host-cfg: xwidgets
 fn upper_subr_0688(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::xwidget-live-p");
 }
 
-#[cfg(feature = "xwidgets")]
+// host-cfg: xwidgets
 fn upper_subr_0689(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::xwidget-info");
 }
 
-#[cfg(feature = "xwidgets")]
+// host-cfg: xwidgets
 fn upper_subr_0690(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::xwidget-view-info");
 }
 
-#[cfg(feature = "xwidgets")]
+// host-cfg: xwidgets
 fn upper_subr_0691(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::xwidget-view-model");
 }
 
-#[cfg(feature = "xwidgets")]
+// host-cfg: xwidgets
 fn upper_subr_0692(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::xwidget-view-window");
 }
 
-#[cfg(feature = "xwidgets")]
+// host-cfg: xwidgets
 fn upper_subr_0693(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::xwidget-view-lookup");
 }
 
-#[cfg(feature = "xwidgets")]
+// host-cfg: xwidgets
 fn upper_subr_0694(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::delete-xwidget-view");
 }
 
-#[cfg(feature = "xwidgets")]
+// host-cfg: xwidgets
 fn upper_subr_0695(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::xwidget-plist");
 }
 
-#[cfg(feature = "xwidgets")]
+// host-cfg: xwidgets
 fn upper_subr_0696(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::set-xwidget-plist");
 }
 
-#[cfg(feature = "xwidgets")]
+// host-cfg: xwidgets
 fn upper_subr_0697(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::xwidget-buffer");
 }
 
-#[cfg(feature = "xwidgets")]
+// host-cfg: xwidgets
 fn upper_subr_0698(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::set-xwidget-buffer");
 }
 
-#[cfg(feature = "xwidgets")]
+// host-cfg: xwidgets
 fn upper_subr_0699(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::xwidget-query-on-exit-flag");
 }
 
-#[cfg(feature = "xwidgets")]
+// host-cfg: xwidgets
 fn upper_subr_0700(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::set-xwidget-query-on-exit-flag");
 }
 
-#[cfg(feature = "xwidgets")]
+// host-cfg: xwidgets
 fn upper_subr_0701(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::get-buffer-xwidgets");
 }
 
-#[cfg(feature = "xwidgets")]
+// host-cfg: xwidgets
 fn upper_subr_0702(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::kill-xwidget");
 }
 
-#[cfg(feature = "xwidgets")]
+// host-cfg: xwidgets
 fn upper_subr_0703(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::xwidget-resize");
 }
 
-#[cfg(feature = "xwidgets")]
+// host-cfg: xwidgets
 fn upper_subr_0704(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::xwidget-size-request");
 }
 
-#[cfg(feature = "xwidgets")]
+// host-cfg: xwidgets
 fn upper_subr_0705(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::xwidget-webkit-uri");
 }
 
-#[cfg(feature = "xwidgets")]
+// host-cfg: xwidgets
 fn upper_subr_0706(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::xwidget-webkit-title");
 }
 
-#[cfg(feature = "xwidgets")]
+// host-cfg: xwidgets
 fn upper_subr_0707(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::xwidget-webkit-goto-uri");
 }
 
-#[cfg(feature = "xwidgets")]
+// host-cfg: xwidgets
 fn upper_subr_0708(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::xwidget-webkit-execute-script");
 }
 
-#[cfg(feature = "xwidgets")]
+// host-cfg: xwidgets
 fn upper_subr_0709(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::xwidget-webkit-estimated-load-progress");
 }
@@ -2943,77 +2943,77 @@ fn upper_subr_0715(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::dbus--registered-fds");
 }
 
-#[cfg(feature = "sqlite")]
+// host-cfg: sqlite
 fn upper_subr_0716(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::sqlite-open");
 }
 
-#[cfg(feature = "sqlite")]
+// host-cfg: sqlite
 fn upper_subr_0717(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::sqlite-close");
 }
 
-#[cfg(feature = "sqlite")]
+// host-cfg: sqlite
 fn upper_subr_0718(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::sqlite-execute");
 }
 
-#[cfg(feature = "sqlite")]
+// host-cfg: sqlite
 fn upper_subr_0719(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::sqlite-select");
 }
 
-#[cfg(feature = "sqlite")]
+// host-cfg: sqlite
 fn upper_subr_0720(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::sqlite-execute-batch");
 }
 
-#[cfg(feature = "sqlite")]
+// host-cfg: sqlite
 fn upper_subr_0721(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::sqlite-transaction");
 }
 
-#[cfg(feature = "sqlite")]
+// host-cfg: sqlite
 fn upper_subr_0722(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::sqlite-commit");
 }
 
-#[cfg(feature = "sqlite")]
+// host-cfg: sqlite
 fn upper_subr_0723(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::sqlite-rollback");
 }
 
-#[cfg(feature = "sqlite")]
+// host-cfg: sqlite
 fn upper_subr_0724(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::sqlite-pragma");
 }
 
-#[cfg(feature = "sqlite")]
+// host-cfg: sqlite
 fn upper_subr_0725(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::sqlite-load-extension");
 }
 
-#[cfg(feature = "sqlite")]
+// host-cfg: sqlite
 fn upper_subr_0726(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::sqlite-next");
 }
 
-#[cfg(feature = "sqlite")]
+// host-cfg: sqlite
 fn upper_subr_0727(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::sqlite-columns");
 }
 
-#[cfg(feature = "sqlite")]
+// host-cfg: sqlite
 fn upper_subr_0728(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::sqlite-more-p");
 }
 
-#[cfg(feature = "sqlite")]
+// host-cfg: sqlite
 fn upper_subr_0729(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::sqlite-finalize");
 }
 
-#[cfg(feature = "sqlite")]
+// host-cfg: sqlite
 fn upper_subr_0730(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::sqlite-version");
 }
@@ -3867,55 +3867,55 @@ static UPPER_SUBRS: &[(&str, u16, Option<u16>, fn(&mut Context, Vec<Value>) -> E
     ("neomacs-video-destroy", 1, Some(1), upper_subr_0682),
     ("neomacs-video-diagnostics", 0, Some(1), upper_subr_0683),
     ("neomacs-video-begin-measurement-epoch", 0, Some(0), upper_subr_0684),
-    #[cfg(feature = "xwidgets")]
+    // host-cfg: xwidgets
     ("make-xwidget", 4, Some(7), upper_subr_0685),
-    #[cfg(feature = "xwidgets")]
+    // host-cfg: xwidgets
     ("xwidgetp", 1, Some(1), upper_subr_0686),
-    #[cfg(feature = "xwidgets")]
+    // host-cfg: xwidgets
     ("xwidget-view-p", 1, Some(1), upper_subr_0687),
-    #[cfg(feature = "xwidgets")]
+    // host-cfg: xwidgets
     ("xwidget-live-p", 1, Some(1), upper_subr_0688),
-    #[cfg(feature = "xwidgets")]
+    // host-cfg: xwidgets
     ("xwidget-info", 1, Some(1), upper_subr_0689),
-    #[cfg(feature = "xwidgets")]
+    // host-cfg: xwidgets
     ("xwidget-view-info", 1, Some(1), upper_subr_0690),
-    #[cfg(feature = "xwidgets")]
+    // host-cfg: xwidgets
     ("xwidget-view-model", 1, Some(1), upper_subr_0691),
-    #[cfg(feature = "xwidgets")]
+    // host-cfg: xwidgets
     ("xwidget-view-window", 1, Some(1), upper_subr_0692),
-    #[cfg(feature = "xwidgets")]
+    // host-cfg: xwidgets
     ("xwidget-view-lookup", 1, Some(2), upper_subr_0693),
-    #[cfg(feature = "xwidgets")]
+    // host-cfg: xwidgets
     ("delete-xwidget-view", 1, Some(1), upper_subr_0694),
-    #[cfg(feature = "xwidgets")]
+    // host-cfg: xwidgets
     ("xwidget-plist", 1, Some(1), upper_subr_0695),
-    #[cfg(feature = "xwidgets")]
+    // host-cfg: xwidgets
     ("set-xwidget-plist", 2, Some(2), upper_subr_0696),
-    #[cfg(feature = "xwidgets")]
+    // host-cfg: xwidgets
     ("xwidget-buffer", 1, Some(1), upper_subr_0697),
-    #[cfg(feature = "xwidgets")]
+    // host-cfg: xwidgets
     ("set-xwidget-buffer", 2, Some(2), upper_subr_0698),
-    #[cfg(feature = "xwidgets")]
+    // host-cfg: xwidgets
     ("xwidget-query-on-exit-flag", 1, Some(1), upper_subr_0699),
-    #[cfg(feature = "xwidgets")]
+    // host-cfg: xwidgets
     ("set-xwidget-query-on-exit-flag", 2, Some(2), upper_subr_0700),
-    #[cfg(feature = "xwidgets")]
+    // host-cfg: xwidgets
     ("get-buffer-xwidgets", 1, Some(1), upper_subr_0701),
-    #[cfg(feature = "xwidgets")]
+    // host-cfg: xwidgets
     ("kill-xwidget", 1, Some(1), upper_subr_0702),
-    #[cfg(feature = "xwidgets")]
+    // host-cfg: xwidgets
     ("xwidget-resize", 3, Some(3), upper_subr_0703),
-    #[cfg(feature = "xwidgets")]
+    // host-cfg: xwidgets
     ("xwidget-size-request", 1, Some(1), upper_subr_0704),
-    #[cfg(feature = "xwidgets")]
+    // host-cfg: xwidgets
     ("xwidget-webkit-uri", 1, Some(1), upper_subr_0705),
-    #[cfg(feature = "xwidgets")]
+    // host-cfg: xwidgets
     ("xwidget-webkit-title", 1, Some(1), upper_subr_0706),
-    #[cfg(feature = "xwidgets")]
+    // host-cfg: xwidgets
     ("xwidget-webkit-goto-uri", 2, Some(2), upper_subr_0707),
-    #[cfg(feature = "xwidgets")]
+    // host-cfg: xwidgets
     ("xwidget-webkit-execute-script", 2, Some(3), upper_subr_0708),
-    #[cfg(feature = "xwidgets")]
+    // host-cfg: xwidgets
     ("xwidget-webkit-estimated-load-progress", 1, Some(1), upper_subr_0709),
     #[cfg(neomacs_have_dbus)]
     ("dbus--init-bus", 1, Some(2), upper_subr_0710),
@@ -3929,35 +3929,35 @@ static UPPER_SUBRS: &[(&str, u16, Option<u16>, fn(&mut Context, Vec<Value>) -> E
     ("dbus--fd-close", 1, Some(1), upper_subr_0714),
     #[cfg(neomacs_have_dbus)]
     ("dbus--registered-fds", 0, Some(0), upper_subr_0715),
-    #[cfg(feature = "sqlite")]
+    // host-cfg: sqlite
     ("sqlite-open", 0, Some(3), upper_subr_0716),
-    #[cfg(feature = "sqlite")]
+    // host-cfg: sqlite
     ("sqlite-close", 1, Some(1), upper_subr_0717),
-    #[cfg(feature = "sqlite")]
+    // host-cfg: sqlite
     ("sqlite-execute", 2, Some(3), upper_subr_0718),
-    #[cfg(feature = "sqlite")]
+    // host-cfg: sqlite
     ("sqlite-select", 2, Some(4), upper_subr_0719),
-    #[cfg(feature = "sqlite")]
+    // host-cfg: sqlite
     ("sqlite-execute-batch", 2, Some(2), upper_subr_0720),
-    #[cfg(feature = "sqlite")]
+    // host-cfg: sqlite
     ("sqlite-transaction", 1, Some(1), upper_subr_0721),
-    #[cfg(feature = "sqlite")]
+    // host-cfg: sqlite
     ("sqlite-commit", 1, Some(1), upper_subr_0722),
-    #[cfg(feature = "sqlite")]
+    // host-cfg: sqlite
     ("sqlite-rollback", 1, Some(1), upper_subr_0723),
-    #[cfg(feature = "sqlite")]
+    // host-cfg: sqlite
     ("sqlite-pragma", 2, Some(2), upper_subr_0724),
-    #[cfg(feature = "sqlite")]
+    // host-cfg: sqlite
     ("sqlite-load-extension", 2, Some(2), upper_subr_0725),
-    #[cfg(feature = "sqlite")]
+    // host-cfg: sqlite
     ("sqlite-next", 1, Some(1), upper_subr_0726),
-    #[cfg(feature = "sqlite")]
+    // host-cfg: sqlite
     ("sqlite-columns", 1, Some(1), upper_subr_0727),
-    #[cfg(feature = "sqlite")]
+    // host-cfg: sqlite
     ("sqlite-more-p", 1, Some(1), upper_subr_0728),
-    #[cfg(feature = "sqlite")]
+    // host-cfg: sqlite
     ("sqlite-finalize", 1, Some(1), upper_subr_0729),
-    #[cfg(feature = "sqlite")]
+    // host-cfg: sqlite
     ("sqlite-version", 0, Some(0), upper_subr_0730),
     ("sqlitep", 1, Some(1), upper_subr_0731),
     ("sqlite-available-p", 0, Some(0), upper_subr_0732),

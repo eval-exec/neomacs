@@ -41,7 +41,7 @@ const PRELUDE: &str = r####"
   (dolist (buffer (buffer-list))
     (with-current-buffer buffer
       (when (and buffer-file-name
-                 (file-in-directory-p buffer-file-name root))
+                 (neomacs-melpa-path-inside-p buffer-file-name root))
         (set-buffer-modified-p nil)
         (kill-buffer buffer)))))
 

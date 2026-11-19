@@ -292,7 +292,7 @@ fn save_and_load_restores_file_buffers_metadata_and_hidden_workspace() -> Parity
                  (string< (buffer-name left) (buffer-name right))))))))))
 "####;
     let expected = expect![[
-        r#"OK (:state-file-exists t :saved-names ("none" "release-41") :loaded-names ("none" "release-41") :registered ("none" "release-41") :buffers ("notes.txt" "release.el") :files ("checkout/notes.txt" "checkout/release.el") :parameters ((persp-file . "[ORACLE-SANDBOX]/persp-mode-save-load/state/perspectives.el") (environment . "production") (owner . "release-engineering") (attempt . 3)) :hidden t :contents ("deploy at 14:00 UTC\n" #("(setq release-status 'approved)\n" 0 32 (fontified nil))))"#
+        r#"OK (:state-file-exists t :saved-names ("none" "release-41") :loaded-names ("none" "release-41") :registered ("none" "release-41") :buffers ("notes.txt" "release.el") :files ("checkout/notes.txt" "checkout/release.el") :parameters ((persp-file . "[ORACLE-SANDBOX]/persp-mode-save-load/state/perspectives.el") (environment . "production") (owner . "release-engineering") (attempt . 3)) :hidden t :contents ("deploy at 14:00 UTC\n" "(setq release-status 'approved)\n"))"#
     ]];
     ParityBatchCase::value(
         "save_and_load_restores_file_buffers_metadata_and_hidden_workspace",

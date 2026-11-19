@@ -25,7 +25,7 @@ fn set_cc(settings: &mut libc::termios, index: usize, value: u8) {
     }
 }
 
-pub fn configure_child_pty_tty(tty_name: &OsStr) -> Result<(), String> {
+pub(crate) fn configure_child_pty_tty(tty_name: &OsStr) -> Result<(), String> {
     let path = std::ffi::CString::new(tty_name.as_bytes())
         .map_err(|_| "PTY tty name contains an interior NUL".to_string())?;
     let fd = unsafe { libc::open(path.as_ptr(), libc::O_RDWR | libc::O_NOCTTY) };
@@ -86,7 +86,9 @@ pub fn configure_child_pty_tty(tty_name: &OsStr) -> Result<(), String> {
 /// # Safety
 /// Must only be called from a `pre_exec` context (post-fork, pre-exec), where
 /// running async-signal-safe syscalls on the child's fds is sound.
-pub unsafe fn establish_pty_controlling_terminal(tty: &std::ffi::CStr) -> std::io::Result<()> {
+pub(crate) unsafe fn establish_pty_controlling_terminal(
+    tty: &std::ffi::CStr,
+) -> std::io::Result<()> {
     let slave = unsafe { libc::open(tty.as_ptr(), libc::O_RDWR | libc::O_NOCTTY) };
     if slave < 0 {
         return Err(std::io::Error::last_os_error());
@@ -113,7 +115,7 @@ pub unsafe fn establish_pty_controlling_terminal(tty: &std::ffi::CStr) -> std::i
 /// The foreground process-group id of the terminal open on `fd` (`TIOCGPGRP`),
 /// or `None` if `fd` is not a tty or has no foreground group. This is GNU's
 /// `emacs_get_tty_pgrp` probe, used by `process-running-child-p`.
-pub fn fd_foreground_pgrp(fd: RawFd) -> Option<i32> {
+pub(crate) fn fd_foreground_pgrp(fd: RawFd) -> Option<i32> {
     let mut gid: libc::pid_t = -1;
     // SAFETY: `TIOCGPGRP` writes the pgrp through the provided `&mut gid`.
     let ok = unsafe { libc::ioctl(fd, libc::TIOCGPGRP as _, &mut gid) } != -1;
@@ -123,7 +125,7 @@ pub fn fd_foreground_pgrp(fd: RawFd) -> Option<i32> {
 /// Like [`fd_foreground_pgrp`] but for a tty given by path: open it read-only,
 /// probe, and close. Used when a process has no live PTY master fd but does
 /// know its controlling tty's name.
-pub fn tty_path_foreground_pgrp(path: &OsStr) -> Option<i32> {
+pub(crate) fn tty_path_foreground_pgrp(path: &OsStr) -> Option<i32> {
     let c_path = std::ffi::CString::new(path.as_bytes()).ok()?;
     // SAFETY: `c_path` is a valid C string; the tty is opened read-only.
     let fd = unsafe { libc::open(c_path.as_ptr(), libc::O_RDONLY, 0) };

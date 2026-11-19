@@ -102,7 +102,7 @@ const PRELUDE: &str = r####"
 (defun rk429-test-write (relative contents)
   (let ((file (expand-file-name relative rk429-test-root)))
     (unless (and rk429-test-root-owned
-                 (file-in-directory-p file rk429-test-root))
+                 (neomacs-melpa-path-inside-p file rk429-test-root))
       (error "Refusing rake write outside owned root: %s" file))
     (make-directory (file-name-directory file) t)
     (let ((coding-system-for-write 'utf-8-unix))

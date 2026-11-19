@@ -89,8 +89,19 @@ impl Registry {
         self.gate.gate_owner.load(Ordering::Acquire) == current_thread()
     }
 
-    /// Internal stopped image prepare/commit only. Never wait while retaining a gate,
-    /// entry/root-table/allocator guard, or a callback into owner code.
+    /// Real failed acquisition of the predicate mutex. Fixtures use this to
+    /// prove a waiter is about to park; it is not a sleep or a `Busy` guess.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn predicate_mutex_would_block(&self) -> bool {
+        matches!(
+            self.gate.state.try_lock(),
+            Err(std::sync::TryLockError::WouldBlock)
+        )
+    }
+
+    /// Internal stopped image prepare/commit or owner resume-drain admission.
+    /// Never wait while retaining a gate, entry/root-table/allocator guard,
+    /// or a callback into owner code.
     pub(super) fn lock_blocking(&self) -> Result<RegistryGuard<'_>, RegistrationError> {
         if self.park.poisoned.load(Ordering::Acquire) {
             return Err(RegistrationError::Poisoned);

@@ -36,15 +36,15 @@ pub use intern::InitialInternError;
 mod functions;
 #[cfg(feature = "test-support")]
 pub mod functions;
+pub use functions::FunctionCallCache;
 #[cfg(any(test, feature = "test-support"))]
 pub use functions::FunctionOpKind;
+pub use functions::FunctionStep;
 #[cfg(any(test, feature = "test-support"))]
 pub(super) use functions::PreparedNameFunction;
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) use functions::{EraCoreHofExt, EraCoreUnaryExt, RunAccessHofExt, RunAccessUnaryExt};
-pub use functions::{
-    FunctionActivation, FunctionCallCache, FunctionError, FunctionSelection, FunctionStep,
-};
+pub use functions::{FunctionActivation, FunctionError, FunctionSelection};
 #[doc(hidden)]
 pub use functions::{PreparedHofBuiltin, PreparedUnaryFunction};
 mod word;
@@ -330,7 +330,8 @@ impl<'owner, 'era> RunAccess<'owner, 'era> {
             key: *key,
         })
     }
-    pub fn symbol_mut<'a>(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn symbol_mut<'a>(
         &'a mut self,
         key: &SymbolHandle,
     ) -> Result<SymbolMut<'a, 'owner, 'era>, RegistrationError> {

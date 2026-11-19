@@ -103,7 +103,7 @@ fn session<H: WeakTableHost>(
                 let (ready_tx, ready_rx) = channel();
                 let (retired_tx, retired_rx) = channel();
                 let permits: Vec<_> = (0..n)
-                    .map(|index| retry_reg(|| era.register(9800 + index as u64, NSLOTS)))
+                    .map(|index| era.register(9800 + index as u64, NSLOTS).unwrap())
                     .collect();
                 let mut go_txs = Vec::new();
                 let mut done_txs = Vec::new();

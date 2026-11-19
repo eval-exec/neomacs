@@ -55,32 +55,44 @@ enum CleanupReceipt {
     Pending,
     Finished(Result<(), CleanupError>),
 }
+enum CleanupInvocation {
+    SingleOwner,
+    ConcurrentOwners,
+}
 #[must_use = "drop the frame and clear the actual bank before owner retirement"]
 struct Guard<'era> {
     resources: Resources<'era>,
     receipt: Rc<RefCell<CleanupReceipt>>,
+    invocation: CleanupInvocation,
 }
-impl Drop for Guard<'_> {
+impl<'era> Drop for Guard<'era> {
     fn drop(&mut self) {
         let result = match std::mem::replace(&mut self.resources, Resources::Released) {
             Resources::Released => return,
             Resources::Resident(Worker { mut owner, frame }) => (|| {
                 drop(frame);
-                contention::retry(
-                    Deadline::contention(),
-                    || owner.run_access()?.clear_root_slots(),
-                    contention::registration,
-                )
+                let mut clear = || owner.run_access()?.clear_root_slots();
+                match self.invocation {
+                    CleanupInvocation::SingleOwner => clear(),
+                    // The live cohort's contention policy remains a separate
+                    // audit gap; a serial fixture must not inherit its retry.
+                    CleanupInvocation::ConcurrentOwners => {
+                        contention::retry(Deadline::contention(), clear, contention::registration)
+                    }
+                }
                 .map_err(CleanupError::Registration)?;
-                retry_owned(
-                    Deadline::contention(),
-                    owner,
-                    |owner| owner.retire_rooted(&[]),
-                    |failed| match contention::rendezvous(&failed.reason) {
-                        Retry::Busy => ControlFlow::Continue(failed.into_owner()),
-                        Retry::Refuse => ControlFlow::Break(failed),
-                    },
-                )
+                let retire = |owner: Mutator<'era>| owner.retire_rooted(&[]);
+                match self.invocation {
+                    CleanupInvocation::SingleOwner => retire(owner),
+                    CleanupInvocation::ConcurrentOwners => {
+                        retry_owned(Deadline::contention(), owner, retire, |failed| {
+                            match contention::rendezvous(&failed.reason) {
+                                Retry::Busy => ControlFlow::Continue(failed.into_owner()),
+                                Retry::Refuse => ControlFlow::Break(failed),
+                            }
+                        })
+                    }
+                }
                 .map_err(|failed| CleanupError::Retirement(failed.reason))
             })(),
         };
@@ -90,11 +102,7 @@ impl Drop for Guard<'_> {
 impl Worker<'_> {
     fn seed(&mut self, session: &Session) -> Result<(), Error> {
         let program = ProgramIndex::checked(0, session)?;
-        let frame = contention::retry(
-            Deadline::contention(),
-            || session.seed(&mut self.owner, program),
-            executor::classify,
-        )?;
+        let frame = session.seed(&mut self.owner, program)?;
         self.frame = FrameState::Ready(frame);
         Ok(())
     }
@@ -107,17 +115,12 @@ impl Worker<'_> {
     fn word(&mut self, register: RootRegister) -> WordIdentity {
         match &self.frame {
             FrameState::Empty => panic!("C6 mixed frame not seeded"),
-            FrameState::Ready(frame) => contention::retry(
-                Deadline::contention(),
-                || {
-                    let run = self.owner.run_access()?;
-                    Ok(WordIdentity(
-                        frame.home(register).unwrap().word_for_test(&run),
-                    ))
-                },
-                contention::registration,
-            )
-            .unwrap(),
+            FrameState::Ready(frame) => {
+                // Serial bodies are Idle; cohort observations run after this
+                // owner's native return. Only peer resume debt may remain.
+                let run = self.owner.run_access_after_resume_drain().unwrap();
+                WordIdentity(frame.home(register).unwrap().word_for_test(&run))
+            }
         }
     }
     fn complete(&mut self, session: &Session) -> Vec<ReadyStep> {
@@ -219,16 +222,7 @@ fn fixture<H: CombinedParts>(
                 RootReservation::Short => required.checked_sub(1).unwrap(),
             };
             let permit = era.register(1, reserved).unwrap();
-            let owner = retry_owned(
-                Deadline::contention(),
-                permit,
-                |permit| permit.activate(era.heap_identity(), 1),
-                |failed| match contention::registration(&failed.reason) {
-                    Retry::Busy => ControlFlow::Continue(failed.into_permit()),
-                    Retry::Refuse => ControlFlow::Break(failed),
-                },
-            )
-            .unwrap();
+            let owner = permit.activate(era.heap_identity(), 1).unwrap();
             let receipt = Rc::new(RefCell::new(CleanupReceipt::Pending));
             let mut guard = Guard {
                 resources: Resources::Resident(Worker {
@@ -236,6 +230,7 @@ fn fixture<H: CombinedParts>(
                     frame: FrameState::Empty,
                 }),
                 receipt: Rc::clone(&receipt),
+                invocation: CleanupInvocation::SingleOwner,
             };
             let outcome =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

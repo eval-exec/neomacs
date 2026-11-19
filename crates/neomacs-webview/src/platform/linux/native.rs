@@ -367,9 +367,19 @@ unsafe extern "C" fn preferred_buffer_formats(
         "get-preferred-buffer-formats",
         std::ptr::null_mut(),
         || unsafe {
-            delegate(display).map_or(std::ptr::null_mut(), |delegate| {
-                plat::wpe_display_get_preferred_buffer_formats(delegate)
-            })
+            let Some(delegate) = delegate(display) else {
+                return std::ptr::null_mut();
+            };
+            // `WPEDisplay::get_preferred_buffer_formats` stores this vfunc's
+            // return with `adoptGRef` (transfer full). The delegate getter is
+            // transfer none, so return one new ref and leave the delegate's
+            // ref in place. Returning the borrowed pointer makes display
+            // finalize unref an object the delegate already released.
+            let formats = plat::wpe_display_get_preferred_buffer_formats(delegate);
+            if !formats.is_null() {
+                plat::g_object_ref(formats.cast());
+            }
+            formats
         },
     )
 }

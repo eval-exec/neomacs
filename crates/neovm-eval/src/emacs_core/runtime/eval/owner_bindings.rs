@@ -220,7 +220,7 @@ impl OwnerRecordId {
 /// record. No `Value`: the record's values live in the slab, which the
 /// collector traces.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct OwnerBindingRef {
+pub struct OwnerBindingRef {
     sym: SymId,
     record: OwnerRecordId,
 }
@@ -229,7 +229,7 @@ impl OwnerBindingRef {
     /// The specpdl's handle on RECORD, a binding of SYM.
     #[inline]
     #[doc(hidden)]
-    pub fn new(sym: SymId, record: OwnerRecordId) -> Self {
+    pub(crate) fn new(sym: SymId, record: OwnerRecordId) -> Self {
         Self { sym, record }
     }
 
@@ -278,6 +278,10 @@ pub struct OwnerSlab {
     /// it on error. Kept beside `native_fileio` but separate, exactly as GNU
     /// keeps the write policy and the directory umask as independent statics.
     native_fileio_dir_umask: u32,
+    /// Dormant selection arm. No Lisp values, so the collector does not
+    /// trace it. The clipboard stubs do not read it. Absent until this
+    /// owner allocates a slab, and uninstalled when the slab is new.
+    pub(crate) selection_activation: super::activation::SelectionActivation,
     _thread_confined: PhantomData<*const ()>,
 }
 
@@ -290,6 +294,7 @@ impl std::fmt::Debug for OwnerSlab {
             .field("heap", &format_args!("{:#x}", self.heap))
             .field("records", &self.records.len())
             .field("locals", &self.locals.len())
+            .field("selection", &self.selection_activation.phase())
             .finish_non_exhaustive()
     }
 }
@@ -326,6 +331,7 @@ impl OwnerSlab {
             green: None,
             native_fileio: AutoSaveNativeWritePolicy::Ordinary { preserved_mode: 0 },
             native_fileio_dir_umask: 0,
+            selection_activation: super::activation::SelectionActivation::dormant(),
             _thread_confined: PhantomData,
         }
     }
@@ -2366,36 +2372,6 @@ impl Context {
         self.with_revealed_projection(base, |ctx| {
             ctx.obarray
                 .set_canonical_value(CanonicalAccess::STORAGE, base, value);
-        });
-    }
-
-    /// [`Context::makunbound_variable`] of a projected cell.
-    #[cold]
-    #[inline(never)]
-    pub(crate) fn makunbound_owner_variable(&mut self, id: SymId) {
-        debug_assert!(
-            self.owner.slab().is_some(),
-            "a Context that sees a projected cell has an owner slab"
-        );
-        let Some((base, projection)) = self.projection_behind(id) else {
-            self.obarray
-                .makunbound_canonical(CanonicalAccess::ROUTED, id);
-            return;
-        };
-        let index = projection.index();
-        if let Some(slab) = self.owner.slab_mut()
-            && slab.slot(index, Channel::Default).value().is_some()
-        {
-            slab.set_slot(
-                index,
-                Channel::Default,
-                SlotState::Bound(SlotValue::new(Value::UNBOUND)),
-            );
-            return;
-        }
-        self.with_revealed_projection(base, |ctx| {
-            ctx.obarray
-                .makunbound_canonical(CanonicalAccess::STORAGE, base);
         });
     }
 }

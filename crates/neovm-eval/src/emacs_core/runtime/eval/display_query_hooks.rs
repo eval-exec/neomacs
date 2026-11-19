@@ -24,41 +24,43 @@ use neovm_edit::emacs_core::display_metrics::{
 use neovm_value::display_vocab::{FrameId, Invisibility};
 
 /// A display-policy selector evaluated at a redisplay boundary.
-pub type DisplayFlagQuery = fn() -> bool;
+pub(crate) type DisplayFlagQuery = fn() -> bool;
 
 /// Whether this frame is an actual termcap face target.
-pub type FrameTTYTargetQuery = fn(&Frame) -> bool;
+pub(crate) type FrameTTYTargetQuery = fn(&Frame) -> bool;
 
 /// Resolve (and, in batch mode, synthesize) the selected frame.
-pub type EnsureSelectedFrameId = fn(&mut FrameManager, &mut BufferManager) -> FrameId;
+pub(crate) type EnsureSelectedFrameId = fn(&mut FrameManager, &mut BufferManager) -> FrameId;
 /// Mirror the selected window's point into its marker.
-pub type RememberSelectedWindowPoint = fn(&mut FrameManager, &mut BufferManager, FrameId);
+pub(crate) type RememberSelectedWindowPoint = fn(&mut FrameManager, &mut BufferManager, FrameId);
 /// Logical body dimensions for GNU window-change records.
-pub type WindowBodyDimensions =
+pub(crate) type WindowBodyDimensions =
     fn(&FrameManager, &BufferManager, FrameId, WindowId) -> Result<(i64, i64), Flow>;
 /// Commit a `resize-mini-window-internal` request.
-pub type ResizeMiniWindow = fn(&mut Context, Vec<Value>) -> EvalResult;
+pub(crate) type ResizeMiniWindow = fn(&mut Context, Vec<Value>) -> EvalResult;
 /// Apply GNU auto-hscroll before a redisplay.
-pub type UpdateAutoHscroll = fn(&mut Context);
+pub(crate) type UpdateAutoHscroll = fn(&mut Context);
 /// The fontset registry generation in the redisplay signature.
-pub type FontsetGeneration = fn() -> u64;
+pub(crate) type FontsetGeneration = fn() -> u64;
 /// GNU's frame-domain window lookup (live/valid/any).
 pub type WindowDomainFrameOf = fn(WindowDomain, &FrameManager, WindowId) -> Option<FrameId>;
 /// Presented regions for one window in an active publication.
-pub type WindowRegionsAt =
+pub(crate) type WindowRegionsAt =
     fn(&PresentationGeometry, PresentationId, WindowId) -> Option<WindowRegions>;
 /// Resolve measured display-row motion.
-pub type MotionResolve = fn(&mut Context, MotionRequest) -> Result<Option<MeasuredMotion>, Flow>;
+pub(crate) type MotionResolve =
+    fn(&mut Context, MotionRequest) -> Result<Option<MeasuredMotion>, Flow>;
 /// GNU `init_iterator`'s line-wrap decision for one window/buffer pair.
-pub type WindowLineWrapQuery = fn(&mut Context, Option<Value>, BufferId, MotionEngine) -> LineWrap;
+pub(crate) type WindowLineWrapQuery =
+    fn(&mut Context, Option<Value>, BufferId, MotionEngine) -> LineWrap;
 /// `(window-body-width WINDOW nil)` for the EditHost geometry surface.
-pub type WindowBodyWidthQuery = fn(&mut Context, &[Value]) -> EvalResult;
+pub(crate) type WindowBodyWidthQuery = fn(&mut Context, &[Value]) -> EvalResult;
 /// `(window-hscroll WINDOW)` for the EditHost geometry surface.
-pub type WindowHscrollQuery = fn(&mut Context, &[Value]) -> EvalResult;
+pub(crate) type WindowHscrollQuery = fn(&mut Context, &[Value]) -> EvalResult;
 /// Resolve an `invisible` property/position against the buffer spec.
-pub type InvisibleStatusQuery = fn(&mut Context, Value) -> Result<Invisibility, Flow>;
+pub(crate) type InvisibleStatusQuery = fn(&mut Context, Value) -> Result<Invisibility, Flow>;
 /// End byte of the source run elided by the current invisibility spec.
-pub type InvisibleSourceRunEndQuery =
+pub(crate) type InvisibleSourceRunEndQuery =
     fn(&mut Context, BufferId, usize, InvisibleRunContext) -> Result<Option<usize>, Flow>;
 
 /// Window/redisplay operations eval invokes at command/redisplay boundaries.
@@ -128,7 +130,7 @@ impl DisplayWindowHooks {
     }
 
     #[doc(hidden)]
-    pub fn remember_selected_window_point(&self) -> RememberSelectedWindowPoint {
+    pub(crate) fn remember_selected_window_point(&self) -> RememberSelectedWindowPoint {
         self.remember_selected_window_point
     }
 
@@ -143,7 +145,7 @@ impl DisplayWindowHooks {
     }
 
     #[doc(hidden)]
-    pub fn update_auto_hscroll(&self) -> UpdateAutoHscroll {
+    pub(crate) fn update_auto_hscroll(&self) -> UpdateAutoHscroll {
         self.update_auto_hscroll
     }
 
@@ -178,12 +180,12 @@ impl DisplayWindowHooks {
     }
 
     #[doc(hidden)]
-    pub fn window_hscroll(&self) -> WindowHscrollQuery {
+    pub(crate) fn window_hscroll(&self) -> WindowHscrollQuery {
         self.window_hscroll
     }
 
     #[doc(hidden)]
-    pub fn invisible_status(&self) -> InvisibleStatusQuery {
+    pub(crate) fn invisible_status(&self) -> InvisibleStatusQuery {
         self.invisible_status
     }
 
@@ -221,7 +223,7 @@ impl DisplayQueryHooks {
         }
     }
 
-    pub fn redisplay_idle_skip(&self) -> DisplayFlagQuery {
+    pub(crate) fn redisplay_idle_skip(&self) -> DisplayFlagQuery {
         self.redisplay_idle_skip
     }
 
@@ -233,7 +235,7 @@ impl DisplayQueryHooks {
         self.face_realization
     }
 
-    pub fn frame_tty_target(&self) -> FrameTTYTargetQuery {
+    pub(crate) fn frame_tty_target(&self) -> FrameTTYTargetQuery {
         self.frame_tty_target
     }
 
@@ -288,7 +290,7 @@ pub fn mode_line_flow_enabled() -> Result<bool, Flow> {
 }
 
 /// Whether the face-realization lifecycle is enabled.
-pub fn face_realization_enabled() -> Result<bool, Flow> {
+pub(crate) fn face_realization_enabled() -> Result<bool, Flow> {
     Ok((hooks_or_refusal()?.face_realization())())
 }
 
@@ -310,7 +312,7 @@ pub fn ensure_selected_frame_id(frames: &mut FrameManager, buffers: &mut BufferM
 }
 
 /// Mirror the selected window's point into its marker.
-pub fn remember_selected_window_point(
+pub(crate) fn remember_selected_window_point(
     frames: &mut FrameManager,
     buffers: &mut BufferManager,
     frame_id: FrameId,
@@ -334,7 +336,7 @@ pub fn resize_mini_window(eval: &mut Context, args: Vec<Value>) -> EvalResult {
 }
 
 /// Apply GNU auto-hscroll before a redisplay.
-pub fn update_auto_hscroll(eval: &mut Context) {
+pub(crate) fn update_auto_hscroll(eval: &mut Context) {
     (installed_window_hooks().update_auto_hscroll())(eval)
 }
 
@@ -376,12 +378,12 @@ pub fn window_body_width(eval: &mut Context, args: &[Value]) -> EvalResult {
 }
 
 /// `(window-hscroll WINDOW)` for the EditHost geometry surface.
-pub fn window_hscroll(eval: &mut Context, args: &[Value]) -> EvalResult {
+pub(crate) fn window_hscroll(eval: &mut Context, args: &[Value]) -> EvalResult {
     (installed_window_hooks().window_hscroll())(eval, args)
 }
 
 /// Resolve an `invisible` property/position against the buffer spec.
-pub fn invisible_status(eval: &mut Context, value: Value) -> Result<Invisibility, Flow> {
+pub(crate) fn invisible_status(eval: &mut Context, value: Value) -> Result<Invisibility, Flow> {
     (installed_window_hooks().invisible_status())(eval, value)
 }
 

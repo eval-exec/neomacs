@@ -55,6 +55,7 @@ pub use function_write_hooks::{
 pub mod symbol_table;
 
 mod cache_root_scan;
+mod publication;
 #[doc(hidden)]
 pub use cache_root_scan::CacheRootScan;
 
@@ -64,7 +65,8 @@ pub use cache_root_scan::CacheRootScan;
 /// is the SATB log keyed on `concurrent_mark_running`. The dump remembered set is
 /// maintained unconditionally in `record_heap_write` regardless of this mode.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum WriteTrackingMode {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) enum WriteTrackingMode {
     Disabled,
     OwnersAndRecords,
 }
@@ -147,7 +149,7 @@ impl MemoryUseCountSlot {
 }
 
 impl HeapWriteRecord {
-    pub const fn bulk(owner: TaggedValue, kind: HeapWriteKind) -> Self {
+    pub(crate) const fn bulk(owner: TaggedValue, kind: HeapWriteKind) -> Self {
         Self {
             owner,
             kind,
@@ -1079,6 +1081,8 @@ pub struct TaggedHeap {
     /// is N-mutator ready. Appended after the frozen store ABI fields, so no
     /// pinned offset moves.
     overlay_serial: crate::heap_types::OverlaySerialCounter,
+    /// Retired-process and killed-buffer ephemeron records (memory_registry).
+    ephemeron_records: memory_registry::EphemeronRecords,
 }
 
 impl Default for TaggedHeap {
@@ -1213,6 +1217,7 @@ impl TaggedHeap {
             #[cfg(any(test, feature = "test-support"))]
             mapped_veclike_traces: 0,
             overlay_serial: crate::heap_types::OverlaySerialCounter::new(),
+            ephemeron_records: memory_registry::EphemeronRecords::default(),
             dirty_owner_bits: FxHashSet::default(),
             dirty_writes: Vec::new(),
             gc_collections: 0,
@@ -1393,7 +1398,8 @@ impl TaggedHeap {
         }
     }
 
-    pub fn set_write_tracking_mode(&mut self, mode: WriteTrackingMode) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn set_write_tracking_mode(&mut self, mode: WriteTrackingMode) {
         self.write_tracking_mode = mode;
         TAGGED_HEAP_WRITE_TRACKING_MODE.with(|current| current.set(mode));
         // SAFETY: the executing mutator holds this heap's exclusive loan; no
@@ -1405,7 +1411,8 @@ impl TaggedHeap {
         }
     }
 
-    pub fn write_tracking_mode(&self) -> WriteTrackingMode {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn write_tracking_mode(&self) -> WriteTrackingMode {
         self.write_tracking_mode
     }
 
@@ -1431,11 +1438,6 @@ impl TaggedHeap {
                 self.pace_lead_bytes,
             );
         }
-    }
-
-    /// Lifetime count of cap-forced concurrent-mark terminations.
-    pub fn must_finish_count(&self) -> u64 {
-        self.must_finish_count
     }
 
     /// Trace probe: the projected mark-window allocation in bytes (the
@@ -1522,10 +1524,6 @@ impl TaggedHeap {
         if !self.gc_threshold_overridden {
             self.gc_threshold = threshold.max(1);
         }
-    }
-
-    pub fn clear_gc_threshold_override(&mut self) {
-        self.gc_threshold_overridden = false;
     }
 
     pub fn gc_threshold_is_overridden(&self) -> bool {
@@ -2501,6 +2499,9 @@ pub mod alloc_probe;
 #[cfg(test)]
 #[path = "gc/tests/layout_stats_test.rs"]
 mod layout_stats_tests;
+#[cfg(test)]
+#[path = "gc/tests/slot_store_test.rs"]
+mod slot_store_tests;
 
 #[cfg(test)]
 #[path = "gc/tests/pacer_test.rs"]
@@ -2686,7 +2687,7 @@ pub(crate) use collection_observed::collection_observed;
 pub(crate) use collection_observed::collection_observed_metadata;
 pub(crate) use collection_observed::{
     advance_collection_observation_epoch, clear_noncons_collection_observed_metadata,
-    mark_collection_observed,
+    mark_collection_observed, reclaimed_collection_observation_count,
 };
 use collection_observed::{
     clear_cons_observed_block, clear_cons_observed_dead, has_noncons_collection_observations,
@@ -2782,8 +2783,20 @@ use census::{CensusCycleKind, GenCensus, census_remset_probe_on};
 pub use facade_mark::{
     CollectorQuiescenceError, ConcurrentMarkAdmissionError, ConcurrentMarkCapture,
     ConcurrentMarkPermit, FacadeEpochRetention, FacadeMarkExclusion, FacadeMarkExclusionError,
-    QuiescentCollector,
+    QuiescentCollector, heap_transfer,
 };
+pub use mutator_registration::FunctionCallCache;
+pub use mutator_registration::KeeperTableMut;
+pub use mutator_registration::MutatorPermit;
+pub use mutator_registration::NativeRoots;
+pub use mutator_registration::OwnerPublication;
+pub use mutator_registration::ResumeGcImage;
+pub use mutator_registration::SealedTableAccess;
+pub use mutator_registration::SliceRoot;
+pub use mutator_registration::SymbolMut;
+pub use mutator_registration::SymbolRef;
+pub use mutator_registration::TableMut;
+pub use mutator_registration::TableRef;
 #[cfg(all(
     any(test, feature = "test-support"),
     not(feature = "gc-memory-telemetry")
@@ -2791,15 +2804,18 @@ pub use facade_mark::{
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) use mutator_registration::symbol_functions::boundary as function_boundary_testkit;
 pub use mutator_registration::{
-    AllStopped, AllStoppedFailure, CollectionError, CollectionReport, FunctionActivation,
-    FunctionCallCache, FunctionError, FunctionSelection, FunctionStep, GlobalError,
-    InitialInternError, KeeperSymbols, KeeperTableMut, MinorCollectionError, Mode, Mutator,
-    MutatorEntry, MutatorFinishFailure, MutatorKey, MutatorPermit, MutatorStartFailure,
-    NativeReturn, NativeRoots, OwnerPublication, OwnerRootSlot, ParallelExecutionAdmission,
-    ParallelHeapEra, Phase, PlainSymbolBacking, RegistrationCensus, RegistrationError, Rendezvous,
-    RendezvousError, Request, ResumeGcImage, ResumeGcImageFailure, RootedRetireFailure, RunAccess,
-    RunSlice, SealedTableAccess, SliceRoot, Snapshot, StoppedSummaries, SymbolHandle, SymbolMut,
-    SymbolRef, TableMut, TableRef, YoungWorkerLoan,
+    AllStopped, CollectionError, CollectionReport, FunctionActivation, FunctionError,
+    FunctionSelection, KeeperSymbols, MinorCollectionError, Mode, Mutator, OwnerRootSlot,
+    ParallelExecutionAdmission, ParallelHeapEra, Phase, PlainSymbolBacking, RegistrationError,
+    RendezvousError, Request, RunAccess, RunSlice, Snapshot, SymbolHandle,
+};
+pub use mutator_registration::{
+    AllStoppedFailure, MutatorEntry, MutatorFinishFailure, MutatorStartFailure, NativeReturn,
+    RegistrationCensus, ResumeGcImageFailure, RootedRetireFailure, StoppedSummaries,
+    YoungWorkerLoan,
+};
+pub use mutator_registration::{
+    FunctionStep, GlobalError, InitialInternError, MutatorKey, Rendezvous,
 };
 // The extension-trait convenience re-export is `pub(crate)`: it can never name
 // anything for a dependency build, and no consumer in any configuration uses
@@ -2903,8 +2919,6 @@ mod marker_arena_tests;
 /// Record and closure slot stores are atomic: race-free against an atomic
 /// reader, same semantics, same barrier through a concurrent mark.
 #[cfg(test)]
-#[path = "gc/tests/slot_store_test.rs"]
-mod slot_store_tests;
 #[cfg(test)]
 #[path = "gc/tests/symbol_with_pos_arena_test.rs"]
 mod symbol_with_pos_arena_tests;
@@ -2927,6 +2941,10 @@ mod generational_tests;
 #[cfg(test)]
 #[path = "gc/tests/birth_logs_test.rs"]
 mod birth_logs_tests;
+
+#[cfg(test)]
+#[path = "gc/tests/weak_table_minor_test.rs"]
+mod weak_table_minor_tests;
 
 #[cfg(feature = "test-support")]
 #[path = "gc/tests/generational_major_test.rs"]

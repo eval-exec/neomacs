@@ -226,6 +226,7 @@ impl CapturedCharacterPolicy {
             slant: style.slant,
             width: style.width,
             size: key.size,
+            otf: None,
         }
         .with_spec(spec.into())
     }
@@ -326,6 +327,7 @@ impl FontResolver {
             weight: None,
             slant: None,
             width: None,
+            otf: None,
         };
         let policy =
             CapturedCharacterPolicy::from_rendering_spec(key, &query.inherited, style, &fallback);

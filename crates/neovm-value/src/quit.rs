@@ -276,3 +276,6 @@ pub fn install_quit_requested_for_test(pending: bool) -> QuitRequest {
 pub fn clear_quit_requested_for_test() {
     QUIT_REQUESTED_TLS.with(|cell| *cell.borrow_mut() = None);
 }
+
+#[doc(hidden)]
+pub mod quit_detach;

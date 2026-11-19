@@ -5,73 +5,97 @@
 ))]
 
 use super::*;
-use crate::tagged::gc::ProofEra as ParallelHeapEra;
 use crate::tagged::gc::mark_word::MarkWord;
+use crate::tagged::gc::{ProofEra as ParallelHeapEra, TaggedHeap};
 use crate::tagged::transport::SharedRoot;
 use crate::tagged::value::TaggedValue as Value;
 use std::sync::{Arc, Barrier, mpsc};
 use std::thread;
 use std::time::Duration;
 
-fn retry<T>(mut f: impl FnMut() -> Result<T, RendezvousError>) -> T {
-    loop {
-        match f() {
-            Ok(value) => return value,
-            Err(RendezvousError::Busy) => thread::yield_now(),
-            Err(error) => panic!("unexpected collection refusal: {error:?}"),
+// These helpers serve one-thread histories; an unexpected refusal is terminal.
+fn retire(owner: Mutator<'_>) {
+    owner.retire_rooted(&[]).unwrap();
+}
+fn complete(stopped: AllStopped<'_>) {
+    stopped.complete().unwrap();
+}
+
+// Preserve the concurrent admission histories without imposing a serial start.
+// Their unresolved admission retry policies are audited independently.
+mod contended {
+    use super::*;
+
+    pub(super) fn retry<T>(mut f: impl FnMut() -> Result<T, RendezvousError>) -> T {
+        loop {
+            match f() {
+                Ok(value) => return value,
+                Err(RendezvousError::Busy) => thread::yield_now(),
+                Err(error) => panic!("unexpected collection refusal: {error:?}"),
+            }
         }
     }
-}
-fn activate<'era>(
-    mut permit: MutatorPermit<'era>,
-    heap: HeapIdentity,
-    owner: u64,
-) -> Mutator<'era> {
-    loop {
-        match permit.activate(heap, owner) {
-            Ok(mutator) => return mutator,
-            Err(failure) if failure.reason == RegistrationError::Busy => {
-                permit = failure.into_permit();
-                thread::yield_now();
+    pub(super) fn activate<'era>(
+        mut permit: MutatorPermit<'era>,
+        heap: HeapIdentity,
+        owner: u64,
+    ) -> Mutator<'era> {
+        loop {
+            match permit.activate(heap, owner) {
+                Ok(mutator) => return mutator,
+                Err(failure) if failure.reason == RegistrationError::Busy => {
+                    permit = failure.into_permit();
+                    thread::yield_now();
+                }
+                Err(failure) => panic!("activation: {:?}", failure.reason),
             }
-            Err(failure) => panic!("activation: {:?}", failure.reason),
         }
     }
-}
-fn apply(mut image: ResumeGcImage<'_, '_>) {
-    loop {
-        match image.apply() {
-            Ok(()) => return,
-            Err(failure) if failure.reason == RendezvousError::Busy => {
-                image = failure.into_image();
-                thread::yield_now();
+    pub(super) fn apply(mut image: ResumeGcImage<'_, '_>) {
+        loop {
+            match image.apply() {
+                Ok(()) => return,
+                Err(failure) if failure.reason == RendezvousError::Busy => {
+                    image = failure.into_image();
+                    thread::yield_now();
+                }
+                Err(failure) => panic!("restore: {:?}", failure.reason),
             }
-            Err(failure) => panic!("restore: {:?}", failure.reason),
         }
     }
-}
-fn retire(mut owner: Mutator<'_>) {
-    loop {
-        match owner.retire_rooted(&[]) {
-            Ok(()) => return,
-            Err(failure) if failure.reason == RendezvousError::Busy => {
-                owner = failure.into_owner();
-                thread::yield_now();
+    pub(super) fn retire(mut owner: Mutator<'_>) {
+        loop {
+            match owner.retire_rooted(&[]) {
+                Ok(()) => return,
+                Err(failure) if failure.reason == RendezvousError::Busy => {
+                    owner = failure.into_owner();
+                    thread::yield_now();
+                }
+                Err(failure) => panic!("retire: {:?}", failure.reason),
             }
-            Err(failure) => panic!("retire: {:?}", failure.reason),
         }
     }
-}
-fn complete(mut stopped: AllStopped<'_>) {
-    loop {
-        match stopped.complete() {
-            Ok(()) => return,
-            Err(failure) if failure.reason == RendezvousError::Busy => {
-                stopped = failure.into_stopped();
-                thread::yield_now();
+    pub(super) fn complete(mut stopped: AllStopped<'_>) {
+        loop {
+            match stopped.complete() {
+                Ok(()) => return,
+                Err(failure) if failure.reason == RendezvousError::Busy => {
+                    stopped = failure.into_stopped();
+                    thread::yield_now();
+                }
+                Err(failure) => panic!("complete: {:?}", failure.reason),
             }
-            Err(failure) => panic!("complete: {:?}", failure.reason),
         }
+    }
+    pub(super) fn assert_owned<K: EraKeeper>(
+        era: &ParallelHeapEra<'_, K>,
+        stop: &AllStopped<'_>,
+        words: &[usize],
+        expected: bool,
+    ) {
+        retry(|| {
+            era.with_stopped_heap_for_test(stop, |heap| super::check_owned(heap, words, expected))
+        });
     }
 }
 fn receive<T>(rx: &mpsc::Receiver<T>) -> T {
@@ -84,23 +108,23 @@ fn assert_owned<K: EraKeeper>(
     words: &[usize],
     expected: bool,
 ) {
-    retry(|| {
-        era.with_stopped_heap_for_test(stop, |heap| {
-            for &word in words {
-                assert_eq!(
-                    heap.owns_heap_value_for_test(
-                        // SAFETY: `word` is the bit pattern `graph` stored from
-                        // a cons allocated in this heap (`head.bits()` /
-                        // `child.bits()`) before the stop. Rehydration only
-                        // feeds the ownership query.
-                        unsafe { Value::from_bits(word) }
-                    ),
-                    expected,
-                    "ownership of opaque observation {word:#x}"
-                );
-            }
-        })
-    });
+    era.with_stopped_heap_for_test(stop, |heap| check_owned(heap, words, expected))
+        .unwrap();
+}
+fn check_owned(heap: &TaggedHeap, words: &[usize], expected: bool) {
+    for &word in words {
+        assert_eq!(
+            heap.owns_heap_value_for_test(
+                // SAFETY: `word` is the bit pattern `graph` stored from
+                // a cons allocated in this heap (`head.bits()` /
+                // `child.bits()`) before the stop. Rehydration only
+                // feeds the ownership query.
+                unsafe { Value::from_bits(word) }
+            ),
+            expected,
+            "ownership of opaque observation {word:#x}"
+        );
+    }
 }
 
 pub(crate) type Graph = (SharedRoot, [usize; 2], Value);
@@ -229,6 +253,8 @@ fn two_requesters_collect_transitive_world_private_and_image_roots<K, W>(
             RendezvousError,
         >,
 {
+    use contended::{activate, apply, assert_owned, complete, retire, retry};
+
     requesters_era(&mut |era,
                          (
         a,
@@ -253,20 +279,14 @@ fn two_requesters_collect_transitive_world_private_and_image_roots<K, W>(
                 let tx = tx.clone();
                 scope.spawn(move || {
                     let mut owner = activate(permit, heap, 801 + index as u64);
-                    loop {
-                        match owner.run_access() {
-                            Ok(mut run) => {
-                                let hot = &mut run.state().hot;
-                                hot.bytes_since_gc = 64 + index;
-                                if generational {
-                                    hot.pacing.promoted_since_major = 32;
-                                    hot.pacing.minors_since_major = 4;
-                                    hot.pacing.stress_cycles_since_major = 3;
-                                }
-                                break;
-                            }
-                            Err(RegistrationError::Busy) => thread::yield_now(),
-                            Err(error) => panic!("initial owner access: {error:?}"),
+                    {
+                        let mut run = owner.run_access().unwrap();
+                        let hot = &mut run.state().hot;
+                        hot.bytes_since_gc = 64 + index;
+                        if generational {
+                            hot.pacing.promoted_since_major = 32;
+                            hot.pacing.minors_since_major = 4;
+                            hot.pacing.stress_cycles_since_major = 3;
                         }
                     }
                     barrier.wait();
@@ -280,23 +300,14 @@ fn two_requesters_collect_transitive_world_private_and_image_roots<K, W>(
                     tx.send((owner.key(), epoch)).unwrap();
                     let response = owner.begin_restore_retry(false).unwrap();
                     apply(response);
-                    loop {
-                        match owner.run_access() {
-                            Ok(mut run) => {
-                                assert_eq!(run.state().hot.bytes_since_gc, 0);
-                                assert_eq!(run.state().hot.pacing.promoted_since_major, 0);
-                                assert_eq!(run.state().hot.pacing.minors_since_major, 0);
-                                assert_eq!(run.state().hot.pacing.stress_cycles_since_major, 0);
-                                assert_eq!(
-                                    run.state().hot.bytes_banked_at_resets,
-                                    (64 + index) as u64
-                                );
-                                run.state().root_scratch.clear();
-                                break;
-                            }
-                            Err(RegistrationError::Busy) => thread::yield_now(),
-                            Err(error) => panic!("run after collection: {error:?}"),
-                        }
+                    {
+                        let mut run = owner.run_access_after_resume_drain().unwrap();
+                        assert_eq!(run.state().hot.bytes_since_gc, 0);
+                        assert_eq!(run.state().hot.pacing.promoted_since_major, 0);
+                        assert_eq!(run.state().hot.pacing.minors_since_major, 0);
+                        assert_eq!(run.state().hot.pacing.stress_cycles_since_major, 0);
+                        assert_eq!(run.state().hot.bytes_banked_at_resets, (64 + index) as u64);
+                        run.state().root_scratch.clear();
                     }
                     retire(owner);
                 });
@@ -366,7 +377,7 @@ fn native_image_logs_fold_once_across_repeated_full_majors<K, W>(
         let remembered_observations = remembered.1;
         let mut remembered = Some(remembered);
         for round in 0..2 {
-            let mut stopped = retry(|| era.stop());
+            let mut stopped = era.stop().unwrap();
             let work_words = if let Some((root, words, word)) = remembered.take() {
                 stopped
                     .with_owner_image(key, |image| {
@@ -382,7 +393,7 @@ fn native_image_logs_fold_once_across_repeated_full_majors<K, W>(
             } else {
                 [0; 2]
             };
-            let report = retry(|| era.collect_stopped(&mut stopped, world_roots));
+            let report = era.collect_stopped(&mut stopped, world_roots).unwrap();
             assert!(report.major);
             if let Some(previous) = previous_cycle {
                 assert_eq!(report.cycle, previous + 1);

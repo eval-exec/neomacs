@@ -7,29 +7,36 @@
 
 use super::super::gc::{
     BarrierWindow, CompiledObservationGate, collection_observation_epoch,
-    collection_observed_metadata,
+    collection_observed_metadata, reclaimed_collection_observation_count,
 };
 use super::super::header::ConsCell;
 use super::super::value::{TAG_CONS, TAG_MASK, TAG_VECLIKE};
 use super::NativeWindowCollectionOwner;
 use rustc_hash::FxHashSet;
 use std::collections::BTreeSet;
-use std::mem::{align_of, size_of};
+use std::mem::size_of;
 
 const EMPTY_BOUNDS: (usize, usize) = (usize::MAX, 0);
-const MAX_RECLAMATION_RETRIES: usize = 3;
+// Prune once the marks cleared since the last validation reach this fraction
+// of the ledger. Each O(ledger) scan is then paid for by at least
+// len / PRUNE_DEBT_RATIO real clears, and at most that many entries are dead.
+const PRUNE_DEBT_RATIO: u64 = 4;
 
 pub(super) struct ObservedEnvelope {
     // Complete lifetime publication ledger, including non-inline subtypes.
+    // Between prunes it may also hold identities whose marks were cleared;
+    // membership checks consult exact metadata before trusting an entry.
     owners: FxHashSet<usize>,
     // Cached native-store eligibility from live publication. A Buffer/Window/
     // Frame/Bytecode/String owner is still marked/replay-qualified in `owners`,
     // but cannot widen a native write gate or bound its empty intervals.
-    addresses: Vec<usize>,
+    addresses: SortedAddressLedger,
     // Vector/Record eligibility is also cached at live publication. Native
     // slot stores use these bounds independently of observed Cons addresses.
-    slot_addresses: Vec<usize>,
+    slot_addresses: SortedAddressLedger,
     epoch: Option<u64>,
+    // Global cleared-mark count acquired before the last full validation.
+    validated_reclaimed: u64,
     dump: BarrierWindow,
     full: (usize, usize),
     below: (usize, usize),
@@ -49,30 +56,33 @@ pub(super) struct ObservedEnvelope {
     single_cons: usize,
     #[cfg(any(test, feature = "test-support"))]
     geometry_rebuilds: usize,
+    #[cfg(any(test, feature = "test-support"))]
+    validated_identities: usize,
 }
 
-const _: () = {
-    #[allow(dead_code)]
-    struct LegacyEnvelope {
-        owners: FxHashSet<usize>,
-        addresses: BTreeSet<usize>,
-        slot_addresses: BTreeSet<usize>,
-        epoch: Option<u64>,
-        dump: BarrierWindow,
-        full: (usize, usize),
-        below: (usize, usize),
-        above: (usize, usize),
-        slot_below: (usize, usize),
-        slot_above: (usize, usize),
-        excluded: Option<BarrierWindow>,
-        excluded_cons: usize,
-        single_cons: usize,
-        #[cfg(any(test, feature = "test-support"))]
-        geometry_rebuilds: usize,
-    }
-    assert!(size_of::<ObservedEnvelope>() == size_of::<LegacyEnvelope>());
-    assert!(align_of::<ObservedEnvelope>() == align_of::<LegacyEnvelope>());
-};
+/// Frozen size of the envelope as it was when the thread-local `StateSlot`
+/// reserve was pinned (two ordered address sets). The reserve is sized from
+/// this layout, never from the live envelope: the envelope itself lives in
+/// the heap-side `State`, so growing it must not grow the per-thread TLS block
+/// and shift every `%fs` offset in the binary.
+#[allow(dead_code)]
+pub(super) struct LegacyEnvelopeLayout {
+    owners: FxHashSet<usize>,
+    addresses: BTreeSet<usize>,
+    slot_addresses: BTreeSet<usize>,
+    epoch: Option<u64>,
+    dump: BarrierWindow,
+    full: (usize, usize),
+    below: (usize, usize),
+    above: (usize, usize),
+    slot_below: (usize, usize),
+    slot_above: (usize, usize),
+    excluded: Option<BarrierWindow>,
+    excluded_cons: usize,
+    single_cons: usize,
+    #[cfg(any(test, feature = "test-support"))]
+    geometry_rebuilds: usize,
+}
 
 impl ObservedEnvelope {
     /// Heap reinstallation can change the native dump/owner protocol between
@@ -87,9 +97,10 @@ impl ObservedEnvelope {
     pub(super) fn new() -> Self {
         Self {
             owners: FxHashSet::default(),
-            addresses: Vec::new(),
-            slot_addresses: Vec::new(),
+            addresses: SortedAddressLedger::new(),
+            slot_addresses: SortedAddressLedger::new(),
             epoch: Some(collection_observation_epoch()),
+            validated_reclaimed: reclaimed_collection_observation_count(),
             dump: BarrierWindow::NONE,
             full: EMPTY_BOUNDS,
             below: EMPTY_BOUNDS,
@@ -101,6 +112,8 @@ impl ObservedEnvelope {
             single_cons: 0,
             #[cfg(any(test, feature = "test-support"))]
             geometry_rebuilds: 0,
+            #[cfg(any(test, feature = "test-support"))]
+            validated_identities: 0,
         }
     }
 
@@ -118,36 +131,48 @@ impl ObservedEnvelope {
         self.refresh_reclaimed(dump)
     }
 
-    /// The scanner cannot accept a completed concurrent clearing batch under
-    /// its old epoch. Ordinary stop-the-world/cooperative batches are stable
-    /// on their first pass. Continuous other-mutator reclamation is bounded:
-    /// retain a conservative surviving superset and leave the epoch dirty so
-    /// the next cold access retries. A false bit only removes a dead identity,
-    /// never a live rooted dependency whose sticky mark survives collection.
+    /// Acknowledge a reclamation epoch. Every sweep slice that clears a mark
+    /// advances the epoch, so validating the whole ledger here would make an
+    /// incremental sweep cost O(slices * ledger). Instead prune only once the
+    /// marks cleared since the last validation reach a fixed fraction of the
+    /// ledger: each scan is charged to that many real clears, and the dead
+    /// entries it can retain meanwhile are bounded by the same fraction.
+    /// Retained dead entries are harmless: they only widen the gate, and
+    /// `already_published` and the publishing caller of `insert` check exact
+    /// metadata before trusting one.
     #[cold]
     #[inline(never)]
     fn refresh_reclaimed(&mut self, dump: BarrierWindow) -> bool {
-        let mut changed = false;
-        for _ in 0..MAX_RECLAMATION_RETRIES {
-            let before = collection_observation_epoch();
-            let old_len = self.owners.len();
-            self.owners
-                .retain(|&bits| collection_observed_metadata(bits));
-            // Other heaps share the reclamation epoch. Validate all local
-            // identities, but keep the ordered buffers and bounds when none of
-            // them died; an unrelated sweep must not rebuild this ledger.
-            if self.owners.len() != old_len || self.dump != dump {
+        let reclaimed = reclaimed_collection_observation_count();
+        let debt = reclaimed.wrapping_sub(self.validated_reclaimed);
+        if debt.saturating_mul(PRUNE_DEBT_RATIO) < self.owners.len() as u64 {
+            self.epoch = Some(collection_observation_epoch());
+            if self.dump != dump {
                 self.rebuild(dump);
-                changed = true;
+                return true;
             }
-            let after = collection_observation_epoch();
-            if before == after {
-                self.epoch = Some(after);
-                return changed;
-            }
+            return false;
         }
-        self.epoch = None;
-        changed
+        // Acquire the count and epoch before scanning: a clear published
+        // after them is either seen by this scan or counted as later debt.
+        let epoch = collection_observation_epoch();
+        let old_len = self.owners.len();
+        #[cfg(any(test, feature = "test-support"))]
+        {
+            self.validated_identities += old_len;
+        }
+        self.owners
+            .retain(|&bits| collection_observed_metadata(bits));
+        self.validated_reclaimed = reclaimed;
+        self.epoch = Some(epoch);
+        // Other heaps share the reclamation epoch. Keep the ordered buffers
+        // and bounds when none of this ledger's identities died; an unrelated
+        // sweep must not rebuild this ledger.
+        if self.owners.len() != old_len || self.dump != dump {
+            self.rebuild(dump);
+            return true;
+        }
+        false
     }
 
     /// Insert even when another mutator already set the process-wide mark.
@@ -173,8 +198,8 @@ impl ObservedEnvelope {
         // before epoch filtering removes our old identity. A real projection
         // must still promote Other -> Slots; positive membership alone may
         // remain conservative across reuse and never reads a stale header.
-        let newly_native = insert_address(&mut self.addresses, address);
-        let newly_slot = slot_geometry && insert_address(&mut self.slot_addresses, address);
+        let newly_native = self.addresses.insert(address);
+        let newly_slot = slot_geometry && self.slot_addresses.insert(address);
         if !newly_native && !newly_slot {
             return newly_owned;
         }
@@ -197,9 +222,7 @@ impl ObservedEnvelope {
     /// Positive eligibility is cached from a live projection, independently
     /// of complete identity membership. It may conservatively survive reuse.
     pub(super) fn has_slot_geometry(&self, bits: usize) -> bool {
-        self.slot_addresses
-            .binary_search(&(bits & !TAG_MASK))
-            .is_ok()
+        self.slot_addresses.contains(bits & !TAG_MASK)
     }
 
     /// A completed local publication remains valid throughout a stable
@@ -210,7 +233,9 @@ impl ObservedEnvelope {
     /// before reuse/resumption; this Acquire check rejects every such change.
     #[inline]
     pub(super) fn already_published(&self, bits: usize) -> bool {
-        self.epoch == Some(collection_observation_epoch()) && self.owners.contains(&bits)
+        self.epoch == Some(collection_observation_epoch())
+            && self.owners.contains(&bits)
+            && collection_observed_metadata(bits)
     }
 
     /// Compare with an epoch already acquired by the current pointer read.
@@ -226,6 +251,16 @@ impl ObservedEnvelope {
     #[cfg(any(test, feature = "test-support"))]
     pub(super) fn geometry_rebuilds_for_test(&self) -> usize {
         self.geometry_rebuilds
+    }
+
+    #[cfg(test)]
+    pub(super) fn validated_identities_for_test(&self) -> usize {
+        self.validated_identities
+    }
+
+    #[cfg(test)]
+    pub(super) fn owner_count_for_test(&self) -> usize {
+        self.owners.len()
     }
 
     pub(super) fn ranges(&self) -> [BarrierWindow; 2] {
@@ -256,21 +291,16 @@ impl ObservedEnvelope {
     pub(super) fn exclude_unobserved(&mut self, bits: usize) -> bool {
         let address = bits & !TAG_MASK;
         if self.owners.contains(&bits)
-            || self.addresses.binary_search(&address).is_ok()
+            || self.addresses.contains(address)
             || self.dump.covers(address)
             || self.single_cons == address
             || self.excluded.is_some_and(|gap| gap.covers(address))
         {
             return false;
         }
-        let next = self
-            .addresses
-            .partition_point(|&candidate| candidate < address);
-        let mut lo = next
-            .checked_sub(1)
-            .and_then(|previous| self.addresses.get(previous))
-            .map_or(0, |previous| previous + 1);
-        let mut hi = self.addresses.get(next).copied().unwrap_or(usize::MAX);
+        let (previous, next) = self.addresses.neighbors(address);
+        let mut lo = previous.map_or(0, |previous| previous + 1);
+        let mut hi = next.unwrap_or(usize::MAX);
         if self.dump.len() != 0 {
             if address < self.dump.lo() {
                 hi = hi.min(self.dump.lo());
@@ -329,18 +359,18 @@ impl ObservedEnvelope {
         // address buffer. Full ledger filtering above establishes lifetime;
         // these tag-only membership checks never read a possibly freed header.
         // A dump-span change preserves the same classification and buffer capacity.
-        self.addresses.retain(|&address| {
+        self.addresses.retain(|address| {
             self.owners.contains(&(address | TAG_CONS))
                 || self.owners.contains(&(address | TAG_VECLIKE))
         });
         self.slot_addresses
-            .retain(|&address| self.owners.contains(&(address | TAG_VECLIKE)));
+            .retain(|address| self.owners.contains(&(address | TAG_VECLIKE)));
         self.full = EMPTY_BOUNDS;
         self.below = EMPTY_BOUNDS;
         self.above = EMPTY_BOUNDS;
         self.slot_below = EMPTY_BOUNDS;
         self.slot_above = EMPTY_BOUNDS;
-        for &address in &self.addresses {
+        for address in self.addresses.iter() {
             include(&mut self.full, address);
             if dump.len() == 0 || address < dump.lo() {
                 include(&mut self.below, address);
@@ -348,7 +378,7 @@ impl ObservedEnvelope {
                 include(&mut self.above, address);
             }
         }
-        for &address in &self.slot_addresses {
+        for address in self.slot_addresses.iter() {
             if dump.len() == 0 || address < dump.lo() {
                 include(&mut self.slot_below, address);
             } else if !dump.covers(address) {
@@ -393,14 +423,133 @@ mod disjoint_refinement_tests;
 #[path = "tests/envelope_allocation_test.rs"]
 mod allocation_tests;
 
-// Only cold live publication inserts addresses. Sorted numeric buffers retain
-// capacity across pruning while preserving exact predecessor/successor queries.
-fn insert_address(addresses: &mut Vec<usize>, address: usize) -> bool {
-    match addresses.binary_search(&address) {
-        Ok(_) => false,
-        Err(index) => {
-            addresses.insert(index, address);
-            true
+#[cfg(test)]
+#[path = "tests/observed_address_ledger.rs"]
+mod address_ledger_tests;
+
+/// Sorted address ledger with a bounded hot run.
+///
+/// A single retained sorted `Vec` makes live publication O(n): an address that
+/// sorts below the retained bulk shifts every later address. The observed
+/// workload inserts around index 81k of a ~1.15M-entry ledger, so every
+/// observation moved ~8.5 MB (issue #767).
+///
+/// New addresses enter a small sorted hot run instead. Membership and
+/// predecessor/successor queries search both runs; when the hot run fills it
+/// merges into the bulk in one linear pass. Bulk capacity is retained across
+/// reclamation, so steady-state publication reuses its warmed allocation.
+struct SortedAddressLedger {
+    bulk: Vec<usize>,
+    hot: Vec<usize>,
+}
+
+/// Bounds both the per-insert shift and the amortized bulk merges. At ~1.1M
+/// addresses one observation moves about `HOT_ADDRESS_LIMIT / 2 + n / HOT_ADDRESS_LIMIT`
+/// elements (~1.6k, ~13 KB) instead of the whole tail.
+const HOT_ADDRESS_LIMIT: usize = 1024;
+
+impl SortedAddressLedger {
+    fn new() -> Self {
+        Self {
+            bulk: Vec::new(),
+            hot: Vec::new(),
         }
     }
+
+    fn insert(&mut self, address: usize) -> bool {
+        self.insert_inner::<false>(address).0
+    }
+
+    /// Returns whether the address was inserted and how many address slots
+    /// moved. Only the issue #767 regression test asks for the count; the
+    /// const generic removes the arithmetic from release builds.
+    fn insert_inner<const COUNT: bool>(&mut self, address: usize) -> (bool, usize) {
+        if self.bulk.binary_search(&address).is_ok() {
+            return (false, 0);
+        }
+        let index = match self.hot.binary_search(&address) {
+            Ok(_) => return (false, 0),
+            Err(index) => index,
+        };
+        let shifted = if COUNT { self.hot.len() - index } else { 0 };
+        self.hot.insert(index, address);
+        let mut moved = shifted;
+        if self.hot.len() >= HOT_ADDRESS_LIMIT {
+            let merged = self.merge_hot();
+            if COUNT {
+                moved += merged;
+            }
+        }
+        (true, moved)
+    }
+
+    fn contains(&self, address: usize) -> bool {
+        self.bulk.binary_search(&address).is_ok() || self.hot.binary_search(&address).is_ok()
+    }
+
+    /// Nearest observed address strictly below and at-or-above `address`.
+    /// The caller has already established that `address` itself is absent.
+    fn neighbors(&self, address: usize) -> (Option<usize>, Option<usize>) {
+        let (bulk_previous, bulk_next) = run_neighbors(&self.bulk, address);
+        let (hot_previous, hot_next) = run_neighbors(&self.hot, address);
+        (
+            match (bulk_previous, hot_previous) {
+                (Some(a), Some(b)) => Some(a.max(b)),
+                (a, b) => a.or(b),
+            },
+            match (bulk_next, hot_next) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            },
+        )
+    }
+
+    /// Iterates both runs in insertion-free order. Bounds only need each
+    /// address once; sorted order is not required here.
+    fn iter(&self) -> impl Iterator<Item = usize> + '_ {
+        self.bulk.iter().copied().chain(self.hot.iter().copied())
+    }
+
+    fn retain(&mut self, mut keep: impl FnMut(usize) -> bool) {
+        self.bulk.retain(|&address| keep(address));
+        self.hot.retain(|&address| keep(address));
+    }
+
+    /// Merge the sorted hot run into the sorted bulk in place. Reads and writes
+    /// never cross: the destination index stays at or above the unread bulk
+    /// element because the hot run always contributes at least one element per
+    /// step. Capacity is expected to be warm in steady state; growth here is
+    /// the same amortized allocation a growing `Vec` already performs.
+    fn merge_hot(&mut self) -> usize {
+        if self.hot.is_empty() {
+            return 0;
+        }
+        let bulk_len = self.bulk.len();
+        let hot_len = self.hot.len();
+        self.bulk.resize(bulk_len + hot_len, 0);
+        let mut bulk = bulk_len;
+        let mut hot = hot_len;
+        let mut destination = bulk_len + hot_len;
+        while hot > 0 {
+            destination -= 1;
+            if bulk > 0 && self.bulk[bulk - 1] > self.hot[hot - 1] {
+                self.bulk[destination] = self.bulk[bulk - 1];
+                bulk -= 1;
+            } else {
+                self.bulk[destination] = self.hot[hot - 1];
+                hot -= 1;
+            }
+        }
+        self.hot.clear();
+        bulk_len + hot_len
+    }
+}
+
+fn run_neighbors(run: &[usize], address: usize) -> (Option<usize>, Option<usize>) {
+    let next = run.partition_point(|&candidate| candidate < address);
+    (
+        next.checked_sub(1)
+            .and_then(|previous| run.get(previous).copied()),
+        run.get(next).copied(),
+    )
 }

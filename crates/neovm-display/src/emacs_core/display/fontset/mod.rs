@@ -1,7 +1,8 @@
 use super::font::FontNameSpelling;
 use crate::face::{FontSlant, FontWeight, FontWidth};
 pub use neovm_eval::emacs_core::eval::data::fontset_state::{
-    FontDefinitionMetadata, FontRepertory, FontSpecEntry, StoredFontSpec,
+    FontDefinitionMetadata, FontRepertory, FontSpecEntry, StoredFontSpec, StoredOtfFeatures,
+    StoredOtfLangsys, StoredOtfSpec,
 };
 use neovm_eval::emacs_core::eval::data::fontset_state::{
     FontsetDataSnapshot, FontsetRangeEntrySnapshot, FontsetRegistrySnapshot,
@@ -27,8 +28,9 @@ pub use native_policy::{
 use native_policy::{SharedFontsetEntries, StoredFontsetEntry};
 use strum::{EnumString, IntoStaticStr};
 
-pub const DEFAULT_FONTSET_NAME: &str = "-*-*-*-*-*-*-*-*-*-*-*-*-fontset-default";
-pub const DEFAULT_FONTSET_ALIAS: &str = "fontset-default";
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) const DEFAULT_FONTSET_NAME: &str = "-*-*-*-*-*-*-*-*-*-*-*-*-fontset-default";
+pub(crate) const DEFAULT_FONTSET_ALIAS: &str = "fontset-default";
 
 fn fontset_string_text(value: &Value) -> Option<String> {
     // Issue #131: read the value's real Emacs bytes (lossy UTF-8 view) rather than
@@ -53,7 +55,7 @@ fn fontset_name_runtime(name: &FontNameSpelling) -> String {
 }
 
 #[derive(Clone, Copy, Debug)]
-enum FontsetLookupPurpose {
+pub(crate) enum FontsetLookupPurpose {
     /// Rendering tries the configured font and tests its native glyph coverage.
     Rendering,
     /// `fontset-font` reports patterns admitted by encoding/repertory metadata.
@@ -155,16 +157,18 @@ impl FontsetRegistry {
         self.generation = self.generation.wrapping_add(1);
     }
 
-    fn update_target(
+    /// One `set-fontset-font` call: every target gets ENTRY, and the
+    /// generation moves once so cached font selections are redone.
+    fn update_targets(
         &mut self,
         name: &FontNameSpelling,
-        target: FontsetTarget,
+        targets: Vec<FontsetTarget>,
         entry: FontSpecEntry,
         add: FontsetAddMode,
     ) {
         self.ensure_fontset(name);
         let data = self.fontsets.entry(name.clone()).or_default();
-        data.update_target(target, entry, add);
+        data.update_targets(targets, entry, add);
         self.generation = self.generation.wrapping_add(1);
     }
 
@@ -254,30 +258,6 @@ impl FontsetData {
             .collect()
     }
 
-    fn bounded_entries_for_char(
-        &self,
-        code: u32,
-        max_entries: usize,
-    ) -> Option<Vec<FontSpecEntry>> {
-        let specific = self.specific_in_charset_order(code);
-        let fallback = self.fallback_in_charset_order();
-        let mut result = Vec::new();
-        for (index, entry) in specific.iter().chain(fallback.iter()).enumerate() {
-            if index >= max_entries {
-                return None;
-            }
-            result.push(
-                entry
-                    .original()
-                    .for_lookup(code, FontsetLookupPurpose::Rendering)?,
-            );
-            if matches!(entry.original(), FontSpecEntry::ExplicitNone) {
-                break;
-            }
-        }
-        Some(result)
-    }
-
     fn update_target(&mut self, target: FontsetTarget, entry: FontSpecEntry, add: FontsetAddMode) {
         let entry = StoredFontsetEntry::from(entry);
         match target {
@@ -286,6 +266,156 @@ impl FontsetData {
         }
     }
 
+    fn update_targets(
+        &mut self,
+        targets: Vec<FontsetTarget>,
+        entry: FontSpecEntry,
+        add: FontsetAddMode,
+    ) {
+        let entry = StoredFontsetEntry::from(entry);
+        let mut new_ranges = Vec::new();
+        for target in targets {
+            match target {
+                FontsetTarget::Fallback => self.update_fallback(entry.clone(), add),
+                FontsetTarget::Range(from, to) => {
+                    if from <= to {
+                        new_ranges.push((from, to));
+                    }
+                }
+            }
+        }
+        if !new_ranges.is_empty() {
+            self.update_ranges(new_ranges, entry, add);
+        }
+    }
+
+    fn update_ranges(
+        &mut self,
+        mut new_ranges: Vec<(u32, u32)>,
+        entry: StoredFontsetEntry,
+        add: FontsetAddMode,
+    ) {
+        if new_ranges.is_empty() {
+            return;
+        }
+
+        new_ranges.sort_unstable_by_key(|&(from, _)| from);
+        // GNU `set-fontset-font` calls `fontset_add` once per target range,
+        // so a character that two targets cover gets an `append`ed or
+        // `prepend`ed entry twice.  Only `overwrite` is idempotent, so only it
+        // may merge overlapping targets.  Merging targets that merely touch
+        // is exact in every mode.  Sorted by start, any overlap shows up
+        // between neighbours.
+        let overlapping = new_ranges.windows(2).any(|pair| pair[1].0 <= pair[0].1);
+        match add {
+            FontsetAddMode::Append | FontsetAddMode::Prepend if overlapping => {
+                // The repeated entry is the same one, so the order of the
+                // per-target updates does not change the result.
+                for (from, to) in new_ranges {
+                    self.update_range(from, to, entry.clone(), add);
+                }
+                return;
+            }
+            FontsetAddMode::Overwrite | FontsetAddMode::Append | FontsetAddMode::Prepend => {}
+        }
+
+        let mut coalesced: Vec<(u32, u32)> = Vec::with_capacity(new_ranges.len());
+        for (from, to) in new_ranges {
+            if let Some(last) = coalesced.last_mut() {
+                if from <= last.1.saturating_add(1) {
+                    last.1 = last.1.max(to);
+                } else {
+                    coalesced.push((from, to));
+                }
+            } else {
+                coalesced.push((from, to));
+            }
+        }
+
+        let mut next = Vec::with_capacity(self.ranges.len() + coalesced.len() * 2);
+        let mut old_iter = std::mem::take(&mut self.ranges).into_iter().peekable();
+        let mut new_iter = coalesced.into_iter().peekable();
+
+        while let Some(&(n_from, n_to)) = new_iter.peek() {
+            let mut cursor = n_from;
+            while let Some(mut old) = old_iter.peek().cloned() {
+                if old.to < cursor {
+                    old_iter.next();
+                    push_range_entry(&mut next, old);
+                    continue;
+                }
+                if old.from > n_to {
+                    break;
+                }
+
+                // old overlaps with [cursor, n_to]
+                if old.from < cursor {
+                    push_range_entry(
+                        &mut next,
+                        RangeEntry {
+                            from: old.from,
+                            to: cursor - 1,
+                            entries: old.entries.clone(),
+                        },
+                    );
+                    old.from = cursor;
+                }
+
+                if cursor < old.from {
+                    push_range_entry(
+                        &mut next,
+                        RangeEntry {
+                            from: cursor,
+                            to: old.from - 1,
+                            entries: apply_fontset_add(None, entry.clone(), add),
+                        },
+                    );
+                    cursor = old.from;
+                }
+
+                let overlap_to = old.to.min(n_to);
+                push_range_entry(
+                    &mut next,
+                    RangeEntry {
+                        from: cursor,
+                        to: overlap_to,
+                        entries: apply_fontset_add(Some(&old.entries), entry.clone(), add),
+                    },
+                );
+                cursor = overlap_to.saturating_add(1);
+
+                if old.to > n_to {
+                    // The rest of OLD lies past this target; a later target
+                    // or the final copy loop takes it.
+                    if let Some(rest) = old_iter.peek_mut() {
+                        rest.from = n_to + 1;
+                    }
+                    break;
+                }
+                old_iter.next();
+            }
+
+            if cursor <= n_to {
+                push_range_entry(
+                    &mut next,
+                    RangeEntry {
+                        from: cursor,
+                        to: n_to,
+                        entries: apply_fontset_add(None, entry.clone(), add),
+                    },
+                );
+            }
+            new_iter.next();
+        }
+
+        for old in old_iter {
+            push_range_entry(&mut next, old);
+        }
+
+        self.ranges = next;
+    }
+
+    #[cfg(test)]
     fn specific_entries_for_char(&self, code: u32) -> Vec<FontSpecEntry> {
         self.find_range(code)
             .map(|range| range.entries.to_original_entries())
@@ -418,6 +548,9 @@ impl StoredFontSpecExt for StoredFontSpec {
             weight: self.weight,
             slant: self.slant,
             width: self.width,
+            // The :otf requirement is a matching constraint, not informational
+            // metadata: rendering must keep rejecting fonts that fail it.
+            otf: self.otf.clone(),
             definition: None,
         }
     }
@@ -434,16 +567,11 @@ impl StoredFontSpecExt for StoredFontSpec {
 // The default bodies above are the implementation; this binds them to the
 // upper-layer type that owns the state.
 
-pub fn repertory_target_ranges(repertory: &FontRepertory) -> Option<Vec<(u32, u32)>> {
-    match repertory {
-        FontRepertory::Charset(name) => charset_target_ranges(resolve_sym(*name)),
-        FontRepertory::CharTableRanges(ranges) => Some(ranges.clone()),
-    }
-}
-
 /// Stage-4 W5/E13 upper extension trait over the eval-owned type.
-#[doc(hidden)]
-pub trait FontSpecEntryExt: Sized {
+///
+/// Crate-local: the only caller is this module's lookup pass, and its
+/// `purpose` parameter is a crate-private enum.
+pub(crate) trait FontSpecEntryExt: Sized {
     fn for_lookup(&self, code: u32, purpose: FontsetLookupPurpose) -> Option<Self>;
 }
 
@@ -830,24 +958,12 @@ pub(crate) fn resolve_fontset_name_arg(value: &Value) -> Result<String, Flow> {
     }
 }
 
-/// Bounded snapshot acquisition for detached font-selection jobs. Rendering
-/// entries discard encoding/repertory metadata without loading or expanding
-/// charset maps. Informational pattern queries retain that metadata through
-/// the ordinary reader.
-pub fn bounded_entries_for_char(ch: char, max_entries: usize) -> Option<(u64, Vec<FontSpecEntry>)> {
-    let slot = registry().read().ok()?;
-    let data = slot
-        .fontsets
-        .get(&fontset_name_spelling(DEFAULT_FONTSET_NAME))?;
-    let entries = data.bounded_entries_for_char(ch as u32, max_entries)?;
-    Some((slot.generation, entries))
-}
-
 pub fn matching_entries_for_char(ch: char) -> Vec<FontSpecEntry> {
     matching_entries_for_fontset(DEFAULT_FONTSET_NAME, ch)
 }
 
-pub fn matching_entries_for_fontset(name: &str, ch: char) -> Vec<FontSpecEntry> {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn matching_entries_for_fontset(name: &str, ch: char) -> Vec<FontSpecEntry> {
     let name = fontset_name_spelling(name);
     registry()
         .read()
@@ -969,9 +1085,7 @@ pub fn set_fontset_font(
         )
     })?;
     let canonical = slot.register_fontset(fontset_name_spelling(&fontset_name), None);
-    for target in targets {
-        slot.update_target(&canonical, target, entry.clone(), add_mode);
-    }
+    slot.update_targets(&canonical, targets, entry, add_mode);
     Ok(Value::NIL)
 }
 
@@ -992,6 +1106,7 @@ fn parse_font_spec_entry(
                 weight: None,
                 slant: None,
                 width: None,
+                otf: None,
                 definition: None,
             };
             spec.definition = Some(resolve_font_definition(&spec, font_encoding_alist));
@@ -1043,6 +1158,8 @@ fn parse_font_vector(items: &[Value]) -> StoredFontSpec {
     let width = font_vector_get_flexible(items, "width")
         .and_then(|value| value_text(&value))
         .and_then(|width| FontWidth::from_symbol(&width));
+    let otf =
+        font_vector_get_flexible(items, "otf").and_then(|value| parse_stored_otf_spec(&value));
 
     StoredFontSpec {
         family,
@@ -1051,8 +1168,88 @@ fn parse_font_vector(items: &[Value]) -> StoredFontSpec {
         weight,
         slant,
         width,
+        otf,
         definition: None,
     }
+}
+
+/// GNU `font_prop_validate_otf` value shape -> the stored requirement.
+///
+/// `font-spec` rejects a malformed `:otf` (see `normalize_font_prop_value`), so
+/// a well-formed value is `(SCRIPT [LANGSYS [GSUB [GPOS]]])` with symbol tags.
+/// A raw fontset entry that still carries a malformed value stores no
+/// requirement rather than failing the lookup.
+pub(crate) fn parse_stored_otf_spec(value: &Value) -> Option<StoredOtfSpec> {
+    if !value.is_cons() {
+        return None;
+    }
+    let script = value_text(&value.cons_car())?;
+    let mut rest = value.cons_cdr();
+    let mut slot = 0;
+    let mut langsys = StoredOtfLangsys::Default;
+    let mut gsub = None;
+    let mut gpos = None;
+    while !rest.is_nil() && slot < 3 {
+        if !rest.is_cons() {
+            return None;
+        }
+        let item = rest.cons_car();
+        match slot {
+            0 => {
+                // GNU's second-slot validator check re-tests XCAR(val), so any
+                // non-nil value reaches font_check_otf; a non-symbol can never
+                // `eq` a langsys tag and therefore rejects every font.
+                langsys = if item.is_nil() {
+                    StoredOtfLangsys::Default
+                } else if let Some(text) = value_symbol_text(&item) {
+                    StoredOtfLangsys::Named(text)
+                } else {
+                    // GNU compares LANGSYS with `eq` against the tag symbols
+                    // read from the font, so a non-symbol never matches.
+                    StoredOtfLangsys::Unmatchable
+                };
+            }
+            1 => gsub = parse_stored_otf_features(&item),
+            _ => gpos = parse_stored_otf_features(&item),
+        }
+        rest = rest.cons_cdr();
+        slot += 1;
+    }
+    Some(StoredOtfSpec {
+        script,
+        langsys,
+        gsub,
+        gpos,
+    })
+}
+
+/// `(FEATURE ... [nil FEATURE ...])`: before `nil` the features are required,
+/// after it they are forbidden (`src/font.c` `font_check_otf_features`).
+fn parse_stored_otf_features(value: &Value) -> Option<StoredOtfFeatures> {
+    if value.is_nil() {
+        return None;
+    }
+    let mut features = StoredOtfFeatures::default();
+    let mut negative = false;
+    let mut tail = *value;
+    while tail.is_cons() {
+        let item = tail.cons_car();
+        if item.is_nil() {
+            negative = true;
+        } else {
+            let tag = value_text(&item)?;
+            if negative {
+                features.forbidden.push(tag);
+            } else {
+                features.required.push(tag);
+            }
+        }
+        tail = tail.cons_cdr();
+    }
+    if !tail.is_nil() {
+        return None;
+    }
+    Some(features)
 }
 
 /// Issue #131: intern a font family/name Value faithfully. String values keep
@@ -1110,6 +1307,7 @@ fn parse_font_name_string(name: &neovm_value::heap_types::LispString) -> StoredF
                 weight: None,
                 slant: None,
                 width: None,
+                otf: None,
                 definition: None,
             };
         }
@@ -1122,6 +1320,7 @@ fn parse_font_name_string(name: &neovm_value::heap_types::LispString) -> StoredF
         weight: None,
         slant: None,
         width: None,
+        otf: None,
         definition: None,
     }
 }
@@ -1384,6 +1583,14 @@ fn list_to_vec(value: &Value) -> Vec<Value> {
 fn value_text(value: &Value) -> Option<String> {
     match value.kind() {
         ValueKind::String => fontset_string_text(value),
+        ValueKind::Symbol(id) => Some(resolve_sym(id).to_string()),
+        _ => None,
+    }
+}
+
+/// Only a symbol can `eq` an OpenType tag symbol in GNU's matcher.
+fn value_symbol_text(value: &Value) -> Option<String> {
+    match value.kind() {
         ValueKind::Symbol(id) => Some(resolve_sym(id).to_string()),
         _ => None,
     }

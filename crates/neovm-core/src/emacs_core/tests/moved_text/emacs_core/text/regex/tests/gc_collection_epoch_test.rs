@@ -262,7 +262,7 @@ impl WarmRegexCaches {
             &pattern, false, false, true, None, &syntax,
         )
         .unwrap();
-        assert!(search.used_syntax && lisp_syntax.used_syntax);
+        assert!(search.used_syntax() && lisp_syntax.used_syntax());
         ctx.eval_str("(set-syntax-table (standard-syntax-table))")
             .unwrap();
 
@@ -558,7 +558,7 @@ fn populate_cache(ctx: &mut Context, owner: CacheOwner) -> (Value, Value) {
                         compile_search_pattern_with_posix(&pattern, false, false, &syntax).unwrap();
                     assert!(matches!(
                         compiled,
-                        CompiledSearchPattern::Emacs(ref compiled) if compiled.used_syntax
+                        CompiledSearchPattern::Emacs(ref compiled) if compiled.used_syntax()
                     ));
                 }
                 CacheOwner::LispSyntax => {
@@ -567,7 +567,7 @@ fn populate_cache(ctx: &mut Context, owner: CacheOwner) -> (Value, Value) {
                             &pattern, false, false, true, None, &syntax,
                         )
                         .unwrap()
-                        .used_syntax
+                        .used_syntax()
                     );
                 }
                 _ => unreachable!(),

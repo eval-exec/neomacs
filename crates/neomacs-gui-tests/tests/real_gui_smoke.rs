@@ -139,6 +139,45 @@ fn static_xwidget_page_survives_renderer_device_replacement() {
     }
 }
 
+/// The skip probe must follow `(featurep 'xwidget-internal)`, the R8 agreement
+/// predicate, and not `(fboundp 'xwidget-insert)`.
+///
+/// `xwidget-insert` is an ungated Lisp defun. After `(require 'xwidget)` it is
+/// bound in a default build and in an xwidgets build, and on GNU Emacs 31.1
+/// built without XWIDGETS. A probe of that symbol never skips, so the fixture
+/// calls `make-xwidget`, writes no snapshot, and the harness reports NotFound.
+#[test]
+fn xwidget_skip_probe_matches_xwidget_internal_feature() {
+    let binary = neomacs_binary(&workspace_root());
+    if !binary.exists() {
+        eprintln!(
+            "skipping xwidget skip-probe agreement; no release binary at {}",
+            binary.display()
+        );
+        return;
+    }
+    let feature = batch_prin1_stdout(&binary, "(featurep 'xwidget-internal)")
+        .expect("featurep xwidget-internal");
+    let insert = batch_prin1_stdout(
+        &binary,
+        "(progn (require 'xwidget) (fboundp 'xwidget-insert))",
+    )
+    .expect("fboundp xwidget-insert after require");
+    let probed = xwidget_backend_available(&binary);
+    assert_eq!(
+        probed,
+        feature == "t",
+        "skip probe must follow (featurep 'xwidget-internal) (printed {feature}), \
+         not (fboundp 'xwidget-insert) after require (printed {insert})"
+    );
+    if feature != "t" {
+        assert_eq!(
+            insert, "t",
+            "xwidget-insert stays fbound after require when the backend is compiled out"
+        );
+    }
+}
+
 /// Whether the runtime under test was built with the Linux WPE backend.
 ///
 /// The default production package enables Linux video but not `webview`:
@@ -149,10 +188,50 @@ fn static_xwidget_page_survives_renderer_device_replacement() {
 /// installed").  A runtime without that feature has no backend to compose a
 /// page with, so the pixel proof is opt-in like NEOMACS_GUI_TEST_BACKEND:
 /// run `cargo xtask fresh-build --release --features webview` and set
-/// NEOMACS_GUI_TEST_WEBVIEW=1 to exercise it.  The oversized-glyph layout
-/// contract below runs either way.
+/// NEOMACS_GUI_TEST_WEBVIEW=1 to exercise it.
 fn webview_runtime_expected() -> bool {
     std::env::var_os("NEOMACS_GUI_TEST_WEBVIEW").is_some()
+}
+
+fn batch_prin1_stdout(binary: &std::path::Path, form: &str) -> Result<String, String> {
+    let eval = format!("(prin1 {form})");
+    let output = std::process::Command::new(binary)
+        .args(["-Q", "--batch", "--eval", &eval])
+        .output()
+        .map_err(|err| format!("spawn {}: {err}", binary.display()))?;
+    if !output.status.success() {
+        return Err(format!(
+            "batch eval of {form} failed ({:?}): {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// Ask the runtime under test whether it has an xwidget backend.
+///
+/// The fixture calls `xwidget-insert`, which calls `make-xwidget`. That subr
+/// exists only in an xwidgets build, the same gate as GNU's `HAVE_XWIDGETS`
+/// (`Fprovide` of `xwidget-internal` in `src/xwidget.c`). `xwidget-insert`
+/// itself is an ungated defun in `lisp/xwidget.el`, so `(fboundp
+/// 'xwidget-insert)` is t after `(require 'xwidget)` even when the backend
+/// was compiled out. Probe `(featurep 'xwidget-internal)`, which the R8
+/// agreement keeps equal to `(fboundp 'make-xwidget)` and `(boundp
+/// 'xwidget-list)`.
+fn xwidget_backend_available(binary: &std::path::Path) -> bool {
+    std::process::Command::new(binary)
+        .args([
+            "-Q",
+            "--batch",
+            "--eval",
+            "(prin1 (featurep 'xwidget-internal))",
+        ])
+        .output()
+        .map(|output| {
+            output.status.success() && String::from_utf8_lossy(&output.stdout).trim() == "t"
+        })
+        .unwrap_or(false)
 }
 
 fn assert_oversized_xwidget_page_visible(name: &str, fixture: &str) -> Option<PathBuf> {
@@ -174,6 +253,17 @@ fn assert_oversized_xwidget_page_visible(name: &str, fixture: &str) -> Option<Pa
         binary.exists(),
         "build {binary:?} with --features webview before running the xwidget regression"
     );
+    if !xwidget_backend_available(&binary) {
+        eprintln!(
+            "skipping oversized xwidget composition regression: {binary:?} has no \
+             xwidget backend ((featurep 'xwidget-internal) is nil). The default \
+             Linux runtime is built without the `webview` feature. Run \
+             `cargo xtask fresh-build --release --features webview` and set \
+             NEOMACS_GUI_TEST_WEBVIEW=1 to exercise the glyph layout and the WPE \
+             pixel proof"
+        );
+        return None;
+    }
 
     let artifact_root = workspace_root.join("target/neomacs-gui-tests");
     let session = DisplayHarness::for_backend(backend)

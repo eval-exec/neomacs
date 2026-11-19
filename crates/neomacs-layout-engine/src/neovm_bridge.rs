@@ -3754,11 +3754,19 @@ impl<'a, B: LayoutBufferView + ?Sized> RustTextPropAccess<'a, B> {
             .unwrap_or_else(|| self.buffer.layout_point_max_char_pos().get()) as i64
     }
 
-    /// Get a specific text property at a position.
+    /// Get a character property (overlay first, then text) at a position.
+    ///
+    /// Mirrors GNU `get_it_property`, which calls `Fget_char_property` with the
+    /// window as OBJECT: a non-nil overlay value that applies to this window
+    /// wins over the text property. Its callers read `line-prefix` and
+    /// `wrap-prefix`.
     pub fn get_property(&self, charpos: i64, name: Value) -> Option<Value> {
         let bytepos = buffer_i64_charpos_to_emacs_byte_pos(self.buffer, charpos);
-        self.buffer
-            .layout_text_prop_at_emacs_byte_pos(bytepos, name)
+        LayoutCharPropertyLookup::new(self.buffer, name).overlay_or_text_value_at(
+            self.buffer,
+            bytepos,
+            self.window_id,
+        )
     }
 }
 

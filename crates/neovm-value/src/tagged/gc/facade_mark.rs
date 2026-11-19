@@ -187,6 +187,7 @@ impl FacadeEpochRetention {
         })
     }
 
+    #[allow(dead_code)] // LOST WIRING: evaluated by the facade/root-batch unit tests; production caller is the Part B prepared-root-batch constructor (A4/A5).
     fn validate(&self, heap: &TaggedHeap) -> Result<(), FacadeMarkExclusionError> {
         let actual = heap.heap_identity();
         if actual == self.heap_identity() {
@@ -229,7 +230,8 @@ impl FacadeMarkExclusion {
         self.epoch.heap_identity()
     }
 
-    pub fn validate(&self, heap: &TaggedHeap) -> Result<(), FacadeMarkExclusionError> {
+    #[allow(dead_code)] // LOST WIRING: evaluated by the facade/root-batch unit tests; production caller is the Part B prepared-root-batch constructor (A4/A5).
+    pub(crate) fn validate(&self, heap: &TaggedHeap) -> Result<(), FacadeMarkExclusionError> {
         self.epoch.validate(heap)
     }
 
@@ -361,6 +363,19 @@ impl Drop for QuiescentCollector<'_> {
 }
 
 impl QuiescentCollector<'_> {
+    /// Rebuild the exclusive loan from the allocation's original root.
+    ///
+    /// # Safety
+    /// `heap` is that retained root. No collector loan, installed TLS slot,
+    /// or sibling heap borrow is outstanding. The returned loan is the sole
+    /// access path until it drops.
+    pub(super) unsafe fn from_retained_root(heap: &mut TaggedHeap) -> QuiescentCollector<'_> {
+        QuiescentCollector {
+            heap,
+            _owner: PhantomData,
+        }
+    }
+
     /// Cold registration admission keeps this exclusive heap loan in its era.
     #[cold]
     #[inline(never)]
@@ -960,3 +975,6 @@ mod tests {
 
 mod cons_suspend;
 pub(super) use cons_suspend::SuspendedConsCollector;
+
+#[doc(hidden)]
+pub mod heap_transfer;

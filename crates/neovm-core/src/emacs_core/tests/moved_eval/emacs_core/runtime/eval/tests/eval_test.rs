@@ -2756,7 +2756,7 @@ fn set_default_display_var_invalidates_redisplay() {
 /// variables.
 #[test]
 fn variable_affects_display_classifies_curated_set() {
-    use neovm_edit::buffer::buffer::variable_affects_display;
+    use neovm_edit::buffer::buffer::variable_affects_display_by_sym_id;
     for name in [
         "truncate-lines",
         "tab-width",
@@ -2770,7 +2770,7 @@ fn variable_affects_display_classifies_curated_set() {
         "word-wrap",
     ] {
         assert!(
-            variable_affects_display(name),
+            variable_affects_display_by_sym_id(neovm_value::intern::intern(name)),
             "{name} should be classified as display-affecting"
         );
     }
@@ -2782,7 +2782,7 @@ fn variable_affects_display_classifies_curated_set() {
         "case-fold-search",
     ] {
         assert!(
-            !variable_affects_display(name),
+            !variable_affects_display_by_sym_id(neovm_value::intern::intern(name)),
             "{name} should NOT be classified as display-affecting"
         );
     }
@@ -23082,8 +23082,8 @@ fn gc_concurrent_handshake_stats_populate_per_group() {
     );
 
     let hs = ev.tagged_heap().handshake_stats();
-    assert!(hs.start_count >= 1, "start handshake never recorded");
-    assert!(hs.term_count >= 1, "termination handshake never recorded");
+    assert!(hs.start_count() >= 1, "start handshake never recorded");
+    assert!(hs.term_count() >= 1, "termination handshake never recorded");
     assert!(
         hs.last_start_total_us > 0,
         "whole start pause must be timed"
@@ -23116,10 +23116,10 @@ fn gc_concurrent_handshake_stats_populate_per_group() {
     assert!(hs.probe_obarray_chunks > 0, "obarray chunks probe empty");
     assert!(hs.probe_buffer_count >= 1, "buffer count probe empty");
     assert!(
-        hs.probe_vector_snapshot_len > 0,
+        hs.probe_vector_snapshot_len() > 0,
         "a bootstrapped dump-less heap owns vectors; Tier B snapshot empty"
     );
-    assert!(hs.probe_cons_blocks > 0, "cons block probe empty");
+    assert!(hs.probe_cons_blocks() > 0, "cons block probe empty");
 }
 
 #[test]
@@ -25812,7 +25812,7 @@ fn drain_probe_median(samples: &mut [u64]) -> u64 {
 /// Shared driver for the `gc_drain_kinds_profile_*` probes: churn a mixed
 /// Lisp working set (strings/lists/vectors/records/closures/hash-tables)
 /// through a bootstrapped evaluator in SMALL eval chunks, and after each chunk
-/// poll `SweepStats.termination_count` to capture the per-cycle deferred
+/// poll `SweepStats.termination_count()` to capture the per-cycle deferred
 /// total, per-kind breakdown, fold cost, and termination drain (`mark_us`).
 /// The retained rolling window (1 in 8 iterations, 256 slots) keeps a live
 /// mixed working set while the rest churns to drive cycles. Note what feeds
@@ -25889,16 +25889,16 @@ fn gc_drain_kinds_profile(pdump: bool, chunks: usize) {
     // that washes out of the medians).
     let mut hs_captures: Vec<neovm_value::tagged::gc::HandshakeStats> = Vec::new();
     let mut missed = 0usize;
-    let mut seen = ev.tagged_heap().sweep_stats().termination_count;
+    let mut seen = ev.tagged_heap().sweep_stats().termination_count();
     let start_collections = ev.tagged_heap().gc_collections();
     for _ in 0..chunks {
         ev.eval_str("(drain-probe--step 200)").expect("churn step");
         let stats = ev.tagged_heap().sweep_stats();
-        if stats.termination_count > seen {
+        if stats.termination_count() > seen {
             // More than one termination inside a single chunk loses all but
             // the last cycle's per-cycle stats; count the loss honestly.
-            missed += stats.termination_count - seen - 1;
-            seen = stats.termination_count;
+            missed += stats.termination_count() - seen - 1;
+            seen = stats.termination_count();
             captures.push(stats);
             hs_captures.push(ev.tagged_heap().handshake_stats());
         }
@@ -25912,7 +25912,7 @@ fn gc_drain_kinds_profile(pdump: bool, chunks: usize) {
             s.last_termination_deferred,
             s.last_termination_satb,
             s.last_termination_fold_us,
-            s.mark_us,
+            s.mark_us(),
             s.last_concurrent_str_claimed,
             s.last_concurrent_float_claimed,
             s.last_concurrent_subr_dropped,
@@ -25944,7 +25944,7 @@ fn gc_drain_kinds_profile(pdump: bool, chunks: usize) {
         med(|s| s.last_termination_deferred as u64),
         med(|s| s.last_termination_satb as u64),
         med(|s| s.last_termination_fold_us),
-        med(|s| s.mark_us),
+        med(|s| s.mark_us()),
         med(|s| s.last_concurrent_str_claimed as u64),
         med(|s| s.last_concurrent_float_claimed as u64),
         med(|s| s.last_concurrent_subr_dropped as u64),
@@ -25961,7 +25961,7 @@ fn gc_drain_kinds_profile(pdump: bool, chunks: usize) {
         med(|s| s.last_termination_kinds.cons as u64),
         med(|s| s.last_termination_kinds.subr as u64),
         med(|s| s.last_termination_kinds.other as u64),
-        ev.tagged_heap().sweep_stats().max_termination_kinds,
+        ev.tagged_heap().sweep_stats().max_termination_kinds(),
     );
 
     // --- HANDSHAKE decomposition (root-scan floor probe): per-phase and
@@ -26032,9 +26032,9 @@ fn gc_drain_kinds_profile(pdump: bool, chunks: usize) {
         hmed(&|h| h.last_start_roots.total_us),
         hmed(&|h| h.last_start_conssnap_us),
         hmed(&|h| h.last_start_vecsnap_us),
-        hmed(&|h| h.last_start_floatsnap_us),
-        hmed(&|h| h.last_start_vecbasesnap_us),
-        hmed(&|h| h.last_start_bcsnap_us),
+        hmed(&|h| h.last_start_floatsnap_us()),
+        hmed(&|h| h.last_start_vecbasesnap_us()),
+        hmed(&|h| h.last_start_bcsnap_us()),
         hmed(&|h| h.last_start_jobasm_us),
         group_table(&|h| &h.last_start_roots),
         hmed(&|h| h.last_term_roots_total_us),
@@ -26048,20 +26048,20 @@ fn gc_drain_kinds_profile(pdump: bool, chunks: usize) {
         hmed(&|h| h.last_term_ctxroots.total_us),
         hmed(&|h| h.last_term_newsyms_us),
         hmed(&|h| h.last_term_newsyms_roots as u64),
-        med(|s| s.mark_us),
+        med(|s| s.mark_us()),
         hmed(&|h| h.last_term_finalizer_us),
         hmed(&|h| h.last_term_weak_us),
         hmed(&|h| h.last_term_unchain_us),
         group_table(&|h| &h.last_term_ctxroots),
         hmed(&|h| h.probe_jit_compiled_entries as u64),
         hmed(&|h| h.probe_jit_reloc_slots as u64),
-        hmed(&|h| h.probe_mapped_remembered as u64),
+        hmed(&|h| h.probe_mapped_remembered() as u64),
         hmed(&|h| h.probe_bc_buf_depth as u64),
         hmed(&|h| h.probe_specpdl_depth as u64),
         hmed(&|h| h.probe_obarray_slots as u64),
         hmed(&|h| h.probe_obarray_chunks as u64),
-        hmed(&|h| h.probe_vector_snapshot_len as u64),
-        hmed(&|h| h.probe_cons_blocks as u64),
+        hmed(&|h| h.probe_vector_snapshot_len() as u64),
+        hmed(&|h| h.probe_cons_blocks() as u64),
         hmed(&|h| h.probe_buffer_count as u64),
     );
     // Like the other profiling aids, report via panic! so the dump surfaces
@@ -26094,9 +26094,9 @@ fn gc_concurrent_leaked_subr_drop_under_pdump_verifiers() {
     ev.set_lexical_binding(true);
 
     // Churn until two concurrent terminations complete (bounded).
-    let seen0 = ev.tagged_heap().sweep_stats().termination_count;
+    let seen0 = ev.tagged_heap().sweep_stats().termination_count();
     let mut guard = 0usize;
-    while ev.tagged_heap().sweep_stats().termination_count < seen0 + 2 {
+    while ev.tagged_heap().sweep_stats().termination_count() < seen0 + 2 {
         ev.eval_str("(let ((l nil)) (dotimes (i 2000) (push (format \"s%d\" i) l)) (length l))")
             .expect("churn step");
         guard += 1;
@@ -26207,7 +26207,7 @@ fn gc_concurrent_obarray_scan_vs_defalias_churn() {
     // reliably overlap a mutation of the same slot. The churn is cheap (tens of
     // ms per iteration — startup dominates wall time); the burst is sized for
     // many scan overlaps.
-    let seen0 = ev.tagged_heap().sweep_stats().termination_count;
+    let seen0 = ev.tagged_heap().sweep_stats().termination_count();
     let mut fresh = 0u64;
     // Cap fresh interns so the obarray can't grow without bound; the fset churn
     // (race A) keeps running regardless.
@@ -26242,7 +26242,7 @@ fn gc_concurrent_obarray_scan_vs_defalias_churn() {
     // Concurrency actually engaged: the GC obarray scan demonstrably ran on the
     // GC thread while we churned (else there was no race surface to exercise).
     // Mirrors the leaked-subr repro's ">=2 concurrent terminations" bar.
-    let terminations = ev.tagged_heap().sweep_stats().termination_count - seen0;
+    let terminations = ev.tagged_heap().sweep_stats().termination_count() - seen0;
     assert!(
         terminations >= 2,
         "concurrent GC did not engage under churn (terminations={terminations}); \

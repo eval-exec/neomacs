@@ -29,6 +29,7 @@ members = [
     "crates/neovm-text",
     "crates/neovm-edit",
     "crates/neovm-display-identity",
+    "crates/neovm-gnu-ledgers",
     "crates/neovm-host-abi",
     "crates/neovm-oracle-tests",
     "crates/neovm-value",
@@ -100,6 +101,7 @@ neomacs-terminfo = { path = "crates/neomacs-terminfo" }
 neomacs-allocator = { path = "crates/neomacs-allocator" }
 neovm-core = { path = "crates/neovm-core", default-features = false }
 neovm-display-identity = { path = "crates/neovm-display-identity", default-features = false }
+neovm-gnu-ledgers = { path = "crates/neovm-gnu-ledgers", default-features = false }
 neovm-host-abi = { path = "crates/neovm-host-abi", default-features = false }
 neovm-oracle-tests = { path = "crates/neovm-oracle-tests", default-features = false }
 neovm-value = { path = "crates/neovm-value", default-features = false }
@@ -463,8 +465,7 @@ opt-level = 2
 # these overrides the interpreter-heavy test families run at opt-level 0 in
 # every test build: measured on the macmini (test profile), the mapc
 # resumed-chain oracle's falsify body went 2.58 s -> 24.0 s, and the macOS CI
-# job crossed nextest's 600 s per-test timeout at 470f484c21.  A guard
-# (test_profile_codegen_guard_test.rs) keeps the set complete.
+# job crossed nextest's 600 s per-test timeout at 470f484c21.
 [profile.test.package.neovm-eval]
 opt-level = 2
 

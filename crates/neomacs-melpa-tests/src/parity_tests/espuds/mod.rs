@@ -145,7 +145,7 @@ const PRELUDE: &str = r####"
 (defun espuds424-test-write (relative contents)
   (let ((file (expand-file-name relative espuds424-test-root)))
     (unless (and espuds424-test-root-owned
-                 (file-in-directory-p file espuds424-test-root))
+                 (neomacs-melpa-path-inside-p file espuds424-test-root))
       (error "Refusing Espuds write outside owned root: %S" file))
     (make-directory (file-name-directory file) t)
     (let ((coding-system-for-write 'utf-8-unix)
@@ -492,7 +492,7 @@ fn public_owned_file_temp_file_load_and_other_windows() -> ParityBatchCase {
                          buffer-file-name))
                    :under-tmp
                    (and buffer-file-name
-                        (file-in-directory-p buffer-file-name
+                        (neomacs-melpa-path-inside-p buffer-file-name
                                              temporary-file-directory))
                    :visiting (and buffer-file-name t)))
        (When "I load the following:" "(defun espuds424-loaded () 'café)\n")

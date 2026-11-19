@@ -588,36 +588,46 @@ enum OsrLookup {
     Pending,
 }
 
-#[cfg(any(test, debug_assertions))]
+// CFG CONTRACT (RELEASE-TEST-SUPPORT-CFG): the F5 witness reader
+// (`test_support::authority::native_depth_for_test`) is compiled under
+// `test-support`, which a unified release workspace test build enables on this
+// LIB while `cfg(test)` and `debug_assertions` are both off for the dependency.
+// This recorded signal must therefore include `feature = "test-support"`, or the
+// release test observes a hard-wired 0 (the same class as
+// `shims.rs::SPEC_CALL_COUNT`). Production release builds have no such feature.
+#[cfg(any(test, debug_assertions, feature = "test-support"))]
 thread_local! {
-    /// Nesting depth of native leaf executions on this thread (debug and test
-    /// builds). `clear()` asserts it is 0: the soundness of every spec-slot leaf
-    /// pointer and every baked box address rests on "no clear() fires while a
-    /// native frame is live" (`resolve_compiled_leaf_ptr`), so a violation must
-    /// be loud in debug/test builds instead of a silent use-after-free.
+    /// Nesting depth of native leaf executions on this thread (debug, test and
+    /// release test-support builds). `clear()` asserts it is 0: the soundness of
+    /// every spec-slot leaf pointer and every baked box address rests on "no
+    /// clear() fires while a native frame is live"
+    /// (`resolve_compiled_leaf_ptr`), so a violation must be loud in debug/test
+    /// builds instead of a silent use-after-free.
     static NATIVE_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
 /// Current native nesting depth (0 outside any leaf). Always 0 in production
-/// release builds, where the counter does not exist.
+/// release builds, where the counter does not exist; recorded in release
+/// test-support builds (see the CFG CONTRACT above).
 #[inline]
 pub(crate) fn native_depth() -> u32 {
-    #[cfg(any(test, debug_assertions))]
+    #[cfg(any(test, debug_assertions, feature = "test-support"))]
     {
         NATIVE_DEPTH.with(|d| d.get())
     }
-    #[cfg(not(any(test, debug_assertions)))]
+    #[cfg(not(any(test, debug_assertions, feature = "test-support")))]
     {
         0
     }
 }
 
 /// RAII marker for one native leaf execution (see `NATIVE_DEPTH`). Zero-sized
-/// and a no-op in production release builds; unwind-safe (the decrement is in `Drop`).
+/// and a no-op in production release builds; recorded in release test-support
+/// builds; unwind-safe (the decrement is in `Drop`).
 #[must_use = "the thread-local extent ends when this guard drops"]
 #[derive(Debug)]
 pub(crate) struct NativeDepthGuard {
-    #[cfg(any(test, debug_assertions))]
+    #[cfg(any(test, debug_assertions, feature = "test-support"))]
     _scope: neovm_value::tls_scope::TlsScope<u32, std::cell::Cell<u32>>,
     _thread: std::marker::PhantomData<std::rc::Rc<()>>,
 }
@@ -628,7 +638,7 @@ impl NativeDepthGuard {
     #[doc(hidden)]
     pub fn enter() -> Self {
         Self {
-            #[cfg(any(test, debug_assertions))]
+            #[cfg(any(test, debug_assertions, feature = "test-support"))]
             _scope: neovm_value::tls_scope::TlsScope::restore(
                 &NATIVE_DEPTH,
                 NATIVE_DEPTH.with(|depth| depth.replace(depth.get().saturating_add(1))),
@@ -2855,7 +2865,8 @@ fn max_compiled_id() -> u64 {
 /// stays valid for the whole call; the caller holds the dormant-Context
 /// contract described above.
 #[inline(never)]
-pub unsafe fn try_run_compiled(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) unsafe fn try_run_compiled(
     ctx: *mut Context,
     func: &ByteCodeFunction,
     func_value: Value,
@@ -3603,14 +3614,14 @@ fn run_resolved_leaf_native_inner(
             leaf.entry_call_raw_memory(ctx as *mut u8, func.jit_constant_base(), args_ptr, &mut out)
         };
         if status == super::compile::STATUS_OK {
-            #[cfg(any(test, debug_assertions))]
+            #[cfg(any(test, debug_assertions, feature = "test-support"))]
             NATIVE_OK_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             return NativeCallOutcome::Value(unsafe {
                 /* SAFETY: JIT constant-pool word */
                 Value::from_bits(out as usize)
             });
         }
-        #[cfg(any(test, debug_assertions))]
+        #[cfg(any(test, debug_assertions, feature = "test-support"))]
         count_native_status(status);
         return direct_call_cold(ctx, func, func_value, leaf, status);
     }
@@ -3636,14 +3647,14 @@ fn run_resolved_leaf_native_outlined(
             leaf.entry_call_raw_register(ctx as *mut u8, func.jit_constant_base(), args_ptr)
         };
         if ret.status == super::compile::STATUS_OK {
-            #[cfg(any(test, debug_assertions))]
+            #[cfg(any(test, debug_assertions, feature = "test-support"))]
             NATIVE_OK_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             return NativeCallOutcome::Value(unsafe {
                 /* SAFETY: JIT constant-pool word */
                 Value::from_bits(ret.value as usize)
             });
         }
-        #[cfg(any(test, debug_assertions))]
+        #[cfg(any(test, debug_assertions, feature = "test-support"))]
         count_native_status(ret.status);
         return direct_call_cold(ctx, func, func_value, leaf, ret.status);
     }
@@ -3663,7 +3674,7 @@ pub(crate) fn finish_framed_run(
     leaf: &CompiledLeaf,
     outcome: NativeRun,
 ) -> NativeCallOutcome {
-    #[cfg(any(test, debug_assertions))]
+    #[cfg(any(test, debug_assertions, feature = "test-support"))]
     count_native_outcome(&outcome);
     match outcome {
         NativeRun::Ok(bits) => NativeCallOutcome::Value(unsafe {
@@ -3865,7 +3876,7 @@ pub(crate) static SEAM_INTERP_FALLBACK_COUNT: std::sync::atomic::AtomicU64 =
 
 /// Called by the eval dispatch seam on an `Ok(None)` native attempt.
 #[inline]
-pub fn note_seam_interp_fallback() {
+pub(crate) fn note_seam_interp_fallback() {
     SEAM_INTERP_FALLBACK_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
@@ -3874,8 +3885,15 @@ pub fn note_seam_interp_fallback() {
 ///
 /// Test/debug builds only, like the spec-site counters: a relaxed
 /// `fetch_add` is still a locked read-modify-write on x86, ~20 cycles on
-/// every native call in a release build that reads the total nowhere.
-#[cfg(any(test, debug_assertions))]
+/// every native call in a release build that reads the total nowhere, so
+/// production (no `test-support`) carries none.
+///
+/// CFG CONTRACT (RELEASE-TEST-SUPPORT-CFG): [`native_run_counters`] is
+/// exposed to core's release test build under `test-support` and is read by
+/// e.g. `green_release_class_b_test`; this gate must stay a superset of that
+/// reader's (include `feature = "test-support"`), or the release test reads a
+/// counter that can never move.
+#[cfg(any(test, debug_assertions, feature = "test-support"))]
 pub(crate) fn count_native_status(status: i64) {
     use super::compile::{STATUS_DEOPT_AT, STATUS_SIGNAL};
     let counter = if status == STATUS_SIGNAL {
@@ -3888,7 +3906,7 @@ pub(crate) fn count_native_status(status: i64) {
     counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
-#[cfg(any(test, debug_assertions))]
+#[cfg(any(test, debug_assertions, feature = "test-support"))]
 fn count_native_outcome(outcome: &NativeRun) {
     let counter = match outcome {
         NativeRun::Ok(_) => &NATIVE_OK_COUNT,
@@ -3919,7 +3937,7 @@ fn finish_native_run(
     leaf: &CompiledLeaf,
     outcome: NativeRun,
 ) -> Result<Option<usize>, Flow> {
-    #[cfg(any(test, debug_assertions))]
+    #[cfg(any(test, debug_assertions, feature = "test-support"))]
     count_native_outcome(&outcome);
     match outcome {
         NativeRun::Ok(bits) => Ok(Some(bits)),
@@ -4113,7 +4131,7 @@ pub(crate) fn reset_carrier_tls() {
         0,
         "a reused carrier must have no native leaf guards from its completed job"
     );
-    #[cfg(any(test, debug_assertions))]
+    #[cfg(any(test, debug_assertions, feature = "test-support"))]
     NATIVE_DEPTH.with(|depth| depth.set(0));
     clear();
     COMPILED_HEAP.with(|slot| slot.set(None));
@@ -4150,7 +4168,7 @@ pub(crate) fn native_depth_reset_leak_probe_for_test() -> NativeDepthResetObserv
         let guard = NativeDepthGuard::enter();
         assert_eq!(
             native_depth(),
-            u32::from(cfg!(any(test, debug_assertions))),
+            u32::from(cfg!(any(test, debug_assertions, feature = "test-support"))),
             "the real guard establishes the configured native extent"
         );
         std::mem::forget(guard);
@@ -4159,7 +4177,7 @@ pub(crate) fn native_depth_reset_leak_probe_for_test() -> NativeDepthResetObserv
         let retained_depth = native_depth();
         // Only the fixture repairs the deliberately leaked TLS, after observing
         // whether the failed reset preserved it. A normal reset must then finish.
-        #[cfg(any(test, debug_assertions))]
+        #[cfg(any(test, debug_assertions, feature = "test-support"))]
         NATIVE_DEPTH.with(|depth| depth.set(0));
         reset_carrier_tls();
         NativeDepthResetObservation {

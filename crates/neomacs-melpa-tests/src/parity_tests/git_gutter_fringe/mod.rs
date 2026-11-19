@@ -37,7 +37,7 @@ const TEST_PRELUDE: &str = r####"
                         (file-name-as-directory (file-truename scratch))))
          (sandbox-truename (and (stringp sandbox) (file-truename sandbox)))
          (inside (and approved sandbox-truename
-                      (file-in-directory-p sandbox-truename
+                      (neomacs-melpa-path-inside-p sandbox-truename
                                            (file-truename approved)))))
     (unless (and (stringp sandbox) (> (length sandbox) 1)
                  (file-name-absolute-p sandbox)

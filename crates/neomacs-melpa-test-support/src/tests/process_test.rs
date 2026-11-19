@@ -82,9 +82,12 @@ fn private_pty_timeout_kills_a_hup_ignoring_session_child() {
     use std::time::Duration;
 
     let workspace_root = crate::workspace_root();
+    // `tmp/` is gitignored, so a fresh worktree does not have it.
+    let scratch_parent = workspace_root.join("tmp");
+    fs::create_dir_all(&scratch_parent).expect("create workspace-local tmp directory");
     let scratch = tempfile::Builder::new()
         .prefix("neomacs-pty-timeout-")
-        .tempdir_in(workspace_root.join("tmp"))
+        .tempdir_in(&scratch_parent)
         .expect("create workspace-local process scratch directory");
     let child_pid_path = scratch.path().join("child.pid");
     let sentinel = scratch.path().join("never-written");

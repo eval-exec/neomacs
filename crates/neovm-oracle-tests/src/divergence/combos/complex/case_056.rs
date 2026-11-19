@@ -7,16 +7,14 @@ use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 fn div_cx56_process_filter_hash_env_exitcode_coding_narrow_overlay_textprop_evaporate_undo_display_mega()
  {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[
-        r#""ERR (error \"`let' bindings can have only one value-form\" exit-code (let ((p (make-process :name \"neo-cx56-ec\" :command '(\"sh\" \"-c\" \"exit 4\"))) (accept-process-output p 2) (process-exit-status p))) (buf (get-buffer-create \" *neo-cx56-fp*\")) (received nil))""#
-    ]];
+    let expect = expect_test::expect![[r#""ERR (user-error \"No further undo information\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((env-val
        (let ((process-environment (cons "NEO_CX56=v" process-environment)))
          (string-trim (shell-command-to-string "echo $NEO_CX56"))))
       (exit-code
-       (let ((p (make-process :name "neo-cx56-ec" :command '("sh" "-c" "exit 4")))
+       (let ((p (make-process :name "neo-cx56-ec" :command '("sh" "-c" "exit 4"))))
          (accept-process-output p 2)
          (process-exit-status p)))
       (buf (get-buffer-create " *neo-cx56-fp*"))
@@ -30,10 +28,10 @@ fn div_cx56_process_filter_hash_env_exitcode_coding_narrow_overlay_textprop_evap
     (narrow-to-region 1 7))
   (let ((p (make-process :name "neo-cx56-fp" :command '("printf" "%s" "café世界")
                          :buffer buf :connection-type 'pipe
-                         :filter (lambda (proc str) (push str received))))
+                         :filter (lambda (proc str) (push str received)))))
     (set-process-coding-system p 'utf-8-unix 'utf-8-unix)
     (accept-process-output p 1)
-    (accept-process-output p 0.5)))
+    (accept-process-output p 0.5))
   (prog1 (with-current-buffer buf
            (widen)
            (let ((content (buffer-string)))
@@ -43,7 +41,7 @@ fn div_cx56_process_filter_hash_env_exitcode_coding_narrow_overlay_textprop_evap
                    (length (overlays-in 1 20))
                    (secure-hash 'md5 (apply #'concat (nreverse received))))))
     (kill-buffer buf)))
-)"##,
+"##,
         expect,
     );
 }
@@ -270,16 +268,14 @@ fn div_cx56_set_buffer_multibyte_narrow_overlay_marker_textprop_display_evaporat
 fn div_cx56_regex_casefold_replace_undo_marker_overlay_narrow_display_textprop_evaporate_superword_subword_env_exitcode_mega()
  {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[
-        r#""ERR (error \"`let' bindings can have only one value-form\" accept-process-output p 2)""#
-    ]];
+    let expect = expect_test::expect![[r#""ERR (args-out-of-range 1 45)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((env-val
        (let ((process-environment (cons "NEO_CX56=v" process-environment)))
          (string-trim (shell-command-to-string "echo $NEO_CX56"))))
       (exit-code
-       (let ((p (make-process :name "neo-cx56-ec" :command '("sh" "-c" "exit 6")))
+       (let ((p (make-process :name "neo-cx56-ec" :command '("sh" "-c" "exit 6"))))
          (accept-process-output p 2)
          (process-exit-status p))))
   (let ((case-fold-search t))
@@ -303,7 +299,7 @@ fn div_cx56_regex_casefold_replace_undo_marker_overlay_narrow_display_textprop_e
           (list env-val exit-code state (buffer-string)
                 (marker-position m) (overlayp ov) (overlay-start ov)
                 (text-properties-at 1) (current-column))))))
-))"##,
+)"##,
         expect,
     );
 }
@@ -346,9 +342,7 @@ fn div_cx56_print_circle_gensym_struct_vector_propertized_escape_length_level_ba
 fn div_cx56_process_output_decode_encode_hash_overlay_narrow_textprop_evaporate_undo_display_cl_coerce_json_xml_env_exitcode_timer_mega()
  {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[
-        r#""ERR (error \"`let' bindings can have only one value-form\" exit-code (let ((p (make-process :name \"neo-cx56-ec\" :command '(\"sh\" \"-c\" \"exit 9\"))) (accept-process-output p 2) (process-exit-status p))) (buf (get-buffer-create \" *neo-cx56-po*\")))""#
-    ]];
+    let expect = expect_test::expect![[r#""ERR (user-error \"No further undo information\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let (timer-fired)
@@ -357,7 +351,7 @@ fn div_cx56_process_output_decode_encode_hash_overlay_narrow_textprop_evaporate_
          (let ((process-environment (cons "NEO_CX56=v" process-environment)))
            (string-trim (shell-command-to-string "echo $NEO_CX56"))))
         (exit-code
-         (let ((p (make-process :name "neo-cx56-ec" :command '("sh" "-c" "exit 9")))
+         (let ((p (make-process :name "neo-cx56-ec" :command '("sh" "-c" "exit 9"))))
            (accept-process-output p 2)
            (process-exit-status p)))
         (buf (get-buffer-create " *neo-cx56-po*")))
@@ -387,7 +381,7 @@ fn div_cx56_process_output_decode_encode_hash_overlay_narrow_textprop_evaporate_
                          (text-properties-at 0) (text-properties-at 7)
                          (length (overlays-in 1 20))))))
       (kill-buffer buf))))
-))"##,
+)"##,
         expect,
     );
 }
@@ -397,7 +391,7 @@ fn div_cx56_read_eval_backquote_destructuring_lexical_cl_loop_hash_secure_print_
  {
     return_if_neovm_enable_oracle_proptest_not_set!();
     let expect = expect_test::expect![[
-        r#""ERR (error \"`let' bindings can have only one value-form\" accept-process-output p 2)""#
+        r#""OK (\"v\" 8 (\"café\" \"世界\" \"😀\") 6 3 \"0b7266c3aceacb4062dda9d723270ddd85f00c71150be592677d9700f35bc614\")""#
     ]];
     crate::common::assert_oracle_parity_expect(
         r##"
@@ -405,16 +399,18 @@ fn div_cx56_read_eval_backquote_destructuring_lexical_cl_loop_hash_secure_print_
        (let ((process-environment (cons "NEO_CX56=v" process-environment)))
          (string-trim (shell-command-to-string "echo $NEO_CX56"))))
       (exit-code
-       (let ((p (make-process :name "neo-cx56-ec" :command '("sh" "-c" "exit 8")))
+       (let ((p (make-process :name "neo-cx56-ec" :command '("sh" "-c" "exit 8"))))
          (accept-process-output p 2)
          (process-exit-status p))))
   (let ((lexical-binding t))
-    (let ((data '((("café" . 1) ("世界" . 2) ("😀" . 3))))
+    (require 'cl-lib)
+    (let ((data '((("café" . 1) ("世界" . 2) ("😀" . 3)))))
       (let* ((processed (eval (car (read-from-string
-                                   "`(:names ,(mapcar #'car (caar ,data))
-                                      :vals ,(mapcar #'cdr (caar ,data))
-                                      :sum ,(cl-loop for v in (mapcar #'cdr (caar ,data)) sum v)
-                                      :count ,(cl-loop for v in (mapcar #'cdr (caar ,data)) count t))")) t))
+                                   (format "`(:names ,(mapcar #'car (car '%S))
+                                      :vals ,(mapcar #'cdr (car '%S))
+                                      :sum ,(cl-loop for v in (mapcar #'cdr (car '%S)) sum v)
+                                      :count ,(cl-loop for v in (mapcar #'cdr (car '%S)) count t))"
+                                           data data data data))) t))
              (ht (make-hash-table :test 'equal)))
         (cl-loop for n in (plist-get processed :names)
                  for v in (plist-get processed :vals)
@@ -425,7 +421,7 @@ fn div_cx56_read_eval_backquote_destructuring_lexical_cl_loop_hash_secure_print_
                 (plist-get processed :sum)
                 (hash-table-count ht)
                 (secure-hash 'sha256 (prin1-to-string processed)))))))
-)))"##,
+)"##,
         expect,
     );
 }

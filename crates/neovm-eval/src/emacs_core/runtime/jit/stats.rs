@@ -49,8 +49,8 @@ pub(crate) struct CompileStats {
     pub total_us: u64,
     pub max_us: u64,
     /// `ops.len()` of the function behind `max_us`.
-    pub max_fn_len: usize,
-    pub compiled_ok: u64,
+    pub(crate) max_fn_len: usize,
+    pub(crate) compiled_ok: u64,
     /// Times compiled code was actually ENTERED. Compiles alone say nothing
     /// about payoff: on org-editing the JIT costs 3-5% of instructions at every
     /// setting and relaxing its profitability gate moves Ir by 0.006%, which is
@@ -64,18 +64,18 @@ pub(crate) struct CompileStats {
     /// profitability gate, id cap, arity) left "ordinary calls do not arrive
     /// here" as the only explanation, and that deserved measuring rather than
     /// inferring.
-    pub dispatch_consulted: u64,
-    pub dispatch_said_compiled: u64,
-    pub not_profitable: u64,
-    pub not_compilable: u64,
+    pub(crate) dispatch_consulted: u64,
+    pub(crate) dispatch_said_compiled: u64,
+    pub(crate) not_profitable: u64,
+    pub(crate) not_compilable: u64,
     /// Cache misses served by a pre-compiled AOT leaf ([`super::aot`]) instead
     /// of a JIT compile — no compile ran, so NOT counted in `total_compiles`.
     pub aot_loads: u64,
     /// Leaves rebuilt with the full register allocator after proving hot
     /// (`RuntimeState::RETIER_FACTOR`); each one is a second compile.
-    pub retiers: u64,
+    pub(crate) retiers: u64,
     /// Stall distribution: `<100µs, <250µs, <500µs, <1ms, <2.5ms, <5ms, <10ms, >=10ms`.
-    pub histogram_us: [u64; 8],
+    pub(crate) histogram_us: [u64; 8],
     /// MIR-tier funnel: where bodies are lost on the way to the ONLY tier that
     /// inlines, unboxes across op boundaries and elides redundant guards. A
     /// body that does not reach it gets none of those, so knowing which gate
@@ -83,42 +83,42 @@ pub(crate) struct CompileStats {
     /// widening a gate nothing was waiting behind.
     ///
     /// The three `gate_*` counters are independent (a body can trip several).
-    pub mir_gate_optional: u64,
-    pub mir_gate_rest: u64,
-    pub mir_gate_prefix: u64,
+    pub(crate) mir_gate_optional: u64,
+    pub(crate) mir_gate_rest: u64,
+    pub(crate) mir_gate_prefix: u64,
     /// Kept off the MIR tier by deopt reoptimization (`ReoptLevel` at or
     /// above `BaselineOnly`).
-    pub mir_gate_reopt: u64,
+    pub(crate) mir_gate_reopt: u64,
     /// Passed the gates but `build_mir` bailed (unmodelled op, odd CFG).
-    pub mir_build_failed: u64,
+    pub(crate) mir_build_failed: u64,
     /// Passed the tier gate, but `lower_mir_pure` bailed.
-    pub mir_lower_failed: u64,
+    pub(crate) mir_lower_failed: u64,
     /// Built (and inlined), but the tier gate sent it to the baseline before
     /// lowering — keyed `gate:*` in the bail census: a Float-feedback site, a
     /// loop with a shim-lowered op, a generic call left after inlining, or a
     /// shim-lowered op in a body that inlined a callee.
-    pub mir_tier_rejected: u64,
+    pub(crate) mir_tier_rejected: u64,
     /// Actually took the MIR tier.
-    pub mir_taken: u64,
+    pub(crate) mir_taken: u64,
     /// Callees successfully spliced in by `inline_pure_single_block_callees`.
-    pub mir_inlined_callees: u64,
+    pub(crate) mir_inlined_callees: u64,
     /// Bodies the MIR builder built only by skipping unreachable leaders
     /// (`NEOVM_JIT_MIR_REACH=dead`; without the bit each bails as
     /// `mir-unreachable-block`), and the leaders it skipped.
-    pub mir_reach_dead: u64,
-    pub mir_dead_leaders: u64,
+    pub(crate) mir_reach_dead: u64,
+    pub(crate) mir_dead_leaders: u64,
     /// Deopts consumed on this thread, by cause (`reopt::DeoptCause::
     /// census_index`, names in `DeoptCause::CENSUS_NAMES`). Release builds
     /// count too: this is the steady-state deopt census.
-    pub deopt_causes: [u64; DEOPT_CAUSES],
+    pub(crate) deopt_causes: [u64; DEOPT_CAUSES],
     /// Of those, deopts of OSR leaves.
-    pub deopt_osr: u64,
+    pub(crate) deopt_osr: u64,
     /// Deopt-driven invalidations (`reopt::invalidate_for_reopt`), by the
     /// `ReoptLevel` the source stood at afterwards.
-    pub reopt_levels: [u64; 5],
+    pub(crate) reopt_levels: [u64; 5],
     /// Deopts of a leaf already stale (retired): its callers were unlinked,
     /// nothing invalidated.
-    pub reopt_stale: u64,
+    pub(crate) reopt_stale: u64,
     /// Exits the lowering marked cold under `NEOVM_JIT_COLD_EXITS=on`, by
     /// `compile::cold_exits::ColdExit` (zero with the knob off). Counted as
     /// the lowering marks them, failed compiles included.
@@ -130,7 +130,7 @@ pub(crate) struct CompileStats {
     /// Per-[`CompilePhase`] ns of every compile timed under the phase split
     /// (`NEOVM_JIT_COMPILE_STATS`); zero when the split was off. Sums to the
     /// origin rows' µs of those compiles.
-    pub phase_ns: [u64; <CompilePhase as strum::EnumCount>::COUNT],
+    pub(crate) phase_ns: [u64; <CompilePhase as strum::EnumCount>::COUNT],
 }
 
 /// Number of deopt census buckets.

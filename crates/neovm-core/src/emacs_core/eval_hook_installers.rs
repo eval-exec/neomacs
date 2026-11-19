@@ -31,6 +31,10 @@ static CANONICAL_EVAL_HOOK_SET: OnceLock<EvalHookSet> = OnceLock::new();
 /// refusal, which this process-level entry treats as a fatal invariant
 /// violation (two canonical sets can never exist).
 pub fn install_eval_hooks() -> EvalHooksInstalled {
+    // Beside the sqlite finalizer slot below. Every runtime boot publishes
+    // the system module-scope probe here, so a linked neovm-system cannot
+    // leave source entry unregistered.
+    install_source_module_scope_probe_for_eval_hooks();
     let set = CANONICAL_EVAL_HOOK_SET.get_or_init(|| {
         EvalHookSet::new(
             crate::emacs_core::lifecycle_hooks::canonical_lifecycle_hooks(),
@@ -69,6 +73,13 @@ fn install_sqlite_finalizer_hook_for_eval_hooks() -> Result<HookInstallStatus, H
     // No finalizer table is compiled in; report it as published so the one
     // boot entry stays uniform across feature configurations.
     Ok(HookInstallStatus::Installed)
+}
+
+fn install_source_module_scope_probe_for_eval_hooks() {
+    match crate::emacs_core::dynamic_module::register_source_module_scope_probe() {
+        Ok(HookInstallStatus::Installed | HookInstallStatus::AlreadyInstalled) => {}
+        Err(_) => panic!("a different source-module scope probe is already installed"),
+    }
 }
 
 // The wait/timer/frontend/display slots call the upper-layer service

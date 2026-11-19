@@ -376,8 +376,8 @@ const SCALA_MODE_TEST_PRELUDE: &str = r####"
                       (format "scala-mode365-%s-界/" case-name)
                     (format "scala-mode365-%s project 界/" case-name))
                   owner)))
-      (unless (and (file-in-directory-p owner scratch)
-                   (file-in-directory-p tmp scratch))
+      (unless (and (neomacs-melpa-path-inside-p owner scratch)
+                   (neomacs-melpa-path-inside-p tmp scratch))
         (error "Scala Mode scratch paths escape the MELPA scratch root: %S"
                (list scratch owner tmp)))
       (unless (and (file-name-absolute-p root) (not (equal owner root))
@@ -767,7 +767,7 @@ const SCALA_MODE_TEST_PRELUDE: &str = r####"
            (file (and (buffer-live-p buffer)
                       (buffer-local-value 'buffer-file-name buffer)))
            (true-file (and file (file-truename file))))
-      (unless (and true-file (file-in-directory-p true-file root))
+      (unless (and true-file (neomacs-melpa-path-inside-p true-file root))
         (error "Scala Mode navigation left the owned project: %S" file))
       (with-current-buffer buffer
         (save-restriction

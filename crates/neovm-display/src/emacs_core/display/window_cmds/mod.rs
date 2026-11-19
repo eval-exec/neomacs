@@ -11,6 +11,7 @@ mod split_request;
 pub(crate) use split_request::SiblingResize;
 
 use crate::window::DisplayFrameExt;
+use crate::window::DisplayFrameManagerCrateExt;
 use crate::window::DisplayFrameManagerExt;
 use crate::window::WindowChromeLine;
 use crate::window::body::{WindowBodyAxis, WindowBodyCellSize, WindowBodyUnit};
@@ -1400,17 +1401,16 @@ pub fn resolve_frame_id_in_state(
     // windows -- `framep` is a tag test on a `Lisp_Frame` pseudovector.
     match val.kind() {
         ValueKind::Veclike(VecLikeType::Frame) => {
-            let raw_id = val.as_frame_id().unwrap();
-            let fid = FrameId(raw_id);
+            let fid = FrameId(val.as_frame_id().unwrap());
             if frames.get(fid).is_some() {
                 Ok(fid)
             } else {
+                // The argument is already the frame object. Reconstructing it
+                // with `make_frame` would hit the missing-registry refusal
+                // once that object has been reclaimed.
                 Err(signal(
                     LispCondition::WrongTypeArgument,
-                    vec![
-                        Value::symbol(predicate.predicate()),
-                        Value::make_frame(raw_id),
-                    ],
+                    vec![Value::symbol(predicate.predicate()), *val],
                 ))
             }
         }
@@ -1433,17 +1433,13 @@ fn resolve_frame_or_window_frame_id_in_state(
     let val = arg.unwrap();
     match val.kind() {
         ValueKind::Veclike(VecLikeType::Frame) => {
-            let raw_id = val.as_frame_id().unwrap();
-            let fid = FrameId(raw_id);
+            let fid = FrameId(val.as_frame_id().unwrap());
             if frames.get(fid).is_some() {
                 Ok(fid)
             } else {
                 Err(signal(
                     LispCondition::WrongTypeArgument,
-                    vec![
-                        Value::symbol(predicate.predicate()),
-                        Value::make_frame(raw_id),
-                    ],
+                    vec![Value::symbol(predicate.predicate()), *val],
                 ))
             }
         }
@@ -2577,7 +2573,11 @@ pub fn builtin_window_frame(
 ) -> EvalResult {
     let (frames, buffers) = eval.frame_manager_and_buffers_mut();
     expect_max_args("window-frame", &args, 1)?;
-    let (fid, _wid) =
+    // GNU `Fwindow_frame` calls `decode_valid_window` (window.c:342-348).
+    // `WINDOW_VALID_P` requires non-nil contents (window.h:1188-1194).
+    // `delete_all_child_windows` nils contents (window.c:8136-8153), so a
+    // window of a deleted frame signals `window-valid-p`.
+    let (fid, _) =
         resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
     Ok(Value::make_frame(fid.0))
 }
@@ -8792,6 +8792,10 @@ pub fn builtin_force_window_update(
 #[cfg(test)]
 #[path = "tests/window_cmds_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/deleted_frame_gc_test.rs"]
+mod deleted_frame_gc_tests;
 
 #[cfg(test)]
 #[path = "tests/selection_chrome_test.rs"]

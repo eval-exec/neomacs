@@ -1,0 +1,5 @@
+error[E0432]: unresolved import `neovm_value::DetachedInFlightRegistry`
+ --> tests/pentry_e2_loan_ui/receipt_in_flight_is_private.rs
+  |
+  | use neovm_value::DetachedInFlightRegistry;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `DetachedInFlightRegistry` in the root

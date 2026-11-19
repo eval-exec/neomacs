@@ -97,7 +97,7 @@ impl Buffer {
         self.insert_internal(text, InsertMarkerPlacement::AfterMarkers)
     }
 
-    pub fn insert_before_markers(&mut self, text: &str) -> TextInsertion {
+    pub(crate) fn insert_before_markers(&mut self, text: &str) -> TextInsertion {
         self.insert_internal(text, InsertMarkerPlacement::BeforeMarkers)
     }
 
@@ -109,7 +109,7 @@ impl Buffer {
         )
     }
 
-    pub fn insert_lisp_string_before_markers(&mut self, text: &LispString) -> TextInsertion {
+    pub(crate) fn insert_lisp_string_before_markers(&mut self, text: &LispString) -> TextInsertion {
         self.insert_lisp_string_full(
             text,
             InsertMarkerPlacement::BeforeMarkers,
@@ -122,7 +122,7 @@ impl Buffer {
     /// `insertion_type` is true. This matches GNU
     /// `adjust_markers_for_replace` (insdel.c:341), where markers at
     /// `from_byte` stay put regardless of insertion_type.
-    pub fn insert_lisp_string_for_replace(&mut self, text: &LispString) -> TextInsertion {
+    pub(crate) fn insert_lisp_string_for_replace(&mut self, text: &LispString) -> TextInsertion {
         self.insert_lisp_string_full(
             text,
             InsertMarkerPlacement::AfterMarkers,
@@ -173,7 +173,7 @@ impl Buffer {
         self.replace_measured_region_lisp_string(old_range, text)
     }
 
-    pub fn replace_measured_region_lisp_string(
+    pub(crate) fn replace_measured_region_lisp_string(
         &mut self,
         old_range: TextEditRange,
         text: &LispString,
@@ -201,7 +201,7 @@ impl Buffer {
         self.delete_measured_region(range)
     }
 
-    pub fn delete_measured_region(&mut self, range: TextEditRange) -> TextEditRange {
+    pub(crate) fn delete_measured_region(&mut self, range: TextEditRange) -> TextEditRange {
         if range.is_empty() {
             return TextEditRange::default();
         }
@@ -233,7 +233,7 @@ impl Buffer {
     ///
     /// The replacement is performed in place, so callers must ensure the
     /// matched character's Emacs-byte length equals `to_bytes.len()`.
-    pub fn subst_char_in_region(
+    pub(crate) fn subst_char_in_region(
         &mut self,
         range: TextEditRange,
         modified_range: TextEditRange,
@@ -263,7 +263,7 @@ impl Buffer {
         true
     }
 
-    pub fn subst_char_changed_range(
+    pub(crate) fn subst_char_changed_range(
         &self,
         range: TextEditRange,
         from_code: u32,
@@ -290,7 +290,8 @@ impl Buffer {
     /// GNU `Ftranspose_regions` core: swap two non-overlapping current-buffer
     /// regions without changing buffer size.  Text movement is byte-based,
     /// while property and marker movement follows GNU's character positions.
-    pub fn transpose_regions(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn transpose_regions(
         &mut self,
         transposition: TextTransposition,
         anchor_policy: TranspositionAnchorPolicy,
@@ -397,7 +398,8 @@ impl BufferManager {
             .map(|buf| buf.edit_range_for_emacs_byte_range(byte_range))
     }
 
-    pub fn edit_range_for_buffer_char_range(
+    #[cfg(test)]
+    pub(crate) fn edit_range_for_buffer_char_range(
         &self,
         id: BufferId,
         char_range: CharRange,
@@ -430,19 +432,6 @@ impl BufferManager {
         text: &LispString,
     ) -> Option<()> {
         self.insert_lisp_string_into_buffer_full(id, text, InsertMarkerAdjustment::ByInsertionType)
-    }
-
-    /// GNU-equivalent replace path: like `insert_lisp_string_into_buffer`
-    /// but doesn't push markers exactly at point past the inserted text,
-    /// even if their `insertion_type` is true. Used by
-    /// `replace_buffer_region_lisp_string_in_manager` to match GNU
-    /// `adjust_markers_for_replace` (insdel.c:341) semantics.
-    pub fn insert_lisp_string_into_buffer_for_replace(
-        &mut self,
-        id: BufferId,
-        text: &LispString,
-    ) -> Option<()> {
-        self.insert_lisp_string_into_buffer_full(id, text, InsertMarkerAdjustment::StrictAfter)
     }
 
     fn insert_lisp_string_into_buffer_full(
@@ -522,7 +511,12 @@ impl BufferManager {
         self.delete_buffer_measured_region(id, range)
     }
 
-    pub fn delete_buffer_char_range(&mut self, id: BufferId, char_range: CharRange) -> Option<()> {
+    #[cfg(test)]
+    pub(crate) fn delete_buffer_char_range(
+        &mut self,
+        id: BufferId,
+        char_range: CharRange,
+    ) -> Option<()> {
         if char_range.is_empty() {
             return Some(());
         }
@@ -551,7 +545,7 @@ impl BufferManager {
     /// `delete-and-extract-region`'s core: delete `range` from buffer `id`
     /// and return the deleted text (GNU `del_range_1` with `ret_string`);
     /// `None` for an empty range or a missing buffer.
-    pub fn delete_and_extract_buffer_measured_region(
+    pub(crate) fn delete_and_extract_buffer_measured_region(
         &mut self,
         id: BufferId,
         range: TextEditRange,
@@ -666,7 +660,7 @@ impl BufferManager {
         self.execute_shared_casify_edit(id, plan, expansions, storage_shape, properties)
     }
 
-    pub fn subst_char_in_buffer_region(
+    pub(crate) fn subst_char_in_buffer_region(
         &mut self,
         id: BufferId,
         range: TextEditRange,

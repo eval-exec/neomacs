@@ -16,11 +16,11 @@ fn div_v4_print_circle_number_table_combined() {
        (mixed (list shared [n s] shared)))
   (list (let ((print-circle t) (print-number-table t)) (prin1-to-string tree))
         (let ((print-circle t) (print-number-table t)) (prin1-to-string mixed))
-        (let ((print-number-table t) (prin1-to-string tree))
-        (let ((print-circle t) (prin1-to-string tree))))
-))"##;
+        (let ((print-number-table t)) (prin1-to-string tree))
+        (let ((print-circle t)) (prin1-to-string tree))))
+"##;
     let expect = expect_test::expect![[
-        r#""OK (\"(#1=(42 \\\"shared\\\") #1#)\" \"(#1=(42 \\\"shared\\\") [n s] #1#)\" nil)""#
+        r#""OK (\"(#1=(42 \\\"shared\\\") #1#)\" \"(#1=(42 \\\"shared\\\") [n s] #1#)\" \"((42 \\\"shared\\\") (42 \\\"shared\\\"))\" \"(#1=(42 \\\"shared\\\") #1#)\")""#
     ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }

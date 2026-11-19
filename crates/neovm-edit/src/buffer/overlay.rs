@@ -426,7 +426,8 @@ impl OverlayList {
     /// share the live Lisp objects. They do preserve each source object's
     /// precedence serial: changing that serial would change GNU's final
     /// `compare_overlays` tiebreak merely because redisplay took a snapshot.
-    pub fn snapshot_clone(&self) -> Self {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn snapshot_clone(&self) -> Self {
         self.clone_with_identity(OverlayCloneIdentity::PreservePrecedence)
     }
 
@@ -1012,7 +1013,8 @@ impl OverlayList {
         self.index.interval_height()
     }
 
-    pub fn insert_overlay(&mut self, overlay: Value) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn insert_overlay(&mut self, overlay: Value) {
         let data = overlay.as_overlay_data().unwrap();
         // Attach consumes the object's materialized coordinates. A live
         // overlay already owned by this index is rejected, while cross-buffer
@@ -1021,11 +1023,13 @@ impl OverlayList {
         self.index_mut().attach(overlay, range);
     }
 
-    pub fn detach_overlay(&mut self, overlay: Value) -> bool {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn detach_overlay(&mut self, overlay: Value) -> bool {
         self.index_mut().detach(overlay).is_some()
     }
 
-    pub fn delete_overlay(&mut self, overlay: Value) -> bool {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn delete_overlay(&mut self, overlay: Value) -> bool {
         if !self.detach_overlay(overlay) {
             return false;
         }
@@ -1057,7 +1061,13 @@ impl OverlayList {
         }
     }
 
-    pub fn overlay_put(&mut self, overlay: Value, prop: Value, value: Value) -> Result<bool, Flow> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn overlay_put(
+        &mut self,
+        overlay: Value,
+        prop: Value,
+        value: Value,
+    ) -> Result<bool, Flow> {
         neovm_value::symbol::SymbolPropertyRevision::observe_category_property(prop, value);
         let (changed, plist_replaced) = overlay
             .with_overlay_data_mut(|data| {
@@ -1080,7 +1090,7 @@ impl OverlayList {
         Ok(changed)
     }
 
-    pub fn overlay_get(&self, overlay: Value, prop: &Value) -> Option<Value> {
+    pub(crate) fn overlay_get(&self, overlay: Value, prop: &Value) -> Option<Value> {
         plist::plist_get(overlay.as_overlay_data().unwrap().plist, prop)
     }
 
@@ -1124,7 +1134,12 @@ impl OverlayList {
         self.index.range(overlay).map(EmacsByteRange::end)
     }
 
-    pub fn move_overlay_to_emacs_byte_range(&mut self, overlay: Value, range: EmacsByteRange) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn move_overlay_to_emacs_byte_range(
+        &mut self,
+        overlay: Value,
+        range: EmacsByteRange,
+    ) {
         if self.index_mut().move_to(overlay, range).is_none() {
             return;
         }
@@ -1288,7 +1303,8 @@ impl OverlayList {
         Some(hasher.finish())
     }
 
-    pub fn overlays_in_accessible_emacs_byte_range(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn overlays_in_accessible_emacs_byte_range(
         &self,
         range: EmacsByteRange,
         accessible_end: EmacsBytePos,
@@ -1345,7 +1361,9 @@ impl OverlayList {
         best.map(|(winner, _)| winner)
     }
 
-    pub fn highest_priority_overlay_at_emacs_byte_pos(
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn highest_priority_overlay_at_emacs_byte_pos(
         &self,
         pos: EmacsBytePos,
         property: Value,
@@ -1457,24 +1475,7 @@ impl OverlayList {
         }
     }
 
-    /// Single-winner overlay lookup with GNU `overlay-get` alias semantics.
-    /// The canonical property is first in `property_lookup_order`, followed by
-    /// its `char-property-alias-alist` fallbacks. Property lookup happens per
-    /// overlay before the highest-precedence carrier is selected.
-    pub fn highest_priority_overlay_effective_property_value_at_emacs_byte_pos(
-        &self,
-        pos: EmacsBytePos,
-        property_lookup_order: &[Value],
-        window_id: Option<u64>,
-    ) -> Option<Value> {
-        match self.resolve_overlay_property_at_emacs_byte_pos(pos, window_id, |overlay| {
-            overlay_property_in_lookup_order(overlay, property_lookup_order)
-        }) {
-            OverlayPropertyAtPoint::Present(resolution) => Some(resolution.value()),
-            OverlayPropertyAtPoint::Vacant(_) => None,
-        }
-    }
-
+    #[cfg(test)]
     /// The overlay half of GNU `face_at_buffer_position` (src/xfaces.c): every
     /// window-visible overlay's PROPERTY value at POS in ASCENDING precedence
     /// (`sort_overlays` order), for the one policy where overlay values MERGE
@@ -1485,7 +1486,7 @@ impl OverlayList {
     /// value, then a stable tiebreak. A bare `priority`-integer comparison is not
     /// equivalent -- it silently reads a cons `priority` as 0 and drops the
     /// containment rule.
-    pub fn overlay_property_values_ascending_at_emacs_byte_pos(
+    pub(crate) fn overlay_property_values_ascending_at_emacs_byte_pos(
         &self,
         pos: EmacsBytePos,
         property: Value,
@@ -1498,6 +1499,7 @@ impl OverlayList {
         )
     }
 
+    #[cfg(test)]
     /// GNU `overlay-get` property lookup composed with the ascending overlay
     /// merge order used by `face_at_buffer_position`.
     ///
@@ -1507,7 +1509,7 @@ impl OverlayList {
     /// overlay carrying an alias must still merge after a lower-priority
     /// overlay carrying the canonical name.  Querying each name across all
     /// overlays separately would reverse that GNU ordering.
-    pub fn overlay_effective_property_values_ascending_at_emacs_byte_pos(
+    pub(crate) fn overlay_effective_property_values_ascending_at_emacs_byte_pos(
         &self,
         pos: EmacsBytePos,
         property_lookup_order: &[Value],
@@ -1646,7 +1648,8 @@ impl OverlayList {
         Some(start)
     }
 
-    pub fn highest_priority_overlay_for_inserted_emacs_byte_pos(
+    #[cfg(test)]
+    pub(crate) fn highest_priority_overlay_for_inserted_emacs_byte_pos(
         &self,
         pos: EmacsBytePos,
         property: &Value,
@@ -1660,7 +1663,7 @@ impl OverlayList {
 
     /// [`Self::highest_priority_overlay_for_inserted_emacs_byte_pos`] reading
     /// `priority' the way the caller says (see [`OverlayPriorityLookup`]).
-    pub fn highest_priority_overlay_for_inserted_emacs_byte_pos_with(
+    pub(crate) fn highest_priority_overlay_for_inserted_emacs_byte_pos_with(
         &self,
         pos: EmacsBytePos,
         property: &Value,
@@ -1713,7 +1716,8 @@ impl OverlayList {
         }
     }
 
-    pub fn adjust_for_insert_at_emacs_byte_pos(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn adjust_for_insert_at_emacs_byte_pos(
         &mut self,
         pos: EmacsBytePos,
         len: EmacsByteLen,
@@ -1729,7 +1733,11 @@ impl OverlayList {
         });
     }
 
-    pub fn adjust_for_inserted_text(&mut self, insertion: TextInsertion, before_markers: bool) {
+    pub(crate) fn adjust_for_inserted_text(
+        &mut self,
+        insertion: TextInsertion,
+        before_markers: bool,
+    ) {
         self.adjust_for_insert_at_emacs_byte_pos(
             insertion.byte_pos(),
             insertion.extent().emacs_bytes(),
@@ -1737,7 +1745,8 @@ impl OverlayList {
         );
     }
 
-    pub fn adjust_for_delete_emacs_byte_range(&mut self, range: EmacsByteRange) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn adjust_for_delete_emacs_byte_range(&mut self, range: EmacsByteRange) {
         if range.is_empty() {
             return;
         }
@@ -1767,11 +1776,11 @@ impl OverlayList {
         }
     }
 
-    pub fn adjust_for_deleted_text(&mut self, range: TextEditRange) {
+    pub(crate) fn adjust_for_deleted_text(&mut self, range: TextEditRange) {
         self.adjust_for_delete_emacs_byte_range(range.byte_range());
     }
 
-    pub fn adjust_for_replace_at_emacs_byte_pos(
+    pub(crate) fn adjust_for_replace_at_emacs_byte_pos(
         &mut self,
         start: EmacsBytePos,
         old_len: EmacsByteLen,
@@ -1786,7 +1795,7 @@ impl OverlayList {
         self.adjust_for_delete_emacs_byte_range(EmacsByteRange::from_start_len(start, old_len));
     }
 
-    pub fn adjust_for_replaced_text(&mut self, replacement: TextReplacement) {
+    pub(crate) fn adjust_for_replaced_text(&mut self, replacement: TextReplacement) {
         self.adjust_for_replace_at_emacs_byte_pos(
             replacement.byte_start(),
             replacement.old_byte_len(),
@@ -1794,14 +1803,18 @@ impl OverlayList {
         );
     }
 
-    pub fn set_front_advance(&mut self, overlay: Value, advance: bool) {
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn set_front_advance(&mut self, overlay: Value, advance: bool) {
         self.invalidate_snapshot();
         let _ = overlay.with_overlay_data_mut(|data| {
             data.front_advance = advance;
         });
     }
 
-    pub fn set_rear_advance(&mut self, overlay: Value, advance: bool) {
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn set_rear_advance(&mut self, overlay: Value, advance: bool) {
         self.invalidate_snapshot();
         let _ = overlay.with_overlay_data_mut(|data| {
             data.rear_advance = advance;
@@ -1826,7 +1839,7 @@ impl OverlayList {
         self.next_boundary_after_until_emacs_byte_pos(pos, EmacsBytePos::new(usize::MAX))
     }
 
-    pub fn next_boundary_after_until_emacs_byte_pos(
+    pub(crate) fn next_boundary_after_until_emacs_byte_pos(
         &self,
         pos: EmacsBytePos,
         limit: EmacsBytePos,
@@ -1846,14 +1859,15 @@ impl OverlayList {
         self.index.next_boundary_after_no_alloc(pos, limit)
     }
 
-    pub fn previous_boundary_before_emacs_byte_pos(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn previous_boundary_before_emacs_byte_pos(
         &self,
         pos: EmacsBytePos,
     ) -> Option<EmacsBytePos> {
         self.previous_boundary_before_since_emacs_byte_pos(pos, EmacsBytePos::ZERO)
     }
 
-    pub fn previous_boundary_before_since_emacs_byte_pos(
+    pub(crate) fn previous_boundary_before_since_emacs_byte_pos(
         &self,
         pos: EmacsBytePos,
         limit: EmacsBytePos,
@@ -1947,6 +1961,7 @@ fn overlay_range(overlay: Value) -> Option<EmacsByteRange> {
     data.buffer.map(|_| overlay_data_range(data))
 }
 
+#[cfg(any(test, feature = "test-support"))]
 fn overlay_covers_pos(overlay: Value, pos: EmacsBytePos) -> bool {
     let Some(data) = overlay.as_overlay_data() else {
         return false;
@@ -1971,6 +1986,7 @@ fn overlay_property_named(overlay: Value, prop_name: Value) -> Option<Value> {
     plist::plist_get(plist, &prop_name)
 }
 
+#[cfg(test)]
 fn overlay_property_in_lookup_order(
     overlay: Value,
     property_lookup_order: &[Value],
@@ -2034,6 +2050,7 @@ fn overlay_precedence(
     })
 }
 
+#[cfg(test)]
 /// Order `overlays` by ascending precedence, reading each overlay's key once.
 fn sort_overlays_by_precedence_ascending(overlays: &mut [Value]) {
     let mut keyed: Vec<(Value, Option<OverlayPrecedence>)> = overlays
@@ -2174,13 +2191,14 @@ fn winner_window_symbol_id() -> neovm_value::intern::SymId {
 /// fallback needs an obarray, which this layer has none of, so a caller that
 /// has one passes the lookup in; callers without one read the overlay's own
 /// plist, which is what this layer did for everyone before.
-pub type OverlayPriorityLookup<'a> = &'a dyn Fn(Value) -> Option<Value>;
+pub(crate) type OverlayPriorityLookup<'a> = &'a dyn Fn(Value) -> Option<Value>;
 
 /// How a caller reads any property of an overlay -- `Foverlay_get' when the
 /// caller has an obarray (so `category' is followed), the overlay's own plist
 /// otherwise.
-pub type OverlayPropertyLookup<'a> = &'a dyn Fn(Value, Value) -> Option<Value>;
+pub(crate) type OverlayPropertyLookup<'a> = &'a dyn Fn(Value, Value) -> Option<Value>;
 
+#[cfg(any(test, feature = "test-support"))]
 fn overlay_plist_property(overlay: Value, property: Value) -> Option<Value> {
     overlay_property_named(overlay, property)
 }

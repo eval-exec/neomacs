@@ -1,0 +1,5 @@
+error[E0432]: unresolved import `neovm_eval::DetachedIntegerWidthActivation`
+ --> tests/pentry_e2_loan_ui/receipt_integer_width_is_private.rs
+  |
+  | use neovm_eval::DetachedIntegerWidthActivation;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `DetachedIntegerWidthActivation` in the root

@@ -10,6 +10,7 @@ fn registry_spec(name: &str) -> FontSpecEntry {
         weight: None,
         slant: None,
         width: None,
+        otf: None,
         definition: None,
     })
 }
@@ -37,27 +38,6 @@ fn family_only_cjk_rule_is_a_rendering_candidate_without_a_registry() {
             if spec.family == Some(intern("LXGWWenKai Nerd Font")))),
         "a missing registry must not discard the configured CJK rendering candidate"
     );
-}
-
-#[test]
-fn detached_capture_keeps_family_only_cjk_rendering_candidates() {
-    crate::test_utils::init_test_tracing();
-    reset_fontset_registry();
-    reset_charset_registry();
-    set_fontset_font(
-        &Value::T,
-        &Value::fixnum('中' as i64),
-        &Value::string("LXGWWenKai Nerd Font"),
-        None,
-        None,
-        None,
-        Some(&Value::NIL),
-    )
-    .expect("install the family-only fontset rule");
-    let (_, entries) = bounded_entries_for_char('中', 1)
-        .expect("rendering capture does not need charset metadata expansion");
-    assert!(matches!(&entries[..], [FontSpecEntry::Font(spec)]
-        if spec.family == Some(intern("LXGWWenKai Nerd Font")) && spec.definition.is_none()));
 }
 
 #[test]
@@ -101,6 +81,7 @@ fn font_encoding_entry_distinguishes_nil_and_explicit_repertory() {
         weight: None,
         slant: None,
         width: None,
+        otf: None,
         definition: None,
     };
 
@@ -227,6 +208,299 @@ fn partial_overlap_append_splits_ranges() {
 }
 
 #[test]
+fn update_targets_batch_matches_single_target_updates() {
+    crate::test_utils::init_test_tracing();
+    let mut data1 = FontsetData::default();
+    let mut data2 = FontsetData::default();
+
+    // Initial base ranges
+    let base_targets = vec![
+        FontsetTarget::Range(0x1000, 0x1050),
+        FontsetTarget::Range(0x2000, 0x2050),
+        FontsetTarget::Range(0x3000, 0x3050),
+    ];
+    for t in &base_targets {
+        data1.update_target(t.clone(), registry_spec("base"), FontsetAddMode::Overwrite);
+    }
+    data2.update_targets(
+        base_targets.clone(),
+        registry_spec("base"),
+        FontsetAddMode::Overwrite,
+    );
+
+    // Apply multiple overlapping and new ranges with Append
+    let update_targets = vec![
+        FontsetTarget::Range(0x1020, 0x1040), // partial overlap
+        FontsetTarget::Range(0x1045, 0x1060), // partial overlap extending past end
+        FontsetTarget::Range(0x2000, 0x2050), // exact overlap
+        FontsetTarget::Range(0x2500, 0x2550), // disjoint new range
+        FontsetTarget::Range(0x3010, 0x3020), // sub-range
+    ];
+
+    for t in &update_targets {
+        data1.update_target(t.clone(), registry_spec("extra"), FontsetAddMode::Append);
+    }
+    data2.update_targets(
+        update_targets,
+        registry_spec("extra"),
+        FontsetAddMode::Append,
+    );
+
+    // Verify both produce identical entries across sampled points
+    let probe_points = [
+        0x1000, 0x1019, 0x1020, 0x1030, 0x1040, 0x1041, 0x1045, 0x1050, 0x1055, 0x1060, 0x1061,
+        0x2000, 0x2025, 0x2050, 0x2051, 0x2500, 0x2525, 0x2550, 0x2551, 0x3000, 0x3009, 0x3010,
+        0x3015, 0x3020, 0x3021, 0x3050,
+    ];
+
+    for &cp in &probe_points {
+        assert_eq!(
+            data1.specific_entries_for_char(cp),
+            data2.specific_entries_for_char(cp),
+            "Mismatch at codepoint {cp:#x}"
+        );
+    }
+}
+
+#[test]
+fn update_targets_batch_large_fragmented_ranges() {
+    crate::test_utils::init_test_tracing();
+    let mut data = FontsetData::default();
+    // Simulate 4,000 non-contiguous ranges (like japanese-jisx0208)
+    let targets: Vec<FontsetTarget> = (0..4000)
+        .map(|i| FontsetTarget::Range(i * 10, i * 10 + 5))
+        .collect();
+
+    data.update_targets(targets, registry_spec("cjk"), FontsetAddMode::Overwrite);
+
+    assert_eq!(
+        data.specific_entries_for_char(25 * 10 + 2),
+        vec![registry_spec("cjk")]
+    );
+    assert_eq!(data.specific_entries_for_char(25 * 10 + 7), Vec::new());
+}
+
+/// Both fontsets give every code point in `0..=last` the same entries, and
+/// they share one fallback chain.
+fn assert_same_fontset_lookup(sequential: &FontsetData, batched: &FontsetData, last: u32) {
+    for code in 0..=last {
+        assert_eq!(
+            sequential.specific_entries_for_char(code),
+            batched.specific_entries_for_char(code),
+            "specific entries differ at {code:#x}"
+        );
+    }
+    assert_eq!(
+        sequential
+            .fallback
+            .as_ref()
+            .map(|entries| entries.to_original_entries()),
+        batched
+            .fallback
+            .as_ref()
+            .map(|entries| entries.to_original_entries()),
+        "fallback entries differ"
+    );
+}
+
+fn apply_one_target_at_a_time(
+    data: &mut FontsetData,
+    targets: &[FontsetTarget],
+    entry: &FontSpecEntry,
+    add: FontsetAddMode,
+) {
+    for target in targets {
+        data.update_target(target.clone(), entry.clone(), add);
+    }
+}
+
+#[test]
+fn update_targets_batch_merges_unsorted_overlapping_and_adjacent_overwrites() {
+    crate::test_utils::init_test_tracing();
+    let mut sequential = FontsetData::default();
+    sequential.update_target(
+        FontsetTarget::Range(0x20, 0x60),
+        registry_spec("base"),
+        FontsetAddMode::Overwrite,
+    );
+    let mut batched = sequential.clone();
+    // Unsorted; 0x40..=0x4F touches 0x50..=0x58 and 0x45..=0x55 overlaps both.
+    let targets = vec![
+        FontsetTarget::Range(0x50, 0x58),
+        FontsetTarget::Range(0x10, 0x12),
+        FontsetTarget::Range(0x40, 0x4F),
+        FontsetTarget::Range(0x45, 0x55),
+    ];
+    apply_one_target_at_a_time(
+        &mut sequential,
+        &targets,
+        &registry_spec("new"),
+        FontsetAddMode::Overwrite,
+    );
+    batched.update_targets(targets, registry_spec("new"), FontsetAddMode::Overwrite);
+
+    let new = vec![registry_spec("new")];
+    let base = vec![registry_spec("base")];
+    for (code, expected) in [
+        (0x0F, Vec::new()),
+        (0x10, new.clone()),
+        (0x12, new.clone()),
+        (0x13, Vec::new()),
+        (0x20, base.clone()),
+        (0x3F, base.clone()),
+        (0x40, new.clone()),
+        (0x4F, new.clone()),
+        (0x50, new.clone()),
+        (0x58, new.clone()),
+        (0x59, base.clone()),
+        (0x60, base),
+        (0x61, Vec::new()),
+    ] {
+        assert_eq!(
+            batched.specific_entries_for_char(code),
+            expected,
+            "{code:#x}"
+        );
+    }
+    assert_same_fontset_lookup(&sequential, &batched, 0x80);
+}
+
+/// GNU `set-fontset-font` calls `fontset_add` once per target range, so a
+/// character two targets cover gets an `append`ed or `prepend`ed font twice.
+#[test]
+fn update_targets_batch_repeats_append_and_prepend_for_overlapping_targets() {
+    crate::test_utils::init_test_tracing();
+    let base = registry_spec("base");
+    let extra = registry_spec("extra");
+    for (add, twice) in [
+        (
+            FontsetAddMode::Append,
+            vec![base.clone(), extra.clone(), extra.clone()],
+        ),
+        (
+            FontsetAddMode::Prepend,
+            vec![extra.clone(), extra.clone(), base.clone()],
+        ),
+    ] {
+        let once = match add {
+            FontsetAddMode::Append => vec![base.clone(), extra.clone()],
+            FontsetAddMode::Prepend => vec![extra.clone(), base.clone()],
+            FontsetAddMode::Overwrite => unreachable!("only the accumulating modes"),
+        };
+        let mut sequential = FontsetData::default();
+        sequential.update_target(
+            FontsetTarget::Range(0x40, 0x60),
+            base.clone(),
+            FontsetAddMode::Overwrite,
+        );
+        let mut batched = sequential.clone();
+        let targets = vec![
+            FontsetTarget::Range(0x4C, 0x58),
+            FontsetTarget::Range(0x48, 0x50),
+        ];
+        apply_one_target_at_a_time(&mut sequential, &targets, &extra, add);
+        batched.update_targets(targets, extra.clone(), add);
+
+        for (code, expected) in [
+            (0x47, vec![base.clone()]),
+            (0x48, once.clone()),
+            (0x4B, once.clone()),
+            (0x4C, twice.clone()),
+            (0x50, twice.clone()),
+            (0x51, once.clone()),
+            (0x58, once.clone()),
+            (0x59, vec![base.clone()]),
+        ] {
+            assert_eq!(
+                batched.specific_entries_for_char(code),
+                expected,
+                "{add:?} at {code:#x}"
+            );
+        }
+        assert_same_fontset_lookup(&sequential, &batched, 0x80);
+    }
+}
+
+/// A fixed linear congruential sequence keeps every generated case reproducible.
+struct CaseSequence(u64);
+
+impl CaseSequence {
+    fn below(&mut self, bound: u64) -> u64 {
+        self.0 = self
+            .0
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        (self.0 >> 33) % bound
+    }
+
+    fn pick<T: Clone>(&mut self, items: &[T]) -> T {
+        items[self.below(items.len() as u64) as usize].clone()
+    }
+
+    /// `count` targets over `0..=last`, mostly short ranges that often
+    /// overlap or touch, now and then the fallback.
+    fn targets(&mut self, count: u64, last: u32) -> Vec<FontsetTarget> {
+        (0..count)
+            .map(|_| {
+                if self.below(10) == 0 {
+                    FontsetTarget::Fallback
+                } else {
+                    let from = self.below(u64::from(last) + 1) as u32;
+                    let to = (from + self.below(24) as u32).min(last);
+                    FontsetTarget::Range(from, to)
+                }
+            })
+            .collect()
+    }
+}
+
+/// The batch is only a faster spelling of one `update_target` per target,
+/// whatever the targets' order, overlap, adjacency, or mode.
+#[test]
+fn update_targets_batch_matches_one_target_at_a_time_for_generated_targets() {
+    crate::test_utils::init_test_tracing();
+    let modes = [
+        FontsetAddMode::Overwrite,
+        FontsetAddMode::Append,
+        FontsetAddMode::Prepend,
+    ];
+    let entries = [
+        registry_spec("a"),
+        registry_spec("b"),
+        registry_spec("c"),
+        FontSpecEntry::ExplicitNone,
+    ];
+    let last = 0x7F;
+    let mut sequence = CaseSequence(0x808);
+    for case in 0..300 {
+        let mut sequential = FontsetData::default();
+        let mut batched = FontsetData::default();
+        for _ in 0..sequence.below(5) {
+            let count = 1 + sequence.below(4);
+            let targets = sequence.targets(count, last);
+            let entry = sequence.pick(&entries);
+            let add = sequence.pick(&modes);
+            apply_one_target_at_a_time(&mut sequential, &targets, &entry, add);
+            apply_one_target_at_a_time(&mut batched, &targets, &entry, add);
+        }
+        let count = 1 + sequence.below(8);
+        let targets = sequence.targets(count, last);
+        let entry = sequence.pick(&entries);
+        let add = sequence.pick(&modes);
+        apply_one_target_at_a_time(&mut sequential, &targets, &entry, add);
+        batched.update_targets(targets.clone(), entry, add);
+        for code in 0..=last {
+            assert_eq!(
+                sequential.specific_entries_for_char(code),
+                batched.specific_entries_for_char(code),
+                "case {case}: {add:?} {targets:?} differs at {code:#x}"
+            );
+        }
+        assert_same_fontset_lookup(&sequential, &batched, last);
+    }
+}
+
+#[test]
 fn fallback_entries_append_after_specific_entries() {
     crate::test_utils::init_test_tracing();
     let mut data = FontsetData::default();
@@ -260,6 +534,7 @@ fn encoding_charset_filters_informational_patterns() {
             weight: None,
             slant: None,
             width: None,
+            otf: None,
             definition: Some(FontDefinitionMetadata {
                 encoding: intern("iso-8859-1"),
                 repertory: Some(FontRepertory::Charset(intern("iso-8859-1"))),
@@ -276,6 +551,7 @@ fn encoding_charset_filters_informational_patterns() {
             weight: None,
             slant: None,
             width: None,
+            otf: None,
             definition: Some(FontDefinitionMetadata {
                 encoding: intern("unicode-bmp"),
                 repertory: Some(FontRepertory::Charset(intern("unicode-bmp"))),
@@ -331,6 +607,7 @@ fn encoding_subset_charset_filters_informational_patterns() {
             weight: None,
             slant: None,
             width: None,
+            otf: None,
             definition: Some(FontDefinitionMetadata {
                 encoding: intern("iso-8859-2-test"),
                 repertory: Some(FontRepertory::Charset(intern("iso-8859-2-test"))),
@@ -347,6 +624,7 @@ fn encoding_subset_charset_filters_informational_patterns() {
             weight: None,
             slant: None,
             width: None,
+            otf: None,
             definition: Some(FontDefinitionMetadata {
                 encoding: intern("unicode-bmp"),
                 repertory: Some(FontRepertory::Charset(intern("unicode-bmp"))),
@@ -403,18 +681,6 @@ fn repertory_target_ranges_support_subset_charsets() {
         ranges
             .iter()
             .any(|(from, to)| *from <= 0x017D && 0x017D <= *to)
-    );
-}
-
-#[test]
-fn repertory_target_ranges_support_symbol_backed_charsets() {
-    crate::test_utils::init_test_tracing();
-    let ranges = repertory_target_ranges(&FontRepertory::Charset(intern("unicode-bmp")))
-        .expect("symbol-backed repertory ranges");
-    assert!(
-        ranges
-            .iter()
-            .any(|(from, to)| *from <= ('好' as u32) && ('好' as u32) <= *to)
     );
 }
 
@@ -685,6 +951,7 @@ fn fontset_registry_pdump_uses_symbol_identity_for_charset_repertories() {
                         weight: None,
                         slant: None,
                         width: None,
+                        otf: None,
                         definition: Some(FontDefinitionMetadata {
                             encoding: repertory_sym,
                             repertory: Some(FontRepertory::Charset(repertory_sym)),
@@ -763,50 +1030,6 @@ fn resolve_fontset_name_maps_a_font_name_to_the_default_fontset() {
     assert_eq!(
         resolve_fontset_name_arg(&Value::string(fontset_name)).unwrap(),
         fontset_name
-    );
-}
-
-#[test]
-fn bounded_fontset_capture_preserves_order_and_stops_at_explicit_none() {
-    let mut data = FontsetData::default();
-    data.fallback = Some(
-        vec![
-            registry_spec("first"),
-            FontSpecEntry::ExplicitNone,
-            registry_spec("unreachable"),
-        ]
-        .into(),
-    );
-    assert_eq!(
-        data.bounded_entries_for_char('好' as u32, 2),
-        Some(vec![registry_spec("first"), FontSpecEntry::ExplicitNone])
-    );
-    assert_eq!(data.bounded_entries_for_char('好' as u32, 1), None);
-}
-
-#[test]
-fn bounded_fontset_capture_omits_repertory_metadata_without_expansion() {
-    let mut data = FontsetData::default();
-    let FontSpecEntry::Font(mut spec) = registry_spec("fixture") else {
-        unreachable!()
-    };
-    spec.definition = Some(FontDefinitionMetadata {
-        encoding: intern("ascii"),
-        repertory: Some(FontRepertory::CharTableRanges(vec![(0, 100); 128])),
-    });
-    data.fallback = Some(vec![FontSpecEntry::Font(spec.clone())].into());
-    assert_eq!(
-        data.bounded_entries_for_char('好' as u32, 1),
-        Some(vec![registry_spec("fixture")])
-    );
-    spec.definition = Some(FontDefinitionMetadata {
-        encoding: intern("ascii"),
-        repertory: Some(FontRepertory::Charset(intern("ascii"))),
-    });
-    data.fallback = Some(vec![FontSpecEntry::Font(spec)].into());
-    assert_eq!(
-        data.bounded_entries_for_char('好' as u32, 1),
-        Some(vec![registry_spec("fixture")])
     );
 }
 
@@ -970,4 +1193,54 @@ fn resetting_a_charset_registry_keeps_the_published_order() {
         registry_names(&matching_entries_for_char('é')),
         ["iso10646-1", "iso8859-1"]
     );
+}
+
+#[test]
+fn stored_otf_spec_preserves_gnu_langsys_and_feature_shape() {
+    crate::test_utils::init_test_tracing();
+    let spec = parse_stored_otf_spec(&Value::list(vec![
+        Value::symbol("arab"),
+        Value::symbol("URD "),
+        Value::list(vec![
+            Value::symbol("init"),
+            Value::NIL,
+            Value::symbol("liga"),
+        ]),
+        Value::NIL,
+    ]))
+    .expect("valid :otf shape");
+    assert_eq!(spec.script, "arab");
+    assert_eq!(spec.langsys, StoredOtfLangsys::Named("URD ".to_owned()));
+    assert_eq!(
+        spec.gsub,
+        Some(StoredOtfFeatures {
+            required: vec!["init".to_owned()],
+            forbidden: vec!["liga".to_owned()],
+        })
+    );
+    assert!(spec.gpos.is_none());
+}
+
+#[test]
+fn stored_otf_spec_marks_non_symbol_langsys_unmatchable() {
+    crate::test_utils::init_test_tracing();
+    // GNU's validator re-tests XCAR (val) for the second slot, so a string
+    // reaches font_check_otf; `assq_no_quit` can never `eq` it to a tag
+    // symbol, so every feature requirement rejects the font.
+    let spec = parse_stored_otf_spec(&Value::list(vec![
+        Value::symbol("arab"),
+        Value::string("URD "),
+        Value::list(vec![Value::symbol("init")]),
+    ]))
+    .expect("the validator quirk reaches the store");
+    assert_eq!(spec.langsys, StoredOtfLangsys::Unmatchable);
+    assert!(spec.gsub.is_some());
+
+    let nil_langsys = parse_stored_otf_spec(&Value::list(vec![
+        Value::symbol("arab"),
+        Value::NIL,
+        Value::list(vec![Value::symbol("init")]),
+    ]))
+    .expect("nil LANGSYS means the default langsys");
+    assert_eq!(nil_langsys.langsys, StoredOtfLangsys::Default);
 }

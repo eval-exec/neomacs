@@ -1378,7 +1378,7 @@ fn make_terminal_frame_on_existing_terminal(
     terminal_id: u64,
 ) -> EvalResult {
     let parameters = args.first().copied().unwrap_or(Value::NIL);
-    let (width, height) = eval
+    let stored = eval
         .frame_manager()
         .selected_frame()
         .filter(|frame| frame.terminal_id == terminal_id)
@@ -1394,6 +1394,23 @@ fn make_terminal_frame_on_existing_terminal(
                 .map(|frame| (frame.width, frame.height))
         })
         .unwrap_or((80, 25));
+    // GNU sizes a root frame from the terminal, not from the selected frame
+    // (`frame.c:1850-1863`). A child keeps its parameter / parent geometry.
+    let parent = live_parent_frame_parameter(eval, parameters);
+    let (menu, tab) = if parent.is_some() {
+        (0, 0)
+    } else {
+        (
+            tty_root_bar_lines(eval, parameters, "menu-bar-lines", "menu-bar-mode"),
+            tty_root_bar_lines(eval, parameters, "tab-bar-lines", "tab-bar-mode"),
+        )
+    };
+    let (width, height) = if parent.is_some() {
+        (stored.0.max(1), stored.1.max(1))
+    } else {
+        let (cols, rows) = root_tty_winsize(terminal_id, stored);
+        clamped_tty_root_cells(cols, rows, menu, tab)
+    };
     let (frames, buffers) = eval.frame_manager_and_buffers_mut();
     let frame = make_frame_plain_on_terminal(frames, buffers, args, terminal_id, width, height)?;
     let frame_id = FrameId(frame.as_frame_id().expect("make-frame returned a frame"));
@@ -1411,14 +1428,105 @@ fn make_terminal_frame_on_existing_terminal(
         ));
     }
     let displays_chrome = !eval.noninteractive();
+    let Some(size) = super::terminal::pure::TtyFrameSize::new(width, height) else {
+        let _ = eval.frame_manager_mut().delete_frame(frame_id);
+        return Err(signal(
+            "error",
+            vec![Value::string("Screen size is too small")],
+        ));
+    };
     let (frames, buffers) = eval.frame_manager_and_buffers_mut();
-    if let Some(frame) = frames.get_mut(frame_id) {
-        let size = super::terminal::pure::TtyFrameSize::new(width, height)
-            .expect("live terminal frames have nonzero dimensions");
+    if let Some(frame) = frames.get_mut(frame_id)
+        && frame_is_top_level_non_window(frame)
+    {
+        // `make_terminal_frame` seeds the bars from the modes before
+        // `adjust_frame_size` (`frame.c:1602-1607`). An explicit alist entry
+        // already stored by `make_frame_plain_on_terminal` wins.
+        if alist_int_parameter(parameters, "menu-bar-lines").is_none() {
+            frame.set_parameter(
+                FrameParam::MenuBarLines.symbol(),
+                Value::fixnum(i64::from(menu)),
+            );
+        }
+        if alist_int_parameter(parameters, "tab-bar-lines").is_none() {
+            frame.set_parameter(
+                FrameParam::TabBarLines.symbol(),
+                Value::fixnum(i64::from(tab)),
+            );
+        }
+        frame.sync_menu_bar_height_from_parameters();
+        frame.sync_tab_bar_height_from_parameters();
         apply_terminal_viewport_to_tty_frame(frame, buffers, size, displays_chrome);
     }
     super::xfaces::realization::initialize_new_terminal_frame_faces(eval, frame_id, parameters)?;
     Ok(frame)
+}
+
+/// Total character cells of a root tty frame after GNU's safe clamp.
+///
+/// `adjust_frame_size` with inhibit 5 (`frame.c:860-927`) never rejects a
+/// zero winsize. The TTY arm of `frame_windows_min_size` (`frame.c:562-570`)
+/// floors the text height at menu + tab + mode line + echo area, and
+/// `window-safe-min-width` is 2. The returned height is the whole terminal:
+/// that text floor plus the top margin. Attested on a 0x0 pty with the menu
+/// bar on: `frame-width` 2, `frame-height` 3 (terminal rows 4). An 80x24
+/// winsize stays 80 by 24, so `frame-height` is 23.
+fn clamped_tty_root_cells(cols: u32, rows: u32, menu: u32, tab: u32) -> (u32, u32) {
+    const MIN_COLS: u32 = 2;
+    let mode_line = 1u32;
+    let echo = 1u32;
+    let top = menu.saturating_add(tab);
+    let text_floor = top.saturating_add(mode_line).saturating_add(echo);
+    let total_floor = text_floor.saturating_add(top);
+    (cols.max(MIN_COLS), rows.max(total_floor))
+}
+
+fn root_tty_winsize(terminal_id: u64, stored: (u32, u32)) -> (u32, u32) {
+    // GNU reads `get_tty_size(fileno(FRAME_TTY(f)->input))` (`frame.c:1861`).
+    // `(0, 0)` is that answer. A terminal with no query, no host fd, and no
+    // open size has nothing else to read, so the frame cells remain.
+    super::terminal::pure::terminal_winsize_cells(terminal_id).unwrap_or(stored)
+}
+
+fn tty_root_bar_lines(
+    eval: &neovm_eval::emacs_core::eval::Context,
+    params: Value,
+    parameter: &str,
+    mode: &str,
+) -> u32 {
+    if let Some(lines) = alist_int_parameter(params, parameter) {
+        return lines.max(0) as u32;
+    }
+    u32::from(
+        eval.builtin_var_value_by_name(mode)
+            .is_some_and(|value| value.is_truthy()),
+    )
+}
+
+fn alist_int_parameter(params: Value, name: &str) -> Option<i64> {
+    let items = neovm_value::value::list_to_vec(&params)?;
+    let key = Value::from_sym_id(intern(name));
+    for item in items {
+        if item.is_cons() && item.cons_car() == key {
+            return item.cons_cdr().as_int();
+        }
+    }
+    None
+}
+
+fn live_parent_frame_parameter(
+    eval: &neovm_eval::emacs_core::eval::Context,
+    params: Value,
+) -> Option<FrameId> {
+    let items = neovm_value::value::list_to_vec(&params)?;
+    let key = Value::from_sym_id(intern("parent-frame"));
+    for item in items {
+        if item.is_cons() && item.cons_car() == key {
+            let id = FrameId(item.cons_cdr().as_frame_id()?);
+            return eval.frame_manager().get(id).is_some().then_some(id);
+        }
+    }
+    None
 }
 
 /// Apply the physical terminal viewport only to its top-level frame.
@@ -2392,7 +2500,12 @@ pub fn builtin_framep(
         _ => return Ok(Value::NIL),
     };
     let Some(frame) = eval.frame_manager().get(FrameId(id)) else {
-        return Ok(Value::NIL);
+        // A deleted frame is gone from the live map. GNU still answers
+        // `framep` from the output method `delete_frame` left in place.
+        return Ok(eval
+            .frame_manager()
+            .deleted_frame_output(FrameId(id))
+            .unwrap_or(Value::NIL));
     };
     // GNU `Fframep` (frame.c) returns the frame's intrinsic output method
     // (output_pgtk -> `pgtk`, output_x_window -> `x`, output_termcap /
@@ -2406,7 +2519,11 @@ pub fn builtin_framep(
     Ok(frame.effective_window_system().unwrap_or(Value::T))
 }
 
-/// `(frame-live-p OBJ)` -> t if OBJ is a live frame object or frame id.
+/// `(frame-live-p OBJ)` -> the `framep` value of a live frame, else nil.
+///
+/// GNU `Fframe_live_p` (frame.c:334-337) returns `Fframep` when the object
+/// is a live frame and nil otherwise. A termcap frame is `t`. A GUI frame
+/// is its output-method symbol, the same value `builtin_framep` returns.
 #[doc(hidden)]
 pub fn builtin_frame_live_p(
     eval: &mut neovm_eval::emacs_core::eval::Context,
@@ -2424,7 +2541,10 @@ pub fn builtin_frame_live_p(
         ValueKind::Veclike(VecLikeType::Frame) => args[0].as_frame_id().unwrap(),
         _ => return Ok(Value::NIL),
     };
-    Ok(Value::bool_val(frames.get(FrameId(id)).is_some()))
+    let Some(frame) = frames.get(FrameId(id)) else {
+        return Ok(Value::NIL);
+    };
+    Ok(frame.effective_window_system().unwrap_or(Value::T))
 }
 
 pub(crate) fn live_frame_buffer_parameter_ids(

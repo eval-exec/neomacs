@@ -14,7 +14,7 @@ pub mod header;
 pub mod mutate;
 #[doc(hidden)]
 pub mod pdump_image;
-pub mod symbol_marks;
+pub(crate) mod symbol_marks;
 pub mod transport;
 pub mod value;
 pub use value::SymbolMode;

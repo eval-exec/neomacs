@@ -206,7 +206,7 @@ pub const fn assert_valid(entries: &[SchemaEntry<'_>]) {
 /// typed so a Sealed entry states *which* authority E1 grants it; there is no
 /// boolean "is sealed" flag and no string-keyed authority vocabulary.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SealedAuthority {
+pub(crate) enum SealedAuthority {
     /// One field of one cons cell (read).
     ConsFieldRead,
     /// One field of one cons cell (write, with the generational barrier).
@@ -223,7 +223,7 @@ pub enum SealedAuthority {
 
 /// The two dispositions of the Return opcode (E4 peer required change 1).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ReturnDisposition {
+pub(crate) enum ReturnDisposition {
     OwnerLocal,
     #[allow(dead_code)]
     // E4's executor selects this arm at runtime; the cold catalog admits the split.
@@ -232,7 +232,7 @@ pub enum ReturnDisposition {
 
 /// The Plain variable opcode access admitted through an `EffectivePlainKey`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PlainVarAccess {
+pub(crate) enum PlainVarAccess {
     Ref,
     Set,
     Bind,
@@ -241,7 +241,7 @@ pub enum PlainVarAccess {
 
 /// The operand split of the R6 numeric arithmetic set.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ArithOperands {
+pub(crate) enum ArithOperands {
     Numeric,
     #[allow(dead_code)] // R6: a marker operand escapes; the executor selects this arm at runtime.
     MarkerInvolved,
@@ -250,7 +250,7 @@ pub enum ArithOperands {
 /// The P3 canonical parallel class of one E1 entry. World is the default for
 /// every registration that carries no explicit evidence-bearing declaration.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ParallelClass {
+pub(crate) enum ParallelClass {
     World,
     Sealed(SealedAuthority),
     Scalar,
@@ -259,7 +259,7 @@ pub enum ParallelClass {
 /// The typed per-entry variant refining a World-class P3 entry (E4 R1/R6).
 /// The canonical P3 verdict stays World; the variant names the executor split.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ParallelVariant {
+pub(crate) enum ParallelVariant {
     Return(ReturnDisposition),
     PlainVar(PlainVarAccess),
     Arith(ArithOperands),
@@ -269,7 +269,7 @@ pub enum ParallelVariant {
 /// `kind`/`name` must match a scanned registration. Aliases never appear here:
 /// they inherit their resolved target's class, exactly as in P3.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ParallelDeclaration {
+pub(crate) struct ParallelDeclaration {
     pub kind: CatalogKind,
     pub name: &'static str,
     pub class: ParallelClass,
@@ -278,7 +278,7 @@ pub struct ParallelDeclaration {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ParallelSchemaError {
+pub(crate) enum ParallelSchemaError {
     /// Every claim carries a source-review evidence note.
     MissingEvidence,
     /// A World-class declaration must carry a typed variant; otherwise it
@@ -296,7 +296,7 @@ pub enum ParallelSchemaError {
 /// (names exist, designations, exact counts) belong to the architecture gate,
 /// which has the scanned registrations; this const check is shared with the
 /// source scanner and needs no catalog context.
-pub const fn validate_parallel(
+pub(crate) const fn validate_parallel(
     declarations: &[ParallelDeclaration],
 ) -> Result<(), ParallelSchemaError> {
     let mut current = 0;
@@ -330,7 +330,7 @@ pub const fn validate_parallel(
 
 /// Const failure messages are also the parallel architecture-gate diagnostics.
 #[allow(dead_code)] // Runtime const catalogs/fixtures; the scanner calls validate_parallel.
-pub const fn assert_parallel_valid(declarations: &[ParallelDeclaration]) {
+pub(crate) const fn assert_parallel_valid(declarations: &[ParallelDeclaration]) {
     match validate_parallel(declarations) {
         Ok(()) => {}
         Err(ParallelSchemaError::MissingEvidence) => {
@@ -368,7 +368,7 @@ pub const fn assert_parallel_valid(declarations: &[ParallelDeclaration]) {
 /// fast-path re-entrancy: `mod` is `World` for admission and `CannotReenter`
 /// for the JIT's baked arithmetic intrinsic.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum FastPathReentry {
+pub(crate) enum FastPathReentry {
     /// Machine arithmetic over values already in registers: cannot call
     /// Lisp, grow eval depth, allocate or serve attention at the site.
     /// Signaling (`arith-error`) exits compiled code through the slow path.
@@ -384,7 +384,7 @@ pub enum FastPathReentry {
 /// lowering asks the generated table, and the pin test compares the JIT's
 /// own inlining set against it. Ascending name order; the generated lookup
 /// binary-searches its sorted projection.
-pub const INLINED_NATIVE_OPS: [&str; 5] = ["logand", "logior", "lognot", "logxor", "mod"];
+pub(crate) const INLINED_NATIVE_OPS: [&str; 5] = ["logand", "logior", "lognot", "logxor", "mod"];
 
 /// The executor arm of one admitted entry (E4-DESIGN §2/§3.1).
 ///
@@ -392,7 +392,7 @@ pub const INLINED_NATIVE_OPS: [&str; 5] = ["logand", "logior", "lognot", "logxor
 /// names the typed R1/R6 refinement whose runtime guard may still select the
 /// World escape. A table miss is therefore exactly `World(WorldSplit::Escape)`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ParallelArm {
+pub(crate) enum ParallelArm {
     /// Runs inline in the executor: no authority, no heap payload access.
     Scalar,
     /// Runs through the typed single-object sealed authority.
@@ -404,7 +404,7 @@ pub enum ParallelArm {
 
 /// The typed disposition of a World-class entry.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum WorldSplit {
+pub(crate) enum WorldSplit {
     /// Always takes the serial escape (every unlisted registration).
     Escape,
     /// `Op::Return`: owner-local unwind, or serial cleanup when the frame
@@ -419,7 +419,7 @@ pub enum WorldSplit {
 
 /// One generated dispatch row: the arm and the folded re-entry axis.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DispatchSlot {
+pub(crate) struct DispatchSlot {
     pub arm: ParallelArm,
     pub reentry: FastPathReentry,
 }
@@ -428,7 +428,7 @@ pub struct DispatchSlot {
 /// canonical World entry only (the same rule `validate_parallel` enforces on
 /// declarations; the gate applies it to resolved rows too).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum DispatchShapeError {
+pub(crate) enum DispatchShapeError {
     VariantOnNonWorldClass,
 }
 
@@ -436,7 +436,7 @@ pub enum DispatchShapeError {
 /// arm. The generated table, the closed-world gate and the E4 accessors share
 /// this function; an impossible combination is a typed error, never a
 /// silently chosen arm.
-pub const fn dispatch_arm(
+pub(crate) const fn dispatch_arm(
     class: ParallelClass,
     variant: Option<ParallelVariant>,
 ) -> Result<ParallelArm, DispatchShapeError> {

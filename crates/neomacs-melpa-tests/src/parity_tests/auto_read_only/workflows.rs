@@ -105,7 +105,7 @@ fn auto_read_only_default_user_emacs_directory_pattern_protects_installed_packag
            (list
             (file-name-nondirectory
              buffer-file-name)
-            (file-in-directory-p
+            (neomacs-melpa-path-inside-p
              buffer-file-name
              user-emacs-directory)
             (mapcar

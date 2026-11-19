@@ -139,7 +139,7 @@ const PRELUDE: &str = r####"
 
 (defun node405-test-write-file (root relative contents)
   (let ((path (expand-file-name relative root)))
-    (unless (file-in-directory-p path root)
+    (unless (neomacs-melpa-path-inside-p path root)
       (error "Unsafe Node.js REPL fixture path: %s" path))
     (make-directory (file-name-directory path) t)
     (with-temp-buffer
@@ -151,7 +151,7 @@ const PRELUDE: &str = r####"
 (defun node405-test-manifest (root)
   (mapcar
    (lambda (path)
-     (unless (and (file-in-directory-p path root)
+     (unless (and (neomacs-melpa-path-inside-p path root)
                   (file-regular-p path) (not (file-symlink-p path)))
        (error "Unsafe Node.js REPL fixture: %s" path))
      (list (file-relative-name path root)

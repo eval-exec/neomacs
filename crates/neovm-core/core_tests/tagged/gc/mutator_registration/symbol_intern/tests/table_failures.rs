@@ -54,7 +54,7 @@ fn table_limit(limit: Limit) {
                 let before = run.symbol_table_census_for_test().unwrap();
                 let charge = run.hot_bytes_since_gc_for_test().unwrap();
                 assert_eq!(
-                    intern_retry(run, &homes.name, &mut homes.dst),
+                    intern_once(run, &homes.name, &mut homes.dst),
                     Err(InitialInternError::Authority(RegistrationError::Capacity))
                 );
                 let canonical_after = fresh_registry_facts_for_test(heap, id, name, &spelling);
@@ -115,7 +115,7 @@ fn table_limit(limit: Limit) {
             // restoring this ledger's production limits issues exactly one ID.
             run.override_symbol_table_limits_for_test(TableLimitProbe::Production)
                 .unwrap();
-            intern_retry(run, &homes.name, &mut homes.dst).unwrap();
+            intern_once(run, &homes.name, &mut homes.dst).unwrap();
             let committed = fresh_registry_facts_for_test(heap, id, name, &spelling);
             assert_eq!(committed.epoch(), canonical_before.epoch() + 1);
             assert_eq!(committed.symbols(), canonical_before.symbols() + 1);
@@ -199,7 +199,7 @@ fn nmjit_n3_actual_post_table_publication_poison_retains_both_descriptors() {
                     )
                     .unwrap();
                     assert_eq!(
-                        intern_retry(&mut run, &name, &mut dst),
+                        intern_once(&mut run, &name, &mut dst),
                         Err(InitialInternError::Authority(RegistrationError::Poisoned))
                     );
                     let now = run.symbol_table_census_for_test().unwrap();

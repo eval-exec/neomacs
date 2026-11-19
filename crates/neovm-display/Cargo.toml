@@ -42,7 +42,6 @@ libc.workspace = true
 neomacs-display-protocol.workspace = true
 neomacs-video-model.workspace = true
 num_enum.workspace = true
-regex.workspace = true
 rustc-hash.workspace = true
 smallvec.workspace = true
 static_assertions.workspace = true

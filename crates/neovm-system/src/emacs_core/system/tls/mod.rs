@@ -26,7 +26,7 @@ pub fn gnutls_available_capabilities() -> &'static [&'static str] {
 }
 
 #[doc(hidden)]
-pub fn builtin_neomacs_tls_available_p(args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_neomacs_tls_available_p(args: Vec<Value>) -> EvalResult {
     expect_args("neomacs-tls-available-p", &args, 0)?;
     Ok(Value::T)
 }

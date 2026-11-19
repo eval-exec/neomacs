@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 
 mod model;
+#[path = "rendezvous/resume_drain.rs"]
+mod resume_drain;
 mod support;
 
 use loom::sync::Arc;

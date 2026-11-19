@@ -27,7 +27,9 @@ use super::*;
 use crate::symbol::FunctionCellSnapshot;
 use crate::tagged::gc::mark_word::MarkWord;
 use crate::tagged::value::TaggedValue as Value;
-pub use call::{FunctionActivation, FunctionCallCache, FunctionSelection, FunctionStep};
+pub use call::FunctionCallCache;
+pub use call::FunctionStep;
+pub use call::{FunctionActivation, FunctionSelection};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FunctionError {
@@ -107,7 +109,7 @@ impl<'era> RunAccess<'_, 'era> {
 
     /// Test the direct function cell without resolving aliases or executing it.
     /// The canonical boolean reaches the resident home before reader release.
-    pub fn sym_fboundp_into(
+    pub(crate) fn sym_fboundp_into(
         &mut self,
         symbol: &SymbolHandle,
         dst: &mut OwnerRootSlot<'era>,

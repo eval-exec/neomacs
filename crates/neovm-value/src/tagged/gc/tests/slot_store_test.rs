@@ -6,7 +6,8 @@
 
 use super::*;
 use crate::tagged::header::{AtomicTaggedValue, LambdaObj, MacroObj, RecordObj, VectorScanEntry};
-use crate::tagged::mutate::{set_closure_slot, set_record_slot};
+use crate::tagged::mutate::b13_test_hooks::set_closure_slot;
+use crate::tagged::mutate::set_record_slot;
 
 fn slot_base(value: TaggedValue) -> (*const AtomicTaggedValue, usize) {
     let ptr = value.as_veclike_ptr().expect("a veclike");

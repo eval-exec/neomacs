@@ -175,12 +175,6 @@ impl ChunkSide {
         unsafe { (*stamps)[slot].store(epoch, Ordering::Release) };
         true
     }
-
-    /// Whether this chunk holds a stamp array (tests: the lazy allocation).
-    #[cfg(any(test, feature = "test-support"))]
-    pub(super) fn has_stamps(&self) -> bool {
-        !self.fn_stamps.load(Ordering::Acquire).is_null()
-    }
 }
 
 impl Drop for ChunkSide {
@@ -262,4 +256,14 @@ pub(crate) fn fn_stamps_enabled() -> bool {
     }
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| matches!(std::env::var("NEOVM_FN_STAMPS").as_deref(), Ok("1" | "on")))
+}
+
+#[cfg(test)]
+pub(crate) mod b13_test_hooks {
+    use super::*;
+    impl ChunkSide {
+        pub(crate) fn has_stamps(&self) -> bool {
+            !self.fn_stamps.load(Ordering::Acquire).is_null()
+        }
+    }
 }

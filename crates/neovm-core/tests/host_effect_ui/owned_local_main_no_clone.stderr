@@ -1,0 +1,16 @@
+error[E0277]: the trait bound `OwnedLocalMain: Clone` is not satisfied
+ --> tests/host_effect_ui/owned_local_main_no_clone.rs:7:22
+  |
+7 |     requires_clone::<owner::activation::OwnedLocalMain>();
+  |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+  |
+help: the trait `Clone` is not implemented for `OwnedLocalMain`
+ --> tests/host_effect_ui/support/../../../../neovm-eval/src/emacs_core/runtime/eval/activation.rs
+  |
+  | pub struct OwnedLocalMain {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `requires_clone`
+ --> tests/host_effect_ui/owned_local_main_no_clone.rs:4:22
+  |
+4 | fn requires_clone<T: Clone>() {}
+  |                      ^^^^^ required by this bound in `requires_clone`

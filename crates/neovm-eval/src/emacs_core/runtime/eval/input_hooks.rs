@@ -24,18 +24,18 @@ pub enum CommandInputWaitOutcome {
 }
 
 /// Apply GNU's command-loop interrupt policy to one special input event.
-pub type InterruptForInputEvent =
+pub(crate) type InterruptForInputEvent =
     fn(&mut Context, super::keyboard::InputEvent) -> Result<bool, Flow>;
 /// Whether a pending OS signal is latched.
-pub type OsSignalPending = fn() -> bool;
+pub(crate) type OsSignalPending = fn() -> bool;
 /// Take the latched termination signal, if any.
-pub type TakeTerminationSignal = fn() -> Option<i32>;
+pub(crate) type TakeTerminationSignal = fn() -> Option<i32>;
 /// Drain pending OS signals through the evaluator.
-pub type DrainPendingOsSignals = fn(&mut Context) -> Result<(), Flow>;
+pub(crate) type DrainPendingOsSignals = fn(&mut Context) -> Result<(), Flow>;
 /// The process-lifetime signal self-pipe read end for evaluator wait pollers.
-pub type SignalWakePipeReadFd = fn() -> Option<i32>;
+pub(crate) type SignalWakePipeReadFd = fn() -> Option<i32>;
 /// Drain one wake byte from the signal self-pipe.
-pub type DrainSignalWakePipe = fn(i32);
+pub(crate) type DrainSignalWakePipe = fn(i32);
 
 /// How an OS signal wakes an evaluator wait.
 ///
@@ -147,7 +147,7 @@ pub fn signal_wake_pipe_read_fd() -> Option<i32> {
 }
 
 /// Drain one wake byte from the signal self-pipe. An absent source has no byte.
-pub fn drain_signal_wake_pipe(fd: i32) {
+pub(crate) fn drain_signal_wake_pipe(fd: i32) {
     if let SignalWakeSource::SelfPipe { drain, .. } = input_hooks().signal_wake {
         drain(fd);
     }

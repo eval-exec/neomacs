@@ -8,12 +8,13 @@
 //! contract.
 
 use std::fs;
-use std::io;
+use std::io::{self, BufRead, BufReader, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::mpsc;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// Output resolution and compositor scale are one test environment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -474,7 +475,7 @@ pub fn start_xvfb_with_size(
 /// ("Failed to initialize SHM for the X11 output"); Mesa's software GL also
 /// loses its shared-memory present path.  Scenarios that run a compositor on
 /// this server therefore need the local socket.  The session keeps its own
-/// Xauthority cookie and a process-unique display number, so the socket below
+/// Xauthority cookie and a server-chosen display number, so the socket below
 /// /tmp/.X11-unix carries the same isolation as the TCP port.
 pub fn start_local_xvfb_with_size(
     artifact_root: &Path,
@@ -557,25 +558,145 @@ fn start_xvfb_with_transport(
     // that is the only place the X protocol puts it, and only it carries
     // MIT-SHM (see start_local_xvfb_with_size).
     fs::create_dir_all(artifact_root)?;
-    let base = 90 + (std::process::id() % 1000);
-    let mut last_err = None;
-    for offset in 0..8u32 {
-        let display_number = base + offset * 1000;
-        match start_xvfb_on(artifact_root, display_number, width, height, transport) {
-            Ok(session) => return Ok(session),
-            Err(err) => last_err = Some(err),
+    // A pid-derived display number collides when a previous server's lock is
+    // still on that number (`Server is already active for display N`).
+    // `-nolock` is ignored for non-root, so the server picks a free display.
+    start_xvfb_on(artifact_root, width, height, transport)
+}
+
+fn read_xvfb_display_number(
+    receiver: &mpsc::Receiver<(io::Result<usize>, String)>,
+    child: &mut Child,
+) -> io::Result<u32> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match receiver.try_recv() {
+            Ok((Ok(0), line)) => {
+                return Err(io::Error::other(format!(
+                    "Xvfb -displayfd returned no display number ({line:?})"
+                )));
+            }
+            Ok((Ok(_), line)) => {
+                let number = line
+                    .trim()
+                    .parse::<u32>()
+                    .map_err(|_| io::Error::other(format!("Xvfb -displayfd returned {line:?}")))?;
+                if number > u32::from(u16::MAX) - 6000 {
+                    return Err(io::Error::other(format!(
+                        "X display {number} has no TCP port"
+                    )));
+                }
+                return Ok(number);
+            }
+            Ok((Err(error), _)) => return Err(error),
+            Err(mpsc::TryRecvError::Empty) => {
+                if child.try_wait()?.is_some() {
+                    return Err(io::Error::other("Xvfb exited before reporting a display"));
+                }
+                if Instant::now() >= deadline {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "Xvfb -displayfd produced no display number",
+                    ));
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                return Err(io::Error::other("Xvfb -displayfd reader exited"));
+            }
         }
     }
-    Err(last_err.unwrap_or_else(|| io::Error::other("no Xvfb display candidate worked")))
+}
+
+fn xauth_add(authority: &Path, display: &str, cookie: &str) -> io::Result<()> {
+    let output = Command::new("xauth")
+        .arg("-f")
+        .arg(authority)
+        .args(["add", display, "MIT-MAGIC-COOKIE-1", cookie])
+        .output()?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let diagnostic = String::from_utf8_lossy(&output.stderr);
+    Err(io::Error::other(format!(
+        "xauth failed for owned display {display}: {diagnostic}"
+    )))
 }
 
 fn start_xvfb_on(
     artifact_root: &Path,
-    display_number: u32,
     width: u32,
     height: u32,
     transport: XTransport,
 ) -> io::Result<DisplaySession> {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos())
+        .unwrap_or(0);
+    let session_dir = artifact_root.join(format!("xvfb-{}-{nonce}", std::process::id()));
+    fs::create_dir(&session_dir)?;
+    let mut pending = PendingXvfbSession::new(session_dir.clone());
+    set_owner_only_dir_permissions(&session_dir)?;
+    let stdout_path = session_dir.join("xvfb.stdout");
+    let stderr_path = session_dir.join("xvfb.stderr");
+    let authority_path = session_dir.join("Xauthority");
+    let mut cookie = [0_u8; 16];
+    getrandom::fill(&mut cookie).map_err(|error| {
+        io::Error::other(format!("failed to create Xauthority cookie: {error}"))
+    })?;
+    let cookie = cookie
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    // The server loads every cookie in the file at startup. The client name
+    // is added after -displayfd reports the number the server chose.
+    xauth_add(&authority_path, "localhost:65535", &cookie)?;
+    let mut stdout_log = fs::File::create(&stdout_path)?;
+    let stderr = fs::File::create(&stderr_path)?;
+    let mut xvfb = Command::new("Xvfb");
+    // stdout is the displayfd. The number is one line, then the log copy
+    // keeps anything else the server writes.
+    xvfb.arg("-displayfd")
+        .arg("1")
+        .arg("-screen")
+        .arg("0")
+        .arg(format!("{width}x{height}x24"));
+    match transport {
+        XTransport::Tcp => {
+            xvfb.arg("-nolisten").arg("unix").arg("-listen").arg("tcp");
+        }
+        XTransport::Local => {
+            // The local Unix socket is the only MIT-SHM-capable transport;
+            // keep the host's TCP ports out of this server entirely.
+            xvfb.arg("-nolisten").arg("tcp");
+        }
+    }
+    let mut child = xvfb
+        .arg("-nolock")
+        // DisplaySession owns the server lifetime. Short-lived probe clients
+        // must not reset it while the editor establishes its first connection.
+        .arg("-noreset")
+        .arg("-auth")
+        .arg(&authority_path)
+        .current_dir(&session_dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::from(stderr))
+        .spawn()?;
+    let xvfb_stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| io::Error::other("Xvfb stdout was not piped for -displayfd"))?;
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let mut reader = BufReader::new(xvfb_stdout);
+        let mut line = String::new();
+        let read = reader.read_line(&mut line);
+        let _ = write!(stdout_log, "{line}");
+        let _ = sender.send((read, line));
+        let _ = io::copy(&mut reader, &mut stdout_log);
+    });
+    let display_number = read_xvfb_display_number(&receiver, &mut child)?;
+    pending.child = Some(child);
     let (endpoint, display) = match transport {
         XTransport::Tcp => {
             let port_number = u16::try_from(6000 + display_number).map_err(|_| {
@@ -591,64 +712,7 @@ fn start_xvfb_on(
         }
         XTransport::Local => ("local socket".to_string(), format!(":{display_number}")),
     };
-    let session_dir = artifact_root.join(format!("xvfb-{}-{display_number}", std::process::id()));
-    fs::create_dir(&session_dir)?;
-    let mut pending = PendingXvfbSession::new(session_dir.clone());
-    set_owner_only_dir_permissions(&session_dir)?;
-    let stdout_path = session_dir.join("xvfb.stdout");
-    let stderr_path = session_dir.join("xvfb.stderr");
-    let authority_path = session_dir.join("Xauthority");
-    let mut cookie = [0_u8; 16];
-    getrandom::fill(&mut cookie).map_err(|error| {
-        io::Error::other(format!("failed to create Xauthority cookie: {error}"))
-    })?;
-    let cookie = cookie
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    let xauth = Command::new("xauth")
-        .arg("-f")
-        .arg(&authority_path)
-        .arg("add")
-        .arg(&display)
-        .arg("MIT-MAGIC-COOKIE-1")
-        .arg(cookie)
-        .output()?;
-    if !xauth.status.success() {
-        let diagnostic = String::from_utf8_lossy(&xauth.stderr);
-        return Err(io::Error::other(format!(
-            "xauth failed for owned display {display}: {diagnostic}"
-        )));
-    }
-    let stdout = fs::File::create(&stdout_path)?;
-    let stderr = fs::File::create(&stderr_path)?;
-    let mut xvfb = Command::new("Xvfb");
-    xvfb.arg(format!(":{display_number}"))
-        .arg("-screen")
-        .arg("0")
-        .arg(format!("{width}x{height}x24"));
-    match transport {
-        XTransport::Tcp => {
-            xvfb.arg("-nolisten").arg("unix").arg("-listen").arg("tcp");
-        }
-        XTransport::Local => {
-            // The local Unix socket is the only MIT-SHM-capable transport;
-            // keep the host's TCP ports out of this server entirely.
-            xvfb.arg("-nolisten").arg("tcp");
-        }
-    }
-    let child = xvfb
-        .arg("-nolock")
-        // DisplaySession owns the server lifetime. Short-lived probe clients
-        // must not reset it while the editor establishes its first connection.
-        .arg("-noreset")
-        .arg("-auth")
-        .arg(&authority_path)
-        .current_dir(&session_dir)
-        .stdout(Stdio::from(stdout))
-        .stderr(Stdio::from(stderr))
-        .spawn()?;
-    pending.child = Some(child);
+    xauth_add(&authority_path, &display, &cookie)?;
 
     if wait_for_authenticated_x11_display(
         pending

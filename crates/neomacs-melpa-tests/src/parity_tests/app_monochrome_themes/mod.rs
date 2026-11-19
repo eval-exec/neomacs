@@ -100,6 +100,44 @@ const APP_MONOCHROME_TEST_PRELUDE: &str = r####"
   (when
       (file-exists-p root)
     (delete-directory root t)))
+
+(defun neomacs-app-monochrome-test-complete-compilation (buffer)
+  "Wait for BUFFER's process, force one complete compilation parse, fontify.
+`compilation-filter' parses output as it arrives and `font-lock-ensure'
+reads whatever `compilation--parsed' happens to cover; if a previous
+parse ran while a diagnostic line was still partly inserted, the
+line-number face can be absent even though the text is present (both
+editors can lose it under load).  Wait for the exit annotation so the
+buffer is complete, flush the incremental parse marker, fontify once,
+and then assert the contract this fixture snapshots: every diagnostic
+line carries its parsed face.  A violation signals instead of returning
+a silently incomplete snapshot."
+  (with-current-buffer buffer
+    (let ((process (get-buffer-process buffer))
+          (deadline (+ (float-time) 30.0)))
+      (while (and process (process-live-p process)
+                  (< (float-time) deadline))
+        (accept-process-output process 0.05))
+      (when (and process (process-live-p process))
+        (error "compilation process did not finish")))
+    ;; `compilation-handle-exit' writes the terminal annotation last.
+    (let ((deadline (+ (float-time) 30.0)))
+      (while (and (< (float-time) deadline)
+                  (not (save-excursion
+                         (goto-char (point-max))
+                         (re-search-backward
+                          "^Compilation \\(finished\\|exited abnormally\\)"
+                          nil t))))
+        (accept-process-output nil 0.05)))
+    (compilation--flush-parse (point-min) (point-max))
+    (font-lock-ensure)
+    (dolist (needle '("4:8" "8:2"))
+      (save-excursion
+        (goto-char (point-min))
+        (unless (search-forward needle nil t)
+          (error "compilation diagnostic %s is missing" needle))
+        (unless (get-text-property (match-beginning 0) 'font-lock-face)
+          (error "compilation diagnostic %s has no parsed face" needle))))))
 "####;
 
 fn app_monochrome_oracle() -> CachedMelpaOracle {

@@ -2,8 +2,7 @@
 //!
 //! This module may be named only from `crates/neovm-core/core_tests/**`; the
 //! architecture TA2 guard rejects every `src/**` or `tests/**` reference.
-//! Each FENCE item here is one row of `AUTHORITY-ITEMS.tsv`, signed before
-//! code. The fence re-exports existing drivers and hooks with their bodies and
+//! The fence re-exports existing drivers and hooks with their bodies and
 //! contracts unchanged, and never widens an original path, so a compile-fail
 //! fixture that names the original item keeps failing. This module also
 //! carries VIS re-exports (the catalog-waits observer fn and its snapshot
@@ -66,8 +65,8 @@ thread_local! {
 /// identities with `RegistrationError::WrongHeap`. A foreign word is safe to
 /// carry, but it never roots the foreign object in this heap.
 ///
-/// The TLS store is the fence's authority: AUTHORITY-ITEMS row
-/// `TestHeapScope::install`. `set_tagged_heap` itself gains no new row.
+/// The TLS store is the fence's authority: `TestHeapScope::install`.
+/// `set_tagged_heap` itself gains no new route.
 pub struct TestHeapScope {
     /// The slot value before this scope installed; `None` means the thread had
     /// no heap (the common case in a re-homed test).
@@ -431,10 +430,10 @@ pub fn registry_first_chunk_word_for_test<'heap, K: crate::tagged::gc::EraKeeper
     crate::tagged::gc::mutator_registration::test_fences::registry_first_chunk_word_for_test(era)
 }
 
-/// FENCE (peer-signed A composite; peer #1482 condition 3 audit): wait on
-/// the registry's resume-debt event, then run `body` with a run admitted
-/// under the predicate gate. The Mutator registry field, park ticket,
-/// registry guard, live phase word and resume wait never cross.
+/// FENCE (peer-signed A composite; peer #1482 condition 3 audit): run `body`
+/// on a slice admitted by `Mutator::run_access_after_resume_drain`. The
+/// Mutator registry field, park ticket, registry guard, live phase word and
+/// resume wait stay inside that cold API.
 pub fn with_registry_admission_gate_for_test<'era, R>(
     owner: &mut crate::tagged::gc::mutator_registration::Mutator<'era>,
     body: impl FnMut(

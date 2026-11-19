@@ -122,7 +122,8 @@ impl super::intern::InitialObarrayMut<'_, '_, '_> {
 impl<'era> RunAccess<'_, 'era> {
     /// A void error leaves dst unchanged. The loaded value becomes a root
     /// before the counted-reader lease is released, including heap pointers.
-    pub fn sym_value_into(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn sym_value_into(
         &mut self,
         symbol: &SymbolHandle,
         dst: &mut OwnerRootSlot<'era>,
@@ -131,7 +132,8 @@ impl<'era> RunAccess<'_, 'era> {
         self.symbol_ref(symbol)?.copy_into(dst.index, false)
     }
 
-    pub fn sym_boundp_into(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn sym_boundp_into(
         &mut self,
         symbol: &SymbolHandle,
         dst: &mut OwnerRootSlot<'era>,
@@ -191,7 +193,9 @@ static_assertions::assert_not_impl_any!(SymbolReadToken<'static>: Send, Sync, Cl
 
 impl<'era> RunAccess<'_, 'era> {
     /// Validate both homes before authority; aliases load the source first.
-    pub fn sym_set_into(
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn sym_set_into(
         &mut self,
         symbol: &SymbolHandle,
         src: &OwnerRootSlot<'era>,
@@ -213,7 +217,9 @@ impl<'era> RunAccess<'_, 'era> {
         self.symbol_mut(symbol)?.store_into(dst.index, value, value)
     }
 
-    pub fn sym_makunbound_into(
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn sym_makunbound_into(
         &mut self,
         symbol: &SymbolHandle,
         dst: &mut OwnerRootSlot<'era>,

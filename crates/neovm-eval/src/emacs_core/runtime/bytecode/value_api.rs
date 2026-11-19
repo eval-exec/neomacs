@@ -86,7 +86,7 @@ impl TaggedValueBytecodeExt for TaggedValue {
     /// data. Everything that reads bytecode data routes through this (the
     /// architecture test pins it), so a stub can never leak empty vectors.
     fn get_bytecode_data(self) -> Option<&'static super::ByteCodeFunction> {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         neovm_value::value::note_bytecode_data_access();
         // Observe before the header and data projections, which share this
         // identity and have no intervening Lisp call or write.
@@ -116,7 +116,7 @@ impl TaggedValueBytecodeExt for TaggedValue {
     #[inline(always)]
     fn get_bytecode_data_unobserved(self) -> Option<&'static super::ByteCodeFunction> {
         debug_assert!(!neovm_value::tagged::collection_reads::is_active());
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         neovm_value::value::note_bytecode_data_access();
         if !self.is_veclike() {
             return None;
@@ -159,7 +159,7 @@ impl TaggedValueBytecodeExt for TaggedValue {
     #[inline(always)]
     fn bytecode_data_typechecked_by_caller(self) -> &'static super::ByteCodeFunction {
         debug_assert_eq!(self.veclike_type(), Some(VecLikeType::ByteCode));
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         neovm_value::value::note_bytecode_data_access();
         let ptr = (self.bits() & !TAG_MASK) as *const ByteCodeObj;
         // SAFETY: the caller's type proof (debug-asserted above) establishes
@@ -187,7 +187,7 @@ impl TaggedValueBytecodeExt for TaggedValue {
     #[inline(always)]
     unsafe fn bytecode_data_materialized_by_caller(self) -> &'static super::ByteCodeFunction {
         debug_assert_eq!(self.veclike_type(), Some(VecLikeType::ByteCode));
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         neovm_value::value::note_bytecode_data_access();
         let ptr = (self.bits() & !TAG_MASK) as *const ByteCodeObj;
         // SAFETY: the caller's type and materialization proofs (debug-asserted)

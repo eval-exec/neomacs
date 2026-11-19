@@ -37,11 +37,11 @@ pub enum PerfOp {
 }
 
 /// Record one measured operation in the core counters.
-pub type PerfRecord = fn(PerfOp, Duration);
+pub(crate) type PerfRecord = fn(PerfOp, Duration);
 /// Drop the core hotpath tracing state on a green carrier park.
-pub type PerfCarrierReset = fn();
+pub(crate) type PerfCarrierReset = fn();
 /// Debug-only TLS fingerprint for the core hotpath records.
-pub type PerfCarrierFingerprint = fn(&mut u64);
+pub(crate) type PerfCarrierFingerprint = fn(&mut u64);
 
 /// The cold descriptor core publishes at the construction seams.
 #[derive(Clone, Copy)]
@@ -106,11 +106,6 @@ pub(crate) fn install_perf_hooks(
         Err(_same_answer) if *PERF_ENABLED.get().unwrap_or(&false) == enabled => Ok(published),
         Err(_different_answer) => Err(HookInstallError::DifferentTable),
     }
-}
-
-/// The installed descriptor, if core has run one of the two pinned seams.
-pub fn perf_hooks() -> Option<&'static PerfHooks> {
-    PERF_HOOKS.get()
 }
 
 /// Whether hot-path tracing is on. This is the disabled fast-path gate: one

@@ -247,15 +247,15 @@ fn oracle_prop_huffman_encode_decode_roundtrip() {
                                      (let ((decoded-str (concat (nreverse decoded))))
                                        (list (equal text decoded-str)
                                              (length text)
-                                             (length encoded))))))))))))
+                                             (length encoded)))))))))))
                     ;; Test with various inputs
                     (list
                      (funcall huffman-roundtrip "abracadabra")
                      (funcall huffman-roundtrip "hello world")
                      (funcall huffman-roundtrip "aaaaaaa")
                      (funcall huffman-roundtrip "abcdefgh")
-                     (funcall huffman-roundtrip "mississippi"))"#;
-    let expect = expect_test::expect![[r#""ERR (void-variable huffman-roundtrip)""#]];
+                     (funcall huffman-roundtrip "mississippi")))"#;
+    let expect = expect_test::expect![[r#""ERR (void-variable pq-insert)""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 

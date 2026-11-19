@@ -665,9 +665,9 @@ fn print_recursive_closure_uses_backreference() {
 #[test]
 fn print_frame_handles_use_oracle_style_f_prefix() {
     let _harness = crate::test_utils::unit_harness();
-    let f1 = Value::make_frame(neovm_value::display_vocab::FRAME_ID_BASE);
-    let f2 = Value::make_frame(neovm_value::display_vocab::FRAME_ID_BASE + 1);
-    let legacy = Value::make_frame(7);
+    let f1 = Value::mint_frame(neovm_value::display_vocab::FRAME_ID_BASE);
+    let f2 = Value::mint_frame(neovm_value::display_vocab::FRAME_ID_BASE + 1);
+    let legacy = Value::mint_frame(7);
 
     assert_eq!(print_value(&f1), "#<frame F1 0x100000000>");
     assert_eq!(print_value_bytes(&f1), b"#<frame F1 0x100000000>");

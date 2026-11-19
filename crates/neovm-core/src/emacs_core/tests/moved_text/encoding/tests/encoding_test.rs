@@ -788,9 +788,19 @@ fn undecided_write_encoding_preserves_bytes_and_converts_eol() {
 #[test]
 fn multibyte_detection_treats_unibyte_storage_as_unibyte() {
     crate::test_utils::init_test_tracing();
-    assert!(!is_multibyte_string("abc"));
+    assert!(
+        !neovm_value::value::Value::string("abc")
+            .as_lisp_string()
+            .expect("string")
+            .is_multibyte()
+    );
     // Pure ASCII is not multibyte
-    assert!(!is_multibyte_string("hello"));
+    assert!(
+        !neovm_value::value::Value::string("hello")
+            .as_lisp_string()
+            .expect("string")
+            .is_multibyte()
+    );
 }
 
 #[test]

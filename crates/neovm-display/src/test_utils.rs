@@ -702,10 +702,13 @@ mod unit_runtime {
         // plan's arity only if it proves the plan against the COMPILED H3
         // stand-in table, so the T6 equality cannot hold by construction:
         //   1. every host-active row's plan (min, max) equals its compiled
-        //      entry's (min, max), and a host-inactive row is not compiled;
+        //      entry's (min, max). A host-inactive row is not compiled, except
+        //      eval-owned feature classes (sqlite, xwidgets, vm-profile):
+        //      those stand-ins are always compiled and excused below;
         //   2. every compiled entry is accounted for EXACTLY ONCE: an upper
         //      entry by its one upper_segment registration, a display entry
-        //      by the one REAL display row its segment registers below.
+        //      by the one REAL display row its segment registers below, or an
+        //      always-compiled inactive stand-in by that excuse.
         // The display rows remain in the checked-in snapshot table (the
         // split made them REAL, not absent), so the ledger is a partition,
         // not "upper rows only".
@@ -719,6 +722,10 @@ mod unit_runtime {
         }
         let mut consumed = vec![false; UPPER_SUBRS.len()];
         let mut display_owned = vec![false; UPPER_SUBRS.len()];
+        // Sqlite, xwidgets, and vm-profile stand-ins are compiled in every
+        // build. HostCfgClass::is_active decides whether this runtime
+        // registers them; an inactive one is excused, not a missing cfg.
+        let mut excused = vec![false; UPPER_SUBRS.len()];
         // Account every display row against the compiled table before the
         // ordered walk: present iff host-active, arity equal to the plan, and
         // exactly one REAL registration site (its display segment).
@@ -729,24 +736,35 @@ mod unit_runtime {
             for row in &names[step.first - 1..step.first - 1 + step.count] {
                 match compiled.get(row.name) {
                     Some(&index) => {
-                        let (_, min, max, _) = UPPER_SUBRS[index];
-                        assert!(
-                            cfg_active(row.cfg),
-                            "host-inactive display row {:?} is compiled",
-                            row.name
-                        );
-                        assert_eq!(
-                            (min, max),
-                            (row.min, row.max),
-                            "plan/compiled arity mismatch for display row {:?}",
-                            row.name
-                        );
-                        assert!(
-                            !consumed[index] && !display_owned[index],
-                            "compiled stand-in {:?} accounted twice",
-                            row.name
-                        );
-                        display_owned[index] = true;
+                        if !cfg_active(row.cfg) {
+                            let class = neovm_eval::host_cfg::HostCfgClass::from_label(row.cfg)
+                                .expect("cfg_active accepted this label");
+                            assert!(
+                                class.standin_ignores_feature_cfg(),
+                                "host-inactive display row {:?} is compiled",
+                                row.name
+                            );
+                            assert!(
+                                !consumed[index] && !display_owned[index] && !excused[index],
+                                "compiled stand-in {:?} accounted twice",
+                                row.name
+                            );
+                            excused[index] = true;
+                        } else {
+                            let (_, min, max, _) = UPPER_SUBRS[index];
+                            assert_eq!(
+                                (min, max),
+                                (row.min, row.max),
+                                "plan/compiled arity mismatch for display row {:?}",
+                                row.name
+                            );
+                            assert!(
+                                !consumed[index] && !display_owned[index] && !excused[index],
+                                "compiled stand-in {:?} accounted twice",
+                                row.name
+                            );
+                            display_owned[index] = true;
+                        }
                     }
                     None => assert!(
                         !cfg_active(row.cfg),
@@ -962,11 +980,21 @@ mod unit_runtime {
                 CanonicalStepKind::UpperSegment => {
                     for row in &names[step.first - 1..step.first - 1 + step.count] {
                         if !cfg_active(row.cfg) {
-                            assert!(
-                                compiled.get(row.name).is_none(),
-                                "host-inactive upper row {:?} is compiled",
-                                row.name
-                            );
+                            if let Some(&index) = compiled.get(row.name) {
+                                let class = neovm_eval::host_cfg::HostCfgClass::from_label(row.cfg)
+                                    .expect("cfg_active accepted this label");
+                                assert!(
+                                    class.standin_ignores_feature_cfg(),
+                                    "host-inactive upper row {:?} is compiled",
+                                    row.name
+                                );
+                                assert!(
+                                    !consumed[index] && !display_owned[index] && !excused[index],
+                                    "compiled stand-in {:?} accounted twice",
+                                    row.name
+                                );
+                                excused[index] = true;
+                            }
                             continue;
                         }
                         let &index = compiled.get(row.name).unwrap_or_else(|| {
@@ -983,7 +1011,7 @@ mod unit_runtime {
                             row.name
                         );
                         assert!(
-                            !consumed[index] && !display_owned[index],
+                            !consumed[index] && !display_owned[index] && !excused[index],
                             "compiled stand-in {:?} consumed twice",
                             row.name
                         );
@@ -1031,20 +1059,20 @@ mod unit_runtime {
             "the plan's display ids disagree with the exhaustive DisplayStep ids"
         );
         for (index, entry) in UPPER_SUBRS.iter().enumerate() {
-            assert!(
-                consumed[index] || display_owned[index],
-                "compiled stand-in {:?} was never accounted for",
-                entry.0
-            );
-            assert!(
-                !(consumed[index] && display_owned[index]),
-                "compiled stand-in {:?} is both consumed and display-owned",
+            let accounted = [consumed[index], display_owned[index], excused[index]]
+                .into_iter()
+                .filter(|flag| *flag)
+                .count();
+            assert_eq!(
+                accounted, 1,
+                "compiled stand-in {:?} was not accounted for exactly once",
                 entry.0
             );
         }
         assert_eq!(
             consumed.iter().filter(|flag| **flag).count()
-                + display_owned.iter().filter(|flag| **flag).count(),
+                + display_owned.iter().filter(|flag| **flag).count()
+                + excused.iter().filter(|flag| **flag).count(),
             UPPER_SUBRS.len(),
             "compiled upper table must be accounted for exactly once"
         );

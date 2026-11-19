@@ -167,7 +167,7 @@ inspects the encrypted format, so nothing about it is authored here."
   (dolist (buffer (buffer-list))
     (with-current-buffer buffer
       (when (and buffer-file-name
-                 (file-in-directory-p buffer-file-name agx-test-root))
+                 (neomacs-melpa-path-inside-p buffer-file-name agx-test-root))
         (set-buffer-modified-p nil)
         (kill-buffer buffer))))
   (when (file-directory-p agx-test-root)

@@ -14,7 +14,7 @@ impl Context {
     /// before calling this.
     #[allow(clippy::too_many_arguments)]
     #[doc(hidden)]
-    pub fn from_dump(
+    pub(crate) fn from_dump(
         tagged_heap: neovm_value::tagged::gc::AliasableBox<neovm_value::tagged::gc::TaggedHeap>,
         obarray: Obarray,
         lexenv: Value,
@@ -356,6 +356,8 @@ impl Context {
             in_flight_registry: neovm_value::error::current_in_flight_registry_handle(),
             cached_standard_case_table: None,
             frame_and_buffer_state: None,
+            gc_cycle_elapsed: std::time::Duration::ZERO,
+            retained_frame_pins: Vec::new(),
         };
         ev.setup_thread_locals();
 

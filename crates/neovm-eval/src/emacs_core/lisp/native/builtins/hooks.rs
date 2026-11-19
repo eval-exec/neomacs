@@ -193,6 +193,9 @@ thread_local! {
         HeapRegistrySlot::new(HashMap::new());
 }
 
+#[path = "window_configuration_detach.rs"]
+mod window_configuration_detach;
+
 pub(super) fn reset_hooks_thread_locals() {
     WINDOW_CONFIGURATION_SNAPSHOTS.with(|slot| slot.reset(HashMap::new()));
 }

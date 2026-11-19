@@ -256,14 +256,14 @@ fn div_cx8_condition_case_nested_unwind_throw_chain() {
 fn div_cx8_buffer_format_then_print_circle_read() {
     return_if_neovm_enable_oracle_proptest_not_set!();
     let expect = expect_test::expect![[
-        r##""ERR (error \"`let' bindings can have only one value-form\" list (string-match \"#1=\" p) p)""##
+        r#""OK (1 \"(#1=#(\\\"café\\\" 0 4 (face bold mouse-face highlight)) #1#)\")""#
     ]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let* ((s (propertize "café" 'face 'bold 'mouse-face 'highlight))
-       (p (let ((print-circle t)) (prin1-to-string (list s s))))
+       (p (let ((print-circle t)) (prin1-to-string (list s s)))))
   (list (string-match "#1=" p) p))
-)"##,
+"##,
         expect,
     );
 }

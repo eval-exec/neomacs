@@ -321,10 +321,11 @@ fn div_cx428_process_filter_insert() {
                                       (with-current-buffer (process-buffer p)
                                         (insert "[" s "]"))))))
     (set-process-query-on-exit-flag proc nil)
-    (let ((i 0))
-      (while (and (process-live-p proc) (< i 100))
-        (accept-process-output proc 0.02)
-        (setq i (1+ i))))
+    ;; The assertion is about the SETTLED buffer, not an intermediate
+    ;; event-loop state.  A terminal status does not imply the final filter
+    ;; bytes arrived (GNU's own comment on accept-process-output), and the
+    ;; old 100 x 0.02s ceiling returned OK "" for GNU under gate load.
+    (neovm--oracle-settle-process proc 600)
     (prog1 (with-current-buffer buf
              (string-trim-right (buffer-string)))
       (when (process-live-p proc)

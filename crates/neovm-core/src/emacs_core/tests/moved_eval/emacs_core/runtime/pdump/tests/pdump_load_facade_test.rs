@@ -1035,13 +1035,16 @@ fn pdump_round_trip_keeps_the_well_known_symbol_table_identity() {
         assert!(is_canonical_id(id), "{variant:?}");
         // A fixed id is not membership: a spelling this profile's GNU build
         // does not compile (`fontsize` is nsfns.m-only) keeps its identity
-        // but stays out of the dumped obarray, and the round trip must
-        // preserve that absence.
-        let profile_gated =
-            neovm_value::intern::is_gnu_defsym_spelling_absent_for_this_profile(variant.name());
+        // but stays out of the dumped obarray, while a cited boot-extra
+        // spelling (wheel-down via lisp/loadup.el + lisp/mouse.el) is a member
+        // on every platform. The round trip must preserve the same set.
+        let expected_member =
+            neovm_value::intern::is_gnu_defsym_spelling_boot_member_for_this_profile(
+                variant.name(),
+            );
         assert_eq!(
             loaded.obarray().is_global_member(id),
-            !profile_gated,
+            expected_member,
             "{variant:?} keeps GNU's initial-obarray membership across the dump"
         );
         assert_eq!(lookup_interned(variant.name()), Some(id), "{variant:?}");

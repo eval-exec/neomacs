@@ -17,82 +17,106 @@ use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
 
-fn retry<T>(mut f: impl FnMut() -> Result<T, RendezvousError>) -> T {
-    loop {
-        match f() {
-            Ok(value) => return value,
-            Err(RendezvousError::Busy) => thread::yield_now(),
-            Err(error) => panic!("cons protocol: {error:?}"),
-        }
-    }
-}
-fn retry_registration<T>(mut f: impl FnMut() -> Result<T, RegistrationError>) -> T {
-    loop {
-        match f() {
-            Ok(value) => return value,
-            Err(RegistrationError::Busy) => thread::yield_now(),
-            Err(error) => panic!("cons registration: {error:?}"),
-        }
-    }
-}
-fn activate<'era>(mut permit: MutatorPermit<'era>, heap: HeapIdentity, id: u64) -> Mutator<'era> {
-    loop {
-        match permit.activate(heap, id) {
-            Ok(owner) => return owner,
-            Err(failure) if failure.reason == RegistrationError::Busy => {
-                permit = failure.into_permit();
-                thread::yield_now();
-            }
-            Err(failure) => panic!("activate cons owner: {:?}", failure.reason),
-        }
-    }
+// Serial histories have no competing actor that could make admission Busy.
+// Any refusal must fail immediately rather than disappear inside a retry.
+fn activate<'era>(permit: MutatorPermit<'era>, heap: HeapIdentity, id: u64) -> Mutator<'era> {
+    permit.activate(heap, id).unwrap()
 }
 fn with_run<R>(owner: &mut Mutator<'_>, body: impl FnOnce(&mut RunAccess<'_, '_>) -> R) -> R {
-    loop {
-        match owner.run_access() {
-            Ok(mut run) => {
-                let result = body(&mut run);
-                retry_registration(|| run.close_cons_region());
-                return result;
+    run_body(owner.run_access().unwrap(), body)
+}
+fn run_body<R>(mut run: RunAccess<'_, '_>, body: impl FnOnce(&mut RunAccess<'_, '_>) -> R) -> R {
+    let result = body(&mut run);
+    // Owner-local tail rewind has no contended admission to retry.
+    run.close_cons_region().unwrap();
+    result
+}
+fn complete(stopped: AllStopped<'_>) {
+    stopped.complete().unwrap();
+}
+fn retire(owner: Mutator<'_>) {
+    owner.retire_rooted(&[]).unwrap();
+}
+
+// Keep the original concurrent schedules separate from strict serial helpers.
+// Their admission retry contracts are audited independently of these histories.
+mod contended {
+    use super::*;
+
+    pub(super) fn retry<T>(mut f: impl FnMut() -> Result<T, RendezvousError>) -> T {
+        loop {
+            match f() {
+                Ok(value) => return value,
+                Err(RendezvousError::Busy) => thread::yield_now(),
+                Err(error) => panic!("cons protocol: {error:?}"),
             }
-            Err(RegistrationError::Busy) => thread::yield_now(),
-            Err(error) => panic!("run cons owner: {error:?}"),
         }
     }
-}
-fn apply(mut image: ResumeGcImage<'_, '_>) {
-    loop {
-        match image.apply() {
-            Ok(()) => return,
-            Err(failure) if failure.reason == RendezvousError::Busy => {
-                image = failure.into_image();
-                thread::yield_now();
+    pub(super) fn retry_registration<T>(mut f: impl FnMut() -> Result<T, RegistrationError>) -> T {
+        loop {
+            match f() {
+                Ok(value) => return value,
+                Err(RegistrationError::Busy) => thread::yield_now(),
+                Err(error) => panic!("cons registration: {error:?}"),
             }
-            Err(failure) => panic!("restore cons owner: {:?}", failure.reason),
         }
     }
-}
-fn complete(mut stopped: AllStopped<'_>) {
-    loop {
-        match stopped.complete() {
-            Ok(()) => return,
-            Err(failure) if failure.reason == RendezvousError::Busy => {
-                stopped = failure.into_stopped();
-                thread::yield_now();
+    pub(super) fn activate<'era>(
+        mut permit: MutatorPermit<'era>,
+        heap: HeapIdentity,
+        id: u64,
+    ) -> Mutator<'era> {
+        loop {
+            match permit.activate(heap, id) {
+                Ok(owner) => return owner,
+                Err(failure) if failure.reason == RegistrationError::Busy => {
+                    permit = failure.into_permit();
+                    thread::yield_now();
+                }
+                Err(failure) => panic!("activate cons owner: {:?}", failure.reason),
             }
-            Err(failure) => panic!("complete cons stop: {:?}", failure.reason),
         }
     }
-}
-fn retire(mut owner: Mutator<'_>) {
-    loop {
-        match owner.retire_rooted(&[]) {
-            Ok(()) => return,
-            Err(failure) if failure.reason == RendezvousError::Busy => {
-                owner = failure.into_owner();
-                thread::yield_now();
+    pub(super) fn with_run<R>(
+        owner: &mut Mutator<'_>,
+        body: impl FnOnce(&mut RunAccess<'_, '_>) -> R,
+    ) -> R {
+        super::run_body(owner.run_access_after_resume_drain().unwrap(), body)
+    }
+    pub(super) fn apply(mut image: ResumeGcImage<'_, '_>) {
+        loop {
+            match image.apply() {
+                Ok(()) => return,
+                Err(failure) if failure.reason == RendezvousError::Busy => {
+                    image = failure.into_image();
+                    thread::yield_now();
+                }
+                Err(failure) => panic!("restore cons owner: {:?}", failure.reason),
             }
-            Err(failure) => panic!("retire cons owner: {:?}", failure.reason),
+        }
+    }
+    pub(super) fn complete(mut stopped: AllStopped<'_>) {
+        loop {
+            match stopped.complete() {
+                Ok(()) => return,
+                Err(failure) if failure.reason == RendezvousError::Busy => {
+                    stopped = failure.into_stopped();
+                    thread::yield_now();
+                }
+                Err(failure) => panic!("complete cons stop: {:?}", failure.reason),
+            }
+        }
+    }
+    pub(super) fn retire(mut owner: Mutator<'_>) {
+        loop {
+            match owner.retire_rooted(&[]) {
+                Ok(()) => return,
+                Err(failure) if failure.reason == RendezvousError::Busy => {
+                    owner = failure.into_owner();
+                    thread::yield_now();
+                }
+                Err(failure) => panic!("retire cons owner: {:?}", failure.reason),
+            }
         }
     }
 }
@@ -291,6 +315,8 @@ fn two_owner_cons_allocator_stress<K, W>(
             RendezvousError,
         >,
 {
+    use contended::{activate, apply, complete, retire, retry, retry_registration, with_run};
+
     roots_era(&mut |era, (cars, nil)| {
         const PHASES: usize = 2;
         const PER_OWNER: usize = 4200; // exceeds a real cons block per owner
@@ -765,7 +791,8 @@ fn return_cons_storage_preserves_busy_stop_validation_for_retry<K, W>(
             assert_eq!(refusal, Err(RegistrationError::Busy));
             assert!(!registry.park.poisoned.load(Ordering::Acquire));
         });
-        retry_registration(|| era.return_cons_storage(&stopped));
+        // The competing gate holder has joined; any refusal is now a defect.
+        era.return_cons_storage(&stopped).unwrap();
         era.collect_stopped(&mut stopped, world_roots).unwrap();
         era.with_stopped_heap_for_test(&stopped, |heap| check_pair(heap, &root, 1701))
             .unwrap();
