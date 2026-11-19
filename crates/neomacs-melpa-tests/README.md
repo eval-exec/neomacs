@@ -203,16 +203,15 @@ real X11 probes for the md/org pages and the posframe child frame.
 
 The GUI probes pin both editors' exact observations on a fixed
 DejaVu Sans Mono 10pt face, so the pixel values do not move with the host's
-font. While these known divergences are open:
+font. `frame-live-p` now reports each backend's terminal type (`x` in GNU,
+`neo` here), as GNU's `Fframep`-based contract requires; the panel palettes
+also agree. While these known divergences are open:
 
-- `frame-live-p` returns the terminal type (`x`) in GNU and `t` here;
 - a posframe anchored at `(cells 1 1)` lands at top 17 in GNU and top 68 here;
 - one default line is 17 px in GNU and 18 px here (a 12-line page is 245 vs
   256 px tall);
 - a face set to `:height 100` reports 101 in GNU and 100 here, and scaled
   heading heights differ by 2;
-- a bare frame's default palette is #f7f7f7/#000000 in GNU and
-  #eff0f2/#1F2328 here;
 - every ETAF-mounted buffer line here (previews, panels, the desktop canvas)
   starts with U+200B.
 

@@ -74,13 +74,12 @@ fn etaf_posframe_real_gui_panel_matches_gnu() {
     .expect("run real graphical GNU Emacs and Neomacs sequentially");
 
     // Both sides are pinned while these known divergences are open:
-    //   - `frame-live-p` returns the terminal type (`x`) in GNU and `t` here;
     //   - the same `(cells 1 1)` anchor places the child frame at top 17 in
     //     GNU and top 68 here;
     //   - the default line is 17 px in GNU and 18 px here;
-    //   - the default palette is #f7f7f7/#000000 in GNU and #eff0f2/#1F2328
-    //     here;
     //   - the panel buffer text starts with U+200B here.
+    // `frame-live-p` reports each backend's terminal type (`x` vs `neo`),
+    // which is GNU's own Fframep-based contract; the panel palettes agree.
     // When a divergence is fixed the Neomacs pin fails first; flip this test
     // to a single assert_eq and delete the note.
     let expected_gnu = expect![[
@@ -88,7 +87,7 @@ fn etaf_posframe_real_gui_panel_matches_gnu() {
     ]];
     expected_gnu.assert_eq(&pair.gnu_behavior.to_string());
     let expected_neomacs = expect![[
-        r##"OK (:before (:live t :has-parent t :visible t :width 20 :height 1 :left 16 :top 68 :window-width 20 :window-height 1 :pixel-width 160 :pixel-height 18 :char-width 8 :char-height 17 :background "#eff0f2" :foreground "#1F2328" :text "​panel parity") :panels-before 1 :frame-after-hide nil :panels-after-hide 0 :frame-live-after-hide nil)"##
+        r##"OK (:before (:live neo :has-parent t :visible t :width 20 :height 1 :left 16 :top 68 :window-width 20 :window-height 1 :pixel-width 160 :pixel-height 18 :char-width 8 :char-height 17 :background "#f7f7f7" :foreground "#000000" :text "​panel parity") :panels-before 1 :frame-after-hide nil :panels-after-hide 0 :frame-live-after-hide nil)"##
     ]];
     expected_neomacs.assert_eq(&pair.neomacs_behavior.to_string());
     assert_ne!(

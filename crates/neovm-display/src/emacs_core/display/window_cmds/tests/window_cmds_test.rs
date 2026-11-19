@@ -4420,6 +4420,27 @@ fn frame_live_p_false() {
     assert_eq!(r, "OK nil");
 }
 
+/// GNU `Fframe_live_p` returns `Fframep`'s value for a live frame, so a GUI
+/// frame reports its terminal type rather than `t` (src/frame.c:326-338).
+#[test]
+fn frame_live_p_reports_gui_terminal_type() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
+    let frame_id = super::ensure_selected_frame_id(&mut ev);
+    ev.frame_manager_mut()
+        .get_mut(frame_id)
+        .expect("selected frame")
+        .install_backend_less_gui_kind(WindowSystemKind::X);
+
+    let live =
+        crate::emacs_core::frame::builtin_frame_live_p(&mut ev, &[Value::make_frame(frame_id.0)])
+            .unwrap();
+    assert_eq!(live, Value::symbol("x"));
+    let not_a_frame =
+        crate::emacs_core::frame::builtin_frame_live_p(&mut ev, &[Value::NIL]).unwrap();
+    assert_eq!(not_a_frame, Value::NIL);
+}
+
 #[test]
 fn frame_builtins_accept_frame_handle_values() {
     crate::test_utils::init_test_tracing();

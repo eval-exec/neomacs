@@ -7672,6 +7672,18 @@ pub fn builtin_x_create_frame(
             super::font::seed_live_frame_default_face_from_font_parameter(eval, frame_id);
             eval.initialize_display_faces_for_frame(frame_id);
         }
+        // GNU init_frame_faces realizes the default face while x-create-frame
+        // builds any graphical frame (xfaces.c:6008-6105): an unspecified
+        // foreground/background comes from the frame's foreground-color and
+        // background-color parameters. Lisp's x-create-frame-with-faces then
+        // recalculates frame-local definitions on top.
+        if eval
+            .frame_manager()
+            .get(frame_id)
+            .is_some_and(|frame| frame.effective_window_system().is_some())
+        {
+            super::xfaces::realize_default_lisp_face_for_frame(eval, frame_id);
+        }
         // The frame is already live and realized. Like GNU x_set_frame_alpha,
         // which ignores X errors, a host opacity failure must not turn into a
         // signal that hides the new frame from its caller.
