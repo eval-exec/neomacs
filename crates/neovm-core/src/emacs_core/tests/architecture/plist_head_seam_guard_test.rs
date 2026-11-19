@@ -6,7 +6,9 @@
 //! primitives, `replace_symbol_plist_id`, construction (`publish_fill`) and
 //! pdump reconstruction (`from_dump`) all route through it, so there is no
 //! exception list to maintain.  Construction and pdump stores take the seam
-//! and do not bump the clock.
+//! and do not bump the clock.  They also skip the SATB note: the pre-image
+//! is nil, which the note treats as a no-op, and the construction arm
+//! debug-asserts that.
 //!
 //! The scan runs over the whole crate source, strips comments and string
 //! data, skips test-only files and `#[cfg(test)]` items, and requires every

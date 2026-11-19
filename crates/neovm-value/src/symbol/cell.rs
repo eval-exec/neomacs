@@ -634,13 +634,20 @@ pub(crate) enum PlistStore {
 
 /// The ONE production store of a symbol's plist head.
 ///
-/// Publishes the head through the cell's atomic contract.  Before that
-/// store, the SATB barrier notes the cell's current head, for both kinds.
-/// Construction callers start from nil: [`LispSymbol::empty`] builds the
-/// plist as `NIL`, and [`LispSymbol::from_dump`] installs `NIL` before this
-/// store, so the note is the existing nil no-op.  A construction store then
-/// debug-asserts that pre-image and does not bump.  A runtime store bumps
-/// on every call.
+/// Publishes the head through the cell's atomic contract.  A runtime store
+/// notes the pre-image through the SATB barrier before that store, then
+/// bumps the clock on every call.  Same-head suppression is not this rule.
+///
+/// A construction store does not bump, and it skips the note.
+/// [`LispSymbol::empty`] builds the plist as `NIL`, and
+/// [`LispSymbol::from_dump`] installs `NIL` before this store, so the
+/// pre-image is nil.  [`note_root_overwrite`](crate::tagged::gc::note_root_overwrite)
+/// returns immediately unless the pre-image is a heap object or a Symbol.
+/// Nil is neither, so the call would be a no-op.  The
+/// `debug_assert` on this arm is that proof in tests.  Skipping the call
+/// keeps the note, the concurrent-mark thread-local read, and that path's
+/// panic out of the cold publishers (`publish_fresh_slot`,
+/// `publish_fresh_slot_admitted`, `from_dump`).
 ///
 /// [`SymbolPropertyRevision::changed`](crate::symbol::SymbolPropertyRevision::changed)
 /// stays at the four runtime writers (`put_property`, `put_property_id`,
@@ -655,13 +662,17 @@ pub(crate) enum PlistStore {
 #[inline]
 pub(crate) fn store_plist_head(symbol: &mut LispSymbol, plist: Value, kind: PlistStore) {
     let previous = symbol.plist.get();
-    crate::tagged::gc::note_root_overwrite(previous);
-    symbol.plist.store_atomic(plist);
     match kind {
-        PlistStore::Runtime => note_plist_head_store(),
+        PlistStore::Runtime => {
+            crate::tagged::gc::note_root_overwrite(previous);
+        }
         PlistStore::Construction => {
             debug_assert!(previous.is_nil());
         }
+    }
+    symbol.plist.store_atomic(plist);
+    if let PlistStore::Runtime = kind {
+        note_plist_head_store();
     }
 }
 
@@ -671,7 +682,8 @@ pub(crate) fn store_runtime_plist_head(symbol: &mut LispSymbol, plist: Value) {
     store_plist_head(symbol, plist, PlistStore::Runtime);
 }
 
-/// Construction head store: publish the head and leave the clock alone.
+/// Construction head store: publish the head, skip the nil SATB note, and
+/// leave the clock alone.
 #[inline]
 pub(crate) fn store_construction_plist_head(symbol: &mut LispSymbol, plist: Value) {
     store_plist_head(symbol, plist, PlistStore::Construction);
