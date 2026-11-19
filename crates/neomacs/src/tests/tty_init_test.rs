@@ -288,6 +288,25 @@ fn positive_ioctl_wins_over_termcap() {
     );
 }
 
+/// GNU `get_tty_size` stores 0 when `TIOCGWINSZ` fails (`sysdep.c:1403-1404`).
+/// A pipe is not a terminal, so the ioctl fails. The result stays `(0, 0)`
+/// rather than a size from another source.
+#[cfg(unix)]
+#[test]
+fn a_failing_initial_tty_fd_is_zero() {
+    let mut pipes = [0; 2];
+    // SAFETY: `pipes` is a two-int buffer the libc `pipe` writes, and both
+    // descriptors are closed before return.
+    let rc = unsafe { libc::pipe(pipes.as_mut_ptr()) };
+    assert_eq!(rc, 0);
+    let size = super::winsize_from_fd(pipes[0]);
+    unsafe {
+        libc::close(pipes[0]);
+        libc::close(pipes[1]);
+    }
+    assert_eq!(size, (0, 0));
+}
+
 /// Below 3 after the fallback is the fatal screen, including a missing `tgetnum`.
 #[test]
 fn screen_below_three_is_too_small() {

@@ -282,13 +282,36 @@ pub fn query_terminal_size_cells() -> Option<(u32, u32)> {
 
 /// Winsize for a root `make-terminal-frame` on the initial terminal.
 ///
-/// GNU `get_tty_size` (`src/sysdep.c:1403-1408`) stores 0 when the ioctl fails
-/// and also stores a successful 0×0 report. Both are `(0, 0)`. The frame
-/// clamp turns that into a live frame.
+/// GNU `get_tty_size` (`src/sysdep.c:1396-1408`) is one `TIOCGWINSZ` on the
+/// initial terminal's input fd (`/dev/tty`, opened by `init_tty`). Failure
+/// and a successful 0×0 are both `(0, 0)`. There is no crossterm or `tput`
+/// fallback. The frame clamp turns that into a live frame.
 pub fn initial_tty_winsize_cells() -> (u32, u32) {
-    match TerminalSizeQuery::new().query() {
-        Ok(size) => (u32::from(size.columns()), u32::from(size.rows())),
-        Err(_) => (0, 0),
+    #[cfg(unix)]
+    {
+        let Ok(file) = std::fs::File::open("/dev/tty") else {
+            return (0, 0);
+        };
+        winsize_from_fd(std::os::fd::AsRawFd::as_raw_fd(&file))
+    }
+    #[cfg(not(unix))]
+    {
+        (0, 0)
+    }
+}
+
+/// One `TIOCGWINSZ` on `fd`. Same shape as the secondary terminal's raw read:
+/// a failed ioctl is `(0, 0)`, and a successful 0×0 stays `(0, 0)`.
+#[cfg(unix)]
+fn winsize_from_fd(fd: std::os::fd::RawFd) -> (u32, u32) {
+    let mut size = unsafe { std::mem::zeroed::<libc::winsize>() };
+    // SAFETY: `fd` is borrowed for this call. `TIOCGWINSZ` writes only the
+    // zeroed `winsize` and keeps no pointer. A failed call leaves `size` zero,
+    // and the branch below discards it.
+    if unsafe { libc::ioctl(fd, libc::TIOCGWINSZ as _, &mut size) } == 0 {
+        (u32::from(size.ws_col), u32::from(size.ws_row))
+    } else {
+        (0, 0)
     }
 }
 
