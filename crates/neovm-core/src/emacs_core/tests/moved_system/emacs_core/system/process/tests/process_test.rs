@@ -11191,15 +11191,38 @@ fn adaptive_read_buffering_coalesces_spaced_short_writes_like_gnu() {
          (t-row (nth 1 ordered))
          (nil-count (nth 1 nil-row))
          (t-count (nth 1 t-row)))
+    ;; The five flags stay the contract. The five integers after them are
+    ;; nil-count, t-count, nil-bytes, t-bytes, and (- nil-count t-count).
     (list (< t-count nil-count)
           (= (nth 2 nil-row) 56)
           (= (nth 2 t-row) 56)
           (>= nil-count 2)
-          (>= t-count 1))))
+          (>= t-count 1)
+          nil-count
+          t-count
+          (nth 2 nil-row)
+          (nth 2 t-row)
+          (- nil-count t-count))))
 "#,
     );
 
-    assert_eq!(result, "OK (t t t t t)");
+    let body = result
+        .strip_prefix("OK (")
+        .and_then(|rest| rest.strip_suffix(')'))
+        .unwrap_or(result.as_str());
+    let mut words = body.split_whitespace();
+    let flags: Vec<&str> = words.by_ref().take(5).collect();
+    let raw: Vec<&str> = words.collect();
+    assert_eq!(
+        flags.as_slice(),
+        ["t", "t", "t", "t", "t"].as_slice(),
+        "nil-count={} t-count={} nil-bytes={} t-bytes={} nil-minus-t={} raw={result}",
+        raw.first().copied().unwrap_or("?"),
+        raw.get(1).copied().unwrap_or("?"),
+        raw.get(2).copied().unwrap_or("?"),
+        raw.get(3).copied().unwrap_or("?"),
+        raw.get(4).copied().unwrap_or("?"),
+    );
 }
 
 struct KillChildren(Vec<u32>);
