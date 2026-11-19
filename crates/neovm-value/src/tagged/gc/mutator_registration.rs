@@ -66,6 +66,9 @@ mod keeper;
 pub use keeper::EraKeeper;
 #[doc(hidden)]
 pub use keeper::{FrozenFunctionRoots, FrozenLegacyRoots};
+mod world_loan;
+#[doc(hidden)]
+pub use world_loan::{EraWorldLoan, SymbolRootDesignators, WorldIdentity, WorldLoan};
 mod gate;
 mod image;
 mod native_extent;

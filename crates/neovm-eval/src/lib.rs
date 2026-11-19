@@ -71,3 +71,10 @@ macro_rules! gnu_emacs_version {
 }
 
 gnu_emacs_version!(31, 1);
+
+/// Contract-fixture names for the dormant era loan. The items stay
+/// `#[doc(hidden)]` on the value side, which is the cross-crate surface a
+/// `pub(crate)` item cannot cross. Production code does not use this path.
+#[cfg(feature = "contract-fixtures")]
+#[doc(hidden)]
+pub use neovm_value::tagged::gc::{EraWorldLoan, SymbolRootDesignators, WorldIdentity, WorldLoan};

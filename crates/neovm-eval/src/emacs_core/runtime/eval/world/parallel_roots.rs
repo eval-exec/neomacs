@@ -376,6 +376,52 @@ mod function_boundary;
 #[path = "tests/intern_boundary.rs"]
 mod intern_boundary;
 
+impl Baton {
+    /// Original allocation designators only. No aggregate manager borrow.
+    ///
+    /// Each call mints a fresh identity token from the live allocation.
+    /// Tokens for the same address compare equal and are not clones.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn parallel_symbol_root_designators(
+        &self,
+    ) -> neovm_value::tagged::gc::SymbolRootDesignators {
+        use neovm_value::tagged::gc::{SymbolRootDesignators, WorldIdentity};
+        assert!(self.held_here(), "symbol backing keeper must be held here");
+        let address = std::sync::Arc::as_ptr(&self.world) as usize;
+        // SAFETY: this held Baton retains the World. The address and the two
+        // manager pointers are identity metadata for that allocation. Neither
+        // pointer is dereferenced through the designator.
+        unsafe {
+            SymbolRootDesignators::new(
+                WorldIdentity::new(address),
+                std::ptr::NonNull::new(self.world.obarray.get())
+                    .expect("World obarray root")
+                    .cast(),
+                std::ptr::NonNull::from(&self.world.thread_projections).cast(),
+            )
+        }
+    }
+
+    /// Compare original allocation designators without borrowing managers.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn check_era_symbol_root_designators(
+        &self,
+        roots: &neovm_value::tagged::gc::SymbolRootDesignators,
+    ) -> Result<(), neovm_value::tagged::gc::RegistrationError> {
+        use neovm_value::tagged::gc::RegistrationError;
+        if !self.held_here() {
+            return Err(RegistrationError::WrongThread);
+        }
+        let current = self.parallel_symbol_root_designators();
+        if roots != &current {
+            return Err(RegistrationError::StaleRegistration);
+        }
+        Ok(())
+    }
+}
+
 // SAFETY: Baton is the unique serial-execution authority of its retained
 // World. Era ownership holds the real token by value on its keeper thread;
 // keeper_designator checks held_here before lending original manager identities.

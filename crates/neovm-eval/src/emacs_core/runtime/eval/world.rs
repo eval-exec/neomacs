@@ -36,6 +36,7 @@ pub(crate) use era::WorldProofEraExt;
 #[cfg(test)]
 pub(crate) use era::WorldProofEraFinishFailure;
 pub(crate) use era::prepare_keeper_backing;
+mod era_world_loan;
 mod function_write_hooks;
 mod green_owner;
 mod slot;
