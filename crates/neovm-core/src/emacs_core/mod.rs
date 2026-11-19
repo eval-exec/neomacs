@@ -587,3 +587,7 @@ mod moved_edit;
 #[cfg(all(test, feature = "jit"))]
 #[path = "tests/architecture/bg_startup_defaults_test.rs"]
 mod architecture_bg_startup_defaults_test;
+
+#[cfg(test)]
+#[path = "tests/architecture/orphan_test_guard_test.rs"]
+mod architecture_orphan_test_guard_test;

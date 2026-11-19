@@ -1,0 +1,23 @@
+# Recorded orphan-test debt. The guard fails when this set changes.
+# Byte-identical copies of a reached namesake were deleted in the guard commit.
+# These remain because the body differs from the reached namesake, or no reached
+# test calls the same file. Class is documentation; the guard compares paths.
+# path	class
+crates/neomacs-display-protocol/src/tests/display_identity_test.rs	differs-from-reached-namesake
+crates/neomacs-display-protocol/src/tests/effect_config_test.rs	differs-from-reached-namesake
+crates/neomacs-display-protocol/src/tests/face_test.rs	differs-from-reached-namesake
+crates/neomacs-display-protocol/src/tests/font_test.rs	differs-from-reached-namesake
+crates/neomacs-display-protocol/src/tests/frame_glyphs_test.rs	differs-from-reached-namesake
+crates/neomacs-display-protocol/src/tests/glyph_matrix_test.rs	differs-from-reached-namesake
+crates/neomacs-display-protocol/src/tests/image_test.rs	differs-from-reached-namesake
+crates/neomacs-display-protocol/src/tests/motion_spec_test.rs	differs-from-reached-namesake
+crates/neomacs-display-protocol/src/tests/popup_placement_test.rs	differs-from-reached-namesake
+crates/neomacs-display-protocol/src/tests/presented_pointer_test.rs	differs-from-reached-namesake
+crates/neomacs-display-protocol/src/tests/terminal_color_test.rs	differs-from-reached-namesake
+crates/neomacs-display-protocol/src/tests/tty_palette_test.rs	differs-from-reached-namesake
+crates/neomacs-display-protocol/src/tests/types_test.rs	differs-from-reached-namesake
+crates/neomacs-display-runtime/src/core/grid/tests/grid_test.rs	parent-grid-rs-not-a-module
+crates/neovm-core/core_tests/emacs_core/runtime/errors/tests/errors_test.rs	facade-emacs_core/errors.rs-not-mounted
+crates/neovm-core/core_tests/emacs_core/runtime/value/tests/bytecode_capture_test.rs	no-rust-reference
+crates/neovm-core/core_tests/tagged/gc/tests/bytecode_parameter_roots.rs	no-rust-reference
+crates/neovm-system/src/emacs_core/system/fileio/tests/write_coding_choice_test.rs	fileio-has-the-fn-but-no-mod
