@@ -15,12 +15,10 @@ use neovm_edit::buffer::{
 use neovm_edit::emacs_core::display_metrics::GuiFrameGeometryHints;
 use neovm_edit::emacs_core::display_metrics::{Rect, WindowId, WindowMargins};
 use neovm_edit::emacs_core::textprop::WindowBufferLookup;
-#[cfg(any(test, feature = "test-support"))]
-use neovm_value::display_vocab::WindowSystemKind;
 use neovm_value::display_vocab::{
     ChangeStamp, FRAME_ID_BASE, FrameId, FrameParam, FrameQueryParam, FrameVisibility,
     RenderFrameVisibility, SourcePreloadWindowRetirementRefusal, SplitDirection,
-    WindowHistoryState, WindowLayoutVariable,
+    WindowHistoryState, WindowLayoutVariable, WindowSystemKind,
 };
 use neovm_value::gc_trace::GcTrace;
 use neovm_value::intern::SymId;
@@ -3472,6 +3470,44 @@ pub struct Frame {
     pub buried_buffer_list: Vec<BufferId>,
 }
 
+/// Output method kept for a frame after it leaves the live map.
+///
+/// GNU `delete_frame` clears `f->terminal` (frame.c:2940) and does not
+/// touch `output_method`. `Fframep` (frame.c:300-316) still switches on
+/// that field, so a deleted frame answers `t` or its window system.
+/// `frame-live-p` stays nil. The value is copied from the frame's own
+/// output-method field at deletion, not from a frame parameter.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DeletedFrameTombstone {
+    output: DeletedFrameOutput,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DeletedFrameOutput {
+    Text,
+    Window(WindowSystemKind),
+}
+
+impl DeletedFrameTombstone {
+    fn from_frame(frame: &Frame) -> Self {
+        let output = match frame
+            .effective_window_system()
+            .and_then(|value| WindowSystemKind::from_symbol_value(&value))
+        {
+            Some(kind) => DeletedFrameOutput::Window(kind),
+            None => DeletedFrameOutput::Text,
+        };
+        Self { output }
+    }
+
+    fn lisp_value(self) -> Value {
+        match self.output {
+            DeletedFrameOutput::Text => Value::T,
+            DeletedFrameOutput::Window(kind) => Value::symbol(kind.name()),
+        }
+    }
+}
+
 pub struct FrameManager {
     pub frames: HashMap<FrameId, Frame>,
     /// Called on each newly built Frame before it is inserted. The Lisp
@@ -3499,6 +3535,9 @@ pub struct FrameManager {
     /// window from the tree, so the buffer has to be recorded here instead --
     /// a set of ids alone cannot answer the question.
     pub deleted_windows: HashMap<WindowId, DeletedWindowRecord>,
+    /// Output method of each deleted frame, keyed by the frame id the Lisp
+    /// object still carries. Live lookup does not consult this map.
+    pub deleted_frames: HashMap<FrameId, DeletedFrameTombstone>,
     pub deleted_window_parameters: HashMap<WindowId, WindowParameters>,
     pub window_select_count: i64,
     pub next_navigation_intent_generation: std::num::NonZeroU64,
@@ -4420,6 +4459,7 @@ impl Default for FrameManager {
             window_sequence_origin: WindowSequenceOrigin(FIRST_WINDOW_ID),
             old_selected_window: None,
             deleted_windows: HashMap::default(),
+            deleted_frames: HashMap::default(),
             deleted_window_parameters: HashMap::default(),
             window_select_count: 0,
             next_navigation_intent_generation: std::num::NonZeroU64::MIN,
@@ -5493,6 +5533,13 @@ impl FrameManager {
             .sequence_number(window, WindowId(self.next_window_id))
     }
 
+    /// `framep` of a deleted frame. Live frames are not stored here.
+    pub fn deleted_frame_output(&self, id: FrameId) -> Option<Value> {
+        self.deleted_frames
+            .get(&id)
+            .map(|tombstone| tombstone.lisp_value())
+    }
+
     /// Get a frame by ID.
     pub fn get(&self, id: FrameId) -> Option<&Frame> {
         self.frames.get(&id)
@@ -6022,6 +6069,8 @@ impl FrameManager {
             })
             .flatten();
         if let Some(frame) = self.frames.remove(&id) {
+            self.deleted_frames
+                .insert(id, DeletedFrameTombstone::from_frame(&frame));
             let terminal_id = frame.terminal_id;
             self.pending_content_transition_intents.frames.remove(id);
             for wid in frame.window_list() {
@@ -7230,6 +7279,7 @@ impl FrameManager {
             window_sequence_origin: WindowSequenceOrigin(FIRST_WINDOW_ID),
             old_selected_window: None,
             deleted_windows: HashMap::default(),
+            deleted_frames: HashMap::default(),
             deleted_window_parameters: HashMap::default(),
             window_select_count: 0,
             next_navigation_intent_generation: std::num::NonZeroU64::MIN,

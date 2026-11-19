@@ -4339,6 +4339,66 @@ fn frame_live_p_returns_framep_for_a_live_gui_frame() {
     );
 }
 
+/// GNU `Fframep` still switches on `output_method` after `delete_frame`
+/// clears `f->terminal` (frame.c:2940, frame.c:300-316). `frame-live-p`
+/// stays nil. The saved method is the frame field, not the parameter.
+#[test]
+fn framep_of_a_deleted_frame_keeps_its_output_method() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
+    let buf = ev.edit.buffers.create_buffer("*scratch*");
+    ev.edit.buffers.set_current(buf);
+    let _primary = ev.frame_manager_mut().create_frame("F1", 800, 600, buf);
+
+    let text = ev.frame_manager_mut().create_frame("F2", 800, 600, buf);
+    let text_value = Value::make_frame(text.0);
+    ev.frame_manager_mut().delete_frame(text);
+    assert_eq!(
+        crate::emacs_core::frame::builtin_framep(&mut ev, vec![text_value]).unwrap(),
+        Value::T
+    );
+    assert_eq!(
+        crate::emacs_core::frame::builtin_frame_live_p(&mut ev, &[text_value]).unwrap(),
+        Value::NIL
+    );
+
+    let gui = ev.frame_manager_mut().create_frame("F3", 800, 600, buf);
+    ev.frame_manager_mut()
+        .get_mut(gui)
+        .expect("gui frame")
+        .install_backend_less_gui_kind(WindowSystemKind::X);
+    ev.frame_manager_mut()
+        .get_mut(gui)
+        .expect("gui frame")
+        .set_parameter(Value::symbol("window-system"), Value::symbol("w32"));
+    let gui_value = Value::make_frame(gui.0);
+    ev.frame_manager_mut().delete_frame(gui);
+    assert_eq!(
+        crate::emacs_core::frame::builtin_framep(&mut ev, vec![gui_value]).unwrap(),
+        Value::symbol("x")
+    );
+    assert_eq!(
+        crate::emacs_core::frame::builtin_frame_live_p(&mut ev, &[gui_value]).unwrap(),
+        Value::NIL
+    );
+
+    let neo = ev.frame_manager_mut().create_frame("F4", 800, 600, buf);
+    ev.frame_manager_mut()
+        .get_mut(neo)
+        .expect("neo frame")
+        .install_backend_less_gui_kind(WindowSystemKind::Neo);
+    let neo_value = Value::make_frame(neo.0);
+    ev.frame_manager_mut().delete_frame(neo);
+    assert_eq!(
+        crate::emacs_core::frame::builtin_framep(&mut ev, vec![neo_value]).unwrap(),
+        Value::symbol("neo")
+    );
+    assert_eq!(
+        crate::emacs_core::frame::builtin_frame_live_p(&mut ev, &[neo_value]).unwrap(),
+        Value::NIL
+    );
+}
+
 #[test]
 fn framep_false() {
     crate::test_utils::init_test_tracing();

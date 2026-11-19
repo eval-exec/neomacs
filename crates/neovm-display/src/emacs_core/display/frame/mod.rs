@@ -2500,7 +2500,12 @@ pub fn builtin_framep(
         _ => return Ok(Value::NIL),
     };
     let Some(frame) = eval.frame_manager().get(FrameId(id)) else {
-        return Ok(Value::NIL);
+        // A deleted frame is gone from the live map. GNU still answers
+        // `framep` from the output method `delete_frame` left in place.
+        return Ok(eval
+            .frame_manager()
+            .deleted_frame_output(FrameId(id))
+            .unwrap_or(Value::NIL));
     };
     // GNU `Fframep` (frame.c) returns the frame's intrinsic output method
     // (output_pgtk -> `pgtk`, output_x_window -> `x`, output_termcap /

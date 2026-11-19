@@ -2198,6 +2198,9 @@ impl DisplayFrameManagerExt for FrameManager {
     ) -> FrameId {
         let frame_id = FrameId(self.next_frame_id);
         self.next_frame_id += 1;
+        // Frame ids are not reused. Drop a tombstone anyway so a wrapped id
+        // cannot answer `framep` with a previous frame's output method.
+        self.deleted_frames.remove(&frame_id);
 
         let window_id = self.next_window_id();
         let bounds = Rect::new(0.0, 0.0, width as f32, height as f32);
