@@ -2775,10 +2775,27 @@ fn compute_coding_ascii_compat(info: &CodingSystemInfo, mode: SymbolMode) -> boo
         // not).
         "utf-8" => coding_explicit_ascii_compat(info).unwrap_or_else(|| !coding_has_bom(info)),
         "utf-16" => false,
-        "iso-2022" => matches!(
-            compute_coding_category(info, mode),
-            "coding-category-iso-8-1" | "coding-category-iso-8-2"
-        ),
+        // coding.c:11271-11272 sets the attribute when initial G0 is
+        // ASCII-compatible. coding.c:11327-11329 clears it unless the
+        // category is iso-8-1 or iso-8-2. A non-ASCII G0 keeps the
+        // caller's argument (coding.c:11070), which is nil when the
+        // Lisp definition omits `:ascii-compatible-p`.
+        "iso-2022" => {
+            let category = compute_coding_category(info, mode);
+            if !matches!(
+                category,
+                "coding-category-iso-8-1" | "coding-category-iso-8-2"
+            ) {
+                false
+            } else if iso2022_spec(info, mode)
+                .and_then(|spec| spec.initial[0])
+                .is_some_and(super::charset::charset_is_ascii_compatible)
+            {
+                true
+            } else {
+                info.ascii_compatible_p
+            }
+        }
         "emacs-mule" | "raw-text" => true,
         "shift-jis" | "big5" => first_ascii(),
         // `undecided` is defined in C with `:ascii-compatible-p t`

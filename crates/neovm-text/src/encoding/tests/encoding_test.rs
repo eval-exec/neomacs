@@ -2080,6 +2080,10 @@ fn iso2022_c1_resets_g0_before_the_next_graphic() {
         SymbolMode::Bare,
     )
     .unwrap();
+    // coding.c:11271-11329. An iso-8-1 system whose G0 is not
+    // ASCII-compatible stays incompatible, so a pure-ASCII string still
+    // runs the ISO-2022 decoder.
+    assert!(!mgr.is_ascii_compatible("cr-8", SymbolMode::Bare));
     let info = mgr.get("cr-8").unwrap();
     let spec = iso2022_spec(info, SymbolMode::Bare).unwrap();
     let list = info.charset_list.clone();
