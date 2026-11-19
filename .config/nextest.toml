@@ -236,6 +236,12 @@ filter = 'package(neomacs-gui-tests) and test(~macos_native_menus::)'
 platform = { host = 'cfg(target_os = "macos")' }
 threads-required = "num-test-threads"
 
+# A signature-exact GNU ime miss is non-fatal, so its ::warning:: line has to
+# reach the step log on success. GitHub Actions only annotates lines it sees.
+[[profile.default.overrides]]
+filter = 'test(fcitx5_fullwidth_punctuation_is_text_and_f13_stays_a_key)'
+success-output = "immediate-final"
+
 # The Helm Pydoc workflow drives a real Helm session in BOTH editors; the first
 # `M-x helm-pydoc` synchronously collects the module list through a Python
 # subprocess in each editor, and the stage's own readiness bound is 12 s.  In a
