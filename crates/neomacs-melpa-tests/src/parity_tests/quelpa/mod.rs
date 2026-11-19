@@ -296,7 +296,7 @@ introduced by Quelpa's in-memory caches."
           (neomacs-quelpa-test-deep-copy (funcall function root))
         (dolist (buffer (buffer-list))
           (when-let* ((file (buffer-file-name buffer))
-                      ((file-in-directory-p file root)))
+                      ((neomacs-melpa-path-inside-p file root)))
             (with-current-buffer buffer
               (set-buffer-modified-p nil))
             (kill-buffer buffer)))

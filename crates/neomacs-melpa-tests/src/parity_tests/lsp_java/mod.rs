@@ -569,7 +569,7 @@ while True:
        (dolist (buffer (buffer-list))
          (when (or (and source-buffer (eq buffer source-buffer))
                    (and (buffer-file-name buffer)
-                        (file-in-directory-p (buffer-file-name buffer)
+                        (neomacs-melpa-path-inside-p (buffer-file-name buffer)
                                              project-root))
                    (string-prefix-p "*jdtls" (buffer-name buffer))
                    (string-prefix-p "*lsp-java" (buffer-name buffer)))
@@ -578,7 +578,7 @@ while True:
        (when (buffer-live-p origin-buffer)
          (set-buffer origin-buffer))
        (when (and (file-directory-p root)
-                  (file-in-directory-p
+                  (neomacs-melpa-path-inside-p
                    root
                    (file-name-as-directory
                     (getenv "NEOMACS_TEST_SANDBOX_ROOT"))))

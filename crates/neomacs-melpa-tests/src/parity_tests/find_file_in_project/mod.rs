@@ -107,7 +107,7 @@ keyword, root, flags - is still asserted verbatim."
   (let* ((path (expand-file-name relative root))
          (parent (file-name-directory path)))
     (make-directory parent t)
-    (unless (file-in-directory-p (file-truename parent)
+    (unless (neomacs-melpa-path-inside-p (file-truename parent)
                                  (file-truename root))
       (error "FIND-FILE-IN-PROJECT fixture escaped root: %s" path))
     path))
@@ -134,11 +134,11 @@ keyword, root, flags - is still asserted verbatim."
           (directory default-directory))
       (unless (or (equal (buffer-name buffer) "*ffip-diff*")
                   (and file
-                       (file-in-directory-p
+                       (neomacs-melpa-path-inside-p
                         (file-truename (file-name-directory file))
                         (file-truename root)))
                   (and directory
-                       (file-in-directory-p (file-truename directory)
+                       (neomacs-melpa-path-inside-p (file-truename directory)
                                             (file-truename root))))
         (error "FIND-FILE-IN-PROJECT refuses unowned buffer: %S file=%S dir=%S"
                (buffer-name buffer) file directory))))
@@ -412,7 +412,7 @@ keyword, root, flags - is still asserted verbatim."
                (file-name-absolute-p ffip356-test-real-git)
                (file-executable-p ffip356-test-real-git))
     (error "FIND-FILE-IN-PROJECT has no absolute executable Git"))
-  (unless (file-in-directory-p (file-truename directory)
+  (unless (neomacs-melpa-path-inside-p (file-truename directory)
                                (file-truename ffip356-test-world-root))
     (error "FIND-FILE-IN-PROJECT Git cwd escaped root: %S" directory))
   (let ((default-directory (file-name-as-directory directory))
@@ -661,7 +661,7 @@ keyword, root, flags - is still asserted verbatim."
               (path)
               (and (stringp path)
                    (file-name-absolute-p path)
-                   (file-in-directory-p (expand-file-name path)
+                   (neomacs-melpa-path-inside-p (expand-file-name path)
                                         (expand-file-name root))))
              (drain
               (phase)

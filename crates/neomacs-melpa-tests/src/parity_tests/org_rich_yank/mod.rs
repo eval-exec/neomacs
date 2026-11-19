@@ -84,7 +84,7 @@ const PRELUDE: &str = r####"
 
 (defun ory406-test-write-file (root relative contents)
   (let ((file (expand-file-name relative root)))
-    (unless (and (file-in-directory-p file root)
+    (unless (and (neomacs-melpa-path-inside-p file root)
                  (not (equal file (directory-file-name root))))
       (error "Unsafe Org Rich Yank fixture path: %s" file))
     (make-directory (file-name-directory file) t)
@@ -97,7 +97,7 @@ const PRELUDE: &str = r####"
 (defun ory406-test-manifest (root)
   (mapcar
    (lambda (file)
-     (unless (and (file-in-directory-p file root)
+     (unless (and (neomacs-melpa-path-inside-p file root)
                   (file-regular-p file)
                   (not (file-symlink-p file)))
        (error "Unsafe Org Rich Yank fixture: %s" file))

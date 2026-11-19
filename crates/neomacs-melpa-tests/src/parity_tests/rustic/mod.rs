@@ -115,7 +115,7 @@ const PRELUDE: &str = r####"
 (defun rustic419-test-write (relative contents &optional executable)
   (let ((file (expand-file-name relative rustic419-test-root)))
     (unless (and rustic419-test-root-owned
-                 (file-in-directory-p file rustic419-test-root))
+                 (neomacs-melpa-path-inside-p file rustic419-test-root))
       (error "Refusing Rustic write outside owned root: %S" file))
     (make-directory (file-name-directory file) t)
     (let ((coding-system-for-write 'utf-8-unix))
@@ -456,7 +456,7 @@ its buffer records only as much of the child's output as had been read"
   (seq-filter
    (lambda (buffer)
      (when-let ((file (buffer-local-value 'buffer-file-name buffer)))
-       (file-in-directory-p file rustic419-test-root)))
+       (neomacs-melpa-path-inside-p file rustic419-test-root)))
    (buffer-list)))
 
 (defun rustic419-test-window-state ()

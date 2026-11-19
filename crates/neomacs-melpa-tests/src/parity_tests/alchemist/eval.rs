@@ -27,7 +27,7 @@ fn alchemist_eval_line_region_buffer_and_print_workflows_write_local_temp_payloa
                                          (file-name-nondirectory file))
                                         "alchemist-eval*.exs"
                                       (file-name-nondirectory file))
-                                    (file-in-directory-p
+                                    (neomacs-melpa-path-inside-p
                                      file (getenv "TMPDIR"))
                                     (with-temp-buffer
                                       (insert-file-contents file)
@@ -86,7 +86,7 @@ fn alchemist_quoted_eval_variants_preserve_payload_region_direction_and_quote_pr
                                       (insert-file-contents file)
                                       (buffer-string))
                                     filter
-                                    (file-in-directory-p
+                                    (neomacs-melpa-path-inside-p
                                      file (getenv "TMPDIR")))
                                    requests))
                                 'quoted)))
@@ -183,7 +183,7 @@ fn alchemist_macroexpand_line_and_region_workflows_write_local_payloads_and_sele
                                       (insert-file-contents file)
                                       (buffer-string))
                                     filter
-                                    (file-in-directory-p
+                                    (neomacs-melpa-path-inside-p
                                      file (getenv "TMPDIR")))
                                    requests))
                                 'expanded)))
