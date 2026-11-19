@@ -501,18 +501,10 @@ fn two_owner_local_slot_allocator_stress() {
         owner: &mut Mutator<'era>,
         body: impl FnOnce(&mut RunAccess<'_, 'era>) -> R,
     ) -> R {
-        let deadline = Instant::now() + Duration::from_secs(30);
-        loop {
-            match owner.run_access() {
-                Ok(mut access) => {
-                    let result = body(&mut access);
-                    access.close_cons_region().unwrap();
-                    return result;
-                }
-                Err(RegistrationError::Busy) if Instant::now() < deadline => thread::yield_now(),
-                Err(error) => panic!("local-slot run: {error:?}"),
-            }
-        }
+        let mut access = owner.run_access_after_resume_drain().unwrap();
+        let result = body(&mut access);
+        access.close_cons_region().unwrap();
+        result
     }
     fn receive<T>(receiver: &mpsc::Receiver<T>) -> T {
         receiver

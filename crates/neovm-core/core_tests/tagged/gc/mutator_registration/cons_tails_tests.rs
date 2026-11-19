@@ -75,13 +75,7 @@ mod contended {
         owner: &mut Mutator<'_>,
         body: impl FnOnce(&mut RunAccess<'_, '_>) -> R,
     ) -> R {
-        loop {
-            match owner.run_access() {
-                Ok(run) => return super::run_body(run, body),
-                Err(RegistrationError::Busy) => thread::yield_now(),
-                Err(error) => panic!("run tails owner: {error:?}"),
-            }
-        }
+        super::run_body(owner.run_access_after_resume_drain().unwrap(), body)
     }
     pub(super) fn complete(mut stopped: AllStopped<'_>) {
         loop {

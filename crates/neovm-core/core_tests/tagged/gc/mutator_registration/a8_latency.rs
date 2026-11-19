@@ -60,18 +60,10 @@ fn with_run<'era, R>(
     owner: &mut Mutator<'era>,
     body: impl FnOnce(&mut RunAccess<'_, 'era>) -> Result<R, RegistrationError>,
 ) -> Result<R, RegistrationError> {
-    let deadline = Instant::now() + SPIN_WAIT;
-    loop {
-        match owner.run_access() {
-            Ok(mut run) => {
-                let result = body(&mut run);
-                run.close_cons_region()?;
-                return result;
-            }
-            Err(RegistrationError::Busy) if Instant::now() < deadline => thread::yield_now(),
-            Err(error) => return Err(error),
-        }
-    }
+    let mut run = owner.run_access_after_resume_drain()?;
+    let result = body(&mut run);
+    run.close_cons_region()?;
+    result
 }
 
 /// `with_run` for an allocating owner that must also serve signals:
