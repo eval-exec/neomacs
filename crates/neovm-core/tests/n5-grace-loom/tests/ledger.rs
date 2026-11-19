@@ -1,10 +1,12 @@
 //! N5 grace model: the REAL N3 ledger composed with activation release
 //! points (P13-PREP deliverable 1; N5 design rev 2 section 2).
 //!
-//! The ledger is included byte-for-byte through the build-time seam
+//! The N3 adapter is included byte-for-byte through the build-time seam
 //! (`build.rs` -> `OUT_DIR/publication.inc`). Its `super::sync` import
-//! resolves to the crate-root Loom backend below, so every atomic load/store
-//! and every mutex transition it performs is one of Loom's modeled cells.
+//! resolves to the crate-root Loom backend below. The generic owner is
+//! included beside it (`publication_types.inc`, `publication_ledger.inc`);
+//! that owner's `super::sync` is the nested Loom backend, so the root store,
+//! the metadata mutex, and the adapter's load are Loom cells.
 //! Other `std::` paths stay the real standard library. Nothing about the
 //! ledger is reimplemented here. The descriptor vocabulary comes
 //! from the named stand-in (`support::vocab.rs`), which mirrors
@@ -100,12 +102,33 @@ use loom::sync::{Arc, Condvar, Mutex};
 use std::num::NonZeroUsize;
 
 /// Loom backend at the production `symbol_table::sync` parent seam.
-/// `TryLockError` stays the real `std` type because that is what Loom's
-/// `try_lock` returns.
+/// The adapter's view loads through this module. The owner's mutex is the
+/// nested backend below; `TryLockError` there stays real `std`.
 mod sync {
     pub use loom::sync::atomic::{AtomicPtr, Ordering};
-    pub use loom::sync::{Mutex, MutexGuard};
-    pub use std::sync::TryLockError;
+}
+
+/// Generic owner. Its `sync` is the same Loom backend, so the root store and
+/// the adapter's load are one modeled atomic. The mutex lives in this owner.
+#[allow(dead_code)]
+pub mod tagged {
+    #[allow(dead_code)]
+    pub mod gc {
+        #[allow(dead_code)]
+        pub mod publication {
+            mod sync {
+                pub use loom::sync::atomic::{AtomicPtr, Ordering};
+                pub use loom::sync::{Mutex, MutexGuard};
+                pub use std::sync::TryLockError;
+            }
+            include!(concat!(env!("OUT_DIR"), "/publication_types.inc"));
+            #[allow(dead_code)]
+            mod ledger {
+                include!(concat!(env!("OUT_DIR"), "/publication_ledger.inc"));
+            }
+            pub(crate) use ledger::{Admission, Commit, OpenPublication, PublicationLedger};
+        }
+    }
 }
 
 /// Chunk slots per descriptor chunk; the real backing uses `OBARRAY_CHUNK`.

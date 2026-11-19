@@ -54,8 +54,7 @@ pub use function_write_hooks::{
 #[doc(hidden)]
 pub mod symbol_table;
 
-// Dormant until symbol-table publication moves onto this owner.
-#[allow(dead_code)]
+// Symbol-table publication is the N3 adapter over this owner.
 mod publication;
 
 mod cache_root_scan;

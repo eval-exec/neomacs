@@ -17,6 +17,10 @@ use std::rc::Rc;
 struct Metadata<P> {
     current: P,
     predecessors: Vec<P>,
+    /// Test builds can tighten one owner's caps without process state.
+    /// Absent means the limits stored at construction.
+    #[cfg(any(test, feature = "test-support"))]
+    limit_override: Option<RetentionLimits>,
 }
 
 /// Retention owner. Callers never borrow the ledger or the root directly.
@@ -46,6 +50,36 @@ pub(crate) struct PreparedPublication<'owner, P: PublicationPayload> {
     _thread: PhantomData<Rc<()>>,
 }
 
+/// One admission under the metadata lock. `admit` runs at most once.
+pub(crate) struct Admission<'a, P: PublicationPayload> {
+    metadata: &'a mut Metadata<P>,
+    limits: RetentionLimits,
+}
+
+/// What the caller commits after its own backing work. `Keep` neither
+/// pushes nor stores. `Replace` is the initialized successor.
+pub(crate) enum Commit<P> {
+    Keep,
+    Replace(P),
+}
+
+/// Open transaction. The metadata lock is held until `finish` or drop.
+#[must_use = "finish the open transaction or drop it without publishing"]
+pub(crate) struct OpenPublication<'owner, P: PublicationPayload, T> {
+    store: &'owner PublicationLedger<P>,
+    metadata: MutexGuard<'owner, Metadata<P>>,
+    body: T,
+    _thread: PhantomData<Rc<()>>,
+}
+
+/// Capacity growth is reported even when admission refuses. A dropped
+/// transaction publishes nothing.
+#[must_use = "publish the open transaction or drop it without publishing"]
+pub(crate) struct Accounted<'owner, P: PublicationPayload, T> {
+    pub(crate) result: Result<OpenPublication<'owner, P, T>, PublicationError<P::Error>>,
+    pub(crate) charged: RetainedBytes,
+}
+
 /// Names a payload for the auto-trait assertions and the compile-fail fixture.
 pub(crate) struct BoundWitness;
 
@@ -73,6 +107,7 @@ impl PublicationPayload for BoundWitness {
 static_assertions::assert_not_impl_any!(PublicationLedger<BoundWitness>: Send, Sync);
 static_assertions::assert_not_impl_any!(PublicationView<'static, BoundWitness>: Send, Sync, Clone, Copy);
 static_assertions::assert_not_impl_any!(PreparedPublication<'static, BoundWitness>: Send, Sync, Clone, Copy);
+static_assertions::assert_not_impl_any!(OpenPublication<'static, BoundWitness, ()>: Send, Sync, Clone, Copy);
 
 impl<P: PublicationPayload> PublicationView<'_, P> {
     pub(crate) fn published_address(&self) -> *mut u8 {
@@ -95,6 +130,8 @@ impl<P: PublicationPayload> PublicationLedger<P> {
             metadata: Mutex::new(Metadata {
                 current: initial,
                 predecessors: Vec::new(),
+                #[cfg(any(test, feature = "test-support"))]
+                limit_override: None,
             }),
             limits,
             _not_send: PhantomData,
@@ -125,9 +162,10 @@ impl<P: PublicationPayload> PublicationLedger<P> {
 
     pub(crate) fn prepare(&self) -> Result<PreparedPublication<'_, P>, PublicationError<P::Error>> {
         let mut metadata = self.lock()?;
+        let limits = self.effective_limits(&metadata);
         let plan = P::prepare(&metadata.current).map_err(PublicationError::Payload)?;
         if let PayloadPlan::Replacement(next) = &plan {
-            admit_replacement(&mut metadata, next, self.limits)?;
+            admit_replacement(&mut metadata, next, limits)?;
         }
         Ok(PreparedPublication {
             store: self,
@@ -135,6 +173,91 @@ impl<P: PublicationPayload> PublicationLedger<P> {
             plan,
             _thread: PhantomData,
         })
+    }
+
+    /// The live root. Callers atomic-load this cell; they do not own it.
+    pub(crate) fn slot(&self) -> &AtomicPtr<u8> {
+        &self.root
+    }
+
+    /// Lock, let the caller decide, and reserve when it admits a quote.
+    ///
+    /// The closure builds whatever the adapter still needs (a shape check, an
+    /// uninitialized successor). `admit` is the reserve and the byte quote.
+    /// `finish` commits only after the caller's backing work.
+    pub(crate) fn account<T>(
+        &self,
+        decide: impl FnOnce(&mut Admission<'_, P>) -> Result<T, PublicationError<P::Error>>,
+    ) -> Accounted<'_, P, T> {
+        let mut metadata = match self.lock() {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                return Accounted {
+                    result: Err(error),
+                    charged: RetainedBytes::new(0),
+                };
+            }
+        };
+        let before = reserved_capacity_bytes::<P>(&metadata);
+        let limits = self.effective_limits(&metadata);
+        let decided = {
+            let mut admission = Admission {
+                metadata: &mut metadata,
+                limits,
+            };
+            decide(&mut admission)
+        };
+        let charged =
+            RetainedBytes::new(reserved_capacity_bytes::<P>(&metadata).saturating_sub(before));
+        let result = match decided {
+            Ok(body) => Ok(OpenPublication {
+                store: self,
+                metadata,
+                body,
+                _thread: PhantomData,
+            }),
+            Err(error) => Err(error),
+        };
+        Accounted { result, charged }
+    }
+
+    fn effective_limits(&self, metadata: &Metadata<P>) -> RetentionLimits {
+        let _ = metadata;
+        #[cfg(any(test, feature = "test-support"))]
+        if let Some(limits) = metadata.limit_override {
+            return limits;
+        }
+        self.limits
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn set_limit_override(
+        &self,
+        limits: Option<RetentionLimits>,
+    ) -> Result<(), PublicationError<P::Error>> {
+        self.lock()?.limit_override = limits;
+        Ok(())
+    }
+
+    /// Blocking read of the current owner and every predecessor. A poisoned
+    /// lock still yields the retained owners; it does not clear the flag.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn with_retained<R>(&self, body: impl FnOnce(&P, &[P]) -> R) -> R {
+        let metadata = match self.metadata.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        body(&metadata.current, &metadata.predecessors)
+    }
+
+    /// Hold the metadata lock across `body`. A panic poisons the lock.
+    #[cfg(test)]
+    pub(crate) fn hold_metadata_for_test(&self, body: impl FnOnce()) {
+        let _guard = match self.metadata.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        body();
     }
 
     fn lock(&self) -> Result<MutexGuard<'_, Metadata<P>>, PublicationError<P::Error>> {
@@ -176,17 +299,54 @@ impl<P: PublicationPayload> PreparedPublication<'_, P> {
             }
             PayloadPlan::Replacement(next) => next,
         };
-        let charged = next.retained_bytes();
-        let generation = next.generation();
-        let pointer = next.published_address();
-        let previous = mem::replace(&mut self.metadata.current, next);
-        self.metadata.predecessors.push(previous);
-        self.store
-            .release_retained(pointer, &self.metadata.predecessors);
-        Ok(PublicationChange::Published {
-            generation,
-            charged,
-        })
+        Ok(commit_replacement(self.store, &mut self.metadata, next))
+    }
+}
+
+impl<P: PublicationPayload> Admission<'_, P> {
+    pub(crate) fn current(&self) -> &P {
+        &self.metadata.current
+    }
+
+    pub(crate) fn admit(&mut self, extra: RetainedBytes) -> Result<(), PublicationError<P::Error>> {
+        admit_quote(self.metadata, extra.get(), self.limits)
+    }
+}
+
+impl<P: PublicationPayload, T> OpenPublication<'_, P, T> {
+    pub(crate) fn finish(
+        self,
+        decide: impl FnOnce(T, &P) -> Result<Commit<P>, PublicationError<P::Error>>,
+    ) -> Result<PublicationChange<P::Generation>, PublicationError<P::Error>> {
+        let OpenPublication {
+            store,
+            mut metadata,
+            body,
+            _thread,
+        } = self;
+        match decide(body, &metadata.current)? {
+            Commit::Keep => Ok(PublicationChange::Unchanged {
+                generation: metadata.current.generation(),
+            }),
+            Commit::Replace(next) => Ok(commit_replacement(store, &mut metadata, next)),
+        }
+    }
+}
+
+fn commit_replacement<P: PublicationPayload>(
+    store: &PublicationLedger<P>,
+    metadata: &mut Metadata<P>,
+    next: P,
+) -> PublicationChange<P::Generation> {
+    let charged = next.retained_bytes();
+    let generation = next.generation();
+    let pointer = next.published_address();
+    let previous = mem::replace(&mut metadata.current, next);
+    metadata.predecessors.push(previous);
+    store.release_retained(pointer, &metadata.predecessors);
+    PublicationChange::Published {
+        generation,
+        charged,
     }
 }
 
@@ -198,29 +358,56 @@ fn admit_replacement<P: PublicationPayload>(
     next: &P,
     limits: RetentionLimits,
 ) -> Result<(), PublicationError<P::Error>> {
+    admit_quote(metadata, next.retained_bytes().get(), limits)
+}
+
+fn admit_quote<P: PublicationPayload>(
+    metadata: &mut Metadata<P>,
+    extra: usize,
+    limits: RetentionLimits,
+) -> Result<(), PublicationError<P::Error>> {
     if metadata.predecessors.len() >= limits.retired.get() {
         return Err(PublicationError::NeedGrace(RetentionLimit::Retired));
     }
+    // Reservation failure and quote overflow are capacity, not backpressure.
+    // The two comparisons above and below are the only `NeedGrace` arms.
     if metadata.predecessors.try_reserve(1).is_err() {
-        return Err(PublicationError::NeedGrace(RetentionLimit::Retired));
+        return Err(PublicationError::Capacity);
     }
     let needed = retained_quote(metadata)?
-        .checked_add(next.retained_bytes().get())
-        .ok_or(PublicationError::NeedGrace(RetentionLimit::RetainedBytes))?;
+        .checked_add(extra)
+        .ok_or(PublicationError::Capacity)?;
     if needed > limits.bytes.get() {
         return Err(PublicationError::NeedGrace(RetentionLimit::RetainedBytes));
     }
     Ok(())
 }
 
+fn reserved_capacity_bytes<P: PublicationPayload>(metadata: &Metadata<P>) -> usize {
+    // Vec capacity is bounded by `isize::MAX` bytes. Saturation keeps the
+    // charge accessor total if that invariant changes. The quote uses
+    // `checked_mul` and reports overflow as `Capacity`.
+    metadata
+        .predecessors
+        .capacity()
+        .saturating_mul(P::storage_overhead())
+}
+
 fn retained_quote<P: PublicationPayload>(
     metadata: &Metadata<P>,
 ) -> Result<usize, PublicationError<P::Error>> {
-    let mut total = metadata.current.retained_bytes().get();
+    let mut total = metadata
+        .predecessors
+        .capacity()
+        .checked_mul(P::storage_overhead())
+        .ok_or(PublicationError::Capacity)?;
+    total = total
+        .checked_add(metadata.current.retained_bytes().get())
+        .ok_or(PublicationError::Capacity)?;
     for owner in &metadata.predecessors {
         total = total
             .checked_add(owner.retained_bytes().get())
-            .ok_or(PublicationError::NeedGrace(RetentionLimit::RetainedBytes))?;
+            .ok_or(PublicationError::Capacity)?;
     }
     Ok(total)
 }
@@ -438,5 +625,49 @@ mod tests {
         assert_eq!(take_release_order(), Some(true));
         assert_eq!(store.statistics().unwrap().retired, RetiredCount::new(1));
         assert_eq!(read(&store.view()), 20);
+    }
+
+    #[test]
+    fn replacement_publishes_a_non_prefix_successor() {
+        let store = ledger(10, 1, RetentionLimits::production());
+        let old = store.view();
+        let old_address = old.published_address();
+        plan(20);
+        let change = store.prepare().unwrap().publish().unwrap();
+        let new_address = store.view().published_address();
+        // The successor is a distinct allocation. Nothing in the core asks
+        // the new address to extend the predecessor; that law is the adapter's.
+        assert_ne!(old_address, new_address);
+        assert_eq!(read(&old), 10);
+        assert_eq!(read(&store.view()), 20);
+        assert_eq!(
+            change,
+            PublicationChange::Published {
+                generation: 1,
+                charged: RetainedBytes::new(1),
+            }
+        );
+        assert_eq!(store.statistics().unwrap().retired, RetiredCount::new(1));
+    }
+
+    #[test]
+    fn byte_quote_overflow_is_capacity_not_need_grace() {
+        let store = ledger(
+            1,
+            usize::MAX,
+            RetentionLimits::new(RetainedBytes::new(usize::MAX), RetiredCount::new(8)),
+        );
+        let original = store.view();
+        plan(2);
+        let Err(refused) = store.prepare() else {
+            panic!("an overflowing quote prepared a transaction");
+        };
+        assert_eq!(refused, PublicationError::Capacity);
+        assert_eq!(read(&original), 1);
+        assert_eq!(read(&store.view()), 1);
+        let statistics = store.statistics().unwrap();
+        assert_eq!(statistics.retired, RetiredCount::new(0));
+        assert_eq!(statistics.generation, 0);
+        assert_eq!(statistics.retained_bytes, RetainedBytes::new(usize::MAX));
     }
 }

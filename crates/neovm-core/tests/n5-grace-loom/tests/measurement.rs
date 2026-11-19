@@ -51,9 +51,32 @@ use vocab::{SymbolChunkCount, SymbolChunkSlots, SymbolSlotCount};
 
 /// Production re-export at the same parent seam the Loom target binds.
 /// This target is native: the cells are real `std` synchronization.
+/// The adapter's view loads through this module. The owner's mutex is the
+/// nested backend below.
 mod sync {
     pub use std::sync::atomic::{AtomicPtr, Ordering};
-    pub use std::sync::{Mutex, MutexGuard, TryLockError};
+}
+
+/// Generic owner against real `std`, same cells as the adapter's parent seam.
+/// The mutex and the atomic root live here.
+#[allow(dead_code)]
+pub mod tagged {
+    #[allow(dead_code)]
+    pub mod gc {
+        #[allow(dead_code)]
+        pub mod publication {
+            mod sync {
+                pub use std::sync::atomic::{AtomicPtr, Ordering};
+                pub use std::sync::{Mutex, MutexGuard, TryLockError};
+            }
+            include!(concat!(env!("OUT_DIR"), "/publication_types.inc"));
+            #[allow(dead_code)]
+            mod ledger {
+                include!(concat!(env!("OUT_DIR"), "/publication_ledger.inc"));
+            }
+            pub(crate) use ledger::{Admission, Commit, OpenPublication, PublicationLedger};
+        }
+    }
 }
 
 // The real ledger's whole API compiles here; the parts this model does

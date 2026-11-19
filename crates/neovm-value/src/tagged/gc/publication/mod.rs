@@ -1,16 +1,18 @@
 //! Generic publication types.
 //!
 //! Monomorphized inputs for one retention owner. No `Value`, `Context`,
-//! `World`, interner, or GC tracing lives here, and `symbol_table` does not
-//! call this module. The symbol-table ledger remains the only production
-//! protocol until a later adapter slice.
+//! `World`, interner, or GC tracing lives here. Symbol-table publication is
+//! the N3 adapter over this owner. It is not a second protocol.
 
 mod ledger;
 mod sync;
 
-// The compile-fail fixture names these. Production callers arrive in a later slice.
+// The compile-fail fixture names the view. The N3 adapter names the
+// transaction types. Both stay crate-private.
 #[allow(unused_imports)]
-pub(crate) use ledger::{BoundWitness, PublicationLedger, PublicationView};
+pub(crate) use ledger::{
+    Accounted, Admission, BoundWitness, Commit, OpenPublication, PublicationLedger, PublicationView,
+};
 
 /// Bytes one owner contributes to the retention quote.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -75,9 +77,13 @@ pub(crate) enum RetentionLimit {
 }
 
 /// Publication refusal. `Payload` is the adapter's own error.
+///
+/// `Capacity` is a failed predecessor reservation or a byte-quote overflow.
+/// `NeedGrace` is only a retiree-count cap or a retained-byte cap.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PublicationError<E> {
     Payload(E),
+    Capacity,
     NeedGrace(RetentionLimit),
     Busy,
     Poisoned,
@@ -132,6 +138,12 @@ pub(crate) trait PublicationPayload: Sized {
     fn published_address(&self) -> *mut u8;
 
     fn retained_bytes(&self) -> RetainedBytes;
+
+    /// Bytes of predecessor-vector storage charged for one reserved slot.
+    /// Payloads with no retained vector return zero.
+    fn storage_overhead() -> usize {
+        0
+    }
 
     fn generation(&self) -> Self::Generation;
 
