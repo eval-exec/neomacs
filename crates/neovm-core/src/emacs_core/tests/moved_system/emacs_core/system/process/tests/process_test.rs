@@ -11143,6 +11143,18 @@ fn adaptive_read_buffering_updates_delay_with_gnu_thresholds() {
     update_process_adaptive_read_buffering(process, 42, false);
     assert_eq!(process.read_output_delay, Duration::from_millis(70));
     assert!(process.read_output_skip);
+
+    // src/process.c:6283 returns before touching the delay when nbytes is 0
+    // or adaptive buffering is off. At 70ms a no-op is distinct from a reset.
+    update_process_adaptive_read_buffering(process, 0, false);
+    assert_eq!(process.read_output_delay, Duration::from_millis(70));
+    assert!(process.read_output_skip);
+    process.adaptive_read_buffering = 0;
+    update_process_adaptive_read_buffering(process, 42, false);
+    assert_eq!(process.read_output_delay, Duration::from_millis(70));
+    assert!(process.read_output_skip);
+    process.adaptive_read_buffering = 1;
+
     update_process_adaptive_read_buffering(process, 42, false);
     assert_eq!(process.read_output_delay, Duration::from_millis(70));
 
@@ -11156,14 +11168,6 @@ fn adaptive_read_buffering_updates_delay_with_gnu_thresholds() {
         assert!(process.read_output_skip);
     }
     update_process_adaptive_read_buffering(process, 1024, true);
-    assert_eq!(process.read_output_delay, Duration::ZERO);
-    assert!(!process.read_output_skip);
-
-    let frozen = process.read_output_delay;
-    update_process_adaptive_read_buffering(process, 0, false);
-    assert_eq!(process.read_output_delay, frozen);
-    process.adaptive_read_buffering = 0;
-    update_process_adaptive_read_buffering(process, 42, false);
     assert_eq!(process.read_output_delay, Duration::ZERO);
     assert!(!process.read_output_skip);
 }
@@ -11311,6 +11315,98 @@ fn adaptive_read_send_resets_delay_only_when_adaptive_is_t() {
     assert_eq!(other.read_output_delay, Duration::from_millis(20));
     assert!(other.read_output_skip);
     assert_eq!(other.adaptive_read_buffering, 2);
+}
+
+/// Ready output on a skipping process waits out its delay, then arrives as one chunk.
+///
+/// src/process.c:5694-5703 `FD_CLR`s a skipping channel, so bytes already in
+/// the pipe are not read until that wait ends. Naming a process in
+/// `accept-process-output` sets `check_delay` to 0 (src/process.c:5605-5610
+/// and :5626), so this wait names no process.
+#[test]
+fn adaptive_read_skip_holds_ready_output_for_the_delay() {
+    crate::test_utils::init_test_tracing();
+    let marker_dir = tempfile::tempdir().expect("marker dir");
+    let marker = marker_dir.path().join("ready");
+    let marker_display = marker.display().to_string();
+    assert!(
+        !marker_display.contains('\''),
+        "marker path must be a single shell word"
+    );
+    let sh = find_bin("sh");
+    let mut ev = crate::emacs_core::eval_hook_installers::new_context();
+    ev.eval_str("(setq process-adaptive-read-buffering t)")
+        .expect("enable adaptive read buffering");
+    ev.eval_str(
+        r#"(progn
+            (setq held-first-delay nil)
+            (setq held-text "")
+            (setq held-nchunks 0)
+            (setq held-first-chunk nil)
+            (setq held-start nil))"#,
+    )
+    .expect("held vars");
+    let spawned = ev
+        .eval_str(&format!(
+            r#"(make-process :name "adaptive-held" :buffer nil :connection-type 'pipe :noquery t :command '("{sh}" "-c" "printf 'a\\n'; printf 'b\\n'; : > '{marker_display}'; read _"))"#
+        ))
+        .expect("spawn held");
+    let id = spawned.as_process_id().expect("process id");
+    let pid = ev
+        .processes()
+        .get(id)
+        .and_then(|proc| proc.os_pid)
+        .expect("child pid");
+    let _kill = KillChildren(vec![pid]);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !marker.is_file() {
+        assert!(
+            Instant::now() < deadline,
+            "child did not publish the marker; both writes must already be in the pipe"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    {
+        let proc = ev.processes_mut().get_mut(id).expect("held");
+        proc.adaptive_read_buffering = 1;
+        proc.read_output_delay = Duration::from_millis(40);
+        proc.read_output_skip = true;
+    }
+    ev.eval_str(
+        r#"(set-process-filter
+           (get-process "adaptive-held")
+           (lambda (_process string)
+             (if held-first-delay
+                 nil
+               (setq held-first-delay (- (float-time) held-start)))
+             (setq held-nchunks (1+ held-nchunks))
+             (setq held-text (concat held-text string))
+             (if held-first-chunk
+                 nil
+               (setq held-first-chunk string))))"#,
+    )
+    .expect("filter");
+    ev.eval_str("(progn (setq held-start (float-time)) (accept-process-output nil 0.25))")
+        .expect("accept");
+    let delay = ev
+        .eval_symbol("held-first-delay")
+        .expect("first delay")
+        .as_float()
+        .expect("first delay is a float");
+    assert!(
+        delay >= 0.039,
+        "first filter at {delay}s; ready output must wait out the 40ms skip"
+    );
+    let chunks = ev
+        .eval_symbol("held-nchunks")
+        .expect("chunk count")
+        .as_int()
+        .expect("chunk count is an int");
+    assert_eq!(chunks, 1, "the two writes arrive as one read");
+    let text = ev.eval_symbol("held-text").expect("text");
+    assert_eq!(text.as_runtime_string_owned().as_deref(), Some("a\nb\n"));
+    let first = ev.eval_symbol("held-first-chunk").expect("first chunk");
+    assert_eq!(first.as_runtime_string_owned().as_deref(), Some("a\nb\n"));
 }
 
 /// Two skipping processes cost one wait bounded by the shorter delay.
