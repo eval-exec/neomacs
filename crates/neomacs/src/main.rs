@@ -1114,8 +1114,17 @@ fn startup_dimensions(
             }
             // TTY frames use 1x1 character cells (GNU Emacs frame.c:1184-1185),
             // so frame dimensions are in character cells, not pixels.
-            let (cols, rows) = tty_init::query_terminal_size_cells().unwrap_or((80, 25));
-            (cols, rows)
+            // GNU `init_tty` (term.c:4805-4814) replaces an ioctl side `<= 0`
+            // with termcap `co`/`li`, and `vfatal`s below 3×3. The initial
+            // terminal is the fatal call (dispnew.c:7348). `make-terminal-frame`
+            // does not use this size.
+            match tty_init::initial_tty_startup_cells() {
+                Ok(cells) => cells,
+                Err(error) => {
+                    eprintln!("emacs: {error}");
+                    std::process::exit(1);
+                }
+            }
         }
     }
 }

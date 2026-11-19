@@ -11,6 +11,8 @@
 use super::terminal_capabilities::StringCapability;
 use super::terminal_capabilities::TerminalCapabilityDatabase;
 use super::{FrontendKind, StartupOptions};
+use std::fmt;
+
 use neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities;
 use neomacs_display_runtime::tty_input::{
     TerminalCellSize, TerminalColumns, TerminalRows, TerminalSizeQuery,
@@ -288,6 +290,92 @@ pub fn initial_tty_winsize_cells() -> (u32, u32) {
         Ok(size) => (u32::from(size.columns()), u32::from(size.rows())),
         Err(_) => (0, 0),
     }
+}
+
+/// GNU `init_tty` refuses this screen (`term.c:4810-4814`, `vfatal` at 4936).
+///
+/// `cols` and `rows` are the signed sizes after the `co`/`li` fallback, in
+/// that order. `tgetnum` returns -1 when the capability is missing, and the
+/// message prints that value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct InitialTtySizeError {
+    cols: i32,
+    rows: i32,
+}
+
+impl fmt::Display for InitialTtySizeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "Screen size {}x{} is too small",
+            self.cols, self.rows
+        )
+    }
+}
+
+/// Initial-terminal cells from an ioctl report and termcap `co`/`li`.
+///
+/// GNU `init_tty` (`term.c:4800-4814`) keeps a positive ioctl side and, only
+/// when that side is `<= 0`, replaces it with `tgetnum("co")` or
+/// `tgetnum("li")`. Either side below 3 is fatal. This is the initial frame
+/// only. `make-terminal-frame` keeps [`initial_tty_winsize_cells`], including
+/// a raw `(0, 0)`.
+pub(crate) fn initial_tty_cells_from_ioctl(
+    ioctl_cols: i32,
+    ioctl_rows: i32,
+    co: i32,
+    li: i32,
+) -> Result<(u32, u32), InitialTtySizeError> {
+    let cols = if ioctl_cols > 0 { ioctl_cols } else { co };
+    let rows = if ioctl_rows > 0 { ioctl_rows } else { li };
+    if cols < 3 || rows < 3 {
+        return Err(InitialTtySizeError { cols, rows });
+    }
+    Ok((
+        u32::try_from(cols).unwrap_or(u32::MAX),
+        u32::try_from(rows).unwrap_or(u32::MAX),
+    ))
+}
+
+/// Size of the initial interactive terminal.
+///
+/// A positive ioctl wins, so an 80×24 pty stays 80×24. A non-positive side
+/// reads `co` or `li` through neomacs-terminfo (`tgetnum`). A missing number
+/// is -1, the same answer GNU's `tgetnum` gives, and then fails the 3×3 check.
+pub(crate) fn initial_tty_startup_cells() -> Result<(u32, u32), InitialTtySizeError> {
+    let (ioctl_cols, ioctl_rows) = initial_tty_winsize_cells();
+    let ioctl_cols = reported_tty_dimension(ioctl_cols);
+    let ioctl_rows = reported_tty_dimension(ioctl_rows);
+    let (co, li) = if ioctl_cols <= 0 || ioctl_rows <= 0 {
+        termcap_co_li()
+    } else {
+        (0, 0)
+    };
+    initial_tty_cells_from_ioctl(ioctl_cols, ioctl_rows, co, li)
+}
+
+fn reported_tty_dimension(value: u32) -> i32 {
+    i32::try_from(value).unwrap_or(i32::MAX)
+}
+
+/// Termcap `co` and `li` for `TERM`, or -1 when the name or the number is absent.
+fn termcap_co_li() -> (i32, i32) {
+    let Some(term) = detect_tty_type() else {
+        return (-1, -1);
+    };
+    let Ok(database) = neomacs_terminfo::Database::load(
+        &term,
+        &[
+            neomacs_terminfo::Query::TermcapNumber("co"),
+            neomacs_terminfo::Query::TermcapNumber("li"),
+        ],
+    ) else {
+        return (-1, -1);
+    };
+    (
+        database.termcap_number("co").unwrap_or(-1),
+        database.termcap_number("li").unwrap_or(-1),
+    )
 }
 
 fn legacy_terminal_columns_rows(size: TerminalCellSize) -> (u32, u32) {
