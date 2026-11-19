@@ -8,6 +8,14 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      job:
+        description: >-
+          Job id to run, or all. One source for a single job, including
+          neomacs-xwidget-webview-gui. Push, pull request, and schedule
+          ignore this and run the suite.
+        type: string
+        default: all
   schedule:
     - cron: "17 5 * * 0"
 
@@ -21,6 +29,7 @@ permissions:
 jobs:
   neomacs-workspace-test-archive:
     name: workspace test archive (linux x86_64)
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.job == 'all' || github.event.inputs.job == 'neomacs-workspace-test-archive' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
@@ -124,6 +133,7 @@ jobs:
 
   neomacs-daemon-lifecycle:
     name: daemon lifecycle (linux, matching debug runtime)
+    if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || github.event.inputs.job == 'all' || github.event.inputs.job == 'neomacs-daemon-lifecycle') && (github.event.inputs.job == 'neomacs-daemon-lifecycle' || needs.gnu-emacs-oracle.result == 'success') }}
     needs: gnu-emacs-oracle
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -156,7 +166,7 @@ jobs:
 
   neomacs-melpa-direct-windows-tests:
     name: MELPA direct adapter Job Object contracts (windows x86_64)
-    if: ${{ github.event_name != 'schedule' }}
+    if: ${{ github.event_name != 'schedule' && (github.event_name != 'workflow_dispatch' || github.event.inputs.job == 'all' || github.event.inputs.job == 'neomacs-melpa-direct-windows-tests') }}
     runs-on: windows-latest
     timeout-minutes: 30
     env:
@@ -195,7 +205,7 @@ jobs:
           --no-fail-fast
 
   neovm-core-tests:
-    if: ${{ github.event_name != 'schedule' }}
+    if: ${{ !cancelled() && github.event_name != 'schedule' && (github.event_name != 'workflow_dispatch' || github.event.inputs.job == 'all' || github.event.inputs.job == 'neovm-core-tests') && (github.event.inputs.job == 'neovm-core-tests' || (needs.neomacs-test-runtime.result == 'success' && needs.neomacs-workspace-test-archive.result == 'success' && needs.gnu-emacs-oracle.result == 'success')) }}
     # The core shards spawn GNU directly in their parity tests, so they need
     # the pinned oracle. Depending on the warming job also means they restore
     # its cached build instead of compiling Emacs twenty times in parallel.
@@ -223,7 +233,7 @@ jobs:
   # job cannot lose it.
   neovm-core-tests-macos:
     name: neovm-core tests (macos aarch64)
-    if: ${{ github.event_name != 'schedule' }}
+    if: ${{ !cancelled() && github.event_name != 'schedule' && (github.event_name != 'workflow_dispatch' || github.event.inputs.job == 'all' || github.event.inputs.job == 'neovm-core-tests-macos') && (github.event.inputs.job == 'neovm-core-tests-macos' || needs.gnu-emacs-oracle-macos.result == 'success') }}
     needs: [gnu-emacs-oracle-macos]
     runs-on: macos-latest
     timeout-minutes: 150
@@ -324,6 +334,7 @@ jobs:
   # watchdog sized for a fixture crate build instead of a unit test.
   compile-contracts:
     name: compile contracts (linux x86_64)
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.job == 'all' || github.event.inputs.job == 'compile-contracts' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
@@ -413,7 +424,7 @@ jobs:
   # bless rewrote 9 of them). This job is their gate.
   compile-contracts-macos:
     name: compile contracts (macos aarch64)
-    if: ${{ github.event_name != 'schedule' }}
+    if: ${{ github.event_name != 'schedule' && (github.event_name != 'workflow_dispatch' || github.event.inputs.job == 'all' || github.event.inputs.job == 'compile-contracts-macos') }}
     runs-on: macos-latest
     timeout-minutes: 120
     env:
@@ -465,6 +476,7 @@ jobs:
 
   gnu-emacs-oracle:
     name: GNU Emacs oracle (linux x86_64)
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.job == 'all' || github.event.inputs.job == 'gnu-emacs-oracle' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -482,6 +494,7 @@ jobs:
 
   gnu-emacs-oracle-macos:
     name: GNU Emacs oracle (macos aarch64)
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.job == 'all' || github.event.inputs.job == 'gnu-emacs-oracle-macos' }}
     runs-on: macos-latest
     timeout-minutes: 60
     steps:
@@ -505,6 +518,7 @@ jobs:
 
   neomacs-test-runtime:
     name: Packaged Neomacs Runtime (linux x86_64)
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.job == 'all' || github.event.inputs.job == 'neomacs-test-runtime' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 150
     env:
@@ -757,14 +771,14 @@ jobs:
           retention-days: 1
 
   neovm-oracle-tests:
-    if: ${{ github.event_name != 'schedule' }}
+    if: ${{ !cancelled() && github.event_name != 'schedule' && (github.event_name != 'workflow_dispatch' || github.event.inputs.job == 'all' || github.event.inputs.job == 'neovm-oracle-tests') && (github.event.inputs.job == 'neovm-oracle-tests' || (needs.neomacs-test-runtime.result == 'success' && needs.neomacs-workspace-test-archive.result == 'success' && needs.gnu-emacs-oracle.result == 'success')) }}
     needs: [neomacs-test-runtime, neomacs-workspace-test-archive, gnu-emacs-oracle]
     uses: ./.github/workflows/nextest-shards.yml
     with:
       suite: oracle
 
   neomacs-tui-tests:
-    if: ${{ github.event_name != 'schedule' }}
+    if: ${{ !cancelled() && github.event_name != 'schedule' && (github.event_name != 'workflow_dispatch' || github.event.inputs.job == 'all' || github.event.inputs.job == 'neomacs-tui-tests') && (github.event.inputs.job == 'neomacs-tui-tests' || (needs.neomacs-test-runtime.result == 'success' && needs.neomacs-workspace-test-archive.result == 'success' && needs.gnu-emacs-oracle.result == 'success')) }}
     needs: [neomacs-test-runtime, neomacs-workspace-test-archive, gnu-emacs-oracle]
     uses: ./.github/workflows/nextest-shards.yml
     with:
@@ -777,7 +791,7 @@ jobs:
     # watchers key per-job baselines on it (tmp/v10x/ci/ci-watch.sh), and a
     # renamed job would lose its baseline.
     name: MELPA ${{ matrix.suite }} compatibility and GNU parity (linux x86_64)
-    if: ${{ github.event_name != 'schedule' }}
+    if: ${{ !cancelled() && github.event_name != 'schedule' && (github.event_name != 'workflow_dispatch' || github.event.inputs.job == 'all' || github.event.inputs.job == 'neomacs-melpa-tests') && (github.event.inputs.job == 'neomacs-melpa-tests' || (needs.neomacs-test-runtime.result == 'success' && needs.neomacs-workspace-test-archive.result == 'success' && needs.gnu-emacs-oracle.result == 'success')) }}
     needs: [neomacs-test-runtime, neomacs-workspace-test-archive, gnu-emacs-oracle]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -914,7 +928,7 @@ jobs:
 
   neomacs-display-tests:
     name: display stack tests (linux x86_64)
-    if: ${{ github.event_name != 'schedule' }}
+    if: ${{ !cancelled() && github.event_name != 'schedule' && (github.event_name != 'workflow_dispatch' || github.event.inputs.job == 'all' || github.event.inputs.job == 'neomacs-display-tests') && (github.event.inputs.job == 'neomacs-display-tests' || (needs.neomacs-test-runtime.result == 'success' && needs.neomacs-workspace-test-archive.result == 'success')) }}
     # The layout-engine tests bootstrap GNU Lisp through neovm-core, which
     # reads the workspace's lisp/ tree.  The checkout has the tracked sources
     # but not the generated ones (lisp/international/charscript.el,
@@ -994,7 +1008,7 @@ jobs:
 
   neomacs-prefix-face-tui-parity:
     name: GNU prefix face TUI parity (linux x86_64)
-    if: ${{ github.event_name != 'schedule' }}
+    if: ${{ !cancelled() && github.event_name != 'schedule' && (github.event_name != 'workflow_dispatch' || github.event.inputs.job == 'all' || github.event.inputs.job == 'neomacs-prefix-face-tui-parity') && (github.event.inputs.job == 'neomacs-prefix-face-tui-parity' || (needs.neomacs-test-runtime.result == 'success' && needs.neomacs-workspace-test-archive.result == 'success' && needs.gnu-emacs-oracle.result == 'success')) }}
     needs: [neomacs-test-runtime, neomacs-workspace-test-archive, gnu-emacs-oracle]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -1046,7 +1060,7 @@ jobs:
 
   neomacs-gui-tests:
     name: real GUI tests (linux x86_64, X11 + Wayland)
-    if: ${{ github.event_name != 'schedule' }}
+    if: ${{ !cancelled() && github.event_name != 'schedule' && (github.event_name != 'workflow_dispatch' || github.event.inputs.job == 'all' || github.event.inputs.job == 'neomacs-gui-tests') && (github.event.inputs.job == 'neomacs-gui-tests' || (needs.neomacs-test-runtime.result == 'success' && needs.neomacs-workspace-test-archive.result == 'success' && needs.gnu-emacs-oracle.result == 'success')) }}
     needs: [neomacs-test-runtime, neomacs-workspace-test-archive, gnu-emacs-oracle]
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -1255,7 +1269,7 @@ jobs:
   # in ~4.05 s each (2026-11-18, WPE WebKit 2.52.3).
   neomacs-xwidget-webview-gui:
     name: xwidget webview page composition (linux x86_64, X11)
-    if: ${{ github.event_name != 'schedule' }}
+    if: ${{ github.event_name != 'schedule' && (github.event_name != 'workflow_dispatch' || github.event.inputs.job == 'all' || github.event.inputs.job == 'neomacs-xwidget-webview-gui') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
@@ -1303,7 +1317,7 @@ jobs:
 
   doom-install-compatibility:
     name: doom install compatibility (linux x86_64)
-    if: ${{ github.event_name != 'schedule' }}
+    if: ${{ !cancelled() && github.event_name != 'schedule' && (github.event_name != 'workflow_dispatch' || github.event.inputs.job == 'all' || github.event.inputs.job == 'doom-install-compatibility') && (github.event.inputs.job == 'doom-install-compatibility' || needs.neomacs-test-runtime.result == 'success') }}
     needs: neomacs-test-runtime
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -1330,7 +1344,7 @@ jobs:
   # never reads, for no ordering benefit.
   doom-install-compatibility-macos:
     name: doom install compatibility (macos aarch64)
-    if: ${{ github.event_name != 'schedule' }}
+    if: ${{ github.event_name != 'schedule' && (github.event_name != 'workflow_dispatch' || github.event.inputs.job == 'all' || github.event.inputs.job == 'doom-install-compatibility-macos') }}
     runs-on: macos-latest
     timeout-minutes: 120
     env:
