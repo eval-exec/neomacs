@@ -1124,6 +1124,7 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl P
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessKind::name
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessManager::adaptive_read_timeout
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessManager::clear_adaptive_read_skip_if_needed
+crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessManager::clear_adaptive_read_skips
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessManager::clear_status_notify_pending
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessManager::create_process_record
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessManager::find_by_buffer_id
@@ -1145,6 +1146,7 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl P
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessManager::set_child_status_pending
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessManager::set_default_read_config
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessManager::setenv
+crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessManager::skipping_adaptive_read_ids
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessManager::stderr_pipe_owner
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessManager::sync_process_mark
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessManager::was_issued_id
@@ -1188,6 +1190,7 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn make_n
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn os_str_to_lisp_string
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn print_process_handle
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn process_contact_server_p
+crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn process_defers_adaptive_read
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn process_effective_status
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn process_filter_accepts_output
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn process_has_readable_process_io

@@ -11097,6 +11097,243 @@ fn adaptive_read_buffering_coalesces_spaced_short_writes_like_gnu() {
     assert_eq!(result, "OK (t t t t t)");
 }
 
+struct KillChildren(Vec<u32>);
+
+impl Drop for KillChildren {
+    fn drop(&mut self) {
+        for pid in &self.0 {
+            let _ = std::process::Command::new("kill")
+                .args(["-KILL", &pid.to_string()])
+                .status();
+        }
+    }
+}
+
+fn arm_skipping_sleeper(ev: &mut Context, name: &str, delay_ms: u64) -> (ProcessId, u32) {
+    let sh = find_bin("sh");
+    let value = ev
+        .eval_str(&format!(
+            r#"(make-process :name "{name}" :buffer nil :connection-type 'pipe :noquery t :command '("{sh}" "-c" "read _"))"#
+        ))
+        .unwrap_or_else(|err| panic!("spawn {name}: {err:?}"));
+    let id = value.as_process_id().expect("process id");
+    {
+        let proc = ev.processes_mut().get_mut(id).expect("process record");
+        proc.adaptive_read_buffering = 1;
+        proc.read_output_delay = Duration::from_millis(delay_ms);
+        proc.read_output_skip = true;
+    }
+    let pid = ev
+        .processes()
+        .get(id)
+        .and_then(|proc| proc.os_pid)
+        .expect("child pid");
+    (id, pid)
+}
+
+/// Two skipping processes cost one wait bounded by the shorter delay.
+///
+/// GNU `FD_CLR`s every skipping channel and sets the select timeout to the
+/// minimum `read_output_delay` (src/process.c:5690-5709). Sleeping once per
+/// process in the service loop makes the wait entry itself cost the sum.
+#[test]
+fn adaptive_read_two_skippers_share_one_wait() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = crate::emacs_core::eval_hook_installers::new_context();
+    ev.eval_str("(setq process-adaptive-read-buffering t)")
+        .expect("enable adaptive read buffering");
+    let (_slow, slow_pid) = arm_skipping_sleeper(&mut ev, "adaptive-skip-slow", 50);
+    let (_fast, fast_pid) = arm_skipping_sleeper(&mut ev, "adaptive-skip-fast", 40);
+    let _kill = KillChildren(vec![slow_pid, fast_pid]);
+
+    let entered = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let slot = std::sync::Arc::clone(&entered);
+    let started = Instant::now();
+    ev.processes_mut()
+        .before_next_backend_wait_for_test(move |entry| {
+            *slot.lock().expect("wait entry") =
+                Some((started.elapsed(), entry.requested_timeout()));
+        });
+    builtin_accept_process_output(&mut ev, vec![Value::NIL, Value::make_float(0.25)])
+        .expect("accept-process-output");
+
+    let (elapsed, timeout) = entered
+        .lock()
+        .expect("wait entry")
+        .expect("the accept entered one backend wait");
+    assert!(
+        elapsed < Duration::from_millis(75),
+        "two skippers delayed the wait entry by {elapsed:?}; GNU spends one delay inside the wait"
+    );
+    assert_eq!(
+        timeout,
+        Duration::from_millis(40),
+        "the shared wait is the minimum skip delay"
+    );
+}
+
+/// Output from a process that is not skipping is serviced before the adaptive
+/// delay of the skippers ends (src/process.c:5701 leaves every other fd in
+/// the select set).
+#[test]
+fn adaptive_read_other_process_output_wakes_before_delay() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = crate::emacs_core::eval_hook_installers::new_context();
+    ev.eval_str("(setq process-adaptive-read-buffering t)")
+        .expect("enable adaptive read buffering");
+    ev.eval_str("(setq adaptive-peer-text \"\")")
+        .expect("peer text");
+    let sh = find_bin("sh");
+    let peer = ev
+        .eval_str(&format!(
+            r#"(make-process :name "adaptive-peer" :buffer nil :connection-type 'pipe :noquery t :filter (lambda (_ text) (setq adaptive-peer-text (concat adaptive-peer-text text))) :command '("{sh}" "-c" "IFS= read -r line; printf '%s\\n' \"$line\""))"#
+        ))
+        .expect("spawn peer");
+    let peer_id = peer.as_process_id().expect("peer id");
+    let peer_pid = ev
+        .processes()
+        .get(peer_id)
+        .and_then(|proc| proc.os_pid)
+        .expect("peer pid");
+    let mut peer_input = ev
+        .processes()
+        .get(peer_id)
+        .expect("peer")
+        .live_io
+        .child
+        .stdin()
+        .expect("peer stdin")
+        .try_clone()
+        .expect("clone peer stdin");
+    let (_slow, slow_pid) = arm_skipping_sleeper(&mut ev, "adaptive-peer-skip-a", 50);
+    let (_fast, fast_pid) = arm_skipping_sleeper(&mut ev, "adaptive-peer-skip-b", 50);
+    let _kill = KillChildren(vec![peer_pid, slow_pid, fast_pid]);
+
+    ev.processes_mut()
+        .before_next_backend_wait_for_test(move |_entry| {
+            use std::io::Write;
+            peer_input.write_all(b"ready\n").expect("write peer stdin");
+            peer_input.flush().expect("flush peer stdin");
+        });
+    let started = Instant::now();
+    let outcome = builtin_accept_process_output(&mut ev, vec![Value::NIL, Value::make_float(0.25)])
+        .expect("accept-process-output");
+    let elapsed = started.elapsed();
+    let peer_text = ev
+        .eval_symbol("adaptive-peer-text")
+        .expect("peer text variable");
+    assert_eq!(
+        peer_text.as_runtime_string_owned().as_deref(),
+        Some("ready\n"),
+        "peer text {peer_text:?} as {:?} after {elapsed:?} outcome {outcome:?}",
+        peer_text.as_runtime_string_owned()
+    );
+    assert!(
+        elapsed < Duration::from_millis(75),
+        "peer output waited out the skippers: {elapsed:?}"
+    );
+}
+
+/// A timer due during the adaptive delay fires on that deadline. GNU runs
+/// `timer_check` and lets the timer shorten the select (src/process.c:5489
+/// and :5720-5729); a per-process sleep in front of the wait holds the timer
+/// until every skipper has slept.
+#[test]
+fn adaptive_read_timer_fires_during_skip_delay() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = crate::emacs_core::eval_hook_installers::new_context();
+    ev.eval_str(
+        r#"(progn
+            (setq process-adaptive-read-buffering t)
+            (fset 'timer-event-handler
+                  (lambda (timer)
+                    (setq timer-list (delq timer timer-list))
+                    (apply (aref timer 5) (aref timer 6))))
+            (fset 'adaptive-timer-fired
+                  (lambda ()
+                    (setq adaptive-timer-ran t)
+                    (setq adaptive-timer-delay (- (float-time) adaptive-timer-start))
+                    (setq adaptive-timer-on-time
+                          (let ((delay adaptive-timer-delay))
+                            (and (> delay 0.005) (< delay 0.060))))))
+            (setq adaptive-timer-on-time nil)
+            (setq adaptive-timer-ran nil)
+            (setq adaptive-timer-delay nil))"#,
+    )
+    .expect("timer handler");
+    let (_slow, slow_pid) = arm_skipping_sleeper(&mut ev, "adaptive-timer-skip-a", 50);
+    let (_fast, fast_pid) = arm_skipping_sleeper(&mut ev, "adaptive-timer-skip-b", 50);
+    let _kill = KillChildren(vec![slow_pid, fast_pid]);
+    ev.eval_str("(setq adaptive-timer-start (float-time))")
+        .expect("timer start");
+    ev.set_variable(
+        "timer-list",
+        Value::list(vec![gnu_timer_after(
+            Duration::from_millis(20),
+            "adaptive-timer-fired",
+        )]),
+    );
+
+    let started = Instant::now();
+    let outcome = builtin_accept_process_output(&mut ev, vec![Value::NIL, Value::make_float(0.25)])
+        .expect("accept-process-output");
+    let elapsed = started.elapsed();
+    let on_time = ev
+        .eval_symbol("adaptive-timer-on-time")
+        .expect("timer stamp");
+    let ran = ev.eval_symbol("adaptive-timer-ran").expect("timer ran");
+    let delay = ev.eval_symbol("adaptive-timer-delay").expect("timer delay");
+    assert_eq!(
+        on_time,
+        Value::T,
+        "timer did not fire inside the adaptive delay (ran={ran:?} delay={delay:?} elapsed={elapsed:?} outcome={outcome:?})"
+    );
+}
+
+/// Pending keyboard input wakes a command wait that is also deferring
+/// skipping processes. GNU skips the select when input is already pending
+/// and keeps the keyboard fd in the set otherwise (src/process.c:5656-5671
+/// and :5623-5624). The input harness publishes one key when the backend
+/// wait is entered.
+#[test]
+fn adaptive_read_command_input_wakes_during_skip_delay() {
+    use crate::test_utils::input_wait::{InputGateOwner, WaitWitness};
+    crate::test_utils::init_test_tracing();
+    let mut ev = crate::emacs_core::eval_hook_installers::new_context();
+    ev.eval_str("(setq process-adaptive-read-buffering t)")
+        .expect("enable adaptive read buffering");
+    let (_slow, slow_pid) = arm_skipping_sleeper(&mut ev, "adaptive-key-skip-a", 50);
+    let (_fast, fast_pid) = arm_skipping_sleeper(&mut ev, "adaptive-key-skip-b", 50);
+    let _kill = KillChildren(vec![slow_pid, fast_pid]);
+
+    let input_owner = InputGateOwner::install(&mut ev);
+    let (gate, publication) = input_owner.gate(vec![
+        neovm_eval::emacs_core::eval::keyboard::InputEvent::key_press(
+            neovm_eval::emacs_core::eval::keyboard::KeyEvent::char('z'),
+        ),
+    ]);
+    gate.arm(&mut ev, WaitWitness::InputWaitEntered);
+
+    let started = Instant::now();
+    let completion = ev.wait_for_command_input(Some(Instant::now() + Duration::from_secs(1)));
+    let elapsed = started.elapsed();
+    assert_eq!(
+        publication
+            .finish()
+            .expect("keyboard wait was entered")
+            .witness,
+        WaitWitness::InputWaitEntered
+    );
+    assert_eq!(
+        completion.expect("command input"),
+        CommandInputWaitOutcome::InputPending
+    );
+    assert!(
+        elapsed < Duration::from_millis(75),
+        "keyboard input waited out the skippers: {elapsed:?}"
+    );
+}
+
 #[test]
 fn internal_default_process_filter_inserts_while_another_buffer_is_read_only() {
     // neomacs#192 (magit-blame shows nothing): magit's blame filter calls

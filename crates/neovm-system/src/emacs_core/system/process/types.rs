@@ -4325,6 +4325,40 @@ pub trait SystemProcessExt {
     fn processes_with_unnotified_status_change(&self) -> Vec<ProcessId>;
 }
 
+/// Drop read interest for skipping adaptive-read channels for one wait.
+///
+/// The poller is level-triggered, so leaving a readable skipped fd
+/// registered makes `poller.wait` return immediately and the service loop
+/// spins. Child-status and write sources stay registered: GNU `FD_CLR`s
+/// only the process channel (src/process.c:5701). A filter of `t` is
+/// already out of the read set; restoring interest must not put it back.
+///
+/// These are free functions because [`ProcessManager`] lives in `neovm-eval`
+/// and the poller registration lives on [`SystemProcessExt`].
+pub(crate) fn suspend_skipping_adaptive_reads(processes: &ProcessManager) -> Vec<ProcessId> {
+    let ids = processes.skipping_adaptive_read_ids();
+    for &id in &ids {
+        let accepts = processes.get(id).is_some_and(process_filter_accepts_output);
+        if accepts {
+            processes.set_process_output_read_interest(id, false);
+        }
+    }
+    ids
+}
+
+/// Put suspended read fds back and clear the skip flags. GNU clears
+/// `read_output_skip` before `pselect` returns, so the next pass reads
+/// whatever arrived during the one shared delay (src/process.c:5702-5709).
+pub(crate) fn restore_skipping_adaptive_reads(processes: &mut ProcessManager, ids: &[ProcessId]) {
+    for &id in ids {
+        let accepts = processes.get(id).is_some_and(process_filter_accepts_output);
+        if accepts {
+            processes.set_process_output_read_interest(id, true);
+        }
+    }
+    processes.clear_adaptive_read_skips(ids);
+}
+
 impl SystemProcessExt for ProcessManager {
     fn register_readable_source(
         poller: &polling::Poller,
@@ -8932,17 +8966,16 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
                 continue;
             }
             if target_process.is_none()
-                && let Some(delay) = self.processes_mut().clear_adaptive_read_skip_if_needed(pid)
+                && self
+                    .processes()
+                    .get(pid)
+                    .is_some_and(process_defers_adaptive_read)
             {
-                // GNU `wait_reading_process_output` (src/process.c:5681-5717)
-                // drops a process with `read_output_skip` from the select set
-                // and bounds that wait by the adaptive delay, so the child's
-                // queued short writes are read together on the next pass.
-                // Neo's ready-fd pass would otherwise read again immediately
-                // and defeat `process-adaptive-read-buffering` entirely.
-                // Spending the delay here gives the same read-time
-                // coalescing; it is bounded by READ_OUTPUT_DELAY_MAX.
-                std::thread::sleep(delay);
+                // GNU `wait_reading_process_output` (src/process.c:5690-5709)
+                // FD_CLRs a skipping channel and does not read it on this
+                // pass. The wait excludes that fd and bounds one timeout by
+                // the minimum delay. Sleeping here would stall timers,
+                // keyboard input, and every other process once per skipper.
                 continue;
             }
 

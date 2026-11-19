@@ -2146,6 +2146,13 @@ pub fn process_filter_accepts_output(proc: &Process) -> bool {
     ProcessFilterDispatch::from_lisp(proc.filter).accepts_output()
 }
 
+/// GNU `read_output_skip` with a positive delay: this channel is left out of
+/// the current wait (src/process.c:5696-5703). `adaptive_read_buffering == 0`
+/// is the nil default and never defers.
+pub fn process_defers_adaptive_read(proc: &Process) -> bool {
+    proc.adaptive_read_buffering != 0 && proc.read_output_skip && !proc.read_output_delay.is_zero()
+}
+
 pub(crate) fn pending_network_connect_has_ready_async_dns(pending: &PendingNetworkConnect) -> bool {
     matches!(pending, PendingNetworkConnect::Dns(request) if request.is_ready())
 }
@@ -2274,38 +2281,44 @@ impl ProcessManager {
         self.default_read_config = config;
     }
 
+    /// Minimum `read_output_delay` among processes GNU would drop from this
+    /// select, capped at `READ_OUTPUT_DELAY_MAX`.
+    ///
+    /// GNU applies that minimum only to channels with `read_output_skip` set
+    /// (src/process.c:5694-5708). A process that still has a delay from an
+    /// earlier short read, but is not skipping, stays in the select and does
+    /// not shorten it.
     pub fn adaptive_read_timeout(&self) -> Option<Duration> {
         self.processes
             .values()
-            .filter(|process| process.adaptive_read_buffering != 0)
-            .filter_map(|process| {
-                (!process.read_output_delay.is_zero()).then_some(process.read_output_delay)
-            })
+            .filter(|process| process_defers_adaptive_read(process))
+            .map(|process| process.read_output_delay)
             .min()
             .map(|delay| delay.min(Duration::from_millis(READ_OUTPUT_DELAY_MAX_MS)))
     }
 
-    /// Consume a pending adaptive-read skip for `id`.
-    ///
-    /// GNU `wait_reading_process_output` (src/process.c:5681-5717) removes a
-    /// process with `read_output_skip` from the select set, bounds that wait by
-    /// `read_output_delay` (capped at `READ_OUTPUT_DELAY_MAX`), and clears the
-    /// skip flag, so the child's queued short writes are read together on the
-    /// next pass. Return the delay the caller must spend before servicing the
-    /// process again; `None` when no skip is pending.
-    pub fn clear_adaptive_read_skip_if_needed(&mut self, id: ProcessId) -> Option<Duration> {
-        let proc = self.processes.get_mut(&id)?;
-        if proc.adaptive_read_buffering == 0
-            || proc.read_output_delay.is_zero()
-            || !proc.read_output_skip
-        {
-            return None;
+    /// Processes whose read fds GNU would `FD_CLR` for this wait
+    /// (src/process.c:5696-5703).
+    pub fn skipping_adaptive_read_ids(&self) -> Vec<ProcessId> {
+        let mut ids: Vec<_> = self
+            .processes
+            .iter()
+            .filter(|(_, process)| process_defers_adaptive_read(process))
+            .map(|(id, _)| *id)
+            .collect();
+        ids.sort_unstable();
+        ids
+    }
+
+    /// Clear `read_output_skip` on `ids`. GNU clears the flag while removing
+    /// the channel from the select set, so it is already clear when `pselect`
+    /// returns (src/process.c:5702-5709).
+    pub fn clear_adaptive_read_skips(&mut self, ids: &[ProcessId]) {
+        for id in ids {
+            if let Some(proc) = self.processes.get_mut(id) {
+                proc.read_output_skip = false;
+            }
         }
-        proc.read_output_skip = false;
-        Some(
-            proc.read_output_delay
-                .min(Duration::from_millis(READ_OUTPUT_DELAY_MAX_MS)),
-        )
     }
 
     #[allow(clippy::too_many_arguments)]
