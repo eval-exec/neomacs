@@ -27,8 +27,15 @@ fn div_cx338_repeat_timer_fires_multiple() {
     crate::common::assert_oracle_parity_expect(
         r##"
 (let (fired)
+  ;; Drive the timer's own handler twice instead of sleeping: under heavy
+  ;; scheduling delay both GNU Emacs and Neomacs may coalesce a 1ms repeating
+  ;; timer into one wake inside `(sit-for 0.02)', so the old form asserted a
+  ;; property of the scheduler, not of timer repetition.  `timer-event-handler'
+  ;; is the function the timer dispatcher itself calls; two calls exercise the
+  ;; repeat/re-arm path deterministically.
   (let ((timer (run-with-timer 0 0.001 (lambda () (push :tick fired)))))
-    (sit-for 0.02)
+    (timer-event-handler timer)
+    (timer-event-handler timer)
     (cancel-timer timer))
   (list (> (length fired) 1)
         (catch 'bad

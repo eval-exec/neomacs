@@ -104,8 +104,9 @@ pub mod child_wait;
 pub(crate) use child_wait::ChildWait;
 #[cfg(unix)]
 pub(crate) use child_wait::poll_child_status;
-// The raw-status decode entry point is currently only exercised by status-decode
-// tests; production reaps through `poll_child_status`.
+// The raw-status decode entry point: `poll_child_status` (the production
+// reaper, child_wait.rs:35) calls it at child_wait.rs:46; the status-decode
+// tests reach it through this re-export.
 #[cfg(all(unix, any(test, feature = "test-support")))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) use child_wait::decode_wait_status;

@@ -64,7 +64,8 @@ pub use cache_root_scan::CacheRootScan;
 /// is the SATB log keyed on `concurrent_mark_running`. The dump remembered set is
 /// maintained unconditionally in `record_heap_write` regardless of this mode.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum WriteTrackingMode {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) enum WriteTrackingMode {
     Disabled,
     OwnersAndRecords,
 }
@@ -1079,6 +1080,10 @@ pub struct TaggedHeap {
     /// is N-mutator ready. Appended after the frozen store ABI fields, so no
     /// pinned offset moves.
     overlay_serial: crate::heap_types::OverlaySerialCounter,
+    /// Retired process fields armed for the next stop-the-world full cycle.
+    retired_process_ephemerons: FxHashMap<crate::heap_types::ProcessId, Vec<TaggedValue>>,
+    /// Process ids whose ephemeron keys were unreachable in the last full cycle.
+    reclaimed_process_ids: Vec<crate::heap_types::ProcessId>,
     /// Killed-buffer fields armed for the next stop-the-world full cycle.
     killed_buffer_ephemerons: FxHashMap<crate::value::buffer_vocab::BufferId, Vec<TaggedValue>>,
     /// Buffer ids whose ephemeron keys were unreachable in the last full cycle.
@@ -1217,6 +1222,8 @@ impl TaggedHeap {
             #[cfg(any(test, feature = "test-support"))]
             mapped_veclike_traces: 0,
             overlay_serial: crate::heap_types::OverlaySerialCounter::new(),
+            retired_process_ephemerons: FxHashMap::default(),
+            reclaimed_process_ids: Vec::new(),
             killed_buffer_ephemerons: FxHashMap::default(),
             reclaimed_buffer_ids: Vec::new(),
             dirty_owner_bits: FxHashSet::default(),
@@ -1399,7 +1406,8 @@ impl TaggedHeap {
         }
     }
 
-    pub fn set_write_tracking_mode(&mut self, mode: WriteTrackingMode) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn set_write_tracking_mode(&mut self, mode: WriteTrackingMode) {
         self.write_tracking_mode = mode;
         TAGGED_HEAP_WRITE_TRACKING_MODE.with(|current| current.set(mode));
         // SAFETY: the executing mutator holds this heap's exclusive loan; no
@@ -1411,7 +1419,8 @@ impl TaggedHeap {
         }
     }
 
-    pub fn write_tracking_mode(&self) -> WriteTrackingMode {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn write_tracking_mode(&self) -> WriteTrackingMode {
         self.write_tracking_mode
     }
 
@@ -2498,6 +2507,9 @@ pub mod alloc_probe;
 #[cfg(test)]
 #[path = "gc/tests/layout_stats_test.rs"]
 mod layout_stats_tests;
+#[cfg(test)]
+#[path = "gc/tests/slot_store_test.rs"]
+mod slot_store_tests;
 
 #[cfg(test)]
 #[path = "gc/tests/pacer_test.rs"]
@@ -2683,7 +2695,7 @@ pub(crate) use collection_observed::collection_observed;
 pub(crate) use collection_observed::collection_observed_metadata;
 pub(crate) use collection_observed::{
     advance_collection_observation_epoch, clear_noncons_collection_observed_metadata,
-    mark_collection_observed,
+    mark_collection_observed, reclaimed_collection_observation_count,
 };
 use collection_observed::{
     clear_cons_observed_block, clear_cons_observed_dead, has_noncons_collection_observations,
@@ -2781,6 +2793,18 @@ pub use facade_mark::{
     ConcurrentMarkPermit, FacadeEpochRetention, FacadeMarkExclusion, FacadeMarkExclusionError,
     QuiescentCollector,
 };
+pub use mutator_registration::FunctionCallCache;
+pub use mutator_registration::KeeperTableMut;
+pub use mutator_registration::MutatorPermit;
+pub use mutator_registration::NativeRoots;
+pub use mutator_registration::OwnerPublication;
+pub use mutator_registration::ResumeGcImage;
+pub use mutator_registration::SealedTableAccess;
+pub use mutator_registration::SliceRoot;
+pub use mutator_registration::SymbolMut;
+pub use mutator_registration::SymbolRef;
+pub use mutator_registration::TableMut;
+pub use mutator_registration::TableRef;
 #[cfg(all(
     any(test, feature = "test-support"),
     not(feature = "gc-memory-telemetry")
@@ -2788,15 +2812,18 @@ pub use facade_mark::{
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) use mutator_registration::symbol_functions::boundary as function_boundary_testkit;
 pub use mutator_registration::{
-    AllStopped, AllStoppedFailure, CollectionError, CollectionReport, FunctionActivation,
-    FunctionCallCache, FunctionError, FunctionSelection, FunctionStep, GlobalError,
-    InitialInternError, KeeperSymbols, KeeperTableMut, MinorCollectionError, Mode, Mutator,
-    MutatorEntry, MutatorFinishFailure, MutatorKey, MutatorPermit, MutatorStartFailure,
-    NativeReturn, NativeRoots, OwnerPublication, OwnerRootSlot, ParallelExecutionAdmission,
-    ParallelHeapEra, Phase, PlainSymbolBacking, RegistrationCensus, RegistrationError, Rendezvous,
-    RendezvousError, Request, ResumeGcImage, ResumeGcImageFailure, RootedRetireFailure, RunAccess,
-    RunSlice, SealedTableAccess, SliceRoot, Snapshot, StoppedSummaries, SymbolHandle, SymbolMut,
-    SymbolRef, TableMut, TableRef, YoungWorkerLoan,
+    AllStopped, CollectionError, CollectionReport, FunctionActivation, FunctionError,
+    FunctionSelection, KeeperSymbols, MinorCollectionError, Mode, Mutator, OwnerRootSlot,
+    ParallelExecutionAdmission, ParallelHeapEra, Phase, PlainSymbolBacking, RegistrationError,
+    RendezvousError, Request, RunAccess, RunSlice, Snapshot, SymbolHandle,
+};
+pub use mutator_registration::{
+    AllStoppedFailure, MutatorEntry, MutatorFinishFailure, MutatorStartFailure, NativeReturn,
+    RegistrationCensus, ResumeGcImageFailure, RootedRetireFailure, StoppedSummaries,
+    YoungWorkerLoan,
+};
+pub use mutator_registration::{
+    FunctionStep, GlobalError, InitialInternError, MutatorKey, Rendezvous,
 };
 // The extension-trait convenience re-export is `pub(crate)`: it can never name
 // anything for a dependency build, and no consumer in any configuration uses
@@ -2922,6 +2949,10 @@ mod generational_tests;
 #[cfg(test)]
 #[path = "gc/tests/birth_logs_test.rs"]
 mod birth_logs_tests;
+
+#[cfg(test)]
+#[path = "gc/tests/weak_table_minor_test.rs"]
+mod weak_table_minor_tests;
 
 #[cfg(feature = "test-support")]
 #[path = "gc/tests/generational_major_test.rs"]

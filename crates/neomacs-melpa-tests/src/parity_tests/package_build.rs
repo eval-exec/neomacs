@@ -78,7 +78,7 @@ const PACKAGE_BUILD_TEST_PRELUDE: &str = r##"
         (funcall body root)
       (dolist (buffer (buffer-list))
         (when-let* ((file (buffer-file-name buffer))
-                    ((file-in-directory-p file root)))
+                    ((neomacs-melpa-path-inside-p file root)))
           (kill-buffer buffer)))
       (delete-directory root t))))
 "##;

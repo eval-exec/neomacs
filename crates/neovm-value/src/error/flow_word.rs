@@ -154,6 +154,8 @@ impl Flow {
     pub fn shutdown(request: ShutdownRequest) -> Flow {
         Self::from_kind(FlowKind::Shutdown(request))
     }
+    #[cfg(feature = "test-support")]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     #[inline]
     pub fn is_throw(&self) -> bool {
         self.tag() == FlowTag::Throw
@@ -162,6 +164,7 @@ impl Flow {
     pub fn is_thread_blocked(&self) -> bool {
         self.tag() == FlowTag::ThreadBlocked
     }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     #[inline]
     pub fn as_thread_blocked(&self) -> Option<&ThreadBlockedData> {
         // SAFETY: this tag names the live ThreadBlockedData box; the borrow

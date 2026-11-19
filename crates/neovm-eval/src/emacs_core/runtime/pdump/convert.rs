@@ -40,7 +40,8 @@ use crate::emacs_core::eval::data::face::{
 use crate::emacs_core::eval::data::face::{Face, FaceDecoration, FaceTable};
 use crate::emacs_core::eval::data::fontset_state::{
     FontDefinitionMetadata, FontRepertory, FontSpecEntry, FontsetDataSnapshot,
-    FontsetRangeEntrySnapshot, FontsetRegistrySnapshot, StoredFontSpec,
+    FontsetRangeEntrySnapshot, FontsetRegistrySnapshot, StoredFontSpec, StoredOtfFeatures,
+    StoredOtfLangsys, StoredOtfSpec,
 };
 use crate::emacs_core::eval::data::register::{RegisterContent, RegisterManager};
 use crate::emacs_core::eval::interactive_registry::{InteractiveRegistry, InteractiveSpec};
@@ -4515,6 +4516,56 @@ pub(crate) fn dump_charset_registry(encoder: &mut DumpEncoder) -> DumpCharsetReg
                 .map(|(alias, target)| (dump_sym_id(alias), dump_sym_id(target)))
                 .collect()
         }),
+        iso_designation_syms: snapshot.iso_designations.map(|entries| {
+            entries
+                .into_iter()
+                .map(|(key, name)| (key, dump_sym_id(name)))
+                .collect()
+        }),
+        published_names: snapshot.published_names.map(|names| {
+            names
+                .into_iter()
+                .map(|(identity, published)| (dump_sym_id(identity), dump_sym_id(published)))
+                .collect()
+        }),
+        binding_slots: snapshot.binding_slots.map(|records| {
+            records
+                .into_iter()
+                .map(|(name, identity, slot)| (dump_sym_id(name), dump_sym_id(identity), slot))
+                .collect()
+        }),
+        plist_slots: snapshot.plist_slots.map(|slots| {
+            slots
+                .into_iter()
+                .map(|slot| {
+                    slot.map(|pairs| {
+                        pairs
+                            .into_iter()
+                            .map(|(key, value)| (dump_sym_id(key), encoder.dump_value(&value)))
+                            .collect()
+                    })
+                })
+                .collect()
+        }),
+        // Version 6 writes the member list and the cached plist objects even
+        // when both are empty. An absent trailer would make an old reader
+        // derive membership from the current ISO final.
+        iso2022_members: Some(
+            snapshot
+                .iso2022_members
+                .unwrap_or_default()
+                .into_iter()
+                .map(dump_sym_id)
+                .collect(),
+        ),
+        plist_lisp: Some(
+            snapshot
+                .plist_lisp
+                .unwrap_or_default()
+                .into_iter()
+                .map(|slot| slot.map(|value| encoder.dump_value(&value)))
+                .collect(),
+        ),
         next_id: snapshot.next_id,
     }
 }
@@ -4530,6 +4581,51 @@ fn dump_font_width(width: &FontWidth) -> DumpFontWidth {
         FontWidth::Expanded => DumpFontWidth::Expanded,
         FontWidth::ExtraExpanded => DumpFontWidth::ExtraExpanded,
         FontWidth::UltraExpanded => DumpFontWidth::UltraExpanded,
+    }
+}
+
+fn dump_stored_otf_spec(spec: StoredOtfSpec) -> DumpStoredOtfSpec {
+    let (langsys, langsys_unmatchable) = match spec.langsys {
+        StoredOtfLangsys::Default => (None, false),
+        StoredOtfLangsys::Named(langsys) => (Some(langsys), false),
+        StoredOtfLangsys::Unmatchable => (None, true),
+    };
+    DumpStoredOtfSpec {
+        script: spec.script,
+        langsys,
+        langsys_unmatchable,
+        gsub: spec.gsub.map(dump_stored_otf_features),
+        gpos: spec.gpos.map(dump_stored_otf_features),
+    }
+}
+
+fn dump_stored_otf_features(features: StoredOtfFeatures) -> DumpStoredOtfFeatures {
+    DumpStoredOtfFeatures {
+        required: features.required,
+        forbidden: features.forbidden,
+    }
+}
+
+fn load_stored_otf_spec(spec: &DumpStoredOtfSpec) -> StoredOtfSpec {
+    StoredOtfSpec {
+        script: spec.script.clone(),
+        langsys: if spec.langsys_unmatchable {
+            StoredOtfLangsys::Unmatchable
+        } else {
+            spec.langsys
+                .clone()
+                .map(StoredOtfLangsys::Named)
+                .unwrap_or_default()
+        },
+        gsub: spec.gsub.as_ref().map(load_stored_otf_features),
+        gpos: spec.gpos.as_ref().map(load_stored_otf_features),
+    }
+}
+
+fn load_stored_otf_features(features: &DumpStoredOtfFeatures) -> StoredOtfFeatures {
+    StoredOtfFeatures {
+        required: features.required.clone(),
+        forbidden: features.forbidden.clone(),
     }
 }
 
@@ -4551,6 +4647,7 @@ fn dump_stored_font_spec(spec: StoredFontSpec) -> DumpStoredFontSpec {
         weight: spec.weight.map(FontWeight::dump_code),
         slant: spec.slant.map(|slant| dump_font_slant(&slant)),
         width: spec.width.map(|width| dump_font_width(&width)),
+        otf: spec.otf.map(dump_stored_otf_spec),
         definition: spec
             .definition
             .map(|definition| DumpFontDefinitionMetadata {
@@ -6887,6 +6984,47 @@ pub(crate) fn load_charset_registry(decoder: &mut LoadDecoder, dcr: &DumpCharset
                 .map(|(alias, target)| (load_sym_id(alias), load_sym_id(target)))
                 .collect()
         }),
+        iso_designations: dcr.iso_designation_syms.as_ref().map(|entries| {
+            entries
+                .iter()
+                .map(|(key, name)| (*key, load_sym_id(name)))
+                .collect()
+        }),
+        published_names: dcr.published_names.as_ref().map(|names| {
+            names
+                .iter()
+                .map(|(identity, published)| (load_sym_id(identity), load_sym_id(published)))
+                .collect()
+        }),
+        binding_slots: dcr.binding_slots.as_ref().map(|records| {
+            records
+                .iter()
+                .map(|(name, identity, slot)| (load_sym_id(name), load_sym_id(identity), *slot))
+                .collect()
+        }),
+        plist_slots: dcr.plist_slots.as_ref().map(|slots| {
+            slots
+                .iter()
+                .map(|slot| {
+                    slot.as_ref().map(|pairs| {
+                        pairs
+                            .iter()
+                            .map(|(key, value)| (load_sym_id(key), decoder.load_value(value)))
+                            .collect()
+                    })
+                })
+                .collect()
+        }),
+        plist_lisp: dcr.plist_lisp.as_ref().map(|slots| {
+            slots
+                .iter()
+                .map(|slot| slot.as_ref().map(|value| decoder.load_value(value)))
+                .collect()
+        }),
+        iso2022_members: dcr
+            .iso2022_members
+            .as_ref()
+            .map(|names| names.iter().map(load_sym_id).collect()),
         next_id: dcr.next_id,
         // The binary dump does not carry GNU's `Vcharset_non_preferred_head`
         // boundary; a freshly loaded session reproduces GNU's dumped default
@@ -6963,6 +7101,7 @@ fn load_font_spec_entry(entry: &DumpFontSpecEntry) -> FontSpecEntry {
             weight: spec.weight.map(FontWeight::from_dump_code),
             slant: spec.slant.as_ref().map(load_font_slant),
             width: spec.width.as_ref().map(load_font_width),
+            otf: spec.otf.as_ref().map(load_stored_otf_spec),
             definition: spec
                 .definition
                 .as_ref()

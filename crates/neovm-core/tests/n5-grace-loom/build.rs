@@ -25,7 +25,7 @@ use std::fs;
 use std::path::Path;
 
 fn main() {
-    let source = Path::new("../../src/tagged/gc/symbol_table/publication.rs");
+    let source = Path::new("../../../neovm-value/src/tagged/gc/symbol_table/publication.rs");
     println!("cargo:rerun-if-changed={}", source.display());
     let original = fs::read_to_string(source).expect("read the real publication.rs");
     let stripped = strip_leading_inner_docs(&original);
@@ -52,6 +52,24 @@ fn main() {
         assert!(
             stripped.contains(expected),
             "publication.rs no longer imports `{expected}`: the loom seam \
+             must be re-anchored (N5 design rev 2 section 2.2)"
+        );
+    }
+    // Names the included file reaches outside the original sync imports.
+    // The model supplies them from the stand-in, the crate-root stubs, and
+    // the std shim. Removing one of them is a re-anchor, not a silent drop.
+    for expected in [
+        "std::iter::once",
+        "std::rc::Rc",
+        "super::SymbolChunkIndex",
+        "crate::intern::NameId",
+        "crate::symbol::LispSymbol",
+        ".as_slice()",
+        "generation.0",
+    ] {
+        assert!(
+            stripped.contains(expected),
+            "publication.rs no longer contains `{expected}`: the loom seam \
              must be re-anchored (N5 design rev 2 section 2.2)"
         );
     }

@@ -9,12 +9,17 @@ pub(crate) use super::batch_support::ParityBatchCase;
 
 mod workflows;
 
-const ARCH_PACKER_TEST_TIMEOUT: Duration = Duration::from_secs(180);
+// The in-fixture waits reset their 150 s deadline on observable progress, so a
+// merely starved run can spend well over the old 180 s bound; the outer bound
+// only has to cover several progress stalls plus cleanup.  nextest's MELPA
+// slow timeout (960 s, .config/nextest.toml) remains the hard ceiling.
+const ARCH_PACKER_TEST_TIMEOUT: Duration = Duration::from_secs(600);
 const ARCH_PACKER_TEST_PRELUDE: &str = r####"
 (require 'cl-lib)
 (require 'thingatpt)
 
 (defvar neomacs-arch-packer-test-start-process nil)
+(defvar neomacs-arch-packer-test-shell nil)
 
 (defun neomacs-arch-packer-test-root (name)
   (file-name-as-directory
@@ -54,11 +59,52 @@ follow-up query from the action snapshot regardless of sentinel timing."
           (expand-file-name "async-child-init.el" root))
          (pacman (expand-file-name "pacman" bin))
          (pacaur (expand-file-name "pacaur" bin))
-         (sudo (expand-file-name "sudo" bin)))
+         (sudo (expand-file-name "sudo" bin))
+         (shell (expand-file-name "arch-packer-shell" bin)))
     (neomacs-arch-packer-test-cleanup root)
-    ;; The package hard-codes the FHS path /bin/bash.  This Nix development
-    ;; environment has real bash on PATH but no /bin/bash, so resolve only
-    ;; that missing path while preserving bash and every process argument.
+    ;; The package hard-codes the FHS path /bin/bash and drives it as an
+    ;; interactive shell: commands go in one line at a time and the package's
+    ;; process filter matches whole markers ("Pacman finished") inside a filter
+    ;; chunk.  A real interactive bash prints prompts and PS2 continuations and
+    ;; runs the multi-line exit-status probe; under load a chunk boundary can
+    ;; split a marker, and timeouts were observed on BOTH editors (GNU and
+    ;; Neomacs) in the full-suite and 12-way runs.  A fixture-owned shell keeps
+    ;; the same command grammar and the same fixture pacman/pacaur binaries,
+    ;; but emits each marker as one write, so the workflow does not depend on
+    ;; prompt scheduling.  It prints prompts because the package's
+    ;; open-shell-process relies on accept-process-output returning non-nil
+    ;; before it sends the first command.  Identical for both editors.
+    (neomacs-arch-packer-test-write-executable
+     shell
+     (concat
+      "#!/bin/sh\n"
+      "last=0\n"
+      "printf 'bash-5.3$ '\n"
+      "while IFS= read -r line; do\n"
+      "  case \"$line\" in\n"
+      "    'if ['*)\n"
+      "      while IFS= read -r continuation; do\n"
+      "        case \"$continuation\" in *';fi'*) break ;; esac\n"
+      "      done\n"
+      "      sleep 0.2\n"
+      "      if [ \"$last\" -ne 0 ]; then\n"
+      "        printf 'Pacman error\\n'\n"
+      "      else\n"
+      "        printf 'Pacman finished\\n'\n"
+      "      fi\n"
+      "      printf 'bash-5.3$ '\n"
+      "      ;;\n"
+      "    '')\n"
+      "      ;;\n"
+      "    *)\n"
+      "      cmd=${line%'; history -d $((HISTCMD-1))'}\n"
+      "      eval \"$cmd\"\n"
+      "      last=$?\n"
+      "      printf 'bash-5.3$ '\n"
+      "      ;;\n"
+      "  esac\n"
+      "done\n"))
+    (setq neomacs-arch-packer-test-shell shell)
     (setq neomacs-arch-packer-test-start-process
           (symbol-function 'start-process))
     (fset
@@ -71,11 +117,8 @@ follow-up query from the action snapshot regardless of sentinel timing."
         (if
             (and
              (string= process-name "arch-packer-process")
-             (string= program "/bin/bash")
-             (not (file-executable-p program)))
-            (or
-             (executable-find "bash")
-             program)
+             (string= program "/bin/bash"))
+            neomacs-arch-packer-test-shell
           program)
         program-args)))
     (make-directory bin t)
@@ -198,19 +241,43 @@ follow-up query from the action snapshot regardless of sentinel timing."
     (setenv "ARCH_PACKER_TEST_STATE" state)
     (list :root root :trace trace :state state)))
 
+(defun neomacs-arch-packer-test-progress-token ()
+  "Observable progress of the package's async workflow.
+The trace file, the process buffer's mode/size and the output buffer's size
+all advance as bash, the fake pacman and the menu rebuild do their work."
+  (list
+   (ignore-errors
+     (let ((attributes (file-attributes (getenv "ARCH_PACKER_TEST_TRACE"))))
+       (and attributes
+            (list (nth 7 attributes) (nth 5 attributes)))))
+   (and (get-buffer arch-packer-process-buffer)
+        (with-current-buffer arch-packer-process-buffer
+          (list major-mode (buffer-size))))
+   (and (get-buffer arch-packer-process-output-buffer)
+        (with-current-buffer arch-packer-process-output-buffer
+          (buffer-size)))))
+
 (defun neomacs-arch-packer-test-wait-for (predicate)
-  "Wait for PREDICATE on a wall-clock deadline.
+  "Wait for PREDICATE with a progress-reset deadline.
 
 The pacman stand-in, the shell filter and the menu rebuild are all real
 process and display work; on a loaded machine ten seconds of polling was
 not enough, and even a minute was not enough when the host is running
 other builds (both editors were measured to exceed 60 s here, on
-different cases).  The wait is still a deadline, not a round count, and
-the batch's own timeout is the outer bound."
-  (let ((deadline (+ (float-time) 150)))
+different cases).  A fixed wall-clock deadline is the wrong guard for a
+merely starved run, so the deadline resets whenever the workflow makes
+observable progress (trace, process mode/size, output buffer); a real
+hang still reaches the deadline because nothing advances.  The batch's
+own timeout is the outer bound."
+  (let ((deadline (+ (float-time) 150))
+        (last-progress (neomacs-arch-packer-test-progress-token)))
     (while (and (< (float-time) deadline)
                 (not (funcall predicate)))
-      (accept-process-output nil 0.05))
+      (accept-process-output nil 0.05)
+      (let ((progress (neomacs-arch-packer-test-progress-token)))
+        (unless (equal progress last-progress)
+          (setq last-progress progress
+                deadline (+ (float-time) 150)))))
     (unless (funcall predicate)
       ;; A bare timeout says nothing about WHICH step stalled.  Include the
       ;; observable state the predicate reads, so a failure names the step and

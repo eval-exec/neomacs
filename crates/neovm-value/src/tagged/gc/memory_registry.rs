@@ -79,7 +79,8 @@ impl TaggedHeap {
         self.buffer_registry.get(id.0 as usize).copied().flatten()
     }
 
-    pub fn register_buffer_value(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn register_buffer_value(
         &mut self,
         id: crate::value::buffer_vocab::BufferId,
         value: TaggedValue,
@@ -140,6 +141,21 @@ impl TaggedHeap {
         value: TaggedValue,
     ) {
         self.process_registry.insert(id, value);
+    }
+
+    /// Arm retired process fields as ephemerons for the next full collection.
+    #[doc(hidden)]
+    pub fn arm_retired_process_ephemerons(
+        &mut self,
+        retired: Vec<(crate::heap_types::ProcessId, Vec<TaggedValue>)>,
+    ) {
+        self.retired_process_ephemerons = retired.into_iter().collect();
+    }
+
+    /// Take the process ids reclaimed by the last full collection.
+    #[doc(hidden)]
+    pub fn take_reclaimed_process_ids(&mut self) -> Vec<crate::heap_types::ProcessId> {
+        std::mem::take(&mut self.reclaimed_process_ids)
     }
 
     /// Register cons cells whose storage is owned by the loaded pdump image.
@@ -284,20 +300,40 @@ impl TaggedHeap {
         ImageStamp::Stamped
     }
 
-    pub fn is_dirty_owner(&self, owner: TaggedValue) -> bool {
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn is_dirty_owner(&self, owner: TaggedValue) -> bool {
         self.dirty_owner_bits.contains(&owner.bits())
     }
 
-    pub fn clear_dirty_owners(&mut self) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn clear_dirty_owners(&mut self) {
         self.dirty_owners.clear();
         self.dirty_owner_bits.clear();
     }
 
-    pub fn dirty_writes(&self) -> &[HeapWriteRecord] {
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn dirty_writes(&self) -> &[HeapWriteRecord] {
         &self.dirty_writes
     }
 
-    pub fn clear_dirty_writes(&mut self) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn clear_dirty_writes(&mut self) {
         self.dirty_writes.clear();
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod b13_test_hooks {
+    use super::*;
+    impl TaggedHeap {
+        pub(crate) fn dirty_owner_count(&self) -> usize {
+            self.dirty_owners.len()
+        }
+
+        pub(crate) fn dirty_write_count(&self) -> usize {
+            self.dirty_writes.len()
+        }
     }
 }

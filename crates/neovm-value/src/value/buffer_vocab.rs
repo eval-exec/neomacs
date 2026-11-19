@@ -43,7 +43,8 @@ impl BufferSlot {
         self.0 as i16
     }
 
-    pub fn from_u16(index: u16) -> Option<Self> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn from_u16(index: u16) -> Option<Self> {
         if usize::from(index) < BUFFER_SLOT_COUNT {
             Some(Self(index as u8))
         } else {

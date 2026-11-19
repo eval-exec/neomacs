@@ -60,6 +60,7 @@ cargo nextest run --tests --no-capture
 ```
 
 `LOOM_ITERATIONS` receipts print per test on stderr; `LOOM_WITNESS` lines
-print for each negative control that found its witness. Runs with no
-`LOOM_MAX_PREEMPTIONS` set (full exhaustive exploration, no preemption
-bound); the receipts in RESULTS.md are from such runs.
+print for each negative control that found its witness. `check()` forces
+`preemption_bound = None` and ignores `LOOM_MAX_PREEMPTIONS`. One case,
+`check_bounded(5, 2)` in `tests/authority.rs`, uses literal bound 2.
+RESULTS.md receipts are from the `None` runs.

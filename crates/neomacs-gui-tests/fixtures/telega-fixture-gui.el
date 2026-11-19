@@ -234,6 +234,14 @@ and `:avatar-spec-*' the cached avatar image Telega built for it."
     (let* ((token (with-temp-buffer
                     (insert-file-contents tf/request-path)
                     (string-trim (buffer-string))))
+           ;; The snapshot dumps the presented frame matrix. `window-start'
+           ;; already reports the scroll position set by the last command, so
+           ;; a slow renderer can answer the request with the frame from
+           ;; BEFORE that scroll (CI saw rows at Synthetic Group 54 while the
+           ;; checkpoint said window-start 1). Force the pending redisplay
+           ;; first, like the xwidget fixture's capture does.
+           (_ (force-window-update))
+           (_ (redisplay t))
            (snapshot (and (fboundp 'neomacs--write-frame-snapshot)
                           (neomacs--write-frame-snapshot tf/snapshot-path t 'json))))
       (unless snapshot

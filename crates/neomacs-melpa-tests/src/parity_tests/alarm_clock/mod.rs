@@ -42,6 +42,20 @@ const ALARM_CLOCK_TEST_PRELUDE: &str = r##"
 (require 'cl-lib)
 (require 'seq)
 
+;; `alarm-clock-save' writes with `save-buffer' on a file inside the sandbox,
+;; so whether the case sees `alarm-clock.cache~' would otherwise depend on the
+;; sandbox path: GNU `normal-backup-enable-predicate' (files.el) returns nil
+;; below `temporary-file-directory' and /tmp, and `set-visited-file-name' then
+;; makes `backup-inhibited' permanently buffer-local
+;; (files.el:5206-5208).  Pin the policy for BOTH editors so the case cannot
+;; inherit a host- or editor-dependent backup state.
+(setq make-backup-files t
+      backup-inhibited nil
+      backup-directory-alist nil
+      backup-by-copying nil
+      version-control nil
+      backup-enable-predicate (lambda (_name) t))
+
 (defvar alarm-clock-test-root nil)
 
 (defun alarm-clock-test-setup ()

@@ -98,6 +98,12 @@ fn iter_symbol_list(value: &Value, symbol_mode: SymbolMode) -> Vec<String> {
 // Hierarchical signal matching (for condition-case)
 // ---------------------------------------------------------------------------
 
+// Every caught signal reads this property (GNU's `Qerror_conditions`).
+fn error_conditions_sym_id() -> SymId {
+    static ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new();
+    *ID.get_or_init(|| intern("error-conditions"))
+}
+
 /// Identity-aware variant of `signal_matches_condition_value`.
 ///
 /// GNU matches a `condition-case' clause by testing whether the clause's
@@ -115,7 +121,7 @@ pub fn signal_matches_condition_value_sym(
 ) -> bool {
     // The signal's own conditions, read by identity (falling back to just the
     // symbol itself, matching `signal_matches_hierarchical`'s exact-match rule).
-    let conditions = obarray.get_property_id(signal_sym, intern("error-conditions"));
+    let conditions = obarray.get_property_id(signal_sym, error_conditions_sym_id());
     signal_matches_pattern_against_conditions(signal_sym, conditions.as_ref(), pattern, symbol_mode)
 }
 
@@ -130,7 +136,7 @@ pub fn signal_matches_hierarchical_sym(
     condition_sym: SymId,
     symbol_mode: SymbolMode,
 ) -> bool {
-    let conditions = obarray.get_property_id(signal_sym, intern("error-conditions"));
+    let conditions = obarray.get_property_id(signal_sym, error_conditions_sym_id());
     signal_matches_symbol_against_conditions(
         signal_sym,
         conditions.as_ref(),

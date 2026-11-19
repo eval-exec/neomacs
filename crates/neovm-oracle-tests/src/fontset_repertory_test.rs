@@ -85,3 +85,30 @@ fn oracle_fontset_range_script_and_charset_targets_preserve_metadata() {
     ]];
     assert_oracle_parity_expect(form, expected);
 }
+
+/// Script and charset targets expand to many disjoint ranges that one
+/// `set-fontset-font` call updates together; `append`, `prepend` and
+/// `overwrite` keep GNU's per-range `fontset_add` order next to the existing
+/// range and fallback entries.
+#[test]
+fn oracle_fontset_multi_range_targets_keep_add_mode_order() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let form = r#"
+(let ((font-encoding-alist '(("-iso10646-1\\'" . unicode))))
+  (set-fontset-font t '(#x80 . #x10ffff)
+                    (font-spec :family "PR808 Base" :registry "iso10646-1"))
+  (set-fontset-font t nil (font-spec :family "PR808 Fallback" :registry "iso10646-1"))
+  (set-fontset-font t 'han (font-spec :family "PR808 Han" :registry "iso10646-1")
+                    nil 'append)
+  (set-fontset-font t 'japanese-jisx0208
+                    (font-spec :family "PR808 JIS" :registry "iso10646-1")
+                    nil 'prepend)
+  (set-fontset-font t 'kana (font-spec :family "PR808 Kana" :registry "iso10646-1"))
+  (mapcar (lambda (ch) (cons ch (mapcar #'car (fontset-font t ch t))))
+          (list #x4e2d #x65e5 #x3042 #x30a2 #x2460 #x2015 #x20000 #x1f600)))
+"#;
+    let expected = expect_test::expect![[
+        r#""OK ((20013 \"PR808 JIS\" \"PR808 Base\" \"PR808 Han\" \"PR808 Fallback\") (26085 \"PR808 JIS\" \"PR808 Base\" \"PR808 Han\" \"PR808 Fallback\") (12354 \"PR808 Kana\" \"PR808 Fallback\") (12450 \"PR808 Kana\" \"PR808 Fallback\") (9312 \"PR808 Base\" \"PR808 Fallback\") (8213 \"PR808 Base\" \"PR808 Fallback\") (131072 \"PR808 Base\" \"PR808 Han\" \"PR808 Fallback\") (128512 \"PR808 Base\" \"PR808 Fallback\"))""#
+    ]];
+    assert_oracle_parity_expect(form, expected);
+}

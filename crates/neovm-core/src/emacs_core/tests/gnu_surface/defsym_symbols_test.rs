@@ -194,3 +194,76 @@ fn file_locked_is_not_an_obarray_symbol_at_boot() {
         "file-locked must be created lazily by userlock.el, not at boot"
     );
 }
+
+/// GNU's reader interns every symbol token through `Fintern` while reading
+/// (`src/lread.c:4674-4709`), even when the profile does not compile the
+/// symbol's DEFSYM. `fontsize` is DEFSYM'd only in `nsfns.m`, so a Linux
+/// build does not seed it at startup; reading `'fontsize` must still make
+/// `(intern-soft "fontsize")` answer the symbol, with no value, function, or
+/// plist.
+///
+/// Attested GNU 31.1 (a360712c9d27, linux-gtk3):
+///   (prin1 (let ((s 'fontsize))
+///            (list (intern-soft "fontsize")
+///                  (eq s (intern-soft "fontsize"))
+///                  (null (symbol-plist s)))))
+///   => (fontsize t t)
+#[test]
+fn the_reader_interns_a_symbol_whose_defsym_is_absent_from_this_profile() {
+    let mut eval = crate::test_utils::new_context();
+    let result = eval
+        .eval_str(
+            r#"(let ((s 'fontsize))
+                 (list (intern-soft "fontsize")
+                       (eq s (intern-soft "fontsize"))
+                       (null (symbol-plist s))))"#,
+        )
+        .expect("reader-intern oracle");
+    assert_eq!(
+        result,
+        Value::list(vec![Value::symbol("fontsize"), Value::T, Value::T]),
+        "reading a symbol literal must intern it, exactly as GNU's reader does"
+    );
+}
+
+/// PROFILE-SET regression row (PEER 5831): membership in the boot obarray
+/// equals the generated DEFSYM profile set, plus the cited boot-extra set of
+/// spellings that preloaded Lisp/C interns. An active DEFSYM spelling must be
+/// a member; an inactive one must be absent unless it has a boot-extra row
+/// (wheel-* read from lisp/mouse.el via loadup, and the attested face/frame
+/// spellings). A member that is neither active nor allowlisted fails, and a
+/// stale allowlist row fails as absent, so the exception list stays honest.
+/// This is the row that catches the macOS wheel-down class in both
+/// directions: it proves the membership is GNU-correct while keeping the
+/// profile ratchet.
+#[test]
+fn every_gnu_defsym_spelling_membership_follows_the_profile_set() {
+    let eval = crate::test_utils::new_context();
+    let mut wrong: Vec<(&str, bool, bool)> = Vec::new();
+    let mut checked = 0usize;
+    for (name, _) in gnu_defsyms_generated::GNU_DEFSYMS {
+        if neovm_value::intern::is_gnu_startup_uninterned_spelling(name) {
+            continue;
+        }
+        checked += 1;
+        // The generated gate alone is not the startup set: preloaded Lisp/C
+        // intern cited boot-extra spellings (wheel-* from lisp/mouse.el via
+        // loadup), and those are not in the DEFSYM gate. The helper is the
+        // ratchet: an inactive-gate spelling that is a member WITHOUT an
+        // allowlist row fails, and a stale allowlist row fails as absent.
+        let expected =
+            neovm_value::intern::is_gnu_defsym_spelling_boot_member_for_this_profile(name);
+        let present = eval.obarray().intern_soft(name).is_some();
+        if present != expected {
+            wrong.push((name, expected, present));
+        }
+    }
+    assert!(checked > 1000, "profile set unexpectedly small: {checked}");
+    assert!(
+        wrong.is_empty(),
+        "{} DEFSYM spellings disagree with the generated profile set \
+         (name, expected_member, actual_member): {:?}",
+        wrong.len(),
+        &wrong[..wrong.len().min(20)]
+    );
+}

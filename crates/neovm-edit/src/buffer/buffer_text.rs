@@ -1103,6 +1103,7 @@ impl BufferText {
         ))
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn try_from_str_with_backend_kind(
         text: &str,
@@ -1111,6 +1112,7 @@ impl BufferText {
         Ok(Self::from_str_with_backend_kind(text, kind.try_into()?))
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn from_str_with_backend_kind(
         text: &str,
         kind: ImplementedBufferTextBackendKind,
@@ -2437,6 +2439,7 @@ impl BufferText {
             .range_has_any_interval_in_char_range(range)
     }
 
+    #[cfg(feature = "test-support")]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn text_props_remove_property_in_emacs_byte_range(
         &self,
@@ -3055,6 +3058,7 @@ impl BufferText {
         false
     }
 
+    #[cfg(feature = "test-support")]
     /// Return true iff `marker` is currently spliced into this buffer's chain.
     /// Used by BufferManager to pick the correct buffer when updating
     /// insertion type across buffers.

@@ -7235,14 +7235,9 @@ fn pure_dispatch_native_comp_surface_matches_no_native_comp_build() {
 #[test]
 fn pure_dispatch_open_overlay_placeholders_match_compat_contracts() {
     crate::test_utils::init_test_tracing();
-    let open_font = dispatch_builtin_pure(
-        "open-font",
-        vec![Value::vector(vec![Value::keyword("font-entity")])],
-    )
-    .expect("builtin open-font should resolve")
-    .expect("builtin open-font should evaluate");
-    assert!(open_font.is_nil());
-
+    // open-font is evaluator-backed now: it needs a live frame and the
+    // display host's exact entity catalog, so it is covered by the GUI
+    // oracle test rather than this pure-dispatch placeholder table.
     let open_dribble = dispatch_builtin_pure("open-dribble-file", vec![Value::string("x.log")])
         .expect("builtin open-dribble-file should resolve")
         .expect("builtin open-dribble-file should evaluate");
@@ -8806,11 +8801,12 @@ fn pure_dispatch_def_keymap_placeholder_cluster_matches_compat_contracts() {
 
     let iso_charset = dispatch_builtin_pure(
         "iso-charset",
-        vec![Value::fixnum(1), Value::fixnum(2), Value::fixnum(3)],
+        vec![Value::fixnum(1), Value::fixnum(94), Value::fixnum(66)],
     )
     .expect("builtin iso-charset should resolve")
     .expect("builtin iso-charset should evaluate");
-    assert!(iso_charset.is_nil());
+    // GNU: (iso-charset 1 94 ?B) => ascii.
+    assert_eq!(iso_charset, Value::symbol("ascii"));
 
     let keyelt = dispatch_builtin_pure("keymap--get-keyelt", vec![Value::NIL, Value::NIL])
         .expect("builtin keymap--get-keyelt should resolve")

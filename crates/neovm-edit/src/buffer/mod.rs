@@ -43,8 +43,6 @@ pub use buffer::{
     Buffer, BufferId, BufferManager, BufferTextSnapshot, InsertionType, LineIndexBuild, MarkerRef,
     SavedRestrictionState,
 };
-#[cfg(not(feature = "test-support"))]
-pub(crate) use buffer::{LabeledRestriction, SavedLabeledRestrictions};
 #[cfg(feature = "test-support")]
 pub use buffer::{LabeledRestriction, SavedLabeledRestrictions};
 pub use buffer::{LabeledRestrictionLabel, SavedRestrictionKind};
@@ -54,7 +52,7 @@ pub(crate) use buffer_text::BufferText;
 pub use buffer_text::BufferText;
 pub use buffer_text::{BufferSourceAuthority, BufferSourceReadLease};
 pub use edit_runtime::EditRuntime;
-#[cfg(not(feature = "test-support"))]
+#[cfg(all(test, not(feature = "test-support")))]
 pub(crate) use edit_transaction::TranspositionAnchorPolicy;
 #[cfg(feature = "test-support")]
 pub use edit_transaction::TranspositionAnchorPolicy;
@@ -77,13 +75,16 @@ pub(crate) use text::{TextInsertion, TextReplacement, TextTransposition};
 #[cfg(feature = "test-support")]
 pub use text::{TextInsertion, TextReplacement, TextTransposition};
 pub use text_props::{ObjectIntervalPlistRun, ObjectIntervalRun, TextPropertyTable};
+#[cfg(not(feature = "test-support"))]
+pub(crate) use undo::truncate_undo_list;
+#[cfg(feature = "test-support")]
+pub use undo::truncate_undo_list;
 pub(crate) use undo::undo_first_group_bytes;
 pub use undo::{
-    UndoLimitBindings, truncate_undo_list, undo_list_boundary, undo_list_is_disabled,
-    undo_list_record_insert,
+    UndoLimitBindings, undo_list_boundary, undo_list_is_disabled, undo_list_record_insert,
 };
 #[cfg(not(feature = "test-support"))]
-pub(crate) use undo::{UndoLimits, UndoRecording, undo_list_has_trailing_boundary};
+pub(crate) use undo::{UndoLimits, UndoRecording};
 #[cfg(feature = "test-support")]
 pub use undo::{UndoLimits, UndoRecording, undo_list_has_trailing_boundary};
 pub use visited_file_modtime::VisitedFileModtime;

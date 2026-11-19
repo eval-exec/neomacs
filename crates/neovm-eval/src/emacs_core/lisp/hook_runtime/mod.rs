@@ -45,7 +45,9 @@ impl HookRuntime for Context {
         authorization: &HookWalkAuthorization<'_>,
     ) -> EvalResult {
         let _ = authorization;
-        self.apply(function, args.to_vec())
+        // The slice fills the inline argument vector directly; `to_vec`
+        // allocated a heap `Vec` per hook function call.
+        self.apply(function, args)
     }
 
     fn report_safe_hook_error(

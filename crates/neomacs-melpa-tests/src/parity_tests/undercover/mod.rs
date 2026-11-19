@@ -85,7 +85,7 @@ const PRELUDE: &str = r####"
 
 (defun undercover375-test-owned-buffer-p (buffer root)
   (let ((file (buffer-file-name buffer)))
-    (or (and file (file-in-directory-p file root))
+    (or (and file (neomacs-melpa-path-inside-p file root))
         (string-prefix-p " *undercover375-" (buffer-name buffer)))))
 
 (defun undercover375-test-run-case (name thunk)

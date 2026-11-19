@@ -115,22 +115,22 @@ fn unintern_keeps_the_well_known_identity_while_lisp_reinterns() {
 fn initial_obarray_contains_every_table_symbol_like_gnu_defsym() {
     let mut ctx = crate::test_utils::new_context();
     for variant in WellKnown::VARIANTS.iter().copied() {
-        // A fixed id is not membership. GNU only interns the spellings its
-        // compiled `defsym_name[]` carries: `fontsize` is DEFSYM'd in
-        // `nsfns.m`, which a Linux GTK build does not compile, and the
-        // attested oracle answers `(intern-soft "fontsize")` with nil. The
-        // id stays for the display code's internal identity; the spelling
-        // stays out of this build's obarray.
-        if neovm_value::intern::is_gnu_defsym_spelling_absent_for_this_profile(variant.name()) {
-            assert!(
-                !ctx.obarray().is_global_member(variant.id()),
-                "{variant:?} is not compiled into this profile's GNU build"
+        // A fixed id is not membership. GNU interns the spellings its
+        // compiled `defsym_name[]` carries plus the spellings preloaded Lisp
+        // or C startup reads (`lisp/loadup.el:263` loads mouse.el, whose
+        // `mouse-wheel-buttons` alist interns wheel-down on every platform).
+        // `fontsize` is nsfns-only and stays out of a Linux obarray; `access`
+        // is inotify-only on Linux and out on macOS; both become members when
+        // Lisp reads them, which the reader regression covers separately.
+        let expected_member =
+            neovm_value::intern::is_gnu_defsym_spelling_boot_member_for_this_profile(
+                variant.name(),
             );
-            continue;
-        }
-        assert!(
+        assert_eq!(
             ctx.obarray().is_global_member(variant.id()),
-            "{variant:?} must be an initial-obarray member"
+            expected_member,
+            "{variant:?} startup membership must follow the DEFSYM profile plus the cited \
+             boot-extra set"
         );
     }
     // The two probed spellings are only string data in this form; mapatoms

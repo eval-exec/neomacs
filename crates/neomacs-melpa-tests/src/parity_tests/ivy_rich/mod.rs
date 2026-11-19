@@ -34,7 +34,7 @@ const IVY_RICH_TEST_PRELUDE: &str = r##"
 (defun ivy-rich-test-project-finder (directory)
   (setq ivy-rich-test-project-lookups (1+ ivy-rich-test-project-lookups))
   (when (and ivy-rich-test-project-root
-             (file-in-directory-p directory ivy-rich-test-project-root))
+             (neomacs-melpa-path-inside-p directory ivy-rich-test-project-root))
     (cons 'transient ivy-rich-test-project-root)))
 
 (defun ivy-rich-test-order-field (candidate field)

@@ -169,6 +169,62 @@ fn source_slice_graft_matches_random_overlapping_destinations() {
 }
 
 #[test]
+fn source_slice_graft_detaches_plists_and_preserves_unchanged_remainder_identity() {
+    let face = Value::symbol("face");
+    let help = Value::symbol("help-echo");
+    let nested_value = Value::list(vec![Value::symbol("nested")]);
+    let mut source = TextPropertyTable::new();
+    set_chars(
+        &mut source,
+        0,
+        12,
+        vec![(face, Value::symbol("italic")), (help, nested_value)],
+    );
+    let source_plist = source.raw_plist_at_for_test(char_pos(3)).unwrap();
+    let mut target = TextPropertyTable::new();
+    set_chars(&mut target, 0, 30, vec![(face, Value::symbol("bold"))]);
+    let original = target.raw_plist_at_for_test(char_pos(5)).unwrap();
+    target.append_source_slice_at_char_offset(&source, char_range(2, 8), char_len(10));
+    let left = target.raw_plist_at_for_test(char_pos(5)).unwrap();
+    let grafted = target.raw_plist_at_for_test(char_pos(12)).unwrap();
+    let right = target.raw_plist_at_for_test(char_pos(25)).unwrap();
+    assert_ne!(left.bits(), original.bits(), "left remainder is detached");
+    assert_eq!(left, original);
+    assert_ne!(
+        grafted.bits(),
+        source_plist.bits(),
+        "grafted plist is detached from source"
+    );
+    assert_eq!(grafted, source_plist);
+    assert_eq!(
+        right.bits(),
+        original.bits(),
+        "right remainder retains its old plist identity"
+    );
+    assert_eq!(
+        get_at_char(&target, 12, help).unwrap().bits(),
+        nested_value.bits(),
+        "property values remain shallow-shared"
+    );
+    let target_before_source_write = target.interval_plist_runs_for_test();
+    put_chars(&mut source, 0, 12, face, Value::symbol("source-after"));
+    put_chars(&mut source, 0, 12, help, Value::symbol("help-after"));
+    assert_eq!(
+        target.interval_plist_runs_for_test(),
+        target_before_source_write,
+        "source writes cannot mutate produced output"
+    );
+    let source_before_target_write = source.interval_plist_runs_for_test();
+    put_chars(&mut target, 10, 16, face, Value::symbol("target-after"));
+    put_chars(&mut target, 10, 16, help, Value::NIL);
+    assert_eq!(
+        source.interval_plist_runs_for_test(),
+        source_before_target_write,
+        "output writes cannot mutate source"
+    );
+}
+
+#[test]
 fn source_slice_graft_matches_syntax_cache_and_presence_updates() {
     let face = Value::symbol("face");
     let syntax = Value::symbol("syntax-table");

@@ -72,11 +72,14 @@ use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-pub use thread_projection::{
-    BuiltinForwarder, CanonicalArm, CanonicalBlv, THREAD_PROJECTION_OFFSET,
-    ThreadProjectionDescriptor, TlsIndex,
-};
-pub use thread_projection::{ProjectionCapacityError, ThreadProjectionTable};
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) use thread_projection::BuiltinForwarder;
+pub use thread_projection::CanonicalBlv;
+#[cfg(feature = "test-support")]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) use thread_projection::THREAD_PROJECTION_OFFSET;
+pub use thread_projection::ThreadProjectionTable;
+pub use thread_projection::{CanonicalArm, ThreadProjectionDescriptor, TlsIndex};
 
 /// Discriminant for [`LispFwd`]. Mirrors GNU `enum Lisp_Fwd_Type`
 /// (`src/lisp.h:3046-3055`). Always read the first field of any `*Fwd`
@@ -415,7 +418,8 @@ impl FwdRef {
     /// Here those slots live in the leaked descriptor, so the descriptor is
     /// the root -- and this is the one place that decides which variants are
     /// roots at all, rather than each registry deciding for itself.
-    pub fn owned_value(self) -> Option<Value> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn owned_value(self) -> Option<Value> {
         match self.slot() {
             // `Bool` owns a native `bool`; `BufferObj`'s storage is the
             // buffer's slot array, traced with the buffer.
@@ -458,7 +462,8 @@ impl FwdRef {
     }
 
     /// The descriptor as a Boolean forwarder, if that is what it is.
-    pub fn as_bool_fwd(self) -> Option<&'static LispBoolFwd> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn as_bool_fwd(self) -> Option<&'static LispBoolFwd> {
         match self.slot() {
             ForwardSlot::Bool(bool_fwd) => Some(bool_fwd),
             ForwardSlot::Int(_)

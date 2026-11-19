@@ -177,6 +177,7 @@ impl BookmarkManager {
         names
     }
 
+    #[cfg(feature = "test-support")]
     /// Return the most recently used bookmark names (most recent first).
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn recent_names(&self) -> &[LispString] {

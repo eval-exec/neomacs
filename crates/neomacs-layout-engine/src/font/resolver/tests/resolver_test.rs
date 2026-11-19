@@ -962,6 +962,7 @@ fn captured_character_policy_selects_on_a_thread_without_evaluator_state() {
         weight: Some(FontWeight::from_css_weight(700)),
         slant: Some(FontSlant::Italic),
         width: Some(FontWidth::Normal),
+        otf: None,
         definition: Some(neovm_core::emacs_core::fontset::FontDefinitionMetadata {
             encoding: intern("unicode"),
             repertory: Some(

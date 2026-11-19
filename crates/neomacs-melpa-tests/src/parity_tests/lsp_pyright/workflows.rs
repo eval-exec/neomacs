@@ -573,7 +573,7 @@ fn python_discovery_obeys_real_filesystem_and_search_function_precedence() -> Pa
            (setenv "PATH" "")
            (lsp-pyright-locate-python))))
     (when (and (file-directory-p root)
-               (file-in-directory-p
+               (neomacs-melpa-path-inside-p
                 root
                 (file-name-as-directory (getenv "NEOMACS_TEST_SANDBOX_ROOT"))))
       (delete-directory root t))))
@@ -644,7 +644,7 @@ fn missing_server_keeps_the_buffer_disconnected_and_emits_one_delegated_warning(
     (when (buffer-live-p origin-buffer)
       (set-buffer origin-buffer))
     (when (and (file-directory-p root)
-               (file-in-directory-p
+               (neomacs-melpa-path-inside-p
                 root
                 (file-name-as-directory (getenv "NEOMACS_TEST_SANDBOX_ROOT"))))
       (delete-directory root t))))

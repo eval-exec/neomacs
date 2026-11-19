@@ -201,6 +201,20 @@ fn is_exception(relative: &str, argument: &str) -> bool {
 }
 
 #[test]
+fn bash_that_can_launch_an_editor_stays_a_violation() {
+    assert!(
+        !NON_EDITOR_PROGRAMS.contains(&"bash"),
+        "a program-wide bash allow exempts every Command::new(\"bash\"), including a script that launches an editor"
+    );
+    let argument = first_argument("Command::new(\"bash\")");
+    assert_eq!(argument, "\"bash\"");
+    assert!(
+        !NON_EDITOR_PROGRAMS.contains(&argument.trim_matches('"')),
+        "Command::new(\"bash\") must fail the tripwire"
+    );
+}
+
+#[test]
 fn harness_editor_spawns_go_through_the_canonical_environment() {
     let root = repo_root();
     let mut files = Vec::new();

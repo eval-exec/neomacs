@@ -256,7 +256,7 @@ fn root_families(backing: PlainSymbolBacking) {
             } in receipts
             {
                 assert!(report.major);
-                assert_eq!(report.frozen_owners, 0);
+                assert_eq!(report.frozen_owners(), 0);
                 assert!(
                     census
                         .iter()

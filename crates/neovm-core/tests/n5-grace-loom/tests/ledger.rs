@@ -69,11 +69,16 @@
 //! property the real ledger's own `Send`/`Sync` impls vouch for.
 mod support;
 
+#[path = "support/intern.rs"]
+pub mod intern;
+#[path = "support/symbol.rs"]
+pub mod symbol;
+
 pub use support::vocab::{
     OwnedSymbolTable, PointerTableGeneration, PreparedSymbolTable, PublishedSymbolTable,
-    SymbolChunkAddress, SymbolTableShape, TableError,
+    SymbolChunkAddress, SymbolChunkIndex, SymbolTableShape, TableError,
 };
-use support::vocab::{SymbolChunkCount, SymbolChunkIndex, SymbolChunkSlots, SymbolSlotCount};
+use support::vocab::{SymbolChunkCount, SymbolChunkSlots, SymbolSlotCount};
 
 // The real ledger's whole API compiles here; the parts this model does
 // not call are dead code by design (read-only consumption).
@@ -104,6 +109,15 @@ mod ledger {
         }
         pub mod ptr {
             pub use ::std::ptr::null_mut;
+        }
+        pub mod iter {
+            pub use ::std::iter::once;
+        }
+        /// `PhantomData<Rc<()>>` is a zero-sized marker on `PublicationView`.
+        /// The real `Rc` keeps that field zero-sized, so `repr(transparent)`
+        /// still has one non-trivial field.
+        pub mod rc {
+            pub use ::std::rc::Rc;
         }
     }
 }

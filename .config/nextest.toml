@@ -77,12 +77,10 @@ filter = 'package(neomacs-melpa-tests) and not (test(~parity_tests::harness_cont
 platform = { host = "cfg(unix)" }
 setup = 'melpa-infra-preflight'
 
-# The interactive package-TUI suites (moved out of the MELPA jobs) provision
-# pinned packages and boot editor pairs; give them the same preflight.
-[[profile.default.scripts]]
-filter = 'test(~package_tui::)'
-platform = { host = "cfg(unix)" }
-setup = 'melpa-infra-preflight'
+# Package-TUI scenarios use MelpaSandbox::new_with_short_home. They do not
+# need a checkout-rooted cache, so they do not take melpa-infra-preflight.
+# Attaching that refusing setup here cancels the whole TUI suite when
+# CARGO_TARGET_DIR points outside the checkout.
 
 # Compile-fail contract runners (feature `contract-fixtures`). Each runner
 # drives trybuild, which builds one scratch fixture project behind a single

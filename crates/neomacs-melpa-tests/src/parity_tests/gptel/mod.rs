@@ -93,7 +93,7 @@ const PRELUDE: &str = r####"
 
 (defun gptel402-test-write-file (root relative content)
   (let ((file (expand-file-name relative root)))
-    (unless (file-in-directory-p file root)
+    (unless (neomacs-melpa-path-inside-p file root)
       (error "Refusing gptel fixture outside root: %s" file))
     (make-directory (file-name-directory file) t)
     (let ((coding-system-for-write 'utf-8-unix))

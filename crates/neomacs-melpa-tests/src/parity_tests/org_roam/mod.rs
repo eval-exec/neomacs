@@ -40,7 +40,7 @@ const ORG_ROAM_TEST_PRELUDE: &str = r##"
   (dolist (buffer (buffer-list))
     (when-let* ((file (buffer-file-name buffer))
                 ((stringp org-roam-directory))
-                ((file-in-directory-p file org-roam-directory)))
+                ((neomacs-melpa-path-inside-p file org-roam-directory)))
       (with-current-buffer buffer (set-buffer-modified-p nil))
       (kill-buffer buffer))))
 

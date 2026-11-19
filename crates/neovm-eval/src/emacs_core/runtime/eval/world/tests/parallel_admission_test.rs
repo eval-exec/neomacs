@@ -77,7 +77,7 @@ fn attempt(context: &mut Context) -> Attempt {
             // Census entries counts published images, not cancelled starts.
             // Owner zero retains the one image; the two new permits never
             // activated and must appear only in cancelled_starts.
-            if census.cancelled_starts != 2 || census.entries != 1 {
+            if census.cancelled_starts() != 2 || census.entries != 1 {
                 return Err(format!("two cancelled production permits: {census:?}"));
             }
             if keys[0].heap_identity() != era.heap_identity()

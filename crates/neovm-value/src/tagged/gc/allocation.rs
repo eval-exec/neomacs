@@ -139,6 +139,7 @@ impl TaggedHeap {
     /// `float_arena.owns`) and are NOT `link_object`ed — the intrusive lists
     /// sweep with `free_gc_object`/`Box::from_raw`, which would corrupt the
     /// heap on a page pointer. The page sweep is the only float reclaimer.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn alloc_float(&mut self, value: f64) -> TaggedValue {
         self.alloc_float_inline(value)
     }
@@ -173,7 +174,8 @@ impl TaggedHeap {
     /// every live vector. Page vectors never touch `all_objects` /
     /// `non_cons_object_addrs`; the page sweep is their only reclaimer (its
     /// `drop_in_place` frees the element `Vec` the vector owns).
-    pub fn alloc_vector(&mut self, items: Vec<TaggedValue>) -> TaggedValue {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn alloc_vector(&mut self, items: Vec<TaggedValue>) -> TaggedValue {
         self.add_memory_use_count(MemoryUseCountSlot::VectorCells, items.len() as u64);
         let ptr = self.vector_arena.alloc_slot();
         unsafe {
@@ -206,7 +208,8 @@ impl TaggedHeap {
     }
 
     /// Allocate a GNU-shaped char-table.
-    pub fn alloc_char_table(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn alloc_char_table(
         &mut self,
         purpose: TaggedValue,
         init: TaggedValue,
@@ -380,7 +383,8 @@ impl TaggedHeap {
     }
 
     /// Allocate a buffer reference.
-    pub fn alloc_buffer(&mut self, id: crate::value::buffer_vocab::BufferId) -> TaggedValue {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn alloc_buffer(&mut self, id: crate::value::buffer_vocab::BufferId) -> TaggedValue {
         let obj = Box::new(BufferObj {
             header: VecLikeHeader::new(VecLikeType::Buffer),
             id,
@@ -393,7 +397,8 @@ impl TaggedHeap {
     }
 
     /// Allocate a window reference.
-    pub fn alloc_window(&mut self, id: u64) -> TaggedValue {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn alloc_window(&mut self, id: u64) -> TaggedValue {
         let obj = Box::new(WindowObj {
             header: VecLikeHeader::new(VecLikeType::Window),
             id,
@@ -406,7 +411,8 @@ impl TaggedHeap {
     }
 
     /// Allocate a frame reference.
-    pub fn alloc_frame(&mut self, id: u64) -> TaggedValue {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn alloc_frame(&mut self, id: u64) -> TaggedValue {
         let obj = Box::new(FrameObj {
             header: VecLikeHeader::new(VecLikeType::Frame),
             id,
@@ -459,7 +465,8 @@ impl TaggedHeap {
 
     /// Allocate an xwidget model object.
     #[allow(clippy::too_many_arguments)]
-    pub fn alloc_xwidget(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn alloc_xwidget(
         &mut self,
         type_: TaggedValue,
         title: TaggedValue,
@@ -800,7 +807,8 @@ impl TaggedHeap {
     /// intrusive-list / addr-set entry (owned via the page-span oracle,
     /// routed by `owns_veclike_object`). The page sweep's `drop_in_place`
     /// frees the record's slot `Vec`. Marking is unchanged (deferred).
-    pub fn alloc_record(&mut self, items: Vec<TaggedValue>) -> TaggedValue {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn alloc_record(&mut self, items: Vec<TaggedValue>) -> TaggedValue {
         self.add_memory_use_count(MemoryUseCountSlot::VectorCells, items.len() as u64);
         self.alloc_record_like(VecLikeType::Record, items)
     }
@@ -824,7 +832,8 @@ impl TaggedHeap {
     /// Allocate a window configuration. Structurally a record (`{header, data}`)
     /// but tagged `WindowConfiguration` so it is a distinct pseudovector type.
     /// Shares the record arena (same `RecordObj`).
-    pub fn alloc_window_configuration(&mut self, items: Vec<TaggedValue>) -> TaggedValue {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn alloc_window_configuration(&mut self, items: Vec<TaggedValue>) -> TaggedValue {
         self.add_memory_use_count(MemoryUseCountSlot::VectorCells, items.len() as u64);
         self.alloc_record_like(VecLikeType::WindowConfiguration, items)
     }
@@ -1037,7 +1046,8 @@ impl TaggedHeap {
     }
 
     /// Allocate an SQLite database or statement object.
-    pub fn alloc_sqlite(&mut self, is_statement: bool, id: i64) -> TaggedValue {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn alloc_sqlite(&mut self, is_statement: bool, id: i64) -> TaggedValue {
         let obj = Box::new(SqliteObj {
             header: VecLikeHeader::new(VecLikeType::Sqlite),
             is_statement,

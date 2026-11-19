@@ -5,6 +5,12 @@
 
 use super::*;
 
+/// Weak-table entries the weak pass's fixpoint has examined, summed over
+/// every table and round (test-only cost probe).
+#[cfg(any(test, feature = "test-support"))]
+pub(super) static WEAK_ENTRY_VISITS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
 /// Where [`TaggedHeap::for_each_veclike_child`] sends children: one at a
 /// time, or a run at once, which a vector collects with one reservation.
 pub(super) trait ChildSink {
@@ -1662,8 +1668,9 @@ impl TaggedHeap {
             )
             .chain(
                 self.process_registry
-                    .values()
-                    .map(|value| (*value, "process-registry")),
+                    .iter()
+                    .filter(|(id, _)| !self.retired_process_ephemerons.contains_key(id))
+                    .map(|(_, value)| (*value, "process-registry")),
             )
             .chain(
                 self.canonical_empty_strings
@@ -1708,22 +1715,19 @@ impl TaggedHeap {
         //    so heap access is exclusive (no concurrency hazard here). --
         let mark_t0 = std::time::Instant::now();
         self.mark_all_on_gc_thread();
-        while self.mark_reached_killed_buffers() {
-            self.mark_all();
-        }
+        self.mark_reached_ephemeron_records_to_fixpoint();
         // Queue doomed finalizers before the weak sweep (GNU
         // `queue_doomed_finalizers` runs before
         // `mark_and_sweep_weak_table_contents` in `garbage_collect`): their
         // functions are re-marked so both the weak sweep and the object sweep
         // see them as live.
         self.mark_and_queue_doomed_finalizers();
-        while self.mark_reached_killed_buffers() {
-            self.mark_all();
-        }
+        self.mark_reached_ephemeron_records_to_fixpoint();
         // Resolve weak hash tables now that the main mark has drained. Both the
         // sync and concurrent paths converge here with the mutator stopped, so
         // this is single-threaded and path-agnostic.
         self.mark_and_sweep_weak_tables();
+        self.reclaim_unreached_retired_processes();
         self.reclaim_unreached_killed_buffers();
         let mark_us = mark_t0.elapsed().as_micros() as u64;
 
@@ -1834,15 +1838,26 @@ impl TaggedHeap {
         // collectible table from the registry before freeing its storage.
         // Young tables join this cycle's worklist through `trace_veclike` /
         // `register_weak_hash_table_for_sweep`.
-        for &tptr in &self.always_swept_weak_tables {
-            if self.weak_hash_tables_set.insert(tptr) {
-                self.weak_hash_tables.push(tptr);
+        //
+        // A minor seeds none of them. Every minor survivor is promoted, so an
+        // old table can gain a young key or value only through a store, and
+        // the store logs the table (`remember_owner`); the remembered seed
+        // then registered it above. At the end of the first partition cycle,
+        // `scan_permanents_for_young_children` remembers every tenured table
+        // that holds a collectible child, so the next minor registers those
+        // the same way. An unwritten old table holds only old, permanent or
+        // immediate children, all black by generation here
+        // (`is_value_marked`): each entry survives and marks nothing, so
+        // scanning it cannot change the result.
+        if !self.is_minor_collection() {
+            for &tptr in &self.always_swept_weak_tables {
+                if self.weak_hash_tables_set.insert(tptr) {
+                    self.weak_hash_tables.push(tptr);
+                }
             }
         }
 
-        while self.mark_reached_killed_buffers() {
-            self.mark_all();
-        }
+        self.mark_reached_ephemeron_records_to_fixpoint();
 
         if self.weak_hash_tables.is_empty() {
             return;
@@ -1867,6 +1882,8 @@ impl TaggedHeap {
                     tables.inspect(tptr, |ht| {
                         let weakness = ht.weakness;
                         for entry in ht.data.entries_in_slot_order() {
+                            #[cfg(any(test, feature = "test-support"))]
+                            WEAK_ENTRY_VISITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             let (key, value) = (entry.key, entry.value);
                             let key_survives = self.is_value_marked(key);
                             let value_survives = self.is_value_marked(value);
@@ -1884,6 +1901,7 @@ impl TaggedHeap {
                     })
                 };
             }
+            marked |= self.mark_reached_retired_processes();
             marked |= self.mark_reached_killed_buffers();
             // Drain whatever those surviving entries reached, then re-check.
             self.mark_all();
@@ -1911,6 +1929,55 @@ impl TaggedHeap {
                     });
                 })
             };
+        }
+    }
+
+    /// Mark retired-process and killed-buffer fields to one joint fixpoint.
+    /// A field of either kind can reach the key object of the other, so the
+    /// two ephemeron sets are drained together rather than one after another.
+    fn mark_reached_ephemeron_records_to_fixpoint(&mut self) {
+        loop {
+            let processes = self.mark_reached_retired_processes();
+            let buffers = self.mark_reached_killed_buffers();
+            if !(processes || buffers) {
+                break;
+            }
+            self.mark_all();
+        }
+    }
+
+    /// Mark fields of retired processes whose process objects were reached.
+    /// Returns true when it adds work to the gray queue; the caller drains and
+    /// repeats so chains of retired processes reach a fixpoint.
+    fn mark_reached_retired_processes(&mut self) -> bool {
+        let reached: Vec<_> = self
+            .retired_process_ephemerons
+            .keys()
+            .copied()
+            .filter(|id| {
+                self.process_registry
+                    .get(id)
+                    .is_some_and(|value| self.is_value_marked(*value))
+            })
+            .collect();
+        for id in &reached {
+            let fields = self
+                .retired_process_ephemerons
+                .remove(id)
+                .unwrap_or_default();
+            for field in fields {
+                self.mark_or_push_child(field, "retired-process-field");
+            }
+        }
+        !reached.is_empty()
+    }
+
+    /// Drop registry roots for retired processes that no other root reached.
+    fn reclaim_unreached_retired_processes(&mut self) {
+        let unreached = std::mem::take(&mut self.retired_process_ephemerons);
+        for id in unreached.into_keys() {
+            self.process_registry.remove(&id);
+            self.reclaimed_process_ids.push(id);
         }
     }
 

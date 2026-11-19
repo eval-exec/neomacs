@@ -12,6 +12,13 @@ const TREEMACS_ICONS_DIRED_TEST_PRELUDE: &str = r##"
 (require 'cl-lib)
 (require 'treemacs)
 
+;; The sandbox lives inside the neomacs checkout, whose top-level
+;; `.dir-locals.el' sets `tab-width' 8 for every buffer.  `dired-revert'
+;; calls `hack-dir-local-variables-non-file-buffer', so without this the
+;; graphical-revert reading of `tab-width' depends on which checkout the
+;; host happens to run from rather than on treemacs-icons-dired.
+(setq enable-dir-local-variables nil)
+
 (treemacs-create-theme "Neomacs Dired Test"
   :icon-directory (getenv "NEOMACS_TEST_SANDBOX_ROOT")
   :config

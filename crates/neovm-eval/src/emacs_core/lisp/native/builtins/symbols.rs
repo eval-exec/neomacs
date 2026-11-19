@@ -2722,25 +2722,246 @@ pub fn builtin_native_comp_available_p(args: Vec<Value>) -> EvalResult {
     Ok(Value::NIL)
 }
 
-#[doc(hidden)]
-pub fn builtin_open_font(args: Vec<Value>, symbol_mode: SymbolMode) -> EvalResult {
-    expect_args_range("open-font", &args, 1, 3)?;
-    let is_font_entity = match args[0].kind() {
-        ValueKind::Veclike(VecLikeType::Vector) => {
-            let items = args[0].as_vector_data().unwrap().clone();
-            items
-                .first()
-                .is_some_and(|v| v.as_symbol_name(symbol_mode) == Some(":font-entity"))
+/// Look up one keyword property on a font entity/spec field vector. Entity
+/// keys are keywords, so the `:` prefix is stripped before matching.
+fn font_entity_field(fields: &[Value], name: &str, symbol_mode: SymbolMode) -> Option<Value> {
+    let mut index = 1;
+    while index + 1 < fields.len() {
+        if fields[index]
+            .as_symbol_name(symbol_mode)
+            .is_some_and(|key| key.trim_start_matches(':') == name)
+        {
+            return Some(fields[index + 1]);
+        }
+        index += 2;
+    }
+    None
+}
+
+fn font_entity_set_field(
+    fields: &mut Vec<Value>,
+    name: &'static str,
+    value: Value,
+    symbol_mode: SymbolMode,
+) {
+    let mut index = 1;
+    while index + 1 < fields.len() {
+        if fields[index]
+            .as_symbol_name(symbol_mode)
+            .is_some_and(|key| key.trim_start_matches(':') == name)
+        {
+            fields[index + 1] = value;
+            return;
+        }
+        index += 2;
+    }
+    fields.push(Value::keyword(name));
+    fields.push(value);
+}
+
+/// `eq`-style comparison for the requested-size cache key. Nil, fixnum, and
+/// float are the only shapes `open-font` accepts here.
+fn opened_font_size_key_matches(candidate: Value, key: Value) -> bool {
+    match (candidate.kind(), key.kind()) {
+        (ValueKind::Nil, ValueKind::Nil) => true,
+        (ValueKind::Fixnum(left), ValueKind::Fixnum(right)) => left == right,
+        (ValueKind::Float, ValueKind::Float) => {
+            candidate.xfloat().to_bits() == key.xfloat().to_bits()
         }
         _ => false,
+    }
+}
+
+fn opened_font_cache_lookup(cache: Value, key: Value) -> Option<Value> {
+    let mut cursor = cache;
+    while cursor.is_cons() {
+        let entry = cursor.cons_car();
+        if entry.is_cons() && opened_font_size_key_matches(entry.cons_car(), key) {
+            return Some(entry.cons_cdr());
+        }
+        cursor = cursor.cons_cdr();
+    }
+    None
+}
+
+#[doc(hidden)]
+pub fn builtin_open_font(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    use crate::emacs_core::eval::{FontOpenEntityRequest, FontOpeningSize};
+    use neovm_value::display_vocab::FontEntityHandle;
+
+    expect_args_range("open-font", &args, 1, 3)?;
+    let symbol_mode = eval.symbol_mode();
+    // GNU decodes FRAME before CHECK_FONT_ENTITY and the size operand.
+    let frame_id = match args.get(2) {
+        None => eval
+            .frame_manager()
+            .selected_frame()
+            .map(|frame| frame.id)
+            .ok_or_else(|| signal("error", vec![Value::string("No selected frame")]))?,
+        Some(value) if value.is_nil() => eval
+            .frame_manager()
+            .selected_frame()
+            .map(|frame| frame.id)
+            .ok_or_else(|| signal("error", vec![Value::string("No selected frame")]))?,
+        Some(value) if value.is_frame() => {
+            let frame_id =
+                neovm_value::display_vocab::FrameId(value.as_frame_id().expect("frame value"));
+            if eval.frame_manager().get(frame_id).is_none() {
+                return Err(signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("frame-live-p"), *value],
+                ));
+            }
+            frame_id
+        }
+        Some(value) => {
+            return Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("frame-live-p"), *value],
+            ));
+        }
     };
+
+    let entity = args[0];
+    let mut entity_fields: Vec<Value> = entity
+        .as_vector_data()
+        .map(|fields| fields.iter().copied().collect())
+        .unwrap_or_default();
+    let is_font_entity = entity_fields
+        .first()
+        .is_some_and(|tag| tag.as_symbol_name(symbol_mode) == Some(":font-entity"));
     if !is_font_entity {
         return Err(signal(
             LispCondition::WrongTypeArgument,
-            vec![Value::symbol("font-entity"), args[0]],
+            vec![Value::symbol("font-entity"), entity],
         ));
     }
-    Ok(Value::NIL)
+
+    // GNU `Fopen_font`: NIL size forwards the entity's own size operand
+    // (0 for scalable entities); an explicit integer is a pixel operand, an
+    // explicit float is a point size converted through the frame resolution.
+    // Operand 0 becomes 120; a negative operand reaches the driver, which
+    // opens its smallest usable strike unless the +15 probe window cannot
+    // reach a manageable size (then the open returns nil).  The object's
+    // `:size` keeps the operand GNU stored, which can differ from the pixel
+    // size the driver actually opened.
+    #[derive(Clone, Copy)]
+    enum SizeRequest {
+        EntityDefault,
+        Integer(i64),
+        Float(f64),
+    }
+    let size_argument = args.get(1).copied().filter(|value| !value.is_nil());
+    let (size_key, request) = match size_argument {
+        None => (Value::NIL, SizeRequest::EntityDefault),
+        Some(value) if value.is_fixnum() => {
+            let size = value.as_fixnum().expect("fixnum");
+            if !(i64::from(i32::MIN)..=i64::from(i32::MAX)).contains(&size) {
+                return Err(signal(LispCondition::ArgsOutOfRange, vec![entity, value]));
+            }
+            (value, SizeRequest::Integer(size))
+        }
+        Some(value) if value.is_float() => (value, SizeRequest::Float(value.xfloat())),
+        Some(value) => {
+            return Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("numberp"), value],
+            ));
+        }
+    };
+
+    let resolve_operand = |operand: i64| -> Result<Option<(FontOpeningSize, i64)>, Flow> {
+        let operand = if operand == 0 { 120 } else { operand };
+        if operand < -15 {
+            // font_open_entity probes psize .. psize+15; none is manageable.
+            return Ok(None);
+        }
+        let opening = if operand > 0 {
+            FontOpeningSize::Pixels(
+                std::num::NonZeroU32::new(operand as u32).expect("positive operand"),
+            )
+        } else {
+            FontOpeningSize::SmallestUsable
+        };
+        Ok(Some((opening, operand)))
+    };
+
+    let mut resolved = match request {
+        SizeRequest::EntityDefault => {
+            let entity_size = font_entity_field(&entity_fields, "size", symbol_mode)
+                .and_then(|value| value.as_fixnum())
+                .unwrap_or(0);
+            // NIL size does not take the explicit-argument 0 -> 120 rule.
+            let opening = u32::try_from(entity_size)
+                .ok()
+                .filter(|size| *size > 0)
+                .and_then(std::num::NonZeroU32::new)
+                .map(FontOpeningSize::Pixels)
+                .unwrap_or(FontOpeningSize::SmallestUsable);
+            Some((opening, entity_size))
+        }
+        SizeRequest::Integer(operand) => resolve_operand(operand)?,
+        SizeRequest::Float(_) => None,
+    };
+    if !matches!(request, SizeRequest::Float(_)) && resolved.is_none() {
+        return Ok(Value::NIL);
+    }
+
+    // GNU reuses the opened font object cached on its entity for the same
+    // pixel size, so `(eq (open-font e 20) (open-font e 20))` is t. Keep the
+    // same per-entity cache in a hidden entity property, which also roots the
+    // Value for the garbage collector exactly as long as the entity lives.
+    let cache = font_entity_field(&entity_fields, "neomacs-opened-fonts", symbol_mode)
+        .unwrap_or(Value::NIL);
+    if let Some(opened) = opened_font_cache_lookup(cache, size_key) {
+        return Ok(opened);
+    }
+
+    let handle = font_entity_field(&entity_fields, "neomacs-entity-handle", symbol_mode)
+        .and_then(|value| value.as_int())
+        .and_then(|value| u32::try_from(value).ok())
+        .and_then(FontEntityHandle::new);
+    let Some(host) = eval.display_host.as_mut() else {
+        return Ok(Value::NIL);
+    };
+    if let SizeRequest::Float(points) = request {
+        let Some(operand) = host
+            .font_open_point_pixels(points)
+            .map_err(|error| signal("error", vec![Value::string(error)]))?
+        else {
+            return Ok(Value::NIL);
+        };
+        if !(i64::from(i32::MIN)..=i64::from(i32::MAX)).contains(&operand) {
+            return Err(signal(LispCondition::ArgsOutOfRange, vec![entity, args[1]]));
+        }
+        resolved = resolve_operand(operand)?;
+        if resolved.is_none() {
+            return Ok(Value::NIL);
+        }
+    }
+    let (opening_size, reported_size) = resolved.expect("open-font operand resolved");
+    let opened = host
+        .open_font_entity(FontOpenEntityRequest {
+            frame_id,
+            handle,
+            size: opening_size,
+            reported_size: Some(reported_size),
+        })
+        .map_err(|error| signal("error", vec![Value::string(error)]))?;
+    let Some(opened) = opened else {
+        return Ok(Value::NIL);
+    };
+
+    let cache_entry = Value::cons(size_key, opened);
+    let cache = Value::cons(cache_entry, cache);
+    font_entity_set_field(
+        &mut entity_fields,
+        "neomacs-opened-fonts",
+        cache,
+        symbol_mode,
+    );
+    let _ = entity.replace_vector_data(entity_fields);
+    Ok(opened)
 }
 
 #[doc(hidden)]
@@ -3044,7 +3265,7 @@ pub fn builtin_set_charset_plist(args: Vec<Value>, symbol_mode: SymbolMode) -> E
             i += 2;
         }
     }
-    super::charset::set_charset_plist_registry(name, plist_pairs);
+    super::charset::set_charset_plist_value(name, plist_pairs, args[1]);
     Ok(args[1])
 }
 
@@ -5431,12 +5652,6 @@ pub fn builtin_handler_bind_1(eval: &mut super::eval::Context, args: Vec<Value>)
     eval.truncate_condition_stack(condition_stack_base);
     eval.restore_specpdl_roots(scope);
     body_result
-}
-
-#[doc(hidden)]
-pub fn builtin_iso_charset(args: Vec<Value>) -> EvalResult {
-    expect_args("iso-charset", &args, 3)?;
-    Ok(Value::NIL)
 }
 
 #[doc(hidden)]

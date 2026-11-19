@@ -274,6 +274,8 @@ const _: () = {
             == 4576
                 + size_of::<super::super::collection_reads::StoreState>()
                 + size_of::<crate::heap_types::OverlaySerialCounter>()
+                + size_of::<FxHashMap<crate::heap_types::ProcessId, Vec<TaggedValue>>>()
+                + size_of::<Vec<crate::heap_types::ProcessId>>()
                 + size_of::<FxHashMap<crate::value::buffer_vocab::BufferId, Vec<TaggedValue>>>()
                 + size_of::<Vec<crate::value::buffer_vocab::BufferId>>()
     );

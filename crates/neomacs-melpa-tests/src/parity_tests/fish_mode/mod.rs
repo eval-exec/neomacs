@@ -191,7 +191,7 @@ const PRELUDE: &str = r####"
 (defun fm427-test-write (relative contents)
   (let ((file (expand-file-name relative fm427-test-root)))
     (unless (and fm427-test-root-owned
-                 (file-in-directory-p file fm427-test-root))
+                 (neomacs-melpa-path-inside-p file fm427-test-root))
       (error "Refusing Fish Mode write outside owned root: %s" file))
     (make-directory (file-name-directory file) t)
     (let ((coding-system-for-write 'utf-8-unix))

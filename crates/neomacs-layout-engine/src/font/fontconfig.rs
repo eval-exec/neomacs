@@ -413,6 +413,7 @@ pub fn find_font_for_spec(
         weight,
         slant,
         width,
+        otf: None,
         definition: None,
     };
     let representative = representative_char_for_spec(&spec);
@@ -534,6 +535,7 @@ fn match_font_for_char_uncached(
         weight: None,
         slant: None,
         width: None,
+        otf: None,
         definition: None,
     };
     let matched = match_font_from_spec(

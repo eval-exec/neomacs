@@ -1,4 +1,5 @@
 mod batch_support;
+mod path_inside_audit;
 mod process_wait_audit;
 
 mod a;

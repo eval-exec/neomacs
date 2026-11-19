@@ -740,6 +740,7 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/file_name_expand.rs	fn	fn exp
 crates/neovm-eval/src/emacs_core/runtime/eval/data/file_name_expand.rs	fn	fn file_name_absolute_p
 crates/neovm-eval/src/emacs_core/runtime/eval/data/fontset_state.rs	enum	enum FontRepertory
 crates/neovm-eval/src/emacs_core/runtime/eval/data/fontset_state.rs	enum	enum FontSpecEntry
+crates/neovm-eval/src/emacs_core/runtime/eval/data/fontset_state.rs	enum	enum StoredOtfLangsys
 crates/neovm-eval/src/emacs_core/runtime/eval/data/fontset_state.rs	field	FontDefinitionMetadata field encoding
 crates/neovm-eval/src/emacs_core/runtime/eval/data/fontset_state.rs	field	FontDefinitionMetadata field repertory
 crates/neovm-eval/src/emacs_core/runtime/eval/data/fontset_state.rs	field	FontsetDataSnapshot field fallback
@@ -754,12 +755,21 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/fontset_state.rs	field	Fontse
 crates/neovm-eval/src/emacs_core/runtime/eval/data/fontset_state.rs	field	StoredFontSpec field definition
 crates/neovm-eval/src/emacs_core/runtime/eval/data/fontset_state.rs	field	StoredFontSpec field family
 crates/neovm-eval/src/emacs_core/runtime/eval/data/fontset_state.rs	field	StoredFontSpec field lang
+crates/neovm-eval/src/emacs_core/runtime/eval/data/fontset_state.rs	field	StoredFontSpec field otf
 crates/neovm-eval/src/emacs_core/runtime/eval/data/fontset_state.rs	field	StoredFontSpec field registry
 crates/neovm-eval/src/emacs_core/runtime/eval/data/fontset_state.rs	field	StoredFontSpec field slant
 crates/neovm-eval/src/emacs_core/runtime/eval/data/fontset_state.rs	field	StoredFontSpec field weight
 crates/neovm-eval/src/emacs_core/runtime/eval/data/fontset_state.rs	field	StoredFontSpec field width
+crates/neovm-eval/src/emacs_core/runtime/eval/data/fontset_state.rs	field	StoredOtfFeatures field forbidden
+crates/neovm-eval/src/emacs_core/runtime/eval/data/fontset_state.rs	field	StoredOtfFeatures field required
+crates/neovm-eval/src/emacs_core/runtime/eval/data/fontset_state.rs	field	StoredOtfSpec field gpos
+crates/neovm-eval/src/emacs_core/runtime/eval/data/fontset_state.rs	field	StoredOtfSpec field gsub
+crates/neovm-eval/src/emacs_core/runtime/eval/data/fontset_state.rs	field	StoredOtfSpec field langsys
+crates/neovm-eval/src/emacs_core/runtime/eval/data/fontset_state.rs	field	StoredOtfSpec field script
 crates/neovm-eval/src/emacs_core/runtime/eval/data/fontset_state.rs	struct	struct FontDefinitionMetadata
 crates/neovm-eval/src/emacs_core/runtime/eval/data/fontset_state.rs	struct	struct StoredFontSpec
+crates/neovm-eval/src/emacs_core/runtime/eval/data/fontset_state.rs	struct	struct StoredOtfFeatures
+crates/neovm-eval/src/emacs_core/runtime/eval/data/fontset_state.rs	struct	struct StoredOtfSpec
 crates/neovm-eval/src/emacs_core/runtime/eval/data/frame_alpha.rs	fn	fn component
 crates/neovm-eval/src/emacs_core/runtime/eval/data/frame_alpha.rs	fn	fn lower_limit
 crates/neovm-eval/src/emacs_core/runtime/eval/data/frame_alpha.rs	fn	fn pair
@@ -1114,6 +1124,7 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl P
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessKind::name
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessManager::adaptive_read_timeout
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessManager::clear_adaptive_read_skip_if_needed
+crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessManager::clear_adaptive_read_skips
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessManager::clear_status_notify_pending
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessManager::create_process_record
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessManager::find_by_buffer_id
@@ -1135,6 +1146,7 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl P
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessManager::set_child_status_pending
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessManager::set_default_read_config
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessManager::setenv
+crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessManager::skipping_adaptive_read_ids
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessManager::stderr_pipe_owner
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessManager::sync_process_mark
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessManager::was_issued_id
@@ -1178,6 +1190,7 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn make_n
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn os_str_to_lisp_string
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn print_process_handle
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn process_contact_server_p
+crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn process_defers_adaptive_read
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn process_effective_status
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn process_filter_accepts_output
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn process_has_readable_process_io
@@ -2411,6 +2424,10 @@ crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontEntityMetricsRequ
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontEntityMetricsRequest field slant
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontEntityMetricsRequest field weight
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontEntityMetricsRequest field width
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontOpenEntityRequest field frame_id
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontOpenEntityRequest field handle
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontOpenEntityRequest field reported_size
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontOpenEntityRequest field size
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontOtfCapability field gpos
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontOtfCapability field gsub
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontPxProbeResult field ascent
@@ -2431,6 +2448,7 @@ crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontSpecListQuery fie
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontSpecResolveRequest field family
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontSpecResolveRequest field frame_id
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontSpecResolveRequest field lang
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontSpecResolveRequest field otf
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontSpecResolveRequest field registry
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontSpecResolveRequest field selection
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontSpecResolveRequest field slant
@@ -2553,6 +2571,7 @@ crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	mod	mod process_hooks
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	mod	mod protocol
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	struct	struct Context
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	struct	struct FontEntityMetricsRequest
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	struct	struct FontOpenEntityRequest
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	struct	struct FontOtfCapability
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	struct	struct FontPxProbeResult
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	struct	struct FontSpecListQuery
@@ -3283,12 +3302,18 @@ crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCharsetInfo fi
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCharsetInfo field unified_p
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCharsetInfo field unify_map
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCharsetRegistry field alias_syms
+crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCharsetRegistry field binding_slots
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCharsetRegistry field charsets
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCharsetRegistry field emacs_mule_order_syms
+crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCharsetRegistry field iso2022_members
+crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCharsetRegistry field iso_designation_syms
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCharsetRegistry field next_id
+crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCharsetRegistry field plist_lisp
+crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCharsetRegistry field plist_slots
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCharsetRegistry field priority
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCharsetRegistry field priority_identity_syms
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCharsetRegistry field priority_syms
+crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCharsetRegistry field published_names
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCharsetSubsetSpec field offset
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCharsetSubsetSpec field parent
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCharsetSubsetSpec field parent_max_code

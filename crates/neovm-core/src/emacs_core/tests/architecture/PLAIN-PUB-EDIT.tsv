@@ -514,7 +514,6 @@ crates/neovm-edit/src/buffer/mod.rs	use	use TextPositionAnchor
 crates/neovm-edit/src/buffer/mod.rs	use	use TextPropertyTable
 crates/neovm-edit/src/buffer/mod.rs	use	use UndoLimitBindings
 crates/neovm-edit/src/buffer/mod.rs	use	use VisitedFileModtime
-crates/neovm-edit/src/buffer/mod.rs	use	use truncate_undo_list
 crates/neovm-edit/src/buffer/mod.rs	use	use undo_list_boundary
 crates/neovm-edit/src/buffer/mod.rs	use	use undo_list_is_disabled
 crates/neovm-edit/src/buffer/mod.rs	use	use undo_list_record_insert
@@ -734,11 +733,8 @@ crates/neovm-edit/src/buffer/text/mod.rs	use	use TextExtent
 crates/neovm-edit/src/buffer/text/mod.rs	use	use TextMetrics
 crates/neovm-edit/src/buffer/text_props.rs	use	use neovm_value::value::text_props::*
 crates/neovm-edit/src/buffer/text_snapshot.rs	fn	fn buffer_text_cow_copies
-crates/neovm-edit/src/buffer/text_snapshot.rs	fn	fn set_text_snapshot_mode_override
 crates/neovm-edit/src/buffer/text_snapshot.rs	fn	fn take_buffer_text_cow_copies
-crates/neovm-edit/src/buffer/undo.rs	fn	fn impl UndoLimits::read
 crates/neovm-edit/src/buffer/undo.rs	fn	fn impl UndoRecording::of
-crates/neovm-edit/src/buffer/undo.rs	fn	fn truncate_undo_list
 crates/neovm-edit/src/buffer/undo.rs	fn	fn undo_list_boundary
 crates/neovm-edit/src/buffer/undo.rs	fn	fn undo_list_is_disabled
 crates/neovm-edit/src/buffer/undo.rs	fn	fn undo_list_record_delete

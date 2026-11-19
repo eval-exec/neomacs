@@ -91,7 +91,7 @@ neovm_eval::emacs_core::subr::define_subrs! {
     )),
     neovm_eval::emacs_core::subr::world_subr!(SubrSpec::new(
         "font-match-p",
-        NativeFn::NoContextVec(font_match_p),
+        NativeFn::ContextVec(font_match_p),
         SubrArity::new(2, Some(2)),
     )),
     neovm_eval::emacs_core::subr::world_subr!(SubrSpec::new(

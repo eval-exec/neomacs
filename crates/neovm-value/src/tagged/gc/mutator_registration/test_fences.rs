@@ -59,6 +59,7 @@ pub fn begin_restore_retry_for_test<'owner, 'era>(
 #[cfg(feature = "test-support")]
 pub use super::super::cons_storage::{CatalogWaitsSnapshot, catalog_waits_for_test};
 #[cfg(not(feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) use super::super::cons_storage::{CatalogWaitsSnapshot, catalog_waits_for_test};
 
 /// Peer-signed 18:40Z shape (a): typed scoped seam over the owner-private

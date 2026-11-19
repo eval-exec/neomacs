@@ -8,7 +8,8 @@ use super::super::EraKeeper;
 use super::*;
 pub(crate) use crate::tagged::gc::ProofEra as ParallelHeapEra;
 pub(crate) use crate::tagged::value::TaggedValue;
-pub(crate) use std::sync::mpsc::{self, Receiver};
+pub(crate) use std::sync::mpsc;
+pub(crate) use std::sync::mpsc::Receiver;
 pub(crate) use std::thread;
 pub(crate) use std::time::Duration;
 

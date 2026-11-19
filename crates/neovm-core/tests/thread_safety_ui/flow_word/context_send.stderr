@@ -281,7 +281,7 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `neovm_core::Context: Send`
            `*mut HashTableObj: Send`
            which is required by `neovm_core::Context: Send`
-           `*mut FinalizerObj: Send`
+           `*mut header::FinalizerObj: Send`
            which is required by `neovm_core::Context: Send`
            `*mut *mut MarkerObj: Send`
            which is required by `neovm_core::Context: Send`
@@ -319,7 +319,7 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `neovm_core::Context: Send`
            `*mut HashTableObj: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `*mut FinalizerObj: std::marker::Sync`
+           `*mut header::FinalizerObj: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
            `*mut *mut MarkerObj: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
@@ -339,7 +339,7 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `neovm_core::Context: Send`
            `*mut MarkerObj: Send`
            which is required by `neovm_core::Context: Send`
-           `*mut BignumObj: Send`
+           `*mut header::BignumObj: Send`
            which is required by `neovm_core::Context: Send`
            `NonNull<[Cell<usize>; 8192]>: Send`
            which is required by `neovm_core::Context: Send`
@@ -407,7 +407,7 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `neovm_core::Context: Send`
            `*mut MarkerObj: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `*mut BignumObj: std::marker::Sync`
+           `*mut header::BignumObj: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
            `*const LispSymbol: std::marker::Sync`
            which is required by `neovm_core::Context: Send`

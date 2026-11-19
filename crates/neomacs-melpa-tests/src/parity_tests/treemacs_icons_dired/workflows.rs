@@ -81,7 +81,7 @@ fn global_mode_updates_existing_and_future_dired_buffers_then_tears_down() -> Pa
     (when (file-exists-p root) (delete-directory root t))))
 "##;
     let expected = expect![[
-        r#"OK (:before (:entry (:name "README.md" :present t :icon nil) :tab-width 8 :displayed nil) :enabled (:mode t :registration (:after-readin t :mode-select t :tab-width t :revert t :add-entry t) :existing (:file (:name "README.md" :present t :icon "[MD]") :directory (:name "src" :present t :icon "[SRC]") :tab-width 1 :displayed t :coverage ("./")) :future (:file (:name "plan.el" :present t :icon "[EL]") :tab-width 1 :displayed t :coverage ("./"))) :disabled (:mode nil :registration (:after-readin nil :mode-select nil :tab-width nil :revert nil :add-entry nil) :existing (:entry (:name "README.md" :present t :icon nil) :tab-width 8 :displayed t) :future (:entry (:name "plan.el" :present t :icon nil) :tab-width 8 :displayed t)))"#
+        r#"OK (:before (:entry (:name "README.md" :present t :icon nil) :tab-width 8 :displayed nil) :enabled (:mode t :registration (:after-readin t :mode-select t :tab-width t :revert t :add-entry t) :existing (:file (:name "README.md" :present t :icon "[MD]") :directory (:name "src" :present t :icon "[SRC]") :tab-width 1 :displayed t :coverage ("./")) :future (:file (:name "plan.el" :present t :icon "[EL]") :tab-width 1 :displayed t :coverage ("./"))) :disabled (:mode nil :registration (:after-readin nil :mode-select nil :tab-width nil :revert nil :add-entry nil) :existing (:entry (:name "README.md" :present t :icon nil) :tab-width 1 :displayed t) :future (:entry (:name "plan.el" :present t :icon nil) :tab-width 1 :displayed t)))"#
     ]];
     ParityBatchCase::value(
         "global_mode_updates_existing_and_future_dired_buffers_then_tears_down",
@@ -241,7 +241,7 @@ fn enable_once_respects_the_terminal_gate_then_draws_on_graphical_revert() -> Pa
     (when (file-exists-p root) (delete-directory root t))))
 "##;
     let expected = expect![[
-        r#"OK (:terminal (:mode t :enable-once-hook nil :entry (:name "notes.txt" :present t :icon nil) :tab-width 1 :displayed nil) :graphical (:mode t :entry (:name "notes.txt" :present t :icon "[TXT]") :tab-width 8 :displayed t :coverage ("./")))"#
+        r#"OK (:terminal (:mode t :enable-once-hook nil :entry (:name "notes.txt" :present t :icon nil) :tab-width 1 :displayed nil) :graphical (:mode t :entry (:name "notes.txt" :present t :icon "[TXT]") :tab-width 1 :displayed t :coverage ("./")))"#
     ]];
     ParityBatchCase::value(
         "enable_once_respects_the_terminal_gate_then_draws_on_graphical_revert",

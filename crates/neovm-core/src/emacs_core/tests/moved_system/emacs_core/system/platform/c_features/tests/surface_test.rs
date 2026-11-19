@@ -119,7 +119,7 @@ fn every_provided_feature_names_what_backs_it() {
         provided += 1;
         match row.here {
             HereDecision::UnconditionalInGnu => assert_eq!(
-                row.gnu_guard,
+                row.gnu_guard(),
                 GnuGuard::Unconditional,
                 "{} is provided here on the grounds that GNU provides it in \
                  every build, but its own row says GNU guards it",
@@ -173,11 +173,11 @@ fn every_row_cites_gnus_own_site() {
     crate::test_utils::init_test_tracing();
     for row in gnu_c_features() {
         assert!(
-            row.gnu_site.starts_with("src/")
-                && (row.gnu_site.contains(".c:") || row.gnu_site.contains(".m:")),
+            row.gnu_site().starts_with("src/")
+                && (row.gnu_site().contains(".c:") || row.gnu_site().contains(".m:")),
             "{} cites {:?}, which is not a src/*.c or src/*.m line",
             row.name,
-            row.gnu_site
+            row.gnu_site()
         );
     }
 }
@@ -200,7 +200,7 @@ fn the_nsterm_objective_c_rows_are_in_the_table() {
             .into_iter()
             .find(|f| f.name == name)
             .unwrap_or_else(|| panic!("the table lost its {name} row"));
-        assert_eq!(row.gnu_site, site, "{name} cites the wrong line");
+        assert_eq!(row.gnu_site(), site, "{name} cites the wrong line");
         assert!(
             !row.here.provided(),
             "{name} is a NeXTstep window-system feature and this build has no NS terminal"
@@ -219,7 +219,7 @@ fn dbusbind_row_follows_the_libdbus_probe() {
         .into_iter()
         .find(|f| f.name == "dbusbind")
         .expect("the table has a dbusbind row");
-    assert_eq!(row.gnu_guard, GnuGuard::BuildOption("HAVE_DBUS"));
+    assert_eq!(row.gnu_guard(), GnuGuard::BuildOption("HAVE_DBUS"));
     let present = std::cfg_select! {
         neomacs_have_dbus => true,
         _ => false,

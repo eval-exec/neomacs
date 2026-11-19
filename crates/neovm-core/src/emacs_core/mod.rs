@@ -366,6 +366,9 @@ mod gnu_defsym_symbols_test;
 #[path = "tests/gnu_surface/defvar_special_test.rs"]
 mod gnu_defvar_special_test;
 #[cfg(test)]
+#[path = "tests/gnu_surface/reader_entry_point_intern_test.rs"]
+mod gnu_reader_entry_point_intern_test;
+#[cfg(test)]
 #[path = "tests/gnu_surface/subr_test.rs"]
 mod gnu_subr_surface_test;
 #[cfg(test)]
@@ -505,6 +508,14 @@ mod architecture_host_cfg_agreement_guard_test;
 mod architecture_canonical_registration_trace_test;
 
 #[cfg(test)]
+#[path = "tests/architecture/contract_twin_goldens_guard_test.rs"]
+mod architecture_contract_twin_goldens_guard_test;
+
+#[cfg(test)]
+#[path = "tests/architecture/wreg_stage_trace_test.rs"]
+mod architecture_wreg_stage_trace_test;
+
+#[cfg(test)]
 #[path = "tests/architecture/host_cfg_elisp_regression_test.rs"]
 mod architecture_host_cfg_elisp_regression_test;
 
@@ -546,6 +557,10 @@ mod architecture_unsafe_shim_guard_test;
 #[cfg(test)]
 #[path = "tests/architecture/debug_assert_side_effect_guard_test.rs"]
 mod architecture_debug_assert_side_effect_guard_test;
+
+#[cfg(test)]
+#[path = "tests/architecture/test_support_evidence_cfg_test.rs"]
+mod architecture_test_support_evidence_cfg_test;
 
 #[cfg(test)]
 #[path = "tests/architecture/leaf_slot_writer_guard_test.rs"]

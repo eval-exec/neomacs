@@ -1295,7 +1295,7 @@ fn parse_c_intern_ledger_with(text: &str, ledger: &str) -> Result<Vec<CInternRow
     Ok(rows)
 }
 
-fn scan_source(file_name: &str, text: &str, out: &mut Vec<(String, String)>) {
+fn scan_source(text: &str, out: &mut Vec<(String, String)>) {
     let bytes = text.as_bytes();
     for (offset, _) in text.match_indices("DEFSYM") {
         // A real DEFSYM token: not the tail of a longer identifier.
@@ -1354,7 +1354,6 @@ fn scan_source(file_name: &str, text: &str, out: &mut Vec<(String, String)>) {
                     cursor += 2;
                 }
                 b'"' => {
-                    cursor += 1;
                     closed = true;
                     break;
                 }
@@ -1412,7 +1411,7 @@ pub fn extract(src_dir: &Path) -> Result<Vec<Row>, String> {
         let bytes = fs::read(path).map_err(|error| format!("read {}: {error}", path.display()))?;
         let text = String::from_utf8_lossy(&bytes);
         let mut scanned = Vec::new();
-        scan_source(file_name, &text, &mut scanned);
+        scan_source(&text, &mut scanned);
         for (c_name, spelling) in scanned {
             occurrences.push((c_name, spelling, file_name.to_string()));
         }

@@ -81,13 +81,9 @@ fn app_monochrome_dark_supports_a_real_edit_build_and_error_navigation_session()
                   #'shell-quote-argument
                   (list checker source)
                   " "))))
-        (let ((process (get-buffer-process compilation-buffer)))
-          (while
-              (process-live-p process)
-            (accept-process-output process 0.05))
-          (accept-process-output process 0.05))
+        (neomacs-app-monochrome-test-complete-compilation
+         compilation-buffer)
         (with-current-buffer compilation-buffer
-          (font-lock-ensure)
           (setq diagnostics
                 (mapcar
                  (lambda (needle)

@@ -44,6 +44,14 @@ pub struct RegistrationCensus {
     pub(crate) young_blocks: usize,
 }
 
+#[cfg(feature = "test-support")]
+impl RegistrationCensus {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn cancelled_starts(&self) -> usize {
+        self.cancelled_starts
+    }
+}
+
 /// A gate-bounded metadata census. It is deliberately NOT collection authority:
 /// no heap pointer, stopped-world constructor, raw decoding or mark operation.
 pub struct StoppedSummaries<'era> {

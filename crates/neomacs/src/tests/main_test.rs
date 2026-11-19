@@ -2892,8 +2892,6 @@ fn primary_image_catalog_lookup_returns_pending_without_waiting_for_render_threa
     let ImageLookup::Pending(image) = lookup else {
         panic!("new image lookup should be pending");
     };
-    assert_eq!(image.placement().width(), 50);
-    assert_eq!(image.placement().height(), 50);
     match cmd_rx.try_recv().expect("queued image load") {
         RenderCommand::Asset(AssetCommand::ImageLoadFile { size, frame, .. }) => {
             assert_eq!(
@@ -2904,18 +2902,64 @@ fn primary_image_catalog_lookup_returns_pending_without_waiting_for_render_threa
         }
         other => panic!("expected ImageLoadFile, got {other:?}"),
     }
+    // The load token is the pending identity. The slot's layout is the header
+    // probe's separate subject -- it may settle between the two lookups -- so
+    // this assertion is on the token, not on the whole pending image.
+    let duplicate = unbounded_lookup(&host.image_catalog, request.clone());
+    let ImageLookup::Pending(duplicate) = duplicate else {
+        panic!("duplicate lookup should stay pending");
+    };
     assert_eq!(
-        unbounded_lookup(&host.image_catalog, request.clone()),
-        ImageLookup::Pending(image.clone()),
-        "duplicate lookup should reuse the same pending image"
+        duplicate.load(),
+        image.load(),
+        "duplicate lookup should reuse the same pending load token"
     );
     assert!(
         cmd_rx.try_recv().is_err(),
         "duplicate lookup must not enqueue a second decode"
     );
+}
+
+/// The pending slot's layout is the header's subject, not the token's: a live
+/// header probe may settle it at any point during another lookup. Assert the
+/// layout update deterministically instead: a source with no readable header
+/// keeps the placeholder, and this test publishes the decode-completion
+/// terminal itself (the render thread would in a live session), so neither
+/// side races the assertion.
+#[test]
+fn primary_image_catalog_pending_layout_updates_when_the_decode_completes() {
+    let (cmd_tx, _cmd_rx) = neomacs_display_runtime::thread_comm::RenderCommandSender::unbounded();
+    let image_metadata = Arc::new(ImageRenderState::default());
+    let catalog = test_image_catalog(&cmd_tx, Arc::clone(&image_metadata));
+    let request = ImageResolveRequest {
+        spec: test_image_spec_identity("pending-layout"),
+        source: ImageResolveSource::Data(ImageDataSource::Isolated(EncodedBytes::new(
+            b"not an image".to_vec(),
+        ))),
+        identity: test_file_image_identity("pending-layout"),
+        size: ImageSizeSpec::new(AxisSize::AtMost(50), AxisSize::AtMost(50)),
+        rotation: ImageRotation::None,
+        colors: ImageColorContext::default(),
+        mask: Default::default(),
+        frame: ImageFrameIndex::new(3),
+        animation: ImageAnimationPolicy::disabled(),
+        realization: Default::default(),
+    };
+
+    let lookup = unbounded_lookup(&catalog, request.clone());
+    let ImageLookup::Pending(pending) = lookup else {
+        panic!("headerless source lookup should be pending");
+    };
+    assert_eq!(pending.placement().width(), 50);
+    assert_eq!(pending.placement().height(), 50);
+    assert_eq!(
+        unbounded_lookup(&catalog, request.clone()),
+        ImageLookup::Pending(pending.clone()),
+        "a headerless pending lookup keeps the placeholder and its token"
+    );
 
     image_metadata.publish_terminal(
-        image.load(),
+        pending.load(),
         ImageDecodeTerminal::Ready(ResolvedImageMetadata::layout_is_image_pixels(
             25,
             50,
@@ -2925,7 +2969,7 @@ fn primary_image_catalog_lookup_returns_pending_without_waiting_for_render_threa
         )),
     );
 
-    let ImageLookup::Ready(image) = unbounded_lookup(&host.image_catalog, request) else {
+    let ImageLookup::Ready(image) = unbounded_lookup(&catalog, request) else {
         panic!("decoded image lookup should be ready");
     };
     assert_eq!(image.metadata.layout.dimensions(), (25, 50));
