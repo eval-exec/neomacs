@@ -9,6 +9,8 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest import mock
+from urllib.error import HTTPError, URLError
 
 WORKSPACE = Path(__file__).resolve().parents[3]
 SCRIPT = WORKSPACE / "scripts/ci/prefetch-display-font-fixtures.py"
@@ -173,6 +175,48 @@ class DisplayFontFixtureTests(unittest.TestCase):
             raise AssertionError("complete cache must not download")
 
         provisioner.provision(workspace, pins, fetch)
+
+    def test_fetch_error_names_the_url(self):
+        url = "https://archive.ubuntu.com/ubuntu/pool/font.tar.gz"
+        with mock.patch.object(
+            provisioner,
+            "urlopen",
+            side_effect=HTTPError(url, 403, "Forbidden", hdrs=None, fp=None),
+        ):
+            with self.assertRaises(provisioner.PinError) as caught:
+                provisioner.fetch_bytes(url, 64)
+        self.assertIn(f"url={url}", str(caught.exception))
+        self.assertIn("403", str(caught.exception))
+        with mock.patch.object(
+            provisioner,
+            "urlopen",
+            side_effect=URLError("timed out"),
+        ):
+            with self.assertRaises(provisioner.PinError) as caught:
+                provisioner.fetch_bytes(url, 64)
+        self.assertIn(f"url={url}", str(caught.exception))
+
+    def test_fetch_sends_a_non_urllib_user_agent(self):
+        seen = []
+
+        class Response:
+            def read(self, _limit):
+                return b"font"
+            def __enter__(self):
+                return self
+            def __exit__(self, *_args):
+                return False
+
+        def urlopen(request, timeout=None):
+            seen.append((request, timeout))
+            return Response()
+
+        with mock.patch.object(provisioner, "urlopen", urlopen):
+            data = provisioner.fetch_bytes("https://example.invalid/font.tar.gz", 64)
+        self.assertEqual(data, b"font")
+        agent = seen[0][0].get_header("User-agent")
+        self.assertEqual(agent, "neomacs-font-fixtures")
+        self.assertNotIn("Python-urllib", agent)
 
     def test_workflow_provisions_before_display_tests_and_can_dispatch(self):
         workflow = (WORKSPACE / ".github/workflows/test-suite.yml").read_text()
