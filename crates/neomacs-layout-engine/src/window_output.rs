@@ -1908,7 +1908,14 @@ impl WindowOutputEmitter {
         end_col: usize,
     ) {
         self.push_text_display_point(buffer_pos, glyph_x, glyph_y, width, height, row, start_col);
-        self.move_text_output_to(evaluator, row, end_col, row_y, glyph_x + width.max(0.0));
+        // A zero-advance span keeps its display point but must not move the
+        // output cursor.  Composition members are published at the composite
+        // glyph's start so their buffer positions stay addressable; moving the
+        // pen back there would shrink the finished row's end_x below the
+        // composite's own advance (issue #785: string-pixel-width "جا" = 0).
+        if width > 0.0 || end_col > start_col {
+            self.move_text_output_to(evaluator, row, end_col, row_y, glyph_x + width.max(0.0));
+        }
     }
 
     fn emit_text_output_span(&mut self, evaluator: &mut Context, span: TextOutputSpan) {
