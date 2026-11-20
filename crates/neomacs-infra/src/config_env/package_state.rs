@@ -16,12 +16,20 @@
 use crate::inventory::sha256_hex;
 use std::fs;
 use std::path::Path;
+use std::process::Command;
 
 /// One package build the bootstrap produced.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct InstalledPackage {
     pub name: String,
     pub version: String,
+}
+
+/// One straight repo checkout and the commit the bootstrap left it at.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct RepoRevision {
+    pub name: String,
+    pub commit: String,
 }
 
 /// The package-state identity of one sealed fixture, in its native layout.
@@ -32,12 +40,11 @@ pub enum PackageStateIdentity {
         emacs_version: String,
         packages: Vec<InstalledPackage>,
     },
-    /// Straight: `repos/<repo>/` builds anchored by the per-Emacs build
-    /// cache (this fixture shape carries no versions lockfile).
-    Straight {
-        build_cache_sha256: String,
-        repos: Vec<String>,
-    },
+    /// Straight: `repos/<repo>/` git checkouts at their pinned commits.
+    /// The commits are the reproducible provenance: the bootstrap leaves
+    /// every repo at its recipe's pin, independent of the host Emacs
+    /// build, while the generated build cache is host-local output.
+    Straight { repos: Vec<RepoRevision> },
 }
 
 /// SHA-256 of a record — the pin the spec stores.
@@ -89,6 +96,27 @@ fn read_sorted_entries(dir: &Path) -> Result<Vec<std::path::PathBuf>, String> {
         .collect();
     paths.sort();
     Ok(paths)
+}
+
+/// The commit one straight repo checkout is at, via `git rev-parse HEAD`.
+/// Straight repos are real git checkouts even in a sealed fixture (the
+/// seal only drops write bits), and the bootstrap leaves each at its
+/// recipe's pin.
+fn head_commit(repo: &Path) -> Result<String, String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .map_err(|error| format!("run git rev-parse in {}: {error}", repo.display()))?;
+    if !output.status.success() {
+        return Err(format!(
+            "{}: git rev-parse HEAD failed: {}",
+            repo.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
 impl PackageStateIdentity {
@@ -161,46 +189,23 @@ impl PackageStateIdentity {
         })
     }
 
-    /// Straight layout: the sorted repo list, anchored by the digest of the
-    /// single `build-*-cache.el` the bootstrap generated.
+    /// Straight layout: the sorted repo list, each with the commit the
+    /// bootstrap checked out.  The per-Emacs build cache the identity once
+    /// hashed is host-local output — two CI materializations on one runner
+    /// image produced two digests (2026-11-20, runs 44759918099 and
+    /// 44770027130) — so the reproducible provenance is the repos'
+    /// commits, which the recipes pin independently of the host.
     fn from_straight(straight: &Path) -> Result<Self, String> {
-        let mut build_caches = Vec::new();
-        for path in read_sorted_entries(straight)? {
+        let mut repos = Vec::new();
+        for path in read_sorted_dirs(&straight.join("repos"))? {
             let name = path
                 .file_name()
-                .map(|name| name.to_string_lossy().into_owned());
-            if name
-                .as_deref()
-                .is_some_and(|name| name.starts_with("build-") && name.ends_with("-cache.el"))
-                && fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_file())
-            {
-                build_caches.push(path);
-            }
+                .map(|name| name.to_string_lossy().into_owned())
+                .ok_or_else(|| format!("{}: unreadable repo dir name", path.display()))?;
+            let commit = head_commit(&path)?;
+            repos.push(RepoRevision { name, commit });
         }
-        if build_caches.len() != 1 {
-            return Err(format!(
-                "{}: expected exactly one build-*-cache.el, found {}",
-                straight.display(),
-                build_caches.len()
-            ));
-        }
-        let build_cache_sha256 = {
-            let bytes = fs::read(&build_caches[0])
-                .map_err(|error| format!("read {}: {error}", build_caches[0].display()))?;
-            sha256_hex(&bytes)
-        };
-        let mut repos: Vec<String> = read_sorted_dirs(&straight.join("repos"))?
-            .into_iter()
-            .filter_map(|path| {
-                path.file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-            })
-            .collect();
-        repos.sort();
-        Ok(Self::Straight {
-            build_cache_sha256,
-            repos,
-        })
+        Ok(Self::Straight { repos })
     }
 
     /// Serialize to the fixture's `PACKAGES` record (stable text).
@@ -219,16 +224,12 @@ impl PackageStateIdentity {
                 }
                 out
             }
-            Self::Straight {
-                build_cache_sha256,
-                repos,
-            } => {
-                let mut out = format!(
-                    "schema = 1\nlayout = straight\nbuild_cache = {build_cache_sha256}\nrepos = {}\n",
-                    repos.len()
-                );
+            Self::Straight { repos } => {
+                let mut out = format!("schema = 2\nlayout = straight\nrepos = {}\n", repos.len());
                 for repo in repos {
-                    out.push_str(repo);
+                    out.push_str(&repo.name);
+                    out.push(' ');
+                    out.push_str(&repo.commit);
                     out.push('\n');
                 }
                 out
@@ -240,13 +241,29 @@ impl PackageStateIdentity {
     pub fn parse_record(text: &str) -> Result<Self, String> {
         let mut lines = text.lines();
         let schema = lines.next().ok_or("PACKAGES record is empty")?;
-        if schema != "schema = 1" {
-            return Err(format!("PACKAGES record has unknown {schema:?}"));
-        }
         let layout = lines
             .next()
             .and_then(|line| line.strip_prefix("layout = "))
             .ok_or("PACKAGES record missing layout")?;
+        if layout == "straight" && schema != "schema = 2" {
+            // A straight record anchored by the build-cache digest.  That
+            // digest is host-local output, so such a fixture was sealed
+            // against an identity that cannot be reproduced; the only way
+            // forward is a fresh materialization under the commit identity.
+            return Err(format!(
+                "PACKAGES record has {schema:?}, but straight records are \
+                 `schema = 2` (per-repo commits) since the build-cache \
+                 identity was retired; re-materialize the fixture"
+            ));
+        }
+        if layout == "elpa" && schema != "schema = 1" {
+            return Err(format!("PACKAGES record has unknown {schema:?}"));
+        }
+        if layout != "elpa" && layout != "straight" {
+            return Err(format!(
+                "PACKAGES record has unknown layout {layout:?} (known: elpa, straight)"
+            ));
+        }
         match layout {
             "elpa" => {
                 let emacs_version = lines
@@ -284,11 +301,6 @@ impl PackageStateIdentity {
                 })
             }
             "straight" => {
-                let build_cache_sha256 = lines
-                    .next()
-                    .and_then(|line| line.strip_prefix("build_cache = "))
-                    .ok_or("PACKAGES record missing build_cache digest")?
-                    .to_owned();
                 let count: usize = lines
                     .next()
                     .and_then(|line| line.strip_prefix("repos = "))
@@ -299,7 +311,16 @@ impl PackageStateIdentity {
                     if line.is_empty() {
                         continue;
                     }
-                    repos.push(line.to_owned());
+                    let (name, commit) = line
+                        .split_once(' ')
+                        .ok_or_else(|| format!("PACKAGES line {line:?} is not `repo commit`"))?;
+                    if commit.contains(' ') {
+                        return Err(format!("PACKAGES line {line:?} is not `repo commit`"));
+                    }
+                    repos.push(RepoRevision {
+                        name: name.to_owned(),
+                        commit: commit.to_owned(),
+                    });
                 }
                 if repos.len() != count {
                     return Err(format!(
@@ -307,10 +328,7 @@ impl PackageStateIdentity {
                         repos.len()
                     ));
                 }
-                Ok(Self::Straight {
-                    build_cache_sha256,
-                    repos,
-                })
+                Ok(Self::Straight { repos })
             }
             other => Err(format!(
                 "PACKAGES record has unknown layout {other:?} (known: elpa, straight)"

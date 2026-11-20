@@ -120,49 +120,158 @@ fn package_identity_records_the_elpa_layout() {
     );
 }
 
+/// Initialize a synthetic straight repo checkout with one commit, the way
+/// the bootstrap leaves recipe repos: a real git tree at a pinned commit.
+#[cfg(unix)]
+fn git_repo(path: &Path, file: &'static str) {
+    use std::process::Command;
+    fs::create_dir_all(path).expect("repo dir");
+    let git = |args: &[&str]| {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(path)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "infra test")
+            .env("GIT_AUTHOR_EMAIL", "test@neomacs.invalid")
+            .env("GIT_COMMITTER_NAME", "infra test")
+            .env("GIT_COMMITTER_EMAIL", "test@neomacs.invalid")
+            .env("GIT_AUTHOR_DATE", "2005-04-02T22:17:00Z")
+            .env("GIT_COMMITTER_DATE", "2005-04-02T22:17:00Z")
+            .output()
+            .expect("spawn git");
+        assert!(
+            output.status.success(),
+            "git {args:?} in {}: {}",
+            path.display(),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_owned()
+    };
+    git(&["init", "--quiet"]);
+    fs::write(path.join(file), ";; synthetic package\n").expect("write repo file");
+    git(&["add", file]);
+    git(&["commit", "--quiet", "-m", "synthetic package"]);
+}
+
 #[cfg(unix)]
 #[test]
 fn package_identity_records_the_straight_layout() {
     let owner = tempfile::tempdir().expect("fixture root");
     let root = owner.path();
-    let repos_dir = root.join("tree/.local/straight/repos");
-    fs::create_dir_all(repos_dir.join("compat")).expect("repo dir");
-    fs::create_dir_all(repos_dir.join("dash.el")).expect("repo dir");
-    fs::create_dir(root.join("tree/.local/straight/build-31.1")).expect("build dir");
+    let straight = root.join("tree/.local/straight");
+    let repos_dir = straight.join("repos");
+    git_repo(&repos_dir.join("compat"), "compat.el");
+    git_repo(&repos_dir.join("dash.el"), "dash.el");
+    // The build cache exists in real fixtures but is host-local output:
+    // it must not anchor the identity.
     fs::write(
-        root.join("tree/.local/straight/build-31.1-cache.el"),
+        straight.join("build-31.1-cache.el"),
         ";; straight build cache\n",
     )
     .expect("build cache");
 
     let identity = super::package_state::PackageStateIdentity::from_fixture(root)
         .expect("read package identity");
-    let super::package_state::PackageStateIdentity::Straight {
-        build_cache_sha256,
-        repos,
-    } = &identity
-    else {
+    let super::package_state::PackageStateIdentity::Straight { repos } = &identity else {
         panic!("straight layout must read as the Straight variant");
     };
     assert_eq!(
-        repos,
-        &vec!["compat".to_owned(), "dash.el".to_owned()],
+        repos
+            .iter()
+            .map(|repo| repo.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["compat", "dash.el"],
         "repos must be sorted by name"
     );
+    for repo in repos {
+        let head = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repos_dir.join(&repo.name))
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .expect("spawn git");
+        assert_eq!(
+            repo.commit,
+            String::from_utf8_lossy(&head.stdout).trim(),
+            "the identity must record the repo's checked-out commit"
+        );
+    }
+
+    // The record round-trips.
+    let record = identity.to_record();
+    let parsed =
+        super::package_state::PackageStateIdentity::parse_record(&record).expect("parse record");
+    assert_eq!(parsed.to_record(), record);
+
+    // Host-local output keeps the identity: a rewritten build cache (new
+    // bytes, new mtime) and rewritten repo worktree files change nothing.
+    fs::write(
+        straight.join("build-31.1-cache.el"),
+        ";; a different cache the next materialization wrote\n",
+    )
+    .expect("rewrite build cache");
+    fs::write(repos_dir.join("compat/compat.el"), ";; rewritten\n").expect("rewrite repo file");
+    let unchanged = super::package_state::PackageStateIdentity::from_fixture(root)
+        .expect("read unchanged identity");
     assert_eq!(
-        build_cache_sha256,
-        &super::package_state::digest(";; straight build cache\n"),
-        "the build cache digest anchors the straight identity"
+        identity.to_record(),
+        unchanged.to_record(),
+        "build-cache and worktree bytes must not enter the identity"
     );
 
-    // Adding a repo changes the identity.
-    fs::create_dir(repos_dir.join("melpa")).expect("add repo");
+    // A second fixture at a different path with the same repos has the
+    // same identity: nothing host- or path-specific is hashed.
+    let other = tempfile::tempdir().expect("second fixture root");
+    let other_repos = other.path().join("tree/.local/straight/repos");
+    git_repo(&other_repos.join("compat"), "compat.el");
+    git_repo(&other_repos.join("dash.el"), "dash.el");
+    let twin = super::package_state::PackageStateIdentity::from_fixture(other.path())
+        .expect("read twin identity");
+    assert_eq!(
+        identity.to_record(),
+        twin.to_record(),
+        "two materializations of the same repos must agree"
+    );
+
+    // A different HEAD in one repo changes the identity.
+    let moved = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repos_dir.join("dash.el"))
+        .args(["commit", "--quiet", "--allow-empty", "-m", "upstream moved"])
+        .env("GIT_AUTHOR_NAME", "infra test")
+        .env("GIT_AUTHOR_EMAIL", "test@neomacs.invalid")
+        .env("GIT_COMMITTER_NAME", "infra test")
+        .env("GIT_COMMITTER_EMAIL", "test@neomacs.invalid")
+        .env("GIT_AUTHOR_DATE", "2005-04-02T22:18:00Z")
+        .env("GIT_COMMITTER_DATE", "2005-04-02T22:18:00Z")
+        .output()
+        .expect("spawn git");
+    assert!(
+        moved.status.success(),
+        "advance dash.el HEAD: {}",
+        String::from_utf8_lossy(&moved.stderr)
+    );
     let changed = super::package_state::PackageStateIdentity::from_fixture(root)
         .expect("read changed identity");
     assert_ne!(
         identity.to_record(),
         changed.to_record(),
-        "an added repo must change the identity record"
+        "a moved upstream commit must change the identity record"
+    );
+}
+
+#[test]
+fn straight_records_from_the_build_cache_schema_fail_closed() {
+    // A record sealed against the retired build-cache identity cannot be
+    // re-pinned: the digest it carries is host-local output.  Parsing must
+    // refuse it and name re-materialization, so a stale sealed fixture
+    // fails at open time with the fix stated.
+    let record = "schema = 1\nlayout = straight\nbuild_cache = 684009cd\nrepos = 1\ncompat\n";
+    let error = super::package_state::PackageStateIdentity::parse_record(record)
+        .expect_err("schema-1 straight record must fail closed");
+    assert!(
+        error.contains("schema = 2") && error.contains("re-materialize"),
+        "error must name the retirement and the fix: {error}"
     );
 }
 
@@ -249,7 +358,7 @@ fn spec_pin_binds_the_recorded_package_identity() {
 
     // The identity under test: whatever a fixture's PACKAGES record says.
     let identity = super::package_state::PackageStateIdentity::parse_record(
-        "schema = 1\nlayout = straight\nbuild_cache = dead\nrepos = 0\n",
+        "schema = 2\nlayout = straight\nrepos = 0\n",
     )
     .expect("synthetic record");
     let fixture_digest = super::package_state::digest(&identity.to_record());
@@ -281,7 +390,7 @@ fn spec_pin_binds_the_recorded_package_identity() {
 
     // A changed fixture identity must fail the check with the fix named.
     let changed = super::package_state::PackageStateIdentity::parse_record(
-        "schema = 1\nlayout = straight\nbuild_cache = beff\nrepos = 1\nmelpa\n",
+        "schema = 2\nlayout = straight\nrepos = 1\nmelpa 0123456789abcdef0123456789abcdef01234567\n",
     )
     .expect("changed synthetic record");
     let error = super::common::check_package_pin(pinned.host_packages(), "synthetic", &changed)
