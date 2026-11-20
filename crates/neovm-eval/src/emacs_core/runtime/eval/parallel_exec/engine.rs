@@ -21,7 +21,7 @@ use super::effective::{
 };
 use super::frames::{
     FrameArena, FrameId, FramePublishError, HandlerMark, InterpFrame, OwnerRecordMark, PollBudget,
-    RootGroup, RootHandle, RootPublishError,
+    RootGroup, RootHandle, RootPublishError, RootRevokeError,
 };
 use crate::emacs_core::builtins::{
     builtin_atom_1, builtin_characterp, builtin_consp_1, builtin_floatp_1, builtin_identity,
@@ -123,9 +123,25 @@ pub(crate) enum StepOutcome {
     Fault(EngineFault),
 }
 
+/// Where one harness run is. `Idle` is the only state in which [`Stage1::start`]
+/// accepts work. `Finished` holds the done root until [`Stage1::take`].
+enum RunState {
+    Idle,
+    Suspended {
+        frame: FrameId,
+        handle: RootHandle,
+    },
+    Escaped {
+        frame: FrameId,
+        request: EscapeRequest,
+    },
+    Finished {
+        handle: RootHandle,
+    },
+}
+
 struct FrameNote {
     id: FrameId,
-    last: Value,
 }
 
 enum FormStep {
@@ -147,7 +163,7 @@ pub(crate) struct Stage1<S, E, O> {
     shape: ShapeGeneration,
     interval: NonZeroU32,
     notes: Vec<FrameNote>,
-    pending: Option<RootHandle>,
+    state: RunState,
 }
 
 impl<S, E, O> Stage1<S, E, O>
@@ -166,7 +182,7 @@ where
             shape,
             interval: NonZeroU32::MIN,
             notes: Vec::new(),
-            pending: None,
+            state: RunState::Idle,
         }
     }
 
@@ -182,6 +198,28 @@ where
         self.arena.interp(id).is_some()
     }
 
+    pub(crate) fn arena_depth(&self) -> u32 {
+        self.arena.depth()
+    }
+
+    pub(crate) fn live_root_count(&self) -> usize {
+        self.arena.root_len()
+    }
+
+    /// Pop the root a finished run published. A handle that is not that
+    /// root is refused, and the registry is left as it was.
+    pub(crate) fn take(&mut self, handle: RootHandle) -> Result<Value, RootRevokeError> {
+        let RunState::Finished { handle: done } = self.state else {
+            return Err(RootRevokeError::Stale);
+        };
+        if done != handle {
+            return Err(RootRevokeError::Stale);
+        }
+        let value = self.arena.roots_mut().pop(handle)?;
+        self.state = RunState::Idle;
+        Ok(value)
+    }
+
     /// Step `forms`, a proper list, as an implicit progn.
     ///
     /// `interval` is the poll budget copied into every frame this run pushes.
@@ -192,7 +230,7 @@ where
         forms: Value,
         interval: NonZeroU32,
     ) -> StepOutcome {
-        if !self.notes.is_empty() || self.pending.is_some() {
+        if !matches!(self.state, RunState::Idle) {
             return StepOutcome::Fault(EngineFault::Busy);
         }
         self.interval = interval;
@@ -202,17 +240,17 @@ where
         self.drive(ctx)
     }
 
-    /// Continue the suspended frame.
-    ///
-    /// Pops the pending root. The caller looks the handle up first; the
-    /// value itself stays in the frame note.
+    /// Continue the suspended frame. Pops the pending root first. The
+    /// progn accumulator on the frame is the value that was published.
     pub(crate) fn resume(&mut self, ctx: &mut Context) -> StepOutcome {
-        let Some(handle) = self.pending.take() else {
+        let RunState::Suspended { handle, .. } = self.state else {
             return StepOutcome::Fault(EngineFault::NotSuspended);
         };
         if self.arena.roots_mut().pop(handle).is_err() {
+            self.unwind_to_idle();
             return StepOutcome::Fault(EngineFault::StaleRoot);
         }
+        self.state = RunState::Idle;
         self.drive(ctx)
     }
 
@@ -257,6 +295,11 @@ where
     }
 
     fn drive(&mut self, ctx: &mut Context) -> StepOutcome {
+        let outcome = self.drive_inner(ctx);
+        self.settle(outcome)
+    }
+
+    fn drive_inner(&mut self, ctx: &mut Context) -> StepOutcome {
         loop {
             let Some(id) = self.notes.last().map(|note| note.id) else {
                 return StepOutcome::Fault(EngineFault::NoFrame);
@@ -299,12 +342,12 @@ where
             let form = frame.cursor;
             match self.eval_form(ctx, form) {
                 FormStep::Value(value) => {
-                    if let Some(note) = self.notes.last_mut() {
-                        note.last = value;
-                    }
                     if self
                         .arena
-                        .with_interp(id, |frame| frame.cursor = Value::NIL)
+                        .with_interp(id, |frame| {
+                            frame.last = value;
+                            frame.cursor = Value::NIL;
+                        })
                         .is_none()
                     {
                         return StepOutcome::Fault(EngineFault::StaleFrame);
@@ -323,20 +366,26 @@ where
         let Some(note) = self.notes.pop() else {
             return TopFinish::Fault(EngineFault::NoFrame);
         };
+        let Some(child) = self.arena.interp(note.id) else {
+            return TopFinish::Fault(EngineFault::StaleFrame);
+        };
+        let value = child.last;
         if self.arena.pop(note.id).is_none() {
             return TopFinish::Fault(EngineFault::StaleFrame);
         }
-        let Some(parent) = self.notes.last_mut() else {
+        let Some(parent) = self.notes.last() else {
             return TopFinish::Done {
                 frame: note.id,
-                value: note.last,
+                value,
             };
         };
-        parent.last = note.last;
         let parent_id = parent.id;
         if self
             .arena
-            .with_interp(parent_id, |frame| frame.cursor = Value::NIL)
+            .with_interp(parent_id, |frame| {
+                frame.last = value;
+                frame.cursor = Value::NIL;
+            })
             .is_none()
         {
             return TopFinish::Fault(EngineFault::StaleFrame);
@@ -360,13 +409,16 @@ where
             return None;
         }
         let last = self
-            .notes
-            .last()
-            .map(|note| note.last)
+            .arena
+            .interp(id)
+            .map(|frame| frame.last)
             .unwrap_or(Value::NIL);
         match self.arena.roots_mut().push(RootGroup::EvalTemp, last) {
             Ok(pending) => {
-                self.pending = Some(pending);
+                self.state = RunState::Suspended {
+                    frame: id,
+                    handle: pending,
+                };
                 Some(StepOutcome::Suspended { frame: id, pending })
             }
             Err(error) => Some(StepOutcome::Fault(EngineFault::Root(error))),
@@ -375,7 +427,10 @@ where
 
     fn publish_done(&mut self, frame: FrameId, value: Value) -> StepOutcome {
         match self.arena.roots_mut().push(RootGroup::EvalTemp, value) {
-            Ok(pending) => StepOutcome::Done { frame, pending },
+            Ok(pending) => {
+                self.state = RunState::Finished { handle: pending };
+                StepOutcome::Done { frame, pending }
+            }
             Err(error) => StepOutcome::Fault(EngineFault::Root(error)),
         }
     }
@@ -386,16 +441,14 @@ where
             body,
             Value::NIL,
             Value::NIL,
+            Value::NIL,
             0,
             HandlerMark::EMPTY,
             OwnerRecordMark::EMPTY,
             PollBudget::new(self.interval),
         );
         let id = self.arena.push_interp(frame)?;
-        self.notes.push(FrameNote {
-            id,
-            last: Value::NIL,
-        });
+        self.notes.push(FrameNote { id });
         Ok(())
     }
 
@@ -433,14 +486,14 @@ where
                 ParallelArm::World(split) => {
                     FormStep::Stop(self.record(EscapeClass::World(split), form))
                 }
-                ParallelArm::Scalar => self.eval_scalar(ctx, name, tail),
-                ParallelArm::Sealed(authority) => self.eval_sealed(ctx, name, tail, authority),
+                ParallelArm::Scalar => self.eval_scalar(ctx, name, form),
+                ParallelArm::Sealed(authority) => self.eval_sealed(ctx, name, form, authority),
             },
         }
     }
 
-    fn eval_scalar(&mut self, ctx: &mut Context, name: &'static str, tail: Value) -> FormStep {
-        let args = match self.eval_arg_list(tail) {
+    fn eval_scalar(&mut self, ctx: &mut Context, name: &'static str, form: Value) -> FormStep {
+        let args = match self.eval_arg_list(form.cons_cdr()) {
             Ok(args) => args,
             Err(outcome) => return FormStep::Stop(outcome),
         };
@@ -451,7 +504,7 @@ where
         &mut self,
         ctx: &mut Context,
         name: &'static str,
-        tail: Value,
+        form: Value,
         authority: SealedAuthority,
     ) -> FormStep {
         let implemented = matches!(
@@ -459,12 +512,9 @@ where
             SealedAuthority::ConsFieldRead | SealedAuthority::HeaderWord
         );
         if !implemented {
-            return FormStep::Stop(self.record(
-                EscapeClass::UnimplementedSealed(authority),
-                form_of(name, tail),
-            ));
+            return FormStep::Stop(self.record(EscapeClass::UnimplementedSealed(authority), form));
         }
-        let args = match self.eval_arg_list(tail) {
+        let args = match self.eval_arg_list(form.cons_cdr()) {
             Ok(args) => args,
             Err(outcome) => return FormStep::Stop(outcome),
         };
@@ -475,10 +525,9 @@ where
             | SealedAuthority::ConsAllocation
             | SealedAuthority::HashRead
             | SealedAuthority::CanonicalSymbol => {
-                return FormStep::Stop(self.record(
-                    EscapeClass::UnimplementedSealed(authority),
-                    form_of(name, tail),
-                ));
+                return FormStep::Stop(
+                    self.record(EscapeClass::UnimplementedSealed(authority), form),
+                );
             }
         };
         core_step(name, outcome)
@@ -515,6 +564,36 @@ where
         self.escape.escape(request);
         StepOutcome::Escaped(request)
     }
+
+    /// `Done` and `Suspended` already published their state. An escape keeps
+    /// the top frame. A signal, a missing core, or a fault drops every frame
+    /// and root this run pushed.
+    fn settle(&mut self, outcome: StepOutcome) -> StepOutcome {
+        match &outcome {
+            StepOutcome::Done { .. } | StepOutcome::Suspended { .. } => {}
+            StepOutcome::Escaped(request) => {
+                if let Some(note) = self.notes.last() {
+                    self.state = RunState::Escaped {
+                        frame: note.id,
+                        request: *request,
+                    };
+                }
+            }
+            StepOutcome::Fault(EngineFault::Busy) => {}
+            StepOutcome::MissingCore { .. } | StepOutcome::Signaled(_) | StepOutcome::Fault(_) => {
+                self.unwind_to_idle()
+            }
+        }
+        outcome
+    }
+
+    fn unwind_to_idle(&mut self) {
+        while let Some(note) = self.notes.pop() {
+            let _ = self.arena.pop(note.id);
+        }
+        let _ = self.arena.roots_mut().truncate(0);
+        self.state = RunState::Idle;
+    }
 }
 
 enum TopFinish {
@@ -529,10 +608,6 @@ fn quoted_payload(tail: Value) -> Option<Value> {
     } else {
         None
     }
-}
-
-fn form_of(name: &'static str, tail: Value) -> Value {
-    Value::cons(Value::symbol(name), tail)
 }
 
 fn core_step(name: &'static str, outcome: CoreOutcome) -> FormStep {

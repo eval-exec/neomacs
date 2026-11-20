@@ -21,6 +21,7 @@ fn interp_frame(a: i64, b: i64, c: i64, d: i64) -> InterpFrame {
         Value::fixnum(b),
         Value::fixnum(c),
         Value::fixnum(d),
+        Value::NIL,
         1,
         HandlerMark::EMPTY,
         OwnerRecordMark::EMPTY,
@@ -205,7 +206,11 @@ fn root_walk_publishes_every_frame_record_and_registry_root() {
             "missing root {expected:?} in {seen:?}"
         );
     }
-    assert_eq!(seen.len(), 12, "each root visited exactly once");
+    assert!(
+        seen.iter().any(|entry| *entry == ("eval_temp", None)),
+        "the progn accumulator is rooted, in {seen:?}"
+    );
+    assert_eq!(seen.len(), 13, "each root visited exactly once");
 }
 
 #[test]

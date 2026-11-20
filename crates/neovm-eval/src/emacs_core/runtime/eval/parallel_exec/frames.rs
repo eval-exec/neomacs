@@ -720,6 +720,9 @@ pub(crate) struct InterpFrame {
     pub(crate) body: Value,
     pub(crate) cursor: Value,
     pub(crate) lexenv: Value,
+    /// The value of the last completed form in this progn. GC-JOIN scans
+    /// the arena, so the accumulator lives here rather than beside it.
+    pub(crate) last: Value,
     pub(crate) eval_depth: u32,
     pub(crate) handler_base: HandlerMark,
     pub(crate) spec_base: OwnerRecordMark,
@@ -733,6 +736,7 @@ impl InterpFrame {
         body: Value,
         cursor: Value,
         lexenv: Value,
+        last: Value,
         eval_depth: u32,
         handler_base: HandlerMark,
         spec_base: OwnerRecordMark,
@@ -743,6 +747,7 @@ impl InterpFrame {
             body,
             cursor,
             lexenv,
+            last,
             eval_depth,
             handler_base,
             spec_base,
@@ -761,6 +766,7 @@ impl FrameRoots for InterpFrame {
             body,
             cursor,
             lexenv,
+            last,
             eval_depth: _,
             handler_base: _,
             spec_base: _,
@@ -770,6 +776,7 @@ impl FrameRoots for InterpFrame {
         visit(RootGroup::EvalTemp, *body);
         visit(RootGroup::EvalTemp, *cursor);
         visit(RootGroup::EvalTemp, *lexenv);
+        visit(RootGroup::EvalTemp, *last);
     }
 }
 
@@ -1043,6 +1050,12 @@ impl FrameArena {
     #[doc(hidden)]
     pub fn depth(&self) -> u32 {
         self.depth.current()
+    }
+
+    /// Live published roots. Revoked slots are not counted.
+    #[doc(hidden)]
+    pub fn root_len(&self) -> usize {
+        self.roots.len()
     }
 
     #[doc(hidden)]

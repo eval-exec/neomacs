@@ -8,21 +8,20 @@ use super::effective::{
     ShapeGeneration,
 };
 use super::engine::{
-    CoreOutcome, EscapeClass, EscapeRequest, SealedOps, SerialEscape, Stage1, StepOutcome,
-    apply_one, apply_slice, apply_vec, scalar_core,
+    CoreOutcome, EngineFault, EscapeClass, EscapeRequest, SealedOps, SerialEscape, Stage1,
+    StepOutcome, apply_one, apply_slice, apply_vec,
 };
-use super::frames::{FrameArena, HandlerMark, InterpFrame, OwnerRecordMark, PollBudget};
+use super::frames::{
+    FrameArena, HandlerMark, InterpFrame, OwnerRecordMark, PollBudget, RootRevokeError,
+};
 use crate::emacs_core::builtins::{
-    builtin_arrayp, builtin_atom_1, builtin_car_1, builtin_car_safe_1, builtin_cdr_1,
-    builtin_cdr_safe_1, builtin_characterp, builtin_consp_1, builtin_floatp_1,
-    builtin_hash_table_p, builtin_identity, builtin_integerp_1, builtin_listp_1,
-    builtin_module_function_p, builtin_native_comp_available_p, builtin_nlistp_1, builtin_null_1,
-    builtin_numberp_1, builtin_sequencep, builtin_stringp_1, builtin_symbol_with_pos_p_1,
-    builtin_treesit_available_p, builtin_user_ptrp, builtin_vector_or_char_table_p,
-    builtin_vectorp_1,
+    builtin_arrayp, builtin_car_1, builtin_car_safe_1, builtin_cdr_1, builtin_cdr_safe_1,
+    builtin_hash_table_p, builtin_integerp_1, builtin_module_function_p, builtin_numberp_1,
+    builtin_sequencep, builtin_symbol_with_pos_p_1, builtin_user_ptrp,
+    builtin_vector_or_char_table_p, builtin_vectorp_1,
 };
 use crate::emacs_core::builtins_extra::{
-    builtin_byte_code_function_p, builtin_byteorder, builtin_closurep, builtin_subrp,
+    builtin_byte_code_function_p, builtin_closurep, builtin_subrp,
 };
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::subr::effect_catalog::inventory;
@@ -34,14 +33,12 @@ use crate::test_utils::unit_runtime;
 use neovm_edit::emacs_core::buffer::builtin_bufferp;
 use neovm_edit::emacs_core::marker::{builtin_markerp, make_marker_value};
 use neovm_text::emacs_core::chartable::builtin_char_table_p;
-use neovm_text::emacs_core::xml::builtin_libxml_available_p;
-use neovm_text::emacs_core::zlib::builtin_zlib_available_p;
 use neovm_text::encoding::builtin_multibyte_string_p_1;
 use neovm_value::boolvec::builtin_bool_vector_p;
 use neovm_value::error::Flow;
 use neovm_value::forward::TlsIndex;
 use neovm_value::intern::NIL_SYM_ID;
-use neovm_value::value::Value;
+use neovm_value::value::{Value, eq_value};
 use std::cell::Cell;
 use std::num::NonZeroU32;
 
@@ -66,6 +63,25 @@ impl SerialEscape for RecordingEscape {
 /// Test double for sealed reads. Cons fields are read only when the caller
 /// already owns the cons; this impl never looks a cons up in a shared heap.
 struct HarnessSealed;
+
+/// Sealed ops that admit the catalog name and still have no core. The
+/// stepper must unwind that outcome instead of leaving the frame pushed.
+struct MissingSealed;
+
+impl SealedOps for MissingSealed {
+    fn read_cons_field(&mut self, _ctx: &mut Context, _name: &str, _args: &[Value]) -> CoreOutcome {
+        CoreOutcome::MissingCore
+    }
+
+    fn read_header_word(
+        &mut self,
+        _ctx: &mut Context,
+        _name: &str,
+        _args: &[Value],
+    ) -> CoreOutcome {
+        CoreOutcome::MissingCore
+    }
+}
 
 impl SealedOps for HarnessSealed {
     fn read_cons_field(&mut self, ctx: &mut Context, name: &str, args: &[Value]) -> CoreOutcome {
@@ -197,31 +213,17 @@ fn signal_key(flow: &Flow) -> (String, Vec<Value>) {
     (data.symbol_name().to_string(), data.data.clone())
 }
 
-fn assert_cores(label: &str, engine_outcome: CoreOutcome, serial: CoreOutcome) {
-    match (engine_outcome, serial) {
-        (CoreOutcome::Value(left), CoreOutcome::Value(right)) => {
-            assert_eq!(left, right, "{label}");
-        }
-        (CoreOutcome::Signal(left), CoreOutcome::Signal(right)) => {
-            assert_eq!(signal_key(&left), signal_key(&right), "{label}");
-        }
-        (CoreOutcome::MissingCore, _) => panic!("{label}: engine has no shared core"),
-        (_, CoreOutcome::MissingCore) => panic!("{label}: serial oracle has no shared core"),
-        (CoreOutcome::Value(_), CoreOutcome::Signal(_)) => {
-            panic!("{label}: engine returned a value and the builtin signaled")
-        }
-        (CoreOutcome::Signal(_), CoreOutcome::Value(_)) => {
-            panic!("{label}: engine signaled and the builtin returned a value")
-        }
-    }
+fn assert_clear<O: SealedOps>(engine: &Stage1<TestSlots, RecordingEscape, O>) {
+    assert_eq!(engine.arena_depth(), 0, "arena depth");
+    assert_eq!(engine.live_root_count(), 0, "live roots");
 }
 
-fn done_value(
-    engine: &mut Stage1<TestSlots, RecordingEscape, HarnessSealed>,
+fn done_value<O: SealedOps>(
+    engine: &mut Stage1<TestSlots, RecordingEscape, O>,
     outcome: StepOutcome,
 ) -> Value {
     match outcome {
-        StepOutcome::Done { pending, .. } => engine.lookup_root(pending).expect("done root"),
+        StepOutcome::Done { pending, .. } => engine.take(pending).expect("done root"),
         StepOutcome::Escaped(request) => panic!("escaped {:?}", request.class),
         StepOutcome::Signaled(flow) => panic!("signaled {}", signal_key(&flow).0),
         StepOutcome::MissingCore { name } => panic!("missing core {name}"),
@@ -230,39 +232,34 @@ fn done_value(
     }
 }
 
-/// Serial builtin calls, written separately from [`scalar_core`].
-fn serial_scalar(ctx: &mut Context, name: &str, args: &[Value]) -> CoreOutcome {
-    match name {
-        "atom" => apply_one(ctx, "atom", args, builtin_atom_1),
-        "byteorder" => apply_vec(args, builtin_byteorder),
-        "characterp" => apply_vec(args, builtin_characterp),
-        "consp" => apply_one(ctx, "consp", args, builtin_consp_1),
-        "floatp" => apply_one(ctx, "floatp", args, builtin_floatp_1),
-        "identity" => apply_vec(args, builtin_identity),
-        "libxml-available-p" => apply_vec(args, builtin_libxml_available_p),
-        "listp" => apply_one(ctx, "listp", args, builtin_listp_1),
-        "native-comp-available-p" => apply_vec(args, builtin_native_comp_available_p),
-        "nlistp" => apply_one(ctx, "nlistp", args, builtin_nlistp_1),
-        "null" => apply_one(ctx, "null", args, builtin_null_1),
-        "stringp" => apply_one(ctx, "stringp", args, builtin_stringp_1),
-        "treesit-available-p" => apply_vec(args, builtin_treesit_available_p),
-        "zlib-available-p" => apply_vec(args, builtin_zlib_available_p),
-        _ => CoreOutcome::MissingCore,
-    }
-}
-
 fn samples() -> Vec<Value> {
     vec![
         Value::NIL,
         Value::T,
         Value::fixnum(1),
+        Value::make_int(-1),
+        Value::make_int(0x3F_FFFF),
+        Value::make_int(0x40_0000),
+        Value::make_int(Value::MOST_POSITIVE_FIXNUM + 1),
         Value::make_float(1.5),
         Value::string("m"),
+        Value::multibyte_string("héllo"),
         Value::cons(Value::fixnum(1), Value::fixnum(2)),
         Value::vector(vec![Value::fixnum(9)]),
         Value::symbol("sym"),
         make_marker_value(None, None, false),
     ]
+}
+
+/// `(name 'arg ...)`. Quote keeps the serial evaluator from treating a
+/// symbol argument as a variable.
+fn quoted_call(name: &'static str, args: &[Value]) -> Value {
+    let mut cells = Vec::with_capacity(1 + args.len());
+    cells.push(Value::symbol(name));
+    for arg in args {
+        cells.push(quote(*arg));
+    }
+    Value::list(cells)
 }
 
 #[test]
@@ -310,18 +307,18 @@ fn car_of_a_fixnum_signals_the_serial_wrong_type_argument() {
 fn an_unknown_name_escapes_once_and_does_not_run_the_argument() {
     let mut ctx = context();
     let mut stepper = engine(TestSlots::empty());
-    let outcome = stepper.start(
-        &mut ctx,
-        body(&[call(
-            "no-such-stage1-primitive",
-            &[call("car", &[Value::fixnum(1)])],
-        )]),
-        wide(),
+    let form = call(
+        "no-such-stage1-primitive",
+        &[call("car", &[Value::fixnum(1)])],
     );
+    let outcome = stepper.start(&mut ctx, body(&[form]), wide());
     let StepOutcome::Escaped(request) = outcome else {
         panic!("unknown name must escape");
     };
     assert_eq!(request.class, EscapeClass::UnknownName);
+    assert!(eq_value(&request.form, &form));
+    assert_eq!(stepper.arena_depth(), 1);
+    assert_eq!(stepper.live_root_count(), 0);
     assert_eq!(stepper.escape_handler().requests.len(), 1);
     assert_eq!(
         request.form.cons_cdr().cons_car().cons_car(),
@@ -333,14 +330,12 @@ fn an_unknown_name_escapes_once_and_does_not_run_the_argument() {
 fn a_world_primitive_escapes_once_and_does_not_run_its_body() {
     let mut ctx = context();
     let mut stepper = engine(TestSlots::empty());
-    let outcome = stepper.start(
-        &mut ctx,
-        body(&[call("+", &[call("car", &[Value::fixnum(1)])])]),
-        wide(),
-    );
+    let form = call("+", &[call("car", &[Value::fixnum(1)])]);
+    let outcome = stepper.start(&mut ctx, body(&[form]), wide());
     let StepOutcome::Escaped(request) = outcome else {
         panic!("+ is a World arm");
     };
+    assert!(eq_value(&request.form, &form));
     assert!(matches!(
         request.class,
         EscapeClass::World(WorldSplit::Arith(_))
@@ -379,14 +374,11 @@ fn a_world_primitive_escapes_once_and_does_not_run_its_body() {
 fn an_unimplemented_sealed_authority_escapes_before_arguments() {
     let mut ctx = context();
     let mut stepper = engine(TestSlots::empty());
-    let outcome = stepper.start(
-        &mut ctx,
-        body(&[call(
-            "setcar",
-            &[call("car", &[Value::fixnum(1)]), Value::fixnum(2)],
-        )]),
-        wide(),
+    let form = call(
+        "setcar",
+        &[call("car", &[Value::fixnum(1)]), Value::fixnum(2)],
     );
+    let outcome = stepper.start(&mut ctx, body(&[form]), wide());
     let StepOutcome::Escaped(request) = outcome else {
         panic!("setcar is ConsFieldWrite");
     };
@@ -394,6 +386,7 @@ fn an_unimplemented_sealed_authority_escapes_before_arguments() {
         request.class,
         EscapeClass::UnimplementedSealed(SealedAuthority::ConsFieldWrite)
     );
+    assert!(eq_value(&request.form, &form));
     assert_eq!(stepper.escape_handler().requests.len(), 1);
     assert_eq!(
         request.form.cons_cdr().cons_car().cons_car(),
@@ -401,11 +394,8 @@ fn an_unimplemented_sealed_authority_escapes_before_arguments() {
     );
 
     let mut stepper = engine(TestSlots::empty());
-    let outcome = stepper.start(
-        &mut ctx,
-        body(&[call("cons", &[Value::fixnum(1), Value::fixnum(2)])]),
-        wide(),
-    );
+    let form = call("cons", &[Value::fixnum(1), Value::fixnum(2)]);
+    let outcome = stepper.start(&mut ctx, body(&[form]), wide());
     let StepOutcome::Escaped(request) = outcome else {
         panic!("cons is ConsAllocation");
     };
@@ -413,6 +403,7 @@ fn an_unimplemented_sealed_authority_escapes_before_arguments() {
         request.class,
         EscapeClass::UnimplementedSealed(SealedAuthority::ConsAllocation)
     );
+    assert!(eq_value(&request.form, &form));
 }
 
 #[test]
@@ -428,7 +419,13 @@ fn poll_budget_one_suspends_a_two_form_body_and_resumes_the_same_frame() {
         panic!("the first form must suspend");
     };
     assert!(stepper.frame_is_live(frame));
+    assert_eq!(stepper.arena_depth(), 1);
+    assert_eq!(stepper.live_root_count(), 1);
     assert_eq!(stepper.lookup_root(pending), Some(Value::fixnum(1)));
+    let busy = stepper.start(&mut ctx, body(&[Value::fixnum(9)]), wide());
+    assert!(matches!(busy, StepOutcome::Fault(EngineFault::Busy)));
+    assert_eq!(stepper.arena_depth(), 1);
+    assert_eq!(stepper.live_root_count(), 1);
     let resumed = stepper.resume(&mut ctx);
     let StepOutcome::Done {
         frame: done,
@@ -439,7 +436,11 @@ fn poll_budget_one_suspends_a_two_form_body_and_resumes_the_same_frame() {
     };
     assert_eq!(frame, done);
     assert_eq!(frame.generation(), done.generation());
-    assert_eq!(stepper.lookup_root(done_root), Some(Value::fixnum(2)));
+    assert_eq!(
+        stepper.take(done_root).expect("done root"),
+        Value::fixnum(2)
+    );
+    assert_clear(&stepper);
     assert!(stepper.escape_handler().requests.is_empty());
 }
 
@@ -456,6 +457,7 @@ fn progn_returns_its_last_form() {
 fn a_stale_frame_id_pop_is_still_refused() {
     let mut arena = FrameArena::new(4);
     let frame = InterpFrame::new(
+        Value::NIL,
         Value::NIL,
         Value::NIL,
         Value::NIL,
@@ -540,7 +542,80 @@ fn effective_read_write_and_bound_use_the_pure_rule() {
 }
 
 #[test]
-fn every_scalar_primitive_matches_the_serial_builtin_on_the_sample_matrix() {
+fn every_outcome_reports_depth_and_live_roots() {
+    let mut ctx = context();
+
+    let mut stepper = engine(TestSlots::empty());
+    let outcome = stepper.start(&mut ctx, body(&[Value::fixnum(1)]), wide());
+    let StepOutcome::Done { pending, .. } = outcome else {
+        panic!("a value must finish");
+    };
+    assert_eq!(stepper.arena_depth(), 0);
+    assert_eq!(stepper.live_root_count(), 1);
+    assert!(matches!(
+        stepper.start(&mut ctx, body(&[Value::fixnum(2)]), wide()),
+        StepOutcome::Fault(EngineFault::Busy)
+    ));
+    assert_eq!(stepper.live_root_count(), 1);
+    assert_eq!(stepper.take(pending).expect("take"), Value::fixnum(1));
+    assert_eq!(
+        stepper.take(pending),
+        Err(RootRevokeError::Stale),
+        "the done root is popped"
+    );
+    assert_clear(&stepper);
+    let again = stepper.start(&mut ctx, body(&[Value::fixnum(2)]), wide());
+    assert_eq!(done_value(&mut stepper, again), Value::fixnum(2));
+    assert_clear(&stepper);
+
+    let mut stepper = engine(TestSlots::empty());
+    let outcome = stepper.start(&mut ctx, body(&[call("car", &[Value::fixnum(1)])]), wide());
+    assert!(matches!(outcome, StepOutcome::Signaled(_)));
+    assert_clear(&stepper);
+    let again = stepper.start(&mut ctx, body(&[Value::fixnum(4)]), wide());
+    assert_eq!(done_value(&mut stepper, again), Value::fixnum(4));
+
+    let mut stepper = Stage1::new(
+        TestSlots::empty(),
+        RecordingEscape::new(),
+        MissingSealed,
+        EraId::new(3),
+        ShapeGeneration::new(7),
+    );
+    let outcome = stepper.start(&mut ctx, body(&[call("car", &[Value::NIL])]), wide());
+    assert!(matches!(outcome, StepOutcome::MissingCore { .. }));
+    assert_clear(&stepper);
+    let again = stepper.start(&mut ctx, body(&[Value::fixnum(5)]), wide());
+    assert_eq!(done_value(&mut stepper, again), Value::fixnum(5));
+
+    let mut stepper = engine(TestSlots::empty());
+    assert!(matches!(
+        stepper.resume(&mut ctx),
+        StepOutcome::Fault(EngineFault::NotSuspended)
+    ));
+    assert_clear(&stepper);
+    let again = stepper.start(&mut ctx, body(&[Value::fixnum(6)]), wide());
+    assert_eq!(done_value(&mut stepper, again), Value::fixnum(6));
+
+    let mut stepper = engine(TestSlots::empty());
+    let form = call("cons", &[Value::fixnum(1), Value::fixnum(2)]);
+    let outcome = stepper.start(&mut ctx, body(&[form]), wide());
+    let StepOutcome::Escaped(request) = outcome else {
+        panic!("cons must escape");
+    };
+    assert!(eq_value(&request.form, &form));
+    assert_eq!(stepper.arena_depth(), 1);
+    assert_eq!(stepper.live_root_count(), 0);
+    assert!(matches!(
+        stepper.start(&mut ctx, body(&[Value::fixnum(7)]), wide()),
+        StepOutcome::Fault(EngineFault::Busy)
+    ));
+    assert_eq!(stepper.arena_depth(), 1);
+    assert_eq!(stepper.live_root_count(), 0);
+}
+
+#[test]
+fn every_scalar_primitive_matches_serial_eval_on_the_sample_matrix() {
     let mut ctx = context();
     let mut scalars = Vec::new();
     for entry in inventory() {
@@ -558,11 +633,37 @@ fn every_scalar_primitive_matches_the_serial_builtin_on_the_sample_matrix() {
     assert_eq!(scalars.len(), 14, "the 14 catalog Scalar primitives");
     let mut rows = vec![Vec::new()];
     rows.extend(samples().into_iter().map(|value| vec![value]));
+    rows.push(vec![Value::fixnum(1), Value::T]);
     for name in scalars {
         for args in &rows {
-            let engine_outcome = scalar_core(&mut ctx, name, args);
-            let serial = serial_scalar(&mut ctx, name, args);
-            assert_cores(name, engine_outcome, serial);
+            let form = quoted_call(name, args);
+            let mut stepper = engine(TestSlots::empty());
+            let outcome = stepper.start(&mut ctx, body(&[form]), wide());
+            let engine_result = match outcome {
+                StepOutcome::Done { pending, .. } => {
+                    let value = stepper.take(pending).expect("done root");
+                    assert_clear(&stepper);
+                    Ok(value)
+                }
+                StepOutcome::Signaled(flow) => {
+                    assert_clear(&stepper);
+                    Err(signal_key(&flow))
+                }
+                StepOutcome::Escaped(request) => panic!("{name} escaped {:?}", request.class),
+                StepOutcome::MissingCore { .. } => panic!("{name} has no shared core"),
+                StepOutcome::Suspended { .. } => panic!("{name} suspended"),
+                StepOutcome::Fault(_) => panic!("{name} faulted"),
+            };
+            let serial = match ctx.eval_sub(form) {
+                Ok(value) => Ok(value),
+                Err(flow) => Err(signal_key(&flow)),
+            };
+            match (engine_result, serial) {
+                (Ok(left), Ok(right)) => assert_eq!(left, right, "{name}"),
+                (Err(left), Err(right)) => assert_eq!(left, right, "{name}"),
+                (Ok(_), Err(right)) => panic!("{name}: engine value, serial signal {right:?}"),
+                (Err(left), Ok(_)) => panic!("{name}: engine signal {left:?}, serial value"),
+            }
         }
     }
 }
