@@ -155,6 +155,34 @@ fn hash_entries_keyed_by_live_objects_answer_every_key_reader() {
     assert!(copied.lookup(copy_of(keys[1]), test, false).is_some());
 }
 
+#[test]
+fn hash_live_key_by_key_readers_bound_shared_dag_materialization() {
+    let mut key = Value::NIL;
+    for _ in 0..14 {
+        key = Value::cons(key, key);
+    }
+    let mut storage = HashTableStorage::with_capacity(2);
+    put(&mut storage, key, Value::T);
+    let query =
+        Value::cons(Value::fixnum(1), Value::NIL).to_hash_key_swp(&HashTableTest::Equal, false);
+
+    let (found, (_, bytes)) = measured(|| storage.contains_key(&query));
+    assert!(!found);
+    assert!(bytes < 512 * 1024, "contains_key allocated {bytes} bytes");
+
+    let (found, (_, bytes)) = measured(|| storage.get(&query).is_some());
+    assert!(!found);
+    assert!(bytes < 512 * 1024, "get allocated {bytes} bytes");
+
+    let (found, (_, bytes)) = measured(|| storage.get_mut(&query).is_some());
+    assert!(!found);
+    assert!(bytes < 512 * 1024, "get_mut allocated {bytes} bytes");
+
+    let (found, (_, bytes)) = measured(|| storage.key_snapshot(&query).is_some());
+    assert!(!found);
+    assert!(bytes < 512 * 1024, "key_snapshot allocated {bytes} bytes");
+}
+
 /// GNU keeps the hash computed at insertion and compares the LIVE key
 /// object (`hash_find_with_hash`). A list key mutated after `puthash` is then
 /// found by nothing: the object and a copy of its new shape hash elsewhere,

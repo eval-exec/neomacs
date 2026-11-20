@@ -227,10 +227,41 @@ pub(super) fn entry_has_key(
             .and_then(Option::as_ref)
             .is_some_and(|stored| {
                 live_key_can_be(stored.key, key)
-                    && stored.key.to_hash_key(&HashTableTest::Equal) == *key
+                    && stored
+                        .key
+                        .to_equal_key_bounded(hash_key_node_count(key), false)
+                        == *key
             }),
         stored => stored == key,
     }
+}
+
+/// The number of structural nodes a live key needs to materialize for `key`.
+/// A scan candidate is bounded by the query's already-materialized shape.
+fn hash_key_node_count(key: &HashKey) -> usize {
+    let children = match key {
+        HashKey::EqualCons(car, cdr) => {
+            hash_key_node_count(car).saturating_add(hash_key_node_count(cdr))
+        }
+        HashKey::EqualVec(items) => items.iter().fold(0usize, |count, item| {
+            count.saturating_add(hash_key_node_count(item))
+        }),
+        HashKey::ByteCode(parts) => parts.iter().fold(0usize, |count, part| {
+            count.saturating_add(match part {
+                ByteCodeKeyPart::Value(value) => hash_key_node_count(value),
+                ByteCodeKeyPart::Values(values) => values.iter().fold(0usize, |nested, value| {
+                    nested.saturating_add(hash_key_node_count(value))
+                }),
+                _ => 0,
+            })
+        }),
+        HashKey::Overlay(parts) => hash_key_node_count(&parts.3),
+        HashKey::SymbolWithPos(symbol, position) => {
+            hash_key_node_count(symbol).saturating_add(hash_key_node_count(position))
+        }
+        _ => 0,
+    };
+    children.saturating_add(1)
 }
 
 /// Whether the key object `value` can materialize to `key` at all: the
