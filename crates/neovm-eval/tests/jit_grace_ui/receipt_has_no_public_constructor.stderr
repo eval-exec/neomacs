@@ -1,0 +1,5 @@
+error[E0451]: field `_private` of struct `JitGracePeriod` is private
+ --> tests/jit_grace_ui/receipt_has_no_public_constructor.rs:3:73
+  |
+3 |     let _receipt = neovm_eval::emacs_core::jit::cache::JitGracePeriod { _private: () };
+  |                                                                         ^^^^^^^^ private field
