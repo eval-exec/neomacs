@@ -201,9 +201,19 @@ batch modules cover `ecss` (cascade/specificity/layers/var), `ebox`
 (session/library/search/transport/panes/LRC/layout/palette through its
 documented scripted-client seam, so no network, Node, mpv or login),
 `etaf-rss` (RSS/Atom/JSON/RDF parsing, OPML, HTML blocks/wrapping, store
-round-trip, and local file:// subscribe/search/scopes with no network), and
-the `etaf-md`/`etaf-org-preview` headless readers. `gui_parity_tests/etaf_*` adds
+round-trip, and local file:// subscribe/search/scopes with no network),
+`etaf-bili` (popular/search/selection/play through its scripted client, plus
+WBI signing and response parsing), and the `etaf-md`/`etaf-org-preview`
+headless readers. `gui_parity_tests/etaf_*` adds
 real X11 probes for the md/org pages and the posframe child frame.
+
+`etaf-reader`, `etaf-weread`, `etaf-youtube`, `etaf-video-player`, `maillist`
+and other `etaf-db` consumers open a SQLite library through Emacs' built-in
+`sqlite` support. The attested GNU 31.1 oracle profile has no `SQLITE`
+feature, so their behavioural corpora cannot run against it: a local GNU in
+this environment reports `sqlite-open` unbound too. Their load surface is
+covered, and behavior remains **UNATTESTED** until the oracle recipe includes
+SQLite. (Probing them against another GNU build would break the oracle pin.)
 
 The GUI probes run both editors on one X11 display with a fixed DejaVu Sans
 Mono 10pt face, so pixel values do not move with the host's font, and assert

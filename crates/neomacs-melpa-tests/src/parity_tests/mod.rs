@@ -387,6 +387,7 @@ mod espuds;
 mod ess;
 mod esup;
 mod esxml;
+mod etaf_bili;
 mod etaf_core;
 mod etaf_desktop;
 mod etaf_ecosystem;
