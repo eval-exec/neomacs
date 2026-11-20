@@ -1249,6 +1249,232 @@ fn find_default_combining_composition_in_string<H: TextHost>(
     query.select(ranges)
 }
 
+/// The shared gates of GNU `find_automatic_composition` as reached from
+/// `Ffind_composition_internal` (src/composite.c): multibyte text,
+/// `auto-composition-mode` enabled, and the current buffer displayed in some
+/// window (`Fget_buffer_window (Fcurrent_buffer (), Qnil)`).
+///
+/// GNU's `inhibit_auto_composition` also disables composition when
+/// `auto-composition-mode` is a string equal to the selected terminal's tty
+/// type.  That case is left to the shaping gate: on a tty the evaluator below
+/// resolves no font object and the scan yields nothing, matching GNU's
+/// outcome through the window-system branch `autocmp_chars` skips.
+fn automatic_composition_enabled<H: TextHost>(ctx: &H, multibyte: bool) -> bool {
+    multibyte
+        && ctx.current_buffer_is_displayed()
+        && !ctx
+            .visible_variable_value_or_nil(neovm_value::intern::intern("auto-composition-mode"))
+            .is_nil()
+}
+
+/// Build and shape the gstring of one composition as GNU's `autocmp_chars`
+/// does: `composition-get-gstring`, then the rule function — which for the
+/// shaping rules of the default table (Arabic, the Indic scripts, and the
+/// graphic default) bottoms out in `font-shape-gstring` — runs through the
+/// evaluator against the displayed window's font.
+///
+/// A font or shaping failure yields `None`, matching `autocmp_chars`'s nil
+/// return that keeps GNU's scan moving to the next candidate.  Two
+/// simplifications against `autocmp_chars` are deliberate: the font comes
+/// from `font-at` at the composition start rather than GNU's whole-range
+/// `font_range` walk (equivalent whenever one face covers the composition),
+/// and the rule function is invoked as `font-shape-gstring` rather than
+/// through `auto-composition-function` (identical for every default-table
+/// rule, all of which shape; user-installed wrapper functions are not run).
+fn shape_composition_gstring<H: TextHost>(
+    ctx: &mut H,
+    start: i64,
+    end: i64,
+    string: Value,
+) -> Option<Value> {
+    let font_at = Value::symbol(neovm_value::intern::intern("font-at"));
+    let font_form = if string.is_nil() {
+        Value::list(vec![font_at.clone(), Value::fixnum(start)])
+    } else {
+        Value::list(vec![font_at, Value::fixnum(start), Value::NIL, string])
+    };
+    let font = ctx.eval_sub(font_form).ok()?;
+    if !font.is_font_object() {
+        return None;
+    }
+    let gstring = composition_get_gstring(
+        ctx,
+        vec![Value::fixnum(start), Value::fixnum(end), font, string],
+    )
+    .ok()?;
+    // GNU 31.1's `Ffont_shape_gstring` takes (GSTRING DIRECTION); the
+    // automatic-composition search of `find_automatic_composition` passes
+    // Qnil (composite.c), leaving the actual bidi resolution to the shaper.
+    let shaped = ctx
+        .eval_sub(Value::list(vec![
+            Value::symbol(neovm_value::intern::intern("font-shape-gstring")),
+            gstring,
+            Value::NIL,
+        ]))
+        .ok()?;
+    (!shaped.is_nil()).then_some(shaped)
+}
+
+/// Walk `spans` in the query's order and return the first accepting span
+/// whose gstring shapes; GNU's forward search treats an unshapable
+/// candidate as no composition and keeps scanning.
+fn select_shaped_composition<H: TextHost>(
+    ctx: &mut H,
+    spans: Vec<AutomaticCompositionSpan>,
+    query: AutomaticCompositionQuery,
+    string: Value,
+    position_base: i64,
+) -> Option<(i64, i64, Value)> {
+    let spans = match query {
+        AutomaticCompositionQuery::Backward { .. } => {
+            let mut spans = spans;
+            spans.reverse();
+            spans
+        }
+        _ => spans,
+    };
+    for span in spans {
+        let range = CharRange::new(CharPos0::new(span.start()), CharPos0::new(span.end()));
+        if !query.accepts(range) {
+            continue;
+        }
+        let start = position_base + span.start() as i64;
+        let end = position_base + span.end() as i64;
+        if let Some(gstring) = shape_composition_gstring(ctx, start, end, string) {
+            return Some((start, end, gstring));
+        }
+    }
+    None
+}
+
+/// The string-arm automatic composition search beyond the default
+/// combining-marks rule: GNU `find_automatic_composition` for
+/// `Ffind_composition_internal`'s string case.  `pos` and `limit` are in the
+/// string's 0-based coordinates, as the caller received them.
+fn find_automatic_composition_in_string<H: TextHost>(
+    ctx: &mut H,
+    string: Value,
+    text: &str,
+    multibyte: bool,
+    pos: usize,
+    limit: i64,
+) -> Option<(i64, i64, Value)> {
+    if !automatic_composition_enabled(ctx, multibyte) {
+        return None;
+    }
+    let table = ctx
+        .visible_variable_value_or_nil(neovm_value::intern::intern("composition-function-table"));
+    let spans = {
+        let buf = ctx.buffers().current_buffer()?;
+        AutomaticCompositionRules::new(&buf, table)?.spans(text)
+    };
+    select_shaped_composition(
+        ctx,
+        spans,
+        AutomaticCompositionQuery::new(pos, limit),
+        string,
+        0,
+    )
+}
+
+/// The buffer-arm automatic composition search: GNU
+/// `find_automatic_composition` for `Ffind_composition_internal`'s nil-string
+/// case.  `pos` and `to` are buffer positions (1-based; `to` negative means
+/// "at POS").
+///
+/// Candidates come from the same forward scan over the live
+/// `composition-function-table` that redisplay uses, bounded to POS's line —
+/// "This assumes a newline can never be composed" — and to GNU's forward
+/// check limit.  The returned span is 1-based and end-exclusive, like the
+/// property-based search beside it.
+fn find_automatic_composition_in_buffer<H: TextHost>(
+    ctx: &mut H,
+    pos: i64,
+    to: i64,
+) -> Option<(i64, i64, Value)> {
+    let (begv, zv, multibyte) = {
+        let buf = ctx.buffers().current_buffer()?;
+        (
+            buf.point_min_lisp_char_pos().as_i64(),
+            buf.point_max_lisp_char_pos().as_i64(),
+            buf.get_multibyte(),
+        )
+    };
+    if !automatic_composition_enabled(ctx, multibyte) {
+        return None;
+    }
+    // GNU scans from the start of POS's line; a lookback that crosses a
+    // newline is as impossible as a match that spans one.
+    let head = {
+        let buf = ctx.buffers().current_buffer()?;
+        let mut byte = buf.lisp_pos_to_emacs_byte_pos(neovm_edit::buffer::LispCharPos1::new(pos));
+        let begv_byte = buf.lisp_pos_to_emacs_byte_pos(neovm_edit::buffer::LispCharPos1::new(begv));
+        while byte > begv_byte {
+            match buf.char_before_emacs_byte_pos(byte) {
+                Some('\n') | None => break,
+                Some(_) => {
+                    let Some(len) = buf.char_before_emacs_byte_len(byte) else {
+                        break;
+                    };
+                    byte = byte.saturating_sub_len(len);
+                }
+            }
+        }
+        buf.emacs_byte_pos_to_lisp_char_pos(byte).as_i64()
+    };
+    // The forward trigger limit past POS (or LIMIT): matches may run to the
+    // end of their line, but no trigger beyond this limit starts one.
+    let fore_check_limit = if to >= 0 && to > pos {
+        (to + MAX_AUTO_COMPOSITION_LOOKBACK as i64).min(zv)
+    } else {
+        (pos + 1 + MAX_AUTO_COMPOSITION_LOOKBACK as i64).min(zv)
+    };
+    let scan_end = {
+        let buf = ctx.buffers().current_buffer()?;
+        let mut cursor = fore_check_limit.max(head).min(zv);
+        while cursor < zv {
+            let byte =
+                buf.lisp_pos_to_emacs_byte_pos(neovm_edit::buffer::LispCharPos1::new(cursor));
+            if buf.char_code_after_emacs_byte_pos(byte) == Some('\n' as u32) {
+                break;
+            }
+            cursor += 1;
+        }
+        cursor
+    };
+    if scan_end <= head {
+        return None;
+    }
+    let text = {
+        let buf = ctx.buffers().current_buffer()?;
+        let byte_range =
+            neovm_edit::emacs_core::editfns::current_buffer_accessible_char_region_in_buffers(
+                ctx.buffers(),
+                &Value::fixnum(head),
+                &Value::fixnum(scan_end),
+            )
+            .ok()??;
+        buf.buffer_substring_lisp_string_range(byte_range)
+            .as_utf8_str()?
+            .to_owned()
+    };
+    let table = ctx
+        .visible_variable_value_or_nil(neovm_value::intern::intern("composition-function-table"));
+    let spans = {
+        let buf = ctx.buffers().current_buffer()?;
+        AutomaticCompositionRules::new(&buf, table)?.spans_in(&text, (head - 1) as usize)
+    };
+    // Spans are 0-based over the buffer; the query works in the same
+    // coordinates as GNU's pos/limit, shifted down by one.
+    select_shaped_composition(
+        ctx,
+        spans,
+        AutomaticCompositionQuery::new((pos - 1) as usize, to - 1),
+        Value::NIL,
+        1,
+    )
+}
+
 /// `(find-composition-internal POS LIMIT STRING DETAIL-P)`
 ///
 /// GNU `Ffind_composition_internal` (composite.c): describe the composition at
@@ -1329,7 +1555,20 @@ pub fn find_composition_internal<H: TextHost>(ctx: &mut H, args: Vec<Value>) -> 
                 gstring,
             })
         } else {
-            None
+            let text_str = text.as_utf8_str().map(str::to_owned).unwrap_or_default();
+            find_automatic_composition_in_string(
+                ctx,
+                args[2],
+                &text_str,
+                text.is_multibyte(),
+                pos as usize,
+                limit,
+            )
+            .map(|(start, end, gstring)| LocatedComposition::Automatic {
+                start,
+                end,
+                gstring,
+            })
         }
     } else {
         let (begv, zv) = {
@@ -1356,17 +1595,50 @@ pub fn find_composition_internal<H: TextHost>(ctx: &mut H, args: Vec<Value>) -> 
             ));
         }
         let to = if limit < 0 { -1 } else { limit.clamp(begv, zv) };
-        let buf = ctx
-            .buffers()
-            .current_buffer()
-            .expect("checked current buffer");
-        find_composition_in_buffer(buf, begv, zv, pos, to, comp).map(|(start, end, property)| {
-            LocatedComposition::Stored {
-                start,
-                end,
-                property,
+        let stored = {
+            let buf = ctx
+                .buffers()
+                .current_buffer()
+                .expect("checked current buffer");
+            find_composition_in_buffer(buf, begv, zv, pos, to, comp)
+        };
+        match stored {
+            // A stored run that does not cover POS still wins unless an
+            // automatic composition sits strictly closer to POS (GNU
+            // Ffind_composition_internal's second branch).
+            Some((start, end, property)) if !(start <= pos && pos < end) => {
+                match find_automatic_composition_in_buffer(ctx, pos, to) {
+                    Some((s, e, gstring)) if (if e <= pos { e > end } else { s < start }) => {
+                        Some(LocatedComposition::Automatic {
+                            start: s,
+                            end: e,
+                            gstring,
+                        })
+                    }
+                    _ => Some(LocatedComposition::Stored {
+                        start,
+                        end,
+                        property,
+                    }),
+                }
             }
-        })
+            found => {
+                found.map(|(start, end, property)| LocatedComposition::Stored {
+                    start,
+                    end,
+                    property,
+                })
+            }
+            .or_else(|| {
+                find_automatic_composition_in_buffer(ctx, pos, to).map(|(s, e, gstring)| {
+                    LocatedComposition::Automatic {
+                        start: s,
+                        end: e,
+                        gstring,
+                    }
+                })
+            }),
+        }
     };
 
     let Some(found) = found else {

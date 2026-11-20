@@ -898,17 +898,46 @@ impl FontMetricsService {
             return GstringShapeOutcome::NeedLargerGlyphs;
         }
 
+        // Cluster byte offsets -> inclusive character from/to, following
+        // GNU's `hbfont_shape` (src/hbfont.c): every glyph of one cluster
+        // shares the cluster's FROM/TO, and the character recorded for the
+        // glyph is taken from the cluster's characters in order, clamped to
+        // TO.  (GNU walks a reversed cluster with a -1 step for RTL; the
+        // oracle rows here have one glyph per RTL cluster, so the forward
+        // step records the same character.)
+        let char_index_of_byte = |byte: usize| {
+            let mut byte = byte.min(text.len());
+            while byte > 0 && !text.is_char_boundary(byte) {
+                byte -= 1;
+            }
+            text[..byte].chars().count()
+        };
+        let mut cluster_from: Option<usize> = None;
+        let mut cluster_to = 0usize;
+        let mut cluster_offset = 0usize;
         for (index, glyph) in shaped.iter().enumerate() {
-            // Cluster byte offsets -> inclusive character from/to.
-            let from_char = text[..glyph.cluster_start.min(text.len())].chars().count();
-            let to_end = glyph.cluster_end.min(text.len());
-            let to_char_exclusive = text[..to_end].chars().count();
-            let cluster_char = text[glyph.cluster_start.min(text.len())..to_end]
-                .chars()
-                .next();
+            let from_char = char_index_of_byte(glyph.cluster_start);
+            if cluster_from != Some(from_char) {
+                cluster_from = Some(from_char);
+                let mut next = index + 1;
+                while next < shaped.len()
+                    && char_index_of_byte(shaped[next].cluster_start) == from_char
+                {
+                    next += 1;
+                }
+                cluster_to = if next == shaped.len() {
+                    chars.len().saturating_sub(1)
+                } else {
+                    char_index_of_byte(shaped[next].cluster_start).saturating_sub(1)
+                };
+                cluster_offset = 0;
+            }
+            let char_idx = (from_char + cluster_offset).min(cluster_to.max(from_char));
+            cluster_offset += 1;
+            let cluster_char = chars.get(char_idx).copied();
             let slot_values = vec![
                 neovm_core::Value::fixnum(from_char as i64),
-                neovm_core::Value::fixnum(to_char_exclusive.saturating_sub(1) as i64),
+                neovm_core::Value::fixnum(cluster_to as i64),
                 cluster_char.map_or(neovm_core::Value::NIL, |ch| {
                     neovm_core::Value::fixnum(ch as i64)
                 }),

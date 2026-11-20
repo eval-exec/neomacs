@@ -5108,8 +5108,13 @@ fn shape_gstring_with_driver(
         }
         // Cluster coverage validation: glyph[0].from == 0; every glyph's
         // from <= to; same from shares the same to; otherwise from ==
-        // previous to + 1 (src/font.c Ffont_shape_gstring).
-        let mut covered_to: Option<i64> = None;
+        // previous to + 1 (src/font.c Ffont_shape_gstring).  The comparison
+        // is against the PREVIOUS GLYPH's from, not its to: several glyphs
+        // of one grapheme cluster (e.g. a base and its vowel sign) all share
+        // a single from/to pair whose to spans the cluster, so `from` only
+        // equals the previous `to` by accident when every cluster is one
+        // character long.
+        let mut covered: Option<(i64, i64)> = None;
         for index in 0..glyph_slots {
             let glyph_slot = gstring.as_vector_data().expect("g")[2 + index].clone();
             let Some(glyph) = glyph_slot.as_vector_data() else {
@@ -5119,17 +5124,16 @@ fn shape_gstring_with_driver(
                 (Some(f), Some(t)) => (f, t),
                 _ => return Ok(Value::NIL),
             };
-            let valid = match covered_to {
+            let valid = match covered {
                 None => from == 0 && to >= from,
-                Some(prev_to) => {
-                    (from == covered_to.unwrap_or(i64::MIN) && to == prev_to)
-                        || (from == prev_to + 1 && to >= from)
+                Some((prev_from, prev_to)) => {
+                    (from == prev_from && to == prev_to) || (from == prev_to + 1 && to >= from)
                 }
             };
             if !valid {
                 return Ok(Value::NIL);
             }
-            covered_to = Some(to);
+            covered = Some((from, to));
         }
     }
     composition_gstring_adjust_zero_width(&gstring);
