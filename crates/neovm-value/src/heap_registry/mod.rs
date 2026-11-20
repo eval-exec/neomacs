@@ -248,6 +248,11 @@ impl<T> HeapRegistryHandle<T> {
     }
 }
 
+#[doc(hidden)]
+pub mod detachment;
+#[doc(hidden)]
+pub mod text_retirement;
+
 #[cfg(any(test, feature = "test-support"))]
 #[path = "tests/ownership_test.rs"]
 mod ownership_tests;

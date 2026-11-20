@@ -6,6 +6,7 @@ use neovm_eval::test_support::authority::WorldProofEra as ParallelHeapEra;
 use neovm_eval::test_support::authority::with_test_symbol_backing_era;
 use std::num::NonZeroU64;
 use std::sync::atomic::Ordering;
+use std::sync::mpsc::TryRecvError;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Round {
@@ -221,14 +222,10 @@ fn worker(
                 return Err(Error::Protocol);
             }
             // Inspect the restored home BEFORE another read can overwrite it.
-            let word = contention::retry(
-                Deadline::contention(),
-                || {
-                    let run = owner.run_access()?;
-                    Ok(Checksum(home.word_for_test(&run)))
-                },
-                contention::registration,
-            )?;
+            let word = {
+                let run = owner.run_access_after_resume_drain()?;
+                Checksum(home.word_for_test(&run))
+            };
             observations.push(Restored {
                 round,
                 epoch: response,

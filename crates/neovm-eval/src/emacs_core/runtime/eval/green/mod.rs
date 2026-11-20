@@ -33,6 +33,7 @@ pub use api::{green_make_thread, green_world};
 pub(crate) use bootstrap::GreenBootstrap;
 #[cfg(debug_assertions)]
 pub(crate) use bootstrap::debug_assert_native_tables_open;
+pub(crate) use carried::SourceWorldCarriers;
 pub(crate) use scheduler::{ConditionId, MutexId, ThreadKey, Wait};
 #[doc(hidden)]
 pub use switch::{GreenSeat, SelectTurn};
@@ -66,8 +67,9 @@ pub(crate) struct GreenRuntime {
     pub(super) outgoing_constant_error:
         std::cell::Cell<Option<(ThreadKey, neovm_value::intern::SymId)>>,
     /// The bounded carrier OS-thread pool (S-track). Carriers share its
-    /// `Arc` while idle; it owns every carrier's join handle. Visible to the
-    /// Green module and its children only, matching `CarrierPool`.
+    /// `Arc` while idle; each live slot owns that carrier's join handle.
+    /// Visible to the Green module and its children only, matching
+    /// `CarrierPool`.
     carriers: carrier::CarrierPool,
 
     /// The standard case table, one for every thread as in GNU:
@@ -369,6 +371,17 @@ impl Context {
                     vec![neovm_value::value::Value::string(error.to_string())],
                 )
             })
+    }
+}
+
+#[cfg(test)]
+impl Context {
+    /// Carrier pool `(slot count, join-handle count)`.
+    ///
+    /// `cfg(test)` only. The test-support build does not call it, and
+    /// `CarrierPool::counts_for_test` is not part of that feature.
+    pub(crate) fn carrier_pool_counts_for_test(&self) -> (usize, usize) {
+        self.with_green_runtime(|runtime| runtime.carriers.counts_for_test())
     }
 }
 

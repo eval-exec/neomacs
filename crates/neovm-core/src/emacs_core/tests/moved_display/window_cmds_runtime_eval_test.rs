@@ -363,13 +363,16 @@ fn live_frame_subrs_reject_a_deleted_frame_like_gnu() {
         "precondition: the frame must really be gone from the table"
     );
 
-    // `framep` still answers t for it, exactly as GNU's CHECK_FRAME would.
+    // GNU `Fframep` (frame.c:300-316) switches on `output_method` after the
+    // FRAMEP test. `delete_frame` only clears `f->terminal` (frame.c:2940)
+    // and does not write `output_method`, so a deleted termcap frame still
+    // answers t. This fixture's `create_frame` is that frame.
     let still_a_frame = crate::emacs_core::frame::builtin_framep(&mut ev, vec![dead])
         .expect("framep must not signal");
     assert_eq!(
         still_a_frame,
-        Value::NIL,
-        "a deleted frame is gone from the table"
+        Value::T,
+        "framep keeps the deleted frame's output method"
     );
 
     // `frame--set-was-invisible`, `frame-after-make-frame` and

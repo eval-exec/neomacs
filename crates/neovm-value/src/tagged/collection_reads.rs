@@ -998,8 +998,54 @@ mod store_state;
 // functions above, never the RefCell-bearing accessor (LEAD 10:5xZ).
 use store_state::with_state;
 pub(crate) use store_state::{
-    ObservationWorld, StoreState, clear_installed_store_heap, with_store,
+    ObservationWorld, SourceObservationRestoreFailure, StoreState, clear_installed_store_heap,
+    with_store,
 };
+#[doc(hidden)]
+pub use store_state::{SourceObservationError, SourceObservationsDetached};
+
+/// Address of the store protocol installed on this thread. Test census only.
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub fn installed_store_address() -> *const StoreState {
+    with_store(std::ptr::from_ref)
+}
+
+/// A detached observation owner installed as this thread's TLS sentinel.
+///
+/// No safe constructor. The guard keeps the extra `Rc` alive so a later census
+/// still sees it. Not `Send`, `Sync`, `Clone`, or `Copy`.
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub struct ObservationPlaceholderGuard {
+    _owner: ObservationWorld,
+    root: *const StoreState,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl ObservationPlaceholderGuard {
+    /// # Safety
+    /// The caller owns this thread's observation TLS and drops the guard
+    /// before a sole-owner census of a different owner must succeed.
+    #[doc(hidden)]
+    pub unsafe fn install() -> Self {
+        let owner = ObservationWorld::default();
+        owner.install(crate::tagged::gc::BarrierWindow::NONE);
+        let root = owner.root().as_ptr().cast_const();
+        Self {
+            _owner: owner,
+            root,
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn root(&self) -> *const StoreState {
+        self.root
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+static_assertions::assert_not_impl_any!(ObservationPlaceholderGuard: Send, Sync, Clone, Copy);
 
 mod compiled_journal;
 #[cfg(not(feature = "test-support"))]
@@ -1142,13 +1188,14 @@ fn publish_observed_owner_in_state(state: &mut State, bits: usize) -> bool {
         let native_geometry =
             promoted_geometry.unwrap_or_else(|| native_window_collection_owner(bits));
         let changed = state.observed.insert(bits, native_geometry);
-        let newly = if changed {
+        // Between prunes the ledger can retain a dead lifetime's identity at
+        // this reused address; its cleared mark must be published again.
+        let newly = if changed || !super::gc::collection_observed_metadata(bits) {
             #[cfg(any(test, feature = "test-support"))]
             OBSERVED_OWNER_PUBLICATIONS.with(|count| count.set(count.get() + 1));
             super::gc::mark_collection_observed(bits)
         } else {
-            // Epoch refresh retained this identity only after its exact metadata
-            // mark was found. Its live publication needs no second radix query.
+            // The retained identity's exact metadata mark was found above.
             false
         };
         if refreshed || changed {
@@ -1275,6 +1322,10 @@ mod observed_collisions_tests;
 #[cfg(all(test, feature = "jit"))]
 #[path = "collection_reads/tests/observed_reused_subtype_test.rs"]
 mod observed_reused_subtype_tests;
+
+#[cfg(all(test, feature = "jit"))]
+#[path = "collection_reads/tests/observed_sweep_amortization_test.rs"]
+mod observed_sweep_amortization_tests;
 
 /// Carrier park: clear this thread's read-observation scope and recent-read
 /// cache. `STATE` is World-carried by the swap protocol and is not touched.

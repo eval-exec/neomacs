@@ -67,6 +67,8 @@ pub struct FontsetRenderingSpec {
     pub weight: Option<FontWeight>,
     pub slant: Option<FontSlant>,
     pub width: Option<FontWidth>,
+    /// GNU `:otf` requirement; a detached worker must reject fonts that fail it.
+    pub otf: Option<super::StoredOtfSpec>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -100,6 +102,7 @@ impl From<FontSpecEntry> for StoredFontsetEntry {
                     weight: spec.weight,
                     slant: spec.slant,
                     width: spec.width,
+                    otf: spec.otf.clone(),
                 })
             }
             FontSpecEntry::ExplicitNone => FontsetRenderingEntry::ExplicitNone,
@@ -194,11 +197,12 @@ impl SharedFontsetEntries {
     /// Japanese language environment a `jisx0208` entry is tried before a
     /// `gb2312` entry listed ahead of it.
     ///
-    /// Only GNU's encoding rule is applied.  Its exemptions for a spec that
-    /// matches the face's ASCII font or has `:otf`, and its `:lang` rule for
-    /// specs without an encoding, are not.  An `ExplicitNone` ends the chain,
-    /// so only the entries before it are reordered.  The result is computed
-    /// once per preference revision and shared by every holder of this chain.
+    /// GNU's `:otf` exemption is applied (a spec with `:otf` takes no
+    /// charset-rank penalty).  Its exemption for a spec that matches the
+    /// face's ASCII font and its `:lang` rule for specs without an encoding
+    /// are not.  An `ExplicitNone` ends the chain, so only the entries before
+    /// it are reordered.  The result is computed once per preference revision
+    /// and shared by every holder of this chain.
     pub(super) fn in_charset_order(&self) -> Self {
         let preference = CHARSET_PREFERENCE
             .read()
@@ -228,6 +232,11 @@ impl SharedFontsetEntries {
         let ranks: Vec<usize> = entries[..end]
             .iter()
             .map(|entry| match entry.original() {
+                // GNU `reorder_font_vector`: a spec with `:otf` is preferable
+                // "regardless of encoding and language", so it takes no
+                // charset-rank penalty (`src/fontset.c:413-416`). It keeps its
+                // definition order ahead of every penalized entry.
+                FontSpecEntry::Font(spec) if spec.otf.is_some() => 0,
                 FontSpecEntry::Font(spec) => spec.definition.as_ref().map_or(0, |definition| {
                     preferred
                         .iter()

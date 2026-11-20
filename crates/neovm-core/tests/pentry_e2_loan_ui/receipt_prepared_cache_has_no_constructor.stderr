@@ -1,0 +1,16 @@
+error[E0599]: no associated function or constant named `new` found for struct `neovm_value::heap_registry::text_retirement::PreparedValueCacheRetirement<'a>` in the current scope
+ --> tests/pentry_e2_loan_ui/receipt_prepared_cache_has_no_constructor.rs
+  |
+  |     let _prepared = PreparedValueCacheRetirement::<'_>::new();
+  |                                                         ^^^ associated function or constant not found in `neovm_value::heap_registry::text_retirement::PreparedValueCacheRetirement<'_>`
+  |
+note: if you're trying to build a new `neovm_value::heap_registry::text_retirement::PreparedValueCacheRetirement<'_>`, consider using `neovm_value::heap_registry::text_retirement::PreparedValueCacheRetirement::<'a>::prepare` which returns `Result<neovm_value::heap_registry::text_retirement::PreparedValueCacheRetirement<'_>, neovm_value::heap_registry::text_retirement::TextCacheRetireError>`
+ --> $WORKSPACE/crates/neovm-value/src/heap_registry/text_retirement.rs
+  |
+  | /     pub fn prepare(
+  | |         value: &'a RefCell<Option<Value>>,
+  | |         owner: &'a Cell<usize>,
+  | |         heap: HeapIdentity,
+  | |         kind: TextCacheSlot,
+  | |     ) -> Result<Self, TextCacheRetireError> {
+  | |___________________________________________^

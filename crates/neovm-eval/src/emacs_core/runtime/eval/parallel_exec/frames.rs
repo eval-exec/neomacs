@@ -15,8 +15,12 @@
 use super::super::owner_bindings::{BindingKind, Channel, UndoTarget};
 use neovm_value::forward::TlsIndex;
 use neovm_value::intern::SymId;
+use neovm_value::tagged::gc::{RendezvousError, TaggedHeap};
+use neovm_value::tagged::transport::SharedRoot;
 use neovm_value::value::Value;
-use std::num::NonZeroU32;
+#[cfg(test)]
+use std::cell::Cell;
+use std::num::{NonZeroU32, NonZeroU64};
 
 /// The canonical E3 private-root groups (`gc_pacing::trace_root_groups`) the
 /// executor publishes. The names are exactly that roster so stage 1 plugs the
@@ -58,58 +62,277 @@ impl RootGroup {
             Self::Misc => "misc",
         }
     }
+
+    /// Index into a scan counted in [`Self::ALL`] order.
+    const fn ordinal(self) -> usize {
+        match self {
+            Self::VmFrames => 0,
+            Self::EvalTemp => 1,
+            Self::Bc => 2,
+            Self::JitWindow => 3,
+            Self::Handlers => 4,
+            Self::Specpdl => 5,
+            Self::Misc => 6,
+        }
+    }
 }
 
-/// One explicitly published root: an owned value the frame walk does not
-/// reach (a pending escape or native obligation, a result awaiting resume).
+const _: () = {
+    let mut index = 0;
+    while index < RootGroup::ALL.len() {
+        assert!(RootGroup::ALL[index].ordinal() == index);
+        index += 1;
+    }
+};
+
+/// Why a root could not be published or revoked.
+///
+/// [`RootPublishError::GenerationExhausted`] is the non-wrapping end of the
+/// `NonZeroU64` counter. The registry stays as it was; it does not recycle a
+/// generation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RootPublishError {
+    GenerationExhausted,
+    IndexExhausted,
+}
+
+/// Why a revoke did not remove a root.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RootRevokeError {
+    /// The handle's generation is not the slot's current generation, or the
+    /// handle does not name the live top. The slot payload is not read.
+    Stale,
+    GenerationExhausted,
+}
+
+/// A revocable token for one published root.
+///
+/// `generation` is a `NonZeroU64` taken from a counter that refuses to wrap.
+/// After the slot is reused, this handle no longer names it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[doc(hidden)]
+pub struct RootHandle {
+    index: u32,
+    generation: NonZeroU64,
+}
+
+impl RootHandle {
+    #[doc(hidden)]
+    pub const fn index(self) -> u32 {
+        self.index
+    }
+
+    #[doc(hidden)]
+    pub const fn generation(self) -> NonZeroU64 {
+        self.generation
+    }
+}
+
+/// The value stored in a slot. Vacant slots stay in the table so a later push
+/// can reuse the index under a new generation.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct RootRecord {
-    pub(crate) group: RootGroup,
-    pub(crate) value: Value,
+enum SlotPayload {
+    Vacant,
+    Live { group: RootGroup, value: Value },
+}
+
+struct RootSlot {
+    generation: NonZeroU64,
+    payload: SlotPayload,
+}
+
+/// One vector per canonical group. Adding a field without naming it in
+/// [`RootRegistry::trace_root_groups`] is a compile error (E0027).
+struct GroupPayloads {
+    vm_frames: Vec<Value>,
+    eval_temp: Vec<Value>,
+    bc: Vec<Value>,
+    jit_window: Vec<Value>,
+    handlers: Vec<Value>,
+    specpdl: Vec<Value>,
+    misc: Vec<Value>,
+}
+
+impl GroupPayloads {
+    fn from_live<'a>(slots: impl Iterator<Item = &'a RootSlot>) -> Self {
+        let mut payloads = Self {
+            vm_frames: Vec::new(),
+            eval_temp: Vec::new(),
+            bc: Vec::new(),
+            jit_window: Vec::new(),
+            handlers: Vec::new(),
+            specpdl: Vec::new(),
+            misc: Vec::new(),
+        };
+        for slot in slots {
+            let SlotPayload::Live { group, value } = slot.payload else {
+                continue;
+            };
+            match group {
+                RootGroup::VmFrames => payloads.vm_frames.push(value),
+                RootGroup::EvalTemp => payloads.eval_temp.push(value),
+                RootGroup::Bc => payloads.bc.push(value),
+                RootGroup::JitWindow => payloads.jit_window.push(value),
+                RootGroup::Handlers => payloads.handlers.push(value),
+                RootGroup::Specpdl => payloads.specpdl.push(value),
+                RootGroup::Misc => payloads.misc.push(value),
+            }
+        }
+        payloads
+    }
 }
 
 /// The owner's auxiliary published roots, separate from the frame arena.
-#[derive(Default)]
+///
+/// Slots are a dense live prefix. Revoke bumps the slot generation before
+/// clearing the payload, so a stale [`RootHandle`] fails the generation
+/// compare and does not read the value.
 pub(crate) struct RootRegistry {
-    records: Vec<RootRecord>,
+    slots: Vec<RootSlot>,
+    live: u32,
+    next_generation: NonZeroU64,
 }
 
 impl RootRegistry {
     #[doc(hidden)]
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            slots: Vec::new(),
+            live: 0,
+            next_generation: NonZeroU64::MIN,
+        }
     }
 
-    /// Publish VALUE in GROUP and return the token proving it is rooted.
+    /// Publish VALUE in GROUP. The returned handle is the only lookup key.
     #[must_use]
     #[doc(hidden)]
-    pub fn push(&mut self, group: RootGroup, value: Value) -> RootedValue {
-        self.records.push(RootRecord { group, value });
-        RootedValue(value)
+    pub fn push(&mut self, group: RootGroup, value: Value) -> Result<RootHandle, RootPublishError> {
+        if self.live == u32::MAX {
+            return Err(RootPublishError::IndexExhausted);
+        }
+        let generation = self.issue()?;
+        let index = self.live;
+        if index as usize == self.slots.len() {
+            self.slots.push(RootSlot {
+                generation,
+                payload: SlotPayload::Vacant,
+            });
+        }
+        let slot = &mut self.slots[index as usize];
+        slot.generation = generation;
+        slot.payload = SlotPayload::Live { group, value };
+        self.live += 1;
+        Ok(RootHandle { index, generation })
+    }
+
+    /// The value HANDLE names, or `None` when the handle is stale.
+    ///
+    /// The generation compare happens before the payload match. A mismatch
+    /// returns here and does not read [`SlotPayload`].
+    #[doc(hidden)]
+    pub fn lookup(&self, handle: RootHandle) -> Option<Value> {
+        let slot = self.slots.get(handle.index as usize)?;
+        if slot.generation != handle.generation {
+            return None;
+        }
+        match slot.payload {
+            SlotPayload::Live { value, .. } => Some(value),
+            SlotPayload::Vacant => None,
+        }
+    }
+
+    /// Drop the top root when HANDLE names it. A stale or non-top handle is
+    /// refused before the payload is read.
+    #[doc(hidden)]
+    pub fn pop(&mut self, handle: RootHandle) -> Result<Value, RootRevokeError> {
+        let Some(slot) = self.slots.get(handle.index as usize) else {
+            return Err(RootRevokeError::Stale);
+        };
+        if slot.generation != handle.generation || handle.index.saturating_add(1) != self.live {
+            return Err(RootRevokeError::Stale);
+        }
+        let value = match slot.payload {
+            SlotPayload::Live { value, .. } => value,
+            SlotPayload::Vacant => return Err(RootRevokeError::Stale),
+        };
+        self.retire_last()
+            .map_err(|_| RootRevokeError::GenerationExhausted)?;
+        Ok(value)
+    }
+
+    /// Drop every live root at or above KEEP. Returns how many were removed.
+    #[doc(hidden)]
+    pub fn truncate(&mut self, keep: usize) -> Result<usize, RootPublishError> {
+        let keep = u32::try_from(keep).unwrap_or(self.live).min(self.live);
+        let removed = (self.live - keep) as usize;
+        while self.live > keep {
+            self.retire_last()?;
+        }
+        Ok(removed)
     }
 
     #[doc(hidden)]
     pub fn len(&self) -> usize {
-        self.records.len()
+        self.live as usize
     }
 
     #[doc(hidden)]
     pub fn trace_roots(&self, visit: &mut dyn FnMut(RootGroup, Value)) {
-        for record in &self.records {
-            visit(record.group, record.value);
+        for slot in self.slots.iter().take(self.live as usize) {
+            if let SlotPayload::Live { group, value } = slot.payload {
+                visit(group, value);
+            }
         }
     }
-}
 
-/// A value the registry has published. The private field prevents a caller
-/// from claiming an unrooted value; stage 1 hands these across a poll.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct RootedValue(Value);
-
-impl RootedValue {
+    /// Enter every [`RootGroup`] once, including a group with no live roots.
+    ///
+    /// The payload struct is destructured without a rest pattern, and
+    /// [`GroupPayloads::from_live`] matches every variant. A new group fails
+    /// to compile until both sites name it.
     #[doc(hidden)]
-    pub fn get(self) -> Value {
-        self.0
+    pub fn trace_root_groups(&self, visit: &mut dyn FnMut(RootGroup, &[Value])) {
+        let GroupPayloads {
+            vm_frames,
+            eval_temp,
+            bc,
+            jit_window,
+            handlers,
+            specpdl,
+            misc,
+        } = GroupPayloads::from_live(self.slots.iter().take(self.live as usize));
+        visit(RootGroup::VmFrames, &vm_frames);
+        visit(RootGroup::EvalTemp, &eval_temp);
+        visit(RootGroup::Bc, &bc);
+        visit(RootGroup::JitWindow, &jit_window);
+        visit(RootGroup::Handlers, &handlers);
+        visit(RootGroup::Specpdl, &specpdl);
+        visit(RootGroup::Misc, &misc);
+    }
+
+    /// Park the counter at its last value so the next issue refuses.
+    #[cfg(test)]
+    pub(crate) fn exhaust_generations_for_test(&mut self) {
+        self.next_generation = NonZeroU64::MAX;
+    }
+
+    fn issue(&mut self) -> Result<NonZeroU64, RootPublishError> {
+        let generation = self.next_generation;
+        self.next_generation = generation
+            .checked_add(1)
+            .ok_or(RootPublishError::GenerationExhausted)?;
+        Ok(generation)
+    }
+
+    fn retire_last(&mut self) -> Result<(), RootPublishError> {
+        debug_assert!(self.live > 0, "retiring an empty root registry");
+        let generation = self.issue()?;
+        let index = self.live - 1;
+        let slot = &mut self.slots[index as usize];
+        slot.generation = generation;
+        slot.payload = SlotPayload::Vacant;
+        self.live = index;
+        Ok(())
     }
 }
 
@@ -171,6 +394,17 @@ impl DepthLimitExceeded {
     pub const fn limit(self) -> u32 {
         self.limit
     }
+}
+
+/// Why a frame could not be published.
+///
+/// [`FramePublishError::GenerationExhausted`] is the non-wrapping end of the
+/// `NonZeroU64` counter. The arena does not recycle a generation, and the
+/// call-depth enter is undone.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FramePublishError {
+    Depth(DepthLimitExceeded),
+    GenerationExhausted,
 }
 
 impl CallDepth {
@@ -272,16 +506,18 @@ impl OwnerRecordMark {
 
 /// A live frame handle: its arena position plus the generation it was issued
 /// at, so a stale handle never names a reused slot.
+///
+/// `generation` is a `NonZeroU64` from a counter that refuses to wrap.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[doc(hidden)]
 pub struct FrameId {
     depth: NonZeroU32,
-    generation: NonZeroU32,
+    generation: NonZeroU64,
 }
 
 impl FrameId {
     #[doc(hidden)]
-    pub const fn generation(self) -> NonZeroU32 {
+    pub const fn generation(self) -> NonZeroU64 {
         self.generation
     }
 }
@@ -484,6 +720,9 @@ pub(crate) struct InterpFrame {
     pub(crate) body: Value,
     pub(crate) cursor: Value,
     pub(crate) lexenv: Value,
+    /// The value of the last completed form in this progn. GC-JOIN scans
+    /// the arena, so the accumulator lives here rather than beside it.
+    pub(crate) last: Value,
     pub(crate) eval_depth: u32,
     pub(crate) handler_base: HandlerMark,
     pub(crate) spec_base: OwnerRecordMark,
@@ -497,6 +736,7 @@ impl InterpFrame {
         body: Value,
         cursor: Value,
         lexenv: Value,
+        last: Value,
         eval_depth: u32,
         handler_base: HandlerMark,
         spec_base: OwnerRecordMark,
@@ -507,6 +747,7 @@ impl InterpFrame {
             body,
             cursor,
             lexenv,
+            last,
             eval_depth,
             handler_base,
             spec_base,
@@ -525,6 +766,7 @@ impl FrameRoots for InterpFrame {
             body,
             cursor,
             lexenv,
+            last,
             eval_depth: _,
             handler_base: _,
             spec_base: _,
@@ -534,6 +776,7 @@ impl FrameRoots for InterpFrame {
         visit(RootGroup::EvalTemp, *body);
         visit(RootGroup::EvalTemp, *cursor);
         visit(RootGroup::EvalTemp, *lexenv);
+        visit(RootGroup::EvalTemp, *last);
     }
 }
 
@@ -671,7 +914,7 @@ pub(crate) enum OwnedFrame {
 
 #[derive(Clone, Copy, Debug)]
 struct FrameSlot {
-    generation: NonZeroU32,
+    generation: NonZeroU64,
     frame: OwnedFrame,
 }
 
@@ -694,7 +937,10 @@ pub(crate) struct FrameArena {
     bindings: BindStack,
     roots: RootRegistry,
     depth: CallDepth,
-    next_generation: NonZeroU32,
+    next_generation: NonZeroU64,
+    /// The next [`OwnerScanJoin::publish_scan`] fails before it reserves.
+    #[cfg(test)]
+    fail_scan_reserve: Cell<bool>,
 }
 
 static_assertions::assert_not_impl_any!(FrameArena: Send, Sync);
@@ -709,31 +955,80 @@ impl FrameArena {
             bindings: BindStack::new(),
             roots: RootRegistry::new(),
             depth: CallDepth::new(depth_limit),
-            next_generation: NonZeroU32::MIN,
+            next_generation: NonZeroU64::MIN,
+            #[cfg(test)]
+            fail_scan_reserve: Cell::new(false),
         }
     }
 
     #[doc(hidden)]
-    pub fn push_interp(&mut self, frame: InterpFrame) -> Result<FrameId, DepthLimitExceeded> {
+    pub fn push_interp(&mut self, frame: InterpFrame) -> Result<FrameId, FramePublishError> {
         self.push(OwnedFrame::Interp(frame))
     }
 
     #[doc(hidden)]
-    pub fn push_vm(&mut self, frame: VmFrame) -> Result<FrameId, DepthLimitExceeded> {
+    pub fn push_vm(&mut self, frame: VmFrame) -> Result<FrameId, FramePublishError> {
         self.push(OwnedFrame::Vm(frame))
     }
 
     #[doc(hidden)]
-    pub fn push(&mut self, frame: OwnedFrame) -> Result<FrameId, DepthLimitExceeded> {
-        self.depth.enter()?;
+    pub fn push(&mut self, frame: OwnedFrame) -> Result<FrameId, FramePublishError> {
+        self.depth.enter().map_err(FramePublishError::Depth)?;
         let generation = self.next_generation;
-        self.next_generation = generation.checked_add(1).unwrap_or(NonZeroU32::MIN);
+        let Some(next) = generation.checked_add(1) else {
+            self.depth.leave();
+            return Err(FramePublishError::GenerationExhausted);
+        };
+        self.next_generation = next;
         self.frames.push(FrameSlot { generation, frame });
         let depth = u32::try_from(self.frames.len())
             .ok()
             .and_then(NonZeroU32::new)
             .expect("a frame arena deeper than u32");
         Ok(FrameId { depth, generation })
+    }
+
+    /// The interpreter frame ID names, if it is still the live top.
+    ///
+    /// A stale or non-top handle is `None`. The generation compare happens
+    /// before the frame is read.
+    #[doc(hidden)]
+    pub fn interp(&self, id: FrameId) -> Option<&InterpFrame> {
+        let slot = self.frames.last()?;
+        if slot.generation != id.generation {
+            return None;
+        }
+        if u32::try_from(self.frames.len()).ok() != Some(id.depth.get()) {
+            return None;
+        }
+        match &slot.frame {
+            OwnedFrame::Interp(frame) => Some(frame),
+            OwnedFrame::Vm(_) => None,
+        }
+    }
+
+    /// Update the interpreter frame ID names in place.
+    ///
+    /// The [`FrameId`] does not change: stage 1 resumes the same handle.
+    /// A stale, non-top, or non-interpreter frame is `None` and is not written.
+    #[doc(hidden)]
+    pub fn with_interp<R>(
+        &mut self,
+        id: FrameId,
+        update: impl FnOnce(&mut InterpFrame) -> R,
+    ) -> Option<R> {
+        let depth = u32::try_from(self.frames.len()).ok();
+        let slot = self.frames.last_mut()?;
+        if slot.generation != id.generation {
+            return None;
+        }
+        if depth != Some(id.depth.get()) {
+            return None;
+        }
+        match &mut slot.frame {
+            OwnedFrame::Interp(frame) => Some(update(frame)),
+            OwnedFrame::Vm(_) => None,
+        }
     }
 
     /// Pop the frame ID names. A stale or non-top handle is refused, exactly
@@ -755,6 +1050,12 @@ impl FrameArena {
     #[doc(hidden)]
     pub fn depth(&self) -> u32 {
         self.depth.current()
+    }
+
+    /// Live published roots. Revoked slots are not counted.
+    #[doc(hidden)]
+    pub fn root_len(&self) -> usize {
+        self.roots.len()
     }
 
     #[doc(hidden)]
@@ -821,6 +1122,199 @@ impl FrameArena {
     #[doc(hidden)]
     pub fn frame_kinds(&self) -> impl Iterator<Item = FrameKind> + '_ {
         self.frames.iter().map(|slot| slot.frame.kind())
+    }
+
+    /// Park the frame-id counter at its last value so the next push refuses.
+    #[cfg(test)]
+    pub(crate) fn exhaust_frame_generations_for_test(&mut self) {
+        self.next_generation = NonZeroU64::MAX;
+    }
+
+    /// The next scan returns [`RendezvousError::Capacity`] and reserves nothing.
+    #[cfg(test)]
+    pub(crate) fn fail_next_scan_reserve_for_test(&self) {
+        self.fail_scan_reserve.set(true);
+    }
+
+    /// Visit every owned root once.
+    ///
+    /// Interpreter fields publish as [`RootGroup::EvalTemp`] because that is
+    /// [`InterpFrame::ROOT_GROUPS`]. VM frame fields and the operand stack
+    /// publish as [`RootGroup::VmFrames`]. The operand vector is one source:
+    /// a frame cursor is a view of it, so the cursor is not walked again.
+    /// Handler tags, binding undo values, and the registry keep their own
+    /// groups. The destructure names every arena field, and [`ArenaScan`]
+    /// names every [`RootGroup`], so a new source or group fails to compile
+    /// until this scan publishes it.
+    fn for_each_owner_root(&self, visit: &mut dyn FnMut(RootGroup, Value)) {
+        let Self {
+            frames,
+            operands,
+            handlers,
+            bindings,
+            roots,
+            depth: _,
+            next_generation: _,
+            #[cfg(test)]
+                fail_scan_reserve: _,
+        } = self;
+        for slot in frames {
+            match slot.frame {
+                OwnedFrame::Interp(frame) => frame.trace_frame_roots(visit),
+                OwnedFrame::Vm(frame) => frame.trace_frame_roots(visit),
+            }
+        }
+        for value in operands {
+            visit(RootGroup::VmFrames, *value);
+        }
+        handlers.trace_roots(visit);
+        bindings.trace_roots(visit);
+        // Registry contribution: every group, including an empty one.
+        // `trace_root_groups` is not the owner publication.
+        roots.trace_root_groups(&mut |group, values| {
+            for value in values {
+                visit(group, *value);
+            }
+        });
+    }
+}
+
+/// The owner's scan, copied into the `&[SharedRoot]` batch a stop
+/// acknowledgement already takes.
+///
+/// The trait does not acknowledge and carries no epoch. On `Err`, `out` is
+/// unchanged and this call leaves no shared root behind.
+pub(crate) trait OwnerScanJoin {
+    fn publish_scan(
+        &self,
+        heap: &TaggedHeap,
+        out: &mut Vec<SharedRoot>,
+    ) -> Result<(), RendezvousError>;
+}
+
+/// One vector per canonical group. Destructuring this without `..` is the
+/// scan's exactly-once site for [`RootGroup`].
+struct ArenaScan {
+    vm_frames: Vec<Value>,
+    eval_temp: Vec<Value>,
+    bc: Vec<Value>,
+    jit_window: Vec<Value>,
+    handlers: Vec<Value>,
+    specpdl: Vec<Value>,
+    misc: Vec<Value>,
+}
+
+impl ArenaScan {
+    fn try_reserve_counts(counts: &[usize; RootGroup::ALL.len()]) -> Result<Self, RendezvousError> {
+        let mut vm_frames = Vec::new();
+        let mut eval_temp = Vec::new();
+        let mut bc = Vec::new();
+        let mut jit_window = Vec::new();
+        let mut handlers = Vec::new();
+        let mut specpdl = Vec::new();
+        let mut misc = Vec::new();
+        vm_frames
+            .try_reserve(counts[RootGroup::VmFrames.ordinal()])
+            .map_err(|_| RendezvousError::Capacity)?;
+        eval_temp
+            .try_reserve(counts[RootGroup::EvalTemp.ordinal()])
+            .map_err(|_| RendezvousError::Capacity)?;
+        bc.try_reserve(counts[RootGroup::Bc.ordinal()])
+            .map_err(|_| RendezvousError::Capacity)?;
+        jit_window
+            .try_reserve(counts[RootGroup::JitWindow.ordinal()])
+            .map_err(|_| RendezvousError::Capacity)?;
+        handlers
+            .try_reserve(counts[RootGroup::Handlers.ordinal()])
+            .map_err(|_| RendezvousError::Capacity)?;
+        specpdl
+            .try_reserve(counts[RootGroup::Specpdl.ordinal()])
+            .map_err(|_| RendezvousError::Capacity)?;
+        misc.try_reserve(counts[RootGroup::Misc.ordinal()])
+            .map_err(|_| RendezvousError::Capacity)?;
+        Ok(Self {
+            vm_frames,
+            eval_temp,
+            bc,
+            jit_window,
+            handlers,
+            specpdl,
+            misc,
+        })
+    }
+
+    fn push(&mut self, group: RootGroup, value: Value) {
+        // Capacity was reserved for this group, so `push` does not allocate.
+        match group {
+            RootGroup::VmFrames => self.vm_frames.push(value),
+            RootGroup::EvalTemp => self.eval_temp.push(value),
+            RootGroup::Bc => self.bc.push(value),
+            RootGroup::JitWindow => self.jit_window.push(value),
+            RootGroup::Handlers => self.handlers.push(value),
+            RootGroup::Specpdl => self.specpdl.push(value),
+            RootGroup::Misc => self.misc.push(value),
+        }
+    }
+}
+
+fn admit_shared(heap: &TaggedHeap, values: &[Value], out: &mut Vec<SharedRoot>) {
+    for value in values {
+        // SAFETY: `SharedRoot::new` requires a mutator of `heap`, a live
+        // value whose traced objects belong to that heap, and reachability
+        // until registration completes. The caller is that mutator, and the
+        // arena still holds `value` until this function returns.
+        out.push(unsafe { SharedRoot::new(heap, *value) });
+    }
+}
+
+impl OwnerScanJoin for FrameArena {
+    fn publish_scan(
+        &self,
+        heap: &TaggedHeap,
+        out: &mut Vec<SharedRoot>,
+    ) -> Result<(), RendezvousError> {
+        #[cfg(test)]
+        if self.fail_scan_reserve.replace(false) {
+            return Err(RendezvousError::Capacity);
+        }
+        let mut counts = [0usize; RootGroup::ALL.len()];
+        self.for_each_owner_root(&mut |group, _value| {
+            counts[group.ordinal()] += 1;
+        });
+        let mut scan = ArenaScan::try_reserve_counts(&counts)?;
+        self.for_each_owner_root(&mut |group, value| scan.push(group, value));
+        let ArenaScan {
+            vm_frames,
+            eval_temp,
+            bc,
+            jit_window,
+            handlers,
+            specpdl,
+            misc,
+        } = scan;
+        let total = vm_frames.len()
+            + eval_temp.len()
+            + bc.len()
+            + jit_window.len()
+            + handlers.len()
+            + specpdl.len()
+            + misc.len();
+        let mut local = Vec::new();
+        local
+            .try_reserve(total)
+            .map_err(|_| RendezvousError::Capacity)?;
+        admit_shared(heap, &vm_frames, &mut local);
+        admit_shared(heap, &eval_temp, &mut local);
+        admit_shared(heap, &bc, &mut local);
+        admit_shared(heap, &jit_window, &mut local);
+        admit_shared(heap, &handlers, &mut local);
+        admit_shared(heap, &specpdl, &mut local);
+        admit_shared(heap, &misc, &mut local);
+        debug_assert_eq!(local.len(), total);
+        out.try_reserve(local.len())
+            .map_err(|_| RendezvousError::Capacity)?;
+        out.extend(local);
+        Ok(())
     }
 }
 

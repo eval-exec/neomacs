@@ -278,6 +278,10 @@ pub struct OwnerSlab {
     /// it on error. Kept beside `native_fileio` but separate, exactly as GNU
     /// keeps the write policy and the directory umask as independent statics.
     native_fileio_dir_umask: u32,
+    /// Dormant selection arm. No Lisp values, so the collector does not
+    /// trace it. The clipboard stubs do not read it. Absent until this
+    /// owner allocates a slab, and uninstalled when the slab is new.
+    pub(crate) selection_activation: super::activation::SelectionActivation,
     _thread_confined: PhantomData<*const ()>,
 }
 
@@ -290,6 +294,7 @@ impl std::fmt::Debug for OwnerSlab {
             .field("heap", &format_args!("{:#x}", self.heap))
             .field("records", &self.records.len())
             .field("locals", &self.locals.len())
+            .field("selection", &self.selection_activation.phase())
             .finish_non_exhaustive()
     }
 }
@@ -326,6 +331,7 @@ impl OwnerSlab {
             green: None,
             native_fileio: AutoSaveNativeWritePolicy::Ordinary { preserved_mode: 0 },
             native_fileio_dir_umask: 0,
+            selection_activation: super::activation::SelectionActivation::dormant(),
             _thread_confined: PhantomData,
         }
     }

@@ -4,6 +4,7 @@ pub(super) mod control;
 mod keeper;
 mod owner;
 mod resume;
+mod run_admission;
 
 pub use control::{Mode, Phase, Request};
 pub use keeper::AllStopped;

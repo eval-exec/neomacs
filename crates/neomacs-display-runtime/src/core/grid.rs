@@ -255,7 +255,14 @@ impl CharacterGrid {
     }
 
     /// Set a cell's content
-    pub fn set_cell(&mut self, x: usize, y: usize, text: String, style: Option<Arc<CellStyle>>, width: u8) {
+    pub fn set_cell(
+        &mut self,
+        x: usize,
+        y: usize,
+        text: String,
+        style: Option<Arc<CellStyle>>,
+        width: u8,
+    ) {
         if let Some(cell) = self.get_cell_mut(x, y) {
             cell.text = text;
             cell.style = style;
@@ -265,7 +272,12 @@ impl CharacterGrid {
     }
 
     /// Update a range of cells in a row from a vector of (text, style) pairs
-    pub fn update_row(&mut self, y: usize, col_start: usize, cells: &[(String, Option<Arc<CellStyle>>)]) {
+    pub fn update_row(
+        &mut self,
+        y: usize,
+        col_start: usize,
+        cells: &[(String, Option<Arc<CellStyle>>)],
+    ) {
         let mut x = col_start;
         for (text, style) in cells {
             if x >= self.width {
@@ -287,7 +299,11 @@ impl CharacterGrid {
                 || (0xFFE0..=0xFFE6).contains(&cp) // Fullwidth Signs
                 || (0x20000..=0x2FA1F).contains(&cp) // CJK Unified Ext B-F + Compat Supp
                 || (0x30000..=0x3134F).contains(&cp) // CJK Unified Ext G-H
-            }) { 2u8 } else { 1u8 };
+            }) {
+                2u8
+            } else {
+                1u8
+            };
             if let Some(cell) = self.get_cell_mut(x, y) {
                 cell.text = text.clone();
                 cell.style = style.clone();
@@ -315,4 +331,3 @@ impl CharacterGrid {
 #[cfg(test)]
 #[path = "grid/tests/grid_test.rs"]
 mod tests;
-

@@ -76,7 +76,7 @@ const COUNSEL_TEST_PRELUDE: &str = r##"
   "Kill buffers visiting ROOT and delete ROOT recursively."
   (dolist (buffer (buffer-list))
     (let ((file (buffer-local-value 'buffer-file-name buffer)))
-      (when (and file (file-in-directory-p file root))
+      (when (and file (neomacs-melpa-path-inside-p file root))
         (kill-buffer buffer))))
   (when (file-exists-p root)
     (delete-directory root t)))

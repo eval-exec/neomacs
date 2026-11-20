@@ -69,22 +69,14 @@ impl TaggedHeap {
         if self.generational.major_in_progress {
             self.incremental_drain_all();
         }
-        // Queue doomed finalizers first (mirrors `complete_collection`; a miss
-        // here would mean finalizers silently never run under the concurrent
-        // collector). The main mark has drained — the termination handshake
-        // already traced the deferred veclikes — so marks are final.
-        let finalizer_t0 = std::time::Instant::now();
-        self.mark_and_queue_doomed_finalizers();
-        self.handshake.last_term_finalizer_us = finalizer_t0.elapsed().as_micros() as u64;
-        // Resolve weak hash tables (GNU mark_and_sweep_weak_table_contents): mark
-        // entries that survive per their table's weakness, then drop the rest. This
-        // mirrors `complete_collection` and MUST run on the concurrent/incremental
-        // termination too — otherwise a weak table's only-weakly-reachable entries
-        // are neither marked nor removed, so they are swept while still referenced
-        // by the table (UAF). The main mark has already drained at this point.
-        let weak_t0 = std::time::Instant::now();
-        self.mark_and_sweep_weak_tables();
-        self.handshake.last_term_weak_us = weak_t0.elapsed().as_micros() as u64;
+        // Same post-mark adapters as `complete_collection`: doomed finalizers,
+        // the weak sweep, and the three explicit reclaims. The main mark has
+        // drained — the termination handshake already traced the deferred
+        // veclikes — so marks are final. Empty explicit maps reclaim nothing.
+        // Queued Lisp finalizers are not run in this stop.
+        let (finalizer_us, weak_us) = self.finish_stopped_mark_adapters();
+        self.handshake.last_term_finalizer_us = finalizer_us;
+        self.handshake.last_term_weak_us = weak_us;
 
         // Dump-partition safety gate (marks still intact). Same as
         // `finalize_collection`'s, run before any object is freed.

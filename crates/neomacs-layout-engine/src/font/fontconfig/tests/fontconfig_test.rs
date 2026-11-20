@@ -148,6 +148,7 @@ fn query_charset_ranges_follow_gnu_registry_uniquifiers_when_registry_is_present
         weight: None,
         slant: None,
         width: None,
+        otf: None,
         definition: Some(neovm_core::emacs_core::fontset::FontDefinitionMetadata {
             encoding: font_sym("unicode"),
             repertory: Some(FontRepertory::CharTableRanges(vec![(0x4E00, 0x9FFF)])),
@@ -169,6 +170,7 @@ fn query_charset_ranges_do_not_treat_repertory_metadata_as_glyph_coverage() {
         weight: None,
         slant: None,
         width: None,
+        otf: None,
         definition: Some(neovm_core::emacs_core::fontset::FontDefinitionMetadata {
             encoding: font_sym("unicode"),
             repertory: Some(FontRepertory::CharTableRanges(vec![(0x4E00, 0x9FFF)])),
@@ -188,6 +190,7 @@ fn query_charset_ranges_skip_generic_gnu_registries() {
             weight: None,
             slant: None,
             width: None,
+            otf: None,
             definition: None,
         };
         assert!(query_charset_ranges(&spec, '好').is_empty(), "{registry}");
@@ -209,6 +212,7 @@ fn gb2312_registry_pattern() -> (
         weight: None,
         slant: None,
         width: None,
+        otf: None,
         definition: None,
     };
     let representative = representative_char_for_spec(&spec);
@@ -343,6 +347,7 @@ fn registry_only_fontset_specs_try_requested_family_before_unspecified_fallback(
         weight: None,
         slant: None,
         width: None,
+        otf: None,
         definition: None,
     };
     let config = native_fixture();
@@ -364,6 +369,7 @@ fn constrained_fontset_specs_without_family_try_requested_family_first() {
         weight: Some(FontWeight::SEMI_BOLD),
         slant: None,
         width: None,
+        otf: None,
         definition: None,
     };
     let config = native_fixture();
@@ -595,6 +601,7 @@ fn find_font_candidate_prefers_the_requested_family_over_an_earlier_fallback() {
         weight: Some(FontWeight::Normal),
         slant: Some(FontSlant::Normal),
         width: None,
+        otf: None,
         definition: None,
     };
 
@@ -636,6 +643,7 @@ fn find_font_candidate_prefers_requested_width_over_candidate_order() {
         weight: Some(FontWeight::Bold),
         slant: Some(FontSlant::Normal),
         width: Some(FontWidth::Normal),
+        otf: None,
         definition: None,
     };
 

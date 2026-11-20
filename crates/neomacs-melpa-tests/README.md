@@ -36,6 +36,9 @@ phase-specific failures.
   batch model for their comprehensive API corpora. Named logical cases cover
   normal, empty, boundary, mutation, evaluation-count, Unicode, and signal
   behavior without paying a process pair for every snapshot.
+- `src/parity_tests/etaf_*` and `src/gui_parity_tests/etaf_*` cover the pinned
+  `emacs-taf` ecosystem: a load/API-surface test for every package, behavioural
+  batches for the pure engines and readers, and real-GUI page/panel probes.
 - Inline `expect-test` snapshots pin the complete normalized `OK` value or
   `ERR` signal. The harness reports differential, outcome-kind, GNU Emacs
   snapshot, and Neomacs snapshot failures together instead of short-circuiting
@@ -186,6 +189,109 @@ cargo nextest run -p neomacs-melpa-tests \
 
 Review every snapshot diff before committing it. Divergent GNU Emacs and
 Neomacs outcomes fail before `expect-test` can update the snapshot.
+
+## ETAF ecosystem corpus
+
+The pinned `emacs-taf` packages are the project's largest real-world divergence
+surface. `parity_tests/etaf_ecosystem` loads every package (32 modules) and
+compares the feature plus the package-prefixed `fboundp`/`boundp` surface;
+batch modules cover `ecss` (cascade/specificity/layers/var), `ebox`
+(render/flex/mutation), `ebox-playground` (fixed-viewport file rendering,
+same-basename companion loading, preview replacement, source errors, close
+lifecycle and .ebox file mode), `ekp` (layout plans/justification), `etaf`
+(refs/Data/animation/View), `etaf-ui` (color/QR/icons/editor), `etaf-ncm`
+(session/library/search/transport/panes/LRC/layout/palette through its
+documented scripted-client seam, so no network, Node, mpv or login),
+`etaf-rss` (RSS/Atom/JSON/RDF parsing, OPML, HTML blocks/wrapping, store
+round-trip, and local file:// subscribe/search/scopes with no network),
+`etaf-bili` (popular/search/selection/play through its scripted client, plus
+WBI signing and response parsing), `etaf-pi` (the pure wire-event projection:
+streaming drafts, agent lifecycle, failures, queue, dialogs, authoritative
+messages), `etaf-weread` (shelf/search refresh, selection clamping, book
+detail caching, highlight/thought grouping, pane toggles, export and backend
+failures through its documented scripted client), `etaf-pomodoro` (creation
+validation, start/pause toggling, extension, reset, style cycling and
+stopping through the public session API), `etaf-desktop` (window lifecycle,
+geometry policy, workspaces, settings and panels, tiling splits, session
+round-trips and the application/instance registry, plus mounted canvas text),
+`etaf-ascii-video` (source normalization, render-mode/speed/file/URL
+validation before a decoder starts, and player-command errors outside a
+player buffer; frame decoding is timing-dependent and not pinned),
+`etaf-screensaver` (scene registry and lookup, custom registration and
+replacement, directory loading with probe-written spec files, start/stop
+lifecycle and first-key dismissal; the MELPA build installs no bundled scene
+resource directories, and animated frame content is not pinned),
+`etaf-gamekit` (the built-in engine descriptions, adapter registration,
+duplicate/replace/unregister behavior, game-definition validation, and
+pre-process start failures; no engine subprocess is spawned),
+`etaf-posframe` (panel-option validation, batch-frame palette derivation,
+empty-panel queries and non-panel operation errors; child-frame creation is
+covered by the GUI corpus), `etaf-video-studio` (open/state through a
+test-written fake CLI, the startup list/status protocol, project loading and
+clip selection, CLI error and missing-executable reporting, close and
+outside-buffer errors, and local title validation; no real project store,
+ffmpeg or network), `etaf-algo-lab` (catalog/lifecycle, player controls,
+A*/Dijkstra/BFS runs and unreachable goals, all four sorts and headless
+comparison, and laboratory switching through published Hosts; animated frame
+text is reduced to counts and matches), and the
+`etaf-md`/`etaf-org-preview` headless readers. `gui_parity_tests/etaf_*` adds
+real X11 probes for the md/org pages and the posframe child frame.
+
+`etaf-db`, `etaf-reader`, `etaf-youtube`, `etaf-video-player`,
+`etaf-playground`, `maillist`, the `etaf-weread` local highlight index, and
+other `etaf-db` consumers open a SQLite library through Emacs' built-in
+`sqlite` support. The attested GNU 31.1 oracle profile has no `SQLITE`
+feature, so those store-backed corpora cannot run against it: a local GNU in
+this environment reports `sqlite-open` unbound too. Their load surface and
+non-SQLite behaviour are covered, and the store-backed behavior remains
+**UNATTESTED** until the oracle recipe includes SQLite. (Probing them against
+another GNU build would break the oracle pin.)
+
+`etaf-tanks` and `etaf-salvage` launch a Godot project through
+`etaf-gamekit`, and `etaf-solitaire`/`etaf-xiangqi` launch OpenSpiel. Those
+runtimes are not part of the pinned package set or the test image, so their
+session behavior is not exercised here: the load surface and the shared
+gamekit adapter contract are covered. `etaf-telega` requires the unpinned
+`telega` package and a live Telegram login, so its behavior is likewise not
+covered.
+
+The GUI probes run both editors on one X11 display with a fixed DejaVu Sans
+Mono 10pt face, so pixel values do not move with the host's font, and assert
+**strict parity**: each probe's GNU observation is pinned, and Neomacs must
+produce the identical observation. There is deliberately no pinned Neomacs
+outcome, so a divergence cannot be blessed by re-recording it. The GUI shard
+is therefore red until these known bugs are fixed (they are failures, not
+expected results):
+
+- a posframe anchored at `(cells 1 1)` lands at top 17 in GNU and top 68 here;
+- one default line is 17 px in GNU and 18 px here (a 12-line page is 245 vs
+  256 px tall);
+- a face set to `:height 100` reports 101 in GNU and 100 here, and scaled
+  heading heights differ by 2;
+- every ETAF-mounted buffer line here (previews, panels, the desktop canvas)
+  starts with U+200B.
+
+`frame-live-p` reports each backend's terminal type (`x` in GNU, `neo` here),
+as GNU's `Fframep`-based contract requires; the posframe probe records the
+`frame-live-p`/`framep` agreement instead of the backend symbol so backend
+identity is not compared as if it were a divergence. The panel palettes agree.
+
+The etaf-algo-lab crash surfaced 2026-11-19 is fixed. Mounting either
+laboratory used to abort Neomacs with an allocation failure while GNU renders
+it; the core dump showed unbounded recursion in `neovm_value`'s
+`to_equal_key_depth_swp`, the stored equal key of a shared structure (the
+laboratories abort at 4, 8 and 32 GB limits, so it was unbounded work, not a
+memory budget). The stored-key walk is now node-budgeted and membership still
+compares live key objects, so GNU's observable behavior is unchanged.
+`etaf_algo_lab_real_gui_workspace_matches_gnu` is a strict parity test and is
+red for the remaining observations plus 594 vs 581 pixels for the same 34 body
+lines.
+
+The etaf-desktop GUI test is also red for a separate reason: GNU's own
+`etaf-desktop-mount` comes back with an empty buffer in this environment, and
+the probe's stale match data then raises `args-out-of-range 0 0`; the Neomacs
+side still renders the canvas. That is a probe/environment issue to fix, not a
+Neomacs divergence.
 
 When MELPA publishes a new version, update only the hard-coded version next to
 the package name in `DASH_MELPA_PIN`, `S_MELPA_PIN`, or the relevant package

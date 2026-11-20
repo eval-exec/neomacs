@@ -9712,3 +9712,44 @@ fn core_lexical_resolver_aliases_share_lower_definition_and_visible_directory() 
     assert!(!via_system.is_multibyte());
     assert!(!via_edit_host.is_multibyte());
 }
+
+/// GNU's file-name-* text primitives allocate fresh strings
+/// (`make_specified_string`, src/fileio.c:505/572/671/762): text properties on
+/// the input never reach the result. Neomacs cloned the input on several
+/// no-op branches; the `directory` property company-c-headers attaches to its
+/// candidates therefore leaked into the location it builds with
+/// `file-name-nondirectory` (company_c_headers MELPA divergence).
+#[test]
+fn file_name_primitives_drop_input_text_properties() {
+    let mut context = crate::test_utils::new_context();
+    let observed = context
+        .eval_str(
+            r#"(let ((candidate (propertize "concept.hpp" 'directory "/abs/include/")))
+                 (list
+                  (text-properties-at 0 (file-name-nondirectory candidate))
+                  (text-properties-at 0 (file-name-directory (concat "/tmp/" candidate)))
+                  (text-properties-at 0 (file-name-as-directory (concat "/tmp/" candidate "/")))
+                  (text-properties-at 0 (directory-file-name (concat "/tmp/" candidate "///")))
+                  (text-properties-at 0 (concat "/abs/include/"
+                                                (file-name-nondirectory candidate)))
+                  ;; The input itself still carries the property; only the
+                  ;; fresh file-name-* results are plain.
+                  (text-properties-at 0 candidate)))"#,
+        )
+        .expect("file-name property probe");
+    assert_eq!(
+        observed,
+        Value::list(vec![
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::list(vec![
+                Value::symbol("directory"),
+                Value::string("/abs/include/")
+            ]),
+        ]),
+        "file-name primitives must drop input text properties like GNU"
+    );
+}

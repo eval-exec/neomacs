@@ -1656,6 +1656,17 @@ impl Drop for ProcessWaitBackend {
     }
 }
 
+/// How long a wait pauses before it returns a batch whose readiness mapped to
+/// no process, so the caller does not re-poll a descriptor that stays ready.
+const STALE_READINESS_PAUSE: Duration = Duration::from_millis(15);
+
+/// Test-only: how many times any wait backend in this process entered
+/// `Poller::wait`.  The cost witness for a wait that must block, not spin.
+/// Process-global: sound under nextest, which runs each test in its own
+/// process, and not under a threaded `cargo test` run.
+#[cfg(test)]
+static BACKEND_POLL_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 impl ProcessWaitBackend {
     pub fn new() -> Self {
         // Miri implements no `timerfd_create`, which `polling::Poller::new`
@@ -1743,107 +1754,150 @@ impl ProcessWaitBackend {
                 }
             }
 
-            let deadline = ProcessWaitDeadline::from(timeout);
-            loop {
-                let now = Instant::now();
-                let wait_time = deadline.remaining(now);
-                let mut events = polling::Events::new();
-                match poller.wait(&mut events, wait_time) {
-                    Ok(_) => {
-                        let mut notification_wakeup = interest.wants_notifications()
-                            && self.notification_pending.swap(false, Ordering::AcqRel);
-                        let mut ready_processes = Vec::new();
-                        let mut writable_processes = Vec::new();
-                        for event in events.iter() {
-                            #[cfg(unix)]
-                            if event.key == usize::MAX - 1 {
-                                if let Some(fd) = self.signal_fd {
-                                    super::super::input_hooks::drain_signal_wake_pipe(fd);
-                                }
-                                notification_wakeup = true;
-                                continue;
-                            }
-                            if interest.wants_processes() {
-                                let id = event.key as ProcessId;
-                                let Some(process) = processes.get(&id) else {
-                                    continue;
-                                };
-                                if event.readable
-                                    && (process_has_readable_process_io(process)
-                                        || process_has_pending_tls_handshake_io(process)
-                                        || process_has_observable_child_status(process))
-                                {
-                                    ready_processes.push(id);
-                                }
-                                if event.writable
-                                    && (process.live_io.pending_network_connect.is_some()
-                                        || process_has_pending_tls_handshake_io(process)
-                                        || !process.write_queue.is_nil())
-                                {
-                                    writable_processes.push(id);
-                                }
-                            }
-                        }
-                        // A cross-platform `Poller::notify()` wake carries no
-                        // poll event.  The shared pending bit above distinguishes
-                        // that semantic wake from an equally eventless timeout.
-                        if interest.wants_processes() {
-                            ready_processes.extend(processes.iter().filter_map(|(id, process)| {
-                                process_has_ready_async_dns(process).then_some(*id)
-                            }));
-                        }
-                        let backend = ProcessWaitEvents::from_sources_with_writable(
-                            notification_wakeup,
-                            ready_processes,
-                            writable_processes,
-                        );
-                        if backend.has_notification_wakeup()
-                            || backend.has_ready_processes()
-                            || backend.has_writable_processes()
-                            || deadline.is_expired(Instant::now())
-                        {
-                            return Some(backend);
-                        }
-                        std::thread::yield_now();
-                    }
-                    // GNU's own wait spells the answer in one line -- `if
-                    // (xerrno == EINTR) no_avail = 1;`
-                    // (src/process.c:5891-5892) -- i.e. treat an interrupted
-                    // poll as an empty batch and let the loop re-check its
-                    // deadline, NOT as a broken poller.
-                    //
-                    // **This arm is not reached today, and ledger 200 measured
-                    // that rather than reasoning about it.**  A previous
-                    // version of this comment claimed it "became reachable the
-                    // moment ledger 184 installed the first `sigaction`",
-                    // because `epoll_wait` is one of the calls signal(7) lists
-                    // as never restarted regardless of `SA_RESTART`.  That is
-                    // true of the syscall and false of this call site:
-                    // `polling::Poller::wait` catches `ErrorKind::Interrupted`
-                    // from the sys poller and re-enters the wait itself
-                    // (polling-3.11.0/src/lib.rs:751-764), so a delivery
-                    // cannot surface here.  Measured: a confirmed SIGCHLD
-                    // delivered during a 3s block left it running the full
-                    // 3.000038747s.  The arm stays because `io::ErrorKind` is
-                    // non-exhaustive and a future backend may surface it; what
-                    // it must NOT be is a mechanism something else relies on.
-                    Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {
-                        if deadline.is_expired(Instant::now()) {
-                            return Some(ProcessWaitEvents::from_sources_with_writable(
-                                false,
-                                Vec::new(),
-                                Vec::new(),
-                            ));
-                        }
-                    }
-                    Err(_) => {
-                        return None;
-                    }
-                }
-            }
+            return self.poll_events(
+                poller,
+                processes,
+                ProcessWaitDeadline::from(timeout),
+                interest,
+            );
         }
 
         None
+    }
+
+    /// Poll `poller` until a batch carries a result for `interest`, or
+    /// `deadline` expires.
+    fn poll_events(
+        &self,
+        poller: &polling::Poller,
+        processes: &HashMap<ProcessId, Process>,
+        deadline: ProcessWaitDeadline,
+        interest: ProcessWaitBackendInterest,
+    ) -> Option<ProcessWaitEvents> {
+        loop {
+            let now = Instant::now();
+            let wait_time = deadline.remaining(now);
+            let mut events = polling::Events::new();
+            #[cfg(test)]
+            BACKEND_POLL_COUNT.fetch_add(1, Ordering::Relaxed);
+            match poller.wait(&mut events, wait_time) {
+                Ok(_) => {
+                    let mut notification_wakeup = interest.wants_notifications()
+                        && self.notification_pending.swap(false, Ordering::AcqRel);
+                    let mut ready_processes = Vec::new();
+                    let mut writable_processes = Vec::new();
+                    for event in events.iter() {
+                        #[cfg(unix)]
+                        if event.key == usize::MAX - 1 {
+                            if let Some(fd) = self.signal_fd {
+                                super::super::input_hooks::drain_signal_wake_pipe(fd);
+                            }
+                            notification_wakeup = true;
+                            continue;
+                        }
+                        if interest.wants_processes() {
+                            let id = event.key as ProcessId;
+                            let Some(process) = processes.get(&id) else {
+                                continue;
+                            };
+                            if event.readable
+                                && (process_has_readable_process_io(process)
+                                    || process_has_pending_tls_handshake_io(process)
+                                    || process_has_observable_child_status(process))
+                            {
+                                ready_processes.push(id);
+                            }
+                            if event.writable
+                                && (process.live_io.pending_network_connect.is_some()
+                                    || process_has_pending_tls_handshake_io(process)
+                                    || !process.write_queue.is_nil())
+                            {
+                                writable_processes.push(id);
+                            }
+                        }
+                    }
+                    // A cross-platform `Poller::notify()` wake carries no
+                    // poll event.  The shared pending bit above distinguishes
+                    // that semantic wake from an equally eventless timeout.
+                    if interest.wants_processes() {
+                        ready_processes.extend(processes.iter().filter_map(|(id, process)| {
+                            process_has_ready_async_dns(process).then_some(*id)
+                        }));
+                    }
+                    let backend = ProcessWaitEvents::from_sources_with_writable(
+                        notification_wakeup,
+                        ready_processes,
+                        writable_processes,
+                    );
+                    if backend.has_notification_wakeup()
+                        || backend.has_ready_processes()
+                        || backend.has_writable_processes()
+                        || deadline.is_expired(Instant::now())
+                    {
+                        return Some(backend);
+                    }
+                    if !events.is_empty() {
+                        // Every event mapped to no process with a result for
+                        // `interest`.  A level-triggered descriptor whose
+                        // record is gone, or does not read, stays ready, so
+                        // polling again here returns at once until the
+                        // deadline.  GNU returns a batch with nothing to read
+                        // to the top of `wait_reading_process_output`
+                        // (src/process.c:5964-5965), which runs timers and
+                        // re-checks the time limit before it selects again.
+                        // Hand the batch back the same way, after a pause so
+                        // a descriptor that stays ready costs one poll per
+                        // pause rather than a core.  The key is not
+                        // deregistered here: the poller needs the descriptor,
+                        // which only the owning record holds (a key with no
+                        // record has none left to name), and read interest
+                        // belongs to that owner, as `stop-process` shows.
+                        std::thread::sleep(
+                            deadline
+                                .remaining(Instant::now())
+                                .map_or(STALE_READINESS_PAUSE, |remaining| {
+                                    remaining.min(STALE_READINESS_PAUSE)
+                                }),
+                        );
+                        return Some(backend);
+                    }
+                    std::thread::yield_now();
+                }
+                // GNU's own wait spells the answer in one line -- `if
+                // (xerrno == EINTR) no_avail = 1;`
+                // (src/process.c:5891-5892) -- i.e. treat an interrupted
+                // poll as an empty batch and let the loop re-check its
+                // deadline, NOT as a broken poller.
+                //
+                // **This arm is not reached today, and ledger 200 measured
+                // that rather than reasoning about it.**  A previous
+                // version of this comment claimed it "became reachable the
+                // moment ledger 184 installed the first `sigaction`",
+                // because `epoll_wait` is one of the calls signal(7) lists
+                // as never restarted regardless of `SA_RESTART`.  That is
+                // true of the syscall and false of this call site:
+                // `polling::Poller::wait` catches `ErrorKind::Interrupted`
+                // from the sys poller and re-enters the wait itself
+                // (polling-3.11.0/src/lib.rs:751-764), so a delivery
+                // cannot surface here.  Measured: a confirmed SIGCHLD
+                // delivered during a 3s block left it running the full
+                // 3.000038747s.  The arm stays because `io::ErrorKind` is
+                // non-exhaustive and a future backend may surface it; what
+                // it must NOT be is a mechanism something else relies on.
+                Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {
+                    if deadline.is_expired(Instant::now()) {
+                        return Some(ProcessWaitEvents::from_sources_with_writable(
+                            false,
+                            Vec::new(),
+                            Vec::new(),
+                        ));
+                    }
+                }
+                Err(_) => {
+                    return None;
+                }
+            }
+        }
     }
 }
 
@@ -2146,6 +2200,13 @@ pub fn process_filter_accepts_output(proc: &Process) -> bool {
     ProcessFilterDispatch::from_lisp(proc.filter).accepts_output()
 }
 
+/// GNU `read_output_skip` with a positive delay: this channel is left out of
+/// the current wait (src/process.c:5696-5703). `adaptive_read_buffering == 0`
+/// is the nil default and never defers.
+pub fn process_defers_adaptive_read(proc: &Process) -> bool {
+    proc.adaptive_read_buffering != 0 && proc.read_output_skip && !proc.read_output_delay.is_zero()
+}
+
 pub(crate) fn pending_network_connect_has_ready_async_dns(pending: &PendingNetworkConnect) -> bool {
     matches!(pending, PendingNetworkConnect::Dns(request) if request.is_ready())
 }
@@ -2270,33 +2331,75 @@ impl ProcessManager {
         }
     }
 
+    /// Temporarily remove retired records from the ordinary root walk while
+    /// an explicit full collection decides which process objects remain live.
+    pub(crate) fn take_retired_processes_for_gc(
+        &mut self,
+    ) -> (Vec<(ProcessId, Vec<Value>)>, Vec<(ProcessId, Process)>) {
+        let retired = std::mem::take(&mut self.deleted_processes);
+        let ephemerons = retired
+            .iter()
+            .map(|(id, process)| (*id, process.gc_fields().to_vec()))
+            .collect();
+        (ephemerons, retired.into_iter().collect())
+    }
+
+    /// Restore records whose process object was reached by the collection.
+    pub(crate) fn restore_reached_retired_processes(
+        &mut self,
+        retired: Vec<(ProcessId, Process)>,
+        reclaimed: Vec<ProcessId>,
+    ) {
+        let reclaimed: std::collections::HashSet<ProcessId> = reclaimed.into_iter().collect();
+        self.deleted_processes.extend(
+            retired
+                .into_iter()
+                .filter(|(id, _)| !reclaimed.contains(id)),
+        );
+    }
+
     pub fn set_default_read_config(&mut self, config: ProcessReadConfig) {
         self.default_read_config = config;
     }
 
+    /// Minimum `read_output_delay` among processes GNU would drop from this
+    /// select, capped at `READ_OUTPUT_DELAY_MAX`.
+    ///
+    /// GNU applies that minimum only to channels with `read_output_skip` set
+    /// (src/process.c:5694-5708). A process that still has a delay from an
+    /// earlier short read, but is not skipping, stays in the select and does
+    /// not shorten it.
     pub fn adaptive_read_timeout(&self) -> Option<Duration> {
         self.processes
             .values()
-            .filter(|process| process.adaptive_read_buffering != 0)
-            .filter_map(|process| {
-                (!process.read_output_delay.is_zero()).then_some(process.read_output_delay)
-            })
+            .filter(|process| process_defers_adaptive_read(process))
+            .map(|process| process.read_output_delay)
             .min()
             .map(|delay| delay.min(Duration::from_millis(READ_OUTPUT_DELAY_MAX_MS)))
     }
 
-    pub fn clear_adaptive_read_skip_if_needed(&mut self, id: ProcessId) -> bool {
-        let Some(proc) = self.processes.get_mut(&id) else {
-            return false;
-        };
-        if proc.adaptive_read_buffering == 0
-            || proc.read_output_delay.is_zero()
-            || !proc.read_output_skip
-        {
-            return false;
+    /// Processes whose read fds GNU would `FD_CLR` for this wait
+    /// (src/process.c:5696-5703).
+    pub fn skipping_adaptive_read_ids(&self) -> Vec<ProcessId> {
+        let mut ids: Vec<_> = self
+            .processes
+            .iter()
+            .filter(|(_, process)| process_defers_adaptive_read(process))
+            .map(|(id, _)| *id)
+            .collect();
+        ids.sort_unstable();
+        ids
+    }
+
+    /// Clear `read_output_skip` on `ids`. GNU clears the flag while removing
+    /// the channel from the select set, so it is already clear when `pselect`
+    /// returns (src/process.c:5702-5709).
+    pub fn clear_adaptive_read_skips(&mut self, ids: &[ProcessId]) {
+        for id in ids {
+            if let Some(proc) = self.processes.get_mut(id) {
+                proc.read_output_skip = false;
+            }
         }
-        proc.read_output_skip = false;
-        true
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -3454,6 +3557,33 @@ pub enum LastBlockArrival {
     AlreadyRaised,
 }
 
+impl Process {
+    fn gc_fields(&self) -> [Value; 20] {
+        [
+            self.name,
+            self.proc_type,
+            self.buffer,
+            self.mark,
+            self.command,
+            self.childp,
+            self.status,
+            self.pending_status,
+            self.tty_name,
+            self.write_queue,
+            self.filter,
+            self.sentinel,
+            self.log,
+            self.plist,
+            self.stderrproc,
+            self.datagram_address,
+            self.coding_decode,
+            self.coding_encode,
+            self.thread,
+            self.gnutls_boot_parameters,
+        ]
+    }
+}
+
 // GcTrace moved verbatim with the state type (peer ruling condition 3).
 
 impl GcTrace for ProcessManager {
@@ -3463,26 +3593,7 @@ impl GcTrace for ProcessManager {
             .values()
             .chain(self.deleted_processes.values())
         {
-            roots.push(process.name);
-            roots.push(process.proc_type);
-            roots.push(process.buffer);
-            roots.push(process.mark);
-            roots.push(process.command);
-            roots.push(process.childp);
-            roots.push(process.status);
-            roots.push(process.pending_status);
-            roots.push(process.tty_name);
-            roots.push(process.write_queue);
-            roots.push(process.filter);
-            roots.push(process.sentinel);
-            roots.push(process.log);
-            roots.push(process.plist);
-            roots.push(process.stderrproc);
-            roots.push(process.datagram_address);
-            roots.push(process.coding_decode);
-            roots.push(process.coding_encode);
-            roots.push(process.thread);
-            roots.push(process.gnutls_boot_parameters);
+            roots.extend(process.gc_fields());
         }
     }
 }
@@ -3681,3 +3792,7 @@ impl std::fmt::Debug for ChildOwnership {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "tests/process_wait_backend_test.rs"]
+mod process_wait_backend_tests;

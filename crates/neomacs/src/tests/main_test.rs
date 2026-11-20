@@ -4,7 +4,8 @@ use super::super::frame_layout::{
 use super::super::image_catalog::{AsyncImageCatalog, wait_for_image_metadata};
 use super::super::tty_frontend::{TtyPopupDisplayHost, TtyTerminalHost};
 use super::super::tty_init::{
-    default_controlling_tty_name, detect_tty_background_mode, should_enable_live_tty_io,
+    default_controlling_tty_name, detect_tty_background_mode, initial_tty_fatal_checks_apply,
+    should_enable_live_tty_io,
 };
 use super::super::{
     BOOTSTRAP_CORE_FEATURES, BootstrapDisplayConfig, DumpImageKind, EarlyCliAction, FontSizing,
@@ -2452,6 +2453,19 @@ fn install_synthetic_startup_display(eval: &mut Context) {
     .expect("pin the fixture's synthetic display in process-environment");
     eval.set_variable("x-display-name", Value::string(identity.terminal_name()));
     eval.set_display_host(Box::new(StartupGuiDisplayHost { identity }));
+}
+
+/// A real frame for the configure_gnu_startup_state tests. A frame object
+/// exists only for a created frame (make_frame refuses an id the registry
+/// never minted), so these tests cannot pass a made-up FrameId.
+fn startup_state_test_frame(eval: &mut Context) -> FrameId {
+    let buffer = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    eval.frame_manager_mut()
+        .create_frame("startup-state", 800, 600, buffer)
 }
 
 fn bootstrap_runtime_gui_frame(eval: &mut Context) -> FrameId {
@@ -5268,7 +5282,8 @@ fn configure_gnu_startup_state_marks_batch_mode_noninteractive() {
         no_build_details: false,
         rows_query_admission: neomacs_layout_engine::RowsQueryAdmission::Off,
     };
-    configure_gnu_startup_state(&mut eval, FrameId(9), &startup);
+    let frame = startup_state_test_frame(&mut eval);
+    configure_gnu_startup_state(&mut eval, frame, &startup);
 
     assert_eq!(
         eval.default_value_only_by_name("noninteractive"),
@@ -5300,7 +5315,8 @@ fn configure_gnu_startup_state_marks_batch_mode_noninteractive() {
 fn configure_gnu_startup_state_seeds_command_line_args_left_for_gnu_startup() {
     let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let startup = gui_startup_with_args(&["-Q", "-l", "/tmp/demo.el"]);
-    configure_gnu_startup_state(&mut eval, FrameId(42), &startup);
+    let frame = startup_state_test_frame(&mut eval);
+    configure_gnu_startup_state(&mut eval, frame, &startup);
 
     assert_eq!(
         eval.default_value_only_by_name("command-line-args-left"),
@@ -5344,7 +5360,7 @@ fn bootstrap_buffers_seed_frame_with_renderer_metrics() {
 #[test]
 fn startup_dimensions_gui_matches_gnu_default_text_grid() {
     let metrics = bootstrap_frame_metrics();
-    let (width, height) = startup_dimensions(FrontendKind::Gui, metrics, false);
+    let (width, height) = startup_dimensions(FrontendKind::Gui, metrics, false, false);
     // GNU's default GUI frame is 80 text columns wide and 35 counted text rows
     // tall (its frame-height is deterministically one less than the nominal 36-row
     // geometry). The requested window reserves the scroll bar + both 8px fringes on
@@ -5369,7 +5385,19 @@ fn startup_dimensions_gui_matches_gnu_default_text_grid() {
 fn startup_dimensions_noninteractive_tty_matches_gnu_initial_frame() {
     let metrics = bootstrap_frame_metrics_for_frontend(FrontendKind::Tty);
     assert_eq!(
-        startup_dimensions(FrontendKind::Tty, metrics, true),
+        startup_dimensions(FrontendKind::Tty, metrics, true, false),
+        (80, 25)
+    );
+}
+
+#[test]
+fn startup_dimensions_daemon_skips_the_initial_tty_fatal_checks() {
+    let metrics = bootstrap_frame_metrics_for_frontend(FrontendKind::Tty);
+    assert!(!initial_tty_fatal_checks_apply(false, true));
+    assert!(!initial_tty_fatal_checks_apply(true, false));
+    assert!(initial_tty_fatal_checks_apply(false, false));
+    assert_eq!(
+        startup_dimensions(FrontendKind::Tty, metrics, false, true),
         (80, 25)
     );
 }
@@ -7737,7 +7765,8 @@ fn configure_gnu_startup_state_applies_explicit_no_build_details() {
     let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let mut startup = gui_startup();
     startup.no_build_details = true;
-    configure_gnu_startup_state(&mut eval, FrameId(42), &startup);
+    let frame = startup_state_test_frame(&mut eval);
+    configure_gnu_startup_state(&mut eval, frame, &startup);
     assert_eq!(
         eval.default_value_only_by_name("build-details"),
         Some(Value::NIL)

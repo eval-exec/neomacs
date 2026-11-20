@@ -83,7 +83,7 @@ fn a_tutorial_session_is_created_edited_saved_and_resumed_from_disk() -> ParityB
           result))
     (dolist (buffer (buffer-list))
       (when (and (buffer-file-name buffer)
-                 (file-in-directory-p (buffer-file-name buffer) root))
+                 (neomacs-melpa-path-inside-p (buffer-file-name buffer) root))
         (kill-buffer buffer)))
     (delete-directory root t)))
 "####;

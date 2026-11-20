@@ -55,6 +55,11 @@ pub use function_write_hooks::{
 pub mod symbol_table;
 
 mod cache_root_scan;
+pub mod condition_snapshots;
+mod publication;
+#[cfg(test)]
+mod publication_owner_seam;
+mod publication_roots;
 #[doc(hidden)]
 pub use cache_root_scan::CacheRootScan;
 
@@ -1080,6 +1085,12 @@ pub struct TaggedHeap {
     /// is N-mutator ready. Appended after the frozen store ABI fields, so no
     /// pinned offset moves.
     overlay_serial: crate::heap_types::OverlaySerialCounter,
+    /// Retired-process and killed-buffer ephemeron records (memory_registry).
+    ephemeron_records: memory_registry::EphemeronRecords,
+    /// Per-cycle collector-time bank. Trailing, so no pinned offset moves.
+    cycle_time_bank: cycle_time_bank::GcCycleTimeBank,
+    /// Heads published by payload owners, keyed by a minted id.
+    published_payload_roots: publication_roots::PublishedPayloadRoots,
 }
 
 impl Default for TaggedHeap {
@@ -1088,10 +1099,7 @@ impl Default for TaggedHeap {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Post-mark ownership verification gate (DIVERGENCES.md 162)
-// ---------------------------------------------------------------------------
-//
+// Post-mark ownership verification gate (DIVERGENCES.md 162).
 // `verify_marked_objects_owned` was written for the missing-root class and
 // then never called ("dead code written for exactly this failure", 161's own
 // residual list). It is O(live objects) per collection, so it stays off by
@@ -1214,6 +1222,9 @@ impl TaggedHeap {
             #[cfg(any(test, feature = "test-support"))]
             mapped_veclike_traces: 0,
             overlay_serial: crate::heap_types::OverlaySerialCounter::new(),
+            ephemeron_records: memory_registry::EphemeronRecords::default(),
+            cycle_time_bank: cycle_time_bank::GcCycleTimeBank::default(),
+            published_payload_roots: publication_roots::PublishedPayloadRoots::default(),
             dirty_owner_bits: FxHashSet::default(),
             dirty_writes: Vec::new(),
             gc_collections: 0,
@@ -1857,23 +1868,6 @@ impl TaggedHeap {
         // extra saturating add.
         // A plain add: a usize of allocated bytes cannot overflow.
         self.current_mutator_gc_mut().bytes_since_gc += bytes;
-    }
-
-    /// Every byte this heap has ever allocated.
-    ///
-    /// Derived rather than counted: `bytes_banked_at_resets` is advanced by
-    /// [`Self::reset_bytes_since_gc`], the one place `bytes_since_gc` returns
-    /// to zero, so the sum is exact by construction.
-    #[doc(hidden)]
-    pub fn total_allocated_bytes(&self) -> u64 {
-        let delta = self.allocation_region_deltas();
-        self.mutators()
-            .map(|state| {
-                state
-                    .bytes_banked_at_resets
-                    .saturating_add(state.exact_bytes_since_gc(delta) as u64)
-            })
-            .fold(0, u64::saturating_add)
     }
 
     fn vector_storage_bytes<T>(values: &Vec<T>) -> usize {
@@ -2601,6 +2595,8 @@ mod mark_sweep;
 #[cfg(feature = "test-support")]
 pub mod mark_sweep;
 
+mod alloc_bytes;
+mod cycle_time_bank;
 #[cfg(feature = "gc-memory-telemetry")]
 mod memory_inventory;
 mod memory_registry;
@@ -2683,7 +2679,7 @@ pub(crate) use collection_observed::collection_observed;
 pub(crate) use collection_observed::collection_observed_metadata;
 pub(crate) use collection_observed::{
     advance_collection_observation_epoch, clear_noncons_collection_observed_metadata,
-    mark_collection_observed,
+    mark_collection_observed, reclaimed_collection_observation_count,
 };
 use collection_observed::{
     clear_cons_observed_block, clear_cons_observed_dead, has_noncons_collection_observations,
@@ -2779,7 +2775,7 @@ use census::{CensusCycleKind, GenCensus, census_remset_probe_on};
 pub use facade_mark::{
     CollectorQuiescenceError, ConcurrentMarkAdmissionError, ConcurrentMarkCapture,
     ConcurrentMarkPermit, FacadeEpochRetention, FacadeMarkExclusion, FacadeMarkExclusionError,
-    QuiescentCollector,
+    QuiescentCollector, heap_transfer,
 };
 pub use mutator_registration::FunctionCallCache;
 pub use mutator_registration::KeeperTableMut;
@@ -2937,6 +2933,10 @@ mod generational_tests;
 #[cfg(test)]
 #[path = "gc/tests/birth_logs_test.rs"]
 mod birth_logs_tests;
+
+#[cfg(test)]
+#[path = "gc/tests/weak_table_minor_test.rs"]
+mod weak_table_minor_tests;
 
 #[cfg(feature = "test-support")]
 #[path = "gc/tests/generational_major_test.rs"]

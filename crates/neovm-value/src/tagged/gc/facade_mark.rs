@@ -363,6 +363,19 @@ impl Drop for QuiescentCollector<'_> {
 }
 
 impl QuiescentCollector<'_> {
+    /// Rebuild the exclusive loan from the allocation's original root.
+    ///
+    /// # Safety
+    /// `heap` is that retained root. No collector loan, installed TLS slot,
+    /// or sibling heap borrow is outstanding. The returned loan is the sole
+    /// access path until it drops.
+    pub(super) unsafe fn from_retained_root(heap: &mut TaggedHeap) -> QuiescentCollector<'_> {
+        QuiescentCollector {
+            heap,
+            _owner: PhantomData,
+        }
+    }
+
     /// Cold registration admission keeps this exclusive heap loan in its era.
     #[cold]
     #[inline(never)]
@@ -962,3 +975,8 @@ mod tests {
 
 mod cons_suspend;
 pub(super) use cons_suspend::SuspendedConsCollector;
+
+#[doc(hidden)]
+pub mod heap_transfer;
+
+mod source_observations;

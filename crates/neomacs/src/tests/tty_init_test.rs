@@ -261,3 +261,76 @@ fn terminal_size_query_failure_without_valid_environment_remains_unavailable() {
     });
     assert_eq!(result, None);
 }
+
+/// GNU `init_tty` (term.c:4805-4814): a non-positive ioctl side takes `co`/`li`.
+#[test]
+fn zero_ioctl_uses_termcap_co_and_li() {
+    assert_eq!(
+        super::initial_tty_cells_from_ioctl(0, 0, 80, 24),
+        Ok((80, 24))
+    );
+    assert_eq!(
+        super::initial_tty_cells_from_ioctl(0, 40, 80, 24),
+        Ok((80, 40))
+    );
+    assert_eq!(
+        super::initial_tty_cells_from_ioctl(100, 0, 80, 24),
+        Ok((100, 24))
+    );
+}
+
+/// A positive ioctl side is the terminal's report. Termcap does not replace it.
+#[test]
+fn positive_ioctl_wins_over_termcap() {
+    assert_eq!(
+        super::initial_tty_cells_from_ioctl(80, 24, 100, 40),
+        Ok((80, 24))
+    );
+}
+
+/// GNU `init_tty` (`term.c:4466-4470`) selects the fatal text from whether
+/// the open itself failed.
+#[test]
+fn initial_tty_open_diagnostic_follows_the_fd() {
+    assert_eq!(
+        super::initial_tty_open_diagnostic(true),
+        "Could not open file: /dev/tty"
+    );
+    assert_eq!(
+        super::initial_tty_open_diagnostic(false),
+        "Not a tty device: /dev/tty"
+    );
+}
+
+/// GNU `get_tty_size` stores 0 when `TIOCGWINSZ` fails (`sysdep.c:1403-1404`).
+/// A pipe is not a terminal, so the ioctl fails. The result stays `(0, 0)`
+/// rather than a size from another source.
+#[cfg(unix)]
+#[test]
+fn a_failing_initial_tty_fd_is_zero() {
+    let mut pipes = [0; 2];
+    // SAFETY: `pipes` is a two-int buffer the libc `pipe` writes, and both
+    // descriptors are closed before return.
+    let rc = unsafe { libc::pipe(pipes.as_mut_ptr()) };
+    assert_eq!(rc, 0);
+    let size = super::winsize_from_fd(pipes[0]);
+    unsafe {
+        libc::close(pipes[0]);
+        libc::close(pipes[1]);
+    }
+    assert_eq!(size, (0, 0));
+}
+
+/// Below 3 after the fallback is the fatal screen, including a missing `tgetnum`.
+#[test]
+fn screen_below_three_is_too_small() {
+    let missing = super::initial_tty_cells_from_ioctl(0, 0, -1, 24).unwrap_err();
+    assert_eq!(missing.to_string(), "Screen size -1x24 is too small");
+
+    let both = super::initial_tty_cells_from_ioctl(0, 0, 2, 2).unwrap_err();
+    assert_eq!(both.to_string(), "Screen size 2x2 is too small");
+
+    // A positive ioctl below 3 is kept. It is not replaced by a larger `li`.
+    let short = super::initial_tty_cells_from_ioctl(80, 2, 80, 24).unwrap_err();
+    assert_eq!(short.to_string(), "Screen size 80x2 is too small");
+}

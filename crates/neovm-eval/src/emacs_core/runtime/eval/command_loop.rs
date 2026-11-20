@@ -6,6 +6,118 @@
 use super::*;
 use neovm_value::tagged::gc::MarkPhase;
 
+/// Restores killed-buffer, retired-process, and deleted-frame records if the
+/// explicit collection unwinds before the success path commits them.
+///
+/// One guard covers all three kinds, so the three restores cannot drift. On
+/// unwind it puts every taken record back and disarms the heap's armed maps
+/// and reclaimed-id lists. The next cycle does not treat those objects as
+/// ephemerons and does not apply a partial reclaim.
+struct ExplicitEphemeronGcGuard {
+    /// Stored frame provenance root, not a pointer from `&mut *self.frames`.
+    frames: *mut super::data::window_state::FrameManager,
+    /// Stored `WorldSlot` cell, not a pointer from a `DerefMut` reborrow.
+    processes: *mut super::data::process_state::ProcessManager,
+    /// Inline `Context.edit.buffers`. There is no stored provenance root;
+    /// `addr_of_mut!` names the field without borrowing it.
+    buffers: *mut neovm_edit::buffer::BufferManager,
+    heap: *mut neovm_value::tagged::gc::TaggedHeap,
+    taken_frames: Vec<super::data::window_state::DeletedFrameGcRecord>,
+    taken_processes: Vec<(
+        neovm_value::heap_types::ProcessId,
+        super::data::process_state::Process,
+    )>,
+    taken_buffers: Vec<(neovm_edit::buffer::BufferId, neovm_edit::buffer::Buffer)>,
+    committed: bool,
+}
+
+impl Drop for ExplicitEphemeronGcGuard {
+    fn drop(&mut self) {
+        if self.committed {
+            return;
+        }
+        // SAFETY: all four pointers address this collection's Context.
+        // `frames` is the view's provenance root, `processes` is the
+        // WorldSlot cell, `buffers` is the inline field address, and `heap`
+        // is the heap provenance root. Drop runs before that `&mut self`
+        // ends, including on unwind. The pointers are not used while a
+        // conflicting reference is live. Frame windows go back through
+        // `restore_deleted_frame_records`, not the commit path, which
+        // forgets tombstones. Buffer and process restores get an empty
+        // reclaimed list, so every taken record returns. Abandon clears
+        // every armed map and every reclaimed-id list.
+        unsafe {
+            (*self.heap).abandon_explicit_ephemerons();
+            (*self.frames).restore_deleted_frame_records(std::mem::take(&mut self.taken_frames));
+            (*self.processes).restore_reached_retired_processes(
+                std::mem::take(&mut self.taken_processes),
+                Vec::new(),
+            );
+            (*self.buffers)
+                .restore_reached_killed_buffers(std::mem::take(&mut self.taken_buffers), &[]);
+        }
+    }
+}
+
+impl ExplicitEphemeronGcGuard {
+    /// Record reclaimed ids, put reached records back, and defuse the guard.
+    ///
+    /// `commit` does not panic: it only moves maps. It is marked committed
+    /// first so a later unwind cannot restore records the collection already
+    /// decided.
+    fn commit(
+        &mut self,
+        reclaimed_frames: Vec<u64>,
+        reclaimed_processes: Vec<neovm_value::heap_types::ProcessId>,
+        reclaimed_buffers: Vec<neovm_edit::buffer::BufferId>,
+        window_materialized: impl Fn(u64) -> bool,
+    ) {
+        self.committed = true;
+        let taken_frames = std::mem::take(&mut self.taken_frames);
+        let taken_processes = std::mem::take(&mut self.taken_processes);
+        let taken_buffers = std::mem::take(&mut self.taken_buffers);
+        // SAFETY: the four pointers address the Context that owns this
+        // guard, and the collection borrow has finished. The window
+        // predicate reads the heap only; the manager pointers are not
+        // aliases of that heap.
+        unsafe {
+            (*self.frames).commit_reclaimed_deleted_frames(
+                taken_frames,
+                &reclaimed_frames,
+                window_materialized,
+            );
+            (*self.processes)
+                .restore_reached_retired_processes(taken_processes, reclaimed_processes);
+            (*self.buffers).restore_reached_killed_buffers(taken_buffers, &reclaimed_buffers);
+        }
+    }
+}
+
+/// The armed-window panic is a `#[cfg(test)]` writer in this crate. A
+/// workspace test of another crate compiles this crate without `cfg(test)`,
+/// so the flag is not a test-support static and the 3-way rule allows it.
+#[cfg(test)]
+thread_local! {
+    static PANIC_IN_ARMED_EPHEMERON_WINDOW: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+}
+
+/// Request a panic after explicit ephemerons are armed and before the
+/// collection runs. The flag clears when the hook fires, so a later
+/// collection in the same test is a normal cycle.
+#[cfg(test)]
+pub(crate) fn arm_ephemeron_window_panic_for_test() {
+    PANIC_IN_ARMED_EPHEMERON_WINDOW.with(|flag| flag.set(true));
+}
+
+#[cfg(test)]
+fn panic_if_armed_window_test_requested() {
+    let requested = PANIC_IN_ARMED_EPHEMERON_WINDOW.with(|flag| flag.replace(false));
+    if requested {
+        panic!("explicit collection armed-window test panic");
+    }
+}
+
 /// Labels for the structured GC diagnostics; text compatibility stays in the
 /// event message for existing pause-analysis tools.
 #[derive(Clone, Copy)]
@@ -1413,12 +1525,70 @@ impl Context {
                         return;
                     }
                 }
+                // Pin frame objects named by bare ids (queued input, the last
+                // event frame, mouse position) before this collection can
+                // reclaim a deleted frame. The pins are ordinary roots.
+                self.retained_frame_pins = self.command_loop.keyboard.retained_frame_pins();
+                // Arm killed-buffer ephemerons before begin_stw_collection
+                // seeds the buffer registry as an internal root.
+                let (ephemerons, killed_buffers) = self.edit.buffers.take_killed_buffers_for_gc();
+                (*heap_ptr).arm_killed_buffer_ephemerons(ephemerons);
+                // Arm process ephemerons before begin_stw_collection seeds the
+                // process registry as an internal root.
+                let (ephemerons, retired_processes) =
+                    self.processes.take_retired_processes_for_gc();
+                (*heap_ptr).arm_retired_process_ephemerons(ephemerons);
+                // Arm deleted-frame ephemerons before begin_stw_collection
+                // seeds the frame registry as an internal root. A frame that
+                // owns a materialized window is not armed: the window
+                // registry root keeps that frame alive.
+                // Provenance roots, not pointers from a reborrow: a
+                // reference-derived pointer is invalidated by the next
+                // borrow of that view inside seeding. `frames` is the view's
+                // stored root. `processes` is the WorldSlot cell. `buffers`
+                // is the inline field (`addr_of_mut!` does not borrow it);
+                // BufferManager is not behind a WorldView, and moving it
+                // would shift Context. Drop and commit dereference these
+                // only after this function's borrows of the managers end.
+                let frames_ptr = self.frames.provenance_root().as_ptr();
+                let processes_ptr = self.processes.cell().as_ptr();
+                let buffers_ptr = std::ptr::addr_of_mut!(self.edit.buffers);
+                let (frame_ephemerons, taken_frames) = self
+                    .frames
+                    .take_deleted_frames_for_gc(|id| (*heap_ptr).window_object_registered(id));
+                (*heap_ptr).arm_deleted_frame_ephemerons(frame_ephemerons);
+                let mut ephemeron_guard = ExplicitEphemeronGcGuard {
+                    frames: frames_ptr,
+                    processes: processes_ptr,
+                    buffers: buffers_ptr,
+                    heap: heap_ptr,
+                    taken_frames,
+                    taken_processes: retired_processes,
+                    taken_buffers: killed_buffers,
+                    committed: false,
+                };
+                // Inside the armed window: the maps are armed and the taken
+                // records live in the guard. A panic here, or in the
+                // collection below, runs the guard's Drop.
+                #[cfg(test)]
+                panic_if_armed_window_test_requested();
                 // Disarms a concurrent first cycle drained above, so this
                 // cycle traces the whole image before it promotes (see
                 // `begin_stw_collection`).
                 (*heap_ptr).begin_stw_collection();
                 self.seed_registered_mutator_roots_world_stopped(heap_ptr);
                 (*heap_ptr).complete_collection();
+                // Take every reclaimed-id list before commit. Commit uses
+                // the manager pointers; this heap use does not overlap that.
+                let reclaimed_frames = (*heap_ptr).take_reclaimed_frame_ids();
+                let reclaimed_processes = (*heap_ptr).take_reclaimed_process_ids();
+                let reclaimed_buffers = (*heap_ptr).take_reclaimed_buffer_ids();
+                ephemeron_guard.commit(
+                    reclaimed_frames,
+                    reclaimed_processes,
+                    reclaimed_buffers,
+                    |id| (*heap_ptr).window_object_registered(id),
+                );
                 cycle_completed = true;
             } else {
                 match (*heap_ptr).mark_phase() {
@@ -1445,7 +1615,7 @@ impl Context {
                         } else if (*heap_ptr).incremental_sweep_slice(INCREMENTAL_SWEEP_BUDGET) {
                             cycle_completed = true; // sweep drained -> cycle done
                         } else {
-                            return; // more sweep to do; defer bookkeeping
+                            return self.bank_gc_cycle_time(start); // more sweep to do; defer bookkeeping
                         }
                     }
                     MarkPhase::ConcurrentRunning => {
@@ -1469,9 +1639,9 @@ impl Context {
                                 (*heap_ptr).note_must_finish();
                             }
                             self.terminate_concurrent_mark(heap_ptr);
-                            return; // sweep deferred; cycle not done yet
+                            return self.bank_gc_cycle_time(start); // sweep deferred; cycle not done yet
                         }
-                        return; // GC thread still marking; mutator continues
+                        return self.bank_gc_cycle_time(start); // GC thread still marking; mutator continues
                     }
                     MarkPhase::StoppedMarking => {
                         // A joined worker or dropped unpublished capture can leave a
@@ -1484,7 +1654,7 @@ impl Context {
                             Err(error) => {
                                 // Preserve the unfinished cycle on failed recovery.
                                 tracing::warn!(target: "neovm::gc", %error, "residual major recovery pending");
-                                return;
+                                return self.bank_gc_cycle_time(start);
                             }
                         }
                         cycle_completed = true;
@@ -1532,7 +1702,7 @@ impl Context {
                 );
                             self.seed_registered_mutator_roots_world_stopped(heap_ptr);
                             (*heap_ptr).complete_minor_collection();
-                            return;
+                            return self.bank_gc_cycle_time(start);
                         } else {
                             let concurrent_kind = if (*heap_ptr).should_run_concurrent() {
                                 Some(ConcurrentCycleKind::Threshold)
@@ -1543,7 +1713,7 @@ impl Context {
                             };
                             if let Some(kind) = concurrent_kind {
                                 match self.start_concurrent_mark(heap_ptr, kind) {
-                        Ok(()) => return,
+                        Ok(()) => return self.bank_gc_cycle_time(start),
                         Err(neovm_value::tagged::gc::ConcurrentMarkAdmissionError::Excluded(_)) => {
                             // Held facade roots choose exact synchronous GC.
                         }
@@ -1553,7 +1723,7 @@ impl Context {
                             // An exchanged heap cannot use this owner's old
                             // census. Keep the incomplete cycle for explicit
                             // owner recovery rather than tracing foreign roots.
-                            return;
+                            return self.bank_gc_cycle_time(start);
                         }
                         Err(
                             neovm_value::tagged::gc::ConcurrentMarkAdmissionError::CollectorBusy
@@ -1587,7 +1757,7 @@ impl Context {
                                                 error = %error,
                                                 "NEOVM_GC synchronous recovery pending: {error}"
                                             );
-                                            return;
+                                            return self.bank_gc_cycle_time(start);
                                         }
                                     }
                                 }
@@ -1614,7 +1784,7 @@ impl Context {
             }
         }
         if !cycle_completed {
-            return;
+            return self.bank_gc_cycle_time(start);
         }
         // First partition cycle (concurrent bootstrap): with the sweep now
         // drained, promote survivors + blacken the image + build the initial
@@ -1625,7 +1795,10 @@ impl Context {
         }
         self.gc_pending = false;
         self.gc_count += 1;
-        self.update_gc_runtime_stats(start.elapsed());
+        // The whole collection, not only this last call. Earlier calls, from
+        // this Context or another that shares the heap, banked their time on
+        // the heap. This take publishes that sum once.
+        self.publish_completed_cycle(start.elapsed());
         self.sync_gc_threshold_from_runtime_settings();
         // Destroy the GPU objects of shader-surface handles this cycle swept.
         // Every completed collection funnels through this block (explicit
@@ -1647,6 +1820,20 @@ impl Context {
             // allocation-bearing safe point.
             self.tagged_heap.reset_bytes_since_gc();
         }
+    }
+
+    /// Bank the time of a collector call that leaves its cycle unfinished.
+    ///
+    /// The bank is the heap's, so every Context of this heap adds to one
+    /// sum. The call that completes the cycle publishes that sum once.
+    fn bank_gc_cycle_time(&mut self, start: std::time::Instant) {
+        self.tagged_heap.bank_cycle_elapsed(start.elapsed());
+    }
+
+    /// Publish the heap's bank plus this call, then leave the bank at zero.
+    pub(crate) fn publish_completed_cycle(&mut self, this_call: std::time::Duration) {
+        let elapsed = self.tagged_heap.take_cycle_elapsed() + this_call;
+        self.update_gc_runtime_stats(elapsed);
     }
 
     /// Seed every evaluator/context root into the collector's gray queue and

@@ -1,0 +1,7 @@
+error[E0133]: call to unsafe function `neovm_value::tagged::gc::SymbolRootDesignators::new` is unsafe and requires unsafe block
+ --> tests/pentry_e2_loan_ui/symbol_root_designators_new_requires_unsafe.rs:8:9
+  |
+8 |         SymbolRootDesignators::new(world, NonNull::<()>::dangling(), NonNull::<()>::dangling());
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
+  |
+  = note: consult the function's documentation for information on how to avoid undefined behavior

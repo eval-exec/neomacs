@@ -66,6 +66,17 @@ mod keeper;
 pub use keeper::EraKeeper;
 #[doc(hidden)]
 pub use keeper::{FrozenFunctionRoots, FrozenLegacyRoots};
+mod world_loan;
+// `cfg(test)` alone leaves these types `pub(crate)`. A `pub use` in that
+// build is rejected. Eval tests see them through `test-support`, which also
+// makes the types and this module public.
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub use world_loan::retained::{
+    OwnerRecoveryError, RetainedEraOwner, RetainedOwnerRecoveryFailure,
+};
+#[doc(hidden)]
+pub use world_loan::{EraWorldLoan, SymbolRootDesignators, WorldIdentity, WorldLoan};
 mod gate;
 mod image;
 mod native_extent;
@@ -85,6 +96,7 @@ pub use run_slice::SliceRoot;
     not(feature = "gc-memory-telemetry")
 ))]
 pub(crate) mod c5_intern_testkit;
+pub(crate) mod custody_brand;
 mod rendezvous;
 mod summaries;
 #[cfg(not(feature = "test-support"))]

@@ -2482,7 +2482,7 @@ fn x_geometry_fonts_and_resource_batch_semantics() {
 #[test]
 fn x_property_and_frame_arg_batch_semantics() {
     crate::test_utils::init_test_tracing();
-    for args in [vec![], vec![Value::NIL], vec![Value::make_frame(1)]] {
+    for args in [vec![], vec![Value::NIL], vec![Value::mint_frame(1)]] {
         match builtin_x_backspace_delete_keys_p(args).kinded() {
             Err(FlowKind::Signal(sig)) => {
                 assert_eq!(sig.symbol_name(), "error");
@@ -2604,7 +2604,7 @@ fn x_coordinate_sync_and_message_batch_semantics() {
     for args in [
         vec![Value::NIL],
         vec![Value::NIL, Value::NIL],
-        vec![Value::make_frame(1)],
+        vec![Value::mint_frame(1)],
         vec![Value::fixnum(1), Value::NIL],
         vec![Value::string("x"), Value::NIL],
         vec![term, Value::NIL],
@@ -2635,7 +2635,7 @@ fn x_coordinate_sync_and_message_batch_semantics() {
         }
         other => panic!("expected error signal, got {other:?}"),
     }
-    match builtin_x_translate_coordinates(vec![Value::make_frame(1)]).kinded() {
+    match builtin_x_translate_coordinates(vec![Value::mint_frame(1)]).kinded() {
         Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
@@ -2701,7 +2701,7 @@ fn x_coordinate_sync_and_message_batch_semantics() {
         }
         other => panic!("expected error signal, got {other:?}"),
     }
-    match builtin_x_frame_list_z_order(vec![Value::make_frame(1)]).kinded() {
+    match builtin_x_frame_list_z_order(vec![Value::mint_frame(1)]).kinded() {
         Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
@@ -2763,7 +2763,7 @@ fn x_coordinate_sync_and_message_batch_semantics() {
         other => panic!("expected error signal, got {other:?}"),
     }
     match builtin_x_send_client_message(vec![
-        Value::make_frame(1),
+        Value::mint_frame(1),
         Value::NIL,
         Value::NIL,
         Value::NIL,
@@ -2864,7 +2864,7 @@ fn x_popup_dialog_and_menu_batch_semantics() {
         }
         other => panic!("expected wrong-type-argument signal, got {other:?}"),
     }
-    match builtin_x_popup_dialog_batch(vec![Value::make_frame(1), Value::NIL]).kinded() {
+    match builtin_x_popup_dialog_batch(vec![Value::mint_frame(1), Value::NIL]).kinded() {
         Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("stringp"), Value::NIL]);
@@ -2872,7 +2872,7 @@ fn x_popup_dialog_and_menu_batch_semantics() {
         other => panic!("expected wrong-type-argument signal, got {other:?}"),
     }
     match builtin_x_popup_dialog_batch(vec![
-        Value::make_frame(1),
+        Value::mint_frame(1),
         Value::list(vec![Value::string("A")]),
     ])
     .kinded()
@@ -2885,7 +2885,7 @@ fn x_popup_dialog_and_menu_batch_semantics() {
     }
     assert!(
         builtin_x_popup_dialog_batch(vec![
-            Value::make_frame(1),
+            Value::mint_frame(1),
             Value::list(vec![
                 Value::string("Title"),
                 Value::cons(Value::string("Yes"), Value::T),
@@ -2907,7 +2907,7 @@ fn x_popup_dialog_and_menu_batch_semantics() {
     );
     assert!(
         builtin_x_popup_dialog_batch(vec![
-            Value::make_frame(1),
+            Value::mint_frame(1),
             Value::list(vec![Value::string("A"), Value::fixnum(1)]),
         ])
         .unwrap()
@@ -2960,7 +2960,7 @@ fn x_popup_dialog_and_menu_batch_semantics() {
             .is_nil()
     );
     for pos in [
-        Value::make_frame(1),
+        Value::mint_frame(1),
         Value::string("x"),
         Value::fixnum(1),
         term,
@@ -3374,7 +3374,7 @@ fn x_popup_menu_accepts_keymap_menus_like_gnu() {
 fn x_clipboard_input_context_batch_semantics() {
     crate::test_utils::init_test_tracing();
     let term = terminal_handle_value();
-    let frame = Value::make_frame(1);
+    let frame = Value::mint_frame(1);
 
     let assert_wrong_type =
         |result: EvalResult, pred: &'static str, arg: Value| match result.kinded() {
@@ -3773,7 +3773,7 @@ fn x_frame_mouse_and_dnd_batch_semantics() {
     for args in [
         vec![],
         vec![Value::NIL],
-        vec![Value::make_frame(1)],
+        vec![Value::mint_frame(1)],
         vec![Value::NIL, Value::NIL],
     ] {
         match builtin_x_export_frames(args).kinded() {
@@ -3837,7 +3837,7 @@ fn x_frame_mouse_and_dnd_batch_semantics() {
     assert!(builtin_x_frame_edges(vec![]).unwrap().is_nil());
     assert!(builtin_x_frame_edges(vec![Value::NIL]).unwrap().is_nil());
     assert!(
-        builtin_x_frame_edges(vec![Value::make_frame(1)])
+        builtin_x_frame_edges(vec![Value::mint_frame(1)])
             .unwrap()
             .is_nil()
     );
@@ -3874,7 +3874,7 @@ fn x_frame_mouse_and_dnd_batch_semantics() {
     assert!(builtin_x_frame_geometry(vec![]).unwrap().is_nil());
     assert!(builtin_x_frame_geometry(vec![Value::NIL]).unwrap().is_nil());
     assert!(
-        builtin_x_frame_geometry(vec![Value::make_frame(1)])
+        builtin_x_frame_geometry(vec![Value::mint_frame(1)])
             .unwrap()
             .is_nil()
     );
@@ -3936,7 +3936,7 @@ fn x_frame_mouse_and_dnd_batch_semantics() {
 
     for args in [
         vec![Value::NIL],
-        vec![Value::make_frame(1)],
+        vec![Value::mint_frame(1)],
         vec![Value::fixnum(1)],
         vec![terminal_handle_value()],
         vec![Value::NIL, Value::NIL],

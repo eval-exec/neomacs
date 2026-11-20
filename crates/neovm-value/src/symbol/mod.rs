@@ -57,9 +57,7 @@ pub enum CanonicalWrite {
     /// The cell is a thread projection: the owner-aware caller routes it.
     Projected,
 }
-#[cfg(any(test, feature = "test-support"))]
 pub(crate) use cell::plist_epoch;
-pub(crate) use cell::store_plist_head;
 use cell::{ArmMut, CellWrite, MarkGate, RevealedCell, read_symbol_children};
 #[doc(hidden)]
 pub use cell::{
@@ -67,6 +65,9 @@ pub use cell::{
     LISP_SYMBOL_INTERNED_GLOBAL_OFFSET, LISP_SYMBOL_SIZE, LISP_SYMBOL_VAL_OFFSET, ValueCell,
 };
 pub use cell::{LispSymbol, SymbolFlags};
+pub(crate) use cell::{
+    PlistStore, store_construction_plist_head, store_plist_head, store_runtime_plist_head,
+};
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use fn_stamps::force_fn_stamps_for_test;
 pub use function_cell_observer::FunctionCellObserver;
@@ -2209,8 +2210,8 @@ impl Obarray {
     }
 
     /// Restore the dump-carried per-symbol flags without handing out the
-    /// symbol cell. This is the ONE cross-crate route for pdump restore
-    /// (`PROMOTION-LEDGER.tsv`), and it can only set the three flags the image
+    /// symbol cell. This is the ONE cross-crate route for pdump restore, and
+    /// it can only set the three flags the image
     /// carries; the raw by-id accessor stays crate-private.
     #[doc(hidden)]
     pub fn restore_dumped_symbol_flags(
@@ -4350,9 +4351,7 @@ impl Obarray {
             Value::list(flat)
         };
         let sym = self.ensure_symbol_id(symbol);
-        // SATB: retain the plist cell's pre-image during a concurrent mark.
-        crate::tagged::gc::note_root_overwrite(sym.plist.get());
-        store_plist_head(sym, new_plist);
+        store_runtime_plist_head(sym, new_plist);
         SymbolPropertyRevision::changed(symbol);
     }
 
@@ -4362,9 +4361,7 @@ impl Obarray {
     pub fn set_symbol_plist_id(&mut self, symbol: SymId, plist: Value) {
         self.ensure_global_member_if_canonical(symbol);
         let sym = self.ensure_symbol_id(symbol);
-        // SATB: retain the plist cell's pre-image during a concurrent mark.
-        crate::tagged::gc::note_root_overwrite(sym.plist.get());
-        store_plist_head(sym, plist);
+        store_runtime_plist_head(sym, plist);
         SymbolPropertyRevision::changed(symbol);
     }
 

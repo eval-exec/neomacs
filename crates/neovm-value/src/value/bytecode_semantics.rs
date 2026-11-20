@@ -12,7 +12,7 @@ use super::{EqualKind, EqualSeenPair, Flow, HashKey, Value};
 /// Structural operations used only on byte-code values.
 #[derive(Clone, Copy)]
 pub struct BytecodeSemantics {
-    to_equal_key: fn(Value, usize, &mut Vec<usize>, bool) -> HashKey,
+    to_equal_key: fn(Value, usize, &mut Vec<usize>, bool, &mut usize) -> HashKey,
     equal: fn(&Value, &Value, usize, &mut Option<HashSet<EqualSeenPair>>, bool, EqualKind) -> bool,
     try_equal: fn(
         &Value,
@@ -29,7 +29,7 @@ impl BytecodeSemantics {
     /// Declare inert, typed callback data. This neither installs the table
     /// nor proves its equal/key/hash laws; installation is the unsafe grant.
     pub const fn new(
-        to_equal_key: fn(Value, usize, &mut Vec<usize>, bool) -> HashKey,
+        to_equal_key: fn(Value, usize, &mut Vec<usize>, bool, &mut usize) -> HashKey,
         equal: fn(
             &Value,
             &Value,
@@ -63,8 +63,9 @@ impl BytecodeSemantics {
         depth: usize,
         seen: &mut Vec<usize>,
         symbols_with_pos_enabled: bool,
+        budget: &mut usize,
     ) -> HashKey {
-        (self.to_equal_key)(value, depth, seen, symbols_with_pos_enabled)
+        (self.to_equal_key)(value, depth, seen, symbols_with_pos_enabled, budget)
     }
 
     #[inline]

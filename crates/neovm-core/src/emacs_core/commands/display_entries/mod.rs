@@ -155,9 +155,12 @@ fn current_mouse_position_value(
     let selected_frame = selected_frame_value(eval);
     let (frame_value, x, y) = match eval.command_loop().keyboard.mouse_pixel_position() {
         Some(state) => {
+            // The position stores a bare id. The keyboard pins that object
+            // for as long as the id is held, so a deleted frame still
+            // answers here. A reclaimed id does not call `make_frame`.
             let frame_value = state
                 .frame_id
-                .map(|frame_id| Value::make_frame(frame_id.0))
+                .and_then(|frame_id| Value::registered_frame(frame_id.0))
                 .unwrap_or(Value::NIL);
             let (x, y) = if pixel_units {
                 (Value::fixnum(state.x), Value::fixnum(state.y))

@@ -17076,40 +17076,9 @@ fn dump_emacs_portable_enospc_worker() {
 #[test]
 #[cfg(target_os = "linux")]
 fn dump_emacs_portable_reports_enospc_with_gnus_write_action() {
-    use std::ffi::CString;
-    use std::os::unix::ffi::OsStrExt;
-    use std::os::unix::process::CommandExt;
-
     crate::test_utils::init_test_tracing();
     let mount_dir = tempdir().expect("tmpfs mount point");
-    let exe = std::env::current_exe().expect("current test binary");
-    let target = CString::new(mount_dir.path().as_os_str().as_bytes())
-        .expect("tempdir path contains no NUL");
-
-    let mut command = Command::new(&exe);
-    command
-        .env(DUMP_ENOSPC_MOUNT_ENV, mount_dir.path())
-        .arg(DUMP_ENOSPC_WORKER_TEST)
-        .arg("--nocapture");
-    // SAFETY: `pre_exec` runs the closure between fork and exec; the closure
-    // makes only raw syscalls / raw-fd writes and changes namespaces only in
-    // the forked child.
-    unsafe {
-        command.pre_exec(move || match preexec_setup_tiny_tmpfs(&target) {
-            Ok(()) => Ok(()),
-            Err(error) => {
-                // SAFETY: raw write to the inherited stdout pipe; the static
-                // marker bytes need no allocation.
-                unsafe {
-                    let marker = DUMP_ENOSPC_SETUP_FAILED.as_bytes();
-                    libc::write(1, marker.as_ptr().cast(), marker.len());
-                    libc::write(1, b"\n".as_ptr().cast(), 1);
-                }
-                Err(error)
-            }
-        });
-    }
-    let output = command.output().expect("spawn the ENOSPC worker");
+    let output = spawn_enospc_worker(mount_dir.path(), false);
     let stdout = String::from_utf8_lossy(&output.stdout);
     if stdout.contains(DUMP_ENOSPC_SETUP_FAILED) {
         eprintln!("skipping the ENOSPC parity test: unprivileged user namespaces unavailable");
@@ -17127,4 +17096,83 @@ fn dump_emacs_portable_reports_enospc_with_gnus_write_action() {
         "worker marker missing; the spawned filter probably matched no test\nstdout:\n{stdout}"
     );
     eprintln!("ENOSPC parity exercised on a one-page tmpfs");
+}
+
+/// Spawn this test binary as the ENOSPC worker, installing the tiny tmpfs in
+/// the forked child. A host that refuses unprivileged user namespaces must
+/// still produce a capturable [`std::process::Output`]: the child writes the
+/// skip marker and exits successfully instead of returning `Err` from
+/// `pre_exec`, which would make `Command::output` fail before the parent can
+/// read the marker.
+#[cfg(target_os = "linux")]
+fn spawn_enospc_worker(
+    mount_dir: &std::path::Path,
+    force_setup_failure: bool,
+) -> std::process::Output {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::process::CommandExt;
+
+    let exe = std::env::current_exe().expect("current test binary");
+    let target =
+        CString::new(mount_dir.as_os_str().as_bytes()).expect("tempdir path contains no NUL");
+
+    let mut command = Command::new(&exe);
+    command
+        .env(DUMP_ENOSPC_MOUNT_ENV, mount_dir)
+        .arg(DUMP_ENOSPC_WORKER_TEST)
+        .arg("--nocapture");
+    // SAFETY: `pre_exec` runs between fork and exec; the closure makes only
+    // raw syscalls / raw-fd writes. The failure arm exits the forked child
+    // without running any Rust destructor.
+    unsafe {
+        command.pre_exec(move || {
+            let setup = if force_setup_failure {
+                Err(std::io::Error::from_raw_os_error(libc::EACCES))
+            } else {
+                preexec_setup_tiny_tmpfs(&target)
+            };
+            match setup {
+                Ok(()) => Ok(()),
+                Err(_error) => {
+                    // SAFETY: raw write to the inherited stdout pipe; the
+                    // static marker bytes need no allocation.
+                    unsafe {
+                        let marker = DUMP_ENOSPC_SETUP_FAILED.as_bytes();
+                        libc::write(1, marker.as_ptr().cast(), marker.len());
+                        libc::write(1, b"\n".as_ptr().cast(), 1);
+                        libc::_exit(0);
+                    }
+                }
+            }
+        });
+    }
+    command.output().expect("spawn the ENOSPC worker")
+}
+
+/// Regression for the skip path: when the namespace setup fails (as it does on
+/// the CI runner, which refuses unprivileged user namespaces), the parent must
+/// observe the marker and skip. Before this, the failure arm returned `Err`,
+/// so `Command::output().expect(...)` panicked instead of skipping.
+#[test]
+#[cfg(target_os = "linux")]
+fn dump_emacs_portable_enospc_setup_failure_is_a_clean_skip() {
+    crate::test_utils::init_test_tracing();
+    let mount_dir = tempdir().expect("tmpfs mount point");
+    let output = spawn_enospc_worker(mount_dir.path(), true);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains(DUMP_ENOSPC_SETUP_FAILED),
+        "setup-failure arm must publish the skip marker\nstdout:\n{stdout}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert!(
+        !stdout.contains(DUMP_ENOSPC_WORKER_OK),
+        "the forced-failure worker must not run the ENOSPC body"
+    );
+    assert!(
+        output.status.success(),
+        "skip path must exit successfully: {:?}",
+        output.status
+    );
 }

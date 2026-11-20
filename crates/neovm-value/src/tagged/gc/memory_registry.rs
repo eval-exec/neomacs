@@ -92,6 +92,21 @@ impl TaggedHeap {
         self.buffer_registry[idx] = Some(value);
     }
 
+    /// Arm killed-buffer fields as ephemerons for the next full collection.
+    #[doc(hidden)]
+    pub fn arm_killed_buffer_ephemerons(
+        &mut self,
+        killed: Vec<(crate::value::buffer_vocab::BufferId, Vec<TaggedValue>)>,
+    ) {
+        self.ephemeron_records.killed_buffer_ephemerons = killed.into_iter().collect();
+    }
+
+    /// Take the buffer ids reclaimed by the last full collection.
+    #[doc(hidden)]
+    pub fn take_reclaimed_buffer_ids(&mut self) -> Vec<crate::value::buffer_vocab::BufferId> {
+        std::mem::take(&mut self.ephemeron_records.reclaimed_buffer_ids)
+    }
+
     pub(crate) fn window_value(&self, id: u64) -> Option<TaggedValue> {
         self.window_registry.get(&id).copied()
     }
@@ -126,6 +141,92 @@ impl TaggedHeap {
         value: TaggedValue,
     ) {
         self.process_registry.insert(id, value);
+    }
+
+    /// Arm retired process fields as ephemerons for the next full collection.
+    #[doc(hidden)]
+    pub fn arm_retired_process_ephemerons(
+        &mut self,
+        retired: Vec<(crate::heap_types::ProcessId, Vec<TaggedValue>)>,
+    ) {
+        self.ephemeron_records.retired_process_ephemerons = retired.into_iter().collect();
+    }
+
+    /// Take the process ids reclaimed by the last full collection.
+    #[doc(hidden)]
+    pub fn take_reclaimed_process_ids(&mut self) -> Vec<crate::heap_types::ProcessId> {
+        std::mem::take(&mut self.ephemeron_records.reclaimed_process_ids)
+    }
+
+    /// True when `make_window` has registered a window object for `id`.
+    ///
+    /// The window registry is an unconditional root. A deleted frame that
+    /// owns any such window stays a root too: GNU `mark_window` marks
+    /// `w->frame`.
+    #[doc(hidden)]
+    pub fn window_object_registered(&self, id: u64) -> bool {
+        self.window_registry.contains_key(&id)
+    }
+
+    /// Arm deleted-frame fields as ephemerons for the next full collection.
+    #[doc(hidden)]
+    pub fn arm_deleted_frame_ephemerons(&mut self, deleted: Vec<(u64, Vec<TaggedValue>)>) {
+        self.ephemeron_records.deleted_frame_ephemerons = deleted.into_iter().collect();
+    }
+
+    /// Take the frame ids reclaimed by the last full collection.
+    #[doc(hidden)]
+    pub fn take_reclaimed_frame_ids(&mut self) -> Vec<u64> {
+        std::mem::take(&mut self.ephemeron_records.reclaimed_frame_ids)
+    }
+
+    /// Drop an uncommitted explicit-collection arm.
+    ///
+    /// A collection that panics before its restore commits must not leave
+    /// killed buffers, retired processes, or deleted frames unrooted, and
+    /// must not leave reclaimed ids for a later cycle to apply. Registry
+    /// entries are left as they are. One function clears every kind so the
+    /// three disarms cannot drift.
+    #[doc(hidden)]
+    pub fn abandon_explicit_ephemerons(&mut self) {
+        self.ephemeron_records.retired_process_ephemerons.clear();
+        self.ephemeron_records.reclaimed_process_ids.clear();
+        self.ephemeron_records.killed_buffer_ephemerons.clear();
+        self.ephemeron_records.reclaimed_buffer_ids.clear();
+        self.ephemeron_records.deleted_frame_ephemerons.clear();
+        self.ephemeron_records.reclaimed_frame_ids.clear();
+    }
+
+    /// True when no explicit-collection ephemeron map or reclaimed-id list
+    /// is armed. A pure reader: it writes nothing.
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn explicit_ephemeron_arm_is_clear(&self) -> bool {
+        let records = &self.ephemeron_records;
+        records.retired_process_ephemerons.is_empty()
+            && records.reclaimed_process_ids.is_empty()
+            && records.killed_buffer_ephemerons.is_empty()
+            && records.reclaimed_buffer_ids.is_empty()
+            && records.deleted_frame_ephemerons.is_empty()
+            && records.reclaimed_frame_ids.is_empty()
+    }
+
+    /// Add one Context's slice to this heap's cycle bank.
+    #[doc(hidden)]
+    pub fn bank_cycle_elapsed(&mut self, slice: std::time::Duration) {
+        self.cycle_time_bank.bank(slice);
+    }
+
+    /// Take the bank. The caller publishes it; the next cycle starts at zero.
+    #[doc(hidden)]
+    pub fn take_cycle_elapsed(&mut self) -> std::time::Duration {
+        self.cycle_time_bank.take()
+    }
+
+    /// Time banked for the cycle in progress.
+    #[doc(hidden)]
+    pub fn cycle_elapsed(&self) -> std::time::Duration {
+        self.cycle_time_bank.peek()
     }
 
     /// Register cons cells whose storage is owned by the loaded pdump image.
@@ -307,3 +408,32 @@ pub(crate) mod b13_test_hooks {
         }
     }
 }
+
+/// Retired-process, killed-buffer, and deleted-frame records armed as
+/// ephemerons for the next explicit full collection, keyed on the process,
+/// buffer, or frame object, plus the ids that collection did not reach.
+///
+/// There is no durable set of reclaimed frame ids. Frame creation mints the
+/// object, and a later missing `frame_registry` entry means reclaimed or
+/// never created.
+#[derive(Default)]
+pub(crate) struct EphemeronRecords {
+    /// Retired process fields armed for the next stop-the-world full cycle.
+    pub(crate) retired_process_ephemerons:
+        FxHashMap<crate::heap_types::ProcessId, Vec<TaggedValue>>,
+    /// Process ids whose ephemeron keys were unreachable in the last full cycle.
+    pub(crate) reclaimed_process_ids: Vec<crate::heap_types::ProcessId>,
+    /// Killed-buffer fields armed for the next stop-the-world full cycle.
+    pub(crate) killed_buffer_ephemerons:
+        FxHashMap<crate::value::buffer_vocab::BufferId, Vec<TaggedValue>>,
+    /// Buffer ids whose ephemeron keys were unreachable in the last full cycle.
+    pub(crate) reclaimed_buffer_ids: Vec<crate::value::buffer_vocab::BufferId>,
+    /// Deleted-frame fields armed for the next stop-the-world full cycle.
+    pub(crate) deleted_frame_ephemerons: FxHashMap<u64, Vec<TaggedValue>>,
+    /// Frame ids whose ephemeron keys were unreachable in the last full cycle.
+    pub(crate) reclaimed_frame_ids: Vec<u64>,
+}
+
+#[cfg(test)]
+#[path = "tests/ephemeron_cross_kind_test.rs"]
+mod ephemeron_cross_kind_tests;

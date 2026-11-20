@@ -5,6 +5,12 @@
 
 use super::*;
 
+/// Weak-table entries the weak pass's fixpoint has examined, summed over
+/// every table and round (test-only cost probe).
+#[cfg(any(test, feature = "test-support"))]
+pub(super) static WEAK_ENTRY_VISITS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
 /// Where [`TaggedHeap::for_each_veclike_child`] sends children: one at a
 /// time, or a run at once, which a vector collects with one reservation.
 pub(super) trait ChildSink {
@@ -1433,6 +1439,10 @@ impl TaggedHeap {
     }
 
     /// Direct children of a mapped vectorlike object (read-only) for the verifier.
+    ///
+    /// `test-support` publishes this read so a core test can check the same
+    /// edge the collector walks. Product builds keep it `pub(super)`.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn collect_veclike_children(&self, ptr: *mut VecLikeHeader) -> Vec<TaggedValue> {
         let mut out = Vec::new();
         Self::for_each_veclike_child(self.collector_tables(), ptr, &mut out);
@@ -1637,8 +1647,15 @@ impl TaggedHeap {
         let roots: Vec<(TaggedValue, &'static str)> = self
             .buffer_registry
             .iter()
-            .flatten()
-            .map(|value| (*value, "buffer-registry"))
+            .enumerate()
+            .filter(|(idx, _)| {
+                self.ephemeron_records.killed_buffer_ephemerons.is_empty()
+                    || !self
+                        .ephemeron_records
+                        .killed_buffer_ephemerons
+                        .contains_key(&crate::value::buffer_vocab::BufferId(*idx as u64))
+            })
+            .filter_map(|(_, value)| value.map(|value| (value, "buffer-registry")))
             .chain(
                 self.window_registry
                     .values()
@@ -1646,8 +1663,15 @@ impl TaggedHeap {
             )
             .chain(
                 self.frame_registry
-                    .values()
-                    .map(|value| (*value, "frame-registry")),
+                    .iter()
+                    .filter(|(id, _)| {
+                        self.ephemeron_records.deleted_frame_ephemerons.is_empty()
+                            || !self
+                                .ephemeron_records
+                                .deleted_frame_ephemerons
+                                .contains_key(*id)
+                    })
+                    .map(|(_, value)| (*value, "frame-registry")),
             )
             .chain(
                 self.timer_registry
@@ -1656,8 +1680,14 @@ impl TaggedHeap {
             )
             .chain(
                 self.process_registry
-                    .values()
-                    .map(|value| (*value, "process-registry")),
+                    .iter()
+                    .filter(|(id, _)| {
+                        !self
+                            .ephemeron_records
+                            .retired_process_ephemerons
+                            .contains_key(id)
+                    })
+                    .map(|(_, value)| (*value, "process-registry")),
             )
             .chain(
                 self.canonical_empty_strings
@@ -1671,6 +1701,13 @@ impl TaggedHeap {
                 self.doomed_finalizer_functions
                     .iter()
                     .map(|value| (*value, "doomed-finalizer-function")),
+            )
+            .chain(
+                self.published_payload_roots
+                    .values()
+                    .flatten()
+                    .copied()
+                    .map(|value| (value, "published-payload-root")),
             )
             .collect();
 
@@ -1702,16 +1739,10 @@ impl TaggedHeap {
         //    so heap access is exclusive (no concurrency hazard here). --
         let mark_t0 = std::time::Instant::now();
         self.mark_all_on_gc_thread();
-        // Queue doomed finalizers before the weak sweep (GNU
-        // `queue_doomed_finalizers` runs before
-        // `mark_and_sweep_weak_table_contents` in `garbage_collect`): their
-        // functions are re-marked so both the weak sweep and the object sweep
-        // see them as live.
-        self.mark_and_queue_doomed_finalizers();
-        // Resolve weak hash tables now that the main mark has drained. Both the
-        // sync and concurrent paths converge here with the mutator stopped, so
-        // this is single-threaded and path-agnostic.
-        self.mark_and_sweep_weak_tables();
+        // Ephemeron fixpoint, doomed finalizers, weak sweep, and the three
+        // explicit reclaims. The order lives in one method so the incremental
+        // termination cannot drop the reclaims.
+        let _ = self.finish_stopped_mark_adapters();
         let mark_us = mark_t0.elapsed().as_micros() as u64;
 
         // The mark has drained and the sweep has not started: the one moment
@@ -1729,15 +1760,53 @@ impl TaggedHeap {
         self.finalize_collection(mark_us, bytes_before, t0);
     }
 
+    /// Post-mark adapters shared by `complete_collection` and
+    /// `incremental_finish`.
+    ///
+    /// The order is fixed: ephemeron fixpoint, doomed finalizers, fixpoint,
+    /// weak sweep, then the three explicit reclaims. This method is the only
+    /// caller of those steps, except the era path's test permit, which still
+    /// calls `mark_and_sweep_weak_tables` by itself.
+    ///
+    /// Does not run `mark_all_on_gc_thread` or `finalize_collection`. Does
+    /// not run queued Lisp finalizers or host destroy. Empty explicit maps
+    /// reclaim nothing.
+    ///
+    /// Returns the microseconds spent in the finalizer scan and the weak
+    /// sweep, so incremental termination can keep its handshake split. The
+    /// ephemeron fixpoints and the reclaims sit outside those two timers.
+    pub(super) fn finish_stopped_mark_adapters(&mut self) -> (u64, u64) {
+        self.mark_reached_ephemeron_records_to_fixpoint();
+        // Queue doomed finalizers before the weak sweep (GNU
+        // `queue_doomed_finalizers` runs before
+        // `mark_and_sweep_weak_table_contents` in `garbage_collect`): their
+        // functions are re-marked so both the weak sweep and the object sweep
+        // see them as live.
+        let finalizer_t0 = std::time::Instant::now();
+        self.mark_and_queue_doomed_finalizers();
+        let finalizer_us = finalizer_t0.elapsed().as_micros() as u64;
+        self.mark_reached_ephemeron_records_to_fixpoint();
+        // Resolve weak hash tables now that the main mark has drained. Both
+        // the sync and incremental paths converge here with the mutator
+        // stopped, so this is single-threaded.
+        let weak_t0 = std::time::Instant::now();
+        self.mark_and_sweep_weak_tables();
+        let weak_us = weak_t0.elapsed().as_micros() as u64;
+        self.reclaim_unreached_retired_processes();
+        self.reclaim_unreached_killed_buffers();
+        self.reclaim_unreached_deleted_frames();
+        (finalizer_us, weak_us)
+    }
+
     /// Queue the functions of finalizer objects this cycle found unreachable —
-    /// GNU `queue_doomed_finalizers` + `mark_finalizers` (alloc.c). Must run
-    /// at BOTH mark terminations (`complete_collection` and
-    /// `incremental_finish`), after the main mark drains and before the weak
-    /// sweep. A doomed finalizer leaves the registry and is swept normally;
-    /// only its `function` is queued, re-marked transitively (same marking
-    /// helpers as the weak-table fixpoint) so the imminent sweep keeps
-    /// everything it needs. Still-marked finalizers stay registered.
-    pub(super) fn mark_and_queue_doomed_finalizers(&mut self) {
+    /// GNU `queue_doomed_finalizers` + `mark_finalizers` (alloc.c). Runs only
+    /// from `finish_stopped_mark_adapters`, after the main mark drains and
+    /// before the weak sweep. A doomed finalizer leaves the registry and is
+    /// swept normally; only its `function` is queued, re-marked transitively
+    /// (same marking helpers as the weak-table fixpoint) so the imminent sweep
+    /// keeps everything it needs. Still-marked finalizers stay registered.
+    /// The queued functions are not called here.
+    fn mark_and_queue_doomed_finalizers(&mut self) {
         if self.finalizer_registry.is_empty() {
             return;
         }
@@ -1821,11 +1890,26 @@ impl TaggedHeap {
         // collectible table from the registry before freeing its storage.
         // Young tables join this cycle's worklist through `trace_veclike` /
         // `register_weak_hash_table_for_sweep`.
-        for &tptr in &self.always_swept_weak_tables {
-            if self.weak_hash_tables_set.insert(tptr) {
-                self.weak_hash_tables.push(tptr);
+        //
+        // A minor seeds none of them. Every minor survivor is promoted, so an
+        // old table can gain a young key or value only through a store, and
+        // the store logs the table (`remember_owner`); the remembered seed
+        // then registered it above. At the end of the first partition cycle,
+        // `scan_permanents_for_young_children` remembers every tenured table
+        // that holds a collectible child, so the next minor registers those
+        // the same way. An unwritten old table holds only old, permanent or
+        // immediate children, all black by generation here
+        // (`is_value_marked`): each entry survives and marks nothing, so
+        // scanning it cannot change the result.
+        if !self.is_minor_collection() {
+            for &tptr in &self.always_swept_weak_tables {
+                if self.weak_hash_tables_set.insert(tptr) {
+                    self.weak_hash_tables.push(tptr);
+                }
             }
         }
+
+        self.mark_reached_ephemeron_records_to_fixpoint();
 
         if self.weak_hash_tables.is_empty() {
             return;
@@ -1850,6 +1934,8 @@ impl TaggedHeap {
                     tables.inspect(tptr, |ht| {
                         let weakness = ht.weakness;
                         for entry in ht.data.entries_in_slot_order() {
+                            #[cfg(any(test, feature = "test-support"))]
+                            WEAK_ENTRY_VISITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             let (key, value) = (entry.key, entry.value);
                             let key_survives = self.is_value_marked(key);
                             let value_survives = self.is_value_marked(value);
@@ -1867,6 +1953,9 @@ impl TaggedHeap {
                     })
                 };
             }
+            marked |= self.mark_reached_retired_processes();
+            marked |= self.mark_reached_killed_buffers();
+            marked |= self.mark_reached_deleted_frames();
             // Drain whatever those surviving entries reached, then re-check.
             self.mark_all();
             if !marked {
@@ -1893,6 +1982,133 @@ impl TaggedHeap {
                     });
                 })
             };
+        }
+    }
+
+    /// Mark retired-process, killed-buffer, and deleted-frame fields to one
+    /// joint fixpoint. A field of any kind can reach the key object of
+    /// another, so the three ephemeron sets are drained together rather than
+    /// one after another.
+    fn mark_reached_ephemeron_records_to_fixpoint(&mut self) {
+        loop {
+            let processes = self.mark_reached_retired_processes();
+            let buffers = self.mark_reached_killed_buffers();
+            let frames = self.mark_reached_deleted_frames();
+            if !(processes || buffers || frames) {
+                break;
+            }
+            self.mark_all();
+        }
+    }
+
+    /// Mark fields of retired processes whose process objects were reached.
+    /// Returns true when it adds work to the gray queue; the caller drains and
+    /// repeats so chains of retired processes reach a fixpoint.
+    fn mark_reached_retired_processes(&mut self) -> bool {
+        let reached: Vec<_> = self
+            .ephemeron_records
+            .retired_process_ephemerons
+            .keys()
+            .copied()
+            .filter(|id| {
+                self.process_registry
+                    .get(id)
+                    .is_some_and(|value| self.is_value_marked(*value))
+            })
+            .collect();
+        for id in &reached {
+            let fields = self
+                .ephemeron_records
+                .retired_process_ephemerons
+                .remove(id)
+                .unwrap_or_default();
+            for field in fields {
+                self.mark_or_push_child(field, "retired-process-field");
+            }
+        }
+        !reached.is_empty()
+    }
+
+    /// Drop registry roots for retired processes that no other root reached.
+    fn reclaim_unreached_retired_processes(&mut self) {
+        let unreached = std::mem::take(&mut self.ephemeron_records.retired_process_ephemerons);
+        for id in unreached.into_keys() {
+            self.process_registry.remove(&id);
+            self.ephemeron_records.reclaimed_process_ids.push(id);
+        }
+    }
+
+    /// Mark fields of killed buffers whose buffer objects were reached.
+    /// Returns true when it adds work to the gray queue; the caller drains and
+    /// repeats so chains of killed buffers reach a fixpoint.
+    fn mark_reached_killed_buffers(&mut self) -> bool {
+        let reached: Vec<_> = self
+            .ephemeron_records
+            .killed_buffer_ephemerons
+            .keys()
+            .copied()
+            .filter(|id| {
+                self.buffer_value(*id)
+                    .is_some_and(|value| self.is_value_marked(value))
+            })
+            .collect();
+        for id in &reached {
+            let fields = self
+                .ephemeron_records
+                .killed_buffer_ephemerons
+                .remove(id)
+                .unwrap_or_default();
+            for field in fields {
+                self.mark_or_push_child(field, "killed-buffer-field");
+            }
+        }
+        !reached.is_empty()
+    }
+
+    /// Drop registry roots for killed buffers that no other root reached.
+    fn reclaim_unreached_killed_buffers(&mut self) {
+        let unreached = std::mem::take(&mut self.ephemeron_records.killed_buffer_ephemerons);
+        for id in unreached.into_keys() {
+            if let Some(slot) = self.buffer_registry.get_mut(id.0 as usize) {
+                *slot = None;
+            }
+            self.ephemeron_records.reclaimed_buffer_ids.push(id);
+        }
+    }
+
+    /// Mark fields of deleted frames whose frame objects were reached.
+    /// Returns true when it adds work to the gray queue; the caller drains and
+    /// repeats so a chain that alternates kinds reaches one fixpoint.
+    fn mark_reached_deleted_frames(&mut self) -> bool {
+        let reached: Vec<_> = self
+            .ephemeron_records
+            .deleted_frame_ephemerons
+            .keys()
+            .copied()
+            .filter(|id| {
+                self.frame_value(*id)
+                    .is_some_and(|value| self.is_value_marked(value))
+            })
+            .collect();
+        for id in &reached {
+            let fields = self
+                .ephemeron_records
+                .deleted_frame_ephemerons
+                .remove(id)
+                .unwrap_or_default();
+            for field in fields {
+                self.mark_or_push_child(field, "deleted-frame-field");
+            }
+        }
+        !reached.is_empty()
+    }
+
+    /// Drop registry roots for deleted frames that no other root reached.
+    fn reclaim_unreached_deleted_frames(&mut self) {
+        let unreached = std::mem::take(&mut self.ephemeron_records.deleted_frame_ephemerons);
+        for id in unreached.into_keys() {
+            self.frame_registry.remove(&id);
+            self.ephemeron_records.reclaimed_frame_ids.push(id);
         }
     }
 

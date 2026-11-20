@@ -31,18 +31,6 @@ pub(super) fn builtin(operation: HofOperation) -> SubrEntry {
     crate::emacs_core::eval::subr_abi::builtin_hof_entry_for_test(operation)
 }
 
-#[derive(Debug)]
-enum ReconcileError {
-    Stop(RendezvousError),
-    Function(FunctionError),
-}
-fn reconcile_retry(error: &ReconcileError) -> Retry {
-    match error {
-        ReconcileError::Stop(error) => rendezvous(error),
-        ReconcileError::Function(error) => function(error),
-    }
-}
-
 pub(super) enum FixtureParameters {
     Nullary,
     Unary(neovm_value::intern::SymId),
@@ -204,57 +192,29 @@ pub(crate) fn prepared_hof_fixture<P>(
             // stop synchronously, then retires this already-published owner.
             // with_native_extent's worker-only wait/restore contract is not
             // appropriate here: there is no blocked native body to resume.
-            retry(
-                Deadline::contention(),
-                || owner.enter_native(&[]),
-                rendezvous,
-            )
-            .expect("HOF fixture terminal publication");
-            let mut stopped =
-                retry(Deadline::contention(), || era.stop(), rendezvous).expect("HOF fixture stop");
-            retry(
-                Deadline::contention(),
-                || era.return_cons_storage(&stopped),
-                registration,
-            )
-            .expect("return HOF cons storage");
-            retry(
-                Deadline::contention(),
-                || {
-                    era.reconcile_functions(&mut stopped.symbols().map_err(ReconcileError::Stop)?)
-                        .map_err(ReconcileError::Function)
-                },
-                reconcile_retry,
-            )
-            .expect("HOF function reconciliation");
-            let collection = retry(
-                Deadline::contention(),
-                || era.collect_stopped(&mut stopped),
-                rendezvous,
-            )
-            .expect("HOF fixture real stopped collection");
+            owner
+                .enter_native(&[])
+                .expect("HOF fixture terminal publication");
+            let mut stopped = era.stop().expect("HOF fixture stop");
+            era.return_cons_storage(&stopped)
+                .expect("return HOF cons storage");
+            stopped
+                .symbols()
+                .map_err(|error| format!("stop: {error:?}"))
+                .and_then(|mut symbols| {
+                    era.reconcile_functions(&mut symbols)
+                        .map_err(|error| format!("function: {error:?}"))
+                })
+                .expect("HOF function reconciliation");
+            let collection = era
+                .collect_stopped(&mut stopped)
+                .expect("HOF fixture real stopped collection");
             assert!(collection.major);
             assert_eq!(collection.frozen_owners(), 1);
-            retry_owned(
-                Deadline::contention(),
-                stopped,
-                |stopped| stopped.complete(),
-                |failure| match rendezvous(&failure.reason) {
-                    Retry::Busy => ControlFlow::Continue(failure.into_stopped()),
-                    Retry::Refuse => ControlFlow::Break(failure),
-                },
-            )
-            .expect("HOF fixture resume");
-            let cleanup = retry_owned(
-                Deadline::contention(),
-                owner,
-                |owner| owner.retire_rooted(&[]),
-                |failure| match rendezvous(&failure.reason) {
-                    Retry::Busy => ControlFlow::Continue(failure.into_owner()),
-                    Retry::Refuse => ControlFlow::Break(failure),
-                },
-            )
-            .map_err(|failure| format!("HOF fixture retirement: {failure:?}"));
+            stopped.complete().expect("HOF fixture resume");
+            let cleanup = owner
+                .retire_rooted(&[])
+                .map_err(|failure| format!("HOF fixture retirement: {failure:?}"));
             eprintln!(
                 "NMJIT_N4_HOF_CLEANUP_COLLECTION_DRAINED {}",
                 collection.epoch

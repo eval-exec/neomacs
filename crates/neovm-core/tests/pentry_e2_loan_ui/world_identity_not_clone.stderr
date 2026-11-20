@@ -1,0 +1,23 @@
+error[E0599]: the associated function or constant `check` exists for struct `RequireClone<neovm_value::tagged::gc::WorldIdentity>`, but its trait bounds were not satisfied
+ --> tests/pentry_e2_loan_ui/world_identity_not_clone.rs:7:49
+  |
+7 |     loan_bounds::RequireClone::<WorldIdentity>::check();
+  |                                                 ^^^^^ associated function or constant cannot be called due to unsatisfied trait bounds
+  |
+ ::: $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_registration/world_loan.rs
+  |
+  | pub struct WorldIdentity(usize);
+  | ------------------------ doesn't satisfy `neovm_value::tagged::gc::WorldIdentity: Clone`
+  |
+ ::: tests/pentry_e2_loan_ui/support/loan_bounds.rs
+  |
+  | pub struct RequireClone<T>(PhantomData<T>);
+  | -------------------------- associated function or constant `check` not found for this struct
+  |
+note: trait bound `neovm_value::tagged::gc::WorldIdentity: Clone` was not satisfied
+ --> tests/pentry_e2_loan_ui/support/loan_bounds.rs
+  |
+  | impl<T: Clone> RequireClone<T> {
+  |         ^^^^^  ---------------
+  |         |
+  |         unsatisfied trait bound introduced here

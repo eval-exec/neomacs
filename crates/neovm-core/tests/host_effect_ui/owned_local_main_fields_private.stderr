@@ -1,0 +1,15 @@
+error[E0451]: field `_capability` of struct `OwnedLocalMain` is private
+ --> tests/host_effect_ui/owned_local_main_fields_private.rs:8:9
+  |
+7 |     let _forged = OwnedLocalMain {
+  |                   -------------- in this type
+8 |         _capability: ActivationCapability {
+  |         ^^^^^^^^^^^ private field
+
+error[E0451]: field `_confined` of struct `ActivationCapability` is private
+ --> tests/host_effect_ui/owned_local_main_fields_private.rs:9:13
+  |
+8 |         _capability: ActivationCapability {
+  |                      -------------------- in this type
+9 |             _confined: std::marker::PhantomData,
+  |             ^^^^^^^^^ private field

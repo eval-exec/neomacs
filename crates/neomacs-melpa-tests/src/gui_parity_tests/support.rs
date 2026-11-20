@@ -294,7 +294,20 @@ fn classify_gui_stderr_line(line: &str) -> Result<GuiStderrLine<'_>, String> {
     // A line that mentions the GIO condition but is not exactly GLib's form
     // fails closed: only the known host warning may be classified out.
     let malformed = || format!("malformed volatile GNU GIO warning: {line:?}");
-    let after_program = line.strip_prefix("(emacs:").ok_or_else(malformed)?;
+    // The attested oracle is installed as `emacs-31.1`. The resolver invokes
+    // the canonical binary, and GLib records that basename (normalizing the
+    // dot), so the program field is not always exactly `emacs`.
+    let rest = line.strip_prefix('(').ok_or_else(malformed)?;
+    let (program, after_program) = rest.split_once(':').ok_or_else(malformed)?;
+    let program_ok = program == "emacs"
+        || (program.starts_with("emacs-")
+            && program.len() > "emacs-".len()
+            && program
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'.' || byte == b'-'));
+    if !program_ok {
+        return Err(malformed());
+    }
     let (pid, after_marker) = after_program.split_once(MARKER).ok_or_else(malformed)?;
     let timestamp = after_marker
         .strip_suffix(&format!(": {CONDITION}"))
@@ -390,6 +403,18 @@ fn gui_stderr_normalization_preserves_unrelated_diagnostics() {
     assert_eq!(
         normalize_gui_stderr("a\n\n\nb\n".into()).expect("plain blank lines"),
         "a\n\n\nb\n"
+    );
+    assert_eq!(
+        normalize_gui_stderr(
+            concat!(
+                "(emacs-31-1:12345): GLib-GIO-CRITICAL **: 04:23:40.175: ",
+                "g_settings_schema_source_lookup: assertion 'source != NULL' failed\n",
+            )
+            .into()
+        )
+        .expect("classify the versioned oracle program name"),
+        "",
+        "the attested oracle's canonical basename is emacs-31.1, not emacs"
     );
     assert!(
         normalize_gui_stderr(

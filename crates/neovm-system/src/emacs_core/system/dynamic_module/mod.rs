@@ -358,6 +358,11 @@ thread_local! {
         const { std::cell::RefCell::new(Vec::new()) };
 }
 
+mod source_scope;
+
+#[doc(hidden)]
+pub use source_scope::register_source_module_scope_probe;
+
 #[derive(Clone, Copy)]
 struct ActiveModuleEnvEntry {
     env_priv: *mut emacs_env_private,

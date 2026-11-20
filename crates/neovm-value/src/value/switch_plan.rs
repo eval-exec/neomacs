@@ -376,7 +376,10 @@ impl LispHashTable {
                     holds_live_keys = true;
                     equal_value_hash(stored.key) != entry.hash
                 }
-                snapshot => stored.key.to_hash_key(&self.test) != *snapshot,
+                snapshot => {
+                    !snapshot.contains_truncation()
+                        && stored.key.to_hash_key(&self.test) != *snapshot
+                }
             });
         snapshot_changed
             || holds_live_keys
@@ -575,12 +578,12 @@ impl PlanSlot {
             // entry filed by its key object has no snapshot. The lookup finds
             // it by its object under the hash it was filed by, so it is
             // planned from the object while the object still hashes there.
-            let hash_key = entry.key.to_hash_key(&test);
+            let hash_key = entry.key.to_hash_key_for_insert(test, false);
             let as_stored = match &index_entry.key {
                 HashKey::LiveKey => equal_value_hash(entry.key) == index_entry.hash,
-                snapshot => hash_key == *snapshot,
+                snapshot => !snapshot.contains_truncation() && hash_key == *snapshot,
             };
-            if !as_stored {
+            if !as_stored || hash_key.contains_truncation() {
                 return PlanSlot::Generic;
             }
             let start = nodes.len();

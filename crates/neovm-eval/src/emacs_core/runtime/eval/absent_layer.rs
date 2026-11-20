@@ -484,6 +484,32 @@ macro_rules! eval_absent_layer_slots {
                 absent_layer_unlinked("ABSENT-LAYER display::terminal.install_owner_registry_handle");
             }
 
+            /// Display's terminal slot is not linked. The local slot is never
+            /// installed, so the receipt is AlreadyInactive and retains the handle.
+            pub(crate) fn terminal_detach_registry(
+                handle: &TerminalRegistryHandle,
+            ) -> Result<
+                neovm_value::heap_registry::detachment::DetachedRegistry<
+                    $crate::emacs_core::eval::data::terminal_state::TerminalLispRegistry,
+                >,
+                neovm_value::heap_registry::detachment::RegistryDetachFailure<
+                    $crate::emacs_core::eval::data::terminal_state::TerminalLispRegistry,
+                >,
+            > {
+                // A local slot is never installed. No thread-local is added:
+                // the receipt is AlreadyInactive and retains the handle.
+                let slot = neovm_value::heap_registry::HeapRegistrySlot::new(
+                    $crate::emacs_core::eval::data::terminal_state::TerminalLispRegistry::default(),
+                );
+                // SAFETY: no display slot exists in this runtime.
+                unsafe {
+                    slot.detach(
+                        handle,
+                        $crate::emacs_core::eval::data::terminal_state::TerminalLispRegistry::default(),
+                    )
+                }
+            }
+
             pub(crate) fn fontset_alias_alist_startup_value() -> Value {
                 record_hit(
                     AbsentLayerHit::Unlinked,
@@ -595,6 +621,32 @@ macro_rules! eval_absent_layer_slots {
 
             pub(crate) fn xfaces_install_registry_handle(handle: &FontRegistryHandle) {
                 absent_layer_unlinked("ABSENT-LAYER display::xfaces.install_registry_handle");
+            }
+
+            /// Display's face slot is not linked. The local slot is never
+            /// installed, so the receipt is AlreadyInactive and retains the handle.
+            pub(crate) fn xfaces_detach_registry(
+                handle: &FontRegistryHandle,
+            ) -> Result<
+                neovm_value::heap_registry::detachment::DetachedRegistry<
+                    $crate::emacs_core::eval::data::face_registry::FaceAttrState,
+                >,
+                neovm_value::heap_registry::detachment::RegistryDetachFailure<
+                    $crate::emacs_core::eval::data::face_registry::FaceAttrState,
+                >,
+            > {
+                // A local slot is never installed. No thread-local is added:
+                // the receipt is AlreadyInactive and retains the handle.
+                let slot = neovm_value::heap_registry::HeapRegistrySlot::new(
+                    $crate::emacs_core::eval::data::face_registry::FaceAttrState::default(),
+                );
+                // SAFETY: no display slot exists in this runtime.
+                unsafe {
+                    slot.detach(
+                        handle,
+                        $crate::emacs_core::eval::data::face_registry::FaceAttrState::default(),
+                    )
+                }
             }
 
             pub(crate) fn timefns_reset() {

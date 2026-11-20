@@ -34,8 +34,12 @@ use crate::value::*;
 /// Set `error-conditions` and `error-message` properties on `name` in the
 /// obarray.  `conditions` is the full list of condition symbols (including
 /// `name` itself, its parents, and their transitive ancestors).
-fn put_error_properties<I, S>(obarray: &mut Obarray, name: &str, message: &str, conditions: I)
-where
+pub(crate) fn put_error_properties<I, S>(
+    obarray: &mut Obarray,
+    name: &str,
+    message: &str,
+    conditions: I,
+) where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
 {
@@ -82,7 +86,7 @@ fn build_conditions_from_obarray(obarray: &Obarray, name: &str, parents: &[&str]
 }
 
 /// Iterate over a Value list, yielding symbol names.
-fn iter_symbol_list(value: &Value, symbol_mode: SymbolMode) -> Vec<String> {
+pub(crate) fn iter_symbol_list(value: &Value, symbol_mode: SymbolMode) -> Vec<String> {
     let mut result = Vec::new();
     if let Some(items) = list_to_vec(value) {
         for item in items {
@@ -97,6 +101,12 @@ fn iter_symbol_list(value: &Value, symbol_mode: SymbolMode) -> Vec<String> {
 // ---------------------------------------------------------------------------
 // Hierarchical signal matching (for condition-case)
 // ---------------------------------------------------------------------------
+
+// Every caught signal reads this property (GNU's `Qerror_conditions`).
+fn error_conditions_sym_id() -> SymId {
+    static ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new();
+    *ID.get_or_init(|| intern("error-conditions"))
+}
 
 /// Identity-aware variant of `signal_matches_condition_value`.
 ///
@@ -115,7 +125,7 @@ pub fn signal_matches_condition_value_sym(
 ) -> bool {
     // The signal's own conditions, read by identity (falling back to just the
     // symbol itself, matching `signal_matches_hierarchical`'s exact-match rule).
-    let conditions = obarray.get_property_id(signal_sym, intern("error-conditions"));
+    let conditions = obarray.get_property_id(signal_sym, error_conditions_sym_id());
     signal_matches_pattern_against_conditions(signal_sym, conditions.as_ref(), pattern, symbol_mode)
 }
 
@@ -130,7 +140,7 @@ pub fn signal_matches_hierarchical_sym(
     condition_sym: SymId,
     symbol_mode: SymbolMode,
 ) -> bool {
-    let conditions = obarray.get_property_id(signal_sym, intern("error-conditions"));
+    let conditions = obarray.get_property_id(signal_sym, error_conditions_sym_id());
     signal_matches_symbol_against_conditions(
         signal_sym,
         conditions.as_ref(),

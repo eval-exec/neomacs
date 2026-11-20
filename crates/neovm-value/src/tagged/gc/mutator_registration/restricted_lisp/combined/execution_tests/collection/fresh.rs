@@ -37,12 +37,7 @@ impl Preparation {
             | Scenario::Relog
             | Scenario::RelogNoop
             | Scenario::RelogUnwind => {
-                let mut stopped = contention::retry(
-                    Deadline::contention(),
-                    || era.stop(),
-                    contention::rendezvous,
-                )
-                .unwrap();
+                let mut stopped = era.stop().unwrap();
                 let atoms = era
                     .with_stopped_heap_for_test(&stopped, |heap| {
                         // SAFETY: matching real stop and retained serial heap; lambda
@@ -179,12 +174,7 @@ impl Placement {
                     .unwrap();
                 stopped.trace(|_, _| Ok(())).unwrap();
                 stopped.complete().unwrap();
-                contention::retry(
-                    Deadline::contention(),
-                    || era.start_cons_storage(),
-                    contention::registration,
-                )
-                .unwrap();
+                era.start_cons_storage().unwrap();
                 Self::Workers(cycle)
             }
         }
@@ -197,12 +187,7 @@ impl Placement {
         match *self {
             Self::Unused | Self::Collector(_) => {}
             Self::Workers(cycle) => {
-                contention::retry(
-                    Deadline::contention(),
-                    || era.return_cons_storage(stopped),
-                    contention::registration,
-                )
-                .unwrap();
+                era.return_cons_storage(stopped).unwrap();
                 *self = Self::Collector(cycle);
             }
         }
@@ -214,12 +199,7 @@ impl Placement {
     ) {
         match *self {
             Self::Collector(cycle) => {
-                contention::retry(
-                    Deadline::contention(),
-                    || era.resume_cons_storage(stopped),
-                    contention::registration,
-                )
-                .unwrap();
+                era.resume_cons_storage(stopped).unwrap();
                 *self = Self::Workers(cycle);
             }
             Self::Unused | Self::Workers(_) => panic!("fresh response requires returned catalog"),
@@ -347,12 +327,7 @@ where
     K: crate::tagged::gc::mutator_registration::EraKeeper,
     W: WorldRoots<K>,
 {
-    let mut stopped = contention::retry(
-        Deadline::contention(),
-        || era.stop(),
-        contention::rendezvous,
-    )
-    .unwrap();
+    let mut stopped = era.stop().unwrap();
     let mut placement = placement.borrow_mut();
     placement.return_for_finish(era, &stopped);
     let cycle = match observation {

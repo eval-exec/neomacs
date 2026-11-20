@@ -656,6 +656,10 @@ thread_local! {
         HeapRegistrySlot::new(HashTableTestRegistry::default());
 }
 
+#[path = "hash_test_detach.rs"]
+mod hash_test_detach;
+pub(crate) use hash_test_detach::detach_hash_table_test_registry;
+
 /// A Context owns this registry and exclusively lends it to its mutator. The
 /// existing thread-local slot selects that owner; it does not own callback
 /// state. Callback accounting belongs to the Context's GC settings cache.

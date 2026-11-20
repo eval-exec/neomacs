@@ -1,0 +1,10 @@
+error[E0624]: associated function `mint` is private
+ --> tests/host_effect_ui/activation_authority_mint_private.rs:7:40
+  |
+7 |     let _forged = ActivationAuthority::mint();
+  |                                        ^^^^ private associated function
+  |
+ ::: tests/host_effect_ui/support/../../../../neovm-eval/src/emacs_core/runtime/eval/activation.rs
+  |
+  |     unsafe fn mint() -> Self {
+  |     ------------------------ private associated function defined here

@@ -1,11 +1,14 @@
 //! N5 grace model: the REAL N3 ledger composed with activation release
 //! points (P13-PREP deliverable 1; N5 design rev 2 section 2).
 //!
-//! The ledger is included byte-for-byte through the build-time seam
-//! (`build.rs` -> `OUT_DIR/publication.inc`); its own `std::` imports
-//! resolve to the `mod std` shim below so every atomic load/store and every
-//! mutex transition it performs is one of Loom's modeled cells. Nothing
-//! about the ledger is reimplemented here. The descriptor vocabulary comes
+//! The N3 adapter is included byte-for-byte through the build-time seam
+//! (`build.rs` -> `OUT_DIR/publication.inc`). Its `super::sync` import
+//! resolves to the crate-root Loom backend below. The generic owner is
+//! included beside it (`publication_types.inc`, `publication_ledger.inc`);
+//! that owner's `super::sync` is the nested Loom backend, so the root store,
+//! the metadata mutex, and the adapter's load are Loom cells.
+//! Other `std::` paths stay the real standard library. Nothing about the
+//! ledger is reimplemented here. The descriptor vocabulary comes
 //! from the named stand-in (`support::vocab.rs`), which mirrors
 //! `src/tagged/gc/symbol_table.rs` field-for-field; the ledger never
 //! dereferences chunk entries, so modeled reads observe only publication
@@ -69,43 +72,25 @@
 //! property the real ledger's own `Send`/`Sync` impls vouch for.
 mod support;
 
+#[path = "support/intern.rs"]
+pub mod intern;
+#[path = "support/symbol.rs"]
+pub mod symbol;
+
 pub use support::vocab::{
     OwnedSymbolTable, PointerTableGeneration, PreparedSymbolTable, PublishedSymbolTable,
-    SymbolChunkAddress, SymbolTableShape, TableError,
+    SymbolChunkAddress, SymbolChunkIndex, SymbolTableShape, TableError,
 };
-use support::vocab::{SymbolChunkCount, SymbolChunkIndex, SymbolChunkSlots, SymbolSlotCount};
+use support::vocab::{SymbolChunkCount, SymbolChunkSlots, SymbolSlotCount};
 
 // The real ledger's whole API compiles here; the parts this model does
 // not call are dead code by design (read-only consumption).
 #[allow(dead_code)]
 mod ledger {
-    //! The real `publication.rs`, pasted read-only, with its `std::` imports
-    //! captured by the sibling Loom shim (same-module paste: the only
-    //! include form whose local `mod std` wins path resolution).
+    //! The real `publication.rs`, pasted read-only. `super::sync` is the
+    //! crate-root Loom backend. A same-module `mod std` does not capture
+    //! that path.
     include!(concat!(env!("OUT_DIR"), "/publication.inc"));
-
-    /// Loom seam (N5 design rev 2 section 2.2). Each name the ledger imports
-    /// maps onto Loom's modeled cell; `TryLockError` stays the real `std`
-    /// type because that is what Loom's own `try_lock` returns.
-    pub mod std {
-        pub mod sync {
-            pub mod atomic {
-                pub use loom::sync::atomic::AtomicPtr;
-                pub use loom::sync::atomic::Ordering;
-            }
-            pub use ::std::sync::TryLockError;
-            pub use loom::sync::{Mutex, MutexGuard};
-        }
-        pub mod marker {
-            pub use ::std::marker::PhantomData;
-        }
-        pub mod mem {
-            pub use ::std::mem::{replace, size_of};
-        }
-        pub mod ptr {
-            pub use ::std::ptr::null_mut;
-        }
-    }
 }
 use ledger::{
     PublicationChange, PublishedSymbolTables, RetainedTableBytes, RetiredTableCount, TableLimit,
@@ -115,6 +100,36 @@ use ledger::{
 use loom::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use loom::sync::{Arc, Condvar, Mutex};
 use std::num::NonZeroUsize;
+
+/// Loom backend at the production `symbol_table::sync` parent seam.
+/// The adapter's view loads through this module. The owner's mutex is the
+/// nested backend below; `TryLockError` there stays real `std`.
+mod sync {
+    pub use loom::sync::atomic::{AtomicPtr, Ordering};
+}
+
+/// Generic owner. Its `sync` is the same Loom backend, so the root store and
+/// the adapter's load are one modeled atomic. The mutex lives in this owner.
+#[allow(dead_code)]
+pub mod tagged {
+    #[allow(dead_code)]
+    pub mod gc {
+        #[allow(dead_code)]
+        pub mod publication {
+            mod sync {
+                pub use loom::sync::atomic::{AtomicPtr, Ordering};
+                pub use loom::sync::{Mutex, MutexGuard};
+                pub use std::sync::TryLockError;
+            }
+            include!(concat!(env!("OUT_DIR"), "/publication_types.inc"));
+            #[allow(dead_code)]
+            mod ledger {
+                include!(concat!(env!("OUT_DIR"), "/publication_ledger.inc"));
+            }
+            pub(crate) use ledger::{Admission, Commit, OpenPublication, PublicationLedger};
+        }
+    }
+}
 
 /// Chunk slots per descriptor chunk; the real backing uses `OBARRAY_CHUNK`.
 const CHUNK_SLOTS: usize = 4;

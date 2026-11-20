@@ -72,7 +72,7 @@ jobs:
         uses: ./.github/actions/setup-rust
         with:
           cache-key: neomacs-perf-controlled-linux-x86_64
-          cache-shared-key: linux-x86_64-release
+          cache-shared-key: linux-x86_64-release-2
           cache-save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build candidate

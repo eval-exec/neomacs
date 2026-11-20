@@ -282,6 +282,26 @@ impl HashKey {
                 | HashKey::Cycle(_)
         )
     }
+
+    /// Whether this key stopped at [`super::TRUNCATED_KEY_CYCLE`] anywhere.
+    ///
+    /// A budgeted structural key (see
+    /// [`crate::value::TaggedValue::to_equal_key_bounded`]) uses that
+    /// sentinel where its node budget ran out.  Such a key still identifies
+    /// the entry for membership, but it no longer describes the key object
+    /// completely, so exact-key consumers must decline it.
+    pub(crate) fn contains_truncation(&self) -> bool {
+        match self {
+            HashKey::Cycle(index) => *index == super::TRUNCATED_KEY_CYCLE,
+            HashKey::EqualCons(car, cdr) => car.contains_truncation() || cdr.contains_truncation(),
+            HashKey::EqualVec(keys) => keys.iter().any(HashKey::contains_truncation),
+            HashKey::SymbolWithPos(sym, pos) => {
+                sym.contains_truncation() || pos.contains_truncation()
+            }
+            HashKey::Overlay(parts) => parts.3.contains_truncation(),
+            _ => false,
+        }
+    }
 }
 
 /// The hash an entry for `key` (whose key object is `key_value`) is filed

@@ -41,7 +41,7 @@ fn refusal(kind: PlainSymbolBacking, query: Query) {
         let charge = run.hot_bytes_since_gc_for_test().unwrap();
         let output = homes.dst.word_for_test(run);
         run.arm_initial_fault_for_test(InitialInternFault::ReservationAfterSpineMove).unwrap();
-        assert_eq!(intern_retry(run, &homes.name, &mut homes.dst),
+        assert_eq!(intern_once(run, &homes.name, &mut homes.dst),
             Err(InitialInternError::Authority(RegistrationError::Capacity)));
         let after = run.initial_facts_copy_for_test(id).unwrap();
         let registry_after = fresh_registry_facts_for_test(heap, id, name, &spelling);
@@ -70,7 +70,7 @@ fn refusal(kind: PlainSymbolBacking, query: Query) {
             (false, true, InitialInternFault::ReservationAfterSpineMove as u8));
         // Refusal is clean: the next attempt reuses the same proposed ID and
         // publishes exactly once, rather than leaving a gap or stale atom.
-        intern_retry(run, &homes.name, &mut homes.dst).unwrap();
+        intern_once(run, &homes.name, &mut homes.dst).unwrap();
         assert_eq!(unsafe { Value::from_bits(homes.dst.word_for_test(run)) }.as_bare_symbol_id(), Some(id));
         let committed = fresh_registry_facts_for_test(heap, id, name, &spelling);
         assert_eq!((committed.epoch(), committed.symbols()),
@@ -88,7 +88,7 @@ fn refusal(kind: PlainSymbolBacking, query: Query) {
                 SymId::from_raw(id.to_raw() - 1)
             }).unwrap().present());
         }
-        intern_retry(run, &homes.equal_name, &mut homes.dst).unwrap();
+        intern_once(run, &homes.equal_name, &mut homes.dst).unwrap();
         assert_eq!(unsafe { Value::from_bits(homes.dst.word_for_test(run)) }.as_bare_symbol_id(), Some(id));
         assert_eq!(fresh_registry_facts_for_test(heap, id, name, &spelling), committed);
         assert_eq!(name_publication_for_test(heap, id, equal), (Some(name), true, false, true));
@@ -170,7 +170,7 @@ fn p3sym_c5_fresh_partial_world_publication_closes_era_without_registry_commit()
                         run.arm_initial_fault_for_test(InitialInternFault::AfterSlotPublication)
                             .unwrap();
                         assert_eq!(
-                            intern_retry(&mut run, &name, &mut dst),
+                            intern_once(&mut run, &name, &mut dst),
                             Err(InitialInternError::Authority(RegistrationError::Poisoned))
                         );
                         unpublished(

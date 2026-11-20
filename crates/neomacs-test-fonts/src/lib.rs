@@ -232,6 +232,8 @@ static LXGW_NERD_REGULAR_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
 static MPLUS_1_CODE_THIN_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
 static NOTO_SANS_MONO_VARIABLE_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
 static NOTO_SANS_ARABIC_VARIABLE_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
+static NOTO_SANS_ARABIC_VARIABLE_CACHED_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
+static DESKTOP_FONTS_CACHED_FIXTURE: OnceLock<DesktopFontFixtures> = OnceLock::new();
 static NOTO_SERIF_VARIABLE_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
 static NOTO_SANS_HEBREW_VARIABLE_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
 static NOTO_COLOR_EMOJI_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
@@ -490,6 +492,54 @@ pub fn noto_sans_arabic_variable() -> &'static Path {
             )
         })
         .as_path()
+}
+
+/// Cached-only Noto Sans Arabic for compatibility suites that must not touch
+/// the network at test runtime.
+///
+/// Provision the shared cache once with `cargo xtask font-fixtures`. A missing
+/// or SHA-256-mismatched file panics (`FIXTURE-MISSING:`), which fails the
+/// test instead of downloading or skipping.
+#[must_use]
+pub fn noto_sans_arabic_variable_cached() -> &'static Path {
+    NOTO_SANS_ARABIC_VARIABLE_CACHED_FIXTURE
+        .get_or_init(|| {
+            require_cached_pinned_file(
+                NOTO_SANS_ARABIC_VARIABLE_NAME,
+                NOTO_SANS_ARABIC_VARIABLE_SHA256,
+            )
+        })
+        .as_path()
+}
+
+/// Cached-only DesktopFontFixtures directory, verified file by file.
+///
+/// Same deterministic-provisioning contract as
+/// [`noto_sans_arabic_variable_cached`].
+#[must_use]
+pub fn desktop_fonts_cached() -> &'static DesktopFontFixtures {
+    DESKTOP_FONTS_CACHED_FIXTURE.get_or_init(|| {
+        let directory = font_fixture_cache_root().join("desktop-fonts");
+        match desktop_font_files_match(&directory) {
+            Ok(true) => DesktopFontFixtures { directory },
+            Ok(false) | Err(_) => panic!(
+                "FIXTURE-MISSING: cached desktop fonts are absent or do not match their pinned SHA-256 in {}; run `cargo xtask font-fixtures` before this suite",
+                directory.display()
+            ),
+        }
+    })
+}
+
+/// Return an already-provisioned fixture file without any network access.
+fn require_cached_pinned_file(name: &'static str, sha256: &'static str) -> PathBuf {
+    let path = font_fixture_cache_root().join(name);
+    if path.is_file() && verify_sha256(&path, sha256).is_ok() {
+        return path;
+    }
+    panic!(
+        "FIXTURE-MISSING: pinned fixture {name} is absent or its SHA-256 does not match {sha256} in {}; run `cargo xtask font-fixtures` before this suite",
+        path.display()
+    );
 }
 
 /// Pinned Hebrew shaping face used alongside the Arabic, CJK, Latin and

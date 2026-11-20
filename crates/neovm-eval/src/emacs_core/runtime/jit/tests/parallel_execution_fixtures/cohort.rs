@@ -45,17 +45,6 @@ enum Event {
     Paused(usize, CohortPhase),
     Failed(usize, String),
 }
-#[derive(Debug)]
-enum ReconcileError {
-    Stop(RendezvousError),
-    Function(FunctionError),
-}
-fn reconcile_retry(error: &ReconcileError) -> Retry {
-    match error {
-        ReconcileError::Stop(error) => rendezvous(error),
-        ReconcileError::Function(error) => function(error),
-    }
-}
 #[must_use = "release every waiting worker before joining the scoped cohort"]
 struct Commands(Vec<Sender<Command>>);
 impl Drop for Commands {
@@ -82,7 +71,7 @@ fn receive<T>(receiver: &Receiver<T>) -> Result<T, String> {
             .map_err(|error| format!("cohort wait: {error:?}"))
     }
 }
-/// Wait on the product's resume-debt event, never on the body's outcome.
+/// Admit through `run_access_after_resume_drain`, never by polling the body.
 /// The predicate gate covers admission only and is released before the body;
 /// concurrent native code, publication, and symbol writers remain concurrent.
 fn with_run<'era, R>(
@@ -442,31 +431,22 @@ fn prepared_cohort<P: Send>(
                         seen.sort_unstable();
                         seen.dedup();
                         assert_eq!(seen.len(), size.count());
-                        let mut stopped = retry(Deadline::contention(), || era.stop(), rendezvous)
-                            .expect("cohort stop");
-                        retry(
-                            Deadline::contention(),
-                            || era.return_cons_storage(&stopped),
-                            registration,
-                        )
-                        .expect("cohort return storage");
-                        retry(
-                            Deadline::contention(),
-                            || {
-                                era.reconcile_functions(
-                                    &mut stopped.symbols().map_err(ReconcileError::Stop)?,
-                                )
-                                .map_err(ReconcileError::Function)
-                            },
-                            reconcile_retry,
-                        )
-                        .expect("cohort reconcile");
-                        let report = retry(
-                            Deadline::contention(),
-                            || era.collect_stopped(&mut stopped),
-                            rendezvous,
-                        )
-                        .expect("cohort collection");
+                        // Every owner remains in its published native extent
+                        // until the commands below; no peer can contend here.
+                        let mut stopped = era.stop().expect("cohort stop");
+                        era.return_cons_storage(&stopped)
+                            .expect("cohort return storage");
+                        stopped
+                            .symbols()
+                            .map_err(|error| format!("stop: {error:?}"))
+                            .and_then(|mut symbols| {
+                                era.reconcile_functions(&mut symbols)
+                                    .map_err(|error| format!("function: {error:?}"))
+                            })
+                            .expect("cohort reconcile");
+                        let report = era
+                            .collect_stopped(&mut stopped)
+                            .expect("cohort collection");
                         assert!(report.major);
                         assert_eq!(report.frozen_owners(), size.count());
                         if let Some((epoch, cycle)) = previous {
@@ -475,23 +455,10 @@ fn prepared_cohort<P: Send>(
                         }
                         previous = Some((report.epoch, report.cycle));
                         if !matches!(phase, CohortPhase::AfterSecondCollection) {
-                            retry(
-                                Deadline::contention(),
-                                || era.resume_cons_storage(&stopped),
-                                registration,
-                            )
-                            .expect("cohort resume storage");
+                            era.resume_cons_storage(&stopped)
+                                .expect("cohort resume storage");
                         }
-                        retry_owned(
-                            Deadline::contention(),
-                            stopped,
-                            |stopped| stopped.complete(),
-                            |failed| match rendezvous(&failed.reason) {
-                                Retry::Busy => ControlFlow::Continue(failed.into_stopped()),
-                                Retry::Refuse => ControlFlow::Break(failed),
-                            },
-                        )
-                        .expect("cohort complete");
+                        stopped.complete().expect("cohort complete");
                         eprintln!(
                             "NMJIT_N4_COHORT_COLLECTION {size:?} {phase:?} epoch={} cycle={} owners={}",
                             report.epoch,

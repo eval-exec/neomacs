@@ -205,6 +205,19 @@ impl<'era> AllStopped<'era> {
         self.registry.gate_is_held_by_current_thread()
     }
 
+    /// Cold look at the gate this stop already holds. The body cannot finish
+    /// the epoch or take a heap loan. The keeper-thread check is the same
+    /// predicate `stop` used to mint this guard.
+    pub(in crate::tagged::gc::mutator_registration) fn with_stopped_gate<R>(
+        &self,
+        body: impl FnOnce(&Registry, &RegistryState) -> Result<R, RendezvousError>,
+    ) -> Result<R, RendezvousError> {
+        keeper(self.registry)?;
+        let gate = self.registry.lock().map_err(registration_error)?;
+        self.validate(&gate)?;
+        body(self.registry, &gate)
+    }
+
     pub(in crate::tagged::gc::mutator_registration) fn matches_registry(
         &self,
         registry: &Registry,
@@ -214,6 +227,12 @@ impl<'era> AllStopped<'era> {
 
     pub fn epoch(&self) -> NonZeroU64 {
         self.epoch
+    }
+
+    pub(in crate::tagged::gc::mutator_registration) fn heap_identity(
+        &self,
+    ) -> crate::tagged::gc::HeapIdentity {
+        self.registry.heap
     }
 
     fn validate(&self, gate: &RegistryState) -> Result<(), RendezvousError> {

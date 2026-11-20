@@ -2688,6 +2688,15 @@ fn complete(stopped: AllStopped<'_>) {
     .unwrap_or_else(|failure| panic!("complete: {:?}", failure.reason))
 }
 
+// Every caller has already received all native-ready receipts and retains
+// the done senders, so no owner can contend with this keeper completion.
+// ACK/restore-driven rounds retain their separate active admission path.
+fn complete_parked(stopped: AllStopped<'_>) {
+    stopped
+        .complete()
+        .unwrap_or_else(|failure| panic!("complete: {:?}", failure.reason))
+}
+
 fn on_heap<R, K: crate::tagged::gc::mutator_registration::EraKeeper>(
     era: &ParallelHeapEra<'_, K>,
     stopped: &AllStopped<'_>,
@@ -3009,7 +3018,7 @@ impl<'body, 'heap, K: crate::tagged::gc::mutator_registration::EraKeeper> Sessio
         let mut permits = Vec::with_capacity(n);
         for index in 0..n {
             let id = id_base + index as u64;
-            permits.push(retry_reg(|| era.register(id, nslots)));
+            permits.push(era.register(id, nslots).unwrap());
         }
         for (index, permit) in permits.into_iter().enumerate() {
             let id = id_base + index as u64;
@@ -3102,16 +3111,16 @@ impl<'body, 'heap, K: crate::tagged::gc::mutator_registration::EraKeeper> Sessio
             assert!(!seen[index], "duplicate ready");
             seen[index] = true;
         }
-        let mut stopped = retry_rv(|| self.era.stop());
+        let mut stopped = self.era.stop().unwrap();
         let epoch = stopped.epoch().get();
         assert_eq!(epoch, self.next_epoch, "reclaim epoch");
         self.next_epoch += 1;
-        retry_reg(|| self.era.return_cons_storage(&stopped));
-        let report = retry_rv(|| self.era.collect_stopped(&mut stopped, roots));
+        self.era.return_cons_storage(&stopped).unwrap();
+        let report = self.era.collect_stopped(&mut stopped, roots).unwrap();
         assert!(report.major);
         after(self.era, &stopped);
         // Catalog stays on the heap: `finish` refuses a suspended cons catalog.
-        complete(stopped);
+        complete_parked(stopped);
         for tx in &self.done_txs {
             tx.send(())
                 .unwrap_or_else(|_| panic!("done channel closed"));
@@ -3456,14 +3465,14 @@ fn a6_runtime_refuses_foreign_cons_without_writing<H: HostParts>(host: &mut H) {
             assert_eq!(car, Some(1));
             assert_eq!(recv(&ready_rx), 0);
             let mut next_epoch = 1u64;
-            let mut stopped = retry_rv(|| era.stop());
+            let mut stopped = era.stop().unwrap();
             assert_eq!(stopped.epoch().get(), next_epoch);
             next_epoch += 1;
             let _ = next_epoch;
-            retry_reg(|| era.return_cons_storage(&stopped));
-            let report = retry_rv(|| era.collect_stopped(&mut stopped, roots));
+            era.return_cons_storage(&stopped).unwrap();
+            let report = era.collect_stopped(&mut stopped, roots).unwrap();
             assert!(report.major);
-            complete(stopped);
+            complete_parked(stopped);
             done_tx.send(()).unwrap();
             assert_eq!(recv(&retired_rx), 0);
         });
@@ -3525,11 +3534,11 @@ fn a6_arithmetic_matches_gnu_oracle<H: HostParts>(host: &mut H) {
             let end = recv(&end_rx);
             assert_eq!(end.lines, oracle[..8]);
             assert_eq!(recv(&ready_rx), 0);
-            let mut stopped = retry_rv(|| era.stop());
+            let mut stopped = era.stop().unwrap();
             assert_eq!(stopped.epoch().get(), 1);
-            retry_reg(|| era.return_cons_storage(&stopped));
-            assert!(retry_rv(|| era.collect_stopped(&mut stopped, roots)).major);
-            complete(stopped);
+            era.return_cons_storage(&stopped).unwrap();
+            assert!(era.collect_stopped(&mut stopped, roots).unwrap().major);
+            complete_parked(stopped);
             done_tx.send(()).unwrap();
             assert_eq!(recv(&retired_rx), 0);
         });
@@ -3970,7 +3979,7 @@ fn run_ht_session<H: HostParts>(
             };
             let heap = era.heap_identity();
             let registry = era.registry();
-            let permit = retry_reg(|| era.register(6600, setup.nslots));
+            let permit = era.register(6600, setup.nslots).unwrap();
             let (end_tx, end_rx) = channel();
             let (ready_tx, ready_rx) = channel();
             let (done_tx, done_rx) = channel();
@@ -4003,11 +4012,11 @@ fn run_ht_session<H: HostParts>(
             scope.spawn(move || launch.run());
             let end = recv(&end_rx);
             assert_eq!(recv(&ready_rx), 0);
-            let mut stopped = retry_rv(|| era.stop());
+            let mut stopped = era.stop().unwrap();
             assert_eq!(stopped.epoch().get(), 1);
-            retry_reg(|| era.return_cons_storage(&stopped));
-            assert!(retry_rv(|| era.collect_stopped(&mut stopped, roots)).major);
-            complete(stopped);
+            era.return_cons_storage(&stopped).unwrap();
+            assert!(era.collect_stopped(&mut stopped, roots).unwrap().major);
+            complete_parked(stopped);
             done_tx.send(()).unwrap();
             assert_eq!(recv(&retired_rx), 0);
             lines = end.lines;
@@ -4233,7 +4242,7 @@ fn a6_ht_user_test_refuses_mutation_inside_the_test<H: HostParts>(host: &mut H) 
             };
             let heap = era.heap_identity();
             let registry = era.registry();
-            let permit = retry_reg(|| era.register(6601, setup.nslots));
+            let permit = era.register(6601, setup.nslots).unwrap();
             let abort_flag = &abort;
             let env_ref = &env;
             let planted_ref = &planted;
@@ -4274,13 +4283,13 @@ fn a6_ht_user_test_refuses_mutation_inside_the_test<H: HostParts>(host: &mut H) 
             );
             assert_eq!(recv(&ready_rx), 0);
             let mut next_epoch = 1u64;
-            let mut stopped = retry_rv(|| era.stop());
+            let mut stopped = era.stop().unwrap();
             assert_eq!(stopped.epoch().get(), next_epoch);
             next_epoch += 1;
             let _ = next_epoch;
-            retry_reg(|| era.return_cons_storage(&stopped));
-            assert!(retry_rv(|| era.collect_stopped(&mut stopped, roots)).major);
-            complete(stopped);
+            era.return_cons_storage(&stopped).unwrap();
+            assert!(era.collect_stopped(&mut stopped, roots).unwrap().major);
+            complete_parked(stopped);
             done_tx.send(()).unwrap();
             assert_eq!(recv(&retired_rx), 0);
         });
@@ -4395,7 +4404,7 @@ fn a6_ht_lease_mints_from_a_live_run_access<H: HostParts>(host: &mut H) {
             };
             let heap = era.heap_identity();
             let registry = era.registry();
-            let permit = retry_reg(|| era.register(6602, 1));
+            let permit = era.register(6602, 1).unwrap();
             let abort_flag = &abort;
             let root = root.clone();
             let (ready_tx, ready_rx) = channel();
@@ -4468,11 +4477,11 @@ fn a6_ht_lease_mints_from_a_live_run_access<H: HostParts>(host: &mut H) {
                 "the read-back sees the edit"
             );
             assert_eq!(recv(&ready_rx), 0);
-            let mut stopped = retry_rv(|| era.stop());
+            let mut stopped = era.stop().unwrap();
             assert_eq!(stopped.epoch().get(), 1);
-            retry_reg(|| era.return_cons_storage(&stopped));
-            assert!(retry_rv(|| era.collect_stopped(&mut stopped, roots)).major);
-            complete(stopped);
+            era.return_cons_storage(&stopped).unwrap();
+            assert!(era.collect_stopped(&mut stopped, roots).unwrap().major);
+            complete_parked(stopped);
             done_tx.send(()).unwrap();
             assert_eq!(recv(&retired_rx), 0);
         });
@@ -4657,7 +4666,7 @@ where
     // Design 3.3: register every permit before spawning any owner thread.
     let mut permits = Vec::with_capacity(n);
     for index in 0..n {
-        permits.push(retry_reg(|| era.register(6300 + index as u64, nslots)));
+        permits.push(era.register(6300 + index as u64, nslots).unwrap());
     }
     for (index, permit) in permits.into_iter().enumerate() {
         let (go_tx, go_rx) = channel();
@@ -4828,13 +4837,13 @@ fn tp_drive<H: HostParts>(
             for _ in 0..owners {
                 recv(&session.ready_rx);
             }
-            let mut stopped = retry_rv(|| session.era.stop());
+            let mut stopped = session.era.stop().unwrap();
             assert_eq!(stopped.epoch().get(), session.next_epoch, "reclaim epoch");
             session.next_epoch += 1;
-            retry_reg(|| session.era.return_cons_storage(&stopped));
-            let report = retry_rv(|| session.era.collect_stopped(&mut stopped, roots));
+            session.era.return_cons_storage(&stopped).unwrap();
+            let report = session.era.collect_stopped(&mut stopped, roots).unwrap();
             assert!(report.major);
-            complete(stopped);
+            complete_parked(stopped);
             for tx in &session.done_txs {
                 tx.send(())
                     .unwrap_or_else(|_| panic!("done channel closed"));
@@ -5059,9 +5068,7 @@ fn run_ht_overlap_session<H: HostParts>(
             let mut done_txs = Vec::with_capacity(n);
             let mut permits = Vec::with_capacity(n);
             for index in 0..n {
-                permits.push(retry_reg(|| {
-                    era.register(id_base + index as u64, setup.nslots)
-                }));
+                permits.push(era.register(id_base + index as u64, setup.nslots).unwrap());
             }
             for (index, permit) in permits.into_iter().enumerate() {
                 let (done_tx, done_rx) = channel();
@@ -5096,11 +5103,11 @@ fn run_ht_overlap_session<H: HostParts>(
             drop(retired_tx);
             let ends = gather(&end_rx, n, |end| end.index);
             let _readies = gather(&ready_rx, n, |index| *index);
-            let mut stopped = retry_rv(|| era.stop());
+            let mut stopped = era.stop().unwrap();
             assert_eq!(stopped.epoch().get(), 1);
-            retry_reg(|| era.return_cons_storage(&stopped));
-            assert!(retry_rv(|| era.collect_stopped(&mut stopped, roots)).major);
-            complete(stopped);
+            era.return_cons_storage(&stopped).unwrap();
+            assert!(era.collect_stopped(&mut stopped, roots).unwrap().major);
+            complete_parked(stopped);
             for done in &done_txs {
                 done.send(()).unwrap();
             }
@@ -5628,8 +5635,8 @@ fn a6_ht_user_test_revalidates_under_another_owner<H: HostParts>(host: &mut H) {
             let registry = era.registry();
             let abort_flag = &abort;
             // Both permits exist before either owner thread (§3.3).
-            let permit_r = retry_reg(|| era.register(6800, setup.nslots));
-            let permit_e = retry_reg(|| era.register(6801, setup.nslots));
+            let permit_r = era.register(6800, setup.nslots).unwrap();
+            let permit_e = era.register(6801, setup.nslots).unwrap();
             let (end_tx, end_rx) = channel();
             let (ready_tx, ready_rx) = channel();
             let (done_tx_r, done_rx_r) = channel();
@@ -5710,11 +5717,11 @@ fn a6_ht_user_test_revalidates_under_another_owner<H: HostParts>(host: &mut H) {
             drop(retired_tx);
             let ends = gather(&end_rx, 1, |end| end.index);
             let _readies = gather(&ready_rx, 2, |index| *index);
-            let mut stopped = retry_rv(|| era.stop());
+            let mut stopped = era.stop().unwrap();
             assert_eq!(stopped.epoch().get(), 1);
-            retry_reg(|| era.return_cons_storage(&stopped));
-            assert!(retry_rv(|| era.collect_stopped(&mut stopped, roots)).major);
-            complete(stopped);
+            era.return_cons_storage(&stopped).unwrap();
+            assert!(era.collect_stopped(&mut stopped, roots).unwrap().major);
+            complete_parked(stopped);
             done_tx_r.send(()).unwrap();
             done_tx_e.send(()).unwrap();
             let _retired = gather(&retired_rx, 2, |index| *index);
@@ -5865,7 +5872,7 @@ fn a6_ht_sealed_edit_triggers_jit_switch_stale_shim<H: HostParts>(host: &mut H) 
                 abort: &abort,
             };
             let heap = era.heap_identity();
-            let permit = retry_reg(|| era.register(6831, 1));
+            let permit = era.register(6831, 1).unwrap();
             let (ready_tx, ready_rx) = channel();
             let (done_tx, done_rx) = channel();
             let (retired_tx, retired_rx) = channel();
@@ -5912,11 +5919,11 @@ fn a6_ht_sealed_edit_triggers_jit_switch_stale_shim<H: HostParts>(host: &mut H) 
                     .unwrap_or_else(|_| panic!("retired channel closed"));
             });
             assert_eq!(recv(&ready_rx), 0, "fill owner frozen");
-            let mut stopped = retry_rv(|| era.stop());
+            let mut stopped = era.stop().unwrap();
             assert_eq!(stopped.epoch().get(), 1);
-            retry_reg(|| era.return_cons_storage(&stopped));
-            assert!(retry_rv(|| era.collect_stopped(&mut stopped, roots)).major);
-            complete(stopped);
+            era.return_cons_storage(&stopped).unwrap();
+            assert!(era.collect_stopped(&mut stopped, roots).unwrap().major);
+            complete_parked(stopped);
             done_tx.send(()).unwrap();
             assert_eq!(recv(&retired_rx), 0);
         });
@@ -5978,7 +5985,7 @@ fn a6_ht_sealed_edit_triggers_jit_switch_stale_shim<H: HostParts>(host: &mut H) 
                 abort: &abort,
             };
             let heap = era.heap_identity();
-            let permit = retry_reg(|| era.register(6830, 1));
+            let permit = era.register(6830, 1).unwrap();
             let (ready_tx, ready_rx) = channel();
             let (done_tx, done_rx) = channel();
             let (retired_tx, retired_rx) = channel();
@@ -6059,11 +6066,11 @@ fn a6_ht_sealed_edit_triggers_jit_switch_stale_shim<H: HostParts>(host: &mut H) 
                     .unwrap_or_else(|_| panic!("retired channel closed"));
             });
             assert_eq!(recv(&ready_rx), 0, "corrupt owner frozen");
-            let mut stopped = retry_rv(|| era.stop());
+            let mut stopped = era.stop().unwrap();
             assert_eq!(stopped.epoch().get(), 1);
-            retry_reg(|| era.return_cons_storage(&stopped));
-            assert!(retry_rv(|| era.collect_stopped(&mut stopped, roots)).major);
-            complete(stopped);
+            era.return_cons_storage(&stopped).unwrap();
+            assert!(era.collect_stopped(&mut stopped, roots).unwrap().major);
+            complete_parked(stopped);
             done_tx.send(()).unwrap();
             assert_eq!(recv(&retired_rx), 0);
         });

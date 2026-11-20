@@ -208,13 +208,15 @@ fn local_cons_does_not_wait_for_the_shared_root_table_lock() {
                         with_root_table_lock_for_test(heap, || {
                             held_by_actor.store(true, Ordering::Release);
                             ready_tx.send(()).unwrap();
-                            // A regression that tries to register is released
-                            // by the watchdog, then fails the held assertion.
-                            let _ = release_rx.recv_timeout(Duration::from_secs(3));
+                            // Keep the lock until the allocations finish. On
+                            // unwind the scoped sender disconnects before the
+                            // implicit join; a product deadlock reaches the
+                            // outer watchdog without a timed self-release.
+                            let _ = release_rx.recv();
                             held_by_actor.store(false, Ordering::Release);
                         });
                     });
-                    ready_rx.recv_timeout(Duration::from_secs(30)).unwrap();
+                    ready_rx.recv().unwrap();
                     for _ in 0..260 {
                         run.cons_into(&a, &d, &mut out).unwrap();
                     }
@@ -499,18 +501,10 @@ fn two_owner_local_slot_allocator_stress() {
         owner: &mut Mutator<'era>,
         body: impl FnOnce(&mut RunAccess<'_, 'era>) -> R,
     ) -> R {
-        let deadline = Instant::now() + Duration::from_secs(30);
-        loop {
-            match owner.run_access() {
-                Ok(mut access) => {
-                    let result = body(&mut access);
-                    access.close_cons_region().unwrap();
-                    return result;
-                }
-                Err(RegistrationError::Busy) if Instant::now() < deadline => thread::yield_now(),
-                Err(error) => panic!("local-slot run: {error:?}"),
-            }
-        }
+        let mut access = owner.run_access_after_resume_drain().unwrap();
+        let result = body(&mut access);
+        access.close_cons_region().unwrap();
+        result
     }
     fn receive<T>(receiver: &mpsc::Receiver<T>) -> T {
         receiver

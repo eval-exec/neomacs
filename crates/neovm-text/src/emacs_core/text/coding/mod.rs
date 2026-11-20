@@ -901,6 +901,9 @@ const UNDECIDED_KEY_INHIBIT_NULL: i64 = i64::MIN + 9;
 const UTF_BOM_KEY_FIRST: i64 = i64::MIN + 10;
 const UTF_BOM_KEY_SECOND: i64 = i64::MIN + 11;
 const UNDECIDED_KEY_PREFER_UTF8: i64 = i64::MIN + 12;
+/// Charset identities marked safe when an ISO-2022 system is defined
+/// (`coding.c:11064-11068`). Missing means live membership.
+const ISO2022_KEY_SAFE_CHARSETS: i64 = i64::MIN + 13;
 
 fn definition_property(info: &CodingSystemInfo, key: SymId) -> Option<Value> {
     let mut plist = *info.int_properties.get(&PLIST_VERBATIM_KEY)?;
@@ -1064,6 +1067,9 @@ pub(crate) struct Iso2022Spec {
     /// of 4 means "no fixed register"; such charsets fall back to G0.
     pub(crate) reg_usage: (u8, u8),
     pub flags: enumflags2::BitFlags<IsoFlag>,
+    /// Identities safe at define time. `None` is live membership: a hand-built
+    /// spec, an old dump, or a preloaded full-support system after loadup.
+    pub(crate) safe_charsets: Option<Vec<SymId>>,
 }
 
 impl Iso2022Spec {
@@ -1134,7 +1140,35 @@ pub(crate) fn iso2022_spec(info: &CodingSystemInfo, mode: SymbolMode) -> Option<
         request,
         reg_usage,
         flags: enumflags2::BitFlags::from_bits_truncate(flags_bits as u32),
+        safe_charsets: stored_iso2022_safe_charsets(info, mode),
     })
+}
+
+/// `None` when the key was never stored. An empty vector is still `Some`:
+/// that coding system listed no charset.
+fn stored_iso2022_safe_charsets(info: &CodingSystemInfo, mode: SymbolMode) -> Option<Vec<SymId>> {
+    let stored = info.int_properties.get(&ISO2022_KEY_SAFE_CHARSETS)?;
+    Some(
+        stored
+            .as_vector_data()
+            .map(|slots| {
+                slots
+                    .iter()
+                    .filter_map(|elem| elem.as_symbol_id(mode))
+                    .collect()
+            })
+            .unwrap_or_default(),
+    )
+}
+
+fn iso2022_safe_charset_value(charset_list: &[SymId]) -> Value {
+    let full = charset_list.len() == 1 && resolve_sym(charset_list[0]) == "iso-2022";
+    let names = if full {
+        crate::emacs_core::charset::charset_iso2022_members()
+    } else {
+        charset_list.to_vec()
+    };
+    Value::vector(names.into_iter().map(Value::from_sym_id).collect())
 }
 
 pub use crate::encoding::CodingSystemInfo;
@@ -1664,6 +1698,27 @@ impl CodingSystemManager {
     pub fn get(&self, name: &str) -> Option<&CodingSystemInfo> {
         let canonical = self.resolve(name)?;
         self.systems.get(&canonical)
+    }
+
+    /// Drop define-time snapshots of preloaded full-support ISO-2022 systems.
+    ///
+    /// GNU's dumped `iso-2022-7bit` refreshes `Viso_2022_charset_list` on
+    /// first use (`coding.c:2868-2874`) because the dumped list is not `eq`
+    /// to the live one. These systems are defined from Lisp during loadup, so
+    /// a snapshot taken then would reject a charset defined before the first
+    /// decode. Removing the key restores live membership when `:charset-list`
+    /// is the symbol `iso-2022`. An explicit list keeps its snapshot. A
+    /// system defined after this call freezes at define time.
+    pub fn release_preloaded_iso2022_safe_sets(&mut self) {
+        self.invalidate_lookup_cache();
+        let Some(marker) = lookup_interned("iso-2022") else {
+            return;
+        };
+        for info in self.systems.values_mut() {
+            if info.charset_list.len() == 1 && info.charset_list[0] == marker {
+                info.int_properties.remove(&ISO2022_KEY_SAFE_CHARSETS);
+            }
+        }
     }
 
     /// Look up a coding system mutably by name (resolving aliases).
@@ -3890,6 +3945,52 @@ pub(crate) fn builtin_find_coding_system(
     }
 }
 
+/// GNU `CHECK_CHARSET_GET_CHARSET` (`coding.c:11048`) reads the attribute
+/// vector on this name. Two charsets may share an `:emacs-mule-id`, so the
+/// stored key is that binding, not the first charset found with the id.
+/// An unknown symbol stays as given.
+fn captured_charset_symbol(symbol: SymId) -> SymId {
+    use crate::emacs_core::charset::charset_defined_identity;
+    charset_defined_identity(symbol).unwrap_or(symbol)
+}
+
+fn capture_charset_in_value(value: Value, mode: SymbolMode) -> Value {
+    match value.as_symbol_id(mode) {
+        Some(symbol) => Value::from_sym_id(captured_charset_symbol(symbol)),
+        None => value,
+    }
+}
+
+fn capture_iso2022_initial(value: Value, mode: SymbolMode) -> Value {
+    let Some(slots) = value.as_vector_data() else {
+        return value;
+    };
+    Value::vector(
+        slots
+            .iter()
+            .copied()
+            .map(|slot| capture_charset_in_value(slot, mode))
+            .collect(),
+    )
+}
+
+fn capture_iso2022_request(value: Value, mode: SymbolMode) -> Value {
+    let Some(pairs) = neovm_value::value::list_to_vec(&value) else {
+        return value;
+    };
+    Value::list(
+        pairs
+            .into_iter()
+            .map(|pair| {
+                Value::cons(
+                    capture_charset_in_value(pair.cons_car(), mode),
+                    pair.cons_cdr(),
+                )
+            })
+            .collect(),
+    )
+}
+
 /// `(define-coding-system-internal NAME MNEMONIC CODING-TYPE CHARSET-LIST
 ///    ASCII-COMPAT DECODE-TL ENCODE-TL POST-READ PRE-WRITE DEFAULT-CHAR
 ///    FOR-UNIBYTE PLIST EOL-TYPE &rest TYPE-SPECIFIC-ATTRS)`
@@ -3923,11 +4024,29 @@ pub fn builtin_define_coding_system_internal(
         )
     })?;
 
-    // arg[3]: charset-list (list of symbols, or special symbol like 'iso-2022)
+    // arg[3]: charset-list. GNU matches the symbols `iso-2022` and
+    // `emacs-mule` before any charset lookup (`coding.c:11017-11031`), so an
+    // alias of that name cannot swallow the marker. An explicit list stores
+    // each name's own attribute vector (`coding.c:11041-11057`).
     let charset_list = if let Some(id) = args[3].as_symbol_id(mode).filter(|_| !args[3].is_nil()) {
-        vec![id]
+        let marker = resolve_sym(id);
+        if marker == "iso-2022" || marker == "emacs-mule" {
+            let coding_name = resolve_sym(coding_type);
+            let marker_matches = (marker == "iso-2022" && coding_name == "iso-2022")
+                || (marker == "emacs-mule" && coding_name == "emacs-mule");
+            if !marker_matches {
+                return Err(signal("error", vec![Value::string("Invalid charset-list")]));
+            }
+            vec![id]
+        } else {
+            vec![captured_charset_symbol(id)]
+        }
     } else if let Some(items) = neovm_value::value::list_to_vec(&args[3]) {
-        items.iter().filter_map(|v| v.as_symbol_id(mode)).collect()
+        items
+            .iter()
+            .filter_map(|v| v.as_symbol_id(mode))
+            .map(captured_charset_symbol)
+            .collect()
     } else {
         Vec::new()
     };
@@ -4030,10 +4149,20 @@ pub fn builtin_define_coding_system_internal(
     // request-alist, flags-bitmask].  Stash them so the ISO-2022 codec can read
     // the G0-G3 designations; see `iso2022_spec`.
     if resolve_sym(coding_type) == "iso-2022" && args.len() > 16 {
-        info.int_properties.insert(ISO2022_KEY_INITIAL, args[13]);
+        info.int_properties
+            .insert(ISO2022_KEY_INITIAL, capture_iso2022_initial(args[13], mode));
         info.int_properties.insert(ISO2022_KEY_REG_USAGE, args[14]);
-        info.int_properties.insert(ISO2022_KEY_REQUEST, args[15]);
+        info.int_properties
+            .insert(ISO2022_KEY_REQUEST, capture_iso2022_request(args[15], mode));
         info.int_properties.insert(ISO2022_KEY_FLAGS, args[16]);
+        // coding.c:11020-11024 copies Viso for the symbol `iso-2022`.
+        // coding.c:11064-11068 then marks every listed id safe, including a
+        // 96-set whose reg-usage register is 4. The reg filter inside
+        // `setup_iso_safe_charsets` does not run on this path.
+        info.int_properties.insert(
+            ISO2022_KEY_SAFE_CHARSETS,
+            iso2022_safe_charset_value(&info.charset_list),
+        );
     }
 
     // arg[13..16] (CCL only): decoder program, encoder program, and the

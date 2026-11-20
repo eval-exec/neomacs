@@ -1497,11 +1497,23 @@ fn contains(bounds: FrameRect, x: f32, y: f32) -> bool {
         && y < bounds.y() + bounds.height()
 }
 
+/// Sub-pixel tolerance for semantic containment.
+///
+/// Position and region geometry is produced independently in logical pixels:
+/// on a fractional-scale output (e.g. 1.75) a 12-physical-pixel glyph is
+/// 6.857142857 logical pixels wide, so a glyph edge that is mathematically on
+/// the region boundary can land a fraction of an f32 ulp past it. Comparing
+/// exactly would reject a coherent frame, and a rejected frame is never
+/// displayed. The tolerance is far below one physical pixel at any supported
+/// scale, so a real placement error still fails. `glyph_matrix` uses the same
+/// epsilon when it validates that every window region fits its window.
+const CONTAINMENT_EPSILON: f32 = 0.01;
+
 fn rect_contains_rect(outer: FrameRect, inner: FrameRect) -> bool {
-    inner.x() >= outer.x()
-        && inner.y() >= outer.y()
-        && inner.x() + inner.width() <= outer.x() + outer.width()
-        && inner.y() + inner.height() <= outer.y() + outer.height()
+    inner.x() + CONTAINMENT_EPSILON >= outer.x()
+        && inner.y() + CONTAINMENT_EPSILON >= outer.y()
+        && inner.x() + inner.width() <= outer.x() + outer.width() + CONTAINMENT_EPSILON
+        && inner.y() + inner.height() <= outer.y() + outer.height() + CONTAINMENT_EPSILON
 }
 
 fn find_presented_pointer_candidate<'a>(

@@ -97,7 +97,7 @@ const PRELUDE: &str = r####"
 (defun ex428-test-write (relative contents)
   (let ((file (expand-file-name relative ex428-test-root)))
     (unless (and ex428-test-root-owned
-                 (file-in-directory-p file ex428-test-root))
+                 (neomacs-melpa-path-inside-p file ex428-test-root))
       (error "Refusing esxml write outside owned root: %s" file))
     (make-directory (file-name-directory file) t)
     (let ((coding-system-for-write 'utf-8-unix))

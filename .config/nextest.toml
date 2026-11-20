@@ -77,12 +77,10 @@ filter = 'package(neomacs-melpa-tests) and not (test(~parity_tests::harness_cont
 platform = { host = "cfg(unix)" }
 setup = 'melpa-infra-preflight'
 
-# The interactive package-TUI suites (moved out of the MELPA jobs) provision
-# pinned packages and boot editor pairs; give them the same preflight.
-[[profile.default.scripts]]
-filter = 'test(~package_tui::)'
-platform = { host = "cfg(unix)" }
-setup = 'melpa-infra-preflight'
+# Package-TUI scenarios use MelpaSandbox::new_with_short_home. They do not
+# need a checkout-rooted cache, so they do not take melpa-infra-preflight.
+# Attaching that refusing setup here cancels the whole TUI suite when
+# CARGO_TARGET_DIR points outside the checkout.
 
 # Compile-fail contract runners (feature `contract-fixtures`). Each runner
 # drives trybuild, which builds one scratch fixture project behind a single
@@ -237,6 +235,12 @@ slow-timeout = { period = "30s", terminate-after = 1, grace-period = "0s" }
 filter = 'package(neomacs-gui-tests) and test(~macos_native_menus::)'
 platform = { host = 'cfg(target_os = "macos")' }
 threads-required = "num-test-threads"
+
+# A signature-exact GNU ime miss is non-fatal, so its ::warning:: line has to
+# reach the step log on success. GitHub Actions only annotates lines it sees.
+[[profile.default.overrides]]
+filter = 'test(fcitx5_fullwidth_punctuation_is_text_and_f13_stays_a_key)'
+success-output = "immediate-final"
 
 # The Helm Pydoc workflow drives a real Helm session in BOTH editors; the first
 # `M-x helm-pydoc` synchronously collects the module list through a Python

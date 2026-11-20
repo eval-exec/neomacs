@@ -48,15 +48,34 @@ static HAS_NONCONS_MARKS: AtomicBool = AtomicBool::new(false);
 // collecting mutator invalidates its RECENT cache at this actual-clear edge.
 static OBSERVATION_EPOCH: AtomicU64 = AtomicU64::new(0);
 
+// Monotonic count of cleared sticky marks, published (Release) after the
+// clears and before the epoch advance. A ledger that has validated its
+// identities against the count it Acquired can hold at most the difference
+// in dead entries, so it can defer its O(ledger) prune until that debt is
+// proportional to its size instead of rescanning on every reclamation batch.
+static RECLAIMED_OBSERVATIONS: AtomicU64 = AtomicU64::new(0);
+
 #[inline]
 #[doc(hidden)]
 pub fn collection_observation_epoch() -> u64 {
     OBSERVATION_EPOCH.load(Ordering::Acquire)
 }
 
-/// Complete a reclamation batch after its sticky bits have been cleared.
+#[inline]
+pub(crate) fn reclaimed_collection_observation_count() -> u64 {
+    RECLAIMED_OBSERVATIONS.load(Ordering::Acquire)
+}
+
+/// Complete a reclamation batch after one sticky bit has been cleared.
 #[inline]
 pub(crate) fn advance_collection_observation_epoch() {
+    advance_collection_observation_epoch_by(1);
+}
+
+/// Complete a reclamation batch after `cleared` sticky bits have been cleared.
+#[inline]
+fn advance_collection_observation_epoch_by(cleared: u64) {
+    RECLAIMED_OBSERVATIONS.fetch_add(cleared, Ordering::Release);
     let epoch = OBSERVATION_EPOCH
         .fetch_add(1, Ordering::Release)
         .wrapping_add(1);
@@ -280,7 +299,7 @@ fn clear_cons_observed_dead_slow(
     let Some(bitmap) = observation_radix::lookup(base) else {
         return;
     };
-    let mut changed = false;
+    let mut cleared = 0u64;
     let cells_per_side_word = u64::BITS as usize / OWNED_CELL_ADDRESS_STRIDE;
     for (word, observed) in bitmap.cons.iter().enumerate() {
         let current = observed.load(Ordering::Acquire);
@@ -298,11 +317,12 @@ fn clear_cons_observed_dead_slow(
             spread_live_bits(live & valid)
         };
         if current & !keep != 0 {
-            changed |= observed.fetch_and(keep, Ordering::Release) & !keep != 0;
+            let previous = observed.fetch_and(keep, Ordering::Release);
+            cleared += u64::from((previous & !keep).count_ones());
         }
     }
-    if changed {
-        advance_collection_observation_epoch();
+    if cleared != 0 {
+        advance_collection_observation_epoch_by(cleared);
     }
 }
 
@@ -330,16 +350,17 @@ pub(super) fn clear_cons_observed_block(base: usize) {
 #[inline(never)]
 fn clear_cons_observed_block_slow(base: usize) {
     if let Some(bitmap) = observation_radix::lookup(base) {
-        let mut changed = false;
+        let mut cleared = 0u64;
         for word in &bitmap.cons {
-            if word.load(Ordering::Acquire) != 0 {
+            let current = word.load(Ordering::Acquire);
+            if current != 0 {
                 // Whole-granule ownership excludes concurrent new marks.
                 word.store(0, Ordering::Release);
-                changed = true;
+                cleared += u64::from(current.count_ones());
             }
         }
-        if changed {
-            advance_collection_observation_epoch();
+        if cleared != 0 {
+            advance_collection_observation_epoch_by(cleared);
         }
     }
 }

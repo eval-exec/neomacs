@@ -137,12 +137,8 @@ fn round(
 
 fn clear_holders<'era>(run: &mut RunAccess<'_, 'era>, homes: &mut Homes<'era>) {
     for holder in [homes.old_handle, homes.equal_holder] {
-        contention::retry(
-            Deadline::contention(),
-            || run.sym_makunbound_into(&holder, &mut homes.dst),
-            contention::global,
-        )
-        .expect("clear the actual serial input holder");
+        run.sym_makunbound_into(&holder, &mut homes.dst)
+            .expect("clear the actual serial input holder on its first attempt");
     }
     // Drop every ordinary name home from the canonical bank. The retained
     // transport roots are only NIL/NIL/23, and this minimal shell has NO
@@ -161,7 +157,7 @@ fn sole_name_root(kind: PlainSymbolBacking) {
                 .unwrap()
                 .as_bytes()
                 .to_vec();
-            intern_retry(&mut run, &homes.name, &mut homes.dst).unwrap();
+            intern_once(&mut run, &homes.name, &mut homes.dst).unwrap();
             let id_word = homes.dst.word_for_test(&run);
             // SAFETY: `id_word` is the rooted intern result just stored in the destination slot.
             let id = unsafe { Value::from_bits(id_word) }.as_bare_symbol_id().unwrap();

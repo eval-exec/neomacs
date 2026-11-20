@@ -16,7 +16,17 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use super::architecture_moving_set::MOVING_CRATES;
+/// The lower crates that hold production code carved out of neovm-core, in
+/// extraction order. Every scanner walks `neovm-core` plus these trees.
+const LOWER_CRATES: [&str; 7] = [
+    "neovm-value",
+    "neovm-display-identity",
+    "neovm-edit",
+    "neovm-text",
+    "neovm-eval",
+    "neovm-display",
+    "neovm-system",
+];
 
 /// The value extraction manifest: pre-split core-relative path -> destination
 /// below `crates/neovm-value/src`. G0 members left `emacs_core/runtime/...` for
@@ -111,33 +121,26 @@ pub(crate) fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
-/// The crate directory for a `MOVING_CRATES` entry (`neovm_eval` ->
-/// `neovm-eval`).
-fn crate_dir_name(name: &str) -> String {
-    name.replace('_', "-")
-}
-
 /// The workspace's `crates/` directory. Scanners that intentionally cover
-/// crates outside the moving set (workspace TLS, registered resets, host
-/// effect owners) still derive the directory from here.
+/// crates outside the production roots (workspace TLS, registered resets)
+/// still derive the directory from here.
 pub(crate) fn crates_dir() -> PathBuf {
     workspace_root().join("crates")
 }
 
-/// Every production source tree: `neovm-core` first, then every extracted
-/// crate in `MOVING_CRATES` order.
+/// Every production source tree: `neovm-core` first, then every crate in
+/// `LOWER_CRATES` order.
 pub(crate) fn production_source_roots() -> Vec<ProductionSourceRoot> {
     let crates = crates_dir();
-    let mut roots = Vec::with_capacity(MOVING_CRATES.len() + 1);
+    let mut roots = Vec::with_capacity(LOWER_CRATES.len() + 1);
     roots.push(ProductionSourceRoot {
         crate_dir: "neovm-core".to_owned(),
         src: crates.join("neovm-core/src"),
     });
-    for name in MOVING_CRATES {
-        let directory = crate_dir_name(name);
+    for directory in LOWER_CRATES {
         roots.push(ProductionSourceRoot {
-            src: crates.join(&directory).join("src"),
-            crate_dir: directory,
+            src: crates.join(directory).join("src"),
+            crate_dir: directory.to_owned(),
         });
     }
     roots
@@ -375,9 +378,8 @@ mod tests {
                 .file_name()
                 .and_then(|name| name.to_str())
                 .expect("architecture file name");
-            // The helper owns the only direct root construction; the moving-set
-            // table names crates but walks no sources.
-            if name == "production_source_roots.rs" || name == "moving_set.rs" {
+            // The helper owns the only direct root construction.
+            if name == "production_source_roots.rs" {
                 continue;
             }
             let source = std::fs::read_to_string(&path).expect("read architecture scanner");

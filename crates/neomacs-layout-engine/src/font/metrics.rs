@@ -759,8 +759,6 @@ pub struct FontMetricsService {
     metrics_cache: HashMap<MetricsCacheKey, FontMetricObservation>,
     /// Cache for pre-loading font files and resolving fontdb family names
     font_file_cache: FontFileCache,
-    /// Parsed layout-table metadata, owned by the same native font lifetime.
-    otf_capability_cache: crate::font::probe::OtfCapabilityCache,
     /// Cache: (face, run text) → shaped glyphs. A run is shaped by BOTH the
     /// measure pass (wrap/cursor advance) and the render pass (glyph
     /// production); this makes the second a cache hit so cosmic-text shapes
@@ -958,7 +956,6 @@ impl FontMetricsService {
             char_cache: HashMap::default(),
             metrics_cache: HashMap::default(),
             font_file_cache: FontFileCache::new(),
-            otf_capability_cache: crate::font::probe::OtfCapabilityCache::default(),
             shaped_run_cache: HashMap::default(),
             shaped_run_cache_cap: SHAPED_RUN_CACHE_CAP,
             n_shape_calls: 0,
@@ -1165,12 +1162,15 @@ impl FontMetricsService {
 
     /// Probe one selected collection face, reusing unchanged file metadata.
     /// Clearing this service's native caches also retires these observations.
+    /// GNU `font_otf_capability` reads the opened font's GSUB/GPOS tables.
+    /// The resolver owns the per-file probe cache (`:otf` matching needs the
+    /// same observation), so this seam exports that one cached result.
     pub fn otf_capability_for_file(
         &mut self,
         file: &str,
         face_index: u32,
     ) -> Option<crate::font::probe::OtfCapability> {
-        self.otf_capability_cache.get(file, face_index)
+        self.font_resolver.otf_capability_for_file(file, face_index)
     }
 
     pub fn resolve_font_entity(
@@ -1275,6 +1275,39 @@ impl FontMetricsService {
         let opened = self.font_resolver.open_entity(query, pixel_size)?;
         self.observe_opened_font_metrics(opened.metrics.ascent, opened.metrics.descent);
         Some(opened)
+    }
+
+    /// Open one exact listed/matched platform face, as `open-font` on a font
+    /// entity does.  The identity check refuses to silently return a
+    /// different face when the family-only materialization cannot reproduce
+    /// the caller's exact selector.
+    pub fn open_platform_match_font(
+        &mut self,
+        matched: &crate::font_backend::PlatformFontMatch,
+        pixel_size: u32,
+    ) -> Option<SelectedFontInfo> {
+        let font_size = pixel_size.max(1) as f32;
+        let family = matched.metadata.family.clone();
+        let weight = matched.weight().unwrap_or(400);
+        let italic = matched.slant().is_italic();
+        let platform = self.materialize_platform_match(matched.clone())?;
+        let handle = self.materialize_platform_selection(
+            Some(platform),
+            &family,
+            weight,
+            italic,
+            font_size,
+        )?;
+        if handle.font.identity != matched.identity {
+            return None;
+        }
+        Some(SelectedFontInfo {
+            foundry: matched.metadata.foundry.clone(),
+            resolved: handle.font,
+            slant: handle.selector_slant,
+            metrics: handle.px_metrics?,
+            glyph_code: None,
+        })
     }
 
     #[must_use]
@@ -2243,14 +2276,26 @@ impl FontMetricsService {
         // Only the semantic fallback path needs a representative-glyph probe.
         let resolved_family = self.resolve_family(&self.font_resolver.resolve_family(family), None);
         let platform = self.platform_primary_match(&resolved_family, weight, italic, font_size);
+        self.materialize_platform_selection(platform, &resolved_family, weight, italic, font_size)
+    }
+
+    /// Materialize one already-selected platform face (or the family fallback
+    /// when `platform` is None) at `font_size`.  Shared by face-primary
+    /// realization and `open-font`, so an entity opened through Lisp reaches
+    /// the same canonical interned record the layout engine uses.
+    fn materialize_platform_selection(
+        &mut self,
+        platform: Option<crate::font_backend::PlatformFontMatch>,
+        resolved_family: &str,
+        weight: u16,
+        italic: bool,
+        font_size: f32,
+    ) -> Option<LayoutFontHandle> {
         let spacing = platform
             .as_ref()
             .map(|matched| matched.metadata.fixed_spacing_policy())
             .unwrap_or_else(|| {
-                if self
-                    .font_resolver
-                    .family_prefers_monospace(&resolved_family)
-                {
+                if self.font_resolver.family_prefers_monospace(resolved_family) {
                     neomacs_display_protocol::font::FixedFontSpacing::MonospaceOrCharacterCell
                 } else {
                     neomacs_display_protocol::font::FixedFontSpacing::ProportionalOrDual
@@ -2264,7 +2309,7 @@ impl FontMetricsService {
         {
             return self.materialize_bitmap_font(
                 matched,
-                &resolved_family,
+                resolved_family,
                 weight,
                 font_size,
                 FontResolutionSource::FacePrimary,
@@ -2277,13 +2322,13 @@ impl FontMetricsService {
         let font_id = match platform_fontdb_face {
             Some(face) => face.id(),
             None => {
-                self.selected_font_id_and_space_width(&resolved_family, weight, italic, font_size)
+                self.selected_font_id_and_space_width(resolved_family, weight, italic, font_size)
                     .0?
             }
         };
         let effective_weight = crate::font::font_match::resolve_weight_in_family(
             &self.font_system,
-            &resolved_family,
+            resolved_family,
             weight,
             italic,
         );
@@ -2303,7 +2348,7 @@ impl FontMetricsService {
             file.as_deref(),
             face_index,
             postscript_name.clone(),
-            &resolved_family,
+            resolved_family,
         );
         let selected_asset = file
             .as_deref()
@@ -2380,7 +2425,7 @@ impl FontMetricsService {
         self.observe_opened_font_vertical_metrics(vertical);
         let font = self.font_instances.intern(identity, replay, font_size, || {
             FontInstanceProperties {
-                family: resolved_family,
+                family: resolved_family.to_owned(),
                 full_name: None,
                 postscript_name,
                 // Preserve the resolved CSS weight, not the container face's
@@ -3622,7 +3667,6 @@ impl FontMetricsService {
     /// records are dropped only by a catalog advance, not request changes.
     pub fn clear_caches(&mut self) {
         self.coverage_bitmap_fonts.clear();
-        self.otf_capability_cache.clear();
         self.ascii_cache.clear();
         self.char_cache.clear();
         self.metrics_cache.clear();

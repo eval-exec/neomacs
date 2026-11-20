@@ -1,0 +1,22 @@
+error[E0599]: the associated function or constant `check` exists for struct `RequireSync<neovm_value::tagged::gc::WorldLoan>`, but its trait bounds were not satisfied
+ --> tests/pentry_e2_loan_ui/world_loan_not_sync.rs:7:44
+  |
+7 |     loan_bounds::RequireSync::<WorldLoan>::check();
+  |                                            ^^^^^ associated function or constant cannot be called on `RequireSync<neovm_value::tagged::gc::WorldLoan>` due to unsatisfied trait bounds
+  |
+ ::: $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_registration/world_loan.rs
+  |
+  | pub unsafe trait EraWorldLoan: Send + 'static {
+  | --------------------------------------------- doesn't satisfy `_: Sync`
+...
+  | pub struct WorldLoan(Box<dyn EraWorldLoan>);
+  | -------------------- doesn't satisfy `neovm_value::tagged::gc::WorldLoan: Sync`
+  |
+ ::: tests/pentry_e2_loan_ui/support/loan_bounds.rs
+  |
+  | pub struct RequireSync<T>(PhantomData<T>);
+  | ------------------------- associated function or constant `check` not found for this struct
+  |
+  = note: the following trait bounds were not satisfied:
+          `(dyn neovm_value::tagged::gc::EraWorldLoan + 'static): Sync`
+          which is required by `neovm_value::tagged::gc::WorldLoan: Sync`

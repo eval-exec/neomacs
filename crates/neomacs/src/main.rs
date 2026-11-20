@@ -219,7 +219,8 @@ use neovm_core::emacs_core::load::{
 use neovm_core::emacs_core::print_value_with_eval;
 use neovm_core::emacs_core::terminal::pure::{
     TerminalRuntimeConfig, configure_terminal_runtime, ensure_terminal_runtime_owner,
-    reset_terminal_host, reset_terminal_runtime, set_terminal_host,
+    reset_terminal_host, reset_terminal_runtime, set_initial_terminal_winsize_query,
+    set_terminal_host,
 };
 use neovm_core::emacs_core::value::list_length;
 use neovm_core::emacs_core::{
@@ -1061,6 +1062,7 @@ fn startup_dimensions(
     frontend: FrontendKind,
     frame_metrics: BootstrapFrameMetrics,
     noninteractive: bool,
+    daemon: bool,
 ) -> (u32, u32) {
     match frontend {
         FrontendKind::Gui => {
@@ -1105,16 +1107,30 @@ fn startup_dimensions(
             (width.max(200), height.max(100))
         }
         FrontendKind::Tty => {
-            if noninteractive {
-                // GNU `make_frame` seeds the initial non-window frame with
-                // total size 80x25, then gives the root window 24 lines plus
-                // a one-line minibuffer.
+            // GNU `make_frame` seeds the initial non-window frame with total
+            // size 80x25. A daemon never reaches `init_tty`
+            // (`dispnew.c:7222-7237`), so it uses that seed too.
+            if !tty_init::initial_tty_fatal_checks_apply(noninteractive, daemon) {
                 return (80, 25);
             }
             // TTY frames use 1x1 character cells (GNU Emacs frame.c:1184-1185),
             // so frame dimensions are in character cells, not pixels.
-            let (cols, rows) = tty_init::query_terminal_size_cells().unwrap_or((80, 25));
-            (cols, rows)
+            // GNU `init_tty` (term.c:4805-4814) replaces an ioctl side `<= 0`
+            // with termcap `co`/`li`, and `vfatal`s below 3×3. The initial
+            // terminal is the fatal call (dispnew.c:7348). `make-terminal-frame`
+            // does not use this size. The same call opens `/dev/tty` first
+            // and fatals if that open fails (term.c:4464-4470).
+            if let Some(diagnostic) = tty_init::initial_tty_open_failure() {
+                eprintln!("emacs: {diagnostic}");
+                std::process::exit(1);
+            }
+            match tty_init::initial_tty_startup_cells() {
+                Ok(cells) => cells,
+                Err(error) => {
+                    eprintln!("emacs: {error}");
+                    std::process::exit(1);
+                }
+            }
         }
     }
 }
@@ -1294,6 +1310,9 @@ fn font_entity_query(
     }
     if let Some(width) = request.width {
         query = query.with_width(width);
+    }
+    if let Some(otf) = request.otf.as_ref() {
+        query = query.with_otf(otf.clone());
     }
     query
 }
@@ -1882,7 +1901,7 @@ impl DisplayHost for PrimaryWindowDisplayHost {
             let error = startup_frame::StartupFrameError::NoUsableFont.to_string();
             return Err(error);
         };
-        let (width, height) = startup_dimensions(FrontendKind::Gui, font.metrics(), false);
+        let (width, height) = startup_dimensions(FrontendKind::Gui, font.metrics(), false, false);
         let selected = font.into_selected();
         let height_tenths = startup
             .display
@@ -2808,6 +2827,13 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         })
     }
 
+    fn font_opening_pixel_size(
+        &mut self,
+        size: neovm_core::emacs_core::eval::FontOpeningSize,
+    ) -> Result<Option<u32>, String> {
+        Ok(Some(self.font_sizing.font_opening_size_px(size).get()))
+    }
+
     fn probe_font_px_metrics(
         &mut self,
         file: &str,
@@ -2823,6 +2849,57 @@ impl DisplayHost for PrimaryWindowDisplayHost {
                 .observe_opened_font_metrics(metrics.ascent, metrics.descent);
         }
         Ok(metrics.map(core_font_px_metrics))
+    }
+
+    fn open_font_entity(
+        &mut self,
+        request: neovm_core::emacs_core::eval::FontOpenEntityRequest,
+    ) -> Result<Option<Value>, String> {
+        let Some(handle) = request.handle else {
+            return Ok(None);
+        };
+        let Some(matched) = self.font_entities.get(handle).cloned() else {
+            return Ok(None);
+        };
+        let pixel_size = self.font_sizing.font_opening_size_px(request.size).get();
+        let reported_size = request.reported_size.unwrap_or(i64::from(pixel_size));
+        let Some(selected) = self
+            .synchronized_font_metrics()
+            .open_platform_match_font(&matched, pixel_size)
+        else {
+            return Ok(None);
+        };
+        let capability = selected
+            .resolved
+            .identity
+            .file_path
+            .as_deref()
+            .and_then(|file| {
+                self.font_otf_capability(file, selected.resolved.identity.file_face_index())
+                    .ok()
+                    .flatten()
+            });
+        let opened = core_opened_font_from_selection(selected, |_, _| capability.clone());
+        Ok(Some(neovm_core::emacs_core::font::font_object_from_opened(
+            &opened,
+            reported_size,
+            matched.metadata.spacing,
+        )))
+    }
+
+    fn font_open_point_pixels(&mut self, points: f64) -> Result<Option<i64>, String> {
+        // GNU Fopen_font: POINT_TO_PIXEL (round-half-up, then C truncation
+        // toward zero) with the frame's integer resolution.  The zero -> 120
+        // rule is applied by the caller after this conversion.
+        if !points.is_finite() {
+            return Ok(None);
+        }
+        let dpi = f64::from(self.font_sizing.layout_dpi().trunc());
+        let pixels = (points * dpi / 72.0 + 0.5).trunc();
+        if !pixels.is_finite() || pixels < i64::MIN as f64 || pixels > i64::MAX as f64 {
+            return Ok(None);
+        }
+        Ok(Some(pixels as i64))
     }
 
     fn probe_font_entity_metrics(
@@ -5149,8 +5226,12 @@ pub fn run(mode: RuntimeMode) {
     // TTY geometry is in character cells and performs no native font lookup.
     // GUI geometry is prepared once on the evaluator thread instead.
     let frame_metrics = BootstrapFrameMetrics::TTY;
-    let (width, height) =
-        startup_dimensions(startup.frontend, frame_metrics, startup.noninteractive);
+    let (width, height) = startup_dimensions(
+        startup.frontend,
+        frame_metrics,
+        startup.noninteractive,
+        startup.daemon.is_some(),
+    );
 
     // 2. Initialize the evaluator from the canonical bootstrap surface.
     //    GNU loads the dumped bootstrap image here, then lets the outer
@@ -5163,6 +5244,14 @@ pub fn run(mode: RuntimeMode) {
     if tty_init::should_enable_live_tty_io(&startup) {
         reset_terminal_host();
         configure_terminal_runtime(tty_init::detect_tty_runtime(&startup));
+        // Root `make-terminal-frame` re-reads this terminal's winsize
+        // (`frame.c:1861`). The query lives on the initial terminal's
+        // record. The same function may be installed again; a different
+        // one is refused. The initial frame keeps the size startup stored.
+        if let Err(error) = set_initial_terminal_winsize_query(tty_init::initial_tty_winsize_cells)
+        {
+            tracing::error!("initial terminal winsize query refused: {error:?}");
+        }
         // GNU `init_sys_modes' (src/sysdep.c:1130) publishes the terminal's
         // ERASE character here, read from the termios it saved before touching
         // the terminal modes. Do the same while stdout is still cooked and
