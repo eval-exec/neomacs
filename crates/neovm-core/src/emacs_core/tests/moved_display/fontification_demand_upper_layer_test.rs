@@ -538,6 +538,17 @@ fn fontification_callback_range_is_bounded_and_flat_on_a_long_line() {
         (149_873, 650_001),
         "GNU's large-narrowing bounds for the callback position"
     );
+    // The buffer-start boundary must stay inside the narrowed region: with a
+    // 0-based conversion the range started at 2 and a callback at position 1
+    // ran outside its own narrowing, which made every layout retry fontify
+    // the first position again.
+    let (calls_start, min_start, max_start) = observed_long_line_fontification_range(700_000, 0);
+    assert!(calls_start >= 1, "the probe was never entered");
+    assert_eq!(
+        (min_start, max_start),
+        (1, 250_001),
+        "the callback at point-min must be inside GNU's narrowed region"
+    );
     assert!(
         max_short - min_short <= 500_000 + 128,
         "fontification range {} exceeds long-line-optimizations-region-size plus the BOL search limit",
