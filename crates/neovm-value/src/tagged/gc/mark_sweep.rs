@@ -2433,3 +2433,9 @@ mod generation_tests;
 #[cfg(test)]
 #[path = "tests/permanent_box_chain_test.rs"]
 mod permanent_box_chain_tests;
+
+/// The serial stop and the stopped major yield one queued doomed finalizer
+/// function through the same runtime-root seed.
+#[cfg(test)]
+#[path = "tests/doomed_finalizer_seed_test.rs"]
+mod doomed_finalizer_seed_tests;
