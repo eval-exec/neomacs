@@ -178,7 +178,7 @@ fn retire_and_clear_disarm_the_slot_and_the_next_call_re_arms_it() {
     );
     assert!(slot_armed(callee), "re-armed from the fresh cache entry");
     // `clear()` FREES leaves (image reload): every slot must read empty.
-    cache::clear();
+    cache::clear_with_serial_receipt().expect("serial jit grace");
     assert!(!slot_armed(callee), "clear() disarms every slot");
     assert_eq!(call0(&mut ev, caller), Value::make_int(3));
     assert!(slot_armed(callee));

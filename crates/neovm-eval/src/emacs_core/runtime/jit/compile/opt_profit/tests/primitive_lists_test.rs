@@ -29,7 +29,7 @@ const _: () = assert!(std::mem::size_of::<FixtureScopes>() == 0);
 impl FixtureScopes {
     #[doc(hidden)]
     pub fn enter() -> Self {
-        cache::clear();
+        cache::clear_with_serial_receipt().expect("serial jit grace");
         inline::force_inline_for_test(Some(true));
         stats::force_observe_for_test(stats::ObserveOverride {
             stats: true,
@@ -41,7 +41,7 @@ impl FixtureScopes {
 }
 impl Drop for FixtureScopes {
     fn drop(&mut self) {
-        cache::clear();
+        cache::clear_with_serial_receipt().expect("serial jit grace");
         inline::force_inline_for_test(None);
         stats::force_observe_for_test(stats::ObserveOverride {
             stats: false,

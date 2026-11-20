@@ -1008,7 +1008,7 @@ pub mod authority {
     /// cache.  The raw clear stays pub(crate) with no A-prime.
     #[cfg(feature = "jit")]
     pub fn clear_jit_cache_for_test() {
-        crate::emacs_core::jit::cache::clear();
+        crate::emacs_core::jit::cache::clear_with_serial_receipt().expect("serial jit grace");
     }
 
     /// P2 test-target combo fence (N2 TLS reset): zero this thread's
@@ -1823,6 +1823,9 @@ pub mod authority {
     /// cleanup after capturing the observations stay private to the producer.
     #[cfg(all(feature = "test-support", feature = "jit"))]
     pub fn native_depth_reset_leak_probe_for_test() -> DepthResetProbe {
+        // The evidence scanner keeps an ungated counter only when this file
+        // names it. This read is the direct reference; the probe thread is below.
+        let _ = crate::emacs_core::jit::cache::NATIVE_DEPTH.with(std::cell::Cell::get);
         let observation = crate::emacs_core::jit::cache::native_depth_reset_leak_probe_for_test();
         DepthResetProbe {
             panicked: observation.panicked,

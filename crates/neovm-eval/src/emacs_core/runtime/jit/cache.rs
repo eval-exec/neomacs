@@ -214,7 +214,9 @@ impl DenseCache {
                 if old.obs.t2.due().is_some() {
                     super::tier2::upgrade_failed(&old);
                 }
-                fold_dropped_leaf(&old);
+                // No receipt on this path: keep the displaced leaf allocated.
+                // Draining it is `clear`, which consumes a [`JitGracePeriod`].
+                self.retire(old);
             }
             Some(CacheEntry::CompiledUpgrading(upgrade)) => {
                 super::tier2::upgrade_failed(&upgrade.old);
@@ -295,6 +297,35 @@ thread_local! {
     /// totals still include them. Cold: touched only when leaves are dropped.
     static DROPPED_LEAF_TOTALS: std::cell::Cell<LeafTotals> =
         const { std::cell::Cell::new(LeafTotals { leaves: 0, entries: 0, deopt_at: 0, deopt_rerun: 0, signals: 0 }) };
+    /// Leaves removed from a cache while `COMPILED` was already borrowed.
+    /// Drained only by [`clear`], which holds a [`JitGracePeriod`].
+    static OVERFLOW_RETIRED: std::cell::RefCell<Vec<Rc<CompiledLeaf>>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+    /// A heap or obarray sync refused its receipt. The next reloc walk
+    /// skips those leaves instead of tracing the replaced image.
+    static RELOC_ROOTS_REFUSED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Keep a displaced cache-owned leaf until a receipt drains it.
+fn retire_displaced(leaf: Rc<CompiledLeaf>) {
+    let parked = COMPILED.with(|cache| {
+        if let Ok(mut cache) = cache.try_borrow_mut() {
+            cache.retire(Rc::clone(&leaf));
+            true
+        } else {
+            false
+        }
+    });
+    if !parked {
+        OVERFLOW_RETIRED.with(|slot| slot.borrow_mut().push(leaf));
+    }
+}
+
+fn insert_osr(key: (u64, usize), entry: Option<OsrEntry>) {
+    let previous = OSR_CACHE.with(|cache| cache.borrow_mut().insert(key, entry));
+    if let Some(Some(old)) = previous {
+        retire_displaced(old.leaf);
+    }
 }
 
 /// Fold a leaf that is about to leave every cache into the dropped totals.
@@ -590,46 +621,50 @@ enum OsrLookup {
     Pending,
 }
 
-// CFG CONTRACT (RELEASE-TEST-SUPPORT-CFG): the F5 witness reader
-// (`test_support::authority::native_depth_for_test`) is compiled under
-// `test-support`, which a unified release workspace test build enables on this
-// LIB while `cfg(test)` and `debug_assertions` are both off for the dependency.
-// This recorded signal must therefore include `feature = "test-support"`, or the
-// release test observes a hard-wired 0 (the same class as
-// `shims.rs::SPEC_CALL_COUNT`). Production release builds have no such feature.
-#[cfg(any(test, debug_assertions, feature = "test-support"))]
+// The serial mint reads this counter in every build, including production
+// release. Compiling it out would make that mint succeed under a live frame.
 thread_local! {
-    /// Nesting depth of native leaf executions on this thread (debug, test and
-    /// release test-support builds). `clear()` asserts it is 0: the soundness of
-    /// every spec-slot leaf pointer and every baked box address rests on "no
-    /// clear() fires while a native frame is live"
-    /// (`resolve_compiled_leaf_ptr`), so a violation must be loud in debug/test
-    /// builds instead of a silent use-after-free.
-    static NATIVE_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    /// Nesting depth of native leaf executions on this thread. The serial
+    /// [`JitGracePeriod`] mint refuses while this is non-zero, so a cache
+    /// drop cannot free a leaf's reloc and spec boxes under its machine code.
+    pub(crate) static NATIVE_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
-/// Current native nesting depth (0 outside any leaf). Always 0 in production
-/// release builds, where the counter does not exist; recorded in release
-/// test-support builds (see the CFG CONTRACT above).
+/// Current native nesting depth (0 outside any leaf).
 #[inline]
 pub(crate) fn native_depth() -> u32 {
-    #[cfg(any(test, debug_assertions, feature = "test-support"))]
-    {
-        NATIVE_DEPTH.with(|d| d.get())
-    }
-    #[cfg(not(any(test, debug_assertions, feature = "test-support")))]
-    {
-        0
+    NATIVE_DEPTH.with(|d| d.get())
+}
+
+/// Last `CompiledLeaf` drops observed while `native_depth() > 0`.
+/// The owner pin reads this counter. It must not catch a panic.
+#[cfg(test)]
+thread_local! {
+    static LIVE_FRAME_OWNER_DROPS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn reset_live_frame_owner_drops_for_test() {
+    LIVE_FRAME_OWNER_DROPS.with(|drops| drops.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn live_frame_owner_drops_for_test() -> u32 {
+    LIVE_FRAME_OWNER_DROPS.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+pub(crate) fn note_compiled_leaf_drop_for_test() {
+    if native_depth() > 0 {
+        LIVE_FRAME_OWNER_DROPS.with(|drops| drops.set(drops.get().saturating_add(1)));
     }
 }
 
-/// RAII marker for one native leaf execution (see `NATIVE_DEPTH`). Zero-sized
-/// and a no-op in production release builds; recorded in release test-support
-/// builds; unwind-safe (the decrement is in `Drop`).
+/// RAII marker for one native leaf execution (see `NATIVE_DEPTH`).
+/// Unwind-safe: the decrement is in `Drop`.
 #[must_use = "the thread-local extent ends when this guard drops"]
 #[derive(Debug)]
 pub(crate) struct NativeDepthGuard {
-    #[cfg(any(test, debug_assertions, feature = "test-support"))]
     _scope: neovm_value::tls_scope::TlsScope<u32, std::cell::Cell<u32>>,
     _thread: std::marker::PhantomData<std::rc::Rc<()>>,
 }
@@ -640,7 +675,6 @@ impl NativeDepthGuard {
     #[doc(hidden)]
     pub fn enter() -> Self {
         Self {
-            #[cfg(any(test, debug_assertions, feature = "test-support"))]
             _scope: neovm_value::tls_scope::TlsScope::restore(
                 &NATIVE_DEPTH,
                 NATIVE_DEPTH.with(|depth| depth.replace(depth.get().saturating_add(1))),
@@ -940,7 +974,9 @@ pub(crate) unsafe fn try_run_osr_probe(
     if ctx.is_null() {
         return OsrProbe::NoTransfer;
     }
-    sync_cache_to_current_heap();
+    if sync_cache_to_current_heap().is_err() {
+        return OsrProbe::NoTransfer;
+    }
     let id = func.jit_runtime().compiled_id_or_assign();
     let cached = match osr_lookup(ctx, func, osr_pc, id) {
         OsrLookup::Entry(entry) => entry,
@@ -1147,7 +1183,7 @@ fn osr_lookup(ctx: *mut Context, func: &ByteCodeFunction, osr_pc: usize, id: u64
             if let Some(code) = deferred {
                 code.cancel();
             }
-            OSR_CACHE.with(|c| c.borrow_mut().insert(key, compiled.clone()));
+            insert_osr(key, compiled.clone());
             OsrLookup::Entry(compiled)
         }
     }
@@ -1235,13 +1271,13 @@ fn install_osr_pending(
             stack_depth,
             bind_depth,
         }),
-        Err(super::bg::Discard::Rejected) => {
+        Err(discarded) => {
+            retire_displaced(Rc::new(discarded.leaf));
             refresh_cached_inline_deps(key.0);
-            None
-        }
-        Err(super::bg::Discard::Stale(_)) => {
-            refresh_cached_inline_deps(key.0);
-            return None;
+            match discarded.reason {
+                super::bg::Discard::Rejected => None,
+                super::bg::Discard::Stale(_) => return None,
+            }
         }
     };
     if let Some(entry) = &entry {
@@ -1249,7 +1285,7 @@ fn install_osr_pending(
     }
     // The settled job released a waiting entry: its next call compiles
     // against the installed (or refused) leaf.
-    OSR_CACHE.with(|c| c.borrow_mut().insert(key, entry.clone()));
+    insert_osr(key, entry.clone());
     Some(OsrLookup::Entry(entry))
 }
 
@@ -1928,12 +1964,10 @@ pub(crate) fn invalidate_for_reopt(
             Err(_) => false,
         });
         if !retired {
-            // Defensive cache-borrow failure: native dispatch normally releases
-            // the cache before running Lisp. This deopting transfer still owns
-            // its Rc through resume; no cache entry is published here.
-            for leaf in &osr {
-                fold_dropped_leaf(leaf);
-            }
+            // The cache borrow failed, so these leaves cannot join `retired`
+            // yet. Park them for the receipt drain. Folding here and letting
+            // the vec drop would free them under a live frame.
+            OVERFLOW_RETIRED.with(|slot| slot.borrow_mut().extend(osr.iter().cloned()));
         }
     }
     let mut unlinked = 0;
@@ -2236,22 +2270,31 @@ pub(crate) fn compile_and_cache_jit_leaf(
 /// machine code; the next compile's `declare_function` name string landed in the
 /// freed reloc cell and the leaf called `"neovm_jit_varbind"`'s bytes as a
 /// function. See `resolve_compiled_leaf_ptr` for the invariant this preserves.
-fn sync_cache_to_current_heap() {
+fn sync_cache_to_current_heap() -> Result<(), JitGraceRefuse> {
     let cur = neovm_value::tagged::gc::current_tagged_heap_identity();
     let changed = COMPILED_HEAP.with(|h| match h.get() {
         None => {
             h.set(cur);
             false
         }
-        Some(prev) if Some(prev) != cur => {
-            h.set(cur);
-            true
-        }
+        Some(prev) if Some(prev) != cur => true,
         Some(_) => false,
     });
-    if changed {
-        clear();
+    if !changed {
+        return Ok(());
     }
+    // Mint before publishing the new identity. Retiring is wrong: a retired
+    // leaf would keep reloc roots into the heap this swap replaced.
+    let receipt = match JitGracePeriod::mint_serial() {
+        Ok(receipt) => receipt,
+        Err(err) => {
+            RELOC_ROOTS_REFUSED.with(|flag| flag.set(true));
+            return Err(err);
+        }
+    };
+    COMPILED_HEAP.with(|h| h.set(cur));
+    clear(receipt);
+    Ok(())
 }
 
 /// Pin the heap identity the cache's leaves are built against, at INSERT time
@@ -2287,16 +2330,28 @@ fn record_compiled_obarray(obarray: Option<&Obarray>) {
 /// catches -- so this is the belt to that brace, for the leaves that keep
 /// obarray-internal addresses (symbol cells, BLV records, forwarder
 /// descriptors). One thread-local compare per GC root walk; nothing per call.
-pub(crate) fn sync_cache_to_obarray(generation: u64) {
+pub(crate) fn sync_cache_to_obarray(generation: u64) -> Result<(), JitGraceRefuse> {
     let changed = COMPILED_OBARRAY.with(|g| g.get().is_some_and(|prev| prev != generation));
-    if changed {
-        clear();
-        COMPILED_OBARRAY.with(|g| g.set(Some(generation)));
+    if !changed {
+        return Ok(());
     }
+    let receipt = match JitGracePeriod::mint_serial() {
+        Ok(receipt) => receipt,
+        Err(err) => {
+            RELOC_ROOTS_REFUSED.with(|flag| flag.set(true));
+            return Err(err);
+        }
+    };
+    clear(receipt);
+    COMPILED_OBARRAY.with(|g| g.set(Some(generation)));
+    Ok(())
 }
 
 pub(crate) fn collect_jit_reloc_gc_roots_for_heap(roots: &mut Vec<Value>, heap_id: usize) {
-    sync_cache_to_current_heap();
+    if sync_cache_to_current_heap().is_err() || RELOC_ROOTS_REFUSED.with(|flag| flag.replace(false))
+    {
+        return;
+    }
     // Another live Context can collect while this thread's active view still
     // names the cached leaves' owner. Its reloc Values belong to that owner,
     // irrespective of which heap is currently installed in TLS.
@@ -2328,6 +2383,11 @@ pub(crate) fn collect_jit_reloc_gc_roots_for_heap(roots: &mut Vec<Value>, heap_i
         // compile, so no barrier is involved. Bounded: retiring is rare
         // (re-tier, stale inline, patched prefix, deopt invalidation).
         for leaf in &cache.retired {
+            leaf_gc_roots(leaf, roots);
+        }
+    });
+    OVERFLOW_RETIRED.with(|slot| {
+        for leaf in slot.borrow().iter() {
             leaf_gc_roots(leaf, roots);
         }
     });
@@ -2448,6 +2508,47 @@ pub(crate) fn prepopulate_aot_leaves(leaves: Vec<(u64, CompiledLeaf)>) -> Vec<u6
     inserted
 }
 
+/// Serial receipt for dropping cache-owned compiled leaves.
+///
+/// The constructor is private. [`JitGracePeriod::mint_serial`] succeeds only
+/// while `native_depth` is 0, including in release. The multi-mutator mint
+/// stays with the stop proof and is not part of this receipt.
+#[derive(Debug)]
+pub struct JitGracePeriod {
+    _private: (),
+}
+
+static_assertions::assert_not_impl_any!(JitGracePeriod: Clone, Copy);
+
+/// A serial mint refused because a native frame is still on this thread.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct JitGraceRefuse {
+    /// `native_depth` at the mint.
+    pub depth: u32,
+}
+
+impl JitGracePeriod {
+    pub(crate) fn mint_serial() -> Result<Self, JitGraceRefuse> {
+        let depth = native_depth();
+        if depth != 0 {
+            return Err(JitGraceRefuse { depth });
+        }
+        Ok(Self { _private: () })
+    }
+}
+
+/// Drop compiled leaves. External callers must pass a receipt; there is no
+/// public constructor for one.
+#[doc(hidden)]
+pub fn reclaim_with_receipt(receipt: JitGracePeriod) {
+    clear(receipt);
+}
+
+pub(crate) fn clear_with_serial_receipt() -> Result<(), JitGraceRefuse> {
+    clear(JitGracePeriod::mint_serial()?);
+    Ok(())
+}
+
 /// Drop all compiled state on this thread. Called when a pdump load replaces the
 /// runtime image (and thus the heap that every cached leaf's reloc vector + baked
 /// addresses reference) — so every cached leaf is now stale and must neither be run
@@ -2455,14 +2556,12 @@ pub(crate) fn prepopulate_aot_leaves(leaves: Vec<(u64, CompiledLeaf)>) -> Vec<u6
 /// matters when a process reloads an image in-place (e.g. the pdump round-trip
 /// tests), where leaving stale leaves cached makes R1a's reloc roots trace
 /// freed/reused memory.
-pub(crate) fn clear() {
-    debug_assert_eq!(
-        native_depth(),
-        0,
-        "jit::cache::clear() under a running native leaf would free its reloc/spec boxes \
-         beneath its own machine code (the heap-identity stability invariant, see \
-         resolve_compiled_leaf_ptr)"
-    );
+///
+/// `receipt` is the serial mint. It replaces the old depth assertion: a live
+/// frame fails the mint in release and never reaches this function.
+pub(crate) fn clear(receipt: JitGracePeriod) {
+    let JitGracePeriod { _private: () } = receipt;
+    RELOC_ROOTS_REFUSED.with(|flag| flag.set(false));
     COMPILED.with(|c| c.borrow_mut().clear());
     INLINE_DEPS.with(|m| m.borrow_mut().clear());
     INLINE_EVICTIONS.with(|m| m.borrow_mut().clear());
@@ -2474,6 +2573,13 @@ pub(crate) fn clear() {
         osr.clear();
     });
     OSR_PENDING.with(|p| p.borrow_mut().clear());
+    OVERFLOW_RETIRED.with(|slot| {
+        let mut parked = slot.borrow_mut();
+        for leaf in parked.iter() {
+            fold_dropped_leaf(leaf);
+        }
+        parked.clear();
+    });
     // Every remembered NotCompilable verdict is now as stale as the cache.
     REJECTION_EPOCH.fetch_add(1, Ordering::Relaxed);
     // No leaf is left to be bound to an obarray.
@@ -2656,12 +2762,13 @@ fn probe_upgrade(cache: &mut DenseCache, id: u64, ctx: Option<&Context>) -> Rc<C
     };
     match super::bg::install(job, Some(&rt), ctx) {
         Ok(leaf) => publish_upgrade(cache, id, old, Rc::new(leaf), kind, &rt),
-        Err(reason) => {
+        Err(discarded) => {
             register_inline_deps(id, &old);
-            match reason {
+            match discarded.reason {
                 super::bg::Discard::Rejected => super::tier2::upgrade_failed(&old),
                 super::bg::Discard::Stale(_) => super::tier2::upgrade_deferred(&rt, &old),
             }
+            cache.retire(Rc::new(discarded.leaf));
             cache.insert(id, CacheEntry::Compiled(Rc::clone(&old)));
             old
         }
@@ -2763,19 +2870,24 @@ fn install_pending(
             cache.insert(id, CacheEntry::Compiled(Rc::clone(&leaf)));
             Some(leaf)
         }
-        Err(super::bg::Discard::Rejected) => {
-            forget_inline_deps(id);
-            add_osr_inline_deps(id, None);
-            if let Some(rt) = rt {
-                rt.mark_native_rejected(rejection_epoch());
+        Err(discarded) => {
+            cache.retire(Rc::new(discarded.leaf));
+            match discarded.reason {
+                super::bg::Discard::Rejected => {
+                    forget_inline_deps(id);
+                    add_osr_inline_deps(id, None);
+                    if let Some(rt) = rt {
+                        rt.mark_native_rejected(rejection_epoch());
+                    }
+                    cache.insert(id, CacheEntry::NotCompilable);
+                    None
+                }
+                super::bg::Discard::Stale(_) => {
+                    forget_inline_deps(id);
+                    add_osr_inline_deps(id, None);
+                    None
+                }
             }
-            cache.insert(id, CacheEntry::NotCompilable);
-            None
-        }
-        Err(super::bg::Discard::Stale(_)) => {
-            forget_inline_deps(id);
-            add_osr_inline_deps(id, None);
-            None
         }
     }
 }
@@ -4003,8 +4115,8 @@ pub(crate) fn install_leaf_for_test(
     func: &ByteCodeFunction,
     leaf: CompiledLeaf,
 ) -> Rc<CompiledLeaf> {
-    sync_cache_to_current_heap();
-    sync_cache_to_obarray(ctx.obarray.generation());
+    sync_cache_to_current_heap().expect("serial jit grace");
+    sync_cache_to_obarray(ctx.obarray.generation()).expect("serial jit grace");
     let id = func.jit_runtime().compiled_id_or_assign();
     let leaf = Rc::new(leaf);
     func.jit_runtime().disarm_leaf_slot();
@@ -4024,7 +4136,7 @@ pub(crate) fn install_leaf_for_test(
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) fn prepare_entry_for_test(ctx: *mut Context, func: &ByteCodeFunction) {
     use std::time::Duration;
-    sync_cache_to_current_heap();
+    sync_cache_to_current_heap().expect("serial jit grace");
     let id = func.jit_runtime().compiled_id_or_assign();
     COMPILED.with(|cache| {
         let mut cache = cache.borrow_mut();
@@ -4083,7 +4195,7 @@ pub(crate) fn prepare_osr_for_test(ctx: *mut Context, func: &ByteCodeFunction, p
         !ctx.is_null(),
         "OSR preparation requires the owning Context"
     );
-    sync_cache_to_current_heap();
+    sync_cache_to_current_heap().expect("serial jit grace");
     let id = func.jit_runtime().compiled_id_or_assign();
     let _ = osr_lookup(ctx, func, pc, id);
     assert!(
@@ -4102,7 +4214,7 @@ pub(crate) fn prepare_osr_for_test(ctx: *mut Context, func: &ByteCodeFunction, p
 #[cfg(test)]
 pub(crate) fn prepare_upgrade_for_test(ctx: *mut Context, func: &ByteCodeFunction) {
     use std::time::Duration;
-    sync_cache_to_current_heap();
+    sync_cache_to_current_heap().expect("serial jit grace");
     let Some(id) = func.jit_runtime().compiled_id() else {
         return;
     };
@@ -4128,14 +4240,13 @@ pub(crate) fn prepare_upgrade_for_test(ctx: *mut Context, func: &ByteCodeFunctio
 /// on their blocked carrier and must not call this reset. Cached relocation
 /// Values are unrooted while idle, so the cache cannot enter the next job.
 pub(crate) fn reset_carrier_tls() {
-    debug_assert_eq!(
-        native_depth(),
-        0,
-        "a reused carrier must have no native leaf guards from its completed job"
-    );
-    #[cfg(any(test, debug_assertions, feature = "test-support"))]
+    // A live frame still owns its leaves. Zeroing the counter first would
+    // let the mint succeed and drop those leaves under the frame.
+    let Ok(receipt) = JitGracePeriod::mint_serial() else {
+        return;
+    };
     NATIVE_DEPTH.with(|depth| depth.set(0));
-    clear();
+    clear(receipt);
     COMPILED_HEAP.with(|slot| slot.set(None));
     DROPPED_LEAF_TOTALS.with(|totals| {
         totals.set(LeafTotals {
@@ -4168,18 +4279,13 @@ pub(crate) fn native_depth_reset_leak_probe_for_test() -> NativeDepthResetObserv
     std::thread::spawn(|| {
         assert_eq!(native_depth(), 0, "the probe starts outside native code");
         let guard = NativeDepthGuard::enter();
-        assert_eq!(
-            native_depth(),
-            u32::from(cfg!(any(test, debug_assertions, feature = "test-support"))),
-            "the real guard establishes the configured native extent"
-        );
+        assert_eq!(native_depth(), 1, "the guard records one live native frame");
         std::mem::forget(guard);
 
         let reset = std::panic::catch_unwind(reset_carrier_tls);
         let retained_depth = native_depth();
         // Only the fixture repairs the deliberately leaked TLS, after observing
-        // whether the failed reset preserved it. A normal reset must then finish.
-        #[cfg(any(test, debug_assertions, feature = "test-support"))]
+        // whether the refused reset preserved it. A normal reset must then finish.
         NATIVE_DEPTH.with(|depth| depth.set(0));
         reset_carrier_tls();
         NativeDepthResetObservation {

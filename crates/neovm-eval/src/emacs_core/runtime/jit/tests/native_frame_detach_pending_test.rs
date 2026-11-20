@@ -11,7 +11,7 @@ struct HeldPending;
 impl Drop for HeldPending {
     fn drop(&mut self) {
         // Cancel this mutator's jobs before its Context dies, even on failure.
-        cache::clear();
+        cache::clear_with_serial_receipt().expect("serial jit grace");
         bg::force_mode_for_test(None);
         force_profit_gate_for_test(true);
     }
@@ -127,7 +127,7 @@ fn held_pending_callee_keeps_cleanup_backtrace_args_after_recovery() {
                 "((\"kept-b\" (83 . 89) [97]))",
             ),
         ] {
-            cache::clear();
+            cache::clear_with_serial_receipt().expect("serial jit grace");
             let name = format!("neo-detach-pending-{nargs}");
             ev.eval_str(&format!(
                 "(progn

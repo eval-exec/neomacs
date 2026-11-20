@@ -827,6 +827,16 @@ pub struct CompiledLeaf {
 
 static_assertions::assert_not_impl_any!(CompiledLeaf: Send, Sync);
 
+/// Owner observer for the live-frame pin. Records a last-owner drop while
+/// native code is still on this thread. The counter is the assertion; this
+/// destructor does not catch or raise a panic.
+#[cfg(test)]
+impl Drop for CompiledLeaf {
+    fn drop(&mut self) {
+        super::super::cache::note_compiled_leaf_drop_for_test();
+    }
+}
+
 /// How a native-to-native caller that owns the frame bookkeeping (the spec
 /// shim, `cache::run_resolved_leaf_native`) enters a leaf: one byte decided
 /// when the leaf is built, so the hot memory-ABI entry is one compare, and

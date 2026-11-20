@@ -36,7 +36,7 @@ impl Hooks {
             return;
         }
         self.active = false;
-        clear();
+        clear_with_serial_receipt().expect("serial jit grace");
         bg::hold_publish_for_test(false);
         bg::publish_held_for_test();
         bg::force_deferred_install_for_test(false);

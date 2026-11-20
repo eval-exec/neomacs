@@ -101,5 +101,5 @@ fn opt_profit_primitive_loops_numeric_osr_runs_opt_and_deopts_at_entry() {
     assert_eq!(frame.stack.as_slice(), &bad);
     assert_eq!(context.jit_root_stack_top, 0);
     force_opt_osr_entry_for_test(None);
-    cache::clear();
+    cache::clear_with_serial_receipt().expect("serial jit grace");
 }

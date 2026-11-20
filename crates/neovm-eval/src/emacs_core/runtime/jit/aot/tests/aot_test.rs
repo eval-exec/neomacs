@@ -825,7 +825,7 @@ fn aot_reloc_const_is_gc_rooted_via_compiled_walk() {
         "the AOT leaf's rebuilt reloc const must be a GC root (COMPILED walk)"
     );
 
-    super::super::cache::clear();
+    super::super::cache::clear_with_serial_receipt().expect("serial jit grace");
     test_support::reset();
 }
 
@@ -921,7 +921,7 @@ fn aot_hit_serves_without_jitting_through_cache() {
         "cached leaf must be AOT-backed (served without JITing)"
     );
 
-    super::super::cache::clear();
+    super::super::cache::clear_with_serial_receipt().expect("serial jit grace");
     test_support::reset();
 }
 
@@ -1151,7 +1151,7 @@ fn r2_prepopulate_native_from_call_1_and_survives_gc() {
         "prepopulated leaf must still be AOT-backed after a GC"
     );
 
-    super::super::cache::clear();
+    super::super::cache::clear_with_serial_receipt().expect("serial jit grace");
     test_support::reset();
 }
 
@@ -1204,7 +1204,7 @@ fn r2_prepopulate_skips_on_preload_miss() {
         "a preload miss must leave the fn uncompiled (it will JIT normally)"
     );
 
-    super::super::cache::clear();
+    super::super::cache::clear_with_serial_receipt().expect("serial jit grace");
     test_support::reset();
 }
 
@@ -1325,7 +1325,7 @@ fn r2_prepopulate_never_overwrites_existing_jit_leaf() {
         }),
     );
 
-    super::super::cache::clear();
+    super::super::cache::clear_with_serial_receipt().expect("serial jit grace");
     test_support::reset();
 }
 
@@ -1649,7 +1649,7 @@ fn prepopulate_manifest_prefilter_skips_nonmember_without_hashing() {
         control.missed >= 1,
         "nonmember misses in control; got {control:?}"
     );
-    super::super::cache::clear();
+    super::super::cache::clear_with_serial_receipt().expect("serial jit grace");
 
     // FILTERED: inject the v2 pre-keys — `m` for the member, verified `x`
     // for the nonmember.
@@ -1705,7 +1705,7 @@ fn prepopulate_manifest_prefilter_skips_nonmember_without_hashing() {
         "nonmember stays uncompiled (it will JIT normally)"
     );
 
-    super::super::cache::clear();
+    super::super::cache::clear_with_serial_receipt().expect("serial jit grace");
     test_support::reset();
 }
 
@@ -1787,7 +1787,7 @@ fn prepopulate_prekey_mismatch_fails_closed_to_hash_path() {
         Some(true)
     );
 
-    super::super::cache::clear();
+    super::super::cache::clear_with_serial_receipt().expect("serial jit grace");
     test_support::reset();
 }
 
@@ -1875,7 +1875,7 @@ fn pgo_drain_cap_bounds_count_and_exists_skips() {
     use neovm_value::intern::intern;
 
     let dir = tempfile::tempdir().expect("tempdir");
-    super::super::cache::clear();
+    super::super::cache::clear_with_serial_receipt().expect("serial jit grace");
     // A bare `(callee x)` is call-dominated → decline the JIT profit gate so it
     // enters the JIT set as the drain's spec-bearing source.
     super::super::compile::force_profit_gate_for_test(false);
@@ -1927,7 +1927,7 @@ fn pgo_drain_cap_bounds_count_and_exists_skips() {
         ".exists() skip → re-drain no-op"
     );
     assert_eq!(count_so(dir.path()), 2);
-    super::super::cache::clear();
+    super::super::cache::clear_with_serial_receipt().expect("serial jit grace");
 }
 
 /// `jit_compiled_ids` reports the proven-hot JIT set; a NON-compilable body is
@@ -1939,7 +1939,7 @@ fn pgo_jit_set_and_wrapper_default_off() {
     use neovm_value::intern::intern;
 
     let dir = tempfile::tempdir().expect("tempdir");
-    super::super::cache::clear();
+    super::super::cache::clear_with_serial_receipt().expect("serial jit grace");
     super::super::compile::force_profit_gate_for_test(false);
     let mut c = Context::new(crate::test_utils::unit_runtime());
     pgo_alias(&mut c, "pgo-set-callee", "recordp");
@@ -1976,7 +1976,7 @@ fn pgo_jit_set_and_wrapper_default_off() {
         1,
         "the core drains the same hot leaf when explicitly targeted"
     );
-    super::super::cache::clear();
+    super::super::cache::clear_with_serial_receipt().expect("serial jit grace");
 }
 
 /// An AOT leaf carries no GNU byte-offset map, so a `switch` jump table's

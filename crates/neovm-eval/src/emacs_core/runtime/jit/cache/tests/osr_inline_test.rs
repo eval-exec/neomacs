@@ -116,7 +116,7 @@ fn osr_inline_chain_feedback_retires_the_osr_leaf_and_widens_the_inner_source() 
     let _knobs = Knobs::enter(Inline2Mode::Off);
     reopt::force_reopt_for_test(Some(ReoptKnobs::stress()));
     let ctx = Context::new(crate::test_utils::unit_runtime());
-    sync_cache_to_current_heap();
+    sync_cache_to_current_heap().expect("serial jit grace");
     let physical = function(vec![Op::StackRef(0), Op::Add1, Op::Return], vec![]);
     let inner = function(vec![Op::StackRef(0), Op::Add1, Op::Return], vec![]);
     let id = physical.jit_runtime().compiled_id_or_assign();
@@ -160,7 +160,7 @@ fn osr_inline_dependencies_evict_a_source_whose_entry_leaf_inlines_nothing() {
     let _knobs = Knobs::enter(Inline2Mode::All);
     compile::force_profit_gate_for_test(false);
     let ctx = Context::new(crate::test_utils::unit_runtime());
-    sync_cache_to_current_heap();
+    sync_cache_to_current_heap().expect("serial jit grace");
     let physical = function(vec![Op::StackRef(0), Op::Return], vec![]);
     let id = compile_and_cache_jit_leaf(&physical, None).unwrap();
     let ptr = compiled_leaf_ptr_for_test(id).unwrap();
@@ -184,7 +184,7 @@ fn osr_inline_dependencies_evict_a_source_whose_entry_leaf_inlines_nothing() {
 fn osr_inline_dependency_union_survives_rebuilding_the_entry_leaf() {
     let _knobs = Knobs::enter(Inline2Mode::All);
     let ctx = Context::new(crate::test_utils::unit_runtime());
-    sync_cache_to_current_heap();
+    sync_cache_to_current_heap().expect("serial jit grace");
     let physical = function(vec![Op::StackRef(0), Op::Return], vec![]);
     let id = physical.jit_runtime().compiled_id_or_assign();
     let osr_symbol = neovm_value::intern::intern("osr-union-dependency");
@@ -236,7 +236,7 @@ fn baseline_with_dependencies(
 fn osr_inline_disabled_preserves_entry_only_dependency_eviction() {
     let _knobs = Knobs::enter(Inline2Mode::Off);
     let ctx = Context::new(crate::test_utils::unit_runtime());
-    sync_cache_to_current_heap();
+    sync_cache_to_current_heap().expect("serial jit grace");
     let physical = function(vec![Op::StackRef(0), Op::Return], vec![]);
     let id = physical.jit_runtime().compiled_id_or_assign();
     let entry_symbol = neovm_value::intern::intern("off-entry-dependency");
@@ -283,7 +283,7 @@ fn osr_inline_invalidation_preserves_dependencies_of_a_borrowed_entry() {
     let _knobs = Knobs::enter(Inline2Mode::All);
     reopt::force_reopt_for_test(Some(ReoptKnobs::stress()));
     let ctx = Context::new(crate::test_utils::unit_runtime());
-    sync_cache_to_current_heap();
+    sync_cache_to_current_heap().expect("serial jit grace");
     let physical = function(vec![Op::StackRef(0), Op::Return], vec![]);
     let id = physical.jit_runtime().compiled_id_or_assign();
     let entry_symbol = neovm_value::intern::intern("retained-entry-dependency");

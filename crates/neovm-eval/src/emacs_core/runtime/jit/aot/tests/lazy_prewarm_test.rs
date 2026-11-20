@@ -134,7 +134,7 @@ fn lazy_prewarm_serves_a_marked_member_from_the_preload() {
         "the marked member must be served from the preload"
     );
 
-    super::super::cache::clear();
+    super::super::cache::clear_with_serial_receipt().expect("serial jit grace");
     test_support::reset();
 }
 
@@ -241,7 +241,7 @@ fn lazy_prewarm_battery_matches_the_interpreter_and_serves_every_member() {
     assert_eq!(stats.aot_loads, members.len() as u64, "{stats:?}");
     assert_eq!(stats.total_compiles, 0, "{stats:?}");
 
-    super::super::cache::clear();
+    super::super::cache::clear_with_serial_receipt().expect("serial jit grace");
     test_support::reset();
 }
 
@@ -331,7 +331,7 @@ fn lazy_prewarm_marks_pdump_stubs_without_materializing_them() {
         Some(true)
     );
 
-    super::super::cache::clear();
+    super::super::cache::clear_with_serial_receipt().expect("serial jit grace");
     test_support::reset();
 }
 
@@ -471,7 +471,7 @@ fn call_glue_members_are_served_at_tier_up_not_from_call_1() {
             Some(true)
         );
 
-        super::super::cache::clear();
+        super::super::cache::clear_with_serial_receipt().expect("serial jit grace");
         test_support::reset();
     }
 }

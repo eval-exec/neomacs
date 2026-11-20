@@ -1923,7 +1923,14 @@ impl Context {
         // against; drop the cache before its roots are walked if this
         // Context's obarray is not that one (P1.4 §3.6).
         #[cfg(feature = "jit")]
-        crate::emacs_core::jit::cache::sync_cache_to_obarray(self.obarray.generation());
+        if let Err(refused) =
+            crate::emacs_core::jit::cache::sync_cache_to_obarray(self.obarray.generation())
+        {
+            tracing::debug!(
+                depth = refused.depth,
+                "obarray sync refused a jit grace receipt"
+            );
+        }
         // Exact GC can finish an older sweep after activation. Read the epoch
         // here, before any TLS cache reconstructs Values from address keys.
         let collection_epoch = unsafe { (*heap_ptr).gc_collections() };

@@ -77,15 +77,27 @@ const TLS_CLASSIFICATION: &[(&str, &str, TlsClass)] = &[
     // carrier_loop accepts the next job only after run_carrier_job returns).
     // switch.rs retires/parks the old job before the NEXT job's deferred reset.
     // Deferred reuse asserts zero before clearing; PARK must preserve depth.
-    // MustReset: cache::reset_carrier_tls asserts zero before its zero store
-    // at deferred reuse. Static and store share the same gate
-    // (any(test, debug_assertions, feature = "test-support")) so a release
-    // workspace test build records the F5 native-depth witness and still
-    // clears it between jobs; ordinary Green waits retain the live native
-    // frame on the same carrier.
+    // MustReset: the counter is compiled in every build. reset_carrier_tls
+    // mints a serial receipt before its zero store. A leaked guard refuses
+    // that mint and keeps the depth. Ordinary Green waits retain the live
+    // native frame on the same carrier.
     (
         "neovm-eval/src/emacs_core/runtime/jit/cache.rs",
         "NATIVE_DEPTH",
+        TlsClass::MustReset,
+    ),
+    // MustReset: leaves parked while COMPILED was borrowed. cache::clear
+    // drains the vec, and reset_carrier_tls calls clear after a successful mint.
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/cache.rs",
+        "OVERFLOW_RETIRED",
+        TlsClass::MustReset,
+    ),
+    // MustReset: a heap or obarray sync that refused its receipt. cache::clear
+    // sets the flag false, and reset_carrier_tls calls clear after a successful mint.
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/cache.rs",
+        "RELOC_ROOTS_REFUSED",
         TlsClass::MustReset,
     ),
     // Profiling observations belong to one job; eval deferred reset clears them.

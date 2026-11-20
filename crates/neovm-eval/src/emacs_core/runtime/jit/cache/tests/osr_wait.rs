@@ -4,8 +4,8 @@
 //! overrides; no native execution overlaps a cache mutation.
 
 use super::super::{
-    OSR_CACHE, OSR_PENDING, OsrProbe, cache_entry_kind_for_test, clear, resolve_compiled_leaf_ptr,
-    try_run_compiled, try_run_osr, try_run_osr_probe,
+    OSR_CACHE, OSR_PENDING, OsrProbe, cache_entry_kind_for_test, clear_with_serial_receipt,
+    resolve_compiled_leaf_ptr, try_run_compiled, try_run_osr, try_run_osr_probe,
 };
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
@@ -25,7 +25,7 @@ struct Settings(std::marker::PhantomData<*const ()>);
 impl Settings {
     #[doc(hidden)]
     pub fn enter() -> Self {
-        clear();
+        clear_with_serial_receipt().expect("serial jit grace");
         compile::force_opt_for_test(Some(compile::OptMode::Opt), Some(compile::OptAdmit::ALL));
         compile::force_opt_profit_for_test(Some(compile::OptProfitMode::PrimitiveLists));
         compile::force_opt_early_for_test(Some(compile::OptEarlyMode::Hot));
@@ -45,7 +45,7 @@ impl Drop for Settings {
         bg::hold_publish_for_test(false);
         let _ = bg::publish_held_for_test();
         bg::force_deferred_install_for_test(false);
-        clear();
+        clear_with_serial_receipt().expect("serial jit grace");
         compile::force_opt_for_test(None, None);
         compile::force_opt_profit_for_test(None);
         compile::force_opt_early_for_test(None);

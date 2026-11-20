@@ -36,7 +36,7 @@ const SHAPES: &[(&str, &str)] = &[
 fn fixture() -> Context {
     use crate::emacs_core::defvar_bool::ByteBooleanVars;
     let mut ev = Context::new(crate::test_utils::unit_runtime());
-    crate::emacs_core::jit::cache::clear();
+    crate::emacs_core::jit::cache::clear_with_serial_receipt().expect("serial jit grace");
     ev.obarray.intern_member("tpj-obj");
     ev.obarray
         .install_objfwd(intern("tpj-obj"), alloc_objfwd(Value::fixnum(4343)));

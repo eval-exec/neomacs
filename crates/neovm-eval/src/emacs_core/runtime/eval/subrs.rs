@@ -4635,7 +4635,7 @@ impl Context {
             crate::emacs_core::subr::leaf::record_subr_leaf(intern(spec.name()), spec.leaf_spec());
         if change == crate::emacs_core::subr::leaf::LeafChange::Replaced {
             #[cfg(feature = "jit")]
-            crate::emacs_core::jit::cache::clear();
+            crate::emacs_core::jit::cache::clear_with_serial_receipt().expect("serial jit grace");
         }
 
         if spec.command_default() == crate::emacs_core::subr::CommandDefault::Disabled {

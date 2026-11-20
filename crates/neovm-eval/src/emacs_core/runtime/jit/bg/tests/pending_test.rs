@@ -160,7 +160,7 @@ fn jit_bg_superseded_pending_entry_releases_the_park() {
     let f = add1();
     assert_eq!(run(ctx, &f, 1), None);
     assert!(f.jit_runtime().tier_up_parked());
-    cache::clear();
+    cache::clear_with_serial_receipt().expect("serial jit grace");
     assert_eq!(pending_count(), 0);
     assert!(!f.jit_runtime().tier_up_parked());
     let len = f.executable_ops().len();

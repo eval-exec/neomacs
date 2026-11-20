@@ -397,7 +397,7 @@ fn tier2_loop_credit_requests_inside_one_call_at_the_poll_cadence() {
         );
         let polls = bytecode_branch_poll_count();
         let state = current(&f).obs.t2.state.get();
-        cache::clear();
+        cache::clear_with_serial_receipt().expect("serial jit grace");
         (polls, state)
     };
     let (off_polls, off_state) = polls_with(Tier2Knob {
@@ -492,7 +492,7 @@ fn tier2_mapping_builtin_credits_its_sequence() {
         assert_eq!(current(&caller).obs.t2.state.get(), T2State::Idle);
         assert_eq!(run(&mut ev, &caller, &[identity, list]), Some(list));
         let state = current(&caller).obs.t2.state.get();
-        cache::clear();
+        cache::clear_with_serial_receipt().expect("serial jit grace");
         state
     };
     let before = stats().hof_credits;

@@ -3,9 +3,9 @@
 //! no native execution overlaps a cache mutation or borrowed leaf inspection.
 
 use super::super::{
-    LeafOrigin, NativeRun, OSR_CACHE, OSR_PENDING, OsrEntry, OsrProbe, ReoptLevel, clear,
-    evict_compiled, invalidate_for_reopt, record_compiled_obarray, sync_cache_to_current_heap,
-    try_run_osr, try_run_osr_probe,
+    LeafOrigin, NativeRun, OSR_CACHE, OSR_PENDING, OsrEntry, OsrProbe, ReoptLevel,
+    clear_with_serial_receipt, evict_compiled, invalidate_for_reopt, record_compiled_obarray,
+    sync_cache_to_current_heap, try_run_osr, try_run_osr_probe,
 };
 use super::*;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
@@ -30,7 +30,7 @@ const _: () = assert!(std::mem::size_of::<Settings>() == 0);
 impl Settings {
     #[doc(hidden)]
     pub fn enter() -> Self {
-        clear();
+        clear_with_serial_receipt().expect("serial jit grace");
         compile::force_opt_for_test(Some(compile::OptMode::Opt), Some(compile::OptAdmit::ALL));
         compile::force_opt_profit_for_test(Some(compile::OptProfitMode::Lists));
         compile::force_opt_early_for_test(Some(compile::OptEarlyMode::Hot));
@@ -48,7 +48,7 @@ impl Drop for Settings {
         bg::hold_publish_for_test(false);
         let _ = bg::publish_held_for_test();
         bg::force_deferred_install_for_test(false);
-        clear();
+        clear_with_serial_receipt().expect("serial jit grace");
         compile::force_opt_for_test(None, None);
         compile::force_opt_profit_for_test(None);
         compile::force_opt_early_for_test(None);
@@ -98,7 +98,7 @@ fn snapshot(pair: Value) -> [Value; 3] {
 fn prepare(ctx: &mut Context, values: &[Value]) {
     // These are the existing compile/cache-owner seams. Pin the same obarray
     // an ordinary compile_cache_entry would pin before its frontend query.
-    sync_cache_to_current_heap();
+    sync_cache_to_current_heap().expect("serial jit grace");
     record_compiled_obarray(Some(&ctx.obarray));
     ctx.bc_buf.clear();
     ctx.bc_buf.extend_from_slice(values);
@@ -140,7 +140,7 @@ fn opt_osr_evidence_missing_and_exact_source_header_checks_do_not_assign_or_heat
     assert!(!ready(&ctx, &other, 1));
     assert_eq!(other.jit_runtime().compiled_id(), None);
     assert_eq!(source.jit_runtime().heat(), heat);
-    clear();
+    clear_with_serial_receipt().expect("serial jit grace");
     assert!(!ready(&ctx, &source, 1));
 }
 

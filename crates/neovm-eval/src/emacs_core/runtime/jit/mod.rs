@@ -1844,6 +1844,10 @@ mod green_release_tests;
 #[path = "tests/p3sym_functions_test.rs"]
 mod p3sym_functions_tests;
 
+#[cfg(all(test, feature = "jit"))]
+#[path = "tests/n5_clear_inside_entry_test.rs"]
+mod n5_clear_inside_entry_tests;
+
 /// Debug-only carrier TLS fingerprint for the JIT subsystem.
 #[cfg(debug_assertions)]
 pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
