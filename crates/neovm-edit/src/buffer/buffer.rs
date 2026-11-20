@@ -40,7 +40,7 @@ pub use super::text::{BufferTextBackendKind, ImplementedBufferTextBackendKind};
 // `SharedUndoState` (for the two always-present slots that don't
 // match either pattern). Mirrors GNU's struct buffer layout in
 // buffer.h:330-462.
-use super::overlay::OverlayList;
+use super::overlay::{OverlayList, OverlaySnapshot};
 use super::shared::{SavedPointBeforeCommand, SharedUndoState};
 use super::text_props::{ObjectIntervalRun, TextPropertyTable};
 use super::undo;
@@ -5066,6 +5066,23 @@ impl Buffer {
             .unwrap_or(NO_OVERLAY_CONTENT_DIGEST ^ tick as u64);
         self.overlay_digest_cache.set(Some((tick, digest)));
         digest
+    }
+
+    /// Immutable overlay view containing only the overlays a layout walk can
+    /// observe inside the character window `[first, first + budget)`.
+    pub fn overlay_snapshot_in_char_range(
+        &self,
+        first: usize,
+        budget: usize,
+    ) -> OverlaySnapshot {
+        let end = first
+            .saturating_add(budget)
+            .min(self.total_char_end_pos().get());
+        let start = self.char_pos_to_emacs_byte_pos_clamped_no_alloc(CharPos0::new(first));
+        let end_byte =
+            self.char_pos_to_emacs_byte_pos_clamped_no_alloc(CharPos0::new(end));
+        self.overlays
+            .snapshot_in_range(EmacsByteRange::new(start, end_byte))
     }
 
     /// The buffer's automatic-composition spans, recomputed only when

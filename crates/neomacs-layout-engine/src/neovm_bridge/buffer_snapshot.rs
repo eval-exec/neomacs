@@ -54,7 +54,7 @@ pub(crate) struct LayoutBufferSnapshot {
 impl LayoutBufferSnapshot {
     #[cfg(test)]
     pub fn from_buffer(buffer: &Buffer) -> Self {
-        Self::capture_buffer(buffer, None)
+        Self::capture_buffer(buffer, None, None)
     }
 
     /// Project a query's source boundary without narrowing the live buffer.
@@ -71,7 +71,19 @@ impl LayoutBufferSnapshot {
     // Resolve layout variables once, with the caller's global defaults already
     // available. Window snapshots must not build and then replace a complete
     // buffer-local-only variable table on every layout attempt.
-    fn capture_buffer(buffer: &Buffer, variables: Option<VariableView<'_>>) -> Self {
+    fn capture_buffer(
+        buffer: &Buffer,
+        variables: Option<VariableView<'_>>,
+        visible: Option<(usize, usize)>,
+    ) -> Self {
+        // `visible` is the same (first_char, budget) pair the retained-window
+        // key hashes, so the layout input and its validity signal cover the
+        // same overlay set. A caller with no window in hand keeps the
+        // whole-buffer view.
+        let overlays = match visible {
+            Some((first, budget)) => buffer.overlay_snapshot_in_char_range(first, budget),
+            None => buffer.overlays().snapshot(),
+        };
         Self {
             display_when: crate::display_when::DisplayWhenConditions::structural(),
             display_target: crate::display_property::DisplayPropertyTarget::Graphical,
@@ -82,7 +94,7 @@ impl LayoutBufferSnapshot {
             accessible_end_char: buffer.point_max_char_pos(),
             source_context_end: buffer.point_max_char_pos(),
             vars: resolve_layout_vars(buffer, variables),
-            overlays: buffer.overlays().snapshot(),
+            overlays,
             category_symbol_plists: FxHashMap::default(),
             automatic_composition_spans: Vec::new(),
             string_composition_rules: None,
@@ -124,9 +136,10 @@ impl LayoutBufferSnapshot {
         symbol_mode: SymbolMode,
     ) -> Self {
         let obarray = vars.obarray();
-        let mut snapshot = Self::capture_buffer(buffer, Some(vars));
+        let mut snapshot = Self::capture_buffer(buffer, Some(vars), visible);
         snapshot.display_target = target;
-        snapshot.category_symbol_plists = capture_layout_category_symbol_plists(buffer, obarray);
+        snapshot.category_symbol_plists =
+            capture_layout_category_symbol_plists_from_overlays(buffer, &snapshot.overlays, obarray);
         snapshot.automatic_composition_spans =
             capture_automatic_composition_spans(buffer, vars, &snapshot.vars, visible, symbol_mode);
         snapshot.string_composition_rules =
@@ -241,6 +254,17 @@ fn capture_layout_category_symbol_plists(
     buffer: &Buffer,
     obarray: &Obarray,
 ) -> FxHashMap<SymId, Value> {
+    capture_layout_category_symbol_plists_from_overlays(buffer, buffer.overlays(), obarray)
+}
+
+/// Capture the category plists a layout walk can read. `overlays` is the
+/// walk's own view, so a window snapshot only visits the overlays it copied
+/// rather than every overlay in the buffer.
+fn capture_layout_category_symbol_plists_from_overlays(
+    buffer: &Buffer,
+    overlays: &OverlayList,
+    obarray: &Obarray,
+) -> FxHashMap<SymId, Value> {
     fn remember(category: Value, obarray: &Obarray, plists: &mut FxHashMap<SymId, Value>) {
         if let Some(category_id) = category.as_bare_symbol_id() {
             neovm_core::emacs_core::symbol::SymbolPropertyRevision::observe(category_id);
@@ -269,14 +293,11 @@ fn capture_layout_category_symbol_plists(
         pos = next.min(end);
     }
 
-    if !buffer.overlays().may_contain_property(category_property) {
+    if !overlays.may_contain_property(category_property) {
         return plists;
     }
-    for overlay in buffer.overlays().overlays_in_gnu_lists_order() {
-        if let Some(category) = buffer
-            .overlays()
-            .overlay_get_named(overlay, category_property)
-        {
+    for overlay in overlays.overlays_in_gnu_lists_order() {
+        if let Some(category) = overlays.overlay_get_named(overlay, category_property) {
             remember(category, obarray, &mut plists);
         }
     }
@@ -350,6 +371,36 @@ mod category_capture_tests {
         assert!(
             reads.is_some(),
             "unrelated history must not exhaust a visible layout's dependency budget"
+        );
+    }
+
+    #[test]
+    fn window_snapshot_copies_only_the_visible_overlay_range() {
+        let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+        eval.eval_str(
+            "(progn (insert (make-string 2048 ?x))
+                    (overlay-put (make-overlay 6 7) 'face 'bold)
+                    (overlay-put (make-overlay 2000 2001) 'face 'italic))",
+        )
+        .unwrap();
+        let id = eval.buffer_manager().current_buffer().unwrap().id();
+        let buffer = eval.buffer_manager().get(id).unwrap();
+        let snapshot = LayoutBufferSnapshot::from_buffer_for_window(
+            buffer,
+            eval.variables(),
+            Some((0, 64)),
+            crate::display_property::DisplayPropertyTarget::Graphical,
+        );
+        let view = snapshot.layout_overlays();
+        assert_eq!(
+            view.overlays_at_emacs_byte_pos(EmacsBytePos::new(5)).len(),
+            1,
+            "the in-window overlay is missing from the view"
+        );
+        assert!(
+            view.overlays_at_emacs_byte_pos(EmacsBytePos::new(1999))
+                .is_empty(),
+            "an overlay outside the window was copied"
         );
     }
 

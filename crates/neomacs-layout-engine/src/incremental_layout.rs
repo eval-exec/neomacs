@@ -324,6 +324,11 @@ impl RetainedWindowKey {
                     buffer.overlay_modified_tick(),
                     buffer.get_multibyte(),
                     buffer.point_max_char_pos().get() as i64,
+                    // The retained-window key compares across a moving
+                    // window_start, so it needs a range-independent digest.
+                    // The window-range digest is for the layout view itself;
+                    // making this key range-scoped would disable scroll and
+                    // prepared-viewport replay (offscreen_row_test).
                     buffer.overlay_content_digest(),
                 )
             })

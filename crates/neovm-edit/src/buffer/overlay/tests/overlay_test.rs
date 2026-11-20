@@ -1576,3 +1576,7 @@ mod snapshot_reuse;
 #[cfg(test)]
 #[path = "random_overlay_model_test.rs"]
 mod random_overlay_model_test;
+
+#[cfg(test)]
+#[path = "window_view.rs"]
+mod window_view;
