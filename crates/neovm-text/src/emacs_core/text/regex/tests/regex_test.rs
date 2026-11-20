@@ -2023,6 +2023,8 @@ fn literal_search_after_edit_keeps_gap_at_the_edit() {
     }
     let copied = super::SEARCH_COPIED_BYTES.load(Ordering::Relaxed) - copied_before;
     assert_eq!(copied, 0, "bytes copied out of the buffer");
+}
+
 fn backward_search_buffer(text: &str) -> Buffer {
     let mut buf = Buffer::new(
         BufferId(1),
