@@ -1709,6 +1709,7 @@ impl TaggedHeap {
                 self.published_payload_roots
                     .values()
                     .flatten()
+                    .flatten()
                     .copied()
                     .map(|value| (value, "published-payload-root")),
             )

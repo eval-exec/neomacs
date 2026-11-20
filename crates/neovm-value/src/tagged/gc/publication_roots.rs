@@ -1,8 +1,11 @@
 //! Heap-owned plist heads for published payloads.
 //!
 //! The key is an id this heap mints. The collector reads the values and never
-//! a publisher address. Unregister removes the id. Dropping a publisher
-//! without unregister leaves the id in place, so the heads stay reachable.
+//! a publisher address. Each value is one generation per descriptor: the heads
+//! `for_each_root` yielded when that descriptor was appended. Unregister
+//! removes the id. Dropping a publisher without unregister leaves the id in
+//! place, so the heads stay reachable. [`TaggedHeap::reclaim_payload_generation`]
+//! removes one generation and no other.
 //!
 //! Root enumeration is not part of the generic publication owner. The
 //! thread-safety fixture and the n5-grace loom model compile that owner on
@@ -25,15 +28,32 @@ pub(crate) trait PayloadRoots: PublicationPayload {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct PublisherId(u64);
 
-/// One `Vec<TaggedValue>` per publisher id, plus the next id to mint.
+/// Heap-object heads of one published descriptor.
+pub(crate) struct GenerationRoots {
+    heads: Vec<TaggedValue>,
+}
+
+impl<'a> IntoIterator for &'a GenerationRoots {
+    type Item = &'a TaggedValue;
+    type IntoIter = std::slice::Iter<'a, TaggedValue>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.heads.iter()
+    }
+}
+
+/// One `Vec<GenerationRoots>` per publisher id, plus the next id to mint.
+///
+/// The outer `Vec` is the same width as the flat `Vec<TaggedValue>` it
+/// replaced, so this struct's size does not move the cold-gc pin.
 #[derive(Default)]
 pub(crate) struct PublishedPayloadRoots {
     next_id: u64,
-    entries: FxHashMap<PublisherId, Vec<TaggedValue>>,
+    entries: FxHashMap<PublisherId, Vec<GenerationRoots>>,
 }
 
 impl PublishedPayloadRoots {
-    pub(crate) fn values(&self) -> impl Iterator<Item = &Vec<TaggedValue>> {
+    pub(crate) fn values(&self) -> impl Iterator<Item = &Vec<GenerationRoots>> {
         self.entries.values()
     }
 
@@ -48,16 +68,37 @@ impl PublishedPayloadRoots {
         self.entries.remove(&id);
     }
 
-    fn append(&mut self, id: PublisherId, value: TaggedValue) {
-        self.entries
+    /// Push one generation and return its index. Later removals shift higher
+    /// indices; the caller that recorded the index fixes those up.
+    fn append_generation(&mut self, id: PublisherId, heads: Vec<TaggedValue>) -> usize {
+        let generations = self
+            .entries
             .get_mut(&id)
-            .expect("payload roots are appended only for a registered publisher")
-            .push(value);
+            .expect("payload roots are appended only for a registered publisher");
+        let index = generations.len();
+        generations.push(GenerationRoots { heads });
+        index
+    }
+
+    fn reclaim_generation(&mut self, id: PublisherId, generation_index: usize) {
+        let generations = self
+            .entries
+            .get_mut(&id)
+            .expect("a payload generation is reclaimed only for a registered publisher");
+        generations.remove(generation_index);
     }
 
     #[cfg(test)]
     fn len_of(&self, id: PublisherId) -> usize {
-        self.entries.get(&id).map(Vec::len).unwrap_or(0)
+        self.entries
+            .get(&id)
+            .map(|generations| {
+                generations
+                    .iter()
+                    .map(|generation| generation.heads.len())
+                    .sum()
+            })
+            .unwrap_or(0)
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -75,12 +116,27 @@ impl TaggedHeap {
         self.published_payload_roots.unregister(id)
     }
 
-    /// Append every head `payload` yields. Callers run this before the
-    /// publication Release store, under the same exclusive heap borrow as
-    /// registration.
-    pub(crate) fn append_payload_roots<P: PayloadRoots>(&mut self, id: PublisherId, payload: &P) {
-        let roots = &mut self.published_payload_roots;
-        payload.for_each_root(&mut |value| roots.append(id, value));
+    /// Append one generation of every head `payload` yields. Callers run this
+    /// before the publication Release store, under the same exclusive heap
+    /// borrow as registration. The returned index is the slot just pushed.
+    pub(crate) fn append_payload_roots<P: PayloadRoots>(
+        &mut self,
+        id: PublisherId,
+        payload: &P,
+    ) -> usize {
+        let mut heads = Vec::new();
+        payload.for_each_root(&mut |value| heads.push(value));
+        self.published_payload_roots.append_generation(id, heads)
+    }
+
+    /// Remove one generation's inner vec and no other.
+    ///
+    /// The payload that appended this index is still alive, so the words in
+    /// the vec are exactly the heads it yielded. Higher indices shift down.
+    #[cfg_attr(not(test), expect(dead_code, reason = "P10-b slices 2/3 wire refresh"))]
+    pub(crate) fn reclaim_payload_generation(&mut self, id: PublisherId, generation_index: usize) {
+        self.published_payload_roots
+            .reclaim_generation(id, generation_index);
     }
 
     #[cfg(test)]
