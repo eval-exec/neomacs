@@ -47,24 +47,33 @@ fn neomacs_binary(root: &Path) -> PathBuf {
         .unwrap_or_else(|| root.join("target/release/neomacs"))
 }
 
+/// Copy one pinned fixture into the artifact directory.  The pinned files can
+/// be read-only, and `fs::copy` reproduces that mode on the destination; a
+/// second run of the suite would then fail to overwrite it, so remove a stale
+/// destination before copying.
+fn copy_fixture(source: &Path, destination: &Path, label: &str) {
+    let _ = std::fs::remove_file(destination);
+    std::fs::copy(source, destination).unwrap_or_else(|error| panic!("{label}: {error}"));
+}
+
 /// The private fontconfig both arms resolve fonts through: Ubuntu Mono for
 /// Latin, FreeSerif for everything Arabic or Devanagari.  Returns the
 /// `FONTCONFIG_FILE` path.
 fn write_private_fontconfig(artifacts: &Path) -> PathBuf {
     let fonts = artifacts.join("fonts");
     std::fs::create_dir_all(&fonts).expect("fonts dir");
-    std::fs::copy(
-        neomacs_test_fonts::desktop_fonts()
+    copy_fixture(
+        &neomacs_test_fonts::desktop_fonts()
             .directory()
             .join("UbuntuMono[wght].ttf"),
-        fonts.join("UbuntuMono.ttf"),
-    )
-    .expect("pinned Ubuntu Mono fixture");
-    std::fs::copy(
+        &fonts.join("UbuntuMono.ttf"),
+        "pinned Ubuntu Mono fixture",
+    );
+    copy_fixture(
         neomacs_test_fonts::free_serif(),
-        fonts.join("FreeSerif.ttf"),
-    )
-    .expect("pinned FreeSerif fixture");
+        &fonts.join("FreeSerif.ttf"),
+        "pinned FreeSerif fixture",
+    );
     let fontconfig = artifacts.join("fonts.conf");
     std::fs::write(
         &fontconfig,

@@ -43,19 +43,21 @@ The glyph slots start at index 2 and run to (- (length GSTRING) 2)."
       (setq i (1+ i)))
     sum))
 
-(defun c785-walk ()
-  "Print one span row per position and one comp row per composition."
+(defun c785-walk (&optional prefix)
+  "Print one span row per position and one comp row per composition.
+PREFIX distinguishes independently reset-buffer scenarios."
   (let ((pos 1) comp)
     (while (<= pos (point-max))
       (setq comp (find-composition pos))
       (if comp
           (progn
-            (c785-log (format "span %d %d %d" pos (nth 0 comp) (nth 1 comp)))
+            (c785-log (format "%sspan %d %d %d"
+                              (or prefix "") pos (nth 0 comp) (nth 1 comp)))
             (when (and (= pos (nth 0 comp)) (nth 2 comp))
-              (c785-log (format "comp %d %d%s"
-                                (nth 0 comp) (nth 1 comp)
+              (c785-log (format "%scomp %d %d%s"
+                                (or prefix "") (nth 0 comp) (nth 1 comp)
                                 (c785-glyph-cols (nth 2 comp))))))
-        (c785-log (format "span %d nil" pos)))
+        (c785-log (format "%sspan %d nil" (or prefix "") pos)))
       (setq pos (1+ pos)))))
 
 (defun c785-sumeq (label string pos)
@@ -82,7 +84,7 @@ The glyph slots start at index 2 and run to (- (length GSTRING) 2)."
       (insert c785-text)
       (goto-char (point-min))
 
-      (c785-walk)
+      (c785-walk "")
 
       ;; Lone JIM is its own one-glyph composition; JA and STE are the
       ;; shaped composites of the report; NAMASTE mixes two singleton
@@ -99,7 +101,32 @@ The glyph slots start at index 2 and run to (- (length GSTRING) 2)."
                  (if (and comp (nth 2 comp)
                           (= (round (- full na ma))
                              (c785-gsum (nth 2 comp))))
-                     "t" "nil")))))
+                     "t" "nil"))))
+
+      ;; F2: one RTL cluster with two glyphs (Arabic base + fatha).  GNU
+      ;; distributes the cluster's characters backwards over HarfBuzz's
+      ;; visual glyph order, so the mark glyph comes first with CHAR 1614 and
+      ;; the base second with CHAR 1576.
+      (erase-buffer)
+      (insert "بَ")
+      (goto-char (point-min))
+      (redisplay t)
+      (c785-walk "f2 ")
+
+      ;; F1: a composable position one past a composition.  GNU's
+      ;; find_automatic_composition rewinds to a safe start, scans forward,
+      ;; and returns the last composition it examined even when that
+      ;; composition does not cover POS.
+      (setq auto-composition-mode t
+            auto-composition-function 'auto-compose-chars
+            composition-function-table (make-char-table nil))
+      (aset composition-function-table ?x
+            (list (vector "x." 0 'font-shape-gstring)))
+      (erase-buffer)
+      (insert "xab")
+      (goto-char (point-min))
+      (redisplay t)
+      (c785-walk "f1 "))
   (error (c785-log (format "error %S" err))))
 
 (kill-emacs 0)
