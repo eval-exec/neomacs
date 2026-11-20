@@ -345,14 +345,9 @@ fn poll_resumed_after_restore_keeps_the_published_root() {
             go_tx.send(()).expect("go");
             let stopped = retry("stop", || stop_for_test(&era));
             let before = owns(&era, &stopped, bits);
-            let keeper = era.keeper_for_test().expect("keeper");
-            let mut ticket = match lend_serial_for_test(&era, keeper, stopped) {
-                Ok(ticket) => ticket,
-                Err(failure) => panic!("lend: {:?}", failure.reason),
-            };
-            serial_gc_for_test(&mut ticket).expect("serial_gc");
-            end_serial_for_test(ticket)
-                .unwrap_or_else(|failure| panic!("end: {:?}", failure.reason));
+            let mut ticket = lend(&era, stopped);
+            collect(&mut ticket);
+            end_epoch(ticket);
             assert!(before, "the cons was not in the heap at the stop");
             assert!(matches!(recv(&done_rx), PollOutcome::Resumed { .. }));
         });
@@ -362,12 +357,9 @@ fn poll_resumed_after_restore_keeps_the_published_root() {
             owns(&era, &stopped, bits),
             "the published cons did not survive serial_gc"
         );
-        let keeper = era.keeper_for_test().expect("keeper");
-        let mut ticket = lend_serial_for_test(&era, keeper, stopped)
-            .unwrap_or_else(|failure| panic!("lend survived: {:?}", failure.reason));
-        serial_gc_for_test(&mut ticket).expect("second serial_gc");
-        end_serial_for_test(ticket)
-            .unwrap_or_else(|failure| panic!("end survived: {:?}", failure.reason));
+        let mut ticket = lend(&era, stopped);
+        collect(&mut ticket);
+        end_epoch(ticket);
         finish(era);
     });
 }
@@ -422,12 +414,8 @@ fn poll_region_refill_on_reserve_miss_then_grant() {
             });
             let reserve_ptr = recv(&ptr_rx) as *mut OwnerEraReserve;
             let stopped = retry("stop", || stop_for_test(&era));
-            let keeper = era.keeper_for_test().expect("keeper");
-            let mut ticket = match lend_serial_for_test(&era, keeper, stopped) {
-                Ok(ticket) => ticket,
-                Err(failure) => panic!("lend: {:?}", failure.reason),
-            };
-            serial_gc_for_test(&mut ticket).expect("serial_gc");
+            let mut ticket = lend(&era, stopped);
+            collect(&mut ticket);
             // Mint after the sweep so the new block is not this cycle's garbage.
             {
                 let heap = heap_mut(heap_addr);
@@ -440,8 +428,7 @@ fn poll_region_refill_on_reserve_miss_then_grant() {
                     .grant_at_stop(heap, true, MeasuredInterval::zero())
                     .expect("grant at the stop");
             }
-            end_serial_for_test(ticket)
-                .unwrap_or_else(|failure| panic!("end: {:?}", failure.reason));
+            end_epoch(ticket);
             carved_bits = recv(&carved_rx);
             request_stop(rendezvous);
             go_tx.send(()).expect("publish the carved cons");
@@ -468,12 +455,9 @@ fn poll_region_refill_on_reserve_miss_then_grant() {
             owns(&era, &stopped, carved_bits),
             "the cons carved after the grant did not survive collection"
         );
-        let keeper = era.keeper_for_test().expect("keeper");
-        let mut ticket = lend_serial_for_test(&era, keeper, stopped)
-            .unwrap_or_else(|failure| panic!("lend reachable: {:?}", failure.reason));
-        serial_gc_for_test(&mut ticket).expect("reachable serial_gc");
-        end_serial_for_test(ticket)
-            .unwrap_or_else(|failure| panic!("end reachable: {:?}", failure.reason));
+        let mut ticket = lend(&era, stopped);
+        collect(&mut ticket);
+        end_epoch(ticket);
         finish(era);
     });
 }
@@ -511,14 +495,9 @@ fn poll_on_the_keeper_continues_while_the_executor_resumes() {
                 );
                 go_tx.send(()).expect("go");
                 let stopped = retry("stop", || stop_for_test(&era));
-                let keeper = era.keeper_for_test().expect("keeper");
-                let mut ticket = match lend_serial_for_test(&era, keeper, stopped) {
-                    Ok(ticket) => ticket,
-                    Err(failure) => panic!("lend: {:?}", failure.reason),
-                };
-                serial_gc_for_test(&mut ticket).expect("serial_gc");
-                end_serial_for_test(ticket)
-                    .unwrap_or_else(|failure| panic!("end: {:?}", failure.reason));
+                let mut ticket = lend(&era, stopped);
+                collect(&mut ticket);
+                end_epoch(ticket);
                 assert!(matches!(recv(&done_rx), PollOutcome::Resumed { .. }));
                 retire(keeper_owner);
             });
@@ -634,14 +613,9 @@ fn poll_closure_error_leaves_the_owner_usable() {
                 go_tx.send(()).expect("go");
                 recv(&failed_rx);
                 let stopped = retry("stop", || stop_for_test(&era));
-                let keeper = era.keeper_for_test().expect("keeper");
-                let mut ticket = match lend_serial_for_test(&era, keeper, stopped) {
-                    Ok(ticket) => ticket,
-                    Err(failure) => panic!("lend: {:?}", failure.reason),
-                };
-                serial_gc_for_test(&mut ticket).expect("serial_gc");
-                end_serial_for_test(ticket)
-                    .unwrap_or_else(|failure| panic!("end: {:?}", failure.reason));
+                let mut ticket = lend(&era, stopped);
+                collect(&mut ticket);
+                end_epoch(ticket);
                 assert!(matches!(recv(&done_rx), PollOutcome::Resumed { .. }));
             });
             assert!(!era.registry_poisoned_for_test());
