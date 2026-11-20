@@ -1515,6 +1515,14 @@ impl TaggedHeap {
         (self.jit.cons_cur.get(), self.jit.cons_lim.get())
     }
 
+    /// Era follow-up row: copied read observer over the JIT float window.
+    /// The heap-local state stays private; callers see only the pair.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn jit_float_window_for_test(&self) -> (usize, usize) {
+        (self.jit.float_cur.get(), self.jit.float_lim.get())
+    }
+
     /// Era follow-up row: copied snapshot of the heap's region statistics.
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
@@ -2837,6 +2845,7 @@ pub(crate) use mutator_registration::{
 };
 
 mod alloc_region;
+mod owner_alloc_region;
 use alloc_region::RegionBook;
 #[cfg(not(feature = "test-support"))]
 use alloc_region::RegionStats;
@@ -2852,6 +2861,8 @@ pub use jit_state::{
     FLOAT_SLOT_BYTES, HEAP_JIT_BARRIER_LEN, HEAP_JIT_BARRIER_LO, HEAP_JIT_CONS_CUR,
     HEAP_JIT_CONS_LIM, HEAP_JIT_FLOAT_CUR, HEAP_JIT_FLOAT_LIM, JitHeapState,
 };
+#[doc(hidden)]
+pub use owner_alloc_region::OwnerAllocRegion;
 /// Allocation regions: sources, give-back, exact counters, black across
 /// the phase flags, and the close at every collector entry.
 #[cfg(test)]

@@ -38,3 +38,6 @@ mod frames_tests;
 #[cfg(test)]
 #[path = "tests/join_test.rs"]
 mod join_tests;
+#[cfg(test)]
+#[path = "tests/region_test.rs"]
+mod region_tests;

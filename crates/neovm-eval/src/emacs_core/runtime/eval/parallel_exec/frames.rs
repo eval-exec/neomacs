@@ -15,7 +15,7 @@
 use super::super::owner_bindings::{BindingKind, Channel, UndoTarget};
 use neovm_value::forward::TlsIndex;
 use neovm_value::intern::SymId;
-use neovm_value::tagged::gc::{RendezvousError, TaggedHeap};
+use neovm_value::tagged::gc::{OwnerAllocRegion, RendezvousError, TaggedHeap};
 use neovm_value::tagged::transport::SharedRoot;
 use neovm_value::value::Value;
 #[cfg(test)]
@@ -936,6 +936,9 @@ pub(crate) struct FrameArena {
     handlers: HandlerStack,
     bindings: BindStack,
     roots: RootRegistry,
+    /// Cons and float cursors for this owner. The bump does not touch
+    /// `TaggedHeap`'s JIT window.
+    region: OwnerAllocRegion,
     depth: CallDepth,
     next_generation: NonZeroU64,
     /// The next [`OwnerScanJoin::publish_scan`] fails before it reserves.
@@ -954,6 +957,7 @@ impl FrameArena {
             handlers: HandlerStack::new(),
             bindings: BindStack::new(),
             roots: RootRegistry::new(),
+            region: OwnerAllocRegion::new(),
             depth: CallDepth::new(depth_limit),
             next_generation: NonZeroU64::MIN,
             #[cfg(test)]
@@ -1099,6 +1103,39 @@ impl FrameArena {
         &mut self.roots
     }
 
+    /// Install a free-list cons run into this owner's cursors.
+    ///
+    /// The heap JIT window is not read or written. `first` is the address of
+    /// the first cell; the run is `cells` cons cells long.
+    #[doc(hidden)]
+    pub fn install_cons_free_list(&mut self, first: usize, cells: usize) {
+        self.region.install_cons_free_list(first, cells);
+    }
+
+    /// Install a block-tail cons run into this owner's cursors.
+    #[doc(hidden)]
+    pub fn install_cons_block_tail(&mut self, first: usize, cells: usize, block: usize) {
+        self.region.install_cons_block_tail(first, cells, block);
+    }
+
+    /// Install a float-page bump tail into this owner's cursors.
+    #[doc(hidden)]
+    pub fn install_float_page_tail(&mut self, first: usize, slots: usize, page: usize) {
+        self.region.install_float_page_tail(first, slots, page);
+    }
+
+    /// The next cons cell of this owner's run, or `None` when it is exhausted.
+    #[doc(hidden)]
+    pub fn take_cons_cell(&self) -> Option<usize> {
+        self.region.take_cons_cell()
+    }
+
+    /// The next float slot of this owner's run, or `None` when it is exhausted.
+    #[doc(hidden)]
+    pub fn take_float_slot(&self) -> Option<usize> {
+        self.region.take_float_slot()
+    }
+
     /// Publish every root this arena owns, grouped by the canonical E3 names.
     #[doc(hidden)]
     pub fn trace_roots(&self, visit: &mut dyn FnMut(RootGroup, Value)) {
@@ -1153,6 +1190,7 @@ impl FrameArena {
             handlers,
             bindings,
             roots,
+            region: _,
             depth: _,
             next_generation: _,
             #[cfg(test)]
