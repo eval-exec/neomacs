@@ -82,7 +82,9 @@ fn etaf_posframe_real_gui_panel_matches_gnu() {
     // 17 vs 68), the default line height (17 vs 18 px), and the U+200B line
     // prefix.  `:live` records that `frame-live-p' agrees with `framep';
     // the terminal type itself is backend identity (`x` vs `neo').
-    let expected_gnu = expect![[r##"OK (:before (:live t :has-parent t :visible t :width 20 :height 1 :left 16 :top 17 :window-width 20 :window-height 1 :pixel-width 160 :pixel-height 17 :char-width 8 :char-height 17 :background "#f7f7f7" :foreground "#000000" :text "panel parity") :panels-before 1 :frame-after-hide nil :panels-after-hide 0 :frame-live-after-hide nil)"##]];
+    let expected_gnu = expect![[
+        r##"OK (:before (:live t :has-parent t :visible t :width 20 :height 1 :left 16 :top 17 :window-width 20 :window-height 1 :pixel-width 160 :pixel-height 17 :char-width 8 :char-height 17 :background "#f7f7f7" :foreground "#000000" :text "panel parity") :panels-before 1 :frame-after-hide nil :panels-after-hide 0 :frame-live-after-hide nil)"##
+    ]];
     expected_gnu.assert_eq(&pair.gnu_behavior.to_string());
     // Strict parity: the probe must produce GNU's exact observation.  There
     // is deliberately no pinned Neomacs outcome, so a divergence cannot be
