@@ -226,8 +226,11 @@ duplicate/replace/unregister behavior, game-definition validation, and
 pre-process start failures; no engine subprocess is spawned),
 `etaf-posframe` (panel-option validation, batch-frame palette derivation,
 empty-panel queries and non-panel operation errors; child-frame creation is
-covered by the GUI corpus), and the `etaf-md`/`etaf-org-preview` headless
-readers. `gui_parity_tests/etaf_*` adds
+covered by the GUI corpus), `etaf-video-studio` (open/state through a
+test-written fake CLI, the startup list/status protocol, project loading and
+clip selection, CLI error and missing-executable reporting, close and
+outside-buffer errors, and local title validation; no real project store,
+ffmpeg or network), and the `etaf-md`/`etaf-org-preview` headless readers. `gui_parity_tests/etaf_*` adds
 real X11 probes for the md/org pages and the posframe child frame.
 
 `etaf-reader`, `etaf-youtube`, `etaf-video-player`, `maillist`, the
