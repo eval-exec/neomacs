@@ -120,8 +120,9 @@ jobs:
       # printed above) when the runner's desktop cannot present.
       - name: Run the scenario-tier GUI tests
         run: |
+          # Issue #600: these three modules. A macOS failure stays a failure.
           cargo nextest run -p neomacs-gui-tests --test gui \
-            -E 'test(~real_gui_smoke_generates_surface_readback_png) | test(~child_frame_position) | test(~child_frame_sizing) | test(~compact_frame_geometry) | test(~display_window_geometry::pixelwise_window_resize) | test(~integer_width) | test(~doom_gui_boot_renders_on_the_host_backend)' \
+            -E 'test(~real_gui_smoke_generates_surface_readback_png) | test(~child_frame_position) | test(~child_frame_sizing) | test(~compact_frame_geometry) | test(~display_window_geometry::pixelwise_window_resize) | test(~integer_width) | test(~doom_gui_boot_renders_on_the_host_backend) | test(~fill_column_stipple) | test(~startup_user_settings) | test(~frame_bar_parameters)' \
             --test-threads 1 --no-fail-fast --success-output final
 
       - name: Upload GUI artifacts
