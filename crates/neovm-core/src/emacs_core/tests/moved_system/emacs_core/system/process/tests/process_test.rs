@@ -7373,7 +7373,10 @@ fn accept_process_output_defers_pty_status_after_explicit_coding() {
     // the parent's slave the same way Neo does (src/process.c:2313-2314;
     // types.rs:5259-5261), and attested GNU-macOS loses the same output, so
     // `(exit nil)` is the faithful answer only for a wait that covered the
-    // drain.  A shorter wait must still decode the output first.
+    // drain.  A port that never reads before the child exits would always
+    // cover the drain and be accepted here; the guard for that class is the
+    // delay-0 paired row in `process::pty_output_vs_exit_semantics`, selected
+    // on the macOS oracle-families job.
     assert!(
         result == "OK (run t)"
             || result == "OK (exit t)"
@@ -7504,9 +7507,10 @@ fn accept_process_output_decodes_multibyte_before_explicit_coding_status() {
     // GNU-faithful answer is the status message alone.  GNU and Neo close the
     // parent's slave identically (src/process.c:2313-2314; types.rs:5259-5261)
     // and the attested GNU-macOS oracle loses the same output after a 1.5 s
-    // delay.  The arm is accepted only for a wait that covered the drain; a
-    // shorter wait must still see the output, so a regression that always
-    // loses it still fails.
+    // delay.  A port that never reads before the child exits would always
+    // cover the drain and be accepted here; the guard for that class is the
+    // delay-0 paired row in `process::pty_output_vs_exit_semantics`, selected
+    // on the macOS oracle-families job.
     assert!(
         result == "OK (\"café世界\" 11 6)"
             || result == "OK (\"café世界\nProcess apio-pty-coding-mb finished\n\" 48 43)"
@@ -7554,8 +7558,11 @@ fn accept_process_output_with_temp_buffer_defers_explicit_coding_status() {
     // (process/types.rs:5259-5261), and the attested GNU-macOS oracle loses
     // the same output after a 1.5 s delay.  So the status-only arm is the
     // GNU-faithful macOS answer, and it is accepted only when the measured
-    // wait covered the drain (>= 550 ms); a shorter wait must still see the
-    // output, so a regression that always loses it still fails.
+    // wait covered the drain (>= 550 ms).  A port that never reads before the
+    // child exits would always cover the drain and be accepted here; the guard
+    // for that class is the delay-0 paired row in
+    // `process::pty_output_vs_exit_semantics`, selected on the macOS
+    // oracle-families job.
     assert!(
         result == "OK \"hello\n\""
             || result == "OK \"hello\n\nProcess apio-pty-coding-temp finished\n\""
