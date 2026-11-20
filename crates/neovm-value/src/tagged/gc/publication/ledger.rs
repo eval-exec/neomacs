@@ -10,8 +10,8 @@
 
 use super::sync::{AtomicPtr, AtomicU32, Mutex, MutexGuard, Ordering, TryLockError};
 use super::{
-    PayloadPlan, PublicationChange, PublicationError, PublicationPayload, PublicationStatistics,
-    RetainedBytes, RetentionLimit, RetentionLimits, RetiredCount,
+    PayloadGeneration, PayloadPlan, PublicationChange, PublicationError, PublicationPayload,
+    PublicationStatistics, RetainedBytes, RetentionLimit, RetentionLimits, RetiredCount,
 };
 use std::marker::PhantomData;
 use std::mem;
@@ -19,12 +19,12 @@ use std::rc::Rc;
 
 struct Metadata<P> {
     current: P,
-    /// Generation vec the noting path appended for `current`.
+    /// Generation the noting path appended for `current`.
     /// `None` on the no-hook path, which never reclaims.
-    current_generation: Option<usize>,
+    current_generation: Option<PayloadGeneration>,
     predecessors: Vec<P>,
-    /// Parallel to `predecessors`: the generation vec each one appended.
-    predecessor_generations: Vec<Option<usize>>,
+    /// Parallel to `predecessors`: the generation each one appended.
+    predecessor_generations: Vec<Option<PayloadGeneration>>,
     /// Test builds can tighten one owner's caps without process state.
     /// Absent means the limits stored at construction.
     #[cfg(any(test, feature = "test-support"))]
@@ -170,14 +170,14 @@ impl<P: PublicationPayload> PublicationLedger<P> {
 
     /// [`Self::create`] plus `note_roots` on the payload that becomes current,
     /// before the Release store. A quote refusal does not call `note_roots`.
-    /// `note_roots` returns the generation index it appended.
+    /// `note_roots` returns the generation id it appended.
     ///
     /// `create` itself stays the no-hook path so symbol publication does not
     /// monomorphize a root callback.
     pub(crate) fn create_noting(
         initial: P,
         limits: RetentionLimits,
-        note_roots: impl FnOnce(&P) -> usize,
+        note_roots: impl FnOnce(&P) -> PayloadGeneration,
     ) -> Result<Self, PublicationError<P::Error>> {
         if initial.retained_bytes().get() > limits.bytes.get() {
             return Err(PublicationError::NeedGrace(RetentionLimit::RetainedBytes));
@@ -392,10 +392,14 @@ impl<P: PublicationPayload> Admission<'_, P> {
     /// `reclaim` removes that generation's roots and no other, while the
     /// payload is still in `predecessors`. Current is never passed to it.
     /// A positive view depth, a count under the cap, a missing generation
-    /// index, or a byte quote that would still refuse returns without
+    /// id, or a byte quote that would still refuse returns without
     /// dropping an owner, so `admit` keeps `NeedGrace`.
     #[cfg_attr(not(test), expect(dead_code, reason = "P10-b slices 2/3 wire refresh"))]
-    pub(crate) fn reclaim_oldest_predecessor(&mut self, extra: usize, reclaim: impl FnOnce(usize)) {
+    pub(crate) fn reclaim_oldest_predecessor(
+        &mut self,
+        extra: usize,
+        reclaim: impl FnOnce(PayloadGeneration),
+    ) {
         if self.view_depth.load(Ordering::Relaxed) > 0 {
             return;
         }
@@ -415,12 +419,11 @@ impl<P: PublicationPayload> Admission<'_, P> {
             Ok(needed) if needed <= self.limits.bytes.get() => {}
             _ => return,
         }
-        // Current is never reclaimed. This index is the oldest predecessor.
-        let predecessor_generation = generation;
-        reclaim(predecessor_generation);
+        // Current is never reclaimed. This id is the oldest predecessor.
+        // Other stored ids stay valid: they are not slots.
+        reclaim(generation);
         self.metadata.predecessors.remove(0);
         self.metadata.predecessor_generations.remove(0);
-        decrement_generations_above(self.metadata, predecessor_generation);
     }
 }
 
@@ -445,11 +448,11 @@ impl<P: PublicationPayload, T> OpenPublication<'_, P, T> {
 
     /// [`Self::finish`] that notes the replacement before the Release store.
     /// `Commit::Keep` does not call `note_roots`. `note_roots` returns the
-    /// generation index it appended for the new current payload.
+    /// generation id it appended for the new current payload.
     pub(crate) fn finish_noting(
         self,
         decide: impl FnOnce(T, &P) -> Result<Commit<P>, PublicationError<P::Error>>,
-        note_roots: impl FnOnce(&P) -> usize,
+        note_roots: impl FnOnce(&P) -> PayloadGeneration,
     ) -> Result<PublicationChange<P::Generation>, PublicationError<P::Error>> {
         let OpenPublication {
             store,
@@ -491,18 +494,18 @@ fn commit_replacement<P: PublicationPayload>(
 
 /// [`commit_replacement`] after `note_roots` has seen the new current payload.
 /// The note runs only on this replacement path, before the Release store.
-/// `note_roots` returns the generation index appended for `next`.
+/// `note_roots` returns the generation id appended for `next`.
 fn commit_replacement_noting<P: PublicationPayload>(
     store: &PublicationLedger<P>,
     metadata: &mut Metadata<P>,
     next: P,
-    note_roots: impl FnOnce(&P) -> usize,
+    note_roots: impl FnOnce(&P) -> PayloadGeneration,
 ) -> PublicationChange<P::Generation> {
     let charged = next.retained_bytes();
     let generation = next.generation();
     let pointer = next.published_address();
-    let generation_index = note_roots(&next);
-    let previous_generation = metadata.current_generation.replace(generation_index);
+    let noted = note_roots(&next);
+    let previous_generation = metadata.current_generation.replace(noted);
     let previous = mem::replace(&mut metadata.current, next);
     push_predecessor(metadata, previous, previous_generation);
     store.release_retained(pointer, &metadata.predecessors);
@@ -512,25 +515,13 @@ fn commit_replacement_noting<P: PublicationPayload>(
     }
 }
 
-fn push_predecessor<P>(metadata: &mut Metadata<P>, payload: P, generation: Option<usize>) {
+fn push_predecessor<P>(
+    metadata: &mut Metadata<P>,
+    payload: P,
+    generation: Option<PayloadGeneration>,
+) {
     metadata.predecessors.push(payload);
     metadata.predecessor_generations.push(generation);
-}
-
-/// A removed generation shifts every higher stored index down by one.
-fn decrement_generations_above<P>(metadata: &mut Metadata<P>, removed: usize) {
-    for stored in &mut metadata.predecessor_generations {
-        if let Some(index) = stored.as_mut() {
-            if *index > removed {
-                *index -= 1;
-            }
-        }
-    }
-    if let Some(index) = metadata.current_generation.as_mut() {
-        if *index > removed {
-            *index -= 1;
-        }
-    }
 }
 
 /// Retiree cap, then one reserved predecessor slot, then the byte quote.

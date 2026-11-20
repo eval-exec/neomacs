@@ -204,8 +204,9 @@ impl PublishedConditionSnapshots {
             // One predecessor, before the quote, and only at the retiree cap.
             // A live view skips this; `admit` then returns `NeedGrace`.
             let extra = next.retained_bytes().get();
-            admission.reclaim_oldest_predecessor(extra, |generation_index| {
-                heap.reclaim_payload_generation(id, generation_index);
+            admission.reclaim_oldest_predecessor(extra, |generation| {
+                heap.reclaim_payload_generation(id, generation)
+                    .expect("the oldest predecessor generation is still registered");
             });
             admission.admit(next.retained_bytes())?;
             Ok(RefreshPlan::Replace(next))
@@ -862,5 +863,92 @@ mod tests {
         );
         assert!(!heap.owns_heap_value_for_test(garbage));
         published.unregister(&mut heap);
+    }
+
+    /// A stale id, and an id this publisher never minted, must not remove a
+    /// generation that is still live. The live head stays a traced root.
+    #[test]
+    fn stale_or_foreign_generation_cannot_drop_a_live_head() {
+        let mut heap = TestHeap::new();
+        let prop = TaggedValue::from_sym_id(intern("p10-b-gen-prop"));
+        let only_live = pair(&mut heap, prop, TaggedValue::fixnum(1));
+        let freed = pair(&mut heap, prop, TaggedValue::fixnum(2));
+        let kept = pair(&mut heap, prop, TaggedValue::fixnum(3));
+        let only_symbol = make_uninterned_symbol("p10-b-gen-only");
+        let freed_symbol = make_uninterned_symbol("p10-b-gen-freed");
+        let kept_symbol = make_uninterned_symbol("p10-b-gen-kept");
+
+        let mut only_obarray = Obarray::new();
+        only_obarray.set_symbol_plist_id(only_symbol, only_live);
+        let only_id = heap.register_payload_publisher();
+        let _only_generation =
+            heap.append_payload_roots(only_id, &ConditionPayload::capture(&only_obarray));
+        only_obarray.set_symbol_plist_id(only_symbol, TaggedValue::NIL);
+
+        let mut stacked_obarray = Obarray::new();
+        stacked_obarray.set_symbol_plist_id(freed_symbol, freed);
+        let stacked_id = heap.register_payload_publisher();
+        let freed_generation =
+            heap.append_payload_roots(stacked_id, &ConditionPayload::capture(&stacked_obarray));
+        stacked_obarray.set_symbol_plist_id(freed_symbol, TaggedValue::NIL);
+        stacked_obarray.set_symbol_plist_id(kept_symbol, kept);
+        let _kept_generation =
+            heap.append_payload_roots(stacked_id, &ConditionPayload::capture(&stacked_obarray));
+        stacked_obarray.set_symbol_plist_id(kept_symbol, TaggedValue::NIL);
+
+        let foreign = super::super::publication::PayloadGeneration::from_raw(u64::MAX);
+        assert!(
+            !removed_generation(&mut heap, only_id, foreign),
+            "a foreign generation reclaimed a slot"
+        );
+        assert_eq!(heap.payload_root_count_for_test(only_id), 1);
+        assert!(
+            !removed_generation(&mut heap, stacked_id, foreign),
+            "a foreign generation reclaimed a slot"
+        );
+        assert_eq!(heap.payload_root_count_for_test(stacked_id), 2);
+
+        heap.reclaim_payload_generation(stacked_id, freed_generation)
+            .expect("the freed generation is still registered");
+        assert_eq!(heap.payload_root_count_for_test(stacked_id), 1);
+        assert!(
+            !removed_generation(&mut heap, stacked_id, freed_generation),
+            "a stale generation reclaimed a slot"
+        );
+        assert_eq!(heap.payload_root_count_for_test(stacked_id), 1);
+
+        heap.collect_exact(std::iter::empty());
+        assert!(
+            heap.owns_heap_value_for_test(only_live),
+            "a foreign generation dropped a live head"
+        );
+        assert!(
+            heap.owns_heap_value_for_test(kept),
+            "a stale generation dropped a live head"
+        );
+        assert!(
+            !heap.owns_heap_value_for_test(freed),
+            "the reclaimed generation's head stayed owned"
+        );
+        heap.unregister_payload_publisher(only_id);
+        heap.unregister_payload_publisher(stacked_id);
+    }
+
+    /// `true` when reclaim removed a generation. A debug assert on an absent
+    /// id unwinds; that is still a refusal, and the roots are unchanged
+    /// because the assert runs before the removal.
+    fn removed_generation(
+        heap: &mut TestHeap,
+        id: super::super::publication_roots::PublisherId,
+        generation: super::super::publication::PayloadGeneration,
+    ) -> bool {
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            heap.reclaim_payload_generation(id, generation)
+        }));
+        match outcome {
+            Err(_) => false,
+            Ok(Err(_)) => false,
+            Ok(Ok(())) => true,
+        }
     }
 }

@@ -5,14 +5,15 @@
 //! `for_each_root` yielded when that descriptor was appended. Unregister
 //! removes the id. Dropping a publisher without unregister leaves the id in
 //! place, so the heads stay reachable. [`TaggedHeap::reclaim_payload_generation`]
-//! removes one generation and no other.
+//! removes the generation with that id and no other. An id this publisher
+//! does not hold removes nothing.
 //!
 //! Root enumeration is not part of the generic publication owner. The
 //! thread-safety fixture and the n5-grace loom model compile that owner on
 //! its own. Payloads that publish heads implement [`PayloadRoots`] here.
 
 use super::TaggedHeap;
-use super::publication::PublicationPayload;
+use super::publication::{PayloadGeneration, PublicationPayload};
 use crate::tagged::value::TaggedValue;
 use rustc_hash::FxHashMap;
 
@@ -42,14 +43,54 @@ impl<'a> IntoIterator for &'a GenerationRoots {
     }
 }
 
-/// One `Vec<GenerationRoots>` per publisher id, plus the next id to mint.
+/// Generation ids for one publisher, in append order, parallel to that
+/// publisher's `Vec<GenerationRoots>`.
 ///
-/// The outer `Vec` is the same width as the flat `Vec<TaggedValue>` it
-/// replaced, so this struct's size does not move the cold-gc pin.
-#[derive(Default)]
+/// The id is not a slot. A removal does not renumber the ids that remain, so
+/// an id a caller dropped cannot name a later generation. Keeping the ids
+/// beside the entries leaves [`GenerationRoots`] and the entries map unchanged
+/// for the seed walk.
+struct PublisherGenerations {
+    next: PayloadGeneration,
+    order: Vec<PayloadGeneration>,
+}
+
+/// Publisher-id counter and the per-publisher generation ids. Boxed behind
+/// [`PublishedPayloadRoots`] so the entries map keeps the size and offset the
+/// cold-gc pin measured.
+struct PublisherCounters {
+    next_publisher: u64,
+    by_publisher: FxHashMap<PublisherId, PublisherGenerations>,
+}
+
+/// One `Vec<GenerationRoots>` per publisher id.
+///
+/// `entries` is the map the seed flattens, with the value type and offset it
+/// had before generation ids were tracked, so the seed walk stays one flatten
+/// per level. Boxing the counters keeps this struct at the cold-gc pin's
+/// size.
+#[repr(C)]
 pub(crate) struct PublishedPayloadRoots {
-    next_id: u64,
     entries: FxHashMap<PublisherId, Vec<GenerationRoots>>,
+    counters: Box<PublisherCounters>,
+}
+
+#[cfg(all(target_arch = "x86_64", target_pointer_width = "64"))]
+const _: () = {
+    assert!(std::mem::size_of::<PublishedPayloadRoots>() == 40);
+    assert!(std::mem::offset_of!(PublishedPayloadRoots, entries) == 0);
+};
+
+impl Default for PublishedPayloadRoots {
+    fn default() -> Self {
+        Self {
+            entries: FxHashMap::default(),
+            counters: Box::new(PublisherCounters {
+                next_publisher: 0,
+                by_publisher: FxHashMap::default(),
+            }),
+        }
+    }
 }
 
 impl PublishedPayloadRoots {
@@ -58,34 +99,89 @@ impl PublishedPayloadRoots {
     }
 
     fn register(&mut self) -> PublisherId {
-        let id = PublisherId(self.next_id);
-        self.next_id = self.next_id.checked_add(1).expect("publisher id space");
+        let id = PublisherId(self.counters.next_publisher);
+        self.counters.next_publisher = self
+            .counters
+            .next_publisher
+            .checked_add(1)
+            .expect("publisher id space");
         self.entries.insert(id, Vec::new());
+        self.counters.by_publisher.insert(
+            id,
+            PublisherGenerations {
+                next: PayloadGeneration::from_raw(0),
+                order: Vec::new(),
+            },
+        );
         id
     }
 
     fn unregister(&mut self, id: PublisherId) {
         self.entries.remove(&id);
+        self.counters.by_publisher.remove(&id);
     }
 
-    /// Push one generation and return its index. Later removals shift higher
-    /// indices; the caller that recorded the index fixes those up.
-    fn append_generation(&mut self, id: PublisherId, heads: Vec<TaggedValue>) -> usize {
-        let generations = self
-            .entries
+    /// Push one generation and return its id. The id is not a slot, and a
+    /// later removal does not renumber the generations that remain.
+    fn append_generation(&mut self, id: PublisherId, heads: Vec<TaggedValue>) -> PayloadGeneration {
+        let generation = {
+            let slot = self
+                .counters
+                .by_publisher
+                .get_mut(&id)
+                .expect("payload roots are appended only for a registered publisher");
+            debug_assert_eq!(slot.order.len(), self.entries[&id].len());
+            let generation = slot.next;
+            slot.next = generation.checked_next();
+            slot.order.push(generation);
+            generation
+        };
+        self.entries
             .get_mut(&id)
-            .expect("payload roots are appended only for a registered publisher");
-        let index = generations.len();
-        generations.push(GenerationRoots { heads });
-        index
+            .expect("payload roots are appended only for a registered publisher")
+            .push(GenerationRoots { heads });
+        generation
     }
 
-    fn reclaim_generation(&mut self, id: PublisherId, generation_index: usize) {
+    /// Remove the generation named `generation` and no other.
+    ///
+    /// A generation this publisher does not hold returns
+    /// [`AbsentPayloadGeneration`] and leaves the vec untouched. In debug
+    /// builds that miss also asserts.
+    fn reclaim_generation(
+        &mut self,
+        id: PublisherId,
+        generation: PayloadGeneration,
+    ) -> Result<(), AbsentPayloadGeneration> {
+        let held = &self
+            .counters
+            .by_publisher
+            .get(&id)
+            .expect("a payload generation is reclaimed only for a registered publisher")
+            .order;
         let generations = self
             .entries
-            .get_mut(&id)
+            .get(&id)
             .expect("a payload generation is reclaimed only for a registered publisher");
-        generations.remove(generation_index);
+        debug_assert_eq!(held.len(), generations.len());
+        let Some(index) = held.iter().position(|held| *held == generation) else {
+            debug_assert!(
+                false,
+                "reclaim of a payload generation this publisher does not hold"
+            );
+            return Err(AbsentPayloadGeneration);
+        };
+        self.counters
+            .by_publisher
+            .get_mut(&id)
+            .expect("a payload generation is reclaimed only for a registered publisher")
+            .order
+            .remove(index);
+        self.entries
+            .get_mut(&id)
+            .expect("a payload generation is reclaimed only for a registered publisher")
+            .remove(index);
+        Ok(())
     }
 
     #[cfg(test)]
@@ -107,6 +203,11 @@ impl PublishedPayloadRoots {
     }
 }
 
+/// `reclaim_generation` was asked for a generation this publisher does not
+/// hold. It dropped nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct AbsentPayloadGeneration;
+
 impl TaggedHeap {
     pub(crate) fn register_payload_publisher(&mut self) -> PublisherId {
         self.published_payload_roots.register()
@@ -118,25 +219,30 @@ impl TaggedHeap {
 
     /// Append one generation of every head `payload` yields. Callers run this
     /// before the publication Release store, under the same exclusive heap
-    /// borrow as registration. The returned index is the slot just pushed.
+    /// borrow as registration. The returned id is the generation just pushed.
     pub(crate) fn append_payload_roots<P: PayloadRoots>(
         &mut self,
         id: PublisherId,
         payload: &P,
-    ) -> usize {
+    ) -> PayloadGeneration {
         let mut heads = Vec::new();
         payload.for_each_root(&mut |value| heads.push(value));
         self.published_payload_roots.append_generation(id, heads)
     }
 
-    /// Remove one generation's inner vec and no other.
+    /// Remove the generation named `generation` and no other.
     ///
-    /// The payload that appended this index is still alive, so the words in
-    /// the vec are exactly the heads it yielded. Higher indices shift down.
+    /// The payload that appended this id is still alive, so the words in the
+    /// vec are exactly the heads it yielded. A stale or foreign id removes
+    /// nothing.
     #[cfg_attr(not(test), expect(dead_code, reason = "P10-b slices 2/3 wire refresh"))]
-    pub(crate) fn reclaim_payload_generation(&mut self, id: PublisherId, generation_index: usize) {
+    pub(crate) fn reclaim_payload_generation(
+        &mut self,
+        id: PublisherId,
+        generation: PayloadGeneration,
+    ) -> Result<(), AbsentPayloadGeneration> {
         self.published_payload_roots
-            .reclaim_generation(id, generation_index);
+            .reclaim_generation(id, generation)
     }
 
     #[cfg(test)]

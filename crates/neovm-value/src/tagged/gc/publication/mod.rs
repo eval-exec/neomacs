@@ -15,6 +15,24 @@ pub(crate) use ledger::{
     Accounted, Admission, BoundWitness, Commit, OpenPublication, PublicationLedger, PublicationView,
 };
 
+/// Identity of one appended payload-root generation.
+///
+/// This is a per-publisher counter, not a slot. Reclaim matches the id and
+/// leaves every other generation in place. Minting does not wrap, so an old
+/// id cannot name a later generation of the same publisher.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct PayloadGeneration(u64);
+
+impl PayloadGeneration {
+    pub(crate) const fn from_raw(raw: u64) -> Self {
+        Self(raw)
+    }
+
+    pub(crate) fn checked_next(self) -> Self {
+        Self(self.0.checked_add(1).expect("payload generation id space"))
+    }
+}
+
 /// Bytes one owner contributes to the retention quote.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct RetainedBytes(usize);
