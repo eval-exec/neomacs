@@ -117,30 +117,43 @@ impl OwnerAllocRegion {
             && self.float_lim.get() == 0
     }
 
-    /// Install a free-list cons run. Does not read or write `heap.jit`.
+    /// Test seam: install a free-list cons run. Does not read or write `heap.jit`.
+    ///
+    /// Absent from a product build. A real run is installed by a sealed
+    /// reserve grant, not by a caller-supplied address.
     ///
     /// # Panics
     ///
     /// The cons book is already open, or `cells` is 0. A second grant has
     /// to close first; an empty run is not a region.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
     pub fn install_cons_free_list(&mut self, first: usize, cells: usize) {
         self.install_cons(first, cells, ConsRegionSource::FreeListRun);
     }
 
-    /// Install a block-tail cons run. Does not read or write `heap.jit`.
+    /// Test seam: install a block-tail cons run. Does not read or write `heap.jit`.
+    ///
+    /// Absent from a product build.
     ///
     /// # Panics
     ///
     /// The cons book is already open, or `cells` is 0.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
     pub fn install_cons_block_tail(&mut self, first: usize, cells: usize, block: usize) {
         self.install_cons(first, cells, ConsRegionSource::BlockTail { block });
     }
 
-    /// Install a float-page free-list run. Does not read or write `heap.jit`.
+    /// Test seam: install a float-page free-list run. Does not read or write `heap.jit`.
+    ///
+    /// Absent from a product build.
     ///
     /// # Panics
     ///
     /// The float book is already open, or `slots` is 0.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
     pub fn install_float_page_free(&mut self, first: usize, slots: usize, page: usize) {
         self.install_float(
             first,
@@ -152,11 +165,15 @@ impl OwnerAllocRegion {
         );
     }
 
-    /// Install a float-page bump tail. Does not read or write `heap.jit`.
+    /// Test seam: install a float-page bump tail. Does not read or write `heap.jit`.
+    ///
+    /// Absent from a product build.
     ///
     /// # Panics
     ///
     /// The float book is already open, or `slots` is 0.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
     pub fn install_float_page_tail(&mut self, first: usize, slots: usize, page: usize) {
         self.install_float(
             first,

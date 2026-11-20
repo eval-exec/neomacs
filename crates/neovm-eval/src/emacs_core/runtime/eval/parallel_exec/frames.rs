@@ -1103,24 +1103,27 @@ impl FrameArena {
         &mut self.roots
     }
 
-    /// Install a free-list cons run into this owner's cursors.
+    /// Test seam: install a free-list cons run into this owner's cursors.
     ///
-    /// The heap JIT window is not read or written. `first` is the address of
-    /// the first cell; the run is `cells` cons cells long.
+    /// Crate-private and compiled only into this crate's tests. The heap
+    /// JIT window is not read or written. A product build has no installer.
+    #[cfg(test)]
     #[doc(hidden)]
-    pub fn install_cons_free_list(&mut self, first: usize, cells: usize) {
+    pub(crate) fn install_cons_free_list(&mut self, first: usize, cells: usize) {
         self.region.install_cons_free_list(first, cells);
     }
 
-    /// Install a block-tail cons run into this owner's cursors.
+    /// Test seam: install a block-tail cons run into this owner's cursors.
+    #[cfg(test)]
     #[doc(hidden)]
-    pub fn install_cons_block_tail(&mut self, first: usize, cells: usize, block: usize) {
+    pub(crate) fn install_cons_block_tail(&mut self, first: usize, cells: usize, block: usize) {
         self.region.install_cons_block_tail(first, cells, block);
     }
 
-    /// Install a float-page bump tail into this owner's cursors.
+    /// Test seam: install a float-page bump tail into this owner's cursors.
+    #[cfg(test)]
     #[doc(hidden)]
-    pub fn install_float_page_tail(&mut self, first: usize, slots: usize, page: usize) {
+    pub(crate) fn install_float_page_tail(&mut self, first: usize, slots: usize, page: usize) {
         self.region.install_float_page_tail(first, slots, page);
     }
 
@@ -1136,9 +1139,10 @@ impl FrameArena {
         self.region.take_float_slot()
     }
 
-    /// Install a float-page free-list run into this owner's cursors.
+    /// Test seam: install a float-page free-list run into this owner's cursors.
+    #[cfg(test)]
     #[doc(hidden)]
-    pub fn install_float_page_free(&mut self, first: usize, slots: usize, page: usize) {
+    pub(crate) fn install_float_page_free(&mut self, first: usize, slots: usize, page: usize) {
         self.region.install_float_page_free(first, slots, page);
     }
 
