@@ -265,6 +265,8 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `neovm_core::Context: Send`
            `Rc<neomacs_display_protocol::tty_palette::TtyPalette>: Send`
            which is required by `neovm_core::Context: Send`
+           `Rc<()>: Send`
+           which is required by `neovm_core::Context: Send`
            `Rc<Cell<Option<shared::PointBeforeCommand>>>: Send`
            which is required by `neovm_core::Context: Send`
            `std::rc::Weak<RefCell<neovm_core::buffer::buffer::buffer_list_cursor::BufferListLinks>>: Send`
@@ -364,8 +366,6 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            `OnceCell<collection_reads::store_state::ObservationWorld>: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
            `Cell<*mut TaggedHeap>: std::marker::Sync`
-           which is required by `neovm_core::Context: Send`
-           `Rc<()>: Send`
            which is required by `neovm_core::Context: Send`
            `*const c_void: Send`
            which is required by `neovm_core::Context: Send`

@@ -292,6 +292,8 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `neovm_core::Context: std::marker::Sync`
            `Rc<neomacs_display_protocol::tty_palette::TtyPalette>: std::marker::Sync`
            which is required by `neovm_core::Context: std::marker::Sync`
+           `Rc<()>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
            `Rc<RefCell<Vec<std::rc::Weak<[TaggedValue]>>>>: Send`
            which is required by `neovm_core::Context: std::marker::Sync`
            `*mut emacs_value_tag: Send`
@@ -455,8 +457,6 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            `(dyn std::io::Write + Send + 'static): std::marker::Sync`
            which is required by `neovm_core::Context: std::marker::Sync`
            `std::sync::mpsc::Receiver<Result<Vec<std::net::SocketAddr>, std::string::String>>: std::marker::Sync`
-           which is required by `neovm_core::Context: std::marker::Sync`
-           `Rc<()>: std::marker::Sync`
            which is required by `neovm_core::Context: std::marker::Sync`
            `Rc<Vec<AutomaticCompositionSpan>>: Send`
            which is required by `neovm_core::Context: std::marker::Sync`

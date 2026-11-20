@@ -416,11 +416,3 @@ mod value_test_bridge {
 
     scan_contract_test_methods!();
 }
-
-// `publication` stays private to the generic owner, and `gc.rs` is at its
-// line ceiling, so this already-public module is the name eval uses for the
-// serial admission switch. The ledger API stays crate-private behind the
-// newtype. The owner files themselves stay free of heap types.
-pub use super::condition_snapshots::{
-    ConditionSnapshotAdmission, ConditionSnapshotAdmitError, ConditionSnapshotPublisher,
-};

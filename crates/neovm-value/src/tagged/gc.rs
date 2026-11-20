@@ -55,7 +55,7 @@ pub use function_write_hooks::{
 pub mod symbol_table;
 
 mod cache_root_scan;
-mod condition_snapshots;
+pub mod condition_snapshots;
 mod publication;
 #[cfg(test)]
 mod publication_owner_seam;

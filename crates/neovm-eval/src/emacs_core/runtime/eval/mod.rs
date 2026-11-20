@@ -59,7 +59,7 @@ use neovm_value::intern::{
 };
 use neovm_value::kmacro::KmacroManager;
 use neovm_value::symbol::{CanonicalAccess, ConstantWrite, Obarray};
-pub(crate) use neovm_value::tagged::gc::scan_contract::{
+pub(crate) use neovm_value::tagged::gc::condition_snapshots::{
     ConditionSnapshotAdmission, ConditionSnapshotAdmitError,
 };
 use neovm_value::tagged::header::{CLOSURE_ARGLIST, SubrDispatchKind, SubrInteractivity};
