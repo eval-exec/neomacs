@@ -496,23 +496,18 @@ macro_rules! eval_absent_layer_slots {
                     $crate::emacs_core::eval::data::terminal_state::TerminalLispRegistry,
                 >,
             > {
-                thread_local! {
-                    static SLOT: neovm_value::heap_registry::HeapRegistrySlot<
-                        $crate::emacs_core::eval::data::terminal_state::TerminalLispRegistry,
-                    > = neovm_value::heap_registry::HeapRegistrySlot::new(
+                // A local slot is never installed. No thread-local is added:
+                // the receipt is AlreadyInactive and retains the handle.
+                let slot = neovm_value::heap_registry::HeapRegistrySlot::new(
+                    $crate::emacs_core::eval::data::terminal_state::TerminalLispRegistry::default(),
+                );
+                // SAFETY: no display slot exists in this runtime.
+                unsafe {
+                    slot.detach(
+                        handle,
                         $crate::emacs_core::eval::data::terminal_state::TerminalLispRegistry::default(),
-                    );
+                    )
                 }
-                SLOT.with(|slot| {
-                    // SAFETY: no display slot exists in this runtime. The empty
-                    // local slot only mints the AlreadyInactive receipt.
-                    unsafe {
-                        slot.detach(
-                            handle,
-                            $crate::emacs_core::eval::data::terminal_state::TerminalLispRegistry::default(),
-                        )
-                    }
-                })
             }
 
             pub(crate) fn fontset_alias_alist_startup_value() -> Value {
@@ -640,23 +635,18 @@ macro_rules! eval_absent_layer_slots {
                     $crate::emacs_core::eval::data::face_registry::FaceAttrState,
                 >,
             > {
-                thread_local! {
-                    static SLOT: neovm_value::heap_registry::HeapRegistrySlot<
-                        $crate::emacs_core::eval::data::face_registry::FaceAttrState,
-                    > = neovm_value::heap_registry::HeapRegistrySlot::new(
+                // A local slot is never installed. No thread-local is added:
+                // the receipt is AlreadyInactive and retains the handle.
+                let slot = neovm_value::heap_registry::HeapRegistrySlot::new(
+                    $crate::emacs_core::eval::data::face_registry::FaceAttrState::default(),
+                );
+                // SAFETY: no display slot exists in this runtime.
+                unsafe {
+                    slot.detach(
+                        handle,
                         $crate::emacs_core::eval::data::face_registry::FaceAttrState::default(),
-                    );
+                    )
                 }
-                SLOT.with(|slot| {
-                    // SAFETY: no display slot exists in this runtime. The empty
-                    // local slot only mints the AlreadyInactive receipt.
-                    unsafe {
-                        slot.detach(
-                            handle,
-                            $crate::emacs_core::eval::data::face_registry::FaceAttrState::default(),
-                        )
-                    }
-                })
             }
 
             pub(crate) fn timefns_reset() {

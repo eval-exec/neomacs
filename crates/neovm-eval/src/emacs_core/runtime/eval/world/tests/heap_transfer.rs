@@ -773,6 +773,7 @@ fn pentry_e2b_retained_era_owner_actual_thread_roundtrip_preserves_backing() {
     let identity = owner.parallel_heap_identity();
     let root = owner.heap_root_designator().as_non_null().as_ptr();
     let (retainer, proxy) = RetainedEraOwner::new(owner);
+    let proxy = WorldLoan::new(proxy);
     let proxy = std::thread::spawn(move || {
         proxy.adopt_current_thread();
         assert!(proxy.held_here());
@@ -806,7 +807,9 @@ fn pentry_e2b_retained_era_owner_foreign_proxy_is_owned_failure() {
         second_observations,
     ));
     let (first, first_proxy) = RetainedEraOwner::new(first);
+    let first_proxy = WorldLoan::new(first_proxy);
     let (second, second_proxy) = RetainedEraOwner::new(second);
+    let second_proxy = WorldLoan::new(second_proxy);
     let failure = match first.recover(second_proxy) {
         Err(failure) => failure,
         Ok(_) => panic!("foreign proxy recovered"),
@@ -832,6 +835,7 @@ fn pentry_e2b_retained_era_owner_unwind_keeps_original_adapter() {
     });
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
         let (_retainer, proxy) = RetainedEraOwner::new(owner);
+        let proxy = WorldLoan::new(proxy);
         let _ = proxy.parallel_epoch_retention();
     }));
     assert!(outcome.is_err());
@@ -854,6 +858,7 @@ fn pentry_e2b_retained_era_owner_poison_refuses_recovery() {
         _probe: probe,
     });
     let (retainer, proxy) = RetainedEraOwner::new(owner);
+    let proxy = WorldLoan::new(proxy);
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let _ = proxy.parallel_epoch_retention();
     }));

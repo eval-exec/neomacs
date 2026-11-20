@@ -1,7 +1,8 @@
 //! Reference-free admission into one borrowed production era.
 //!
-//! Value does not name the evaluator keeper. The callback receives the
-//! original loan, the decoded census, and the exclusive GEN1 admission. It
+//! Value does not name the evaluator keeper and does not mint the frozen
+//! census. The callback receives the original loan, the heap identity, the
+//! decoded words, the function roots, and the exclusive GEN1 admission. It
 //! admits and finishes that era, then returns the same loan. This module
 //! keeps the phase, the publication, and the opaque census. A typed refusal
 //! or an unwind retains that backing and poisons the phase. No production
@@ -15,7 +16,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::tagged::gc::{
-    EraWorldLoan, FrozenFunctionRoots, FrozenLegacyRoots, Gen1Admission, TaggedValue, WorldLoan,
+    EraWorldLoan, FrozenFunctionRoots, Gen1Admission, HeapIdentity, TaggedValue, WorldLoan,
 };
 use crate::tagged::transport::RootBatchLease;
 
@@ -147,7 +148,9 @@ impl EraScope {
         body: impl for<'heap> FnOnce(
             Gen1Admission<'heap>,
             WorldLoan,
-            FrozenLegacyRoots,
+            HeapIdentity,
+            Vec<TaggedValue>,
+            FrozenFunctionRoots,
         )
             -> Result<(WorldLoan, R), (ScopedEraError, Option<WorldLoan>)>,
     ) -> Result<R, ScopedEraError> {
@@ -172,9 +175,6 @@ impl EraScope {
         );
         let heap = self.control.identity.heap;
         let functions = self.functions;
-        // SAFETY: the publication above still pins every managed word. The
-        // census is the one captured for this retained root.
-        let roots = unsafe { FrozenLegacyRoots::new(heap, decoded, functions) };
         let root = self.root;
         let owner = ManuallyDrop::into_inner(self.owner.take().expect("affine era owner"));
         // SAFETY: this scope holds the original root, and no collector loan
@@ -192,7 +192,7 @@ impl EraScope {
                         ));
                     }
                 };
-                body(admission, owner, roots)
+                body(admission, owner, heap, decoded, functions)
             })
         };
         match outcome {
@@ -284,7 +284,9 @@ impl PreparedHeapTransfer {
         body: impl for<'heap> FnOnce(
             Gen1Admission<'heap>,
             WorldLoan,
-            FrozenLegacyRoots,
+            HeapIdentity,
+            Vec<TaggedValue>,
+            FrozenFunctionRoots,
         )
             -> Result<(WorldLoan, R), (ScopedEraError, Option<WorldLoan>)>,
     ) -> Result<(Self, R), ScopedEraFailure> {

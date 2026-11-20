@@ -119,7 +119,11 @@ impl PreparedHeapTransferProductionEra for PreparedHeapTransfer {
         self,
         body: impl for<'heap> FnOnce(&neovm_value::tagged::gc::ParallelHeapEra<'heap, Baton>) -> R,
     ) -> Result<(Self, R), ScopedEraFailure> {
-        self.with_scoped_owner(|admission, owner, roots| {
+        self.with_scoped_owner(|admission, owner, heap, words, functions| {
+            // SAFETY: `words` and `functions` are the census this transfer
+            // published, and this file is the eval World owner allowed to
+            // mint that census.
+            let roots = unsafe { FrozenLegacyRoots::new(heap, words, functions) };
             let keeper = Baton::from_world_loan(owner);
             // The trait method derives this keeper's retained epoch and
             // symbol backing, and the roots are the sealed census this

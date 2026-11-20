@@ -31,6 +31,7 @@ impl CarrierId {
     }
 }
 
+#[derive(Clone, Copy)]
 pub(super) struct CarrierDeclaration {
     pub(super) id: CarrierId,
     pub(super) placeholder: Placeholder,

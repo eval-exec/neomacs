@@ -163,7 +163,7 @@ impl RetainedEraOwner {
         )
     )]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    pub(crate) fn new(owner: WorldLoan) -> (Self, WorldLoan) {
+    pub(crate) fn new(owner: WorldLoan) -> (Self, impl EraWorldLoan) {
         let owner = ManuallyDrop::new(owner);
         let storage = Arc::new(Mutex::new(owner));
         let proxy = OwnerProxy {
@@ -175,7 +175,9 @@ impl RetainedEraOwner {
                 storage: ManuallyDrop::new(storage),
                 _local: PhantomData,
             },
-            WorldLoan::new(proxy),
+            // The eval World owner mints the loan. This module only builds
+            // the private proxy.
+            proxy,
         )
     }
 
