@@ -220,7 +220,10 @@ player buffer; frame decoding is timing-dependent and not pinned),
 `etaf-screensaver` (scene registry and lookup, custom registration and
 replacement, directory loading with probe-written spec files, start/stop
 lifecycle and first-key dismissal; the MELPA build installs no bundled scene
-resource directories, and animated frame content is not pinned), and the
+resource directories, and animated frame content is not pinned),
+`etaf-gamekit` (the built-in engine descriptions, adapter registration,
+duplicate/replace/unregister behavior, game-definition validation, and
+pre-process start failures; no engine subprocess is spawned), and the
 `etaf-md`/`etaf-org-preview` headless readers. `gui_parity_tests/etaf_*` adds
 real X11 probes for the md/org pages and the posframe child frame.
 
