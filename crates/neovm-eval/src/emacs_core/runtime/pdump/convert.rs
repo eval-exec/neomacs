@@ -3288,9 +3288,10 @@ pub(crate) fn dump_hash_table(encoder: &mut DumpEncoder, ht: &LispHashTable) -> 
                     // An entry filed by its key object is dumped as the key
                     // that object materializes to, the form the loader reads.
                     let key = match key {
-                        HashKey::LiveKey => {
-                            dump_hash_key(encoder, &entry.key.to_hash_key(&ht.test))
-                        }
+                        HashKey::LiveKey => dump_hash_key(
+                            encoder,
+                            &entry.key.to_hash_key_for_insert(ht.test, false),
+                        ),
                         key => dump_hash_key(encoder, key),
                     };
                     (key, encoder.dump_value(&entry.value), snapshot)

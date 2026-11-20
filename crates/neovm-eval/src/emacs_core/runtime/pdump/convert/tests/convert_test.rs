@@ -296,3 +296,30 @@ fn dump_hash_table_writes_puthash_structural_keys_materialized() {
         .collect();
     assert_eq!(written, expected);
 }
+
+#[test]
+fn dump_hash_table_bounds_live_shared_dag_key_materialization() {
+    crate::test_utils::init_test_tracing();
+    use crate::emacs_core::builtins::builtin_puthash;
+
+    let table = Value::hash_table(HashTableTest::Equal);
+    let mut key = Value::NIL;
+    for _ in 0..14 {
+        key = Value::cons(key, key);
+    }
+    builtin_puthash(vec![key, Value::T, table]).unwrap();
+
+    let dumped = dump_hash_table(&mut DumpEncoder::new(), table.as_hash_table().unwrap());
+    let dumped_key = &dumped.ordered_entries[0].0;
+    fn count_nodes(key: &DumpHashKey) -> usize {
+        match key {
+            DumpHashKey::EqualCons(car, cdr) => 1 + count_nodes(car) + count_nodes(cdr),
+            _ => 1,
+        }
+    }
+    assert!(
+        count_nodes(dumped_key) <= 8192,
+        "dumped key contains {} materialized nodes",
+        count_nodes(dumped_key)
+    );
+}
