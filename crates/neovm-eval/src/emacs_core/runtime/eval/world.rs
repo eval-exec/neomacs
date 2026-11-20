@@ -60,11 +60,6 @@ mod serial_gate_retarget;
 #[cfg(test)]
 #[path = "world/tests/serial_gate_threads.rs"]
 mod serial_gate_threads;
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "READY-E2B, wired by the E4 engine slice")
-)]
-pub(crate) use poll::PollOutcome;
 mod slot;
 mod source_entry;
 // Crate-visible so the public test-support re-export in eval/mod.rs can name

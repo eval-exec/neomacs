@@ -2,6 +2,8 @@
 
 use super::frames::{FrameArena, OwnerScanJoin, ReserveRefill, RootGroup};
 use crate::emacs_core::eval::Context;
+use crate::emacs_core::eval::world::WorldProofEra;
+use crate::emacs_core::eval::world::poll::PollOutcome;
 use crate::emacs_core::eval::world::poll::{
     poll_interp_back_edge, poll_interp_call_entry, poll_serial_request, poll_vm_back_edge,
     poll_vm_call,
@@ -10,7 +12,6 @@ use crate::emacs_core::eval::world::serial_gate::{
     SerialEndError, SerialTicket, end_serial_for_test, lend_serial_for_test, serial_gc_for_test,
     stop_for_test,
 };
-use crate::emacs_core::eval::world::{PollOutcome, WorldProofEra};
 use neovm_value::tagged::gc::mutator_registration::a8_probes;
 use neovm_value::tagged::gc::{
     AllStopped, HeapIdentity, MeasuredInterval, Mutator, MutatorPermit, OwnerEraReserve,
