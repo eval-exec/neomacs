@@ -56,6 +56,8 @@ pub mod symbol_table;
 
 mod cache_root_scan;
 mod publication;
+#[cfg(test)]
+mod publication_owner_seam;
 #[doc(hidden)]
 pub use cache_root_scan::CacheRootScan;
 
