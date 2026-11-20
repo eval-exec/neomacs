@@ -839,6 +839,40 @@ fn an_undefined_charset_list_entry_signals_and_a_defined_one_computes_ascii_comp
         "t",
         "an ASCII-compatible listed charset makes the system ASCII-compatible"
     );
+
+    // F2: the attribute is stored at define time; a later charset
+    // redefinition does not change it (attested GNU answers (t t)).
+    ev.eval_str(
+        "(define-charset-internal 'memo-test-charset 1 [33 126 0 0 0 0 0 0]
+            nil nil nil nil nil nil nil nil 0 nil nil nil nil nil)",
+    )
+    .expect("redefine charset without ASCII compatibility");
+    assert_eq!(
+        read(&mut ev),
+        "t",
+        "GNU keeps the value stored at define time"
+    );
+
+    // Symmetric: defined nil, the charset becomes ASCII-compatible later,
+    // and the coding system keeps saying nil.
+    let mut ev = crate::test_utils::new_context();
+    ev.eval_str(
+        "(define-charset-internal 'memo-test-charset 1 [33 126 0 0 0 0 0 0]
+            nil nil nil nil nil nil nil nil 0 nil nil nil nil nil)",
+    )
+    .expect("define non-ascii charset");
+    ev.eval_str(define_cs).expect("define coding system");
+    assert_eq!(read(&mut ev), "nil");
+    ev.eval_str(
+        "(define-charset-internal 'memo-test-charset 1 [33 126 0 0 0 0 0 0]
+            nil nil nil nil nil t nil nil 0 nil nil nil nil nil)",
+    )
+    .expect("redefine charset ascii-compatible");
+    assert_eq!(
+        read(&mut ev),
+        "nil",
+        "GNU does not re-read the charset for an existing coding system"
+    );
 }
 
 fn mgr() -> CodingSystemManager {

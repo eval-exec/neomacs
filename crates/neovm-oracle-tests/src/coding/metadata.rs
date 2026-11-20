@@ -285,3 +285,62 @@ fn oracle_prop_stacked_eol_suffixes_are_not_coding_systems() {
     ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
+
+/// F2 (6159 follow-up): GNU snapshots `:ascii-compatible-p` for a
+/// `charset`-type coding system at define time from its `:charset-list`
+/// (src/coding.c:11070, 11119-11129) and `coding-system-plist` reports
+/// that stored attribute.  Redefining the charset later must not change it.
+/// Neomacs recomputed it from the live charset, so the plist flipped from
+/// t to nil (attested GNU: (t t)).
+#[test]
+fn oracle_prop_charset_coding_ascii_compat_is_fixed_at_define_time() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let form = r#"(progn
+  (define-charset-internal 'f2-memo-ch 1 [33 126 0 0 0 0 0 0]
+    nil nil nil nil nil t nil nil 0 nil nil nil nil nil)
+  (define-coding-system-internal 'f2-memo-cs ?x 'charset '(f2-memo-ch)
+    nil nil nil nil nil nil nil '(:name f2-memo-cs :docstring "") nil)
+  (let ((before (plist-get (coding-system-plist 'f2-memo-cs)
+                           :ascii-compatible-p)))
+    (define-charset-internal 'f2-memo-ch 1 [33 126 0 0 0 0 0 0]
+      nil nil nil nil nil nil nil nil 0 nil nil nil nil nil)
+    (list before
+          (plist-get (coding-system-plist 'f2-memo-cs)
+                     :ascii-compatible-p))))"#;
+    let expect = expect_test::expect![[r#""OK (t t)""#]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+/// F2 r2 (peer 6173): big5 and shift-jis snapshot their FIRST charset's
+/// ASCII compatibility at define time (src/coding.c:11380-11387,
+/// :11344-11349); redefining that charset later must not change an
+/// existing coding system's answer.  Attested GNU: ((t t) (t t)).
+#[test]
+fn oracle_prop_big5_and_shift_jis_ascii_compat_are_fixed_at_define_time() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let form = r#"(progn
+  (define-charset-internal 'pb-ch1 1 [33 126 0 0 0 0 0 0]
+    nil nil nil nil nil t nil nil 0 nil nil nil nil nil)
+  (define-charset-internal 'pb-k1 1 [161 223 0 0 0 0 0 0]
+    nil nil nil nil nil nil nil nil #x102000 nil nil nil nil nil)
+  (define-charset-internal 'pb-ch2 2 [161 254 64 254 0 0 0 0]
+    nil nil nil nil nil nil nil nil #x100000 nil nil nil nil nil)
+  (define-coding-system-internal 'pb-cs ?b 'big5 '(pb-ch1 pb-ch2)
+    nil nil nil nil nil nil nil '(:name pb-cs :docstring "") nil)
+  (define-coding-system-internal 'pb-sj ?s 'shift-jis '(pb-ch1 pb-k1 pb-ch2)
+    nil nil nil nil nil nil nil '(:name pb-sj :docstring "") nil)
+  (let ((big5-before (plist-get (coding-system-plist 'pb-cs)
+                                :ascii-compatible-p))
+        (sj-before (plist-get (coding-system-plist 'pb-sj)
+                              :ascii-compatible-p)))
+    (define-charset-internal 'pb-ch1 1 [33 126 0 0 0 0 0 0]
+      nil nil nil nil nil nil nil nil 0 nil nil nil nil nil)
+    (list (list big5-before
+                (plist-get (coding-system-plist 'pb-cs)
+                           :ascii-compatible-p))
+          (list sj-before
+                (plist-get (coding-system-plist 'pb-sj)
+                           :ascii-compatible-p)))))"#;
+    let expect = expect_test::expect![[r#""OK ((t t) (t t))""#]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}

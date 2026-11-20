@@ -2751,22 +2751,72 @@ fn coding_category_of(
     })
 }
 
+/// GNU `Fdefine_coding_system_internal`'s stored CODING_ATTR_ASCII_COMPAT
+/// for the coding types whose rule reads the charset registry.  The
+/// argument (already in `info.ascii_compatible_p`, `src/coding.c:11070`)
+/// is raised by the type's rule at define time:
+///
+/// * `charset`: any ASCII-compatible charset in :charset-list
+///   (`src/coding.c:11119-11129`).
+/// * `big5` and `shift-jis`: only the FIRST charset is tested
+///   (`:11380-11387`, `:11344-11349`).
+/// * `iso-2022`: the G0 initial charset (`:11271-11272`), and the whole
+///   attribute is forced to nil unless the computed category is
+///   iso-8-1/iso-8-2 (`:11325-11329`).
+fn define_time_ascii_compat(info: &CodingSystemInfo, iso_initial: Value, mode: SymbolMode) -> bool {
+    let charset_ascii = |charset: SymId| super::charset::charset_is_ascii_compatible(charset);
+    let first_ascii = || {
+        info.charset_list
+            .first()
+            .is_some_and(|&charset| charset_ascii(charset))
+    };
+    match resolve_sym(info.coding_type) {
+        "charset" => {
+            info.ascii_compatible_p
+                || info
+                    .charset_list
+                    .iter()
+                    .any(|&charset| charset_ascii(charset))
+        }
+        "big5" | "shift-jis" => info.ascii_compatible_p || first_ascii(),
+        "iso-2022" => {
+            if !matches!(
+                compute_coding_category(info, mode),
+                "coding-category-iso-8-1" | "coding-category-iso-8-2"
+            ) {
+                return false;
+            }
+            let g0_ascii = iso_initial
+                .as_vector_data()
+                .and_then(|slots| slots.first().copied())
+                .and_then(|slot| slot.as_symbol_id(mode))
+                .is_some_and(charset_ascii);
+            info.ascii_compatible_p || g0_ascii
+        }
+        _ => info.ascii_compatible_p,
+    }
+}
+
+/// Whether `info` came from `define-coding-system-internal` (it carries the
+/// verbatim definition plist) rather than a static built-in registration.
+fn is_defined_coding(info: &CodingSystemInfo) -> bool {
+    info.int_properties.contains_key(&PLIST_VERBATIM_KEY)
+}
+
 /// Compute `:ascii-compatible-p` for a coding system, mirroring GNU's
 /// per-type overrides (the stored value is the `:ascii-compatible-p` argument).
 fn compute_coding_ascii_compat(info: &CodingSystemInfo, mode: SymbolMode) -> bool {
     let charsets = &info.charset_list;
-    let any_ascii = || {
-        charsets
-            .iter()
-            .any(|&c| super::charset::charset_is_ascii_compatible(c))
-    };
     let first_ascii = || {
         charsets
             .first()
             .is_some_and(|&c| super::charset::charset_is_ascii_compatible(c))
     };
     match resolve_sym(info.coding_type) {
-        "charset" => any_ascii() || info.ascii_compatible_p,
+        // `info.ascii_compatible_p` is the define-time snapshot GNU stores in
+        // CODING_ATTR_ASCII_COMPAT (`src/coding.c:11070`, :11119-11129); the
+        // live charset registry is deliberately not consulted again.
+        "charset" => info.ascii_compatible_p,
         // GNU auto-sets `:ascii-compatible-p t` for a BOM-less utf-8 coding
         // (utf-8-with-signature / utf-8-auto carry a BOM and are not), unless the
         // coding's Lisp definition explicitly overrode it (utf-7, utf-7-imap and
@@ -2774,11 +2824,16 @@ fn compute_coding_ascii_compat(info: &CodingSystemInfo, mode: SymbolMode) -> boo
         // not).
         "utf-8" => coding_explicit_ascii_compat(info).unwrap_or_else(|| !coding_has_bom(info)),
         "utf-16" => false,
-        // coding.c:11271-11272 sets the attribute when initial G0 is
-        // ASCII-compatible. coding.c:11327-11329 clears it unless the
-        // category is iso-8-1 or iso-8-2. A non-ASCII G0 keeps the
-        // caller's argument (coding.c:11070), which is nil when the
-        // Lisp definition omits `:ascii-compatible-p`.
+        // An iso-2022 coding defined through define-coding-system-internal
+        // carries the define-time snapshot (see define_time_ascii_compat);
+        // a later charset redefinition must not change it.
+        "iso-2022" if is_defined_coding(info) => info.ascii_compatible_p,
+        // Static built-ins keep the live rule: coding.c:11271-11272 sets
+        // the attribute when initial G0 is ASCII-compatible.
+        // coding.c:11327-11329 clears it unless the category is iso-8-1 or
+        // iso-8-2. A non-ASCII G0 keeps the caller's argument
+        // (coding.c:11070), which is nil when the Lisp definition omits
+        // `:ascii-compatible-p`.
         "iso-2022" => {
             let category = compute_coding_category(info, mode);
             if !matches!(
@@ -2796,6 +2851,7 @@ fn compute_coding_ascii_compat(info: &CodingSystemInfo, mode: SymbolMode) -> boo
             }
         }
         "emacs-mule" | "raw-text" => true,
+        "shift-jis" | "big5" if is_defined_coding(info) => info.ascii_compatible_p,
         "shift-jis" | "big5" => first_ascii(),
         // `undecided` is defined in C with `:ascii-compatible-p t`
         // (src/coding.c `syms_of_coding`), which is what
@@ -3089,6 +3145,14 @@ pub fn builtin_coding_system_put(
         } else {
             val
         };
+        // GNU `Fcoding_system_put` also moves the typed attribute for the
+        // properties listed in its docstring, including
+        // `:ascii-compatible-p` (src/coding.c:11570-11572).  Keep the stored
+        // attribute in step so the answer is stable after a later charset
+        // redefinition.
+        if matches!(prop_name, ":ascii-compatible-p" | "ascii-compatible-p") {
+            info.ascii_compatible_p = stored_val.is_truthy();
+        }
         info.properties.insert(prop_id, stored_val);
         record_put_override(info, args[1], stored_val, mode);
         return Ok(stored_val);
@@ -4284,6 +4348,23 @@ pub fn builtin_define_coding_system_internal_with_quoting_style(
         info.int_properties.insert(CCL_KEY_DECODER, args[13]);
         info.int_properties.insert(CCL_KEY_ENCODER, args[14]);
         info.int_properties.insert(CCL_KEY_VALIDS, args[15]);
+    }
+
+    // GNU stores CODING_ATTR_ASCII_COMPAT at define time: the
+    // :ascii-compatible-p argument (`src/coding.c:11070`) is then raised by
+    // each coding type's own rule.  Snapshot the result for the types whose
+    // rule reads the charset registry, so a later charset redefinition
+    // cannot change an existing coding system's answer.
+    if matches!(
+        resolve_sym(coding_type),
+        "charset" | "big5" | "shift-jis" | "iso-2022"
+    ) {
+        let iso_initial = info
+            .int_properties
+            .get(&ISO2022_KEY_INITIAL)
+            .copied()
+            .unwrap_or(Value::NIL);
+        info.ascii_compatible_p = define_time_ascii_compat(&info, iso_initial, mode);
     }
 
     // Register the base coding system.
