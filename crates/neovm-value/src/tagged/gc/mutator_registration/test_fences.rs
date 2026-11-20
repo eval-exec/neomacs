@@ -45,6 +45,29 @@ pub fn begin_restore_retry_for_test<'owner, 'era>(
     owner.begin_restore_retry(native)
 }
 
+/// One-shot hook for the instant `prepare_restore` holds the registry gate,
+/// before the condvar wait. The `Mutator` field stays cfg(test) inside this
+/// crate so a test-support build does not put `dyn FnOnce` on `Mutator`.
+#[cfg(any(test, feature = "test-support"))]
+std::thread_local! {
+    static RESTORE_GATE_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Install the hook on this thread. The next non-keeper `prepare_restore`
+/// that waits out `Stopping` or `Tracing` runs it while the gate is held.
+#[cfg(any(test, feature = "test-support"))]
+pub fn install_restore_gate_hook_for_test(hook: Box<dyn FnOnce()>) {
+    RESTORE_GATE_HOOK.with(|slot| {
+        *slot.borrow_mut() = Some(hook);
+    });
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub fn take_restore_gate_hook_for_test() -> Option<Box<dyn FnOnce()>> {
+    RESTORE_GATE_HOOK.with(|slot| slot.borrow_mut().take())
+}
+
 /// Name and public route for the peer-approved MEMQ-TAIL-SHAPES (5) copied
 /// catalog-waits observer. `cons_storage` is a private module, so without this
 /// re-export the A'-widened items have no cross-crate path. Same items and

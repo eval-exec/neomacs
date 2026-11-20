@@ -11,7 +11,9 @@ use neovm_value::tagged::gc::{
     HeapIdentity, Mutator, MutatorPermit, RegistrationError, RendezvousError, Request,
 };
 use neovm_value::tagged::transport::SharedRoot;
-use neovm_value::test_support::authority::begin_restore_retry_for_test;
+use neovm_value::test_support::authority::{
+    begin_restore_retry_for_test, install_restore_gate_hook_for_test,
+};
 use neovm_value::value::Value;
 
 use super::serial_gate::{
@@ -421,5 +423,52 @@ fn request_during_ticket_then_admitted_after_end() {
             done_tx.send(()).expect("done");
         });
         eprintln!("PENTRY_TSAN case=request_during_ticket kind=PRODUCT");
+    });
+}
+
+/// (e) The participant is inside `prepare_restore`, holding the registry
+/// gate, before `lend_serial_for_test`. `Busy` must come back with that same
+/// `AllStopped` so the keeper can retry. Today the `?` drops the proof and
+/// `AllStopped::drop` poisons the era, so this case is red until lend retains
+/// the proof. `lend_settled` stays on (a)-(d) until that retain lands.
+#[test]
+fn lend_races_participant_restore() {
+    with_participant!(|era, keeper, heap, rendezvous, permit, car, cdr| {
+        let (acked_tx, acked_rx) = mpsc::channel::<()>();
+        let (stopped_tx, stopped_rx) = mpsc::channel::<()>();
+        let (holding_tx, holding_rx) = mpsc::channel::<()>();
+        thread::scope(|scope| {
+            scope.spawn(move || {
+                let mut owner = activate(permit, heap);
+                let epoch = request_epoch(rendezvous);
+                acknowledge(&mut owner, epoch, &[car, cdr]);
+                acked_tx.send(()).expect("ack");
+                recv(&stopped_rx, "keeper stopped");
+                // Hold the gate across the keeper's lend. Releasing it only
+                // after a signal deadlocks: Busy drops AllStopped, and that
+                // Drop poisons under the same gate.
+                install_restore_gate_hook_for_test(Box::new(move || {
+                    holding_tx.send(()).expect("holding the gate");
+                    thread::sleep(Duration::from_millis(500));
+                }));
+                restore(&mut owner);
+                retire(owner);
+            });
+            recv(&acked_rx, "ack");
+            let stopped = retry_gate("stop", || stop_for_test(era));
+            stopped_tx.send(()).expect("keeper stopped");
+            recv(&holding_rx, "participant holds the gate");
+            let lend = lend_serial_for_test(era, keeper, stopped);
+            match lend {
+                Ok(_ticket) => {
+                    panic!("lend succeeded while the participant held the gate");
+                }
+                Err(RendezvousError::Busy) => {
+                    panic!("lend Busy dropped AllStopped; the era is poisoned");
+                }
+                Err(error) => panic!("lend: {error:?}"),
+            }
+        });
+        eprintln!("PENTRY_TSAN case=lend_races_participant_restore kind=PRODUCT");
     });
 }

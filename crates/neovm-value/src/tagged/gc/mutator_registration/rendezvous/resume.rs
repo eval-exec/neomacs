@@ -148,6 +148,11 @@ impl<'era> Mutator<'era> {
                     if let Some(hook) = self.protocol.hooks.take_restore_wait() {
                         hook();
                     }
+                    #[cfg(any(test, feature = "test-support"))]
+                    if let Some(hook) = crate::tagged::gc::mutator_registration::test_fences::take_restore_gate_hook_for_test()
+                    {
+                        hook();
+                    }
                     // The predicate mutex is released by Condvar. No entry,
                     // image, or allocation loan survives across this wait.
                     gate = wait(registry, gate)?;
