@@ -386,6 +386,11 @@ impl Context {
     #[inline(always)]
     #[doc(hidden)]
     pub fn read_var_cached(&self, id: SymId) -> Option<Value> {
+        // The `*-consed` DEFVAR_INTs are derived from live allocation
+        // accounting; their cell is only a cache the read refreshes.
+        if let Some(value) = self.derived_memory_use_read(id) {
+            return Some(value);
+        }
         let tier = CachedVarReadTier::admit()?;
         let sym = self.obarray.get_by_id(id)?;
         self.read_var_cached_symbol(sym, tier)

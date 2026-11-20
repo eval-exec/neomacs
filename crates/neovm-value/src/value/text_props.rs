@@ -977,6 +977,9 @@ impl IntervalTree {
 
         let mid = start + (end - start) / 2;
         let id = IntervalId(self.nodes.len());
+        // GNU `intervals-consed` (`src/alloc.c:7442`) counts every interval
+        // node allocated; this balanced build is one allocation site.
+        crate::value::add_wrapping(crate::tagged::gc::MemoryUseCountSlot::Intervals, 1);
         self.nodes.push(runs[mid].to_node());
 
         let left = self.build_balanced(runs, start, mid, Some(id));
@@ -1022,6 +1025,9 @@ impl IntervalTree {
     fn push_node(&mut self, node: IntervalNode) -> IntervalId {
         self.invalidate_find_cache();
         let id = IntervalId(self.nodes.len());
+        // GNU `intervals-consed` counts every interval node allocated; a split
+        // or a fresh insertion creates one here.
+        crate::value::add_wrapping(crate::tagged::gc::MemoryUseCountSlot::Intervals, 1);
         self.nodes.push(node);
         id
     }

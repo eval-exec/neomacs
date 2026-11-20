@@ -702,9 +702,9 @@ pub fn merge_face_height(
 
 #[doc(hidden)]
 pub fn face_symbol_value(name: &str) -> Value {
-    // The spelling path accounts the same symbol use as the fixed WellKnown
-    // path (`resolve_fixed_symbol`), which the face producer contract pins.
-    Value::account_symbol_name_use();
+    // The symbol counter is charged by the registry per allocated symbol, so
+    // the spelling path and the fixed WellKnown path agree without extra
+    // accounting here: neither adds a counter when the id already exists.
     Value::from_sym_id(intern(name))
 }
 

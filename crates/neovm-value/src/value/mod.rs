@@ -320,8 +320,11 @@ pub fn note_bytecode_data_access() {
     BYTECODE_DATA_ACCESS_COUNT.with(|count| count.set(count.get() + 1));
 }
 
+/// Charge one allocation-counter slot. Thread-local by design: the counters
+/// are drained on the thread that allocated. The symbol registry and the
+/// interval tree allocate outside the tagged heap, so they call this directly.
 #[inline(always)]
-fn add_wrapping(counter: MemoryUseCountSlot, delta: u64) {
+pub(crate) fn add_wrapping(counter: MemoryUseCountSlot, delta: u64) {
     THREAD_LOCAL_ALLOCATION_COUNTS.with(|counts| {
         let mut values = counts.get();
         let slot = counter.index();
@@ -2615,9 +2618,8 @@ impl IntoSymbol for &ProducerSymbolName {
             "nil" => Value::NIL,
             "t" => Value::T,
             name => {
-                // Match the &str constructor's observable accounting and
-                // keyword tag even when the producer avoids another intern.
-                add_wrapping(MemoryUseCountSlot::Symbols, 1);
+                // Symbol accounting is per allocated symbol, charged by the
+                // registry; naming an existing symbol allocates nothing.
                 if name.starts_with(':') {
                     TaggedValue::from_kw_id(self.symbol)
                 } else {
@@ -2641,23 +2643,20 @@ impl IntoSymbol for &'static str {
         } else if self == "t" {
             Value::T
         } else if self.starts_with(':') {
-            add_wrapping(MemoryUseCountSlot::Symbols, 1);
             TaggedValue::from_kw_id(intern(self))
         } else {
-            add_wrapping(MemoryUseCountSlot::Symbols, 1);
             TaggedValue::from_sym_id(intern(self))
         }
     }
 }
 
-// A fixed DEFSYM identity keeps the string constructor's observable symbol
-// accounting. The table's compile-time checks exclude nil, t and keyword
-// spellings, so the tag is always a plain canonical symbol; no runtime name
-// inspection is needed (or possible to get wrong).
+// A fixed DEFSYM identity is already allocated; the registry charged it when
+// the symbol id was created. The table's compile-time checks exclude nil, t
+// and keyword spellings, so the tag is always a plain canonical symbol; no
+// runtime name inspection is needed (or possible to get wrong).
 impl IntoSymbol for crate::intern::WellKnown {
     #[inline]
     fn into_symbol(self) -> Value {
-        add_wrapping(MemoryUseCountSlot::Symbols, 1);
         TaggedValue::from_sym_id(self.id())
     }
 }
@@ -2699,24 +2698,14 @@ const EQUAL_KEY_NODE_BUDGET: usize = 4096;
 // ---------------------------------------------------------------------------
 
 impl TaggedValue {
-    /// Record the symbol-use accounting the string symbol constructor
-    /// performs. Subsystems that compare a spelling path against a fixed-id
-    /// path (face-name producers) call this explicitly so the counters stay
-    /// equal; it creates no symbol and publishes no membership.
-    #[doc(hidden)]
-    #[inline]
-    pub fn account_symbol_name_use() {
-        add_wrapping(MemoryUseCountSlot::Symbols, 1);
-    }
-
     /// Create a symbol from a string (with nil/t/keyword canonicalization) or SymId.
     pub fn symbol(s: impl IntoSymbol) -> Self {
         s.into_symbol()
     }
 
-    /// Create a keyword by interning a canonical `:name` symbol.
+    /// Create a keyword by interning a canonical `:name` symbol. The registry
+    /// charges the symbol counter when the spelling is new; a hit is free.
     pub fn keyword(s: &'static str) -> Self {
-        add_wrapping(MemoryUseCountSlot::Symbols, 1);
         TaggedValue::from_kw_id(intern(&canonical_keyword_name(s.as_ref())))
     }
 

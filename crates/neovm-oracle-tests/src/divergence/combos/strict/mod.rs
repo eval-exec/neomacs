@@ -97,6 +97,7 @@ mod concat_charset_coding_control;
 mod condition_case_unwind_catch_deep_nesting_combo;
 mod config_defaults_batch2;
 mod config_mode_electric_indent_delete_selection_subword_combo;
+mod consed_counters_live_var_sweep_combo;
 mod core_subr_fboundp_sweep_combo;
 mod data_symbol_obarray_core_var_sweep_combo;
 mod defaults_sweep;

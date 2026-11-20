@@ -1335,6 +1335,10 @@ impl SymbolRegistry {
 
     fn alloc_symbol(&mut self, name: NameId, canonical: bool, name_value: NewSymbolName) -> SymId {
         let id = SymId(self.symbols.len() as u32);
+        // GNU `syms_of_alloc` `symbols-consed` (`src/alloc.c:7429`) counts
+        // every symbol object, interned or uninterned; this is the one place
+        // a symbol id is handed out.
+        crate::value::add_wrapping(crate::tagged::gc::MemoryUseCountSlot::Symbols, 1);
         self.symbols.push(SymbolSlot {
             name,
             canonical,

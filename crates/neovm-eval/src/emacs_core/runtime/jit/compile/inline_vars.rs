@@ -253,33 +253,41 @@ fn classify(sym: u32) -> Option<VarSite> {
         // SAFETY: round-trip of interned ids stored in inline-var sites (peer seal N8).
         let id = unsafe { SymId::from_raw(sym) };
         let cell = obarray.jit_symbol_cell_addr(id)?;
-        let shape = match obarray.get_by_id(id) {
-            Some(symbol) => match symbol.value_cell() {
-                ValueCell::Localized(blv) => {
-                    let blv_ptr = blv.as_ptr();
-                    // SAFETY: a `Localized` cell names a record the obarray
-                    // owns for its life.
-                    let blv = unsafe { &*blv_ptr };
-                    match blv.fwd {
-                        Some(fwd) if FwdKind::of(fwd.ty()).is_none() => VarShape::Plain,
-                        fwd => VarShape::Localized {
-                            blv: blv_ptr as usize,
-                            fwd: fwd.map_or(0, |f| f.address()),
-                            rule: fwd.and_then(|f| FwdKind::of(f.ty())),
-                            remembered_defcell: None,
-                        },
+        // The `*-consed` DEFVAR_INTs are derived from live allocation
+        // accounting on every read; no cached cell is authoritative. `Plain`
+        // at run time refuses the forwarded redirect and takes the shim,
+        // where `read_var_cached` refreshes the value.
+        let shape = if crate::emacs_core::eval::derived_counters::slot(id).is_some() {
+            VarShape::Plain
+        } else {
+            match obarray.get_by_id(id) {
+                Some(symbol) => match symbol.value_cell() {
+                    ValueCell::Localized(blv) => {
+                        let blv_ptr = blv.as_ptr();
+                        // SAFETY: a `Localized` cell names a record the obarray
+                        // owns for its life.
+                        let blv = unsafe { &*blv_ptr };
+                        match blv.fwd {
+                            Some(fwd) if FwdKind::of(fwd.ty()).is_none() => VarShape::Plain,
+                            fwd => VarShape::Localized {
+                                blv: blv_ptr as usize,
+                                fwd: fwd.map_or(0, |f| f.address()),
+                                rule: fwd.and_then(|f| FwdKind::of(f.ty())),
+                                remembered_defcell: None,
+                            },
+                        }
                     }
-                }
-                ValueCell::Forwarded(fwd) => match FwdKind::of(fwd.ty()) {
-                    Some(kind) => VarShape::Forwarded {
-                        desc: fwd.address(),
-                        kind,
+                    ValueCell::Forwarded(fwd) => match FwdKind::of(fwd.ty()) {
+                        Some(kind) => VarShape::Forwarded {
+                            desc: fwd.address(),
+                            kind,
+                        },
+                        None => VarShape::Plain,
                     },
-                    None => VarShape::Plain,
+                    ValueCell::Plain(_) | ValueCell::Alias(_) => VarShape::Plain,
                 },
-                ValueCell::Plain(_) | ValueCell::Alias(_) => VarShape::Plain,
-            },
-            None => VarShape::Plain,
+                None => VarShape::Plain,
+            }
         };
         let bit = sym as usize;
         let projected = mask

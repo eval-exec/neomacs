@@ -111,6 +111,7 @@ use subr_abi::{SubrFn, SubrObj};
 mod callback;
 mod command_error;
 mod context_api;
+pub(crate) mod derived_counters;
 mod edit_host;
 mod lexenv_cache;
 mod lexical_symbols;
@@ -5930,6 +5931,11 @@ impl Context {
                     }
                 }
                 neovm_value::symbol::ValueCell::Forwarded(_) => {
+                    // GNU's `*-consed` DEFVAR_INTs live in the allocation
+                    // accounting; derive them before the generic cell load.
+                    if let Some(value) = self.derived_memory_use_read(sym_id) {
+                        return Ok(SymbolValueLookup::Bound(value));
+                    }
                     if let Some(lookup) = self.forwarded_buffer_obj_value(sym_id, sym) {
                         return Ok(lookup);
                     }
@@ -7293,6 +7299,9 @@ impl Context {
                     }
                 }
                 SymbolRedirect::Forwarded => {
+                    if let Some(value) = self.derived_memory_use_read(resolved) {
+                        return Some(value);
+                    }
                     if let Some(lookup) = self.forwarded_buffer_obj_value(resolved, sym) {
                         return match lookup {
                             SymbolValueLookup::Bound(value) => Some(value),
@@ -7669,6 +7678,10 @@ pub mod command_loop;
 #[cfg(test)]
 #[path = "tests/absent_fontset_generation_test.rs"]
 mod absent_fontset_generation_tests;
+
+#[cfg(test)]
+#[path = "tests/derived_counters_test.rs"]
+mod derived_counters_tests;
 
 #[doc(hidden)]
 pub mod redisplay_hooks;
