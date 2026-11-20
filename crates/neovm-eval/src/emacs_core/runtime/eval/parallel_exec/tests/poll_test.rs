@@ -507,7 +507,7 @@ fn poll_on_the_keeper_continues_while_the_executor_resumes() {
                 assert_eq!(
                     keeper_owner.phase_word_for_test() & 0x0F,
                     1,
-                    "keeper poll ran while the phase tag was not STOPPING"
+                    "the word was STOPPING, so Continue came from the keeper identity, not the fast path"
                 );
                 go_tx.send(()).expect("go");
                 let stopped = retry("stop", || stop_for_test(&era));
