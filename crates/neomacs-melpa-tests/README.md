@@ -223,8 +223,11 @@ lifecycle and first-key dismissal; the MELPA build installs no bundled scene
 resource directories, and animated frame content is not pinned),
 `etaf-gamekit` (the built-in engine descriptions, adapter registration,
 duplicate/replace/unregister behavior, game-definition validation, and
-pre-process start failures; no engine subprocess is spawned), and the
-`etaf-md`/`etaf-org-preview` headless readers. `gui_parity_tests/etaf_*` adds
+pre-process start failures; no engine subprocess is spawned),
+`etaf-posframe` (panel-option validation, batch-frame palette derivation,
+empty-panel queries and non-panel operation errors; child-frame creation is
+covered by the GUI corpus), and the `etaf-md`/`etaf-org-preview` headless
+readers. `gui_parity_tests/etaf_*` adds
 real X11 probes for the md/org pages and the posframe child frame.
 
 `etaf-reader`, `etaf-youtube`, `etaf-video-player`, `maillist`, the

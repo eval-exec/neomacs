@@ -397,6 +397,7 @@ mod etaf_gamekit;
 mod etaf_ncm;
 mod etaf_pi;
 mod etaf_pomodoro;
+mod etaf_posframe;
 mod etaf_preview;
 mod etaf_rss;
 mod etaf_screensaver;
