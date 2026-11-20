@@ -1515,14 +1515,6 @@ impl TaggedHeap {
         (self.jit.cons_cur.get(), self.jit.cons_lim.get())
     }
 
-    /// Era follow-up row: copied read observer over the JIT float window.
-    /// The heap-local state stays private; callers see only the pair.
-    #[cfg(any(test, feature = "test-support"))]
-    #[doc(hidden)]
-    pub fn jit_float_window_for_test(&self) -> (usize, usize) {
-        (self.jit.float_cur.get(), self.jit.float_lim.get())
-    }
-
     /// Era follow-up row: copied snapshot of the heap's region statistics.
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
