@@ -370,6 +370,14 @@ pub struct KBoard {
     /// Quail also binds the Lisp function to nil during its nested reads.
     /// The saved-reader call scopes this flag across normal and error returns.
     pub(crate) in_input_method_function: bool,
+    /// True when the most recently finished key-sequence read ended with the
+    /// user rejecting a mouse popup menu -- GNU's `read_char` returning Qt,
+    /// which `read_key_sequence` reports as its -1 result
+    /// (keyboard.c:11297-11302).  Cleared by `begin_key_sequence_read`, so it
+    /// describes only the read that just returned, never an earlier one.
+    /// KBoard-local like GNU's `used_mouse_menu`, and it fits the padding
+    /// next to the other boolean state.
+    pub(crate) last_read_menu_rejected: bool,
     /// Last mouse down event seen by the event-ingest path. GNU
     /// `keyboard.c:6041-6130` (`make_lispy_event` / the
     /// `button_down_time` / `last_mouse_click` globals) tracks
@@ -465,6 +473,7 @@ impl KBoard {
             executing_kbd_macro_iterations: 0,
             dribble: None,
             in_input_method_function: false,
+            last_read_menu_rejected: false,
             last_mouse_click: None,
             button_down: [None; 5],
         }
@@ -817,12 +826,6 @@ pub struct KeyboardRuntime {
     parked_kboards: HashMap<u64, KBoard>,
     /// Keyboard-local command-loop state.
     pub kboard: KBoard,
-    /// True when the most recently finished key-sequence read ended with the
-    /// user rejecting a mouse popup menu -- GNU's `read_char` returning Qt,
-    /// which `read_key_sequence` reports as its -1 result
-    /// (keyboard.c:11297-11302).  Cleared by `begin_key_sequence_read`, so it
-    /// describes only the read that just returned, never an earlier one.
-    pub(crate) last_read_menu_rejected: bool,
 }
 
 /// GNU's `num_nonmacro_input_events` slot, reached by its Lisp name because
@@ -933,7 +936,6 @@ impl KeyboardRuntime {
             active_terminal_id: crate::emacs_core::eval::protocol::tty_host::TERMINAL_ID,
             parked_kboards: HashMap::new(),
             kboard: KBoard::new(),
-            last_read_menu_rejected: false,
         }
     }
 

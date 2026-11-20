@@ -3625,7 +3625,7 @@ impl crate::emacs_core::eval::Context {
         // `read_key_sequence_vs`, so a rejected menu is its typed -1 result
         // rather than the quit the Lisp-facing reader converts it to.
         let (keys, binding) = self.read_key_sequence_inner(options)?;
-        if self.command_loop.keyboard.last_read_menu_rejected {
+        if self.command_loop.keyboard.kboard.last_read_menu_rejected {
             return Ok(CommandKeySequenceRead::End(
                 CommandKeySequenceEnd::MenuRejected,
             ));
@@ -3706,7 +3706,7 @@ impl crate::emacs_core::eval::Context {
         }
         // GNU reports a rejected menu purely as read_key_sequence's -1
         // return, so the state cannot outlive the read that produced it.
-        self.command_loop.keyboard.last_read_menu_rejected = false;
+        self.command_loop.keyboard.kboard.last_read_menu_rejected = false;
         self.assign_by_id(LAST_NONMENU_EVENT.id(), Value::NIL);
     }
 
@@ -3724,7 +3724,7 @@ impl crate::emacs_core::eval::Context {
         options: ReadKeySequenceOptions,
     ) -> Result<(Vec<Value>, ReadCommandBinding), neovm_value::error::Flow> {
         let read = self.read_key_sequence_inner(options)?;
-        if self.command_loop.keyboard.last_read_menu_rejected {
+        if self.command_loop.keyboard.kboard.last_read_menu_rejected {
             self.set_quit_flag_value(Value::T);
             self.maybe_quit()?;
         }
@@ -4292,7 +4292,7 @@ impl crate::emacs_core::eval::Context {
                         // done here once for both consumers of the -1 result.
                         self.command_loop
                             .set_command_key_sequences(Vec::new(), Vec::new());
-                        self.command_loop.keyboard.last_read_menu_rejected = true;
+                        self.command_loop.keyboard.kboard.last_read_menu_rejected = true;
                         return Ok((Vec::new(), ReadCommandBinding::unremapped(Value::NIL)));
                     }
                     // GNU: `read_char` returns the selected event; back in
