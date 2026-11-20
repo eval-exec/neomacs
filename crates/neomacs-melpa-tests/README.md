@@ -237,14 +237,23 @@ text is reduced to counts and matches), and the
 `etaf-md`/`etaf-org-preview` headless readers. `gui_parity_tests/etaf_*` adds
 real X11 probes for the md/org pages and the posframe child frame.
 
-`etaf-reader`, `etaf-youtube`, `etaf-video-player`, `maillist`, the
-`etaf-weread` local highlight index, and other `etaf-db` consumers open a
-SQLite library through Emacs' built-in `sqlite` support. The attested GNU 31.1
-oracle profile has no `SQLITE` feature, so those store-backed corpora cannot
-run against it: a local GNU in this environment reports `sqlite-open` unbound
-too. Their load surface and non-SQLite behaviour are covered, and the
-store-backed behavior remains **UNATTESTED** until the oracle recipe includes
-SQLite. (Probing them against another GNU build would break the oracle pin.)
+`etaf-db`, `etaf-reader`, `etaf-youtube`, `etaf-video-player`,
+`etaf-playground`, `maillist`, the `etaf-weread` local highlight index, and
+other `etaf-db` consumers open a SQLite library through Emacs' built-in
+`sqlite` support. The attested GNU 31.1 oracle profile has no `SQLITE`
+feature, so those store-backed corpora cannot run against it: a local GNU in
+this environment reports `sqlite-open` unbound too. Their load surface and
+non-SQLite behaviour are covered, and the store-backed behavior remains
+**UNATTESTED** until the oracle recipe includes SQLite. (Probing them against
+another GNU build would break the oracle pin.)
+
+`etaf-tanks` and `etaf-salvage` launch a Godot project through
+`etaf-gamekit`, and `etaf-solitaire`/`etaf-xiangqi` launch OpenSpiel. Those
+runtimes are not part of the pinned package set or the test image, so their
+session behavior is not exercised here: the load surface and the shared
+gamekit adapter contract are covered. `etaf-telega` requires the unpinned
+`telega` package and a live Telegram login, so its behavior is likewise not
+covered.
 
 The GUI probes run both editors on one X11 display with a fixed DejaVu Sans
 Mono 10pt face, so pixel values do not move with the host's font, and assert
