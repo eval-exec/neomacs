@@ -564,11 +564,37 @@ fn start_xvfb_with_transport(
     start_xvfb_on(artifact_root, width, height, transport)
 }
 
+/// Hung-server bound. A dead server is still reported on the next poll.
+/// The display number is written only after font and keyboard init
+/// (`NotifyParentProcess`). A partial listen set never reaches that write:
+/// each rejected display costs another bind-retry cycle, so a longer bound
+/// does not finish the scan. The TCP path avoids that scan with
+/// `-nolisten inet6`.
+const XVFB_DISPLAYFD_BOUND: Duration = Duration::from_secs(30);
+
 fn read_xvfb_display_number(
     receiver: &mpsc::Receiver<(io::Result<usize>, String)>,
     child: &mut Child,
+    stdout_path: &Path,
+    stderr_path: &Path,
 ) -> io::Result<u32> {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    read_xvfb_display_number_until(
+        receiver,
+        child,
+        stdout_path,
+        stderr_path,
+        XVFB_DISPLAYFD_BOUND,
+    )
+}
+
+fn read_xvfb_display_number_until(
+    receiver: &mpsc::Receiver<(io::Result<usize>, String)>,
+    child: &mut Child,
+    stdout_path: &Path,
+    stderr_path: &Path,
+    bound: Duration,
+) -> io::Result<u32> {
+    let deadline = Instant::now() + bound;
     loop {
         match receiver.try_recv() {
             Ok((Ok(0), line)) => {
@@ -591,21 +617,49 @@ fn read_xvfb_display_number(
             Ok((Err(error), _)) => return Err(error),
             Err(mpsc::TryRecvError::Empty) => {
                 if child.try_wait()?.is_some() {
-                    return Err(io::Error::other("Xvfb exited before reporting a display"));
+                    return Err(displayfd_log_error(
+                        io::ErrorKind::Other,
+                        "Xvfb exited before reporting a display",
+                        stdout_path,
+                        stderr_path,
+                    ));
                 }
                 if Instant::now() >= deadline {
-                    return Err(io::Error::new(
+                    return Err(displayfd_log_error(
                         io::ErrorKind::TimedOut,
                         "Xvfb -displayfd produced no display number",
+                        stdout_path,
+                        stderr_path,
                     ));
                 }
                 thread::sleep(Duration::from_millis(20));
             }
             Err(mpsc::TryRecvError::Disconnected) => {
-                return Err(io::Error::other("Xvfb -displayfd reader exited"));
+                return Err(displayfd_log_error(
+                    io::ErrorKind::Other,
+                    "Xvfb -displayfd reader exited",
+                    stdout_path,
+                    stderr_path,
+                ));
             }
         }
     }
+}
+
+fn displayfd_log_error(
+    kind: io::ErrorKind,
+    reason: &str,
+    stdout_path: &Path,
+    stderr_path: &Path,
+) -> io::Error {
+    io::Error::new(
+        kind,
+        format!(
+            "{reason}; stdout: {}; stderr: {}",
+            read_log_tail(stdout_path),
+            read_log_tail(stderr_path)
+        ),
+    )
 }
 
 fn xauth_add(authority: &Path, display: &str, cookie: &str) -> io::Result<()> {
@@ -663,7 +717,16 @@ fn start_xvfb_on(
         .arg(format!("{width}x{height}x24"));
     match transport {
         XTransport::Tcp => {
-            xvfb.arg("-nolisten").arg("unix").arg("-listen").arg("tcp");
+            // `tcp` is an alias for IPv6 and IPv4. A failed IPv6 bind is retried
+            // about twenty times with a one-second sleep, then the listen set
+            // is partial and `-displayfd` rejects the display. Clients of this
+            // session use IPv4, so IPv6 is not part of the listen set.
+            xvfb.arg("-nolisten")
+                .arg("unix")
+                .arg("-listen")
+                .arg("tcp")
+                .arg("-nolisten")
+                .arg("inet6");
         }
         XTransport::Local => {
             // The local Unix socket is the only MIT-SHM-capable transport;
@@ -679,6 +742,8 @@ fn start_xvfb_on(
         .arg("-auth")
         .arg(&authority_path)
         .current_dir(&session_dir)
+        // The server is a daemon and must not inherit the test's stdin.
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::from(stderr))
         .spawn()?;
@@ -695,8 +760,14 @@ fn start_xvfb_on(
         let _ = sender.send((read, line));
         let _ = io::copy(&mut reader, &mut stdout_log);
     });
-    let display_number = read_xvfb_display_number(&receiver, &mut child)?;
+    // Store the child before the displayfd wait. A timeout returns through
+    // `?`, and only `PendingXvfbSession::drop` kills and reaps the server.
     pending.child = Some(child);
+    let child = pending
+        .child
+        .as_mut()
+        .ok_or_else(|| io::Error::other("Xvfb child was not stored before the displayfd wait"))?;
+    let display_number = read_xvfb_display_number(&receiver, child, &stdout_path, &stderr_path)?;
     let (endpoint, display) = match transport {
         XTransport::Tcp => {
             let port_number = u16::try_from(6000 + display_number).map_err(|_| {
@@ -1000,6 +1071,135 @@ fn path_to_string(path: &Path) -> String {
 /// precedence, so one assignment pins every consumer of the session env.
 fn locale_pin() -> (String, String) {
     ("LC_ALL".to_string(), "C.UTF-8".to_string())
+}
+
+#[cfg(test)]
+mod displayfd_tests {
+    use super::*;
+
+    fn log_pair(dir: &Path, stdout: &str, stderr: &str) -> (PathBuf, PathBuf) {
+        let stdout_path = dir.join("xvfb.stdout");
+        let stderr_path = dir.join("xvfb.stderr");
+        fs::write(&stdout_path, stdout).expect("stdout log");
+        fs::write(&stderr_path, stderr).expect("stderr log");
+        (stdout_path, stderr_path)
+    }
+
+    #[test]
+    fn displayfd_timeout_includes_log_tails_and_does_not_retry() {
+        let root = tempfile::tempdir().expect("artifact root");
+        let (stdout_path, stderr_path) =
+            log_pair(root.path(), "stdout-tail-marker\n", "stderr-tail-marker\n");
+        let mut child = Command::new("sleep")
+            .arg("60")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("sleep");
+        let (_sender, receiver) = mpsc::channel();
+        let started = Instant::now();
+        let error = read_xvfb_display_number_until(
+            &receiver,
+            &mut child,
+            &stdout_path,
+            &stderr_path,
+            Duration::from_millis(80),
+        )
+        .expect_err("a silent server hits the hung bound");
+        let elapsed = started.elapsed();
+        let _ = child.kill();
+        let _ = child.wait();
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        let message = error.to_string();
+        assert!(
+            message.contains("Xvfb -displayfd produced no display number"),
+            "{message}"
+        );
+        assert!(message.contains("stdout-tail-marker"), "{message}");
+        assert!(message.contains("stderr-tail-marker"), "{message}");
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "the supplied bound is the only wait, elapsed {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn displayfd_child_exit_returns_before_the_hung_bound() {
+        let root = tempfile::tempdir().expect("artifact root");
+        let (stdout_path, stderr_path) =
+            log_pair(root.path(), "exit-stdout-marker\n", "exit-stderr-marker\n");
+        let mut child = Command::new("true")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("true");
+        let observe = Instant::now() + Duration::from_secs(2);
+        while child.try_wait().expect("poll true").is_none() {
+            assert!(Instant::now() < observe, "true did not exit");
+            thread::sleep(Duration::from_millis(5));
+        }
+        let (_sender, receiver) = mpsc::channel();
+        let started = Instant::now();
+        let error = read_xvfb_display_number_until(
+            &receiver,
+            &mut child,
+            &stdout_path,
+            &stderr_path,
+            XVFB_DISPLAYFD_BOUND,
+        )
+        .expect_err("a dead server is reported at once");
+        let elapsed = started.elapsed();
+        assert_ne!(error.kind(), io::ErrorKind::TimedOut);
+        let message = error.to_string();
+        assert!(
+            message.contains("Xvfb exited before reporting a display"),
+            "{message}"
+        );
+        assert!(message.contains("exit-stdout-marker"), "{message}");
+        assert!(message.contains("exit-stderr-marker"), "{message}");
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "child exit must not wait out the hung-server bound, elapsed {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn displayfd_timeout_kills_and_reaps_the_owned_child() {
+        let root = tempfile::tempdir().expect("artifact root");
+        let (stdout_path, stderr_path) = log_pair(root.path(), "", "");
+        let child = Command::new("sleep")
+            .arg("60")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("sleep");
+        let pid = child.id();
+        let mut pending = PendingXvfbSession::new(root.path().to_path_buf());
+        pending.child = Some(child);
+        let (_sender, receiver) = mpsc::channel();
+        let error = read_xvfb_display_number_until(
+            &receiver,
+            pending
+                .child
+                .as_mut()
+                .expect("the session owns the child before the wait"),
+            &stdout_path,
+            &stderr_path,
+            Duration::from_millis(80),
+        )
+        .expect_err("a silent server hits the hung bound");
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        drop(pending);
+        let probe = Command::new("kill")
+            .arg("-0")
+            .arg(pid.to_string())
+            .status()
+            .expect("kill -0");
+        assert!(
+            !probe.success(),
+            "pid {pid} is still alive after the session guard dropped"
+        );
+    }
 }
 
 #[cfg(test)]
