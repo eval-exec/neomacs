@@ -201,11 +201,13 @@ batch modules cover `ecss` (cascade/specificity/layers/var), `ebox`
 `etaf-md`/`etaf-org-preview` headless readers. `gui_parity_tests/etaf_*` adds
 real X11 probes for the md/org pages and the posframe child frame.
 
-The GUI probes pin both editors' exact observations on a fixed
-DejaVu Sans Mono 10pt face, so the pixel values do not move with the host's
-font. `frame-live-p` now reports each backend's terminal type (`x` in GNU,
-`neo` here), as GNU's `Fframep`-based contract requires; the panel palettes
-also agree. While these known divergences are open:
+The GUI probes run both editors on one X11 display with a fixed DejaVu Sans
+Mono 10pt face, so pixel values do not move with the host's font, and assert
+**strict parity**: each probe's GNU observation is pinned, and Neomacs must
+produce the identical observation. There is deliberately no pinned Neomacs
+outcome, so a divergence cannot be blessed by re-recording it. The GUI shard
+is therefore red until these known bugs are fixed (they are failures, not
+expected results):
 
 - a posframe anchored at `(cells 1 1)` lands at top 17 in GNU and top 68 here;
 - one default line is 17 px in GNU and 18 px here (a 12-line page is 245 vs
@@ -215,6 +217,11 @@ also agree. While these known divergences are open:
 - every ETAF-mounted buffer line here (previews, panels, the desktop canvas)
   starts with U+200B.
 
+`frame-live-p` reports each backend's terminal type (`x` in GNU, `neo` here),
+as GNU's `Fframep`-based contract requires; the posframe probe records the
+`frame-live-p`/`framep` agreement instead of the backend symbol so backend
+identity is not compared as if it were a divergence. The panel palettes agree.
+
 The etaf-algo-lab crash surfaced 2026-11-19 is fixed. Mounting either
 laboratory used to abort Neomacs with an allocation failure while GNU renders
 it; the core dump showed unbounded recursion in `neovm_value`'s
@@ -222,12 +229,15 @@ it; the core dump showed unbounded recursion in `neovm_value`'s
 laboratories abort at 4, 8 and 32 GB limits, so it was unbounded work, not a
 memory budget). The stored-key walk is now node-budgeted and membership still
 compares live key objects, so GNU's observable behavior is unchanged.
-`etaf_algo_lab_real_gui_workspace_matches_gnu` now runs as a normal test and
-pins the remaining observations above, plus 594 vs 581 pixels for the same 34
-body lines.
+`etaf_algo_lab_real_gui_workspace_matches_gnu` is a strict parity test and is
+red for the remaining observations plus 594 vs 581 pixels for the same 34 body
+lines.
 
-Each test fails when its divergence is fixed; flip it to a single
-`assert_eq` and delete the note.
+The etaf-desktop GUI test is also red for a separate reason: GNU's own
+`etaf-desktop-mount` comes back with an empty buffer in this environment, and
+the probe's stale match data then raises `args-out-of-range 0 0`; the Neomacs
+side still renders the canvas. That is a probe/environment issue to fix, not a
+Neomacs divergence.
 
 When MELPA publishes a new version, update only the hard-coded version next to
 the package name in `DASH_MELPA_PIN`, `S_MELPA_PIN`, or the relevant package

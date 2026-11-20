@@ -1,7 +1,8 @@
 //! Real graphical parity for the pinned `etaf-algo-lab` workspace.
 //!
 //! The sorting laboratory is mounted at its initial paused state and its
-//! painted text and pixel size are compared in a real X11 frame.
+//! painted text and pixel size are compared in a real X11 frame.  The probe
+//! asserts strict GNU parity; Neomacs must produce GNU's exact observation.
 
 use std::time::Duration;
 
@@ -44,9 +45,9 @@ const GUI_PROBE: &str = r####"
 // TaggedValue::to_equal_key_depth_swp (the stored equal key of a shared
 // structure); both laboratories aborted at 4, 8 and 32 GB address-space
 // limits, so it was unbounded work, not a memory budget.  The stored key walk
-// is now node-budgeted, and this test pins the remaining observations:
-// Neomacs' U+200B line prefix, a 100 vs 101 default height, and 594 vs 581
-// pixels for the same 34 body lines.
+// is now node-budgeted.  This strict parity test reports the remaining
+// divergences as failures: the U+200B line prefix, a 100 vs 101 default
+// height, and 594 vs 581 pixels for the same 34 body lines.
 #[test]
 fn etaf_algo_lab_real_gui_workspace_matches_gnu() {
     let oracle = CachedMelpaOracle::new(("etaf-algo-lab", "0.1.1"), "etaf-algo-lab.el")
@@ -63,14 +64,13 @@ fn etaf_algo_lab_real_gui_workspace_matches_gnu() {
         r#"OK (:labs (pathfinding sorting) :text " \n 算法实验室  寻路实验台   排序实验台   \n   \n 排序实验台 准备就绪  \n   \n 每一列的高度就是一个数字，最下面一行是它的值。  \n 黄色 = 正在比较，紫色 = 正在写回，绿色 = 已经排好。  \n   \n   \n   开始/继续   暂停   单步   跳到完成    \n     \n   重置   批量对比    \n     \n  速度  慢速   正常   快速    \n     \n  算法  冒泡   插入   选择   归并    \n   \n   \n   \n  比较 0 次 · 写入 0 次   \n     \n  跑完后这里记住每种算法比较了多少次。   \n   \n   \n    \n                                                                                      \n                                                                                      \n                                                                                      \n                                                                                      \n                                                                                      \n                                                                                      \n                                                                                      \n                                                                                      \n                                                                                      " :pixel-size (800 . 581) :body-width 100 :body-height 34 :default-family "DejaVu Sans Mono" :default-height 101 :frame-width 100 :frame-height 35)"#
     ]];
     expected_gnu.assert_eq(&pair.gnu_behavior.to_string());
-    let expected_neomacs = expect![[
-        r#"OK (:labs (pathfinding sorting) :text "​ \n​ 算法实验室  寻路实验台   排序实验台   \n​   \n​ 排序实验台 准备就绪  \n​   \n​ 每一列的高度就是一个数字，最下面一行是它的值。  \n​ 黄色 = 正在比较，紫色 = 正在写回，绿色 = 已经排好。  \n​   \n​   \n​   开始/继续   暂停   单步   跳到完成    \n​     \n​   重置   批量对比    \n​     \n​  速度  慢速   正常   快速    \n​     \n​  算法  冒泡   插入   选择   归并    \n​   \n​   \n​   \n​  比较 0 次 · 写入 0 次   \n​     \n​  跑完后这里记住每种算法比较了多少次。   \n​   \n​   \n​    \n​                                                                                      \n​                                                                                      \n​                                                                                      \n​                                                                                      \n​                                                                                      \n​                                                                                      \n​                                                                                      \n​                                                                                      " :pixel-size (800 . 594) :body-width 100 :body-height 34 :default-family "DejaVu Sans Mono" :default-height 100 :frame-width 100 :frame-height 35)"#
-    ]];
-    expected_neomacs.assert_eq(&pair.neomacs_behavior.to_string());
-    assert_ne!(
-        pair.neomacs_behavior, pair.gnu_behavior,
-        "the pinned etaf-algo-lab GUI divergences are FIXED: flip this test to \
-         assert_eq and re-record both snapshots; full outcomes:\nNeomacs: {}\nGNU Emacs: {}",
-        pair.neomacs, pair.gnu_emacs,
+    // Strict parity: the probe must produce GNU's exact observation.  There
+    // is deliberately no pinned Neomacs outcome, so a divergence cannot be
+    // blessed by re-recording it.
+    assert_eq!(
+        pair.neomacs_behavior.to_string(),
+        pair.gnu_behavior.to_string(),
+        "Neomacs must match GNU exactly; open ETAF GUI divergences are bugs to \
+         fix, not values to re-pin"
     );
 }

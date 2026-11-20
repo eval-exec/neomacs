@@ -2,7 +2,8 @@
 //!
 //! Complements the batch module's text/state probes with the resolved title
 //! face, page pixel height and the frame/default-face metrics the page is
-//! painted with in a real X11 frame.
+//! painted with in a real X11 frame.  The probe asserts strict GNU parity:
+//! Neomacs must produce GNU's exact observation, with no Neomacs pin.
 
 use std::time::Duration;
 
@@ -89,14 +90,13 @@ fn etaf_org_preview_real_gui_page_matches_gnu() {
         r##"OK (:text "   \n  Demo   \n     \n  Ada   \n     \n     \n    目录   \n    First heading   \n     Second heading   \n     \n     \n   TODO  First heading    :work:   \n     \n     \n  Body text for parity.   \n     \n   DONE  Second heading    :home:   \n     \n     \n  完 done item   \n  待 open item   \n   " :has-window t :pixel-size (800 . 417) :body-width 100 :body-height 33 :title-face ((:height 217 :weight bold) (:foreground "#1b5a7a") (:background "#ffffff")) :title-foreground "#1b5a7a" :title-height 217 :title-weight bold :default-family "DejaVu Sans Mono" :default-height 101 :default-foreground "black" :default-background "white" :frame-width 100 :frame-height 35 :frame-background "white" :frame-foreground "black")"##
     ]];
     expected_gnu.assert_eq(&pair.gnu_behavior.to_string());
-    let expected_neomacs = expect![[
-        r##"OK (:text "​   \n​  Demo   \n​     \n​  Ada   \n​     \n​     \n​    目录   \n​    First heading   \n​     Second heading   \n​     \n​     \n​   TODO  First heading    :work:   \n​     \n​     \n​  Body text for parity.   \n​     \n​   DONE  Second heading    :home:   \n​     \n​     \n​  完 done item   \n​  待 open item   \n​   " :has-window t :pixel-size (800 . 436) :body-width 100 :body-height 33 :title-face ((:height 215 :weight bold) (:foreground "#1b5a7a") (:background "#ffffff")) :title-foreground "#1b5a7a" :title-height 215 :title-weight bold :default-family "DejaVu Sans Mono" :default-height 100 :default-foreground "black" :default-background "white" :frame-width 100 :frame-height 35 :frame-background "white" :frame-foreground "black")"##
-    ]];
-    expected_neomacs.assert_eq(&pair.neomacs_behavior.to_string());
-    assert_ne!(
-        pair.neomacs_behavior, pair.gnu_behavior,
-        "the pinned etaf-org-preview GUI divergences are FIXED: flip this test \
-         to assert_eq and re-record both snapshots; full outcomes:\nNeomacs: {}\nGNU Emacs: {}",
-        pair.neomacs, pair.gnu_emacs,
+    // Strict parity: the probe must produce GNU's exact observation.  There
+    // is deliberately no pinned Neomacs outcome, so a divergence cannot be
+    // blessed by re-recording it.
+    assert_eq!(
+        pair.neomacs_behavior.to_string(),
+        pair.gnu_behavior.to_string(),
+        "Neomacs must match GNU exactly; open ETAF GUI divergences are bugs to \
+         fix, not values to re-pin"
     );
 }

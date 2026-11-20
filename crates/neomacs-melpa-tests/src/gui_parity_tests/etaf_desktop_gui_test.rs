@@ -2,7 +2,8 @@
 //!
 //! The batch module pins the controller's data state and headless canvas text.
 //! This probe mounts a controlled two-window desktop in an X11 frame and reads
-//! the painted text, pixel size and window-title face.
+//! the painted text, pixel size and window-title face.  Neomacs must reproduce
+//! GNU's observation exactly; there is no pinned Neomacs outcome.
 
 use std::time::Duration;
 
@@ -72,14 +73,13 @@ fn etaf_desktop_real_gui_canvas_matches_gnu() {
         r##"OK (:text "  main     \n  \n  \n            \n   Hel   \n   lo              \n   des    Tas   \n   kto    k     \n   p     one   \n              \n               \n        \n         \n  \n  \n  \n  \n  \n  \n  \n  \n  ⊞ Appli   " :pixel-size (96 . 374) :body-width 100 :body-height 34 :title-face (:background "#D3DBE4") :default-family "DejaVu Sans Mono" :default-height 101 :default-foreground "black" :default-background "white" :frame-width 100 :frame-height 35)"##
     ]];
     expected_gnu.assert_eq(&pair.gnu_behavior.to_string());
-    let expected_neomacs = expect![[
-        r##"OK (:text "​  main     \n​  \n​  \n​            \n​   Hel   \n​   lo              \n​   des    Tas   \n​   kto    k     \n​   p     one   \n​              \n​               \n​        \n​         \n​  \n​  \n​  \n​  \n​  \n​  \n​  \n​  \n​  ⊞ Appli   " :pixel-size (97 . 396) :body-width 100 :body-height 34 :title-face (:background "#D3DBE4") :default-family "DejaVu Sans Mono" :default-height 100 :default-foreground "black" :default-background "white" :frame-width 100 :frame-height 35)"##
-    ]];
-    expected_neomacs.assert_eq(&pair.neomacs_behavior.to_string());
-    assert_ne!(
-        pair.neomacs_behavior, pair.gnu_behavior,
-        "the pinned etaf-desktop GUI divergences are FIXED: flip this test to \
-         assert_eq and re-record both snapshots; full outcomes:\nNeomacs: {}\nGNU Emacs: {}",
-        pair.neomacs, pair.gnu_emacs,
+    // Strict parity: the probe must produce GNU's exact observation.  There
+    // is deliberately no pinned Neomacs outcome, so a divergence cannot be
+    // blessed by re-recording it.
+    assert_eq!(
+        pair.neomacs_behavior.to_string(),
+        pair.gnu_behavior.to_string(),
+        "Neomacs must match GNU exactly; open ETAF GUI divergences are bugs to \
+         fix, not values to re-pin"
     );
 }

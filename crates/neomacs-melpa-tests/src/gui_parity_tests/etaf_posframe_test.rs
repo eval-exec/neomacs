@@ -3,7 +3,8 @@
 //! The probe opens one panel at a deterministic anchor and size, reads the
 //! child frame's geometry, resolved palette and buffer text, then hides it and
 //! checks that the frame and registry entry are gone.  GNU Emacs and Neomacs
-//! run sequentially on the same owned X11 display.
+//! run sequentially on the same owned X11 display and their observations must
+//! be identical; there is no pinned Neomacs outcome.
 
 use std::time::Duration;
 
@@ -23,7 +24,10 @@ const GUI_PROBE: &str = r####"
     "Return the observable facts of the panel FRAME."
     (let* ((root (frame-root-window frame))
            (buffer (window-buffer root)))
-      (list :live (frame-live-p frame)
+      ;; `frame-live-p' reports the backend's terminal type (GNU Fframep's
+      ;; value), which is backend identity (`x' vs `neo'), not a parity fact.
+      ;; Record the contract that it agrees with `framep' instead.
+      (list :live (eq (frame-live-p frame) (framep frame))
             :has-parent (and (frame-parent frame) t)
             :visible (frame-visible-p frame)
             :width (frame-parameter frame 'width)
@@ -73,27 +77,20 @@ fn etaf_posframe_real_gui_panel_matches_gnu() {
     )
     .expect("run real graphical GNU Emacs and Neomacs sequentially");
 
-    // Both sides are pinned while these known divergences are open:
-    //   - the same `(cells 1 1)` anchor places the child frame at top 17 in
-    //     GNU and top 68 here;
-    //   - the default line is 17 px in GNU and 18 px here;
-    //   - the panel buffer text starts with U+200B here.
-    // `frame-live-p` reports each backend's terminal type (`x` vs `neo`),
-    // which is GNU's own Fframep-based contract; the panel palettes agree.
-    // When a divergence is fixed the Neomacs pin fails first; flip this test
-    // to a single assert_eq and delete the note.
-    let expected_gnu = expect![[
-        r##"OK (:before (:live x :has-parent t :visible t :width 20 :height 1 :left 16 :top 17 :window-width 20 :window-height 1 :pixel-width 160 :pixel-height 17 :char-width 8 :char-height 17 :background "#f7f7f7" :foreground "#000000" :text "panel parity") :panels-before 1 :frame-after-hide nil :panels-after-hide 0 :frame-live-after-hide nil)"##
-    ]];
+    // Strict parity: Neomacs must produce GNU's exact observation.  The open
+    // divergences this test currently reports are the child-frame anchor (top
+    // 17 vs 68), the default line height (17 vs 18 px), and the U+200B line
+    // prefix.  `:live` records that `frame-live-p' agrees with `framep';
+    // the terminal type itself is backend identity (`x` vs `neo').
+    let expected_gnu = expect![[r##"OK (:before (:live t :has-parent t :visible t :width 20 :height 1 :left 16 :top 17 :window-width 20 :window-height 1 :pixel-width 160 :pixel-height 17 :char-width 8 :char-height 17 :background "#f7f7f7" :foreground "#000000" :text "panel parity") :panels-before 1 :frame-after-hide nil :panels-after-hide 0 :frame-live-after-hide nil)"##]];
     expected_gnu.assert_eq(&pair.gnu_behavior.to_string());
-    let expected_neomacs = expect![[
-        r##"OK (:before (:live neo :has-parent t :visible t :width 20 :height 1 :left 16 :top 68 :window-width 20 :window-height 1 :pixel-width 160 :pixel-height 18 :char-width 8 :char-height 17 :background "#f7f7f7" :foreground "#000000" :text "​panel parity") :panels-before 1 :frame-after-hide nil :panels-after-hide 0 :frame-live-after-hide nil)"##
-    ]];
-    expected_neomacs.assert_eq(&pair.neomacs_behavior.to_string());
-    assert_ne!(
-        pair.neomacs_behavior, pair.gnu_behavior,
-        "the pinned ETAF posframe divergences are FIXED: flip this test to \
-         assert_eq and re-record both snapshots; full outcomes:\nNeomacs: {}\nGNU Emacs: {}",
-        pair.neomacs, pair.gnu_emacs,
+    // Strict parity: the probe must produce GNU's exact observation.  There
+    // is deliberately no pinned Neomacs outcome, so a divergence cannot be
+    // blessed by re-recording it.
+    assert_eq!(
+        pair.neomacs_behavior.to_string(),
+        pair.gnu_behavior.to_string(),
+        "Neomacs must match GNU exactly; open ETAF GUI divergences are bugs to \
+         fix, not values to re-pin"
     );
 }
