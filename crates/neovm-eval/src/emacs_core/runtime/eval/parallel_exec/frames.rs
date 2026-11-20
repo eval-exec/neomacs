@@ -16,7 +16,7 @@ use super::super::owner_bindings::{BindingKind, Channel, UndoTarget};
 use neovm_value::forward::TlsIndex;
 use neovm_value::intern::SymId;
 use neovm_value::value::Value;
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroU64};
 
 /// The canonical E3 private-root groups (`gc_pacing::trace_root_groups`) the
 /// executor publishes. The names are exactly that roster so stage 1 plugs the
@@ -60,56 +60,188 @@ impl RootGroup {
     }
 }
 
-/// One explicitly published root: an owned value the frame walk does not
-/// reach (a pending escape or native obligation, a result awaiting resume).
+/// Why a root could not be published or revoked.
+///
+/// [`RootPublishError::GenerationExhausted`] is the non-wrapping end of the
+/// `NonZeroU64` counter. The registry stays as it was; it does not recycle a
+/// generation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RootPublishError {
+    GenerationExhausted,
+    IndexExhausted,
+}
+
+/// Why a revoke did not remove a root.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RootRevokeError {
+    /// The handle's generation is not the slot's current generation, or the
+    /// handle does not name the live top. The slot payload is not read.
+    Stale,
+    GenerationExhausted,
+}
+
+/// A revocable token for one published root.
+///
+/// `generation` is a `NonZeroU64` taken from a counter that refuses to wrap.
+/// After the slot is reused, this handle no longer names it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[doc(hidden)]
+pub struct RootHandle {
+    index: u32,
+    generation: NonZeroU64,
+}
+
+impl RootHandle {
+    #[doc(hidden)]
+    pub const fn index(self) -> u32 {
+        self.index
+    }
+
+    #[doc(hidden)]
+    pub const fn generation(self) -> NonZeroU64 {
+        self.generation
+    }
+}
+
+/// The value stored in a slot. Vacant slots stay in the table so a later push
+/// can reuse the index under a new generation.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct RootRecord {
-    pub(crate) group: RootGroup,
-    pub(crate) value: Value,
+enum SlotPayload {
+    Vacant,
+    Live { group: RootGroup, value: Value },
+}
+
+struct RootSlot {
+    generation: NonZeroU64,
+    payload: SlotPayload,
 }
 
 /// The owner's auxiliary published roots, separate from the frame arena.
-#[derive(Default)]
+///
+/// Slots are a dense live prefix. Revoke bumps the slot generation before
+/// clearing the payload, so a stale [`RootHandle`] fails the generation
+/// compare and does not read the value.
 pub(crate) struct RootRegistry {
-    records: Vec<RootRecord>,
+    slots: Vec<RootSlot>,
+    live: u32,
+    next_generation: NonZeroU64,
 }
 
 impl RootRegistry {
     #[doc(hidden)]
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            slots: Vec::new(),
+            live: 0,
+            next_generation: NonZeroU64::MIN,
+        }
     }
 
-    /// Publish VALUE in GROUP and return the token proving it is rooted.
+    /// Publish VALUE in GROUP. The returned handle is the only lookup key.
     #[must_use]
     #[doc(hidden)]
-    pub fn push(&mut self, group: RootGroup, value: Value) -> RootedValue {
-        self.records.push(RootRecord { group, value });
-        RootedValue(value)
+    pub fn push(&mut self, group: RootGroup, value: Value) -> Result<RootHandle, RootPublishError> {
+        if self.live == u32::MAX {
+            return Err(RootPublishError::IndexExhausted);
+        }
+        let generation = self.issue()?;
+        let index = self.live;
+        if index as usize == self.slots.len() {
+            self.slots.push(RootSlot {
+                generation,
+                payload: SlotPayload::Vacant,
+            });
+        }
+        let slot = &mut self.slots[index as usize];
+        slot.generation = generation;
+        slot.payload = SlotPayload::Live { group, value };
+        self.live += 1;
+        Ok(RootHandle { index, generation })
+    }
+
+    /// The value HANDLE names, or `None` when the handle is stale.
+    ///
+    /// The generation compare happens before the payload match. A mismatch
+    /// returns here and does not read [`SlotPayload`].
+    #[doc(hidden)]
+    pub fn lookup(&self, handle: RootHandle) -> Option<Value> {
+        let slot = self.slots.get(handle.index as usize)?;
+        if slot.generation != handle.generation {
+            return None;
+        }
+        match slot.payload {
+            SlotPayload::Live { value, .. } => Some(value),
+            SlotPayload::Vacant => None,
+        }
+    }
+
+    /// Drop the top root when HANDLE names it. A stale or non-top handle is
+    /// refused before the payload is read.
+    #[doc(hidden)]
+    pub fn pop(&mut self, handle: RootHandle) -> Result<Value, RootRevokeError> {
+        let Some(slot) = self.slots.get(handle.index as usize) else {
+            return Err(RootRevokeError::Stale);
+        };
+        if slot.generation != handle.generation || handle.index.saturating_add(1) != self.live {
+            return Err(RootRevokeError::Stale);
+        }
+        let value = match slot.payload {
+            SlotPayload::Live { value, .. } => value,
+            SlotPayload::Vacant => return Err(RootRevokeError::Stale),
+        };
+        self.retire_last()
+            .map_err(|_| RootRevokeError::GenerationExhausted)?;
+        Ok(value)
+    }
+
+    /// Drop every live root at or above KEEP. Returns how many were removed.
+    #[doc(hidden)]
+    pub fn truncate(&mut self, keep: usize) -> Result<usize, RootPublishError> {
+        let keep = u32::try_from(keep).unwrap_or(self.live).min(self.live);
+        let removed = (self.live - keep) as usize;
+        while self.live > keep {
+            self.retire_last()?;
+        }
+        Ok(removed)
     }
 
     #[doc(hidden)]
     pub fn len(&self) -> usize {
-        self.records.len()
+        self.live as usize
     }
 
     #[doc(hidden)]
     pub fn trace_roots(&self, visit: &mut dyn FnMut(RootGroup, Value)) {
-        for record in &self.records {
-            visit(record.group, record.value);
+        for slot in self.slots.iter().take(self.live as usize) {
+            if let SlotPayload::Live { group, value } = slot.payload {
+                visit(group, value);
+            }
         }
     }
-}
 
-/// A value the registry has published. The private field prevents a caller
-/// from claiming an unrooted value; stage 1 hands these across a poll.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct RootedValue(Value);
+    /// Park the counter at its last value so the next issue refuses.
+    #[cfg(test)]
+    pub(crate) fn exhaust_generations_for_test(&mut self) {
+        self.next_generation = NonZeroU64::MAX;
+    }
 
-impl RootedValue {
-    #[doc(hidden)]
-    pub fn get(self) -> Value {
-        self.0
+    fn issue(&mut self) -> Result<NonZeroU64, RootPublishError> {
+        let generation = self.next_generation;
+        self.next_generation = generation
+            .checked_add(1)
+            .ok_or(RootPublishError::GenerationExhausted)?;
+        Ok(generation)
+    }
+
+    fn retire_last(&mut self) -> Result<(), RootPublishError> {
+        debug_assert!(self.live > 0, "retiring an empty root registry");
+        let generation = self.issue()?;
+        let index = self.live - 1;
+        let slot = &mut self.slots[index as usize];
+        slot.generation = generation;
+        slot.payload = SlotPayload::Vacant;
+        self.live = index;
+        Ok(())
     }
 }
 

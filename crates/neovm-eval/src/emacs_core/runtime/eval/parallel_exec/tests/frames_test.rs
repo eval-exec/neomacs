@@ -141,8 +141,14 @@ fn root_walk_publishes_every_frame_record_and_registry_root() {
     arena.push_vm(vm).expect("vm frame");
     arena.handlers_mut().push(handler_record(frame, 19, 20));
     arena.bindings_mut().push(slot_record(21));
-    let rooted = arena.roots_mut().push(RootGroup::Misc, Value::fixnum(22));
-    assert_eq!(rooted.get().as_fixnum(), Some(22));
+    let rooted = arena
+        .roots_mut()
+        .push(RootGroup::Misc, Value::fixnum(22))
+        .expect("registry root");
+    assert_eq!(
+        arena.roots_mut().lookup(rooted).and_then(Value::as_fixnum),
+        Some(22)
+    );
 
     let mut seen = Vec::new();
     arena.trace_roots(&mut |group, value| {
@@ -212,6 +218,59 @@ fn poll_budget_fires_once_per_interval() {
     assert!(!budget.consume());
     assert!(budget.consume());
     assert_eq!(budget.remaining(), 2);
+}
+
+#[test]
+fn stale_root_handle_is_refused_after_the_slot_is_reused() {
+    let mut registry = RootRegistry::new();
+    let first = registry
+        .push(RootGroup::Bc, Value::fixnum(1))
+        .expect("first root");
+    let top = registry
+        .push(RootGroup::Misc, Value::fixnum(2))
+        .expect("top root");
+    assert_eq!(registry.lookup(first).and_then(Value::as_fixnum), Some(1));
+    assert_eq!(registry.pop(first), Err(RootRevokeError::Stale));
+    assert_eq!(registry.lookup(first).and_then(Value::as_fixnum), Some(1));
+
+    assert_eq!(registry.pop(top).expect("pop top").as_fixnum(), Some(2));
+    assert!(registry.lookup(top).is_none());
+
+    assert_eq!(registry.truncate(0).expect("clear"), 1);
+    assert!(registry.lookup(first).is_none());
+
+    let reused = registry
+        .push(RootGroup::JitWindow, Value::fixnum(9))
+        .expect("reuse slot");
+    assert_eq!(reused.index(), first.index());
+    assert_ne!(reused.generation(), first.generation());
+    assert!(registry.lookup(first).is_none());
+    assert!(registry.lookup(top).is_none());
+    assert_eq!(registry.lookup(reused).and_then(Value::as_fixnum), Some(9));
+}
+
+#[test]
+fn root_handle_generation_exhaustion_refuses_without_wrapping() {
+    let mut registry = RootRegistry::new();
+    let live = registry
+        .push(RootGroup::EvalTemp, Value::fixnum(4))
+        .expect("live root");
+    registry.exhaust_generations_for_test();
+    assert_eq!(
+        registry.push(RootGroup::Bc, Value::fixnum(5)),
+        Err(RootPublishError::GenerationExhausted)
+    );
+    assert_eq!(
+        registry.truncate(0),
+        Err(RootPublishError::GenerationExhausted)
+    );
+    assert_eq!(registry.len(), 1);
+    assert_eq!(registry.lookup(live).and_then(Value::as_fixnum), Some(4));
+    assert_eq!(
+        registry.pop(live),
+        Err(RootRevokeError::GenerationExhausted)
+    );
+    assert_eq!(registry.lookup(live).and_then(Value::as_fixnum), Some(4));
 }
 
 #[test]
