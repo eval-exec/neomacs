@@ -476,6 +476,9 @@ fn observed_long_line_fontification_range(line_len: usize, from_char0: i64) -> (
 (defvar p640-seen-min nil)
 (defvar p640-seen-max nil)
 (setq p640-calls 0 p640-seen-min nil p640-seen-max nil)
+;; The reported state: sql-mode + toggle-truncate-lines. GNU's narrowing
+;; itself has no truncate-lines condition (src/xdisp.c:4702).
+(setq truncate-lines t)
 (setq fontification-functions
       (list (lambda (pos)
               (setq p640-calls (1+ p640-calls)
