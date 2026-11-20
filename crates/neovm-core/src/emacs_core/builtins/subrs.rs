@@ -1818,8 +1818,8 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     crate::emacs_core::display_subrs::register_move_to_window_line(ctx);
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "long-line-optimizations-p",
-        NativeFn::ContextVec(|_ctx, args| {
-            crate::emacs_core::xdisp::builtin_long_line_optimizations_p(args)
+        NativeFn::ContextVec(|ctx, args| {
+            crate::emacs_core::xdisp::builtin_long_line_optimizations_p(ctx, args)
         }),
         SubrArity::new(0, Some(0)),
     )));

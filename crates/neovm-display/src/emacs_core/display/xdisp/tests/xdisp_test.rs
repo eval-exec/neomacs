@@ -6875,8 +6875,32 @@ fn line_number_display_width_uses_byte_newline_count_not_char_pos_scan() {
 #[test]
 fn test_long_line_optimizations_p() {
     crate::test_utils::init_test_tracing();
-    let result = builtin_long_line_optimizations_p(vec![]).unwrap();
-    assert!(result.is_nil());
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    eval.eval_str("(setq long-line-threshold 50000)")
+        .expect("set the long-line threshold");
+    // No redisplay has scanned this short buffer yet: GNU's flag starts nil.
+    assert!(
+        builtin_long_line_optimizations_p(&mut eval, vec![])
+            .unwrap()
+            .is_nil()
+    );
+    let buffer = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    eval.edit
+        .buffers
+        .get_mut(buffer)
+        .expect("buffer")
+        .insert(&"a".repeat(1_200_000));
+    // The redisplay fontification entry runs GNU's long-line scan.
+    ensure_fontified_for_redisplay(&mut eval, buffer, 0, 10).expect("fontify");
+    assert_eq!(
+        builtin_long_line_optimizations_p(&mut eval, vec![]).unwrap(),
+        Value::T
+    );
 }
 
 // Test wrong arity errors

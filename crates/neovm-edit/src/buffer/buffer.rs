@@ -2516,6 +2516,15 @@ pub struct Buffer {
     /// buffer supersedes the point saved for every other one -- see
     /// [`SavedPointBeforeCommand`].
     pub(crate) saved_point_before_command: SavedPointBeforeCommand,
+    /// GNU `struct buffer.long_line_optimizations_p` (`buffer.h`): redisplay
+    /// found a line longer than `long-line-threshold`. Redisplay shortcuts and
+    /// the fontification narrowing are in effect while this is set. Only
+    /// [`Self::refresh_long_line_optimizations`] writes it.
+    pub(crate) long_line_optimizations_p: bool,
+    /// `modified_tick` when the long-line scan last ran. A buffer with no long
+    /// line is rescanned only after GNU's >8 modification-tick hysteresis
+    /// (`xdisp.c:20646-20663`).
+    pub(crate) long_line_scan_tick: i64,
 }
 #[cfg(any(test, feature = "test-support"))]
 /// A single text buffer with point, mark, narrowing, markers, and local vars.
@@ -2653,6 +2662,15 @@ pub struct Buffer {
     /// buffer supersedes the point saved for every other one -- see
     /// [`SavedPointBeforeCommand`].
     pub(crate) saved_point_before_command: SavedPointBeforeCommand,
+    /// GNU `struct buffer.long_line_optimizations_p` (`buffer.h`): redisplay
+    /// found a line longer than `long-line-threshold`. Redisplay shortcuts and
+    /// the fontification narrowing are in effect while this is set. Only
+    /// [`Self::refresh_long_line_optimizations`] writes it.
+    pub(crate) long_line_optimizations_p: bool,
+    /// `modified_tick` when the long-line scan last ran. A buffer with no long
+    /// line is rescanned only after GNU's >8 modification-tick hysteresis
+    /// (`xdisp.c:20646-20663`).
+    pub(crate) long_line_scan_tick: i64,
 }
 
 /// Stand-in digest for an overlay set that cannot be content-addressed. Mixed
@@ -2892,6 +2910,8 @@ impl Buffer {
         assert!(name.is_string(), "buffer name must be a Lisp string");
         Self {
             line_number_anchor: std::cell::Cell::new(None),
+            long_line_optimizations_p: false,
+            long_line_scan_tick: 0,
             id,
             name,
             last_name: Value::NIL,
@@ -2936,6 +2956,8 @@ impl Buffer {
         assert!(parts.name.is_string(), "buffer name must be a Lisp string");
         Self {
             line_number_anchor: std::cell::Cell::new(None),
+            long_line_optimizations_p: false,
+            long_line_scan_tick: 0,
             id: parts.id,
             name: parts.name,
             last_name: parts.last_name,
@@ -3407,6 +3429,58 @@ impl Buffer {
     /// End of the accessible portion as a 1-based Lisp character position.
     pub fn point_max_lisp_char_pos(&self) -> LispCharPos1 {
         self.point_max_char_pos().to_lisp()
+    }
+
+    /// GNU `struct buffer.long_line_optimizations_p` (`buffer.h`): redisplay
+    /// found a line longer than `long-line-threshold`, so the long-line
+    /// display shortcuts and the `fontification-functions` narrowing are in
+    /// effect.
+    pub fn long_line_optimizations_p(&self) -> bool {
+        self.long_line_optimizations_p
+    }
+
+    /// Rescan the accessible region for a line longer than `threshold`
+    /// characters, following GNU `redisplay_window` (`src/xdisp.c:20646-20663`):
+    /// stop at the first line over the threshold, and rescan a buffer that has
+    /// no long line only after eight modification ticks.
+    ///
+    /// Returns whether a long line is present. The line search is the buffer's
+    /// own newline search (GNU `find_newline`, `src/search.c`), so a line only
+    /// costs a character conversion when its byte length already exceeds the
+    /// threshold.
+    #[doc(hidden)]
+    pub fn refresh_long_line_optimizations(&mut self, threshold: i64) -> bool {
+        if self.long_line_optimizations_p {
+            return true;
+        }
+        if threshold <= 0 {
+            return false;
+        }
+        let tick = self.modified_tick();
+        if self.long_line_scan_tick != 0 && tick.saturating_sub(self.long_line_scan_tick) <= 8 {
+            return false;
+        }
+        self.long_line_scan_tick = tick;
+        let limit = self.point_max_emacs_byte_pos();
+        let mut byte = self.point_min_emacs_byte_pos();
+        let mut chars = self.emacs_byte_pos_to_lisp_char_pos(byte).as_i64();
+        let mut found = false;
+        while byte < limit {
+            let (past, crossed) = self.nth_newline_emacs_byte(byte, limit, 1);
+            let next = if crossed == 0 { limit } else { past };
+            let next_chars = self.emacs_byte_pos_to_lisp_char_pos(next).as_i64();
+            if next_chars.saturating_sub(chars) as i64 > threshold {
+                found = true;
+                break;
+            }
+            if crossed == 0 {
+                break;
+            }
+            byte = next;
+            chars = next_chars;
+        }
+        self.long_line_optimizations_p = found;
+        found
     }
 
     /// Total number of characters in the buffer text.

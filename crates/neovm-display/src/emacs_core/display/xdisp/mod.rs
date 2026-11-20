@@ -7747,12 +7747,22 @@ pub(crate) fn line_number_gutter_cols(
 
 /// (long-line-optimizations-p) -> boolean
 ///
-/// Check if long-line optimizations are enabled. Returns nil.
+/// GNU `Flong_line_optimizations_p` (`src/xdisp.c:20387-20394`): non-nil when
+/// redisplay found a line longer than `long-line-threshold` in the current
+/// buffer, so the long-line display shortcuts and the
+/// `fontification-functions` narrowing are in effect.
 #[doc(hidden)]
-pub fn builtin_long_line_optimizations_p(args: Vec<Value>) -> EvalResult {
+pub fn builtin_long_line_optimizations_p(
+    ctx: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
     expect_args("long-line-optimizations-p", &args, 0)?;
-    // Return nil (optimizations not enabled)
-    Ok(Value::NIL)
+    let present = ctx
+        .edit
+        .buffers
+        .current_buffer()
+        .is_some_and(|buffer| buffer.long_line_optimizations_p());
+    Ok(if present { Value::T } else { Value::NIL })
 }
 
 fn validate_optional_window_designator(
@@ -9487,6 +9497,61 @@ fn next_unfontified_position(
     Ok(end)
 }
 
+/// GNU `handle_fontified_prop` (`src/xdisp.c:4702-4719`): in a buffer where
+/// `long-line-optimizations-p` is non-nil, run `fontification-functions`
+/// under a labeled narrowing around POS so a fontification function cannot
+/// scan the far side of a long line. Returns the buffer, the byte range, and
+/// the GNU label, or `None` when the optimization does not apply.
+fn long_line_fontification_narrowing(
+    ctx: &mut neovm_eval::emacs_core::eval::Context,
+    pos: i64,
+) -> Option<(BufferId, EmacsByteRange, Value)> {
+    let region_size = ctx
+        .builtin_var_value_by_name("long-line-optimizations-region-size")
+        .and_then(|value| value.as_int())?;
+    if region_size <= 0 {
+        return None;
+    }
+    let bol_limit = ctx
+        .builtin_var_value_by_name("long-line-optimizations-bol-search-limit")
+        .and_then(|value| value.as_int())
+        .unwrap_or(0);
+    let buffer_id = ctx.edit.buffers.current_buffer_id()?;
+    let buffer = ctx.edit.buffers.get(buffer_id)?;
+    if !buffer.long_line_optimizations_p() {
+        return None;
+    }
+    let point_min = buffer.point_min_lisp_char_pos().as_i64();
+    let point_max = buffer.point_max_lisp_char_pos().as_i64();
+    let len = region_size / 2;
+    let mut beg = pos.saturating_sub(len).max(point_min);
+    let zv = pos.saturating_add(len).min(point_max);
+    // GNU `get_large_narrowing_begv` (`src/xdisp.c:3793-3807`): walk back up
+    // to `long-line-optimizations-bol-search-limit` characters to reach the
+    // beginning of the line.
+    let mut limit = bol_limit.max(0);
+    while beg > point_min && limit > 0 {
+        let before = buffer.char_pos_to_emacs_byte_pos_clamped(CharPos0::new((beg - 1) as usize));
+        if buffer.emacs_byte_at_pos(before) == Some(b'\n') {
+            break;
+        }
+        beg -= 1;
+        limit -= 1;
+    }
+    if beg >= zv {
+        return None;
+    }
+    let range = EmacsByteRange::new(
+        buffer.char_pos_to_emacs_byte_pos_clamped(CharPos0::new(beg as usize)),
+        buffer.char_pos_to_emacs_byte_pos_clamped(CharPos0::new(zv as usize)),
+    );
+    Some((
+        buffer_id,
+        range,
+        Value::symbol("long-line-optimizations-in-fontification-functions"),
+    ))
+}
+
 fn call_fontification_functions_at<O: FontificationDemandObserver>(
     ctx: &mut neovm_eval::emacs_core::eval::Context,
     hook_value: Value,
@@ -9519,6 +9584,18 @@ fn call_fontification_functions_at<O: FontificationDemandObserver>(
         return;
     }
 
+    // GNU runs the fontification functions on a labeled narrowing around
+    // POS when the buffer has a long line (`src/xdisp.c:4702-4719`).
+    let narrowed =
+        long_line_fontification_narrowing(ctx, pos).and_then(|(buffer_id, range, label)| {
+            let saved = ctx.edit.buffers.save_current_restriction_state()?;
+            ctx.edit
+                .buffers
+                .internal_labeled_narrow_to_emacs_byte_range(buffer_id, range, label)
+                .is_some()
+                .then_some(saved)
+        });
+
     // GNU `handle_fontified_prop` calls each function with `dsafe_call1`,
     // which binds `inhibit-redisplay` and logs ordinary errors without
     // aborting the redisplay pass.  Do the same per function so one broken
@@ -9549,6 +9626,10 @@ fn call_fontification_functions_at<O: FontificationDemandObserver>(
                 rendered
             );
         }
+    }
+
+    if let Some(saved) = narrowed {
+        ctx.edit.buffers.restore_saved_restriction_state(saved);
     }
 
     if let Err(flow) = ctx.unbind_to_with_result(binding_count, Ok(Value::NIL)) {
@@ -9697,6 +9778,18 @@ fn ensure_fontified_for_redisplay_inner<O: FontificationDemandObserver>(
     mode: FontificationBoundaryMode,
     observer: &mut O,
 ) -> Result<RedisplayFontificationOutcome, Flow> {
+    // GNU `redisplay_window` (`src/xdisp.c:20646-20663`) refreshes the
+    // buffer's long-line flag while displaying it. The fontification narrowing
+    // below and `long-line-optimizations-p` read it. The scan is guarded by
+    // GNU's eight-modification-tick hysteresis inside the buffer.
+    if let Some(threshold) = ctx
+        .builtin_var_value_by_name("long-line-threshold")
+        .and_then(|value| value.as_int())
+        && let Some(buffer) = ctx.edit.buffers.get_mut(buf_id)
+    {
+        buffer.refresh_long_line_optimizations(threshold);
+    }
+
     let Some((point_min, point_max)) = ctx.edit.buffers.get(buf_id).map(|buffer| {
         (
             buffer.point_min_lisp_char_pos().as_i64(),

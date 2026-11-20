@@ -453,3 +453,82 @@ fn actual_source_killing_callback_preserves_legacy_outcome_and_never_no_demand()
         assert_eq!(observations[0], observations[1], "{mode:?}");
     }
 }
+
+/// The accessible `[point-min, point-max]` a `fontification-functions` callback
+/// sees for one long-line buffer, plus the callback count.
+fn observed_long_line_fontification_range(line_len: usize, from_char0: i64) -> (i64, i64, i64) {
+    let mut eval = crate::test_utils::new_context();
+    eval.eval_str("(setq long-line-threshold 50000)")
+        .expect("set the long-line threshold");
+    let buffer = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    eval.edit
+        .buffers
+        .get_mut(buffer)
+        .expect("buffer")
+        .insert(&"a".repeat(line_len));
+    eval.eval_str(
+        r#"
+(defvar p640-calls 0)
+(defvar p640-seen-min nil)
+(defvar p640-seen-max nil)
+(setq p640-calls 0 p640-seen-min nil p640-seen-max nil)
+(setq fontification-functions
+      (list (lambda (pos)
+              (setq p640-calls (1+ p640-calls)
+                    p640-seen-min (point-min)
+                    p640-seen-max (point-max))
+              (put-text-property pos (min (point-max) (+ pos 100000)) 'fontified t)
+              nil)))
+"#,
+    )
+    .expect("install the fontification probe");
+    ensure_fontified_for_redisplay(&mut eval, buffer, from_char0, from_char0 + 1).expect("fontify");
+    let calls = eval
+        .eval_str("p640-calls")
+        .expect("probe calls")
+        .as_int()
+        .expect("fixnum");
+    let min = eval
+        .eval_str("p640-seen-min")
+        .expect("probe point-min")
+        .as_int()
+        .expect("fixnum");
+    let max = eval
+        .eval_str("p640-seen-max")
+        .expect("probe point-max")
+        .as_int()
+        .expect("fixnum");
+    (calls, min, max)
+}
+
+/// GNU `handle_fontified_prop` (`src/xdisp.c:4702-4719`): in a buffer with a
+/// long line, a fontification function runs on a labeled narrowing around its
+/// position (`long-line-optimizations-region-size`, extended back to the line
+/// start by `long-line-optimizations-bol-search-limit`). The range a callback
+/// can see must therefore be bounded and must NOT grow with the long line.
+#[test]
+fn fontification_callback_range_is_bounded_and_flat_on_a_long_line() {
+    crate::test_utils::init_test_tracing();
+    // Same callback position, two line lengths above the threshold. GNU's
+    // narrowed window is exactly the same for both.
+    let (calls_short, min_short, max_short) =
+        observed_long_line_fontification_range(700_000, 400_000);
+    let (calls_long, min_long, max_long) =
+        observed_long_line_fontification_range(1_400_000, 400_000);
+    assert!(calls_short >= 1, "the probe was never entered");
+    assert!(calls_long >= 1, "the probe was never entered");
+    assert_eq!(
+        (min_short, max_short),
+        (min_long, max_long),
+        "the fontification range grew with the long line: {min_short}..{max_short} vs {min_long}..{max_long}"
+    );
+    assert!(
+        max_short - min_short <= 500_000 + 128,
+        "fontification range {} exceeds long-line-optimizations-region-size plus the BOL search limit",
+        max_short - min_short
+    );
+}
