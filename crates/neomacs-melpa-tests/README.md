@@ -211,8 +211,10 @@ messages), `etaf-weread` (shelf/search refresh, selection clamping, book
 detail caching, highlight/thought grouping, pane toggles, export and backend
 failures through its documented scripted client), `etaf-pomodoro` (creation
 validation, start/pause toggling, extension, reset, style cycling and
-stopping through the public session API), and the
-`etaf-md`/`etaf-org-preview` headless readers. `gui_parity_tests/etaf_*` adds
+stopping through the public session API), `etaf-desktop` (window lifecycle,
+geometry policy, workspaces, settings and panels, tiling splits, session
+round-trips and the application/instance registry, plus mounted canvas text),
+and the `etaf-md`/`etaf-org-preview` headless readers. `gui_parity_tests/etaf_*` adds
 real X11 probes for the md/org pages and the posframe child frame.
 
 `etaf-reader`, `etaf-youtube`, `etaf-video-player`, `maillist`, the
