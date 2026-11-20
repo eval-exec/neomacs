@@ -1,5 +1,7 @@
-//! Product retarget of the scaffold doubles onto `serial_gate`.
-//! The loom crate cannot call these `cfg(test)` names.
+//! Product API retarget onto `serial_gate`. Every case runs on the keeper
+//! thread. `WorldProofEra` is `!Send + !Sync`, and `park_once` / `wait_request`
+//! are `pub(crate)` in neovm-value, so a second thread cannot park or call
+//! stop from this crate. This is not the TSan gate.
 
 #![forbid(unsafe_code)]
 
@@ -28,7 +30,7 @@ fn self_stop_vs_main() {
         assert!(matches!(stop_for_test(era), Err(RendezvousError::Busy)));
         serial_gc_for_test(&mut ticket).expect("release the stop");
         end_serial_for_test(ticket).expect("end after the serial collection");
-        eprintln!("PENTRY_TSAN case=self_stop_vs_main kind=PRODUCT");
+        eprintln!("PENTRY_TSAN case=self_stop_vs_main kind=PRODUCT-SINGLE-THREAD");
     });
 }
 
@@ -48,7 +50,7 @@ fn nested_serial_errors() {
             Err(RendezvousError::Busy)
         ));
         end_serial_for_test(ticket).expect("end the same ticket");
-        eprintln!("PENTRY_TSAN case=nested_serial_errors kind=PRODUCT");
+        eprintln!("PENTRY_TSAN case=nested_serial_errors kind=PRODUCT-SINGLE-THREAD");
     });
 }
 
@@ -64,7 +66,7 @@ fn retained_loan_is_refused() {
         assert_eq!(retained.reason, SerialEndError::NotCollected);
         assert!(matches!(stop_for_test(era), Err(RendezvousError::Busy)));
         let _held = retained.ticket;
-        eprintln!("PENTRY_TSAN case=retained_loan_is_refused kind=PRODUCT refused=true");
+        eprintln!("PENTRY_TSAN case=retained_loan_is_refused kind=PRODUCT-SINGLE-THREAD refused=true");
     });
 }
 
@@ -78,6 +80,6 @@ fn retired_loan_reopens() {
         serial_gc_for_test(&mut ticket).expect("serial collection");
         end_serial_for_test(ticket).expect("end after the serial collection");
         stop_for_test(era).expect("reopen after the ticket returns");
-        eprintln!("PENTRY_TSAN case=retired_loan_reopens kind=PRODUCT refused=false");
+        eprintln!("PENTRY_TSAN case=retired_loan_reopens kind=PRODUCT-SINGLE-THREAD refused=false");
     });
 }

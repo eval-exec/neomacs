@@ -16,8 +16,9 @@ That command is what the batch gate runs. With no arguments it runs `keeper`
 and `safety_gate` at `PENTRY_PREEMPTIONS=2`, then both at `PENTRY_PREEMPTIONS=3`,
 then `seam`, then `lifetime_contracts`. `safety_gate` is a model. `seam` only
 reads landed product source and fails if those anchors move. `run-tsan.sh` is
-scaffold for real-thread doubles, not this gate. The product retarget is the
-neovm-eval lib tests in `serial_gate_retarget`. Each invocation is one `cargo nextest run` on the pinned
+scaffold for real-thread doubles, not this gate. `serial_gate_retarget` is a
+single-thread product API retarget (`kind=PRODUCT-SINGLE-THREAD`), not the
+TSan gate. Each invocation is one `cargo nextest run` on the pinned
 CPUs, with `RUST_LOG` unset, `--test-threads 1`, and `--success-output final`.
 Extra arguments replace that plan and pass through to one nextest invocation
 (`./tests/pentry-keeper-loom/run.sh --test lifetime_contracts`).

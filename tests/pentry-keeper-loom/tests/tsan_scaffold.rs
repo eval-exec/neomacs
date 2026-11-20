@@ -1,5 +1,5 @@
-//! SCAFFOLD real-thread doubles. The product retarget is
-//! `serial_gate_retarget` in neovm-eval. These doubles are not the gate.
+//! SCAFFOLD real-thread doubles. `serial_gate_retarget` is a single-thread
+//! product API retarget, not the TSan gate. These doubles are not the gate.
 #![forbid(unsafe_code)]
 
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
