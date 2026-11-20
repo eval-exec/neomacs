@@ -1,10 +1,11 @@
-//! Dormant InlineSerialMain driver for the five clipboard and primary stubs.
+//! Lowering driver for the five clipboard and primary stubs.
 //!
-//! Hosted activation remains refused. Each public stub calls one of these
-//! functions with [`SelectionInstaller::InlineSerialMain`] and unwraps
-//! [`SelectionStep::Done`]. The arm calls the existing direct body. There is
-//! no second installer, route branch, TLS read, or env test in this module.
-//! The direct bodies keep the cache they already had.
+//! The owner's installed [`SelectionPhase`](crate::emacs_core::eval::activation::SelectionPhase)
+//! selects the arm. `Uninstalled` is the serial direct call; `Local` is the
+//! synchronous local owner turn, which is the same direct body; `Routed` is
+//! the C4b worker boundary and is not installed by this slice. Each public
+//! stub unwraps [`SelectionStep::Done`]. There is no TLS read or env test in
+//! this module. The direct bodies keep the cache they already had.
 
 use neovm_value::error::EvalResult;
 use neovm_value::value::Value;
@@ -34,6 +35,32 @@ impl<T> SelectionStep<T> {
     }
 }
 
+/// Which lowering the owner installed. The installed phase is the single
+/// source of truth, so the phase and the lowering cannot disagree.
+#[inline]
+pub(super) fn installed(ctx: &crate::emacs_core::eval::Context) -> SelectionInstaller {
+    use crate::emacs_core::eval::activation::SelectionPhase;
+    match ctx.selection_phase() {
+        SelectionPhase::Uninstalled => SelectionInstaller::InlineSerialMain,
+        SelectionPhase::Local => SelectionInstaller::OwnedLocalMain,
+        // Only a routed owner reaches these. The routed arm is the C4b worker
+        // boundary; until it lands, the driver refuses cold rather than
+        // running a host call on the wrong thread.
+        SelectionPhase::Routed | SelectionPhase::AwaitingRollback => {
+            SelectionInstaller::OwnedRoutedWorker
+        }
+    }
+}
+
+/// The routed arm is installed by the C4b worker boundary, not by cut-4a.
+/// Reaching it means a routed owner ran the direct path; that is a service
+/// bug, and the existing service code aborts on the same class of state.
+#[cold]
+#[inline(never)]
+fn routed_worker_boundary_not_installed() -> ! {
+    std::process::abort()
+}
+
 #[inline(always)]
 pub(super) fn clipboard_set(
     installer: SelectionInstaller,
@@ -41,9 +68,12 @@ pub(super) fn clipboard_set(
     args: Vec<Value>,
 ) -> SelectionStep<EvalResult> {
     match installer {
-        SelectionInstaller::InlineSerialMain => {
+        // The serial and local lowerings both call the direct body: the local
+        // owner turn is synchronous, so suspension is Infallible (Lead1).
+        SelectionInstaller::InlineSerialMain | SelectionInstaller::OwnedLocalMain => {
             SelectionStep::Done(direct_neomacs_clipboard_set(ctx, args))
         }
+        SelectionInstaller::OwnedRoutedWorker => routed_worker_boundary_not_installed(),
     }
 }
 
@@ -54,9 +84,12 @@ pub(super) fn clipboard_get(
     args: Vec<Value>,
 ) -> SelectionStep<EvalResult> {
     match installer {
-        SelectionInstaller::InlineSerialMain => {
+        // The serial and local lowerings both call the direct body: the local
+        // owner turn is synchronous, so suspension is Infallible (Lead1).
+        SelectionInstaller::InlineSerialMain | SelectionInstaller::OwnedLocalMain => {
             SelectionStep::Done(direct_neomacs_clipboard_get(ctx, args))
         }
+        SelectionInstaller::OwnedRoutedWorker => routed_worker_boundary_not_installed(),
     }
 }
 
@@ -67,9 +100,12 @@ pub(super) fn primary_selection_set(
     args: Vec<Value>,
 ) -> SelectionStep<EvalResult> {
     match installer {
-        SelectionInstaller::InlineSerialMain => {
+        // The serial and local lowerings both call the direct body: the local
+        // owner turn is synchronous, so suspension is Infallible (Lead1).
+        SelectionInstaller::InlineSerialMain | SelectionInstaller::OwnedLocalMain => {
             SelectionStep::Done(direct_neomacs_primary_selection_set(ctx, args))
         }
+        SelectionInstaller::OwnedRoutedWorker => routed_worker_boundary_not_installed(),
     }
 }
 
@@ -80,9 +116,12 @@ pub(super) fn primary_selection_get(
     args: Vec<Value>,
 ) -> SelectionStep<EvalResult> {
     match installer {
-        SelectionInstaller::InlineSerialMain => {
+        // The serial and local lowerings both call the direct body: the local
+        // owner turn is synchronous, so suspension is Infallible (Lead1).
+        SelectionInstaller::InlineSerialMain | SelectionInstaller::OwnedLocalMain => {
             SelectionStep::Done(direct_neomacs_primary_selection_get(ctx, args))
         }
+        SelectionInstaller::OwnedRoutedWorker => routed_worker_boundary_not_installed(),
     }
 }
 
@@ -93,9 +132,12 @@ pub(super) fn primary_selection_owner(
     args: Vec<Value>,
 ) -> SelectionStep<EvalResult> {
     match installer {
-        SelectionInstaller::InlineSerialMain => {
+        // The serial and local lowerings both call the direct body: the local
+        // owner turn is synchronous, so suspension is Infallible (Lead1).
+        SelectionInstaller::InlineSerialMain | SelectionInstaller::OwnedLocalMain => {
             SelectionStep::Done(direct_neomacs_primary_selection_owner(ctx, args))
         }
+        SelectionInstaller::OwnedRoutedWorker => routed_worker_boundary_not_installed(),
     }
 }
 
@@ -115,7 +157,7 @@ pub(super) const SERIAL_CLIPBOARD_ENTRIES: &[&str] = &[
 #[cfg(test)]
 mod tests {
     use super::{
-        SERIAL_CLIPBOARD_ENTRIES, SelectionInstaller, clipboard_get, clipboard_set,
+        SERIAL_CLIPBOARD_ENTRIES, SelectionInstaller, clipboard_get, clipboard_set, installed,
         primary_selection_get, primary_selection_owner, primary_selection_set,
     };
     use crate::emacs_core::eval::Context;
@@ -137,7 +179,27 @@ mod tests {
     }
 
     #[test]
-    fn serial_stubs_call_only_the_inline_arm() {
+    fn installer_selector_is_derived_from_the_owner_phase() {
+        use crate::emacs_core::eval::activation::ActivationAuthority;
+
+        let fresh = Context::new(crate::test_utils::unit_runtime());
+        assert_eq!(installed(&fresh), SelectionInstaller::InlineSerialMain);
+
+        let mut local = Context::new(crate::test_utils::unit_runtime());
+        local
+            .activate_selection_local(&ActivationAuthority::mint_for_test())
+            .unwrap();
+        assert_eq!(installed(&local), SelectionInstaller::OwnedLocalMain);
+
+        let mut routed = Context::new(crate::test_utils::unit_runtime());
+        routed
+            .activate_selection_routed(&ActivationAuthority::mint_for_test())
+            .unwrap();
+        assert_eq!(installed(&routed), SelectionInstaller::OwnedRoutedWorker);
+    }
+
+    #[test]
+    fn stubs_lower_through_the_installed_selector() {
         let stubs = include_str!("stubs.rs");
         let step = include_str!("selection_step.rs");
         let driver = step.split("#[cfg(test)]").next().expect("driver");
@@ -145,15 +207,9 @@ mod tests {
             !driver.contains("std::env")
                 && !driver.contains("NEOVM_THREADS")
                 && !driver.contains("thread_local")
-                && !driver.contains(".with(")
-                && !driver.contains("OwnedRouted")
-                && !driver.contains("OwnedLocal"),
-            "the step driver adds no route, TLS read, or env test"
+                && !driver.contains(".with("),
+            "the step driver adds no TLS read or env test"
         );
-        let arms = driver
-            .matches("SelectionInstaller::InlineSerialMain =>")
-            .count();
-        assert_eq!(arms, SERIAL_CLIPBOARD_ENTRIES.len());
         for name in SERIAL_CLIPBOARD_ENTRIES {
             let marker = format!("pub fn {name}(");
             let start = stubs.find(&marker).expect(name);
@@ -163,11 +219,12 @@ mod tests {
                 .expect("direct body follows the stub");
             let stub = &rest[..marker.len() + end];
             assert!(
-                stub.contains("SelectionInstaller::InlineSerialMain")
+                stub.contains("selection_step::installed(ctx)")
                     && stub.contains(".into_direct()")
                     && !stub.contains(".with(")
-                    && !stub.contains("display_host"),
-                "{name} must be the inline step, not a second body"
+                    && !stub.contains("display_host")
+                    && !stub.contains("SelectionInstaller::"),
+                "{name} must read the installed lowering, not a constant or a second body"
             );
         }
     }
@@ -263,9 +320,14 @@ mod tests {
             let rest = &driver[start..];
             let close = rest.find("\n}").expect("function end");
             let function = &rest[..=close + 1];
-            assert_eq!(function.matches("=>").count(), 1, "{signature}");
+            // Two arms: serial|local lowers to the direct call, routed aborts
+            // cold until the C4b worker boundary installs it.
+            assert_eq!(function.matches("=>").count(), 2, "{signature}");
             assert!(
-                function.contains(call) && !function.contains("if "),
+                function.contains(call)
+                    && function
+                        .contains("OwnedRoutedWorker => routed_worker_boundary_not_installed()")
+                    && !function.contains("if "),
                 "{signature} must lower to {call}"
             );
         }
@@ -281,9 +343,10 @@ mod tests {
             let direct = &direct_rest[..=direct_close + 1];
             assert!(
                 stub.contains(".into_direct()")
-                    && stub.contains("SelectionInstaller::InlineSerialMain")
+                    && stub.contains("selection_step::installed(ctx)")
+                    && !stub.contains("SelectionInstaller::")
                     && !stub.contains("expect_args"),
-                "{name} lowers through the inline step"
+                "{name} lowers through the installed step"
             );
             assert!(
                 direct.contains("expect_args") && !direct.contains("SelectionInstaller"),

@@ -1076,6 +1076,45 @@ fn crate_roots(directory: &Path) -> Vec<PathBuf> {
     roots
 }
 
+/// The cut-4 flip's one activation authority lives behind an eval-scoped
+/// take. No builtin may name the take or the mint: the visibility already
+/// makes such a call a product-build error, and this guard keeps the intent
+/// explicit and mutation-provable for the flip.
+#[test]
+fn builtins_cannot_name_the_activation_authority() {
+    let crates = neomacs_infra::crate_root!()
+        .parent()
+        .expect("workspace crates")
+        .to_path_buf();
+    let native = crates.join("neovm-eval/src/emacs_core/lisp/native");
+    let mut pending = vec![native];
+    let mut hits = Vec::new();
+    while let Some(path) = pending.pop() {
+        let entries = std::fs::read_dir(&path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        for entry in entries {
+            let path = entry.expect("native entry").path();
+            if path.is_dir() {
+                pending.push(path);
+                continue;
+            }
+            if path.extension().and_then(|extension| extension.to_str()) != Some("rs") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).expect("read native module");
+            if text.contains("take_activation_authority")
+                || text.contains("ActivationAuthority::mint(")
+            {
+                hits.push(path.display().to_string());
+            }
+        }
+    }
+    assert!(
+        hits.is_empty(),
+        "builtins must not name the World activation authority: {hits:?}"
+    );
+}
+
 #[test]
 fn native_host_backing_is_confined_to_declared_effect_owners() {
     let crates = neomacs_infra::crate_root!()

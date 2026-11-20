@@ -1102,6 +1102,16 @@ impl Context {
     pub fn set_display_host(&mut self, mut host: Box<dyn DisplayHost>) {
         let _ = host.set_visual_config(self.visual_config.clone());
         self.display_host = Some(host);
+        // Cut-4 flip. Only a Green World activates, so the default GUI/TTY
+        // path stays on the serial installer until S3. A re-attach keeps the
+        // installed arm and uses the current host; a worker is refused.
+        match self.activate_host_session() {
+            Ok(()) => {}
+            Err(super::activation_owner::HostSessionActivationError::NotGreen) => {}
+            Err(error) => {
+                tracing::warn!(?error, "host session activation refused");
+            }
+        }
     }
 
     pub fn set_tty_frame_host_factory(&mut self, factory: Box<dyn TtyFrameHostFactory>) {

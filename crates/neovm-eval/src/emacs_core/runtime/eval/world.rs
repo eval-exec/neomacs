@@ -112,6 +112,10 @@ struct World {
     /// The OS thread holding the World's Baton, in a Green World
     /// (`green_owner`'s safety argument; checked in debug builds).
     baton_holder: Cell<Option<std::thread::ThreadId>>,
+    /// The cut-4 flip's one activation authority. Minted with the World
+    /// allocation, taken once by the main owner's hosted activation, and kept
+    /// off every builtin path by its visibility.
+    activation_authority: Cell<Option<super::activation::ActivationAuthority>>,
 }
 
 impl Drop for World {
@@ -143,6 +147,32 @@ impl ColdRetained for World {}
 pub(crate) struct WorldLease(Arc<World>);
 static_assertions::assert_not_impl_any!(WorldLease: Send, Sync, Clone);
 static_assertions::assert_eq_size!(WorldLease, Arc<World>);
+
+impl WorldLease {
+    /// Take the session's one activation authority. The first call returns
+    /// `Some`; every later call returns `None`. Visibility stops at
+    /// `emacs_core::eval`, so a builtin module cannot name this accessor.
+    pub(in crate::emacs_core::eval) fn take_activation_authority(
+        &self,
+    ) -> Option<super::activation::ActivationAuthority> {
+        self.0.activation_authority.take()
+    }
+}
+
+#[cfg(test)]
+mod activation_slot {
+    use super::activation::ActivationAuthority;
+
+    /// The activation slot is one byte: the authority is a ZST and `Option`
+    /// carries only the discriminant. Context layout is unaffected because
+    /// the slot lives inside the World allocation, not in Context.
+    #[test]
+    fn activation_authority_slot_is_one_byte() {
+        assert_eq!(std::mem::size_of::<ActivationAuthority>(), 0);
+        assert_eq!(std::mem::size_of::<Option<ActivationAuthority>>(), 1);
+        assert!(std::mem::size_of::<super::World>() > 0);
+    }
+}
 
 #[cfg(any(test, feature = "test-support"))]
 impl Context {
@@ -1324,6 +1354,13 @@ impl WorldStorageBuilder {
             threading: Cell::new(super::admission::ThreadingMode::from_env()),
             green: Default::default(),
             baton_holder: Cell::new(None),
+            // SAFETY: this is the World factory, the mint's only caller. The
+            // value stays in the private slot and is taken only by the
+            // eval-scoped activation path; no builtin can name the mint or
+            // the take.
+            activation_authority: Cell::new(Some(unsafe {
+                super::activation::ActivationAuthority::mint()
+            })),
         }));
         // Reinstall the upstream TLS slot from the finalized heap's root
         // before any allocation-capable Context setup resumes. The root (not
@@ -1448,6 +1485,14 @@ impl Context {
     #[inline]
     pub(crate) fn threading_mode(&self) -> super::admission::ThreadingMode {
         self.obarray.lease.0.threading.get()
+    }
+
+    /// Take the World's one activation authority through this Context's
+    /// lease. `pub(in ...eval)` keeps every builtin module out.
+    pub(in crate::emacs_core::eval) fn take_activation_authority(
+        &self,
+    ) -> Option<super::activation::ActivationAuthority> {
+        self.obarray.lease.take_activation_authority()
     }
 
     /// Fix the World's threading mode. Only construction calls this, before

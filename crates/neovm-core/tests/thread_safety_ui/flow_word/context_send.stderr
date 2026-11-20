@@ -221,6 +221,8 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `neovm_core::Context: Send`
            `Cell<Option<ThreadId>>: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
+           `Cell<Option<neovm_core::emacs_core::eval::activation::ActivationAuthority>>: std::marker::Sync`
+           which is required by `neovm_core::Context: Send`
            `*mut u8: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
            `(dyn neovm_value::cold_retained::ColdRetained + 'static): std::marker::Sync`

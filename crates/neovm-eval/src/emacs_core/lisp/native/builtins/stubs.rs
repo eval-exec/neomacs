@@ -123,12 +123,7 @@ pub fn builtin_neomacs_clipboard_set(
     ctx: &mut crate::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    selection_step::clipboard_set(
-        selection_step::SelectionInstaller::InlineSerialMain,
-        ctx,
-        args,
-    )
-    .into_direct()
+    selection_step::clipboard_set(selection_step::installed(ctx), ctx, args).into_direct()
 }
 
 fn direct_neomacs_clipboard_set(
@@ -157,12 +152,7 @@ pub fn builtin_neomacs_clipboard_get(
     ctx: &mut crate::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    selection_step::clipboard_get(
-        selection_step::SelectionInstaller::InlineSerialMain,
-        ctx,
-        args,
-    )
-    .into_direct()
+    selection_step::clipboard_get(selection_step::installed(ctx), ctx, args).into_direct()
 }
 
 fn direct_neomacs_clipboard_get(
@@ -184,12 +174,7 @@ pub fn builtin_neomacs_primary_selection_set(
     ctx: &mut crate::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    selection_step::primary_selection_set(
-        selection_step::SelectionInstaller::InlineSerialMain,
-        ctx,
-        args,
-    )
-    .into_direct()
+    selection_step::primary_selection_set(selection_step::installed(ctx), ctx, args).into_direct()
 }
 
 fn direct_neomacs_primary_selection_set(
@@ -218,12 +203,7 @@ pub fn builtin_neomacs_primary_selection_get(
     ctx: &mut crate::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    selection_step::primary_selection_get(
-        selection_step::SelectionInstaller::InlineSerialMain,
-        ctx,
-        args,
-    )
-    .into_direct()
+    selection_step::primary_selection_get(selection_step::installed(ctx), ctx, args).into_direct()
 }
 
 fn direct_neomacs_primary_selection_get(
@@ -245,12 +225,7 @@ pub fn builtin_neomacs_primary_selection_owner(
     ctx: &mut crate::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    selection_step::primary_selection_owner(
-        selection_step::SelectionInstaller::InlineSerialMain,
-        ctx,
-        args,
-    )
-    .into_direct()
+    selection_step::primary_selection_owner(selection_step::installed(ctx), ctx, args).into_direct()
 }
 
 fn direct_neomacs_primary_selection_owner(

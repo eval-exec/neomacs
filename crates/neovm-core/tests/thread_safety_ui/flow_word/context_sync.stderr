@@ -248,6 +248,8 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `neovm_core::Context: std::marker::Sync`
            `Cell<Option<ThreadId>>: std::marker::Sync`
            which is required by `neovm_core::Context: std::marker::Sync`
+           `Cell<Option<neovm_core::emacs_core::eval::activation::ActivationAuthority>>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
            `*mut u8: std::marker::Sync`
            which is required by `neovm_core::Context: std::marker::Sync`
            `UnsafeCell<neovm_core::buffer::buffer::BufferStorage>: std::marker::Sync`
@@ -297,6 +299,8 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            `Rc<()>: std::marker::Sync`
            which is required by `neovm_core::Context: std::marker::Sync`
            `Rc<RefCell<Vec<std::rc::Weak<[TaggedValue]>>>>: Send`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `Rc<()>: Send`
            which is required by `neovm_core::Context: std::marker::Sync`
            `*mut emacs_value_tag: Send`
            which is required by `neovm_core::Context: std::marker::Sync`
@@ -397,8 +401,6 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            `OnceCell<collection_reads::store_state::ObservationWorld>: std::marker::Sync`
            which is required by `neovm_core::Context: std::marker::Sync`
            `Cell<*mut TaggedHeap>: std::marker::Sync`
-           which is required by `neovm_core::Context: std::marker::Sync`
-           `Rc<()>: Send`
            which is required by `neovm_core::Context: std::marker::Sync`
            `*const c_void: Send`
            which is required by `neovm_core::Context: std::marker::Sync`
