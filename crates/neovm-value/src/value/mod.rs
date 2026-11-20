@@ -333,6 +333,14 @@ pub(crate) fn add_wrapping(counter: MemoryUseCountSlot, delta: u64) {
     });
 }
 
+/// This mutator's allocation counts that have not been drained into its
+/// `MutatorGcState` yet, for a heap-side reader that already holds the heap
+/// and cannot take [`Value::memory_use_counts_snapshot`]'s `with_tagged_heap`.
+#[inline]
+pub(crate) fn thread_local_allocation_counts() -> [u64; MEMORY_USE_COUNT_LEN] {
+    THREAD_LOCAL_ALLOCATION_COUNTS.with(|counts| counts.get())
+}
+
 fn as_neovm_int(value: u64) -> i64 {
     value as i64
 }
@@ -4411,9 +4419,6 @@ impl TaggedValue {
         for (count, extra) in counts.iter_mut().zip(thread_local_counts) {
             *count = count.wrapping_add(extra);
         }
-        // Interval nodes live in their owning trees, not in the tagged heap.
-        let intervals = MemoryUseCountSlot::Intervals.index();
-        counts[intervals] = counts[intervals].wrapping_add(self::text_props::intervals_allocated());
         [
             as_neovm_int(counts[MemoryUseCountSlot::ConsCells.index()]),
             as_neovm_int(counts[MemoryUseCountSlot::Floats.index()]),

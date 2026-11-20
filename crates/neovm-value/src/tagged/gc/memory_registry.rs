@@ -509,6 +509,13 @@ impl TaggedHeap {
             .iter()
             .map(|object| object.byte_len)
             .sum();
+        // Interval nodes are charged through the per-mutator accounting, so
+        // the allocated total is the summed snapshot plus this mutator's
+        // not-yet-drained counts (the same pair
+        // `Value::memory_use_counts_snapshot` combines).
+        let intervals_slot = MemoryUseCountSlot::Intervals.index();
+        let intervals_allocated = self.memory_use_counts_snapshot()[intervals_slot]
+            .wrapping_add(crate::value::thread_local_allocation_counts()[intervals_slot]);
         GcObjectCounts {
             conses_used: stats.cons.live_slots.saturating_add(stats.mapped.conses),
             conses_free: stats
@@ -529,8 +536,10 @@ impl TaggedHeap {
                 / word,
             floats_used: float.allocated_slots.saturating_add(stats.mapped.floats),
             floats_free: capacity(&float).saturating_sub(float.allocated_slots),
-            intervals_used: usize::try_from(crate::value::text_props::intervals_live())
-                .unwrap_or(usize::MAX),
+            intervals_used: usize::try_from(crate::value::text_props::intervals_live_from(
+                intervals_allocated,
+            ))
+            .unwrap_or(usize::MAX),
             buffers_used: self
                 .buffer_registry
                 .iter()

@@ -67,7 +67,7 @@ impl Context {
             ValueCell::Plain(value) => (!value.is_unbound()).then_some(value),
             ValueCell::Localized(_) | ValueCell::Forwarded(_) => {
                 let tier = CachedVarReadTier::admit()?;
-                self.read_var_cached_symbol(sym, tier)
+                self.read_var_cached_symbol(id, sym, tier)
             }
             ValueCell::Alias(_) => None,
         }

@@ -12,8 +12,10 @@
 //!
 //! The JIT refuses to inline these seven sites (`jit::compile::inline_vars`
 //! classifies them `Plain`), so a compiled read takes the shim and reaches the
-//! same hook. A write still lands in the forwarded cell (GNU's `setq` writes
-//! the C slot); the next read re-derives the value, because the allocation
+//! same hook. The hook sits inside `read_forwarded_cached`'s `Int` arm, so a
+//! localized or plain read and every non-`Int` forwarder family pay nothing.
+//! A write still lands in the forwarded cell (GNU's `setq` writes the C
+//! slot); the next read re-derives the value, because the allocation
 //! counters, not the cell, are the authority.
 
 use super::Context;
