@@ -195,6 +195,58 @@ fn pentry_e2b_heap_transfer_os_thread_repeated_local_loans() {
 }
 
 #[test]
+fn e2_safety_miri_source_frame_ends_before_send() {
+    with_prepared(|pending, transfer| {
+        let source = std::thread::current().id();
+        let transfer = std::thread::spawn(move || {
+            assert_ne!(source, std::thread::current().id());
+            let (transfer, ()) = transfer
+                .with_collector(|admission| (admission.into_collector(), ()))
+                .expect("destination loan after the source frame ended");
+            transfer
+        })
+        .join()
+        .expect("destination thread");
+        eprintln!("PENTRY_MIRI case=source_frame_ends_before_send kind=PRODUCT");
+        finish(pending, transfer);
+    });
+}
+
+#[test]
+fn e2_safety_miri_designator_is_not_a_pointer() {
+    use neovm_value::tagged::gc::{SymbolRootDesignators, WorldIdentity};
+    use std::ptr::NonNull;
+    // The identity word is not a pointer permission. Miri must observe no
+    // read or write through it.
+    let address = 0x1000usize;
+    let first = unsafe { WorldIdentity::new(address) };
+    let second = unsafe { WorldIdentity::new(address) };
+    assert_eq!(first, second);
+    let roots = unsafe {
+        SymbolRootDesignators::new(
+            WorldIdentity::new(address),
+            NonNull::<()>::dangling(),
+            NonNull::<()>::dangling(),
+        )
+    };
+    assert_eq!(roots.world(), &first);
+    let _obarray = roots.obarray().as_ptr();
+    let _projections = roots.projections().as_ptr();
+    eprintln!("PENTRY_MIRI case=designator_is_not_a_pointer kind=PRODUCT");
+}
+
+#[test]
+fn e2_safety_miri_retained_owner_moves_once() {
+    with_prepared(|pending, transfer| {
+        let transfer = std::thread::spawn(move || transfer)
+            .join()
+            .expect("the prepared owner moves once");
+        eprintln!("PENTRY_MIRI case=retained_owner_moves_once kind=PRODUCT");
+        finish(pending, transfer);
+    });
+}
+
+#[test]
 fn pentry_e2b_heap_transfer_panic_poison_retains_canonical_debt() {
     with_prepared(|pending, transfer| {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

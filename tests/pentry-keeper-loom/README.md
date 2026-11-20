@@ -13,8 +13,10 @@ From the repo root (any cwd works; on this box, inside `nix develop`):
 ```
 
 That command is what the batch gate runs. With no arguments it runs `keeper`
-at `PENTRY_PREEMPTIONS=2`, then `keeper` at `PENTRY_PREEMPTIONS=3`, then
-`lifetime_contracts`. Each invocation is one `cargo nextest run` on the pinned
+and `safety_gate` at `PENTRY_PREEMPTIONS=2`, then both at `PENTRY_PREEMPTIONS=3`,
+then `seam`, then `lifetime_contracts`. `safety_gate` is a model. `seam` only
+reads landed product source and fails if those anchors move. `run-tsan.sh` is
+scaffold for real-thread doubles, not this gate. Each invocation is one `cargo nextest run` on the pinned
 CPUs, with `RUST_LOG` unset, `--test-threads 1`, and `--success-output final`.
 Extra arguments replace that plan and pass through to one nextest invocation
 (`./tests/pentry-keeper-loom/run.sh --test lifetime_contracts`).
