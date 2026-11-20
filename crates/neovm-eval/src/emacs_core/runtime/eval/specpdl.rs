@@ -1680,9 +1680,14 @@ impl Context {
             return Ok(());
         }
         self.specpdl_unrewind_vars_for_thread_switch(false)?;
-        // The worker's Lisp frames have already returned. What remains is
-        // the depth those frames restored, which the continuation starts
-        // from. The caller is restored separately from its own switch frame.
+        // `apply` and `eval_cons_dispatch` have returned and each subtracted
+        // its depth bump, so `self.depth` is the baseline those native frames
+        // restored. The Lisp `let` and `unwind-protect` frames have not
+        // unwound (`unbind_to_with_result_slow` left them for this park), and
+        // the caller that scheduled this worker is still on the stack. The
+        // saved value is the depth the continuation resumes from. Zeroing the
+        // counter keeps that baseline off the shared `Context` while the
+        // caller stays live.
         let lisp_eval_depth = self.depth;
         self.depth = 0;
         let state = ThreadDynamicBindingState {
