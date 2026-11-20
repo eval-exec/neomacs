@@ -2843,6 +2843,8 @@ use alloc_region::RegionBook;
 use alloc_region::RegionStats;
 #[cfg(feature = "test-support")]
 pub use alloc_region::RegionStats;
+#[doc(hidden)]
+pub use alloc_region::owner_era_reserve::*;
 #[cfg(any(test, feature = "test-support"))]
 use alloc_region::{CONS_REGION_MAX_CELLS, ConsRegionSource, FLOAT_REGION_MAX_SLOTS};
 #[cfg(any(test, feature = "test-support"))]

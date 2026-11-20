@@ -48,9 +48,10 @@ static_assertions::assert_not_impl_any!(OwnerAllocRegion: Send, Sync, Clone, Cop
 
 /// What a stop-publication close does with the unhanded cons tail.
 ///
-/// This is the decision. Applying it to the shared free list is the cold
-/// grant's inverse and stays off this slice: these runs are not heap grants,
-/// and pushing their addresses onto the free list would corrupt it.
+/// This is the decision. The era reserve's `close_for_stop` applies it and
+/// re-checks a block tail's `next_index` before rewinding. A cursor installed
+/// from a raw address has no reserve behind it, so applying that decision
+/// would write the shared free list.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[doc(hidden)]
 pub enum ConsTailRefund {
@@ -106,6 +107,16 @@ impl OwnerAllocRegion {
             float: FloatRegionSource::Closed,
             _thread: PhantomData,
         }
+    }
+
+    /// The cons book alone. A float run may stay open.
+    pub(in crate::tagged::gc) fn cons_book_closed(&self) -> bool {
+        matches!(self.cons, ConsRegionSource::Closed)
+    }
+
+    /// The float book alone. A cons run may stay open.
+    pub(in crate::tagged::gc) fn float_book_closed(&self) -> bool {
+        matches!(self.float, FloatRegionSource::Closed)
     }
 
     /// Both books closed and both cursor pairs zero.
@@ -224,6 +235,28 @@ impl OwnerAllocRegion {
             cons: cons_refund(cons_source, cons_cur, cons_lim, cons_step),
             float: float_refund(float_source, float_cur, float_lim, float_step),
         }
+    }
+
+    /// Install a run the stopped collector already reserved.
+    ///
+    /// Not a raw-address seam. The era reserve is the only caller.
+    pub(in crate::tagged::gc) fn install_granted_cons(
+        &mut self,
+        first: usize,
+        cells: usize,
+        source: ConsRegionSource,
+    ) {
+        self.install_cons(first, cells, source);
+    }
+
+    /// Install a float run the stopped collector already reserved.
+    pub(in crate::tagged::gc) fn install_granted_float(
+        &mut self,
+        first: usize,
+        slots: usize,
+        source: FloatRegionSource,
+    ) {
+        self.install_float(first, slots, source);
     }
 
     fn install_cons(&mut self, first: usize, cells: usize, source: ConsRegionSource) {
