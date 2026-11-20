@@ -64,20 +64,20 @@ jobs:
         run: mkdir -p "$TMPDIR/nextest"
       - uses: ./.github/actions/install-build-deps
 
-      # Share the macOS release cache with the neovm-core macOS job: same
-      # workspace, release profile and target, both running fresh-build.  Save
-      # only on main so PRs do not write a multi-GB PR-scoped copy.
+      # Restore the macOS release cache test-suite.yml's
+      # neomacs-macos-test-build saves: same workspace, release profile and
+      # target, both running fresh-build.
       - name: Set up Rust tooling
         uses: ./.github/actions/setup-rust
         with:
           cache-key: macos-gui-tests
-          # Must match the neovm-core macOS job: both restore and save the ONE
-          # `macos-aarch64-release-ws` entry, and whatever rust-cache saves
-          # under this key must include the workspace crates in both jobs or
-          # the first saver would pin the shared entry to the slower shape.
+          # Restore-only.  neomacs-macos-test-build is the ONE saver of the
+          # `macos-aarch64-release-ws` entry, so two jobs never race different
+          # contents under the key; a second saver would only let whichever
+          # job finished first decide what the entry holds.
           cache-shared-key: macos-aarch64-release-ws
           cache-workspace-crates: "true"
-          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-save-if: "false"
           # The test step drives the suite through nextest, like the Linux GUI
           # job; the harness's own Rust tests run under it too.
           install-nextest: true
