@@ -19,6 +19,7 @@ use neovm_value::tagged::gc::{
 use neovm_value::tagged::header::MarkerObj;
 use neovm_value::tagged::value::TaggedValue;
 use std::cell::RefCell;
+use std::mem::ManuallyDrop;
 use std::sync::Arc;
 
 enum PreparationExpectation {
@@ -760,4 +761,106 @@ fn pentry_e2b_heap_transfer_closed_source_unwind_retains_actual_owner() {
         weak.upgrade().is_some(),
         "unwind or refusal must retain the original owner"
     );
+}
+
+#[test]
+fn pentry_e2b_retained_era_owner_actual_thread_roundtrip_preserves_backing() {
+    use neovm_value::tagged::gc::mutator_registration::RetainedEraOwner;
+    let _harness = crate::test_utils::unit_harness();
+    let (owner, roots, observations) = closed_source_inputs();
+    let identity = owner.parallel_heap_identity();
+    let root = owner.heap_root_designator().as_non_null().as_ptr();
+    let (retainer, proxy) = RetainedEraOwner::new(owner);
+    let proxy = std::thread::spawn(move || {
+        proxy.adopt_current_thread();
+        assert!(proxy.held_here());
+        proxy
+    })
+    .join()
+    .unwrap();
+    let owner = retainer.recover(proxy).unwrap();
+    owner.adopt_current_thread();
+    assert!(owner.held_here());
+    assert_eq!(owner.parallel_heap_identity(), identity);
+    assert_eq!(owner.heap_root_designator().as_non_null().as_ptr(), root);
+    // SAFETY: the same closed source. No collector, store frame, or heap
+    // mutation occurred during the reference-free owner handoff.
+    match unsafe { PreparedHeapTransfer::prepare_closed_source(owner, roots, observations) } {
+        Ok((pending, transfer)) => finish_closed_source(pending, transfer),
+        Err(failure) => assert_eq!(failure.reason(), TransferError::GenerationalRequired),
+    }
+}
+
+#[test]
+fn pentry_e2b_retained_era_owner_foreign_proxy_is_owned_failure() {
+    use neovm_value::tagged::gc::mutator_registration::{OwnerRecoveryError, RetainedEraOwner};
+    let _harness = crate::test_utils::unit_harness();
+    let (first, first_roots, first_observations) = closed_source_inputs();
+    let (second, second_roots, second_observations) = closed_source_inputs();
+    let _roots = ManuallyDrop::new((
+        first_roots,
+        second_roots,
+        first_observations,
+        second_observations,
+    ));
+    let (first, first_proxy) = RetainedEraOwner::new(first);
+    let (second, second_proxy) = RetainedEraOwner::new(second);
+    let failure = match first.recover(second_proxy) {
+        Err(failure) => failure,
+        Ok(_) => panic!("foreign proxy recovered"),
+    };
+    assert_eq!(failure.reason(), OwnerRecoveryError::Foreign);
+    drop(failure);
+    drop(first_proxy);
+    drop(second);
+    assert!(!neovm_value::tagged::gc::tagged_heap_is_installed());
+}
+
+#[test]
+fn pentry_e2b_retained_era_owner_unwind_keeps_original_adapter() {
+    use neovm_value::tagged::gc::mutator_registration::RetainedEraOwner;
+    let _harness = crate::test_utils::unit_harness();
+    let (owner, roots, observations) = closed_source_inputs();
+    let _roots = ManuallyDrop::new((roots, observations));
+    let probe = Arc::new(());
+    let weak = Arc::downgrade(&probe);
+    let owner = WorldLoan::new(PanickingRetention {
+        inner: owner,
+        _probe: probe,
+    });
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        let (_retainer, proxy) = RetainedEraOwner::new(owner);
+        let _ = proxy.parallel_epoch_retention();
+    }));
+    assert!(outcome.is_err());
+    assert!(
+        weak.upgrade().is_some(),
+        "unwind must retain the original owner"
+    );
+}
+
+#[test]
+fn pentry_e2b_retained_era_owner_poison_refuses_recovery() {
+    use neovm_value::tagged::gc::mutator_registration::{OwnerRecoveryError, RetainedEraOwner};
+    let _harness = crate::test_utils::unit_harness();
+    let (owner, roots, observations) = closed_source_inputs();
+    let _roots = ManuallyDrop::new((roots, observations));
+    let probe = Arc::new(());
+    let weak = Arc::downgrade(&probe);
+    let owner = WorldLoan::new(PanickingRetention {
+        inner: owner,
+        _probe: probe,
+    });
+    let (retainer, proxy) = RetainedEraOwner::new(owner);
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = proxy.parallel_epoch_retention();
+    }));
+    assert!(outcome.is_err());
+    let failure = match retainer.recover(proxy) {
+        Err(failure) => failure,
+        Ok(_) => panic!("poisoned era owner recovered"),
+    };
+    assert_eq!(failure.reason(), OwnerRecoveryError::Poisoned);
+    drop(failure);
+    assert!(weak.upgrade().is_some());
 }

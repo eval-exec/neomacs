@@ -67,6 +67,11 @@ pub use keeper::EraKeeper;
 #[doc(hidden)]
 pub use keeper::{FrozenFunctionRoots, FrozenLegacyRoots};
 mod world_loan;
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub use world_loan::retained::{
+    OwnerRecoveryError, RetainedEraOwner, RetainedOwnerRecoveryFailure,
+};
 #[doc(hidden)]
 pub use world_loan::{EraWorldLoan, SymbolRootDesignators, WorldIdentity, WorldLoan};
 mod gate;
