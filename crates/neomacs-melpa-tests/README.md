@@ -203,8 +203,9 @@ documented scripted-client seam, so no network, Node, mpv or login),
 `etaf-rss` (RSS/Atom/JSON/RDF parsing, OPML, HTML blocks/wrapping, store
 round-trip, and local file:// subscribe/search/scopes with no network),
 `etaf-bili` (popular/search/selection/play through its scripted client, plus
-WBI signing and response parsing), and the `etaf-md`/`etaf-org-preview`
-headless readers. `gui_parity_tests/etaf_*` adds
+WBI signing and response parsing), `etaf-pi` (the pure wire-event projection:
+streaming drafts, agent lifecycle, failures, queue, dialogs, authoritative
+messages), and the `etaf-md`/`etaf-org-preview` headless readers. `gui_parity_tests/etaf_*` adds
 real X11 probes for the md/org pages and the posframe child frame.
 
 `etaf-reader`, `etaf-weread`, `etaf-youtube`, `etaf-video-player`, `maillist`
