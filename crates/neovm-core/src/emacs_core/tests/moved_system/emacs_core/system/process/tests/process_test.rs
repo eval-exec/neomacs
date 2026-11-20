@@ -7340,6 +7340,7 @@ fn accept_process_output_defers_pty_status_after_explicit_coding() {
     let echo = find_bin("echo");
     let mut ev = crate::emacs_core::eval_hook_installers::new_context();
 
+    let started = Instant::now();
     let result = eval_one_in_context(
         &mut ev,
         &format!(
@@ -7356,6 +7357,7 @@ fn accept_process_output_defers_pty_status_after_explicit_coding() {
                      (kill-buffer buf))))"#
         ),
     );
+    let darwin_drain = cfg!(target_os = "macos") && started.elapsed() >= Duration::from_millis(550);
 
     // Whether the child's exit has been observed by the time the wait returns
     // is a race in GNU too (measured: `emacs --batch` gives `run` in ~2/3 of
@@ -7364,9 +7366,19 @@ fn accept_process_output_defers_pty_status_after_explicit_coding() {
     // output ("hello\n" reached the buffer first) and the status is one of
     // run/exit. Pinning `run` here would pin the pre-observation-decode
     // masking that GNU does not have.
+    //
+    // macOS host-keyed arm: if the wait covered the Darwin tty drain (the
+    // ~600 ms last-slave-close stall measured on macmini macOS 27.0.1 with
+    // ptyprobe.c), the unread output is discarded before the read.  GNU closes
+    // the parent's slave the same way Neo does (src/process.c:2313-2314;
+    // types.rs:5259-5261), and attested GNU-macOS loses the same output, so
+    // `(exit nil)` is the faithful answer only for a wait that covered the
+    // drain.  A shorter wait must still decode the output first.
     assert!(
-        result == "OK (run t)" || result == "OK (exit t)",
-        "unexpected pty status/output after explicit coding: {result}"
+        result == "OK (run t)"
+            || result == "OK (exit t)"
+            || (darwin_drain && result == "OK (exit nil)"),
+        "unexpected pty status/output after explicit coding: {result} (darwin_drain={darwin_drain})"
     );
 }
 
@@ -7451,6 +7463,7 @@ fn accept_process_output_decodes_multibyte_before_explicit_coding_status() {
     let printf = find_bin("printf");
     let mut ev = crate::emacs_core::eval_hook_installers::new_context();
 
+    let started = Instant::now();
     let result = eval_one_in_context(
         &mut ev,
         &format!(
@@ -7468,6 +7481,7 @@ fn accept_process_output_decodes_multibyte_before_explicit_coding_status() {
                      (kill-buffer buf))))"#
         ),
     );
+    let darwin_drain = cfg!(target_os = "macos") && started.elapsed() >= Duration::from_millis(550);
 
     // GNU's own answer here is NOT determinate, and the neighbouring
     // `accept_process_output_direct_pty_*` pin already says so for the same
@@ -7483,10 +7497,21 @@ fn accept_process_output_decodes_multibyte_before_explicit_coding_status() {
     // multibyte output is present, and it is present BEFORE any status
     // message.  Ledger 200 widened the assertion after making the whole-alist
     // walk unconditional moved this port from the 1/10 arm to the 9/10 arm.
+    //
+    // macOS host-keyed arm: the Darwin tty drain discards unread slave output
+    // when the last slave closes, so if the wait covered the ~600 ms drain
+    // (measured on macmini macOS 27.0.1 with the peer's ptyprobe.c) the
+    // GNU-faithful answer is the status message alone.  GNU and Neo close the
+    // parent's slave identically (src/process.c:2313-2314; types.rs:5259-5261)
+    // and the attested GNU-macOS oracle loses the same output after a 1.5 s
+    // delay.  The arm is accepted only for a wait that covered the drain; a
+    // shorter wait must still see the output, so a regression that always
+    // loses it still fails.
     assert!(
         result == "OK (\"café世界\" 11 6)"
-            || result == "OK (\"café世界\nProcess apio-pty-coding-mb finished\n\" 48 43)",
-        "unexpected multibyte output/status after accept-process-output: {result}"
+            || result == "OK (\"café世界\nProcess apio-pty-coding-mb finished\n\" 48 43)"
+            || (darwin_drain && result == "OK (\"\nProcess apio-pty-coding-mb finished\n\" 37 37)"),
+        "unexpected multibyte output/status after accept-process-output: {result} (darwin_drain={darwin_drain})"
     );
 }
 
@@ -7496,6 +7521,7 @@ fn accept_process_output_with_temp_buffer_defers_explicit_coding_status() {
     let echo = find_bin("echo");
     let mut ev = crate::emacs_core::eval_hook_installers::new_context();
 
+    let started = Instant::now();
     let result = eval_one_in_context(
         &mut ev,
         &format!(
@@ -7511,6 +7537,7 @@ fn accept_process_output_with_temp_buffer_defers_explicit_coding_status() {
                    (kill-buffer buf)))"#
         ),
     );
+    let darwin_drain = cfg!(target_os = "macos") && started.elapsed() >= Duration::from_millis(550);
 
     // As above: GNU is not determinate here.  Measured, `-Q --batch`, GNU
     // Emacs 31.0.90, 10 runs of this exact form:
@@ -7519,10 +7546,21 @@ fn accept_process_output_with_temp_buffer_defers_explicit_coding_status() {
     //     4/10   "hello\n\nProcess apio-pty-coding-temp finished\n"
     //
     // The invariant is that the child's output is complete and comes first.
+    //
+    // macOS host-keyed arm: when the child writes and exits before the first
+    // read, the last slave-fd close blocks ~600 ms in the Darwin tty drain
+    // and then discards the unread bytes.  GNU closes the parent's `pty_tty`
+    // after fork (src/process.c:2313-2314) exactly as Neo drops the slave
+    // (process/types.rs:5259-5261), and the attested GNU-macOS oracle loses
+    // the same output after a 1.5 s delay.  So the status-only arm is the
+    // GNU-faithful macOS answer, and it is accepted only when the measured
+    // wait covered the drain (>= 550 ms); a shorter wait must still see the
+    // output, so a regression that always loses it still fails.
     assert!(
         result == "OK \"hello\n\""
-            || result == "OK \"hello\n\nProcess apio-pty-coding-temp finished\n\"",
-        "unexpected output/status after accept-process-output: {result}"
+            || result == "OK \"hello\n\nProcess apio-pty-coding-temp finished\n\""
+            || (darwin_drain && result == "OK \"\nProcess apio-pty-coding-temp finished\n\""),
+        "unexpected output/status after accept-process-output: {result} (darwin_drain={darwin_drain})"
     );
 }
 
