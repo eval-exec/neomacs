@@ -29,3 +29,6 @@ mod effective_tests;
 #[cfg(test)]
 #[path = "tests/frames_test.rs"]
 mod frames_tests;
+#[cfg(test)]
+#[path = "tests/join_test.rs"]
+mod join_tests;
