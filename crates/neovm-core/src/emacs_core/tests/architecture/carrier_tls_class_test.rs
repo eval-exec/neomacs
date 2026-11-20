@@ -86,20 +86,6 @@ const TLS_CLASSIFICATION: &[(&str, &str, TlsClass)] = &[
         "NATIVE_DEPTH",
         TlsClass::MustReset,
     ),
-    // MustReset: leaves parked while COMPILED was borrowed. cache::clear
-    // drains the vec, and reset_carrier_tls calls clear after a successful mint.
-    (
-        "neovm-eval/src/emacs_core/runtime/jit/cache.rs",
-        "OVERFLOW_RETIRED",
-        TlsClass::MustReset,
-    ),
-    // MustReset: a heap or obarray sync that refused its receipt. cache::clear
-    // sets the flag false, and reset_carrier_tls calls clear after a successful mint.
-    (
-        "neovm-eval/src/emacs_core/runtime/jit/cache.rs",
-        "RELOC_ROOTS_REFUSED",
-        TlsClass::MustReset,
-    ),
     // Profiling observations belong to one job; eval deferred reset clears them.
     // MustReset: var_fast::reset_carrier_tls, called by the eval deferred reset,
     // clears every event. Static and reset share cfg(any(test, feature = "vm-profile"));

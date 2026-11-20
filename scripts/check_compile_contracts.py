@@ -4,11 +4,11 @@
 CI runs the six contract targets under `cargo nextest run` (B5: Rust tests
 only under nextest).  Nextest reports one status line per test function:
 
-        PASS [   0.011s] ( 1/22) neovm-core::p0s3_contracts <test>
+        PASS [   0.011s] ( 1/23) neovm-core::p0s3_contracts <test>
 
 and one summary line:
 
-     Summary [  123.456s] 22 tests run: 22 passed, 0 skipped
+     Summary [  123.456s] 23 tests run: 23 passed, 0 skipped
 
 The old cargo-test parser summed every `test result: ok. N passed` line; a
 nested trybuild harness could print `ok. 1` and mask a FAILED runner.  Here the
@@ -32,12 +32,12 @@ import sys
 EXPECTED = {
     "p0s3_contracts": 1,
     "p1rv_contracts": 3,
-    "thread_safety_contracts": 15,
+    "thread_safety_contracts": 16,
     "chartable_write_contracts": 1,
     "mint_seal_contracts": 1,
     "retained_leaf_contracts": 1,
 }
-EXPECTED_TOTAL = sum(EXPECTED.values())  # 22 nextest test functions
+EXPECTED_TOTAL = sum(EXPECTED.values())  # 23 nextest test functions
 
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 STATUS = re.compile(
@@ -179,7 +179,7 @@ SELF_TEST_CASES = {
             overrides={("thread_safety_contracts", 0): "FAIL"},
             replay=[("thread_safety_contracts", 0)],
         ),
-        "thread_safety_contracts: 15 runners (expected 15)",
+        "thread_safety_contracts: 16 runners (expected 16)",
     ),
     "timeout-runner": (False, _nextest_log(overrides={("p1rv_contracts", 0): "TIMEOUT"})),
     "missing-runner": (

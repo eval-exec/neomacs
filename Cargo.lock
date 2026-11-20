@@ -4506,7 +4506,6 @@ dependencies = [
  "tree-sitter",
  "tree-sitter-json",
  "tree-sitter-language",
- "trybuild",
  "unicode_names2",
  "visibility",
  "whoami",

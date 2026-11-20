@@ -148,16 +148,7 @@ neomacs-test-env.workspace = true
 tracing-subscriber.workspace = true
 neomacs-infra.workspace = true
 tree-sitter-json = "0.24"
-trybuild = "1.0"
 
 [lints.rust]
 # Split-wave class guard (LEAD 11:5xZ): deny accidental self-recursion.
 unconditional_recursion = "deny"
-
-# Opt-in compiler-contract suite. The harness lives under tests/jit_grace/
-# so cargo's tests/*.rs autodiscovery does not pick it up; the fixtures
-# live beside it and are compiled only by trybuild.
-[[test]]
-name = "jit_grace_contracts"
-path = "tests/jit_grace/harness.rs"
-required-features = ["jit", "contract-fixtures"]

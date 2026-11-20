@@ -230,8 +230,12 @@ fn opt_osr_evidence_cache_owner_and_reentrant_borrow_fail_closed() {
         Some(ctx.obarray.generation().wrapping_add(1)),
         std::iter::once(1)
     ));
-    let heap = COMPILED_HEAP.with(|owner| owner.get()).unwrap();
-    let old = COMPILED_HEAP.with(|owner| owner.replace(Some(heap.wrapping_add(1))));
+    let super::super::CompiledHeapPin::Pinned(heap) = COMPILED_HEAP.with(|owner| owner.get())
+    else {
+        panic!("the cache pinned a heap");
+    };
+    let old = COMPILED_HEAP
+        .with(|owner| owner.replace(super::super::CompiledHeapPin::Pinned(heap.wrapping_add(1))));
     assert!(!ready(&ctx, &source, 1));
     COMPILED_HEAP.with(|owner| owner.set(old));
     OSR_CACHE.with(|cache| {
