@@ -225,23 +225,19 @@ impl PublishedConditionSnapshots {
         self.ledger.view()
     }
 
-    /// The table `view` loaded from this owner.
+    /// The table `view` loaded.
     ///
-    /// The address is read from the view, whose lifetime is the owner's, so
-    /// no raw pointer crosses this API. The returned reference is tied to
-    /// this owner. The owner retains the box after the payload becomes a
-    /// predecessor, and the allocation does not move. `PublicationView` is
-    /// not `Copy` and borrows this owner, so a view cannot cross [`Self::refresh`].
+    /// The result borrows `view`. A caller cannot pass one publisher's view
+    /// and keep the table after that view's owner is dropped. The address
+    /// stays inside this function.
     #[cfg(test)]
     pub(crate) fn table_at<'a>(
-        &'a self,
-        view: &PublicationView<'_, ConditionPayload>,
+        view: &'a PublicationView<'_, ConditionPayload>,
     ) -> &'a ConditionSnapshotTable {
         let address = view.published_address();
-        // SAFETY: `view` names a box this owner published. Publication does
-        // not reclaim a payload, and moving that box into the predecessor
-        // vector does not move the allocation. This reference cannot outlive
-        // `self`, which retains the box.
+        // SAFETY: the view retains the loaded address for its own lifetime,
+        // per its must_use contract, and publication never reclaims a payload
+        // today.
         unsafe { &*address.cast::<ConditionSnapshotTable>() }
     }
 
@@ -338,7 +334,7 @@ mod tests {
             PublishedConditionSnapshots::mint(&mut heap, &obarray, retired_once()).unwrap();
         let (before_address, before_epoch) = {
             let view = published.view();
-            let captured = published.table_at(&view);
+            let captured = PublishedConditionSnapshots::table_at(&view);
             assert_eq!(captured.len(), obarray.iter_symbols().count());
             assert_eq!(captured.epoch(), plist_epoch());
             assert!(captured.cons_head(symbol).is_some());
@@ -378,7 +374,7 @@ mod tests {
         );
         {
             let view = published.view();
-            let current = published.table_at(&view);
+            let current = PublishedConditionSnapshots::table_at(&view);
             assert_ne!(view.published_address() as usize, before_address);
             assert!(current.epoch() > before_epoch);
             assert_eq!(
@@ -416,7 +412,7 @@ mod tests {
             PublishedConditionSnapshots::mint(&mut heap, &obarray, retired_once()).unwrap();
         let first_epoch = {
             let view = published.view();
-            published.table_at(&view).epoch()
+            PublishedConditionSnapshots::table_at(&view).epoch()
         };
         obarray.set_symbol_plist_id(symbol, second);
         assert!(matches!(
@@ -425,7 +421,7 @@ mod tests {
         ));
         let (current_address, current_epoch) = {
             let view = published.view();
-            let current = published.table_at(&view);
+            let current = PublishedConditionSnapshots::table_at(&view);
             (view.published_address() as usize, current.epoch())
         };
         obarray.set_symbol_plist_id(symbol, refused);
@@ -437,7 +433,10 @@ mod tests {
         {
             let view = published.view();
             assert_eq!(view.published_address() as usize, current_address);
-            assert_eq!(published.table_at(&view).epoch(), current_epoch);
+            assert_eq!(
+                PublishedConditionSnapshots::table_at(&view).epoch(),
+                current_epoch
+            );
         }
         assert_eq!(published.registry_len(&heap), 2);
 
@@ -496,7 +495,12 @@ mod tests {
         {
             let view = published.view();
             assert_eq!(
-                plist_get(published.table_at(&view).cons_head(symbol).unwrap(), &prop),
+                plist_get(
+                    PublishedConditionSnapshots::table_at(&view)
+                        .cons_head(symbol)
+                        .unwrap(),
+                    &prop
+                ),
                 Some(TaggedValue::fixnum(7))
             );
         }
@@ -548,7 +552,12 @@ mod tests {
         {
             let view = published.view();
             assert_eq!(
-                plist_get(published.table_at(&view).cons_head(symbol).unwrap(), &prop),
+                plist_get(
+                    PublishedConditionSnapshots::table_at(&view)
+                        .cons_head(symbol)
+                        .unwrap(),
+                    &prop
+                ),
                 Some(TaggedValue::fixnum(11))
             );
         }
