@@ -417,12 +417,12 @@ fn publish_scan_copies_every_owner_source_once() {
     let mut acknowledged = false;
     publish_then_acknowledge(&arena, &context, &mut out, |roots| {
         acknowledged = true;
-        assert_eq!(roots.len(), 13);
+        assert_eq!(roots.len(), 14);
     })
     .expect("scan");
     assert!(acknowledged);
     assert_eq!(out[0].parallel_word(), prefix);
-    assert_eq!(out.len(), 13);
+    assert_eq!(out.len(), 14);
     let published: Vec<usize> = out[1..].iter().map(SharedRoot::parallel_word).collect();
     for expected in [11, 12, 13, 14, 17, 18, 15, 16, 19, 20, 21, 22] {
         let word = Value::fixnum(expected).bits();
@@ -431,7 +431,11 @@ fn publish_scan_copies_every_owner_source_once() {
             "missing fixnum {expected} in {published:?}"
         );
     }
-    assert_eq!(published.len(), 12);
+    assert_eq!(published.len(), 13);
+    assert!(
+        published.contains(&Value::NIL.bits()),
+        "publish_scan carries the progn accumulator"
+    );
 }
 
 #[test]
@@ -476,5 +480,12 @@ fn publish_scan_reserve_failure_does_not_acknowledge() {
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].parallel_word(), prefix);
     publish_then_acknowledge(&arena, &context, &mut out, |_| {}).expect("flag cleared");
-    assert_eq!(out.len(), 5);
+    assert_eq!(out.len(), 6);
+    assert_eq!(
+        out.iter()
+            .filter(|root| root.parallel_word() == Value::NIL.bits())
+            .count(),
+        1,
+        "publish_scan carries the progn accumulator"
+    );
 }

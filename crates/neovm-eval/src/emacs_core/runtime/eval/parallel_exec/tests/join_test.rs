@@ -72,6 +72,7 @@ fn publish_five(context: &mut Context) -> SoleRoots {
             Value::NIL,
             Value::NIL,
             Value::NIL,
+            Value::NIL,
             1,
             HandlerMark::EMPTY,
             OwnerRecordMark::EMPTY,
