@@ -184,7 +184,9 @@ fn etaf_weread_behavior_batch() {
     (etaf-weread-refresh app)
     (list (neomacs-weread-facts app) (neomacs-weread-ops))))
 "####,
-            expect![[r#"OK ((:mode browse :section :shelf :query "" :selection 0 :rows-total 2 :list-total 2 :items (("书1" "1小时13分") ("书2" "")) :account "测试读者" :stats "1小时13分" :pane list :detail ("1" nil 0 nil) :notes nil :message "书架 2 本 · 在读 1 · 读完 0" :error nil) ((:shelf nil nil) (:status nil nil) (:stats nil nil)))"#]],
+            expect![[
+                r#"OK ((:mode browse :section :shelf :query "" :selection 0 :rows-total 2 :list-total 2 :items (("书1" "1小时13分") ("书2" "")) :account "测试读者" :stats "1小时13分" :pane list :detail ("1" nil 0 nil) :notes nil :message "书架 2 本 · 在读 1 · 读完 0" :error nil) ((:shelf nil nil) (:status nil nil) (:stats nil nil)))"#
+            ]],
         ),
         // Search trims its keyword and rejects a blank one.
         ParityBatchCase::value(
@@ -200,7 +202,9 @@ fn etaf_weread_behavior_batch() {
                 (etaf-weread-search app "   ")
               (etaf-weread-error (list (car err) (cadr err))))))))
 "####,
-            expect![[r#"OK ((:mode search :section :search :query "三体" :selection 0 :rows-total 1 :list-total 1 :items (("搜到的书" "")) :account nil :stats nil :pane list :detail ("9" nil 0 nil) :notes nil :message "搜索「三体」· 展示了 1 本" :error nil) ((:search nil "三体")) (etaf-weread-error "搜索关键词不能为空"))"#]],
+            expect![[
+                r#"OK ((:mode search :section :search :query "三体" :selection 0 :rows-total 1 :list-total 1 :items (("搜到的书" "")) :account nil :stats nil :pane list :detail ("9" nil 0 nil) :notes nil :message "搜索「三体」· 展示了 1 本" :error nil) ((:search nil "三体")) (etaf-weread-error "搜索关键词不能为空"))"#
+            ]],
         ),
         // Selection clamps at both ends, and activating a row opens its
         // detail.
@@ -219,7 +223,9 @@ fn etaf_weread_behavior_batch() {
           (etaf-weread-activate-selection app)
           (list bottom top (neomacs-weread-facts app)))))))
 "####,
-            expect![[r#"OK (1 0 (:mode browse :section :shelf :query "" :selection 0 :rows-total 2 :list-total 2 :items (("书1" "1小时13分") ("书2" "")) :account "测试读者" :stats "1小时13分" :pane detail :detail ("1" "文学" 2 36) :notes nil :message "详情节1 · 2 章 · 36%" :error nil))"#]],
+            expect![[
+                r#"OK (1 0 (:mode browse :section :shelf :query "" :selection 0 :rows-total 2 :list-total 2 :items (("书1" "1小时13分") ("书2" "")) :account "测试读者" :stats "1小时13分" :pane detail :detail ("1" "文学" 2 36) :notes nil :message "详情节1 · 2 章 · 36%" :error nil))"#
+            ]],
         ),
         // Showing a book publishes its detail and chapters; a repeat uses
         // the cache without another backend request.
@@ -240,7 +246,9 @@ fn etaf_weread_behavior_batch() {
                      (lambda (op) (eq op :book)) (neomacs-weread-ops)
                      :key #'car))))))
 "####,
-            expect![[r#"OK ((:mode browse :section :shelf :query "" :selection 0 :rows-total 0 :list-total 0 :items nil :account nil :stats nil :pane detail :detail ("7" "文学" 2 36) :notes nil :message "详情节7 · 2 章 · 36%" :error nil) 1 1)"#]],
+            expect![[
+                r#"OK ((:mode browse :section :shelf :query "" :selection 0 :rows-total 0 :list-total 0 :items nil :account nil :stats nil :pane detail :detail ("7" "文学" 2 36) :notes nil :message "详情节7 · 2 章 · 36%" :error nil) 1 1)"#
+            ]],
         ),
         // Highlights group by chapter; an orphan thought is collected apart.
         ParityBatchCase::value(
@@ -252,7 +260,9 @@ fn etaf_weread_behavior_batch() {
     (etaf-weread-show-book app "2" 'notes)
     (neomacs-weread-facts app)))
 "####,
-            expect![[r#"OK (:mode browse :section :shelf :query "" :selection 0 :rows-total 0 :list-total 0 :items nil :account nil :stats nil :pane notes :detail ("2" "文学" 2 36) :notes (1 2 (("第一章" (("详情节2的划线" "想法内容"))) ("其他想法" (("" "没有划线的想法"))))) :message "「详情节2」划线与想法：3 条" :error nil)"#]],
+            expect![[
+                r#"OK (:mode browse :section :shelf :query "" :selection 0 :rows-total 0 :list-total 0 :items nil :account nil :stats nil :pane notes :detail ("2" "文学" 2 36) :notes (1 2 (("第一章" (("详情节2的划线" "想法内容"))) ("其他想法" (("" "没有划线的想法"))))) :message "「详情节2」划线与想法：3 条" :error nil)"#
+            ]],
         ),
         // The side pane toggles between detail and notes; an unknown pane
         // signals without changing the pane.
@@ -292,7 +302,9 @@ fn etaf_weread_behavior_batch() {
     (list (neomacs-weread-ops)
           (plist-get (etaf-weread-state app) :message))))
 "####,
-            expect![[r#"OK (((:shelf nil nil) (:status nil nil) (:stats nil nil) (:export "1" nil)) "已导出笔记")"#]],
+            expect![[
+                r#"OK (((:shelf nil nil) (:status nil nil) (:stats nil nil) (:export "1" nil)) "已导出笔记")"#
+            ]],
         ),
         // A failing backend reply lands in the status line; the reader stays
         // usable and the next section is empty rather than an error.

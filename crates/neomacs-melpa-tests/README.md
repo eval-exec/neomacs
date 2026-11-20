@@ -214,7 +214,10 @@ validation, start/pause toggling, extension, reset, style cycling and
 stopping through the public session API), `etaf-desktop` (window lifecycle,
 geometry policy, workspaces, settings and panels, tiling splits, session
 round-trips and the application/instance registry, plus mounted canvas text),
-and the `etaf-md`/`etaf-org-preview` headless readers. `gui_parity_tests/etaf_*` adds
+`etaf-ascii-video` (source normalization, render-mode/speed/file/URL
+validation before a decoder starts, and player-command errors outside a
+player buffer; frame decoding is timing-dependent and not pinned), and the
+`etaf-md`/`etaf-org-preview` headless readers. `gui_parity_tests/etaf_*` adds
 real X11 probes for the md/org pages and the posframe child frame.
 
 `etaf-reader`, `etaf-youtube`, `etaf-video-player`, `maillist`, the
