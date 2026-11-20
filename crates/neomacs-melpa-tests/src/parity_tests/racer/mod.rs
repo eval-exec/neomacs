@@ -80,15 +80,37 @@ const RACER_TEST_PRELUDE: &str = r##"
 
 (defvar racer-test--real-make-process nil)
 
+(defun racer-test--await-process-exit (process stderr-process)
+  "Wait until PROCESS and STDERR-PROCESS have left `process-list'.
+`process-live-p' becomes nil at SIGCHLD, before `status_notify' reads
+remaining output and runs the sentinel. `racer--shell-command' stops on
+that check and then reads both buffers. Returning at that moment parses
+a one-shot child as empty. With `delete-exited-processes' non-nil,
+`status_notify' removes the process immediately before `exec_sentinel',
+so absence from `process-list' means the output was inserted. The
+stderr process is a pipe that racer reads with no wait of its own."
+  (let ((deadline (+ (float-time) 20.0)))
+    (while (and (or (memq process (process-list))
+                    (and stderr-process
+                         (memq stderr-process (process-list))))
+                (< (float-time) deadline))
+      (accept-process-output nil 0.02))
+    (when (or (memq process (process-list))
+              (and stderr-process
+                   (memq stderr-process (process-list))))
+      (error "Racer test process did not finish: %S" process))))
+
 (defun racer-test--make-process-with-silent-sentinel (&rest arguments)
-  (let ((process (apply racer-test--real-make-process arguments)))
+  (let* ((delete-exited-processes t)
+         (process (apply racer-test--real-make-process arguments))
+         (stderr-buffer (plist-get arguments :stderr))
+         (stderr-process
+          (and (bufferp stderr-buffer)
+               (get-buffer-process stderr-buffer))))
     (set-process-sentinel process #'ignore)
-    (let* ((stderr-buffer (plist-get arguments :stderr))
-           (stderr-process
-            (and (bufferp stderr-buffer)
-                 (get-buffer-process stderr-buffer))))
-      (when stderr-process
-        (set-process-sentinel stderr-process #'ignore)))
+    (when stderr-process
+      (set-process-sentinel stderr-process #'ignore))
+    (racer-test--await-process-exit process stderr-process)
     process))
 
 (defmacro racer-test-with-silent-process-sentinels (&rest body)
