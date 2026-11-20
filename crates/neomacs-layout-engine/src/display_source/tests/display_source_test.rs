@@ -3884,7 +3884,14 @@ fn consume_until_line_break_matches_the_per_char_walk() {
         (false, position.byte_idx(), position.charpos())
     }
 
-    let texts: [&[u8]; 8] = [
+    let long_ascii = [vec![b'a'; 5000], b"\nshort\n".to_vec()].concat();
+    let long_mixed = [
+        vec![b'a'; 5000],
+        "é\n".as_bytes().to_vec(),
+        b"tail\n".to_vec(),
+    ]
+    .concat();
+    let texts: [&[u8]; 10] = [
         b"",
         b"abc",
         b"abc\ndef\n",
@@ -3893,16 +3900,37 @@ fn consume_until_line_break_matches_the_per_char_walk() {
         b"\n\nx",
         "abcé".as_bytes(),
         b"ab\xc3\ncd\n",
+        &long_ascii,
+        &long_mixed,
     ];
     for text in texts {
-        for byte_idx in 0..=text.len() + 1 {
+        let starts: Vec<usize> = if text.len() > 100 {
+            // The long runs cross the bulk-scan threshold; the interesting
+            // starts are the edges and the first byte past the threshold.
+            [
+                0,
+                1,
+                4095,
+                4096,
+                5000,
+                text.len() - 2,
+                text.len(),
+                text.len() + 1,
+            ]
+            .into_iter()
+            .filter(|start| *start <= text.len() + 1)
+            .collect()
+        } else {
+            (0..=text.len() + 1).collect()
+        };
+        for byte_idx in starts {
             let start = DisplaySourceTextPosition::new(byte_idx, 40);
             let mut position = start;
             let found = position.consume_until_line_break(text);
             assert_eq!(
                 (found, position.byte_idx(), position.charpos()),
                 per_char(start, text),
-                "{text:?} from byte {byte_idx}"
+                "long text from byte {byte_idx}"
             );
         }
     }
