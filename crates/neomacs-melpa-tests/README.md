@@ -216,7 +216,11 @@ geometry policy, workspaces, settings and panels, tiling splits, session
 round-trips and the application/instance registry, plus mounted canvas text),
 `etaf-ascii-video` (source normalization, render-mode/speed/file/URL
 validation before a decoder starts, and player-command errors outside a
-player buffer; frame decoding is timing-dependent and not pinned), and the
+player buffer; frame decoding is timing-dependent and not pinned),
+`etaf-screensaver` (scene registry and lookup, custom registration and
+replacement, directory loading with probe-written spec files, start/stop
+lifecycle and first-key dismissal; the MELPA build installs no bundled scene
+resource directories, and animated frame content is not pinned), and the
 `etaf-md`/`etaf-org-preview` headless readers. `gui_parity_tests/etaf_*` adds
 real X11 probes for the md/org pages and the posframe child frame.
 

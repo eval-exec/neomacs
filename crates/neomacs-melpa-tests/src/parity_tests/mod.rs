@@ -398,6 +398,7 @@ mod etaf_pi;
 mod etaf_pomodoro;
 mod etaf_preview;
 mod etaf_rss;
+mod etaf_screensaver;
 mod etaf_ui;
 mod etaf_weread;
 mod eval_sexp_fu;
