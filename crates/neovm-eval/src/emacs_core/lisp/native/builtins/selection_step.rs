@@ -15,11 +15,10 @@ use super::{
     direct_neomacs_primary_selection_set,
 };
 
-/// Serial installer. Owned drivers are not constructible in this slice.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum SelectionInstaller {
-    InlineSerialMain,
-}
+#[path = "selection_installer.rs"]
+mod selection_installer;
+
+pub(super) use selection_installer::SelectionInstaller;
 
 /// Serial step. Suspension is uninhabited: the only arm is the direct result.
 #[derive(Debug)]
@@ -395,6 +394,166 @@ mod tests {
         assert_same_batch(direct_clear, via_clear);
         assert_same_batch(direct_owner, via_owner);
 
+        neovm_value::tagged::gc::clear_tagged_heap_root_if_installed(clear_heap);
+    }
+
+    /// One selection program. The installed serial arm stays the direct call.
+    /// This lowering is the other one, and only the harness below constructs it.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum SelectionOp {
+        ClipboardSet,
+        ClipboardGet,
+        PrimarySet,
+        PrimaryGet,
+        PrimaryOwner,
+    }
+
+    enum OwnedLowering {
+        NeedOwner {
+            op: SelectionOp,
+            args: Vec<Value>,
+        },
+        NativeWait {
+            op: SelectionOp,
+            pending: EvalResult,
+        },
+        Done(EvalResult),
+    }
+
+    fn owned_begin(op: SelectionOp, args: Vec<Value>) -> OwnedLowering {
+        OwnedLowering::NeedOwner { op, args }
+    }
+
+    /// NeedOwner handoff. `pending` is the harness owner's result.
+    /// Replacing `result` here is the red mutation for this lowering.
+    fn owned_accept_owner_result(op: SelectionOp, result: EvalResult) -> OwnedLowering {
+        OwnedLowering::NativeWait {
+            op,
+            pending: result,
+        }
+    }
+
+    fn owned_resume(step: OwnedLowering) -> OwnedLowering {
+        match step {
+            OwnedLowering::NativeWait { pending, .. } => OwnedLowering::Done(pending),
+            other => other,
+        }
+    }
+
+    fn perform_on_host(op: SelectionOp, ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+        match op {
+            SelectionOp::ClipboardSet => super::super::direct_neomacs_clipboard_set(ctx, args),
+            SelectionOp::ClipboardGet => super::super::direct_neomacs_clipboard_get(ctx, args),
+            SelectionOp::PrimarySet => {
+                super::super::direct_neomacs_primary_selection_set(ctx, args)
+            }
+            SelectionOp::PrimaryGet => {
+                super::super::direct_neomacs_primary_selection_get(ctx, args)
+            }
+            SelectionOp::PrimaryOwner => {
+                super::super::direct_neomacs_primary_selection_owner(ctx, args)
+            }
+        }
+    }
+
+    fn serial_lower(op: SelectionOp, ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+        match op {
+            SelectionOp::ClipboardSet => {
+                clipboard_set(SelectionInstaller::InlineSerialMain, ctx, args).into_direct()
+            }
+            SelectionOp::ClipboardGet => {
+                clipboard_get(SelectionInstaller::InlineSerialMain, ctx, args).into_direct()
+            }
+            SelectionOp::PrimarySet => {
+                primary_selection_set(SelectionInstaller::InlineSerialMain, ctx, args).into_direct()
+            }
+            SelectionOp::PrimaryGet => {
+                primary_selection_get(SelectionInstaller::InlineSerialMain, ctx, args).into_direct()
+            }
+            SelectionOp::PrimaryOwner => {
+                primary_selection_owner(SelectionInstaller::InlineSerialMain, ctx, args)
+                    .into_direct()
+            }
+        }
+    }
+
+    fn drive_owned(op: SelectionOp, ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+        let (op, args) = match owned_begin(op, args) {
+            OwnedLowering::NeedOwner { op, args } => (op, args),
+            OwnedLowering::NativeWait { .. } | OwnedLowering::Done(_) => {
+                panic!("owned program begins at NeedOwner");
+            }
+        };
+        let result = perform_on_host(op, ctx, args);
+        let pending = match owned_accept_owner_result(op, result) {
+            OwnedLowering::NativeWait {
+                op: waited,
+                pending,
+            } => {
+                assert_eq!(waited, op);
+                pending
+            }
+            OwnedLowering::NeedOwner { .. } | OwnedLowering::Done(_) => {
+                panic!("NeedOwner handoff suspends in NativeWait");
+            }
+        };
+        match owned_resume(OwnedLowering::NativeWait { op, pending }) {
+            OwnedLowering::Done(done) => done,
+            OwnedLowering::NeedOwner { .. } | OwnedLowering::NativeWait { .. } => {
+                panic!("NativeWait resumes to Done");
+            }
+        }
+    }
+
+    fn prime_clipboard(ctx: &mut Context) {
+        match super::super::direct_neomacs_clipboard_set(ctx, vec![Value::symbol("clip")]) {
+            Ok(_) => {}
+            Err(_) => panic!("prime clipboard"),
+        }
+    }
+
+    fn prime_primary(ctx: &mut Context) {
+        match super::super::direct_neomacs_primary_selection_set(ctx, vec![Value::symbol("prim")]) {
+            Ok(_) => {}
+            Err(_) => panic!("prime primary"),
+        }
+    }
+
+    fn run_owned_against_serial(op: SelectionOp, args: Vec<Value>, prime: fn(&mut Context)) {
+        let mut serial_ctx = Context::new(crate::test_utils::unit_runtime());
+        let mut owned_ctx = Context::new(crate::test_utils::unit_runtime());
+        super::super::reset_stubs_thread_locals();
+        prime(&mut serial_ctx);
+        let serial = serial_lower(op, &mut serial_ctx, args.clone());
+        super::super::reset_stubs_thread_locals();
+        prime(&mut owned_ctx);
+        let owned = drive_owned(op, &mut owned_ctx, args);
+        match &serial {
+            Ok(value) => assert_ne!(value, &Value::T, "{op:?} serial result must not be t"),
+            Err(_) => panic!("{op:?} serial lowering returns a value"),
+        }
+        assert_same_batch(serial, owned);
+    }
+
+    fn prime_nothing(_ctx: &mut Context) {}
+
+    #[test]
+    fn owned_lowering_matches_the_serial_lowering() {
+        let heap = neovm_value::tagged::gc::TestHeap::new();
+        let clear_heap = heap.root();
+        run_owned_against_serial(
+            SelectionOp::ClipboardSet,
+            vec![Value::symbol("clip")],
+            prime_nothing,
+        );
+        run_owned_against_serial(SelectionOp::ClipboardGet, vec![], prime_clipboard);
+        run_owned_against_serial(
+            SelectionOp::PrimarySet,
+            vec![Value::symbol("prim")],
+            prime_nothing,
+        );
+        run_owned_against_serial(SelectionOp::PrimaryGet, vec![], prime_primary);
+        run_owned_against_serial(SelectionOp::PrimaryOwner, vec![], prime_primary);
         neovm_value::tagged::gc::clear_tagged_heap_root_if_installed(clear_heap);
     }
 }
