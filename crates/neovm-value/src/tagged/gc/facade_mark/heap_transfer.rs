@@ -563,6 +563,10 @@ pub(crate) mod production_era;
 pub(crate) mod source_preparation;
 
 #[doc(hidden)]
+pub use crate::tagged::gc::mutator_registration::custody_brand::{
+    PublishedOwner, StopScope, StoppedInterval, UnenteredReservation, with_stop_scope,
+};
+#[doc(hidden)]
 pub use production_era::{ScopedEraError, ScopedEraFailure};
 #[doc(hidden)]
 pub use source_preparation::ClosedSourcePrepareFailure;

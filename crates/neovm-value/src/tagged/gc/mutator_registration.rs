@@ -96,6 +96,7 @@ pub use run_slice::SliceRoot;
     not(feature = "gc-memory-telemetry")
 ))]
 pub(crate) mod c5_intern_testkit;
+pub(crate) mod custody_brand;
 mod rendezvous;
 mod summaries;
 #[cfg(not(feature = "test-support"))]
