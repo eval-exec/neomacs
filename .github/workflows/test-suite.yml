@@ -233,18 +233,17 @@ jobs:
   # The Darwin arm of the same suite.  A separate job, not a matrix arm,
   # because it shares nothing with Linux beyond the test sources: the runtime
   # and test binaries are compiled on the Mac, and the oracle is an NS GNU
-  # built by the recipe's Darwin profile (setup-gnu-emacs-macos).  It runs the neovm-core package and then the
-  # host-hermetic oracle-parity families -- the org/divergence/file/process
-  # selection of package neovm-oracle-tests whose expectations hold on both
-  # hosts after the macOS-keyed fixes -- in Verify mode, so those
-  # expectations are proven in CI and not only on a developer's Mac.  The
-  # unfiltered package still carries Linux-keyed lib expectation families
-  # (cus_start_platform, defvar_*, fontset, file acl, trigonometry, ...);
-  # making those host-hermetic is a separate expectation project, and this
-  # job states its boundary rather than skipping them silently.  The
-  # selection is unsharded because a macOS runner has three cores; the job
-  # keeps its 150-minute timeout and the measured wall time is recorded in
-  # the commit that added the second suite.  The GNU build itself is warmed
+  # built by the recipe's Darwin profile (setup-gnu-emacs-macos).  This job
+  # runs the neovm-core package; the host-hermetic oracle-parity families --
+  # the org/divergence/file/process selection of package neovm-oracle-tests
+  # whose expectations hold on both hosts after the macOS-keyed fixes -- run
+  # in Verify mode in neovm-oracle-families-macos (below), three hash shards
+  # in parallel, so those expectations are proven in CI and not only on a
+  # developer's Mac.  The unfiltered package still carries Linux-keyed lib
+  # expectation families (cus_start_platform, defvar_*, fontset, file acl,
+  # trigonometry, ...); making those host-hermetic is a separate expectation
+  # project, and the shard job states its boundary rather than skipping them
+  # silently.  The GNU build itself is warmed
   # by the separate `gnu-emacs-oracle-macos` job (below), so a cancelled test
   # job cannot lose it.
   neovm-core-tests-macos:
@@ -303,8 +302,63 @@ jobs:
             "${{ steps.oracle.outputs.version }}" \
             "${{ steps.oracle.outputs.commit }}"
 
+  # The host-hermetic oracle-parity families on macOS, split from
+  # neovm-core-tests-macos into three hash partitions.  The selection spawns
+  # the pinned GNU for every case, and on one 3-core runner it ran ~62 minutes
+  # after the ~40 minutes of the core job, which made macOS the long pole of
+  # the suite.  Each shard builds its own runtime (fresh-build, LTO off as in
+  # run-neovm-core-macos-job.sh) because the oracle tests need
+  # NEOVM_BINARY_PATH; nextest's hash partition is disjoint, exhaustive and
+  # deterministic, so every selected case still runs exactly once.
+  neovm-oracle-families-macos:
+    name: neovm-oracle families (macos aarch64) shard ${{ matrix.partition }}/3
+    if: ${{ !cancelled() && github.event_name != 'schedule' && (github.event_name != 'workflow_dispatch' || github.event.inputs.job == 'all') && (needs.gnu-emacs-oracle-macos.result == 'success') }}
+    needs: [gnu-emacs-oracle-macos]
+    runs-on: macos-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        partition: [1, 2, 3]
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: "1"
+      TMPDIR: ${{ github.workspace }}/tmp
+    steps:
+      - *checkout
+      - *prepare_workspace_tmp
+      - uses: ./.github/actions/install-build-deps
+
+      - name: Set up the pinned GNU Emacs oracle
+        id: oracle
+        uses: ./.github/actions/setup-gnu-emacs-macos
+
+      - name: Set up Rust tooling
+        uses: ./.github/actions/setup-rust
+        with:
+          cache-key: ci-neovm-oracle-families-macos
+          # Restore the same workspace-crate entry the core job saves; only
+          # the core job saves it, so the shards never race its contents.
+          cache-shared-key: macos-aarch64-release-ws
+          cache-workspace-crates: "true"
+          cache-save-if: "false"
+          install-nextest: true
+          target: aarch64-apple-darwin
+
+      - name: Build the runtime under test
+        env:
+          CARGO_PROFILE_RELEASE_LTO: "false"
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+        run: |
+          scripts/ci/check-gnu-oracle.sh \
+            "${{ steps.oracle.outputs.emacs }}" \
+            "${{ steps.oracle.outputs.version }}" \
+            "${{ steps.oracle.outputs.manifest }}" \
+            "${{ steps.oracle.outputs.commit }}"
+          cargo xtask fresh-build --release
+
       # The host-hermetic oracle-parity families, on the Darwin runner
-      # against the same attested GNU and the runtime `fresh-build` just
+      # against the same attested GNU and the runtime `fresh-build` above
       # produced.  Verify mode runs the local GNU for every case and compares
       # it with the checked-in expectation, then requires Neomacs to match
       # that same live GNU: the live-comparison cases that Snapshot mode can
@@ -339,7 +393,7 @@ jobs:
         run: >-
           cargo nextest run -p neovm-oracle-tests --test oracle --lib
           -E 'test(/org_mode/) | test(/orgexport_/) | test(~process_attributes) | test(/oracle_harness/) | test(/system_info/) | test(/user_env_load_locale_state/) | test(/misc_strict_edge_semantics/) | test(/case_428/) | test(/case_444/) | test(/file_name_runtime/) | test(/file_remote_tramp/) | test(/file_ops_deep/) | test(/float_operations_comprehensive/) | test(/member_alist_semantics/) | test(/jit_flonum_semantics/) | test(/conversion_format_semantics/) | test(/merge_ordered_lists_semantics/) | test(/oracle_command_line_max_length_is_derived_from_this_editors_stack_rlimit/) | test(/file::attributes_strict_edge_semantics/) | test(/load_history_semantics/) | test(/load_suffixes_semantics/) | test(/name_case_insensitive_strict_edge_semantics/) | test(/snarf_documentation_last_writer/) | test(/^trigonometry::/) | test(/^platform_host_semantics::/) | test(/^compare::case_table::/) | test(/^oracle_divergence::divergence::coding_process::/) | test(/^oracle_divergence_combo_complex::divergence_combo_complex::case_083::/) | test(/^oracle_combination::combination::signal_processing_advanced::/) | test(/^file::acl_strict_edge_semantics::/) | test(/^inotify_public_semantics::/) | test(/^oracle_divergence::divergence::process_async_extra_runtime::/) | test(/^oracle_divergence::divergence::unicode_normalization::/) | test(/^process::wait_semantics::/) | test(/^string::comparison_comprehensive::/) | test(/^oracle_combination::combination::/)'
-          --no-fail-fast
+          --partition hash:${{ matrix.partition }}/3 --no-fail-fast
 
   # The compile-fail contracts build only with the `contract-fixtures`
   # feature, so the default suites and the shard matrix never run them and
