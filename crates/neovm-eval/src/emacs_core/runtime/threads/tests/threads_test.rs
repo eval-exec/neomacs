@@ -1575,6 +1575,122 @@ fn test_builtin_condition_wait_noop() {
     assert!(unlock.is_ok());
 }
 
+/// A worker `condition-wait` inside `with-mutex` must park. Returning at
+/// once reads the flag before main sets it (GNU `Fcondition_wait` parks,
+/// src/thread.c:446-501). The `unwind-protect` cleanup stays parked and
+/// unlocks once, after the resume relocks.
+#[test]
+fn test_worker_condition_wait_inside_with_mutex_parks() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let value = eval
+        .eval_str(
+            r#"(eval
+                 '(progn
+                    (defvar e8s-park-flag nil)
+                    (setq e8s-park-flag nil)
+                    (let* ((m (make-mutex))
+                           (c (make-condition-variable m))
+                           (ready nil)
+                           (th (make-thread
+                                (lambda ()
+                                  ;; `with-mutex` is a Lisp macro. This is its
+                                  ;; expansion: the cleanup is an unwind-protect.
+                                  (let ((sym m))
+                                    (mutex-lock sym)
+                                    (unwind-protect
+                                        (progn
+                                          (setq ready t)
+                                          (condition-notify c t)
+                                          (condition-wait c)
+                                          e8s-park-flag)
+                                      (mutex-unlock sym))))
+                                "park-waiter")))
+                      (let ((sym m))
+                        (mutex-lock sym)
+                        (unwind-protect
+                            (while (eq ready nil) (condition-wait c))
+                          (mutex-unlock sym)))
+                      (setq e8s-park-flag t)
+                      (let ((sym m))
+                        (mutex-lock sym)
+                        (unwind-protect
+                            (condition-notify c t)
+                          (mutex-unlock sym)))
+                      (thread-join th)))
+                 t)"#,
+        )
+        .expect("worker parks inside with-mutex until notify");
+    assert!(
+        value.is_truthy(),
+        "waiter saw the flag main set while it was parked, got {value:?}"
+    );
+}
+
+/// A `while` that blocks in `condition-wait` must run the rest of that
+/// iteration and enter the `while` again. The `let` of `rounds` is a
+/// lexical frame GNU keeps live across the wait (eval.c:1151). One
+/// notify, then a broadcast once `go` is set, returns from the wait twice.
+#[test]
+fn test_worker_while_reenters_after_condition_wait() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let value = eval
+        .eval_str(
+            r#"(eval
+                 '(progn
+                    (let* ((m (make-mutex))
+                           (c (make-condition-variable m))
+                           (gate (make-condition-variable m))
+                           (ready nil)
+                           (go nil)
+                           (returns 0)
+                           (th (make-thread
+                                (lambda ()
+                                  (let ((sym m))
+                                    (mutex-lock sym)
+                                    (unwind-protect
+                                        (progn
+                                          (setq ready t)
+                                          (condition-notify gate t)
+                                          (let ((rounds 0))
+                                            (while (and (eq go nil) (< rounds 20))
+                                              (condition-wait c)
+                                              (setq returns (1+ returns))
+                                              (setq rounds (1+ rounds)))
+                                            (list 'ok rounds)))
+                                      (mutex-unlock sym))))
+                                "rewait")))
+                      (let ((sym m))
+                        (mutex-lock sym)
+                        (unwind-protect
+                            (while (eq ready nil) (condition-wait gate))
+                          (mutex-unlock sym)))
+                      (let ((sym m))
+                        (mutex-lock sym)
+                        (unwind-protect
+                            (condition-notify c)
+                          (mutex-unlock sym)))
+                      (let ((spins 0))
+                        (while (eq returns 0)
+                          (setq spins (1+ spins))
+                          (thread-yield)
+                          (if (> spins 100000) (setq returns -1))))
+                      (let ((after returns))
+                        (setq go t)
+                        (let ((sym m))
+                          (mutex-lock sym)
+                          (unwind-protect
+                              (condition-notify c t)
+                            (mutex-unlock sym)))
+                        (list after (thread-join th) returns))))
+                 t)"#,
+        )
+        .expect("while re-enters after condition-wait");
+    let printed = crate::emacs_core::print::print_value(&value);
+    assert_eq!(printed, "(1 (ok 2) 2)", "got {printed}");
+}
+
 #[test]
 fn test_builtin_condition_notify_noop() {
     crate::test_utils::init_test_tracing();

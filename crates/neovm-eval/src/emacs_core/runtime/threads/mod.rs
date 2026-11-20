@@ -56,6 +56,87 @@ pub(crate) fn thread_condition_case_continuation_parts(
     Some((items[1], items[2], items[3], items[4]))
 }
 
+fn blocks_form_chain(value: Value) -> bool {
+    thread_condition_case_continuation_parts(value).is_some()
+        || value
+            .closure_slot(neovm_value::tagged::header::CLOSURE_ARGLIST)
+            .is_some()
+}
+
+/// Forms still to run at this `progn`, then the forms after it.
+///
+/// A blocking call's own tail is not the rest of the enclosing body. A plain
+/// form list is that tail; append the enclosing rest. A condition-case marker
+/// or a resumed closure already names its own continuation.
+#[cold]
+#[inline(never)]
+pub(crate) fn chain_sim_blocked_forms(inner: Value, rest: Value) -> Value {
+    if inner.is_nil() {
+        return rest;
+    }
+    if rest.is_nil() || blocks_form_chain(inner) {
+        return inner;
+    }
+    append_lisp_forms(inner, rest)
+}
+
+/// Re-enter this `while` after the forms that remain in the blocked iteration.
+///
+/// The simulated waiter unwinds its Rust stack. GNU stays inside `Fwhile`.
+/// The saved forms finish this iteration, then evaluate the same `while`.
+pub(crate) fn while_sim_block_continuation(
+    call_name: neovm_value::intern::SymId,
+    tail: Value,
+    inner: Value,
+) -> Value {
+    if blocks_form_chain(inner) {
+        return inner;
+    }
+    let restart = Value::cons(Value::from_sym_id(call_name), tail);
+    let restart_forms = Value::cons(restart, Value::NIL);
+    if inner.is_nil() {
+        restart_forms
+    } else {
+        append_lisp_forms(inner, restart_forms)
+    }
+}
+
+#[cold]
+#[inline(never)]
+pub(crate) fn blocked_while_result(
+    call_name: neovm_value::intern::SymId,
+    tail: Value,
+    result: EvalResult,
+) -> EvalResult {
+    match result {
+        Err(flow) if flow.is_thread_blocked() => {
+            let Some(blocked) = flow.as_thread_blocked() else {
+                return Err(flow);
+            };
+            let forms = while_sim_block_continuation(call_name, tail, blocked.remaining_forms);
+            Err(Flow::thread_blocked(blocked.blocker, forms))
+        }
+        other => other,
+    }
+}
+
+fn append_lisp_forms(prefix: Value, suffix: Value) -> Value {
+    let mut cells = Vec::new();
+    let mut cursor = prefix;
+    while cursor.is_cons() {
+        cells.push(cursor.cons_car());
+        cursor = cursor.cons_cdr();
+    }
+    if !cursor.is_nil() {
+        return prefix;
+    }
+    let mut out = suffix;
+    for car in cells.into_iter().rev() {
+        out = Value::cons(car, out);
+    }
+    out
+}
+
 #[doc(hidden)]
 pub fn make_sleep_blocker(seconds: f64) -> Value {
     Value::list(vec![
@@ -1362,20 +1443,11 @@ pub fn builtin_condition_wait(
     if ctx.green_threads_running() {
         return ctx.green_condition_wait(id);
     }
-    if ctx.threads.current_thread_id() != 0 && !ctx.sim_thread_wait_is_resumable() {
-        // A suspended simulated worker resumes as a saved form list; it
-        // cannot carry dynamic let-bindings, unwind-protect cleanups,
-        // excursions or load state across the switch (the thread-switch
-        // path itself requires the specpdl to unwind first, and a
-        // `with-mutex` cleanup would then release COND's mutex a second
-        // time). GNU parks the whole Lisp stack here. For such nested
-        // contexts the simulation keeps its historical degeneration: the
-        // wait returns at once and the mutex stays held, so the P11 soak's
-        // inline-burn accounting is unchanged. A wait in the worker's
-        // top-level body carries only call frames and takes the real
-        // handoff path below.
-        return Ok(Value::NIL);
-    }
+    // A worker parks here inside `with-mutex` and dynamic `let`. GNU leaves
+    // that stack in place (`Fcondition_wait`, src/thread.c:446-501).
+    // `preserve_blocked_sim_worker` saves the specpdl, including the
+    // `unwind-protect` cleanup, and the resume relocks before the
+    // continuation, so the cleanup unlocks the mutex once.
     let Some(depth) = ctx.threads.mutex_unlock_for_wait(mutex_id) else {
         return Err(condition_mutex_not_held());
     };

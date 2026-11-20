@@ -1632,33 +1632,6 @@ impl Context {
         result
     }
 
-    /// Whether a simulated worker may suspend at this point and resume from
-    /// a saved form list.
-    ///
-    /// The simulated backend resumes a blocked worker by evaluating the rest
-    /// of its body. That cannot carry dynamic `let` bindings, cleanup
-    /// handlers, excursions, restrictions or load state across the switch:
-    /// the thread-switch path itself requires the active specpdl to unwind
-    /// first, and a `with-mutex` cleanup would then free the mutex the wait
-    /// already released. Call frames, temporary roots, the lexical
-    /// environment (the resumed continuation is rewrapped as a closure over
-    /// it) and no-op entries do not affect the continuation.
-    #[doc(hidden)]
-    pub fn sim_thread_wait_is_resumable(&self) -> bool {
-        self.specpdl.iter().all(|binding| {
-            matches!(
-                binding,
-                SpecBinding::LexicalEnv { .. }
-                    | SpecBinding::GcRoot { .. }
-                    | SpecBinding::Backtrace { .. }
-                    | SpecBinding::Backtrace1 { .. }
-                    | SpecBinding::Backtrace2 { .. }
-                    | SpecBinding::BacktraceNative { .. }
-                    | SpecBinding::Nop
-            )
-        })
-    }
-
     #[doc(hidden)]
     pub fn suspend_dynamic_bindings_for_thread_switch(
         &mut self,

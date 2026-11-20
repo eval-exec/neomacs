@@ -12,16 +12,17 @@
 //! shared runtime now fixes: `thread-name` identity (`make-thread` stores the
 //! NAME object, so `(eq name (thread-name th))` is t in both modes) and
 //! `thread-signal` to the main thread arriving as GNU's `THREAD_EVENT`,
-//! dispatched through `special-event-map` to `thread-handle-event`.  The
-//! rest of the 19-case matrix (mutex handoff, condition-wait, the
-//! blocking-I/O Baton, buffer dispositions) lives on the sibling red branch
-//! `v10x/gapsurvey-threads-oracle', where the remaining divergences are
-//! recorded as failing snapshots; nothing here is ignored, cfg-hidden or
-//! weakened.
+//! dispatched through `special-event-map` to `thread-handle-event`.
+//!
+//! Below that landing range, this commit adds the rows that match GNU in both
+//! dispatch modes: signal to a worker, `thread-yield`, mutex handoff,
+//! condition notify, and the dynamic and buffer-local binding rows.
 //!
 //! GNU picks which thread runs after a `thread-yield' by OS scheduling, so
-//! every form reaches its answer through joins, never through one
-//! particular interleaving.
+//! every form reaches its answer through joins, mutexes, conditions, or a
+//! flag, never through one particular interleaving.  A simulated worker only
+//! makes progress inside `make-thread` or at a release point that resumes it.
+//! The waits in these rows are bounded.
 //!
 //! Refresh empty expectations from GNU 31.1 with
 //! `NEOVM_ORACLE_MODE=refresh UPDATE_EXPECT=1'; never hand-write answers.
@@ -144,11 +145,264 @@ fn e8s_thread_signal_to_main_is_a_thread_event() {
     );
 }
 
-/// GNU thread.c:466 clears the blocker before mutex reacquisition; :475
-/// delivers the signal afterwards. The handler is INSIDE with-mutex, before
-/// its unwind unlock. Two successful unlocks pin the saved recursive depth.
-/// The ready-condition handshake forces a real wait without polling, sleeps,
-/// retries or assuming that one GNU thread-yield schedules a particular owner.
+#[test]
+fn e8s_thread_signal_to_worker_pending_at_join_entry() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    assert_default_threads_oracle(
+        r##"
+(let* ((m (make-mutex)) (ready nil)
+       (th (make-thread (lambda ()
+                          (setq ready t)
+                          (mutex-lock m)
+                          (mutex-unlock m))
+                        "e8s-target")))
+  (mutex-lock m)
+  (while (not ready) (thread-yield))
+  ;; No yield between setting the pending signal and join's entry snapshot.
+  (list (thread-signal th 'error '("external"))
+        (condition-case e (thread-join th) (error (list 'join-raised (car (cdr e)))))
+        (mutex-unlock m)
+        (condition-case e (thread-join th) (error (list 'join2-raised (car (cdr e)))))
+        (thread-last-error t)))
+"##,
+        expect_test::expect![[
+            r#""OK (nil (join-raised \"external\") nil nil (error \"external\"))""#
+        ]],
+    );
+}
+
+#[test]
+fn e8s_thread_yield_in_main_and_worker() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    assert_default_threads_oracle(
+        r##"
+(list (thread-yield)
+      (thread-join (make-thread (lambda () (thread-yield) 'after-yield)
+                                "e8s-yielder")))
+"##,
+        expect_test::expect![[r#""OK (nil after-yield)""#]],
+    );
+}
+
+#[test]
+fn e8s_mutex_recursion_and_contention_handoff() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    assert_default_threads_oracle(
+        r##"
+(let ((m (make-mutex "e8s-m")))
+  (mutex-lock m)
+  (let ((th (make-thread (lambda ()
+                           (mutex-lock m)
+                           (mutex-unlock m)
+                           'worker-got)
+                         "e8s-contender")))
+    ;; Recursive acquisition while the contender waits; it can only take the
+    ;; mutex after BOTH levels are released.
+    (mutex-lock m)
+    (list (mutex-unlock m)
+          (mutex-unlock m)
+          (thread-join th)
+          (condition-case e (mutex-unlock m)
+            (error (list 'unowned (car (cdr e))))))))
+"##,
+        expect_test::expect![[
+            r#""OK (nil nil worker-got (unowned \"Cannot unlock mutex owned by another thread\"))""#
+        ]],
+    );
+}
+
+#[test]
+fn e8s_condition_notify_all_wakes_every_waiter() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    assert_default_threads_oracle(
+        r##"
+(let* ((m (make-mutex)) (c (make-condition-variable m)) (ready 0) (go nil)
+       (worker (lambda ()
+                 (with-mutex m
+                   (setq ready (1+ ready))
+                   (condition-notify c t)
+                   (let ((rounds 0))
+                     (while (and (not go) (< rounds 200000))
+                       (setq rounds (1+ rounds))
+                       (condition-wait c))
+                     (list 'woke (> rounds 199000))))))
+       (a (make-thread worker "e8s-broadcast-a"))
+       (b (make-thread worker "e8s-broadcast-b")))
+  (with-mutex m
+    (while (< ready 2) (condition-wait c))
+    (setq go t)
+    (condition-notify c t))
+  (list (thread-join a) (thread-join b)))
+"##,
+        expect_test::expect![[r#""OK ((woke nil) (woke nil))""#]],
+    );
+}
+
+#[test]
+fn e8s_condition_notify_one_wakes_exactly_one_waiter() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    assert_default_threads_oracle(
+        r##"
+(let* ((m (make-mutex))
+       (c (make-condition-variable m))
+       (gate (make-condition-variable m))
+       (ready 0)
+       (go nil)
+       (returns 0)
+       (worker (lambda ()
+                 (with-mutex m
+                   (setq ready (1+ ready))
+                   (condition-notify gate t)
+                   (let ((rounds 0))
+                     (while (and (not go) (< rounds 200000))
+                       (condition-wait c)
+                       ;; Count every return, including a wake that loops
+                       ;; because `go` is still nil. Readiness uses `gate`,
+                       ;; so this count is wakes of `c` only.
+                       (setq returns (1+ returns))
+                       (setq rounds (1+ rounds)))))))
+       (a (make-thread worker "e8s-one"))
+       (b (make-thread worker "e8s-two"))
+       (polls 0))
+  (with-mutex m
+    (while (< ready 2) (condition-wait gate)))
+  (with-mutex m (condition-notify c))
+  ;; `returns` counts condition-wait returns on `c`. One notify wakes one
+  ;; waiter. The poll is bounded so a mode that cannot park still ends.
+  (while (and (< returns 1) (< polls 100000))
+    (setq polls (1+ polls))
+    (thread-yield))
+  (let ((after-one returns))
+    (with-mutex m (setq go t) (condition-notify c t))
+    (list after-one (thread-join a) (thread-join b) returns)))
+"##,
+        expect_test::expect![[r#""OK (1 nil nil 3)""#]],
+    );
+}
+
+#[test]
+fn e8s_binding_child_does_not_see_parent_let() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    assert_default_threads_oracle(
+        r##"
+(progn
+  (defvar e8s-special 'global)
+  (defun e8s-read-special () e8s-special)
+  (let ((e8s-special 'parent-let))
+    (list e8s-special
+          (thread-join
+           (make-thread
+            (lambda ()
+              (list e8s-special (e8s-read-special)
+                    (default-value 'e8s-special)))
+            "e8s-bind-child"))
+          e8s-special)))
+"##,
+        expect_test::expect![[r#""OK (parent-let (global global global) parent-let)""#]],
+    );
+}
+
+/// The worker's `let` is live across `set-default` from main. The wait is
+/// bounded so a mode that cannot park still returns; GNU hits the notify.
+#[test]
+fn e8s_binding_worker_let_and_set_default() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    assert_default_threads_oracle(
+        r##"
+(progn
+  (defvar e8s-special 'global)
+  (defun e8s-read-special () e8s-special)
+  (let* ((m (make-mutex))
+         (c (make-condition-variable m))
+         (ready nil)
+         (go nil)
+         (seen nil)
+         (th (make-thread
+              (lambda ()
+                (let ((e8s-special 'worker-let))
+                  (with-mutex m
+                    (setq ready t)
+                    (condition-notify c t)
+                    (let ((rounds 0))
+                      (while (and (not go) (< rounds 200000))
+                        (setq rounds (1+ rounds))
+                        (condition-wait c))))
+                  (setq seen (list e8s-special (e8s-read-special)
+                                   (default-value 'e8s-special)
+                                   go))))
+              "e8s-bind-worker")))
+    (with-mutex m
+      (let ((rounds 0))
+        (while (and (not ready) (< rounds 200000))
+          (setq rounds (1+ rounds))
+          (condition-wait c))))
+    (let ((other (list e8s-special (default-value 'e8s-special) ready)))
+      (set-default 'e8s-special 'new-global)
+      (with-mutex m (setq go t) (condition-notify c t))
+      (thread-join th)
+      (list other seen (list e8s-special (default-value 'e8s-special))))))
+"##,
+        expect_test::expect![[
+            r#""OK ((global global t) (worker-let worker-let worker-let t) (new-global new-global))""#
+        ]],
+    );
+}
+
+/// Buffer-local value, the default, and the worker's own `let` stay distinct.
+/// `make-thread` copies `m_current_buffer`, so the child starts in this buffer.
+#[test]
+fn e8s_binding_buffer_local_across_threads() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    assert_default_threads_oracle(
+        r##"
+(progn
+  (defvar e8s-local 'default)
+  (let ((b (generate-new-buffer " *e8s-local*")))
+    (unwind-protect
+        (with-current-buffer b
+          (set (make-local-variable 'e8s-local) 'buffer-base)
+          (let* ((m (make-mutex))
+                 (c (make-condition-variable m))
+                 (ready nil)
+                 (go nil)
+                 (seen nil)
+                 (th (make-thread
+                      (lambda ()
+                        (let ((e8s-local 'buffer-let))
+                          (with-mutex m
+                            (setq ready t)
+                            (condition-notify c t)
+                            (let ((rounds 0))
+                              (while (and (not go) (< rounds 200000))
+                                (setq rounds (1+ rounds))
+                                (condition-wait c))))
+                          (setq seen (list (eq (current-buffer) b)
+                                           e8s-local
+                                           (default-value 'e8s-local)
+                                           go))))
+                      "e8s-bind-buffer")))
+            (with-mutex m
+              (let ((rounds 0))
+                (while (and (not ready) (< rounds 200000))
+                  (setq rounds (1+ rounds))
+                  (condition-wait c))))
+            (let ((other (list e8s-local (default-value 'e8s-local) ready)))
+              (setq e8s-local 'buffer-updated)
+              (set-default 'e8s-local 'default-updated)
+              (with-mutex m (setq go t) (condition-notify c t))
+              (thread-join th)
+              (list other seen
+                    (list e8s-local (default-value 'e8s-local))))))
+      (kill-buffer b))))
+"##,
+        expect_test::expect![[
+            r#""OK ((buffer-base default t) (t buffer-let default-updated t) (buffer-updated default-updated))""#
+        ]],
+    );
+}
+
+/// Search regs live on the thread state. The child starts clear; the parent's
+/// match data is unchanged after the child matches.
 #[test]
 fn p15_condition_wait_signal_reacquires_before_inner_handler() {
     return_if_neovm_enable_oracle_proptest_not_set!();

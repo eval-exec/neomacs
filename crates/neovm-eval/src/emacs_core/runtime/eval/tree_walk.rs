@@ -65,11 +65,10 @@ impl Context {
                 match self.eval_sub(form).kinded() {
                     Ok(value) => last = value,
                     Err(FlowKind::ThreadBlocked(blocked)) => {
-                        let remaining_forms = if blocked.remaining_forms.is_nil() {
-                            rest
-                        } else {
-                            blocked.remaining_forms
-                        };
+                        let remaining_forms = crate::emacs_core::threads::chain_sim_blocked_forms(
+                            blocked.remaining_forms,
+                            rest,
+                        );
                         return Err(Flow::thread_blocked(blocked.blocker, remaining_forms));
                     }
                     Err(flow) => return Err(Flow::from_kind(flow)),

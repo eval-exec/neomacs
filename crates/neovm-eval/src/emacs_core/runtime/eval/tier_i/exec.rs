@@ -234,11 +234,10 @@ impl Context {
                 match self.ti_nth(act, form, seq, index).kinded() {
                     Ok(value) => last = value,
                     Err(FlowKind::ThreadBlocked(blocked)) => {
-                        let remaining_forms = if blocked.remaining_forms.is_nil() {
-                            rest
-                        } else {
-                            blocked.remaining_forms
-                        };
+                        let remaining_forms = crate::emacs_core::threads::chain_sim_blocked_forms(
+                            blocked.remaining_forms,
+                            rest,
+                        );
                         return Err(Flow::thread_blocked(blocked.blocker, remaining_forms));
                     }
                     Err(flow) => return Err(Flow::from_kind(flow)),
@@ -985,11 +984,10 @@ impl Context {
             match self.ti_nth(act, form, seq, index).kinded() {
                 Ok(value) => last = value,
                 Err(FlowKind::ThreadBlocked(blocked)) => {
-                    let remaining_forms = if blocked.remaining_forms.is_nil() {
-                        rest
-                    } else {
-                        blocked.remaining_forms
-                    };
+                    let remaining_forms = crate::emacs_core::threads::chain_sim_blocked_forms(
+                        blocked.remaining_forms,
+                        rest,
+                    );
                     return Err(Flow::thread_blocked(blocked.blocker, remaining_forms));
                 }
                 Err(flow) => return Err(Flow::from_kind(flow)),
@@ -1147,10 +1145,24 @@ impl Context {
         let body = tail.cons_cdr();
         let mut iters: u64 = 0;
         loop {
-            if self.ti_child(act, test_form, test)?.is_nil() {
-                return Ok(Value::NIL);
+            match self.ti_child(act, test_form, test) {
+                Ok(value) if value.is_nil() => return Ok(Value::NIL),
+                Ok(_) => {}
+                Err(flow) => {
+                    return crate::emacs_core::threads::blocked_while_result(
+                        call_name,
+                        tail,
+                        Err(flow),
+                    );
+                }
             }
-            self.ti_progn(act, body, body_seq)?;
+            if let Err(flow) = self.ti_progn(act, body, body_seq) {
+                return crate::emacs_core::threads::blocked_while_result(
+                    call_name,
+                    tail,
+                    Err(flow),
+                );
+            }
             iters += 1;
             if iters == 1_000_000 {
                 let cond_str = super::super::super::print::print_value(&test_form);
