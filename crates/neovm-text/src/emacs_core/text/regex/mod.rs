@@ -3708,6 +3708,207 @@ pub(crate) fn search_forward_into(
     )
 }
 
+/// How many Emacs characters `bytes` holds. A unibyte buffer counts bytes.
+fn emacs_char_count(bytes: &[u8], multibyte: bool) -> usize {
+    if !multibyte {
+        return bytes.len();
+    }
+    let mut count = 0;
+    let mut at = 0;
+    while at < bytes.len() {
+        at += emacs_char_step(bytes, at, true);
+        count += 1;
+    }
+    count
+}
+
+fn emacs_char_step(bytes: &[u8], at: usize, multibyte: bool) -> usize {
+    if !multibyte || at >= bytes.len() {
+        return 1;
+    }
+    let (_code, len) = neovm_value::emacs_char::string_char(&bytes[at..]);
+    len.max(1)
+}
+
+/// Index of the suffix that holds the last `nchars` characters.
+///
+/// The gap sits on a character boundary, so walking back over continuation
+/// bytes (`10xxxxxx`) lands on character heads. `search.c`'s `boyer_moore`
+/// stops each fast scan at `BUFFER_CEILING_OF` (search.c:1940-1957) and the
+/// match that crosses the gap is counted in characters, not raw bytes.
+fn rewind_emacs_chars(bytes: &[u8], nchars: usize, multibyte: bool) -> usize {
+    if nchars == 0 {
+        return bytes.len();
+    }
+    if !multibyte {
+        return bytes.len().saturating_sub(nchars);
+    }
+    let mut at = bytes.len();
+    for _ in 0..nchars {
+        if at == 0 {
+            return 0;
+        }
+        at -= 1;
+        while at > 0 && bytes[at] & 0xC0 == 0x80 {
+            at -= 1;
+        }
+    }
+    at
+}
+
+fn take_emacs_chars(bytes: &[u8], nchars: usize, multibyte: bool) -> usize {
+    if !multibyte {
+        return nchars.min(bytes.len());
+    }
+    let mut at = 0;
+    for _ in 0..nchars {
+        if at >= bytes.len() {
+            break;
+        }
+        at += emacs_char_step(bytes, at, true);
+    }
+    at
+}
+
+/// A match that starts in `left` and ends in `right`. The window is
+/// `nchars - 1` characters on each side of the gap: GNU compares one
+/// translated character at a time (`simple_search`, search.c:1556), so a
+/// match of N characters can take at most N-1 from one side.
+fn straddling_match(
+    left: &[u8],
+    right: &[u8],
+    literal: &[u8],
+    multibyte: bool,
+    forward: bool,
+    find: &impl Fn(&[u8]) -> Option<MatchGroup>,
+) -> Option<MatchGroup> {
+    if literal.is_empty() || left.is_empty() || right.is_empty() {
+        return None;
+    }
+    let nchars = emacs_char_count(literal, multibyte);
+    if nchars < 2 {
+        return None;
+    }
+    let keep = nchars - 1;
+    let suffix_at = rewind_emacs_chars(left, keep, multibyte);
+    let prefix_len = take_emacs_chars(right, keep, multibyte);
+    let mut window = Vec::with_capacity(left.len() - suffix_at + prefix_len);
+    window.extend_from_slice(&left[suffix_at..]);
+    window.extend_from_slice(&right[..prefix_len]);
+    let boundary = left.len() - suffix_at;
+    let mut off = 0;
+    let mut best = None;
+    while off < boundary {
+        if let Some(matched) = find(&window[off..]) {
+            if matched.start() == 0 && matched.end() > boundary - off {
+                let hit = matched.shift(suffix_at + off);
+                if forward {
+                    return Some(hit);
+                }
+                best = Some(hit);
+            }
+        }
+        let step = emacs_char_step(&window, off, multibyte);
+        off += step;
+        if step == 0 {
+            break;
+        }
+    }
+    best
+}
+
+fn match_across_segments(
+    left: &[u8],
+    right: &[u8],
+    literal: &[u8],
+    multibyte: bool,
+    forward: bool,
+    find: &impl Fn(&[u8]) -> Option<MatchGroup>,
+) -> Option<MatchGroup> {
+    if forward {
+        if let Some(matched) = find(left) {
+            return Some(matched);
+        }
+        if let Some(matched) = straddling_match(left, right, literal, multibyte, true, find) {
+            return Some(matched);
+        }
+        return find(right).map(|matched| matched.shift(left.len()));
+    }
+    if let Some(matched) = find(right) {
+        return Some(matched.shift(left.len()));
+    }
+    if let Some(matched) = straddling_match(left, right, literal, multibyte, false, find) {
+        return Some(matched);
+    }
+    find(left)
+}
+
+/// The two gap halves of `range`, when the gap is the only split.
+///
+/// `search_buffer_non_re` (search.c:1298) reads both halves through
+/// `BYTE_POS_ADDR` and never calls `move_gap`. A rope or piece-tree range
+/// with more than two chunks returns `None` so the caller copies, which is
+/// the path those backends already had.
+fn with_gap_halves<R>(
+    buf: &Buffer,
+    range: EmacsByteRange,
+    f: impl FnOnce(&[u8], &[u8]) -> R,
+) -> Option<R> {
+    let start = range.start().get();
+    let end = range.end().get();
+    if start >= end {
+        return None;
+    }
+    let (window_start, window_ptr, window_len) = buf.contiguous_window_at(start)?;
+    if start < window_start || start - window_start >= window_len {
+        return None;
+    }
+    let left_end = window_start + window_len;
+    if left_end >= end {
+        return None;
+    }
+    let (right_start, right_ptr, right_len) = buf.contiguous_window_at(left_end)?;
+    if right_start != left_end || right_start + right_len < end {
+        return None;
+    }
+    let left_len = left_end - start;
+    let right_bytes = end - left_end;
+    // SAFETY: `contiguous_window_at` points at the gap half that contains
+    // the logical position, and that pointer stays valid until the next
+    // text mutation. The two halves do not overlap. This read does not
+    // mutate the buffer.
+    let left =
+        unsafe { std::slice::from_raw_parts(window_ptr.add(start - window_start), left_len) };
+    let right = unsafe { std::slice::from_raw_parts(right_ptr, right_bytes) };
+    Some(f(left, right))
+}
+
+/// Literal search over a buffer span. A contiguous span is borrowed. A span
+/// the gap splits is searched in both halves, plus a character-counted
+/// window across the gap. The gap stays where the last edit left it.
+fn search_literal_span(
+    buf: &Buffer,
+    range: EmacsByteRange,
+    literal: &[u8],
+    multibyte: bool,
+    forward: bool,
+    find: impl Fn(&[u8]) -> Option<MatchGroup>,
+) -> Option<MatchGroup> {
+    if buf.has_contiguous_emacs_byte_range(range) {
+        return buf
+            .with_contiguous_emacs_byte_range(range, |text| find(text))
+            .expect("contiguous buffer range should borrow");
+    }
+    if let Some(found) = with_gap_halves(buf, range, |left, right| {
+        match_across_segments(left, right, literal, multibyte, forward, &find)
+    }) {
+        return found;
+    }
+    let mut text = Vec::new();
+    buf.copy_emacs_byte_range_to(range, &mut text);
+    find(&text)
+}
+
 #[doc(hidden)]
 pub fn search_forward_into_with_symbols(
     buf: &mut Buffer,
@@ -3741,15 +3942,17 @@ pub fn search_forward_into_with_symbols(
     // during search; route through the buffer's case-canon table then, else
     // keep the fast hardwired ASCII/Unicode folding.
     let translation = buffer_search_translation_with_symbols(buf, case_fold, mode);
-    let found =
-        with_buffer_emacs_bytes(
-            buf,
-            EmacsByteRange::new(start, limit),
-            |text| match &translation {
-                Some(trt) => canon_fold_literal_find(text, &literal, multibyte, trt),
-                None => literal_find_emacs_bytes(text, &literal, multibyte, case_fold),
-            },
-        );
+    let found = search_literal_span(
+        buf,
+        EmacsByteRange::new(start, limit),
+        &literal,
+        multibyte,
+        true,
+        |text| match &translation {
+            Some(trt) => canon_fold_literal_find(text, &literal, multibyte, trt),
+            None => literal_find_emacs_bytes(text, &literal, multibyte, case_fold),
+        },
+    );
 
     if let Some(found) = found {
         let matched = found.shift(start.get());
@@ -3839,15 +4042,17 @@ pub fn search_backward_into_with_symbols(
     let multibyte = buf.get_multibyte();
     let literal = coerce_pattern_to_buffer_bytes(pattern, multibyte);
     let translation = buffer_search_translation_with_symbols(buf, case_fold, mode);
-    let found =
-        with_buffer_emacs_bytes(
-            buf,
-            EmacsByteRange::new(limit, end),
-            |text| match &translation {
-                Some(trt) => canon_fold_literal_rfind(text, &literal, multibyte, trt),
-                None => literal_rfind_emacs_bytes(text, &literal, multibyte, case_fold),
-            },
-        );
+    let found = search_literal_span(
+        buf,
+        EmacsByteRange::new(limit, end),
+        &literal,
+        multibyte,
+        false,
+        |text| match &translation {
+            Some(trt) => canon_fold_literal_rfind(text, &literal, multibyte, trt),
+            None => literal_rfind_emacs_bytes(text, &literal, multibyte, case_fold),
+        },
+    );
 
     if let Some(found) = found {
         let matched = found.shift(limit.get());
