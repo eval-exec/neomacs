@@ -2,8 +2,12 @@
 
 use super::super::owner_bindings::{BindingKind, Channel, SlotValue, UndoTarget};
 use super::frames::*;
+use crate::emacs_core::eval::Context;
+use crate::test_utils::unit_runtime;
 use neovm_value::forward::TlsIndex;
 use neovm_value::intern::NIL_SYM_ID;
+use neovm_value::tagged::gc::RendezvousError;
+use neovm_value::tagged::transport::SharedRoot;
 use neovm_value::value::Value;
 use std::num::NonZeroU32;
 
@@ -348,4 +352,124 @@ fn root_group_names_are_the_canonical_e3_roster() {
             "misc",
         ]
     );
+}
+
+fn loaded_arena() -> FrameArena {
+    let mut arena = FrameArena::new(4);
+    let frame = arena
+        .push_interp(interp_frame(11, 12, 13, 14))
+        .expect("interp frame");
+    arena.push_operand(Value::fixnum(15));
+    arena.push_operand(Value::fixnum(16));
+    arena
+        .push_vm(vm_frame(17, 18, OperandCursor::new(0, 2)))
+        .expect("vm frame");
+    arena.handlers_mut().push(handler_record(frame, 19, 20));
+    arena.bindings_mut().push(slot_record(21));
+    arena
+        .roots_mut()
+        .push(RootGroup::Misc, Value::fixnum(22))
+        .expect("registry root");
+    arena
+}
+
+/// Publish, then hand the batch to the caller. A reserve failure returns
+/// before the acknowledgement closure runs.
+fn publish_then_acknowledge(
+    arena: &FrameArena,
+    context: &Context,
+    out: &mut Vec<SharedRoot>,
+    acknowledge: impl FnOnce(&[SharedRoot]),
+) -> Result<(), RendezvousError> {
+    arena.publish_scan(context.tagged_heap(), out)?;
+    acknowledge(out);
+    Ok(())
+}
+
+fn shared_fixnum(context: &Context, value: i64) -> SharedRoot {
+    // SAFETY: `value` is an immediate. The context thread is the mutator of
+    // this heap, and an immediate needs no heap object to stay reachable.
+    unsafe { SharedRoot::new(context.tagged_heap(), Value::fixnum(value)) }
+}
+
+#[test]
+fn publish_scan_of_an_empty_arena_appends_nothing() {
+    let context = Context::new(unit_runtime());
+    let arena = FrameArena::new(1);
+    let mut out = Vec::new();
+    arena
+        .publish_scan(context.tagged_heap(), &mut out)
+        .expect("empty scan");
+    assert!(out.is_empty());
+}
+
+#[test]
+fn publish_scan_copies_every_owner_source_once() {
+    let context = Context::new(unit_runtime());
+    let arena = loaded_arena();
+    let mut out = vec![shared_fixnum(&context, 1)];
+    let prefix = out[0].parallel_word();
+    let mut acknowledged = false;
+    publish_then_acknowledge(&arena, &context, &mut out, |roots| {
+        acknowledged = true;
+        assert_eq!(roots.len(), 13);
+    })
+    .expect("scan");
+    assert!(acknowledged);
+    assert_eq!(out[0].parallel_word(), prefix);
+    assert_eq!(out.len(), 13);
+    let published: Vec<usize> = out[1..].iter().map(SharedRoot::parallel_word).collect();
+    for expected in [11, 12, 13, 14, 17, 18, 15, 16, 19, 20, 21, 22] {
+        let word = Value::fixnum(expected).bits();
+        assert!(
+            published.contains(&word),
+            "missing fixnum {expected} in {published:?}"
+        );
+    }
+    assert_eq!(published.len(), 12);
+}
+
+#[test]
+fn publish_scan_publishes_the_operand_stack_once() {
+    let context = Context::new(unit_runtime());
+    let mut arena = FrameArena::new(4);
+    arena.push_operand(Value::fixnum(15));
+    arena
+        .push_vm(vm_frame(1, 2, OperandCursor::new(0, 1)))
+        .expect("first vm frame");
+    arena
+        .push_vm(vm_frame(3, 4, OperandCursor::new(0, 1)))
+        .expect("second vm frame");
+    let mut out = Vec::new();
+    let mut acknowledged = false;
+    publish_then_acknowledge(&arena, &context, &mut out, |_| acknowledged = true).expect("scan");
+    assert!(acknowledged);
+    let operand = Value::fixnum(15).bits();
+    assert_eq!(
+        out.iter()
+            .filter(|root| root.parallel_word() == operand)
+            .count(),
+        1,
+        "a shared operand cursor must not publish the stack twice"
+    );
+    assert_eq!(out.len(), 5);
+}
+
+#[test]
+fn publish_scan_reserve_failure_does_not_acknowledge() {
+    let context = Context::new(unit_runtime());
+    let mut arena = FrameArena::new(2);
+    arena.push_interp(interp_frame(1, 2, 3, 4)).expect("frame");
+    arena.fail_next_scan_reserve_for_test();
+    let mut out = vec![shared_fixnum(&context, 9)];
+    let prefix = out[0].parallel_word();
+    let mut acknowledged = false;
+    let error = publish_then_acknowledge(&arena, &context, &mut out, |_| acknowledged = true)
+        .expect_err("reserve failure");
+    assert_eq!(error, RendezvousError::Capacity);
+    assert!(!acknowledged, "acknowledgement must not run");
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].parallel_word(), prefix);
+    publish_then_acknowledge(&arena, &context, &mut out, |_| {}).expect("flag cleared");
+    assert_eq!(out.len(), 5);
 }

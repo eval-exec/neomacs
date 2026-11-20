@@ -15,7 +15,11 @@
 use super::super::owner_bindings::{BindingKind, Channel, UndoTarget};
 use neovm_value::forward::TlsIndex;
 use neovm_value::intern::SymId;
+use neovm_value::tagged::gc::{RendezvousError, TaggedHeap};
+use neovm_value::tagged::transport::SharedRoot;
 use neovm_value::value::Value;
+#[cfg(test)]
+use std::cell::Cell;
 use std::num::{NonZeroU32, NonZeroU64};
 
 /// The canonical E3 private-root groups (`gc_pacing::trace_root_groups`) the
@@ -58,7 +62,28 @@ impl RootGroup {
             Self::Misc => "misc",
         }
     }
+
+    /// Index into a scan counted in [`Self::ALL`] order.
+    const fn ordinal(self) -> usize {
+        match self {
+            Self::VmFrames => 0,
+            Self::EvalTemp => 1,
+            Self::Bc => 2,
+            Self::JitWindow => 3,
+            Self::Handlers => 4,
+            Self::Specpdl => 5,
+            Self::Misc => 6,
+        }
+    }
 }
+
+const _: () = {
+    let mut index = 0;
+    while index < RootGroup::ALL.len() {
+        assert!(RootGroup::ALL[index].ordinal() == index);
+        index += 1;
+    }
+};
 
 /// Why a root could not be published or revoked.
 ///
@@ -906,6 +931,9 @@ pub(crate) struct FrameArena {
     roots: RootRegistry,
     depth: CallDepth,
     next_generation: NonZeroU64,
+    /// The next [`OwnerScanJoin::publish_scan`] fails before it reserves.
+    #[cfg(test)]
+    fail_scan_reserve: Cell<bool>,
 }
 
 static_assertions::assert_not_impl_any!(FrameArena: Send, Sync);
@@ -921,6 +949,8 @@ impl FrameArena {
             roots: RootRegistry::new(),
             depth: CallDepth::new(depth_limit),
             next_generation: NonZeroU64::MIN,
+            #[cfg(test)]
+            fail_scan_reserve: Cell::new(false),
         }
     }
 
@@ -1042,6 +1072,193 @@ impl FrameArena {
     #[cfg(test)]
     pub(crate) fn exhaust_frame_generations_for_test(&mut self) {
         self.next_generation = NonZeroU64::MAX;
+    }
+
+    /// The next scan returns [`RendezvousError::Capacity`] and reserves nothing.
+    #[cfg(test)]
+    pub(crate) fn fail_next_scan_reserve_for_test(&self) {
+        self.fail_scan_reserve.set(true);
+    }
+
+    /// Visit every owned root once.
+    ///
+    /// Interpreter fields publish as [`RootGroup::EvalTemp`] because that is
+    /// [`InterpFrame::ROOT_GROUPS`]. VM frame fields and the operand stack
+    /// publish as [`RootGroup::VmFrames`]. The operand vector is one source:
+    /// a frame cursor is a view of it, so the cursor is not walked again.
+    /// Handler tags, binding undo values, and the registry keep their own
+    /// groups. The destructure names every arena field, and [`ArenaScan`]
+    /// names every [`RootGroup`], so a new source or group fails to compile
+    /// until this scan publishes it.
+    fn for_each_owner_root(&self, visit: &mut dyn FnMut(RootGroup, Value)) {
+        let Self {
+            frames,
+            operands,
+            handlers,
+            bindings,
+            roots,
+            depth: _,
+            next_generation: _,
+            #[cfg(test)]
+                fail_scan_reserve: _,
+        } = self;
+        for slot in frames {
+            match slot.frame {
+                OwnedFrame::Interp(frame) => frame.trace_frame_roots(visit),
+                OwnedFrame::Vm(frame) => frame.trace_frame_roots(visit),
+            }
+        }
+        for value in operands {
+            visit(RootGroup::VmFrames, *value);
+        }
+        handlers.trace_roots(visit);
+        bindings.trace_roots(visit);
+        // Registry contribution: every group, including an empty one.
+        // `trace_root_groups` is not the owner publication.
+        roots.trace_root_groups(&mut |group, values| {
+            for value in values {
+                visit(group, *value);
+            }
+        });
+    }
+}
+
+/// The owner's scan, copied into the `&[SharedRoot]` batch a stop
+/// acknowledgement already takes.
+///
+/// The trait does not acknowledge and carries no epoch. On `Err`, `out` is
+/// unchanged and this call leaves no shared root behind.
+pub(crate) trait OwnerScanJoin {
+    fn publish_scan(
+        &self,
+        heap: &TaggedHeap,
+        out: &mut Vec<SharedRoot>,
+    ) -> Result<(), RendezvousError>;
+}
+
+/// One vector per canonical group. Destructuring this without `..` is the
+/// scan's exactly-once site for [`RootGroup`].
+struct ArenaScan {
+    vm_frames: Vec<Value>,
+    eval_temp: Vec<Value>,
+    bc: Vec<Value>,
+    jit_window: Vec<Value>,
+    handlers: Vec<Value>,
+    specpdl: Vec<Value>,
+    misc: Vec<Value>,
+}
+
+impl ArenaScan {
+    fn try_reserve_counts(counts: &[usize; RootGroup::ALL.len()]) -> Result<Self, RendezvousError> {
+        let mut vm_frames = Vec::new();
+        let mut eval_temp = Vec::new();
+        let mut bc = Vec::new();
+        let mut jit_window = Vec::new();
+        let mut handlers = Vec::new();
+        let mut specpdl = Vec::new();
+        let mut misc = Vec::new();
+        vm_frames
+            .try_reserve(counts[RootGroup::VmFrames.ordinal()])
+            .map_err(|_| RendezvousError::Capacity)?;
+        eval_temp
+            .try_reserve(counts[RootGroup::EvalTemp.ordinal()])
+            .map_err(|_| RendezvousError::Capacity)?;
+        bc.try_reserve(counts[RootGroup::Bc.ordinal()])
+            .map_err(|_| RendezvousError::Capacity)?;
+        jit_window
+            .try_reserve(counts[RootGroup::JitWindow.ordinal()])
+            .map_err(|_| RendezvousError::Capacity)?;
+        handlers
+            .try_reserve(counts[RootGroup::Handlers.ordinal()])
+            .map_err(|_| RendezvousError::Capacity)?;
+        specpdl
+            .try_reserve(counts[RootGroup::Specpdl.ordinal()])
+            .map_err(|_| RendezvousError::Capacity)?;
+        misc.try_reserve(counts[RootGroup::Misc.ordinal()])
+            .map_err(|_| RendezvousError::Capacity)?;
+        Ok(Self {
+            vm_frames,
+            eval_temp,
+            bc,
+            jit_window,
+            handlers,
+            specpdl,
+            misc,
+        })
+    }
+
+    fn push(&mut self, group: RootGroup, value: Value) {
+        // Capacity was reserved for this group, so `push` does not allocate.
+        match group {
+            RootGroup::VmFrames => self.vm_frames.push(value),
+            RootGroup::EvalTemp => self.eval_temp.push(value),
+            RootGroup::Bc => self.bc.push(value),
+            RootGroup::JitWindow => self.jit_window.push(value),
+            RootGroup::Handlers => self.handlers.push(value),
+            RootGroup::Specpdl => self.specpdl.push(value),
+            RootGroup::Misc => self.misc.push(value),
+        }
+    }
+}
+
+fn admit_shared(heap: &TaggedHeap, values: &[Value], out: &mut Vec<SharedRoot>) {
+    for value in values {
+        // SAFETY: `SharedRoot::new` requires a mutator of `heap`, a live
+        // value whose traced objects belong to that heap, and reachability
+        // until registration completes. The caller is that mutator, and the
+        // arena still holds `value` until this function returns.
+        out.push(unsafe { SharedRoot::new(heap, *value) });
+    }
+}
+
+impl OwnerScanJoin for FrameArena {
+    fn publish_scan(
+        &self,
+        heap: &TaggedHeap,
+        out: &mut Vec<SharedRoot>,
+    ) -> Result<(), RendezvousError> {
+        #[cfg(test)]
+        if self.fail_scan_reserve.replace(false) {
+            return Err(RendezvousError::Capacity);
+        }
+        let mut counts = [0usize; RootGroup::ALL.len()];
+        self.for_each_owner_root(&mut |group, _value| {
+            counts[group.ordinal()] += 1;
+        });
+        let mut scan = ArenaScan::try_reserve_counts(&counts)?;
+        self.for_each_owner_root(&mut |group, value| scan.push(group, value));
+        let ArenaScan {
+            vm_frames,
+            eval_temp,
+            bc,
+            jit_window,
+            handlers,
+            specpdl,
+            misc,
+        } = scan;
+        let total = vm_frames.len()
+            + eval_temp.len()
+            + bc.len()
+            + jit_window.len()
+            + handlers.len()
+            + specpdl.len()
+            + misc.len();
+        let mut local = Vec::new();
+        local
+            .try_reserve(total)
+            .map_err(|_| RendezvousError::Capacity)?;
+        admit_shared(heap, &vm_frames, &mut local);
+        admit_shared(heap, &eval_temp, &mut local);
+        admit_shared(heap, &bc, &mut local);
+        admit_shared(heap, &jit_window, &mut local);
+        admit_shared(heap, &handlers, &mut local);
+        admit_shared(heap, &specpdl, &mut local);
+        admit_shared(heap, &misc, &mut local);
+        debug_assert_eq!(local.len(), total);
+        out.try_reserve(local.len())
+            .map_err(|_| RendezvousError::Capacity)?;
+        out.extend(local);
+        Ok(())
     }
 }
 
