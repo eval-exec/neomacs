@@ -38695,3 +38695,6 @@ mod overlay_string_word_wrap_progress_test;
 
 #[path = "divider_corner_review_test.rs"]
 mod divider_corner_review_test;
+
+#[path = "wrapped_line_recenter_test.rs"]
+mod wrapped_line_recenter_test;
