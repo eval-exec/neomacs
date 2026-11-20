@@ -748,27 +748,48 @@ fn gc_bucket(name: &'static str, counts: &[i64]) -> Value {
     Value::list(items)
 }
 
+/// Convert one heap count to the row integer.
+#[inline]
+fn gc_count(value: usize) -> i64 {
+    i64::try_from(value).unwrap_or(i64::MAX)
+}
+
 /// Build the GC stats list (shared by eval and vm garbage-collect paths).
+///
+/// GNU's rows carry the last sweep's live (USED) and free (FREE) counts from
+/// `gcstat` (`src/alloc.c:6038-6063`): list4 for objects with a free list,
+/// list3 for `string-bytes`, `vectors`, and `buffers`. USED is a live count,
+/// never the cumulative allocation counter; `vectors` counts vector OBJECTS
+/// and `vector-slots` their cells.
 pub(crate) fn builtin_garbage_collect_stats() -> EvalResult {
-    let counts = Value::memory_use_counts_snapshot();
-    let conses = Value::cons_live_count_snapshot().max(0);
-    let floats = counts[1].max(0);
-    let vector_cells = counts[2].max(0);
-    let symbols = counts[3].max(0);
-    let string_chars = counts[4].max(0);
-    let intervals = counts[5].max(0);
-    let strings = counts[6].max(0);
+    let gc = neovm_value::tagged::gc::with_tagged_heap(|heap| heap.gc_object_counts());
 
     Ok(Value::list(vec![
-        gc_bucket("conses", &[16, conses, 0]),
-        gc_bucket("symbols", &[48, symbols, 0]),
-        gc_bucket("strings", &[32, strings, 0]),
-        gc_bucket("string-bytes", &[1, string_chars]),
-        gc_bucket("vectors", &[16, vector_cells]),
-        gc_bucket("vector-slots", &[8, vector_cells, 0]),
-        gc_bucket("floats", &[8, floats, 0]),
-        gc_bucket("intervals", &[56, intervals, 0]),
-        gc_bucket("buffers", &[992, 0]),
+        gc_bucket(
+            "conses",
+            &[16, gc_count(gc.conses_used), gc_count(gc.conses_free)],
+        ),
+        gc_bucket("symbols", &[48, gc_count(gc.symbols_used), 0]),
+        gc_bucket(
+            "strings",
+            &[32, gc_count(gc.strings_used), gc_count(gc.strings_free)],
+        ),
+        gc_bucket("string-bytes", &[1, gc_count(gc.string_bytes)]),
+        gc_bucket("vectors", &[16, gc_count(gc.vectors_used)]),
+        gc_bucket(
+            "vector-slots",
+            &[
+                8,
+                gc_count(gc.vector_slots_used),
+                gc_count(gc.vector_slots_free),
+            ],
+        ),
+        gc_bucket(
+            "floats",
+            &[8, gc_count(gc.floats_used), gc_count(gc.floats_free)],
+        ),
+        gc_bucket("intervals", &[56, gc_count(gc.intervals_used), 0]),
+        gc_bucket("buffers", &[992, gc_count(gc.buffers_used)]),
     ]))
 }
 

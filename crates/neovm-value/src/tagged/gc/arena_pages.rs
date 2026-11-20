@@ -1759,6 +1759,30 @@ pub struct MappedLayoutStats {
     pub copied_veclike_capacity_bytes: usize,
 }
 
+/// Per-kind live/free counts for the `(garbage-collect)` rows.
+///
+/// The shape follows GNU's `gcstat` (`src/alloc.c:310-317`): USED is the live
+/// object/cell count and FREE the capacity that currently holds none. Neo's
+/// arenas have no per-kind free list, so FREE is page capacity minus live
+/// occupancy (vector slots: unused payload capacity).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[doc(hidden)]
+pub struct GcObjectCounts {
+    pub conses_used: usize,
+    pub conses_free: usize,
+    pub symbols_used: usize,
+    pub strings_used: usize,
+    pub strings_free: usize,
+    pub string_bytes: usize,
+    pub vectors_used: usize,
+    pub vector_slots_used: usize,
+    pub vector_slots_free: usize,
+    pub floats_used: usize,
+    pub floats_free: usize,
+    pub intervals_used: usize,
+    pub buffers_used: usize,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 #[doc(hidden)]
 pub struct BoxedKindLayoutStats {

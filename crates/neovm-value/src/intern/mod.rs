@@ -1903,6 +1903,13 @@ pub fn restore_runtime_interner(
     restored
 }
 
+/// Number of symbol ids allocated so far. Neomacs never frees a symbol id, so
+/// this is also the live symbol count reported by `(garbage-collect)`.
+#[doc(hidden)]
+pub fn symbol_span_total() -> usize {
+    global_symbol_registry().read().symbol_span()
+}
+
 /// Intern a string using the global runtime symbol registry.
 #[inline]
 pub fn intern(s: &str) -> SymId {

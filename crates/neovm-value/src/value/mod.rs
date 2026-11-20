@@ -4411,6 +4411,9 @@ impl TaggedValue {
         for (count, extra) in counts.iter_mut().zip(thread_local_counts) {
             *count = count.wrapping_add(extra);
         }
+        // Interval nodes live in their owning trees, not in the tagged heap.
+        let intervals = MemoryUseCountSlot::Intervals.index();
+        counts[intervals] = counts[intervals].wrapping_add(self::text_props::intervals_allocated());
         [
             as_neovm_int(counts[MemoryUseCountSlot::ConsCells.index()]),
             as_neovm_int(counts[MemoryUseCountSlot::Floats.index()]),

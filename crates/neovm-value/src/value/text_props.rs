@@ -696,6 +696,28 @@ impl IntervalRun {
     }
 }
 
+/// GNU `intervals_consed` (`src/alloc.c:7442`) counts every interval node
+/// allocated, and the sweep leaves `gcstat.total_intervals` at the live count.
+/// Neo's nodes are owned by trees rather than swept individually, so the two
+/// globals below give both numbers: every node is charged when its tree
+/// allocates it (insertion or a deep clone) and credited when the tree drops.
+static INTERVALS_ALLOCATED: AtomicU64 = AtomicU64::new(0);
+static INTERVALS_DROPPED: AtomicU64 = AtomicU64::new(0);
+
+/// Nodes allocated since process start: the `intervals-consed` counter.
+#[inline]
+pub(crate) fn intervals_allocated() -> u64 {
+    INTERVALS_ALLOCATED.load(Ordering::Relaxed)
+}
+
+/// Nodes still owned by a live interval tree.
+#[inline]
+pub(crate) fn intervals_live() -> u64 {
+    INTERVALS_ALLOCATED
+        .load(Ordering::Relaxed)
+        .saturating_sub(INTERVALS_DROPPED.load(Ordering::Relaxed))
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct IntervalTree {
     root: Option<IntervalId>,
@@ -729,6 +751,14 @@ pub(crate) struct IntervalTree {
     /// `version` exactly like the find memo (see `rightmost_id_memo`).
     rightmost_gen: MemoGeneration,
     rightmost_id_cache: AtomicUsize,
+}
+
+impl Drop for IntervalTree {
+    fn drop(&mut self) {
+        // Nodes are append-only inside one tree (`delete_node` only unlinks),
+        // so the whole vector leaves the live interval count together.
+        INTERVALS_DROPPED.fetch_add(self.nodes.len() as u64, Ordering::Relaxed);
+    }
 }
 
 /// Generation tag pairing a memo with the tree version it was computed for.
@@ -772,6 +802,9 @@ impl Default for MemoGeneration {
 
 impl Clone for IntervalTree {
     fn clone(&self) -> Self {
+        // A deep clone owns a new node for every source node (GNU
+        // `copy_intervals` likewise allocates copied intervals).
+        INTERVALS_ALLOCATED.fetch_add(self.nodes.len() as u64, Ordering::Relaxed);
         // A clone starts with a fresh (empty) memo; it will populate its own.
         Self {
             root: self.root,
@@ -913,11 +946,11 @@ impl IntervalTree {
     }
 
     fn from_normalized_runs(runs: Vec<IntervalRun>) -> Self {
-        let mut tree = Self {
-            root: None,
-            nodes: Vec::with_capacity(runs.len()),
-            ..Self::default()
-        };
+        // Assign after `default()`: a struct-update expression cannot move
+        // fields out of a type that implements `Drop`.
+        let mut tree = Self::default();
+        tree.root = None;
+        tree.nodes = Vec::with_capacity(runs.len());
         tree.root = tree.build_balanced(&runs, 0, runs.len(), None);
         tree
     }
@@ -979,7 +1012,7 @@ impl IntervalTree {
         let id = IntervalId(self.nodes.len());
         // GNU `intervals-consed` (`src/alloc.c:7442`) counts every interval
         // node allocated; this balanced build is one allocation site.
-        crate::value::add_wrapping(crate::tagged::gc::MemoryUseCountSlot::Intervals, 1);
+        INTERVALS_ALLOCATED.fetch_add(1, Ordering::Relaxed);
         self.nodes.push(runs[mid].to_node());
 
         let left = self.build_balanced(runs, start, mid, Some(id));
@@ -1027,7 +1060,7 @@ impl IntervalTree {
         let id = IntervalId(self.nodes.len());
         // GNU `intervals-consed` counts every interval node allocated; a split
         // or a fresh insertion creates one here.
-        crate::value::add_wrapping(crate::tagged::gc::MemoryUseCountSlot::Intervals, 1);
+        INTERVALS_ALLOCATED.fetch_add(1, Ordering::Relaxed);
         self.nodes.push(node);
         id
     }

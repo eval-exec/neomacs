@@ -476,6 +476,70 @@ pub(crate) struct EphemeronRecords {
     pub(crate) reclaimed_frame_ids: Vec<u64>,
 }
 
+/// `(garbage-collect)`'s per-kind live/free counts (#775).
+///
+/// GNU reports the `gcstat` totals its sweep leaves behind: USED is the live
+/// count for that cycle and FREE the free-list count
+/// (`src/alloc.c:310-317, 6038-6063`). Neo's arenas have no per-kind free
+/// list, so FREE is the page capacity that currently holds no live object
+/// (for vector slots, unused payload capacity). Mapped image objects are
+/// added where they are countable. Closes open allocation regions first, so
+/// every cell is either live or free (the `layout_stats` contract); the scan
+/// is O(pages) and runs only for the `garbage-collect` row build.
+#[doc(hidden)]
+impl TaggedHeap {
+    pub fn gc_object_counts(&mut self) -> GcObjectCounts {
+        self.close_alloc_regions();
+        let stats = self.layout_stats();
+        let arena = |class: &str| {
+            stats
+                .arenas
+                .iter()
+                .find(|arena| arena.class == class)
+                .cloned()
+                .unwrap_or_default()
+        };
+        let string = arena("string");
+        let vector = arena("vector");
+        let float = arena("float");
+        let capacity = |arena: &ArenaLayoutStats| arena.pages.saturating_mul(arena.slots_per_page);
+        let word = std::mem::size_of::<TaggedValue>();
+        let mapped_string_bytes: usize = self
+            .mapped_string_objects
+            .iter()
+            .map(|object| object.byte_len)
+            .sum();
+        GcObjectCounts {
+            conses_used: stats.cons.live_slots.saturating_add(stats.mapped.conses),
+            conses_free: stats
+                .cons
+                .capacity_slots
+                .saturating_sub(stats.cons.live_slots),
+            symbols_used: crate::intern::symbol_span_total(),
+            strings_used: string.allocated_slots.saturating_add(stats.mapped.strings),
+            strings_free: capacity(&string).saturating_sub(string.allocated_slots),
+            string_bytes: string
+                .payload_logical_bytes
+                .saturating_add(mapped_string_bytes),
+            vectors_used: vector.allocated_slots.saturating_add(stats.mapped.veclikes),
+            vector_slots_used: vector.payload_logical_bytes / word,
+            vector_slots_free: vector
+                .payload_capacity_bytes
+                .saturating_sub(vector.payload_logical_bytes)
+                / word,
+            floats_used: float.allocated_slots.saturating_add(stats.mapped.floats),
+            floats_free: capacity(&float).saturating_sub(float.allocated_slots),
+            intervals_used: usize::try_from(crate::value::text_props::intervals_live())
+                .unwrap_or(usize::MAX),
+            buffers_used: self
+                .buffer_registry
+                .iter()
+                .filter(|entry| entry.is_some())
+                .count(),
+        }
+    }
+}
+
 #[cfg(test)]
 #[path = "tests/ephemeron_cross_kind_test.rs"]
 mod ephemeron_cross_kind_tests;
