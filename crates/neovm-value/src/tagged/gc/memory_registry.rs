@@ -229,6 +229,32 @@ impl TaggedHeap {
         self.cycle_time_bank.peek()
     }
 
+    /// Wall microseconds of the context-root seed that just ran.
+    ///
+    /// One store per collection. The clock is the seed's existing total,
+    /// not a per-root sample.
+    #[doc(hidden)]
+    pub fn note_context_seed_us(&mut self, us: u64) {
+        self.cycle_time_bank.note_context_seed(us);
+    }
+
+    /// Context-root seed of the collection now marking. Eager trace lines
+    /// read this. Zero until that seed runs.
+    #[doc(hidden)]
+    pub fn context_seed_us(&self) -> u64 {
+        self.cycle_time_bank.context_seed_us()
+    }
+
+    /// Keep the context-root seed with the deferred sweep it belongs to.
+    pub(super) fn snapshot_context_seed_for_sweep(&mut self) {
+        self.cycle_time_bank.snapshot_context_seed();
+    }
+
+    /// Context-root seed frozen when the deferred sweep was armed.
+    pub(super) fn sweep_context_seed_us(&self) -> u64 {
+        self.cycle_time_bank.sweep_context_seed_us()
+    }
+
     /// Register cons cells whose storage is owned by the loaded pdump image.
     ///
     /// # Safety

@@ -122,6 +122,9 @@ impl TaggedHeap {
             !self.sweep_in_progress,
             "begin_collection while a deferred sweep is in progress"
         );
+        // The context-root seed runs after this entry and overwrites the zero.
+        // A collection that never seeds must not reprint the previous cycle.
+        self.note_context_seed_us(0);
         // YOUNG NON-CONS PARITY FLIP (task #7 stage 2b): this single store
         // un-marks the entire young non-cons generation — everything the last
         // cycle marked has bit == old parity, which the new parity reads as
@@ -2261,24 +2264,25 @@ impl TaggedHeap {
             let dump_cons: usize = self.mapped_cons_ranges.iter().map(|range| range.len).sum();
             let dump_float: usize = self.mapped_float_ranges.iter().map(|range| range.len).sum();
             eprintln!(
-                "NEOVM_GC gc#{} {:.2}ms [clear={}us mark={}us sweep={}us] \
-                 cons_live={} heap_noncons={} dump_marked={}/{} \
-                 dump[cons={} vec={} str={} float={}] dirty_owners={} live={}B",
-                self.gc_collections,
-                elapsed.as_micros() as f64 / 1000.0,
-                self.last_clear_us,
-                mark_us,
-                sweep_us,
-                self.cons_live_count,
-                self.non_cons_object_addrs.len(),
-                mapped_marked,
-                mapped_total,
-                dump_cons,
-                self.mapped_veclike_objects.len(),
-                self.mapped_string_objects.len(),
-                dump_float,
-                self.dirty_owners.len(),
-                self.live_bytes,
+                "{}",
+                super::incremental::format_eager_gc_trace_line(
+                    self.gc_collections,
+                    elapsed.as_micros() as f64 / 1000.0,
+                    self.last_clear_us,
+                    mark_us,
+                    sweep_us,
+                    self.cons_live_count,
+                    self.non_cons_object_addrs.len(),
+                    mapped_marked,
+                    mapped_total,
+                    dump_cons,
+                    self.mapped_veclike_objects.len(),
+                    self.mapped_string_objects.len(),
+                    dump_float,
+                    self.dirty_owners.len(),
+                    self.live_bytes,
+                    self.context_seed_us(),
+                )
             );
         }
         tracing::debug!(
