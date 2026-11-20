@@ -910,6 +910,11 @@ pub enum CommandKeySequenceEnd {
     KeyboardMacroIteration,
     /// The evaluator has no command-input source left to read.
     Input,
+    /// GNU `read_key_sequence` returned -1: `read_char` showed a mouse popup
+    /// menu and the user rejected it (keyboard.c:11297-11302).  Not an
+    /// input-source boundary -- `command_loop_1` "just loops around and reads
+    /// another command" (keyboard.c:1436-1441).
+    MenuRejected,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -2389,6 +2394,81 @@ impl crate::emacs_core::eval::Context {
                 .is_ok_and(|value| value.is_nil())
     }
 
+    /// GNU `read_char_x_menu_prompt` (src/keyboard.c:10094-10152): the
+    /// branch of `read_char` that reads the next event from a mouse popup
+    /// menu instead of the keyboard, when the pending lookup map is a
+    /// keymap and the previous event was a positional mouse event.
+    ///
+    /// The return mirrors the prompt's three GNU outcomes: `Ok(None)` is
+    /// `Qnil` -- no menu applies and the caller reads on normally;
+    /// `Ok(Some(t))` is the `Qt` return for a menu the user dismissed,
+    /// which `read_key_sequence` turns into its -1 "no sequence" return
+    /// (keyboard.c:11297-11302); `Ok(Some(event))` is the selected event,
+    /// which becomes the next event of the key sequence being read.
+    ///
+    /// The guards fold the call-site conditions (keyboard.c:2909-2919) and
+    /// the body's event checks (:10107-10110), which test the same
+    /// predicates.  The popup runs through the `x-popup-menu` subr, whose
+    /// modal session performs its own nested `read_key_sequence`; the
+    /// caller saves and restores the in-progress sequence around this
+    /// call.  `begin_key_sequence_read` clears `last-nonmenu-event` for
+    /// that nested read, so a prefix reached inside menu navigation cannot
+    /// re-enter this prompt.
+    fn read_char_x_menu_prompt(
+        &mut self,
+        map: Value,
+    ) -> Result<Option<Value>, neovm_value::error::Flow> {
+        // `menu-prompting` gates the whole prompt (keyboard.c:10102,
+        // DEFVAR_BOOL keyboard.c:13978).
+        if self.visible_variable_value_or_nil("menu-prompting").is_nil() {
+            return Ok(None);
+        }
+        if !self.keyboard_input_is_interactive() {
+            return Ok(None);
+        }
+        let prev_event = self
+            .eval_symbol_by_id(LAST_NONMENU_EVENT.id())
+            .unwrap_or(Value::NIL);
+        // EVENT_HAS_PARAMETERS (keyboard.c:2417 region): a cons whose cdr is
+        // a cons -- keyboard events and bare symbols do not qualify.
+        if !(prev_event.is_cons() && prev_event.cons_cdr().is_cons()) {
+            return Ok(None);
+        }
+        let mode = self.symbol_mode();
+        if let Some(head) = prev_event.cons_car().as_symbol_name(mode)
+            && matches!(head, "menu-bar" | "tab-bar" | "tool-bar")
+        {
+            return Ok(None);
+        }
+        // "Don't bring up a menu if we already have another event"
+        // (keyboard.c:2918-2919).
+        if self
+            .eval_symbol_by_id(WellKnown::UnreadCommandEvents.id())
+            .is_ok_and(|pending| pending.is_cons())
+        {
+            return Ok(None);
+        }
+        // keyboard.c:10115: `x_popup_menu_1 (prev_event, get_keymap (map, 0,
+        // 1))`.  `map` is already a resolved keymap here, and the subr owns
+        // the modal session.  The subr returns the selection as the event
+        // path -- `(choose)' for a top-level item, `(pane item)' from a
+        // submenu -- which is GNU's `value' list shape.  GNU returns the
+        // first element and unreads the rest (keyboard.c:10117-10141); the
+        // popup's paths deeper than one element would unread their tail,
+        // which the current single-level popup never produces.
+        let value = self.funcall_general(
+            Value::symbol("x-popup-menu"),
+            vec![prev_event, map],
+        )?;
+        if value.is_nil() {
+            return Ok(Some(Value::T));
+        }
+        if value.is_cons() {
+            return Ok(Some(value.cons_car()));
+        }
+        Ok(Some(value))
+    }
+
     /// Return true if EVENT matches `help-char` (default `Ctrl-h`
     /// == 8) or any entry in `help-event-list`.
     ///
@@ -3485,7 +3565,15 @@ impl crate::emacs_core::eval::Context {
             ));
         }
 
-        let (keys, binding) = self.read_key_sequence_with_options(options)?;
+        // GNU command_loop_1 calls `read_key_sequence` directly, not
+        // `read_key_sequence_vs`, so a rejected menu is its typed -1 result
+        // rather than the quit the Lisp-facing reader converts it to.
+        let (keys, binding) = self.read_key_sequence_inner(options)?;
+        if self.command_loop.keyboard.last_read_menu_rejected {
+            return Ok(CommandKeySequenceRead::End(
+                CommandKeySequenceEnd::MenuRejected,
+            ));
+        }
         if keys.is_empty() && binding.executed().is_nil() {
             // The zero-length result is a macro-iteration boundary when the
             // macro is (still) exhausted -- GNU's `at_end_of_macro_p` check
@@ -3560,15 +3648,38 @@ impl crate::emacs_core::eval::Context {
         if !continue_echo {
             self.clear_read_command_keys();
         }
+        // GNU reports a rejected menu purely as read_key_sequence's -1
+        // return, so the state cannot outlive the read that produced it.
+        self.command_loop.keyboard.last_read_menu_rejected = false;
         self.assign_by_id(LAST_NONMENU_EVENT.id(), Value::NIL);
+    }
+
+    /// The Lisp-facing key-sequence read: GNU `read_key_sequence_vs`
+    /// (keyboard.c:11903-11934) wrapped around the internal reader.  A read
+    /// that ended with the user rejecting a mouse menu is GNU's -1 result,
+    /// which `read_key_sequence_vs` surfaces to Lisp as a quit
+    /// (keyboard.c:11929-11933: `Vquit_flag = Qt; maybe_quit ()`).  With
+    /// `inhibit-quit` bound -- the popup modal session reads that way --
+    /// `maybe_quit` declines to signal and the empty sequence returns, the
+    /// same dismissal its caller already maps from a rejected menu.
+    #[doc(hidden)]
+    pub fn read_key_sequence_with_options(
+        &mut self,
+        options: ReadKeySequenceOptions,
+    ) -> Result<(Vec<Value>, ReadCommandBinding), neovm_value::error::Flow> {
+        let read = self.read_key_sequence_inner(options)?;
+        if self.command_loop.keyboard.last_read_menu_rejected {
+            self.set_quit_flag_value(Value::T);
+            self.maybe_quit()?;
+        }
+        Ok(read)
     }
 
     /// Returns the key events and the command pair GNU's `done` label
     /// publishes: the keymaps' binding plus its one-level remapping.  The
     /// command loop executes the latter and records the former, so it must
     /// not run `command-remapping` again.
-    #[doc(hidden)]
-    pub fn read_key_sequence_with_options(
+    fn read_key_sequence_inner(
         &mut self,
         options: ReadKeySequenceOptions,
     ) -> Result<(Vec<Value>, ReadCommandBinding), neovm_value::error::Flow> {
@@ -3605,6 +3716,11 @@ impl crate::emacs_core::eval::Context {
         let mut delayed_selection_event: Option<Value> = None;
         let mut saved_current_buffer: Option<neovm_edit::buffer::BufferId> = None;
         let mut replay_current_sequence = false;
+        // GNU's per-iteration `used_mouse_menu` (keyboard.c:11087): the
+        // event that just entered the sequence came from a mouse popup menu
+        // (the `read_char_x_menu_prompt` port below), so `last-nonmenu-event`
+        // must not take it (keyboard.c:11668-11673).
+        let mut menu_event_in_sequence = false;
 
         loop {
             if replay_current_sequence {
@@ -3866,15 +3982,22 @@ impl crate::emacs_core::eval::Context {
 
             // GNU `keyboard.c:11668-11673`: after keyremap / function-key-map
             // translation, `last_nonmenu_event = key` holds the TRANSLATED key
-            // (e.g. the GUI `<return>` becomes RET/13), not the raw event, unless
-            // a mouse popup menu was used to read it (neomacs does not synthesize
-            // those yet). `last-input-event` (recorded raw above) is unchanged;
-            // only `last-nonmenu-event` takes the translated event -- matching
-            // GNU, where reading an unbound `<return>` yields
+            // (e.g. the GUI `<return>` becomes RET/13), not the raw event,
+            // unless a mouse popup menu was used to read it: GNU skips the
+            // assignment while `used_mouse_menu` is set, so the mouse event
+            // that opened the menu keeps holding the slot.  The flag is raised
+            // by the `read_char_x_menu_prompt` port below and covers exactly
+            // the replay iteration that appends the menu selection.
+            // `last-input-event` (recorded raw above) is unchanged; only
+            // `last-nonmenu-event` takes the translated event -- matching GNU,
+            // where reading an unbound `<return>` yields
             // last-input-event=return but last-nonmenu-event=13.
-            if let Some(translated_last) = translated_events.last() {
+            if !menu_event_in_sequence
+                && let Some(translated_last) = translated_events.last()
+            {
                 self.record_nonmenu_input_event(*translated_last);
             }
+            menu_event_in_sequence = false;
 
             if self
                 .command_loop
@@ -4071,14 +4194,74 @@ impl crate::emacs_core::eval::Context {
                 }
             }
 
-            let is_prefix = resolve_prefix_keymap_binding_in_obarray(
+            let prefix_keymap = resolve_prefix_keymap_binding_in_obarray(
                 &self.obarray,
                 &resolved.lookup,
                 self.symbol_mode(),
-            )
-            .is_some();
+            );
 
-            if is_prefix {
+            if let Some(prefix_keymap) = prefix_keymap {
+                // The read that produces the next event of this sequence is
+                // GNU `read_char (commandflag, current_binding,
+                // last_nonmenu_event, ...)` (keyboard.c:11221-11224), and its
+                // `read_char_x_menu_prompt` branch (call site
+                // keyboard.c:2909-2925, body :10094-10152) pops a mouse menu
+                // INSTEAD of waiting for the next key when the pending lookup
+                // map is a keymap and the previous event was a positional
+                // event.  The DOWN click therefore opens the menu at the
+                // pointer, and the selection becomes the next event of THIS
+                // key sequence: `[down-mouse-3 choose]` dispatches the
+                // command bound under the menu keymap.  Without it, the down
+                // event only selects the keymap and the following mouse-3
+                // release reads as an unbound key -- the M-CTXMENU report.
+                let sequence_snapshot = self.command_loop.keyboard.key_sequence_snapshot();
+                match self.read_char_x_menu_prompt(prefix_keymap)? {
+                    // GNU: the user rejected the menu, so `read_char` returns
+                    // Qt and `read_key_sequence` returns -1
+                    // (keyboard.c:11297-11302) -- no command runs and the
+                    // command loop reads a fresh sequence.
+                    Some(dismissed) if dismissed.is_t() => {
+                        self.restore_delayed_selection_event(&mut delayed_selection_event);
+                        self.restore_key_sequence_current_buffer(&mut saved_current_buffer);
+                        // this_command_key_count = 0 (keyboard.c:1439-1440),
+                        // done here once for both consumers of the -1 result.
+                        self.command_loop
+                            .set_command_key_sequences(Vec::new(), Vec::new());
+                        self.command_loop.keyboard.last_read_menu_rejected = true;
+                        return Ok((Vec::new(), ReadCommandBinding::unremapped(Value::NIL)));
+                    }
+                    // GNU: `read_char` returns the selected event; back in
+                    // `read_key_sequence` it lands in `keybuf[t++] = key`
+                    // (keyboard.c:11663) with the record_menu_key bookkeeping
+                    // already done by the prompt (keyboard.c:3432-3446).  The
+                    // popup's own nested read resets the in-progress sequence
+                    // accumulator, so restore it and append the selection;
+                    // replaying the iteration runs the translation and lookup
+                    // passes over the completed sequence without reading
+                    // another event.
+                    Some(selection) => {
+                        let (translated_snapshot, raw_snapshot) = sequence_snapshot;
+                        self.command_loop
+                            .keyboard
+                            .rewrite_key_sequence_events(raw_snapshot);
+                        self.command_loop
+                            .keyboard
+                            .rewrite_key_sequence_translation(translated_snapshot);
+                        self.command_loop
+                            .keyboard
+                            .push_key_sequence_input_event(selection);
+                        self.publish_current_key_sequence_as_command_keys();
+                        self.record_input_event_history(selection);
+                        self.assign_by_id(LAST_INPUT_EVENT.id(), selection);
+                        menu_event_in_sequence = true;
+                        replay_current_sequence = true;
+                    }
+                    // No menu applies (not interactive, no positional
+                    // previous event, unread input pending, or `menu-prompting`
+                    // off): read the next event normally.  The nested popup
+                    // never ran, so the accumulator is untouched.
+                    None => {}
+                }
                 // GNU doesn't publish a prefix merely because lookup found a
                 // prefix map.  The following unbounded `read_char` owns the
                 // delay: it waits `echo-keystrokes`, verifies that no input or

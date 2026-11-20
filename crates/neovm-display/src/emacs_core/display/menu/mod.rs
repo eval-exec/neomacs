@@ -1,5 +1,6 @@
 //! Evaluator-owned menu semantics. Presentation contains no Lisp values.
 
+use neomacs_display_protocol::menu::MenuItemKind;
 use neovm_edit::emacs_core::edit_host::EditHost;
 use neovm_eval::emacs_core::eval::Context;
 use neovm_eval::emacs_core::eval::PopupMenuEntry;
@@ -85,8 +86,60 @@ pub(crate) fn resolve(ctx: &mut Context, menu: Value, is_tty: bool) -> Result<Re
     result._roots.keep(menu);
     let map = keymap::get_keymap_in_runtime(ctx, &menu, false, true)?;
     result._roots.keep(map);
+    // GNU Fx_popup_menu (src/menu.c:1301-1320) turns the keymap's prompt
+    // into the pane name, and the toolkit draws a pane name as the menu's
+    // title row above the pane's items.
+    let prompt = keymap_prompt(ctx, map);
+    result._roots.keep(prompt);
+    push_title_row(prompt, &mut result);
     append(ctx, map, is_tty, &mut MenuTraversal::default(), &mut result)?;
     Ok(result)
+}
+
+/// GNU Fkeymap_prompt (src/keymap.c:148-168): the first direct string
+/// element of the keymap spine, looking through nested keymap elements.
+fn keymap_prompt(ctx: &mut Context, map: Value) -> Value {
+    let mut tail = map;
+    while tail.is_cons() {
+        let head = tail.cons_car();
+        if head.is_string() {
+            return head;
+        }
+        let child = keymap::get_keymap_in_runtime(ctx, &head, false, false)
+            .unwrap_or(Value::NIL);
+        if !child.is_nil() {
+            let prompt = keymap_prompt(ctx, child);
+            if !prompt.is_nil() {
+                return prompt;
+            }
+        }
+        tail = tail.cons_cdr();
+    }
+    Value::NIL
+}
+
+/// A pane name renders as the popup's title row: GNU sets it as the pane
+/// title (push_menu_pane), which the toolkit draws above the pane's items.
+fn push_title_row(prompt: Value, out: &mut ResolvedMenu) {
+    if prompt.is_nil() {
+        return;
+    }
+    if let Some(label) = prompt.as_runtime_string_owned() {
+        push_list_entry(out, MenuItemKind::Label, label);
+    }
+}
+
+/// Non-selectable rows still occupy an event slot with a nil value, so
+/// entries and events keep one index space.
+fn push_list_entry(out: &mut ResolvedMenu, kind: MenuItemKind, label: String) {
+    out.entries.push(PopupMenuEntry {
+        kind,
+        label,
+        help: None,
+        shortcut: String::new(),
+        depth: 0,
+    });
+    out.events.push(Value::NIL);
 }
 
 fn append(

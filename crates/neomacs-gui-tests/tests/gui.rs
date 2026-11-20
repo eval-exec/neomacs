@@ -28,6 +28,9 @@ mod coding_detection;
 #[path = "coding_save.rs"]
 mod coding_save;
 
+#[path = "ctxmenu_popup_gui_oracle.rs"]
+mod ctxmenu_popup_gui_oracle;
+
 #[path = "colrv1_emoji.rs"]
 mod colrv1_emoji;
 

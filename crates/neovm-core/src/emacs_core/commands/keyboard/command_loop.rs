@@ -658,6 +658,19 @@ impl CommandLoopHost for Context {
                 crate::keyboard::CommandKeySequenceRead::Command { keys, binding } => {
                     (keys, Some(binding))
                 }
+                // GNU command_loop_1 (keyboard.c:1436-1441): "-1 means
+                // read_key_sequence got a menu that was rejected.  Just loop
+                // around and read another command."  Ending the loop here
+                // would treat an Escape-out of a popup menu as end-of-input
+                // and shut the editor down.
+                crate::keyboard::CommandKeySequenceRead::End(
+                    crate::keyboard::CommandKeySequenceEnd::MenuRejected,
+                ) => {
+                    // cancel_echoing (); the reader already reset
+                    // this_command_key_count (keyboard.c:1439-1440).
+                    self.clear_key_echo_message();
+                    continue;
+                }
                 crate::keyboard::CommandKeySequenceRead::End(_) => (Vec::new(), None),
             };
 
