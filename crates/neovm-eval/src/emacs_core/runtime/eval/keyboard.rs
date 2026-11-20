@@ -2454,19 +2454,75 @@ impl crate::emacs_core::eval::Context {
         // keyboard.c:10115: `x_popup_menu_1 (prev_event, get_keymap (map, 0,
         // 1))`.  `map` is already a resolved keymap here, and the subr owns
         // the modal session.  The subr returns the selection as the event
-        // path -- `(choose)' for a top-level item, `(pane item)' from a
-        // submenu -- which is GNU's `value' list shape.  GNU returns the
-        // first element and unreads the rest (keyboard.c:10117-10141); the
-        // popup's paths deeper than one element would unread their tail,
-        // which the current single-level popup never produces.
+        // path -- `(choose)' for a top-level item, `(parent child)' from a
+        // submenu -- which is GNU's `value' list shape.
         let value = self.funcall_general(Value::symbol("x-popup-menu"), vec![prev_event, map])?;
         if value.is_nil() {
             return Ok(Some(Value::T));
         }
-        if value.is_cons() {
-            return Ok(Some(value.cons_car()));
+        if !value.is_cons() {
+            return Ok(Some(value));
         }
-        Ok(Some(value))
+        // GNU keyboard.c:10117-10141: return the first event of the path,
+        // record every remaining event, and unread them.  A symbol or
+        // fixnum tail event is wrapped as `(EVENT . disabled)` so the later
+        // read can tell it came from the menu; read_char unwraps it and
+        // keeps `last-nonmenu-event` on the mouse event that opened the
+        // menu (keyboard.c:2623-2632).  The wrapper is what lets a nested
+        // submenu selection complete as `[mouse parent child]` instead of
+        // treating `[mouse parent]` as a prefix and re-opening the menu.
+        let selection = value.cons_car();
+        let root_scope = self.save_specpdl_roots();
+        self.push_specpdl_root(value);
+        let mut tail = value.cons_cdr();
+        let mut unread_events = Vec::new();
+        while tail.is_cons() {
+            let event = tail.cons_car();
+            self.push_specpdl_root(event);
+            // record_menu_key (keyboard.c:3432-3447): record each tail
+            // event now; the reread below does not record it again.
+            self.record_input_event_history(event);
+            self.assign_by_id(LAST_INPUT_EVENT.id(), event);
+            unread_events.push(if event.is_symbol(mode) || event.is_fixnum() {
+                Value::cons(event, Value::symbol("disabled"))
+            } else {
+                event
+            });
+            tail = tail.cons_cdr();
+        }
+        if !unread_events.is_empty() {
+            let existing = self
+                .eval_symbol_by_id(WellKnown::UnreadCommandEvents.id())
+                .unwrap_or(Value::NIL);
+            self.push_specpdl_root(existing);
+            let mut unread = existing;
+            for event in unread_events.into_iter().rev() {
+                unread = Value::cons(event, unread);
+                self.push_specpdl_root(unread);
+            }
+            self.assign_by_id(WellKnown::UnreadCommandEvents.id(), unread);
+        }
+        self.restore_specpdl_roots(root_scope);
+        Ok(Some(selection))
+    }
+
+    /// GNU read_char's undo of the marker `read_char_x_menu_prompt` puts on
+    /// the tail of a selected menu event path (keyboard.c:2623-2632):
+    /// `(EVENT . disabled)` with a symbol or fixnum EVENT is a re-read menu
+    /// event.  The caller must treat the iteration as `used_mouse_menu`, so
+    /// the event does not overwrite `last-nonmenu-event`.
+    fn unwrap_disabled_menu_event(&self, value: Value, mode: SymbolMode) -> Option<Value> {
+        if !value.is_cons() {
+            return None;
+        }
+        let event = value.cons_car();
+        if !(event.is_symbol(mode) || event.is_fixnum()) {
+            return None;
+        }
+        value
+            .cons_cdr()
+            .is_symbol_named("disabled", mode)
+            .then_some(event)
     }
 
     /// Return true if EVENT matches `help-char` (default `Ctrl-h`
@@ -3763,6 +3819,17 @@ impl crate::emacs_core::eval::Context {
                     }
                 };
                 let mut emacs_event = read_event.event;
+                // GNU read_char undoes the marker read_char_x_menu_prompt
+                // puts on the tail of a selected menu event path
+                // (keyboard.c:2623-2632) and keeps `used_mouse_menu` set,
+                // so the re-read event leaves last-nonmenu-event on the
+                // mouse event that opened the menu.
+                if let Some(event) =
+                    self.unwrap_disabled_menu_event(emacs_event, self.symbol_mode())
+                {
+                    emacs_event = event;
+                    menu_event_in_sequence = true;
+                }
                 self.clear_quit_flag_after_read_key_sequence_event(&emacs_event);
                 if Self::has_switch_frame_event_kind(&emacs_event, self.symbol_mode())
                     && (!self
