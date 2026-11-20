@@ -454,6 +454,41 @@ fn progn_returns_its_last_form() {
 }
 
 #[test]
+fn a_refused_unwind_poisons_the_engine_and_start_refuses() {
+    let mut ctx = context();
+    let mut stepper = engine(TestSlots::empty());
+    let outcome = stepper.start(
+        &mut ctx,
+        body(&[Value::fixnum(1), Value::fixnum(2)]),
+        NonZeroU32::new(1).expect("interval"),
+    );
+    let StepOutcome::Suspended { .. } = outcome else {
+        panic!("the first form must suspend");
+    };
+    assert!(stepper.pop_top_frame_keep_note());
+    assert_eq!(stepper.arena_depth(), 0);
+    let resumed = stepper.resume(&mut ctx);
+    assert!(matches!(
+        resumed,
+        StepOutcome::Fault(EngineFault::StaleFrame)
+    ));
+    assert_eq!(stepper.arena_depth(), 0);
+    assert_eq!(stepper.live_root_count(), 0);
+    let refused = stepper.start(&mut ctx, body(&[Value::fixnum(9)]), wide());
+    assert!(
+        matches!(refused, StepOutcome::Fault(EngineFault::Poisoned)),
+        "a refused unwind must refuse the next start"
+    );
+    assert_eq!(stepper.arena_depth(), 0);
+    assert_eq!(stepper.live_root_count(), 0);
+    assert!(matches!(
+        stepper.resume(&mut ctx),
+        StepOutcome::Fault(EngineFault::Poisoned)
+    ));
+    assert_eq!(stepper.arena_depth(), 0);
+}
+
+#[test]
 fn a_stale_frame_id_pop_is_still_refused() {
     let mut arena = FrameArena::new(4);
     let frame = InterpFrame::new(

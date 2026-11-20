@@ -97,6 +97,8 @@ pub(crate) enum EngineFault {
     StaleRoot,
     NotSuspended,
     Busy,
+    /// An unwind was refused. The leftover frames stay put, and `start` will not push another.
+    Poisoned,
     NoFrame,
     Frame(FramePublishError),
     Root(RootPublishError),
@@ -125,6 +127,7 @@ pub(crate) enum StepOutcome {
 
 /// Where one harness run is. `Idle` is the only state in which [`Stage1::start`]
 /// accepts work. `Finished` holds the done root until [`Stage1::take`].
+/// `Poisoned` means an unwind was refused; the leftover stays put.
 enum RunState {
     Idle,
     Suspended {
@@ -138,6 +141,7 @@ enum RunState {
     Finished {
         handle: RootHandle,
     },
+    Poisoned,
 }
 
 struct FrameNote {
@@ -230,6 +234,9 @@ where
         forms: Value,
         interval: NonZeroU32,
     ) -> StepOutcome {
+        if matches!(self.state, RunState::Poisoned) {
+            return StepOutcome::Fault(EngineFault::Poisoned);
+        }
         if !matches!(self.state, RunState::Idle) {
             return StepOutcome::Fault(EngineFault::Busy);
         }
@@ -243,6 +250,9 @@ where
     /// Continue the suspended frame. Pops the pending root first. The
     /// progn accumulator on the frame is the value that was published.
     pub(crate) fn resume(&mut self, ctx: &mut Context) -> StepOutcome {
+        if matches!(self.state, RunState::Poisoned) {
+            return StepOutcome::Fault(EngineFault::Poisoned);
+        }
         let RunState::Suspended { handle, .. } = self.state else {
             return StepOutcome::Fault(EngineFault::NotSuspended);
         };
@@ -581,7 +591,7 @@ where
                     };
                 }
             }
-            StepOutcome::Fault(EngineFault::Busy) => {}
+            StepOutcome::Fault(EngineFault::Busy | EngineFault::Poisoned) => {}
             StepOutcome::MissingCore { .. } | StepOutcome::Signaled(_) | StepOutcome::Fault(_) => {
                 if let Err(fault) = self.unwind_to_idle() {
                     return StepOutcome::Fault(fault);
@@ -591,22 +601,33 @@ where
         outcome
     }
 
-    /// Drop every frame and root this run pushed. A refused pop is returned
-    /// and the run stays where it is; `Idle` is set only after both succeed.
+    /// Drop every frame and root this run pushed. A refused pop or truncate
+    /// sets `Poisoned` and leaves the leftover in place. `Idle` is set only
+    /// after both succeed.
     fn unwind_to_idle(&mut self) -> Result<(), EngineFault> {
         while let Some(id) = self.notes.last().map(|note| note.id) {
             if self.arena.pop(id).is_none() {
+                self.state = RunState::Poisoned;
                 return Err(EngineFault::StaleFrame);
             }
             self.notes.pop();
         }
         // truncate(0) is correct only because Stage1 owns its FrameArena exclusively.
-        self.arena
-            .roots_mut()
-            .truncate(0)
-            .map_err(EngineFault::Root)?;
+        if let Err(error) = self.arena.roots_mut().truncate(0) {
+            self.state = RunState::Poisoned;
+            return Err(EngineFault::Root(error));
+        }
         self.state = RunState::Idle;
         Ok(())
+    }
+
+    /// Pop the arena frame and keep its note, so the next unwind is refused.
+    #[cfg(test)]
+    pub(crate) fn pop_top_frame_keep_note(&mut self) -> bool {
+        let Some(id) = self.notes.last().map(|note| note.id) else {
+            return false;
+        };
+        self.arena.pop(id).is_some()
     }
 }
 
