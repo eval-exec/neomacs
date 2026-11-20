@@ -670,6 +670,10 @@ fn poll_fast_path_continue_ns() {
             let ns = start.elapsed().as_nanos() / u128::from(iterations);
             let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../../tmp/pentry-r2/e2b/poll-fast-ns.txt");
+            // The macmini lane does not receive this repo's tmp/ directory.
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).expect("create ns receipt directory");
+            }
             std::fs::write(&path, format!("POLL_FAST_NS_PER_ITER={ns}\n"))
                 .expect("write ns receipt");
             eprintln!("POLL_FAST_NS_PER_ITER={ns}");
