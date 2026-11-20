@@ -54,6 +54,10 @@ pub(crate) mod serial_gate;
 #[cfg(test)]
 #[path = "world/tests/serial_gate_retarget.rs"]
 mod serial_gate_retarget;
+/// Second-thread product cases. The ticket stays on the keeper.
+#[cfg(test)]
+#[path = "world/tests/serial_gate_threads.rs"]
+mod serial_gate_threads;
 mod slot;
 mod source_entry;
 // Crate-visible so the public test-support re-export in eval/mod.rs can name

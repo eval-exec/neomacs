@@ -1,7 +1,7 @@
 //! Product API retarget onto `serial_gate`. Every case runs on the keeper
-//! thread. `WorldProofEra` is `!Send + !Sync`, and `park_once` / `wait_request`
-//! are `pub(crate)` in neovm-value, so a second thread cannot park or call
-//! stop from this crate. This is not the TSan gate.
+//! thread and prints `kind=PRODUCT-SINGLE-THREAD`. These checks are not the
+//! TSan gate. The second-thread cases are `serial_gate_threads`.
+//! `WorldProofEra` is `!Send + !Sync`, so `stop` stays on the keeper.
 
 #![forbid(unsafe_code)]
 
@@ -66,7 +66,9 @@ fn retained_loan_is_refused() {
         assert_eq!(retained.reason, SerialEndError::NotCollected);
         assert!(matches!(stop_for_test(era), Err(RendezvousError::Busy)));
         let _held = retained.ticket;
-        eprintln!("PENTRY_TSAN case=retained_loan_is_refused kind=PRODUCT-SINGLE-THREAD refused=true");
+        eprintln!(
+            "PENTRY_TSAN case=retained_loan_is_refused kind=PRODUCT-SINGLE-THREAD refused=true"
+        );
     });
 }
 

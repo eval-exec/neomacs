@@ -1,5 +1,7 @@
 //! SCAFFOLD real-thread doubles. `serial_gate_retarget` is a single-thread
-//! product API retarget, not the TSan gate. These doubles are not the gate.
+//! product API retarget (`kind=PRODUCT-SINGLE-THREAD`). The product TSan
+//! cases are `serial_gate_threads` (`kind=PRODUCT`). These doubles are not
+//! the gate.
 #![forbid(unsafe_code)]
 
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};

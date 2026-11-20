@@ -54,6 +54,12 @@ pub(crate) struct RetainedSerialFailure<'era, 'heap> {
 }
 
 impl<'era, 'heap> SerialTicket<'era, 'heap> {
+    /// The stopped proof this ticket holds. Cons-storage return and resume
+    /// take `&AllStopped` and have to run while the ticket is still out.
+    pub(crate) fn stopped_proof(&self) -> &AllStopped<'era> {
+        &self.stopped
+    }
+
     /// Roots copied at a successful `serial_gc_for_test`, not at lend time.
     pub(crate) fn attached_roots(&self) -> Option<(&[usize], &[usize])> {
         match &self.state {
