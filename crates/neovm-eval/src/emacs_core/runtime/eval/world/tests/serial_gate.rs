@@ -86,6 +86,24 @@ impl std::fmt::Debug for RetainedSerialFailure<'_, '_> {
     }
 }
 
+/// `lend_serial_for_test` did not mint a ticket. The stopped proof is still
+/// live, so a retryable `Busy` can lend again. Dropping this value drops the
+/// proof and poisons the era.
+#[must_use = "retain the stopped proof or the era poisons"]
+pub(crate) struct RetainedLendFailure<'era> {
+    pub(crate) reason: RendezvousError,
+    pub(crate) stopped: AllStopped<'era>,
+}
+
+impl std::fmt::Debug for RetainedLendFailure<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RetainedLendFailure")
+            .field("reason", &self.reason)
+            .field("stopped", &self.stopped)
+            .finish_non_exhaustive()
+    }
+}
+
 static_assertions::assert_not_impl_any!(SerialTicket<'static, 'static>: Send, Sync, Clone, Copy);
 static_assertions::assert_not_impl_any!(
     RetainedSerialFailure<'static, 'static>: Send,
@@ -93,6 +111,7 @@ static_assertions::assert_not_impl_any!(
     Clone,
     Copy
 );
+static_assertions::assert_not_impl_any!(RetainedLendFailure<'static>: Send, Sync, Clone, Copy);
 
 /// Forward to the era's `stop`. Self-stop on the keeper thread is the existing
 /// `RendezvousError::Busy`. This adds no error type.
@@ -104,19 +123,33 @@ pub(crate) fn stop_for_test<'era, 'heap>(
 
 /// Mint a ticket only after `AllStopped`. `owner` must be this era's keeper,
 /// held on the calling thread. A missing keeper is `Identity`, the same
-/// refusal as the wrong owner. The stopped proof moves into the ticket.
+/// refusal as the wrong owner. Every failure returns the stopped proof.
+/// Dropping that proof, not the `Busy` itself, is what poisons the era.
 pub(crate) fn lend_serial_for_test<'era, 'heap>(
     era: &'era WorldProofEra<'heap>,
     owner: &'era Baton,
     stopped: AllStopped<'era>,
-) -> Result<SerialTicket<'era, 'heap>, RendezvousError> {
+) -> Result<SerialTicket<'era, 'heap>, RetainedLendFailure<'era>> {
     if !owner.held_here() {
-        return Err(RegistrationError::WrongThread.into());
+        return Err(RetainedLendFailure {
+            reason: RegistrationError::WrongThread.into(),
+            stopped,
+        });
     }
-    stopped.check_world_roots(owner.parallel_heap_identity())?;
-    let keeper = era.keeper_for_test().ok_or(RendezvousError::Identity)?;
+    if let Err(reason) = stopped.check_world_roots(owner.parallel_heap_identity()) {
+        return Err(RetainedLendFailure { reason, stopped });
+    }
+    let Some(keeper) = era.keeper_for_test() else {
+        return Err(RetainedLendFailure {
+            reason: RendezvousError::Identity,
+            stopped,
+        });
+    };
     if !std::ptr::eq(keeper, owner) {
-        return Err(RendezvousError::Identity);
+        return Err(RetainedLendFailure {
+            reason: RendezvousError::Identity,
+            stopped,
+        });
     }
     Ok(SerialTicket {
         era,
