@@ -230,7 +230,11 @@ covered by the GUI corpus), `etaf-video-studio` (open/state through a
 test-written fake CLI, the startup list/status protocol, project loading and
 clip selection, CLI error and missing-executable reporting, close and
 outside-buffer errors, and local title validation; no real project store,
-ffmpeg or network), and the `etaf-md`/`etaf-org-preview` headless readers. `gui_parity_tests/etaf_*` adds
+ffmpeg or network), `etaf-algo-lab` (catalog/lifecycle, player controls,
+A*/Dijkstra/BFS runs and unreachable goals, all four sorts and headless
+comparison, and laboratory switching through published Hosts; animated frame
+text is reduced to counts and matches), and the
+`etaf-md`/`etaf-org-preview` headless readers. `gui_parity_tests/etaf_*` adds
 real X11 probes for the md/org pages and the posframe child frame.
 
 `etaf-reader`, `etaf-youtube`, `etaf-video-player`, `maillist`, the

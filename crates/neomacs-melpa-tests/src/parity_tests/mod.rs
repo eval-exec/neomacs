@@ -388,6 +388,7 @@ mod espuds;
 mod ess;
 mod esup;
 mod esxml;
+mod etaf_algo_lab;
 mod etaf_ascii_video;
 mod etaf_bili;
 mod etaf_core;
