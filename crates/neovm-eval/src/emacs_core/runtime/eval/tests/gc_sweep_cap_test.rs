@@ -102,7 +102,7 @@ fn sweep_from_zero_allocation() -> Context {
         assert!(attempts < 20, "could not observe a fresh sweep");
         garbage(&mut ev);
     }
-    assert_eq!(ev.tagged_heap.sweep_stats().slice_count, 0);
+    assert_eq!(ev.tagged_heap.sweep_stats().slice_count(), 0);
     ev
 }
 
@@ -116,9 +116,9 @@ fn an_incremental_sweep_is_paced_by_allocation_not_by_safe_points() {
         ev.gc_safe_point_exact();
     }
     assert!(
-        ev.tagged_heap.sweep_stats().slice_count <= 1 + 10_000 / 1024,
+        ev.tagged_heap.sweep_stats().slice_count() <= 1 + 10_000 / 1024,
         "{} slices ran across 10000 safe points with no allocation",
-        ev.tagged_heap.sweep_stats().slice_count
+        ev.tagged_heap.sweep_stats().slice_count()
     );
     assert!(ev.tagged_heap.sweep_in_progress());
     // With allocation, slices follow it, and the sweep completes before the
@@ -132,7 +132,7 @@ fn an_incremental_sweep_is_paced_by_allocation_not_by_safe_points() {
             ev.tagged_heap.bytes_since_gc() <= ev.tagged_heap.gc_threshold(),
             "the sweep fell behind allocation after {slices} slices"
         );
-        slices = ev.tagged_heap.sweep_stats().slice_count;
+        slices = ev.tagged_heap.sweep_stats().slice_count();
         ev.gc_safe_point_exact();
     }
     assert!(slices > 100, "the sweep needed only {slices} slices");
@@ -161,7 +161,7 @@ fn raising_the_threshold_mid_sweep_does_not_postpone_the_sweep() {
         !ev.tagged_heap.sweep_in_progress(),
         "{} bytes allocated after the threshold was raised, sweep unfinished after {} slices",
         ev.tagged_heap.bytes_since_gc(),
-        ev.tagged_heap.sweep_stats().slice_count
+        ev.tagged_heap.sweep_stats().slice_count()
     );
 }
 
@@ -180,6 +180,6 @@ fn a_deferred_sweep_finishes_in_a_loop_that_does_not_allocate() {
     assert!(
         !ev.tagged_heap.sweep_in_progress(),
         "sweep unfinished after {safe_points} safe points with no allocation ({} slices)",
-        ev.tagged_heap.sweep_stats().slice_count
+        ev.tagged_heap.sweep_stats().slice_count()
     );
 }
