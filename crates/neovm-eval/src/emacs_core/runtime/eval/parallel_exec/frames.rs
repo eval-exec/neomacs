@@ -15,7 +15,9 @@
 use super::super::owner_bindings::{BindingKind, Channel, UndoTarget};
 use neovm_value::forward::TlsIndex;
 use neovm_value::intern::SymId;
-use neovm_value::tagged::gc::{OwnerAllocRegion, OwnerRegionRefund, RendezvousError, TaggedHeap};
+use neovm_value::tagged::gc::{
+    OwnerAllocRegion, OwnerEraReserve, OwnerRegionRefund, RendezvousError, ReserveError, TaggedHeap,
+};
 use neovm_value::tagged::transport::SharedRoot;
 use neovm_value::value::Value;
 #[cfg(test)]
@@ -1155,9 +1157,39 @@ impl FrameArena {
 
     /// Refund this owner's unused tails. Only a publication that precedes a
     /// stop calls this. The shared free list is not written.
+    ///
+    /// This records the decision and does not apply it. A cursor installed
+    /// from a raw address has no reserve, so applying the decision here
+    /// would write the shared free list.
     #[doc(hidden)]
     pub fn close_region_for_stop(&mut self) -> OwnerRegionRefund {
         self.region.close_for_stop()
+    }
+
+    /// Carve the next cons run of `reserve` into this arena's book.
+    ///
+    /// `publish_scan` refuses the book while the run is open. The reserve
+    /// holds the blocks; this arena holds only the cursors.
+    #[doc(hidden)]
+    pub fn carve_granted_cons(
+        &mut self,
+        heap: &mut TaggedHeap,
+        reserve: &mut OwnerEraReserve,
+    ) -> Result<(), ReserveError> {
+        reserve.carve_cons(heap, &mut self.region)
+    }
+
+    /// Close this book and apply the reserve's refund.
+    ///
+    /// Pacing loses the unhanded tail. The block's `next_index` stays at
+    /// the grant end until [`OwnerEraReserve::return_unused_before_sweep`].
+    #[doc(hidden)]
+    pub fn close_granted_reserve(
+        &mut self,
+        heap: &mut TaggedHeap,
+        reserve: &mut OwnerEraReserve,
+    ) -> OwnerRegionRefund {
+        reserve.close_for_stop(heap, &mut self.region)
     }
 
     /// Publish every root this arena owns, grouped by the canonical E3 names.

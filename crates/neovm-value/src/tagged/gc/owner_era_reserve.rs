@@ -617,8 +617,11 @@ fn mint_page_in<T: PagedObject>(arena: &mut ObjectArena<T>) -> ReservedPage {
             source: ArenaRunSource::PageTail,
         };
     }
-    let run = arena.reserve_run(slots);
+    // Not `reserve_run`: that takes the serial bump tail when it is shorter
+    // than a page. The owner grant is a whole page of its own.
+    let run = arena.reserve_fresh_page();
     debug_assert_eq!(run.count, slots, "an owner page grant is a whole page");
+    debug_assert_eq!(run.first, 0);
     let origin = arena.pages[run.page].slot_ptr(run.first) as usize;
     ReservedPage {
         page: run.page,
@@ -693,6 +696,8 @@ impl TaggedHeap {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tagged::gc::set_tagged_heap;
+    use crate::tagged::mutate::set_cons_car;
 
     fn heap() -> TestHeap {
         TestHeap::new()
@@ -859,5 +864,149 @@ mod tests {
             heap.cons_block_next_index_for_test(0),
             CONS_BLOCK_SIZE as u16
         );
+    }
+
+    /// A cell this reserve just handed out, initialized and not yet published.
+    fn handed_cons(addr: usize) -> TaggedValue {
+        let cell = addr as *const ConsCell;
+        // SAFETY: `addr` is a cell of a block this reserve holds and has just
+        // carved. Nothing else can read the cell until these stores finish.
+        unsafe {
+            (*cell).set_car(TaggedValue::NIL);
+            (*cell).set_cdr(TaggedValue::NIL);
+            TaggedValue::from_cons_ptr(cell)
+        }
+    }
+
+    #[test]
+    fn a_partial_serial_float_page_is_not_the_owner_grant() {
+        let mut heap = heap();
+        let _serial = heap.alloc_float(1.0);
+        heap.close_alloc_regions();
+        let pages = heap.float_page_len_for_test();
+        assert_eq!(pages, 1);
+        let serial_next = heap.float_arena.pages[0].next_index;
+        assert!(serial_next > 0);
+        assert!(serial_next < ObjectPage::<FloatObj>::SLOTS);
+        let mut owner = OwnerEraReserve::new();
+        owner
+            .grant_at_stop(&mut heap, true, MeasuredInterval::zero())
+            .expect("grant beside a partial serial page");
+        assert_eq!(heap.float_page_len_for_test(), pages + 1);
+        assert_eq!(heap.float_arena.pages[0].next_index, serial_next);
+        assert_eq!(
+            heap.float_arena.pages[1].next_index,
+            ObjectPage::<FloatObj>::SLOTS
+        );
+        owner.return_unused_before_sweep(&mut heap).unwrap();
+        assert!(!owner.holds_reserve());
+        assert_eq!(heap.float_arena.pages[0].next_index, serial_next);
+        assert_eq!(heap.float_arena.pages[1].next_index, 0);
+    }
+
+    #[test]
+    fn an_old_store_keeps_the_owner_cons_and_the_unrooted_cons_is_reclaimed() {
+        let mut heap = Box::new(TaggedHeap::new());
+        // SAFETY: this fixture is the only view of the heap. No collector
+        // thread and no compiled leaf run.
+        unsafe { heap.set_generational_enabled(true) };
+        heap.generational.verify = true;
+        heap.partition_dump = false;
+        heap.dump_blackened = false;
+        heap.gc_threshold = usize::MAX / 4;
+        set_tagged_heap(&mut heap);
+
+        let old = heap.alloc_cons(TaggedValue::fixnum(1), TaggedValue::NIL);
+        for _ in 0..3 {
+            if heap.cons_age_is_old_for_test(old) {
+                break;
+            }
+            heap.begin_minor_collection().expect("promote");
+            heap.seed_root(old);
+            heap.complete_minor_collection();
+            heap.finish_incremental_sweep_now();
+            heap.gc_threshold = usize::MAX / 4;
+        }
+        assert!(heap.cons_age_is_old_for_test(old));
+        heap.close_alloc_regions();
+
+        let mut owner_a = OwnerEraReserve::new();
+        let mut owner_b = OwnerEraReserve::new();
+        let mut region_a = OwnerAllocRegion::new();
+        let mut region_b = OwnerAllocRegion::new();
+        let young = heap.young_block_len_for_test();
+        owner_a
+            .grant_at_stop(&mut heap, true, MeasuredInterval::zero())
+            .expect("owner A grant");
+        owner_b
+            .grant_at_stop(&mut heap, true, MeasuredInterval::zero())
+            .expect("owner B grant");
+        assert_eq!(heap.young_block_len_for_test(), young + 2);
+        owner_a.carve_cons(&mut heap, &mut region_a).unwrap();
+        owner_b.carve_cons(&mut heap, &mut region_b).unwrap();
+        let addr_c = region_a.take_cons_cell().expect("owner A cell");
+        let addr_control = region_b.take_cons_cell().expect("owner B cell");
+        owner_a.note_cons_taken(1);
+        owner_b.note_cons_taken(1);
+        assert!(addr_c.abs_diff(addr_control) >= CONS_BLOCK_BYTES);
+        let kept = handed_cons(addr_c);
+        let control = handed_cons(addr_control);
+        // The next cell was carved into the run and then refunded. It is not
+        // initialized and must not be treated as a root.
+        // SAFETY: the address is the cell after `kept` in a block this
+        // reserve holds. The probe only asks whether the heap owns it.
+        let tail = unsafe {
+            TaggedValue::from_cons_ptr((addr_c + size_of::<ConsCell>()) as *const ConsCell)
+        };
+
+        assert_eq!(
+            owner_a.return_unused_before_sweep(&mut heap),
+            Err(ReserveError::RegionOpen)
+        );
+        assert_eq!(
+            owner_b.return_unused_before_sweep(&mut heap),
+            Err(ReserveError::RegionOpen)
+        );
+        assert!(heap.owns_heap_value_for_test(kept));
+        assert!(heap.owns_heap_value_for_test(control));
+
+        assert!(set_cons_car(old, kept));
+        assert!(heap.owner_card_is_dirty_for_test(old));
+
+        owner_a.close_for_stop(&mut heap, &mut region_a);
+        owner_b.close_for_stop(&mut heap, &mut region_b);
+        owner_a
+            .return_unused_before_sweep(&mut heap)
+            .expect("return A");
+        owner_b
+            .return_unused_before_sweep(&mut heap)
+            .expect("return B");
+        assert!(!owner_a.holds_reserve());
+        assert!(!owner_b.holds_reserve());
+        assert!(region_a.is_closed());
+        assert!(region_b.is_closed());
+        assert!(heap.owns_heap_value_for_test(kept));
+        assert!(heap.owns_heap_value_for_test(control));
+        assert!(
+            !heap.owns_heap_value_for_test(tail),
+            "the unhanded tail is not a live object"
+        );
+        assert_eq!(heap.jit_cons_window_for_test(), (0, 0));
+        assert_eq!(heap.jit_float_window_for_test(), (0, 0));
+
+        // No stack root. The minor reaches `kept` only through the dirty card.
+        heap.begin_minor_collection().expect("card minor");
+        heap.complete_minor_collection();
+        heap.finish_incremental_sweep_now();
+
+        assert!(heap.owns_heap_value_for_test(kept));
+        assert_eq!(old.cons_car(), kept);
+        assert!(
+            !heap.owns_heap_value_for_test(control),
+            "the control had no store and no root"
+        );
+        assert!(!heap.owns_heap_value_for_test(tail));
+        assert_eq!(heap.jit_cons_window_for_test(), (0, 0));
+        assert_eq!(heap.jit_float_window_for_test(), (0, 0));
     }
 }
