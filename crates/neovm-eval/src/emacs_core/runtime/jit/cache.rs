@@ -1497,7 +1497,10 @@ fn add_entry_inline_deps(id: u64) {
 }
 
 /// Add dependencies of every current OSR variant except one being replaced.
-/// All cache reads and reverse-map writes belong to the current mutator.
+/// A leaf parked on the map `retired` by a refused clear is not current: it
+/// never runs again, so its dependencies must not survive the invalidation
+/// that retired it. All cache reads and reverse-map writes belong to the
+/// current mutator.
 fn add_osr_inline_deps(id: u64, skip: Option<usize>) {
     if !super::compile::jit_inline2_mode().enabled() {
         return;
@@ -1507,6 +1510,7 @@ fn add_osr_inline_deps(id: u64, skip: Option<usize>) {
             if *fid == id
                 && skip != Some(*pc)
                 && let Some(entry) = entry
+                && !entry.leaf.retired.get()
             {
                 add_inline_deps(id, &entry.leaf);
             }
@@ -1945,16 +1949,24 @@ pub(crate) fn leaf_is_current(
     }
 }
 
-/// Whether `(func, osr_pc)` has an OSR cache entry (positive or negative) on
-/// this thread. `Vm::osr_transfer` asks after a transfer whose precise deopt
-/// it installed in place: an entry the deopt's invalidation dropped means
-/// the next hot back-edge may transfer again, into a leaf compiled from the
-/// widened feedback, instead of latching the loop onto the interpreter.
+/// Whether `(func, osr_pc)` holds a decision a future probe can use: a
+/// compiled entry, or a refusal. `Vm::osr_transfer` asks after a transfer
+/// whose precise deopt it installed in place: an entry the deopt's
+/// invalidation dropped means the next hot back-edge may transfer again,
+/// into a leaf compiled from the widened feedback, instead of latching the
+/// loop onto the interpreter. A leaf the invalidation parked on the map
+/// `retired` (its `Rc` must outlive the borrowed, live frame that made the
+/// clear refuse) is not such a decision: the next probe moves it onto
+/// `retired` and compiles again, so it reports not cached.
 pub(crate) fn osr_entry_cached(func: &ByteCodeFunction, osr_pc: usize) -> bool {
     let Some(id) = func.jit_runtime().compiled_id() else {
         return false;
     };
-    OSR_CACHE.with(|c| c.borrow().contains_key(&(id, osr_pc)))
+    OSR_CACHE.with(|c| {
+        c.borrow()
+            .get(&(id, osr_pc))
+            .is_some_and(|entry| !entry.as_ref().is_some_and(|e| e.leaf.retired.get()))
+    })
 }
 
 /// Deopt-driven invalidation of `func`'s compiled code on this thread

@@ -315,6 +315,16 @@ fn osr_inline_invalidation_preserves_dependencies_of_a_borrowed_entry() {
     assert_eq!(cache_entry_kind_for_test(id), "compiled");
     assert!(!entry_leaf.retired.get());
     assert!(!osr_entry_cached(&physical, 0));
+    // The refused clear parks the leaf on the map, retired, until the next
+    // probe moves it onto `retired`: its `Rc` must outlive this borrowed
+    // frame. Parked is not cached — the loop may transfer again.
+    assert!(OSR_CACHE.with(|cache| {
+        cache
+            .borrow()
+            .get(&(id, 0))
+            .and_then(Option::as_ref)
+            .is_some_and(|entry| entry.leaf.retired.get())
+    }));
     assert!(INLINE_DEPS.with(|deps| {
         deps.borrow()
             .get(&entry_symbol)
