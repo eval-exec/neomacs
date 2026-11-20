@@ -37,6 +37,9 @@ mod commit_editing;
 #[path = "compact_frame_geometry.rs"]
 mod compact_frame_geometry;
 
+#[path = "composite_shaping_785_gui_oracle.rs"]
+mod composite_shaping_785_gui_oracle;
+
 #[path = "config_env_boot.rs"]
 mod config_env_boot;
 
