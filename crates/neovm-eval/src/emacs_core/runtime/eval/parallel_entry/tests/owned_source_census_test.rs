@@ -247,6 +247,26 @@ fn finish_unexported_fixture(drained: OwnedSourceHeapDrained) {
     drop(ManuallyDrop::into_inner(source));
 }
 
+/// Same teardown after a matched return. Publication retires only once the
+/// source heap is installed again. This is still not a product resume path.
+pub(super) fn finish_returned_fixture(
+    drained: OwnedSourceHeapDrained,
+    publication: neovm_value::tagged::transport::RootBatchLease,
+) {
+    assert!(!neovm_value::tagged::gc::tagged_heap_is_installed());
+    assert!(drained._frame.effects.keeper().held_here());
+    let SourceFrame {
+        mut source,
+        effects,
+    } = drained._frame;
+    source.tagged_heap.install_tagged_heap();
+    effects.release(&mut source);
+    publication
+        .try_finish()
+        .expect("returned source is active before publication retirement");
+    drop(ManuallyDrop::into_inner(source));
+}
+
 trait Release {
     fn release(self, source: &mut super::super::super::Context);
 }

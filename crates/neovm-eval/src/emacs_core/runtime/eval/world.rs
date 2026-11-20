@@ -41,6 +41,8 @@ mod function_write_hooks;
 mod green_owner;
 mod heap_transfer_adapter;
 #[cfg(test)]
+pub(crate) use heap_transfer_adapter::recover_transferred_source;
+#[cfg(test)]
 #[path = "world/tests/heap_transfer.rs"]
 mod heap_transfer_tests;
 mod slot;

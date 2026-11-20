@@ -697,6 +697,18 @@ impl PreparedHeapTransfer {
         }
     }
 
+    /// Test-only traversal of the real local collector boundary. No heap word
+    /// or collector capability is exposed to the boxed-source fixture.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn source_roundtrip_for_test(self) -> Result<Self, RetainedTransferFailure> {
+        self.with_collector(|admission| {
+            let identity = admission.heap_identity();
+            (admission.into_collector(), identity)
+        })
+        .map(|(transfer, _identity)| transfer)
+    }
+
     /// The actual local collector, not merely an arbitrary result, must come
     /// back. The higher-ranked bound excludes borrowed views. The completion
     /// bound excludes unrooted Lisp words, which have no borrow lifetime.

@@ -2,8 +2,9 @@
 //! In-place bindings are parked before host activations leave. Text-cache
 //! retirement and the closed census share that same shell: the census borrows
 //! the keeper the shell already holds. Observation withdrawal uses that same
-//! collector frame and returns only the local receipt. No heap transfer, observation export,
-//! source restoration, or Lisp entry is implemented here. Every armed payload
+//! collector frame and returns only the local receipt. The closed heap split
+//! lives in `bootstrap` and has no production caller. Observation export,
+//! source restoration, and Lisp entry are not implemented here. Every armed payload
 //! retains on Drop, forget, and unwind. Only a pre-effect refusal returns an
 //! ordinary Context.
 
@@ -62,6 +63,7 @@ pub(crate) enum SourceWithdrawalStep {
     JitCache,
     JitBackend,
     JitCompiler,
+    HeapTransfer,
 }
 
 impl SourceWithdrawalStep {
@@ -94,6 +96,7 @@ impl SourceWithdrawalStep {
             Self::JitCache => "jit-cache",
             Self::JitBackend => "jit-backend",
             Self::JitCompiler => "jit-compiler",
+            Self::HeapTransfer => "heap-transfer",
         }
     }
 }
@@ -728,6 +731,8 @@ impl OwnedSourceBackendClosed {
         Ok(OwnedSourceCompilerClosed { _frame: frame })
     }
 }
+
+mod bootstrap;
 
 #[cfg(test)]
 #[path = "tests/owned_source_jit_compiler_test.rs"]
