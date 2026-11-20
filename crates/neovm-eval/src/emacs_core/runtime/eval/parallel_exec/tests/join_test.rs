@@ -495,10 +495,10 @@ fn publish_two_owner_grants(context: &mut Context) -> GrantedPair {
         .grant_at_stop(&mut context.tagged_heap, true, MeasuredInterval::zero())
         .expect("owner B grant");
     arena_a
-        .carve_granted_cons(&mut context.tagged_heap, &mut reserve_a)
+        .carve_granted_cons(&mut context.tagged_heap, &mut reserve_a, None)
         .expect("carve A");
     arena_b
-        .carve_granted_cons(&mut context.tagged_heap, &mut reserve_b)
+        .carve_granted_cons(&mut context.tagged_heap, &mut reserve_b, None)
         .expect("carve B");
     let addr_a = arena_a.take_cons_cell().expect("cell A");
     let addr_b = arena_b.take_cons_cell().expect("cell B");

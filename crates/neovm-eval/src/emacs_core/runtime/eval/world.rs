@@ -45,6 +45,8 @@ pub(crate) use heap_transfer_adapter::recover_transferred_source;
 #[cfg(test)]
 #[path = "world/tests/heap_transfer.rs"]
 mod heap_transfer_tests;
+/// Production safepoint polls. Dormant until the E4 engine slice calls them.
+pub(crate) mod poll;
 /// #7712 gate surface. cfg(test) only, beside the symbol fixture. Not on the
 /// test-support re-export, so another crate's tests cannot call it.
 #[cfg(test)]
@@ -58,6 +60,11 @@ mod serial_gate_retarget;
 #[cfg(test)]
 #[path = "world/tests/serial_gate_threads.rs"]
 mod serial_gate_threads;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "READY-E2B, wired by the E4 engine slice")
+)]
+pub(crate) use poll::PollOutcome;
 mod slot;
 mod source_entry;
 // Crate-visible so the public test-support re-export in eval/mod.rs can name

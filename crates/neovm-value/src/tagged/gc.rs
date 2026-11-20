@@ -2798,8 +2798,8 @@ pub(crate) use mutator_registration::symbol_functions::boundary as function_boun
 pub use mutator_registration::{
     AllStopped, CollectionError, CollectionReport, FunctionActivation, FunctionError,
     FunctionSelection, KeeperSymbols, MinorCollectionError, Mode, Mutator, OwnerRootSlot,
-    ParallelExecutionAdmission, ParallelHeapEra, Phase, PlainSymbolBacking, RegistrationError,
-    RendezvousError, Request, RunAccess, RunSlice, Snapshot, SymbolHandle,
+    ParallelExecutionAdmission, ParallelHeapEra, Phase, PlainSymbolBacking, PollOutcome,
+    RegistrationError, RendezvousError, Request, RunAccess, RunSlice, Snapshot, SymbolHandle,
 };
 pub use mutator_registration::{
     AllStoppedFailure, MutatorEntry, MutatorFinishFailure, MutatorStartFailure, NativeReturn,

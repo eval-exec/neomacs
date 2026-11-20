@@ -4,6 +4,23 @@ use super::super::a8_probes;
 use super::*;
 use crate::tagged::transport::PreparedParallelRootBatch;
 
+/// What the engine does after one poll.
+///
+/// `Continue` did not park: the phase word was admissible, or this owner is
+/// the keeper. `Resumed` is only returned after image restore. Parking stays
+/// inside the poll.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[must_use = "a resumed owner has a restored image; continuing does not"]
+pub enum PollOutcome {
+    Continue,
+    Resumed { epoch: NonZeroU64 },
+}
+
+#[inline(always)]
+fn phase_admissible(registry: &super::super::Registry) -> bool {
+    super::super::admission::PhaseLine::admissible(registry.phase.load())
+}
+
 impl<'era> Mutator<'era> {
     /// Acquire the real request, never a relaxed attention hint. No wait here.
     #[cfg(any(test, feature = "test-support"))]
@@ -100,6 +117,58 @@ impl<'era> Mutator<'era> {
         let epoch = self.wait_request()?;
         self.acknowledge(epoch, roots)?;
         self.restore_wait(false)
+    }
+
+    /// Safepoint poll. The admissible path is one Acquire load of the phase
+    /// word and does not call `roots`, take the gate, or allocate.
+    ///
+    /// The closure runs once, and only after that word is not admissible and
+    /// this owner is not the keeper. Busy retries reuse the batch the closure
+    /// already returned. A closure error returns before `wait_request`.
+    #[inline(never)]
+    pub fn poll(
+        &mut self,
+        roots: impl FnOnce() -> Result<Vec<SharedRoot>, RendezvousError>,
+    ) -> Result<PollOutcome, RendezvousError> {
+        // Poison and the wrong thread stay on the park line. This load is the
+        // only shared line the fast path touches; the slow path reports them.
+        if phase_admissible(self.registry) {
+            return Ok(PollOutcome::Continue);
+        }
+        self.poll_stopped(roots)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn poll_stopped(
+        &mut self,
+        roots: impl FnOnce() -> Result<Vec<SharedRoot>, RendezvousError>,
+    ) -> Result<PollOutcome, RendezvousError> {
+        // Same identity `keeper()` compares. A caller-supplied flag can be wrong.
+        if self.thread == self.registry.keeper_thread {
+            return Ok(PollOutcome::Continue);
+        }
+        let batch = roots()?;
+        let epoch = loop {
+            match self.wait_request() {
+                Ok(epoch) => break epoch,
+                Err(RendezvousError::Busy) => std::thread::yield_now(),
+                Err(error) => return Err(error),
+            }
+        };
+        loop {
+            match self.acknowledge(epoch, &batch) {
+                Ok(()) => break,
+                Err(RendezvousError::Busy) => std::thread::yield_now(),
+                Err(error) => return Err(error),
+            }
+        }
+        // `restore_wait` already retries its own Busy and does not re-acknowledge.
+        let restored = self.restore_wait(false)?;
+        match NonZeroU64::new(restored) {
+            Some(epoch) => Ok(PollOutcome::Resumed { epoch }),
+            None => Err(RendezvousError::Publication),
+        }
     }
     /// Publish terminated-owner roots before leaving. The canonical entry and
     /// its image remain retained and participate in later frozen memberships.

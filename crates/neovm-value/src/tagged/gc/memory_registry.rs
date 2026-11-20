@@ -16,6 +16,22 @@ impl TaggedHeap {
         counts[index] = counts[index].wrapping_add(delta);
     }
 
+    /// Zero the three fields `charge_conses` writes onto the post-image shell.
+    ///
+    /// Between collections those facts live in the published image.
+    /// `restore_legacy` returns `ImageError::DestinationOccupied` when
+    /// `allocated_count`, the cons `memory_use_counts` slot, or
+    /// `bytes_since_gc` is nonzero. This does not bank the bytes, and it
+    /// leaves `cons_live_count` and the cons block in place.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn clear_inter_collection_cons_charge_for_test(&mut self) {
+        let state = self.current_mutator_gc_mut();
+        state.allocated_count = 0;
+        state.memory_use_counts[MemoryUseCountSlot::ConsCells.index()] = 0;
+        state.bytes_since_gc = 0;
+    }
+
     /// The Lisp-visible allocation counts (`memory-use-counts`), exact: one
     /// per object handed out, the open allocation regions' unused cells
     /// excluded (they were charged when the region was granted).
