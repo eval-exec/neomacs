@@ -180,13 +180,26 @@ pub(crate) fn end_serial_for_test<'era, 'heap>(
     }
 }
 
-// The symbol fixture has no `gc-memory-telemetry` gate. `collect_stopped`
-// still returns `RendezvousError::Publication` from `supported_with_weak`
-// when that feature is enabled, before any collection. The default eval lib
-// does not enable it.
+// `cfg!` keeps one test green in both builds. With the feature,
+// `EraCore::admit_rooted` calls `supported` / `supported_with_weak` and maps
+// the refusal to `RegistrationError::Publication` before the fixture body.
+// `serial_gc_for_test` is not reached. The default arm is the collection
+// contract.
 #[test]
 fn serial_gate_reads_current_roots_and_refuses_a_second_collection() {
     let _harness = crate::test_utils::unit_harness();
+    if cfg!(feature = "gc-memory-telemetry") {
+        let refused = crate::emacs_core::eval::Context::try_with_test_symbol_backings_init_era(
+            &[
+                neovm_value::tagged::gc::PlainSymbolBacking::Unprojected,
+                neovm_value::tagged::gc::PlainSymbolBacking::Unprojected,
+            ],
+            |_, _| {},
+            |_era, _ids| panic!("telemetry admission must refuse before the body"),
+        );
+        assert_eq!(refused, Err(RegistrationError::Publication));
+        return;
+    }
     crate::emacs_core::eval::Context::with_test_symbol_functions_init_era(
         neovm_value::tagged::gc::PlainSymbolBacking::Unprojected,
         |_, _| {},
