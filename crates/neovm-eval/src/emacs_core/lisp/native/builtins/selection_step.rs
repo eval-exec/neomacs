@@ -58,6 +58,10 @@ pub(super) fn installed(ctx: &crate::emacs_core::eval::Context) -> SelectionInst
 #[cold]
 #[inline(never)]
 fn routed_worker_boundary_not_installed() -> ! {
+    tracing::error!(
+        target: "neovm::eval::selection",
+        "routed selection arm reached before the C4b worker boundary was installed"
+    );
     std::process::abort()
 }
 
@@ -599,6 +603,102 @@ mod tests {
     }
 
     fn prime_nothing(_ctx: &mut Context) {}
+
+    #[derive(Default)]
+    struct RecordingClipboardHost {
+        clipboard: Option<String>,
+        primary: Option<String>,
+    }
+
+    impl crate::emacs_core::eval::protocol::DisplayHost for RecordingClipboardHost {
+        fn realize_gui_frame(
+            &mut self,
+            _request: crate::emacs_core::eval::GuiFrameHostRequest,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn resize_gui_frame(
+            &mut self,
+            _request: crate::emacs_core::eval::GuiFrameHostRequest,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn set_clipboard_text(&mut self, text: Option<&str>) -> Result<(), String> {
+            self.clipboard = text.map(str::to_owned);
+            Ok(())
+        }
+
+        fn clipboard_text(&mut self) -> Result<Option<String>, String> {
+            Ok(self.clipboard.clone())
+        }
+
+        fn set_primary_selection_text(&mut self, text: Option<&str>) -> Result<(), String> {
+            self.primary = text.map(str::to_owned);
+            Ok(())
+        }
+
+        fn primary_selection_text(&mut self) -> Result<Option<String>, String> {
+            Ok(self.primary.clone())
+        }
+
+        fn primary_selection_owner(
+            &mut self,
+        ) -> Result<neomacs_display_protocol::SelectionOwner, String> {
+            Ok(if self.primary.is_some() {
+                neomacs_display_protocol::SelectionOwner::ThisProcess
+            } else {
+                neomacs_display_protocol::SelectionOwner::None
+            })
+        }
+    }
+
+    /// The flip's production wiring: a Green hosted Context activates Local
+    /// from `set_display_host`, and the stubs then reach the attached host.
+    /// Removing the `activate_host_session` call from `set_display_host` is
+    /// the mutation that makes this test red.
+    #[test]
+    fn set_display_host_activates_the_local_arm_and_reaches_the_host() {
+        use crate::emacs_core::eval::activation::SelectionPhase;
+        use crate::emacs_core::eval::protocol::DisplayHost;
+
+        // Green hosted Context: set_display_host is the flip's production
+        // entry point. Removing its activate_host_session call makes this red.
+        let mut ctx = Context::new(crate::test_utils::unit_runtime());
+        ctx.set_green_threading_mode_at_construction_for_test();
+        assert_eq!(ctx.selection_phase(), SelectionPhase::Uninstalled);
+        ctx.set_display_host(Box::new(RecordingClipboardHost::default()));
+        assert_eq!(ctx.selection_phase(), SelectionPhase::Local);
+        assert_eq!(installed(&ctx), SelectionInstaller::OwnedLocalMain);
+
+        let set =
+            super::super::builtin_neomacs_clipboard_set(&mut ctx, vec![Value::string("wire")]);
+        let got = super::super::builtin_neomacs_clipboard_get(&mut ctx, vec![]);
+        assert!(set.is_ok(), "the installed arm performs the clipboard set");
+        match &got {
+            Ok(value) => assert_eq!(value, &Value::string("wire"), "the host holds the text"),
+            Err(_) => panic!("the installed arm reads the attached host"),
+        }
+
+        // The same calls on a serial Context with an identical host return the
+        // same values; the direct bodies are the serial lowering.
+        let mut serial = Context::new(crate::test_utils::unit_runtime());
+        serial.set_display_host(Box::new(RecordingClipboardHost::default()));
+        let serial_set =
+            super::super::builtin_neomacs_clipboard_set(&mut serial, vec![Value::string("wire")]);
+        let serial_get = super::super::builtin_neomacs_clipboard_get(&mut serial, vec![]);
+        assert_same_batch(set, serial_set);
+        assert_same_batch(got, serial_get);
+
+        // Default mode must not activate. The one-authority-stays-untaken
+        // assertion lives in activation_owner::tests::
+        // default_mode_hosted_stays_uninstalled, where the eval-scoped take
+        // accessor is nameable.
+        let mut default_mode = Context::new(crate::test_utils::unit_runtime());
+        default_mode.set_display_host(Box::new(RecordingClipboardHost::default()));
+        assert_eq!(default_mode.selection_phase(), SelectionPhase::Uninstalled);
+    }
 
     #[test]
     fn owned_lowering_matches_the_serial_lowering() {
