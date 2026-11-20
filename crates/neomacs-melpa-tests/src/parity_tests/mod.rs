@@ -356,6 +356,7 @@ mod drag_stuff;
 mod dumb_jump;
 mod easy_kill;
 mod ebox_layout;
+mod ebox_playground;
 mod ecss_cascade;
 mod ecukes;
 mod editorconfig;

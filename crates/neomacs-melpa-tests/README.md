@@ -196,7 +196,9 @@ The pinned `emacs-taf` packages are the project's largest real-world divergence
 surface. `parity_tests/etaf_ecosystem` loads every package (32 modules) and
 compares the feature plus the package-prefixed `fboundp`/`boundp` surface;
 batch modules cover `ecss` (cascade/specificity/layers/var), `ebox`
-(render/flex/mutation), `ekp` (layout plans/justification), `etaf`
+(render/flex/mutation), `ebox-playground` (fixed-viewport file rendering,
+same-basename companion loading, preview replacement, source errors, close
+lifecycle and .ebox file mode), `ekp` (layout plans/justification), `etaf`
 (refs/Data/animation/View), `etaf-ui` (color/QR/icons/editor), `etaf-ncm`
 (session/library/search/transport/panes/LRC/layout/palette through its
 documented scripted-client seam, so no network, Node, mpv or login),
