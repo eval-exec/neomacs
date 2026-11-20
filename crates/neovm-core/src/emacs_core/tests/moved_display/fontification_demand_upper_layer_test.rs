@@ -529,6 +529,15 @@ fn fontification_callback_range_is_bounded_and_flat_on_a_long_line() {
         (min_long, max_long),
         "the fontification range grew with the long line: {min_short}..{max_short} vs {min_long}..{max_long}"
     );
+    // GNU `get_large_narrowing_begv/zv` (src/xdisp.c:3793-3822) for a
+    // callback at Lisp position 400001: 400001 - 250000 = 150001, walked back
+    // by the 128-character BOL search limit to 149873, and
+    // min(400001 + 250000, ZV) = 650001.
+    assert_eq!(
+        (min_short, max_short),
+        (149_873, 650_001),
+        "GNU's large-narrowing bounds for the callback position"
+    );
     assert!(
         max_short - min_short <= 500_000 + 128,
         "fontification range {} exceeds long-line-optimizations-region-size plus the BOL search limit",

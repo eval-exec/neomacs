@@ -9531,7 +9531,10 @@ fn long_line_fontification_narrowing(
     // beginning of the line.
     let mut limit = bol_limit.max(0);
     while beg > point_min && limit > 0 {
-        let before = buffer.char_pos_to_emacs_byte_pos_clamped(CharPos0::new((beg - 1) as usize));
+        // `beg` and `point_min` are 1-based Lisp positions; the character
+        // before `beg` sits at 0-based `CharPos0(beg - 2)`.
+        let before =
+            buffer.char_pos_to_emacs_byte_pos_clamped(CharPos0::new((beg - 2).max(0) as usize));
         if buffer.emacs_byte_at_pos(before) == Some(b'\n') {
             break;
         }
@@ -9542,8 +9545,8 @@ fn long_line_fontification_narrowing(
         return None;
     }
     let range = EmacsByteRange::new(
-        buffer.char_pos_to_emacs_byte_pos_clamped(CharPos0::new(beg as usize)),
-        buffer.char_pos_to_emacs_byte_pos_clamped(CharPos0::new(zv as usize)),
+        buffer.char_pos_to_emacs_byte_pos_clamped(CharPos0::new((beg - 1) as usize)),
+        buffer.char_pos_to_emacs_byte_pos_clamped(CharPos0::new((zv - 1) as usize)),
     );
     Some((
         buffer_id,
