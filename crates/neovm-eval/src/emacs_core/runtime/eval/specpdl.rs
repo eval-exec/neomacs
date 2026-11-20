@@ -1643,12 +1643,19 @@ impl Context {
             self.lexenv_special_cache.clear();
             return Err(flow);
         }
+        // Unbind still runs as the outgoing thread. The counter switches
+        // with the thread, after that exchange: GNU sets `current_thread`
+        // before `rebind_for_thread_switch` (`src/thread.c` `post_acquire_global_lock`),
+        // and a new worker's `m_lisp_eval_depth` is 0.
+        let lisp_eval_depth = self.depth;
+        self.depth = 0;
         let suspended_depth = self.suspended_thread_bindings.len();
         self.suspended_thread_bindings
             .push(ThreadDynamicBindingState {
                 lexenv,
                 specpdl: std::mem::take(&mut self.specpdl),
                 condition_stack: std::mem::take(&mut self.condition_stack),
+                lisp_eval_depth,
                 parked_thread: None,
             });
         Ok(ThreadDynamicBindingToken { suspended_depth })
@@ -1665,14 +1672,24 @@ impl Context {
     pub fn park_sim_worker_bindings(&mut self, thread_id: u64) -> Result<(), Flow> {
         self.specpdl
             .retain(|binding| !matches!(binding, SpecBinding::BacktraceNative { .. }));
-        if self.specpdl.is_empty() && self.condition_stack.is_empty() && self.lexenv.is_nil() {
+        if self.specpdl.is_empty()
+            && self.condition_stack.is_empty()
+            && self.lexenv.is_nil()
+            && self.depth == 0
+        {
             return Ok(());
         }
         self.specpdl_unrewind_vars_for_thread_switch(false)?;
+        // The worker's Lisp frames have already returned. What remains is
+        // the depth those frames restored, which the continuation starts
+        // from. The caller is restored separately from its own switch frame.
+        let lisp_eval_depth = self.depth;
+        self.depth = 0;
         let state = ThreadDynamicBindingState {
             lexenv: std::mem::replace(&mut self.lexenv, Value::NIL),
             specpdl: std::mem::take(&mut self.specpdl),
             condition_stack: std::mem::take(&mut self.condition_stack),
+            lisp_eval_depth,
             parked_thread: Some(thread_id),
         };
         self.lexenv_assq_cache.clear();
@@ -1712,6 +1729,7 @@ impl Context {
         );
         self.specpdl = state.specpdl;
         self.condition_stack = state.condition_stack;
+        self.depth = state.lisp_eval_depth;
         let rewound = self.specpdl_unrewind_vars_for_thread_switch(true);
         self.lexenv = state.lexenv;
         self.lexenv_assq_cache.clear();
@@ -1743,6 +1761,9 @@ impl Context {
             state.parked_thread.is_none(),
             "a thread switch resumes the caller frame, not a parked worker"
         );
+        // The caller is current again before its bindings rewind, matching
+        // GNU's `current_thread = self` before `rebind_for_thread_switch`.
+        self.depth = state.lisp_eval_depth;
         self.specpdl = state.specpdl;
         self.condition_stack = state.condition_stack;
         let result = self.specpdl_unrewind_vars_for_thread_switch(true);

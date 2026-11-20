@@ -1691,6 +1691,85 @@ fn test_worker_while_reenters_after_condition_wait() {
     assert_eq!(printed, "(1 (ok 2) 2)", "got {printed}");
 }
 
+/// Many simulated workers parked in `condition-wait` must not add their
+/// `lisp-eval-depth` together. GNU stores the counter in the thread state
+/// (`src/thread.h` `m_lisp_eval_depth`), so a switch of `current_thread`
+/// switches the counter and a new worker starts at 0. Nesting every parked
+/// waiter on one counter trips `max-lisp-eval-depth` (the cache floor is
+/// 100) before the readiness notify, and main then reports the readiness
+/// condvar. This is `soak_many_gated.el` at N=300 with the default limit
+/// of 1600.
+#[test]
+fn test_sim_gated_workers_keep_separate_lisp_eval_depth() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let value = eval
+        .eval_str(
+            r#"(eval
+                 '(progn
+                    (setq max-lisp-eval-depth 100)
+                    (let* ((n 24)
+                           (m (make-mutex))
+                           (c (make-condition-variable m))
+                           (rm (make-mutex))
+                           (rc (make-condition-variable rm))
+                           (ready 0)
+                           (go nil)
+                           (ths nil)
+                           (i 0))
+                      (while (< i n)
+                        (let ((id i))
+                          (setq ths
+                                (cons
+                                 (make-thread
+                                  (lambda ()
+                                    (let ((sym m))
+                                      (mutex-lock sym)
+                                      (unwind-protect
+                                          (progn
+                                            (let ((rs rm))
+                                              (mutex-lock rs)
+                                              (unwind-protect
+                                                  (progn
+                                                    (setq ready (1+ ready))
+                                                    (condition-notify rc t))
+                                                (mutex-unlock rs)))
+                                            (let ((rounds 0))
+                                              (while (and (eq go nil) (< rounds 5))
+                                                (setq rounds (1+ rounds))
+                                                (condition-wait c))))
+                                        (mutex-unlock sym)))
+                                    (+ id 1))
+                                  "mg")
+                                 ths)))
+                        (setq i (1+ i)))
+                      (let ((sym rm))
+                        (mutex-lock sym)
+                        (unwind-protect
+                            (let ((rounds 0))
+                              (while (and (< ready n) (< rounds 50))
+                                (setq rounds (1+ rounds))
+                                (condition-wait rc)))
+                          (mutex-unlock sym)))
+                      (let ((sym m))
+                        (mutex-lock sym)
+                        (unwind-protect
+                            (progn
+                              (setq go t)
+                              (condition-notify c t))
+                          (mutex-unlock sym)))
+                      (let ((sum 0))
+                        (while ths
+                          (setq sum (+ sum (thread-join (car ths))))
+                          (setq ths (cdr ths)))
+                        (list ready sum))))
+                 t)"#,
+        )
+        .expect("gated workers park without sharing lisp-eval-depth");
+    let printed = crate::emacs_core::print::print_value(&value);
+    assert_eq!(printed, "(24 300)", "got {printed}");
+}
+
 #[test]
 fn test_builtin_condition_notify_noop() {
     crate::test_utils::init_test_tracing();

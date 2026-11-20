@@ -1925,6 +1925,13 @@ struct ThreadDynamicBindingState {
     lexenv: Value,
     specpdl: Vec<SpecBinding>,
     condition_stack: Vec<ConditionFrame>,
+    /// GNU `lisp_eval_depth` lives in the thread state
+    /// (`src/thread.h` `m_lisp_eval_depth`), so switching `current_thread`
+    /// switches the counter. A new worker's state is zeroed and starts at 0.
+    /// The simulation runs the next worker on this same `Context`, nested
+    /// under the waiter, so the counter has to travel with the suspended
+    /// stack or every parked waiter adds to the caller's depth.
+    lisp_eval_depth: usize,
     /// `Some` is a simulated worker parked across a wait. `None` is the
     /// caller `enter_thread_runtime` suspended. Parked frames share this vec
     /// so a wait does not add a `Context` field.
