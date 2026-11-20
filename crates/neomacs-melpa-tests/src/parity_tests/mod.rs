@@ -392,6 +392,7 @@ mod etaf_desktop;
 mod etaf_ecosystem;
 mod etaf_ncm;
 mod etaf_preview;
+mod etaf_rss;
 mod etaf_ui;
 mod eval_sexp_fu;
 mod evil;

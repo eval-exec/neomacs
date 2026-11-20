@@ -199,8 +199,10 @@ batch modules cover `ecss` (cascade/specificity/layers/var), `ebox`
 (render/flex/mutation), `ekp` (layout plans/justification), `etaf`
 (refs/Data/animation/View), `etaf-ui` (color/QR/icons/editor), `etaf-ncm`
 (session/library/search/transport/panes/LRC/layout/palette through its
-documented scripted-client seam, so no network, Node, mpv or login), and the
-`etaf-md`/`etaf-org-preview` headless readers. `gui_parity_tests/etaf_*` adds
+documented scripted-client seam, so no network, Node, mpv or login),
+`etaf-rss` (RSS/Atom/JSON/RDF parsing, OPML, HTML blocks/wrapping, store
+round-trip, and local file:// subscribe/search/scopes with no network), and
+the `etaf-md`/`etaf-org-preview` headless readers. `gui_parity_tests/etaf_*` adds
 real X11 probes for the md/org pages and the posframe child frame.
 
 The GUI probes run both editors on one X11 display with a fixed DejaVu Sans
