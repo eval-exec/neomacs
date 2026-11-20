@@ -59,6 +59,11 @@ impl PublishedPayloadRoots {
     fn len_of(&self, id: PublisherId) -> usize {
         self.entries.get(&id).map(Vec::len).unwrap_or(0)
     }
+
+    #[cfg(any(test, feature = "test-support"))]
+    fn publisher_count(&self) -> usize {
+        self.entries.len()
+    }
 }
 
 impl TaggedHeap {
@@ -81,5 +86,15 @@ impl TaggedHeap {
     #[cfg(test)]
     pub(crate) fn payload_root_count_for_test(&self, id: PublisherId) -> usize {
         self.published_payload_roots.len_of(id)
+    }
+
+    /// How many publisher ids this heap still holds.
+    ///
+    /// Compiled only for this crate's tests and the `test-support` feature.
+    /// Product profiles do not build it.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn payload_publisher_count_for_test(&self) -> usize {
+        self.published_payload_roots.publisher_count()
     }
 }

@@ -298,6 +298,90 @@ impl Drop for PublishedConditionSnapshots {
     }
 }
 
+/// Why an explicit admission did not install a publisher.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConditionSnapshotAdmitError {
+    /// This admission is already `Active`.
+    AlreadyActive,
+    /// The ledger refused the initial table for capacity.
+    Capacity,
+    /// The ledger refused the initial table for a retention cap.
+    NeedGrace,
+    /// The publication metadata lock was busy.
+    Busy,
+    /// The publication metadata lock was poisoned.
+    Poisoned,
+    /// The payload adapter refused the initial table.
+    Payload,
+}
+
+/// Public box payload for [`ConditionSnapshotAdmission::Active`].
+///
+/// The ledger stays crate-private. Eval can move this owner and cannot
+/// mint or refresh it except through the admission methods.
+pub struct ConditionSnapshotPublisher {
+    inner: PublishedConditionSnapshots,
+}
+
+/// Serial admission of one condition-snapshot publisher.
+///
+/// `Dormant` is the constructor state and does not mint. `Active` is one
+/// boxed publisher, so the enum is one pointer. A second [`Self::admit`]
+/// returns [`ConditionSnapshotAdmitError::AlreadyActive`] and does not mint
+/// another id. [`Self::unregister`] on `Dormant` does nothing.
+pub enum ConditionSnapshotAdmission {
+    Dormant,
+    Active(Box<ConditionSnapshotPublisher>),
+}
+
+const _: () = assert!(size_of::<ConditionSnapshotAdmission>() == size_of::<*const ()>());
+static_assertions::assert_not_impl_any!(ConditionSnapshotAdmission: Send, Sync);
+
+impl ConditionSnapshotAdmission {
+    /// Install one publisher on `heap` for the symbols in `obarray`.
+    ///
+    /// Uses [`RetentionLimits::production`]. Does not refresh later stores.
+    pub fn admit(
+        &mut self,
+        heap: &mut TaggedHeap,
+        obarray: &Obarray,
+    ) -> Result<(), ConditionSnapshotAdmitError> {
+        if !matches!(self, Self::Dormant) {
+            return Err(ConditionSnapshotAdmitError::AlreadyActive);
+        }
+        let published =
+            PublishedConditionSnapshots::mint(heap, obarray, RetentionLimits::production())
+                .map_err(ConditionSnapshotAdmitError::from_publication)?;
+        *self = Self::Active(Box::new(ConditionSnapshotPublisher { inner: published }));
+        Ok(())
+    }
+
+    /// Remove this publisher's id. `Dormant` does not mint and does not
+    /// touch the heap table.
+    pub fn unregister(self, heap: &mut TaggedHeap) {
+        let Self::Active(publisher) = self else {
+            return;
+        };
+        publisher.inner.unregister(heap);
+    }
+
+    pub fn is_dormant(&self) -> bool {
+        matches!(self, Self::Dormant)
+    }
+}
+
+impl ConditionSnapshotAdmitError {
+    fn from_publication(error: PublicationError<()>) -> Self {
+        match error {
+            PublicationError::Payload(()) => Self::Payload,
+            PublicationError::Capacity => Self::Capacity,
+            PublicationError::NeedGrace(_) => Self::NeedGrace,
+            PublicationError::Busy => Self::Busy,
+            PublicationError::Poisoned => Self::Poisoned,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

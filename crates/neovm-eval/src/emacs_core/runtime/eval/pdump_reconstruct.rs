@@ -357,6 +357,7 @@ impl Context {
             cached_standard_case_table: None,
             frame_and_buffer_state: None,
             retained_frame_pins: Vec::new(),
+            condition_snapshots: super::ConditionSnapshotAdmission::Dormant,
         };
         ev.setup_thread_locals();
 

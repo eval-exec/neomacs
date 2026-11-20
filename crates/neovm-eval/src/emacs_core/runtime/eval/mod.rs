@@ -59,6 +59,9 @@ use neovm_value::intern::{
 };
 use neovm_value::kmacro::KmacroManager;
 use neovm_value::symbol::{CanonicalAccess, ConstantWrite, Obarray};
+pub(crate) use neovm_value::tagged::gc::scan_contract::{
+    ConditionSnapshotAdmission, ConditionSnapshotAdmitError,
+};
 use neovm_value::tagged::header::{CLOSURE_ARGLIST, SubrDispatchKind, SubrInteractivity};
 use neovm_value::value::*;
 
@@ -4032,6 +4035,12 @@ pub struct Context {
     /// alive because `recent_keys` stores the frame object
     /// (`frame.c:2898-2901`).
     retained_frame_pins: Vec<Value>,
+    /// Serial admission of published condition snapshots. `Dormant` until
+    /// [`Self::admit_condition_snapshots`]. One niche-optimized pointer,
+    /// appended as the trailing field so every earlier offset stays put.
+    /// Startup does not admit. The hot signal pair and `run_loop` do not
+    /// load this field.
+    condition_snapshots: ConditionSnapshotAdmission,
 }
 
 // A mutex does not make the host hooks, Rc leases or TLS views transferable.
@@ -7676,6 +7685,7 @@ mod allocation_flow;
 pub(crate) use allocation_flow::AllocationFailureContextExt;
 #[cfg(feature = "test-support")]
 pub use allocation_flow::AllocationFailureContextExt;
+mod condition_admission;
 mod construct;
 mod dispatch_class;
 mod form_head_cache;

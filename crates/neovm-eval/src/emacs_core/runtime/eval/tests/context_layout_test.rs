@@ -71,7 +71,12 @@ fn every_context_offset_is_mains() {
     // offset moves. This commit re-blesses that pin.
     //
     // Deleted-frame keyboard pins (`retained_frame_pins`, a `Vec<Value>`,
-    // 24 bytes) stay the last field. No earlier offset moves.
+    // 24 bytes) stay at offset 44640. No earlier offset moves.
+    //
+    // Condition-snapshot admission is one niche-optimized pointer, and it is
+    // the trailing field. Nothing follows it, so no existing offset moves.
+    // Measured: both profiles grow by 8. Release 44664 -> 44672. Debug
+    // 44672 -> 44680. The pointer does not sit in trailing pad.
     assert_eq!(size_of::<NativeStackProbe>(), 16);
     const TEST_EXTRA: usize =
         INTERACTIVE_EXTRA + MINIBUFFER_EXTRA + WAIT_GATE_EXTRA + OBSERVATION_EXTRA;
@@ -92,13 +97,13 @@ fn every_context_offset_is_mains() {
     #[cfg(debug_assertions)]
     assert_eq!(
         size_of::<Context>(),
-        44672 + TEST_EXTRA,
+        44680 + TEST_EXTRA,
         "Context size (debug with test instrumentation)"
     );
     #[cfg(not(debug_assertions))]
     assert_eq!(
         size_of::<Context>(),
-        44664 + TEST_EXTRA,
+        44672 + TEST_EXTRA,
         "Context size (release with test instrumentation)"
     );
     let table: &[(usize, usize, &str)] = &[
@@ -740,6 +745,11 @@ fn every_context_offset_is_mains() {
             44640,
             offset_of!(Context, retained_frame_pins),
             "retained_frame_pins",
+        ),
+        (
+            44664,
+            offset_of!(Context, condition_snapshots),
+            "condition_snapshots",
         ),
     ];
     // Adjust only for independently pinned test/debug storage. Boundaries
