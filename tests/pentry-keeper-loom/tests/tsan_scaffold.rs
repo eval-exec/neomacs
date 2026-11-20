@@ -1,5 +1,5 @@
-//! SCAFFOLD real-thread doubles. Not the E2 gate until pentry's L6 surface
-//! replaces this ticket. Reported as scaffold green, not gate green.
+//! SCAFFOLD real-thread doubles. The product retarget is
+//! `serial_gate_retarget` in neovm-eval. These doubles are not the gate.
 #![forbid(unsafe_code)]
 
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};

@@ -50,6 +50,10 @@ mod heap_transfer_tests;
 #[cfg(test)]
 #[path = "world/tests/serial_gate.rs"]
 pub(crate) mod serial_gate;
+/// Product retarget of the E2 thread doubles onto the #7712 names.
+#[cfg(test)]
+#[path = "world/tests/serial_gate_retarget.rs"]
+mod serial_gate_retarget;
 mod slot;
 mod source_entry;
 // Crate-visible so the public test-support re-export in eval/mod.rs can name
