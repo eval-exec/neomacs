@@ -790,7 +790,9 @@ fn oracle_prop_iso_2022_cant_handle_charset_without_a_final() {
     // coding.c:11049-11055. An iso-2022 list rejects a charset with no final.
     // An emacs-mule list rejects a charset with no mule id. The bare
     // `emacs-mule` symbol does not take that check. The message is
-    // `error("Can't handle charset `%s'")` after curve quoting.
+    // `error("Can't handle charset `%s'")` routed through doprnt, which
+    // follows the current text-quoting-style (doprnt.c:493-499): curve by
+    // default, grave and straight verbatim/replaced when bound.
     let form = r#"(list
         (condition-case err
             (progn
@@ -818,9 +820,27 @@ fn oracle_prop_iso_2022_cant_handle_charset_without_a_final() {
                 :mnemonic ?x :coding-type 'emacs-mule
                 :charset-list 'emacs-mule)
               (coding-system-get 'cr-mule-sym :charset-list))
-          (error (list 'err err))))"#;
+          (error (list 'err err)))
+        (let ((text-quoting-style 'grave))
+          (condition-case err
+              (progn
+                (define-coding-system 'cr-nofinal-grave-cs "x"
+                  :mnemonic ?x :coding-type 'iso-2022
+                  :charset-list '(ascii cr-nofinal)
+                  :designation [(ascii 94) nil nil nil]
+                  :flags '(7-bit designation))
+                'ok)
+            (error (list 'error (error-message-string err)))))
+        (let ((text-quoting-style 'straight))
+          (condition-case err
+              (progn
+                (define-coding-system 'cr-nomule-straight-cs "x"
+                  :mnemonic ?x :coding-type 'emacs-mule
+                  :charset-list '(cr-nomule))
+                'ok)
+            (error (list 'error (error-message-string err))))))"#;
     let expect = expect_test::expect![[
-        r#""OK ((error \"Can’t handle charset ‘cr-nofinal’\") (error \"Can’t handle charset ‘cr-nomule’\") emacs-mule)""#
+        r#""OK ((error \"Can’t handle charset ‘cr-nofinal’\") (error \"Can’t handle charset ‘cr-nomule’\") emacs-mule (error \"Can't handle charset `cr-nofinal'\") (error \"Can't handle charset 'cr-nomule'\"))""#
     ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }

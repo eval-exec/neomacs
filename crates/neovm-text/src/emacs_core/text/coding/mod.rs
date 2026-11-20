@@ -1189,13 +1189,11 @@ fn iso2022_safe_charset_value(charset_list: &[SymId], full: bool) -> Value {
     Value::vector(names.into_iter().map(Value::from_sym_id).collect())
 }
 
-/// GNU `error("Can't handle charset `%s'")` after `format-message` quote
-/// substitution. This path has no obarray, so the batch default is curve.
-fn cant_handle_charset(name: &str) -> Flow {
-    let message = requote_c_error_message(
-        &format!("Can't handle charset `{name}'"),
-        TextQuotingStyle::Curve,
-    );
+/// GNU `error("Can't handle charset `%s'")` routed through `doprnt`, which
+/// translates the C-level backtick/apostrophe pair according to the caller's
+/// `text-quoting-style` (`doprnt.c:493-499`).
+fn cant_handle_charset(name: &str, quoting_style: TextQuotingStyle) -> Flow {
+    let message = requote_c_error_message(&format!("Can't handle charset `{name}'"), quoting_style);
     signal("error", vec![Value::string(message)])
 }
 
@@ -1208,6 +1206,7 @@ fn explicit_charset_entries(
     items: &[Value],
     mode: SymbolMode,
     coding_type: &str,
+    quoting_style: TextQuotingStyle,
 ) -> Result<Vec<SymId>, Flow> {
     let mut out = Vec::with_capacity(items.len());
     for item in items {
@@ -1226,12 +1225,12 @@ fn explicit_charset_entries(
         if coding_type == "iso-2022" {
             match crate::emacs_core::charset::charset_iso_final_of(identity) {
                 Some(final_char) if final_char >= 0 => {}
-                _ => return Err(cant_handle_charset(resolve_sym(identity))),
+                _ => return Err(cant_handle_charset(resolve_sym(identity), quoting_style)),
             }
         } else if coding_type == "emacs-mule" {
             match crate::emacs_core::charset::charset_emacs_mule_id_of(identity) {
                 Some(mule_id) if mule_id >= 0 => {}
-                _ => return Err(cant_handle_charset(resolve_sym(identity))),
+                _ => return Err(cant_handle_charset(resolve_sym(identity), quoting_style)),
             }
         }
         out.push(identity);
@@ -4092,6 +4091,24 @@ pub fn builtin_define_coding_system_internal(
     args: Vec<Value>,
     mode: SymbolMode,
 ) -> EvalResult {
+    // Direct callers with no variable store use GNU's batch default. The
+    // eval builtin resolves the current `text-quoting-style` and calls the
+    // styled variant below.
+    builtin_define_coding_system_internal_with_quoting_style(
+        mgr,
+        args,
+        mode,
+        TextQuotingStyle::Curve,
+    )
+}
+
+#[doc(hidden)]
+pub fn builtin_define_coding_system_internal_with_quoting_style(
+    mgr: &mut CodingSystemManager,
+    args: Vec<Value>,
+    mode: SymbolMode,
+    quoting_style: TextQuotingStyle,
+) -> EvalResult {
     expect_min_args("define-coding-system-internal", &args, 13)?;
 
     // arg[0]: name (symbol)
@@ -4133,7 +4150,7 @@ pub fn builtin_define_coding_system_internal(
             }
         } else if let Some(items) = neovm_value::value::list_to_vec(&args[3]) {
             (
-                explicit_charset_entries(&items, mode, resolve_sym(coding_type))?,
+                explicit_charset_entries(&items, mode, resolve_sym(coding_type), quoting_style)?,
                 false,
             )
         } else {
