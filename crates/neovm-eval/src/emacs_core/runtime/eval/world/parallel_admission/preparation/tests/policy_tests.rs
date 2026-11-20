@@ -20,7 +20,7 @@ fn source() -> Context {
 }
 
 #[test]
-fn pentry_e2b_closed_preparation_preserves_weak_table_without_reclamation_gc() {
+fn pentry_e2b_closed_preparation_admits_the_preserved_weak_table_without_reclamation_gc() {
     let mut source = source();
     source.install_empty_dead_windows_table();
     source.gc_collect_exact();
@@ -28,7 +28,7 @@ fn pentry_e2b_closed_preparation_preserves_weak_table_without_reclamation_gc() {
         .builtin_var_value_by_name("window-dead-windows-table")
         .unwrap();
     let collections = source.tagged_heap.gc_collections();
-    let (reason, recovery) = {
+    let recovery = {
         let PreparedAdmission {
             collector,
             keeper,
@@ -37,31 +37,41 @@ fn pentry_e2b_closed_preparation_preserves_weak_table_without_reclamation_gc() {
         } = source
             .prepare_closed_source()
             .unwrap_or_else(|_| panic!("closed preparation"));
+        // Closed preparation preserves the table (no retirement); since E3
+        // slice 1 the preserved eligible table no longer refuses production
+        // admission.
         assert!(matches!(recovery, SerialRecovery::Unchanged));
-        let failure = match ProductionPlan.admit(collector, keeper, frozen) {
-            Ok(_) => panic!("unsupported weak table must refuse production admission"),
-            Err(failure) => failure,
+        let projection = match ProductionPlan.admit(collector, keeper, frozen) {
+            Ok(projection) => projection,
+            Err(failure) => {
+                let AdmissionFailure {
+                    reason,
+                    collector,
+                    keeper,
+                } = failure;
+                drop(collector);
+                drop(keeper);
+                panic!("preserved eligible weak table admits production plan: {reason:?}");
+            }
         };
-        let AdmissionFailure {
-            reason,
-            collector,
-            keeper,
-        } = failure;
+        let (collector, keeper) = projection
+            .finish()
+            .expect("admitted production era finishes");
         drop(collector);
         drop(keeper);
-        (reason, recovery)
+        recovery
     };
     source.recover_serial_context(recovery);
-    if source.tagged_heap.tagged_heap_generational_enabled() {
-        assert_eq!(reason, OwnedParallelError::Publication);
-    } else {
-        assert_eq!(reason, OwnedParallelError::GenerationalRequired);
-    }
     assert_eq!(
         source.builtin_var_value_by_name("window-dead-windows-table"),
-        Some(table)
+        Some(table),
+        "unchanged recovery preserves the original table object"
     );
-    assert_eq!(source.tagged_heap.gc_collections(), collections);
+    assert_eq!(
+        source.tagged_heap.gc_collections(),
+        collections,
+        "admitting the table runs no reclamation collection"
+    );
 }
 
 #[test]

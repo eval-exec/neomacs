@@ -139,9 +139,48 @@ fn assert_fixture_refuses_before_registration(
     context.lexenv = TaggedValue::NIL;
 }
 
+/// E3 slice 1 removed the blanket weak-table/finalizer refusal: an eligible
+/// fixture now admits at the rooted seam, before any mutator activation. The
+/// era finishes without a collection, and the rooted fixture survives it.
+fn assert_fixture_admits_before_registration(
+    context: &mut Context,
+    make: impl FnOnce(&mut Context) -> TaggedValue,
+) -> TaggedValue {
+    context.setup_thread_locals();
+    let eligible = make(context);
+    // Retain the fixture across the admission, as the refusal twin does, so
+    // the admitted era sees the live object, not setup garbage.
+    context.lexenv = eligible;
+    let keeper = context.issue_green_baton().unwrap();
+    let expected = keeper.parallel_heap_identity();
+    let frozen = context.capture_parallel_legacy_roots(&keeper).unwrap();
+    let heap: *mut neovm_value::tagged::gc::TaggedHeap = context.tagged_heap.heap_root().as_ptr();
+    // SAFETY: sole serial Context, no callback/manager loan, private capture
+    // completed before this heap loan, and keeper excludes concurrent mark.
+    let collector = unsafe {
+        (*heap).drain_to_quiescent(|heap| {
+            context.seed_registered_mutator_roots_world_stopped(heap);
+        })
+    }
+    .unwrap();
+    let era = ParallelHeapEra::admit_rooted(collector, keeper, frozen)
+        .expect("an eligible fixture admits before registration");
+    let (collector, keeper) = era.finish().expect("admitted rooted era finishes");
+    assert_eq!(collector.heap_identity(), expected);
+    assert_eq!(keeper.parallel_heap_identity(), expected);
+    drop(collector);
+    drop(keeper);
+    assert!(context.tagged_heap.owns_heap_value_for_test(eligible));
+    context.lexenv = TaggedValue::NIL;
+    eligible
+}
+
 #[test]
-fn a5_admission_refuses_weak_hash_fixture_before_any_mutator_activation() {
-    unsupported_fixture_refuses_before_registration(|context| {
+fn a5_admission_admits_a_weak_hash_fixture_before_any_mutator_activation() {
+    // The ineligible classes stay refused: permanent/mapped shells, pending
+    // entries, active test depth, and storage authority (weak_policy tests).
+    let mut context = collection_fixture_context();
+    let table = assert_fixture_admits_before_registration(&mut context, |context| {
         context
             .tagged_heap
             .alloc_hash_table(LispHashTable::new_with_options(
@@ -152,6 +191,10 @@ fn a5_admission_refuses_weak_hash_fixture_before_any_mutator_activation() {
                 0.8,
             ))
     });
+    assert_eq!(
+        table.as_hash_table().expect("hash table fixture").weakness,
+        Some(HashTableWeakness::Key)
+    );
 }
 
 #[test]
@@ -160,13 +203,6 @@ fn a5_admission_refuses_native_resource_fixture_even_without_a_finalizer() {
         context
             .tagged_heap
             .alloc_user_ptr(std::ptr::null_mut(), None)
-    });
-}
-
-#[test]
-fn a5_admission_refuses_lisp_finalizer_fixture_before_any_mutator_activation() {
-    unsupported_fixture_refuses_before_registration(|context| {
-        context.tagged_heap.alloc_finalizer(TaggedValue::T)
     });
 }
 
@@ -241,15 +277,20 @@ fn a5_admission_refuses_telemetry_without_unsupported_heap_objects() {
 }
 
 #[test]
-fn a5_admission_refuses_full_context_with_gnu_default_weak_table() {
+fn a5_admission_admits_a_full_context_with_gnu_default_weak_table() {
     // Ordinary Context::new correctly includes GNU's weak-value
-    // window-dead-windows-table. It remains outside A5's minimal fixture.
+    // window-dead-windows-table. Since E3 slice 1 that eligible default table
+    // no longer refuses the rooted admission; it survives the era unchanged.
     let mut context = Context::new(crate::test_utils::unit_runtime());
-    assert_fixture_refuses_before_registration(&mut context, |context| {
+    assert_fixture_admits_before_registration(&mut context, |context| {
         context
             .tagged_heap
             .alloc_cons(TaggedValue::fixnum(5104), TaggedValue::NIL)
     });
+    let table = context
+        .builtin_var_value_by_name("window-dead-windows-table")
+        .expect("the default weak table survives the admitted era");
+    assert!(table.as_hash_table().is_some());
 }
 
 #[cfg(not(feature = "gc-memory-telemetry"))]
@@ -313,31 +354,48 @@ fn a6_owned_admission_pins_shell_census_and_restores_empty_weak_table() {
 
 #[cfg(not(feature = "gc-memory-telemetry"))]
 #[test]
-fn a6_owned_admission_refuses_nonempty_weak_table_without_clearing_it() {
+fn a6_owned_admission_admits_a_nonempty_weak_table_without_clearing_it() {
     let mut context = Context::new(crate::test_utils::unit_runtime());
     context
         .eval_str("(puthash 1 2 window-dead-windows-table)")
         .unwrap();
+    // A non-empty table is never retired at preparation, so recovery is
+    // Unchanged and the same object must come back with its live entry.
+    let table = context
+        .builtin_var_value_by_name("window-dead-windows-table")
+        .unwrap();
     let started = std::sync::atomic::AtomicBool::new(false);
-    let refused: Result<(), OwnedParallelError> = context.admit_owned_proof_parallel(|_| {
-        started.store(true, std::sync::atomic::Ordering::Relaxed);
-        unreachable!("non-empty weak table must refuse before the body");
-    });
-    let error = refused.expect_err("non-empty GNU weak table stays outside admission");
-    assert_eq!(error, OwnedParallelError::Publication);
-    assert!(!started.load(std::sync::atomic::Ordering::Relaxed));
+    context
+        .admit_owned_proof_parallel(|projection| {
+            started.store(true, std::sync::atomic::Ordering::Relaxed);
+            {
+                let era = projection.era();
+                let mut stopped = era.stop().expect("nonempty membership stops");
+                assert!(
+                    ParallelHeapEraWorldCollectExt::collect_stopped(era, &mut stopped)
+                        .unwrap()
+                        .major
+                );
+                stopped.complete().unwrap();
+            }
+            let (collector, keeper) = projection.finish().unwrap();
+            (collector, keeper, ())
+        })
+        .unwrap_or_else(|error| panic!("nonempty GNU weak table admits: {error:?}"));
+    assert!(started.load(std::sync::atomic::Ordering::Relaxed));
+    assert_eq!(
+        context.builtin_var_value_by_name("window-dead-windows-table"),
+        Some(table),
+        "unchanged recovery preserves the original table object"
+    );
+    // The immediate-keyed, immediate-valued entry survives the stopped weak
+    // sweep: nothing about admission clears the live entry.
     assert_eq!(
         context
             .eval_str("(gethash 1 window-dead-windows-table)")
             .unwrap()
             .as_fixnum(),
         Some(2)
-    );
-    assert!(
-        !context
-            .eval_str("window-dead-windows-table")
-            .unwrap()
-            .is_nil()
     );
 }
 
