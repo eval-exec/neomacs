@@ -179,23 +179,28 @@ macro_rules! with_participant {
     };
 }
 
-/// Borrow-check the stopped world, then lend once. `lend_serial_for_test`
-/// consumes `AllStopped`. A `Busy` from a lock the participant still holds
-/// drops that proof and poisons the era, so this does not retry the lend.
-fn lend_settled<'era, 'heap>(
+/// Retry `Busy` on the proof `lend_serial_for_test` returns. Dropping that
+/// failure drops `AllStopped` and poisons the era, so the proof is moved out
+/// before the next attempt.
+fn lend_retrying<'era, 'heap>(
     era: &'era crate::emacs_core::eval::world::WorldProofEra<'heap>,
     keeper: &'era crate::emacs_core::eval::world::Baton,
     stopped: neovm_value::tagged::gc::AllStopped<'era>,
 ) -> super::serial_gate::SerialTicket<'era, 'heap> {
+    let mut stopped = stopped;
     let start = Instant::now();
     loop {
-        match stopped.check_world_roots(keeper.parallel_heap_identity()) {
-            Ok(()) => break,
-            Err(RendezvousError::Busy) if start.elapsed() < DEADLINE => thread::yield_now(),
-            Err(error) => panic!("world roots: {error:?}"),
+        match lend_serial_for_test(era, keeper, stopped) {
+            Ok(ticket) => return ticket,
+            Err(failure)
+                if failure.reason == RendezvousError::Busy && start.elapsed() < DEADLINE =>
+            {
+                stopped = failure.stopped;
+                thread::yield_now();
+            }
+            Err(failure) => panic!("lend: {:?}", failure.reason),
         }
     }
-    lend_serial_for_test(era, keeper, stopped).expect("lend")
 }
 
 fn collect_and_end<'era, 'heap>(
@@ -207,7 +212,7 @@ fn collect_and_end<'era, 'heap>(
     if catalog {
         retry_reg("return cons", || era.return_cons_storage(&stopped));
     }
-    let mut ticket = lend_settled(era, keeper, stopped);
+    let mut ticket = lend_retrying(era, keeper, stopped);
     retry_gate("serial_gc", || serial_gc_for_test(&mut ticket));
     if catalog {
         retry_reg("resume cons", || {
@@ -263,7 +268,7 @@ fn participant_allocates_after_end() {
             recv(&acked2_rx, "second ack");
             let stopped = retry_gate("second stop", || stop_for_test(era));
             retry_reg("second return cons", || era.return_cons_storage(&stopped));
-            let mut ticket = lend_settled(era, keeper, stopped);
+            let mut ticket = lend_retrying(era, keeper, stopped);
             retry_gate("second serial_gc", || serial_gc_for_test(&mut ticket));
             let owned = era
                 .with_stopped_heap_for_test(ticket.stopped_proof(), |heap| {
@@ -309,7 +314,7 @@ fn participant_restore_waits_while_ticket_held() {
             });
             recv(&acked_rx, "ack");
             let stopped = retry_gate("stop", || stop_for_test(era));
-            let mut ticket = lend_settled(era, keeper, stopped);
+            let mut ticket = lend_retrying(era, keeper, stopped);
             held_tx.send(()).expect("ticket held");
             recv(&entered_rx, "participant entered restore");
             thread::sleep(HELD_WINDOW);
@@ -348,7 +353,7 @@ fn retained_ticket_blocks_restore_until_end() {
             });
             recv(&acked_rx, "ack");
             let stopped = retry_gate("stop", || stop_for_test(era));
-            let ticket = lend_settled(era, keeper, stopped);
+            let ticket = lend_retrying(era, keeper, stopped);
             let retained = end_serial_for_test(ticket).expect_err("uncollected end");
             assert_eq!(retained.reason, SerialEndError::NotCollected);
             let mut ticket = retained.ticket;
@@ -404,7 +409,7 @@ fn request_during_ticket_then_admitted_after_end() {
             });
             let first = recv(&first_rx, "first epoch");
             let stopped = retry_gate("stop", || stop_for_test(era));
-            let mut ticket = lend_settled(era, keeper, stopped);
+            let mut ticket = lend_retrying(era, keeper, stopped);
             holding_tx.send(()).expect("holding");
             assert_eq!(
                 recv(&during_rx, "request while held"),
@@ -417,7 +422,7 @@ fn request_during_ticket_then_admitted_after_end() {
             let admitted = recv(&admitted_rx, "request after restore");
             assert_ne!(admitted, first);
             let stopped = retry_gate("cleanup stop", || stop_for_test(era));
-            let mut ticket = lend_settled(era, keeper, stopped);
+            let mut ticket = lend_retrying(era, keeper, stopped);
             retry_gate("cleanup serial_gc", || serial_gc_for_test(&mut ticket));
             end_collected(ticket);
             done_tx.send(()).expect("done");
@@ -426,17 +431,16 @@ fn request_during_ticket_then_admitted_after_end() {
     });
 }
 
-/// (e) The participant is inside `prepare_restore`, holding the registry
-/// gate, before `lend_serial_for_test`. `Busy` must come back with that same
-/// `AllStopped` so the keeper can retry. Today the `?` drops the proof and
-/// `AllStopped::drop` poisons the era, so this case is red until lend retains
-/// the proof. `lend_settled` stays on (a)-(d) until that retain lands.
+/// (e) The participant holds the registry gate inside `prepare_restore`
+/// before lend. `Busy` returns that same `AllStopped`. The keeper retries
+/// it, then `serial_gc` and end succeed, and the participant restores.
 #[test]
 fn lend_races_participant_restore() {
     with_participant!(|era, keeper, heap, rendezvous, permit, car, cdr| {
         let (acked_tx, acked_rx) = mpsc::channel::<()>();
         let (stopped_tx, stopped_rx) = mpsc::channel::<()>();
         let (holding_tx, holding_rx) = mpsc::channel::<()>();
+        let (resumed_tx, resumed_rx) = mpsc::channel::<()>();
         thread::scope(|scope| {
             scope.spawn(move || {
                 let mut owner = activate(permit, heap);
@@ -444,30 +448,25 @@ fn lend_races_participant_restore() {
                 acknowledge(&mut owner, epoch, &[car, cdr]);
                 acked_tx.send(()).expect("ack");
                 recv(&stopped_rx, "keeper stopped");
-                // Hold the gate across the keeper's lend. Releasing it only
-                // after a signal deadlocks: Busy drops AllStopped, and that
-                // Drop poisons under the same gate.
                 install_restore_gate_hook_for_test(Box::new(move || {
                     holding_tx.send(()).expect("holding the gate");
                     thread::sleep(Duration::from_millis(500));
                 }));
                 restore(&mut owner);
+                resumed_tx.send(()).expect("resumed");
                 retire(owner);
             });
             recv(&acked_rx, "ack");
             let stopped = retry_gate("stop", || stop_for_test(era));
             stopped_tx.send(()).expect("keeper stopped");
             recv(&holding_rx, "participant holds the gate");
-            let lend = lend_serial_for_test(era, keeper, stopped);
-            match lend {
-                Ok(_ticket) => {
-                    panic!("lend succeeded while the participant held the gate");
-                }
-                Err(RendezvousError::Busy) => {
-                    panic!("lend Busy dropped AllStopped; the era is poisoned");
-                }
-                Err(error) => panic!("lend: {error:?}"),
-            }
+            let failure = lend_serial_for_test(era, keeper, stopped)
+                .expect_err("lend while the gate is held");
+            assert_eq!(failure.reason, RendezvousError::Busy);
+            let mut ticket = lend_retrying(era, keeper, failure.stopped);
+            retry_gate("serial_gc", || serial_gc_for_test(&mut ticket));
+            end_collected(ticket);
+            recv(&resumed_rx, "participant restored");
         });
         eprintln!("PENTRY_TSAN case=lend_races_participant_restore kind=PRODUCT");
     });
