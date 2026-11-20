@@ -82,6 +82,11 @@ fn pentry_e2_loan_compile_contracts() {
             "impl<T: Sync> RequireSync<T> {",
             "impl<T> RequireSync<T> {",
         ),
+        (
+            "custody_unentered_not_send",
+            "impl<T: Send> RequireSend<T> {",
+            "impl<T> RequireSend<T> {",
+        ),
     ];
     for (name, before, after) in bound_mutations {
         assert_eq!(bounds.matches(before).count(), 1, "one bound for {name}");
@@ -153,6 +158,147 @@ fn pentry_e2_loan_compile_contracts() {
         fs::create_dir_all(&directory).expect("isolated constructor mutation directory");
         let path = directory.join(format!("{name}_mutation.rs"));
         fs::write(&path, mutated_body).expect("safe copy of the constructor call");
+        cases.pass(path);
+    }
+
+    // L5 custody. S2 waits on the held heap-loan receiver. S4 stays with the
+    // held keeper thread. Each control changes one line, or drops one bound.
+    let entry = manifest.join("../neovm-eval/src/emacs_core/runtime/eval/parallel_entry");
+    let custody = fs::read_to_string(entry.join("keeper_custody.rs")).expect("keeper custody");
+    let capability = fs::read_to_string(entry.join("capability.rs")).expect("capability source");
+    let stop_scope = fs::read_to_string(
+        manifest
+            .join("../neovm-value/src/tagged/gc/mutator_registration/custody_brand/stop_scope.rs"),
+    )
+    .expect("stop scope");
+    let reservation = fs::read_to_string(
+        manifest
+            .join("../neovm-value/src/tagged/gc/mutator_registration/custody_brand/reservation.rs"),
+    )
+    .expect("unentered reservation");
+
+    let fixture_mutations = [
+        (
+            "custody_suspended_lend",
+            "keeper: SuspendedKeeper<'static, 'static>,",
+            "keeper: StoppedKeeper<'static, 'static>,",
+        ),
+        (
+            "custody_notice_as_return",
+            "notice: CustodyFailureNotice)",
+            "notice: ReturnedSerialTicket)",
+        ),
+        (
+            "custody_two_scope",
+            "with_stop_scope(|inner| unify(&outer, &inner));",
+            "unify(&outer, &outer);",
+        ),
+    ];
+    for (name, before, after) in fixture_mutations {
+        let fixture =
+            fs::read_to_string(manifest.join(format!("tests/pentry_e2_loan_ui/{name}.rs")))
+                .expect("negative fixture body");
+        assert_eq!(fixture.matches(before).count(), 1, "one line for {name}");
+        assert!(!before.contains('\n') && !after.contains('\n'));
+        let directory = output.join(name);
+        fs::create_dir_all(&directory).expect("isolated custody mutation directory");
+        let path = directory.join(format!("{name}_mutation.rs"));
+        fs::write(&path, fixture.replacen(before, after, 1)).expect("one-line custody control");
+        cases.pass(path);
+    }
+
+    {
+        let name = "custody_scope_escape";
+        let before = "body: impl for<'g> FnOnce(&mut SerialContext<'g, 'g, 'heap, 'owner>, BatonWitness<'g, 'heap, 'owner>) -> R,";
+        let after = "body: impl FnOnce(&mut SerialContext<'static, 'static, 'heap, 'owner>, BatonWitness<'static, 'heap, 'owner>) -> R,";
+        assert_eq!(capability.matches(before).count(), 1, "one scope bound");
+        assert!(!before.contains('\n') && !after.contains('\n'));
+        let directory = output.join(name);
+        fs::create_dir_all(&directory).expect("isolated scope directory");
+        fs::write(
+            directory.join("capability.rs"),
+            capability.replacen(before, after, 1),
+        )
+        .expect("scope bound removed");
+        let fixture =
+            fs::read_to_string(manifest.join(format!("tests/pentry_e2_loan_ui/{name}.rs")))
+                .expect("scope escape fixture");
+        let fixture = fixture.replace(
+            "../../../neovm-eval/src/emacs_core/runtime/eval/parallel_entry/capability.rs",
+            "capability.rs",
+        );
+        let path = directory.join(format!("{name}_mutation.rs"));
+        fs::write(&path, fixture).expect("scope escape against the static bound");
+        cases.pass(path);
+    }
+
+    {
+        let name = "custody_cross_scope";
+        let before = "    stop: PhantomData<fn(&'s mut ()) -> &'s mut ()>,";
+        let after = "    stop: PhantomData<&'s ()>,";
+        assert_eq!(
+            custody.matches(before).count(),
+            1,
+            "one invariant request marker"
+        );
+        assert!(!before.contains('\n') && !after.contains('\n'));
+        let directory = output.join(name);
+        fs::create_dir_all(&directory).expect("isolated cross-scope directory");
+        fs::write(
+            directory.join("keeper_custody.rs"),
+            custody.replacen(before, after, 1),
+        )
+        .expect("request marker made covariant");
+        let fixture =
+            fs::read_to_string(manifest.join(format!("tests/pentry_e2_loan_ui/{name}.rs")))
+                .expect("cross-scope fixture");
+        let fixture = fixture.replace(
+            "../../../neovm-eval/src/emacs_core/runtime/eval/parallel_entry/keeper_custody.rs",
+            "keeper_custody.rs",
+        );
+        let path = directory.join(format!("{name}_mutation.rs"));
+        fs::write(&path, fixture).expect("cross-scope against the covariant marker");
+        cases.pass(path);
+    }
+
+    let signature =
+        "pub fn with_stop_scope<R>(body: impl for<'s> FnOnce(StopScope<'s>) -> R) -> R {";
+    assert_eq!(
+        stop_scope.matches(signature).count(),
+        1,
+        "one generative stop scope"
+    );
+    assert!(!signature.contains('\n'));
+    let standalone = [
+        (
+            "custody_stop_scope_escape",
+            "use std::marker::PhantomData;\n\
+             struct StopScope<'s>(PhantomData<fn(&'s mut ()) -> &'s mut ()>);\n\
+             fn with_stop_scope<R>(body: impl FnOnce(StopScope<'static>) -> R) -> R {\n    \
+             body(StopScope(PhantomData))\n}\n\
+             fn main() {\n    \
+             let _escaped: StopScope<'static> = with_stop_scope(|scope| scope);\n}\n",
+        ),
+        (
+            "custody_unentered_has_no_constructor",
+            "struct UnenteredReservation;\n\
+             impl UnenteredReservation {\n    \
+             pub fn new() -> Self { Self }\n}\n\
+             fn main() { let _reservation = UnenteredReservation::new(); }\n",
+        ),
+    ];
+    assert!(reservation.contains("pub struct UnenteredReservation"));
+    assert!(
+        !reservation.contains("fn new"),
+        "the dormant reservation has no constructor"
+    );
+    for (name, mutated_body) in standalone {
+        assert!(!mutated_body.contains("unsafe"));
+        assert!(!mutated_body.contains("for<'s>"));
+        let directory = output.join(name);
+        fs::create_dir_all(&directory).expect("isolated standalone control directory");
+        let path = directory.join(format!("{name}_mutation.rs"));
+        fs::write(&path, mutated_body).expect("standalone custody control");
         cases.pass(path);
     }
 }
