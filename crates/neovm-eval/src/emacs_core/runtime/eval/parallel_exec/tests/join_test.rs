@@ -24,6 +24,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const OWNER: u64 = 7401;
+const ADMISSION_DEADLINE: Duration = Duration::from_secs(30);
 
 struct SoleRoots {
     scratch: Vec<SharedRoot>,
@@ -164,10 +165,14 @@ fn publish_refresh(context: &mut Context) -> RefreshScan {
 }
 
 fn activate(mut permit: MutatorPermit<'_>, heap: HeapIdentity) -> Mutator<'_> {
+    let start = Instant::now();
     loop {
         match permit.activate(heap, OWNER) {
             Ok(mutator) => return mutator,
-            Err(failure) if failure.reason == RegistrationError::Busy => {
+            Err(failure)
+                if failure.reason == RegistrationError::Busy
+                    && start.elapsed() < ADMISSION_DEADLINE =>
+            {
                 permit = failure.into_permit();
                 thread::yield_now();
             }
@@ -177,21 +182,28 @@ fn activate(mut permit: MutatorPermit<'_>, heap: HeapIdentity) -> Mutator<'_> {
 }
 
 fn request_epoch(rendezvous: neovm_value::tagged::gc::Rendezvous<'_>) -> std::num::NonZeroU64 {
+    let start = Instant::now();
     loop {
         match rendezvous.request() {
             Ok(Request::Active(epoch)) => return epoch,
-            Ok(Request::Queued) => thread::yield_now(),
-            Err(RendezvousError::Busy) => thread::yield_now(),
+            Ok(Request::Queued) if start.elapsed() < ADMISSION_DEADLINE => thread::yield_now(),
+            Ok(Request::Queued) => panic!("request: Queued"),
+            Err(RendezvousError::Busy) if start.elapsed() < ADMISSION_DEADLINE => {
+                thread::yield_now();
+            }
             Err(error) => panic!("request: {error:?}"),
         }
     }
 }
 
 fn acknowledge(owner: &mut Mutator<'_>, epoch: std::num::NonZeroU64, roots: &[SharedRoot]) {
+    let start = Instant::now();
     loop {
         match owner.acknowledge(epoch, roots) {
             Ok(()) => return,
-            Err(RendezvousError::Busy) => thread::yield_now(),
+            Err(RendezvousError::Busy) if start.elapsed() < ADMISSION_DEADLINE => {
+                thread::yield_now();
+            }
             Err(error) => panic!("acknowledge: {error:?}"),
         }
     }
@@ -199,10 +211,14 @@ fn acknowledge(owner: &mut Mutator<'_>, epoch: std::num::NonZeroU64, roots: &[Sh
 
 fn restore(owner: &mut Mutator<'_>) {
     let mut image = begin_restore_retry_for_test(owner, false).expect("begin restore");
+    let start = Instant::now();
     loop {
         match image.apply() {
             Ok(()) => return,
-            Err(failure) if failure.reason == RendezvousError::Busy => {
+            Err(failure)
+                if failure.reason == RendezvousError::Busy
+                    && start.elapsed() < ADMISSION_DEADLINE =>
+            {
                 image = failure.into_image();
                 thread::yield_now();
             }
@@ -212,10 +228,14 @@ fn restore(owner: &mut Mutator<'_>) {
 }
 
 fn retire(mut owner: Mutator<'_>) {
+    let start = Instant::now();
     loop {
         match owner.retire_rooted(&[]) {
             Ok(()) => return,
-            Err(failure) if failure.reason == RendezvousError::Busy => {
+            Err(failure)
+                if failure.reason == RendezvousError::Busy
+                    && start.elapsed() < ADMISSION_DEADLINE =>
+            {
                 owner = failure.into_owner();
                 thread::yield_now();
             }
@@ -235,7 +255,7 @@ fn retry_busy<T>(label: &str, mut op: impl FnMut() -> Result<T, RendezvousError>
     loop {
         match op() {
             Ok(value) => return value,
-            Err(RendezvousError::Busy) if start.elapsed() < Duration::from_secs(30) => {
+            Err(RendezvousError::Busy) if start.elapsed() < ADMISSION_DEADLINE => {
                 thread::yield_now();
             }
             Err(error) => panic!("{label}: {error:?}"),
@@ -342,70 +362,91 @@ fn sole_root_in_each_owner_source_survives_only_through_the_joined_scan() {
 
 #[test]
 fn refreshed_scan_is_acknowledged_after_the_escape_stand_in() {
-    Context::with_test_collection_era(publish_refresh, |era, mut refresh| {
-        drop(refresh.keepers);
-        let heap = era.heap_identity();
-        let rendezvous = era.rendezvous();
-        let permit = era.register(OWNER, 0).expect("register the owner");
-        let (tx, rx) = mpsc::channel();
-        let first = std::mem::take(&mut refresh.first);
-        let second = std::mem::take(&mut refresh.second);
-        let old_bits = refresh.old_bits;
-        let new_bits = refresh.new_bits;
-        thread::scope(|scope| {
-            scope.spawn(move || {
-                let mut owner = activate(permit, heap);
-                let published = publish_and_ack(&mut owner, rendezvous, first);
-                tx.send(published).expect("first acknowledgement");
-                restore(&mut owner);
-                // The replacement was published before admission. This stop
-                // acknowledges that fresh scan and does not reuse the slice
-                // from before the stand-in escape.
-                let published = publish_and_ack(&mut owner, rendezvous, second);
-                tx.send(published).expect("second acknowledgement");
-                restore(&mut owner);
-                retire(owner);
-            });
-            let first = rx
-                .recv_timeout(Duration::from_secs(30))
-                .expect("first acknowledgement");
-            let mut stopped = stop(&era);
-            let reader = reader_words(&stopped, first.key);
-            assert_eq!(reader, first.words);
-            assert!(reader.contains(&old_bits));
-            retry_busy("first collection", || {
-                ParallelHeapEraWorldCollectExt::collect_stopped(&era, &mut stopped)
-            });
-            assert!(owns(&era, &stopped, old_bits));
-            // `second` is still alive on the owner thread, so its root-table
-            // lease keeps the replacement reachable across this collection.
-            assert!(owns(&era, &stopped, new_bits));
-            stopped.complete().expect("complete the first stop");
+    Context::with_test_collection_era_then(
+        publish_refresh,
+        |era, mut refresh| {
+            drop(refresh.keepers);
+            let heap = era.heap_identity();
+            let rendezvous = era.rendezvous();
+            let permit = era.register(OWNER, 0).expect("register the owner");
+            let (tx, rx) = mpsc::channel();
+            let first = std::mem::take(&mut refresh.first);
+            let second = std::mem::take(&mut refresh.second);
+            let old_bits = refresh.old_bits;
+            let new_bits = refresh.new_bits;
+            thread::scope(|scope| {
+                scope.spawn(move || {
+                    let mut owner = activate(permit, heap);
+                    let published = publish_and_ack(&mut owner, rendezvous, first);
+                    tx.send(published).expect("first acknowledgement");
+                    restore(&mut owner);
+                    // The replacement was published before admission. This stop
+                    // acknowledges that fresh scan and does not reuse the slice
+                    // from before the stand-in escape.
+                    let published = publish_and_ack(&mut owner, rendezvous, second);
+                    tx.send(published).expect("second acknowledgement");
+                    restore(&mut owner);
+                    retire(owner);
+                });
+                let first = rx
+                    .recv_timeout(ADMISSION_DEADLINE)
+                    .expect("first acknowledgement");
+                let mut stopped = stop(&era);
+                let reader = reader_words(&stopped, first.key);
+                assert_eq!(reader, first.words);
+                assert!(reader.contains(&old_bits));
+                retry_busy("first collection", || {
+                    ParallelHeapEraWorldCollectExt::collect_stopped(&era, &mut stopped)
+                });
+                assert!(owns(&era, &stopped, old_bits));
+                // `second` is still alive on the owner thread, so its root-table
+                // lease keeps the replacement reachable across this collection.
+                assert!(owns(&era, &stopped, new_bits));
+                stopped.complete().expect("complete the first stop");
 
-            let second = rx
-                .recv_timeout(Duration::from_secs(30))
-                .expect("second acknowledgement");
-            let mut stopped = stop(&era);
-            let reader = reader_words(&stopped, second.key);
-            assert_eq!(reader, second.words, "the second stop uses the fresh scan");
-            assert!(reader.contains(&new_bits));
-            assert!(
-                !reader.contains(&old_bits),
-                "the pre-escape slice was acknowledged again"
-            );
-            retry_busy("second collection", || {
-                ParallelHeapEraWorldCollectExt::collect_stopped(&era, &mut stopped)
+                let second = rx
+                    .recv_timeout(ADMISSION_DEADLINE)
+                    .expect("second acknowledgement");
+                let mut stopped = stop(&era);
+                let reader = reader_words(&stopped, second.key);
+                assert_eq!(reader, second.words, "the second stop uses the fresh scan");
+                assert!(reader.contains(&new_bits));
+                assert!(
+                    !reader.contains(&old_bits),
+                    "the pre-escape slice was acknowledged again"
+                );
+                retry_busy("second collection", || {
+                    ParallelHeapEraWorldCollectExt::collect_stopped(&era, &mut stopped)
+                });
+                assert!(owns(&era, &stopped, new_bits));
+                // The previous batch stays in `retained_roots`, and the root
+                // table traces every live batch, so the replaced cons stays
+                // reachable. The current reader above is the fresh scan only.
+                assert!(
+                    owns(&era, &stopped, old_bits),
+                    "the prior batch lease should keep the replaced cons"
+                );
+                stopped.complete().expect("complete the second stop");
             });
-            assert!(owns(&era, &stopped, new_bits));
-            // The previous batch stays in `retained_roots`, and the root
-            // table traces every live batch, so the replaced cons stays
-            // reachable. The current reader above is the fresh scan only.
+            // Retirement has returned. `EraCore::finish` drains `retained_roots`
+            // with `try_finish` (mutator_registration.rs). The serial collection
+            // below has no acknowledgement of the prior cons.
+            let (collector, keeper) = era.finish().expect("finish the era");
+            (collector, keeper, old_bits)
+        },
+        |context, old_bits| {
+            // SAFETY: `old_bits` is `Value::bits` of the cons allocated in
+            // this heap before the era was admitted.
+            let prior = unsafe { Value::from_bits(old_bits) };
             assert!(
-                owns(&era, &stopped, old_bits),
-                "the prior batch lease should keep the replaced cons"
+                context.tagged_heap.owns_heap_value_for_test(prior),
+                "the prior cons was already gone before the post-drain collection"
             );
-            stopped.complete().expect("complete the second stop");
-        });
-        finish(era);
-    });
+            context.gc_collect_exact();
+            assert!(
+                !context.tagged_heap.owns_heap_value_for_test(prior),
+                "the prior cons stayed owned after its batch lease was finished"
+            );
+        },
+    );
 }
