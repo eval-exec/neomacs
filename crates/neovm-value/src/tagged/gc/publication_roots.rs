@@ -51,15 +51,17 @@ impl<'a> IntoIterator for &'a GenerationRoots {
 /// beside the entries leaves [`GenerationRoots`] and the entries map unchanged
 /// for the seed walk.
 struct PublisherGenerations {
-    next: PayloadGeneration,
     order: Vec<PayloadGeneration>,
 }
 
-/// Publisher-id counter and the per-publisher generation ids. Boxed behind
-/// [`PublishedPayloadRoots`] so the entries map keeps the size and offset the
-/// cold-gc pin measured.
+/// Publisher-id counter, the one heap-wide generation counter, and the
+/// per-publisher id lists. Boxed behind [`PublishedPayloadRoots`] so the
+/// entries map keeps the size and offset the cold-gc pin measured.
 struct PublisherCounters {
     next_publisher: u64,
+    /// One counter for the whole heap, so an id belongs to exactly one
+    /// publisher and is never reused.
+    next_generation: PayloadGeneration,
     by_publisher: FxHashMap<PublisherId, PublisherGenerations>,
 }
 
@@ -87,6 +89,7 @@ impl Default for PublishedPayloadRoots {
             entries: FxHashMap::default(),
             counters: Box::new(PublisherCounters {
                 next_publisher: 0,
+                next_generation: PayloadGeneration::from_raw(0),
                 by_publisher: FxHashMap::default(),
             }),
         }
@@ -106,13 +109,9 @@ impl PublishedPayloadRoots {
             .checked_add(1)
             .expect("publisher id space");
         self.entries.insert(id, Vec::new());
-        self.counters.by_publisher.insert(
-            id,
-            PublisherGenerations {
-                next: PayloadGeneration::from_raw(0),
-                order: Vec::new(),
-            },
-        );
+        self.counters
+            .by_publisher
+            .insert(id, PublisherGenerations { order: Vec::new() });
         id
     }
 
@@ -121,21 +120,19 @@ impl PublishedPayloadRoots {
         self.counters.by_publisher.remove(&id);
     }
 
-    /// Push one generation and return its id. The id is not a slot, and a
-    /// later removal does not renumber the generations that remain.
+    /// Push one generation and return its heap-wide id. The id is not a slot,
+    /// and a later removal does not renumber the generations that remain.
     fn append_generation(&mut self, id: PublisherId, heads: Vec<TaggedValue>) -> PayloadGeneration {
-        let generation = {
-            let slot = self
-                .counters
-                .by_publisher
-                .get_mut(&id)
-                .expect("payload roots are appended only for a registered publisher");
-            debug_assert_eq!(slot.order.len(), self.entries[&id].len());
-            let generation = slot.next;
-            slot.next = generation.checked_next();
-            slot.order.push(generation);
-            generation
-        };
+        let generation = self.counters.next_generation;
+        self.counters.next_generation = generation.checked_next();
+        let order = &mut self
+            .counters
+            .by_publisher
+            .get_mut(&id)
+            .expect("payload roots are appended only for a registered publisher")
+            .order;
+        debug_assert_eq!(order.len(), self.entries[&id].len());
+        order.push(generation);
         self.entries
             .get_mut(&id)
             .expect("payload roots are appended only for a registered publisher")
@@ -145,9 +142,9 @@ impl PublishedPayloadRoots {
 
     /// Remove the generation named `generation` and no other.
     ///
-    /// A generation this publisher does not hold returns
-    /// [`AbsentPayloadGeneration`] and leaves the vec untouched. In debug
-    /// builds that miss also asserts.
+    /// A generation this publisher does not hold, including one another
+    /// publisher minted, returns [`AbsentPayloadGeneration`] and leaves the
+    /// vec untouched. In debug builds that miss also asserts.
     fn reclaim_generation(
         &mut self,
         id: PublisherId,
@@ -233,8 +230,8 @@ impl TaggedHeap {
     /// Remove the generation named `generation` and no other.
     ///
     /// The payload that appended this id is still alive, so the words in the
-    /// vec are exactly the heads it yielded. A stale or foreign id removes
-    /// nothing.
+    /// vec are exactly the heads it yielded. A stale id, or one another
+    /// publisher minted, removes nothing.
     #[cfg_attr(not(test), expect(dead_code, reason = "P10-b slices 2/3 wire refresh"))]
     pub(crate) fn reclaim_payload_generation(
         &mut self,

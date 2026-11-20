@@ -17,9 +17,10 @@ pub(crate) use ledger::{
 
 /// Identity of one appended payload-root generation.
 ///
-/// This is a per-publisher counter, not a slot. Reclaim matches the id and
-/// leaves every other generation in place. Minting does not wrap, so an old
-/// id cannot name a later generation of the same publisher.
+/// One heap-wide counter mints these, so an id is unique across every
+/// publisher and is never reused. This is not a slot. Reclaim matches the id
+/// and leaves every other generation in place. Minting does not wrap, so an
+/// old id cannot name a later generation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct PayloadGeneration(u64);
 

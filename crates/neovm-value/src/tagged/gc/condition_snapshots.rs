@@ -865,7 +865,7 @@ mod tests {
         published.unregister(&mut heap);
     }
 
-    /// A stale id, and an id this publisher never minted, must not remove a
+    /// A stale id, and an id another publisher minted, must not remove a
     /// generation that is still live. The live head stays a traced root.
     #[test]
     fn stale_or_foreign_generation_cannot_drop_a_live_head() {
@@ -881,7 +881,7 @@ mod tests {
         let mut only_obarray = Obarray::new();
         only_obarray.set_symbol_plist_id(only_symbol, only_live);
         let only_id = heap.register_payload_publisher();
-        let _only_generation =
+        let only_generation =
             heap.append_payload_roots(only_id, &ConditionPayload::capture(&only_obarray));
         only_obarray.set_symbol_plist_id(only_symbol, TaggedValue::NIL);
 
@@ -892,21 +892,27 @@ mod tests {
             heap.append_payload_roots(stacked_id, &ConditionPayload::capture(&stacked_obarray));
         stacked_obarray.set_symbol_plist_id(freed_symbol, TaggedValue::NIL);
         stacked_obarray.set_symbol_plist_id(kept_symbol, kept);
-        let _kept_generation =
+        let kept_generation =
             heap.append_payload_roots(stacked_id, &ConditionPayload::capture(&stacked_obarray));
         stacked_obarray.set_symbol_plist_id(kept_symbol, TaggedValue::NIL);
 
-        let foreign = super::super::publication::PayloadGeneration::from_raw(u64::MAX);
+        // Ids are heap-wide, so each publisher's generations are absent from
+        // the other's list. Neither direction may remove a live generation.
         assert!(
-            !removed_generation(&mut heap, only_id, foreign),
-            "a foreign generation reclaimed a slot"
+            !removed_generation(&mut heap, stacked_id, only_generation),
+            "another publisher's generation reclaimed a slot"
+        );
+        assert_eq!(heap.payload_root_count_for_test(stacked_id), 2);
+        assert!(
+            !removed_generation(&mut heap, only_id, freed_generation),
+            "another publisher's generation reclaimed a slot"
         );
         assert_eq!(heap.payload_root_count_for_test(only_id), 1);
         assert!(
-            !removed_generation(&mut heap, stacked_id, foreign),
-            "a foreign generation reclaimed a slot"
+            !removed_generation(&mut heap, only_id, kept_generation),
+            "another publisher's generation reclaimed a slot"
         );
-        assert_eq!(heap.payload_root_count_for_test(stacked_id), 2);
+        assert_eq!(heap.payload_root_count_for_test(only_id), 1);
 
         heap.reclaim_payload_generation(stacked_id, freed_generation)
             .expect("the freed generation is still registered");
@@ -920,7 +926,7 @@ mod tests {
         heap.collect_exact(std::iter::empty());
         assert!(
             heap.owns_heap_value_for_test(only_live),
-            "a foreign generation dropped a live head"
+            "another publisher's generation dropped a live head"
         );
         assert!(
             heap.owns_heap_value_for_test(kept),
