@@ -198,3 +198,11 @@ mod combined_inputs_tests;
 #[cfg(all(test, not(feature = "gc-memory-telemetry")))]
 #[path = "../../../core_tests/tagged/gc/mutator_registration/weak_policy_tests.rs"]
 mod weak_policy_tests;
+
+/// E3 slice 1 shells: one real ordinary-admission stopped major per case, then
+/// heap inspection after the job. Admission must accept the finalizer, weak,
+/// and resource registries and the stop must run the shared post-mark
+/// adapters before the sweep.
+#[cfg(all(test, not(feature = "gc-memory-telemetry")))]
+#[path = "../../../core_tests/tagged/gc/mutator_registration/stopped_adapter_arm_tests.rs"]
+mod stopped_adapter_arm_tests;

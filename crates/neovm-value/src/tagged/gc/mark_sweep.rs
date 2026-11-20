@@ -1886,7 +1886,7 @@ impl TaggedHeap {
     /// survives per its table's weakness — iterate to stability because a value
     /// in one weak table may be a key in another — then non-surviving entries
     /// are removed.
-    pub(super) fn mark_and_sweep_weak_tables(&mut self) {
+    fn mark_and_sweep_weak_tables(&mut self) {
         // Seed the always-swept weak-table registry into this cycle's worklist.
         // It covers image-permanent and collectible runtime-tenured tables. The
         // main mark can skip these owners, but their entries still need weak

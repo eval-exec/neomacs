@@ -21,6 +21,22 @@ mod weak_policy_tests;
 ))]
 pub(crate) use weak_policy_tests::{WeakPolicyCase, WeakPolicyHost, run_weak_policy_case};
 
+#[cfg(all(
+    any(test, feature = "test-support"),
+    not(feature = "gc-memory-telemetry")
+))]
+#[path = "stopped_adapter_fixture_tests.rs"]
+mod stopped_adapter_fixture_tests;
+#[cfg(all(
+    any(test, feature = "test-support"),
+    not(feature = "gc-memory-telemetry")
+))]
+pub use stopped_adapter_fixture_tests::{
+    StoppedAdapterEphemeronFixture, StoppedAdapterResourceFixture,
+    assert_stopped_adapter_ephemerons, assert_stopped_adapter_resources,
+    prepare_stopped_adapter_ephemerons, prepare_stopped_adapter_resources,
+};
+
 #[cfg(all(test, not(feature = "gc-memory-telemetry")))]
 mod threading_payload_tests {
     //! Narrow stopped-collector test access, with no dependency on World code.
@@ -113,37 +129,16 @@ impl CollectionReport {
 }
 
 fn supported(heap: &TaggedHeap) -> Result<(), CollectionError> {
-    supported_with_weak(heap, None)
-}
-
-fn supported_with_weak(
-    heap: &TaggedHeap,
-    weak_sweep: Option<&WeakSweepPermit>,
-) -> Result<(), CollectionError> {
     // This optional inventory includes private buffer capacities, for which
     // A5 has no all-owner adapter. Refuse admission rather than emit partial data.
     if cfg!(feature = "gc-memory-telemetry") {
         return Err(RendezvousError::Publication);
     }
-    if !heap.finalizer_registry.is_empty()
-        || !heap.doomed_finalizer_functions.is_empty()
-        || !heap.always_swept_weak_tables.is_empty()
-        || !heap.weak_hash_tables.is_empty()
-        || !heap.pending_surface_destroys.is_empty()
-        || !heap.pending_video_destroys.is_empty()
-    {
-        #[cfg(any(test, feature = "test-support"))]
-        eprintln!(
-            "A5 unsupported registry: finalizers={} doomed={} always_swept_weak={} weak={} surfaces={} videos={}",
-            heap.finalizer_registry.len(),
-            heap.doomed_finalizer_functions.len(),
-            heap.always_swept_weak_tables.len(),
-            heap.weak_hash_tables.len(),
-            heap.pending_surface_destroys.len(),
-            heap.pending_video_destroys.len()
-        );
-        return Err(RendezvousError::Publication);
-    }
+    // The stopped major runs `finish_stopped_mark_adapters` before the sweep
+    // (E3 slice 1), so a nonempty finalizer registry, doomed batch, weak-table
+    // list, always-swept list, or pending surface/video drain no longer makes
+    // the heap uncollectible: F, W, the three reclaims, and the record-only
+    // resource arms all run inside the stop.
     let inspect = |header: *const GcHeader| -> Result<(), CollectionError> {
         // SAFETY: admission or AllStopped retains initialized catalog storage;
         // no mutator/worker, callback, or collection overlaps this preflight.
@@ -153,12 +148,10 @@ fn supported_with_weak(
             }
             let ptr = header.cast::<VecLikeHeader>();
             match (*ptr).type_tag {
-                VecLikeType::Finalizer
-                | VecLikeType::UserPtr
-                | VecLikeType::ModuleFunction
-                | VecLikeType::Sqlite
-                | VecLikeType::SurfaceHandle
-                | VecLikeType::VideoHandle => {
+                // These own native callbacks that the stop cannot run yet. A
+                // stopped major records resource ids and queues finalizer
+                // functions; it never enters a native callback.
+                VecLikeType::UserPtr | VecLikeType::ModuleFunction | VecLikeType::Sqlite => {
                     #[cfg(any(test, feature = "test-support"))]
                     eprintln!(
                         "A5 unsupported callback-bearing payload: {:?}",
@@ -169,6 +162,12 @@ fn supported_with_weak(
                 VecLikeType::HashTable => {
                     // Admission has exclusive serial authority; a stopped job
                     // installs its real AllStopped before reaching this visit.
+                    // A weak table is swept by `mark_and_sweep_weak_tables`
+                    // inside the stopped major (E3 slice 1), so it needs no
+                    // test permit. The structural eligibility below still
+                    // refuses a table the stopped sweep cannot own: unhydrated
+                    // storage, an active table authority, or a permanent
+                    // image-resident shell.
                     let (weakness, eligible) =
                         heap.collector_tables()
                             .inspect(ptr.cast_mut().cast(), |ht| {
@@ -179,13 +178,9 @@ fn supported_with_weak(
                                         && ht.data.authority.load(Ordering::Acquire) == 0,
                                 )
                             });
-                    let allowed = weak_sweep.is_some_and(|permit| {
-                        permit.covers(heap, header as usize)
-                            && (*header).flags.boxed()
-                            && !(*header).generation.permanent()
-                            && eligible
-                    });
-                    if weakness.is_some() && !allowed {
+                    let admitted =
+                        (*header).flags.boxed() && !(*header).generation.permanent() && eligible;
+                    if weakness.is_some() && !admitted {
                         #[cfg(any(test, feature = "test-support"))]
                         eprintln!("A5 unsupported weak hash payload: {:?}", weakness);
                         Err(RendezvousError::Publication)
@@ -224,7 +219,14 @@ fn supported_with_weak(
                 | VecLikeType::Font
                 | VecLikeType::Macro
                 | VecLikeType::ByteCode
-                | VecLikeType::Timer => Ok(()),
+                | VecLikeType::Timer
+                // E3 slice 1: the stopped major queues a finalizer's function
+                // (F) and records a dead surface/video handle's id for the
+                // post-stop drain; the sweep itself only drops the shell or
+                // records the id. No native callback runs inside the stop.
+                | VecLikeType::Finalizer
+                | VecLikeType::SurfaceHandle
+                | VecLikeType::VideoHandle => Ok(()),
             }
         }
     };
@@ -262,7 +264,7 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
         } else {
             WeakSweepPermit::mint(collector.registration_heap_mut(), keeper, tables).and_then(
                 |permit| {
-                    supported_with_weak(collector.registration_heap_mut(), Some(&permit))
+                    supported(collector.registration_heap_mut())
                         .map(|()| permit)
                         .map_err(|_| RegistrationError::Publication)
                 },
@@ -497,9 +499,7 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
                     self.registry.as_ref().expect("live era registry"),
                 )?;
             }
-            collector_tables::with_stopped_tables(heap, stopped, |heap| {
-                supported_with_weak(heap, self.weak_sweep_permit())
-            })??;
+            collector_tables::with_stopped_tables(heap, stopped, |heap| supported(heap))??;
             facade_mark::CollectorQuiescence::check(heap).map_err(|_| RendezvousError::Busy)?;
             crate::tagged::transport::collect_shared_root_gc_roots(heap, &mut roots);
         }
@@ -520,14 +520,8 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
                 collector.registration_heap_mut(),
                 guard,
                 |heap| {
-                    let job = StoppedCollectorJob::new(
-                        heap,
-                        proof,
-                        guard,
-                        registry,
-                        self.weak_sweep_permit().is_some(),
-                        kind,
-                    )?;
+                    let job =
+                        StoppedCollectorJob::new(heap, proof, guard, registry, kind)?;
                     let mut images = ImageSession::take(registry, &entries, &keys)?;
                     let report =
                         job.run(&mut images, roots, words, heads, root_count, keys.len())?;
@@ -550,7 +544,6 @@ struct StoppedCollectorJob<'heap, 'stop, 'era> {
     _proof: &'stop scan_contract::ParallelStoppedMutatorsProof<'stop>,
     _stopped: &'stop AllStopped<'era>,
     epoch: u64,
-    weak_sweep: bool,
     kind: GenerationCycle,
 }
 impl<'heap, 'stop, 'era> StoppedCollectorJob<'heap, 'stop, 'era> {
@@ -559,7 +552,6 @@ impl<'heap, 'stop, 'era> StoppedCollectorJob<'heap, 'stop, 'era> {
         proof: &'stop scan_contract::ParallelStoppedMutatorsProof<'stop>,
         stopped: &'stop AllStopped<'era>,
         registry: &Registry,
-        weak_sweep: bool,
         kind: GenerationCycle,
     ) -> Result<Self, CollectionError> {
         if !stopped.matches_registry(registry) || heap.heap_identity() != registry.heap {
@@ -573,7 +565,6 @@ impl<'heap, 'stop, 'era> StoppedCollectorJob<'heap, 'stop, 'era> {
             _proof: proof,
             _stopped: stopped,
             epoch: stopped.epoch().get(),
-            weak_sweep,
             kind,
         })
     }
@@ -647,12 +638,21 @@ impl<'heap, 'stop, 'era> StoppedCollectorJob<'heap, 'stop, 'era> {
                 // Existing worker MarkAll remains exclusively on its serial path.
                 let mark_started = std::time::Instant::now();
                 heap.mark_all();
-                if self.weak_sweep {
-                    heap.mark_and_sweep_weak_tables();
-                }
-                if !heap.weak_hash_tables.is_empty() {
-                    return Err(RendezvousError::Publication);
-                }
+                // E3 slice 1: the same post-mark adapters the serial stop and
+                // incremental termination run. Ephemeron fixpoint, F, fixpoint,
+                // W, then the three explicit reclaims, all before the sweep.
+                // The test `WeakSweepPermit` no longer gates this call, because
+                // admission already accepted the registries this job must
+                // finish. `finish_stopped_mark_adapters` is the one production
+                // order (see the architecture guard).
+                let _ = heap.finish_stopped_mark_adapters();
+                // The weak fixpoint consumes every table it registered; the
+                // serial stop relies on the same post-condition. A leftover
+                // list would mean the sweep never reached fixpoint.
+                debug_assert!(
+                    heap.weak_hash_tables.is_empty(),
+                    "the stopped weak sweep must consume every registered weak table"
+                );
                 heap.finalize_collection(
                     mark_started.elapsed().as_micros() as u64,
                     bytes_before,

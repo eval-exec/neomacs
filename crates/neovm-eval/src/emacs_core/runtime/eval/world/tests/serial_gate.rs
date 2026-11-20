@@ -220,7 +220,7 @@ pub(crate) fn end_serial_for_test<'era, 'heap>(
 }
 
 // `cfg!` keeps one test green in both builds. With the feature,
-// `EraCore::admit_rooted` calls `supported` / `supported_with_weak` and maps
+// `EraCore::admit_rooted` calls `supported` and maps
 // the refusal to `RegistrationError::Publication` before the fixture body.
 // `serial_gc_for_test` is not reached. The default arm is the collection
 // contract.
