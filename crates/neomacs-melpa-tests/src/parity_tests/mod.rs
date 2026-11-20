@@ -396,6 +396,7 @@ mod etaf_pi;
 mod etaf_preview;
 mod etaf_rss;
 mod etaf_ui;
+mod etaf_weread;
 mod eval_sexp_fu;
 mod evil;
 mod evil_anzu;
