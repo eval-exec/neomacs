@@ -24,6 +24,7 @@ on:
           - neomacs-workspace-test-archive
           - neomacs-melpa-direct-windows-tests
           - compile-contracts
+          - neovm-eval-tests
           - compile-contracts-macos
           - gnu-emacs-oracle
           - gnu-emacs-oracle-macos
@@ -671,6 +672,34 @@ jobs:
               --test mint_seal_contracts --test retained_leaf_contracts
           } 2>&1 | tee "$RUNNER_TEMP/contracts.log"
           python3 scripts/check_compile_contracts.py "$RUNNER_TEMP/contracts.log"
+
+  # release-native-depth is not a default feature, and the workspace archive
+  # must not enable it: the rest of the eval harness asserts the test counter.
+  # This job is the eval test that runs the release reading of the mint.
+  neovm-eval-tests:
+    name: neovm-eval release native depth (linux x86_64)
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.job == 'all' || github.event.inputs.job == 'neovm-eval-tests' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: 1
+      TMPDIR: ${{ github.workspace }}/tmp
+    steps:
+      - *checkout
+      - *prepare_workspace_tmp
+      - uses: ./.github/actions/install-build-deps
+
+      - name: Set up Rust tooling
+        uses: ./.github/actions/setup-rust
+        with:
+          cache-key: ci-neovm-eval-release-native-depth-linux-x86_64
+          cache-shared-key: linux-x86_64-dev
+          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
+          install-nextest: true
+
+      - name: Run the release-native-depth mint regressions
+        run: cargo nextest run -p neovm-eval --lib --features release-native-depth -E 'test(n5_release_)'
 
   # The same contracts on the arm64 macOS toolchain. rustc on aarch64-apple-darwin
   # orders and caps its E0277/E0599 notes differently, so the suite keeps
