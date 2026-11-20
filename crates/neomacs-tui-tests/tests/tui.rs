@@ -78,6 +78,8 @@ mod input_methods;
 mod issue_140_hscroll;
 #[path = "issue_170_centered_buffer.rs"]
 mod issue_170_centered_buffer;
+#[path = "issue_249_special_key_bindings.rs"]
+mod issue_249_special_key_bindings;
 #[path = "issue_254.rs"]
 mod issue_254;
 #[path = "issue_383_dashboard_banner.rs"]
