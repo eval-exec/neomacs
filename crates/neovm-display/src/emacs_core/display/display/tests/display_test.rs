@@ -3370,6 +3370,127 @@ fn x_popup_menu_accepts_keymap_menus_like_gnu() {
     );
 }
 
+/// GNU's old-fashioned `(TITLE PANE...)` menu (src/menu.c:1354-1364 ->
+/// `list_of_panes` :496-515 -> `list_of_items` :459-484): the title and
+/// pane names are labels, a string item is a disabled line, a
+/// `(LABEL . VALUE)` item returns VALUE, and a non-cons item is a
+/// left/right boundary.  The interactive `x-popup-menu` path displayed
+/// none of this before: it resolved only a single keymap and sent the
+/// list form to the batch validator, which returned nil.
+#[test]
+fn x_popup_menu_old_fashioned_list_decodes_panes_and_values() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let menu = eval
+        .eval_str(
+            r#"'("Repro Title"
+                 ("Pane" "plain line" ("Choose Item" . choose) 42
+                  ("Other Item" . (nested value))))"#,
+        )
+        .expect("menu literal");
+    let resolved = crate::emacs_core::menu::resolve_popup(&mut eval, menu, false).unwrap();
+    let rows: Vec<_> = resolved
+        .entries()
+        .iter()
+        .map(|entry| (entry.label.clone(), entry.kind))
+        .collect();
+    assert_eq!(rows.len(), 6);
+    assert_eq!(rows[0].0, "Repro Title");
+    assert!(matches!(
+        rows[0].1,
+        neomacs_display_protocol::menu::MenuItemKind::Label
+    ));
+    assert_eq!(rows[1].0, "Pane");
+    assert!(matches!(
+        rows[1].1,
+        neomacs_display_protocol::menu::MenuItemKind::Label
+    ));
+    assert_eq!(rows[2].0, "plain line");
+    assert!(matches!(
+        rows[2].1,
+        neomacs_display_protocol::menu::MenuItemKind::Label
+    ));
+    assert_eq!(rows[3].0, "Choose Item");
+    assert!(matches!(
+        rows[3].1,
+        neomacs_display_protocol::menu::MenuItemKind::Command { .. }
+    ));
+    assert!(matches!(
+        rows[4].1,
+        neomacs_display_protocol::menu::MenuItemKind::Separator
+    ));
+    assert_eq!(rows[5].0, "Other Item");
+    let print = neovm_eval::emacs_core::print::print_value;
+    assert_eq!(print(&resolved.events()[0]), "nil");
+    assert_eq!(print(&resolved.events()[1]), "nil");
+    assert_eq!(print(&resolved.events()[2]), "nil");
+    assert_eq!(print(&resolved.events()[3]), "choose");
+    assert_eq!(print(&resolved.events()[4]), "nil");
+    assert_eq!(print(&resolved.events()[5]), "(nested value)");
+}
+
+/// GNU's list-of-keymaps branch (src/menu.c:1322-1350): every element is
+/// resolved with the erroring `get_keymap`, the first prompt becomes the
+/// menu title AND the first pane's name, and every keymap makes one pane.
+#[test]
+fn x_popup_menu_keymap_list_decodes_one_pane_per_keymap() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    // Submenu bindings keep the shortcut resolver -- an ABSENT-LAYER in
+    // this display-only runtime -- out of the walk; the pane structure and
+    // event paths are what this test pins.
+    let menu = eval
+        .eval_str(
+            r#"(let ((context (make-sparse-keymap "Context"))
+                     (context-child (make-sparse-keymap))
+                     (other (make-sparse-keymap "Other"))
+                     (other-child (make-sparse-keymap)))
+                 (define-key context-child [action] '(menu-item "Context Action"))
+                 (define-key other-child [action] '(menu-item "Other Action"))
+                 (define-key context [choose] (list 'menu-item "Repro Choose" context-child))
+                 (define-key other [other] (list 'menu-item "Other Choose" other-child))
+                 (list context other))"#,
+        )
+        .expect("keymap list");
+    let resolved = crate::emacs_core::menu::resolve_popup(&mut eval, menu, false).unwrap();
+    let labels: Vec<_> = resolved
+        .entries()
+        .iter()
+        .map(|entry| entry.label.clone())
+        .collect();
+    assert_eq!(
+        labels,
+        [
+            "Context",
+            "Repro Choose",
+            "Context Action",
+            "Other",
+            "Other Choose",
+            "Other Action"
+        ]
+    );
+    let print = neovm_eval::emacs_core::print::print_value;
+    assert_eq!(print(&resolved.events()[1]), "(choose)");
+    assert_eq!(print(&resolved.events()[2]), "(choose action)");
+    assert_eq!(print(&resolved.events()[4]), "(other)");
+    assert_eq!(print(&resolved.events()[5]), "(other action)");
+
+    // `get_keymap (XCAR (tem), 1, 0)` signals on a non-keymap element.
+    let bad = eval.eval_str("(list (make-sparse-keymap) 42)").unwrap();
+    let error = crate::emacs_core::menu::resolve_popup(&mut eval, bad, false).kinded();
+    match error {
+        Err(FlowKind::Signal(signal)) => {
+            assert_eq!(signal.symbol_name(), "wrong-type-argument");
+            assert_eq!(
+                signal.data,
+                vec![Value::symbol("keymapp"), Value::fixnum(42)]
+            );
+        }
+        Err(other) => panic!("expected keymapp signal, got {other:?}"),
+        Ok(_) => panic!("expected keymapp signal, got a resolved menu"),
+    }
+}
+
 #[test]
 fn x_clipboard_input_context_batch_semantics() {
     crate::test_utils::init_test_tracing();
@@ -5243,7 +5364,7 @@ fn old_style_menu_help_keeps_the_real_submenu_definition() {
         definition,
         neovm_value::tagged::SymbolMode::Bare,
     );
-    let resolved = crate::emacs_core::menu::resolve(&mut eval, menu, true).unwrap();
+    let resolved = crate::emacs_core::menu::resolve_popup(&mut eval, menu, true).unwrap();
     let entry = &resolved.entries()[0];
 
     assert_eq!(entry.help.as_deref(), Some("Open child choices"));

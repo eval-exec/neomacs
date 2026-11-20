@@ -256,7 +256,16 @@ fn inject_sequence(
                                  button: &str,
                                  select: Option<(i32, i32)>|
      -> Option<Rect> {
-        xdotool(env, &["mousemove", "--window", window, &x.to_string(), &y.to_string()]);
+        xdotool(
+            env,
+            &[
+                "mousemove",
+                "--window",
+                window,
+                &x.to_string(),
+                &y.to_string(),
+            ],
+        );
         xdotool(env, &["click", button]);
         std::thread::sleep(Duration::from_millis(700));
         let shot = capture(env, &observations, case);
@@ -293,14 +302,12 @@ fn inject_sequence(
     // Case 1: [down-mouse-3] bound to a menu keymap; title row then the
     // item, so the item sits ~45px below the pointer (GTK) or ~36px
     // (neomacs's 24px rows).
-    let case1 =
-        open_select_and_close("01-case1-open", &baseline, 60, 40, "3", Some(selects.case1));
+    let case1 = open_select_and_close("01-case1-open", &baseline, 60, 40, "3", Some(selects.case1));
     // Case 2: old-fashioned list menu via `x-popup-menu'; title, pane
     // label, then the item (~55px below the pointer on GTK, ~60px on
     // neomacs).
     let base2 = capture(env, &observations, "10-base2");
-    let case2 =
-        open_select_and_close("11-case2-open", &base2, 60, 120, "2", Some(selects.case2));
+    let case2 = open_select_and_close("11-case2-open", &base2, 60, 120, "2", Some(selects.case2));
     // Case 2b: list of keymaps; the pane title, then the first item
     // (~48px down on GTK, ~36px on neomacs: between the panes GTK draws
     // the pane separator, and a click there dismisses nothing — it hits
@@ -407,7 +414,8 @@ fn run_gnu(
     assert!(
         output.exit_code == Some(0),
         "GNU exited {:?}; stderr:\n{}",
-        output.exit_code, output.stderr
+        output.exit_code,
+        output.stderr
     );
     let result_text = std::fs::read_to_string(&result)
         .unwrap_or_else(|error| panic!("GNU did not write {result:?}: {error}"));
@@ -441,25 +449,24 @@ fn run_neomacs(root: &Path, program: PathBuf, artifact_root: &Path) -> EditorRun
     let display =
         neomacs_infra::display::start_local_xvfb_with_size(&artifacts, 1280, 800).unwrap();
     let log = std::fs::File::create(artifacts.join("weston.log")).unwrap();
-    let compositor = Command::new(
-        std::env::var_os("NEOMACS_GUI_WESTON").unwrap_or_else(|| "weston".into()),
-    )
-    .args([
-        "--backend=x11",
-        "--renderer=pixman",
-        "--shell=kiosk-shell.so",
-        "--no-config",
-        "--width=1000",
-        "--height=700",
-        "--socket=ctxmenu-test",
-    ])
-    .envs(display.env().iter().map(|(k, v)| (k, v)))
-    .env("XDG_RUNTIME_DIR", &runtime)
-    .env_remove("WAYLAND_DISPLAY")
-    .stdout(log.try_clone().unwrap())
-    .stderr(log)
-    .spawn()
-    .expect("install Weston with X11 backend and kiosk shell");
+    let compositor =
+        Command::new(std::env::var_os("NEOMACS_GUI_WESTON").unwrap_or_else(|| "weston".into()))
+            .args([
+                "--backend=x11",
+                "--renderer=pixman",
+                "--shell=kiosk-shell.so",
+                "--no-config",
+                "--width=1000",
+                "--height=700",
+                "--socket=ctxmenu-test",
+            ])
+            .envs(display.env().iter().map(|(k, v)| (k, v)))
+            .env("XDG_RUNTIME_DIR", &runtime)
+            .env_remove("WAYLAND_DISPLAY")
+            .stdout(log.try_clone().unwrap())
+            .stderr(log)
+            .spawn()
+            .expect("install Weston with X11 backend and kiosk shell");
     let mut compositor = OwnedChild(compositor);
     wait_until("Wayland socket", &artifacts, || {
         compositor_alive(&mut compositor, &artifacts);
@@ -476,10 +483,7 @@ fn run_neomacs(root: &Path, program: PathBuf, artifact_root: &Path) -> EditorRun
         // Pin the software Vulkan backend the rest of the suite presents
         // through: the runner image has no EGL screen.
         .env("WGPU_BACKEND", "vulkan")
-        .env(
-            READY_ENV,
-            artifacts.join("ready").display().to_string(),
-        )
+        .env(READY_ENV, artifacts.join("ready").display().to_string())
         .env(
             RESULT_ENV,
             artifacts.join("result.el").display().to_string(),
@@ -489,7 +493,9 @@ fn run_neomacs(root: &Path, program: PathBuf, artifact_root: &Path) -> EditorRun
         .env("RUST_LOG", "warn,neomacs_display_runtime=debug")
         .env("NEOMACS_LOG_FILE", artifacts.join("neomacs.log"))
         .stdout(Stdio::null())
-        .stderr(Stdio::from(std::fs::File::create(artifacts.join("wayland.log")).unwrap()))
+        .stderr(Stdio::from(
+            std::fs::File::create(artifacts.join("wayland.log")).unwrap(),
+        ))
         .stdin(Stdio::null())
         .spawn()
         .expect("fresh-build the editor runtime");
@@ -569,11 +575,7 @@ fn editor_alive(child: &mut OwnedChild, artifacts: &Path) {
     }
 }
 
-fn wait_until<T>(
-    what: &str,
-    artifacts: &Path,
-    poll: impl FnMut() -> Option<T>,
-) -> T {
+fn wait_until<T>(what: &str, artifacts: &Path, poll: impl FnMut() -> Option<T>) -> T {
     let deadline = Instant::now() + Duration::from_secs(30);
     let mut poll = poll;
     loop {
@@ -690,8 +692,5 @@ fn right_click_menu_popups_behave_like_gnu() {
         "build {binary:?} before running the context menu oracle"
     );
     let neo = run_neomacs(&root, binary, &artifact_root);
-    // The list-menu half (`x-popup-menu' with list and keymap-list MENU
-    // shapes) is the `list_of_panes'/`keymap_panes' decode, covered by the
-    // ctxmenu list-menu contract test.
-    assert_keymap_menu_contract("Neomacs", &neo);
+    assert_contract("Neomacs", &neo);
 }

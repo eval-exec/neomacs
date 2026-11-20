@@ -2420,7 +2420,10 @@ impl crate::emacs_core::eval::Context {
     ) -> Result<Option<Value>, neovm_value::error::Flow> {
         // `menu-prompting` gates the whole prompt (keyboard.c:10102,
         // DEFVAR_BOOL keyboard.c:13978).
-        if self.visible_variable_value_or_nil("menu-prompting").is_nil() {
+        if self
+            .visible_variable_value_or_nil("menu-prompting")
+            .is_nil()
+        {
             return Ok(None);
         }
         if !self.keyboard_input_is_interactive() {
@@ -2456,10 +2459,7 @@ impl crate::emacs_core::eval::Context {
         // first element and unreads the rest (keyboard.c:10117-10141); the
         // popup's paths deeper than one element would unread their tail,
         // which the current single-level popup never produces.
-        let value = self.funcall_general(
-            Value::symbol("x-popup-menu"),
-            vec![prev_event, map],
-        )?;
+        let value = self.funcall_general(Value::symbol("x-popup-menu"), vec![prev_event, map])?;
         if value.is_nil() {
             return Ok(Some(Value::T));
         }
@@ -3992,9 +3992,7 @@ impl crate::emacs_core::eval::Context {
             // `last-nonmenu-event` takes the translated event -- matching GNU,
             // where reading an unbound `<return>` yields
             // last-input-event=return but last-nonmenu-event=13.
-            if !menu_event_in_sequence
-                && let Some(translated_last) = translated_events.last()
-            {
+            if !menu_event_in_sequence && let Some(translated_last) = translated_events.last() {
                 self.record_nonmenu_input_event(*translated_last);
             }
             menu_event_in_sequence = false;

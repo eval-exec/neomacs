@@ -1,6 +1,6 @@
 //! Evaluator-owned menu semantics. Presentation contains no Lisp values.
 
-use neomacs_display_protocol::menu::MenuItemKind;
+use neomacs_display_protocol::menu::{MenuAvailability, MenuIndicator, MenuItemKind};
 use neovm_edit::emacs_core::edit_host::EditHost;
 use neovm_eval::emacs_core::eval::Context;
 use neovm_eval::emacs_core::eval::PopupMenuEntry;
@@ -77,54 +77,222 @@ impl ResolvedMenu {
     }
 }
 
-pub(crate) fn resolve(ctx: &mut Context, menu: Value, is_tty: bool) -> Result<ResolvedMenu, Flow> {
+/// Decode every MENU shape GNU's `x_popup_menu_1` accepts
+/// (`src/menu.c:1294-1364`): a keymap, a list of keymaps
+/// (`keymap_panes`), or an old-fashioned `(TITLE PANE...)` list
+/// (`list_of_panes`).
+///
+/// The interactive `x-popup-menu` path used to resolve only a single
+/// keymap and send the other two shapes to the batch validator, which
+/// displayed nothing and returned nil.  GNU displays all three forms;
+/// only the returned value differs: a list of event paths for keymaps,
+/// the chosen item's VALUE for the old-fashioned form.
+pub(crate) fn resolve_popup(
+    ctx: &mut Context,
+    menu: Value,
+    is_tty: bool,
+) -> Result<ResolvedMenu, Flow> {
     let mut result = ResolvedMenu {
         entries: Vec::new(),
         events: Vec::new(),
         _roots: MenuRoots::new(),
     };
     result._roots.keep(menu);
-    let map = keymap::get_keymap_in_runtime(ctx, &menu, false, true)?;
-    result._roots.keep(map);
-    // GNU Fx_popup_menu (src/menu.c:1301-1320) turns the keymap's prompt
-    // into the pane name, and the toolkit draws a pane name as the menu's
-    // title row above the pane's items.
-    let prompt = keymap_prompt(ctx, map);
-    result._roots.keep(prompt);
-    push_title_row(prompt, &mut result);
-    append(ctx, map, is_tty, &mut MenuTraversal::default(), &mut result)?;
-    Ok(result)
+    // `keymap = get_keymap (menu, 0, 0); if (CONSP (keymap))`: the branch
+    // needs a real keymap OBJECT.  `get_keymap` returns an unloaded
+    // keymap autoload symbol itself, which GNU does not take here.
+    let map = keymap::get_keymap_in_runtime(ctx, &menu, false, false)?;
+    if keymap::is_list_keymap(&map, ctx.symbol_mode()) {
+        result._roots.keep(map);
+        return finish_keymap_pane(ctx, map, is_tty, result);
+    }
+    // `else if (CONSP (menu) && KEYMAPP (XCAR (menu)))`: the first
+    // element must itself be a keymap object; the remaining elements are
+    // resolved with the erroring `get_keymap` inside the branch.
+    if menu.is_cons() && keymap::is_list_keymap(&menu.cons_car(), ctx.symbol_mode()) {
+        return resolve_keymap_list(ctx, menu, is_tty, result);
+    }
+    // `else { title = Fcar (menu); CHECK_STRING (title); list_of_panes
+    // (Fcdr (menu)); }`
+    resolve_old_fashioned(menu, result)
 }
 
-/// GNU Fkeymap_prompt (src/keymap.c:148-168): the first direct string
-/// element of the keymap spine, looking through nested keymap elements.
+/// GNU's single-keymap branch: `keymap_panes (&menu, 1)` makes one pane
+/// whose name is `(Fkeymap_prompt keymap)`.
+fn finish_keymap_pane(
+    ctx: &mut Context,
+    map: Value,
+    is_tty: bool,
+    mut out: ResolvedMenu,
+) -> Result<ResolvedMenu, Flow> {
+    let prompt = keymap_prompt(ctx, map);
+    out._roots.keep(prompt);
+    push_label_row(prompt, &mut out);
+    append(ctx, map, is_tty, &mut MenuTraversal::default(), &mut out)?;
+    Ok(out)
+}
+
+/// GNU's list-of-keymaps branch (`src/menu.c:1322-1350`): every element is
+/// resolved with `get_keymap (XCAR (tem), 1, 0)`, so a non-keymap element
+/// signals `keymapp`; the first prompt found is the menu title, and that
+/// title becomes the FIRST pane's name (`ASET (menu_items,
+/// MENU_ITEMS_PANE_NAME, title)`).
+fn resolve_keymap_list(
+    ctx: &mut Context,
+    menu: Value,
+    is_tty: bool,
+    mut out: ResolvedMenu,
+) -> Result<ResolvedMenu, Flow> {
+    let mut maps = Vec::new();
+    let mut title = Value::NIL;
+    let mut rest = menu;
+    while rest.is_cons() {
+        let map = keymap::get_keymap_in_runtime(ctx, &rest.cons_car(), true, false)?;
+        let map = out._roots.keep(map);
+        if title.is_nil() {
+            let prompt = keymap_prompt(ctx, map);
+            if !prompt.is_nil() {
+                title = out._roots.keep(prompt);
+            }
+        }
+        maps.push(map);
+        rest = rest.cons_cdr();
+    }
+    for (index, map) in maps.iter().enumerate() {
+        let pane_name = if index == 0 && !title.is_nil() {
+            title
+        } else {
+            keymap_prompt(ctx, *map)
+        };
+        out._roots.keep(pane_name);
+        push_label_row(pane_name, &mut out);
+        append(ctx, *map, is_tty, &mut MenuTraversal::default(), &mut out)?;
+    }
+    Ok(out)
+}
+
+/// GNU's old-fashioned branch (`src/menu.c:1354-1364` -> `list_of_panes`
+/// :496-515 -> `list_of_items` :459-484):
+///
+/// * TITLE is `(Fcar menu)` and must be a string.
+/// * Each PANE is `(PANE-TITLE . PANE-DATA)`; PANE-TITLE must be a string
+///   and PANE-DATA a cons (an empty pane is `wrong-type-argument consp`).
+/// * An item that is a string is a non-selectable line.
+/// * An item that is a cons is `(LABEL . VALUE)`; LABEL must be a string
+///   and the popup returns VALUE.
+/// * Any other item is a left/right boundary, drawn as a separator.
+fn resolve_old_fashioned(menu: Value, mut out: ResolvedMenu) -> Result<ResolvedMenu, Flow> {
+    let title = car_or_nil(menu);
+    if !title.is_string() {
+        return Err(wrong_type_string(title));
+    }
+    out._roots.keep(title);
+    push_label_row(title, &mut out);
+    let mut panes = cdr_or_nil(menu);
+    while panes.is_cons() {
+        let pane = panes.cons_car();
+        let pane_name = car_or_nil(pane);
+        if !pane_name.is_string() {
+            return Err(wrong_type_string(pane_name));
+        }
+        out._roots.keep(pane_name);
+        push_label_row(pane_name, &mut out);
+        let pane_data = cdr_or_nil(pane);
+        if !pane_data.is_cons() {
+            return Err(neovm_value::error::signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("consp"), pane_data],
+            ));
+        }
+        out._roots.keep(pane_data);
+        let mut items = pane_data;
+        while items.is_cons() {
+            let item = items.cons_car();
+            if item.is_string() {
+                push_label_row(item, &mut out);
+            } else if item.is_cons() {
+                let label = item.cons_car();
+                if !label.is_string() {
+                    return Err(wrong_type_string(label));
+                }
+                let value = out._roots.keep(item.cons_cdr());
+                if let Some(label) = label.as_runtime_string_owned() {
+                    push_event_entry(
+                        &mut out,
+                        MenuItemKind::Command {
+                            availability: MenuAvailability::Enabled,
+                            indicator: MenuIndicator::None,
+                        },
+                        label,
+                        value,
+                    );
+                }
+            } else {
+                push_event_entry(&mut out, MenuItemKind::Separator, String::new(), Value::NIL);
+            }
+            items = items.cons_cdr();
+        }
+        panes = panes.cons_cdr();
+    }
+    Ok(out)
+}
+
+/// GNU `Fcar`/`Fcdr` return nil for a non-cons argument rather than
+/// signalling; the old-fashioned decode depends on that to put the
+/// `stringp`/`consp` error on the actual offending value.
+fn car_or_nil(value: Value) -> Value {
+    if value.is_cons() {
+        value.cons_car()
+    } else {
+        Value::NIL
+    }
+}
+
+fn cdr_or_nil(value: Value) -> Value {
+    if value.is_cons() {
+        value.cons_cdr()
+    } else {
+        Value::NIL
+    }
+}
+
+fn wrong_type_string(value: Value) -> Flow {
+    neovm_value::error::signal(
+        LispCondition::WrongTypeArgument,
+        vec![Value::symbol("stringp"), value],
+    )
+}
+
+/// GNU Fkeymap_prompt (src/keymap.c:148-168): `get_keymap` first, then
+/// the first direct string element of the keymap spine, looking through
+/// nested keymap elements (only a real keymap OBJECT recurses).
 fn keymap_prompt(ctx: &mut Context, map: Value) -> Value {
-    let mut tail = map;
-    while tail.is_cons() {
-        let head = tail.cons_car();
+    let mut map = keymap::get_keymap_in_runtime(ctx, &map, false, false).unwrap_or(Value::NIL);
+    while map.is_cons() {
+        let head = map.cons_car();
         if head.is_string() {
             return head;
         }
-        let child = keymap::get_keymap_in_runtime(ctx, &head, false, false)
-            .unwrap_or(Value::NIL);
-        if !child.is_nil() {
-            let prompt = keymap_prompt(ctx, child);
+        if keymap::is_list_keymap(&head, ctx.symbol_mode()) {
+            let prompt = keymap_prompt(ctx, head);
             if !prompt.is_nil() {
                 return prompt;
             }
         }
-        tail = tail.cons_cdr();
+        map = map.cons_cdr();
     }
     Value::NIL
 }
 
-/// A pane name renders as the popup's title row: GNU sets it as the pane
-/// title (push_menu_pane), which the toolkit draws above the pane's items.
-fn push_title_row(prompt: Value, out: &mut ResolvedMenu) {
-    if prompt.is_nil() {
+/// A pane name or non-selectable item renders as a label row.  GNU sets a
+/// pane name as the pane title (`push_menu_pane`), which the toolkit draws
+/// above the pane's items; a string item in an old-fashioned menu becomes
+/// a disabled menu item line (`list_of_items`).
+fn push_label_row(value: Value, out: &mut ResolvedMenu) {
+    if value.is_nil() {
         return;
     }
-    if let Some(label) = prompt.as_runtime_string_owned() {
+    if let Some(label) = value.as_runtime_string_owned() {
         push_list_entry(out, MenuItemKind::Label, label);
     }
 }
@@ -132,6 +300,14 @@ fn push_title_row(prompt: Value, out: &mut ResolvedMenu) {
 /// Non-selectable rows still occupy an event slot with a nil value, so
 /// entries and events keep one index space.
 fn push_list_entry(out: &mut ResolvedMenu, kind: MenuItemKind, label: String) {
+    push_event_entry(out, kind, label, Value::NIL);
+}
+
+/// Selectable rows carry the value the popup returns when that row is
+/// chosen: an event path for keymap panes, the item's VALUE for the
+/// old-fashioned list form (`list_of_items` pushes `XCDR (item)` as the
+/// item key).
+fn push_event_entry(out: &mut ResolvedMenu, kind: MenuItemKind, label: String, event: Value) {
     out.entries.push(PopupMenuEntry {
         kind,
         label,
@@ -139,7 +315,7 @@ fn push_list_entry(out: &mut ResolvedMenu, kind: MenuItemKind, label: String) {
         shortcut: String::new(),
         depth: 0,
     });
-    out.events.push(Value::NIL);
+    out.events.push(event);
 }
 
 fn append(

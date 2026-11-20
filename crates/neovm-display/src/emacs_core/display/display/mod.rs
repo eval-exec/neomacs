@@ -2000,7 +2000,10 @@ fn x_popup_menu_interactive(ctx: &mut Context, position: Value, menu: Value) -> 
     // None). On TTY each submenu collapses to one `" >"` line instead of being
     // inlined; on a window-system frame the toolkit owns nested panes.
     let is_tty = selected_frame_window_system_symbol(ctx).is_none();
-    let resolved = super::menu::resolve(ctx, menu, is_tty)?;
+    // GNU `x_popup_menu_1` decodes all three MENU shapes -- a keymap, a
+    // list of keymaps, or an old-fashioned `(TITLE PANE...)` list -- for
+    // both window-system and TTY frames (src/menu.c:1294-1364).
+    let resolved = super::menu::resolve_popup(ctx, menu, is_tty)?;
     let entries = resolved.entries();
     let events = resolved.events();
     if entries.is_empty() {
@@ -2608,12 +2611,11 @@ pub fn builtin_x_popup_menu(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
     let menu = args[1];
 
     if ctx.display_host.is_some() && ctx.input_rx().as_ref().is_some() && !position.is_nil() {
-        let map = neovm_eval::emacs_core::eval::keymap_lookup::get_keymap_in_runtime(
-            ctx, &menu, false, true,
-        )?;
-        if !map.is_nil() {
-            return x_popup_menu_interactive(ctx, position, map);
-        }
+        // Every MENU shape GNU accepts is decoded (and validated) by the
+        // interactive path now; the batch entry below remains the
+        // no-display/no-input validator, where GNU still builds the menu
+        // data but has no frame to show it on.
+        return x_popup_menu_interactive(ctx, position, menu);
     }
 
     builtin_x_popup_menu_batch(ctx, args)
