@@ -694,3 +694,104 @@ fn generational_partition_verifier_checks_unmarked_old_cons_children() {
     heap.incremental_drain_all();
     heap.verify_dump_partition();
 }
+
+#[test]
+fn minor_sweep_work_estimate_is_bounded_by_the_young_list_not_the_old_boxes() {
+    use crate::value::{HashTableTest, LispHashTable};
+    let mut heap = heap_with_generations(true);
+    set_tagged_heap(&mut heap);
+    let roots = ScratchRoots::new();
+    let tenured: Vec<TaggedValue> = (0..20_000)
+        .map(|_| heap.alloc_hash_table(LispHashTable::new(HashTableTest::Eq)))
+        .collect();
+    for &table in &tenured {
+        roots.keep(table);
+    }
+    minor(&mut heap, &tenured);
+    assert!(header(tenured[0]).tenured);
+    for _ in 0..16 {
+        let _ = heap.alloc_hash_table(LispHashTable::new(HashTableTest::Eq));
+    }
+    heap.begin_minor_collection().unwrap();
+    heap.complete_minor_collection();
+    assert!(heap.sweep_in_progress());
+    assert!(heap.non_cons_object_addrs.len() > 20_000);
+    // The old boxes alone would read as ten slices of 2,048 objects; this
+    // minor's young list holds 16.
+    let remaining = heap.sweep_slices_remaining(8);
+    assert!(
+        remaining <= 2,
+        "a 16-object young list estimated at {remaining} slices"
+    );
+    heap.finish_incremental_sweep_now();
+}
+
+/// Live bytes after a minor whose sweep window allocates `garbage` strings
+/// into the free slots that the previous cycle left in unswept pages.
+fn live_bytes_after_minor_with_sweep_window_garbage(garbage: usize) -> usize {
+    let mut heap = heap_with_generations(true);
+    set_tagged_heap(&mut heap);
+    let roots = ScratchRoots::new();
+    let strings: Vec<TaggedValue> = (0..4_096)
+        .map(|i| heap.alloc_string(LispString::from_utf8(&format!("string {i:08}"))))
+        .collect();
+    let kept: Vec<TaggedValue> = strings.iter().copied().step_by(2).collect();
+    for &string in &kept {
+        roots.keep(string);
+    }
+    minor(&mut heap, &kept);
+    heap.begin_minor_collection().unwrap();
+    heap.complete_minor_collection();
+    assert!(heap.sweep_in_progress());
+    for i in 0..garbage {
+        let _ = heap.alloc_string(LispString::from_utf8(&format!("garbage {i:08}")));
+    }
+    heap.finish_incremental_sweep_now();
+    heap.live_bytes
+}
+
+#[test]
+fn sweep_window_allocation_does_not_count_as_live() {
+    let quiet = live_bytes_after_minor_with_sweep_window_garbage(0);
+    let busy = live_bytes_after_minor_with_sweep_window_garbage(2_048);
+    assert!(
+        busy <= quiet,
+        "2,048 dead strings allocated during the sweep raised live bytes {quiet} -> {busy}"
+    );
+}
+
+/// Live bytes after a minor that tenures 2,048 retained strings, when its
+/// sweep window allocates `conses` dead conses. The sweep never visits a
+/// cons allocated during it: unswept blocks are withheld from allocation, so
+/// a window cons lands in a swept block or a new one.
+fn live_bytes_after_minor_with_sweep_window_conses(conses: usize) -> usize {
+    let mut heap = heap_with_generations(true);
+    set_tagged_heap(&mut heap);
+    let roots = ScratchRoots::new();
+    let kept: Vec<TaggedValue> = (0..2_048)
+        .map(|i| heap.alloc_string(LispString::from_utf8(&format!("retained {i:08}"))))
+        .collect();
+    for &string in &kept {
+        roots.keep(string);
+    }
+    minor(&mut heap, &kept);
+    heap.begin_minor_collection().unwrap();
+    heap.complete_minor_collection();
+    assert!(heap.sweep_in_progress());
+    for _ in 0..conses {
+        let _ = heap.alloc_cons(TaggedValue::NIL, TaggedValue::NIL);
+    }
+    heap.finish_incremental_sweep_now();
+    heap.live_bytes
+}
+
+#[test]
+fn sweep_window_allocation_the_sweep_never_counted_keeps_the_survivors() {
+    let quiet = live_bytes_after_minor_with_sweep_window_conses(0);
+    // About 512 KB of conses, well above the retained strings' bytes.
+    let busy = live_bytes_after_minor_with_sweep_window_conses(32_768);
+    assert!(
+        busy >= quiet,
+        "32,768 conses allocated during the sweep erased survivors: live bytes {quiet} -> {busy}"
+    );
+}

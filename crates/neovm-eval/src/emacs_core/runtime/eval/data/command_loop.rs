@@ -1125,8 +1125,8 @@ impl KeyboardRuntime {
     /// Return whether the next keyboard read can complete without waiting.
     /// Unlike `input-pending-p`, a keyboard read can consume the remaining
     /// events of an executing keyboard macro.
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    pub(crate) fn has_pending_kboard_input(&self) -> bool {
+    #[doc(hidden)]
+    pub fn has_pending_kboard_input(&self) -> bool {
         self.has_pending_low_level_input()
             || self.kboards().any(|kboard| {
                 kboard

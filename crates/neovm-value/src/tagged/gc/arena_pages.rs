@@ -1862,6 +1862,14 @@ pub struct SweepStats {
     pub mark_us: u64,
 }
 
+impl SweepStats {
+    /// Sweep slices the current cycle has taken.
+    #[doc(hidden)]
+    pub fn slice_count(&self) -> usize {
+        self.slice_count
+    }
+}
+
 #[cfg(feature = "test-support")]
 impl SweepStats {
     #[cfg_attr(feature = "test-support", visibility::make(pub))]

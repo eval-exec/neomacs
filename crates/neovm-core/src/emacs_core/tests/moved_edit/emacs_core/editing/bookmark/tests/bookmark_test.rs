@@ -104,7 +104,8 @@ fn bookmark_lookup_key_cannot_retain_input_properties() {
             if !eval.tagged_heap().sweep_in_progress() {
                 break;
             }
-            eval.gc_safe_point_exact();
+            // A safe point paces sweep slices by allocation; drive them.
+            eval.gc_collect_from_current_roots();
         }
         assert!(!eval.tagged_heap().sweep_in_progress());
         assert!(!eval.tagged_heap().mark_in_progress());
@@ -284,7 +285,8 @@ fn bookmark_copied_properties_have_only_manager_roots() {
             if !eval.tagged_heap().sweep_in_progress() {
                 break;
             }
-            eval.gc_safe_point_exact();
+            // A safe point paces sweep slices by allocation; drive them.
+            eval.gc_collect_from_current_roots();
         }
         assert!(!eval.tagged_heap().sweep_in_progress());
         assert!(!eval.tagged_heap().mark_in_progress());

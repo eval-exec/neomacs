@@ -5,6 +5,14 @@
 
 use super::*;
 
+/// Pending non-cons objects a sweep slice reclaims per unit of its budget.
+const NONCONS_OBJECTS_PER_SLICE_UNIT: usize = 256;
+
+/// Least live count a paced sweep's horizon derives from: GNU's default
+/// `gc-cons-threshold` (100,000 words), so a small heap still spreads its
+/// sweep over some allocation.
+const SWEEP_HORIZON_FLOOR_BYTES: usize = 100_000 * size_of::<usize>();
+
 impl TaggedHeap {
     /// True while a mark is underway (between the start handshake and sweep).
     pub fn mark_in_progress(&self) -> bool {
@@ -188,7 +196,7 @@ impl TaggedHeap {
         let forced = self.forced_termination_pending;
         self.forced_termination_pending = false;
         self.pace_close_mark_window(pace_wall_us, pace_alloc, forced);
-        if std::env::var("NEOVM_GC_TRACE").as_deref() == Ok("1") {
+        if knobs::gc_trace_on() {
             eprintln!(
                 "NEOVM_GC mark_window alloc={}B wall={}us start_bytes={} forced={} \
                  rate_ewma={}B/s dur_ewma={}us lead={}B",
@@ -214,6 +222,96 @@ impl TaggedHeap {
     /// True while the deferred sweep is draining.
     pub fn sweep_in_progress(&self) -> bool {
         self.sweep_in_progress
+    }
+
+    /// Whether a safe point owes the deferred sweep a slice of `budget`.
+    ///
+    /// The sweep's work is fixed at mark termination; only its placement is
+    /// paced. Allocation since termination (`bytes_since_gc`, reset there)
+    /// is the clock: the sweep must be done by the time half a threshold
+    /// has been allocated, well before the next cycle is due and the
+    /// overdue drain in the evaluator finishes it at once. A slice is owed
+    /// when the allocated share of that horizon has reached the share of
+    /// slices already run, so the first slice runs at once and a mutator
+    /// that does not allocate is not interrupted again.
+    ///
+    /// The threshold is live: `(setq gc-cons-threshold most-positive-fixnum)`
+    /// during the sweep raises it at once, and the overdue drain then never
+    /// fires. So the horizon is also bounded by the live count the cycle
+    /// started from (`sweep_bytes_before`, fixed at termination, floored at
+    /// the default threshold): a raised threshold cannot postpone the
+    /// sweep past about half that much allocation.
+    #[doc(hidden)]
+    pub fn sweep_slice_due(&self, budget: usize) -> bool {
+        debug_assert!(self.sweep_in_progress, "no deferred sweep to pace");
+        match knobs::sweep_pacing() {
+            knobs::SweepPacing::EverySafePoint => true,
+            knobs::SweepPacing::Allocation => {
+                let done = self.sweep_slice_count as u128;
+                let total = done + self.sweep_slices_remaining(budget) as u128;
+                let horizon = self
+                    .gc_threshold
+                    .min(self.sweep_bytes_before.max(SWEEP_HORIZON_FLOOR_BYTES))
+                    / 2;
+                let horizon = horizon as u128;
+                self.bytes_since_gc() as u128 * total >= done * horizon
+            }
+        }
+    }
+
+    /// Slices of `budget` still needed to finish the deferred sweep. Cons
+    /// blocks and each arena class advance `budget` per slice behind their
+    /// cursors, so their part is exact. The pending object lists have no
+    /// length, so they are bounded from above; an overestimate only
+    /// finishes earlier. Every object on them is in `non_cons_object_addrs`.
+    /// A generational minor sweeps only the young list, and the tenured
+    /// objects in that set would swamp it: young survivors are promoted at
+    /// every termination, so the young list holds only objects linked since
+    /// the previous one, each charged at least a header to the allocation
+    /// counter, which bounds it by the allocation since then.
+    pub(super) fn sweep_slices_remaining(&self, budget: usize) -> usize {
+        let budget = budget.max(1);
+        let units = [
+            (self.sweep_cons_cursor, self.sweep_cons_end),
+            (self.sweep_float_page_cursor, self.sweep_float_page_end),
+            (self.sweep_string_page_cursor, self.sweep_string_page_end),
+            (self.sweep_vector_page_cursor, self.sweep_vector_page_end),
+            (
+                self.sweep_bytecode_page_cursor,
+                self.sweep_bytecode_page_end,
+            ),
+            (self.sweep_lambda_page_cursor, self.sweep_lambda_page_end),
+            (self.sweep_macro_page_cursor, self.sweep_macro_page_end),
+            (self.sweep_record_page_cursor, self.sweep_record_page_end),
+            (
+                self.sweep_symbol_with_pos_page_cursor,
+                self.sweep_symbol_with_pos_page_end,
+            ),
+            (self.sweep_marker_page_cursor, self.sweep_marker_page_end),
+            (self.sweep_bignum_page_cursor, self.sweep_bignum_page_end),
+        ]
+        .into_iter()
+        .map(|(cursor, end)| end.saturating_sub(cursor))
+        .max()
+        .unwrap_or(0);
+        let listed = if self.sweep_noncons_pending.is_null()
+            && self.generational.old_sweep_pending.is_null()
+        {
+            0
+        } else {
+            let mut objects = self.non_cons_object_addrs.len();
+            if self.generational.enabled && !self.generational.major_in_progress {
+                // `bytes_since_gc` at termination, before its reset there.
+                let allocated = self
+                    .pace_mark_start_bytes
+                    .saturating_add(self.sweep_mark_window_alloc_bytes);
+                objects = objects.min(allocated / size_of::<GcHeader>());
+            }
+            objects
+                .div_ceil(budget.saturating_mul(NONCONS_OBJECTS_PER_SLICE_UNIT))
+                .max(1)
+        };
+        units.div_ceil(budget).max(listed)
     }
 
     /// True if a panic ever unwound while one of the collector's own locks was
@@ -356,7 +454,7 @@ impl TaggedHeap {
         // -- non-cons: reclaim more objects per slice than cons blocks, since a
         //    cons block holds thousands of cells while a non-cons node is one
         //    object (with a heavier per-object free). --
-        let noncons_budget = budget.saturating_mul(256);
+        let noncons_budget = budget.saturating_mul(NONCONS_OBJECTS_PER_SLICE_UNIT);
         let mut processed = 0usize;
         let mut noncons_freed = if self.generational.major_in_progress {
             self.sweep_old_objects_slice(noncons_budget)
@@ -422,7 +520,7 @@ impl TaggedHeap {
         self.sweep_slice_count += 1;
         self.sweep_cons_blocks_swept += swept_blocks;
         self.sweep_noncons_freed += noncons_freed + float_freed;
-        if std::env::var("NEOVM_GC_TRACE").as_deref() == Ok("1") {
+        if knobs::gc_trace_on() {
             eprintln!(
                 "NEOVM_GC sweep_slice {slice_us}us cons={}/{} noncons_left={} done={done}",
                 self.sweep_cons_cursor,
@@ -517,16 +615,29 @@ impl TaggedHeap {
         // allocation rate: elb nbody's "live" climbed 13 MB -> 438 MB over
         // eight cycles at a flat 75K live conses. A stop-the-world
         // collection allocates nothing while it runs, so its live count is
-        // GNU's; this brings the incremental one to the same measure. It
-        // undercounts what the mark window allocated that stays live, which
-        // only paces the next cycle sooner.
+        // GNU's; this brings the incremental one to the same measure. The
+        // sweep window is taken out the same way, from the one term that can
+        // hold it: a slot allocated during it in an arena page the cursor had
+        // not reached is counted in `sweep_noncons_live_bytes` when the page
+        // is visited, and a paced sweep spans up to half a threshold of
+        // allocation. Nothing else the sweep counts was allocated in its
+        // window: unswept cons blocks are withheld from allocation, boxed
+        // objects link onto the fresh young list the sweep never visits, and
+        // the old and mapped bytes hold no young object. `bytes_since_gc`
+        // (reset at termination) bounds the counted part from above, and
+        // taking it from that term alone keeps it off the survivors the
+        // window never touched. Both undercount what the windows allocated
+        // that stays live, which only paces the next cycle sooner.
         let cons_live_bytes = self
             .sweep_cons_live_cells
             .saturating_add(mapped_cons_live)
             .saturating_mul(size_of::<ConsCell>());
         let mapped_object_live_bytes = self.mapped_non_cons_live_bytes();
         self.live_bytes = cons_live_bytes
-            .saturating_add(self.sweep_noncons_live_bytes)
+            .saturating_add(
+                self.sweep_noncons_live_bytes
+                    .saturating_sub(self.bytes_since_gc()),
+            )
             .saturating_add(mapped_object_live_bytes)
             .saturating_add(self.old_noncons_bytes())
             .saturating_sub(self.sweep_mark_window_alloc_bytes)
@@ -537,7 +648,7 @@ impl TaggedHeap {
         self.sweep_lifetime_slices += self.sweep_slice_count;
         self.sweep_lifetime_cons_blocks_swept += self.sweep_cons_blocks_swept;
         self.sweep_lifetime_noncons_freed += self.sweep_noncons_freed;
-        if std::env::var("NEOVM_GC_TRACE").as_deref() == Ok("1") {
+        if knobs::gc_trace_on() {
             let (mapped_total, mapped_marked) = self.mapped_object_stats();
             eprintln!(
                 "NEOVM_GC gc#{} [incremental mark={}us sweep_total={}us slices={} blocks={} \

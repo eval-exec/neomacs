@@ -2386,7 +2386,8 @@ fn font_shape_gstring_cache_is_the_sole_edge_across_minor_and_full_gc() {
             if !eval.tagged_heap().sweep_in_progress() {
                 break;
             }
-            eval.gc_safe_point_exact();
+            // A safe point paces sweep slices by allocation; drive them.
+            eval.gc_collect_from_current_roots();
         }
         assert!(
             !eval.tagged_heap().sweep_in_progress(),
