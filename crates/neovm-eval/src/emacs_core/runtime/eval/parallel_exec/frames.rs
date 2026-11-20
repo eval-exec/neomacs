@@ -116,6 +116,47 @@ struct RootSlot {
     payload: SlotPayload,
 }
 
+/// One vector per canonical group. Adding a field without naming it in
+/// [`RootRegistry::trace_root_groups`] is a compile error (E0027).
+struct GroupPayloads {
+    vm_frames: Vec<Value>,
+    eval_temp: Vec<Value>,
+    bc: Vec<Value>,
+    jit_window: Vec<Value>,
+    handlers: Vec<Value>,
+    specpdl: Vec<Value>,
+    misc: Vec<Value>,
+}
+
+impl GroupPayloads {
+    fn from_live<'a>(slots: impl Iterator<Item = &'a RootSlot>) -> Self {
+        let mut payloads = Self {
+            vm_frames: Vec::new(),
+            eval_temp: Vec::new(),
+            bc: Vec::new(),
+            jit_window: Vec::new(),
+            handlers: Vec::new(),
+            specpdl: Vec::new(),
+            misc: Vec::new(),
+        };
+        for slot in slots {
+            let SlotPayload::Live { group, value } = slot.payload else {
+                continue;
+            };
+            match group {
+                RootGroup::VmFrames => payloads.vm_frames.push(value),
+                RootGroup::EvalTemp => payloads.eval_temp.push(value),
+                RootGroup::Bc => payloads.bc.push(value),
+                RootGroup::JitWindow => payloads.jit_window.push(value),
+                RootGroup::Handlers => payloads.handlers.push(value),
+                RootGroup::Specpdl => payloads.specpdl.push(value),
+                RootGroup::Misc => payloads.misc.push(value),
+            }
+        }
+        payloads
+    }
+}
+
 /// The owner's auxiliary published roots, separate from the frame arena.
 ///
 /// Slots are a dense live prefix. Revoke bumps the slot generation before
@@ -217,6 +258,31 @@ impl RootRegistry {
                 visit(group, value);
             }
         }
+    }
+
+    /// Enter every [`RootGroup`] once, including a group with no live roots.
+    ///
+    /// The payload struct is destructured without a rest pattern, and
+    /// [`GroupPayloads::from_live`] matches every variant. A new group fails
+    /// to compile until both sites name it.
+    #[doc(hidden)]
+    pub fn trace_root_groups(&self, visit: &mut dyn FnMut(RootGroup, &[Value])) {
+        let GroupPayloads {
+            vm_frames,
+            eval_temp,
+            bc,
+            jit_window,
+            handlers,
+            specpdl,
+            misc,
+        } = GroupPayloads::from_live(self.slots.iter().take(self.live as usize));
+        visit(RootGroup::VmFrames, &vm_frames);
+        visit(RootGroup::EvalTemp, &eval_temp);
+        visit(RootGroup::Bc, &bc);
+        visit(RootGroup::JitWindow, &jit_window);
+        visit(RootGroup::Handlers, &handlers);
+        visit(RootGroup::Specpdl, &specpdl);
+        visit(RootGroup::Misc, &misc);
     }
 
     /// Park the counter at its last value so the next issue refuses.

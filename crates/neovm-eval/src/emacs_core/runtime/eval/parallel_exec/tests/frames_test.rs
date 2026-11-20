@@ -274,6 +274,37 @@ fn root_handle_generation_exhaustion_refuses_without_wrapping() {
 }
 
 #[test]
+fn root_group_scan_visits_each_group_once() {
+    let mut registry = RootRegistry::new();
+    registry
+        .push(RootGroup::EvalTemp, Value::fixnum(1))
+        .expect("first eval root");
+    registry
+        .push(RootGroup::EvalTemp, Value::fixnum(2))
+        .expect("second eval root");
+    registry
+        .push(RootGroup::Misc, Value::fixnum(3))
+        .expect("misc root");
+
+    let mut seen = Vec::new();
+    registry.trace_root_groups(&mut |group, values| {
+        seen.push((group.name(), values.len()));
+    });
+    assert_eq!(
+        seen,
+        [
+            ("vm_frames", 0),
+            ("eval_temp", 2),
+            ("bc", 0),
+            ("jit_window", 0),
+            ("handlers", 0),
+            ("specpdl", 0),
+            ("misc", 1),
+        ]
+    );
+}
+
+#[test]
 fn root_group_names_are_the_canonical_e3_roster() {
     let names = RootGroup::ALL
         .iter()
