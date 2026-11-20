@@ -403,6 +403,7 @@ mod etaf_preview;
 mod etaf_rss;
 mod etaf_screensaver;
 mod etaf_ui;
+#[cfg(unix)]
 mod etaf_video_studio;
 mod etaf_weread;
 mod eval_sexp_fu;

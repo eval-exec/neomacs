@@ -5,6 +5,7 @@
 //! the exact text mounted into the preview buffer.  Mermaid/KaTeX drawing and
 //! live repaint need external tools or a GUI lane and stay out of this batch.
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use expect_test::expect;
@@ -77,6 +78,33 @@ fn md_oracle() -> CachedMelpaOracle {
         .with_timeout(Duration::from_secs(240))
         .with_prelude(PRELUDE)
 }
+
+/// Directory whose only program is an executable `ffmpeg` stub.
+///
+/// `etaf-org-preview-doctor` reports `(executable-find "ffmpeg")`. Binding
+/// `exec-path` to this directory makes GNU Emacs and Neomacs agree, whether
+/// or not the host PATH has ffmpeg.
+fn controlled_ffmpeg_exec_dir() -> PathBuf {
+    let dir = std::env::temp_dir().join("neomacs-etaf-org-ffmpeg-probe");
+    std::fs::create_dir_all(&dir).expect("create the ffmpeg probe directory");
+    let program = dir.join("ffmpeg");
+    std::fs::write(&program, "#!/bin/sh\nexit 0\n").expect("write the ffmpeg probe");
+    mark_ffmpeg_probe_executable(&program);
+    dir
+}
+
+#[cfg(unix)]
+fn mark_ffmpeg_probe_executable(path: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let mut permissions = std::fs::metadata(path)
+        .expect("stat the ffmpeg probe")
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(path, permissions).expect("mark the ffmpeg probe executable");
+}
+
+#[cfg(not(unix))]
+fn mark_ffmpeg_probe_executable(_path: &std::path::Path) {}
 
 fn org_oracle() -> CachedMelpaOracle {
     CachedMelpaOracle::new(("etaf-org-preview", "0.3.1"), "etaf-org-preview.el")
@@ -197,13 +225,14 @@ fn etaf_org_preview_batch() {
                 r#"OK (t "Demo" ((1 "First heading" "s1" "TODO" ("work")) (2 "Second heading" "s1.1" "DONE" ("home"))))"#
             ]],
         ),
-        // Capability facts are the same in both engines: they describe the
-        // host, not the editor.
+        // Capability facts follow `exec-path`, not the host PATH. The probe
+        // directory contains an executable `ffmpeg`, so both engines report t.
         ParityBatchCase::value(
             "org_doctor",
-            r####"
-(etaf-org-preview-doctor)
-"####,
+            format!(
+                "(let ((exec-path (list \"{}\")))\n  (etaf-org-preview-doctor))\n",
+                controlled_ffmpeg_exec_dir().display()
+            ),
             expect![[
                 r#"OK (:required nil :optional (("org" nil "Optional: load Org to resolve id: links and honour org-todo-keywords.") ("ffmpeg" t "Optional: install ffmpeg to preview video files and terminal images.")))"#
             ]],
