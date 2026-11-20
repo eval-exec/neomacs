@@ -6,10 +6,12 @@
 //! that callback, including its protected era argument, has ended.
 
 use super::heap_transfer_adapter;
+use super::heap_transfer_adapter::PreparedHeapTransferProductionEra;
 use crate::emacs_core::eval::Context;
 use neovm_value::tagged::collection_reads::SourceObservationError;
 use neovm_value::tagged::gc::heap_transfer::{
-    HeapRootDesignator, PendingHeapReturn, PreparedHeapTransfer, RestoredHeapBacking, TransferError,
+    HeapRootDesignator, PendingHeapReturn, PreparedHeapTransfer, RestoredHeapBacking,
+    ScopedEraError, TransferError,
 };
 use neovm_value::tagged::gc::{
     AllStopped, EraWorldLoan, FacadeEpochRetention, FacadeMarkExclusionError, FrozenFunctionRoots,
@@ -863,4 +865,141 @@ fn pentry_e2b_retained_era_owner_poison_refuses_recovery() {
     assert_eq!(failure.reason(), OwnerRecoveryError::Poisoned);
     drop(failure);
     assert!(weak.upgrade().is_some());
+}
+
+#[test]
+fn pentry_e2b_heap_transfer_production_era_roundtrip() {
+    let _harness = crate::test_utils::unit_harness();
+    let Some((pending, transfer)) = prepare_closed_fixture() else {
+        return;
+    };
+    let (transfer, identity) = transfer
+        .with_production_era(|era| era.heap_identity())
+        .expect("scoped production era");
+    assert_eq!(identity, transfer.heap_identity());
+    assert!(!neovm_value::tagged::gc::tagged_heap_is_installed());
+    finish_closed_source(pending, transfer);
+}
+
+#[test]
+fn pentry_e2b_heap_transfer_production_era_thread_gc_roundtrip() {
+    use super::ParallelHeapEraWorldCollectExt;
+    let _harness = crate::test_utils::unit_harness();
+    let Some((pending, transfer)) = prepare_closed_fixture() else {
+        return;
+    };
+    let transfer = std::thread::spawn(move || {
+        let mut transfer = transfer;
+        // Two separate eras. Each ends its loan frame before this
+        // reference-free right is reused.
+        for _ in 0..2 {
+            let (returned, identity) = transfer
+                .with_production_era(|era| {
+                    let mut stopped = era.stop().expect("no peer stop");
+                    era.collect_stopped(&mut stopped)
+                        .expect("actual rooted collection");
+                    stopped.complete().expect("actual collection completion");
+                    era.heap_identity()
+                })
+                .expect("scoped production era");
+            assert_eq!(identity, returned.heap_identity());
+            assert!(!neovm_value::tagged::gc::tagged_heap_is_installed());
+            transfer = returned;
+        }
+        transfer
+    })
+    .join()
+    .expect("service thread");
+    finish_closed_source(pending, transfer);
+}
+
+#[test]
+fn pentry_e2b_heap_transfer_production_era_panic_poison_no_resume() {
+    let _harness = crate::test_utils::unit_harness();
+    let Some((pending, transfer)) = prepare_closed_fixture() else {
+        return;
+    };
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        transfer.with_production_era::<()>(|_| panic!("SCOPED_ACTUAL_ERA_UNWIND"))
+    }));
+    let payload = match result {
+        Err(payload) => payload,
+        Ok(_) => panic!("callback must unwind"),
+    };
+    assert_eq!(
+        payload.downcast_ref::<&str>().copied(),
+        Some("SCOPED_ACTUAL_ERA_UNWIND")
+    );
+    assert!(pending.is_poisoned());
+    assert!(!neovm_value::tagged::gc::tagged_heap_is_installed());
+    drop(pending);
+}
+
+#[test]
+fn pentry_e2b_heap_transfer_production_era_forgotten_permit_refuses_send() {
+    let _harness = crate::test_utils::unit_harness();
+    let Some((pending, transfer)) = prepare_closed_fixture() else {
+        return;
+    };
+    let failure = match transfer.with_production_era(|era| {
+        let permit = era.register(1, 4).expect("actual permit");
+        std::mem::forget(permit);
+    }) {
+        Err(failure) => failure,
+        Ok(_) => panic!("unfinished participant must prevent re-export"),
+    };
+    assert_eq!(
+        failure.reason(),
+        ScopedEraError::Finish(RegistrationError::Busy)
+    );
+    assert!(failure.is_poisoned());
+    assert!(pending.is_poisoned());
+    assert!(!neovm_value::tagged::gc::tagged_heap_is_installed());
+    drop(failure);
+    drop(pending);
+}
+
+#[test]
+fn pentry_e2b_heap_transfer_production_era_source_drop_prevents_reexport() {
+    let _harness = crate::test_utils::unit_harness();
+    let Some((pending, transfer)) = prepare_closed_fixture() else {
+        return;
+    };
+    let failure = match transfer.with_production_era(|_| drop(pending)) {
+        Err(failure) => failure,
+        Ok(_) => panic!("abandoned actual source cannot return to Prepared"),
+    };
+    assert_eq!(
+        failure.reason(),
+        ScopedEraError::Transfer(TransferError::Phase)
+    );
+    assert!(failure.is_poisoned());
+    drop(failure);
+}
+
+#[test]
+fn pentry_e2b_heap_transfer_production_era_foreign_tls_entry_refusal() {
+    let _harness = crate::test_utils::unit_harness();
+    let Some((pending, transfer)) = prepare_closed_fixture() else {
+        return;
+    };
+    let mut foreign = Context::new_minimal_vm_harness(crate::test_utils::unit_harness());
+    foreign.setup_thread_locals();
+    let failure =
+        match transfer.with_production_era::<()>(|_| panic!("must refuse before callback")) {
+            Err(failure) => failure,
+            Ok(_) => panic!("foreign activation must be preserved"),
+        };
+    assert_eq!(
+        failure.reason(),
+        ScopedEraError::Transfer(TransferError::InstalledTls)
+    );
+    assert!(failure.is_poisoned());
+    assert!(pending.is_poisoned());
+    assert!(neovm_value::tagged::gc::tagged_heap_is_current(
+        &foreign.tagged_heap
+    ));
+    neovm_value::tagged::gc::clear_tagged_heap_if_installed(&foreign.tagged_heap);
+    drop(failure);
+    drop(pending);
 }

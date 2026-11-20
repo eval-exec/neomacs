@@ -5,10 +5,10 @@
 //! `prepare_reference_free_transfer` must return that right before any
 //! destination frame runs.
 
-use super::Baton;
+use super::{Baton, ParallelHeapEraWorldExt};
 use neovm_value::tagged::gc::heap_transfer::{
-    PendingHeapReturn, PrepareFailure, PreparedHeapTransfer, RestoredHeapBacking,
-    SourceRecoveryFailure,
+    HeapTransferCompletion, PendingHeapReturn, PrepareFailure, PreparedHeapTransfer,
+    RestoredHeapBacking, ScopedEraError, ScopedEraFailure, SourceRecoveryFailure,
 };
 use neovm_value::tagged::gc::{
     FrozenLegacyRoots, Gen1Admission, WorldLoan, clear_tagged_heap_root_if_installed,
@@ -92,4 +92,63 @@ pub(crate) unsafe fn recover_transferred_source(
     let roots = unsafe { FrozenLegacyRoots::new(heap, words, functions) };
     let baton = Baton::from_world_loan(owner);
     Ok((baton, roots, publication))
+}
+
+/// Admit the original keeper through the existing World era seam.
+///
+/// Value keeps the reference-free shell and does not name `Baton`. This is
+/// the same split as [`ParallelHeapEraWorldExt`]: the era type is value-layer
+/// data, and admitting it needs this World's keeper.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "E2 L4 dormant production era admission; no production caller enters it"
+    )
+)]
+pub(crate) trait PreparedHeapTransferProductionEra: Sized {
+    fn with_production_era<R: HeapTransferCompletion>(
+        self,
+        body: impl for<'heap> FnOnce(&neovm_value::tagged::gc::ParallelHeapEra<'heap, Baton>) -> R,
+    ) -> Result<(Self, R), ScopedEraFailure>;
+}
+
+impl PreparedHeapTransferProductionEra for PreparedHeapTransfer {
+    #[cold]
+    fn with_production_era<R: HeapTransferCompletion>(
+        self,
+        body: impl for<'heap> FnOnce(&neovm_value::tagged::gc::ParallelHeapEra<'heap, Baton>) -> R,
+    ) -> Result<(Self, R), ScopedEraFailure> {
+        self.with_scoped_owner(|admission, owner, roots| {
+            let keeper = Baton::from_world_loan(owner);
+            // The trait method derives this keeper's retained epoch and
+            // symbol backing, and the roots are the sealed census this
+            // transfer published.
+            let era = match ParallelHeapEraWorldExt::admit_rooted(admission, keeper, roots) {
+                Ok(era) => era,
+                Err(failure) => {
+                    let (reason, collector, keeper) = failure.into_parts();
+                    drop(collector);
+                    return Err((
+                        ScopedEraError::Admission(reason),
+                        Some(neovm_value::tagged::gc::WorldLoan::from(keeper)),
+                    ));
+                }
+            };
+            let result = body(&era);
+            match era.finish() {
+                Ok((collector, baton)) => {
+                    drop(collector);
+                    Ok((neovm_value::tagged::gc::WorldLoan::from(baton), result))
+                }
+                Err(failure) => {
+                    let reason = failure.reason();
+                    // Dropping the era poisons its registry and retains the
+                    // keeper. The loan must not also be returned.
+                    drop(failure);
+                    Err((ScopedEraError::Finish(reason), None))
+                }
+            }
+        })
+    }
 }

@@ -441,20 +441,7 @@ static_assertions::assert_not_impl_any!(LocalHeapScope: Send, Sync, Clone, Copy)
 impl LocalHeapScope {
     fn retire_tls(&self) -> Result<(), TransferError> {
         let transfer = self.transfer.as_ref().expect("local retained transfer");
-        let root = transfer.root.as_non_null();
-        let installed = super::super::TAGGED_HEAP.with(|slot| slot.get() == root.as_ptr());
-        // SAFETY: `run_local`'s complete callback and collector frame has
-        // returned, or unwound. This scope retains the sole original backing
-        // and no heap reference. The fresh loan ends before a Send right can
-        // escape.
-        let heap = unsafe { root.as_ref() };
-        if installed {
-            heap.preflight_source_store_retirement()
-                .map_err(TransferError::Observations)?;
-            clear_tagged_heap_if_installed(heap);
-        }
-        heap.retire_source_observation_membership()
-            .map_err(TransferError::Observations)
+        retire_transfer_tls(transfer.root.as_non_null())
     }
 
     fn into_transfer(mut self) -> (PreparedHeapTransfer, Result<(), TransferError>) {
@@ -476,6 +463,40 @@ impl Drop for LocalHeapScope {
         // The actual transfer still owns backing throughout cleanup, including
         // unwinding. Its field Drop then poisons and retains unfinished backing.
     }
+}
+
+/// Only after the complete collector or era frame has returned and every
+/// participant has retired. A refusal that can still hold a heap loan clears
+/// TLS by address and does not call this.
+fn retire_transfer_tls(root: NonNull<super::super::TaggedHeap>) -> Result<(), TransferError> {
+    let installed = super::super::TAGGED_HEAP.with(|slot| slot.get() == root.as_ptr());
+    // SAFETY: the caller's complete callback, collector, or era frame has
+    // returned, or unwound. The scope retains the sole original backing and
+    // no heap reference. The fresh loan ends before a Send right can escape.
+    let heap = unsafe { root.as_ref() };
+    if installed {
+        heap.preflight_source_store_retirement()
+            .map_err(TransferError::Observations)?;
+        clear_tagged_heap_if_installed(heap);
+    }
+    heap.retire_source_observation_membership()
+        .map_err(TransferError::Observations)
+}
+
+/// Rebuild the exclusive loan from the retained provenance root.
+///
+/// # Safety
+/// `root` is that transfer's original root. No collector loan, installed TLS
+/// slot, or sibling heap borrow is outstanding. `body` drops the collector
+/// before it returns; the higher-ranked bound stops the loan from escaping.
+unsafe fn with_retained_collector<R>(
+    root: NonNull<super::super::TaggedHeap>,
+    body: impl for<'heap> FnOnce(QuiescentCollector<'heap>) -> R,
+) -> R {
+    // SAFETY: the caller holds the sole retained root. This frame ends when
+    // `body` returns, so the raw loan does not escape it.
+    let collector = unsafe { QuiescentCollector::from_retained_root(&mut *root.as_ptr()) };
+    body(collector)
 }
 
 /// Armed before preparation may call a retention or publication hook.
@@ -538,8 +559,11 @@ impl<'heap> RetainedPreparation<'heap> {
     }
 }
 
+pub(crate) mod production_era;
 pub(crate) mod source_preparation;
 
+#[doc(hidden)]
+pub use production_era::{ScopedEraError, ScopedEraFailure};
 #[doc(hidden)]
 pub use source_preparation::ClosedSourcePrepareFailure;
 
