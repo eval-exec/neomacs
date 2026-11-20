@@ -4,7 +4,25 @@
 
 use loom::sync::{Arc, Condvar, Mutex};
 use loom::thread;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
+
+fn trace() -> &'static std::sync::Mutex<Vec<&'static str>> {
+    static TRACE: OnceLock<std::sync::Mutex<Vec<&'static str>>> = OnceLock::new();
+    TRACE.get_or_init(|| std::sync::Mutex::new(Vec::new()))
+}
+
+fn trace_clear() {
+    trace().lock().unwrap().clear();
+}
+
+fn trace_note(event: &'static str) {
+    trace().lock().unwrap().push(event);
+}
+
+fn trace_join() -> String {
+    trace().lock().unwrap().join(" > ")
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Case {
@@ -59,11 +77,22 @@ fn publish(shared: &Arc<Shared>, owner: usize) {
     let mut state = shared.state.lock().unwrap();
     state.published[owner] = true;
     shared.changed.notify_all();
+    trace_note(match owner {
+        0 => "owner0-publish",
+        1 => "owner1-publish",
+        _ => "owner-publish",
+    });
 }
 
 fn admission(shared: &Arc<Shared>, edge: Edge) {
     if edge == Edge::OmitAllStopped {
         let state = shared.state.lock().unwrap();
+        trace_note(match state.published {
+            [false, false] => "keeper-admit-before-either-publish",
+            [true, false] => "keeper-admit-after-owner0-only",
+            [false, true] => "keeper-admit-after-owner1-only",
+            [true, true] => "keeper-admit-after-both-published",
+        });
         assert!(
             state.published.iter().all(|published| *published),
             "ADMISSION_WHILE_RUNNING"
@@ -88,6 +117,7 @@ fn serial_vs_gc(shared: &Arc<Shared>, _edge: Edge) {
         state.serial_collecting = true;
         shared.changed.notify_all();
     }
+    trace_note("serial-ticket-out-collecting");
     let mut state = shared.state.lock().unwrap();
     state.gc_saw_gen = Some(state.attached_gen);
     assert_eq!(state.gc_saw_gen, Some(1), "STALE_ENTRY_SNAPSHOT");
@@ -101,6 +131,7 @@ fn keeper_collect(shared: &Arc<Shared>, edge: Edge) {
     loop {
         if state.serial_collecting && edge == Edge::OmitOverlapRefusal {
             state.keeper_overlapped = true;
+            trace_note("keeper-collects-during-serial-ticket");
             assert!(!state.keeper_overlapped, "KEEPER_COLLECTS_WHILE_TICKET_OUT");
         }
         if state.gc_saw_gen.is_some() && !state.serial_collecting {
@@ -116,11 +147,17 @@ fn end_views(shared: &Arc<Shared>) {
     let mut state = shared.state.lock().unwrap();
     state.views_live = false;
     shared.changed.notify_all();
+    trace_note("holder-end-views");
 }
 
 fn retire(shared: &Arc<Shared>, edge: Edge) {
     if edge == Edge::OmitRetainedCheck {
         let mut state = shared.state.lock().unwrap();
+        trace_note(if state.views_live {
+            "retire-reopen-while-views-live"
+        } else {
+            "retire-reopen-after-views-ended"
+        });
         assert!(!state.views_live, "REOPEN_WITH_RETAINED_LOAN");
         state.ticket_out = false;
         state.admission_open = true;
@@ -159,6 +196,7 @@ fn explore(case: Case, edge: Edge, runs: std::sync::Arc<AtomicUsize>) {
     let tally = runs.clone();
     builder.check(move || {
         tally.fetch_add(1, Ordering::Relaxed);
+        trace_clear();
         let shared = Arc::new(Shared::new(case));
         match case {
             Case::Admission => {
@@ -231,7 +269,20 @@ pub(crate) fn negative(case: Case, edge: Edge, witness: &str) {
         count > 1,
         "{witness} must pass execution 1 and fail only during exploration, got {count}"
     );
+    let interleaving = trace_join();
+    let marker = match edge {
+        Edge::OmitAllStopped => "keeper-admit-",
+        Edge::OmitOverlapRefusal => "keeper-collects-during-serial-ticket",
+        Edge::OmitRetainedCheck => "retire-reopen-while-views-live",
+        Edge::Required => "required-edge-has-no-negative",
+    };
+    assert!(
+        interleaving.contains(marker)
+            && !interleaving.contains("after-both-published")
+            && !interleaving.contains("after-views-ended"),
+        "{witness} interleaving did not record its own failing edge: {interleaving}"
+    );
     println!(
-        "PENTRY_NEGATIVE witness={witness} outcome=detected edge={edge:?} executions_to_witness={count} kind=MODEL"
+        "PENTRY_NEGATIVE witness={witness} outcome=detected edge={edge:?} executions_to_witness={count} interleaving={interleaving} kind=MODEL"
     );
 }

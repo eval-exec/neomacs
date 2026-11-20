@@ -47,8 +47,27 @@ fn nested_serial_errors() {
     eprintln!("PENTRY_TSAN case=nested_serial_errors kind=SCAFFOLD");
 }
 
+/// I5 refusal. The holder keeps the view and never retires it, so reopen
+/// stays closed. The same split applies when this retargets onto L6.
 #[test]
-fn retained_loan_refusal() {
+fn retained_loan_is_refused() {
+    let views_live = Arc::new(AtomicBool::new(true));
+    let open = Arc::new(Mutex::new(false));
+    let flag = views_live.clone();
+    let holder = thread::spawn(move || {
+        assert!(flag.load(Ordering::Acquire));
+    });
+    holder.join().unwrap();
+    let admission = open.lock().unwrap();
+    let still_live = views_live.load(Ordering::Acquire);
+    assert!(still_live);
+    assert!(!*admission);
+    eprintln!("PENTRY_TSAN case=retained_loan_is_refused kind=SCAFFOLD refused=true");
+}
+
+/// Release path: the holder ends the view, then admission may reopen.
+#[test]
+fn retired_loan_reopens() {
     let views_live = Arc::new(AtomicBool::new(true));
     let open = Arc::new(Mutex::new(false));
     let flag = views_live.clone();
@@ -58,13 +77,9 @@ fn retained_loan_refusal() {
     });
     holder.join().unwrap();
     let mut admission = gate.lock().unwrap();
-    if views_live.load(Ordering::Acquire) {
-        eprintln!("PENTRY_TSAN case=retained_loan_refusal kind=SCAFFOLD refused=true");
-    } else {
-        *admission = true;
-        eprintln!("PENTRY_TSAN case=retained_loan_refusal kind=SCAFFOLD refused=false");
-    }
-    assert!(!*admission || !views_live.load(Ordering::Acquire));
-    assert!(!views_live.load(Ordering::Acquire));
+    let ended = !views_live.load(Ordering::Acquire);
+    assert!(ended);
+    *admission = true;
     assert!(*admission);
+    eprintln!("PENTRY_TSAN case=retired_loan_reopens kind=SCAFFOLD refused=false");
 }
