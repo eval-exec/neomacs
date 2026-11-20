@@ -1561,6 +1561,24 @@ fn popup_menu_xy(value: Value) -> Option<(f32, f32)> {
 
 fn popup_menu_position(ctx: &mut Context, position: Value) -> PopupMenuPosition {
     let symbol_mode = ctx.symbol_mode();
+    // POSITION t is GNU's `get_current_pos_p`: use the mouse's current
+    // position (src/menu.c:1145-1148, 1182-1235).  The keyboard records
+    // that position from mouse-move input; with no recorded position GNU
+    // starts the coordinates at (0, 0) on the selected frame.
+    if position == Value::T {
+        let (x, y) = ctx
+            .command_loop()
+            .keyboard
+            .mouse_pixel_position()
+            .map(|state| (state.x as f32, state.y as f32))
+            .unwrap_or((0.0, 0.0));
+        tracing::debug!(
+            x,
+            y,
+            "x-popup-menu position: t uses the current mouse position"
+        );
+        return PopupMenuPosition::at(x, y);
+    }
     let Some(items) = list_to_vec(&position) else {
         tracing::debug!("x-popup-menu position: non-list position, fallback=(0, 0)");
         return PopupMenuPosition::at(0.0, 0.0);

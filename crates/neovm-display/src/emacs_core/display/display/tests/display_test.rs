@@ -3491,6 +3491,24 @@ fn x_popup_menu_keymap_list_decodes_one_pane_per_keymap() {
     }
 }
 
+/// POSITION `t` is GNU's `get_current_pos_p`: x-popup-menu uses the mouse's
+/// current position (src/menu.c:1145-1148, 1182-1235), starting from (0, 0)
+/// when no position was recorded.  Neomacs fell back to (0, 0) for every
+/// non-list position, so a `t` popup opened at the frame origin instead of
+/// at the pointer.
+#[test]
+fn x_popup_menu_t_position_uses_the_recorded_mouse_position() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    eval.record_mouse_pixel_position(None, 60, 120);
+    let origin = super::popup_menu_position(&mut eval, Value::T).estimated_origin();
+    assert_eq!(origin, neomacs_display_protocol::Point::new(60.0, 120.0));
+
+    let mut fresh = Context::new(crate::test_utils::unit_runtime());
+    let origin = super::popup_menu_position(&mut fresh, Value::T).estimated_origin();
+    assert_eq!(origin, neomacs_display_protocol::Point::ZERO);
+}
+
 #[test]
 fn x_clipboard_input_context_batch_semantics() {
     crate::test_utils::init_test_tracing();
