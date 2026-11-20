@@ -919,6 +919,195 @@ impl AutomaticCompositionRules {
         };
         select_automatic_composition_spans(self.table, &syntax, text, char_offset)
     }
+
+    /// GNU `find_automatic_composition` over a text slice.
+    ///
+    /// `pos` and `limit` are character indices into `text`; `None` for the
+    /// limit is GNU's negative LIMIT ("at POS").  `head` is the safe rewind
+    /// bound (the first character after the previous newline, or 0 for a
+    /// string).  `shape` builds and shapes one candidate composition;
+    /// returning `None` is GNU's `autocmp_chars` nil.  The returned span is in
+    /// slice character coordinates.
+    ///
+    /// The rewind/scan loop and its "last examined rule" result follow
+    /// src/composite.c:1641-1875: a composable POS is rewound to the start of
+    /// its composable run, rules are gated by `check_pos >= head` and by the
+    /// LIMIT side, and a scan that finds no covering composition returns the
+    /// result of the last rule it examined (nil when that rule failed).
+    pub(crate) fn find_automatic_composition(
+        self,
+        text: &str,
+        pos: usize,
+        limit: Option<i64>,
+        head: usize,
+        shape: &mut dyn FnMut(usize, usize) -> Option<Value>,
+    ) -> Option<(usize, usize, Value)> {
+        if text.is_empty() {
+            return None;
+        }
+        let mut byte_offsets = Vec::with_capacity(text.len() + 1);
+        byte_offsets.extend(text.char_indices().map(|(offset, _)| offset));
+        byte_offsets.push(text.len());
+        let char_count = byte_offsets.len() - 1;
+        if pos >= char_count || head > pos {
+            return None;
+        }
+        let char_at = |index: usize| {
+            text[byte_offsets[index]..]
+                .chars()
+                .next()
+                .expect("character index is inside the scanned text")
+        };
+        let syntax = super::regex_emacs::BufferSyntaxLookup {
+            syntax_table: self.syntax,
+            category_table: self.category,
+            word_boundary: super::regex_emacs::WordBoundaryLookup::default()
+                .with_symbol_mode(self.symbol_mode),
+        };
+
+        let limit = match limit {
+            Some(limit) => limit.min(char_count as i64),
+            None => pos as i64,
+        };
+        let tail = char_count;
+        let mut fore_check_limit = if limit <= pos as i64 {
+            (pos + 1 + MAX_AUTO_COMPOSITION_LOOKBACK).min(tail)
+        } else {
+            ((limit.max(0) as usize) + MAX_AUTO_COMPOSITION_LOOKBACK).min(tail)
+        };
+        let mut cur = pos;
+        loop {
+            let mut skip_rewind = false;
+            if !char_composable_p(char_at(cur)) {
+                if limit <= pos as i64 {
+                    // Case (1): back up to the previous composable character.
+                    loop {
+                        if cur as i64 <= limit || cur == 0 {
+                            return None;
+                        }
+                        cur -= 1;
+                        if char_composable_p(char_at(cur)) {
+                            break;
+                        }
+                    }
+                    fore_check_limit = (cur + 1).min(tail);
+                } else {
+                    // Case (2): no rewinding; search forward from POS.
+                    skip_rewind = true;
+                }
+            }
+            if !skip_rewind {
+                // Rewind to the start of the current composable run.
+                while head < cur {
+                    let previous = cur;
+                    cur -= 1;
+                    if !char_composable_p(char_at(cur)) {
+                        cur = previous;
+                        break;
+                    }
+                }
+            }
+
+            let scan_start = cur;
+            let mut last: Option<(usize, usize, Value)> = None;
+            while cur < fore_check_limit {
+                let trigger = cur;
+                let rules = super::chartable::ct_lookup_with_symbols(
+                    &self.table,
+                    i64::from(char_at(trigger) as u32),
+                    self.symbol_mode,
+                )
+                .unwrap_or(Value::NIL);
+                let mut advanced_to_end = false;
+                if !rules.is_nil() {
+                    for rule in neovm_value::value::list_iter(rules) {
+                        let Some(fields) = rule.as_vector_data() else {
+                            continue;
+                        };
+                        if fields.len() != 3 {
+                            continue;
+                        }
+                        let Some(lookback) = fields[1]
+                            .as_fixnum()
+                            .and_then(|value| usize::try_from(value).ok())
+                        else {
+                            continue;
+                        };
+                        let Some(start) = trigger.checked_sub(lookback) else {
+                            continue;
+                        };
+                        if start < head {
+                            continue;
+                        }
+                        if limit <= pos as i64 {
+                            if (pos as i64) < start as i64 {
+                                continue;
+                            }
+                        } else if limit <= start as i64 {
+                            continue;
+                        }
+                        // Every rule that passes the gates is examined: GNU
+                        // assigns the rule function's result to *gstring even
+                        // when that result is nil.
+                        last = None;
+                        let match_len = if fields[0].is_nil() {
+                            1
+                        } else {
+                            let Some(pattern) = fields[0].as_lisp_string() else {
+                                continue;
+                            };
+                            let suffix = &text[byte_offsets[start]..];
+                            let Ok(Some(match_len)) =
+                                super::regex::looking_at_lisp_pattern_length_with_syntax(
+                                    pattern, suffix, &syntax,
+                                )
+                            else {
+                                continue;
+                            };
+                            match_len
+                        };
+                        let end = start.saturating_add(match_len).min(tail);
+                        if start >= end || trigger >= end {
+                            continue;
+                        }
+                        let Some(gstring) = shape(start, end) else {
+                            continue;
+                        };
+                        last = Some((start, end, gstring));
+                        let target = if (pos as i64) < limit {
+                            (pos as i64) < end as i64
+                        } else {
+                            start as i64 <= pos as i64 && (pos as i64) < end as i64
+                        };
+                        if target {
+                            return last;
+                        }
+                        cur = end;
+                        advanced_to_end = true;
+                        break;
+                    }
+                }
+                if !advanced_to_end {
+                    cur += 1;
+                }
+            }
+
+            if (pos as i64) < limit {
+                return None;
+            }
+            if let Some(found) = last {
+                return Some(found);
+            }
+            if scan_start == head {
+                return None;
+            }
+            cur = scan_start;
+            if cur == 0 {
+                return None;
+            }
+            cur -= 1;
+        }
+    }
 }
 
 /// The scan over a SLICE of a buffer's text.
@@ -1154,6 +1343,29 @@ pub fn automatic_composition_for_terminal(text: &str) -> TerminalComposition {
     }
 }
 
+/// GNU `char_composable_p` (src/composite.c:986-1005): characters of general
+/// category C? (except ZWNJ, ZWJ and the tag characters) and the line and
+/// paragraph separators are the only non-composable characters.  This is a
+/// property of the character, not of whether the composition-function-table
+/// currently has a rule for it.
+fn char_composable_p(ch: char) -> bool {
+    use neovm_value::emacs_char::{UnicodeCategory, char_general_category};
+
+    let code = ch as u32;
+    // GNU uses `c >= ' '` before consulting the category table.
+    if code < ' ' as u32 {
+        return false;
+    }
+    if code == 0x200C || code == 0x200D {
+        return true;
+    }
+    if (0xE0020..=0xE007F).contains(&code) {
+        return true;
+    }
+    char_general_category(code)
+        .is_some_and(|category| category <= UnicodeCategory::SpaceSeparator as i64)
+}
+
 fn is_unicode_combining_mark(code: u32) -> bool {
     use neovm_value::emacs_char::UnicodeCategory;
 
@@ -1318,35 +1530,6 @@ fn shape_composition_gstring<H: TextHost>(
 /// Walk `spans` in the query's order and return the first accepting span
 /// whose gstring shapes; GNU's forward search treats an unshapable
 /// candidate as no composition and keeps scanning.
-fn select_shaped_composition<H: TextHost>(
-    ctx: &mut H,
-    spans: Vec<AutomaticCompositionSpan>,
-    query: AutomaticCompositionQuery,
-    string: Value,
-    position_base: i64,
-) -> Option<(i64, i64, Value)> {
-    let spans = match query {
-        AutomaticCompositionQuery::Backward { .. } => {
-            let mut spans = spans;
-            spans.reverse();
-            spans
-        }
-        _ => spans,
-    };
-    for span in spans {
-        let range = CharRange::new(CharPos0::new(span.start()), CharPos0::new(span.end()));
-        if !query.accepts(range) {
-            continue;
-        }
-        let start = position_base + span.start() as i64;
-        let end = position_base + span.end() as i64;
-        if let Some(gstring) = shape_composition_gstring(ctx, start, end, string) {
-            return Some((start, end, gstring));
-        }
-    }
-    None
-}
-
 /// The string-arm automatic composition search beyond the default
 /// combining-marks rule: GNU `find_automatic_composition` for
 /// `Ffind_composition_internal`'s string case.  `pos` and `limit` are in the
@@ -1364,17 +1547,16 @@ fn find_automatic_composition_in_string<H: TextHost>(
     }
     let table = ctx
         .visible_variable_value_or_nil(neovm_value::intern::intern("composition-function-table"));
-    let spans = {
+    let rules = {
         let buf = ctx.buffers().current_buffer()?;
-        AutomaticCompositionRules::new(&buf, table)?.spans(text)
+        AutomaticCompositionRules::new(&buf, table)?
     };
-    select_shaped_composition(
-        ctx,
-        spans,
-        AutomaticCompositionQuery::new(pos, limit),
-        string,
-        0,
-    )
+    let limit = (limit >= 0).then_some(limit);
+    let mut shape =
+        |start: usize, end: usize| shape_composition_gstring(ctx, start as i64, end as i64, string);
+    rules
+        .find_automatic_composition(text, pos, limit, 0, &mut shape)
+        .map(|(start, end, gstring)| (start as i64, end as i64, gstring))
 }
 
 /// The buffer-arm automatic composition search: GNU
@@ -1382,11 +1564,9 @@ fn find_automatic_composition_in_string<H: TextHost>(
 /// case.  `pos` and `to` are buffer positions (1-based; `to` negative means
 /// "at POS").
 ///
-/// Candidates come from the same forward scan over the live
-/// `composition-function-table` that redisplay uses, bounded to POS's line —
-/// "This assumes a newline can never be composed" — and to GNU's forward
-/// check limit.  The returned span is 1-based and end-exclusive, like the
-/// property-based search beside it.
+/// The scan is bounded to POS's line — "This assumes a newline can never be
+/// composed" — and to GNU's forward check limit.  The returned span is
+/// 1-based and end-exclusive, like the property-based search beside it.
 fn find_automatic_composition_in_buffer<H: TextHost>(
     ctx: &mut H,
     pos: i64,
@@ -1460,19 +1640,18 @@ fn find_automatic_composition_in_buffer<H: TextHost>(
     };
     let table = ctx
         .visible_variable_value_or_nil(neovm_value::intern::intern("composition-function-table"));
-    let spans = {
+    let rules = {
         let buf = ctx.buffers().current_buffer()?;
-        AutomaticCompositionRules::new(&buf, table)?.spans_in(&text, (head - 1) as usize)
+        AutomaticCompositionRules::new(&buf, table)?
     };
-    // Spans are 0-based over the buffer; the query works in the same
-    // coordinates as GNU's pos/limit, shifted down by one.
-    select_shaped_composition(
-        ctx,
-        spans,
-        AutomaticCompositionQuery::new((pos - 1) as usize, to - 1),
-        Value::NIL,
-        1,
-    )
+    let pos_index = usize::try_from(pos - head).ok()?;
+    let limit = (to >= 0).then_some(to - head);
+    let mut shape = |start: usize, end: usize| {
+        shape_composition_gstring(ctx, head + start as i64, head + end as i64, Value::NIL)
+    };
+    rules
+        .find_automatic_composition(&text, pos_index, limit, 0, &mut shape)
+        .map(|(start, end, gstring)| (head + start as i64, head + end as i64, gstring))
 }
 
 /// `(find-composition-internal POS LIMIT STRING DETAIL-P)`
