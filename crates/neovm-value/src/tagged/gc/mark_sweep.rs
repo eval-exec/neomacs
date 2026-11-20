@@ -2439,3 +2439,9 @@ mod permanent_box_chain_tests;
 #[cfg(test)]
 #[path = "tests/doomed_finalizer_seed_test.rs"]
 mod doomed_finalizer_seed_tests;
+
+/// The serial stop keeps each weak-table weakness, including the cross-table
+/// fixpoint, through the collection it already runs.
+#[cfg(test)]
+#[path = "tests/weak_sweep_pin_test.rs"]
+mod weak_sweep_pin_tests;

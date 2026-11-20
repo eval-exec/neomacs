@@ -7711,6 +7711,13 @@ mod saved_state_scope_test;
 #[path = "tests/weak_table_b8.rs"]
 mod weak_table_b8;
 
+/// The stopped major's weak sweep (E3 slice 1) and the serial stop keep the
+/// same weak-table entries. Omitted in telemetry builds: `supported` refuses
+/// the whole heap there, the refusal 0c0469595d pins.
+#[cfg(all(test, not(feature = "gc-memory-telemetry")))]
+#[path = "tests/weak_sweep_pin_test.rs"]
+mod weak_sweep_pin_tests;
+
 #[cfg(test)]
 #[path = "tests/admission_header_test.rs"]
 mod admission_header_tests;

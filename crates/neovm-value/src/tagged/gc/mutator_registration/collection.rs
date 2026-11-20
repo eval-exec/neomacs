@@ -520,8 +520,7 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
                 collector.registration_heap_mut(),
                 guard,
                 |heap| {
-                    let job =
-                        StoppedCollectorJob::new(heap, proof, guard, registry, kind)?;
+                    let job = StoppedCollectorJob::new(heap, proof, guard, registry, kind)?;
                     let mut images = ImageSession::take(registry, &entries, &keys)?;
                     let report =
                         job.run(&mut images, roots, words, heads, root_count, keys.len())?;

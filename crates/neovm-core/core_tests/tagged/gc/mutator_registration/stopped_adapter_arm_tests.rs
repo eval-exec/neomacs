@@ -154,8 +154,7 @@ fn stopped_major_records_dead_handles_and_preserves_pending_drains() {
     let mut context = clean_context();
     // SAFETY: the fresh Context is the sole serial owner and no collection or
     // callback runs before admission freezes the heap.
-    let fixture =
-        unsafe { prepare_stopped_adapter_resources(context.tagged_heap_mut()) };
+    let fixture = unsafe { prepare_stopped_adapter_resources(context.tagged_heap_mut()) };
     context.set_variable("e3-live-surface", fixture.live_surface);
     context.set_variable("e3-live-video", fixture.live_video);
 
@@ -171,8 +170,7 @@ fn stopped_major_records_dead_handles_and_preserves_pending_drains() {
 fn stopped_major_reclaims_unreached_ephemeron_registries() {
     let mut context = clean_context();
     // SAFETY: same sole-serial-owner contract as the resource fixture.
-    let fixture =
-        unsafe { prepare_stopped_adapter_ephemerons(context.tagged_heap_mut()) };
+    let fixture = unsafe { prepare_stopped_adapter_ephemerons(context.tagged_heap_mut()) };
     context.set_variable("e3-live-buffer", fixture.live_buffer);
     context.set_variable("e3-live-process", fixture.live_process);
     context.set_variable("e3-live-frame", fixture.live_frame);
@@ -204,5 +202,59 @@ fn stopped_major_still_refuses_callback_payloads() {
     assert!(
         error.contains("Publication"),
         "admission refuses a native callback payload: {error}"
+    );
+}
+
+/// E3 s4': each callback-bearing payload refuses on its own heap. The
+/// combined test above allocates UserPtr and ModuleFunction together, so the
+/// catalog walk could reach either first and mask the other; Sqlite has no
+/// other stopped-major cover at all. One fresh context per payload makes
+/// each refusal independent of walk order.
+#[test]
+fn stopped_major_still_refuses_a_user_ptr_payload_alone() {
+    let mut context = clean_context();
+    let heap = unsafe { context.tagged_heap_mut() };
+    let _user_ptr = heap.alloc_user_ptr(std::ptr::null_mut(), None);
+
+    let outcome = run_stopped_major(&mut context);
+    let error = outcome.expect_err("a user_ptr payload must stay refused");
+    assert!(
+        error.contains("Publication"),
+        "admission refuses a user_ptr payload: {error}"
+    );
+}
+
+#[test]
+fn stopped_major_still_refuses_a_module_function_payload_alone() {
+    let mut context = clean_context();
+    let heap = unsafe { context.tagged_heap_mut() };
+    let _module_function = heap.alloc_module_function(
+        0,
+        0,
+        std::ptr::null(),
+        std::ptr::null_mut(),
+        TaggedValue::NIL,
+        TaggedValue::NIL,
+    );
+
+    let outcome = run_stopped_major(&mut context);
+    let error = outcome.expect_err("a module_function payload must stay refused");
+    assert!(
+        error.contains("Publication"),
+        "admission refuses a module_function payload: {error}"
+    );
+}
+
+#[test]
+fn stopped_major_still_refuses_a_sqlite_payload_alone() {
+    let mut context = clean_context();
+    let heap = unsafe { context.tagged_heap_mut() };
+    let _sqlite = heap.alloc_sqlite(false, 0);
+
+    let outcome = run_stopped_major(&mut context);
+    let error = outcome.expect_err("a sqlite payload must stay refused");
+    assert!(
+        error.contains("Publication"),
+        "admission refuses a sqlite payload: {error}"
     );
 }

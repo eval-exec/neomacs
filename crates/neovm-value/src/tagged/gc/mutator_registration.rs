@@ -1071,16 +1071,16 @@ pub(crate) use cons_allocation_tests::{
     any(test, feature = "test-support"),
     not(feature = "gc-memory-telemetry")
 ))]
-pub(crate) use collection::{WeakPolicyCase, WeakPolicyHost, run_weak_policy_case};
-#[cfg(all(
-    any(test, feature = "test-support"),
-    not(feature = "gc-memory-telemetry")
-))]
 pub use collection::{
     StoppedAdapterEphemeronFixture, StoppedAdapterResourceFixture,
     assert_stopped_adapter_ephemerons, assert_stopped_adapter_resources,
     prepare_stopped_adapter_ephemerons, prepare_stopped_adapter_resources,
 };
+#[cfg(all(
+    any(test, feature = "test-support"),
+    not(feature = "gc-memory-telemetry")
+))]
+pub(crate) use collection::{WeakPolicyCase, WeakPolicyHost, run_weak_policy_case};
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use rendezvous::fixture_helpers::RootedRendezvousCase;
 #[cfg(any(test, feature = "test-support"))]
