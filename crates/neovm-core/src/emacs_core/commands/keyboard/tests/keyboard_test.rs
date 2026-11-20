@@ -261,6 +261,52 @@ fn the_command_loop_finishes_a_paced_deferred_sweep_before_its_first_input_wait(
 }
 
 #[test]
+fn a_key_read_inside_a_user_hash_test_leaves_the_deferred_sweep_deferred() {
+    // A user hash-table test holds collection off (GNU inhibits GC around
+    // the user's test and hash functions).  A key read inside it reaches
+    // the pre-wait drain with no input pending; the drain must not run the
+    // deferred sweep, whose completion work would run inside the callback.
+    let (mut context, _completed) = context_with_a_paced_deferred_sweep();
+    context
+        .eval_str(
+            r#"(progn
+                 (fset 'timer-event-handler
+                       (lambda (timer)
+                         (setq timer-idle-list (delq timer timer-idle-list))
+                         (apply (aref timer 5) (aref timer 6))))
+                 (fset 'idle-sweep-test-end-read
+                       (lambda () (throw 'idle-sweep-test 'waited)))
+                 (setq timer-idle-list
+                       (list (vector nil 0 0 0 nil 'idle-sweep-test-end-read
+                                     nil t 0 nil)))
+                 (setq idle-sweep-gcs-in-test nil)
+                 (define-hash-table-test 'idle-sweep-collide
+                   (lambda (a b)
+                     (let ((before gcs-done))
+                       (catch 'idle-sweep-test (read-key-sequence "key: "))
+                       (setq idle-sweep-gcs-in-test (- gcs-done before)))
+                     (eq a b))
+                   (lambda (_key) 0)))"#,
+        )
+        .expect("install the idle timer and the colliding hash test");
+    assert!(
+        context.tagged_heap().sweep_in_progress(),
+        "installing the hash test finished the paced sweep"
+    );
+    let result = context.eval_str(
+        r#"(let ((table (make-hash-table :test 'idle-sweep-collide)))
+             (puthash 'a 1 table)
+             (puthash 'b 2 table)
+             idle-sweep-gcs-in-test)"#,
+    );
+    assert_eq!(
+        crate::emacs_core::format_eval_result(&result),
+        "OK 0",
+        "the key read inside the user hash test finished a collection"
+    );
+}
+
+#[test]
 fn a_key_read_finishes_an_idle_sweep_after_a_mouse_motion_it_consumes() {
     use crate::emacs_core::eval::keyboard::{InputEvent, Modifiers};
     // With `track-mouse` nil a motion is no pending input in GNU

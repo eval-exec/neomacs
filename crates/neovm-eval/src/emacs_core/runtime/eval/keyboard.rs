@@ -5224,10 +5224,13 @@ impl crate::emacs_core::eval::Context {
     /// Run deferred sweep slices while no command input is pending, and
     /// return whether any ran.  The caller polls its input queues again
     /// after a slice: the sweep's completion work (`post-gc-hook`,
-    /// finalizers) can queue input or timers.
+    /// finalizers) can queue input or timers.  Nothing runs while
+    /// collection is inhibited (a user hash-table test or hash function is
+    /// on the stack), as at every safe point: the read then waits with the
+    /// sweep still deferred.
     fn sweep_before_command_input_wait(&mut self) -> bool {
         let mut swept = false;
-        while self.tagged_heap().sweep_in_progress() {
+        while self.gc_inhibit_depth == 0 && self.tagged_heap().sweep_in_progress() {
             if self.command_loop.keyboard.has_pending_low_level_input()
                 || self.has_pending_command_input_for_query()
                 || self.input_rx.as_ref().is_some_and(|rx| !rx.is_empty())
