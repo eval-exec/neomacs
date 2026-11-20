@@ -15,7 +15,7 @@
 use super::super::owner_bindings::{BindingKind, Channel, UndoTarget};
 use neovm_value::forward::TlsIndex;
 use neovm_value::intern::SymId;
-use neovm_value::tagged::gc::{OwnerAllocRegion, RendezvousError, TaggedHeap};
+use neovm_value::tagged::gc::{OwnerAllocRegion, OwnerRegionRefund, RendezvousError, TaggedHeap};
 use neovm_value::tagged::transport::SharedRoot;
 use neovm_value::value::Value;
 #[cfg(test)]
@@ -1136,6 +1136,26 @@ impl FrameArena {
         self.region.take_float_slot()
     }
 
+    /// Install a float-page free-list run into this owner's cursors.
+    #[doc(hidden)]
+    pub fn install_float_page_free(&mut self, first: usize, slots: usize, page: usize) {
+        self.region.install_float_page_free(first, slots, page);
+    }
+
+    /// A poll that does not block. The allocation region stays as it is.
+    #[doc(hidden)]
+    pub fn on_nonblocking_poll(&self) {
+        // Closing here would refund the tail and force a refill after every
+        // poll that returns without a stop. The region survives on purpose.
+    }
+
+    /// Refund this owner's unused tails. Only a publication that precedes a
+    /// stop calls this. The shared free list is not written.
+    #[doc(hidden)]
+    pub fn close_region_for_stop(&mut self) -> OwnerRegionRefund {
+        self.region.close_for_stop()
+    }
+
     /// Publish every root this arena owns, grouped by the canonical E3 names.
     #[doc(hidden)]
     pub fn trace_roots(&self, visit: &mut dyn FnMut(RootGroup, Value)) {
@@ -1311,6 +1331,12 @@ impl OwnerScanJoin for FrameArena {
         heap: &TaggedHeap,
         out: &mut Vec<SharedRoot>,
     ) -> Result<(), RendezvousError> {
+        // An open book is not a stop publication. Closing happens only in
+        // `close_region_for_stop`, which the caller runs when this publication
+        // precedes a stop. `out` stays unchanged.
+        if !self.region.is_closed() {
+            return Err(RendezvousError::Publication);
+        }
         #[cfg(test)]
         if self.fail_scan_reserve.replace(false) {
             return Err(RendezvousError::Capacity);

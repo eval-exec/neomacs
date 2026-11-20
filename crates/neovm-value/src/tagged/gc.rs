@@ -2862,7 +2862,9 @@ pub use jit_state::{
     HEAP_JIT_CONS_LIM, HEAP_JIT_FLOAT_CUR, HEAP_JIT_FLOAT_LIM, JitHeapState,
 };
 #[doc(hidden)]
-pub use owner_alloc_region::OwnerAllocRegion;
+pub use owner_alloc_region::{
+    ConsTailRefund, FloatTailRefund, OwnerAllocRegion, OwnerRegionRefund,
+};
 /// Allocation regions: sources, give-back, exact counters, black across
 /// the phase flags, and the close at every collector entry.
 #[cfg(test)]

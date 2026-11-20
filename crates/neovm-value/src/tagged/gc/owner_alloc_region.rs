@@ -46,6 +46,55 @@ pub struct OwnerAllocRegion {
 
 static_assertions::assert_not_impl_any!(OwnerAllocRegion: Send, Sync, Clone, Copy);
 
+/// What a stop-publication close does with the unhanded cons tail.
+///
+/// This is the decision. Applying it to the shared free list is the cold
+/// grant's inverse and stays off this slice: these runs are not heap grants,
+/// and pushing their addresses onto the free list would corrupt it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[doc(hidden)]
+pub enum ConsTailRefund {
+    None,
+    /// `[first, first + cells)` goes back on the block free list.
+    FreeList {
+        first: usize,
+        cells: usize,
+    },
+    /// The block's bump tail rewinds to `first`. Slice 3's apply re-checks
+    /// `next_index` the way `close_cons_region` does, and free-lists the
+    /// range if another grant extended the tail past this limit.
+    Rewind {
+        block: usize,
+        first: usize,
+        cells: usize,
+    },
+}
+
+/// What a stop-publication close does with the unhanded float tail.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[doc(hidden)]
+pub enum FloatTailRefund {
+    None,
+    PageFree {
+        page: usize,
+        first: usize,
+        slots: usize,
+    },
+    PageTail {
+        page: usize,
+        first: usize,
+        slots: usize,
+    },
+}
+
+/// Both tails of one [`OwnerAllocRegion::close_for_stop`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[doc(hidden)]
+pub struct OwnerRegionRefund {
+    pub cons: ConsTailRefund,
+    pub float: FloatTailRefund,
+}
+
 impl OwnerAllocRegion {
     pub const fn new() -> Self {
         Self {
@@ -87,6 +136,22 @@ impl OwnerAllocRegion {
         self.install_cons(first, cells, ConsRegionSource::BlockTail { block });
     }
 
+    /// Install a float-page free-list run. Does not read or write `heap.jit`.
+    ///
+    /// # Panics
+    ///
+    /// The float book is already open, or `slots` is 0.
+    pub fn install_float_page_free(&mut self, first: usize, slots: usize, page: usize) {
+        self.install_float(
+            first,
+            slots,
+            FloatRegionSource::Run {
+                page,
+                source: ArenaRunSource::PageFreeRun,
+            },
+        );
+    }
+
     /// Install a float-page bump tail. Does not read or write `heap.jit`.
     ///
     /// # Panics
@@ -116,6 +181,32 @@ impl OwnerAllocRegion {
     #[inline(always)]
     pub fn take_float_slot(&self) -> Option<usize> {
         take(&self.float_cur, &self.float_lim, stride(CursorClass::Float))
+    }
+
+    /// Refund the unused tails and leave both books closed.
+    ///
+    /// Only a publication that precedes a stop calls this. A poll that does
+    /// not block must not. The returned record is the give-back; this method
+    /// does not write the shared free list or `heap.jit`.
+    pub fn close_for_stop(&mut self) -> OwnerRegionRefund {
+        let cons_step = stride(CursorClass::Cons);
+        let float_step = stride(CursorClass::Float);
+        let cons_cur = self.cons_cur.get();
+        let cons_lim = self.cons_lim.get();
+        let float_cur = self.float_cur.get();
+        let float_lim = self.float_lim.get();
+        let cons_source = self.cons;
+        let float_source = self.float;
+        self.cons_cur.set(0);
+        self.cons_lim.set(0);
+        self.float_cur.set(0);
+        self.float_lim.set(0);
+        self.cons = ConsRegionSource::Closed;
+        self.float = FloatRegionSource::Closed;
+        OwnerRegionRefund {
+            cons: cons_refund(cons_source, cons_cur, cons_lim, cons_step),
+            float: float_refund(float_source, float_cur, float_lim, float_step),
+        }
     }
 
     fn install_cons(&mut self, first: usize, cells: usize, source: ConsRegionSource) {
@@ -156,6 +247,65 @@ fn take(cur: &Cell<usize>, lim: &Cell<usize>, step: usize) -> Option<usize> {
 
 /// A new [`ConsRegionSource`] or [`FloatRegionSource`] variant fails this
 /// match. Closed is the only state that publishes.
+fn unused(cur: usize, lim: usize, step: usize) -> usize {
+    lim.saturating_sub(cur) / step
+}
+
+fn cons_refund(source: ConsRegionSource, cur: usize, lim: usize, step: usize) -> ConsTailRefund {
+    let cells = unused(cur, lim, step);
+    match source {
+        ConsRegionSource::Closed => {
+            debug_assert_eq!((cur, lim), (0, 0));
+            ConsTailRefund::None
+        }
+        ConsRegionSource::FreeListRun => {
+            if cells == 0 {
+                ConsTailRefund::None
+            } else {
+                ConsTailRefund::FreeList { first: cur, cells }
+            }
+        }
+        ConsRegionSource::BlockTail { block } => {
+            if cells == 0 {
+                ConsTailRefund::None
+            } else {
+                ConsTailRefund::Rewind {
+                    block,
+                    first: cur,
+                    cells,
+                }
+            }
+        }
+    }
+}
+
+fn float_refund(source: FloatRegionSource, cur: usize, lim: usize, step: usize) -> FloatTailRefund {
+    let slots = unused(cur, lim, step);
+    match source {
+        FloatRegionSource::Closed => {
+            debug_assert_eq!((cur, lim), (0, 0));
+            FloatTailRefund::None
+        }
+        FloatRegionSource::Run { page, source } => {
+            if slots == 0 {
+                return FloatTailRefund::None;
+            }
+            match source {
+                ArenaRunSource::PageFreeRun => FloatTailRefund::PageFree {
+                    page,
+                    first: cur,
+                    slots,
+                },
+                ArenaRunSource::PageTail => FloatTailRefund::PageTail {
+                    page,
+                    first: cur,
+                    slots,
+                },
+            }
+        }
+    }
+}
+
 fn sources_open(cons: ConsRegionSource, float: FloatRegionSource) -> bool {
     let cons_open = match cons {
         ConsRegionSource::Closed => false,
