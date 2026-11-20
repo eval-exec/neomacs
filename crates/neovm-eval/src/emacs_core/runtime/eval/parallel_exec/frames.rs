@@ -981,6 +981,49 @@ impl FrameArena {
         Ok(FrameId { depth, generation })
     }
 
+    /// The interpreter frame ID names, if it is still the live top.
+    ///
+    /// A stale or non-top handle is `None`. The generation compare happens
+    /// before the frame is read.
+    #[doc(hidden)]
+    pub fn interp(&self, id: FrameId) -> Option<&InterpFrame> {
+        let slot = self.frames.last()?;
+        if slot.generation != id.generation {
+            return None;
+        }
+        if u32::try_from(self.frames.len()).ok() != Some(id.depth.get()) {
+            return None;
+        }
+        match &slot.frame {
+            OwnedFrame::Interp(frame) => Some(frame),
+            OwnedFrame::Vm(_) => None,
+        }
+    }
+
+    /// Update the interpreter frame ID names in place.
+    ///
+    /// The [`FrameId`] does not change: stage 1 resumes the same handle.
+    /// A stale, non-top, or non-interpreter frame is `None` and is not written.
+    #[doc(hidden)]
+    pub fn with_interp<R>(
+        &mut self,
+        id: FrameId,
+        update: impl FnOnce(&mut InterpFrame) -> R,
+    ) -> Option<R> {
+        let depth = u32::try_from(self.frames.len()).ok();
+        let slot = self.frames.last_mut()?;
+        if slot.generation != id.generation {
+            return None;
+        }
+        if depth != Some(id.depth.get()) {
+            return None;
+        }
+        match &mut slot.frame {
+            OwnedFrame::Interp(frame) => Some(update(frame)),
+            OwnedFrame::Vm(_) => None,
+        }
+    }
+
     /// Pop the frame ID names. A stale or non-top handle is refused, exactly
     /// like an owner binding record: the arena is a stack, not a map.
     #[doc(hidden)]
