@@ -371,6 +371,17 @@ impl DepthLimitExceeded {
     }
 }
 
+/// Why a frame could not be published.
+///
+/// [`FramePublishError::GenerationExhausted`] is the non-wrapping end of the
+/// `NonZeroU64` counter. The arena does not recycle a generation, and the
+/// call-depth enter is undone.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FramePublishError {
+    Depth(DepthLimitExceeded),
+    GenerationExhausted,
+}
+
 impl CallDepth {
     #[doc(hidden)]
     pub const fn new(limit: u32) -> Self {
@@ -470,16 +481,18 @@ impl OwnerRecordMark {
 
 /// A live frame handle: its arena position plus the generation it was issued
 /// at, so a stale handle never names a reused slot.
+///
+/// `generation` is a `NonZeroU64` from a counter that refuses to wrap.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[doc(hidden)]
 pub struct FrameId {
     depth: NonZeroU32,
-    generation: NonZeroU32,
+    generation: NonZeroU64,
 }
 
 impl FrameId {
     #[doc(hidden)]
-    pub const fn generation(self) -> NonZeroU32 {
+    pub const fn generation(self) -> NonZeroU64 {
         self.generation
     }
 }
@@ -869,7 +882,7 @@ pub(crate) enum OwnedFrame {
 
 #[derive(Clone, Copy, Debug)]
 struct FrameSlot {
-    generation: NonZeroU32,
+    generation: NonZeroU64,
     frame: OwnedFrame,
 }
 
@@ -892,7 +905,7 @@ pub(crate) struct FrameArena {
     bindings: BindStack,
     roots: RootRegistry,
     depth: CallDepth,
-    next_generation: NonZeroU32,
+    next_generation: NonZeroU64,
 }
 
 static_assertions::assert_not_impl_any!(FrameArena: Send, Sync);
@@ -907,25 +920,29 @@ impl FrameArena {
             bindings: BindStack::new(),
             roots: RootRegistry::new(),
             depth: CallDepth::new(depth_limit),
-            next_generation: NonZeroU32::MIN,
+            next_generation: NonZeroU64::MIN,
         }
     }
 
     #[doc(hidden)]
-    pub fn push_interp(&mut self, frame: InterpFrame) -> Result<FrameId, DepthLimitExceeded> {
+    pub fn push_interp(&mut self, frame: InterpFrame) -> Result<FrameId, FramePublishError> {
         self.push(OwnedFrame::Interp(frame))
     }
 
     #[doc(hidden)]
-    pub fn push_vm(&mut self, frame: VmFrame) -> Result<FrameId, DepthLimitExceeded> {
+    pub fn push_vm(&mut self, frame: VmFrame) -> Result<FrameId, FramePublishError> {
         self.push(OwnedFrame::Vm(frame))
     }
 
     #[doc(hidden)]
-    pub fn push(&mut self, frame: OwnedFrame) -> Result<FrameId, DepthLimitExceeded> {
-        self.depth.enter()?;
+    pub fn push(&mut self, frame: OwnedFrame) -> Result<FrameId, FramePublishError> {
+        self.depth.enter().map_err(FramePublishError::Depth)?;
         let generation = self.next_generation;
-        self.next_generation = generation.checked_add(1).unwrap_or(NonZeroU32::MIN);
+        let Some(next) = generation.checked_add(1) else {
+            self.depth.leave();
+            return Err(FramePublishError::GenerationExhausted);
+        };
+        self.next_generation = next;
         self.frames.push(FrameSlot { generation, frame });
         let depth = u32::try_from(self.frames.len())
             .ok()
@@ -1019,6 +1036,12 @@ impl FrameArena {
     #[doc(hidden)]
     pub fn frame_kinds(&self) -> impl Iterator<Item = FrameKind> + '_ {
         self.frames.iter().map(|slot| slot.frame.kind())
+    }
+
+    /// Park the frame-id counter at its last value so the next push refuses.
+    #[cfg(test)]
+    pub(crate) fn exhaust_frame_generations_for_test(&mut self) {
+        self.next_generation = NonZeroU64::MAX;
     }
 }
 

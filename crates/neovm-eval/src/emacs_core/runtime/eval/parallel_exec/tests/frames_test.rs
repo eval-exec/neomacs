@@ -84,6 +84,27 @@ fn arena_pushes_pops_and_refuses_stale_handles() {
 }
 
 #[test]
+fn frame_id_generation_exhaustion_refuses_without_wrapping() {
+    let mut arena = FrameArena::new(4);
+    let first = arena
+        .push_interp(interp_frame(1, 2, 3, 4))
+        .expect("first frame");
+    arena.exhaust_frame_generations_for_test();
+    assert_eq!(
+        arena.push_vm(vm_frame(5, 6, OperandCursor::new(0, 0))),
+        Err(FramePublishError::GenerationExhausted)
+    );
+    assert_eq!(arena.depth(), 1);
+    assert!(arena.pop(first).is_some());
+    assert_eq!(arena.depth(), 0);
+    assert_eq!(
+        arena.push_interp(interp_frame(7, 8, 9, 10)),
+        Err(FramePublishError::GenerationExhausted)
+    );
+    assert_eq!(arena.depth(), 0);
+}
+
+#[test]
 fn call_depth_limit_refuses_overflow_and_recovers_after_pop() {
     let mut arena = FrameArena::new(1);
     let first = arena
@@ -92,7 +113,12 @@ fn call_depth_limit_refuses_overflow_and_recovers_after_pop() {
     let error = arena
         .push_vm(vm_frame(5, 6, OperandCursor::new(0, 0)))
         .expect_err("depth two refused");
-    assert_eq!(error.limit(), 1);
+    match error {
+        FramePublishError::Depth(depth) => assert_eq!(depth.limit(), 1),
+        FramePublishError::GenerationExhausted => {
+            panic!("depth refusal reported as generation exhaustion")
+        }
+    }
     assert!(arena.pop(first).is_some());
     assert!(
         arena
