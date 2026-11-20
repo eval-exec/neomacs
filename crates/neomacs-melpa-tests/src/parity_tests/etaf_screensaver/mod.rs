@@ -57,7 +57,9 @@ fn etaf_screensaver_behavior_batch() {
       (neomacs-screensaver-error
        (lambda () (etaf-screensaver-scene-info 'nope))))
 "####,
-            expect![[r#"OK ((donut equalizer) (:id donut :title "旋转甜甜圈" :summary "经典 ASCII 甜甜圈：逐格 z-buffer 上色，明暗当墨。" :tags #1=(3d math monochrome) :frame-rate 15 :params #2=((:key speed :label "旋转速度" :type number :min 1 :max 20 :step 1 :default 6) (:key detail :label "采样精度" :type choice :options ((coarse . "低") (normal . "中") (fine . "高")) :default normal))) (:id donut :title "旋转甜甜圈" :summary "经典 ASCII 甜甜圈：逐格 z-buffer 上色，明暗当墨。" :tags #1# :frame-rate 15 :params #2#) (:id donut :title "旋转甜甜圈" :summary "经典 ASCII 甜甜圈：逐格 z-buffer 上色，明暗当墨。" :tags #1# :frame-rate 15 :params #2#) (:id equalizer :title "墨线律动" :summary "单色竖柱随节拍起伏" :tags (bars ink) :frame-rate 24 :params nil) (etaf-screensaver-error "Unknown scene: nope"))"#]],
+            expect![[
+                r#"OK ((donut equalizer) (:id donut :title "旋转甜甜圈" :summary "经典 ASCII 甜甜圈：逐格 z-buffer 上色，明暗当墨。" :tags #1=(3d math monochrome) :frame-rate 15 :params #2=((:key speed :label "旋转速度" :type number :min 1 :max 20 :step 1 :default 6) (:key detail :label "采样精度" :type choice :options ((coarse . "低") (normal . "中") (fine . "高")) :default normal))) (:id donut :title "旋转甜甜圈" :summary "经典 ASCII 甜甜圈：逐格 z-buffer 上色，明暗当墨。" :tags #1# :frame-rate 15 :params #2#) (:id donut :title "旋转甜甜圈" :summary "经典 ASCII 甜甜圈：逐格 z-buffer 上色，明暗当墨。" :tags #1# :frame-rate 15 :params #2#) (:id equalizer :title "墨线律动" :summary "单色竖柱随节拍起伏" :tags (bars ink) :frame-rate 24 :params nil) (etaf-screensaver-error "Unknown scene: nope"))"#
+            ]],
         ),
         // Registering an id appends it; registering it again replaces the
         // scene in place, and a scene without layers is rejected.

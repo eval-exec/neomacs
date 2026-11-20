@@ -122,7 +122,9 @@ fn etaf_video_studio_behavior_batch() {
     (with-current-buffer buffer
       (ignore-errors (etaf-video-studio-close)))))
 "####,
-            expect![[r#"OK ((:project (:id "video-1" :title "Probe" :revision 2 :directory "/tmp/neomacs-video-XXXXXX-probe" :undo nil :redo nil) :projects 0 :clips 1 :captions 1 :pane properties :clip-index 0 :pending 0 :message "已刷新。") (:project (:id "video-1" :title "Probe" :revision 2 :directory "/tmp/neomacs-video-XXXXXX-probe" :undo nil :redo nil) :projects 0 :clips 1 :captions 1 :pane properties :clip-index 0 :pending 0 :message "素材文件不存在：/tmp/neomacs-video-XXXXXX-clip.mp4") ("video-project list --json" "video-project status /tmp/neomacs-video-XXXXXX-probe --json" "video-project list --json" "video-project status /tmp/neomacs-video-XXXXXX-probe --json"))"#]],
+            expect![[
+                r#"OK ((:project (:id "video-1" :title "Probe" :revision 2 :directory "/tmp/neomacs-video-XXXXXX-probe" :undo nil :redo nil) :projects 0 :clips 1 :captions 1 :pane properties :clip-index 0 :pending 0 :message "已刷新。") (:project (:id "video-1" :title "Probe" :revision 2 :directory "/tmp/neomacs-video-XXXXXX-probe" :undo nil :redo nil) :projects 0 :clips 1 :captions 1 :pane properties :clip-index 0 :pending 0 :message "素材文件不存在：/tmp/neomacs-video-XXXXXX-clip.mp4") ("video-project list --json" "video-project status /tmp/neomacs-video-XXXXXX-probe --json" "video-project list --json" "video-project status /tmp/neomacs-video-XXXXXX-probe --json"))"#
+            ]],
         ),
         // Closing releases the buffer; state, close and refresh then report
         // the documented out-of-studio error.
@@ -164,7 +166,9 @@ fn etaf_video_studio_behavior_batch() {
     (with-current-buffer buffer
       (ignore-errors (etaf-video-studio-close)))))
 "####,
-            expect![[r#"OK ((:project nil :projects 0 :clips 0 :captions 0 :pane projects :clip-index nil :pending 0 :message "失败 [notfound] 项目不存在") ("video-project list --json" "video-project status /tmp/neomacs-video-XXXXXX-missing --json"))"#]],
+            expect![[
+                r#"OK ((:project nil :projects 0 :clips 0 :captions 0 :pane projects :clip-index nil :pending 0 :message "失败 [notfound] 项目不存在") ("video-project list --json" "video-project status /tmp/neomacs-video-XXXXXX-missing --json"))"#
+            ]],
         ),
         // A missing executable is reported without signalling, leaving the
         // studio empty and usable.
@@ -181,7 +185,9 @@ fn etaf_video_studio_behavior_batch() {
       (with-current-buffer buffer
         (ignore-errors (etaf-video-studio-close))))))
 "####,
-            expect![[r#"OK (:project nil :projects 0 :clips 0 :captions 0 :pane projects :clip-index nil :pending 0 :message "失败 [deps] 找不到 /tmp/neomacs-video-XXXXXX-does-not-exist；请先安装或设置 `etaf-video-studio-executable' · pi-skill video-project check")"#]],
+            expect![[
+                r#"OK (:project nil :projects 0 :clips 0 :captions 0 :pane projects :clip-index nil :pending 0 :message "失败 [deps] 找不到 /tmp/neomacs-video-XXXXXX-does-not-exist；请先安装或设置 `etaf-video-studio-executable' · pi-skill video-project check")"#
+            ]],
         ),
         // Without a project the studio lists projects; an out-of-range clip
         // selection is ignored and a blank title is rejected locally.

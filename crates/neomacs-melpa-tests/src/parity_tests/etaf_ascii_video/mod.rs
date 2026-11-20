@@ -90,7 +90,9 @@ fn etaf_ascii_video_behavior_batch() {
               '(:kind url :url "http://example.com/x.mp4"
                 :proxy "ftp://proxy")))))
 "####,
-            expect![[r#"OK ((:kind demo :file nil :url nil :target nil :audio-url nil :audio-target nil :headers nil :proxy nil :width nil :height nil :duration nil :fps nil :audio nil) (:kind url :file nil :url "http://example.com/x.mp4" :target "http://example.com/x.mp4" :audio-url "https://example.com/a.mp3" :audio-target "https://example.com/a.mp3" :headers nil :proxy "http://proxy:8080" :width nil :height nil :duration nil :fps nil :audio t) (user-error "Unsupported etaf-video source kind: bogus") (user-error "Video file is not readable: \"/tmp/neomacs-definitely-missing.mp4\"") (user-error "Video audio URL must be http or https: \"ftp://example.com/a.mp3\"") (user-error "Video proxy must be an http or https URL: \"ftp://proxy\""))"#]],
+            expect![[
+                r#"OK ((:kind demo :file nil :url nil :target nil :audio-url nil :audio-target nil :headers nil :proxy nil :width nil :height nil :duration nil :fps nil :audio nil) (:kind url :file nil :url "http://example.com/x.mp4" :target "http://example.com/x.mp4" :audio-url "https://example.com/a.mp3" :audio-target "https://example.com/a.mp3" :headers nil :proxy "http://proxy:8080" :width nil :height nil :duration nil :fps nil :audio t) (user-error "Unsupported etaf-video source kind: bogus") (user-error "Video file is not readable: \"/tmp/neomacs-definitely-missing.mp4\"") (user-error "Video audio URL must be http or https: \"ftp://example.com/a.mp3\"") (user-error "Video proxy must be an http or https URL: \"ftp://proxy\""))"#
+            ]],
         ),
         // Every player command reports the same user error outside a player
         // buffer instead of touching the current buffer.
