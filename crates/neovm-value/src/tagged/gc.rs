@@ -55,9 +55,11 @@ pub use function_write_hooks::{
 pub mod symbol_table;
 
 mod cache_root_scan;
+mod condition_snapshots;
 mod publication;
 #[cfg(test)]
 mod publication_owner_seam;
+mod publication_roots;
 #[doc(hidden)]
 pub use cache_root_scan::CacheRootScan;
 
@@ -1088,7 +1090,7 @@ pub struct TaggedHeap {
     /// Per-cycle collector-time bank. Trailing, so no pinned offset moves.
     cycle_time_bank: cycle_time_bank::GcCycleTimeBank,
     /// Heads published by payload owners, keyed by a minted id.
-    published_payload_roots: publication::PublishedPayloadRoots,
+    published_payload_roots: publication_roots::PublishedPayloadRoots,
 }
 
 impl Default for TaggedHeap {
@@ -1222,7 +1224,7 @@ impl TaggedHeap {
             overlay_serial: crate::heap_types::OverlaySerialCounter::new(),
             ephemeron_records: memory_registry::EphemeronRecords::default(),
             cycle_time_bank: cycle_time_bank::GcCycleTimeBank::default(),
-            published_payload_roots: publication::PublishedPayloadRoots::default(),
+            published_payload_roots: publication_roots::PublishedPayloadRoots::default(),
             dirty_owner_bits: FxHashSet::default(),
             dirty_writes: Vec::new(),
             gc_collections: 0,

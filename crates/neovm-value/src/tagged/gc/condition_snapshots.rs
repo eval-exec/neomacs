@@ -6,11 +6,11 @@
 //! Heap-object heads are copied into the heap root table when the payload
 //! becomes current. Immediate heads are not: they are not swept.
 
-use super::roots::PublisherId;
-use super::{
-    Commit, PublicationChange, PublicationError, PublicationLedger, PublicationPayload,
-    PublicationView, RetainedBytes, RetentionLimits,
+use super::publication::{
+    Commit, PayloadPlan, PublicationChange, PublicationError, PublicationLedger,
+    PublicationPayload, PublicationStatistics, PublicationView, RetainedBytes, RetentionLimits,
 };
+use super::publication_roots::{PayloadRoots, PublisherId};
 use crate::intern::SymId;
 use crate::symbol::{Obarray, plist_epoch};
 use crate::tagged::gc::TaggedHeap;
@@ -130,18 +130,20 @@ impl PublicationPayload for ConditionPayload {
         self.table.epoch()
     }
 
+    fn prepare(_current: &Self) -> Result<PayloadPlan<Self>, Self::Error> {
+        // The refreshed table is built from the obarray, which `prepare`
+        // cannot see. Refresh commits through `Commit::Replace`.
+        Ok(PayloadPlan::Unchanged)
+    }
+}
+
+impl PayloadRoots for ConditionPayload {
     fn for_each_root(&self, visit: &mut dyn FnMut(TaggedValue)) {
         for head in self.table.heads.values().copied() {
             if head.is_heap_object() {
                 visit(head);
             }
         }
-    }
-
-    fn prepare(_current: &Self) -> Result<super::PayloadPlan<Self>, Self::Error> {
-        // The refreshed table is built from the obarray, which `prepare`
-        // cannot see. Refresh commits through `Commit::Replace`.
-        Ok(super::PayloadPlan::Unchanged)
     }
 }
 
@@ -270,7 +272,7 @@ impl PublishedConditionSnapshots {
     }
 
     #[cfg(test)]
-    fn statistics(&self) -> Result<super::PublicationStatistics<u64>, PublicationError<()>> {
+    fn statistics(&self) -> Result<PublicationStatistics<u64>, PublicationError<()>> {
         self.ledger.statistics()
     }
 }
@@ -307,7 +309,7 @@ mod tests {
     fn retired_once() -> RetentionLimits {
         RetentionLimits::new(
             RetentionLimits::DEFAULT_BYTES,
-            super::super::RetiredCount::new(1),
+            super::super::publication::RetiredCount::new(1),
         )
     }
 
@@ -428,7 +430,7 @@ mod tests {
         let error = published.refresh(&mut heap, &obarray).unwrap_err();
         assert_eq!(
             error,
-            PublicationError::NeedGrace(super::super::RetentionLimit::Retired)
+            PublicationError::NeedGrace(super::super::publication::RetentionLimit::Retired)
         );
         {
             let view = published.view();

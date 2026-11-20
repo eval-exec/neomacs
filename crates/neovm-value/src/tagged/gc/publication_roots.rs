@@ -3,9 +3,23 @@
 //! The key is an id this heap mints. The collector reads the values and never
 //! a publisher address. Unregister removes the id. Dropping a publisher
 //! without unregister leaves the id in place, so the heads stay reachable.
+//!
+//! Root enumeration is not part of the generic publication owner. The
+//! thread-safety fixture and the n5-grace loom model compile that owner on
+//! its own. Payloads that publish heads implement [`PayloadRoots`] here.
 
+use super::TaggedHeap;
+use super::publication::PublicationPayload;
 use crate::tagged::value::TaggedValue;
 use rustc_hash::FxHashMap;
+
+/// Heads a payload appends when it becomes current.
+///
+/// [`PublicationPayload`] does not name heap words. The heap registry is the
+/// only caller, and it requires this bound.
+pub(crate) trait PayloadRoots: PublicationPayload {
+    fn for_each_root(&self, visit: &mut dyn FnMut(TaggedValue));
+}
 
 /// Identity of one payload publisher. Not an address.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -47,23 +61,19 @@ impl PublishedPayloadRoots {
     }
 }
 
-impl super::super::TaggedHeap {
+impl TaggedHeap {
     pub(crate) fn register_payload_publisher(&mut self) -> PublisherId {
         self.published_payload_roots.register()
     }
 
     pub(crate) fn unregister_payload_publisher(&mut self, id: PublisherId) {
-        self.published_payload_roots.unregister(id);
+        self.published_payload_roots.unregister(id)
     }
 
     /// Append every head `payload` yields. Callers run this before the
     /// publication Release store, under the same exclusive heap borrow as
     /// registration.
-    pub(crate) fn append_payload_roots<P: super::PublicationPayload>(
-        &mut self,
-        id: PublisherId,
-        payload: &P,
-    ) {
+    pub(crate) fn append_payload_roots<P: PayloadRoots>(&mut self, id: PublisherId, payload: &P) {
         let roots = &mut self.published_payload_roots;
         payload.for_each_root(&mut |value| roots.append(id, value));
     }
