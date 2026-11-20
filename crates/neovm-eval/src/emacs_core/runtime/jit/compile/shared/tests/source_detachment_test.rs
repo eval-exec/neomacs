@@ -1,3 +1,4 @@
+use super::super::super::shims::NativeExtent;
 use super::super::{PERSISTENT_TEST_OVERRIDE, SHARED_JIT, SharedJit};
 use super::{
     CURRENT_LEAF_BASES, DetachedSourceBackend, PENDING_FLOW, PENDING_ROOT_SWEEP_FLOOR,
@@ -29,7 +30,7 @@ fn fixture() -> DetachedSourceCache {
     crate::emacs_core::jit::cache::reset_carrier_tls();
     PENDING_FLOW.with(|slot| *slot.borrow_mut() = None);
     PENDING_SHIM_PANIC.with(|slot| *slot.borrow_mut() = None);
-    CURRENT_LEAF_BASES.with(|slot| slot.set(None));
+    CURRENT_LEAF_BASES.with(|slot| slot.set(NativeExtent::OUTSIDE));
     PENDING_ROOT_SWEEP_FLOOR.with(|slot| slot.set(None));
     let mut source = Box::new(Context::new_minimal_vm_harness(
         crate::test_utils::unit_harness(),
@@ -152,16 +153,22 @@ fn pentry_e2b_source_jit_backend_native_frame_publication_is_not_cleared() {
     let cache = fixture();
     let original = address();
     // Refusal only examines the published marker and never dereferences it.
-    let marker = std::ptr::NonNull::dangling();
-    CURRENT_LEAF_BASES.with(|slot| slot.set(Some(marker)));
+    let marker = NativeExtent::framed(std::ptr::NonNull::dangling());
+    CURRENT_LEAF_BASES.with(|slot| slot.set(marker));
     assert_eq!(
         withdraw(&cache).unwrap_err(),
         SourceBackendError::NativeFramePublished
     );
     assert_eq!(
-        CURRENT_LEAF_BASES.with(|slot| slot.replace(None)),
-        Some(marker)
+        CURRENT_LEAF_BASES.with(|slot| slot.replace(NativeExtent::OUTSIDE)),
+        marker
     );
+    CURRENT_LEAF_BASES.with(|slot| slot.set(NativeExtent::LIVE_NO_BASES));
+    assert_eq!(
+        withdraw(&cache).unwrap_err(),
+        SourceBackendError::NativeFramePublished
+    );
+    CURRENT_LEAF_BASES.with(|slot| slot.set(NativeExtent::OUTSIDE));
     assert_eq!(address(), original);
 }
 

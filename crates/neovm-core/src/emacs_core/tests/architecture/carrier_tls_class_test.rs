@@ -77,10 +77,12 @@ const TLS_CLASSIFICATION: &[(&str, &str, TlsClass)] = &[
     // carrier_loop accepts the next job only after run_carrier_job returns).
     // switch.rs retires/parks the old job before the NEXT job's deferred reset.
     // Deferred reuse asserts zero before clearing; PARK must preserve depth.
-    // MustReset: the counter is compiled in every build. reset_carrier_tls
-    // mints a serial receipt before its zero store. A leaked guard refuses
-    // that mint and keeps the depth. Ordinary Green waits retain the live
-    // native frame on the same carrier.
+    // MustReset: the counter is compiled for test, debug, and test-support.
+    // A production release image has no `NATIVE_DEPTH` symbol; that mint
+    // reads `CURRENT_LEAF_BASES` instead. reset_carrier_tls mints a serial
+    // receipt before its zero store, under the same cfg as the counter.
+    // A leaked guard refuses that mint and keeps the depth. Ordinary Green
+    // waits retain the live native frame on the same carrier.
     (
         "neovm-eval/src/emacs_core/runtime/jit/cache.rs",
         "NATIVE_DEPTH",

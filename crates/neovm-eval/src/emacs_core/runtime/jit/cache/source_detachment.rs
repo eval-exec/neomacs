@@ -3,9 +3,9 @@
 //! inaccessible. No leaf, pending job, or executable allocation is destroyed.
 
 use super::{
-    COMPILED, COMPILED_HEAP, COMPILED_OBARRAY, DenseCache, INLINE_DEPS, INLINE_EVICTIONS,
-    OSR_CACHE, OSR_PENDING, OsrEntry, PendingOsr, REDEFINED_PINS, REJECTION_EPOCH, RedefinedPin,
-    bump_leaf_slot_epoch,
+    COMPILED, COMPILED_HEAP, COMPILED_OBARRAY, CompiledHeapPin, DenseCache, INLINE_DEPS,
+    INLINE_EVICTIONS, OSR_CACHE, OSR_PENDING, OsrEntry, PendingOsr, REDEFINED_PINS,
+    REJECTION_EPOCH, RedefinedPin, bump_leaf_slot_epoch,
 };
 use crate::emacs_core::eval::Context;
 use neovm_value::intern::SymId;
@@ -162,7 +162,7 @@ impl DetachedSourceCache {
                                 {
                                     return Err(SourceCacheError::PendingJobs);
                                 }
-                                let recorded_heap = match COMPILED_HEAP.with(Cell::get) {
+                                let recorded_heap = match COMPILED_HEAP.with(Cell::get).identity() {
                                     Some(heap) if heap == owner.heap => Some(owner.heap),
                                     Some(_) => return Err(SourceCacheError::WrongHeap),
                                     None => {
@@ -204,7 +204,7 @@ impl DetachedSourceCache {
                                     recorded_heap,
                                     recorded_obarray,
                                 };
-                                COMPILED_HEAP.with(|slot| slot.set(None));
+                                COMPILED_HEAP.with(|slot| slot.set(CompiledHeapPin::Unpinned));
                                 COMPILED_OBARRAY.with(|slot| slot.set(None));
                                 Ok(detached)
                             })

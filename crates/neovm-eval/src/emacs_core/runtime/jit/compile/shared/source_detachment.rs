@@ -79,7 +79,7 @@ impl DetachedSourceBackend {
         if crate::emacs_core::jit::cache::native_depth() != 0 {
             return Err(SourceBackendError::NativeActivation);
         }
-        if CURRENT_LEAF_BASES.with(|slot| slot.get().is_some()) {
+        if CURRENT_LEAF_BASES.with(|slot| slot.get().is_inside()) {
             return Err(SourceBackendError::NativeFramePublished);
         }
         if PENDING_ROOT_SWEEP_FLOOR.with(|slot| slot.get().is_some()) {

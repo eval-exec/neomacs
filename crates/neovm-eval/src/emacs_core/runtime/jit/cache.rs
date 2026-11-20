@@ -674,19 +674,38 @@ enum OsrLookup {
     Pending,
 }
 
-// The serial mint reads this counter in every build, including production
-// release. Compiling it out would make that mint succeed under a live frame.
+// Test, debug, and test-support keep the real nesting counter. A production
+// release has no `NATIVE_DEPTH` symbol: `native_depth` reads `CURRENT_LEAF_BASES`
+// (0 outside, 1 inside). `release-native-depth` selects that reading in tests
+// so this counter cannot mask a hole.
+#[cfg(any(test, debug_assertions, feature = "test-support"))]
 thread_local! {
     /// Nesting depth of native leaf executions on this thread. The serial
-    /// [`JitGracePeriod`] mint refuses while this is non-zero, so a cache
-    /// drop cannot free a leaf's reloc and spec boxes under its machine code.
+    /// [`JitGracePeriod`] mint refuses while `native_depth` is non-zero.
     pub(crate) static NATIVE_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
 /// Current native nesting depth (0 outside any leaf).
+///
+/// The counter build reports the real depth. The release build reports 0 or 1
+/// from [`super::compile::CURRENT_LEAF_BASES`].
+#[cfg(all(
+    any(test, debug_assertions, feature = "test-support"),
+    not(feature = "release-native-depth")
+))]
 #[inline]
 pub(crate) fn native_depth() -> u32 {
     NATIVE_DEPTH.with(|d| d.get())
+}
+
+/// Release reading of [`native_depth`]: the 8-byte extent cell, not the counter.
+#[cfg(not(all(
+    any(test, debug_assertions, feature = "test-support"),
+    not(feature = "release-native-depth")
+)))]
+#[inline]
+pub(crate) fn native_depth() -> u32 {
+    u32::from(super::compile::CURRENT_LEAF_BASES.with(|slot| slot.get().is_inside()))
 }
 
 /// Last `CompiledLeaf` drops observed while `native_depth() > 0`.
@@ -715,14 +734,19 @@ pub(crate) fn note_compiled_leaf_drop_for_test() {
 
 /// RAII marker for one native leaf execution (see `NATIVE_DEPTH`).
 /// Unwind-safe: the decrement is in `Drop`.
+///
+/// Absent from a production release image, together with the counter.
+#[cfg(any(test, debug_assertions, feature = "test-support"))]
 #[must_use = "the thread-local extent ends when this guard drops"]
 #[derive(Debug)]
 pub(crate) struct NativeDepthGuard {
     _scope: neovm_value::tls_scope::TlsScope<u32, std::cell::Cell<u32>>,
     _thread: std::marker::PhantomData<std::rc::Rc<()>>,
 }
+#[cfg(any(test, debug_assertions, feature = "test-support"))]
 static_assertions::assert_not_impl_any!(NativeDepthGuard: Send, Sync);
 
+#[cfg(any(test, debug_assertions, feature = "test-support"))]
 impl NativeDepthGuard {
     #[inline]
     #[doc(hidden)]
@@ -3433,6 +3457,31 @@ pub(crate) fn run_armed_leaf(
     leaf: *const CompiledLeaf,
     args_ptr: *const i64,
 ) -> Result<Option<usize>, Flow> {
+    // Outermost armed call: the raw entry publishes no bases. The live tag
+    // says native code is on the stack. A nested armed call during a framed
+    // tail must not hide that frame's pointer. No snapshot and no extra `Rc`:
+    // the tag covers the raw callees this leaf reaches.
+    struct ArmedExtent {
+        saved: Option<super::compile::NativeExtent>,
+    }
+    impl Drop for ArmedExtent {
+        fn drop(&mut self) {
+            if let Some(saved) = self.saved {
+                super::compile::CURRENT_LEAF_BASES.with(|slot| slot.set(saved));
+            }
+        }
+    }
+    let _armed = super::compile::CURRENT_LEAF_BASES.with(|slot| {
+        let current = slot.get();
+        if current.is_outside() {
+            slot.set(super::compile::NativeExtent::LIVE_NO_BASES);
+            ArmedExtent {
+                saved: Some(current),
+            }
+        } else {
+            ArmedExtent { saved: None }
+        }
+    });
     // SAFETY: see armed_leaf_for_stack_call.
     // SAFETY (owner chain): (b) fails for this owner: the incoming raw leaf is shadowed and only
     // &CompiledLeaf is forwarded. Native writes to Context target a different allocation; leaf
@@ -3803,10 +3852,12 @@ fn run_resolved_leaf_native_inner(
 ) -> NativeCallOutcome {
     // Direct handler-free path: a body with no binds, no handler frames and
     // no sidecar runs WITHOUT its own invoke_native frame — no bases
-    // snapshot, no CURRENT_LEAF_BASES publish, no NativeRun materialization.
-    // It executes inside the CALLER leaf's extent exactly like any runtime
-    // shim the caller invokes (see CompiledLeaf::direct_call_eligible for the
-    // containment/soundness argument). Non-OK statuses are routed through
+    // snapshot and no CURRENT_LEAF_BASES publish of its own, no NativeRun
+    // materialization. It executes inside the CALLER leaf's extent exactly
+    // like any runtime shim the caller invokes (see
+    // CompiledLeaf::direct_call_eligible for the containment/soundness
+    // argument). The outermost publication is `run_armed_leaf`'s live tag,
+    // and only when the cell is outside. Non-OK statuses are routed through
     // the same machinery invoke_native would use, out of line.
     //
     // `#[inline(always)]`: this is the shape test, the raw entry call and a
@@ -4347,6 +4398,7 @@ pub(crate) fn reset_carrier_tls() {
     let Ok(receipt) = JitGracePeriod::mint_serial() else {
         return;
     };
+    #[cfg(any(test, debug_assertions, feature = "test-support"))]
     NATIVE_DEPTH.with(|depth| depth.set(0));
     clear(receipt);
     COMPILED_HEAP.with(|slot| slot.set(CompiledHeapPin::Unpinned));

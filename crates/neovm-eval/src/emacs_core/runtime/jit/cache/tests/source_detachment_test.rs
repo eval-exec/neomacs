@@ -1,7 +1,8 @@
 use super::super::{
-    COMPILED, COMPILED_HEAP, COMPILED_OBARRAY, CacheEntry, INLINE_DEPS, INLINE_EVICTIONS,
-    LEAF_SLOT_EPOCH, NativeDepthGuard, OSR_CACHE, OSR_PENDING, REDEFINED_PINS, clear,
-    collect_jit_reloc_gc_roots_for_heap, prepare_entry_for_test, reset_carrier_tls,
+    COMPILED, COMPILED_HEAP, COMPILED_OBARRAY, CacheEntry, CompiledHeapPin, INLINE_DEPS,
+    INLINE_EVICTIONS, LEAF_SLOT_EPOCH, NativeDepthGuard, OSR_CACHE, OSR_PENDING, REDEFINED_PINS,
+    clear_with_serial_receipt, collect_jit_reloc_gc_roots_for_heap, prepare_entry_for_test,
+    reset_carrier_tls,
 };
 use super::{DetachedSourceCache, SourceCacheError, SourceCacheOwner, SourceCacheSlot};
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
@@ -40,7 +41,7 @@ fn metadata_fixture() -> (ManuallyDrop<Box<Context>>, SourceCacheOwner) {
     let source = context();
     let owner = SourceCacheOwner::for_context(&source);
     COMPILED.with(|cache| cache.borrow_mut().insert(11, CacheEntry::NotCompilable));
-    COMPILED_HEAP.with(|slot| slot.set(Some(owner.heap)));
+    COMPILED_HEAP.with(|slot| slot.set(CompiledHeapPin::Pinned(owner.heap)));
     COMPILED_OBARRAY.with(|slot| slot.set(Some(owner.obarray.0)));
     neovm_value::tagged::gc::clear_tagged_heap_if_installed(&source.tagged_heap);
     (ManuallyDrop::new(source), owner)
@@ -84,7 +85,10 @@ fn pentry_e2b_source_jit_cache_real_leaf_relocation_and_executable_retention() {
     let epoch = LEAF_SLOT_EPOCH.load(Ordering::Relaxed);
     let receipt = withdraw(owner).unwrap();
     assert!(COMPILED.with(|cache| cache.borrow().get(id).is_none()));
-    assert!(COMPILED_HEAP.with(|slot| slot.get().is_none()));
+    assert!(matches!(
+        COMPILED_HEAP.with(Cell::get),
+        CompiledHeapPin::Unpinned
+    ));
     assert!(COMPILED_OBARRAY.with(|slot| slot.get().is_none()));
     assert_ne!(LEAF_SLOT_EPOCH.load(Ordering::Relaxed), epoch);
     assert!(
@@ -130,7 +134,10 @@ fn pentry_e2b_source_jit_cache_every_slot_loan_refuses_before_any_mutation() {
     assert!(
         COMPILED.with(|cache| matches!(cache.borrow().get(11), Some(CacheEntry::NotCompilable)))
     );
-    assert_eq!(COMPILED_HEAP.with(Cell::get), Some(owner.heap));
+    assert_eq!(
+        COMPILED_HEAP.with(Cell::get),
+        CompiledHeapPin::Pinned(owner.heap)
+    );
 }
 
 #[test]
@@ -142,15 +149,18 @@ fn pentry_e2b_source_jit_cache_foreign_or_unbound_identity_preserves_original_sl
     drop(foreign);
     let (_source, owner) = metadata_fixture();
     let epoch = LEAF_SLOT_EPOCH.load(Ordering::Relaxed);
-    COMPILED_HEAP.with(|slot| slot.set(Some(other.heap)));
+    COMPILED_HEAP.with(|slot| slot.set(CompiledHeapPin::Pinned(other.heap)));
     assert_eq!(withdraw(owner).unwrap_err(), SourceCacheError::WrongHeap);
-    assert_eq!(COMPILED_HEAP.with(Cell::get), Some(other.heap));
-    COMPILED_HEAP.with(|slot| slot.set(None));
+    assert_eq!(
+        COMPILED_HEAP.with(Cell::get),
+        CompiledHeapPin::Pinned(other.heap)
+    );
+    COMPILED_HEAP.with(|slot| slot.set(CompiledHeapPin::Unpinned));
     assert_eq!(
         withdraw(owner).unwrap_err(),
         SourceCacheError::MissingHeapOwner
     );
-    COMPILED_HEAP.with(|slot| slot.set(Some(owner.heap)));
+    COMPILED_HEAP.with(|slot| slot.set(CompiledHeapPin::Pinned(owner.heap)));
     COMPILED_OBARRAY.with(|slot| slot.set(Some(other.obarray.0)));
     assert_eq!(withdraw(owner).unwrap_err(), SourceCacheError::WrongObarray);
     assert_eq!(LEAF_SLOT_EPOCH.load(Ordering::Relaxed), epoch);
@@ -193,7 +203,7 @@ fn pentry_e2b_source_jit_cache_real_pending_job_is_not_cancelled_by_refusal() {
     struct Reset;
     impl Drop for Reset {
         fn drop(&mut self) {
-            clear();
+            clear_with_serial_receipt().expect("serial mint while idle");
             bg::hold_publish_for_test(false);
             bg::publish_held_for_test();
             bg::force_deferred_install_for_test(false);

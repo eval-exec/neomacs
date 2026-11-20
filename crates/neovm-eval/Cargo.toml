@@ -29,6 +29,9 @@ desktop-font-settings = ["neovm-value/desktop-font-settings"]
 # refusal; core already turns both crates on together.
 gc-memory-telemetry = ["neovm-value/gc-memory-telemetry"]
 jit = ["neovm-value/jit", "neovm-edit/jit", "neovm-text/jit"]
+# Test switch: `native_depth` reads `CURRENT_LEAF_BASES` the way a
+# production release build does, so the test counter cannot mask a hole.
+release-native-depth = ["jit"]
 perf-probes = []
 redisplay-test-policy = ["neovm-edit/redisplay-test-policy"]
 sqlite = []
