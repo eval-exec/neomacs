@@ -247,8 +247,10 @@ where
             return StepOutcome::Fault(EngineFault::NotSuspended);
         };
         if self.arena.roots_mut().pop(handle).is_err() {
-            self.unwind_to_idle();
-            return StepOutcome::Fault(EngineFault::StaleRoot);
+            return match self.unwind_to_idle() {
+                Ok(()) => StepOutcome::Fault(EngineFault::StaleRoot),
+                Err(fault) => StepOutcome::Fault(fault),
+            };
         }
         self.state = RunState::Idle;
         self.drive(ctx)
@@ -581,18 +583,30 @@ where
             }
             StepOutcome::Fault(EngineFault::Busy) => {}
             StepOutcome::MissingCore { .. } | StepOutcome::Signaled(_) | StepOutcome::Fault(_) => {
-                self.unwind_to_idle()
+                if let Err(fault) = self.unwind_to_idle() {
+                    return StepOutcome::Fault(fault);
+                }
             }
         }
         outcome
     }
 
-    fn unwind_to_idle(&mut self) {
-        while let Some(note) = self.notes.pop() {
-            let _ = self.arena.pop(note.id);
+    /// Drop every frame and root this run pushed. A refused pop is returned
+    /// and the run stays where it is; `Idle` is set only after both succeed.
+    fn unwind_to_idle(&mut self) -> Result<(), EngineFault> {
+        while let Some(id) = self.notes.last().map(|note| note.id) {
+            if self.arena.pop(id).is_none() {
+                return Err(EngineFault::StaleFrame);
+            }
+            self.notes.pop();
         }
-        let _ = self.arena.roots_mut().truncate(0);
+        // truncate(0) is correct only because Stage1 owns its FrameArena exclusively.
+        self.arena
+            .roots_mut()
+            .truncate(0)
+            .map_err(EngineFault::Root)?;
         self.state = RunState::Idle;
+        Ok(())
     }
 }
 
