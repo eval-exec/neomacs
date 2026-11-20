@@ -1739,21 +1739,10 @@ impl TaggedHeap {
         //    so heap access is exclusive (no concurrency hazard here). --
         let mark_t0 = std::time::Instant::now();
         self.mark_all_on_gc_thread();
-        self.mark_reached_ephemeron_records_to_fixpoint();
-        // Queue doomed finalizers before the weak sweep (GNU
-        // `queue_doomed_finalizers` runs before
-        // `mark_and_sweep_weak_table_contents` in `garbage_collect`): their
-        // functions are re-marked so both the weak sweep and the object sweep
-        // see them as live.
-        self.mark_and_queue_doomed_finalizers();
-        self.mark_reached_ephemeron_records_to_fixpoint();
-        // Resolve weak hash tables now that the main mark has drained. Both the
-        // sync and concurrent paths converge here with the mutator stopped, so
-        // this is single-threaded and path-agnostic.
-        self.mark_and_sweep_weak_tables();
-        self.reclaim_unreached_retired_processes();
-        self.reclaim_unreached_killed_buffers();
-        self.reclaim_unreached_deleted_frames();
+        // Ephemeron fixpoint, doomed finalizers, weak sweep, and the three
+        // explicit reclaims. The order lives in one method so the incremental
+        // termination cannot drop the reclaims.
+        let _ = self.finish_stopped_mark_adapters();
         let mark_us = mark_t0.elapsed().as_micros() as u64;
 
         // The mark has drained and the sweep has not started: the one moment
@@ -1771,15 +1760,53 @@ impl TaggedHeap {
         self.finalize_collection(mark_us, bytes_before, t0);
     }
 
+    /// Post-mark adapters shared by `complete_collection` and
+    /// `incremental_finish`.
+    ///
+    /// The order is fixed: ephemeron fixpoint, doomed finalizers, fixpoint,
+    /// weak sweep, then the three explicit reclaims. This method is the only
+    /// caller of those steps, except the era path's test permit, which still
+    /// calls `mark_and_sweep_weak_tables` by itself.
+    ///
+    /// Does not run `mark_all_on_gc_thread` or `finalize_collection`. Does
+    /// not run queued Lisp finalizers or host destroy. Empty explicit maps
+    /// reclaim nothing.
+    ///
+    /// Returns the microseconds spent in the finalizer scan and the weak
+    /// sweep, so incremental termination can keep its handshake split. The
+    /// ephemeron fixpoints and the reclaims sit outside those two timers.
+    pub(super) fn finish_stopped_mark_adapters(&mut self) -> (u64, u64) {
+        self.mark_reached_ephemeron_records_to_fixpoint();
+        // Queue doomed finalizers before the weak sweep (GNU
+        // `queue_doomed_finalizers` runs before
+        // `mark_and_sweep_weak_table_contents` in `garbage_collect`): their
+        // functions are re-marked so both the weak sweep and the object sweep
+        // see them as live.
+        let finalizer_t0 = std::time::Instant::now();
+        self.mark_and_queue_doomed_finalizers();
+        let finalizer_us = finalizer_t0.elapsed().as_micros() as u64;
+        self.mark_reached_ephemeron_records_to_fixpoint();
+        // Resolve weak hash tables now that the main mark has drained. Both
+        // the sync and incremental paths converge here with the mutator
+        // stopped, so this is single-threaded.
+        let weak_t0 = std::time::Instant::now();
+        self.mark_and_sweep_weak_tables();
+        let weak_us = weak_t0.elapsed().as_micros() as u64;
+        self.reclaim_unreached_retired_processes();
+        self.reclaim_unreached_killed_buffers();
+        self.reclaim_unreached_deleted_frames();
+        (finalizer_us, weak_us)
+    }
+
     /// Queue the functions of finalizer objects this cycle found unreachable —
-    /// GNU `queue_doomed_finalizers` + `mark_finalizers` (alloc.c). Must run
-    /// at BOTH mark terminations (`complete_collection` and
-    /// `incremental_finish`), after the main mark drains and before the weak
-    /// sweep. A doomed finalizer leaves the registry and is swept normally;
-    /// only its `function` is queued, re-marked transitively (same marking
-    /// helpers as the weak-table fixpoint) so the imminent sweep keeps
-    /// everything it needs. Still-marked finalizers stay registered.
-    pub(super) fn mark_and_queue_doomed_finalizers(&mut self) {
+    /// GNU `queue_doomed_finalizers` + `mark_finalizers` (alloc.c). Runs only
+    /// from `finish_stopped_mark_adapters`, after the main mark drains and
+    /// before the weak sweep. A doomed finalizer leaves the registry and is
+    /// swept normally; only its `function` is queued, re-marked transitively
+    /// (same marking helpers as the weak-table fixpoint) so the imminent sweep
+    /// keeps everything it needs. Still-marked finalizers stay registered.
+    /// The queued functions are not called here.
+    fn mark_and_queue_doomed_finalizers(&mut self) {
         if self.finalizer_registry.is_empty() {
             return;
         }

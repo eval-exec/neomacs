@@ -556,6 +556,10 @@ mod architecture_mac_x11_subrs_ratchet_test;
 mod architecture_plist_head_seam_guard_test;
 
 #[cfg(test)]
+#[path = "tests/architecture/stopped_mark_adapter_guard_test.rs"]
+mod architecture_stopped_mark_adapter_guard_test;
+
+#[cfg(test)]
 #[path = "tests/heap_registry_cross_heap_test.rs"]
 mod heap_registry_cross_heap_test;
 #[cfg(test)]

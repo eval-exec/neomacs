@@ -86,8 +86,9 @@ fn memory_inventory_reports_old_dead_only_before_major_promotion() {
     heap.seed_root(live_cons);
     heap.seed_root(live_vector);
     heap.incremental_drain_all();
-    heap.mark_and_queue_doomed_finalizers();
-    heap.mark_and_sweep_weak_tables();
+    // Post-mark, pre-sweep. Empty explicit maps reclaim nothing, so the
+    // dead cons and vector are still owned when the snapshot is taken.
+    let _ = heap.finish_stopped_mark_adapters();
     let inventory = snapshot(&heap, true);
     let dead_vector_bytes = size_of::<VectorObj>() + 17 * size_of::<TaggedValue>();
     assert_eq!(
