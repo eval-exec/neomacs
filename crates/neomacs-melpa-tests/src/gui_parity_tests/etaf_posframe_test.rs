@@ -77,13 +77,14 @@ fn etaf_posframe_real_gui_panel_matches_gnu() {
     )
     .expect("run real graphical GNU Emacs and Neomacs sequentially");
 
-    // Strict parity: Neomacs must produce GNU's exact observation.  The open
-    // divergences this test currently reports are the child-frame anchor (top
-    // 17 vs 68), the default line height (17 vs 18 px), and the U+200B line
-    // prefix.  `:live` records that `frame-live-p' agrees with `framep';
-    // the terminal type itself is backend identity (`x` vs `neo').
+    // Strict parity: Neomacs must produce GNU's exact observation.  Under the
+    // harness's one pinned FONTCONFIG_FILE both engines resolve the same Han
+    // fallback, so the row strut and the 22 px line agree; the open divergence
+    // is the child-frame anchor (top 17 in GNU, 68 here).  `:live` records
+    // that `frame-live-p' agrees with `framep'; the terminal type itself is
+    // backend identity (`x' vs `neo').
     let expected_gnu = expect![[
-        r##"OK (:before (:live t :has-parent t :visible t :width 20 :height 1 :left 16 :top 17 :window-width 20 :window-height 1 :pixel-width 160 :pixel-height 17 :char-width 8 :char-height 17 :background "#f7f7f7" :foreground "#000000" :text "panel parity") :panels-before 1 :frame-after-hide nil :panels-after-hide 0 :frame-live-after-hide nil)"##
+        r##"OK (:before (:live t :has-parent t :visible t :width 20 :height 1 :left 16 :top 17 :window-width 20 :window-height 1 :pixel-width 160 :pixel-height 22 :char-width 8 :char-height 17 :background "#f7f7f7" :foreground "#000000" :text "​panel parity") :panels-before 1 :frame-after-hide nil :panels-after-hide 0 :frame-live-after-hide nil)"##
     ]];
     expected_gnu.assert_eq(&pair.gnu_behavior.to_string());
     // Strict parity: the probe must produce GNU's exact observation.  There

@@ -4076,6 +4076,7 @@ dependencies = [
  "neomacs-infra",
  "neomacs-melpa-test-support",
  "neomacs-test-env",
+ "neomacs-test-fonts",
  "neomacs-test-oracle",
  "serde_json",
  "sha2",

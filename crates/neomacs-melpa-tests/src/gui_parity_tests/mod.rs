@@ -6,4 +6,5 @@ mod etaf_md_gui_test;
 mod etaf_org_preview_gui_test;
 mod etaf_posframe_test;
 mod git_gutter_fringe_test;
+mod gui_font_hermeticity_test;
 mod support;

@@ -1,5 +1,6 @@
 use std::fs::{self, File};
 use std::os::unix::process::CommandExt;
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -9,7 +10,7 @@ use neomacs_test_env::CanonicalPin;
 use crate::{
     DirectEditorChild, EmacsRuntime, EvalOutcome, MelpaSandbox, PreparedPackageSet,
     direct_probe_process_error, direct_probe_script, read_direct_probe_file,
-    read_direct_probe_outcome, wrap_direct_probe_logs,
+    read_direct_probe_outcome, sanitize_label, wrap_direct_probe_logs,
 };
 
 const GUI_TIMEOUT: Duration = Duration::from_secs(180);
@@ -21,11 +22,133 @@ pub(super) struct GuiPairOutcome {
     pub neomacs: EvalOutcome,
     pub gnu_behavior: EvalOutcome,
     pub neomacs_behavior: EvalOutcome,
+    /// The private `fonts.conf` both editors resolved fonts through, for
+    /// fontconfig-level evidence about exactly that world.
+    pub fonts_config: PathBuf,
 }
 
 struct GuiEditorOutcome {
     behavior: EvalOutcome,
     with_logs: EvalOutcome,
+}
+
+/// The pinned font world both editors of a pair resolve fonts in.
+///
+/// Every GUI parity probe pins only the default face's family; characters the
+/// pinned face does not cover (the ETAF corpus is full of Han text) fall back
+/// through fontconfig to whatever the host installed, so a GNU row recorded on
+/// one host disagrees with live GNU on another (`ebox--row-strut` fires when
+/// the Han fallback is taller than the default face, MOVE-NOTE 6059). One
+/// private `FONTCONFIG_FILE` holding exactly the display-stack pinned set plus
+/// one pinned CJK face makes both engines' resolution host-independent: the
+/// Han fallback is this file's Noto Sans CJK on every machine, or the probe
+/// work has failed, not the host.
+struct PinnedPairFonts {
+    config: PathBuf,
+}
+
+impl PinnedPairFonts {
+    /// Materialize a private fonts directory plus its `fonts.conf` under the
+    /// MELPA cache root, following `font_open_gui_oracle.rs`: only the copied
+    /// `<dir>` and a private `<cachedir>` are configured, so the host's
+    /// system fonts and caches are invisible. Each pair owns its directory,
+    /// so parallel pairs never share a fontconfig cache being written.
+    fn prepare(label: &str) -> Result<Self, String> {
+        let root = neomacs_infra::melpa_cache_root()
+            .join("gui-fontconfig")
+            .join(format!(
+                "{}-{}-{}",
+                sanitize_label(label),
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_err(|error| format!("clock before the epoch: {error}"))?
+                    .as_nanos()
+            ));
+        let fonts = root.join("fonts");
+        fs::create_dir_all(&fonts).map_err(|error| {
+            format!(
+                "failed to create pinned GUI font dir {}: {error}",
+                fonts.display()
+            )
+        })?;
+
+        // The provisioning (not cached-only) accessors: this suite already
+        // installs packages over the network, so a cold runner downloads the
+        // pinned faces once under their lock rather than failing, and a warm
+        // one pays one hash check.
+        let desktop = neomacs_test_fonts::desktop_fonts().directory();
+        let faces = fs::read_dir(desktop).map_err(|error| {
+            format!(
+                "failed to list pinned desktop fonts {}: {error}",
+                desktop.display()
+            )
+        })?;
+        for face in faces {
+            let face = face.map_err(|error| {
+                format!(
+                    "failed to read pinned desktop font entry in {}: {error}",
+                    desktop.display()
+                )
+            })?;
+            if !face
+                .file_type()
+                .map_err(|error| {
+                    format!(
+                        "failed to stat pinned desktop font {}: {error}",
+                        face.path().display()
+                    )
+                })?
+                .is_file()
+            {
+                continue;
+            }
+            let to = fonts.join(face.file_name());
+            fs::copy(face.path(), &to).map_err(|error| {
+                format!(
+                    "failed to copy pinned face {} into {}: {error}",
+                    face.path().display(),
+                    to.display()
+                )
+            })?;
+        }
+        let cjk = neomacs_test_fonts::noto_sans_cjk_variable();
+        let cjk_name = cjk
+            .file_name()
+            .ok_or_else(|| "pinned CJK fixture has no file name".to_string())?;
+        let to = fonts.join(cjk_name);
+        fs::copy(cjk, &to).map_err(|error| {
+            format!(
+                "failed to copy pinned CJK face {} into {}: {error}",
+                cjk.display(),
+                to.display()
+            )
+        })?;
+
+        let cache = root.join("fc-cache");
+        fs::create_dir_all(&cache).map_err(|error| {
+            format!(
+                "failed to create pinned fontconfig cache {}: {error}",
+                cache.display()
+            )
+        })?;
+        let config = root.join("fonts.conf");
+        fs::write(
+            &config,
+            format!(
+                "<fontconfig><dir>{}</dir><cachedir>{}</cachedir></fontconfig>",
+                fonts.display(),
+                cache.display()
+            ),
+        )
+        .map_err(|error| {
+            format!(
+                "failed to write pinned fonts.conf {}: {error}",
+                config.display()
+            )
+        })?;
+        Ok(Self { config })
+    }
 }
 
 /// Own one real display and sequential GNU/Neomacs graphical evaluations.
@@ -77,6 +200,7 @@ impl PackageGuiPair {
             .start_session(neomacs_infra::melpa_cache_root().join("gui-display"))
             .map_err(|error| format!("failed to start owned Xvfb display: {error}"))?;
         let affinity = LinuxCpuAffinity::current_first(4)?;
+        let fonts = PinnedPairFonts::prepare(label)?;
 
         // Sequential use avoids focus, selection, and redisplay contention on
         // the shared real display while still holding one display owner.
@@ -87,6 +211,7 @@ impl PackageGuiPair {
             packages,
             probe_elisp,
             &affinity,
+            &fonts,
         );
         let neomacs = run_editor(
             &display,
@@ -95,6 +220,7 @@ impl PackageGuiPair {
             packages,
             probe_elisp,
             &affinity,
+            &fonts,
         );
         match (gnu_emacs, neomacs) {
             (Ok(gnu_emacs), Ok(neomacs)) => Ok(GuiPairOutcome {
@@ -102,6 +228,7 @@ impl PackageGuiPair {
                 neomacs: neomacs.with_logs,
                 gnu_behavior: gnu_emacs.behavior,
                 neomacs_behavior: neomacs.behavior,
+                fonts_config: fonts.config,
             }),
             (gnu_emacs, neomacs) => Err(paired_gui_failure(label, gnu_emacs, neomacs)),
         }
@@ -134,6 +261,7 @@ fn run_editor(
     packages: &PreparedPackageSet,
     probe_elisp: &str,
     affinity: &LinuxCpuAffinity,
+    fonts: &PinnedPairFonts,
 ) -> Result<GuiEditorOutcome, String> {
     let sandbox = MelpaSandbox::new(&format!("{label}-gui-{}", runtime.name))?;
     let startup_path = packages.write_startup_file(sandbox.root())?;
@@ -172,6 +300,12 @@ fn run_editor(
     command
         .envs(packages.process_environment())
         .env("RUST_LOG", "off")
+        // Both editors resolve fonts through this one private fontconfig,
+        // covering only the pinned faces.  Without it, every probe's Han
+        // fallback follows the host's installed fonts and a GNU row recorded
+        // on one host disagrees with live GNU on another (MOVE-NOTE 6059);
+        // with it, a row moves only when the pinned fixtures move.
+        .env("FONTCONFIG_FILE", &fonts.config)
         // GNU Emacs' GTK build emits a dbind/AT-SPI warning on stderr when
         // the desktop accessibility bus is absent.  The paired outcome
         // compares both editors' captured stderr, so that host property is
