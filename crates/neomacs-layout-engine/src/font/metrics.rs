@@ -837,6 +837,22 @@ fn font_pin_enabled() -> bool {
     *ENABLED.get_or_init(|| std::env::var_os("NEOMACS_DISABLE_FONT_PIN").is_none())
 }
 
+/// Whether a gstring's text runs right-to-left, decided by its first strong
+/// character — the same guess HarfBuzz makes when no direction is supplied.
+/// GNU's `find_automatic_composition` passes Qnil as DIRECTION, so the font
+/// driver's own guessed direction decides the gstring's RTL vs LTR handling.
+fn gstring_text_is_rtl(text: &str) -> bool {
+    use crate::bidi::{BidiClass, bidi_class};
+    for ch in text.chars() {
+        match bidi_class(ch) {
+            BidiClass::L => return false,
+            BidiClass::R | BidiClass::AL => return true,
+            _ => {}
+        }
+    }
+    false
+}
+
 impl Default for FontMetricsService {
     fn default() -> Self {
         Self::new()
@@ -899,12 +915,13 @@ impl FontMetricsService {
         }
 
         // Cluster byte offsets -> inclusive character from/to, following
-        // GNU's `hbfont_shape` (src/hbfont.c): every glyph of one cluster
-        // shares the cluster's FROM/TO, and the character recorded for the
-        // glyph is taken from the cluster's characters in order, clamped to
-        // TO.  (GNU walks a reversed cluster with a -1 step for RTL; the
-        // oracle rows here have one glyph per RTL cluster, so the forward
-        // step records the same character.)
+        // GNU's `hbfont_shape` (src/hbfont.c).  Every glyph of one cluster
+        // shares the cluster's FROM/TO.  For an RTL run GNU's glyph buffer is
+        // in visual order and hbfont distributes the cluster's characters
+        // backwards (`incr = -1`), so a mark glyph precedes its base in the
+        // gstring.  Our shaper returns each cluster's glyphs in logical
+        // order; reverse the cluster's glyphs and walk its characters from TO
+        // down to FROM so the slots match GNU's.
         let char_index_of_byte = |byte: usize| {
             let mut byte = byte.min(text.len());
             while byte > 0 && !text.is_char_boundary(byte) {
@@ -912,44 +929,54 @@ impl FontMetricsService {
             }
             text[..byte].chars().count()
         };
-        let mut cluster_from: Option<usize> = None;
-        let mut cluster_to = 0usize;
-        let mut cluster_offset = 0usize;
-        for (index, glyph) in shaped.iter().enumerate() {
-            let from_char = char_index_of_byte(glyph.cluster_start);
-            if cluster_from != Some(from_char) {
-                cluster_from = Some(from_char);
-                let mut next = index + 1;
-                while next < shaped.len()
-                    && char_index_of_byte(shaped[next].cluster_start) == from_char
-                {
-                    next += 1;
-                }
-                cluster_to = if next == shaped.len() {
-                    chars.len().saturating_sub(1)
-                } else {
-                    char_index_of_byte(shaped[next].cluster_start).saturating_sub(1)
-                };
-                cluster_offset = 0;
+        let rtl = gstring_text_is_rtl(&text);
+        let mut cluster_first_glyph = 0usize;
+        let mut slot_index = 0usize;
+        while cluster_first_glyph < shaped.len() {
+            let from_char = char_index_of_byte(shaped[cluster_first_glyph].cluster_start);
+            let mut cluster_end_glyph = cluster_first_glyph + 1;
+            while cluster_end_glyph < shaped.len()
+                && char_index_of_byte(shaped[cluster_end_glyph].cluster_start) == from_char
+            {
+                cluster_end_glyph += 1;
             }
-            let char_idx = (from_char + cluster_offset).min(cluster_to.max(from_char));
-            cluster_offset += 1;
-            let cluster_char = chars.get(char_idx).copied();
-            let slot_values = vec![
-                neovm_core::Value::fixnum(from_char as i64),
-                neovm_core::Value::fixnum(cluster_to as i64),
-                cluster_char.map_or(neovm_core::Value::NIL, |ch| {
-                    neovm_core::Value::fixnum(ch as i64)
-                }),
-                neovm_core::Value::fixnum(i64::from(glyph.glyph_id)),
-                neovm_core::Value::fixnum(glyph.x_advance.round() as i64),
-                neovm_core::Value::NIL,
-                neovm_core::Value::NIL,
-                neovm_core::Value::NIL,
-                neovm_core::Value::NIL,
-                neovm_core::Value::NIL,
-            ];
-            gstring.set_vector_slot(2 + index, neovm_core::Value::vector(slot_values));
+            let cluster_to = if cluster_end_glyph == shaped.len() {
+                chars.len().saturating_sub(1)
+            } else {
+                char_index_of_byte(shaped[cluster_end_glyph].cluster_start).saturating_sub(1)
+            };
+            let glyph_count = cluster_end_glyph - cluster_first_glyph;
+            for offset in 0..glyph_count {
+                let (glyph, char_idx) = if rtl {
+                    (
+                        &shaped[cluster_end_glyph - 1 - offset],
+                        cluster_to.saturating_sub(offset).max(from_char),
+                    )
+                } else {
+                    (
+                        &shaped[cluster_first_glyph + offset],
+                        (from_char + offset).min(cluster_to.max(from_char)),
+                    )
+                };
+                let cluster_char = chars.get(char_idx).copied();
+                let slot_values = vec![
+                    neovm_core::Value::fixnum(from_char as i64),
+                    neovm_core::Value::fixnum(cluster_to as i64),
+                    cluster_char.map_or(neovm_core::Value::NIL, |ch| {
+                        neovm_core::Value::fixnum(ch as i64)
+                    }),
+                    neovm_core::Value::fixnum(i64::from(glyph.glyph_id)),
+                    neovm_core::Value::fixnum(glyph.x_advance.round() as i64),
+                    neovm_core::Value::NIL,
+                    neovm_core::Value::NIL,
+                    neovm_core::Value::NIL,
+                    neovm_core::Value::NIL,
+                    neovm_core::Value::NIL,
+                ];
+                gstring.set_vector_slot(2 + slot_index, neovm_core::Value::vector(slot_values));
+                slot_index += 1;
+            }
+            cluster_first_glyph = cluster_end_glyph;
         }
         GstringShapeOutcome::Shaped(shaped.len() as i64)
     }
