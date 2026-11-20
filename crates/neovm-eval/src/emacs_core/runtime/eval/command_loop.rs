@@ -1525,6 +1525,10 @@ impl Context {
                         return;
                     }
                 }
+                // #776: the drain above finalized any in-flight automatic
+                // cycle, so apply its retired-process batch before this
+                // explicit collection takes a fresh one.
+                self.finish_automatic_retired_process_cycle(heap_ptr);
                 // Pin frame objects named by bare ids (queued input, the last
                 // event frame, mouse position) before this collection can
                 // reclaim a deleted frame. The pins are ordinary roots.
@@ -1667,6 +1671,10 @@ impl Context {
                         return;
                     }
                     MarkPhase::Idle => {
+                        // #776: this call starts a new automatic cycle (minor,
+                        // concurrent, or synchronous STW below). Arm the
+                        // retired-process records before it seeds any root.
+                        self.begin_automatic_retired_process_cycle(heap_ptr);
                         if self.gc_stress && (*heap_ptr).tagged_heap_generational_enabled() {
                             // A fresh automatic stress cycle is synchronous. Choose its
                             // generation before advancing the next-cycle stride; an
@@ -1702,6 +1710,9 @@ impl Context {
                 );
                             self.seed_registered_mutator_roots_world_stopped(heap_ptr);
                             (*heap_ptr).complete_minor_collection();
+                            // The minor's termination ran the reclaim; this
+                            // branch returns without the completion block.
+                            self.finish_automatic_retired_process_cycle(heap_ptr);
                             return self.bank_gc_cycle_time(start);
                         } else {
                             let concurrent_kind = if (*heap_ptr).should_run_concurrent() {
@@ -1723,6 +1734,8 @@ impl Context {
                             // An exchanged heap cannot use this owner's old
                             // census. Keep the incomplete cycle for explicit
                             // owner recovery rather than tracing foreign roots.
+                            // No cycle started, so restore the batch we took.
+                            self.finish_automatic_retired_process_cycle(heap_ptr);
                             return self.bank_gc_cycle_time(start);
                         }
                         Err(
@@ -1783,6 +1796,12 @@ impl Context {
                 }
             }
         }
+        if cycle_completed {
+            // #776: this call finished the automatic cycle (synchronous STW,
+            // stress cycle, or the last deferred-sweep slice of a concurrent
+            // cycle), so apply the retired-process batch it owned.
+            self.finish_automatic_retired_process_cycle(heap_ptr);
+        }
         if !cycle_completed {
             return self.bank_gc_cycle_time(start);
         }
@@ -1828,6 +1847,56 @@ impl Context {
     /// sum. The call that completes the cycle publishes that sum once.
     fn bank_gc_cycle_time(&mut self, start: std::time::Instant) {
         self.tagged_heap.bank_cycle_elapsed(start.elapsed());
+    }
+
+    /// #776: take the manager's retired-process records and arm them as
+    /// ephemerons for the automatic cycle that is about to seed its roots.
+    ///
+    /// The explicit `garbage-collect` path does the same inside its stack
+    /// guard. An automatic cycle may span several safe-point driver calls
+    /// (concurrent mark, deferred sweep), so the taken batch lives on the
+    /// Context until [`Self::finish_automatic_retired_process_cycle`] applies
+    /// the completed cycle's result. A stale batch from an abandoned cycle is
+    /// restored first, so records are never lost or armed twice.
+    fn begin_automatic_retired_process_cycle(
+        &mut self,
+        heap: *mut neovm_value::tagged::gc::TaggedHeap,
+    ) {
+        self.finish_automatic_retired_process_cycle(heap);
+        let (ephemerons, taken) = self.processes.take_retired_processes_for_gc();
+        if taken.is_empty() {
+            return;
+        }
+        // SAFETY: HEAP is this Context's tagged heap root and the caller holds
+        // the exclusive GC-driver extent; the taken batch keeps every record
+        // alive outside the manager.
+        unsafe { (*heap).arm_retired_process_ephemerons(ephemerons) };
+        self.automatic_retired_processes = Some(taken);
+    }
+
+    /// Apply the completed automatic cycle: reclaimed ids leave the manager,
+    /// every reached record returns, and the armed maps are cleared.
+    ///
+    /// Also called before a new automatic cycle takes a batch, which restores
+    /// an abandoned cycle's records and disarms its maps.
+    fn finish_automatic_retired_process_cycle(
+        &mut self,
+        heap: *mut neovm_value::tagged::gc::TaggedHeap,
+    ) {
+        let Some(taken) = self.automatic_retired_processes.take() else {
+            return;
+        };
+        // SAFETY: same exclusive extent as the begin helper. The collection
+        // borrow has finished in every call site: each runs at a safe-point
+        // boundary, and the explicit driver's force-complete drain has joined
+        // its worker before taking a fresh batch.
+        let reclaimed = unsafe { (*heap).take_reclaimed_process_ids() };
+        self.processes
+            .restore_reached_retired_processes(taken, reclaimed);
+        // An abandoned cycle can leave the armed map behind even though it
+        // reclaimed nothing; clear all three explicit maps (this path arms
+        // only retired processes).
+        unsafe { (*heap).abandon_explicit_ephemerons() };
     }
 
     /// Publish the heap's bank plus this call, then leave the bank at zero.

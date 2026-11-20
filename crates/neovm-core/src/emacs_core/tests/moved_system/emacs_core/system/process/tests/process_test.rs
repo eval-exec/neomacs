@@ -19320,6 +19320,63 @@ fn garbage_collect_reclaims_a_dead_process_nothing_refers_to() {
     assert_eq!(ev.processes().deleted_processes.len(), 0);
 }
 
+/// #776 residual: the automatic safe-point collector, not only the explicit
+/// `(garbage-collect)`, must reclaim a dead process nothing refers to.
+///
+/// A dump-less heap's first automatic cycle is the synchronous STW path once
+/// generational minors are disabled, so one safe-point call runs a full
+/// cycle. The manager must stop tracing the retired record as a root for that
+/// cycle, exactly as the explicit path already does.
+#[test]
+fn an_automatic_collection_reclaims_a_dead_process_nothing_refers_to() {
+    crate::test_utils::init_test_tracing();
+    let true_bin = find_bin("true");
+    let mut ev = crate::test_utils::new_context();
+    let setup = eval_lexical_with_retired_wait(
+        &mut ev,
+        &format!(
+            r#"(setq retired-payloads (make-hash-table :test 'eq :weakness 'key)
+                     retired-done nil)
+               (let* ((payload (make-list 64 'x))
+                      (p (make-process
+                          :name "retired-auto-reclaim"
+                          :buffer nil
+                          :command (list "{true_bin}")
+                          :connection-type 'pipe
+                          :sentinel (lambda (_p _m)
+                                      payload
+                                      (setq retired-done t)))))
+                 (puthash payload t retired-payloads)
+                 (set-process-plist p (list 'payload payload))
+                 (set-process-filter p (lambda (_p _s) payload))
+                 (list (retired-wait 'retired-done)
+                       (process-status p)
+                       (null (get-process "retired-auto-reclaim"))
+                       (hash-table-count retired-payloads)))"#
+        ),
+    );
+    assert_eq!(setup, "OK (t exit t 1)");
+    assert_eq!(ev.processes().deleted_processes.len(), 1);
+
+    // SAFETY: the fixture Context is between evaluations and this test holds
+    // it exclusively; no callback or collector runs across the switch.
+    unsafe {
+        neovm_value::test_support::authority::set_generational_enabled_for_test(
+            ev.tagged_heap_mut(),
+            false,
+        )
+    };
+    ev.gc_collect_from_current_roots();
+
+    let after = ev.eval_str("(hash-table-count retired-payloads)");
+    assert_eq!(format_eval_result(&after), "OK 0");
+    assert_eq!(
+        ev.processes().deleted_processes.len(),
+        0,
+        "the automatic cycle must drop the retired record"
+    );
+}
+
 #[test]
 fn a_dead_process_lisp_still_holds_keeps_every_field_across_garbage_collect() {
     crate::test_utils::init_test_tracing();
@@ -19514,8 +19571,22 @@ fn a_thousand_short_lived_processes_leave_nothing_retired_after_garbage_collect(
                (list retired-finished (hash-table-count retired-payloads))"#
         ),
     );
-    assert_eq!(result, "OK (1000 1000)");
-    assert_eq!(ev.processes().deleted_processes.len(), 1000);
+    // All thousand processes exited. Some payloads may ALREADY be gone before
+    // the explicit collection: an automatic safe-point cycle reclaims retired
+    // processes now (#776), so the pre-GC live count and manager size are
+    // upper-bounded at 1000 rather than pinned there. The explicit collection
+    // below must still leave nothing retired.
+    assert!(
+        result.starts_with("OK (1000 "),
+        "every process must have exited: {result}"
+    );
+    let alive_before: usize = result
+        .trim_start_matches("OK (1000 ")
+        .trim_end_matches(')')
+        .parse()
+        .expect("payload count from the retired-wait result");
+    assert!(alive_before <= 1000, "payloads alive: {alive_before}");
+    assert!(ev.processes().deleted_processes.len() <= 1000);
 
     let after = ev.eval_str("(progn (garbage-collect) (hash-table-count retired-payloads))");
     assert_eq!(format_eval_result(&after), "OK 0");

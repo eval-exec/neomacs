@@ -50,8 +50,6 @@ fn div_v8_gc_rows_report_live_counts_and_free_capacity() {
        (> (nth 3 (assq 'conses gc)) 0)
        (> (nth 3 (assq 'strings gc)) 0)))))
 "##;
-    let expect = expect_test::expect![[
-        r#""OK ((4 4 4 3 3 4 4 4 3) t t t t t t t t t)""#
-    ]];
+    let expect = expect_test::expect![[r#""OK ((4 4 4 3 3 4 4 4 3) t t t t t t t t t)""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }

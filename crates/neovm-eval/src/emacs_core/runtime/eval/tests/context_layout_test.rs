@@ -97,13 +97,13 @@ fn every_context_offset_is_mains() {
     #[cfg(debug_assertions)]
     assert_eq!(
         size_of::<Context>(),
-        44680 + TEST_EXTRA,
+        44704 + TEST_EXTRA,
         "Context size (debug with test instrumentation)"
     );
     #[cfg(not(debug_assertions))]
     assert_eq!(
         size_of::<Context>(),
-        44672 + TEST_EXTRA,
+        44696 + TEST_EXTRA,
         "Context size (release with test instrumentation)"
     );
     let table: &[(usize, usize, &str)] = &[

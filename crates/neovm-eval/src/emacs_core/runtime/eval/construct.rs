@@ -2470,6 +2470,7 @@ impl Context {
             frame_and_buffer_state: None,
             retained_frame_pins: Vec::new(),
             condition_snapshots: super::ConditionSnapshotAdmission::Dormant,
+            automatic_retired_processes: None,
         }
     }
 

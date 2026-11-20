@@ -4049,6 +4049,18 @@ pub struct Context {
     /// Startup does not admit. The hot signal pair and `run_loop` do not
     /// load this field.
     condition_snapshots: ConditionSnapshotAdmission,
+    /// #776: retired-process records taken from the manager for the in-flight
+    /// AUTOMATIC collection. A concurrent cycle spans several safe-point
+    /// driver calls, so the batch must outlive one call; the explicit
+    /// `garbage-collect` path uses its own stack guard instead. `Some` means
+    /// those records are still out of the manager and armed as ephemerons.
+    /// Appended after the pinned layout; only the Context size grows.
+    automatic_retired_processes: Option<
+        Vec<(
+            neovm_value::heap_types::ProcessId,
+            data::process_state::Process,
+        )>,
+    >,
 }
 
 // A mutex does not make the host hooks, Rc leases or TLS views transferable.
@@ -7682,6 +7694,10 @@ mod absent_fontset_generation_tests;
 #[cfg(test)]
 #[path = "tests/derived_counters_test.rs"]
 mod derived_counters_tests;
+
+#[cfg(test)]
+#[path = "tests/gc_rows_test.rs"]
+mod gc_rows_tests;
 
 #[doc(hidden)]
 pub mod redisplay_hooks;
