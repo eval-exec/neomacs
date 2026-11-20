@@ -45,6 +45,11 @@ pub(crate) use heap_transfer_adapter::recover_transferred_source;
 #[cfg(test)]
 #[path = "world/tests/heap_transfer.rs"]
 mod heap_transfer_tests;
+/// #7712 gate surface. cfg(test) only, beside the symbol fixture. Not on the
+/// test-support re-export, so another crate's tests cannot call it.
+#[cfg(test)]
+#[path = "world/tests/serial_gate.rs"]
+pub(crate) mod serial_gate;
 mod slot;
 mod source_entry;
 // Crate-visible so the public test-support re-export in eval/mod.rs can name
