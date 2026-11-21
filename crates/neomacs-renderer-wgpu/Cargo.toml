@@ -59,6 +59,7 @@ objc2-core-text.workspace = true
 [dev-dependencies]
 neomacs-infra.workspace = true
 neomacs-test-fonts.workspace = true
+tempfile.workspace = true
 tracing-test.workspace = true
 jpeg-encoder.workspace = true
 image-extras.workspace = true

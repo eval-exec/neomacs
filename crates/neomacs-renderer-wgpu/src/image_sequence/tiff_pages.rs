@@ -415,27 +415,20 @@ mod tests {
             assert_eq!(error.extent(), ImageNativeExtent::new(3, 2));
 
             // A type known from its bytes must not depend on a filename hint.
-            let unique = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos();
-            let path = std::env::temp_dir().join(format!(
-                "neomacs-bigtiff-admission-{}-{unique}.unknown",
-                std::process::id()
-            ));
-            let mut file = std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&path)
+            let mut file = tempfile::Builder::new()
+                .prefix("neomacs-bigtiff-admission-")
+                .suffix(".unknown")
+                .tempfile()
                 .unwrap();
             file.write_all(&data).unwrap();
-            drop(file);
+            // Close before probing; the path guard also removes the file if
+            // any of the admission assertions unwinds.
+            let path = file.into_temp_path();
             let source = ImageProbeSource::File(path.to_str().unwrap());
             assert!(admit_frame(source, ImageFrameIndex::new(0), limit).is_ok());
             let error = admit_frame(source, ImageFrameIndex::new(1), limit)
                 .expect_err("unknown filename extension must not bypass BigTIFF admission");
             assert_eq!(error.extent(), ImageNativeExtent::new(3, 2));
-            std::fs::remove_file(path).unwrap();
         }
     }
 
