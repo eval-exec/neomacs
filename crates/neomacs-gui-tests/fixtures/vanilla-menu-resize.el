@@ -21,7 +21,8 @@
      (rename-file pending ready t))))
 
 ;; Failure cleanup only; no periodic observer or forced redisplay runs while
-;; the host checks the idle resize. Successful host runs exit through F12.
+;; the host checks the idle resize. Successful host runs exit through the
+;; standard quit chord (C-x C-c); the [f12] binding remains for manual use.
 (run-at-time 45 nil (lambda () (kill-emacs 3)))
 
 ;;; vanilla-menu-resize.el ends here

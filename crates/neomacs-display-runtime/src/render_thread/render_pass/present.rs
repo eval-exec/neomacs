@@ -60,6 +60,19 @@ impl RenderApp {
         let Some(window_state) = self.frame_windows.get_mut(emacs_frame_id) else {
             return SubmissionResult::Timeout;
         };
+        if window_state.render.native_resize_withheld() {
+            // The surface is already at the new size, but the retained scene
+            // was laid out for a different extent. Nothing drawn from it can
+            // be a correct presentation; the evaluator's relaid presentation
+            // is the producer of the next presentable demand, so consume any
+            // competing demand (effects, expose) without presenting.
+            //
+            // GNU queues the native size in the GTK ConfigureNotify handler
+            // (gtkutil.c:1159, delay=true; SET_FRAME_GARBAGED follows) and
+            // applies it at the next redisplay (dispnew.c:6694-6742), so it
+            // never draws the old layout on the resized surface.
+            return SubmissionResult::AwaitingContent;
+        }
         if let Some((width, height)) = window_state.synchronize_window_chrome() {
             let (width, height) = crate::render_thread::state::emacs_pixels_from_window_size(
                 width,

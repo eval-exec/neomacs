@@ -83,12 +83,19 @@ impl RenderApp {
                         neomacs_display_protocol::frame_time::observe_platform_now().into_instant(),
                     );
                 }
-                ws.render.mark_dirty();
             }
             let scale_factor = ws.scale_factor();
             let (content_width, content_height) = ws.content_size();
             let (width, height) =
                 emacs_pixels_from_window_size(content_width, content_height, scale_factor);
+            // The surface already has the new size, but the retained scene
+            // was laid out for the old one. GNU queues the native size in the
+            // resize handler (gtkutil.c:1159, delay=true) and the next
+            // redisplay applies it before drawing (dispnew.c:6694-6742), so
+            // it never draws the pre-resize layout on the resized surface.
+            // The evaluator's relaid presentation arrives asynchronously
+            // here; withhold the superseded extent until it does.
+            ws.render.note_native_resize(width, height);
             self.comms.send_input(InputEvent::WindowResize {
                 width,
                 height,

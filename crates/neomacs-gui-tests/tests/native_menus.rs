@@ -35,14 +35,22 @@ struct Ready {
     char_height: u32,
 }
 
-/// #178 currently does not reproduce. Pin the observed contract with vanilla
-/// menus, rather than replacing them with a synthetic test menu. Each editor
-/// must preserve its own glyph pixels; the GNU GTK and Neomacs menus need not
-/// have identical decorations or rasterization.
+/// #178 residual: every step of a native enlargement must already present
+/// content laid out for the new size. GNU 31.1 gtkutil.c:1144-1166 queues
+/// the native size from the ConfigureNotify handler
+/// (`change_frame_size (..., delay=true)` at gtkutil.c:1159),
+/// `SET_FRAME_GARBAGED` follows, and dispnew.c:6694-6742 applies the queued
+/// pixel size at the next redisplay, so Emacs never draws the pre-resize
+/// layout on the resized surface. xterm.c:21586-21662 is the X11
+/// ConfigureNotify path this contract mirrors. Neomacs applies the surface
+/// size in the render thread but receives the relaid presentation from the
+/// evaluator, so it must withhold the retained pre-resize scene until a
+/// presentation of the requested extent arrives.
 ///
-/// GNU 31.1 gtkutil.c:1144-1166 and xterm.c:21586-21662 invalidate the frame
-/// after native ConfigureNotify; dispnew.c:6694-6742 queues and applies its
-/// new pixel size. No unrelated Lisp polling/redisplay rescues this test.
+/// The same vanilla capture also pins glyph preservation: each editor must
+/// preserve its own glyph pixels, and the GNU GTK and Neomacs menus need not
+/// have identical decorations or rasterization. No unrelated Lisp
+/// polling/redisplay rescues this test; the capture itself injects no input.
 #[test]
 fn vanilla_menu_and_resize_preserve_glyph_pixels_like_gnu() {
     let root = neomacs_infra::workspace_root();
@@ -120,12 +128,17 @@ fn vanilla_menu_and_resize_preserve_glyph_pixels_like_gnu() {
 
 fn exit_vanilla_fixture(env: &[(String, String)]) {
     // The final observation deliberately types a standalone Escape. GNU
-    // leaves its ESC-prefix pending (subr.el:1719-1729), so a bare F12 here
-    // becomes undefined "ESC <f12>" instead of the fixture's exit command.
-    // Clear that prefix only after every pixel assertion has completed.
+    // leaves its ESC-prefix pending (subr.el:1719-1729), so clear it only
+    // after every pixel assertion has completed.
+    //
+    // Exit through the standard quit chord rather than the fixture's [f12]
+    // binding: function keys are not deliverable through every X keymap this
+    // suite runs on (xdotool reports success while the server delivers
+    // nothing), which made the observation hang after all assertions had
+    // passed. The scratch buffer is unmodified, so this needs no prompt.
     input(env, &["key", "--clearmodifiers", "ctrl+g"]);
     thread::sleep(Duration::from_millis(100));
-    input(env, &["key", "--clearmodifiers", "F12"]);
+    input(env, &["key", "--clearmodifiers", "ctrl+x", "ctrl+c"]);
 }
 
 fn observe_vanilla_menu_resize(
@@ -178,8 +191,15 @@ fn observe_vanilla_menu_resize(
         background,
         "the resize witness must start outside the editor; {artifacts:?}"
     );
-    // Only native size notifications occur between the baseline and resized
-    // capture. Keyboard input comes afterwards to test the Escape claim.
+    // Only native size notifications and external pixel captures occur
+    // between the baseline and the final resized capture; neither injects
+    // input into the editor. Keyboard input comes afterwards to test the
+    // Escape claim. The first capture after each windowsize --sync must
+    // already span the new native size: GNU queues the ConfigureNotify size
+    // in the resize handler (gtkutil.c:1159, delay=true) and applies it at
+    // the next redisplay before drawing (dispnew.c:6694-6742), and Neomacs
+    // must withhold the retained pre-resize presentation until a
+    // presentation of the requested extent arrives.
     for (width, height) in [(850, 540), (900, 590), (950, 640), (1000, 690), (1100, 760)] {
         input(
             env,
@@ -190,6 +210,52 @@ fn observe_vanilla_menu_resize(
                 &width.to_string(),
                 &height.to_string(),
             ],
+        );
+        // A compositor repaint can straddle its own X11 output reconfigure:
+        // that transient capture is uniformly the compositor background plus
+        // the pointer, which is not a presentation by the editor. Retry only
+        // those; any capture that carries editor content (including a
+        // pre-resize extent) is decided immediately.
+        let (extent_x, extent_y, extent_width, extent_height) = {
+            let mut attempt = 0;
+            loop {
+                let name = format!("growing-{width}x{height}-{attempt}");
+                let (frame, native) = capture_native_frame(env, window, artifacts, &name);
+                assert_eq!(
+                    native,
+                    (width, height),
+                    "the native window did not reach the requested resize step; {artifacts:?}"
+                );
+                if let Some(extent) = content_extent(&frame)
+                    && (extent.2 >= width / 2 || extent.3 >= height / 2)
+                {
+                    break extent;
+                }
+                attempt += 1;
+                assert!(
+                    attempt < 4,
+                    "the {width}x{height} native window showed no composited editor content in \
+                     four captures; {artifacts:?}"
+                );
+                thread::sleep(Duration::from_millis(20));
+            }
+        };
+        assert_eq!(
+            extent_x, 0,
+            "the first capture with editor content at the {width}x{height} native size does not reach \
+             the left edge; extent=({extent_x},{extent_y},{extent_width},{extent_height}) {artifacts:?}"
+        );
+        assert_eq!(
+            extent_width, width,
+            "the first capture with editor content at the {width}x{height} native size still has \
+             the pre-resize content width; extent=({extent_x},{extent_y},{extent_width},\
+             {extent_height}) {artifacts:?}"
+        );
+        assert!(
+            extent_y + extent_height + 1 >= height,
+            "the first capture with editor content at the {width}x{height} native size does not reach \
+             the bottom edge; extent=({extent_x},{extent_y},{extent_width},{extent_height}) \
+             {artifacts:?}"
         );
     }
     wait_for("resized background presentation", artifacts, || {
@@ -254,6 +320,71 @@ fn capture_vanilla_pixels(
         String::from_utf8_lossy(&output.stderr)
     );
     image::open(path).unwrap().to_rgb8()
+}
+
+/// Capture the native frame window itself, cropped out of the root capture
+/// using the server's own geometry. The crop is the exact area the compositor
+/// or X server displayed for the resized window.
+fn capture_native_frame(
+    env: &[(String, String)],
+    window: &str,
+    artifacts: &Path,
+    name: &str,
+) -> (image::RgbImage, (u32, u32)) {
+    let root = capture_vanilla_pixels(env, artifacts, name);
+    let output = Command::new("xdotool")
+        .args(["getwindowgeometry", "--shell", window])
+        .envs(env.iter().map(|(key, value)| (key, value)))
+        .output()
+        .expect("xdotool getwindowgeometry for the resized native frame");
+    assert!(
+        output.status.success(),
+        "xdotool getwindowgeometry failed: {}; {artifacts:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let geometry = String::from_utf8_lossy(&output.stdout);
+    let field = |key: &str| -> u32 {
+        geometry
+            .lines()
+            .find_map(|line| line.strip_prefix(key))
+            .and_then(|value| value.parse().ok())
+            .unwrap_or_else(|| panic!("missing {key} in window geometry {geometry:?}"))
+    };
+    let (x, y, width, height) = (field("X="), field("Y="), field("WIDTH="), field("HEIGHT="));
+    assert!(
+        width > 0 && height > 0,
+        "degenerate native geometry {geometry:?}"
+    );
+    let frame = image::imageops::crop_imm(&root, x, y, width, height).to_image();
+    (frame, (width, height))
+}
+
+/// Pixel extent `(x, y, width, height)` of everything that differs from the
+/// window's top-left color, the same observation ImageMagick `-trim` makes.
+/// One RGB8 level is tolerated: root capture quantizes unchanged pixels by
+/// that much during a resize.
+fn content_extent(frame: &image::RgbImage) -> Option<(u32, u32, u32, u32)> {
+    let corner = *frame.get_pixel(0, 0);
+    let (width, height) = frame.dimensions();
+    let (mut min_x, mut min_y, mut max_x, mut max_y) = (width, height, 0, 0);
+    let mut found = false;
+    for y in 0..height {
+        for x in 0..width {
+            let pixel = frame.get_pixel(x, y).0;
+            if pixel
+                .iter()
+                .zip(corner.0.iter())
+                .any(|(a, b)| a.abs_diff(*b) > 1)
+            {
+                found = true;
+                min_x = min_x.min(x);
+                min_y = min_y.min(y);
+                max_x = max_x.max(x);
+                max_y = max_y.max(y);
+            }
+        }
+    }
+    found.then(|| (min_x, min_y, max_x - min_x + 1, max_y - min_y + 1))
 }
 
 fn vanilla_text_strip(pixels: &image::RgbImage, ready: &Ready) -> image::RgbImage {

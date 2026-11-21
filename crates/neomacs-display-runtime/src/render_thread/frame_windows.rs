@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use winit::dpi::{PhysicalPosition, PhysicalSize, Position, Size};
 use winit::event_loop::ActiveEventLoop;
@@ -31,7 +32,7 @@ use super::terminal_expansion::TerminalExpansion;
 use super::transitions::clear_frame_transition_textures;
 use crate::core::frame_glyphs::{FrameGlyph, FrameGlyphBuffer};
 use neomacs_display_protocol::effect_config::IdleDimConfig;
-use neomacs_display_protocol::frame_time::EventTime;
+use neomacs_display_protocol::frame_time::{EventTime, observe_platform_now};
 use neomacs_display_protocol::{
     DeviceScale, FrameRect, GeometrySize, LogicalPixels, PresentMapping, PresentationExtent,
     PresentationFramePoint, PresentationId, PresentedHit, PresentedHitError, PresentedHitQuery,
@@ -339,6 +340,42 @@ pub(crate) struct GuiFrameRenderState {
     /// remains useful for input coordinates after leave, but must not reactivate
     /// a visual range on a captured release.
     pub(super) pointer_inside: bool,
+    /// The extent a native size report asked the evaluator for, while the
+    /// retained presentation still describes a different one.
+    ///
+    /// GNU queues the native size in the GTK resize handler
+    /// (gtkutil.c:1159, `change_frame_size (..., delay=true)`), and
+    /// `change_frame_size_1` records it for the next redisplay to apply
+    /// before drawing (dispnew.c:6694-6742); Emacs therefore never draws the
+    /// pre-resize layout into the resized surface. Neomacs applies the
+    /// surface size here, but the relaid presentation comes back
+    /// asynchronously from the evaluator. Until a presentation of the
+    /// requested extent is installed, drawing the retained scene would put
+    /// the old layout on the resized surface.
+    ///
+    /// Keyed by extent, not by "any presentation arrived": a no-op native
+    /// size report must not withhold, and a presentation already in flight
+    /// when the resize was sent still carries the old extent. The deadline
+    /// bounds the wait so a size the evaluator clamps (min-size policy,
+    /// rounding) cannot freeze the window forever.
+    native_resize_awaiting: Option<NativeResizeAwaiting>,
+}
+
+/// How long a requested native extent may be withheld before the retained
+/// presentation is drawn anyway. GNU does not face this because its redisplay
+/// applies the queued size itself; Neomacs' relayout crosses to the evaluator,
+/// so a size it cannot reproduce (for example a window clamped to a minimum
+/// width) must not leave the window blank.
+const NATIVE_RESIZE_WITHHOLD_LIMIT: Duration = Duration::from_secs(1);
+
+/// One outstanding native size report.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct NativeResizeAwaiting {
+    /// Requested frame extent in Emacs pixels, the same units the evaluator
+    /// receives in [`crate::thread_comm::InputEvent::WindowResize`].
+    width: u32,
+    height: u32,
+    deadline: EventTime,
 }
 
 /// Compile-time separation of a suspended surface from drawable geometry.
@@ -545,6 +582,7 @@ impl GuiFrameRenderState {
             mouse_pos: (0.0, 0.0),
             scroll_input: super::scroll_input::ScrollInput::default(),
             pointer_inside: false,
+            native_resize_awaiting: None,
         }
     }
 
@@ -1156,15 +1194,115 @@ impl GuiFrameRenderState {
         self.compositor.dirty = true;
     }
 
+    /// Record a native size report for this window.
+    ///
+    /// A report whose extent the retained presentation already has is not a
+    /// change: GNU skips an unchanged native size (gtkutil.c:1146-1150) and
+    /// the evaluator publishes a frame only when the root window's bounds
+    /// move, so latching on it would leave nothing able to clear the latch.
+    pub(super) fn note_native_resize(&mut self, width: u32, height: u32) {
+        self.note_native_resize_at(width, height, observe_platform_now());
+    }
+
+    /// [`Self::note_native_resize`] observed at the pass instant.
+    ///
+    /// A repeated report of a changed extent updates the requested target but
+    /// keeps the first report's deadline: a continuous drag, or a stream of
+    /// state-only reports while the evaluator lags, must not push the bounded
+    /// wait forward one second at a time. Only a presentation matching the
+    /// target, or a report the retained presentation already matches, ends
+    /// the wait.
+    ///
+    /// An *expired* wait is not a wait. It is what remains when the evaluator
+    /// never reproduces the requested extent (the minimum-size clamp the
+    /// failsafe exists for), and reusing it would keep its past deadline and
+    /// leave every later resize unwithheld, reinstating the #178 staleness.
+    fn note_native_resize_at(&mut self, width: u32, height: u32, now: EventTime) {
+        if self.retained_extent_matches(width, height) {
+            self.native_resize_awaiting = None;
+            return;
+        }
+        match self.native_resize_awaiting {
+            Some(ref mut awaiting) if now < awaiting.deadline => {
+                awaiting.width = width;
+                awaiting.height = height;
+            }
+            _ => {
+                self.native_resize_awaiting = Some(NativeResizeAwaiting {
+                    width,
+                    height,
+                    deadline: now.plus(NATIVE_RESIZE_WITHHOLD_LIMIT),
+                });
+            }
+        }
+    }
+
+    /// Whether drawing the retained presentation would put a layout for a
+    /// different extent on the current surface.
+    pub(super) fn native_resize_withheld(&self) -> bool {
+        self.native_resize_withheld_at(observe_platform_now())
+    }
+
+    fn native_resize_withheld_at(&self, now: EventTime) -> bool {
+        let Some(awaiting) = self.native_resize_awaiting else {
+            return false;
+        };
+        now < awaiting.deadline && !self.retained_extent_matches(awaiting.width, awaiting.height)
+    }
+
+    /// When the bounded wait expires, observed at the pass instant, so the
+    /// frame coordinator can schedule the failsafe presentation instead of
+    /// relying on an unrelated event to wake the loop. `None` once the wait
+    /// has expired or been answered. This must agree with
+    /// [`Self::has_presentable_dirty_content_at`] for the same `now`: the
+    /// demand declaration retracts the previous schedule and this call
+    /// re-arms it, so two clock reads straddling the deadline would drop the
+    /// wake entirely.
+    pub(super) fn native_resize_withhold_deadline_at(&self, now: EventTime) -> Option<EventTime> {
+        let awaiting = self.native_resize_awaiting?;
+        (now < awaiting.deadline && !self.retained_extent_matches(awaiting.width, awaiting.height))
+            .then_some(awaiting.deadline)
+    }
+
+    fn retained_extent_matches(&self, width: u32, height: u32) -> bool {
+        self.compositor.current_frame.as_ref().is_some_and(|frame| {
+            frame.width.round() as i64 == i64::from(width)
+                && frame.height.round() as i64 == i64::from(height)
+        })
+    }
+
+    /// Test convenience: sample the platform clock. Production demand
+    /// decisions go through [`Self::has_presentable_dirty_content_at`] so one
+    /// pass observes one instant.
+    #[cfg(test)]
     pub(super) fn has_presentable_dirty_content(&self) -> bool {
-        self.compositor.dirty && self.compositor.current_frame.is_some()
+        self.has_presentable_dirty_content_at(observe_platform_now())
+    }
+
+    /// [`Self::has_presentable_dirty_content`] observed at the pass instant.
+    /// The frame coordinator must use this form: its retract of the Redisplay
+    /// reason and [`Self::native_resize_withhold_deadline_at`] must be decided
+    /// from the same `now`.
+    pub(super) fn has_presentable_dirty_content_at(&self, now: EventTime) -> bool {
+        self.compositor.dirty
+            && self.compositor.current_frame.is_some()
+            && !self.native_resize_withheld_at(now)
     }
 
     /// Whether only the cursor layer needs to reach the screen. Never true at
     /// the same time as a content repaint is owed: the caller checks
-    /// [`Self::has_presentable_dirty_content`] first and that wins.
+    /// [`Self::has_presentable_dirty_content_at`] first and that wins.
+    /// Test convenience: sample the platform clock.
+    #[cfg(test)]
     pub(super) fn has_presentable_cursor_change(&self) -> bool {
-        self.compositor.cursor_dirty && self.compositor.current_frame.is_some()
+        self.has_presentable_cursor_change_at(observe_platform_now())
+    }
+
+    /// [`Self::has_presentable_cursor_change`] observed at the pass instant.
+    pub(super) fn has_presentable_cursor_change_at(&self, now: EventTime) -> bool {
+        self.compositor.cursor_dirty
+            && self.compositor.current_frame.is_some()
+            && !self.native_resize_withheld_at(now)
     }
 
     /// Consume only the damage the selected rendering strategy will paint.
@@ -1348,6 +1486,18 @@ impl GuiFrameRenderState {
             ActivePresentationTransition::between(previous_presentation, current)
         });
         self.compositor.child_frames.set_root_frame(frame.as_ref());
+        if let Some(frame) = frame.as_ref() {
+            // Only a presentation of the requested extent answers the native
+            // size report. A frame already in flight when the resize was sent
+            // still describes the old geometry, however recently it arrived.
+            let (width, height) = (frame.width.round() as u32, frame.height.round() as u32);
+            if self
+                .native_resize_awaiting
+                .is_some_and(|awaiting| awaiting.width == width && awaiting.height == height)
+            {
+                self.native_resize_awaiting = None;
+            }
+        }
         self.compositor.current_frame = frame;
         #[cfg(feature = "neo-term")]
         {
@@ -1944,12 +2094,30 @@ impl GuiFrameWindowState {
         self.lifecycle.request_redraw();
     }
 
+    #[cfg(test)]
     pub(super) fn has_presentable_dirty_content(&self) -> bool {
         self.lifecycle.is_active() && self.render.has_presentable_dirty_content()
     }
 
+    /// [`Self::has_presentable_dirty_content`] observed at the pass instant.
+    pub(super) fn has_presentable_dirty_content_at(
+        &self,
+        now: neomacs_display_protocol::frame_time::EventTime,
+    ) -> bool {
+        self.lifecycle.is_active() && self.render.has_presentable_dirty_content_at(now)
+    }
+
+    #[cfg(test)]
     pub(super) fn has_presentable_cursor_change(&self) -> bool {
         self.lifecycle.is_active() && self.render.has_presentable_cursor_change()
+    }
+
+    /// [`Self::has_presentable_cursor_change`] observed at the pass instant.
+    pub(super) fn has_presentable_cursor_change_at(
+        &self,
+        now: neomacs_display_protocol::frame_time::EventTime,
+    ) -> bool {
+        self.lifecycle.is_active() && self.render.has_presentable_cursor_change_at(now)
     }
 
     pub fn window(&self) -> Option<&Arc<dyn Window>> {

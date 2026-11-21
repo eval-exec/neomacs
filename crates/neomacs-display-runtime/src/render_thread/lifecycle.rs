@@ -662,7 +662,7 @@ impl RenderApp {
             let fx = &window_state.render.compositor.renderer_effects;
             let effect_demands = [
                 (
-                    window_state.has_presentable_dirty_content(),
+                    window_state.has_presentable_dirty_content_at(now),
                     DemandReason::Redisplay,
                     max_rate,
                 ),
@@ -759,6 +759,24 @@ impl RenderApp {
                 } else {
                     self.frame_coordinator.retract(id, reason);
                 }
+            }
+
+            // A withheld native resize is normally answered by the relaid
+            // presentation, whose ingestion submits a Redisplay demand. If
+            // the evaluator cannot reproduce the requested extent (a
+            // minimum-size clamp, for example), the bounded wait is the only
+            // thing that can release the retained scene; schedule that wake
+            // so the loop cannot sleep past it.
+            if let Some(deadline) = window_state.render.native_resize_withhold_deadline_at(now) {
+                let _ = self.frame_coordinator.submit_demand(
+                    id,
+                    FrameDemand {
+                        invalidation: legacy_repaint,
+                        cadence: Cadence::At(deadline),
+                        reason: DemandReason::Redisplay,
+                    },
+                    now,
+                );
             }
 
             // Cursor geometry is compositor state, not editor content. Keep
@@ -873,7 +891,7 @@ impl RenderApp {
             // retained scene; a content repaint owed on the same pass has
             // already submitted the stronger Redisplay demand above and wins
             // the strongest-invalidation merge.
-            if window_state.has_presentable_cursor_change() {
+            if window_state.has_presentable_cursor_change_at(now) {
                 let cursor_action = self.frame_coordinator.submit_demand(
                     id,
                     FrameDemand {
