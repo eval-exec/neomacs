@@ -1,6 +1,6 @@
 //! Explicit-GC contracts and old-object weak/finalizer lifecycles.
 //!
-//! ONE nextest test runs eleven independent oracle cases sequentially. This
+//! ONE nextest test runs thirteen independent oracle cases sequentially. This
 //! keeps expect-test's RT/Patchwork in one process when refreshing this file.
 //! Generate every expectation from the attested GNU 31.1 binary:
 //! NEOVM_FORCE_ORACLE_PATH=/path/to/attested/emacs
@@ -295,5 +295,50 @@ fn gc_generational_contract_and_old_lifecycle_match_gnu() {
           (buffer-string))))
 "#,
         expect_test::expect![[r#""OK (((ran t)) \"finalizer failed: (error \\\"boom\\\")\\n\")""#]],
+    );
+
+    // Case 12: GNU's `run_finalizer_function` protects the call with
+    // `internal_condition_case_1`, which catches SIGNALS only (src/alloc.c:
+    // 3921-3932). A `throw` to a live catch therefore unwinds through it,
+    // through `unbind_to`, and out of `garbage_collect` to that catch.
+    check_case(
+        "finalizer_throw_reaches_a_live_catch",
+        r#"
+;;; -*- lexical-binding: t -*-
+(defun u34b-fin12-make (tag)
+  (make-finalizer (lambda () (throw tag 'thrown)))
+  nil)
+(catch 'done
+  (u34b-fin12-make 'done)
+  (garbage-collect)
+  'not-thrown)
+"#,
+        expect_test::expect![[r#""OK thrown""#]],
+    );
+
+    // Case 13: GNU `run_finalizers` (src/alloc.c:3934-3951) unchains ONE
+    // finalizer at a time. The first doomed finalizer throws to a live catch;
+    // the second is still on `doomed_finalizers`, so it runs only after the
+    // next collection and is not observable in the log before it.
+    check_case(
+        "finalizer_throw_leaves_the_rest_of_the_batch_queued",
+        r#"
+;;; -*- lexical-binding: t -*-
+(defvar u34b-fin13-log nil)
+(defun u34b-fin13-make (tag)
+  (make-finalizer (lambda () (push 'first u34b-fin13-log) (throw tag 'thrown)))
+  (make-finalizer (lambda () (push 'second u34b-fin13-log)))
+  nil)
+(setq u34b-fin13-log nil)
+(let ((escaped (catch 'done
+                 (u34b-fin13-make 'done)
+                 (garbage-collect)
+                 'not-thrown))
+      after-first)
+  (setq after-first u34b-fin13-log)
+  (garbage-collect)
+  (list escaped after-first u34b-fin13-log))
+"#,
+        expect_test::expect![[r#""OK (thrown (first) (second first))""#]],
     );
 }
