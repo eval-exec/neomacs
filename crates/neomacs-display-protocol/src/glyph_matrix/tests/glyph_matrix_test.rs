@@ -2940,6 +2940,7 @@ fn resolved_fonts_survive_materialize_and_round_trip() {
             descent_px: 3.0,
             space_advance_px: 8.0,
             glyph_advance: Default::default(),
+            spacing: None,
         },
     );
 

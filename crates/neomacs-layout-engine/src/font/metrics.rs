@@ -2347,6 +2347,11 @@ impl FontMetricsService {
         italic: bool,
         font_size: f32,
     ) -> Option<LayoutFontHandle> {
+        // GNU/Fontconfig's raw spacing code, carried into the opened font
+        // object; captured before the match below consumes `platform`.
+        let entity_spacing = platform
+            .as_ref()
+            .and_then(|matched| matched.metadata.spacing);
         let spacing = platform
             .as_ref()
             .map(|matched| matched.metadata.fixed_spacing_policy())
@@ -2495,6 +2500,7 @@ impl FontMetricsService {
                     .map(|metrics| metrics.space_width.max(0) as f32)
                     .unwrap_or(0.0),
                 glyph_advance,
+                spacing: entity_spacing,
             }
         });
         Some(LayoutFontHandle {
@@ -2561,6 +2567,7 @@ impl FontMetricsService {
                     descent_px: observed.descent_px,
                     space_advance_px: observed.space_advance_px,
                     glyph_advance,
+                    spacing: matched.metadata.spacing,
                 }
             });
         Some(LayoutFontHandle {
@@ -2841,6 +2848,10 @@ impl FontMetricsService {
                         .map(|metrics| metrics.space_width.max(0) as f32)
                         .unwrap_or(0.0),
                     glyph_advance,
+                    spacing: resolved
+                        .platform
+                        .as_ref()
+                        .and_then(|matched| matched.metadata.spacing),
                 }
             });
         Some(LayoutFontHandle {
@@ -3138,6 +3149,9 @@ impl FontMetricsService {
                     .map(|metrics| metrics.space_width.max(0) as f32)
                     .unwrap_or(0.0),
                 glyph_advance,
+                spacing: platform
+                    .as_ref()
+                    .and_then(|matched| matched.metadata.spacing),
             }
         }))
     }

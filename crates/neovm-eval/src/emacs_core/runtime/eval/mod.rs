@@ -2817,6 +2817,7 @@ pub(crate) fn test_resolved_opened_font(
             descent_px: metrics.descent as f32,
             space_advance_px: metrics.space_width as f32,
             glyph_advance: Default::default(),
+            spacing: None,
         },
         foundry: foundry.map(neovm_value::heap_types::LispString::from_utf8),
         slant,

@@ -497,6 +497,14 @@ pub struct ResolvedFont {
     /// The per-glyph, bitmap cell, or multi-cell outline advance contract.
     #[serde(default)]
     pub glyph_advance: ResolvedFontAdvance,
+    /// GNU/Fontconfig spacing code of the matched entity: proportional=0
+    /// (fontconfig normally omits the property), dual=90, mono=100,
+    /// charcell=110.  `font-get :spacing` and `font-xlfd-name` expose it:
+    /// GNU's opened DejaVu Sans Mono object carries 100 and its XLFD says
+    /// `m`, while a proportional face such as Noto Sans CJK carries nil and
+    /// the XLFD keeps `*` (oracle, pinned fonts).
+    #[serde(default)]
+    pub spacing: Option<i32>,
 }
 
 /// Resolved font table carried by frame state, keyed by [`ResolvedFontId`].

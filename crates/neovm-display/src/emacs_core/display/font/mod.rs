@@ -435,8 +435,16 @@ fn build_frame_font_object_from_resolution(
     selected.width = Some(opened.width());
     selected.height = Some(FaceHeight::Absolute(resolved.height_tenths));
 
+    // GNU's opened font object inherits the matched entity's spacing code
+    // (FONT_SPACING_INDEX) and exposes it through `font-get`/`font-xlfd-name`.
+    let mut fields =
+        font_object_property_fields(&selected, Some(i64::from(opened.metrics.pixel_size)));
+    if let Some(spacing) = opened.resolved.spacing {
+        fields.push(Value::keyword("spacing"));
+        fields.push(Value::fixnum(i64::from(spacing)));
+    }
     finish_opened_font(
-        font_object_property_fields(&selected, Some(i64::from(opened.metrics.pixel_size))),
+        fields,
         canonical
             .identity
             .file_path
@@ -3553,7 +3561,11 @@ pub fn opened_font_from_resolved_match(
     face: &RuntimeFace,
     matched: &neovm_eval::emacs_core::eval::ResolvedFontMatch,
 ) -> Value {
-    opened_font_from_resolved_match_with_size(face, matched, None, None)
+    // GNU copies the entity's FONT_SPACING_INDEX into the opened font object
+    // (`font_make_object`, src/font.c:226); `font-get :spacing` and
+    // `font-xlfd-name` read it from there.  Fontconfig omits FC_SPACING for
+    // proportional faces, so nil and "*" stay the common case.
+    opened_font_from_resolved_match_with_size(face, matched, None, matched.font.resolved.spacing)
 }
 
 /// As [`opened_font_from_resolved_match`], but lets `open-font` keep GNU's

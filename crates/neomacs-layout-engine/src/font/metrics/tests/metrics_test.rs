@@ -1522,6 +1522,7 @@ fn scalable_color_bitmap_keeps_exact_platform_identity_at_requested_size() {
 
 fn fixture_properties(pixel_size: f32, family: &str) -> FontInstanceProperties {
     FontInstanceProperties {
+        spacing: None,
         family: family.to_owned(),
         full_name: None,
         postscript_name: None,

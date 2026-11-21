@@ -1978,6 +1978,7 @@ fn opened_font_retains_exact_backend_identity_and_variations() {
                 descent_px: 6.0,
                 space_advance_px: 9.0,
                 glyph_advance: Default::default(),
+                spacing: None,
             },
             foundry: Some(LispString::from_utf8("TEST")),
             slant: FontSlant::Normal,
