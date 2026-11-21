@@ -664,6 +664,7 @@ impl PerfHarness {
             | ScenarioId::MagitStatus
             | ScenarioId::MagitStatusCompiled
             | ScenarioId::MagitStatusHeavy
+            | ScenarioId::MagitLogDoubling
             | ScenarioId::FileOpen
             | ScenarioId::ProcessOutput
             | ScenarioId::LargeFileEditing
@@ -1860,6 +1861,7 @@ fn parse_scenario_result(
         | ScenarioId::MagitStatus
         | ScenarioId::MagitStatusCompiled
         | ScenarioId::MagitStatusHeavy
+        | ScenarioId::MagitLogDoubling
         | ScenarioId::FileOpen
         | ScenarioId::ProcessOutput
         | ScenarioId::LargeFileEditing

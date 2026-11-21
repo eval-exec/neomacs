@@ -133,6 +133,7 @@ fn catalog_commits_the_editor_workflow_scenario_family() {
         ("regex-search", ScenarioId::RegexSearch),
         ("magit-status-compiled", ScenarioId::MagitStatusCompiled),
         ("magit-status-heavy", ScenarioId::MagitStatusHeavy),
+        ("magit-log-doubling", ScenarioId::MagitLogDoubling),
         ("file-open", ScenarioId::FileOpen),
         ("process-output", ScenarioId::ProcessOutput),
         (
@@ -160,6 +161,37 @@ fn catalog_commits_the_editor_workflow_scenario_family() {
     assert_eq!(
         scenario(ScenarioId::Startup).primary_metric,
         MetricName::ProcessWallTime
+    );
+}
+
+#[test]
+fn catalog_exposes_the_magit_log_doubling_workload() {
+    let log = scenario(ScenarioId::MagitLogDoubling);
+    assert_eq!(log.id.to_string(), "magit-log-doubling");
+    assert_eq!(
+        ScenarioId::from_str("magit-log-doubling"),
+        Ok(ScenarioId::MagitLogDoubling)
+    );
+    assert_eq!(
+        log.default_frontend,
+        Frontend::Gui {
+            width: 1200,
+            height: 800,
+        }
+    );
+    assert_eq!(
+        log.default_iterations,
+        NonZeroU32::new(1).expect("non-zero default")
+    );
+    assert_eq!(log.primary_metric, MetricName::PerOperationWallTime);
+    assert!(log.description.contains("-n1024"));
+    assert!(log.description.contains("-n32768"));
+    assert!(
+        !crate::suite::SuiteId::Standard
+            .scenarios()
+            .iter()
+            .any(|row| row.scenario == ScenarioId::MagitLogDoubling),
+        "the heavy log row is opt-in and must stay out of the standard suite"
     );
 }
 
