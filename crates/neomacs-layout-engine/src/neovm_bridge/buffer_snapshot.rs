@@ -33,6 +33,8 @@ pub(crate) struct LayoutBufferSnapshot {
     accessible_end_emacs_byte: EmacsBytePos,
     accessible_end_char: CharPos0,
     source_context_end: CharPos0,
+    /// GNU `long_line_optimizations_p` at capture (`src/xdisp.c:20646`).
+    long_line_optimizations: bool,
     overlays: OverlaySnapshot,
     /// Character span of the window-range overlay view. `None` is a
     /// whole-buffer view. A walk that consumes at or past the end must be
@@ -115,6 +117,7 @@ impl LayoutBufferSnapshot {
             accessible_end_emacs_byte: buffer.point_max_emacs_byte_pos(),
             accessible_end_char: buffer.point_max_char_pos(),
             source_context_end: buffer.point_max_char_pos(),
+            long_line_optimizations: buffer.long_line_optimizations_p(),
             vars: resolve_layout_vars(buffer, variables),
             overlays,
             overlay_view_span,
@@ -677,6 +680,10 @@ impl LayoutBufferView for LayoutBufferSnapshot {
 
     fn layout_point_max_char_pos(&self) -> CharPos0 {
         self.accessible_end_char
+    }
+
+    fn layout_long_line_optimizations_p(&self) -> bool {
+        self.long_line_optimizations
     }
 
     fn layout_measurement_context_end(&self) -> Option<CharPos0> {

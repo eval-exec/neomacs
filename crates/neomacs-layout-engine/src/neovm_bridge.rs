@@ -183,6 +183,13 @@ pub(crate) trait LayoutBufferView {
     fn layout_point_min_emacs_byte_pos(&self) -> EmacsBytePos;
     fn layout_point_max_emacs_byte_pos(&self) -> EmacsBytePos;
     fn layout_point_max_char_pos(&self) -> CharPos0;
+    /// GNU `long_line_optimizations_p` for the displayed buffer
+    /// (`src/xdisp.c:20646`): redisplay found a line above
+    /// `long-line-threshold`, enabling its long-line shortcuts. A view that
+    /// cannot prove the flag keeps the exact (unoptimized) walk.
+    fn layout_long_line_optimizations_p(&self) -> bool {
+        false
+    }
     /// Readable context for complete display elements. A measurement stop can
     /// fall inside a composition; actual buffer narrowing still bounds it.
     fn layout_measurement_context_end(&self) -> Option<CharPos0> {
@@ -433,6 +440,7 @@ fn layout_var_info(var: LayoutVar) -> &'static LayoutVarInfo {
                             | LayoutVar::DisplayLineNumbersWidth
                             | LayoutVar::FaceRemappingAlist
                             | LayoutVar::GlyphlessCharDisplay
+                            | LayoutVar::LargeHscrollThreshold
                             | LayoutVar::LinePrefix
                             | LayoutVar::NeomacsCursorEffect
                             | LayoutVar::NeomacsVisualCursors
@@ -467,6 +475,10 @@ impl LayoutBufferView for Buffer {
 
     fn layout_point_max_char_pos(&self) -> CharPos0 {
         self.point_max_char_pos()
+    }
+
+    fn layout_long_line_optimizations_p(&self) -> bool {
+        Buffer::long_line_optimizations_p(self)
     }
 
     fn layout_total_emacs_byte_len(&self) -> EmacsByteLen {

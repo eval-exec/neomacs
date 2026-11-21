@@ -926,6 +926,27 @@ impl HorizontalScrollSkipState {
         }
     }
 
+    /// GNU's long-line hscroll jump (`fast_move_it_horizontally`,
+    /// src/xdisp.c:25896-25920) stopped exactly at the first visible
+    /// boundary: the next source item is the glyph the left-truncation
+    /// marker replaces, or, with line numbers, the marker is complete.
+    pub(crate) fn complete_at_visible_boundary(&mut self) {
+        self.phase = match self.truncation_target {
+            HorizontalScrollTruncationTarget::FirstVisibleSourceGlyph => {
+                HorizontalScrollSkipPhase::ReplaceNextGlyph
+            }
+            HorizontalScrollTruncationTarget::LineNumberPrefix => {
+                HorizontalScrollSkipPhase::Complete
+            }
+        };
+    }
+
+    /// The line ended before the hscroll boundary, so the jump clamped at the
+    /// newline and no source cell remains to consume on this row.
+    pub(crate) fn complete_hidden_line(&mut self) {
+        self.phase = HorizontalScrollSkipPhase::Complete;
+    }
+
     pub(crate) fn consume_display_item(
         &mut self,
         item: HorizontalScrollDisplayItem,

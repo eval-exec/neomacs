@@ -962,6 +962,7 @@ pub enum WindowLayoutVariable {
     ImageScalingFactor,
     IndicateEmptyLines,
     IndicateBufferBoundaries,
+    LargeHscrollThreshold,
     LeftFringeWidth,
     LeftMargin,
     LeftMarginWidth,
