@@ -202,20 +202,26 @@ fn div_cx389_serial_process_availability() {
 fn div_cx389_process_query_before_after_exit() {
     return_if_neovm_enable_oracle_proptest_not_set!();
     let expect = expect_test::expect![[
-        r#""OK ((run open listen connect stop) \"neo-cx389-q\" (\"sh\" \"-c\" \"echo start; exit 5\") t t nil exit 5)""#
+        r#""OK ((run open listen connect stop) \"neo-cx389-q\" (\"sh\" \"-c\" \"echo start; cat >/dev/null; exit 5\") t nil exit 5)""#
     ]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((p (make-process :name "neo-cx389-q"
-                        :command '("sh" "-c" "echo start; exit 5"))))
-  (list (process-live-p p)
-        (process-name p)
-        (process-command p)
-        (accept-process-output p 2)
-        (sit-for 0.05)
-        (process-live-p p)
-        (process-status p)
-        (process-exit-status p)))
+		       :command '("sh" "-c" "echo start; cat >/dev/null; exit 5"))))
+  ;; The child blocks on stdin, so "before exit" is harness-controlled:
+  ;; the immediate live query cannot race SIGCHLD. process-send-eof then
+  ;; releases it, and the drain loop reaches the real exit status.
+  (let ((before (process-live-p p))
+	(eof (progn (process-send-eof p) t)))
+    (while (process-live-p p)
+      (accept-process-output p 0.1))
+    (list before
+	  (process-name p)
+	  (process-command p)
+	  eof
+	  (process-live-p p)
+	  (process-status p)
+	  (process-exit-status p))))
 "##,
         expect,
     )
