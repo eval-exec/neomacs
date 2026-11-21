@@ -89,6 +89,12 @@ pub struct GapBuffer {
     position_anchors: Cell<[TextPositionAnchor; POSITION_ANCHOR_RING]>,
     /// Next ring slot to overwrite.
     anchor_next: Cell<usize>,
+    /// Only bytes submitted to the redundant pre-gap availability count.
+    /// Test reference conversions are accounted separately below.
+    #[cfg(test)]
+    char_to_byte_availability_scanned_bytes: Cell<usize>,
+    #[cfg(test)]
+    char_to_byte_reference_availability_scanned_bytes: Cell<usize>,
 }
 
 /// Recent-conversion anchors kept per gap buffer (see `position_anchors`).
@@ -116,6 +122,10 @@ impl GapBuffer {
             total_bytes: 0,
             position_anchors: Cell::new([TextPositionAnchor::ZERO; POSITION_ANCHOR_RING]),
             anchor_next: Cell::new(0),
+            #[cfg(test)]
+            char_to_byte_availability_scanned_bytes: Cell::new(0),
+            #[cfg(test)]
+            char_to_byte_reference_availability_scanned_bytes: Cell::new(0),
         }
     }
 
@@ -139,6 +149,10 @@ impl GapBuffer {
             total_bytes: byte_count,
             position_anchors: Cell::new([TextPositionAnchor::ZERO; POSITION_ANCHOR_RING]),
             anchor_next: Cell::new(0),
+            #[cfg(test)]
+            char_to_byte_availability_scanned_bytes: Cell::new(0),
+            #[cfg(test)]
+            char_to_byte_reference_availability_scanned_bytes: Cell::new(0),
         }
     }
 
@@ -171,6 +185,10 @@ impl GapBuffer {
             total_bytes: text.len(),
             position_anchors: Cell::new([TextPositionAnchor::ZERO; POSITION_ANCHOR_RING]),
             anchor_next: Cell::new(0),
+            #[cfg(test)]
+            char_to_byte_availability_scanned_bytes: Cell::new(0),
+            #[cfg(test)]
+            char_to_byte_reference_availability_scanned_bytes: Cell::new(0),
         }
     }
 
@@ -1151,16 +1169,39 @@ impl GapBuffer {
             return EmacsBytePos::new(char_pos);
         }
         let result = self.byte_pos_from_char_anchors(char_pos, self.valid_position_anchors());
+        #[cfg(test)]
+        let availability_before_reference = self.char_to_byte_availability_scanned_bytes.get();
         debug_assert_eq!(
             result,
             self.byte_pos_from_char_anchors(char_pos, std::iter::empty()),
             "stale char->byte position anchor at char {char_pos}"
         );
+        #[cfg(test)]
+        {
+            // debug_assert_eq performs a second, uncached reference conversion.
+            // Its work must not be mistaken for the actual cached lookup.
+            let reference_bytes =
+                self.char_to_byte_availability_scanned_bytes.get() - availability_before_reference;
+            self.char_to_byte_availability_scanned_bytes
+                .set(availability_before_reference);
+            self.char_to_byte_reference_availability_scanned_bytes.set(
+                self.char_to_byte_reference_availability_scanned_bytes.get() + reference_bytes,
+            );
+        }
         self.remember_position_anchor(TextPositionAnchor::new(
             CharPos0::new(char_pos),
             EmacsBytePos::new(result),
         ));
         EmacsBytePos::new(result)
+    }
+
+    #[cfg(test)]
+    fn take_char_to_byte_availability_scanned_bytes_for_test(&self) -> (usize, usize) {
+        (
+            self.char_to_byte_availability_scanned_bytes.replace(0),
+            self.char_to_byte_reference_availability_scanned_bytes
+                .replace(0),
+        )
     }
 
     /// Byte position for char `target` (must be `<= total_chars`), scanning
@@ -1200,7 +1241,7 @@ impl GapBuffer {
             return below_byte + (target - below_char);
         }
         if target - below_char <= above_char - target {
-            below_byte + self.bytes_for_n_chars_from_logical_byte(below_byte, target - below_char)
+            below_byte + self.bytes_for_n_chars_from_anchor(below, target - below_char)
         } else {
             above_byte - self.bytes_for_n_chars_before_logical_byte(above_byte, above_char - target)
         }
@@ -1208,7 +1249,7 @@ impl GapBuffer {
 
     /// Logical byte span covering the `nchars` characters ENDING at logical
     /// byte `end_byte` (a char boundary), mapped through the gap — the
-    /// backward twin of `bytes_for_n_chars_from_logical_byte`, so a
+    /// backward twin of `bytes_for_n_chars_from_anchor`, so a
     /// conversion can scan from an anchor above the target when that side
     /// is closer (GNU buf_charpos_to_bytepos scans from the nearer anchor).
     fn bytes_for_n_chars_before_logical_byte(&self, end_byte: usize, nchars: usize) -> usize {
@@ -1236,17 +1277,25 @@ impl GapBuffer {
         }
     }
 
-    /// Logical byte span covering the next `nchars` characters starting at
-    /// logical byte `start_byte` (a char boundary), mapped through the gap.
-    fn bytes_for_n_chars_from_logical_byte(&self, start_byte: usize, nchars: usize) -> usize {
+    /// Logical byte span covering the next `nchars` characters from a known
+    /// current character/byte correspondence, mapped through the gap.
+    fn bytes_for_n_chars_from_anchor(&self, start: TextPositionAnchor, nchars: usize) -> usize {
+        let start_byte = start.emacs_byte_pos_usize();
+        let start_char = start.char_pos_usize();
+        debug_assert!(start_byte <= self.total_bytes);
+        debug_assert!(start_char <= self.total_chars);
+        debug_assert!(nchars <= self.total_chars - start_char);
         if nchars == 0 {
             return 0;
         }
         let mut remaining = nchars;
         let mut consumed = 0;
         if start_byte < self.gap_start_bytes {
+            debug_assert!(start_char <= self.gap_start_chars);
             let slice = &self.buf[start_byte..self.gap_start];
-            let avail = emacs_char_count_bytes(slice, self.multibyte).get();
+            // Both counts use the current encoded/unibyte interpretation.
+            // Recounting this entire suffix defeats nearby conversion anchors.
+            let avail = self.gap_start_chars - start_char;
             if remaining <= avail {
                 return emacs_char_to_byte_in_slice(slice, remaining, self.multibyte);
             }
@@ -1303,6 +1352,10 @@ impl GapBuffer {
             total_bytes: byte_count,
             position_anchors: Cell::new([TextPositionAnchor::ZERO; POSITION_ANCHOR_RING]),
             anchor_next: Cell::new(0),
+            #[cfg(test)]
+            char_to_byte_availability_scanned_bytes: Cell::new(0),
+            #[cfg(test)]
+            char_to_byte_reference_availability_scanned_bytes: Cell::new(0),
         }
     }
 }
