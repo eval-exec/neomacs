@@ -5948,6 +5948,70 @@ fn gui_geometry_queries_distinguish_logical_layout_from_presented_output() {
 }
 
 #[test]
+fn gui_window_pixel_edges_are_relative_to_the_window_area() {
+    // GNU's root `w->pixel_top` is `FRAME_TOP_MARGIN_HEIGHT` and carries no
+    // internal-border offset (window.c:5077-5105; window-edges adds the
+    // border itself, lisp/window.el:3839).  A GTK3 frame's menu/tool bars are
+    // toolkit widgets outside the native frame, so the oracle reports
+    // `(window-pixel-top)` 0 with both bars on; Neomacs's own client-drawn
+    // bars and border sit inside its window and must not leak into the Lisp
+    // coordinate: a (cells 1 1) posframe anchor then lands at one character
+    // height in both engines instead of 68 px lower.
+    crate::test_utils::init_test_tracing();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
+    let buffer = ev.edit.buffers.create_buffer("*pixel-top-chrome*");
+    ev.edit.buffers.set_current(buffer);
+    let frame_id = ev.frame_manager_mut().create_frame("gui", 800, 600, buffer);
+    let window_id = ev
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
+    ev.eval_str("(modify-frame-parameters nil '((internal-border-width . 2)))")
+        .expect("set the frame's internal border");
+    {
+        // Set the realized bar heights after the parameter write: reprojecting
+        // bar geometry from parameters resets them to the frame's (absent)
+        // `menu-bar-lines`/`tool-bar-lines`.
+        let frame = ev.frame_manager_mut().get_mut(frame_id).expect("frame");
+        frame.set_window_system(Some(Value::symbol("neo")));
+        frame.menu_bar_height = 17;
+        frame.tool_bar_height = 34;
+        frame.tab_bar_height = 20;
+        frame.displays_chrome = true;
+    }
+    {
+        let frame = ev.frame_manager_mut().get_mut(frame_id).expect("frame");
+        // The window tree starts after the client-drawn chrome band
+        // (17 + 34 + 20) and the 2 px internal border.
+        frame
+            .find_window_mut(window_id)
+            .expect("window")
+            .set_bounds(crate::window::Rect::new(2.0, 73.0, 800.0, 500.0));
+    }
+    // GNU's window-area origin is `FRAME_TOP_MARGIN_HEIGHT`, which keeps the
+    // tab bar (20) but not the external menu/tool bars; the internal border is
+    // added by `window-edges`, not part of any window's pixel origin
+    // (lisp/window.el:3839).  So the root reports (0, 20) where the same
+    // window is stored 73 px below the frame's top edge here.
+    assert_eq!(
+        super::builtin_window_pixel_left(&mut ev, &vec![])
+            .expect("GUI window-pixel-left")
+            .as_int(),
+        Some(0),
+        "the 2 px internal border is not part of the window-area origin"
+    );
+    assert_eq!(
+        super::builtin_window_pixel_top(&mut ev, &vec![])
+            .expect("GUI window-pixel-top")
+            .as_int(),
+        Some(20),
+        "73 px from the frame origin is the 51 px external bar band plus the \
+         2 px border below GNU's tab-bar-only top margin"
+    );
+}
+
+#[test]
 fn graphical_logical_window_origin_is_available_before_first_presentation() {
     crate::test_utils::init_test_tracing();
     assert_eq!(

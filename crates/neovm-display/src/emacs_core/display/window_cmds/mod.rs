@@ -3663,13 +3663,44 @@ pub fn builtin_window_pixel_left(
     let graphical = frame.is_some_and(|frame| frame.effective_window_system().is_some());
     let cw = frame.map(|frame| frame.char_width).unwrap_or(8.0);
     let left = if graphical {
-        // GNU `Fwindow_pixel_left` returns `w->pixel_left` directly.
-        w.bounds().x as i64
+        // GNU `Fwindow_pixel_left` returns `w->pixel_left` directly, measured
+        // from the frame's window area; the internal border is not part of
+        // any window's pixel origin (lisp/window.el:3839 `window-edges` adds
+        // it separately when it reports body edges).
+        let border = frame.map(window_area_border_offset).unwrap_or(0);
+        (w.bounds().x as i64 - border).max(0)
     } else {
         tty_batch_pixel_left(w, cw)
     };
     Ok(Value::fixnum(left))
 }
+
+/// Pixel offset between Neomacs' window-tree origin and GNU's window-area
+/// origin for the top-left corner, as `(left, top)`.
+///
+/// GNU's `w->pixel_top` starts at `FRAME_TOP_MARGIN_HEIGHT` (src/window.c:
+/// 5077-5105) and its window tree carries no internal-border offset: the root
+/// window's pixel origin is the window area's origin.  Neomacs stores the menu
+/// and tool bar band and the internal border inside the window tree so the
+/// renderer can paint them, so both are subtracted here.
+///
+/// Only the menu and tool bar band moves: GNU's Gtk+ and NS builds keep those
+/// bars outside the native frame, while the tab bar is part of the window
+/// area (and therefore part of `FRAME_TOP_MARGIN_HEIGHT`).
+fn window_area_origin_offset(frame: &crate::window::Frame) -> (i64, i64) {
+    let external_bar = if frame.displays_chrome {
+        i64::from(frame.external_bar_height())
+    } else {
+        0
+    };
+    let border = window_area_border_offset(frame);
+    (border, external_bar + border)
+}
+
+fn window_area_border_offset(frame: &crate::window::Frame) -> i64 {
+    frame.internal_border_width().max(0)
+}
+
 /// `(window-pixel-top &optional WINDOW)` -> integer.
 ///
 /// Graphical frames report the stored frame-relative pixel coordinate.  In
@@ -3687,8 +3718,14 @@ pub fn builtin_window_pixel_top(
     let graphical = frame.is_some_and(|frame| frame.effective_window_system().is_some());
     let ch = frame.map(|frame| frame.char_height).unwrap_or(16.0);
     let top = if graphical {
-        // GNU `Fwindow_pixel_top` returns `w->pixel_top` directly.
-        w.bounds().y as i64
+        // GNU `Fwindow_pixel_top` returns `w->pixel_top`, relative to the
+        // frame's window area: the root starts at `FRAME_TOP_MARGIN_HEIGHT`
+        // and every child inherits that origin (src/window.c:5077-5105).  A
+        // GTK3 oracle frame reports 0 here with its menu and tool bars on,
+        // and a `(cells 1 1)` posframe anchor at top 17 for exactly this
+        // reason.
+        let (_, top_offset) = frame.map(window_area_origin_offset).unwrap_or((0, 0));
+        (w.bounds().y as i64 - top_offset).max(0)
     } else {
         tty_batch_pixel_top(w, ch)
     };
