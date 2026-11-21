@@ -34,6 +34,9 @@ mod oracle_coding_save;
 #[path = "oracle_combination.rs"]
 mod oracle_combination;
 
+#[path = "oracle_compute_motion_raw_bytes.rs"]
+mod oracle_compute_motion_raw_bytes;
+
 #[path = "oracle_copy_lisp_face_defaults.rs"]
 mod oracle_copy_lisp_face_defaults;
 

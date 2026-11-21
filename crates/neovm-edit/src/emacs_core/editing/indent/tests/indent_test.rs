@@ -50,3 +50,7 @@ fn only_word_wrap_backs_a_goal_off_the_row_edge() {
 #[cfg(test)]
 #[path = "gdm_columns.rs"]
 mod gdm_columns;
+
+#[cfg(test)]
+#[path = "compute_motion_scan.rs"]
+mod compute_motion_scan;
