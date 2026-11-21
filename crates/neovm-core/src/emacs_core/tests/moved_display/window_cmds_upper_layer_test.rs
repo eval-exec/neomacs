@@ -2092,6 +2092,12 @@ fn scroll_down_skips_invisible_logical_lines_when_measuring_a_page() {
 /// A truncated long line followed by 200 short lines, with the buffer's
 /// long-line flag set as redisplay would set it.
 fn long_line_scroll_context(long_len: usize) -> Context {
+    long_line_scroll_context_with_threshold(long_len, 50_000)
+}
+
+/// The same fixture with an explicit long-line threshold, so a short first
+/// line can take the same long-lines scroll path.
+fn long_line_scroll_context_with_threshold(long_len: usize, threshold: i64) -> Context {
     let mut ev = crate::test_utils::new_context();
     // `eval_with_frame` creates and selects its own empty `*scratch*` buffer
     // after this context is built, so the text lives in a namespaced buffer
@@ -2118,8 +2124,8 @@ fn long_line_scroll_context(long_len: usize) -> Context {
             .buffers
             .get_mut(buffer)
             .expect("buffer")
-            .refresh_long_line_optimizations(50_000),
-        "the long first line must set the flag"
+            .refresh_long_line_optimizations(threshold),
+        "the first line must exceed the requested long-line threshold"
     );
     ev.eval_str("(goto-char 1)").expect("point");
     ev.store_variable_by_name("p640-scroll-buffer", Value::make_buffer(buffer));
@@ -2167,15 +2173,24 @@ fn scroll_up_long_truncated_uses_gnu_line_motion() {
 }
 
 /// The long-lines scroll must not scan the long line: the work is bounded by
-/// the number of window lines moved, so a 200k and a 400k first line cost the
-/// same.  GNU's own vmotion runs one compute_motion pass per line moved.
+/// the number of window lines moved, so first lines of 200, 200k and 400k
+/// characters cost exactly the same.  GNU's own vmotion runs one
+/// compute_motion pass per line moved.
+///
+/// Every fixture takes GNU's long-lines scroll path: each first line exceeds
+/// the threshold that sets the flag (for the 200-character baseline the
+/// threshold is lowered with `refresh_long_line_optimizations`).  The counter
+/// it measures advances once per CHARACTER inside one screen-line scan, so a
+/// truncated long line costs only up to the window width; a per-character
+/// walk of the line itself would make the 2000x longer lines diverge.
 #[test]
 fn scroll_up_long_line_work_does_not_grow_with_the_line() {
     crate::test_utils::init_test_tracing();
+    let fixtures = [(200usize, 100i64), (200_000, 50_000), (400_000, 50_000)];
     let mut work = Vec::new();
     let mut heights = Vec::new();
-    for long_len in [200_000usize, 400_000] {
-        let mut ev = long_line_scroll_context(long_len);
+    for (long_len, threshold) in fixtures {
+        let mut ev = long_line_scroll_context_with_threshold(long_len, threshold);
         // Setup and the flag-setting redisplay are NOT part of the measured
         // scroll: only the scroll path's own line motion is counted.
         ev.eval_str(
@@ -2199,22 +2214,18 @@ fn scroll_up_long_line_work_does_not_grow_with_the_line() {
             .expect("scroll-up on the long-line buffer");
         work.push(neovm_edit::test_support::authority::screen_line_scan_steps());
     }
+    assert!(
+        work[0] > 0,
+        "the scroll must do the line motion it is supposed to do: work={work:?} ht={heights:?}"
+    );
     assert_eq!(
         work[0], work[1],
-        "scroll work must not grow with the long line: {work:?}"
+        "scroll work must not grow with the long line: work={work:?} ht={heights:?}"
     );
-    // GNU `window_scroll_for_long_lines` (window.c:6242-6315) runs
-    // `pos_visible_p` and two vmotions: max(1, ht - next-screen-context-lines)
-    // lines plus ht/2 center lines, i.e. at most 1.5 * ht line scans.  This
-    // counter records one step per screen-line scan, so 2 * ht leaves room
-    // for a backward re-scan of the same lines without allowing any work
-    // proportional to the long line itself.
-    for (count, ht) in work.iter().zip(&heights) {
-        assert!(
-            *count > 0 && *count <= 2 * (*ht as usize),
-            "the scroll must bound its work by window lines: work={work:?} ht={heights:?}"
-        );
-    }
+    assert_eq!(
+        work[0], work[2],
+        "scroll work must not grow with the long line: work={work:?} ht={heights:?}"
+    );
 }
 
 /// A long truncated first line, 400 short lines, and point on line 300.

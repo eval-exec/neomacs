@@ -6362,28 +6362,36 @@ impl LayoutEngine {
         // remaining unfontified stop is declined, yielding
         // CallbacksUnchanged; the visible pass then restarts from the window
         // start and covers the declined stops.
-        if matches!(
-            &render_outcome,
-            BufferSourceRenderAttemptOutcome::Finished { .. }
-        ) {
+        let finished_walk = match &render_outcome {
+            BufferSourceRenderAttemptOutcome::Finished {
+                redisplay_positions,
+                cursor_only,
+                reused_matrix_rows,
+                ..
+            } => Some((
+                redisplay_positions.window_end_lisp(),
+                // Only a real `try_window` walk reaches
+                // `partial_line_height`.  A cursor-only replay is GNU
+                // `try_cursor_movement` (src/xdisp.c:19838-19876) and a
+                // reused-matrix scroll is `try_window_reusing_current_matrix`;
+                // neither re-walks to the window bottom.
+                !*cursor_only && reused_matrix_rows.is_none(),
+            )),
+            _ => None,
+        };
+        if let Some((window_end, check_margins_walk)) = finished_walk {
             // GNU `partial_line_height` (`src/xdisp.c:11630-11661`): when
             // `try_window` ran with TRY_WINDOW_CHECK_MARGINS, it re-walks to
             // the window bottom and then scans the FIRST screen row after the
-            // window end, entering fontification hooks at that row's stops.
-            // The row comes from this walk's own visible span, and the gates
-            // are GNU's; every other caller stays on the plain visible walk.
-            let probe = self
-                .window_snapshots
-                .iter()
-                .rev()
-                .map(WindowPresentationSnapshot::display_snapshot)
-                .find(|snapshot| snapshot.window_id == window_id)
-                .map(|snapshot| {
-                    fontification_probe_row(
-                        evaluator, params, frame_id, window_id, buf_id, snapshot,
-                    )
-                })
-                .unwrap_or(neovm_core::emacs_core::xdisp::ProbeRow::None);
+            // window end, entering fontification hooks at that row's stops
+            // (the sole call site is `try_window`, src/xdisp.c:21718).  That
+            // row starts at the walk's published window end, and the gates
+            // are GNU's; every other walk stays on the plain visible walk.
+            let probe = if check_margins_walk {
+                fontification_probe_row(evaluator, params, frame_id, window_id, buf_id, window_end)
+            } else {
+                neovm_core::emacs_core::xdisp::ProbeRow::None
+            };
             let coverage = self
                 .window_snapshots
                 .iter()
@@ -7014,16 +7022,18 @@ impl LayoutEngine {
 /// that row's exclusive Lisp end.  A long-line truncated buffer returns early
 /// (`:11636-11638`).
 ///
-/// The row is measured from the completed walk's own visible span with the
+/// The row starts at the completed walk's PUBLISHED window end -- the
+/// exclusive first position after the last displayed row, the same value the
+/// engine records as `window-end` -- and its boundary is measured by the
 /// display line-motion engine (`MotionEngine::ComputeMotion`), not from a
-/// character count, so wrapping and truncation decide its boundary.
+/// character count, so wrapping and truncation decide it.
 fn fontification_probe_row(
     evaluator: &mut neovm_core::emacs_core::Context,
     params: &crate::types::WindowParams,
     frame_id: neovm_core::window::FrameId,
     window_id: neovm_core::window::WindowId,
     buf_id: neovm_core::buffer::BufferId,
-    snapshot: &neovm_core::window::WindowDisplaySnapshot,
+    window_end: neovm_core::buffer::LispCharPos1,
 ) -> neovm_core::emacs_core::xdisp::ProbeRow {
     use neovm_core::emacs_core::xdisp::ProbeRow;
     // `force_start` bypasses TRY_WINDOW_CHECK_MARGINS (src/xdisp.c:20767,
@@ -7068,11 +7078,25 @@ fn fontification_probe_row(
     {
         return ProbeRow::None;
     }
-    let Some(span) = snapshot.visible_buffer_span() else {
-        return ProbeRow::None;
-    };
-    let probe_start = span.end();
-    // The window-bottom walk reached EOB: GNU returns before the probe.
+    // GNU's `move_it_to (..., it.last_visible_y, ...)` re-walks the window to
+    // its bottom and `move_it_by_lines (&it, 1)` then scans the FIRST screen
+    // row after the window end (`src/xdisp.c:11630-11661`). That row starts at
+    // the position Neo publishes as `window-end`: the exclusive first
+    // position after the last displayed row, passed in from the same
+    // `TextWindowRedisplayPositions` record the engine turns into the
+    // `WindowEndRecord` it publishes (and that `window-end` returns).
+    //
+    // Do not derive it from `visible_buffer_span().end()`: that is the last
+    // drawn glyph (an inclusive position), and a right-truncated row reports
+    // its skipped line terminator there, so a probe started there begins
+    // inside a row the window already displayed and its one-line advance
+    // does not reach the following row. The published end also sits after a
+    // closing glyph that covers a source range (`display` property or
+    // composition), where last-glyph arithmetic has no exact successor in the
+    // buffer.
+    let probe_start = window_end;
+    // The re-walk reached EOB: GNU takes the `IT_EOB` branch and never scans
+    // a following row (`src/xdisp.c:11644-11649`).
     if probe_start.as_i64() >= buffer.point_max_lisp_char_pos().as_i64() {
         return ProbeRow::None;
     }
