@@ -35,6 +35,264 @@ struct Ready {
     char_height: u32,
 }
 
+/// #178 currently does not reproduce. Pin the observed contract with vanilla
+/// menus, rather than replacing them with a synthetic test menu. Each editor
+/// must preserve its own glyph pixels; the GNU GTK and Neomacs menus need not
+/// have identical decorations or rasterization.
+///
+/// GNU 31.1 gtkutil.c:1144-1166 and xterm.c:21586-21662 invalidate the frame
+/// after native ConfigureNotify; dispnew.c:6694-6742 queues and applies its
+/// new pixel size. No unrelated Lisp polling/redisplay rescues this test.
+#[test]
+fn vanilla_menu_and_resize_preserve_glyph_pixels_like_gnu() {
+    let root = neomacs_infra::workspace_root();
+    let artifacts = root.join(format!(
+        "tmp/vanilla-menu-resize-gnu-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&artifacts).unwrap();
+    let display = neomacs_infra::display::start_local_xvfb_with_size(&artifacts, 1280, 800)
+        .expect("isolated GNU Xvfb display");
+    let gnu = std::env::var_os("NEOVM_FORCE_ORACLE_PATH")
+        .expect("set NEOVM_FORCE_ORACLE_PATH to the checked GNU GUI oracle");
+    let mut editor = OwnedChild(
+        Command::new(gnu)
+            .args(["-Q", "-l"])
+            .arg(root.join("crates/neomacs-gui-tests/fixtures/vanilla-menu-resize.el"))
+            .envs(display.env().iter().map(|(key, value)| (key, value)))
+            .env_remove("WAYLAND_DISPLAY")
+            .env("GDK_BACKEND", "x11")
+            .env("GSETTINGS_BACKEND", "memory")
+            .env("NEOMACS_GUI_MENU_CONTROL", &artifacts)
+            .stdout(fs::File::create(artifacts.join("stdout.log")).unwrap())
+            .stderr(fs::File::create(artifacts.join("stderr.log")).unwrap())
+            .stdin(Stdio::null())
+            .spawn()
+            .expect("start checked GNU GUI oracle"),
+    );
+    let pid = editor.0.id().to_string();
+    let ready = wait_for("GNU vanilla fixture readiness", &artifacts, || {
+        alive(&mut editor, "GNU before input", &artifacts);
+        let state: serde_json::Value =
+            serde_json::from_slice(&fs::read(artifacts.join("state.json")).ok()?).ok()?;
+        Some(Ready {
+            char_width: state["char-width"].as_u64()?.try_into().ok()?,
+            char_height: state["char-height"].as_u64()?.try_into().ok()?,
+        })
+    });
+    let window = wait_for("GNU native frame", &artifacts, || {
+        alive(&mut editor, "GNU frame discovery", &artifacts);
+        let output = Command::new("xdotool")
+            .args(["search", "--onlyvisible", "--pid", &pid])
+            .envs(display.env().iter().map(|(key, value)| (key, value)))
+            .output()
+            .ok()?;
+        String::from_utf8(output.stdout)
+            .ok()?
+            .lines()
+            .next()
+            .map(str::to_owned)
+    });
+    observe_vanilla_menu_resize(display.env(), &window, &ready, &artifacts, &mut editor);
+    input(display.env(), &["key", "F12"]);
+    let status = wait_for("GNU vanilla fixture shutdown", &artifacts, || {
+        editor.0.try_wait().unwrap()
+    });
+    assert!(status.success(), "GNU exit: {status}; {artifacts:?}");
+    drop(editor);
+    drop(display);
+
+    // Native menus require Wayland; the nested compositor still presents to
+    // an isolated Xvfb, so the same physical-input/pixel contract applies.
+    with_native_menu(
+        "vanilla-menu-resize.el",
+        |env, window, ready, artifacts, editor, compositor| {
+            observe_vanilla_menu_resize(env, window, ready, artifacts, editor);
+            alive(compositor, "compositor after vanilla resize", artifacts);
+            input(env, &["key", "F12"]);
+        },
+    );
+}
+
+fn observe_vanilla_menu_resize(
+    env: &[(String, String)],
+    window: &str,
+    ready: &Ready,
+    artifacts: &Path,
+    editor: &mut OwnedChild,
+) {
+    assert!(ready.char_width > 0 && ready.char_height > 0);
+    input(env, &["windowmove", "--sync", window, "0", "0"]);
+    input(env, &["windowfocus", "--sync", window]);
+    input(env, &["windowsize", "--sync", window, "800", "500"]);
+    park_vanilla_pointer(env, window);
+    let before_menu = settled_vanilla_pixels(env, ready, artifacts, "before-menu");
+    let x = (ready.char_width * 3).to_string();
+    let y = (ready.char_height / 2).to_string();
+    input(
+        env,
+        &["mousemove", "--window", window, &x, &y, "click", "1"],
+    );
+    // Exclude the heading itself: a highlighted "File" label alone cannot
+    // satisfy the observation that a real native popup was presented.
+    let closed = image::imageops::crop_imm(&before_menu, 0, ready.char_height, 600, 350).to_image();
+    let popup_delta = wait_for("vanilla File popup pixels", artifacts, || {
+        alive(editor, "opening vanilla File", artifacts);
+        let popup = capture_vanilla_pixels(env, artifacts, "file-popup");
+        let popup = image::imageops::crop_imm(&popup, 0, ready.char_height, 600, 350).to_image();
+        let changed = pixel_delta(&closed, &popup);
+        (changed > 1000).then_some(changed)
+    });
+    input(env, &["key", "Escape"]);
+    wait_for("vanilla File popup dismissal", artifacts, || {
+        let pixels = capture_vanilla_pixels(env, artifacts, "dismissed-popup");
+        let pixels = image::imageops::crop_imm(&pixels, 0, ready.char_height, 600, 350).to_image();
+        (pixel_delta(&closed, &pixels) < 1000).then_some(())
+    });
+    park_vanilla_pointer(env, window);
+    let before = settled_vanilla_pixels(env, ready, artifacts, "before-resize");
+    let strip = vanilla_text_strip(&before, ready);
+    assert_eq!(
+        pixel_delta(&vanilla_text_strip(&before_menu, ready), &strip),
+        0,
+        "dismissing File must preserve toolbar/text pixels; {artifacts:?}"
+    );
+
+    let background = *before.get_pixel(750, 300);
+    assert_ne!(
+        *before.get_pixel(1050, 300),
+        background,
+        "the resize witness must start outside the editor; {artifacts:?}"
+    );
+    // Only native size notifications occur between the baseline and resized
+    // capture. Keyboard input comes afterwards to test the Escape claim.
+    for (width, height) in [(850, 540), (900, 590), (950, 640), (1000, 690), (1100, 760)] {
+        input(
+            env,
+            &[
+                "windowsize",
+                "--sync",
+                window,
+                &width.to_string(),
+                &height.to_string(),
+            ],
+        );
+    }
+    wait_for("resized background presentation", artifacts, || {
+        alive(editor, "idle vanilla resize", artifacts);
+        let pixels = capture_vanilla_pixels(env, artifacts, "resize-witness");
+        (*pixels.get_pixel(1050, 300) == background).then_some(())
+    });
+    let resized = settled_vanilla_pixels(env, ready, artifacts, "resized-idle");
+    assert_eq!(
+        pixel_delta(&strip, &vanilla_text_strip(&resized, ready)),
+        0,
+        "idle resize must preserve existing toolbar/text glyph pixels; {artifacts:?}"
+    );
+    input(env, &["key", "Escape"]);
+    park_vanilla_pointer(env, window);
+    let escaped = settled_vanilla_pixels(env, ready, artifacts, "after-escape");
+    assert_eq!(
+        pixel_delta(&strip, &vanilla_text_strip(&escaped, ready)),
+        0,
+        "Escape must not repair toolbar/text glyph pixels; {artifacts:?}"
+    );
+    alive(editor, "after vanilla menu and resize", artifacts);
+    fs::write(
+        artifacts.join("observation.json"),
+        serde_json::json!({
+            "popup-changed-pixels": popup_delta,
+            "resize-glyph-changed-pixels": 0,
+            "escape-glyph-changed-pixels": 0,
+            "stable-captures-per-stage": 3,
+        })
+        .to_string(),
+    )
+    .unwrap();
+}
+
+fn park_vanilla_pointer(env: &[(String, String)], window: &str) {
+    // Leaving Weston through its outer X11 boundary leaves its native cursor
+    // at the previous position. Move inside the editor, below the crop,
+    // rather than leaving a stale File-heading cursor in the screenshot.
+    input(env, &["mousemove", "--window", window, "701", "300"]);
+    input(
+        env,
+        &["mousemove", "--sync", "--window", window, "700", "300"],
+    );
+}
+
+fn capture_vanilla_pixels(
+    env: &[(String, String)],
+    artifacts: &Path,
+    name: &str,
+) -> image::RgbImage {
+    let path = artifacts.join(format!("{name}.png"));
+    let output = Command::new("import")
+        .args(["-window", "root"])
+        .arg(&path)
+        .envs(env.iter().map(|(key, value)| (key, value)))
+        .output()
+        .expect("ImageMagick import for vanilla menu pixels");
+    assert!(
+        output.status.success(),
+        "screenshot: {}; {artifacts:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    image::open(path).unwrap().to_rgb8()
+}
+
+fn vanilla_text_strip(pixels: &image::RgbImage, ready: &Ready) -> image::RgbImage {
+    // The standard scratch cursor is below this strip. Leave the menu heading
+    // out as well: a menu selection is distinct from damaged font pixels.
+    image::imageops::crop_imm(pixels, 0, ready.char_height, 600, ready.char_height * 4).to_image()
+}
+
+fn pixel_delta(before: &image::RgbImage, after: &image::RgbImage) -> usize {
+    assert_eq!(before.dimensions(), after.dimensions());
+    before
+        .pixels()
+        .zip(after.pixels())
+        // Root-window capture can quantize two unchanged glyph pixels by
+        // one RGB8 level during resize. Movement or duplicate ink changes
+        // channels by more than that observed capture rounding.
+        .filter(|(a, b)| a.0.iter().zip(&b.0).any(|(a, b)| a.abs_diff(*b) > 1))
+        .count()
+}
+
+fn settled_vanilla_pixels(
+    env: &[(String, String)],
+    ready: &Ready,
+    artifacts: &Path,
+    stage: &str,
+) -> image::RgbImage {
+    thread::sleep(Duration::from_millis(150));
+    let mut previous = None;
+    let mut equal = 0;
+    let mut sample = 0;
+    wait_for("settled vanilla glyph pixels", artifacts, || {
+        let pixels = capture_vanilla_pixels(env, artifacts, &format!("{stage}-{sample}"));
+        sample += 1;
+        let strip = vanilla_text_strip(&pixels, ready);
+        equal = if previous.as_ref() == Some(&strip) {
+            equal + 1
+        } else {
+            1
+        };
+        previous = Some(strip);
+        if equal >= 3 {
+            Some(pixels)
+        } else {
+            thread::sleep(Duration::from_millis(100));
+            None
+        }
+    })
+}
+
 #[test]
 fn native_submenu_hover_keeps_editor_and_compositor_alive() {
     with_native_menu(
