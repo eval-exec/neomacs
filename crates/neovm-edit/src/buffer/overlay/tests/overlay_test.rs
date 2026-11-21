@@ -406,6 +406,325 @@ fn next_boundary_uses_one_logarithmic_endpoint_search() {
     );
 }
 
+/// A live fontification boundary query already supplies a narrow source span.
+/// Distant overlays must not make the cold allocation-free reduction scan the
+/// complete buffer at every stop, or force publication of the endpoint index.
+#[test]
+fn no_alloc_boundary_query_stays_local_with_2000_distant_overlays() {
+    check_no_alloc_boundary_locality(2_000);
+}
+
+#[test]
+fn no_alloc_boundary_query_stays_local_with_16000_distant_overlays() {
+    check_no_alloc_boundary_locality(16_000);
+}
+
+#[test]
+fn no_alloc_boundary_query_stays_local_with_64000_distant_overlays() {
+    check_no_alloc_boundary_locality(64_000);
+}
+
+fn check_no_alloc_boundary_locality(distant_count: usize) {
+    crate::test_utils::init_test_tracing();
+    const POS: usize = 1_000_000;
+    const LIMIT: usize = POS + 100;
+    let mut list = OverlayList::new();
+    for index in 0..distant_count {
+        let start = if index % 2 == 0 {
+            index * 2
+        } else {
+            2_000_000 + index * 2
+        };
+        list.insert_overlay(alloc_overlay(start, start + 1));
+    }
+    list.insert_overlay(alloc_overlay(POS - 10, LIMIT));
+    list.insert_overlay(alloc_overlay(POS + 10, POS + 10));
+    list.insert_overlay(alloc_overlay(POS + 20, POS + 30));
+    // Neither endpoint is strictly after POS.
+    list.insert_overlay(alloc_overlay(POS, POS));
+    for _ in 0..3 {
+        let before = list.index.cold_boundary_record_visit_count_for_test();
+        assert_eq!(
+            list.next_boundary_after_until_emacs_byte_pos_no_alloc(
+                emacs_byte_pos(POS),
+                emacs_byte_pos(LIMIT),
+            ),
+            Some(emacs_byte_pos(POS + 10)),
+            "a future empty overlay contributes its endpoint"
+        );
+        assert!(
+            !list.index.endpoint_index_is_published_for_test(),
+            "the no-allocation query must leave the endpoint index cold"
+        );
+        let visits = list.index.cold_boundary_record_visit_count_for_test() - before;
+        assert!(
+            visits <= 8,
+            "fixed (POS,LIMIT] query visited {visits} records with {distant_count} distant overlays"
+        );
+    }
+}
+
+#[test]
+fn no_alloc_boundary_wide_horizon_stays_local_with_2000_distant_overlays() {
+    check_no_alloc_boundary_wide_horizon(2_000);
+}
+
+#[test]
+fn no_alloc_boundary_wide_horizon_stays_local_with_16000_distant_overlays() {
+    check_no_alloc_boundary_wide_horizon(16_000);
+}
+
+#[test]
+fn no_alloc_boundary_wide_horizon_stays_local_with_64000_distant_overlays() {
+    check_no_alloc_boundary_wide_horizon(64_000);
+}
+
+fn check_no_alloc_boundary_wide_horizon(distant_count: usize) {
+    crate::test_utils::init_test_tracing();
+    const POS: usize = 1_000_000;
+    const LIMIT: usize = 4_000_000;
+    let mut list = OverlayList::new();
+    for index in 0..distant_count {
+        let start = if index % 2 == 0 {
+            index * 2
+        } else {
+            2_000_000 + index * 2
+        };
+        list.insert_overlay(alloc_overlay(start, start + 1));
+    }
+    list.insert_overlay(alloc_overlay(POS - 10, POS + 100));
+    list.insert_overlay(alloc_overlay(POS + 10, POS + 10));
+    for _ in 0..3 {
+        let before = list.index.cold_boundary_record_visit_count_for_test();
+        assert_eq!(
+            list.next_boundary_after_until_emacs_byte_pos_no_alloc(
+                emacs_byte_pos(POS),
+                emacs_byte_pos(LIMIT),
+            ),
+            Some(emacs_byte_pos(POS + 10))
+        );
+        assert!(!list.index.endpoint_index_is_published_for_test());
+        let visits = list.index.cold_boundary_record_visit_count_for_test() - before;
+        assert!(
+            visits <= 4,
+            "wide horizon reduced {visits} records with {distant_count} distant overlays"
+        );
+    }
+}
+
+/// Interval subtree maximum END is not a separator for the next START. An
+/// early long span can keep every later prefix maximum high even when its
+/// child has no start after POS; the successor belongs to a later child.
+#[test]
+fn no_alloc_boundary_finds_next_start_across_a_long_span_child() {
+    crate::test_utils::init_test_tracing();
+    let mut list = OverlayList::new();
+    list.insert_overlay(alloc_overlay(0, 1_000_000));
+    for index in 0..2_048 {
+        let start = 100 + index * 2;
+        list.insert_overlay(alloc_overlay(start, start + 1));
+    }
+    for _ in 0..2_048 {
+        list.insert_overlay(alloc_overlay(50_000, 50_000));
+    }
+    list.insert_overlay(alloc_overlay(60_000, 60_000));
+    list.insert_overlay(alloc_overlay(60_010, 60_020));
+
+    let check = |list: &OverlayList, pos: usize, limit: usize, expected: Option<usize>| {
+        assert_eq!(
+            list.next_boundary_after_until_emacs_byte_pos_no_alloc(
+                emacs_byte_pos(pos),
+                emacs_byte_pos(limit),
+            ),
+            expected.map(emacs_byte_pos)
+        );
+        assert!(!list.index.endpoint_index_is_published_for_test());
+    };
+    check(&list, 50_000, 1_000_000, Some(60_000));
+    check(&list, 50_000, 60_000, Some(60_000));
+    check(&list, 50_000, 59_999, None);
+    let nearer_end = alloc_overlay(49_000, 50_010);
+    list.insert_overlay(nearer_end);
+    check(&list, 50_000, 1_000_000, Some(50_010));
+    assert!(list.delete_overlay(nearer_end));
+    check(&list, 50_000, 1_000_000, Some(60_000));
+
+    // Pending shifts at ancestors and leaves must preserve successor routing.
+    list.adjust_for_insert_at_emacs_byte_pos(emacs_byte_pos(1), emacs_byte_len(7), true);
+    check(&list, 50_007, 1_000_007, Some(60_007));
+    list.adjust_for_delete_emacs_byte_range(emacs_byte_range(1, 8));
+    check(&list, 50_000, 1_000_000, Some(60_000));
+}
+
+#[test]
+fn no_alloc_boundary_one_long_span_has_bounded_nodes_with_2000_distant_overlays() {
+    check_no_alloc_boundary_one_long_span_nodes(2_000);
+}
+
+#[test]
+fn no_alloc_boundary_one_long_span_has_bounded_nodes_with_16000_distant_overlays() {
+    check_no_alloc_boundary_one_long_span_nodes(16_000);
+}
+
+#[test]
+fn no_alloc_boundary_one_long_span_has_bounded_nodes_with_64000_distant_overlays() {
+    check_no_alloc_boundary_one_long_span_nodes(64_000);
+}
+
+fn check_no_alloc_boundary_one_long_span_nodes(distant_count: usize) {
+    crate::test_utils::init_test_tracing();
+    const POS: usize = 1_000_000;
+    const LIMIT: usize = 4_000_000;
+    let mut list = OverlayList::new();
+    // Exactly one interval contains POS. Its early start keeps prefix end
+    // maxima high, so actual rejected child-root visits must be counted too.
+    list.insert_overlay(alloc_overlay(0, LIMIT));
+    for index in 0..distant_count {
+        let start = if index % 2 == 0 {
+            100 + index * 2
+        } else {
+            2_000_000 + index * 2
+        };
+        list.insert_overlay(alloc_overlay(start, start + 1));
+    }
+    list.insert_overlay(alloc_overlay(POS + 10, POS + 10));
+    for iteration in 0..3 {
+        assert!(!list.index.endpoint_index_is_published_for_test());
+        let before = list.index.cold_boundary_record_visit_count_for_test();
+        reset_overlays_at_node_visit_count();
+        reset_endpoint_search_node_visit_count();
+        assert_eq!(
+            list.next_boundary_after_until_emacs_byte_pos_no_alloc(
+                emacs_byte_pos(POS),
+                emacs_byte_pos(LIMIT),
+            ),
+            Some(emacs_byte_pos(POS + 10))
+        );
+        let point_nodes = overlays_at_node_visit_count();
+        let key_nodes = endpoint_search_node_visit_count();
+        let reductions = list.index.cold_boundary_record_visit_count_for_test() - before;
+        eprintln!(
+            "cold-boundary nodes: distant={distant_count} iteration={iteration} point={point_nodes} key={key_nodes} reductions={reductions}"
+        );
+        assert!(!list.index.endpoint_index_is_published_for_test());
+        assert_eq!(
+            reductions, 1,
+            "only the containing interval contributes an end"
+        );
+        // B=32 and maximum representable height=9. Only the long-span path
+        // and the position-boundary path can survive own-summary pruning.
+        assert!(
+            point_nodes > 0 && point_nodes <= 2 * 32 * 9,
+            "Point(POS) visited {point_nodes} subtree roots with one containing interval"
+        );
+        assert!(
+            key_nodes > 0 && key_nodes <= 9,
+            "next-start must descend one key-search path; visited {key_nodes} nodes"
+        );
+    }
+}
+
+#[test]
+fn no_alloc_boundary_keeps_endpoint_semantics_after_live_mutations() {
+    crate::test_utils::init_test_tracing();
+    let mut list = OverlayList::new();
+    list.insert_overlay(alloc_overlay(100, 100));
+    list.insert_overlay(alloc_overlay(0, 100));
+    let empty = alloc_overlay(110, 110);
+    list.insert_overlay(empty);
+    let local = alloc_overlay(120, 130);
+    list.insert_overlay(local);
+    let containing = alloc_overlay(90, 200);
+    list.insert_overlay(containing);
+    list.insert_overlay(alloc_overlay(0, 1_000));
+    list.insert_overlay(alloc_overlay(300, 301));
+
+    let check = |list: &OverlayList, pos: usize, limit: usize, expected: Option<usize>| {
+        assert_eq!(
+            list.next_boundary_after_until_emacs_byte_pos_no_alloc(
+                emacs_byte_pos(pos),
+                emacs_byte_pos(limit),
+            ),
+            expected.map(emacs_byte_pos)
+        );
+        assert!(!list.index.endpoint_index_is_published_for_test());
+    };
+    check(&list, 100, 100, None);
+    check(&list, 110, 100, None);
+    check(&list, 100, 109, None);
+    check(&list, 100, 110, Some(110));
+    check(&list, 110, 200, Some(120));
+    check(&list, 120, 130, Some(130));
+    list.move_overlay_to_emacs_byte_range(empty, emacs_byte_range(160, 160));
+    check(&list, 100, 200, Some(120));
+    assert!(list.delete_overlay(local));
+    check(&list, 100, 200, Some(160));
+    assert!(list.delete_overlay(empty));
+    check(&list, 100, 200, Some(200));
+    check(&list, 100, 199, None);
+
+    // Lazy coordinate shifts must be applied to both query summaries and
+    // candidate endpoint values, without publishing the separate endpoint tree.
+    list.adjust_for_insert_at_emacs_byte_pos(emacs_byte_pos(1), emacs_byte_len(7), true);
+    check(&list, 107, 207, Some(207));
+    list.adjust_for_delete_emacs_byte_range(emacs_byte_range(1, 8));
+    check(&list, 100, 200, Some(200));
+    assert!(list.delete_overlay(containing));
+    check(&list, 100, 200, None);
+
+    // Once another caller publishes endpoints, the no-allocation route keeps
+    // using that index and performs no additional cold interval reductions.
+    assert_eq!(
+        list.next_boundary_after_emacs_byte_pos(emacs_byte_pos(100)),
+        Some(emacs_byte_pos(300))
+    );
+    assert!(list.index.endpoint_index_is_published_for_test());
+    let visits = list.index.cold_boundary_record_visit_count_for_test();
+    assert_eq!(
+        list.next_boundary_after_until_emacs_byte_pos_no_alloc(
+            emacs_byte_pos(100),
+            emacs_byte_pos(300),
+        ),
+        Some(emacs_byte_pos(300))
+    );
+    assert_eq!(
+        list.index.cold_boundary_record_visit_count_for_test(),
+        visits
+    );
+}
+
+/// Generated endpoint cases keep the strict-after contract independent of
+/// whichever point-query boundary convention supplies candidate intervals.
+#[test]
+fn no_alloc_boundary_generated_end_at_pos_never_replaces_later_start() {
+    crate::test_utils::init_test_tracing();
+    for a in 0..4 {
+        for width in 1..4 {
+            let pos = a + width;
+            for gap in 1..4 {
+                let later = pos + gap;
+                let mut list = OverlayList::new();
+                list.insert_overlay(alloc_overlay(a, pos));
+                list.insert_overlay(alloc_overlay(pos, pos));
+                list.insert_overlay(alloc_overlay(later, later + 1));
+                for limit in [pos, later - 1, later, later + 1] {
+                    let actual = list.next_boundary_after_until_emacs_byte_pos_no_alloc(
+                        emacs_byte_pos(pos),
+                        emacs_byte_pos(limit),
+                    );
+                    assert_eq!(
+                        actual,
+                        (later <= limit).then(|| emacs_byte_pos(later)),
+                        "[{a},{pos}) plus start {later}, limit {limit}: never return POS"
+                    );
+                    assert!(actual != Some(emacs_byte_pos(pos)));
+                    assert!(!list.index.endpoint_index_is_published_for_test());
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn sorted_overlay_precedence_breaks_same_range_ties_by_creation_serial() {
     crate::test_utils::init_test_tracing();

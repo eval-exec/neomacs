@@ -2057,8 +2057,8 @@ impl OverlayList {
     }
 
     /// Return the next endpoint without allocating or publishing a lazy index.
-    /// Until the endpoint index exists, this borrows and scans interval records
-    /// in O(overlays); subsequent queries reuse the existing endpoint tree.
+    /// Until the endpoint index exists, this combines the next interval start
+    /// with ends of intervals containing `pos`; later queries reuse the tree.
     #[doc(hidden)]
     pub fn next_boundary_after_until_emacs_byte_pos_no_alloc(
         &self,

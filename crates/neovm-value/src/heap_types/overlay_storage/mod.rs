@@ -467,6 +467,18 @@ impl IntervalBPlusTree {
         self.records.is_empty()
     }
 
+    /// Next interval start strictly after position and at or before limit.
+    /// Empty overlays contribute starts too; interval end summaries must not
+    /// route this search to an earlier long-spanning child.
+    #[doc(hidden)]
+    pub fn next_start_after(
+        &self,
+        position: EmacsBytePos,
+        limit: EmacsBytePos,
+    ) -> Option<EmacsBytePos> {
+        self.records.next_key_position_after(position, limit)
+    }
+
     #[doc(hidden)]
     pub fn entries(&self) -> impl Iterator<Item = (Value, EmacsByteRange)> + '_ {
         self.records
