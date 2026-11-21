@@ -97,6 +97,16 @@ impl TestFontconfig {
         sans_serif: &FontFamilyName,
         serif: &FontFamilyName,
     ) -> Result<Self, ConfigError> {
+        Self::with_pattern_rules(files, monospace, sans_serif, serif, "")
+    }
+
+    pub(crate) fn with_pattern_rules(
+        files: &[PathBuf],
+        monospace: &FontFamilyName,
+        sans_serif: &FontFamilyName,
+        serif: &FontFamilyName,
+        pattern_rules: &str,
+    ) -> Result<Self, ConfigError> {
         // SAFETY: creating a new independent configuration has no borrowed input.
         let pointer =
             NonNull::new(unsafe { fontconfig_sys::FcConfigCreate() }).ok_or(ConfigError::Create)?;
@@ -104,7 +114,7 @@ impl TestFontconfig {
         // Explicit aliases name real loaded faces; there are no includes,
         // system directories, cache directories or host resource files.
         let rules = format!(
-            "<fontconfig><alias binding=\"same\"><family>monospace</family><prefer><family>{}</family></prefer></alias><alias binding=\"same\"><family>sans-serif</family><prefer><family>{}</family></prefer></alias><alias binding=\"same\"><family>serif</family><prefer><family>{}</family></prefer></alias></fontconfig>",
+            "<fontconfig><alias binding=\"same\"><family>monospace</family><prefer><family>{}</family></prefer></alias><alias binding=\"same\"><family>sans-serif</family><prefer><family>{}</family></prefer></alias><alias binding=\"same\"><family>serif</family><prefer><family>{}</family></prefer></alias>{pattern_rules}</fontconfig>",
             xml_text(monospace.as_str()),
             xml_text(sans_serif.as_str()),
             xml_text(serif.as_str()),
@@ -161,6 +171,24 @@ impl TestFontconfig {
     pub(super) fn with_reference_config<R>(&self, read: impl FnOnce(ConfigBorrow<'_>) -> R) -> R {
         let access = QueryOwner::Fixture(self).acquire();
         read(access.borrow())
+    }
+
+    pub(crate) fn render_options(
+        &self,
+        file: &str,
+        selector: u32,
+        size: f32,
+        weight: Option<f32>,
+    ) -> Option<neomacs_font_materializer::fontconfig::FontRenderOptions> {
+        self.with_reference_config(|config| {
+            let pointer = NonNull::new(config.native_ptr().ok()?)?;
+            // SAFETY: with_reference_config holds the fixture's native owner
+            // lock until this borrowed context and all native queries finish.
+            let context = unsafe {
+                neomacs_font_materializer::fontconfig::FontconfigContext::from_raw(pointer)
+            };
+            context.options_for_file_with_weight(Path::new(file), selector, size, weight)
+        })
     }
 
     pub(super) fn query_uncached(

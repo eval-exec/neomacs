@@ -1889,7 +1889,8 @@ fn shaping_metrics_do_not_come_from_another_variation_of_the_same_file() {
         Some(selected.post_script_name.clone()),
         &family,
     );
-    let expected = FontMetricsService::probe_resolved_font_metrics(&identity, None, size)
+    let expected = svc
+        .probe_resolved_font_metrics(&identity, None, size)
         .or_else(|| svc.font_px_metrics_from_selected_face(fontdb_id, size, &[]))
         .expect("selected file metrics");
     let shaping = svc

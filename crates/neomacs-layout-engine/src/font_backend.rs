@@ -548,6 +548,25 @@ pub trait FontBackend: Send {
         }
     }
 
+    /// Native render policy uses the same catalog authority as selection.
+    #[cfg(target_os = "linux")]
+    fn render_options(
+        &self,
+        file: &str,
+        selector: u32,
+        size: f32,
+        weight: Option<f32>,
+    ) -> Option<neomacs_font_materializer::fontconfig::FontRenderOptions> {
+        #[cfg(test)]
+        if let crate::font::metrics::test_catalog::TestFontCatalogSource::Fixture(catalog) =
+            self.test_catalog()
+        {
+            return catalog.render_options(file, selector, size, weight);
+        }
+        neomacs_font_materializer::fontconfig::FontconfigContext::system()?
+            .options_for_file_with_weight(std::path::Path::new(file), selector, size, weight)
+    }
+
     fn match_font_spec(&self, query: &FontCandidateQuery) -> FontDriverMatch {
         FontDriverMatch::Enumerated(self.list_candidates(query))
     }

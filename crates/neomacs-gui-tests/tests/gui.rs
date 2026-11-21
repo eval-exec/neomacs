@@ -269,3 +269,6 @@ mod font_hinting_weight;
 
 #[path = "image_api_parity.rs"]
 mod image_api_parity;
+
+#[path = "font_hinting_advances.rs"]
+mod font_hinting_advances;

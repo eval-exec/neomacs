@@ -480,6 +480,8 @@ struct LayoutFontHandle {
     /// device size.  Stored separately from logical aggregate metrics so the
     /// coordinate domains cannot be mixed accidentally.
     device_ascii_advances: Option<std::sync::Arc<crate::font::probe::DeviceAsciiAdvances>>,
+    #[cfg(target_os = "linux")]
+    render_options: Option<neomacs_font_materializer::fontconfig::FontRenderOptions>,
 }
 
 /// How a font request was answered. Distinguishing the tiers keeps traces and
@@ -1608,6 +1610,7 @@ impl FontMetricsService {
     }
 
     fn probe_resolved_font_metrics(
+        &self,
         identity: &ResolvedFontIdentity,
         platform: Option<&crate::font_backend::PlatformFontMatch>,
         font_size: f32,
@@ -1621,11 +1624,52 @@ impl FontMetricsService {
             .iter()
             .find(|coord| coord.tag() == u32::from_be_bytes(*b"wght"))
             .map(|coord| coord.value());
-        crate::font::probe::probe_font_px_metrics(
+        self.probe_font_px_metrics(
             file,
             identity.freetype_selector()?,
             font_size.round().max(1.0) as u32,
             explicit_weight,
+        )
+    }
+
+    /// Native probes borrow the selected catalog's rendering-policy authority.
+    fn probe_font_px_metrics(
+        &self,
+        file: &str,
+        selector: u32,
+        size: u32,
+        weight: Option<f32>,
+    ) -> Option<crate::font::probe::FontPxMetrics> {
+        #[cfg(target_os = "linux")]
+        return crate::font::probe::probe_font_px_metrics_with_policy(
+            file,
+            selector,
+            size,
+            weight,
+            |size| {
+                self.font_resolver
+                    .render_options(file, selector, size as f32, weight)
+            },
+        );
+        #[cfg(not(target_os = "linux"))]
+        crate::font::probe::probe_font_px_metrics(file, selector, size, weight)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn native_render_options(
+        &self,
+        identity: &ResolvedFontIdentity,
+        font_size: f32,
+    ) -> Option<neomacs_font_materializer::fontconfig::FontRenderOptions> {
+        self.font_resolver.render_options(
+            identity.file_path.as_deref()?,
+            identity.freetype_selector()?,
+            self.selection_size(font_size).rounded_device_px() as f32,
+            identity
+                .variation_coords
+                .iter()
+                .find(|coord| coord.tag() == u32::from_be_bytes(*b"wght"))
+                .map(|coord| coord.value()),
         )
     }
 
@@ -1639,6 +1683,8 @@ impl FontMetricsService {
             self.selection_size(font_size),
         )
         .ok()?;
+        #[cfg(target_os = "linux")]
+        let request = request.with_render_options(self.native_render_options(identity, font_size)?);
         crate::font::probe::probe_device_ascii_advances_for_request(&request)
             .ok()
             .map(std::sync::Arc::new)
@@ -1662,7 +1708,15 @@ impl FontMetricsService {
             &materialized.font.identity,
             self.selection_size(materialized.font.pixel_size),
         )
-        .and_then(|request| crate::font::probe::probe_device_glyph_advance(&request, ch));
+        .and_then(|request| {
+            let options = materialized
+                .render_options
+                .ok_or(crate::font::probe::DeviceFontProbeError::RenderOptionsUnavailable)?;
+            crate::font::probe::probe_device_glyph_advance(
+                &request.with_render_options(options),
+                ch,
+            )
+        });
         match measured {
             Ok(DeviceGlyphProbe::Present(advance)) => {
                 Some(advance.logical_advance(self.device_scale))
@@ -2125,9 +2179,7 @@ impl FontMetricsService {
             .and_then(|face| fontdb_face_file(face).map(|file| (file, face.index)));
         if let Some((file, face_index)) = probe_target {
             let pixel_size = font_size.round().max(1.0) as u32;
-            if let Some(metrics) =
-                crate::font::probe::probe_font_px_metrics(&file, face_index, pixel_size, None)
-            {
+            if let Some(metrics) = self.probe_font_px_metrics(&file, face_index, pixel_size, None) {
                 return Some(FontVerticalObservation {
                     metrics: FontVerticalMetrics {
                         ascent: metrics.ascent.max(0) as f32,
@@ -2486,7 +2538,7 @@ impl FontMetricsService {
                 }
             };
         let px_metrics = platform_px_metrics
-            .or_else(|| Self::probe_resolved_font_metrics(&identity, None, font_size))
+            .or_else(|| self.probe_resolved_font_metrics(&identity, None, font_size))
             .or_else(|| {
                 self.font_px_metrics_from_selected_face(
                     font_id,
@@ -2525,6 +2577,8 @@ impl FontMetricsService {
                 spacing: entity_spacing,
             }
         });
+        #[cfg(target_os = "linux")]
+        let render_options = self.native_render_options(&font.identity, font.pixel_size);
         Some(LayoutFontHandle {
             font,
             resolution: FontResolutionSource::FacePrimary,
@@ -2532,6 +2586,8 @@ impl FontMetricsService {
             source: LayoutFontSource::Swash(font_id),
             px_metrics,
             device_ascii_advances,
+            #[cfg(target_os = "linux")]
+            render_options,
         })
     }
 
@@ -2599,6 +2655,8 @@ impl FontMetricsService {
             source: LayoutFontSource::FreeTypeBitmap(opened),
             px_metrics: Some(px_metrics),
             device_ascii_advances: None,
+            #[cfg(target_os = "linux")]
+            render_options: None,
         })
     }
 
@@ -2832,18 +2890,15 @@ impl FontMetricsService {
                     )
                 }
             };
-        let px_metrics = Self::probe_resolved_font_metrics(
-            &identity,
-            resolved.platform.as_ref(),
-            selection.font_size,
-        )
-        .or_else(|| {
-            self.font_px_metrics_from_selected_face(
-                font_id,
-                selection.font_size,
-                &identity.variation_coords,
-            )
-        });
+        let px_metrics = self
+            .probe_resolved_font_metrics(&identity, resolved.platform.as_ref(), selection.font_size)
+            .or_else(|| {
+                self.font_px_metrics_from_selected_face(
+                    font_id,
+                    selection.font_size,
+                    &identity.variation_coords,
+                )
+            });
         let vertical = px_metrics
             .map(|metrics| FontVerticalMetrics {
                 ascent: metrics.ascent.max(0) as f32,
@@ -2876,6 +2931,8 @@ impl FontMetricsService {
                         .and_then(|matched| matched.metadata.spacing),
                 }
             });
+        #[cfg(target_os = "linux")]
+        let render_options = self.native_render_options(&font.identity, font.pixel_size);
         Some(LayoutFontHandle {
             font,
             resolution: FontResolutionSource::FontsetFallback,
@@ -2883,6 +2940,8 @@ impl FontMetricsService {
             source: LayoutFontSource::Swash(font_id),
             px_metrics,
             device_ascii_advances: None,
+            #[cfg(target_os = "linux")]
+            render_options,
         })
     }
 
@@ -3128,7 +3187,8 @@ impl FontMetricsService {
         // Observe the already chosen identity instead of selecting a family
         // winner, which can be another width, file, or variation.
         let platform = self.font_resolver.observe_exact_font(&identity, &family);
-        let px_metrics = Self::probe_resolved_font_metrics(&identity, platform.as_ref(), font_size)
+        let px_metrics = self
+            .probe_resolved_font_metrics(&identity, platform.as_ref(), font_size)
             .or_else(|| {
                 self.font_px_metrics_from_selected_face(
                     font_id,

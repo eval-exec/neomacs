@@ -6,6 +6,8 @@
 //! selection, and pixel-format normalization remain implementation details.
 
 pub mod color_glyph;
+#[cfg(target_os = "linux")]
+pub mod fontconfig;
 mod fontdb;
 pub mod raster_sources;
 

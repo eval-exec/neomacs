@@ -5,7 +5,13 @@ use super::*;
 /// the render-boundary design notes. Immutable release assets make every
 /// expectation execute on hosts without a Nix-store font installation.
 fn assert_gnu_probe(file: &str, size: u32, expect: FontPxMetrics) {
-    let got = probe_font_px_metrics(file, 0, size, None).expect("probe succeeds");
+    // These historical measurements used slight hinting. Make that recorded
+    // policy explicit rather than depending on this host's Fontconfig defaults.
+    let config = probe_config(file, "hintslight");
+    let got = probe_font_px_metrics_with_policy(file, 0, size, None, |size| {
+        config.render_options(file, 0, size as f32, None)
+    })
+    .expect("probe succeeds");
     assert_eq!(got, expect, "probe of {file} at px={size}");
 }
 
@@ -87,4 +93,52 @@ fn noto_sans_named_instances_cover_thin_to_black() {
     }
     assert!(!weights.contains(&350), "350 is not a named instance");
     assert!(!weights.contains(&950), "950 is not a named instance");
+}
+
+fn probe_config(
+    file: &str,
+    hintstyle: &str,
+) -> crate::font::fontconfig::test_config::TestFontconfig {
+    let library = Library::init().unwrap();
+    let face = library.new_face(file, 0).unwrap();
+    let alias = crate::font_backend::FontFamilyName::new(face.family_name().unwrap()).unwrap();
+    let rules = format!(
+        "<match target=\"pattern\"><edit name=\"hintstyle\" mode=\"assign\"><const>{hintstyle}</const></edit><edit name=\"rgba\" mode=\"assign\"><const>none</const></edit></match>"
+    );
+    crate::font::fontconfig::test_config::TestFontconfig::with_pattern_rules(
+        &[std::path::PathBuf::from(file)],
+        &alias,
+        &alias,
+        &alias,
+        &rules,
+    )
+    .unwrap()
+}
+
+#[test]
+fn full_and_slight_noto_ascii_probes_keep_selected_policy() {
+    let file = neomacs_test_fonts::noto_sans_variable().to_str().unwrap();
+    for (policy, small_width) in [("hintfull", 5.0), ("hintslight", 7.0)] {
+        let config = probe_config(file, policy);
+        for (size, width, average) in [(14, 13.0, 7), (7, small_width, 3)] {
+            let request = ExactDeviceFontRequest {
+                file,
+                selector: FreeTypeFaceSelector(0),
+                size: DeviceFontPixelSize::new(size).unwrap(),
+                weight: DeviceFontWeight::Default,
+                options: Some(config.render_options(file, 0, size as f32, None).unwrap()),
+            };
+            let advances = probe_device_ascii_advances_for_request(&request).unwrap();
+            assert_eq!(
+                advances.logical_advance('m', neomacs_display_protocol::geometry::DeviceScale::ONE),
+                Some(width),
+                "{policy}/{size}"
+            );
+            let metrics = probe_font_px_metrics_with_policy(file, 0, size, None, |size| {
+                config.render_options(file, 0, size as f32, None)
+            })
+            .unwrap();
+            assert_eq!(metrics.average_width, average, "{policy}/{size}");
+        }
+    }
 }

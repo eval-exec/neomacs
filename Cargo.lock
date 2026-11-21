@@ -3971,6 +3971,7 @@ dependencies = [
  "tiny-skia",
  "tracing",
  "ttf-parser",
+ "yeslogic-fontconfig-sys",
 ]
 
 [[package]]
@@ -4152,7 +4153,6 @@ dependencies = [
  "tracing-test",
  "wgpu",
  "wgpu-hal",
- "yeslogic-fontconfig-sys",
  "zune-jpeg",
 ]
 
