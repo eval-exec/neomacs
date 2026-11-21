@@ -415,23 +415,64 @@ fn check_gap_char_to_byte_midpoint_availability(lines: usize) {
     crate::test_utils::init_test_tracing();
     let text = "éa日🙂\n".repeat(lines);
     let expected = gap_utf8_position_offsets(&text);
-    let buf = GapBuffer::from_str(&text);
-    assert!(buf.is_multibyte());
-    assert_ne!(buf.char_count(), buf.emacs_byte_len());
-    assert_eq!(buf.gpt_byte(), buf.emacs_byte_len());
-    let midpoint = buf.char_count() / 2;
-    assert_eq!(char_to_byte(&buf, midpoint), expected[midpoint]);
-    let _ = buf.take_char_to_byte_availability_scanned_bytes_for_test();
-    for char_pos in midpoint + 1..=midpoint + 64 {
-        assert_eq!(char_to_byte(&buf, char_pos), expected[char_pos]);
+    const STEPS: usize = 64;
+    // The decoders probe a 64-byte block, then inspect the target character
+    // and (forward only) the following lead byte. Count those repeated visits,
+    // not just the returned byte span. No allowance depends on buffer length.
+    let bound = STEPS * (64 + neovm_value::emacs_char::MAX_MULTIBYTE_LENGTH + 1);
+    for forward in [true, false] {
+        let buf = GapBuffer::from_str(&text);
+        assert!(buf.is_multibyte());
+        assert_ne!(buf.char_count(), buf.emacs_byte_len());
+        assert_eq!(buf.gpt_byte(), buf.emacs_byte_len());
+        let midpoint = buf.char_count() / 2;
+        assert_eq!(char_to_byte(&buf, midpoint), expected[midpoint]);
+        let _ = buf.take_char_to_byte_walked_bytes_for_test();
+        for step in 1..=STEPS {
+            let char_pos = if forward {
+                midpoint + step
+            } else {
+                midpoint - step
+            };
+            assert_eq!(char_to_byte(&buf, char_pos), expected[char_pos]);
+        }
+        let actual = buf.take_char_to_byte_walked_bytes_for_test();
+        eprintln!("gap walk: lines={lines} forward={forward} bytes={actual} bound={bound}");
+        assert!(
+            actual > 0,
+            "mixed-width conversions must exercise the walk counter"
+        );
+        assert!(
+            actual <= bound,
+            "nearby conversions walked {actual} bytes, limit {bound}"
+        );
     }
-    let (actual, reference) = buf.take_char_to_byte_availability_scanned_bytes_for_test();
-    eprintln!(
-        "gap availability: lines={lines} actual_bytes={actual} debug_reference_bytes={reference}"
-    );
+}
+
+#[test]
+fn gap_char_to_byte_walk_counter_observes_counts_and_both_decoders() {
+    let text = "éa日🙂\n".repeat(40);
+    let bytes = text.as_bytes();
+    let before = neovm_value::emacs_char::position_conversion_walked_bytes_for_test();
+    assert_eq!(emacs_char_count_bytes(bytes, true).get(), 200);
     assert_eq!(
-        actual, 0,
-        "nearby forward conversions must use known anchor/gap character counts, not recount a distant suffix"
+        neovm_value::emacs_char::position_conversion_walked_bytes_for_test() - before,
+        bytes.len(),
+        "whole-slice counts must be observed without a call-site counter"
+    );
+    let before = neovm_value::emacs_char::position_conversion_walked_bytes_for_test();
+    assert_eq!(emacs_char_to_byte_in_slice(bytes, 1, true), 2);
+    assert_eq!(
+        neovm_value::emacs_char::position_conversion_walked_bytes_for_test() - before,
+        64 + 3,
+        "forward block, first lead, continuation, next lead"
+    );
+    let before = neovm_value::emacs_char::position_conversion_walked_bytes_for_test();
+    assert_eq!(nth_lead_from_end(bytes, 1, true), Some(bytes.len() - 1));
+    assert_eq!(
+        neovm_value::emacs_char::position_conversion_walked_bytes_for_test() - before,
+        64 + 1,
+        "backward block and final newline"
     );
 }
 
@@ -495,19 +536,11 @@ fn gap_char_to_byte_anchor_controls_ascii_unibyte_and_encoded_byte8() {
     let mut ascii_buf = GapBuffer::from_str(&ascii);
     ascii_buf.move_gap_to(17);
     assert_gap_char_positions(&ascii_buf, &(0..=ascii.len()).collect::<Vec<_>>());
-    assert_eq!(
-        ascii_buf.take_char_to_byte_availability_scanned_bytes_for_test(),
-        (0, 0)
-    );
 
     let raw = [0x80, b'A', 0xFF, b'\n'].repeat(16);
     let mut unibyte = GapBuffer::from_emacs_bytes(&raw, false);
     unibyte.move_gap_to(17);
     assert_gap_char_positions(&unibyte, &(0..=raw.len()).collect::<Vec<_>>());
-    assert_eq!(
-        unibyte.take_char_to_byte_availability_scanned_bytes_for_test(),
-        (0, 0)
-    );
 
     let mut bytes = Vec::new();
     let mut expected = vec![0];
