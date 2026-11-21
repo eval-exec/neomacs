@@ -922,6 +922,85 @@ fn reclaiming_after_a_foreign_handler_keeps_the_latch_and_chains_it() {
     );
 }
 
+#[cfg(unix)]
+fn installed_sigchld_action() -> libc::sigaction {
+    // SAFETY: query only; `old` is written before it is read.
+    unsafe {
+        let mut old: libc::sigaction = std::mem::zeroed();
+        assert_eq!(
+            libc::sigaction(libc::SIGCHLD, std::ptr::null(), &mut old),
+            0,
+            "could not read SIGCHLD's disposition"
+        );
+        old
+    }
+}
+
+/// SIGCHLD carries GNU's `emacs_sigaction_init` action in batch mode.
+///
+/// Mask always: SIGALRM, SIGCHLD, SIGWINCH (SIGDANGER where the platform
+/// defines it, SIGPROF only with GNU's PROFILER_CPU_SUPPORT); interactive
+/// adds SIGINT, SIGQUIT and SIGIO. Flags: `emacs_sigaction_flags` puts
+/// SA_RESTART on the batch action only (src/sysdep.c:1655-1673,
+/// :1679-1707).
+#[cfg(unix)]
+#[test]
+fn sigchld_mask_and_flags_match_gnu_in_batch_mode() {
+    os_signal::install_termination(true);
+    let action = installed_sigchld_action();
+    for sig in [libc::SIGALRM, libc::SIGCHLD, libc::SIGWINCH] {
+        assert_eq!(
+            // SAFETY: `action.sa_mask` is an initialised signal set.
+            unsafe { libc::sigismember(&action.sa_mask, sig) },
+            1,
+            "batch SIGCHLD mask must contain signal {sig}"
+        );
+    }
+    for sig in [libc::SIGINT, libc::SIGQUIT, libc::SIGIO] {
+        assert_eq!(
+            // SAFETY: `action.sa_mask` is an initialised signal set.
+            unsafe { libc::sigismember(&action.sa_mask, sig) },
+            0,
+            "batch SIGCHLD mask must not contain interactive signal {sig}"
+        );
+    }
+    assert_ne!(
+        action.sa_flags & libc::SA_RESTART,
+        0,
+        "noninteractive emacs_sigaction_flags sets SA_RESTART"
+    );
+}
+
+/// The interactive half of the same pin: SIGINT/SIGQUIT/SIGIO are blocked
+/// while SIGCHLD runs, and SA_RESTART is absent so long syscalls interrupt
+/// for pending input.
+#[cfg(unix)]
+#[test]
+fn sigchld_mask_and_flags_match_gnu_in_interactive_mode() {
+    os_signal::install_termination(false);
+    let action = installed_sigchld_action();
+    for sig in [
+        libc::SIGALRM,
+        libc::SIGCHLD,
+        libc::SIGWINCH,
+        libc::SIGINT,
+        libc::SIGQUIT,
+        libc::SIGIO,
+    ] {
+        assert_eq!(
+            // SAFETY: `action.sa_mask` is an initialised signal set.
+            unsafe { libc::sigismember(&action.sa_mask, sig) },
+            1,
+            "interactive SIGCHLD mask must contain signal {sig}"
+        );
+    }
+    assert_eq!(
+        action.sa_flags & libc::SA_RESTART,
+        0,
+        "interactive emacs_sigaction_flags omits SA_RESTART"
+    );
+}
+
 /// Windows has no POSIX SIGUSR dispositions, so this module must expose no
 /// signal entries and must not create an install-time wake mechanism.
 #[cfg(windows)]

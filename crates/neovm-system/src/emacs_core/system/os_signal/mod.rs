@@ -493,11 +493,60 @@ pub(crate) fn clear_child_signal_seen() {
     CHILD_SIGNAL_SEEN.store(false, Ordering::Relaxed);
 }
 
+/// GNU's `noninteractive` as of the last mode-aware install.
+///
+/// GNU installs every disposition from `main`, after the command line has set
+/// `noninteractive`. This port's first claim runs earlier (the evaluator and
+/// its wake pipe exist before the command loop), so it installs the normal
+/// GUI/TUI profile (`false`) until [`install_termination`] records the real
+/// value and re-applies every disposition.
+#[cfg(unix)]
+static SIGACTION_NONINTERACTIVE: AtomicBool = AtomicBool::new(false);
+
+#[cfg(unix)]
+fn sigaction_noninteractive() -> bool {
+    SIGACTION_NONINTERACTIVE.load(Ordering::Relaxed)
+}
+
+/// GNU `emacs_sigaction_init` (src/sysdep.c:1679-1707), the one builder for
+/// every disposition this module installs.
+///
+/// Mask, in GNU's order: SIGALRM, SIGCHLD, SIGDANGER (where the platform has
+/// it), SIGPROF (only with GNU's `PROFILER_CPU_SUPPORT` configure option;
+/// this build has no CPU profiler), SIGWINCH; and, only when interactive,
+/// SIGINT, SIGQUIT and SIGIO (GNU's `USABLE_SIGIO`; `SIGPOLL` is the same
+/// number where it exists). Flags are `emacs_sigaction_flags`
+/// (src/sysdep.c:1655-1673): `SA_RESTART` only when noninteractive, because
+/// interactive Emacs wants a signal to interrupt a long syscall so pending
+/// input is polled.
+#[cfg(unix)]
+fn emacs_sigaction_init(handler: usize, noninteractive: bool) -> libc::sigaction {
+    let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
+    // SAFETY: `sigemptyset`/`sigaddset` write only through `sa_mask`.
+    unsafe {
+        libc::sigemptyset(&mut action.sa_mask);
+        libc::sigaddset(&mut action.sa_mask, libc::SIGALRM);
+        libc::sigaddset(&mut action.sa_mask, libc::SIGCHLD);
+        #[cfg(target_os = "aix")]
+        libc::sigaddset(&mut action.sa_mask, libc::SIGDANGER);
+        libc::sigaddset(&mut action.sa_mask, libc::SIGWINCH);
+        if !noninteractive {
+            libc::sigaddset(&mut action.sa_mask, libc::SIGINT);
+            libc::sigaddset(&mut action.sa_mask, libc::SIGQUIT);
+            libc::sigaddset(&mut action.sa_mask, libc::SIGIO);
+        }
+    }
+    action.sa_sigaction = handler;
+    action.sa_flags = if noninteractive { libc::SA_RESTART } else { 0 };
+    action
+}
+
 /// Claim SIGCHLD the way GNU's `catch_child_signal` does
 /// (src/process.c:8645-8662 led down to the flag-only handler above):
 ///
-/// * block SIGCHLD across the swap, as `block_child_signal` does;
-/// * install `note_child_signal`;
+/// * block SIGCHLD and SIGINT across the swap, as GNU's `block_child_signal`
+///   does (src/sysdep.c:857-864), through `pthread_sigmask`;
+/// * install `note_child_signal` with `emacs_sigaction_init`'s mask and flags;
 /// * keep a one-argument handler installed before, so `note_child_signal` can
 ///   chain it (`lib_child_handler (sig)`, src/process.c:7657, :7769); a
 ///   `SA_SIGINFO` predecessor is refused with an install-time diagnostic
@@ -513,16 +562,17 @@ fn install_child_signal_flag() -> bool {
     // process installed, both on the async-signal-safe list. The mask is
     // empty, matching a flag-writing handler.
     unsafe {
-        let mut action: libc::sigaction = std::mem::zeroed();
-        libc::sigemptyset(&mut action.sa_mask);
-        action.sa_sigaction = note_child_signal as usize;
-        action.sa_flags = libc::SA_RESTART;
+        let action = emacs_sigaction_init(note_child_signal as usize, sigaction_noninteractive());
 
+        // GNU `block_child_signal` (src/sysdep.c:857-864): SIGCHLD and SIGINT,
+        // with `pthread_sigmask` (POSIX leaves `sigprocmask` unspecified once
+        // the process has more than one thread).
         let mut set: libc::sigset_t = std::mem::zeroed();
         let mut old_set: libc::sigset_t = std::mem::zeroed();
         libc::sigemptyset(&mut set);
         libc::sigaddset(&mut set, libc::SIGCHLD);
-        libc::sigprocmask(libc::SIG_BLOCK, &set, &mut old_set);
+        libc::sigaddset(&mut set, libc::SIGINT);
+        libc::pthread_sigmask(libc::SIG_BLOCK, &set, &mut old_set);
 
         let mut old_action: libc::sigaction = std::mem::zeroed();
         let installed = libc::sigaction(libc::SIGCHLD, &action, &mut old_action) == 0;
@@ -546,7 +596,7 @@ fn install_child_signal_flag() -> bool {
             }
         }
 
-        libc::sigprocmask(libc::SIG_SETMASK, &old_set, std::ptr::null_mut());
+        libc::pthread_sigmask(libc::SIG_SETMASK, &old_set, std::ptr::null_mut());
         installed
     }
 }
@@ -752,37 +802,12 @@ fn install_once() -> InstallReport {
     let mut installed = [false; HandledSignal::COUNT];
 
     for &signal in supported_signals() {
-        // GNU's `emacs_sigaction_init` (src/sysdep.c:1678-1710) blocks the
-        // nonfatal signals Emacs catches while this one is being handled, "so
-        // race conditions are less likely".  The set is reproduced here for
-        // the signals this port installs; the rest of GNU's set names signals
-        // nothing here catches, so adding them would block a disposition that
-        // does not exist.
-        //
-        // SAFETY: `sigaction` is called with a fully initialised `struct
-        // sigaction` and a valid signal number, before any thread that could
-        // race with it is started.
-        let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
-        // SAFETY: `sigemptyset`/`sigaddset` write only through `sa_mask`.
-        unsafe {
-            libc::sigemptyset(&mut action.sa_mask);
-            for &other in supported_signals() {
-                libc::sigaddset(&mut action.sa_mask, other.number());
-            }
-        }
-        let handler: extern "C" fn(libc::c_int) = deliver_user_signal;
-        action.sa_sigaction = handler as usize;
-        // SA_RESTART unconditionally, where GNU takes it only when
-        // `noninteractive` (`emacs_sigaction_flags`, src/sysdep.c:1660-1673).
-        // GNU's interactive reason for omitting it is "we need to poll for
-        // pending input so we need long-running syscalls to be interrupted";
-        // this port's wake is the self-pipe instead, and the wait it must
-        // interrupt is `epoll_wait`, which signal(7) lists among the calls
-        // that are "never restarted after being interrupted by a signal
-        // handler, regardless of the use of SA_RESTART".  So SA_RESTART costs
-        // nothing here and spares every other blocking call in the render
-        // thread and the workers a spurious EINTR.
-        action.sa_flags = libc::SA_RESTART;
+        // GNU builds every action with `emacs_sigaction_init`. The command
+        // line's `noninteractive` is not known this early (the wake pipe is
+        // created before the command loop), so this is the stored pre-mode
+        // profile; `install_termination` records the real value and
+        // re-applies the same builder to every disposition.
+        let action = emacs_sigaction_init(deliver_user_signal as usize, sigaction_noninteractive());
 
         // Seeded with a sentinel `sigaction` cannot produce, so
         // "the previous disposition was SIG_DFL" is a reading and not the
@@ -852,6 +877,11 @@ pub fn install_termination(noninteractive: bool) {
     #[cfg(unix)]
     {
         install();
+        // The mode is now known. Every disposition installed before this
+        // point used the stored pre-mode profile, so record the real value
+        // and re-apply the one GNU builder to each of them.
+        SIGACTION_NONINTERACTIVE.store(noninteractive, Ordering::Release);
+
         for sig in FATAL_SIGNALS {
             // SAFETY: valid signals and initialized local sigaction storage.
             let mut old: libc::sigaction = unsafe { std::mem::zeroed() };
@@ -864,26 +894,35 @@ pub fn install_termination(noninteractive: bool) {
             if noninteractive && old.sa_sigaction == libc::SIG_IGN {
                 continue;
             }
-            let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
-            action.sa_sigaction = deliver_user_signal as *const () as usize;
-            action.sa_flags = libc::SA_RESTART;
-            // SAFETY: initialized action, valid signal set and signal numbers.
-            unsafe {
-                libc::sigemptyset(&mut action.sa_mask);
-                libc::sigaddset(&mut action.sa_mask, libc::SIGTERM);
-                libc::sigaddset(&mut action.sa_mask, libc::SIGHUP);
-                if libc::sigaction(sig, &action, std::ptr::null_mut()) != 0 {
-                    panic!(
-                        "cannot install orderly shutdown signal {sig}: {}",
-                        std::io::Error::last_os_error()
-                    );
-                }
+            let action = emacs_sigaction_init(deliver_user_signal as usize, noninteractive);
+            // SAFETY: initialized action and a valid signal number.
+            if unsafe { libc::sigaction(sig, &action, std::ptr::null_mut()) } != 0 {
+                panic!(
+                    "cannot install orderly shutdown signal {sig}: {}",
+                    std::io::Error::last_os_error()
+                );
             }
         }
+
+        // The user signals were installed before the mode was known; replace
+        // the pre-mode action with the mode-correct mask and flags.
+        for &signal in supported_signals() {
+            let action = emacs_sigaction_init(deliver_user_signal as usize, noninteractive);
+            // SAFETY: initialized action and a valid signal number.
+            unsafe {
+                libc::sigaction(signal.number(), &action, std::ptr::null_mut());
+            }
+        }
+
+        // SIGCHLD's mask and flags are mode-dependent too.
+        if !install_child_signal_flag() {
+            tracing::warn!("could not re-claim SIGCHLD for the known batch/interactive mode");
+        }
+
         // P4: GNU's fatal faults are installed after Rust std's runtime has
         // taken SIGSEGV/SIGBUS for its stack-overflow detector; the install
         // saves std's action so a genuine guard-page hit still chains to it.
-        install_fault_dispositions();
+        install_fault_dispositions(noninteractive);
     }
     #[cfg(not(unix))]
     let _ = noninteractive;
@@ -1200,7 +1239,7 @@ unsafe extern "C" fn deliver_fatal_fault(
 /// action per signal. Idempotent; called by [`install_termination`], which
 /// runs from `main` after the Rust runtime has installed its handler.
 #[cfg(unix)]
-fn install_fault_dispositions() {
+fn install_fault_dispositions(noninteractive: bool) {
     FAULT_INSTALL.get_or_init(|| {
         // GNU initializes the backtrace tables before any handler can run
         // (`emacs_backtrace (-1)`, src/emacs.c:1627) because the first
@@ -1213,16 +1252,15 @@ fn install_fault_dispositions() {
             (libc::SIGSEGV, &PREVIOUS_SEGV_ACTION, &PREVIOUS_SEGV_FLAGS),
             (libc::SIGBUS, &PREVIOUS_BUS_ACTION, &PREVIOUS_BUS_FLAGS),
         ] {
-            let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
-            action.sa_sigaction = deliver_fatal_fault as usize;
-            action.sa_flags = libc::SA_SIGINFO | libc::SA_ONSTACK;
+            // GNU builds these with `emacs_sigaction_init` and adds SA_ONSTACK;
+            // this port also takes SA_SIGINFO so a genuine guard-page hit can
+            // chain to Rust std's three-argument handler.
+            let mut action = emacs_sigaction_init(deliver_fatal_fault as usize, noninteractive);
+            action.sa_flags |= libc::SA_SIGINFO | libc::SA_ONSTACK;
             let mut old: libc::sigaction = unsafe { std::mem::zeroed() };
             // SAFETY: both pointers are to initialised locals and `sig` is a
             // valid signal number.
-            let installed = unsafe {
-                libc::sigfillset(&mut action.sa_mask);
-                libc::sigaction(sig, &action, &mut old)
-            };
+            let installed = unsafe { libc::sigaction(sig, &action, &mut old) };
             if installed == 0 {
                 previous_action.store(old.sa_sigaction, Ordering::Release);
                 previous_flags.store(old.sa_flags, Ordering::Release);
