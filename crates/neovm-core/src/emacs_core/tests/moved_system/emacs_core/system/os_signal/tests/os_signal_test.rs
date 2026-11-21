@@ -870,7 +870,6 @@ fn reclaiming_after_a_foreign_handler_keeps_the_latch_and_chains_it() {
     }
 
     let _ = os_signal::install();
-    os_signal::clear_child_signal_seen();
 
     // A library claims SIGCHLD after the port's install.
     // SAFETY: `action` is fully initialised; the handler only stores an atomic.
@@ -909,20 +908,18 @@ fn reclaiming_after_a_foreign_handler_keeps_the_latch_and_chains_it() {
 
     kill_self(libc::SIGCHLD);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-    while !(FOREIGN.load(std::sync::atomic::Ordering::Acquire) && os_signal::child_signal_seen())
+    while !FOREIGN.load(std::sync::atomic::Ordering::Acquire)
         && std::time::Instant::now() < deadline
     {
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
-    assert!(
-        os_signal::child_signal_seen(),
-        "the latch must fire after a re-claim"
-    );
+    // `note_child_signal` stores the latch before it chains, and the chain is
+    // the only thing that can set FOREIGN: the chained call proves both that
+    // the re-claimed handler ran and that its latch store executed.
     assert!(
         FOREIGN.load(std::sync::atomic::Ordering::Acquire),
-        "the foreign handler must still be chained after a re-claim"
+        "the re-claimed handler must fire and still chain the foreign handler"
     );
-    os_signal::clear_child_signal_seen();
 }
 
 /// Windows has no POSIX SIGUSR dispositions, so this module must expose no

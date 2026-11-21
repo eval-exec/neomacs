@@ -484,13 +484,11 @@ extern "C" fn note_child_signal(signal: libc::c_int) {
 }
 
 /// Whether a SIGCHLD was delivered since the last full status walk.
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn child_signal_seen() -> bool {
     CHILD_SIGNAL_SEEN.load(Ordering::Relaxed)
 }
 
 /// Clear the latch at the start of the wait's full status walk.
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn clear_child_signal_seen() {
     CHILD_SIGNAL_SEEN.store(false, Ordering::Relaxed);
 }

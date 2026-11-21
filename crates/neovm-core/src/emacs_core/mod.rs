@@ -304,9 +304,10 @@ pub use neovm_system::emacs_core::filelock;
 pub use neovm_system::emacs_core::host_input;
 #[path = "load_boot.rs"]
 pub mod load_boot;
-// Public so the frontend can re-claim SIGCHLD after WebKit/WPE init
-// (`os_signal::reclaim_child_signal`), GNU's xwidget re-claim points.
-pub use neovm_system::emacs_core::os_signal;
+pub(crate) use neovm_system::emacs_core::os_signal;
+// The frontend's one seam into os_signal: GNU's xwidget re-claim of SIGCHLD
+// after WebKit/WPE init. The rest of the module stays crate-private.
+pub use neovm_system::emacs_core::os_signal::reclaim_child_signal;
 pub use neovm_system::emacs_core::path_exec;
 pub use neovm_system::emacs_core::perf_trace;
 pub(crate) use neovm_system::emacs_core::platform_facts;
