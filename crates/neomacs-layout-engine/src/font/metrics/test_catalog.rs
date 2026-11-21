@@ -310,7 +310,7 @@ impl FontMetricsService {
 impl TestFontCatalogSource {
     pub(crate) fn font_system(&self) -> FontSystem {
         match self {
-            Self::System => FontSystem::new(),
+            Self::System => super::configured_font_system(),
             Self::Fixture(catalog) => catalog.font_system(),
         }
     }

@@ -14,6 +14,12 @@ use neomacs_display_protocol::GraphicalDisplayIdentity;
 use neomacs_display_protocol::types::FaceId;
 use neomacs_font_materializer::FontFileCache;
 
+fn configured_font_system() -> FontSystem {
+    let mut system = FontSystem::new_with_locale_and_db(String::new(), fontdb::Database::new());
+    neomacs_font_materializer::reset_system_font_system(&mut system);
+    system
+}
+
 /// Defensive wrapper around cosmic_text's raw-float API. Frame publication
 /// validates graphic sizes before this backend boundary; the clamp remains for
 /// lower-level shaping helpers that do not publish frame geometry.
@@ -825,9 +831,9 @@ pub struct FontMetricsService {
     ///
     /// Like the `ascii_cache`/`char_cache`/`metrics_cache`, entries are only
     /// valid for the current fontdb generation: `clear_caches` drops them on a
-    /// font change, but `prime_file` (reachable from `resolve_family` /
+    /// font change, but non-Linux `prime_file` (reachable from `resolve_family` /
     /// `font_request_for_char`) can load a font mid-session WITHOUT invalidating
-    /// the cache. Production primes a face's file before shaping it, so a stale
+    /// the cache. Those hosts prime a face's file before shaping it, so a stale
     /// entry does not arise in practice; this matches the existing advance
     /// caches' unstated contract. The cached `font_id`/`glyph_id` are likewise
     /// only valid for that generation — production consumers read only
@@ -1048,7 +1054,7 @@ impl FontMetricsService {
         // the backend's per-service cursor and triggers a safe-point rebuild.
         let font_resolver = crate::font::resolver::FontResolver::platform_default();
         tracing::info!("FontMetricsService: initializing cosmic-text FontSystem");
-        let font_system = FontSystem::new();
+        let font_system = configured_font_system();
         tracing::info!("FontMetricsService: FontSystem ready");
         Self::from_font_system_and_resolver(font_system, font_resolver)
     }
@@ -1058,6 +1064,12 @@ impl FontMetricsService {
         font_system: FontSystem,
         font_resolver: crate::font::resolver::FontResolver,
     ) -> Self {
+        if font_system.db().is_empty() {
+            // Diagnose once when the service is created, not once per glyph.
+            // Native-selected bitmap fonts can still be materialized; outline
+            // requests retain their missing-font results and degraded metrics.
+            tracing::warn!("no scalable fonts in the native catalog; outline text is unavailable");
+        }
         Self {
             display_identity: None,
             font_catalog: crate::font::catalog::FontCatalog::default(),
@@ -1216,7 +1228,7 @@ impl FontMetricsService {
             );
             #[cfg(not(test))]
             {
-                self.font_system = FontSystem::new();
+                neomacs_font_materializer::reset_system_font_system(&mut self.font_system);
             }
             #[cfg(test)]
             {
@@ -1539,10 +1551,13 @@ impl FontMetricsService {
 
     /// Resolve the effective font family name for a face.
     ///
-    /// If `font_file_path` is provided, pre-loads the exact font file into fontdb
-    /// while preserving the exact family name that Fontconfig selected.
-    pub fn resolve_family(&mut self, emacs_family: &str, font_file_path: Option<&str>) -> String {
-        if let Some(path) = font_file_path {
+    /// Linux's native-filtered catalog already admits the approved collection
+    /// members. Loading the whole file here would reintroduce rejected siblings.
+    /// Other hosts retain their legacy file priming; exact selected-face pinning
+    /// is handled separately on all platforms.
+    pub fn resolve_family(&mut self, emacs_family: &str, _font_file_path: Option<&str>) -> String {
+        #[cfg(not(target_os = "linux"))]
+        if let Some(path) = _font_file_path {
             let _ = self.font_file_cache.prime_file(&mut self.font_system, path);
         }
         emacs_family.to_string()
@@ -2000,6 +2015,9 @@ impl FontMetricsService {
         weight: u16,
         italic: bool,
     ) -> Option<CosmicPrimaryProbe> {
+        if self.font_system.db().is_empty() {
+            return None;
+        }
         let slant = if italic {
             FontSlant::Italic
         } else {
@@ -2865,6 +2883,9 @@ impl FontMetricsService {
             );
         }
         let attrs = self.build_attrs_for_resolved_char(&resolved, selection.font_size)?;
+        if self.font_system.db().is_empty() {
+            return None;
+        }
         let metrics = safe_metrics(selection.font_size, selection.font_size * 1.3);
         let mut buffer = Buffer::new_empty(metrics);
         buffer.set_size(
@@ -3336,6 +3357,9 @@ impl FontMetricsService {
             );
             return font_size * 0.6;
         };
+        if self.font_system.db().is_empty() {
+            return font_size * 0.6;
+        }
         let line_height = font_size * 1.3;
         let metrics = safe_metrics(font_size, line_height);
 
@@ -3620,6 +3644,10 @@ impl FontMetricsService {
                     font_size,
                 )
             });
+        if self.font_system.db().is_empty() {
+            widths.fill(font_size * 0.6);
+            return widths;
+        }
         let line_height = font_size * 1.3;
         let metrics = safe_metrics(font_size, line_height);
 
@@ -3840,6 +3868,17 @@ impl FontMetricsService {
         let line_height = font_size * 1.3;
         let metrics = safe_metrics(font_size, line_height);
 
+        let mut ascent = font_size.ceil().max(1.0);
+        let mut descent = (line_height.ceil() - ascent).max(0.0);
+        let mut actual_line_height = (ascent + descent).max(1.0);
+        if self.font_system.db().is_empty() {
+            return FontVerticalMetrics {
+                ascent,
+                descent,
+                line_height: actual_line_height,
+            };
+        }
+
         // Fallback only: measure a representative glyph box when the selected
         // font's global tables are unavailable or obviously pathological.
         let sample = " Mg";
@@ -3857,10 +3896,6 @@ impl FontMetricsService {
             None,
         );
         buffer.shape_until_scroll(&mut self.font_system, false);
-
-        let mut ascent = font_size.ceil().max(1.0);
-        let mut descent = (line_height.ceil() - ascent).max(0.0);
-        let mut actual_line_height = (ascent + descent).max(1.0);
 
         if let Some(layout) = buffer.line_layout(&mut self.font_system, 0)
             && let Some(line) = layout.first()

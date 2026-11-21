@@ -3968,6 +3968,8 @@ dependencies = [
  "neomacs-display-protocol",
  "neomacs-test-fonts",
  "resvg",
+ "sys-locale",
+ "tempfile",
  "thiserror 2.0.20",
  "tiny-skia",
  "tracing",

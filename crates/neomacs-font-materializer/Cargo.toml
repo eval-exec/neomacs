@@ -24,6 +24,7 @@ tracing.workspace = true
 ttf-parser.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
+sys-locale.workspace = true
 freetype-rs = { version = "0.38.0" }
 yeslogic-fontconfig-sys.workspace = true
 
@@ -31,6 +32,7 @@ yeslogic-fontconfig-sys.workspace = true
 freetype-rs = { version = "0.38.0", features = ["bundled"] }
 
 [dev-dependencies]
+tempfile.workspace = true
 neomacs-test-fonts.workspace = true
 
 [lints]

@@ -1,6 +1,9 @@
 use super::*;
 use tracing::debug;
 
+#[path = "empty_catalog_test.rs"]
+mod empty_catalog_tests;
+
 #[cfg(all(test, target_os = "linux"))]
 #[path = "gnu_cjk_metrics.rs"]
 mod gnu_cjk_metrics;
@@ -3307,6 +3310,50 @@ fn portable_metric_fallback_stays_on_the_selected_face() {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn resolve_family_preserves_approved_collection_members() {
+    let file = neomacs_test_fonts::noto_sans_cjk_variable();
+    let catalog = crate::font::metrics::test_catalog::TestFontCatalog::from_files(&[file])
+        .expect("pinned collection catalog");
+    let mut svc = catalog.metrics_service();
+    let rejected: Vec<_> = svc
+        .font_system
+        .db()
+        .faces()
+        .filter(|face| face.index != 0)
+        .map(|face| face.id)
+        .collect();
+    assert!(
+        !rejected.is_empty(),
+        "fixture must contain sibling collection faces"
+    );
+    // Model the admitted-index-only DB produced by the private Fontconfig
+    // collection-filter test in the materializer, then exercise the ordinary
+    // layout realization entry point without a process-global configuration.
+    for id in rejected {
+        svc.font_system.db_mut().remove_face(id);
+    }
+    let approved = svc.font_system.db().faces().next().unwrap();
+    let family = approved.families[0].0.clone();
+    let identity = (approved.id, approved.index, approved.families.clone());
+    assert_eq!(svc.font_system.db().len(), 1);
+    for _ in 0..2 {
+        assert_eq!(svc.resolve_family(&family, file.to_str()), family);
+        let faces: Vec<_> = svc
+            .font_system
+            .db()
+            .faces()
+            .map(|face| (face.id, face.index, face.families.clone()))
+            .collect();
+        assert_eq!(
+            faces,
+            vec![identity.clone()],
+            "resolving an approved file must not publish rejected TTC siblings"
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 #[tracing_test::traced_test]
 fn resolved_font_for_face_preserves_platform_named_instance() {
     use neovm_core::face::{FontSlant, FontWeight};
@@ -3341,9 +3388,9 @@ fn resolved_font_for_face_preserves_platform_named_instance() {
         "the fixed fixture must exercise a named instance"
     );
     let mut svc = catalog.metrics_service();
-    // Frame face realization currently primes the platform file before the
-    // finished-frame font table is materialized.  The exact realization
-    // contract must survive that ordinary pipeline ordering.
+    // Frame face realization resolves the family before the finished-frame
+    // font table is materialized. The exact realization contract must survive
+    // that ordinary pipeline ordering.
     svc.resolve_family("Noto Sans", Some(platform_file));
     let regular = svc
         .resolved_font_for_face("Noto Sans", 400, false, 12.0)

@@ -7,11 +7,20 @@
 use fontconfig_sys as fc;
 use freetype::{LcdFilter, RenderMode, face::LoadFlag};
 use std::{
+    collections::{BTreeMap, BTreeSet},
     ffi::{CStr, CString},
     os::unix::ffi::OsStrExt,
-    path::Path,
+    path::{Path, PathBuf},
     ptr::{self, NonNull},
 };
+
+#[derive(Clone, Copy, Debug, thiserror::Error, PartialEq, Eq)]
+pub(crate) enum FontCatalogError {
+    #[error("native Fontconfig is unavailable")]
+    Unavailable,
+    #[error("native Fontconfig catalog enumeration failed")]
+    Query,
+}
 
 // Fontconfig exposes this since 2.11.91; the raw binding omits it.
 unsafe extern "C" {
@@ -249,6 +258,90 @@ impl FontconfigContext<'static> {
 }
 
 impl<'a> FontconfigContext<'a> {
+    /// Materialize only sources admitted by the native configuration. A
+    /// successful empty catalog remains empty; it never triggers discovery.
+    pub(crate) fn font_database(&self) -> Result<fontdb::Database, FontCatalogError> {
+        self.font_database_with_count()
+            .map(|(database, _)| database)
+    }
+
+    fn font_database_with_count(&self) -> Result<(fontdb::Database, usize), FontCatalogError> {
+        let catalog = self.font_catalog()?;
+        Ok(crate::fontdb::database_from_native_catalog(catalog))
+    }
+
+    fn font_catalog(&self) -> Result<crate::fontdb::NativeFontCatalog, FontCatalogError> {
+        let pattern = Pattern::new().ok_or(FontCatalogError::Query)?;
+        // SAFETY: create an independently owned query projection.
+        let objects = CatalogObjects(
+            NonNull::new(unsafe { fc::FcObjectSetCreate() }).ok_or(FontCatalogError::Query)?,
+        );
+        for property in [c"file", c"index"] {
+            // SAFETY: owned object set and terminated property; Fontconfig copies it.
+            if unsafe { fc::FcObjectSetAdd(objects.0.as_ptr(), property.as_ptr()) } == 0 {
+                return Err(FontCatalogError::Query);
+            }
+        }
+        // SAFETY: this borrowed configuration is live and immutable, both
+        // query objects remain owned, and the returned font set is independent.
+        let font_set = CatalogFonts(
+            NonNull::new(unsafe { fc::FcFontList(self.raw, pattern.raw(), objects.0.as_ptr()) })
+                .ok_or(FontCatalogError::Query)?,
+        );
+        // SAFETY: Fontconfig returned this non-null owned font set. Its owner
+        // remains live until every filename/selector has been copied below.
+        let fonts = unsafe { font_set.0.as_ref() };
+        if fonts.nfont < 0 || (fonts.nfont > 0 && fonts.fonts.is_null()) {
+            return Err(FontCatalogError::Query);
+        }
+        let mut files: BTreeMap<PathBuf, BTreeSet<u32>> = BTreeMap::new();
+        for i in 0..fonts.nfont as usize {
+            // SAFETY: the font set owns nfont entries, all live through this loop.
+            let pattern = unsafe { *fonts.fonts.add(i) };
+            // SAFETY: the font set owns this pattern and remains live and
+            // immutable until the projection has copied its filename/index.
+            if let Some((file, index)) = unsafe { catalog_file_face(pattern) } {
+                files.entry(file).or_default().insert(index);
+            }
+        }
+        let mut generics = Vec::new();
+        if !files.is_empty() {
+            use crate::fontdb::GenericFamily::*;
+            for family in [Serif, SansSerif, Monospace, Cursive, Fantasy] {
+                if let Some(face) = self.generic_catalog_face(family.name()) {
+                    generics.push((family, face));
+                }
+            }
+        }
+        Ok(crate::fontdb::NativeFontCatalog { files, generics })
+    }
+
+    fn generic_catalog_face(&self, family: &str) -> Option<(PathBuf, u32)> {
+        let pattern = Pattern::new()?;
+        pattern.string(c"family", &CString::new(family).ok()?)?;
+        // SAFETY: borrowed configuration and owned pattern are live. This
+        // queries aliases in the same authority that supplied the font list.
+        unsafe {
+            if fc::FcConfigSubstitute(self.raw, pattern.raw(), fc::FcMatchPattern) == 0 {
+                return None;
+            }
+            fc::FcDefaultSubstitute(pattern.raw());
+        }
+        let mut result = fc::FcResultNoMatch;
+        // SAFETY: live borrowed configuration and owned substituted pattern;
+        // the returned match has its own owner, retained through projection.
+        let matched = Pattern(NonNull::new(unsafe {
+            fc::FcFontMatch(self.raw, pattern.raw(), &mut result)
+        })?);
+        (result == fc::FcResultMatch)
+            .then(|| {
+                // SAFETY: matched owns the live, immutable pattern through
+                // the projection, which copies rather than borrows its data.
+                unsafe { catalog_file_face(matched.raw()) }
+            })
+            .flatten()
+    }
+
     /// Borrow an explicit configuration without replacing process defaults.
     ///
     /// # Safety
@@ -457,6 +550,53 @@ impl<'a> FontconfigContext<'a> {
     }
 }
 
+struct CatalogObjects(NonNull<fc::FcObjectSet>);
+impl Drop for CatalogObjects {
+    fn drop(&mut self) {
+        // SAFETY: this wrapper uniquely owns the object set.
+        unsafe { fc::FcObjectSetDestroy(self.0.as_ptr()) };
+    }
+}
+
+struct CatalogFonts(NonNull<fc::FcFontSet>);
+impl Drop for CatalogFonts {
+    fn drop(&mut self) {
+        // SAFETY: this wrapper uniquely owns the enumeration and its patterns.
+        unsafe { fc::FcFontSetDestroy(self.0.as_ptr()) };
+    }
+}
+
+/// Copy one native pattern's file and collection selector.
+///
+/// # Safety
+/// A non-null `pattern` must point to a live Fontconfig pattern protected
+/// against concurrent mutation for this call. Its owning pattern or font set
+/// must retain the filename storage until this function finishes copying it.
+unsafe fn catalog_file_face(pattern: *mut fc::FcPattern) -> Option<(PathBuf, u32)> {
+    if pattern.is_null() {
+        return None;
+    }
+    let mut file = ptr::null_mut();
+    let mut index = 0;
+    // SAFETY: callers retain the owning pattern/font set; output storage is
+    // writable. Copy the filename bytes before the owner is dropped.
+    unsafe {
+        if fc::FcPatternGetString(pattern, c"file".as_ptr(), 0, &mut file) != fc::FcResultMatch
+            || file.is_null()
+            || fc::FcPatternGetInteger(pattern, c"index".as_ptr(), 0, &mut index)
+                != fc::FcResultMatch
+        {
+            return None;
+        }
+        Some((
+            PathBuf::from(std::ffi::OsStr::from_bytes(
+                CStr::from_ptr(file.cast()).to_bytes(),
+            )),
+            u32::try_from(index).ok()?,
+        ))
+    }
+}
+
 impl FontRenderOptions {
     /// Cairo's FT merge gives explicit surface settings precedence, except
     /// that the font pattern's NONE values disable hinting, AA or filtering.
@@ -616,3 +756,7 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/surface_font_options_test.rs"]
 mod surface_tests;
+
+#[cfg(test)]
+#[path = "tests/font_catalog_test.rs"]
+mod catalog_tests;

@@ -1,8 +1,8 @@
 //! UI overlay rendering methods for WgpuRenderer.
 
 use super::super::glyph_atlas::{
-    AnyAtlasEntry, GlyphAtlasHandle, GlyphKey, GlyphMaterialKind, SubpixelRequest, WgpuGlyphAtlas,
-    glyph_font_identity,
+    AnyAtlasEntry, ComposedGlyphLookup, GlyphAtlasHandle, GlyphKey, GlyphMaterialKind,
+    SubpixelRequest, WgpuGlyphAtlas, glyph_font_identity,
 };
 use super::super::vertex::{GlyphVertex, RectVertex, RoundedRectVertex, Uniforms};
 use super::TitleFadeEntry;
@@ -904,7 +904,7 @@ impl WgpuRenderer {
         // a whole, just like ordinary frame text: advancing once per Rust
         // `char` is incorrect for fallback CJK fonts, combining marks,
         // ligatures, emoji sequences, and bidirectional scripts.
-        let shaped_preedit = glyph_atlas.get_or_create_composed_atlas(
+        let shaped_preedit = glyph_atlas.get_or_create_composed_atlas_lookup(
             &self.device,
             &self.queue,
             preedit_text,
@@ -915,14 +915,21 @@ impl WgpuRenderer {
             SubpixelBin::Zero,
             SubpixelRequest::Disabled,
         );
-        let preedit_width = shaped_preedit.as_ref().map_or_else(
-            || preedit_text.chars().count() as f32 * glyph_atlas.default_char_width(),
-            |handles| {
-                handles
+        let (shaped_preedit, preedit_width) = match shaped_preedit {
+            Some(ComposedGlyphLookup::Ink(handles)) => {
+                let width = handles
                     .first()
-                    .map_or(0.0, |handle| handle.advance_width / self.scale_factor)
-            },
-        );
+                    .map_or(0.0, |handle| handle.advance_width / self.scale_factor);
+                (handles, width)
+            }
+            Some(ComposedGlyphLookup::Empty { advance_width }) => {
+                (Vec::new(), advance_width / self.scale_factor)
+            }
+            None => (
+                Vec::new(),
+                preedit_text.chars().count() as f32 * glyph_atlas.default_char_width(),
+            ),
+        };
 
         // Background and underline rects
         let bg_color = Color::new(0.15, 0.15, 0.2, 0.95).srgb_to_linear();
@@ -987,13 +994,9 @@ impl WgpuRenderer {
             [c.r, c.g, c.b, c.a]
         };
         let mut overlay_glyphs: Vec<(GlyphAtlasHandle, f32, f32, [f32; 4])> = shaped_preedit
-            .map(|handles| {
-                handles
-                    .into_iter()
-                    .map(|handle| (handle, px + 2.0, py, text_color))
-                    .collect()
-            })
-            .unwrap_or_default();
+            .into_iter()
+            .map(|handle| (handle, px + 2.0, py, text_color))
+            .collect();
         self.render_overlay_glyphs(view, &mut overlay_glyphs, glyph_atlas, &draw);
     }
 
@@ -1847,7 +1850,11 @@ impl WgpuRenderer {
                         (handle, bounds.x + positioned.padding(), text_y, text_color)
                     }))
                 }
-                Err(error) => tracing::warn!(?error, "menu heading rasterization failed"),
+                Err(error) => {
+                    if !error.is_stable_raster_failure() {
+                        tracing::warn!(?error, "menu heading rasterization failed");
+                    }
+                }
             }
         }
         self.render_overlay_glyphs(view, &mut overlay_glyphs, glyph_atlas, &draw);
@@ -2048,7 +2055,11 @@ impl WgpuRenderer {
                         (handle, bounds.x + positioned.padding(), text_y, text_color)
                     }))
                 }
-                Err(error) => tracing::warn!(?error, "menu heading rasterization failed"),
+                Err(error) => {
+                    if !error.is_stable_raster_failure() {
+                        tracing::warn!(?error, "menu heading rasterization failed");
+                    }
+                }
             }
         }
         self.render_overlay_glyphs(view, &mut overlay_glyphs, glyph_atlas, &draw);

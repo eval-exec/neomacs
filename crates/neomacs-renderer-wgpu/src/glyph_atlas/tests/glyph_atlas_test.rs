@@ -438,7 +438,7 @@ fn glyph_font_identity_discriminates_resolved_font_id() {
     assert_ne!(glyph_font_identity(Some(&a)), glyph_font_identity(Some(&b)));
 }
 
-fn try_test_device_and_atlas() -> Option<(wgpu::Device, wgpu::Queue, WgpuGlyphAtlas)> {
+pub(super) fn try_test_device_and_atlas() -> Option<(wgpu::Device, wgpu::Queue, WgpuGlyphAtlas)> {
     let instance =
         wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
     let adapter =
@@ -615,7 +615,10 @@ fn macos_resolved_cluster_applies_backing_scale() {
                 SubpixelBin::Zero,
                 false,
             )
-            .and_then(|mut parts| (parts.len() == 1).then(|| parts.remove(0)))
+            .and_then(|outcome| match outcome {
+                super::Rasterized::Ink(mut parts) if parts.len() == 1 => Ok(parts.remove(0)),
+                _ => Err(GlyphAtlasError::RasterizeFailed),
+            })
             .expect("rasterize the installed Monaco glyph")
     };
     let at_one = rasterize(&mut atlas);
@@ -765,7 +768,7 @@ fn renderer_keeps_missing_ascii_on_primary_font() {
         atlas.try_fast_single_char_glyph(' ', Some(&face)),
         Some(SingleCharGlyph::MissingPrimaryAscii { advance_width: 5.0 })
     ));
-    let result = atlas
+    let super::Rasterized::Ink(result) = atlas
         .rasterize_glyph(
             ' ',
             Some(&face),
@@ -773,7 +776,10 @@ fn renderer_keeps_missing_ascii_on_primary_font() {
             SubpixelBin::Zero,
             false,
         )
-        .expect("missing ASCII renders GNU's empty box");
+        .expect("missing ASCII renders GNU's empty box")
+    else {
+        panic!("missing ASCII must draw a visible empty box");
+    };
     assert_eq!(result.width, 5);
     assert_eq!(result.advance_width, 5.0);
     assert_eq!(result.height, 10);
@@ -1399,6 +1405,7 @@ fn colrv1_file_face_paints_through_a_derived_asset() {
             cosmic_text::SubpixelBin::Zero,
             None,
         )
+        .expect("the color source opens")
         .expect("a file face paints through a derived asset");
     assert_eq!(image.content, super::RasterContent::Color);
 }

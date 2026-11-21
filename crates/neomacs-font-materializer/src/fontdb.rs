@@ -17,6 +17,161 @@ use std::sync::Arc;
 
 use crate::raster_sources::{SfntFaceRasterSources, classify_sfnt_face, classify_table_directory};
 
+/// Discover one configured system catalog. Linux Fontconfig is authoritative:
+/// its empty result or failure never falls through to fontdb directory walks.
+fn system_font_database() -> fontdb::Database {
+    #[cfg(target_os = "linux")]
+    {
+        let result = crate::fontconfig::FontconfigContext::system()
+            .ok_or(crate::fontconfig::FontCatalogError::Unavailable)
+            .and_then(|context| context.font_database());
+        font_database_from_native_result(result)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let mut database = fontdb::Database::new();
+        database.load_system_fonts();
+        database
+    }
+}
+
+/// Preserve cosmic-text's locale discovery while supplying the authoritative
+/// database explicitly, bypassing its implicit Linux directory discovery.
+fn system_font_system() -> FontSystem {
+    #[cfg(target_os = "linux")]
+    {
+        let locale = sys_locale::get_locale().unwrap_or_else(|| "en-US".into());
+        FontSystem::new_with_locale_and_db(locale, system_font_database())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        FontSystem::new()
+    }
+}
+
+/// Replace an owner's catalog, including clearing its old faces when the
+/// configured native catalog is empty or unavailable. No raw backing escapes.
+pub fn reset_system_font_database(database: &mut fontdb::Database) {
+    *database = system_font_database();
+}
+
+/// Rebuild an owner's font system with native discovery and locale policy.
+pub fn reset_system_font_system(system: &mut FontSystem) {
+    *system = system_font_system();
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn font_database_from_native_result(
+    result: Result<fontdb::Database, crate::fontconfig::FontCatalogError>,
+) -> fontdb::Database {
+    result.unwrap_or_else(|error| {
+        tracing::warn!(%error, "native font catalog unavailable; retaining an empty database");
+        fontdb::Database::new()
+    })
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) struct NativeFontCatalog {
+    pub files: std::collections::BTreeMap<PathBuf, std::collections::BTreeSet<u32>>,
+    pub generics: Vec<(GenericFamily, (PathBuf, u32))>,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy)]
+pub(crate) enum GenericFamily {
+    Serif,
+    SansSerif,
+    Monospace,
+    Cursive,
+    Fantasy,
+}
+
+#[cfg(target_os = "linux")]
+impl GenericFamily {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Serif => "serif",
+            Self::SansSerif => "sans-serif",
+            Self::Monospace => "monospace",
+            Self::Cursive => "cursive",
+            Self::Fantasy => "fantasy",
+        }
+    }
+
+    fn set(self, database: &mut fontdb::Database, name: String) {
+        match self {
+            Self::Serif => database.set_serif_family(name),
+            Self::SansSerif => database.set_sans_serif_family(name),
+            Self::Monospace => database.set_monospace_family(name),
+            Self::Cursive => database.set_cursive_family(name),
+            Self::Fantasy => database.set_fantasy_family(name),
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn database_from_native_catalog(
+    catalog: NativeFontCatalog,
+) -> (fontdb::Database, usize) {
+    let mut database = fontdb::Database::new();
+    let mut opened = 0;
+    let mut unrepresentable = 0;
+    for (file, mut allowed) in catalog.files {
+        // High FC_INDEX bits select a named variable instance. fontdb cannot
+        // represent that selector: stripping it would wrongly authorize the
+        // physical default face even when that face was explicitly rejected.
+        allowed.retain(|index| {
+            let physical = *index <= u32::from(u16::MAX);
+            unrepresentable += usize::from(!physical);
+            physical
+        });
+        if allowed.is_empty() {
+            continue;
+        }
+        let mut staging = fontdb::Database::new();
+        opened += 1;
+        if let Err(error) = staging.load_font_file(&file) {
+            tracing::debug!(%error, file = %file.display(), "cannot load approved font source");
+            continue;
+        }
+        // Parse each approved file once, then publish only the native-approved
+        // collection members. Rejected sibling faces never enter the live DB.
+        for face in staging.faces().filter(|face| allowed.contains(&face.index)) {
+            let mut face = face.clone();
+            face.id = fontdb::ID::dummy();
+            database.push_face_info(face);
+        }
+    }
+    for (generic, (file, index)) in catalog.generics {
+        // A generic match may select a named instance. Resolve its family
+        // only through a physical face already independently admitted above;
+        // this lookup cannot load or authorize that instance's default face.
+        let physical_index = index & u32::from(u16::MAX);
+        let name = database
+            .faces()
+            .find(|face| {
+                face.index == physical_index
+                    && match &face.source {
+                        fontdb::Source::File(path) | fontdb::Source::SharedFile(path, _) => {
+                            path == &file
+                        }
+                        fontdb::Source::Binary(_) => false,
+                    }
+            })
+            .and_then(|face| face.families.first().map(|(name, _)| name.clone()));
+        if let Some(name) = name {
+            generic.set(&mut database, name);
+        }
+    }
+    tracing::debug!(
+        opened,
+        faces = database.len(),
+        unrepresentable,
+        "loaded native-approved font catalog"
+    );
+    (database, opened)
+}
+
 /// The public pin handle carries a static selector. Retain each spelling once,
 /// rather than once per native-cache generation or worker lifetime. The pool
 /// grows with successful selector indices, not cache rebuild count.

@@ -4,6 +4,9 @@
 //! selects it with --test. Each former per-file binary linked the display
 //! stack again; nextest runs every test in its own process.
 
+#[path = "braille_blank.rs"]
+mod braille_blank;
+
 #[path = "buffer_local_completion.rs"]
 mod buffer_local_completion;
 
