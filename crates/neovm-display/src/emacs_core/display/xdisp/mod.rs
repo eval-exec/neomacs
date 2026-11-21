@@ -9590,9 +9590,12 @@ fn call_fontification_functions_at<O: FontificationDemandObserver>(
 /// into a fontified one.
 ///
 /// GNU's `handle_fontified_prop` recomputes iterator properties only for the
-/// successful transition. Keeping callback entry separate lets the immutable layout
-/// engine retry after a successful callback without looping forever when a
-/// fontification function declines to mark the requested position.
+/// successful transition. Keeping callback entry separate lets the immutable
+/// layout engine retry after a successful callback. A callback that declines
+/// to mark the requested position ends the current fontification request
+/// (`src/xdisp.c:4782-4786`): it is entered once for that stop and never
+/// retried over the remaining unfontified run, so a non-fontifying hook
+/// cannot turn one redisplay into a per-character Lisp walk.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum RedisplayFontificationOutcome {
     /// No fontification callback was entered. Native property inspection alone
@@ -9868,15 +9871,18 @@ fn ensure_fontified_for_redisplay_inner<O: FontificationDemandObserver>(
                 break;
             }
 
-            // GNU recomputes properties only if the hook actually
-            // marked the current character fontified.  If it did not,
-            // advance one character to avoid looping forever on the
-            // same unfontified position.
+            // GNU recomputes properties only if the hook actually marked the
+            // current character fontified; otherwise `handle_fontified_prop`
+            // returns HANDLED_NORMALLY and the iterator moves on -- it never
+            // walks the unfontified run to try again at the next character
+            // (src/xdisp.c:4782-4786, "This avoids an endless loop if they
+            // failed to fontify the text").  End this request at the first
+            // declining callback so the Lisp call count is bounded by the
+            // requested stops, not by the region's character count.
             let after = get_fontified_property(ctx, pos)?;
             if after.is_nil() {
                 observer.advance(LispCharPos1::new(pos), LispCharPos1::new(pos + 1), false);
-                pos += 1;
-                continue;
+                break;
             }
             outcome = RedisplayFontificationOutcome::Fontified;
             // Reacquire restrictions, resolution controls, overlays and the

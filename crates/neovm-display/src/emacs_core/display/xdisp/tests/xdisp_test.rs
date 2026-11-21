@@ -6903,6 +6903,51 @@ fn test_long_line_optimizations_p() {
     );
 }
 
+/// GNU `handle_fontified_prop` (`src/xdisp.c:4702-4786`) calls
+/// `fontification-functions` at the iterator's stop and moves on when the
+/// text is still unfontified afterwards: "This avoids an endless loop if they
+/// failed to fontify the text."  A hook that never sets `fontified` must
+/// therefore bound the Lisp calls by the requested stop, not by the region's
+/// character count.
+#[test]
+fn declining_fontification_function_is_not_retried_over_the_run() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let buffer = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    eval.edit
+        .buffers
+        .get_mut(buffer)
+        .expect("buffer")
+        .insert(&"a".repeat(10_000));
+    eval.eval_str(
+        "(progn
+           (defvar p640-declining-calls 0)
+           (setq p640-declining-calls 0)
+           (set (make-local-variable 'fontification-functions)
+                (list (lambda (_pos)
+                        (setq p640-declining-calls (1+ p640-declining-calls))
+                        nil)))
+           nil)",
+    )
+    .expect("install the declining fontification function");
+    ensure_fontified_for_redisplay(&mut eval, buffer, 0, 10_000)
+        .expect("a declining hook must terminate");
+    let calls = eval
+        .eval_str("p640-declining-calls")
+        .expect("call count")
+        .as_int()
+        .expect("fixnum");
+    assert_eq!(
+        calls, 1,
+        "one request must enter the declining hook once, not once per character"
+    );
+}
+
 // Test wrong arity errors
 #[test]
 fn test_wrong_arity() {
