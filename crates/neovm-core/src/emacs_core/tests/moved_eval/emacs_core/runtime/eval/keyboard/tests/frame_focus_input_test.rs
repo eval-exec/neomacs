@@ -3,7 +3,9 @@
 use crate::emacs_core::Context;
 use crate::emacs_core::eval::*;
 use crate::host_input::HostInputPublisher;
-use crate::keyboard::{FrontendKey, InputEvent, render_key_transport_to_input_event};
+use crate::keyboard::{
+    FrontendKey, InputEvent, NativeNonKeyKind, render_key_transport_to_input_event,
+};
 use crate::window::DisplayFrameManagerExt;
 use crate::window::FrameId;
 use neovm_edit::buffer::BufferId;
@@ -15,6 +17,43 @@ struct FocusFixture {
     second: FrameId,
     primary: BufferId,
     secondary: BufferId,
+}
+
+#[test]
+fn native_nonkey_frame_switch_deferral_preserves_its_origin() {
+    let mut fixture = FocusFixture::new();
+    fixture.deliver(vec![InputEvent::NativeNonKey {
+        kind: NativeNonKeyKind::PowerOff,
+        emacs_frame_id: fixture.second.0,
+    }]);
+    let sequence = fixture
+        .eval
+        .eval_str("(setq issue395-input-sequence (read-key-sequence-vector nil nil nil t))")
+        .expect("read native event's preceding frame switch");
+    {
+        let events = sequence.as_vector_data().expect("frame-switch sequence");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].cons_car(), Value::symbol("switch-frame"));
+        assert_eq!(
+            events[0].cons_cdr().cons_car(),
+            Value::make_frame(fixture.second.0)
+        );
+    }
+    fixture
+        .eval
+        .eval_str("(execute-kbd-macro issue395-input-sequence)")
+        .expect("select source frame");
+    let observed = fixture
+        .eval
+        .eval_str(
+            "(list (append (read-key-sequence-vector nil) nil)
+               last-nonmenu-event last-input-event)",
+        )
+        .expect("read deferred native event");
+    assert_eq!(
+        crate::emacs_core::print_value(&observed),
+        "((ns-power-off) nil ns-power-off)"
+    );
 }
 
 impl FocusFixture {

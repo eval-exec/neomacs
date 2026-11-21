@@ -2214,6 +2214,7 @@ cached_symbol_id!(max_lisp_eval_depth_symbol, "max-lisp-eval-depth");
 // Symbol identity is global and immutable; values remain owned by each Context.
 cached_symbol_id!(lisp_eval_depth_reserve_symbol, "lisp-eval-depth-reserve");
 cached_symbol_id!(frame_alpha_lower_limit_symbol, "frame-alpha-lower-limit");
+cached_symbol_id!(ns_confirm_quit_symbol, "ns-confirm-quit");
 cached_symbol_id!(byte_code_literal_symbol, "byte-code-literal");
 cached_symbol_id!(input_decode_map_symbol, "input-decode-map");
 cached_symbol_id!(local_function_key_map_symbol, "local-function-key-map");
@@ -2313,6 +2314,7 @@ fn install_core_eval_symbols(obarray: &mut Obarray, reset_runtime_values: bool) 
         max_lisp_eval_depth_symbol(),
         buffer_undo_list_symbol(),
         frame_alpha_lower_limit_symbol(),
+        ns_confirm_quit_symbol(),
     ] {
         obarray.mark_runtime_projected_id(projected);
     }
@@ -5076,6 +5078,13 @@ impl Context {
             let limit = self::data::frame_alpha::lower_limit(value);
             if let Some(host) = self.display_host.as_mut() {
                 host.set_gui_frame_alpha_lower_limit(limit);
+            }
+        } else if sym_id == ns_confirm_quit_symbol() {
+            // AppKit cannot read evaluator-owned Lisp. Publish only the
+            // completed store's scalar truth value, including let/unlet;
+            // pre-store watcher failures never reach this boundary.
+            if let Some(host) = self.display_host.as_mut() {
+                host.set_ns_confirm_quit(value.is_truthy());
             }
         } else if sym_id == max_lisp_eval_depth_symbol()
             && let Some(depth) = value.as_fixnum()

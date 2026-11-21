@@ -819,6 +819,10 @@ pub trait DisplayHost {
     ) -> Result<(), String> {
         Ok(())
     }
+    /// Mirror GNU's live `ns-confirm-quit` value to the native application.
+    /// This scalar crosses threads; native callbacks must never read Lisp state.
+    fn set_ns_confirm_quit(&mut self, _enabled: bool) {}
+
     /// Publish the compiled NS modifier policy to the display backend.
     ///
     /// GNU's `nsterm.m` reads `ns-command-modifier' and friends at every

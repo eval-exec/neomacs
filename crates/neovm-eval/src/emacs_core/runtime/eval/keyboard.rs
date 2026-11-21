@@ -681,9 +681,16 @@ impl Default for KeySequence {
 #[derive(Clone, Copy, Debug)]
 struct ReadCharEvent {
     event: Value,
+    origin: ReadCharOrigin,
     allow_input_method: bool,
     command_key_recording: CommandKeyRecording,
     input_history: InputHistoryRecording,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ReadCharOrigin {
+    Ordinary,
+    NativeNonKey,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -772,6 +779,7 @@ impl ReadCharEvent {
     pub fn fresh_input_method_candidate(event: Value) -> Self {
         Self {
             event,
+            origin: ReadCharOrigin::Ordinary,
             allow_input_method: true,
             command_key_recording: CommandKeyRecording::Append,
             input_history: InputHistoryRecording::BeforeInputMethod,
@@ -782,6 +790,7 @@ impl ReadCharEvent {
     pub fn reread_input_method_candidate(event: Value) -> Self {
         Self {
             event,
+            origin: ReadCharOrigin::Ordinary,
             allow_input_method: true,
             command_key_recording: CommandKeyRecording::AppendIfEmpty,
             input_history: InputHistoryRecording::AfterInputMethod,
@@ -792,6 +801,7 @@ impl ReadCharEvent {
     pub fn post_input_method(event: Value) -> Self {
         Self {
             event,
+            origin: ReadCharOrigin::Ordinary,
             allow_input_method: false,
             command_key_recording: CommandKeyRecording::AppendIfEmpty,
             input_history: InputHistoryRecording::AlreadyRecorded,
@@ -1299,6 +1309,20 @@ impl TtyInputTarget {
     }
 }
 
+/// Native non-key event identities supported by the frontend.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NativeNonKeyKind {
+    PowerOff,
+}
+
+impl NativeNonKeyKind {
+    pub(crate) fn to_emacs_event_value(self) -> Value {
+        match self {
+            Self::PowerOff => Value::symbol(WellKnown::NsPowerOff.id()),
+        }
+    }
+}
+
 /// Input events from the display layer.
 #[derive(Clone, Debug)]
 pub enum InputEvent {
@@ -1339,6 +1363,15 @@ pub enum InputEvent {
     },
     /// Keyboard key press.
     KeyPress { key: KeyEvent, emacs_frame_id: u64 },
+    /// A native non-key event represented in Lisp by a function-key symbol.
+    ///
+    /// GNU NS_NONKEY_EVENT preserves `last-nonmenu-event` like native menu
+    /// selection (keyboard.c:4501-4505). Keep that provenance distinct from
+    /// a physical key that happens to produce the same symbol.
+    NativeNonKey {
+        kind: NativeNonKeyKind,
+        emacs_frame_id: u64,
+    },
     /// Mouse button press.
     MousePress {
         button: MouseButton,
@@ -1512,6 +1545,49 @@ pub enum InputEvent {
 }
 
 impl InputEvent {
+    fn read_char_origin(&self) -> ReadCharOrigin {
+        match self {
+            Self::NativeNonKey { .. } => ReadCharOrigin::NativeNonKey,
+            Self::Tracked { event, .. }
+            | Self::Observed { event, .. }
+            | Self::FrameSwitchDeferred(event) => event.read_char_origin(),
+            Self::RawTtyBytes { .. }
+            | Self::TtyByte { .. }
+            | Self::TtyCharacter { .. }
+            | Self::KeyPress { .. }
+            | Self::MousePress { .. }
+            | Self::MouseRelease { .. }
+            | Self::MouseMove { .. }
+            | Self::PresentedRegion { .. }
+            | Self::MouseScroll { .. }
+            | Self::PixelScroll { .. }
+            | Self::LayoutInvalidated
+            | Self::ImageStateChanged { .. }
+            | Self::MenuSelection { .. }
+            | Self::ToolBarClick { .. }
+            | Self::PresentedPointer { .. }
+            | Self::PresentationActivated { .. }
+            | Self::PresentationDiscarded { .. }
+            | Self::PresentationRetired { .. }
+            | Self::MenuBarClick { .. }
+            | Self::Resize { .. }
+            | Self::Focus { .. }
+            | Self::MonitorsChanged { .. }
+            | Self::SystemFontsChanged { .. }
+            | Self::SelectWindow { .. }
+            | Self::WindowClose { .. }
+            | Self::TtyHangup { .. }
+            | Self::ThreadEvent { .. }
+            | Self::DisplayReset
+            | Self::WebView(_)
+            | Self::SurfaceCreateFailed { .. }
+            | Self::FrameShaderFailed { .. }
+            | Self::TerminalCreateFailed { .. }
+            | Self::TerminalExited { .. }
+            | Self::TerminalTitleChanged { .. } => ReadCharOrigin::Ordinary,
+        }
+    }
+
     pub fn raw_tty_bytes(bytes: Vec<u8>, emacs_frame_id: u64) -> Self {
         Self::RawTtyBytes {
             bytes,
@@ -1561,6 +1637,7 @@ impl InputEvent {
                 }
             }
             Self::KeyPress { emacs_frame_id, .. }
+            | Self::NativeNonKey { emacs_frame_id, .. }
             | Self::ToolBarClick { emacs_frame_id, .. }
             | Self::PresentedPointer { emacs_frame_id, .. }
             | Self::PresentationActivated { emacs_frame_id, .. }
@@ -1625,6 +1702,7 @@ impl InputEvent {
             Self::FrameSwitchDeferred(event) => event.requests_default_quit(),
             Self::Tracked { .. }
             | Self::Observed { .. }
+            | Self::NativeNonKey { .. }
             | Self::MousePress { .. }
             | Self::MouseRelease { .. }
             | Self::MouseMove { .. }
@@ -3819,6 +3897,10 @@ impl crate::emacs_core::eval::Context {
                     }
                 };
                 let mut emacs_event = read_event.event;
+                // GNU's NS_NONKEY_EVENT sets used_mouse_menu regardless of
+                // the symbol it becomes (keyboard.c:4501-4505). The same
+                // symbol from physical input remains an ordinary key.
+                menu_event_in_sequence |= matches!(read_event.origin, ReadCharOrigin::NativeNonKey);
                 // GNU read_char undoes the marker read_char_x_menu_prompt
                 // puts on the tail of a selected menu event path
                 // (keyboard.c:2623-2632) and keeps `used_mouse_menu` set,
@@ -4050,10 +4132,10 @@ impl crate::emacs_core::eval::Context {
             // GNU `keyboard.c:11668-11673`: after keyremap / function-key-map
             // translation, `last_nonmenu_event = key` holds the TRANSLATED key
             // (e.g. the GUI `<return>` becomes RET/13), not the raw event,
-            // unless a mouse popup menu was used to read it: GNU skips the
+            // unless a native menu/non-key event was used to read it: GNU skips the
             // assignment while `used_mouse_menu` is set, so the mouse event
             // that opened the menu keeps holding the slot.  The flag is raised
-            // by the `read_char_x_menu_prompt` port below and covers exactly
+            // by native event provenance or `read_char_x_menu_prompt` and covers exactly
             // the replay iteration that appends the menu selection.
             // `last-input-event` (recorded raw above) is unchanged; only
             // `last-nonmenu-event` takes the translated event -- matching GNU,
@@ -4840,6 +4922,29 @@ impl crate::emacs_core::eval::Context {
                 idle_policy.resume_idle(self);
                 Ok(self.make_lispy_select_window_event(window_id))
             }
+            InputEvent::NativeNonKey {
+                kind,
+                emacs_frame_id,
+            } => {
+                if frame_already_routed {
+                    self.select_keyboard_input_kboard(emacs_frame_id);
+                } else {
+                    self.route_keyboard_input_to_frame(emacs_frame_id);
+                }
+                if self.command_loop.keyboard.has_unread_selection_event() {
+                    self.command_loop.keyboard.pending_input_events.push_front(
+                        InputEvent::FrameSwitchDeferred(Box::new(InputEvent::NativeNonKey {
+                            kind,
+                            emacs_frame_id,
+                        })),
+                    );
+                    return Ok(None);
+                }
+                self.clear_current_message_for_keyboard_input();
+                let event = kind.to_emacs_event_value();
+                self.command_loop.store_kbd_macro_event(event);
+                Ok(Some(event))
+            }
             InputEvent::KeyPress {
                 key,
                 emacs_frame_id,
@@ -5264,12 +5369,16 @@ impl crate::emacs_core::eval::Context {
                 self.redisplay()?;
             }
             if let Some(event) = self.drain_ready_input_event_for_read_char(idle_policy)? {
+                let origin = event.read_char_origin();
                 if let Some(value) = self.handle_read_char_input_event_with_idle_policy(
                     event,
                     tty_input_decoding,
                     idle_policy,
                 )? {
-                    return Ok(Some(ReadCharEvent::fresh_input_method_candidate(value)));
+                    return Ok(Some(ReadCharEvent {
+                        origin,
+                        ..ReadCharEvent::fresh_input_method_candidate(value)
+                    }));
                 }
                 continue;
             }
@@ -5312,12 +5421,16 @@ impl crate::emacs_core::eval::Context {
             }
 
             if let Some(event) = self.drain_ready_input_event_for_read_char(idle_policy)? {
+                let origin = event.read_char_origin();
                 if let Some(value) = self.handle_read_char_input_event_with_idle_policy(
                     event,
                     tty_input_decoding,
                     idle_policy,
                 )? {
-                    return Ok(Some(ReadCharEvent::fresh_input_method_candidate(value)));
+                    return Ok(Some(ReadCharEvent {
+                        origin,
+                        ..ReadCharEvent::fresh_input_method_candidate(value)
+                    }));
                 }
                 continue;
             }

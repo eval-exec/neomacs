@@ -2061,6 +2061,8 @@ impl GuiFrameWindowManager {
             ws.render.set_emacs_frame_id(emacs_frame_id);
         }
         self.sync_primary_mapping();
+        #[cfg(target_os = "macos")]
+        super::macos_quit_redirect::refresh_frame_views(self);
     }
 
     #[allow(dead_code)] // used by the frame-window manager tests
@@ -2124,6 +2126,8 @@ impl GuiFrameWindowManager {
             window_state.render.set_surface_state(surface_state);
             self.sync_primary_mapping();
         }
+        #[cfg(target_os = "macos")]
+        super::macos_quit_redirect::refresh_frame_views(self);
     }
 
     pub(super) fn take_primary_window(&mut self) -> Option<GuiFrameWindowState> {
@@ -2131,7 +2135,10 @@ impl GuiFrameWindowManager {
         if let Some(winit_id) = self.primary_winit_id.take() {
             self.winit_to_emacs.remove(&winit_id);
         }
-        self.windows.remove(&key)
+        let state = self.windows.remove(&key);
+        #[cfg(target_os = "macos")]
+        super::macos_quit_redirect::refresh_frame_views(self);
+        state
     }
 
     pub fn is_primary_winit(&self, winit_id: WindowId) -> bool {
@@ -2294,6 +2301,8 @@ impl GuiFrameWindowManager {
         adapter: &wgpu::Adapter,
     ) {
         let pending = std::mem::take(&mut self.pending_creates);
+        #[cfg(target_os = "macos")]
+        let refresh_views = !pending.is_empty();
         for req in pending {
             if self
                 .windows
@@ -2490,6 +2499,10 @@ impl GuiFrameWindowManager {
                 }
             }
         }
+        #[cfg(target_os = "macos")]
+        if refresh_views {
+            super::macos_quit_redirect::refresh_frame_views(self);
+        }
     }
 
     /// Process pending window destructions, reporting the frames that went
@@ -2506,6 +2519,10 @@ impl GuiFrameWindowManager {
                 tracing::info!("Destroyed window for frame {}", frame_id);
             }
         }
+        #[cfg(target_os = "macos")]
+        if !destroyed.is_empty() {
+            super::macos_quit_redirect::refresh_frame_views(self);
+        }
         destroyed
     }
 
@@ -2517,6 +2534,8 @@ impl GuiFrameWindowManager {
         self.primary_winit_id = None;
         self.primary_emacs_frame_id = None;
         self.windows.clear();
+        #[cfg(target_os = "macos")]
+        super::macos_quit_redirect::refresh_frame_views(self);
     }
 
     /// Look up the Emacs frame_id for a winit WindowId.

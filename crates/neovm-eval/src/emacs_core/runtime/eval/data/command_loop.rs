@@ -1198,11 +1198,13 @@ impl KeyboardRuntime {
         }
 
         while let Some(event) = self.event_queue.pop_front() {
-            if let InputEvent::KeyPress { key, .. } = event {
-                let emacs_event = key.to_emacs_event_value();
-                self.kboard.store_kbd_macro_event(emacs_event);
-                return Some(emacs_event);
-            }
+            let emacs_event = match event {
+                InputEvent::KeyPress { key, .. } => key.to_emacs_event_value(),
+                InputEvent::NativeNonKey { kind, .. } => kind.to_emacs_event_value(),
+                _ => continue,
+            };
+            self.kboard.store_kbd_macro_event(emacs_event);
+            return Some(emacs_event);
         }
 
         None

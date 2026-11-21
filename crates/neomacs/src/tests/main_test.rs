@@ -4896,8 +4896,8 @@ fn neo_preload_binds_command_q_like_gnu_on_darwin() {
         .eval_str(
             r#"
         ;; GNU's NS port installs this binding in the dump
-        ;; (lisp/term/ns-win.el:141). The AppKit Quit redirect feeds s-q
-        ;; into the input transport, so the darwin branch must bind it.
+        ;; (lisp/term/ns-win.el:141), independently of the application's
+        ;; ns-power-off event binding (ns-win.el:195).
         (let ((system-type 'darwin)
               (original (lookup-key global-map [?\s-q])))
           (unwind-protect
@@ -4911,6 +4911,39 @@ fn neo_preload_binds_command_q_like_gnu_on_darwin() {
         .unwrap_or_else(|err| format!("{err:?}"));
 
     assert_eq!(rendered, "(t)");
+}
+
+#[test]
+fn neo_preload_ns_power_off_is_non_key_and_independent_of_super_q() {
+    let mut eval = create_bootstrap_evaluator_cached_with_features(&["neomacs"])
+        .expect("cached bootstrap evaluator");
+    let rendered = eval
+        .eval_str(
+            r#"
+        ;; GNU installs two independent bindings (ns-win.el:141,195), and
+        ;; marks only ns-power-off as non-key (ns-win.el:177; keymap.el:798).
+        (let ((system-type 'darwin)
+              (original-q (lookup-key global-map [?\s-q]))
+              (original-power (lookup-key global-map [ns-power-off]))
+              (original-mark (get 'ns-power-off 'non-key-event)))
+          (unwind-protect
+              (progn
+                (load "term/neo-preload.el" nil t)
+                (let ((before (key-binding [ns-power-off])))
+                  (global-set-key [?\s-q] #'ignore)
+                  (list (eq before #'save-buffers-kill-emacs)
+                        (eq (key-binding [ns-power-off]) #'save-buffers-kill-emacs)
+                        (eq (key-binding [?\s-q]) #'ignore)
+                        (eq (get 'ns-power-off 'non-key-event) t))))
+            (define-key global-map [?\s-q] original-q)
+            (define-key global-map [ns-power-off] original-power)
+            (put 'ns-power-off 'non-key-event original-mark)))
+        "#,
+        )
+        .map(|value| print_value_with_eval(&eval, &value))
+        .unwrap_or_else(|err| format!("{err:?}"));
+
+    assert_eq!(rendered, "(t t t t)");
 }
 
 #[test]

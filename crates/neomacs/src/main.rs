@@ -2613,6 +2613,13 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         )
     }
 
+    fn set_ns_confirm_quit(&mut self, enabled: bool) {
+        #[cfg(target_os = "macos")]
+        neomacs_display_runtime::render_thread::set_ns_confirm_quit(enabled);
+        #[cfg(not(target_os = "macos"))]
+        let _ = enabled;
+    }
+
     fn set_modifier_policy(
         &mut self,
         policy: neomacs_display_protocol::ModifierPolicy,
@@ -3935,6 +3942,19 @@ fn throw_on_input_active(eval: &Context) -> bool {
 }
 
 fn sync_selected_gui_chrome_state(eval: &mut Context) {
+    #[cfg(target_os = "macos")]
+    {
+        // This runs even when the visible-frame forest is empty. AppKit's
+        // key/main window may be nil after iconifying every frame, while
+        // Lisp still has a selected frame (possibly a presented child).
+        let frames = eval.frame_manager();
+        let selected_root = frames
+            .selected_frame()
+            .filter(|frame| frame.effective_window_system().is_some())
+            .and_then(|frame| frames.root_frame_id(frame.id))
+            .map(|frame| frame.0);
+        neomacs_display_runtime::render_thread::set_selected_gui_frame(selected_root);
+    }
     // GUI chrome collection evaluates dynamic menu/tool-bar forms and this
     // host callback cannot propagate their non-local control flow. Preserve
     // the last snapshot until GNU's `while-no-input` scope has finished.

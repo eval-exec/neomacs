@@ -3,6 +3,8 @@
 //! Owns winit event loop, wgpu, GLib/WebKit. Runs at native VSync.
 
 mod app_handler;
+#[cfg(any(target_os = "macos", test))]
+mod application_quit;
 mod asset_commands;
 mod bootstrap;
 pub(crate) mod child_frames;
@@ -181,3 +183,15 @@ impl RenderEventLoopProxy {
 }
 
 // All GPU caches (image, video, webkit) are managed by WgpuRenderer
+
+/// Publish the evaluator's completed native quit-policy write.
+#[cfg(target_os = "macos")]
+pub fn set_ns_confirm_quit(enabled: bool) {
+    macos_quit_redirect::set_confirm_quit(enabled);
+}
+
+/// Publish the native root of the selected GUI frame for menu-key routing.
+#[cfg(target_os = "macos")]
+pub fn set_selected_gui_frame(frame: Option<u64>) {
+    macos_quit_redirect::set_selected_gui_frame(frame);
+}

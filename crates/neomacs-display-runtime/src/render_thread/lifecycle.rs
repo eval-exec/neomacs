@@ -265,7 +265,7 @@ impl RenderApp {
     }
 
     pub(super) fn handle_about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
-        // A Cmd-Q that arrived while the input queue was full is retried here
+        // An application Quit that found a full input queue is retried here
         // rather than dropped or blocked on the AppKit main thread.
         #[cfg(target_os = "macos")]
         super::macos_quit_redirect::deliver_pending_quit(&self.comms.input_tx);
@@ -575,8 +575,8 @@ impl RenderApp {
         if let Some(tooltip_deadline) = self.menus.tooltip_deadline() {
             deadline = Some(deadline.map_or(tooltip_deadline, |d| d.min(tooltip_deadline)));
         }
-        // A deferred Cmd-Q must not wait for an unrelated event to wake the
-        // loop: keep a bounded retry deadline until the queue has room.
+        // A deferred application Quit must not wait for an unrelated event:
+        // keep a bounded retry deadline until the queue has room.
         #[cfg(target_os = "macos")]
         if super::macos_quit_redirect::quit_is_pending() {
             const QUIT_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);

@@ -30109,3 +30109,130 @@ fn kill_emacs_nested_published_request_survives_outer_unwind() {
         Some(Value::fixnum(2))
     );
 }
+
+struct QuitConfirmationRecordingHost {
+    values: Rc<RefCell<Vec<bool>>>,
+}
+
+impl DisplayHost for QuitConfirmationRecordingHost {
+    fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn resize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn set_ns_confirm_quit(&mut self, enabled: bool) {
+        self.values.borrow_mut().push(enabled);
+    }
+}
+
+fn attach_quit_confirmation_host(eval: &mut Context) -> Rc<RefCell<Vec<bool>>> {
+    let values = Rc::new(RefCell::new(Vec::new()));
+    eval.set_display_host(Box::new(QuitConfirmationRecordingHost {
+        values: Rc::clone(&values),
+    }));
+    values
+}
+
+#[test]
+fn ns_confirm_quit_host_attachment_publishes_current_value() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::test_utils::new_context();
+    eval.eval_str("(setq ns-confirm-quit 'confirm)")
+        .expect("configure before a native host exists");
+    let first_host = attach_quit_confirmation_host(&mut eval);
+    assert_eq!(&*first_host.borrow(), &[true]);
+    eval.eval_str("(setq ns-confirm-quit nil)")
+        .expect("disable confirmation");
+    let second_host = attach_quit_confirmation_host(&mut eval);
+    assert_eq!(&*second_host.borrow(), &[false]);
+}
+
+#[test]
+fn ns_confirm_quit_completed_setq_publishes_lisp_truthiness() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::test_utils::new_context();
+    eval.eval_str("(setq ns-confirm-quit nil)").unwrap();
+    let values = attach_quit_confirmation_host(&mut eval);
+    assert_eq!(&*values.borrow(), &[false]);
+    values.borrow_mut().clear();
+    eval.eval_str("(setq ns-confirm-quit 0)")
+        .expect("every non-nil Lisp value enables GNU's confirmation");
+    assert_eq!(&*values.borrow(), &[true]);
+    eval.eval_str("(setq ns-confirm-quit nil)").unwrap();
+    assert_eq!(&*values.borrow(), &[true, false]);
+}
+
+#[test]
+fn ns_confirm_quit_nested_let_restores_host_projection() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::test_utils::new_context();
+    eval.eval_str("(defvar ns-confirm-quit nil)").unwrap();
+    let values = attach_quit_confirmation_host(&mut eval);
+    assert_eq!(&*values.borrow(), &[false]);
+    values.borrow_mut().clear();
+    let symbol = intern("ns-confirm-quit");
+    assert!(eval.runtime_binding_has_projection(symbol));
+    assert!(
+        eval.obarray()
+            .get_by_id(symbol)
+            .expect("seeded NS variable")
+            .flags()
+            .runtime_projected(),
+        "the plain bind/unbind tiers must not bypass native publication"
+    );
+    let result = eval
+        .eval_str(
+            "(progn
+               (let ((ns-confirm-quit 'confirm))
+                 (let ((ns-confirm-quit nil)) ns-confirm-quit)
+                 ns-confirm-quit)
+               ns-confirm-quit)",
+        )
+        .expect("nested dynamic bindings");
+    assert!(result.is_nil());
+    assert_eq!(&*values.borrow(), &[true, false, true, false]);
+    values.borrow_mut().clear();
+    let result = eval
+        .eval_str(
+            "(condition-case nil
+                 (let ((ns-confirm-quit t)) (signal 'error '(\"unwind confirmation\")))
+               (error ns-confirm-quit))",
+        )
+        .expect("signaled unwind restores the native setting");
+    assert!(result.is_nil());
+    assert_eq!(&*values.borrow(), &[true, false]);
+}
+
+#[test]
+fn ns_confirm_quit_rejected_watcher_write_keeps_host_projection() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::test_utils::new_context();
+    // This bare Context has primitives, not GNU's defun macro or error helper.
+    eval.eval_str(
+        "(progn
+           (setq ns-confirm-quit nil)
+           (fset 'ns-confirm-quit-reject-write
+                 (lambda (_symbol _new operation _where)
+                   (if (eq operation 'set) (signal 'error '(\"reject native setting\")))))
+           (add-variable-watcher 'ns-confirm-quit #'ns-confirm-quit-reject-write))",
+    )
+    .expect("install a watcher that rejects the write");
+    let values = attach_quit_confirmation_host(&mut eval);
+    assert_eq!(&*values.borrow(), &[false]);
+    values.borrow_mut().clear();
+    let result = eval
+        .eval_str(
+            "(condition-case nil (setq ns-confirm-quit t)
+               (error 'rejected))",
+        )
+        .expect("the rejected write is handled");
+    assert_eq!(result, Value::symbol("rejected"));
+    assert!(eval.eval_str("ns-confirm-quit").unwrap().is_nil());
+    assert!(
+        values.borrow().is_empty(),
+        "a rejected pre-store watcher must not publish the proposed value"
+    );
+}

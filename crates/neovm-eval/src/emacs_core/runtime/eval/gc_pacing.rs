@@ -1094,6 +1094,13 @@ impl Context {
 
     pub fn set_display_host(&mut self, mut host: Box<dyn DisplayHost>) {
         let _ = host.set_visual_config(self.visual_config.clone());
+        // A dump or an earlier init form can set the variable before the
+        // native host exists. Reattachment must inherit its current value.
+        host.set_ns_confirm_quit(
+            self.builtin_var_value_by_name("ns-confirm-quit")
+                .unwrap_or(Value::NIL)
+                .is_truthy(),
+        );
         self.display_host = Some(host);
         // Cut-4 flip. Only a Green World activates, so the default GUI/TTY
         // path stays on the serial installer until S3. A re-attach keeps the

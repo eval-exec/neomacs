@@ -140,6 +140,15 @@ pub enum InputEvent {
         /// Emacs frame_id of the window that produced the key event
         emacs_frame_id: u64,
     },
+    /// Application-menu Quit, independent of a physical keyboard chord.
+    ///
+    /// GNU's NS backend posts KEY_NS_POWER_OFF on the selected frame
+    /// (`nsterm.m:6588-6604`). System termination remains a separate native
+    /// delegate decision, including the `ns-confirm-quit` policy.
+    ApplicationQuit {
+        /// Emacs frame associated with the native application-menu action.
+        emacs_frame_id: u64,
+    },
     PositionedPointer(PositionedPointerInput),
     WindowResize {
         width: u32,
@@ -1165,6 +1174,7 @@ impl RenderComms {
             event,
             InputEvent::WindowResize { .. }
                 | InputEvent::WindowClose { .. }
+                | InputEvent::ApplicationQuit { .. }
                 | InputEvent::WindowFocus { .. }
                 | InputEvent::MonitorsChanged { .. }
                 | InputEvent::DisplayReset
@@ -1178,6 +1188,7 @@ impl RenderComms {
             }
             InputEvent::RawTtyBytes { .. } => "raw-tty-bytes",
             InputEvent::Key { .. } => "key",
+            InputEvent::ApplicationQuit { .. } => "application-quit",
             InputEvent::PositionedPointer(PositionedPointerInput { action, .. }) => match action {
                 PointerAction::Button { .. } => "positioned-pointer-button",
                 PointerAction::Move { .. } => "positioned-pointer-move",
