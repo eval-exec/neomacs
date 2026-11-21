@@ -615,6 +615,13 @@ fn async_shell_command_wrappers_use_dynamic_shell_variables_like_gnu() {
                     (let ((p (start-process-shell-command "shell-start" buf "payload")))
                       (while (process-live-p p)
                         (accept-process-output p 0.1))
+                      ;; The loop can exit once the child's status was
+                      ;; recorded outside a wait (ledger 180); GNU drains an
+                      ;; exited process only inside accept-process-output
+                      ;; (process.c:5559-5598), so this is the wait that
+                      ;; reads the output. `if` is a special form.
+                      (if (memq p (process-list))
+                          (accept-process-output p 0.1))
                       (with-current-buffer buf
                         (not (null (string-match-p "--switch:payload" (buffer-string))))))
                   (ignore-errors (kill-buffer buf))))
@@ -623,6 +630,10 @@ fn async_shell_command_wrappers_use_dynamic_shell_variables_like_gnu() {
                     (let ((p (start-file-process-shell-command "shell-file" buf "payload")))
                       (while (process-live-p p)
                         (accept-process-output p 0.1))
+                      ;; Same window as the sibling above: the wait that GNU
+                      ;; drains an exited process in.
+                      (if (memq p (process-list))
+                          (accept-process-output p 0.1))
                       (with-current-buffer buf
                         (not (null (string-match-p "--switch:payload" (buffer-string))))))
                   (ignore-errors (kill-buffer buf))))))"#
