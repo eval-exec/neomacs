@@ -938,3 +938,77 @@ fn oracle_prop_iso_2022_c1_resets_g0_before_the_graphic() {
     let expect = expect_test::expect![[r#""OK ((4194177 65) (4194203 65) (126 232))""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
+
+#[test]
+fn oracle_prop_sort_charsets_orders_by_priority_in_place() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // GNU `Fsort_charsets` (charset.c:2254): each charset ranks by where its
+    // id stands in `Vcharset_ordered_list`, so an alias ties with its target
+    // and keeps its input order. The sorted names go back into the same
+    // conses. `ctext-pre-write-conversion` (mule.el) sorts
+    // `ctext-standard-encodings` this way. The harness's
+    // `(set-language-environment "UTF-8")` ranks `unicode` above `ascii`.
+    let form = r#"(let* ((l (list 'unicode 'ascii 'eight-bit))
+       (second (cdr l))
+       (sorted (sort-charsets l)))
+  (list sorted (eq sorted l) (eq (cdr l) second)
+        (sort-charsets nil)
+        (sort-charsets (list 'unicode 'ascii 'unicode))
+        (sort-charsets (list 'unicode 'ucs 'ascii))
+        (sort-charsets (list 'ucs 'unicode 'ascii))
+        (sort-charsets (list 'japanese-jisx0208 'latin-iso8859-1 'ascii
+                             'chinese-gb2312 'korean-ksc5601))
+        (equal (sort-charsets (reverse (charset-priority-list)))
+               (charset-priority-list))
+        (sort-charsets (copy-sequence ctext-standard-encodings))))"#;
+    let expect = expect_test::expect![[
+        r#""OK ((unicode ascii eight-bit) t t nil (unicode unicode ascii) (unicode ucs ascii) (ucs unicode ascii) (ascii latin-iso8859-1 chinese-gb2312 japanese-jisx0208 korean-ksc5601) t (ascii latin-iso8859-1 latin-iso8859-2 latin-iso8859-3 latin-iso8859-4 cyrillic-iso8859-5 arabic-iso8859-6 greek-iso8859-7 hebrew-iso8859-8 latin-iso8859-9 chinese-gb2312 japanese-jisx0208 korean-ksc5601 latin-jisx0201 katakana-jisx0201))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+#[test]
+fn oracle_prop_sort_charsets_checks_the_list_before_its_charsets() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // `list_length` rejects an improper or circular list before any element
+    // meets `CHECK_CHARSET_GET_ATTR`, and a failed call leaves the list as it
+    // was.
+    let form = r#"(let ((circular (list 'ascii 'unicode))
+      (bad (list 'unicode 'ascii 'foo)))
+  (setcdr (cdr circular) circular)
+  (list (condition-case e (sort-charsets 'ascii) (error e))
+        (condition-case e (sort-charsets (cons 'unicode 'ascii)) (error e))
+        (condition-case e (sort-charsets (cons 'foo 'bar)) (error e))
+        (condition-case e (sort-charsets (list 'ascii 'foo)) (error e))
+        (condition-case e (sort-charsets (list 1)) (error e))
+        (condition-case e (sort-charsets (list nil)) (error e))
+        (condition-case e (sort-charsets (list "ascii")) (error e))
+        (car (condition-case e (sort-charsets circular) (error e)))
+        (condition-case nil (sort-charsets bad) (error bad))))"#;
+    let expect = expect_test::expect![[
+        r#""OK ((wrong-type-argument listp ascii) (wrong-type-argument listp ascii) (wrong-type-argument listp bar) (wrong-type-argument charsetp foo) (wrong-type-argument charsetp 1) (wrong-type-argument charsetp nil) (wrong-type-argument charsetp \"ascii\") circular-list (unicode ascii foo))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+#[test]
+fn oracle_prop_sort_charsets_follows_set_charset_priority() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // `set-charset-priority` reorders `Vcharset_ordered_list`, and an alias
+    // defined afterwards ranks with the charset it names.
+    let form = r#"(progn
+  (set-charset-priority 'korean-ksc5601 'latin-iso8859-1)
+  (define-charset-alias 'neo-sort-charsets-alias 'korean-ksc5601)
+  (list (sort-charsets (list 'ascii 'latin-iso8859-1 'japanese-jisx0208
+                             'korean-ksc5601))
+        (sort-charsets (list 'ascii 'neo-sort-charsets-alias 'latin-iso8859-1))
+        (equal (sort-charsets (reverse (charset-priority-list)))
+               (charset-priority-list))))"#;
+    let expect = expect_test::expect![[
+        r#""OK ((korean-ksc5601 latin-iso8859-1 ascii japanese-jisx0208) (neo-sort-charsets-alias latin-iso8859-1 ascii) t)""#
+    ]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
