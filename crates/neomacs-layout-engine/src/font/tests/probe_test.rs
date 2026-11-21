@@ -115,30 +115,70 @@ fn probe_config(
     .unwrap()
 }
 
+/// Independent same-build FreeType reference: no production policy/probe helpers.
+/// Native hinters may ignore a requested target, and interpreter builds differ;
+/// target selection is invariant, while pixel values belong to this FT build.
+fn native_ascii_reference(file: &str, size: u32, target: LoadFlag) -> (FontPxMetrics, [i32; 128]) {
+    let library = Library::init().unwrap();
+    let face = library.new_face(file, 0).unwrap();
+    face.set_pixel_sizes(size, size).unwrap();
+    let mut widths = [0; 128];
+    for byte in 32u8..127 {
+        assert!(face.get_char_index(usize::from(byte)).is_some());
+        face.load_char(usize::from(byte), target).unwrap();
+        widths[usize::from(byte)] = ((face.glyph().advance().x + 32) >> 6) as i32;
+    }
+    let positive: Vec<_> = widths[32..127]
+        .iter()
+        .copied()
+        .filter(|width| *width > 0)
+        .collect();
+    assert!(!positive.is_empty());
+    let metrics = face.size_metrics().unwrap();
+    let ascent = ((metrics.ascender + 32) >> 6) as i32;
+    let descent = ((-metrics.descender + 32) >> 6) as i32;
+    (
+        FontPxMetrics {
+            pixel_size: size,
+            height: ascent + descent,
+            ascent,
+            descent,
+            max_width: *positive.iter().max().unwrap(),
+            space_width: widths[32],
+            average_width: (positive.iter().map(|width| i64::from(*width)).sum::<i64>()
+                / positive.len() as i64) as i32,
+        },
+        widths,
+    )
+}
+
 #[test]
 fn full_and_slight_noto_ascii_probes_keep_selected_policy() {
     let file = neomacs_test_fonts::noto_sans_variable().to_str().unwrap();
-    for (policy, small_width) in [("hintfull", 5.0), ("hintslight", 7.0)] {
+    for (policy, target) in [
+        ("hintfull", LoadFlag::TARGET_NORMAL),
+        ("hintslight", LoadFlag::TARGET_LIGHT),
+    ] {
         let config = probe_config(file, policy);
-        for (size, width, average) in [(14, 13.0, 7), (7, small_width, 3)] {
+        for size in [14, 7] {
+            let options = config.render_options(file, 0, size as f32, None).unwrap();
+            assert_eq!(options.metrics_load_flags().bits(), target.bits());
+            let (reference, widths) = native_ascii_reference(file, size, target);
             let request = ExactDeviceFontRequest {
                 file,
                 selector: FreeTypeFaceSelector(0),
                 size: DeviceFontPixelSize::new(size).unwrap(),
                 weight: DeviceFontWeight::Default,
-                options: Some(config.render_options(file, 0, size as f32, None).unwrap()),
+                options: Some(options),
             };
             let advances = probe_device_ascii_advances_for_request(&request).unwrap();
-            assert_eq!(
-                advances.logical_advance('m', neomacs_display_protocol::geometry::DeviceScale::ONE),
-                Some(width),
-                "{policy}/{size}"
-            );
+            assert_eq!(advances.device_pixel_size(), size);
+            assert_eq!(advances.widths, widths, "{policy}/{size} ASCII");
             let metrics = probe_font_px_metrics_with_policy(file, 0, size, None, |size| {
                 config.render_options(file, 0, size as f32, None)
             })
             .unwrap();
-            assert_eq!(metrics.average_width, average, "{policy}/{size}");
+            assert_eq!(metrics, reference, "{policy}/{size} aggregate and vertical");
         }
     }
 }
@@ -159,27 +199,31 @@ fn fixture_default_and_explicit_hinting_policies_stay_independent() {
         "<match target=\"pattern\"><edit name=\"hintstyle\" mode=\"assign\"><const>hintfull</const></edit></match>",
     )
     .unwrap();
-    // These are actual GNU 31.1 per-glyph widths, not an assumption that a
-    // family called Mono remains uniform under every hinting policy.
-    for (config, expected) in [
-        (&default, [8.0, 8.0]),
-        (&full, [8.0, 9.0]),
-        (&default, [8.0, 8.0]),
+    // Owners must retain different policies even on a FreeType build where
+    // the two targets happen to produce identical rounded glyph advances.
+    let mut observations = Vec::new();
+    for (config, target) in [
+        (&default, LoadFlag::TARGET_LIGHT),
+        (&full, LoadFlag::TARGET_NORMAL),
+        (&default, LoadFlag::TARGET_LIGHT),
     ] {
         let file = file.to_str().unwrap();
+        let options = config.render_options(file, 0, 14.0, None).unwrap();
+        assert_eq!(options.metrics_load_flags().bits(), target.bits());
+        let (_, expected) = native_ascii_reference(file, 14, target);
         let request = ExactDeviceFontRequest {
             file,
             selector: FreeTypeFaceSelector(0),
             size: DeviceFontPixelSize::new(14).unwrap(),
             weight: DeviceFontWeight::Default,
-            options: Some(config.render_options(file, 0, 14.0, None).unwrap()),
+            options: Some(options),
         };
         let advances = probe_device_ascii_advances_for_request(&request).unwrap();
-        let widths = ['A', 'M'].map(|ch| {
-            advances
-                .logical_advance(ch, neomacs_display_protocol::geometry::DeviceScale::ONE)
-                .unwrap()
-        });
-        assert_eq!(widths, expected);
+        assert_eq!(advances.widths, expected);
+        observations.push(advances.widths);
     }
+    assert_eq!(
+        observations[0], observations[2],
+        "default before/after full"
+    );
 }

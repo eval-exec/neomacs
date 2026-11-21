@@ -21,6 +21,8 @@
       (file . ,(aref info 12))
       (frame_width . ,(frame-char-width))
       (window_width . ,(window-font-width))
+      (font_average_width . ,(aref info 11))
+      (font_max_width . ,(aref info 7))
       (m_width . ,(/ (- right left) 8.0))
       ;; Preserve backend identity diagnostics. GNU's ordinary font APIs do
       ;; not expose the loaded FreeType design coordinates; these properties

@@ -48,9 +48,13 @@ impl Drop for Config {
 #[test]
 fn full_and_slight_hinting_preserve_noto_device_advances() {
     let path = neomacs_test_fonts::noto_sans_variable();
-    for (policy, expected_small) in [("hintfull", 5), ("hintslight", 7)] {
+    for (policy, target) in [
+        ("hintfull", LoadFlag::TARGET_NORMAL),
+        ("hintslight", LoadFlag::TARGET_LIGHT),
+    ] {
         // The fixture owns its font and rules; it neither reads nor changes the
-        // process configuration. Both policies must remain distinct in one run.
+        // process configuration. Targets remain distinct even if this native
+        // hinter produces identical advances for them (FreeType permits that).
         let rules = format!(
             "<match target=\"pattern\"><edit name=\"hintstyle\" mode=\"assign\"><const>{policy}</const></edit><edit name=\"rgba\" mode=\"assign\"><const>none</const></edit></match>"
         );
@@ -58,32 +62,44 @@ fn full_and_slight_hinting_preserve_noto_device_advances() {
         let context = config.context();
         let library = freetype::Library::init().unwrap();
         let face = library.new_face(path, 0).unwrap();
-        for (size, expected, average) in [(14, 13, 7), (7, expected_small, 3)] {
+        let reference = library.new_face(path, 0).unwrap();
+        for size in [14, 7] {
             let options = context.options_for_file(path, 0, size as f32).unwrap();
+            assert_eq!(options.metrics_load_flags().bits(), target.bits());
             face.set_pixel_sizes(size, size).unwrap();
-            face.load_char('m' as usize, options.metrics_load_flags())
-                .unwrap();
-            assert_eq!(
-                (face.glyph().advance().x + 32) >> 6,
-                expected,
-                "{policy}/{size}"
-            );
+            reference.set_pixel_sizes(size, size).unwrap();
             let mut advances = Vec::new();
+            let mut expected_advances = Vec::new();
             for character in 32..127 {
+                assert!(reference.get_char_index(character).is_some());
                 face.load_char(character, options.metrics_load_flags())
                     .unwrap();
                 let advance = (face.glyph().advance().x + 32) >> 6;
+                // This separate face bypasses production options and uses the
+                // requested FT target directly, on the same library build.
+                reference.load_char(character, target).unwrap();
+                let expected = (reference.glyph().advance().x + 32) >> 6;
+                assert_eq!(advance, expected, "{policy}/{size}/U+{character:04X}");
                 if advance > 0 {
                     advances.push(advance);
                 }
+                if expected > 0 {
+                    expected_advances.push(expected);
+                }
             }
+            assert!(!advances.is_empty());
             assert_eq!(
                 advances
                     .iter()
                     .map(|value| i128::from(*value))
                     .sum::<i128>()
                     / advances.len() as i128,
-                average
+                expected_advances
+                    .iter()
+                    .map(|value| i128::from(*value))
+                    .sum::<i128>()
+                    / expected_advances.len() as i128,
+                "{policy}/{size} ASCII average"
             );
         }
     }

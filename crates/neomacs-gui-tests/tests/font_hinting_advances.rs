@@ -86,17 +86,13 @@ fn fontconfig_hintstyle_preserves_scaled_noto_advances_against_attested_gnu() {
     )
     .unwrap();
     for case in &matrix {
-        let small = if case["policy"] == "hintfull" {
-            5.0
-        } else {
-            7.0
-        };
-        for (phase, size, advance, average) in [("base", 14, 13.0, 7), ("scaled", 7, small, 3)] {
+        // FreeType builds may produce different hinted advances, including in
+        // GNU. Compare the live oracle on this host rather than captured pixels.
+        for (phase, size) in [("base", 14), ("scaled", 7)] {
             for editor in ["gnu", "neo"] {
                 let state = &case[editor][phase];
                 for (key, expected) in json!({"family": "Noto Sans", "weight": "regular",
-                    "slant": "normal", "width": "normal", "size": size,
-                    "m_width": advance, "window_width": average, "frame_width": 7})
+                    "slant": "normal", "width": "normal", "size": size})
                 .as_object()
                 .unwrap()
                 {
@@ -105,6 +101,17 @@ fn fontconfig_hintstyle_preserves_scaled_noto_advances_against_attested_gnu() {
                         "{editor}/{phase}/{key}: {case}; {dir:?}"
                     );
                 }
+                let average = state["font_average_width"].as_i64().unwrap();
+                assert!(average > 0, "{editor}/{phase}: {case}; {dir:?}");
+                assert!(state["font_max_width"].as_i64().unwrap() >= average);
+                assert!(state["m_width"].as_f64().unwrap() > 0.0);
+                assert_eq!(state["window_width"], json!(average), "{case}");
+                // A buffer-local remap changes window metrics, while the frame
+                // continues to use its unremapped default font's native average.
+                assert_eq!(
+                    state["frame_width"], case[editor]["base"]["font_average_width"],
+                    "{editor}/{phase}: {case}; {dir:?}"
+                );
                 assert_eq!(
                     fs::canonicalize(state["file"].as_str().unwrap()).unwrap(),
                     font
@@ -113,10 +120,18 @@ fn fontconfig_hintstyle_preserves_scaled_noto_advances_against_attested_gnu() {
                     assert!(state["font_entity"].as_str().unwrap().ends_with(" . 0)"));
                 }
             }
-            assert_eq!(
-                case["gnu"][phase]["m_width"], case["neo"][phase]["m_width"],
-                "{case}"
-            );
+            for key in [
+                "m_width",
+                "font_average_width",
+                "font_max_width",
+                "window_width",
+                "frame_width",
+            ] {
+                assert_eq!(
+                    case["neo"][phase][key], case["gnu"][phase][key],
+                    "{phase}/{key}: {case}; {dir:?}"
+                );
+            }
         }
     }
 }
@@ -276,22 +291,10 @@ fn fontconfig_frame_columns_follow_native_average_width_against_attested_gnu() {
     .unwrap();
     for case in &matrix {
         for (phase, size) in [("size14", 14), ("size13", 13)] {
-            let full = case["policy"] == "hintfull";
-            let average = if full && size == 13 { 7 } else { 8 };
-            let advances = match (full, size) {
-                (true, 14) => json!([8, 9, 8, 8]),
-                (true, 13) => json!([8, 8, 7, 7]),
-                _ => json!([8, 8, 8, 8]),
-            };
             for editor in ["gnu", "neo"] {
                 let state = &case[editor][phase];
                 for (key, expected) in json!({"family":"Noto Sans Mono","weight":"regular",
-                    "slant":"normal","width":"normal","size":size,
-                    "font_average_width":average,"window_width":average,
-                    "immediate_frame_width":average,"frame_width_before_queries":average,
-                    "frame_width":average,"advances":advances,
-                    "font_max_width":if full {if size==14 {10} else {9}} else {8},
-                    "columns":80,"text_pixels":80*average})
+                    "slant":"normal","width":"normal","size":size,"columns":80})
                 .as_object()
                 .unwrap()
                 {
@@ -300,6 +303,25 @@ fn fontconfig_frame_columns_follow_native_average_width_against_attested_gnu() {
                         "{editor}/{phase}/{key}: {case}; {dir:?}"
                     );
                 }
+                let average = state["font_average_width"].as_i64().unwrap();
+                assert!(average > 0, "{editor}/{phase}: {case}; {dir:?}");
+                assert!(state["font_max_width"].as_i64().unwrap() >= average);
+                for key in [
+                    "window_width",
+                    "immediate_frame_width",
+                    "frame_width_before_queries",
+                    "frame_width",
+                ] {
+                    assert_eq!(
+                        state[key],
+                        json!(average),
+                        "{editor}/{phase}/{key}: {case}; {dir:?}"
+                    );
+                }
+                assert_eq!(state["text_pixels"], json!(80 * average), "{case}");
+                let advances = state["advances"].as_array().unwrap();
+                assert_eq!(advances.len(), 4);
+                assert!(advances.iter().all(|width| width.as_i64().unwrap() > 0));
                 assert_eq!(
                     fs::canonicalize(state["file"].as_str().unwrap()).unwrap(),
                     font
@@ -308,10 +330,22 @@ fn fontconfig_frame_columns_follow_native_average_width_against_attested_gnu() {
                     assert!(state["font_entity"].as_str().unwrap().ends_with(" . 0)"));
                 }
             }
-            assert_eq!(
-                case["neo"][phase]["frame_pixels"], case["gnu"][phase]["frame_pixels"],
-                "native frame resize must use the same average-width columns: {case}; {dir:?}"
-            );
+            for key in [
+                "font_average_width",
+                "font_max_width",
+                "advances",
+                "window_width",
+                "immediate_frame_width",
+                "frame_width_before_queries",
+                "frame_width",
+                "text_pixels",
+                "frame_pixels",
+            ] {
+                assert_eq!(
+                    case["neo"][phase][key], case["gnu"][phase][key],
+                    "{phase}/{key}: {case}; {dir:?}"
+                );
+            }
         }
     }
 }
