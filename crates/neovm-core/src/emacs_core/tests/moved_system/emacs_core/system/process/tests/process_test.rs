@@ -17494,6 +17494,9 @@ fn disarm_sigchld_for_test() {
     }
 }
 
+// The Windows target has no POSIX SIGCHLD disposition to read. Its only
+// caller is the cfg(unix) early-status row below.
+#[cfg(unix)]
 fn assert_sigchld_flag_handler_is_installed() {
     // SAFETY: a null `act` means "query only"; `sigaction` fills `old`.
     let old = unsafe {
