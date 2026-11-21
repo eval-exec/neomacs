@@ -334,7 +334,7 @@ impl ImageSequenceCache {
         data: &[u8],
         frame: ImageFrameIndex,
     ) -> ImageSequenceResolution {
-        if matches!(image::guess_format(data), Ok(image::ImageFormat::Tiff)) {
+        if crate::image_probe::has_tiff_signature(data) {
             return match tiff_pages::decode(data, frame) {
                 Some(frame) => ImageSequenceResolution::Frame(frame),
                 None => ImageSequenceResolution::MissingFrame,

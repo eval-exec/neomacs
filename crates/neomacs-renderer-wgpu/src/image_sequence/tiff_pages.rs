@@ -349,10 +349,19 @@ mod tests {
         for order in [ByteOrder::Little, ByteOrder::Big] {
             for layout in [Layout::Classic, Layout::Big] {
                 let data = fixture(order, layout);
+                let cache = crate::image_sequence::ImageSequenceCache::new();
                 for (index, extent, color) in
                     [(0, (2, 1), [255, 0, 0, 255]), (1, (3, 2), [0, 255, 0, 255])]
                 {
-                    let frame = decode(&data, ImageFrameIndex::new(index)).expect("TIFF page");
+                    let resolved = cache.resolve(
+                        neomacs_display_protocol::ImageSequenceId::new(901).unwrap(),
+                        &data,
+                        ImageFrameIndex::new(index),
+                    );
+                    let crate::image_sequence::ImageSequenceResolution::Frame(frame) = resolved
+                    else {
+                        panic!("TIFF page must reach the sequence decoder");
+                    };
                     assert_eq!(frame.dimensions(), extent);
                     assert_eq!(
                         probe(&data, ImageFrameIndex::new(index)),
@@ -388,6 +397,46 @@ mod tests {
         )
         .unwrap();
         assert_eq!(layout.dimensions(), (3, 2));
+    }
+
+    #[test]
+    fn bigtiff_data_and_unknown_extension_file_enforce_selected_page_admission() {
+        use crate::image_probe::{ImageProbeSource, admit_frame};
+        use neomacs_display_protocol::ImageSizeLimit;
+        use std::io::Write;
+
+        for order in [ByteOrder::Little, ByteOrder::Big] {
+            let data = fixture(order, Layout::Big);
+            let limit = ImageSizeLimit::from_axis_pixels(2);
+            let source = ImageProbeSource::Data(&data);
+            assert!(admit_frame(source, ImageFrameIndex::new(0), limit).is_ok());
+            let error = admit_frame(source, ImageFrameIndex::new(1), limit)
+                .expect_err("3x2 second BigTIFF page exceeds the 2-pixel bound");
+            assert_eq!(error.extent(), ImageNativeExtent::new(3, 2));
+
+            // A type known from its bytes must not depend on a filename hint.
+            let unique = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "neomacs-bigtiff-admission-{}-{unique}.unknown",
+                std::process::id()
+            ));
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+                .unwrap();
+            file.write_all(&data).unwrap();
+            drop(file);
+            let source = ImageProbeSource::File(path.to_str().unwrap());
+            assert!(admit_frame(source, ImageFrameIndex::new(0), limit).is_ok());
+            let error = admit_frame(source, ImageFrameIndex::new(1), limit)
+                .expect_err("unknown filename extension must not bypass BigTIFF admission");
+            assert_eq!(error.extent(), ImageNativeExtent::new(3, 2));
+            std::fs::remove_file(path).unwrap();
+        }
     }
 
     #[test]

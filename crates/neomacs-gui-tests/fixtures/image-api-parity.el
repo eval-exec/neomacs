@@ -74,17 +74,51 @@
        'webp t :scale 1 :index index)))
    '(0 1)))
 
+(defconst image-api-bigtiffs
+  ;; Attested GNU 31.1: little-/big-endian BigTIFF, each with 2x1 and 3x2 pages.
+  '(
+    "SUkrAAgAAAAQAAAAAAAAAAoAAAAAAAAAAAEEAAEAAAAAAAAAAgAAAAAAAAABAQQAAQAAAAAAAAABAAAAAAAAAAIBAwABAAAAAAAAAAgAAAAAAAAAAwEDAAEAAAAAAAAAAQAAAAAAAAAGAQMAAQAAAAAAAAACAAAAAAAAABEBBAABAAAAAAAAAOgAAAAAAAAAFQEDAAEAAAAAAAAAAwAAAAAAAAAWAQQAAQAAAAAAAAABAAAAAAAAABcBBAABAAAAAAAAAAYAAAAAAAAAHAEDAAEAAAAAAAAAAQAAAAAAAADwAAAAAAAAAP8AAP8AAAAACgAAAAAAAAAAAQQAAQAAAAAAAAADAAAAAAAAAAEBBAABAAAAAAAAAAIAAAAAAAAAAgEDAAEAAAAAAAAACAAAAAAAAAADAQMAAQAAAAAAAAABAAAAAAAAAAYBAwABAAAAAAAAAAIAAAAAAAAAEQEEAAEAAAAAAAAAyAEAAAAAAAAVAQMAAQAAAAAAAAADAAAAAAAAABYBBAABAAAAAAAAAAIAAAAAAAAAFwEEAAEAAAAAAAAAEgAAAAAAAAAcAQMAAQAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAP8AAP8AAP8AAP8AAP8AAP8A"
+    "TU0AKwAIAAAAAAAAAAAAEAAAAAAAAAAKAQAABAAAAAAAAAABAAAAAgAAAAABAQAEAAAAAAAAAAEAAAABAAAAAAECAAMAAAAAAAAAAQAIAAAAAAAAAQMAAwAAAAAAAAABAAEAAAAAAAABBgADAAAAAAAAAAEAAgAAAAAAAAERAAQAAAAAAAAAAQAAAOgAAAAAARUAAwAAAAAAAAABAAMAAAAAAAABFgAEAAAAAAAAAAEAAAABAAAAAAEXAAQAAAAAAAAAAQAAAAYAAAAAARwAAwAAAAAAAAABAAEAAAAAAAAAAAAAAAAA8P8AAP8AAAAAAAAAAAAAAAoBAAAEAAAAAAAAAAEAAAADAAAAAAEBAAQAAAAAAAAAAQAAAAIAAAAAAQIAAwAAAAAAAAABAAgAAAAAAAABAwADAAAAAAAAAAEAAQAAAAAAAAEGAAMAAAAAAAAAAQACAAAAAAAAAREABAAAAAAAAAABAAAByAAAAAABFQADAAAAAAAAAAEAAwAAAAAAAAEWAAQAAAAAAAAAAQAAAAIAAAAAARcABAAAAAAAAAABAAAAEgAAAAABHAADAAAAAAAAAAEAAQAAAAAAAAAAAAAAAAAAAP8AAP8AAP8AAP8AAP8AAP8A"
+    ))
+
+(defun image-api-bigtiff-case (encoded)
+  (let* ((max-image-size nil)
+         (bytes (base64-decode-string encoded))
+         (file (make-temp-file "neomacs-image-api-bigtiff-" nil ".unknown")))
+    (unwind-protect
+        (progn
+          (let ((coding-system-for-write 'no-conversion))
+            (with-temp-file file
+              (set-buffer-multibyte nil)
+              (insert bytes)))
+          ;; Type comes from the TIFF bytes, not an extension hint. Both
+          ;; sources must select the same page and return count-only metadata.
+          (mapcar
+           (lambda (source)
+             (mapcar
+              (lambda (index)
+                (let ((image (create-image (car source) 'tiff (cdr source)
+                                           :scale 1 :index index)))
+                  (condition-case e
+                      (list (image-size image t) (image-metadata image))
+                    (error (list 'error (error-message-string e))))))
+              '(0 1)))
+           (list (cons bytes t) (cons file nil))))
+      (delete-file file))))
+
 (defun image-api-tiff ()
-  (mapcar
-   (lambda (index)
-     (let ((image (create-image
-                   (base64-decode-string
-                    "SUkqAAgAAAAKAAABBAABAAAAAgAAAAEBBAABAAAAAQAAAAIBAwADAAAAhgAAAAMBAwABAAAAAQAAAAYBAwABAAAAAgAAABEBBAABAAAAjAAAABUBAwABAAAAAwAAABYBBAABAAAAAQAAABcBBAABAAAABgAAABwBAwABAAAAAQAAAJIAAAAIAAgACAD/AAD/AAAKAAABBAABAAAAAwAAAAEBBAABAAAAAgAAAAIBAwADAAAAEAEAAAMBAwABAAAAAQAAAAYBAwABAAAAAgAAABEBBAABAAAAFgEAABUBAwABAAAAAwAAABYBBAABAAAAAgAAABcBBAABAAAAEgAAABwBAwABAAAAAQAAAAAAAAAIAAgACAAA/wAA/wAA/wAA/wAA/wAA/wA=")
-                   'tiff t :scale 1 :index index)))
-       (condition-case e
-           (list (image-size image t) (image-metadata image))
-         (error (list 'error (error-message-string e))))))
-   '(0 1)))
+  (append
+   (mapcar
+    (lambda (index)
+      (let ((image (create-image
+                    (base64-decode-string
+                     "SUkqAAgAAAAKAAABBAABAAAAAgAAAAEBBAABAAAAAQAAAAIBAwADAAAAhgAAAAMBAwABAAAAAQAAAAYBAwABAAAAAgAAABEBBAABAAAAjAAAABUBAwABAAAAAwAAABYBBAABAAAAAQAAABcBBAABAAAABgAAABwBAwABAAAAAQAAAJIAAAAIAAgACAD/AAD/AAAKAAABBAABAAAAAwAAAAEBBAABAAAAAgAAAAIBAwADAAAAEAEAAAMBAwABAAAAAQAAAAYBAwABAAAAAgAAABEBBAABAAAAFgEAABUBAwABAAAAAwAAABYBBAABAAAAAgAAABcBBAABAAAAEgAAABwBAwABAAAAAQAAAAAAAAAIAAgACAAA/wAA/wAA/wAA/wAA/wAA/wA=")
+                    'tiff t :scale 1 :index index)))
+        (condition-case e
+            (list (image-size image t) (image-metadata image))
+          (error (list 'error (error-message-string e))))))
+    '(0 1))
+   (mapcar #'image-api-bigtiff-case image-api-bigtiffs)))
 
 (defun image-api-tiff-damaged-links ()
   (let* ((file (base64-decode-string

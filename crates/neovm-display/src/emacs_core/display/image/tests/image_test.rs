@@ -2352,6 +2352,7 @@ fn image_spec_animation_policy_parses_the_neomacs_extension() {
 
 #[test]
 fn gif_metadata_keeps_reverse_block_order_and_unibyte_payloads() {
+    crate::test_utils::init_test_tracing();
     use neomacs_display_protocol::image::ImageExtensionBlock;
     let metadata = ImageEmbeddedMetadata::gif(
         1,
@@ -2383,6 +2384,7 @@ fn gif_metadata_keeps_reverse_block_order_and_unibyte_payloads() {
 
 #[test]
 fn webp_metadata_publishes_delay_before_count_like_gnu() {
+    crate::test_utils::init_test_tracing();
     let value = image_embedded_metadata_to_lisp(&ImageEmbeddedMetadata::webp(
         2,
         ImageFrameDelay::milliseconds(20, 1).unwrap(),

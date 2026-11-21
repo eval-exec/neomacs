@@ -29,6 +29,7 @@ fn image_metadata_webp_property_order_matches_gnu() {
 
 #[test]
 fn image_metadata_tiff_pages_and_dimensions_match_gnu() {
+    // Classic data plus both BigTIFF byte orders, from data and unknown-extension files.
     compare("tiff");
 }
 
@@ -89,6 +90,16 @@ fn compare(case: &str) {
         assert_eq!(
             values[0], "(t t)\n",
             "GNU must observe the decoded geometry"
+        );
+    }
+    if case == "tiff" {
+        let classic = "((2 . 1) (count 2)) ((3 . 2) (count 2))";
+        let pages = "(((2 . 1) (count 2)) ((3 . 2) (count 2)))";
+        let expected = format!("({classic} ({pages} {pages}) ({pages} {pages}))");
+        assert_eq!(
+            values[0].trim(),
+            expected,
+            "GNU must decode both pages of classic TIFF and both BigTIFF byte orders, from data and unknown-extension files"
         );
     }
     assert_eq!(values[1], values[0], "{case}; artifacts: {artifacts:?}");
