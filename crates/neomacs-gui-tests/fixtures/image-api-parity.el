@@ -86,6 +86,25 @@
          (error (list 'error (error-message-string e))))))
    '(0 1)))
 
+(defun image-api-tiff-damaged-links ()
+  (let* ((file (base64-decode-string
+               "SUkqAAgAAAAKAAABBAABAAAAAgAAAAEBBAABAAAAAQAAAAIBAwADAAAAhgAAAAMBAwABAAAAAQAAAAYBAwABAAAAAgAAABEBBAABAAAAjAAAABUBAwABAAAAAwAAABYBBAABAAAAAQAAABcBBAABAAAABgAAABwBAwABAAAAAQAAAJIAAAAIAAgACAD/AAD/AAAKAAABBAABAAAAAwAAAAEBBAABAAAAAgAAAAIBAwADAAAAEAEAAAMBAwABAAAAAQAAAAYBAwABAAAAAgAAABEBBAABAAAAFgEAABUBAwABAAAAAwAAABYBBAABAAAAAgAAABcBBAABAAAAEgAAABwBAwABAAAAAQAAAAAAAAAIAAgACAAA/wAA/wAA/wAA/wAA/wAA/wA=")))
+    (mapcar
+     (lambda (change)
+       (let ((bytes (copy-sequence file)))
+         (dotimes (i 4)
+           (aset bytes (+ (car change) i)
+                 (logand 255 (ash (cdr change) (* -8 i)))))
+         (mapcar
+          (lambda (index)
+            (let ((image (create-image bytes 'tiff t :scale 1 :index index)))
+              (condition-case e
+                  (list (image-size image t) (image-metadata image))
+                (error (list 'error (error-message-string e))))))
+          (if (= (car change) 130) '(0) '(0 1)))))
+     '((130 . 4294967040) (130 . 8)
+       (268 . 4294967040) (268 . 8)))))
+
 (defun image-api-write (value)
   (with-temp-file (getenv "NEOMACS_GUI_IMAGE_RESULT")
     (let ((print-length nil) (print-level nil))
@@ -120,5 +139,6 @@
        ("metadata" (image-api-metadata))
        ("webp" (image-api-webp))
        ("tiff" (image-api-tiff))
+       ("tiff-links" (image-api-tiff-damaged-links))
        (_ (error "Unknown image API case: %s" case))))
     (run-at-time 1 nil (lambda () (kill-emacs 0)))))

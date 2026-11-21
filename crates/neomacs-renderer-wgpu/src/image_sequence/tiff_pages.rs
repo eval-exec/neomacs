@@ -40,9 +40,13 @@ fn page_decoder(data: &[u8], frame: ImageFrameIndex) -> Option<(PageDecoder<'_>,
         data: Cursor::new(data),
         header: header.select(directory)?,
         header_len: header.layout.header_len(),
+        next_pointer: next_pointer_offset(data, &header, directory)?,
+        pointer_len: header.layout.pointer_len(),
     };
-    // The adapter changes only the first-IFD pointer. Strip/tile offsets and
-    // every subsequent read retain their original absolute file positions.
+    // Present one selected IFD to the pixel decoder. Its next link is zeroed
+    // because the original chain has already supplied the count; otherwise
+    // the TIFF decoder rejects a self-link before reading valid page pixels.
+    // Strip/tile offsets retain their original absolute file positions.
     let decoder = image::codecs::tiff::TiffDecoder::new(BufReader::new(reader)).ok()?;
     Some((decoder, count))
 }
@@ -172,35 +176,63 @@ fn selected_directory(data: &[u8], requested: u64) -> Option<(Header, u64, u32)>
     let mut count = 0_u32;
     while directory != 0 {
         if !seen.insert(directory) {
-            return None;
+            break;
         }
-        let offset = usize::try_from(directory).ok()?;
-        if offset < header.layout.header_len() {
-            return None;
-        }
-        let entries = usize::try_from(integer(
-            data,
-            offset,
-            header.layout.count_len(),
-            header.order,
-        )?)
-        .ok()?;
-        let next = offset
-            .checked_add(header.layout.count_len())?
-            .checked_add(entries.checked_mul(header.layout.entry_len())?)?;
+        // GNU stops counting when TIFFSetDirectory cannot follow the next
+        // link. Keep the readable prefix rather than discarding a selected
+        // page because a later pointer is corrupt or forms a cycle.
+        let Some(next) = next_directory(data, &header, directory) else {
+            break;
+        };
+        let Some(next_count) = count.checked_add(1) else {
+            break;
+        };
         if u64::from(count) == requested {
             selected = Some(directory);
         }
-        count = count.checked_add(1)?;
-        directory = integer(data, next, header.layout.pointer_len(), header.order)?;
+        count = next_count;
+        directory = next;
     }
     Some((header, selected?, count))
+}
+
+/// Validate the entire IFD table and its link before counting that page.
+/// Pixel-format support is deliberately left to the selected-page decoder:
+/// an unselected directory can count even if its pixels need another codec.
+fn next_directory(data: &[u8], header: &Header, directory: u64) -> Option<u64> {
+    integer(
+        data,
+        next_pointer_offset(data, header, directory)?,
+        header.layout.pointer_len(),
+        header.order,
+    )
+}
+
+fn next_pointer_offset(data: &[u8], header: &Header, directory: u64) -> Option<usize> {
+    let offset = usize::try_from(directory).ok()?;
+    if offset < header.layout.header_len() {
+        return None;
+    }
+    let entries = usize::try_from(integer(
+        data,
+        offset,
+        header.layout.count_len(),
+        header.order,
+    )?)
+    .ok()?;
+    let next = offset
+        .checked_add(header.layout.count_len())?
+        .checked_add(entries.checked_mul(header.layout.entry_len())?)?;
+    data.get(next..next.checked_add(header.layout.pointer_len())?)?;
+    Some(next)
 }
 
 struct HeaderOverlay<'a> {
     data: Cursor<&'a [u8]>,
     header: [u8; 16],
     header_len: usize,
+    next_pointer: usize,
+    pointer_len: usize,
 }
 
 impl Read for HeaderOverlay<'_> {
@@ -211,6 +243,13 @@ impl Read for HeaderOverlay<'_> {
             let start = start as usize;
             let end = self.header_len.min(start + count);
             output[..end - start].copy_from_slice(&self.header[start..end]);
+        }
+        let pointer_start = self.next_pointer as u64;
+        let pointer_end = pointer_start + self.pointer_len as u64;
+        let overlap_start = start.max(pointer_start);
+        let overlap_end = (start + count as u64).min(pointer_end);
+        if overlap_start < overlap_end {
+            output[(overlap_start - start) as usize..(overlap_end - start) as usize].fill(0);
         }
         Ok(count)
     }
@@ -363,34 +402,116 @@ mod tests {
         assert!(decode(&data, ImageFrameIndex::new(1)).is_none());
     }
 
+    fn set_next_directory(
+        data: &mut [u8],
+        directory: u64,
+        target: u64,
+        order: ByteOrder,
+        layout: Layout,
+    ) {
+        let next_pointer = directory as usize + layout.count_len() + 10 * layout.entry_len();
+        let mut pointer = Vec::new();
+        put(&mut pointer, target, layout.pointer_len(), order);
+        data[next_pointer..next_pointer + pointer.len()].copy_from_slice(&pointer);
+    }
+
+    fn assert_page(data: &[u8], index: u64, extent: (u32, u32), count: Option<u32>) {
+        let frame = decode(data, ImageFrameIndex::new(index)).expect("retained TIFF page");
+        assert_eq!(frame.dimensions(), extent);
+        assert_eq!(
+            probe(data, ImageFrameIndex::new(index)),
+            Some(ImageNativeExtent::new(extent.0, extent.1))
+        );
+        let (_, metadata) = frame.into_parts();
+        assert_eq!(metadata.frame_count(), count);
+        assert_eq!(metadata.frame_delay(), None);
+    }
+
     #[test]
-    fn tiff_directory_cycles_and_truncated_directory_tables_are_rejected() {
+    fn tiff_bad_or_repeated_first_link_preserves_the_first_page() {
+        // Attested GNU: a valid first IFD followed by an out-of-file or
+        // repeated link still decodes index 0, with nil metadata. Index 1
+        // cannot be selected (image.c:9527-9539,9566-9573).
         for order in [ByteOrder::Little, ByteOrder::Big] {
             for layout in [Layout::Classic, Layout::Big] {
-                let mut data = fixture(order, layout);
-                let end = layout.header_len() + layout.count_len() + 10 * layout.entry_len();
-                assert!(selected_directory(&data[..end], 0).is_none());
-                let mut pointer = Vec::new();
-                put(
-                    &mut pointer,
-                    layout.header_len() as u64,
-                    layout.pointer_len(),
-                    order,
-                );
-                data[end..end + pointer.len()].copy_from_slice(&pointer);
-                assert!(selected_directory(&data, 0).is_none());
+                let original = fixture(order, layout);
+                let first = layout.header_len() as u64;
+                for target in [0xffff_ff00, first] {
+                    let mut data = original.clone();
+                    set_next_directory(&mut data, first, target, order, layout);
+                    assert!(
+                        crate::image_probe::admit_frame(
+                            crate::image_probe::ImageProbeSource::Data(&data),
+                            ImageFrameIndex::new(0),
+                            neomacs_display_protocol::ImageSizeLimit::from_axis_pixels(1),
+                        )
+                        .is_err()
+                    );
+                    assert_page(&data, 0, (2, 1), None);
+                    assert!(decode(&data, ImageFrameIndex::new(1)).is_none());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn tiff_bad_or_repeated_second_link_preserves_both_pages_and_count() {
+        // GNU's count loop stops at the first unreadable/repeated link; a
+        // bad tail does not invalidate pages it has already read.
+        for order in [ByteOrder::Little, ByteOrder::Big] {
+            for layout in [Layout::Classic, Layout::Big] {
+                let original = fixture(order, layout);
+                let first = layout.header_len() as u64;
+                let (_, second, _) = selected_directory(&original, 1).unwrap();
+                for target in [0xffff_ff00, first] {
+                    let mut data = original.clone();
+                    set_next_directory(&mut data, second, target, order, layout);
+                    assert_page(&data, 0, (2, 1), Some(2));
+                    assert_page(&data, 1, (3, 2), Some(2));
+                    assert!(decode(&data, ImageFrameIndex::new(2)).is_none());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn tiff_truncated_later_directory_preserves_the_readable_prefix() {
+        for order in [ByteOrder::Little, ByteOrder::Big] {
+            for layout in [Layout::Classic, Layout::Big] {
+                let data = fixture(order, layout);
+                let (_, second, _) = selected_directory(&data, 1).unwrap();
+                let second = second as usize;
+                for end in [
+                    second,
+                    second + layout.count_len(),
+                    second + layout.count_len() + 3,
+                ] {
+                    assert_page(&data[..end], 0, (2, 1), None);
+                    assert!(decode(&data[..end], ImageFrameIndex::new(1)).is_none());
+                }
+                let first_next = layout.header_len() + layout.count_len() + 10 * layout.entry_len();
+                assert!(selected_directory(&data[..first_next], 0).is_none());
             }
         }
     }
 
     #[test]
     fn tiff_header_overlay_preserves_absolute_seek_positions() {
-        let data = fixture(ByteOrder::Little, Layout::Classic);
+        let mut data = fixture(ByteOrder::Little, Layout::Classic);
         let (header, directory, _) = selected_directory(&data, 1).unwrap();
+        set_next_directory(
+            &mut data,
+            directory,
+            header.layout.header_len() as u64,
+            ByteOrder::Little,
+            Layout::Classic,
+        );
         let mut reader = HeaderOverlay {
             data: Cursor::new(data.as_slice()),
             header: header.select(directory).unwrap(),
             header_len: header.layout.header_len(),
+            next_pointer: next_pointer_offset(&data, &header, directory).unwrap(),
+            pointer_len: header.layout.pointer_len(),
         };
         reader.seek(SeekFrom::Start(3)).unwrap();
         let mut bytes = [0; 8];
@@ -398,5 +519,13 @@ mod tests {
         assert_eq!(&bytes[1..5], &(directory as u32).to_le_bytes());
         assert_eq!(&bytes[5..], &data[8..11]);
         assert_eq!(reader.stream_position().unwrap(), 11);
+        let next_pointer = reader.next_pointer;
+        reader
+            .seek(SeekFrom::Start(next_pointer as u64 - 2))
+            .unwrap();
+        reader.read_exact(&mut bytes).unwrap();
+        assert_eq!(&bytes[..2], &data[next_pointer - 2..next_pointer]);
+        assert_eq!(&bytes[2..6], &[0; 4]);
+        assert_eq!(&bytes[6..], &data[next_pointer + 4..next_pointer + 6]);
     }
 }

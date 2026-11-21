@@ -37,6 +37,11 @@ fn image_mask_bitmap_policy_matches_gnu() {
     compare("mask");
 }
 
+#[test]
+fn image_metadata_tiff_damaged_links_preserve_readable_pages_like_gnu() {
+    compare("tiff-links");
+}
+
 fn compare(case: &str) {
     let root = neomacs_infra::workspace_root();
     let artifacts = root.join(format!("tmp/image-api-{case}-{}", std::process::id()));

@@ -96,9 +96,14 @@ fn probe_frame_intrinsic_extent(
     source: ImageProbeSource<'_>,
     frame: ImageFrameIndex,
 ) -> Option<ImageIntrinsicExtent> {
-    if frame.is_first() {
-        return probe_intrinsic_extent(source);
+    if frame.is_first()
+        && let Some(intrinsic) = probe_intrinsic_extent(source)
+    {
+        return Some(intrinsic);
     }
+    // A readable TIFF page can have a corrupt next link which the generic
+    // decoder rejects while opening its header. The selected-page adapter
+    // isolates that link, and must still enforce admission before allocation.
     catch_unwind(AssertUnwindSafe(|| match source {
         ImageProbeSource::Data(data) => {
             if matches!(image::guess_format(data), Ok(image::ImageFormat::Tiff)) {
