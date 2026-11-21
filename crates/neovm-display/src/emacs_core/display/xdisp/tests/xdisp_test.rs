@@ -6924,28 +6924,48 @@ fn declining_fontification_function_is_not_retried_over_the_run() {
         .get_mut(buffer)
         .expect("buffer")
         .insert(&"a".repeat(10_000));
-    eval.eval_str(
-        "(progn
-           (defvar p640-declining-calls 0)
-           (setq p640-declining-calls 0)
-           (set (make-local-variable 'fontification-functions)
-                (list (lambda (_pos)
-                        (setq p640-declining-calls (1+ p640-declining-calls))
-                        nil)))
-           nil)",
-    )
-    .expect("install the declining fontification function");
+    install_declining_fontification_hook(&mut eval, "p640-declining-calls");
     ensure_fontified_for_redisplay(&mut eval, buffer, 0, 10_000)
         .expect("a declining hook must terminate");
-    let calls = eval
-        .eval_str("p640-declining-calls")
-        .expect("call count")
-        .as_int()
-        .expect("fixnum");
     assert_eq!(
-        calls, 1,
+        recorded_fontification_positions(&mut eval, "p640-declining-calls"),
+        vec![1],
         "one request must enter the declining hook once, not once per character"
     );
+}
+
+/// Install a fontification function that declines (`fontified` stays nil)
+/// and records every position it is entered at.
+///
+/// The display unit runtime has neither subr.el nor the upper-layer subrs
+/// (`propertize`, `insert`, `reverse`, ...), so the hook value is built from
+/// evaluator special forms and core subrs (`list`, `lambda`, `cons`) and the
+/// variable is stored from Rust.  No `make-local-variable`/`set` needed.
+fn install_declining_fontification_hook(eval: &mut Context, variable: &str) {
+    eval.eval_str(&format!("(defvar {variable} nil)"))
+        .expect("defvar the call log");
+    eval.eval_str(&format!("(setq {variable} nil)"))
+        .expect("reset the call log");
+    let hook = eval
+        .eval_str(&format!(
+            "(list (lambda (pos) (setq {variable} (cons pos {variable})) nil))"
+        ))
+        .expect("build the declining hook");
+    eval.store_variable_by_name("fontification-functions", hook);
+}
+
+/// The hook's recorded positions in entry order (the hook conses, so the
+/// list reads newest-first; reverse it in Rust rather than with the
+/// upper-layer `reverse` subr).
+fn recorded_fontification_positions(eval: &mut Context, variable: &str) -> Vec<i64> {
+    let value = eval.eval_str(variable).expect("read the call log");
+    let mut positions: Vec<i64> = neovm_value::value::list_to_vec(&value)
+        .expect("the call log is a list")
+        .into_iter()
+        .map(|entry| entry.as_int().expect("fixnum position"))
+        .collect();
+    positions.reverse();
+    positions
 }
 
 /// With an interval tree present GNU's `compute_stop_pos`
@@ -6964,23 +6984,29 @@ fn declining_fontification_hook_advances_by_gnu_property_stops() {
         .current_buffer()
         .expect("current buffer")
         .id();
-    // Bare unit runtime: no subr.el, so only special forms and core subrs.
-    eval.eval_str(
-        "(progn
-           (let ((i 0))
-             (while (< i 8)
-               (insert (propertize (make-string 150 ?a) 'p640 i) \"\\n\")
-               (setq i (1+ i))))
-           (goto-char 1)
-           (defvar p640-stop-calls nil)
-           (setq p640-stop-calls nil)
-           (set (make-local-variable 'fontification-functions)
-                (list (lambda (pos)
-                        (setq p640-stop-calls (cons pos p640-stop-calls))
-                        nil)))
-           nil)",
-    )
-    .expect("install the declining fontification function");
+    // `insert`/`propertize` are upper-layer subrs the display unit runtime
+    // does not install, so build the text and its interval tree from Rust.
+    let line = format!("{}\n", "a".repeat(150));
+    eval.edit
+        .buffers
+        .get_mut(buffer)
+        .expect("buffer")
+        .insert(&line.repeat(8));
+    for index in 0..8i64 {
+        let start = index * 151 + 1;
+        let end = start + 150;
+        neovm_edit::emacs_core::textprop::builtin_put_text_property(
+            &mut eval,
+            vec![
+                Value::fixnum(start),
+                Value::fixnum(end),
+                Value::symbol("p640"),
+                Value::fixnum(index),
+            ],
+        )
+        .expect("put the p640 text property");
+    }
+    install_declining_fontification_hook(&mut eval, "p640-stop-calls");
     let total = eval
         .edit
         .buffers
@@ -6989,13 +7015,9 @@ fn declining_fontification_hook_advances_by_gnu_property_stops() {
         .total_char_len()
         .get() as i64;
     ensure_fontified_for_redisplay(&mut eval, buffer, 0, total).expect("fontify");
-    let calls = neovm_eval::emacs_core::print::print_value(
-        &eval
-            .eval_str("(reverse p640-stop-calls)")
-            .expect("call positions"),
-    );
     assert_eq!(
-        calls, "(1 151 302 453 604 755 906 1057 1208)",
+        recorded_fontification_positions(&mut eval, "p640-stop-calls"),
+        vec![1, 151, 302, 453, 604, 755, 906, 1057, 1208],
         "the declining hook must follow GNU's newline stops, not every character"
     );
 }

@@ -525,6 +525,8 @@ fn current_column_after_inserting_propertized_text_matches_gnu() {
 /// after `POS + 100`.  Attested GNU on this 60-line form: 39 distinct
 /// positions, beginning 1 151 302 453 604 755.  The total call count depends
 /// on how many redisplay passes run, so only the distinct list is pinned.
+/// The summary is one line: the full 39-element list wraps the echo area, and
+/// the harness reads the tag from a single row.
 #[test]
 fn declining_fontification_visits_gnu_stops_matches_gnu() {
     let (mut gnu, mut neo) = boot_pair("");
@@ -547,12 +549,12 @@ fn declining_fontification_visits_gnu_stops_matches_gnu() {
         &mut neo,
         "P640DECL",
         "(let ((u (delete-dups (reverse decl-calls)))) \
-           (list (length u) (seq-take u 6) u))",
+           (list (length u) (seq-take u 6) (apply (function +) u) (car (last u))))",
     );
     eprintln!("issue#640 declining fontification stops: GNU={gnu_value} NEO={neo_value}");
-    assert!(
-        gnu_value.starts_with("(39 (1 151 302 453 604 755)"),
-        "GNU's attested distinct stops missing: {gnu_value}"
+    assert_eq!(
+        gnu_value, "(39 (1 151 302 453 604 755) 111892 5738)",
+        "GNU's attested distinct stops, position sum, and last stop"
     );
     assert_eq!(
         neo_value, gnu_value,
@@ -640,7 +642,7 @@ fn move_to_column_other_frame_window_stays_exact_like_gnu() {
              (select-frame orig) \
              (set-buffer buf) \
              (goto-char 1) \
-             (message (concat \"P640OF\" \"BEGIN%S \" \"P640OF\" \"END\") \
+             (message (concat \"P640OF\" \"BEGIN%S\" \"P640OF\" \"END\") \
                       (list (move-to-column 150000) (point)))))",
     );
     read_both(&mut gnu, &mut neo, Duration::from_secs(1));
@@ -771,7 +773,7 @@ fn whole_scroll_runs_no_fontification() {
            (redisplay t) \
            (setq p640-s3-calls 0) \
            (scroll-up) \
-           (message (concat \"P640S3F\" \"BEGIN%S \" \"P640S3F\" \"END\") \
+           (message (concat \"P640S3F\" \"BEGIN%S\" \"P640S3F\" \"END\") \
                     p640-s3-calls))",
     );
     read_both(&mut gnu, &mut neo, Duration::from_secs(1));
