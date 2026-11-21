@@ -3933,7 +3933,7 @@ crate::emacs_core::subr::define_subrs! {
     )),
     crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "neomacs-frame-geometry",
-        NativeFn::ContextVec(|_ctx, args| builtin_neomacs_frame_geometry(args)),
+        NativeFn::ContextVec(builtin_neomacs_frame_geometry),
         SubrArity::new(0, None),
     )),
     crate::emacs_core::subr::world_subr!(SubrSpec::new(

@@ -2218,10 +2218,10 @@ pub fn builtin_tty_frame_edges(
 /// `(neomacs-frame-edges &optional FRAME TYPE)` -> GUI frame edges.
 ///
 /// GNU's toolkit-specific `*-frame-edges` functions return a four-number
-/// edge list for `outer-edges`, `native-edges` (or nil), and `inner-edges`.
-/// Neomacs renders frames into one GPU-composited display surface, so native
-/// and outer edges currently coincide; inner edges exclude the frame's
-/// internal border just like GNU's `frame_geometry`.
+/// edge list for `outer-edges`, `native-edges` (or nil), and `inner-edges`
+/// (src/xfns.c:7008).  The native edges exclude the external menu/tool bar
+/// band, which Neomacs draws inside its own window; the inner edges also
+/// exclude the internal border and the tab bar (src/xfns.c:6778-6958).
 #[doc(hidden)]
 pub fn builtin_neomacs_frame_edges(
     eval: &mut neovm_eval::emacs_core::eval::Context,
@@ -2251,25 +2251,45 @@ pub fn builtin_neomacs_frame_edges(
                 vec![Value::string("Frame origin unavailable for frame edges")],
             )
         })?;
-    let mut left = left.round() as i64;
-    let mut top = top.round() as i64;
-    let mut right = left.saturating_add(i64::from(frame.width));
-    let mut bottom = top.saturating_add(i64::from(frame.height));
+    let left = left.round() as i64;
+    let top = top.round() as i64;
+    let right = left.saturating_add(i64::from(frame.width));
+    let bottom = top.saturating_add(i64::from(frame.height));
+    let external_bar_height = i64::from(
+        frame
+            .menu_bar_height
+            .saturating_add(frame.tool_bar_height)
+            .saturating_add(frame.compact_bar_height),
+    );
+    let border = frame.internal_border_width().max(0);
+    let native_top = top.saturating_add(external_bar_height);
+    let requested = args.get(1);
 
-    if args
-        .get(1)
-        .is_some_and(|value| value.is_symbol_named("inner-edges", symbol_mode))
-    {
-        let border = frame.internal_border_width().max(0);
-        left = left.saturating_add(border);
-        top = top.saturating_add(border);
-        right = right.saturating_sub(border);
-        bottom = bottom.saturating_sub(border);
+    if requested.is_some_and(|value| value.is_symbol_named("outer-edges", symbol_mode)) {
+        return Ok(Value::list(vec![
+            Value::fixnum(left),
+            Value::fixnum(top),
+            Value::fixnum(right),
+            Value::fixnum(bottom),
+        ]));
+    }
+    if requested.is_some_and(|value| value.is_symbol_named("inner-edges", symbol_mode)) {
+        return Ok(Value::list(vec![
+            Value::fixnum(left.saturating_add(border)),
+            Value::fixnum(
+                native_top
+                    .saturating_add(border)
+                    .saturating_add(i64::from(frame.tab_bar_height)),
+            ),
+            Value::fixnum(right.saturating_sub(border)),
+            Value::fixnum(bottom.saturating_sub(border)),
+        ]));
     }
 
+    // `native-edges`, nil, and any other TYPE all mean native edges.
     Ok(Value::list(vec![
         Value::fixnum(left),
-        Value::fixnum(top),
+        Value::fixnum(native_top),
         Value::fixnum(right),
         Value::fixnum(bottom),
     ]))
@@ -8853,3 +8873,7 @@ mod selection_chrome_tests;
 #[cfg(test)]
 #[path = "tests/terminal_frame_deletion.rs"]
 mod terminal_frame_deletion_tests;
+
+#[cfg(test)]
+#[path = "tests/neomacs_frame_geometry_test.rs"]
+mod neomacs_frame_geometry_tests;

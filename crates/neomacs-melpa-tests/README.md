@@ -303,9 +303,13 @@ with GNU's pinned metrics.
 `gui_frame_chrome_geometry_test` is the separate bars-ON row: with the menu bar
 and tool bar explicitly enabled it asserts `window-pixel-top`,
 `window-inside-pixel-edges`, `frame-inner-height` and the `(cells 1 1)`
-posframe anchor against live GNU. The bar heights themselves are toolkit chrome
-and are not compared; painting them inside the Neomacs window does not change
-the Lisp geometry.
+posframe anchor against live GNU. It also records GNU's live `frame-geometry`
+under two tool-bar styles (outer 661 -> 678, `menu-bar-size` (832 . 25),
+`tool-bar-size` 41 -> 58, inner height unchanged) and checks an
+engine-relative contract on both engines: `frame-outer-height` still counts
+the realized menu/tool band, and the bar sizes are the frame's own. The
+absolute bar heights are toolkit chrome and are not compared; painting the
+bars inside the Neomacs window does not change the Lisp geometry.
 
 `frame-live-p` reports each backend's terminal type (`x` in GNU, `neo` here),
 as GNU's `Fframep`-based contract requires; the posframe probe records the
