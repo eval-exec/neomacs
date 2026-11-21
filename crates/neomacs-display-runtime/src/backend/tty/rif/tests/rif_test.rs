@@ -2959,6 +2959,17 @@ fn rtl_short_rows_are_right_aligned_in_the_terminal() {
             Some(TerminalColor::Indexed(235)),
             "lead cell {col} carries the window-background fill"
         );
+        // The FaceFillItem alone writes these cells as plain default-face
+        // blanks.  Only the reversed-row lead fill rewrites them with the
+        // end-of-line glyph's erase identity (ends_at_zv is false, and the
+        // end glyph's face is not the canonical default slot), so this is the
+        // assertion that fails if the fill_text_area_blanks lead call is
+        // removed.
+        assert_eq!(
+            rif.desired.cells[col].blank_erase(),
+            BlankErase::Explicit,
+            "lead cell {col} was written by the reversed-row lead fill"
+        );
     }
 }
 
@@ -2987,6 +2998,17 @@ fn rtl_composite_run_is_right_aligned_in_the_terminal() {
             rif.desired.cells[col].attrs().bg,
             Some(TerminalColor::Indexed(235)),
             "lead cell {col} carries the window-background fill"
+        );
+        // The FaceFillItem alone writes these cells as plain default-face
+        // blanks.  Only the reversed-row lead fill rewrites them with the
+        // end-of-line glyph's erase identity (ends_at_zv is false, and the
+        // end glyph's face is not the canonical default slot), so this is the
+        // assertion that fails if the fill_text_area_blanks lead call is
+        // removed.
+        assert_eq!(
+            rif.desired.cells[col].blank_erase(),
+            BlankErase::Explicit,
+            "lead cell {col} was written by the reversed-row lead fill"
         );
     }
 }
