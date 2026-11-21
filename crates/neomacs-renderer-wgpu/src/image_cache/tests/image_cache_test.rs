@@ -2921,3 +2921,38 @@ fn png_empty_indexed_trns_is_ignored_before_mask_classification() {
     .unwrap();
     assert_eq!(decoded.metadata.mask, ImageMaskKind::None);
 }
+
+/// A wholesale clear must release every resident image from the media budget:
+/// each texture was charged when it was created, and the budget drives live
+/// eviction decisions for other media.
+#[test]
+fn clearing_the_cache_frees_every_resident_image_accounting() {
+    use crate::media_budget::{MediaAccounting, MediaBudget, MediaType};
+    let ids = [ImageId::new(3), ImageId::new(7), ImageId::new(11)];
+    let mut budget = MediaBudget::new();
+    for (image, bytes) in ids.iter().zip([60usize, 8, 24]) {
+        budget.register(MediaType::Image, image.get(), bytes);
+    }
+    assert_eq!(budget.current_usage(), 92);
+
+    let freed = ImageCache::cleared_image_accounting(ids.iter());
+    assert_eq!(freed.len(), ids.len(), "one Free per resident image");
+    assert!(
+        freed.iter().all(|event| matches!(
+            event,
+            MediaAccounting::Freed {
+                media_type: MediaType::Image,
+                ..
+            }
+        )),
+        "every event must free an image: {freed:?}"
+    );
+    for event in freed {
+        budget.apply(event);
+    }
+    assert_eq!(
+        budget.current_usage(),
+        0,
+        "a cleared image cache holds no budgeted image bytes"
+    );
+}

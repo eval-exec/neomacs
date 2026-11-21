@@ -562,6 +562,33 @@ pub enum AssetCommand {
     },
     /// Retire an image after its last render presentation releases it.
     ImageRetire { image: ImageId },
+    /// Free one image's texture now, as GNU's `image-flush` does.
+    ///
+    /// `Fimage_flush` (`src/image.c:2538-2560`) removes the matching images
+    /// from the frame cache via `uncache_image`, which frees their pixmaps
+    /// immediately; `image-cache-size` observes the drop before the next
+    /// redisplay.  This is distinct from [`Self::ImageRetire`], which keeps a
+    /// texture drawable until no accepted or queued presentation references
+    /// it.
+    ImageFlush { image: ImageId },
+    /// Drop every retained image texture and chrome icon residency.
+    ///
+    /// GNU `Fclear_image_cache` (`src/image.c:2436-2478`) frees the selected
+    /// frame's (or every window frame's) image cache before returning; the
+    /// shared catalog is this frontend's analogue of all frames, so editor
+    /// images and tool-bar icons are evicted together.  FILTER nil (selected
+    /// frame) and FILTER t (all frames) therefore have the same effect here.
+    ClearImageCache,
+    /// Recompute the renderer's retained-image usage and publish it, then
+    /// acknowledge.
+    ///
+    /// `image-cache-size` reads the shared snapshot directly.  After an
+    /// invalidation or a synchronous resolve that snapshot is known stale, and
+    /// this round-trip is what makes the next read observe GNU's synchronous
+    /// cache state instead of the previous frame's.
+    PublishImageCacheUsage {
+        ack: std::sync::mpsc::SyncSender<()>,
+    },
     /// Retire CPU-side animation decoder/compositor state independently of
     /// frame textures.
     ImageSequenceRetire {

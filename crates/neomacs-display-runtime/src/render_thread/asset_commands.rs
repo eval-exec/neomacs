@@ -196,6 +196,30 @@ impl RenderApp {
                 }
                 self.publish_image_cache_usage();
             }
+            AssetCommand::ImageFlush { image } => {
+                clear_image_terminals(&self.image_metadata, image);
+                tracing::debug!("Flushing image {} immediately", image);
+                if let Some(ref mut renderer) = self.renderer {
+                    renderer.flush_image(image);
+                }
+                self.publish_image_cache_usage();
+            }
+            AssetCommand::ClearImageCache => {
+                if let Some(ref mut renderer) = self.renderer {
+                    renderer.clear_image_cache();
+                }
+                // Toolbar textures live in the same renderer image cache but
+                // are keyed outside the catalog, so their residency map must be
+                // forgotten for the next reconcile to realize them again.
+                self.toolbar.forget_realized();
+                self.publish_image_cache_usage();
+            }
+            AssetCommand::PublishImageCacheUsage { ack } => {
+                self.publish_image_cache_usage();
+                // The waiter is bounded and may have given up; the publish is
+                // the contract, the acknowledgement only says it happened.
+                let _ = ack.try_send(());
+            }
             AssetCommand::ImageSequenceRetire { retirement } => {
                 tracing::debug!(?retirement, "retiring image sequence decoder state");
                 if let Some(ref mut renderer) = self.renderer {

@@ -194,9 +194,11 @@ fn invalidating_dependency_retires_old_identity_and_next_lookup_reloads() {
     ));
 
     catalog.invalidate(ImageInvalidation::Dependency(request.source.clone()));
+    // The flushed identity is freed immediately (GNU `uncache_image`), not
+    // merely marked for presentation-safe retirement.
     assert!(matches!(
         cmd_rx.try_recv().expect("old image identity retired"),
-        RenderCommand::Asset(AssetCommand::ImageRetire { image }) if image == first
+        RenderCommand::Asset(AssetCommand::ImageFlush { image }) if image == first
     ));
 
     let second = lookup(&catalog, request).placement().image_id();
@@ -235,9 +237,13 @@ fn invalidating_spec_preserves_other_spec_that_uses_same_dependency() {
     catalog.invalidate(ImageInvalidation::Spec {
         spec: first.spec.clone(),
     });
+    // GNU `image-flush` -> `uncache_image` frees the matching images at once,
+    // so the retired identity is materialized by the immediate-flush command
+    // rather than a presentation-safe retirement; every identity assertion
+    // below is unchanged.
     assert!(matches!(
         cmd_rx.try_recv().expect("only exact spec identity freed"),
-        RenderCommand::Asset(AssetCommand::ImageRetire { image }) if image == first_id
+        RenderCommand::Asset(AssetCommand::ImageFlush { image }) if image == first_id
     ));
     assert!(cmd_rx.try_recv().is_err());
 
@@ -683,7 +689,7 @@ fn each_lookup_carries_the_bound_it_was_made_under() {
     });
     catalog.lookup(request, ImageSizeLimit::from_axis_pixels(4096));
 
-    // The first load, the retirement of its identity, then the reload.
+    // The first load, the immediate flush of its identity, then the reload.
     assert!(matches!(
         cmd_rx.try_recv().expect("first load"),
         RenderCommand::Asset(AssetCommand::ImageLoadFile { limit, .. })
@@ -691,7 +697,7 @@ fn each_lookup_carries_the_bound_it_was_made_under() {
     ));
     assert!(matches!(
         cmd_rx.try_recv().expect("retirement"),
-        RenderCommand::Asset(AssetCommand::ImageRetire { .. })
+        RenderCommand::Asset(AssetCommand::ImageFlush { .. })
     ));
     assert!(matches!(
         cmd_rx.try_recv().expect("reload"),

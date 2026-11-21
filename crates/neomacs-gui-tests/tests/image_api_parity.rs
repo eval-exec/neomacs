@@ -43,6 +43,16 @@ fn image_metadata_tiff_damaged_links_preserve_readable_pages_like_gnu() {
     compare("tiff-links");
 }
 
+#[test]
+fn image_cache_size_accounting_and_clear_are_synchronous_like_gnu() {
+    compare("cache");
+}
+
+#[test]
+fn image_decode_cancel_on_free_leaves_no_stale_cache_like_gnu() {
+    compare("cancel");
+}
+
 fn compare(case: &str) {
     let root = neomacs_infra::workspace_root();
     let artifacts = root.join(format!("tmp/image-api-{case}-{}", std::process::id()));
@@ -90,6 +100,23 @@ fn compare(case: &str) {
         assert_eq!(
             values[0], "(t t)\n",
             "GNU must observe the decoded geometry"
+        );
+    }
+    if case == "cache" {
+        // Attested GNU 31.1: +60 bytes for the 5x3 opaque RGB PNG (one RGBA
+        // pixmap), +8 for the 2x1 RGBA PNG, -60 after flushing the first, and
+        // 0 immediately after clear-image-cache.
+        assert_eq!(
+            values[0].trim(),
+            "(60 8 -60 0)",
+            "GNU image-cache-size accounting contract"
+        );
+    }
+    if case == "cancel" {
+        assert_eq!(
+            values[0].trim(),
+            "(0 (1200 . 900) t t)",
+            "GNU frees the cache synchronously and recovers the geometry"
         );
     }
     if case == "tiff" {

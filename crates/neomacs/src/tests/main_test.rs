@@ -1651,6 +1651,139 @@ fn image_catalog_reports_renderer_owned_cache_bytes() {
     assert_eq!(catalog.cached_size_bytes(), 4_864);
 }
 
+/// A full command channel must not let the usage acknowledgement overtake the
+/// wholesale clear it is supposed to observe: invalidation commands take the
+/// ordered (never deferred) path, so the read after clear-all is post-clear.
+#[test]
+fn clear_image_cache_usage_read_stays_post_clear_with_a_full_command_channel() {
+    use neomacs_display_protocol::{ImageCacheUsage, ImageId};
+    use neomacs_display_runtime::thread_comm::RenderCommandSender;
+    use neovm_core::emacs_core::image_catalog::ImageInvalidation;
+
+    let (cmd_tx, cmd_rx) =
+        RenderCommandSender::bounded(std::num::NonZeroUsize::new(1).expect("non-zero capacity"));
+    let image_state = Arc::new(neomacs_display_runtime::render_thread::ImageRenderState::default());
+    let catalog = test_image_catalog(&cmd_tx, Arc::clone(&image_state));
+    image_state.publish_cache_usage(ImageCacheUsage::new(4_096, 0));
+
+    // Fill the single slot: the clearance below cannot be queued immediately
+    // and must wait for room instead of taking the decoder deferral path.
+    cmd_tx
+        .send(RenderCommand::Asset(AssetCommand::ImageRetire {
+            image: ImageId::new(9_999),
+        }))
+        .expect("pre-fill the command channel");
+
+    let order = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let order_for_thread = Arc::clone(&order);
+    let state_for_thread = Arc::clone(&image_state);
+    let drainer = std::thread::spawn(move || {
+        // Let the invalidation observe the channel full, then drain in order.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        while let Ok(command) = cmd_rx.recv_timeout(std::time::Duration::from_millis(500)) {
+            match command {
+                RenderCommand::Asset(AssetCommand::ClearImageCache) => {
+                    order_for_thread.lock().expect("order lock").push("clear");
+                    state_for_thread.publish_cache_usage(ImageCacheUsage::default());
+                }
+                RenderCommand::Asset(AssetCommand::PublishImageCacheUsage { ack }) => {
+                    order_for_thread.lock().expect("order lock").push("publish");
+                    let _ = ack.try_send(());
+                    break;
+                }
+                _ => {}
+            }
+        }
+    });
+
+    let _ = catalog.invalidate(ImageInvalidation::All);
+    assert_eq!(
+        catalog.cached_size_bytes(),
+        0,
+        "the read after clear-all must be post-clear even when the channel was full"
+    );
+    drainer.join().expect("fake render thread");
+    assert_eq!(
+        *order.lock().expect("order lock"),
+        vec!["clear", "publish"],
+        "the publish must be processed after the wholesale clear"
+    );
+}
+
+/// When the ordered send times out, the invalidation must still be delivered
+/// (never dropped), the stalled read must keep the previous snapshot, and the
+/// next read after the deferral worker delivers must be post-clear.
+#[test]
+fn clear_image_cache_invalidation_survives_an_ordering_timeout() {
+    use neomacs_display_protocol::{ImageCacheUsage, ImageId};
+    use neomacs_display_runtime::thread_comm::RenderCommandSender;
+    use neovm_core::emacs_core::image_catalog::ImageInvalidation;
+
+    let (cmd_tx, cmd_rx) =
+        RenderCommandSender::bounded(std::num::NonZeroUsize::new(1).expect("non-zero capacity"));
+    let image_state = Arc::new(neomacs_display_runtime::render_thread::ImageRenderState::default());
+    let catalog = test_image_catalog(&cmd_tx, Arc::clone(&image_state));
+    image_state.publish_cache_usage(ImageCacheUsage::new(4_096, 0));
+    cmd_tx
+        .send(RenderCommand::Asset(AssetCommand::ImageRetire {
+            image: ImageId::new(9_999),
+        }))
+        .expect("pre-fill the command channel");
+
+    // Stalls for the ordering bound, then hands the clearance to the
+    // submission worker, which blocks on the still-full channel.
+    let _ = catalog.invalidate(ImageInvalidation::All);
+    assert_eq!(
+        catalog.cached_size_bytes(),
+        4_096,
+        "a stalled invalidation must not be trusted as applied"
+    );
+
+    let (clear_seen_tx, clear_seen_rx) = std::sync::mpsc::channel();
+    let order = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let order_for_thread = Arc::clone(&order);
+    let state_for_thread = Arc::clone(&image_state);
+    let drainer = std::thread::spawn(move || {
+        let mut signalled = false;
+        while let Ok(command) = cmd_rx.recv_timeout(std::time::Duration::from_secs(2)) {
+            match command {
+                RenderCommand::Asset(AssetCommand::ClearImageCache) => {
+                    order_for_thread.lock().expect("order lock").push("clear");
+                    state_for_thread.publish_cache_usage(ImageCacheUsage::default());
+                    if !signalled {
+                        signalled = true;
+                        let _ = clear_seen_tx.send(());
+                    }
+                }
+                RenderCommand::Asset(AssetCommand::PublishImageCacheUsage { ack }) => {
+                    order_for_thread.lock().expect("order lock").push("publish");
+                    let _ = ack.try_send(());
+                    break;
+                }
+                _ => {}
+            }
+        }
+    });
+
+    clear_seen_rx
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .expect("the deferred clearance must still be delivered");
+    // The submission worker decrements its outstanding count after the send
+    // returns; give that transition a beat before trusting the next read.
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    assert_eq!(
+        catalog.cached_size_bytes(),
+        0,
+        "once the deferred clear is delivered the read is post-clear"
+    );
+    drainer.join().expect("fake render thread");
+    assert_eq!(
+        *order.lock().expect("order lock"),
+        vec!["clear", "publish"],
+        "the publish must be processed after the deferred clearance"
+    );
+}
+
 #[test]
 fn runtime_mode_binary_names_match_gnu_shaped_roles() {
     assert_eq!(RuntimeMode::Raw.binary_name(), "neomacs-temacs");

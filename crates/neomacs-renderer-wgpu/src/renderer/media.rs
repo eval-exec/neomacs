@@ -277,6 +277,23 @@ impl WgpuRenderer {
         self.caches.image.retire(image)
     }
 
+    /// Free one image's texture immediately (GNU `image-flush`).
+    ///
+    /// Unlike [`Self::retire_image`], this does not wait for presentations to
+    /// release the identity: the matching pixmaps are freed now, and a later
+    /// redisplay of the image realizes it again from its source.
+    pub fn flush_image(&mut self, image: ImageId) {
+        self.caches.image.flush(image);
+    }
+
+    /// Drop every retained image texture, including chrome icons.
+    ///
+    /// GNU `clear-image-cache` frees the frame image caches; this is the
+    /// shared-cache equivalent, used by the render thread's wholesale clear.
+    pub fn clear_image_cache(&mut self) {
+        self.caches.image.clear();
+    }
+
     /// Replace the complete set of image identities retained by render
     /// presentations, releasing any retirement whose last reference vanished.
     pub fn synchronize_retained_images(

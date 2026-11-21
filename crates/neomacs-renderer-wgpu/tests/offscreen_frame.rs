@@ -2974,3 +2974,64 @@ fn themed_vector_icons_render_one_to_one_at_any_authored_size() {
         );
     }
 }
+
+/// GNU `image-flush` -> `uncache_image` frees the matching pixmaps before the
+/// next redisplay, so `image-cache-size` drops immediately.  A presentation-
+/// safe retirement is not enough: the texture must be gone (and its accounting
+/// released) the moment the flush is processed.
+#[test]
+fn flushing_one_image_frees_its_texture_immediately() {
+    use neomacs_display_protocol::{DeviceScale, ToolBarIconStyle, ToolBarImageSource};
+
+    let mut h = try_harness().expect("image flush test requires an offscreen GPU adapter");
+    let dir = tempfile::TempDir::new().expect("temp dir for flush images");
+    let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\"><rect width=\"24\" height=\"24\" fill=\"#123456\"/></svg>";
+    let first = dir.path().join("first.svg");
+    let second = dir.path().join("second.svg");
+    std::fs::write(&first, svg).expect("write first icon");
+    std::fs::write(&second, svg).expect("write second icon");
+
+    let style = ToolBarIconStyle::from_chrome_face(24, Color::WHITE, Color::BLACK);
+    let first_key = style.realize(
+        ToolBarImageSource::ThemedVector {
+            path: first.to_string_lossy().into_owned(),
+        },
+        DeviceScale::ONE,
+    );
+    let second_key = style.realize(
+        ToolBarImageSource::ThemedVector {
+            path: second.to_string_lossy().into_owned(),
+        },
+        DeviceScale::ONE,
+    );
+    let first_image = h.renderer.load_toolbar_icon(&first_key);
+    let second_image = h.renderer.load_toolbar_icon(&second_key);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    while (!h.renderer.is_image_ready(first_image) || !h.renderer.is_image_ready(second_image))
+        && std::time::Instant::now() < deadline
+    {
+        h.renderer.process_pending_images();
+        std::thread::yield_now();
+    }
+    assert!(h.renderer.is_image_ready(first_image));
+    assert!(h.renderer.is_image_ready(second_image));
+
+    const ICON_BYTES: u64 = 24 * 24 * 4;
+    let before = h.renderer.image_cache_usage().texture_bytes();
+    assert!(before >= 2 * ICON_BYTES);
+    h.renderer.flush_image(first_image);
+    let after = h.renderer.image_cache_usage().texture_bytes();
+    assert_eq!(
+        after,
+        before - ICON_BYTES,
+        "flushing one image must release exactly its texture bytes immediately"
+    );
+    assert!(
+        !h.renderer.is_image_ready(first_image),
+        "a flushed image is no longer resident"
+    );
+    assert!(
+        h.renderer.is_image_ready(second_image),
+        "flushing one image must not disturb another"
+    );
+}

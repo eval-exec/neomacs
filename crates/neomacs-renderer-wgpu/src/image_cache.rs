@@ -2699,6 +2699,20 @@ impl ImageCache {
         }
     }
 
+    /// Free one image immediately, as GNU's `uncache_image` does for
+    /// `image-flush` (`src/image.c:2538-2560`).
+    ///
+    /// Unlike [`Self::retire`], the texture, its media-budget charge and its
+    /// state are dropped now instead of waiting for the presentation lifetime
+    /// fence; the display realizes the image again on its next lookup.
+    pub fn flush(&mut self, image: ImageId) {
+        self.decoder.client.retire_image(image);
+        self.loads.free(image);
+        self.pending_dimensions.remove(&image);
+        self.residency.cancel_retirement(image);
+        self.release(image);
+    }
+
     /// Publish the complete presentation lifetime fence and release every
     /// retirement which has crossed it.
     pub fn synchronize_retained_images(&mut self, retained: RetainedImageSet) {
@@ -2725,8 +2739,27 @@ impl ImageCache {
         std::mem::take(&mut self.accounting)
     }
 
+    /// The media-budget accounting a wholesale clear must publish for `resident`.
+    pub(crate) fn cleared_image_accounting<'a>(
+        resident: impl IntoIterator<Item = &'a ImageId>,
+    ) -> Vec<crate::media_budget::MediaAccounting> {
+        resident
+            .into_iter()
+            .map(|image| crate::media_budget::MediaAccounting::Freed {
+                media_type: crate::media_budget::MediaType::Image,
+                id: image.get(),
+            })
+            .collect()
+    }
+
     /// Clear entire cache
     pub fn clear(&mut self) {
+        // Every resident texture was charged to the media budget when it was
+        // created.  A wholesale clear drops them all at once, so it must
+        // release exactly those charges, like every per-image retire path;
+        // otherwise the budget keeps counting images that no longer exist.
+        self.accounting
+            .extend(Self::cleared_image_accounting(self.textures.keys()));
         self.decoder.client.clear();
         self.loads.clear();
         self.residency.clear();

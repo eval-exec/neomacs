@@ -139,6 +139,58 @@
      '((130 . 4294967040) (130 . 8)
        (268 . 4294967040) (268 . 8)))))
 
+
+(defun image-api-cache ()
+  ;; GNU frees the frame image cache on the caller's thread; the shared-cache
+  ;; frontend must make the same post-invalidation total visible immediately.
+  (let ((buf (get-buffer-create "*image-api-cache*")))
+    (switch-to-buffer buf)
+    (erase-buffer)
+    (redisplay t)
+    (sit-for 0.3)
+    (let* ((base (image-cache-size))
+           (img (create-image (base64-decode-string image-api-png) 'png t :scale 1))
+           (aimg (create-image (base64-decode-string image-api-alpha-png) 'png t :scale 1)))
+      (goto-char (point-max))
+      (insert-image img)
+      (redisplay t)
+      (sit-for 0.3)
+      (let ((after-plain (image-cache-size)))
+        (goto-char (point-max))
+        (insert-image aimg)
+        (redisplay t)
+        (sit-for 0.3)
+        (let* ((after-alpha (image-cache-size))
+               ;; 5x3 opaque PNG = one RGBA pixmap; 2x1 RGBA = one pixmap.
+               (plain (- after-plain base))
+               (masked (- after-alpha after-plain))
+               (flush-immediate (progn (image-flush img t) (image-cache-size)))
+               (clear-immediate (progn (clear-image-cache t) (image-cache-size))))
+          (list plain masked (- flush-immediate after-alpha) clear-immediate))))))
+
+(defun image-api-cancel ()
+  ;; A decode may still be in flight when the cache is freed.  GNU frees and
+  ;; reloads synchronously; the observable contract is a clean zero, the same
+  ;; geometry, and a cache that can hold the image again afterwards.
+  (let* ((big (create-image
+               (concat "<svg xmlns=\"http://www.w3.org/2000/svg\""
+                       " width=\"1200\" height=\"900\">"
+                       "<rect width=\"100%\" height=\"100%\" fill=\"blue\"/></svg>")
+               'svg t :scale 1))
+         (buf (get-buffer-create "*image-api-cancel*")))
+    (switch-to-buffer buf)
+    (erase-buffer)
+    (insert-image big)
+    (redisplay t)
+    (let* ((cleared (progn (clear-image-cache t) (image-cache-size)))
+           (size (image-size big t))
+           (settled (progn (redisplay t) (sit-for 0.4) (image-cache-size))))
+      ;; At most the displayed image plus ordinary chrome may be resident:
+      ;; a cancelled decode that repopulated the cache would exceed this.
+      (list cleared size
+            (>= settled (* 1200 900 4))
+            (<= settled (+ (* 1200 900 4) 1000000))))))
+
 (defun image-api-write (value)
   (with-temp-file (getenv "NEOMACS_GUI_IMAGE_RESULT")
     (let ((print-length nil) (print-level nil))
@@ -174,5 +226,7 @@
        ("webp" (image-api-webp))
        ("tiff" (image-api-tiff))
        ("tiff-links" (image-api-tiff-damaged-links))
+       ("cache" (image-api-cache))
+       ("cancel" (image-api-cancel))
        (_ (error "Unknown image API case: %s" case))))
     (run-at-time 1 nil (lambda () (kill-emacs 0)))))
