@@ -2497,6 +2497,10 @@ mod slot_store_tests;
 #[path = "gc/tests/pacer_test.rs"]
 mod pacer_tests;
 
+#[cfg(test)]
+#[path = "gc/tests/string_pacing_census_test.rs"]
+mod string_pacing_census_tests;
+
 #[cfg(any(test, feature = "test-support"))]
 #[path = "gc/tests/ownership_test.rs"]
 mod ownership_tests;

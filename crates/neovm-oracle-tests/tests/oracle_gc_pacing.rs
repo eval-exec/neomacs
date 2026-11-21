@@ -15,6 +15,23 @@ fn assert_pacing(form: &str, expected: expect_test::Expect) {
 }
 
 #[test]
+fn string_gc_pacing_retained_substrings() {
+    // All large inputs are generated; the source itself is deliberately small.
+    let form = r#"
+(let ((gc-cons-threshold 800000) (gc-cons-percentage 1.0)
+      (post-gc-hook nil) (source (make-string 87 ?x))
+      (holder nil) (i 0) (before 0))
+  (garbage-collect)
+  (setq before gcs-done holder (make-vector 400000 nil))
+  (while (< i 400000)
+    (aset holder i (substring source 0 87))
+    (setq i (1+ i)))
+  (list (- gcs-done before) (length holder) (length (aref holder 0))))
+"#;
+    assert_pacing(form, expect_test::expect![[r#""OK (3 400000 87)""#]]);
+}
+
+#[test]
 fn gcpace_settings_changes_adjust_pending_budget() {
     let form = r#"
 (let ((gc-cons-threshold most-positive-fixnum) (gc-cons-percentage 0.0)
