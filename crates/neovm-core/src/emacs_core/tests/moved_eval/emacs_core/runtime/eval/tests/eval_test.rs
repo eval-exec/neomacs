@@ -30207,6 +30207,58 @@ fn ns_confirm_quit_nested_let_restores_host_projection() {
 }
 
 #[test]
+fn ns_confirm_quit_forwarded_restoration_publishes_once_per_store() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::test_utils::new_context();
+    eval.eval_str("(defvar ns-confirm-quit nil)").unwrap();
+    let symbol = intern("ns-confirm-quit");
+    // GNU's NS DEFVAR_LISP is object-forwarded. Exercise its restore path
+    // even on Linux, where the test-created variable would otherwise be plain.
+    eval.obarray_view_mut()
+        .install_objfwd(symbol, neovm_value::forward::alloc_objfwd(Value::NIL));
+    let values = attach_quit_confirmation_host(&mut eval);
+    let cases: &[(&str, &[bool])] = &[
+        (
+            "(progn (let ((ns-confirm-quit t))
+                      (let ((ns-confirm-quit nil)) ns-confirm-quit))
+                    ns-confirm-quit)",
+            &[true, false, true, false],
+        ),
+        (
+            r#"(condition-case nil
+                   (let ((ns-confirm-quit t)) (signal 'error '("unwind confirmation")))
+                 (error ns-confirm-quit))"#,
+            &[true, false],
+        ),
+        (
+            "(progn (let ((ns-confirm-quit t))
+                      (setq ns-confirm-quit t) (setq ns-confirm-quit t))
+                    ns-confirm-quit)",
+            // Equal-valued completed stores still publish: remove the extra
+            // restore boundary rather than deduplicating boolean values.
+            &[true, true, true, false],
+        ),
+        (
+            "(let ((watcher (lambda (&rest _args) nil)))
+               (add-variable-watcher 'ns-confirm-quit watcher)
+               (let ((ns-confirm-quit t)) ns-confirm-quit)
+               (remove-variable-watcher 'ns-confirm-quit watcher)
+               ns-confirm-quit)",
+            &[true, false],
+        ),
+    ];
+    for (form, expected) in cases {
+        values.borrow_mut().clear();
+        assert!(
+            eval.eval_str(form)
+                .expect("restore the forwarded variable")
+                .is_nil()
+        );
+        assert_eq!(values.borrow().as_slice(), *expected, "{form}");
+    }
+}
+
+#[test]
 fn ns_confirm_quit_rejected_watcher_write_keeps_host_projection() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();

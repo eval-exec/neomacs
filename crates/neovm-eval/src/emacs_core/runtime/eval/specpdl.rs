@@ -1168,13 +1168,9 @@ impl Context {
         // runtime value and invalidates retained redisplay state.
         let value = old_value.unwrap_or(Value::UNBOUND);
         super::super::data::set_default_internal_resolved(self, sym_id, value, bindflag)?;
-        // The evaluator caches a few of these cells in its own fields (the
-        // quit flags, `throw-on-input`, the eval-depth limit) so its hot
-        // paths do not consult the obarray. The plain-cell restore in
-        // `unbind_to_result` republishes them; this one restores a
-        // LOCALIZED/FORWARDED cell and must do the same, or a cache keeps a
-        // value the binding it mirrors has already given up.
-        self.sync_cached_runtime_binding_by_id(sym_id, old_value.unwrap_or(Value::NIL));
+        // The storage seam already publishes the now-visible runtime value.
+        // Repeating that sync here duplicates forwarded callbacks and can
+        // replace a current local value with the hidden saved default.
         self.sync_user_test_gc_binding_by_id(sym_id);
         Ok(())
     }
