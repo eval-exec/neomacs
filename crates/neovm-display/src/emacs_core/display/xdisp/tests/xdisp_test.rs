@@ -6964,15 +6964,20 @@ fn declining_fontification_hook_advances_by_gnu_property_stops() {
         .current_buffer()
         .expect("current buffer")
         .id();
+    // Bare unit runtime: no subr.el, so only special forms and core subrs.
     eval.eval_str(
         "(progn
-           (dotimes (i 8)
-             (insert (propertize (make-string 150 ?a) 'p640 i) \"\\n\"))
+           (let ((i 0))
+             (while (< i 8)
+               (insert (propertize (make-string 150 ?a) 'p640 i) \"\\n\")
+               (setq i (1+ i))))
            (goto-char 1)
            (defvar p640-stop-calls nil)
            (setq p640-stop-calls nil)
            (set (make-local-variable 'fontification-functions)
-                (list (lambda (pos) (push pos p640-stop-calls) nil)))
+                (list (lambda (pos)
+                        (setq p640-stop-calls (cons pos p640-stop-calls))
+                        nil)))
            nil)",
     )
     .expect("install the declining fontification function");
