@@ -6290,6 +6290,150 @@ fn clear_current_message_runs_echo_area_clear_hook_once_when_message_present() {
 }
 
 #[test]
+fn noop_echo_clear_callback_keeps_redisplay_generation() {
+    crate::test_utils::init_test_tracing();
+    for callback_result in ["nil", "'dont-clear-message"] {
+        let mut ev = crate::test_utils::new_context();
+        ev.eval_str(&format!(
+            "(setq inhibit-message nil
+                   echo-clear-callback-calls 0
+                   clear-message-function
+                   (lambda ()
+                     (setq echo-clear-callback-calls (1+ echo-clear-callback-calls))
+                     {callback_result}))"
+        ))
+        .expect("install a no-op clear callback");
+        assert_eq!(ev.current_message_text(), None);
+        let before = ev.redisplay_generation();
+
+        // GNU clear_message (xdisp.c:13635-13661) still calls the callback
+        // without an echo message. A no-op callback is not a body mutation.
+        for _ in 0..5 {
+            ev.clear_current_message_for_keyboard_input();
+        }
+
+        assert_eq!(
+            ev.eval_str("echo-clear-callback-calls")
+                .expect("clear callback count"),
+            Value::fixnum(5),
+            "the {callback_result} callback must still run for every input"
+        );
+        assert_eq!(ev.current_message_text(), None);
+        assert_eq!(
+            ev.redisplay_generation(),
+            before,
+            "the {callback_result} callback must not invalidate unchanged body rows"
+        );
+    }
+}
+
+#[test]
+fn preserving_echo_clear_callback_keeps_message() {
+    let mut ev = crate::test_utils::new_context();
+    ev.eval_str("(setq clear-message-function (lambda () 'dont-clear-message))")
+        .expect("install a preserving callback");
+    ev.set_current_message(Some(neovm_value::heap_types::LispString::from_utf8(
+        "keep this message",
+    )));
+    let before = ev.redisplay_generation();
+    ev.clear_current_message_for_keyboard_input();
+    assert_eq!(
+        ev.current_message_text().as_deref(),
+        Some("keep this message")
+    );
+    assert_eq!(ev.redisplay_generation(), before);
+}
+
+#[test]
+fn echo_clear_keeps_message_and_callback_mutations_invalidating() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = crate::test_utils::new_context();
+    ev.eval_str(
+        "(setq inhibit-message nil
+               echo-clear-callback-calls 0
+               clear-message-function
+               (lambda ()
+                 (setq echo-clear-callback-calls (1+ echo-clear-callback-calls))
+                 nil))",
+    )
+    .expect("install a clear callback");
+    ev.set_current_message(Some(neovm_value::heap_types::LispString::from_utf8(
+        "message to clear",
+    )));
+    let before = ev.redisplay_generation();
+    ev.clear_current_message_for_keyboard_input();
+    assert_eq!(ev.current_message_text(), None);
+    assert!(
+        ev.redisplay_generation() > before,
+        "removing a real echo message must still request redisplay"
+    );
+    assert_eq!(
+        ev.eval_str("echo-clear-callback-calls")
+            .expect("real-message callback count"),
+        Value::fixnum(1)
+    );
+
+    // Returning dont-clear-message must not hide a callback's display-slot
+    // mutation. Its setter owns the invalidation independently of echo state.
+    ev.eval_str(
+        "(setq tab-width 8
+               clear-message-function
+               (lambda ()
+                 (setq echo-clear-callback-calls (1+ echo-clear-callback-calls))
+                 (setq tab-width 4)
+                 'dont-clear-message))",
+    )
+    .expect("install a display-variable-mutating callback");
+    let before = ev.redisplay_generation();
+    ev.clear_current_message_for_keyboard_input();
+    assert!(
+        ev.redisplay_generation() > before,
+        "the callback's tab-width mutation must still invalidate geometry"
+    );
+    assert_eq!(
+        ev.eval_str("tab-width")
+            .expect("callback changed tab-width"),
+        Value::fixnum(4)
+    );
+    assert_eq!(
+        ev.eval_str("echo-clear-callback-calls")
+            .expect("display-variable callback count"),
+        Value::fixnum(2)
+    );
+
+    ev.eval_str(
+        r#"(progn
+             (insert "x")
+             (setq echo-clear-callback-overlay (make-overlay 1 2)
+                   clear-message-function
+                   (lambda ()
+                     (setq echo-clear-callback-calls (1+ echo-clear-callback-calls))
+                     (overlay-put echo-clear-callback-overlay 'after-string "suffix")
+                     nil)))"#,
+    )
+    .expect("install an overlay-mutating callback");
+    let buffer = ev.edit.buffers.current_buffer_id().expect("current buffer");
+    let before = ev
+        .redisplay_buffer_signature(buffer)
+        .expect("buffer redisplay signature");
+    ev.clear_current_message_for_keyboard_input();
+    let after = ev
+        .redisplay_buffer_signature(buffer)
+        .expect("buffer redisplay signature after callback");
+    assert_ne!(
+        before.layout_overlay_modified_tick_for_test(),
+        after.layout_overlay_modified_tick_for_test(),
+        "the callback's overlay mutation must still invalidate body rows"
+    );
+    assert_eq!(
+        ev.eval_str("echo-clear-callback-calls")
+            .expect("overlay callback count"),
+        Value::fixnum(3)
+    );
+    assert_eq!(ev.current_message_text(), None);
+}
+
+#[test]
 fn update_active_region_selection_after_command_calls_gnu_owned_selection_surface() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();

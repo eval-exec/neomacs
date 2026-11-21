@@ -64,6 +64,9 @@ mod oracle_dual_width_text;
 #[path = "oracle_eob_overlay_motion.rs"]
 mod oracle_eob_overlay_motion;
 
+#[path = "oracle_echo_clear_callback.rs"]
+mod oracle_echo_clear_callback;
+
 #[path = "oracle_window_text_chrome.rs"]
 mod oracle_window_text_chrome;
 
