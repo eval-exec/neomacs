@@ -20,7 +20,7 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{NSObject, NSObjectProtocol, NSString};
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -55,7 +55,7 @@ pub(super) fn refresh_frame_views(frames: &super::frame_windows::GuiFrameWindowM
     let Some(_main_thread) = objc2::MainThreadMarker::new() else {
         return;
     };
-    let mut views = HashMap::new();
+    let mut views = BTreeMap::new();
     frames.for_each_top_level_window(|state| {
         let Some(window) = state.window() else { return };
         let Ok(handle) = window.window_handle() else {
@@ -70,7 +70,7 @@ pub(super) fn refresh_frame_views(frames: &super::frame_windows::GuiFrameWindowM
         let view = unsafe { &*handle.ns_view.as_ptr().cast::<NSView>() };
         views.insert(state.render.emacs_frame_id, Weak::new(view));
     });
-    FRAME_VIEWS.with(|slot| *slot.borrow_mut() = views);
+    QUIT_REDIRECT.with(|slot| slot.borrow_mut().frame_views = views);
 }
 
 fn selected_frame_view() -> Option<Retained<NSView>> {
@@ -78,7 +78,7 @@ fn selected_frame_view() -> Option<Retained<NSView>> {
     if frame == 0 {
         return None;
     }
-    FRAME_VIEWS.with(|slot| slot.borrow().get(&frame).and_then(Weak::load))
+    QUIT_REDIRECT.with(|slot| slot.borrow().frame_views.get(&frame).and_then(Weak::load))
 }
 
 pub(super) fn set_confirm_quit(enabled: bool) {
@@ -243,12 +243,24 @@ impl QuitRedirect {
     }
 }
 
+struct QuitRedirectSlot {
+    target: Option<Retained<QuitRedirect>>,
+    // Window registration may precede target installation. Keep these weak
+    // views in the same main-thread owner independently of target readiness.
+    frame_views: BTreeMap<u64, Weak<NSView>>,
+}
+
 thread_local! {
-    // Both delegate and menu target are weak references. Main-thread ownership
-    // keeps the object alive without carrying any Lisp state across threads.
-    static QUIT_REDIRECT: RefCell<Option<Retained<QuitRedirect>>> = const { RefCell::new(None) };
+    // AppKit's delegate/menu target references are weak. This existing
+    // main-thread owner retains the target and tracks weak keyboard views,
+    // without carrying any Lisp state across threads. Take retained objects
+    // out and drop the borrow before AppKit/winit calls: they can re-enter
+    // refresh_frame_views(), which needs to borrow this same owner mutably.
+    static QUIT_REDIRECT: RefCell<QuitRedirectSlot> = const { RefCell::new(QuitRedirectSlot {
+        target: None,
+        frame_views: BTreeMap::new(),
+    }) };
     static INSTALLED: Cell<bool> = const { Cell::new(false) };
-    static FRAME_VIEWS: RefCell<HashMap<u64, Weak<NSView>>> = RefCell::new(HashMap::new());
 }
 
 /// Install native termination policy even when the menu is not available yet.
@@ -262,11 +274,14 @@ pub(super) fn install(input_tx: &Sender<InputEvent>) {
     };
     let app = NSApplication::sharedApplication(mtm);
     install_terminate_override(&app, input_tx);
-    let target = QUIT_REDIRECT.with(|slot| {
-        let mut slot = slot.borrow_mut();
-        slot.get_or_insert_with(|| QuitRedirect::new(mtm, input_tx.clone()))
-            .clone()
-    });
+    let target = if let Some(target) = QUIT_REDIRECT.with(|slot| slot.borrow().target.clone()) {
+        target
+    } else {
+        // NSObject initialization must also run without a slot borrow.
+        let target = QuitRedirect::new(mtm, input_tx.clone());
+        QUIT_REDIRECT.with(|slot| slot.borrow_mut().target = Some(target.clone()));
+        target
+    };
     // Winit explicitly guarantees that it does not install an app delegate
     // (winit-appkit/src/lib.rs). The object is retained by QUIT_REDIRECT.
     app.setDelegate(Some(ProtocolObject::from_ref(&*target)));

@@ -972,9 +972,9 @@ const TLS_CLASSIFICATION: &[(&str, &str, TlsClass)] = &[
         TlsClass::CarrierIntrinsic,
     ),
     (BINARY_CENSUS, "PROFILER", TlsClass::CarrierIntrinsic),
-    // macOS-only menu redirect target (display-runtime
-    // macos_quit_redirect.rs): absent from the shipped Linux census and holds
-    // a retained AppKit object, not Lisp Values.
+    // Retained AppKit redirect target plus the weak frame->NSView registry:
+    // main-thread only, macOS only, absent from the shipped Linux census,
+    // no Lisp Values (display-runtime macos_quit_redirect.rs).
     (
         "neomacs-display-runtime/src/render_thread/macos_quit_redirect.rs",
         "QUIT_REDIRECT",
