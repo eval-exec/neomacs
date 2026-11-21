@@ -1514,30 +1514,57 @@ fn move_to_column_long_truncated_fast_path_gates() {
 /// `current-column` reaches `scan_for_column` only through
 /// `current_column_1` (intervals/overlays/multibyte, `src/indent.c:365-370`),
 /// where GNU's long+truncated shortcut then applies when
-/// `long-line-threshold` is nil and the flag is set.  The same buffer without
-/// a property takes the simple backward scan, which counts the TAB.
+/// `long-line-threshold` is nil and the flag is set.  The interval tree is
+/// what `buffer_intervals` reports, so removing the last property still takes
+/// that branch; a buffer that never had a tree takes the simple backward
+/// scan, which counts the TAB.
 #[test]
 fn current_column_1_long_truncated_fast_path_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let (mut ev, _buffer) = long_line_scan_buffer(200_000, true, true);
+    // GNU dispatches to `current_column_1` on `buffer_intervals
+    // (current_buffer) != NULL` (src/indent.c:365-370), and the interval
+    // tree outlives `remove-text-properties` (src/textprop.c:1607 validates
+    // with `soft`; only whole-text deletion NULLs the tree,
+    // src/intervals.c:1324-1346).  So the removed-property buffer still
+    // reaches the long+truncated shortcut.
+    let (mut ev, buffer) = long_line_scan_buffer(200_000, true, true);
     ev.eval_str("(put-text-property 1 2 'p640 t)")
-        .expect("force the properties branch");
+        .expect("create the interval tree");
+    ev.eval_str("(remove-text-properties 1 2 '(p640 nil))")
+        .expect("remove the property but keep the tree");
+    assert!(
+        ev.edit
+            .buffers
+            .get(buffer)
+            .expect("buffer")
+            .text_props_tree_present(),
+        "GNU's interval tree survives removing the last property"
+    );
     ev.eval_str("(goto-char 30001)").expect("move point");
     neovm_edit::test_support::authority::reset_column_scan_characters();
-    let with_property = ev
+    let with_removed_property = ev
         .eval_str("(let ((long-line-threshold nil)) (current-column))")
         .expect("current-column through current_column_1")
         .as_int()
         .expect("fixnum");
     let work = neovm_edit::test_support::authority::column_scan_characters();
     assert_eq!(
-        with_property, 30_000,
+        with_removed_property, 30_000,
         "current_column_1 takes the one-column-per-character shortcut"
     );
     assert_eq!(work, 0, "the shortcut must not decode the line");
 
-    // Control: no property -> current_column's simple backward scan, exact.
-    let (mut ev, _buffer) = long_line_scan_buffer(200_000, true, true);
+    // Control: a buffer that never had an interval tree -> current_column's
+    // simple backward scan, which counts the TAB.
+    let (mut ev, control) = long_line_scan_buffer(200_000, true, true);
+    assert!(
+        !ev.edit
+            .buffers
+            .get(control)
+            .expect("buffer")
+            .text_props_tree_present(),
+        "the control buffer must never have had an interval tree"
+    );
     ev.eval_str("(goto-char 30001)").expect("move point");
     let no_property = ev
         .eval_str("(let ((long-line-threshold nil)) (current-column))")

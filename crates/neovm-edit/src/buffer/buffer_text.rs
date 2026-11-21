@@ -1839,6 +1839,19 @@ impl BufferText {
         self.storage.borrow().text_props.is_empty()
     }
 
+    /// GNU `buffer_intervals (buffer) != NULL`: the interval tree exists,
+    /// even when it currently carries no properties. Sticky across property
+    /// removal; cleared only where GNU sets the tree to NULL.
+    pub fn text_props_tree_present(&self) -> bool {
+        self.storage.borrow().text_props.interval_tree_present()
+    }
+
+    /// GNU `set_buffer_intervals (buffer, NULL)` for the whole-text-delete
+    /// site (`src/intervals.c:1324-1328`).
+    pub(crate) fn clear_text_prop_tree_presence(&self) {
+        Rc::make_mut(&mut self.storage.borrow_mut().text_props).clear_interval_tree_presence();
+    }
+
     pub fn text_props_snapshot(&self) -> TextPropertyTable {
         // Callers here (transpose-regions, pdump, buffer-copy) want an owned,
         // independent table, so deep-clone the shared inner table -- not the Rc.
@@ -1850,8 +1863,12 @@ impl BufferText {
     /// publish a standalone live property edit: table-local mutation numbers
     /// can collide. Live callers must pair it with the existing content epoch;
     /// the test-only raw replacement helper intentionally bypasses that rule.
-    pub fn text_props_replace(&self, table: TextPropertyTable) {
+    pub fn text_props_replace(&self, mut table: TextPropertyTable) {
         let mut storage = self.storage.borrow_mut();
+        // GNU's interval tree is persistent across edits; a table rebuilt
+        // from runs must not drop the presence bit.  The explicit
+        // whole-text-delete clear runs after the replacement.
+        table.inherit_interval_tree_presence(&storage.text_props);
         storage.text_props = Rc::new(table);
         // A swapped-in table carries its own mutation-tick lineage, which can
         // collide with the memo's stored ticks — drop the memo outright.

@@ -3327,8 +3327,13 @@ pub fn current_column<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult
 /// Whether GNU `current_column`'s properties/overlays/multibyte branch
 /// (`current_column_1`, src/indent.c:365-370) applies, which is the only
 /// branch that reaches `scan_for_column` from `current-column`.
+///
+/// The first test is GNU's `buffer_intervals (current_buffer)`, i.e. the
+/// interval tree EXISTS.  It is not "has a property": GNU keeps the tree
+/// after `remove-text-properties`, so the properties branch (and with it the
+/// long+truncated scan shortcut) still applies then.
 fn current_column_uses_scan(buffer: &Buffer) -> bool {
-    !buffer.text_props_is_empty()
+    buffer.text_props_tree_present()
         || !buffer.overlays.is_empty()
         || buffer.total_char_len().get() != buffer.total_emacs_byte_len().get()
 }

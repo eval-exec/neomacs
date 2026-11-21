@@ -2082,6 +2082,13 @@ impl BufferTextSnapshot {
         self.text.text_props_is_empty()
     }
 
+    /// GNU `buffer_intervals (buffer) != NULL`: the interval tree exists,
+    /// even if every property has been removed. `current_column` dispatches
+    /// on this state (`src/indent.c:365-370`).
+    pub fn text_props_tree_present(&self) -> bool {
+        self.text.text_props_tree_present()
+    }
+
     pub fn text_prop_at_emacs_byte_pos(&self, pos: EmacsBytePos, name: Value) -> Option<Value> {
         self.text
             .text_props_get_property_at_emacs_byte_pos(pos, name)
@@ -4248,6 +4255,13 @@ impl Buffer {
 
     pub fn text_props_is_empty(&self) -> bool {
         self.text.text_props_is_empty()
+    }
+
+    /// GNU `buffer_intervals (buffer) != NULL`: the interval tree exists,
+    /// even if every property has been removed. `current_column` dispatches
+    /// on this state (`src/indent.c:365-370`).
+    pub fn text_props_tree_present(&self) -> bool {
+        self.text.text_props_tree_present()
     }
 
     pub fn text_props_snapshot(&self) -> TextPropertyTable {

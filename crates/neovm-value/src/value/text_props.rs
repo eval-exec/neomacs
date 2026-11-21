@@ -2647,6 +2647,17 @@ enum ReplacementPropertyNames<'a> {
 #[derive(Debug)]
 pub struct TextPropertyTable {
     pub(crate) intervals: IntervalTree,
+    /// GNU `buffer_intervals (buffer) != NULL`: the interval tree EXISTS.
+    ///
+    /// GNU creates the tree on the first property store and keeps it after
+    /// the last property is removed; only these sites set it back to NULL:
+    /// deleting the whole text (`src/intervals.c:1324-1328` and `:1346`),
+    /// `reset_buffer` (`src/buffer.c:633`), killing the buffer
+    /// (`src/buffer.c:2136`), and `set-auto-coding`'s whole-text delete
+    /// (`src/fileio.c:3871`).  `current_column` dispatches on this state
+    /// (`src/indent.c:365-370`), not on whether any property is present, so
+    /// the two must stay distinct.
+    pub(crate) interval_tree_present: bool,
     property_names: ConservativePropertyNames,
     /// Bumped by every mutating entry point; run-caching scanners key their
     /// memos on it (together with the buffer content epoch) so a property
@@ -2855,6 +2866,7 @@ impl Clone for TextPropertyTable {
         TABLE_CLONES.with(|c| c.set(c.get() + 1));
         Self {
             intervals: self.intervals.clone(),
+            interval_tree_present: self.interval_tree_present,
             property_names: self.property_names.clone(),
             mutation_tick: self.mutation_tick,
             syntax_prop_tick: self.syntax_prop_tick,
@@ -2953,12 +2965,45 @@ impl TextPropertyTable {
     pub fn new() -> Self {
         Self {
             intervals: IntervalTree::new(),
+            interval_tree_present: false,
             property_names: ConservativePropertyNames::default(),
             mutation_tick: 0,
             syntax_prop_tick: 0,
             syntax_prop_any: std::sync::atomic::AtomicU64::new(0),
             syntax_prop_ranges: std::sync::Mutex::new((0, Vec::new())),
         }
+    }
+
+    /// Record that an interval tree now exists (GNU `create_root_interval`).
+    #[inline]
+    fn note_interval_tree_presence(&mut self) {
+        if !self.intervals.is_empty() {
+            self.interval_tree_present = true;
+        }
+    }
+
+    /// GNU `buffer_intervals (buffer) != NULL`: an interval tree exists,
+    /// even if it currently carries no properties.
+    pub fn interval_tree_present(&self) -> bool {
+        self.interval_tree_present
+    }
+
+    /// GNU `set_buffer_intervals (buffer, NULL)`: discard the tree. Callers
+    /// are the whole-text-delete, reset, kill and set-auto-coding paths only.
+    #[doc(hidden)]
+    pub fn clear_interval_tree_presence(&mut self) {
+        self.interval_tree_present = false;
+    }
+
+    /// Carry the previous storage's tree presence across a wholesale table
+    /// replacement.  GNU's interval tree is a persistent object: edits and
+    /// property rewrites never discard it, only the whole-text-delete/reset/
+    /// kill/set-auto-coding sites do.  A replacement table built from runs
+    /// alone therefore must not report "no tree" just because its runs are
+    /// empty.
+    #[doc(hidden)]
+    pub fn inherit_interval_tree_presence(&mut self, previous: &Self) {
+        self.interval_tree_present |= previous.interval_tree_present;
     }
 
     /// Current mutation tick — see the field doc.
@@ -3101,9 +3146,11 @@ impl TextPropertyTable {
     }
 
     fn from_interval_runs(runs: Vec<IntervalRun>) -> Self {
+        let interval_tree_present = !runs.is_empty();
         let property_names = ConservativePropertyNames::from_runs(&runs);
         Self {
             intervals: IntervalTree::from_runs(runs),
+            interval_tree_present,
             property_names,
             mutation_tick: 0,
             syntax_prop_tick: 0,
@@ -3123,8 +3170,10 @@ impl TextPropertyTable {
         runs: Vec<IntervalRun>,
         property_names: ConservativePropertyNames,
     ) -> Self {
+        let interval_tree_present = !runs.is_empty();
         Self {
             intervals: IntervalTree::from_runs_preserving_shape(runs),
+            interval_tree_present,
             property_names,
             mutation_tick: 0,
             syntax_prop_tick: 0,
@@ -3300,6 +3349,7 @@ impl TextPropertyTable {
             }
         }
         self.intervals.prune_trailing_empty_intervals();
+        self.note_interval_tree_presence();
         changed
     }
 
@@ -3347,6 +3397,7 @@ impl TextPropertyTable {
             self.syntax_prop_tick += 1;
         }
         let (changed, written) = self.put_property_walk(range, object_len, name, value);
+        self.note_interval_tree_presence();
         if syntax_relevant {
             // Keep the cached bit-set ranges truthful, exactly as
             // `put_property_raw` does. Its absence here was not a
@@ -4384,6 +4435,7 @@ impl TextPropertyTable {
             }
             cursor = node_end;
         }
+        self.note_interval_tree_presence();
     }
 
     /// GNU `Ftext_property_not_all`'s walk (src/textprop.c): ONE descent
@@ -5164,6 +5216,7 @@ impl TextPropertyTable {
             self.property_names.observe_plist(run.plist);
         }
         self.intervals.graft_shifted_runs(&runs, offset, new_root);
+        self.note_interval_tree_presence();
     }
 
     pub fn append_shifted_at_char_offset(&mut self, other: &TextPropertyTable, offset: CharLen) {
@@ -5298,6 +5351,7 @@ impl TextPropertyTable {
             target_runs,
             ReplacementPropertyNames::Include(&other.property_names),
         );
+        self.note_interval_tree_presence();
     }
 
     pub fn merge_adjacent_equal_properties_around_char_range(&mut self, range: CharRange) {
