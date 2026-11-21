@@ -44,7 +44,7 @@ fn process_status_after_a_pure_spin_reaches_exit() {
 fn process_status_change_during_a_wait_is_notified_before_it_returns() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK \"status=exit sentinel-inside=t\""#]];
+    let expect = expect_test::expect![[r##""OK \"status=exit sentinel-inside=t\"""##]];
     assert_oracle_parity_expect(
         r##"(let ((observed 'never))
   (let ((p (make-process :name "pwdet" :noquery t :buffer nil
