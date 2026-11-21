@@ -142,3 +142,44 @@ fn full_and_slight_noto_ascii_probes_keep_selected_policy() {
         }
     }
 }
+
+#[test]
+fn fixture_default_and_explicit_hinting_policies_stay_independent() {
+    use crate::font::fontconfig::test_config::TestFontconfig;
+    use crate::font_backend::FontFamilyName;
+    let file = neomacs_test_fonts::noto_sans_mono_variable();
+    let family = FontFamilyName::new("Noto Sans Mono").unwrap();
+    let files = [file.to_path_buf()];
+    let default = TestFontconfig::new(&files, &family, &family, &family).unwrap();
+    let full = TestFontconfig::with_pattern_rules(
+        &files,
+        &family,
+        &family,
+        &family,
+        "<match target=\"pattern\"><edit name=\"hintstyle\" mode=\"assign\"><const>hintfull</const></edit></match>",
+    )
+    .unwrap();
+    // These are actual GNU 31.1 per-glyph widths, not an assumption that a
+    // family called Mono remains uniform under every hinting policy.
+    for (config, expected) in [
+        (&default, [8.0, 8.0]),
+        (&full, [8.0, 9.0]),
+        (&default, [8.0, 8.0]),
+    ] {
+        let file = file.to_str().unwrap();
+        let request = ExactDeviceFontRequest {
+            file,
+            selector: FreeTypeFaceSelector(0),
+            size: DeviceFontPixelSize::new(14).unwrap(),
+            weight: DeviceFontWeight::Default,
+            options: Some(config.render_options(file, 0, 14.0, None).unwrap()),
+        };
+        let advances = probe_device_ascii_advances_for_request(&request).unwrap();
+        let widths = ['A', 'M'].map(|ch| {
+            advances
+                .logical_advance(ch, neomacs_display_protocol::geometry::DeviceScale::ONE)
+                .unwrap()
+        });
+        assert_eq!(widths, expected);
+    }
+}

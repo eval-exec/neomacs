@@ -153,9 +153,15 @@ fn owner_allows(path: &str, owner: NativeOwner) -> bool {
                 ]
                 .iter()
                 .any(|file| path == format!("{layout}{file}"))
-                || ["lib.rs", "fontdb.rs", "color_glyph.rs", "raster_sources.rs"]
-                    .iter()
-                    .any(|file| path == format!("neomacs-font-materializer/src/{file}"))
+                || [
+                    "lib.rs",
+                    "fontdb.rs",
+                    "color_glyph.rs",
+                    "raster_sources.rs",
+                    "fontconfig.rs",
+                ]
+                .iter()
+                .any(|file| path == format!("neomacs-font-materializer/src/{file}"))
                 || path.starts_with("neomacs-renderer-wgpu/src/glyph_atlas/")
                 || path.starts_with("neomacs-renderer-wgpu/src/renderer/")
                 || path == "neomacs-renderer-wgpu/src/svg.rs"
@@ -1509,6 +1515,19 @@ fn accepts_private_native_backing_and_owned_protocol() {
         )
         .is_empty()
     );
+    let font = "use fontconfig_sys as fc; pub struct Context { raw: *mut fc::FcConfig } struct Pattern(*mut fc::FcPattern);";
+    assert!(scan("neomacs-font-materializer/src/fontconfig.rs", font).is_empty());
+    for path in [
+        "neomacs-font-materializer/src/fontconfig_semantics.rs",
+        "neomacs-font-materializer/src/fontconfig/semantic.rs",
+    ] {
+        assert!(
+            scan(path, font)
+                .iter()
+                .any(|violation| violation.kind == ViolationKind::OutsideNativeOwner),
+            "Fontconfig ownership must remain exact-file: {path}"
+        );
+    }
 }
 
 #[test]

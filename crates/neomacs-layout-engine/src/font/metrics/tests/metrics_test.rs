@@ -616,13 +616,17 @@ fn selected_font_probe_observes_vertical_and_advance_metrics_at_one_size() {
         .db()
         .face(font_id.expect("selected font"))
         .expect("selected face");
-    let probe = crate::font::probe::probe_font_px_metrics(
-        &fontdb_face_file(face).expect("file-backed selected face"),
-        face.index,
-        geometry.font_size.get() as u32,
-        None,
-    )
-    .expect("selected face metrics");
+    // Attested GNU 31.1 gives this Noto Sans Mono file average widths 7 with
+    // full hinting and 8 with slight hinting at 13 px. Compare observations
+    // from the fixture's own authority, rather than the host's system policy.
+    let probe = service
+        .probe_font_px_metrics(
+            &fontdb_face_file(face).expect("file-backed selected face"),
+            face.index,
+            geometry.font_size.get() as u32,
+            None,
+        )
+        .expect("selected face metrics");
     let expected = FrameCellMetrics::derive(
         service.font_resolver.family_prefers_monospace(family),
         geometry.font_size.get(),

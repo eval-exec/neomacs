@@ -97,7 +97,17 @@ impl TestFontconfig {
         sans_serif: &FontFamilyName,
         serif: &FontFamilyName,
     ) -> Result<Self, ConfigError> {
-        Self::with_pattern_rules(files, monospace, sans_serif, serif, "")
+        // Preserve the fixture catalog's historical LIGHT metric contract,
+        // explicitly rather than through a hardcoded production load target.
+        // GNU 31.1 gives Noto Sans Mono A/M widths 8/8 with slight hinting and
+        // 8/9 with full hinting at 14 px. Policy controls bypass this constructor.
+        Self::with_pattern_rules(
+            files,
+            monospace,
+            sans_serif,
+            serif,
+            "<match target=\"pattern\"><edit name=\"hintstyle\" mode=\"assign\"><const>hintslight</const></edit></match>",
+        )
     }
 
     pub(crate) fn with_pattern_rules(
