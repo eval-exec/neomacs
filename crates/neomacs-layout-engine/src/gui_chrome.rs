@@ -564,9 +564,7 @@ fn plist_lookup_by_symbol(
 fn tool_bar_image_source(eval: &Context, value: &Value) -> Option<ToolBarImageSource> {
     image_file_from_spec(value)
         .or_else(|| best_image_file_from_expression(value))
-        .map(|path| ToolBarImageSource::File {
-            path: themed_tool_bar_image_path(eval, &path),
-        })
+        .map(|path| themed_tool_bar_image_source(eval, &path))
 }
 
 fn image_file_from_spec(value: &Value) -> Option<String> {
@@ -639,26 +637,44 @@ fn toolbar_image_type_rank(image_type: ImageType) -> u8 {
     }
 }
 
-fn themed_tool_bar_image_path(eval: &Context, path: &str) -> String {
+/// Resolve one GNU `:image` file to its toolbar realization source.
+///
+/// Only Neomacs-owned SVGs (the selected themed directory, or a custom icon
+/// directory) become [`ToolBarImageSource::ThemedVector`]; every other path is
+/// the GNU image file and keeps GNU's sizing semantics.  The provenance must
+/// survive to the decoder: the same path string cannot say whether the file is
+/// a chrome vector that should rasterize at the slot size or a GNU image whose
+/// native extent is a clamp.
+fn themed_tool_bar_image_source(eval: &Context, path: &str) -> ToolBarImageSource {
     let original_path = resolve_tool_bar_image_path(path);
     let Some(icon_name) =
         tool_bar_icon_name_from_path(path).or_else(|| tool_bar_icon_name_from_path(&original_path))
     else {
-        return original_path;
+        return ToolBarImageSource::GnuRaster {
+            path: original_path,
+        };
     };
 
     if let Some(path) = custom_tool_bar_icon_path(eval, &icon_name) {
-        return path;
+        return ToolBarImageSource::ThemedVector { path };
     }
 
     let theme = current_tool_bar_icon_theme(eval);
     if theme == ToolBarIconTheme::Gnu {
-        return original_path;
+        return ToolBarImageSource::GnuRaster {
+            path: original_path,
+        };
     }
 
-    themed_tool_bar_icon_path(theme, &icon_name)
+    if let Some(path) = themed_tool_bar_icon_path(theme, &icon_name)
         .or_else(|| themed_tool_bar_icon_path(ToolBarIconTheme::Neomacs, &icon_name))
-        .unwrap_or(original_path)
+    {
+        return ToolBarImageSource::ThemedVector { path };
+    }
+
+    ToolBarImageSource::GnuRaster {
+        path: original_path,
+    }
 }
 
 fn current_tool_bar_icon_theme(eval: &Context) -> ToolBarIconTheme {

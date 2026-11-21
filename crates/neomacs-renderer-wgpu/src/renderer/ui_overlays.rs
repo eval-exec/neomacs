@@ -40,6 +40,34 @@ pub(super) fn toolbar_texture_id(
         .copied()
 }
 
+/// Physical device-pixel quad for one toolbar icon.
+///
+/// The texture's own physical extent is the quad extent, so the sampled icon is
+/// 1:1: a themed vector has already been realized at exactly this extent, and a
+/// GNU image keeps its resolved (never upscaled) extent.  The quad is centered
+/// on the item and snapped to whole device pixels, so a fractional window scale
+/// never lands a stroke edge on a half pixel.
+pub(super) fn toolbar_icon_quad(
+    bounds: neomacs_display_protocol::types::Rect,
+    raster: neomacs_display_protocol::ImageRasterExtent,
+    scale: DeviceScale,
+) -> (f32, f32, f32, f32) {
+    let (width, height) = raster.dimensions();
+    let scale = scale.get();
+    let physical_width = width as f32;
+    let physical_height = height as f32;
+    let center_x = (bounds.x + bounds.width / 2.0) * scale;
+    let center_y = (bounds.y + bounds.height / 2.0) * scale;
+    // Snap in device space, then return to the logical space the overlay shader
+    // maps through the surface scale.
+    (
+        (center_x - physical_width / 2.0).round() / scale,
+        (center_y - physical_height / 2.0).round() / scale,
+        physical_width / scale,
+        physical_height / scale,
+    )
+}
+
 impl WgpuRenderer {
     fn render_overlay_glyphs(
         &mut self,
@@ -1844,7 +1872,6 @@ impl WgpuRenderer {
         let menu_fg = rgb(content.menu_foreground());
         let menu_bg = rgb(content.menu_background());
         let tool_fg = rgb(content.tool_foreground());
-        let icon_size = content.icon_size();
         let padding = content.padding();
         let icon_style = content.icon_style();
         let device_scale = DeviceScale::new(self.scale_factor).expect("validated renderer scale");
@@ -1862,7 +1889,6 @@ impl WgpuRenderer {
         let draw = self.parameters(uniforms.screen_size, uniforms.time);
 
         let bg_color = Color::new(menu_bg.0, menu_bg.1, menu_bg.2, 1.0).srgb_to_linear();
-        let icon_sz = icon_size as f32;
         let pad = padding as f32;
 
         let mut rect_verts: Vec<RectVertex> = Vec::new();
@@ -2030,8 +2056,6 @@ impl WgpuRenderer {
                 if item.is_separator() {
                     continue;
                 }
-                let icon_x = bounds.x + (bounds.width - icon_sz) / 2.0;
-                let icon_y = bounds.y + (bounds.height - icon_sz) / 2.0;
                 let alpha = if item.enabled { 1.0 } else { 0.4 };
                 let tint = [1.0, 1.0, 1.0, alpha];
                 if let Some(image) = item.image.as_ref()
@@ -2040,6 +2064,8 @@ impl WgpuRenderer {
                     && let Some(cached) = self.caches.image.get(image_id)
                 {
                     let bg = cached.bind_group.clone();
+                    let (icon_x, icon_y, icon_w, icon_h) =
+                        toolbar_icon_quad(bounds, cached.raster, device_scale);
                     let verts = [
                         GlyphVertex {
                             position: [icon_x, icon_y],
@@ -2047,12 +2073,12 @@ impl WgpuRenderer {
                             color: tint,
                         },
                         GlyphVertex {
-                            position: [icon_x + icon_sz, icon_y],
+                            position: [icon_x + icon_w, icon_y],
                             tex_coords: [1.0, 0.0],
                             color: tint,
                         },
                         GlyphVertex {
-                            position: [icon_x + icon_sz, icon_y + icon_sz],
+                            position: [icon_x + icon_w, icon_y + icon_h],
                             tex_coords: [1.0, 1.0],
                             color: tint,
                         },
@@ -2062,12 +2088,12 @@ impl WgpuRenderer {
                             color: tint,
                         },
                         GlyphVertex {
-                            position: [icon_x + icon_sz, icon_y + icon_sz],
+                            position: [icon_x + icon_w, icon_y + icon_h],
                             tex_coords: [1.0, 1.0],
                             color: tint,
                         },
                         GlyphVertex {
-                            position: [icon_x, icon_y + icon_sz],
+                            position: [icon_x, icon_y + icon_h],
                             tex_coords: [0.0, 1.0],
                             color: tint,
                         },
@@ -2148,7 +2174,6 @@ impl WgpuRenderer {
         let rgb = |color: Color| (color.r, color.g, color.b);
         let fg = rgb(content.foreground());
         let bg = rgb(content.background());
-        let icon_size = content.icon_size();
         let padding = content.padding();
         let icon_style = content.icon_style();
         let device_scale = DeviceScale::new(self.scale_factor).expect("validated renderer scale");
@@ -2166,7 +2191,6 @@ impl WgpuRenderer {
         let draw = self.parameters(uniforms.screen_size, uniforms.time);
 
         let bg_color = Color::new(bg.0, bg.1, bg.2, 1.0).srgb_to_linear();
-        let icon_sz = icon_size as f32;
         let pad = padding as f32;
 
         // --- Pass 1: Background bar + item highlights ---
@@ -2290,8 +2314,6 @@ impl WgpuRenderer {
                 if item.is_separator() {
                     continue;
                 }
-                let icon_x = bounds.x + (bounds.width - icon_sz) / 2.0;
-                let icon_y = bounds.y + (bounds.height - icon_sz) / 2.0;
                 let alpha = if item.enabled { 1.0 } else { 0.4 };
                 let tint = [1.0, 1.0, 1.0, alpha];
                 if let Some(image) = item.image.as_ref()
@@ -2300,6 +2322,8 @@ impl WgpuRenderer {
                     && let Some(cached) = self.caches.image.get(image_id)
                 {
                     let bg = cached.bind_group.clone();
+                    let (icon_x, icon_y, icon_w, icon_h) =
+                        toolbar_icon_quad(bounds, cached.raster, device_scale);
                     let verts = [
                         GlyphVertex {
                             position: [icon_x, icon_y],
@@ -2307,12 +2331,12 @@ impl WgpuRenderer {
                             color: tint,
                         },
                         GlyphVertex {
-                            position: [icon_x + icon_sz, icon_y],
+                            position: [icon_x + icon_w, icon_y],
                             tex_coords: [1.0, 0.0],
                             color: tint,
                         },
                         GlyphVertex {
-                            position: [icon_x + icon_sz, icon_y + icon_sz],
+                            position: [icon_x + icon_w, icon_y + icon_h],
                             tex_coords: [1.0, 1.0],
                             color: tint,
                         },
@@ -2322,12 +2346,12 @@ impl WgpuRenderer {
                             color: tint,
                         },
                         GlyphVertex {
-                            position: [icon_x + icon_sz, icon_y + icon_sz],
+                            position: [icon_x + icon_w, icon_y + icon_h],
                             tex_coords: [1.0, 1.0],
                             color: tint,
                         },
                         GlyphVertex {
-                            position: [icon_x, icon_y + icon_sz],
+                            position: [icon_x, icon_y + icon_h],
                             tex_coords: [0.0, 1.0],
                             color: tint,
                         },
