@@ -13,9 +13,11 @@ use neovm_value::tagged::transport::SharedRoot;
 
 pub(crate) use neovm_value::tagged::gc::PollOutcome;
 
+/// Called by the E4 engine's form-return edge. The engine is test-only until
+/// the executor lands, so the compiler still sees this as dead.
 #[cfg_attr(
     not(test),
-    expect(dead_code, reason = "READY-E2B, wired by the E4 engine slice")
+    expect(dead_code, reason = "the test-only E4 engine calls this")
 )]
 pub(crate) fn poll_interp_call_entry(
     owner: &mut Mutator<'_>,
@@ -58,9 +60,12 @@ pub(crate) fn poll_vm_call(
 }
 
 /// Does not release the witness. The E2 stop protocol does that.
+///
+/// Called before every serial escape in the E4 engine, which is test-only
+/// until the executor lands, so the compiler still sees this as dead.
 #[cfg_attr(
     not(test),
-    expect(dead_code, reason = "READY-E2B, wired by the E4 engine slice")
+    expect(dead_code, reason = "the test-only E4 engine calls this")
 )]
 pub(crate) fn poll_serial_request(
     owner: &mut Mutator<'_>,

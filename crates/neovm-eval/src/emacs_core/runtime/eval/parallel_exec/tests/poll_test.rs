@@ -26,11 +26,15 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-const OWNER: u64 = 7501;
+pub(super) const OWNER: u64 = 7501;
 const KEEPER_OWNER: u64 = 7502;
 const DEADLINE: Duration = Duration::from_secs(30);
 
-fn activate(mut permit: MutatorPermit<'_>, heap: HeapIdentity, owner: u64) -> Mutator<'_> {
+pub(super) fn activate(
+    mut permit: MutatorPermit<'_>,
+    heap: HeapIdentity,
+    owner: u64,
+) -> Mutator<'_> {
     let start = Instant::now();
     loop {
         match permit.activate(heap, owner) {
@@ -46,7 +50,7 @@ fn activate(mut permit: MutatorPermit<'_>, heap: HeapIdentity, owner: u64) -> Mu
     }
 }
 
-fn retry<T>(label: &str, mut op: impl FnMut() -> Result<T, RendezvousError>) -> T {
+pub(super) fn retry<T>(label: &str, mut op: impl FnMut() -> Result<T, RendezvousError>) -> T {
     let start = Instant::now();
     loop {
         match op() {
@@ -57,7 +61,7 @@ fn retry<T>(label: &str, mut op: impl FnMut() -> Result<T, RendezvousError>) -> 
     }
 }
 
-fn retire(mut owner: Mutator<'_>) {
+pub(super) fn retire(mut owner: Mutator<'_>) {
     let start = Instant::now();
     loop {
         match owner.retire_rooted(&[]) {
@@ -73,13 +77,13 @@ fn retire(mut owner: Mutator<'_>) {
     }
 }
 
-fn finish(era: WorldProofEra<'_>) {
+pub(super) fn finish(era: WorldProofEra<'_>) {
     let (collector, keeper) = era.finish().expect("finish the era");
     drop(collector);
     drop(keeper);
 }
 
-fn request_stop(rendezvous: Rendezvous<'_>) {
+pub(super) fn request_stop(rendezvous: Rendezvous<'_>) {
     let start = Instant::now();
     loop {
         match rendezvous.request() {
@@ -104,7 +108,7 @@ fn admissible(owner: &Mutator<'_>) -> bool {
     word & 0x0F == 0 && word & (1 << 4) == 0
 }
 
-fn recv<T>(rx: &mpsc::Receiver<T>) -> T {
+pub(super) fn recv<T>(rx: &mpsc::Receiver<T>) -> T {
     rx.recv_timeout(DEADLINE)
         .expect("peer reached the poll boundary")
 }
@@ -170,7 +174,7 @@ fn quiet_setup(context: &mut Context) -> usize {
 }
 
 /// Retry `Busy` without dropping `AllStopped`. Dropping the failure poisons the era.
-fn lend<'era, 'heap>(
+pub(super) fn lend<'era, 'heap>(
     era: &'era WorldProofEra<'heap>,
     mut stopped: AllStopped<'era>,
 ) -> SerialTicket<'era, 'heap> {
@@ -190,11 +194,11 @@ fn lend<'era, 'heap>(
     }
 }
 
-fn collect(ticket: &mut SerialTicket<'_, '_>) {
+pub(super) fn collect(ticket: &mut SerialTicket<'_, '_>) {
     retry("serial_gc", || serial_gc_for_test(ticket));
 }
 
-fn end_epoch(mut ticket: SerialTicket<'_, '_>) {
+pub(super) fn end_epoch(mut ticket: SerialTicket<'_, '_>) {
     let start = Instant::now();
     loop {
         match end_serial_for_test(ticket) {
