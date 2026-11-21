@@ -61,6 +61,20 @@ pub fn reset_local_var_alist_entry_probes() {
     crate::buffer::buffer::reset_local_var_alist_entry_probes();
 }
 
+/// FENCE (#640 flat-vs-size): zero the column scan's decoded-character
+/// counter. The increment sites and the counter stay pub(crate) under the
+/// `cfg(any(test, feature = "test-support"))` gate; this fence is the
+/// cross-crate reset and read route for the auto-hscroll work test.
+pub fn reset_column_scan_characters() {
+    crate::emacs_core::indent::reset_column_scan_characters_for_test();
+}
+
+/// FENCE (#640 flat-vs-size): characters decoded by column scans since the
+/// last reset.
+pub fn column_scan_characters() -> usize {
+    crate::emacs_core::indent::column_scan_characters_for_test()
+}
+
 /// Setter fence for `Buffer::undo_state` (peer #816 write arm): the moved
 /// indirect-buffer dump/restore test replaces the whole undo state. The
 /// field stays a read surface; the write routes through this fence.

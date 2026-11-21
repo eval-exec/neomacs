@@ -126,6 +126,27 @@ fn fontification_functions_accessible_bounds_match_gnu() {
     );
 }
 
+/// GNU's hscroll pass measures the cursor column on a truncated line with
+/// `fast_move_it_horizontally` above `large-hscroll-threshold`
+/// (`src/xdisp.c:16797-16807`), which advances one frame column per character
+/// from the row start. The resulting `window-hscroll` is Lisp-observable, so
+/// the approximation itself is part of the contract.
+#[test]
+fn long_line_hscroll_matches_gnu() {
+    let (mut gnu, mut neo) = boot_long_line_pair();
+    let (gnu_value, neo_value) = paired_message(
+        &mut gnu,
+        &mut neo,
+        "P640HS",
+        "(progn (goto-char (point-max)) (redisplay t) (window-hscroll))",
+    );
+    eprintln!("issue#640 long-line hscroll: GNU={gnu_value} NEO={neo_value}");
+    assert_eq!(
+        neo_value, gnu_value,
+        "the long-line hscroll approximation must match GNU"
+    );
+}
+
 #[test]
 fn pre_command_hook_accessible_bounds_match_gnu() {
     let (mut gnu, mut neo) = boot_long_line_pair();

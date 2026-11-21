@@ -577,6 +577,13 @@ pub(crate) fn update_auto_hscroll_before_redisplay(ctx: &mut Context) {
             continue;
         }
 
+        // GNU sets the long-line flag while building the frame's matrices
+        // (`xdisp.c:20646`) and runs the hscroll pass afterwards
+        // (`xdisp.c:17942`); Neo's hscroll pass runs before layout, so refresh
+        // the flag here. The scan's fast path (`xdisp.c:16797`) then sees the
+        // same buffer state GNU's pass would see.
+        ctx.refresh_long_line_optimizations(snap.buffer_id);
+
         #[cfg(test)]
         POINT_COLUMN_SCANS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let point_col = match neovm_edit::emacs_core::indent::display_column_at_emacs_byte_pos(

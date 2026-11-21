@@ -30,6 +30,36 @@ use std::cell::Cell;
 use std::collections::VecDeque;
 use std::sync::OnceLock;
 
+/// Characters a column scan decodes, counted for the flat-vs-size tests.
+///
+/// GNU measures a long hscrolled truncated line by jumping
+/// (`fast_move_it_horizontally`, src/xdisp.c:11676) instead of walking it
+/// character by character, so the work must not grow with the line length.
+/// Test-only: the increment sites are gated with this declaration.
+#[cfg(any(test, feature = "test-support"))]
+static COLUMN_SCAN_CHARACTERS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn reset_column_scan_characters_for_test() {
+    COLUMN_SCAN_CHARACTERS.store(0, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn column_scan_characters_for_test() -> usize {
+    COLUMN_SCAN_CHARACTERS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[cfg(any(test, feature = "test-support"))]
+#[inline(always)]
+fn count_column_scan_character() {
+    COLUMN_SCAN_CHARACTERS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(not(any(test, feature = "test-support")))]
+#[inline(always)]
+fn count_column_scan_character() {}
+
 fn next_visible_line_start<H: EditHost>(
     host: &mut H,
     buffer_id: crate::buffer::BufferId,
@@ -1506,6 +1536,16 @@ pub fn tab_width_sym_id() -> neovm_value::intern::SymId {
     *SYMBOL.get_or_init(|| neovm_value::intern::intern("tab-width"))
 }
 
+/// `large-hscroll-threshold` (DEFVAR_INT, src/buffer.c:6044): the character
+/// distance from a line's beginning above which GNU's hscroll pass jumps
+/// (`fast_move_it_horizontally`, src/xdisp.c:16797-16807) instead of walking
+/// the line.
+#[inline(always)]
+fn large_hscroll_threshold_sym_id() -> neovm_value::intern::SymId {
+    static SYMBOL: OnceLock<neovm_value::intern::SymId> = OnceLock::new();
+    *SYMBOL.get_or_init(|| neovm_value::intern::intern("large-hscroll-threshold"))
+}
+
 /// GNU's staticpro'd `Qinvisible`.
 #[inline(always)]
 fn invisible_prop_symbol() -> Value {
@@ -2529,6 +2569,7 @@ fn simple_backward_column(
     let mut post_tab = None::<DisplayColumn>;
     let tab = tab_width.get();
     'text: while scan > start {
+        count_column_scan_character();
         scan = scan.saturating_sub_len(EmacsByteLen::new(1));
         let Some(byte) = buf.emacs_byte_at_pos(scan) else {
             break;
@@ -2772,6 +2813,7 @@ fn scan_for_column<H: EditHost>(
     let mut next_composition_probe = if composition_possible { scan } else { end };
 
     while scan < end {
+        count_column_scan_character();
         if scan >= next_invisible_probe {
             if let Some(next_visible) =
                 host.invisible_source_run_end(buffer_id, scan, InvisibleRunContext::ColumnScan)?
@@ -3132,8 +3174,43 @@ pub fn display_column_at_emacs_byte_pos<H: EditHost>(
         };
         buf.accessible_emacs_byte_region().clamp(pos)
     };
+    if let Some(column) = long_line_hscroll_column(host, buffer_id, clamped) {
+        return Ok(column);
+    }
     let scan = scan_for_column(host, buffer_id, ColumnTarget::Position(clamped))?;
     Ok(scan.column)
+}
+
+/// GNU's long-line shortcut in `hscroll_window_tree` (src/xdisp.c:16797-16807):
+/// when the buffer's long-line optimization flag is set and point lies more
+/// than `large-hscroll-threshold` characters past the beginning of its line,
+/// GNU jumps to point with `fast_move_it_horizontally` instead of walking the
+/// display, and approximates the cursor column as one column per character.
+///
+/// The approximation is deliberate on GNU's side: `fast_move_it_horizontally`
+/// reseats at the character position and the caller adds `nchars` frame
+/// columns, ignoring tabs, wide characters and display vectors. Mirroring it
+/// keeps the computed hscroll equal to GNU's on those lines, and makes the
+/// work flat as the line grows. The fast path is only reachable where GNU
+/// takes it — inside the auto-hscroll measurement for a truncated line.
+fn long_line_hscroll_column<H: EditHost>(
+    host: &mut H,
+    buffer_id: crate::buffer::BufferId,
+    pos: EmacsBytePos,
+) -> Option<usize> {
+    let threshold = host
+        .forwarded_variable_value(large_hscroll_threshold_sym_id())
+        .and_then(|value| value.as_fixnum())
+        .unwrap_or(10_000);
+    let (edit, _vars) = host.edit_and_vars();
+    let buf = edit.buffers.get(buffer_id)?;
+    if !buf.long_line_optimizations_p() {
+        return None;
+    }
+    let bol = bol_emacs_byte(buf, pos);
+    let nchars = buf.emacs_byte_pos_to_lisp_char_pos(pos).as_i64()
+        - buf.emacs_byte_pos_to_lisp_char_pos(bol).as_i64();
+    (nchars > threshold).then(|| nchars.max(0) as usize)
 }
 
 /// The character after point as a deletion range, clamped like
