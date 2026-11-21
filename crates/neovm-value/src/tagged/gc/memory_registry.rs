@@ -512,7 +512,10 @@ impl TaggedHeap {
         // Interval nodes are charged through the per-mutator accounting, so
         // the allocated total is the summed snapshot plus this mutator's
         // not-yet-drained counts (the same pair
-        // `Value::memory_use_counts_snapshot` combines).
+        // `Value::memory_use_counts_snapshot` combines). A parallel owner
+        // whose counts are not yet drained is not visible here, so this row
+        // can read LOW while other owners are mid-collection; it never reads
+        // high.
         let intervals_slot = MemoryUseCountSlot::Intervals.index();
         let intervals_allocated = self.memory_use_counts_snapshot()[intervals_slot]
             .wrapping_add(crate::value::thread_local_allocation_counts()[intervals_slot]);
