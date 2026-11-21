@@ -3301,6 +3301,15 @@ pub struct Frame {
     /// later font can replace it. The base face value is not recorded either,
     /// so an explicit `normal` stays distinct from the unset default.
     pub explicit_default_font_attrs: u32,
+    /// GNU `struct frame.default_face_done_p`: whether this frame's default
+    /// face has been realized once.  `realize_default_face` passes it to
+    /// `set_lface_from_font` as FORCE_P, so the first realization fills only
+    /// unspecified slots while every later one replaces all font-derived
+    /// slots with the opened frame font's values.  `set_font_frame_param`
+    /// clears it before `gui_set_font`'s recompute (src/xfaces.c:3974,6029),
+    /// which makes that immediate realization non-forcing and the next
+    /// redisplay realization forcing.
+    pub default_face_done: bool,
     /// GNU `struct frame.icon_name`: explicit icon name, or nil.
     pub icon_name: Value,
     /// GNU `struct frame.focus_frame`: frame receiving this frame's keystrokes,
@@ -6703,6 +6712,7 @@ impl Frame {
             name,
             explicit_name: false,
             explicit_default_font_attrs: 0,
+            default_face_done: false,
             icon_name: Value::NIL,
             focus_frame: Value::NIL,
             parent_frame: Value::NIL,

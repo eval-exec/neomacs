@@ -1036,18 +1036,29 @@ pub fn seed_live_frame_default_face_from_font_parameter(
     else {
         return;
     };
+    // GNU `set_lface_from_font` receives `f->default_face_done_p` as FORCE_P
+    // (src/xfaces.c:6029).  On the first realization an explicitly set face
+    // slot survives a font change; once the frame's default face has been
+    // realized, the opened font's derived values replace it.
+    let force_p = eval
+        .frame_manager()
+        .get(frame_id)
+        .is_some_and(|frame| frame.default_face_done);
     // GNU set_lface_from_font retains the opened object in LFACE_FONT.
     // faces.el clears font-parameter when there was no explicit user request;
     // that request marker cannot own the realized face font.
     set_lisp_face_vector_attr(vector, LFaceAttr::Font, font_value);
     for (attr_name, attr_value) in derived_face_attrs_from_font_value(&font_value) {
-        // GNU `set_lface_from_font` sets a derived attribute only when the
-        // face slot is unspecified. An explicit `set-face-attribute` on the
-        // frame-local default face must survive a font change.
-        if super::xfaces::frame_has_explicit_default_font_attr(eval, frame_id, attr_name) {
+        if !force_p
+            && super::xfaces::frame_has_explicit_default_font_attr(eval, frame_id, attr_name)
+        {
             continue;
         }
         set_lisp_face_vector_attr(vector, attr_name, attr_value);
+    }
+    if let Some(frame) = eval.frame_manager_mut().get_mut(frame_id) {
+        // `realize_default_face` completes the first realization here.
+        frame.default_face_done = true;
     }
     super::xfaces::realization::record_face_change_for(
         eval,

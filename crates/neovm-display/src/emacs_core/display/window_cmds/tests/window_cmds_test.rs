@@ -3184,10 +3184,19 @@ fn modify_frame_parameters_font_reopens_the_initial_frame_font() {
 }
 
 #[test]
-fn modify_frame_parameters_font_keeps_explicit_default_face_attributes() {
-    // GNU `set_lface_from_font` only fills unspecified slots. A family set
-    // explicitly on the frame-local default face must survive a frame font
-    // change, while the Font slot still follows the opened font.
+fn font_change_realizes_the_opened_font_over_explicit_default_face_attributes() {
+    // GNU `realize_default_face` passes `f->default_face_done_p` as
+    // `set_lface_from_font`'s FORCE_P (src/xfaces.c:6029).  Once the default
+    // face has been realized, a frame font change replaces even explicitly
+    // set font-derived slots with the opened font's values; only the first
+    // realization fills unspecified slots.  The Font slot always follows the
+    // opened font.
+    //
+    // Oracle (linux-gtk3, Gtk3, Xvfb 100 dpi, pinned fonts): after
+    // `(set-face-attribute 'default nil :family "DejaVu Sans Mono" :height 100)`
+    // and `(modify-frame-parameters nil '((font . "Ubuntu Mono-16")))`,
+    // `(face-attribute 'default :family)` is "Ubuntu Mono" and `:height` is
+    // 159 (PIXEL_TO_POINT(22*10, 100)), not the explicit family or 100.
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let host = opened_noto_host();
@@ -3216,8 +3225,13 @@ fn modify_frame_parameters_font_keeps_explicit_default_face_attributes() {
     let default_face = table.merge_faces(&["default"]);
     assert_eq!(
         default_face.family,
-        Some(Value::string("Explicit Family")),
-        "an explicit default-face family must survive the font change"
+        Some(Value::string("Noto Sans Mono")),
+        "the realized default face must take the opened font's family"
+    );
+    assert_eq!(
+        default_face.height,
+        Some(crate::face::FaceHeight::Absolute(160)),
+        "the realized default face must take the opened font's point height"
     );
 
     let opened = ev
@@ -3261,6 +3275,49 @@ fn modify_frame_parameters_font_keeps_explicit_default_face_attributes() {
         default_face.family,
         Some(Value::string("Noto Sans Mono")),
         "an explicit unspecified family must not block the font-derived value"
+    );
+}
+
+#[test]
+fn set_face_attribute_height_adopts_the_realized_font_point_height() {
+    // GNU records `set_lface_from_font`'s
+    // PIXEL_TO_POINT(font->pixel_size * 10, FRAME_RES(f)) in the default
+    // face's `:height` slot (src/xfaces.c:2218,6029; src/font.h:579).  The
+    // caller's `:height 100` therefore survives on the synchronous path but
+    // is replaced by the opened font's point height at the next realization.
+    //
+    // Oracle (linux-gtk3, Xvfb 100 dpi, pinned fonts): DejaVu Sans Mono at
+    // :height 100 opens at 14 px, and `(face-attribute 'default :height)`
+    // reads 100 immediately after `set-face-attribute` and 101 after
+    // `(redisplay t)`.  The mock host records 160 for its Noto 16 pt face.
+    crate::test_utils::init_test_tracing();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
+    ev.set_display_host(Box::new(opened_noto_host()));
+    let fid = gui_frame_for_font_change(&mut ev);
+    ev.eval_str("(fset 'frame-windows-min-size (lambda (&rest _) 1))")
+        .expect("stub the absent window-minimum subr");
+    crate::emacs_core::xfaces::builtin_internal_set_lisp_face_attribute(
+        &mut ev,
+        vec![
+            Value::symbol("default"),
+            Value::keyword("height"),
+            Value::fixnum(100),
+            Value::make_frame(fid.0),
+        ],
+    )
+    .expect("set an explicit default-face height");
+
+    // The redisplay realization forces the opened font's derived height.
+    // `sync_runtime_face_table_from_frame_lisp_faces` is the redisplay entry
+    // point that calls `realize_default_lisp_face_for_frame` first; the raw
+    // table builder only re-derives the vectors it is given.
+    crate::emacs_core::xfaces::sync_runtime_face_table_from_frame_lisp_faces(&mut ev, fid);
+    let default_face = ev.face_table().merge_faces(&["default"]);
+    assert_eq!(
+        default_face.height,
+        Some(crate::face::FaceHeight::Absolute(160)),
+        "realization must replace the explicit height with the opened font's \
+         recorded point height"
     );
 }
 
@@ -3441,8 +3498,10 @@ fn modify_frame_parameters_font_keeps_each_frames_explicit_face() {
 #[test]
 fn modify_frame_parameters_font_updates_a_previously_seeded_family() {
     // A family written by opening a font is not a user setting. The next
-    // font must replace it. An explicit height equal to the face base must
-    // still survive, because that value was set on this frame.
+    // font must replace it. The frame has not realized its default face yet,
+    // so the first font change fills only unspecified slots (GNU FORCE_P is
+    // `default_face_done_p`, false here); that realization then sets the
+    // flag, so the following font change forces every font-derived slot.
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     ev.set_display_host(Box::new(opened_noto_host()));
@@ -3506,9 +3565,15 @@ fn modify_frame_parameters_font_updates_a_previously_seeded_family() {
         Some(Value::string("Other Mono")),
         "a family seeded by the previous font must follow the new font"
     );
+    // The first font update completed this frame's default-face realization
+    // (GNU `realize_default_face` sets `default_face_done_p`), so the next
+    // font change is forcing and replaces the explicit height with the
+    // opened font's recorded point height.
     assert_eq!(
-        face.height, explicit_height,
-        "the explicit height must survive the second font"
+        face.height,
+        Some(crate::face::FaceHeight::Absolute(180)),
+        "after the first realization the opened font's height replaces the \
+         explicit slot"
     );
 }
 
@@ -3608,10 +3673,15 @@ fn modify_frame_parameters_font_honors_a_copied_default_face() {
         .eval_str_each(r#"(modify-frame-parameters (selected-frame) '((font . "Other Mono-18")))"#);
     assert!(out[0].is_ok(), "second font update failed: {:?}", out[0]);
     let face = face(&ev);
+    // This frame's default face was realized by the first font update, so
+    // the next font change forces its opened-font family over the copied
+    // one (GNU `set_lface_from_font` with `default_face_done_p` true;
+    // oracle: an explicit "DejaVu Sans Mono" is replaced by "Ubuntu Mono"
+    // after `(modify-frame-parameters nil '((font . "Ubuntu Mono-16")))`).
     assert_eq!(
         face.family,
-        Some(Value::string("Copied Family")),
-        "a family installed by copy-face must survive the next font"
+        Some(Value::string("Other Mono")),
+        "the realized default face takes the next opened font's family"
     );
     assert_eq!(
         face.height,

@@ -2064,6 +2064,11 @@ pub(crate) fn realize_default_lisp_face_for_frame(
         return;
     };
     let window_system = frame.effective_window_system();
+    // GNU `realize_default_face` drives `set_lface_from_font` with
+    // `f->default_face_done_p` as FORCE_P (src/xfaces.c:6029).  The first
+    // realization fills only unspecified slots; later realizations replace
+    // every font-derived slot with the opened frame font's value.
+    let default_face_done = frame.default_face_done;
 
     if window_system.is_none() {
         set_lisp_face_vector_attr(vector, LFaceAttr::Family, Value::string("default"));
@@ -2094,13 +2099,21 @@ pub(crate) fn realize_default_lisp_face_for_frame(
             LFaceAttr::Weight,
             LFaceAttr::Slant,
         ] {
-            if frame_has_explicit_default_font_attr(eval, frame_id, attr) {
+            if !default_face_done && frame_has_explicit_default_font_attr(eval, frame_id, attr) {
                 continue;
             }
             let fallback = live_frame_font_attribute_fallback(eval, frame_id, attr);
             if let Some(value) = fallback {
                 set_lisp_face_vector_attr(vector, attr, value);
             }
+        }
+        // `set_lface_from_font` sets the `font` slot regardless of FORCE_P
+        // ("The exception is `font' attribute").
+        if let Some(font) = live_frame_font_attribute_fallback(eval, frame_id, LFaceAttr::Font) {
+            set_lisp_face_vector_attr(vector, LFaceAttr::Font, font);
+        }
+        if let Some(frame) = eval.frame_manager_mut().get_mut(frame_id) {
+            frame.default_face_done = true;
         }
     }
 
@@ -3943,8 +3956,22 @@ pub fn builtin_internal_set_lisp_face_attribute(
                 // GNU handles FRAME=0 recursively, so each frame reopens the
                 // font against its own display metrics after a family, height,
                 // weight, slant, or width change.
+                //
+                // `set_font_frame_param` clears `default_face_done_p` before
+                // `gui_set_font`'s `recompute_basic_faces` (src/xfaces.c:3974),
+                // so that synchronous realization keeps the slot the caller
+                // just set; the completion sets the flag again, and the next
+                // redisplay realization forces the opened font's values
+                // (which is how `:height 100` reads back as 100 until a
+                // redisplay and as PIXEL_TO_POINT(14*10, 100) = 101 after it).
                 for frame_id in changed_live_frames.iter().copied() {
+                    if let Some(frame) = eval.frame_manager_mut().get_mut(frame_id) {
+                        frame.default_face_done = false;
+                    }
                     sync_live_default_face_font_state(eval, frame_id)?;
+                    if let Some(frame) = eval.frame_manager_mut().get_mut(frame_id) {
+                        frame.default_face_done = true;
+                    }
                 }
             }
 
