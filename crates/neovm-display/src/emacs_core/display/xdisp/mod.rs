@@ -9754,9 +9754,10 @@ pub enum RedisplayFontificationRequest {
     /// fontifying hook (jit-lock style) a chance to mark text the walk sees.
     Prepass,
     /// The post-walk visible pass.  Follow GNU's `compute_stop_pos` schedule
-    /// across the request and enter one trailing stop at or after its end,
-    /// which is where GNU's iterator gets before it stops displaying rows
-    /// (`handle_fontified_prop`, src/xdisp.c:4702-4786).
+    /// across the request; its end is the first screen row after the window
+    /// end when the caller passes [`ProbeRow::Through`] (GNU
+    /// `partial_line_height`, src/xdisp.c:11630-11661), so the stops inside
+    /// that probe row are entered and nothing beyond it is.
     VisibleWalk,
 }
 
@@ -10122,26 +10123,11 @@ fn ensure_fontified_for_redisplay_inner<O: FontificationDemandObserver>(
                 if next <= pos {
                     break;
                 }
-                if next < end {
-                    pos = next;
-                    continue;
+                if next <= pos || next >= end {
+                    break;
                 }
-                // GNU's display iterator runs past the last displayed row far
-                // enough to reach its next stop, so the visible pass carries
-                // exactly one stop at or after the request end.
-                if next < point_max && get_fontified_property(ctx, next)?.is_nil() {
-                    observer.unknown();
-                    outcome = outcome.merge(RedisplayFontificationOutcome::CallbacksUnchanged);
-                    call_fontification_functions_at(ctx, hook_value, next, window_bounds, observer);
-                    if ctx.edit.buffers.current_buffer_id() != Some(buf_id) {
-                        ctx.restore_current_buffer_if_live(buf_id);
-                        break;
-                    }
-                    if !get_fontified_property(ctx, next)?.is_nil() {
-                        outcome = RedisplayFontificationOutcome::Fontified;
-                    }
-                }
-                break;
+                pos = next;
+                continue;
             }
             outcome = RedisplayFontificationOutcome::Fontified;
             // Reacquire restrictions, resolution controls, overlays and the

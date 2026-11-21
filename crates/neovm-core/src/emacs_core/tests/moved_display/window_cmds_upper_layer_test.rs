@@ -2173,9 +2173,11 @@ fn scroll_up_long_truncated_uses_gnu_line_motion() {
 fn scroll_up_long_line_work_does_not_grow_with_the_line() {
     crate::test_utils::init_test_tracing();
     let mut work = Vec::new();
+    let mut heights = Vec::new();
     for long_len in [200_000usize, 400_000] {
         let mut ev = long_line_scroll_context(long_len);
-        neovm_edit::test_support::authority::reset_screen_line_scan_steps_for_test();
+        // Setup and the flag-setting redisplay are NOT part of the measured
+        // scroll: only the scroll path's own line motion is counted.
         ev.eval_str(
             "(progn (set-buffer p640-scroll-buffer)
                     (set-window-buffer (selected-window) (current-buffer))
@@ -2183,20 +2185,36 @@ fn scroll_up_long_line_work_does_not_grow_with_the_line() {
                     (set-window-point (selected-window) 1)
                     (goto-char 1)
                     (redisplay t)
-                    (scroll-up)
                     nil)",
         )
-        .expect("scroll-up");
+        .expect("scroll setup");
+        heights.push(
+            ev.eval_str("(window-body-height)")
+                .expect("body height")
+                .as_int()
+                .expect("fixnum"),
+        );
+        neovm_edit::test_support::authority::reset_screen_line_scan_steps_for_test();
+        ev.eval_str("(scroll-up)")
+            .expect("scroll-up on the long-line buffer");
         work.push(neovm_edit::test_support::authority::screen_line_scan_steps());
     }
     assert_eq!(
         work[0], work[1],
         "scroll work must not grow with the long line: {work:?}"
     );
-    assert!(
-        work[0] > 0 && work[0] <= 512,
-        "the scroll must bound its work by window lines: {work:?}"
-    );
+    // GNU `window_scroll_for_long_lines` (window.c:6242-6315) runs
+    // `pos_visible_p` and two vmotions: max(1, ht - next-screen-context-lines)
+    // lines plus ht/2 center lines, i.e. at most 1.5 * ht line scans.  This
+    // counter records one step per screen-line scan, so 2 * ht leaves room
+    // for a backward re-scan of the same lines without allowing any work
+    // proportional to the long line itself.
+    for (count, ht) in work.iter().zip(&heights) {
+        assert!(
+            *count > 0 && *count <= 2 * (*ht as usize),
+            "the scroll must bound its work by window lines: work={work:?} ht={heights:?}"
+        );
+    }
 }
 
 /// A long truncated first line, 400 short lines, and point on line 300.
