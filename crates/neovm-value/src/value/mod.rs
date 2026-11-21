@@ -842,10 +842,11 @@ pub struct HashTableEntry {
 /// Compact backing store for a Lisp hash table.
 ///
 /// The hash index files each entry under the hash computed when it was made
-/// (GNU `h->hash[i]`), beside the key as then materialized and a stable slot
-/// number; slot order provides GNU-compatible iteration while storing only
-/// the original Lisp key and value. See [`hash_index`] for how an `equal`
-/// table finds a key.
+/// (GNU `h->hash[i]`), beside the key as then materialized (or
+/// [`HashKey::LiveKey`], an `equal` table's structural key, which the slot
+/// holds) and a stable slot number; slot order provides GNU-compatible
+/// iteration while storing only the original Lisp key and value. See
+/// [`hash_index`] for how an `equal` table finds a key.
 ///
 /// `Clone` is manual: the proof-2 authority word at the end is zeroed on
 /// every copy rather than copied (see the field's comment).
@@ -1058,11 +1059,11 @@ impl HashTableStorage {
     /// Whether an entry's materialized key is `key`. A structural `equal`
     /// key is found by a scan here; look those up by value instead.
     pub fn contains_key(&self, key: &HashKey) -> bool {
-        self.index.find_key(key).is_some()
+        self.index.find_key(key, &self.slots).is_some()
     }
 
     pub fn get(&self, key: &HashKey) -> Option<&Value> {
-        let slot = self.index.find_key(key)?.slot;
+        let slot = self.index.find_key(key, &self.slots)?.slot;
         self.slot_value(slot)
     }
 
@@ -1137,9 +1138,10 @@ impl HashTableStorage {
             Some(hasher) => self.index.find(hasher.finish(), |entry| {
                 value_matches(value, test, &entry.key)
             }),
-            None => self
-                .index
-                .find_key(&value.to_hash_key_swp(&test, symbols_with_pos_enabled)),
+            None => self.index.find_key(
+                &value.to_hash_key_swp(&test, symbols_with_pos_enabled),
+                &self.slots,
+            ),
         }?;
         Some((entry.hash, entry.slot))
     }
@@ -1323,7 +1325,7 @@ impl HashTableStorage {
                     }
                     None => {
                         let key = value.to_hash_key_swp(&test, symbols_with_pos_enabled);
-                        match self.index.find_key(&key) {
+                        match self.index.find_key(&key, &self.slots) {
                             Some(entry) => HashProbe::Found(entry.slot),
                             None => HashProbe::Absent(fx_hash_key(&key)),
                         }
@@ -1333,10 +1335,32 @@ impl HashTableStorage {
         }
     }
 
-    /// File a new entry for a key [`Self::try_probe_for_insert`] found
-    /// absent under `hash`. `hash_key` is the key materialized under the
-    /// table's test and `key` the key object.
-    pub fn insert_absent(&mut self, hash: u64, hash_key: HashKey, key: Value, value: Value) {
+    /// File a new entry for the key object `key`, which
+    /// [`Self::try_probe_for_insert`] found absent under `hash` with the same
+    /// `test` and `symbols_with_pos_enabled`.
+    ///
+    /// An `equal` table files a cons, vector, record or string key by the
+    /// object itself ([`HashKey::LiveKey`]), so the insertion costs nothing
+    /// that grows with the key; any other key is stored materialized under
+    /// the table's test. So is every key put while `symbols_with_pos_enabled`
+    /// is set: its materialized form strips positioned symbols, which a
+    /// reader rebuilding it from the object would not.
+    pub fn insert_absent(
+        &mut self,
+        hash: u64,
+        test: HashTableTest,
+        symbols_with_pos_enabled: bool,
+        key: Value,
+        value: Value,
+    ) {
+        let hash_key = if test == HashTableTest::Equal
+            && !symbols_with_pos_enabled
+            && keyed_by_live_object(key)
+        {
+            HashKey::LiveKey
+        } else {
+            key.to_hash_key_for_insert(test, symbols_with_pos_enabled)
+        };
         debug_assert_eq!(
             hash,
             stored_hash(&hash_key, key),
@@ -1384,12 +1408,12 @@ impl HashTableStorage {
     }
 
     pub fn get_mut(&mut self, key: &HashKey) -> Option<&mut Value> {
-        let slot = self.index.find_key(key)?.slot;
+        let slot = self.index.find_key(key, &self.slots)?.slot;
         self.slot_value_mut(slot)
     }
 
     pub fn key_snapshot(&self, key: &HashKey) -> Option<&Value> {
-        let slot = self.index.find_key(key)?.slot;
+        let slot = self.index.find_key(key, &self.slots)?.slot;
         self.slots
             .get(slot)
             .and_then(Option::as_ref)
@@ -1412,7 +1436,11 @@ impl HashTableStorage {
     }
 
     pub fn replace_key_snapshot(&mut self, key: &HashKey, key_value: Value) {
-        let Some(slot) = self.index.find_key(key).map(|entry| entry.slot) else {
+        let Some(slot) = self
+            .index
+            .find_key(key, &self.slots)
+            .map(|entry| entry.slot)
+        else {
             return;
         };
         self.slots[slot]
@@ -1426,7 +1454,7 @@ impl HashTableStorage {
     /// filed under.
     fn slot_of_new_key(&self, hash: u64, hash_key: &HashKey) -> Option<usize> {
         self.index
-            .find(hash, |entry| entry.key == *hash_key)
+            .find(hash, |entry| entry_has_key(entry, hash_key, &self.slots))
             .map(|entry| entry.slot)
     }
 
@@ -1455,6 +1483,15 @@ impl HashTableStorage {
         None
     }
 
+    /// File `hash_key` as a new entry without looking for an equal one, as
+    /// GNU `hash_table_thaw` files every dumped entry: keys dumped from live
+    /// objects mutated into `equal` shapes stay separate entries.
+    fn push_entry(&mut self, hash_key: HashKey, key: Value, value: Value) {
+        let hash = stored_hash(&hash_key, key);
+        let slot = self.alloc_slot(key, value);
+        self.index.insert_new(hash, hash_key, slot);
+    }
+
     pub(crate) fn insert_replacing_key(
         &mut self,
         hash_key: HashKey,
@@ -1475,7 +1512,7 @@ impl HashTableStorage {
     }
 
     pub fn remove(&mut self, key: &HashKey) -> Option<Value> {
-        let removed = self.index.remove_key(key)?;
+        let removed = self.index.remove_key(key, &self.slots)?;
         self.forget_user_hash(key);
         self.remove_slot(removed.slot)
     }
@@ -1636,7 +1673,9 @@ impl HashTableStorage {
 
     /// Every live entry with its materialized key, in slot (insertion)
     /// order: what a walk of [`Self::live_hash_keys_in_slot_order`] followed
-    /// by a [`Self::get`] per key reads, without looking any key up.
+    /// by a [`Self::get`] per key reads, without looking any key up. An entry
+    /// filed by its key object carries [`HashKey::LiveKey`]; the entry's
+    /// `key` is that object.
     pub fn keyed_entries_in_slot_order(&self) -> Vec<(&HashKey, &HashTableEntry)> {
         let mut keyed = vec![None; self.slots.len()];
         for entry in self.index.iter() {
@@ -2007,6 +2046,15 @@ pub enum HashKey {
     /// Boxed as a pair, like `Marker` and `Overlay`: `HashKey` sits inline in
     /// every bucket, and a test pins it at three words or fewer.
     StringContent(Box<(Box<[u8]>, usize)>),
+    /// An `equal` table's index entry for a cons, vector, record or string
+    /// key, filed under the key OBJECT, which the entry's slot holds: GNU
+    /// `hash_put` (src/fns.c) stores `key` beside its hash. Materializing
+    /// such a key copied it whole on every insertion.
+    ///
+    /// Only the index stores it, and no value materializes to it: a reader
+    /// that needs the key reads the entry's key object
+    /// ([`HashTableEntry::key`]).
+    LiveKey,
 }
 
 /// Hash a [`Value`] in place for an `eq` or `eql` table, the way GNU
@@ -2214,10 +2262,11 @@ impl std::hash::Hash for HashKey {
             HashKey::Marker(_) => 18,
             HashKey::Overlay(_) => 19,
             HashKey::BoolVector(_) => 24,
+            HashKey::LiveKey => 25,
         };
         tag.hash(state);
         match self {
-            HashKey::Nil | HashKey::True => {}
+            HashKey::Nil | HashKey::True | HashKey::LiveKey => {}
             HashKey::Int(n) => n.hash(state),
             HashKey::Bignum(limbs) => limbs.hash(state),
             HashKey::Float(bits) => bits.hash(state),
@@ -2271,7 +2320,9 @@ impl std::hash::Hash for HashKey {
 impl PartialEq for HashKey {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (HashKey::Nil, HashKey::Nil) | (HashKey::True, HashKey::True) => true,
+            (HashKey::Nil, HashKey::Nil)
+            | (HashKey::True, HashKey::True)
+            | (HashKey::LiveKey, HashKey::LiveKey) => true,
             (HashKey::Int(a), HashKey::Int(b)) => a == b,
             (HashKey::Bignum(a), HashKey::Bignum(b)) => a == b,
             (HashKey::Float(a), HashKey::Float(b)) => a == b,
@@ -2487,8 +2538,9 @@ impl LispHashTable {
     }
 
     /// Rebuild from insertion-ordered `(hash_key, value, key_snapshot)`
-    /// triples: one insert (one hash) per entry, no temporary maps. The
-    /// pdump loader's path — its dump format stores entries pre-sorted.
+    /// triples: one entry (one hash) per triple, no temporary maps and no
+    /// merging of equal keys. The pdump loader's path — its dump format
+    /// stores entries pre-sorted.
     pub fn rebuild_from_ordered_entries(&mut self, entries: Vec<(HashKey, Value, Option<Value>)>) {
         self.data.clear();
         self.data.reserve(entries.len());
@@ -2500,7 +2552,7 @@ impl LispHashTable {
                 None if hash_key.is_structural() => crate::hashtab::hash_key_to_value(&hash_key),
                 None => value,
             };
-            self.insert(hash_key, key, value);
+            self.data.push_entry(hash_key, key, value);
         }
     }
 
@@ -2561,8 +2613,9 @@ pub fn build_hash_table_literal_value(
                     }
                 }
                 Ok(HashProbe::Absent(hash)) => {
-                    let key = key_value.to_hash_key_for_insert(table.test, false);
-                    table.data.insert_absent(hash, key, key_value, val_value);
+                    table
+                        .data
+                        .insert_absent(hash, table.test, false, key_value, val_value);
                 }
                 // Literal tables have no user hash/comparison function, so
                 // the probe has nothing to signal.
@@ -5882,7 +5935,7 @@ mod hash_index;
 pub mod switch_plan;
 
 pub(crate) use hash_index::equal_value_hash;
-use hash_index::{HashIndex, fx_hash_key, stored_hash};
+use hash_index::{HashIndex, entry_has_key, fx_hash_key, keyed_by_live_object, stored_hash};
 
 // ---------------------------------------------------------------------------
 // Tests

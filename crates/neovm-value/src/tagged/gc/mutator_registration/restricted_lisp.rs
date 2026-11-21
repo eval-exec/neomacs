@@ -2225,8 +2225,7 @@ fn plain_put(
                 }
                 HashProbe::Absent(hash) => {
                     ht.maybe_resize_for_insert(true);
-                    let key = key_tv.to_hash_key_for_insert(test, false);
-                    ht.data.insert_absent(hash, key, key_tv, value_tv);
+                    ht.data.insert_absent(hash, test, false, key_tv, value_tv);
                 }
             }
             Ok::<(usize, usize), ExecError>((before, ht.data.known_storage_bytes()))
@@ -4444,8 +4443,8 @@ fn a6_ht_lease_mints_from_a_live_run_access<H: HostParts>(host: &mut H) {
                             panic!("fresh table has no matching entry");
                         };
                         ht.maybe_resize_for_insert(true);
-                        let hash_key = key.to_hash_key_swp(&HashTableTest::Eq, false);
-                        ht.data.insert_absent(hash, hash_key, key, value);
+                        ht.data
+                            .insert_absent(hash, HashTableTest::Eq, false, key, value);
                     });
                     drop(writer);
                     let reader = TableRef::enter(run, table)?;

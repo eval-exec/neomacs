@@ -76,8 +76,6 @@ fn a_truncated_key_still_finds_and_updates_its_entry() {
     let dag = shared_dag(24);
     let table = Value::hash_table(HashTableTest::Equal);
     table.with_hash_table_mut(|table| {
-        let key = dag.to_hash_key_for_insert(HashTableTest::Equal, false);
-        assert!(key.contains_truncation());
         let probe = table
             .data
             .try_probe_for_insert(dag, HashTableTest::Equal, false)
@@ -85,7 +83,9 @@ fn a_truncated_key_still_finds_and_updates_its_entry() {
         let HashProbe::Absent(hash) = probe else {
             panic!("the table is empty");
         };
-        table.data.insert_absent(hash, key, dag, Value::fixnum(7));
+        table
+            .data
+            .insert_absent(hash, HashTableTest::Equal, false, dag, Value::fixnum(7));
 
         assert_eq!(
             table.data.lookup(dag, HashTableTest::Equal, false),

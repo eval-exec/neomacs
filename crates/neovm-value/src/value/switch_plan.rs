@@ -24,7 +24,9 @@
 //! The answer is, by construction, exactly [`HashTableStorage::lookup`]'s:
 //! the plan is compiled from the index's own [`HashKey`] snapshots, planned
 //! only while every key object still materializes to its snapshot (an
-//! `equal` lookup compares the live key object), and declines, to the hashed
+//! `equal` lookup compares the live key object) -- or, for an entry filed by
+//! its key object ([`HashKey::LiveKey`]), while that object still hashes to
+//! its entry's hash and equals no other key -- and declines, to the hashed
 //! lookup, every key shape and table it cannot reproduce. A jump table's keys
 //! are byte-code constants; a key object mutated in place AFTER the plan is
 //! built is the one case the plan does not follow. Debug builds check the
@@ -41,7 +43,7 @@ use std::fmt;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use super::{HashKey, HashTableTest, LispHashTable, Value, ValueKind};
+use super::{HashKey, HashTableTest, LispHashTable, Value, ValueKind, equal_value_hash};
 use crate::tagged::value::{FIXNUM_SHIFT, TAG_CONS, TAG_FLOAT, TAG_MASK, TAG_STRING, TAG_SYMBOL};
 
 /// Keys a bit-identity scan may hold; larger all-immediate tables prefilter
@@ -336,7 +338,7 @@ impl LispHashTable {
             .data
             .lookup(value, self.test, swp)
             .map(|target| target.bits());
-        if answer.map(Value::bits) == lookup || self.a_planned_key_was_mutated() {
+        if answer.map(Value::bits) == lookup || self.a_planned_key_was_mutated(value, swp, lookup) {
             return;
         }
         panic!(
@@ -354,21 +356,37 @@ impl LispHashTable {
     /// Whether a key OBJECT of this planned table was mutated in place after
     /// the plan was built: the plan answers from the keys as they were, the
     /// `equal` lookup from the live objects (the module doc's one exception).
+    /// An entry filed by its key object keeps no snapshot to tell: its object
+    /// was mutated when it no longer hashes to its entry, or when a plan
+    /// compiled from the table as it is now answers `value` as the lookup
+    /// does (`lookup`) where the built plan did not.
     #[cfg(debug_assertions)]
-    fn a_planned_key_was_mutated(&self) -> bool {
-        self.data.switch_plan.shape().is_some()
-            && self
-                .data
-                .index
-                .iter()
-                .filter_map(|entry| Some((entry, self.data.entry_at(entry.slot)?)))
-                .any(|(entry, stored)| {
-                    // A truncated key does not describe its key object, and
-                    // walking that object again is the very expansion the
-                    // budget exists to prevent.
-                    !entry.key.contains_truncation()
-                        && stored.key.to_hash_key(&self.test) != entry.key
-                })
+    fn a_planned_key_was_mutated(&self, value: Value, swp: bool, lookup: Option<usize>) -> bool {
+        if self.data.switch_plan.shape().is_none() {
+            return false;
+        }
+        let mut holds_live_keys = false;
+        let snapshot_changed = self
+            .data
+            .index
+            .iter()
+            .filter_map(|entry| Some((entry, self.data.entry_at(entry.slot)?)))
+            .any(|(entry, stored)| match &entry.key {
+                HashKey::LiveKey => {
+                    holds_live_keys = true;
+                    equal_value_hash(stored.key) != entry.hash
+                }
+                snapshot => {
+                    !snapshot.contains_truncation()
+                        && stored.key.to_hash_key(&self.test) != *snapshot
+                }
+            });
+        snapshot_changed
+            || holds_live_keys
+                && PlanSlot::compile(self, self.data.switch_plan.rebuilds)
+                    .lookup(self, value, swp)
+                    .map(Value::bits)
+                    == lookup
     }
 
     /// The table has no plan yet: the first dispatch only notes that it
@@ -536,10 +554,10 @@ impl PlanSlot {
         let mut keys: Vec<CompiledKey> = Vec::with_capacity(data.len());
         let mut nodes: Vec<KeyNode> = Vec::new();
         let mut strings: Vec<StringKey> = Vec::new();
+        let mut shapes: Vec<HashKey> = Vec::new();
         // Compile the INDEX's key snapshots, not the key objects: the
         // snapshots are what the hashed lookup compares against.
         for index_entry in data.index.iter() {
-            let hash_key = &index_entry.key;
             let Some(entry) = data.slots.get(index_entry.slot).and_then(Option::as_ref) else {
                 return PlanSlot::Generic;
             };
@@ -556,16 +574,21 @@ impl PlanSlot {
             //
             // An `equal` table compares the LIVE key object (GNU
             // `hash_find_with_hash`), so a key object mutated since it was
-            // stored no longer matches its snapshot either: not planned.
-            if hash_key.contains_truncation() {
-                return PlanSlot::Generic;
-            }
-            if entry.key.to_hash_key(&test) != *hash_key {
+            // stored no longer matches its snapshot either: not planned. An
+            // entry filed by its key object has no snapshot. The lookup finds
+            // it by its object under the hash it was filed by, so it is
+            // planned from the object while the object still hashes there.
+            let hash_key = entry.key.to_hash_key_for_insert(test, false);
+            let as_stored = match &index_entry.key {
+                HashKey::LiveKey => equal_value_hash(entry.key) == index_entry.hash,
+                snapshot => !snapshot.contains_truncation() && hash_key == *snapshot,
+            };
+            if !as_stored || hash_key.contains_truncation() {
                 return PlanSlot::Generic;
             }
             let start = nodes.len();
             let limit = start + MAX_KEY_NODES;
-            if flatten(hash_key, test, &mut nodes, &mut strings, 0, limit).is_none() {
+            if flatten(&hash_key, test, &mut nodes, &mut strings, 0, limit).is_none() {
                 return PlanSlot::Generic;
             }
             keys.push(CompiledKey {
@@ -573,6 +596,10 @@ impl PlanSlot {
                 end: nodes.len(),
                 target: entry.value,
             });
+            // Only a table small enough to scan is checked for equal keys.
+            if keys.len() <= LINEAR_MAX_BITS {
+                shapes.push(hash_key);
+            }
         }
 
         let mut tags = TagSet::default();
@@ -598,6 +625,16 @@ impl PlanSlot {
         };
         if keys.len() > scan_limit {
             return PlanSlot::Hashed { tags };
+        }
+        // Equal keys, from key objects mutated in place or from a dump of
+        // such keys reloaded, can resolve to different entries under a scan
+        // (index order) and the hashed lookup (probe order).
+        if shapes
+            .iter()
+            .enumerate()
+            .any(|(i, shape)| shapes[..i].contains(shape))
+        {
+            return PlanSlot::Generic;
         }
 
         // Sort by tag so a dispatch scans only the keys its tag can match.

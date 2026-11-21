@@ -3208,6 +3208,9 @@ pub(crate) fn dump_hash_key(encoder: &mut DumpEncoder, k: &HashKey) -> DumpHashK
         HashKey::StringContent(content) => {
             DumpHashKey::StringContent(content.0.to_vec(), content.1 as u64)
         }
+        // Only an index entry holds it, and `dump_hash_table` dumps such an
+        // entry as its key object's materialized key.
+        HashKey::LiveKey => unreachable!("pdump: a live-key entry is dumped by its key object"),
     }
 }
 
@@ -3282,11 +3285,16 @@ pub(crate) fn dump_hash_table(encoder: &mut DumpEncoder, ht: &LispHashTable) -> 
                 .into_iter()
                 .map(|(key, entry)| {
                     let snapshot = Some(encoder.dump_value(&entry.key));
-                    (
-                        dump_hash_key(encoder, key),
-                        encoder.dump_value(&entry.value),
-                        snapshot,
-                    )
+                    // An entry filed by its key object is dumped as the key
+                    // that object materializes to, the form the loader reads.
+                    let key = match key {
+                        HashKey::LiveKey => dump_hash_key(
+                            encoder,
+                            &entry.key.to_hash_key_for_insert(ht.test, false),
+                        ),
+                        key => dump_hash_key(encoder, key),
+                    };
+                    (key, encoder.dump_value(&entry.value), snapshot)
                 })
                 .collect()
         },

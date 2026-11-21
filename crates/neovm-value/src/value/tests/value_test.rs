@@ -783,3 +783,5 @@ mod hash_probe;
 
 #[path = "bounded_equal_key_test.rs"]
 mod bounded_equal_key;
+#[path = "hash_live_key_test.rs"]
+mod hash_live_key;
