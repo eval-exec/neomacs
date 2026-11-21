@@ -65,6 +65,11 @@ impl Drop for MenuRoots {
 pub(crate) struct ResolvedMenu {
     entries: Vec<PopupMenuEntry>,
     events: Vec<Value>,
+    /// A keymap pane's synthesized name (`Fkeymap_prompt`).  A GUI popup
+    /// renders it as a title entry; a TTY menu draws it above the first item
+    /// (on the menu-bar row for a menu-bar drop-down), so the TTY host needs
+    /// the text even when the entry row is suppressed.
+    keymap_title: Option<String>,
     _roots: MenuRoots,
 }
 
@@ -74,6 +79,9 @@ impl ResolvedMenu {
     }
     pub(crate) fn events(&self) -> &[Value] {
         &self.events
+    }
+    pub(crate) fn keymap_title(&self) -> Option<&str> {
+        self.keymap_title.as_deref()
     }
 }
 
@@ -104,6 +112,7 @@ pub(crate) fn resolve_popup(
     let mut result = ResolvedMenu {
         entries: Vec::new(),
         events: Vec::new(),
+        keymap_title: None,
         _roots: MenuRoots::new(),
     };
     result._roots.keep(menu);
@@ -135,9 +144,12 @@ fn finish_keymap_pane(
     keymap_pane_title: bool,
     mut out: ResolvedMenu,
 ) -> Result<ResolvedMenu, Flow> {
-    if keymap_pane_title {
-        let prompt = keymap_prompt(ctx, map);
+    let prompt = keymap_prompt(ctx, map);
+    if !prompt.is_nil() {
         out._roots.keep(prompt);
+        out.keymap_title = prompt.as_runtime_string_owned();
+    }
+    if keymap_pane_title {
         push_label_row(prompt, &mut out);
     }
     append(ctx, map, is_tty, &mut MenuTraversal::default(), &mut out)?;
@@ -170,6 +182,9 @@ fn resolve_keymap_list(
         }
         maps.push(map);
         rest = rest.cons_cdr();
+    }
+    if !title.is_nil() {
+        out.keymap_title = title.as_runtime_string_owned();
     }
     for (index, map) in maps.iter().enumerate() {
         if keymap_pane_title {

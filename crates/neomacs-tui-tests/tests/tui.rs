@@ -96,6 +96,8 @@ mod issue_446_align_to_hscroll;
 mod issue_470;
 #[path = "issue_621_mouse_drag_selection.rs"]
 mod issue_621_mouse_drag_selection;
+
+// N4 (peer 6163): paired TTY drop-down menu grid.
 #[path = "issue_654_centered_cursor.rs"]
 mod issue_654_centered_cursor;
 #[path = "issue_656_kill_minibuffer.rs"]
@@ -179,6 +181,8 @@ mod strict_grid;
 mod tty_color_index;
 #[path = "tty_input.rs"]
 mod tty_input;
+#[path = "tty_menu_grid_oracle.rs"]
+mod tty_menu_grid_oracle;
 #[cfg(test)]
 #[path = "tty_relay.rs"]
 mod tty_relay;

@@ -2082,6 +2082,15 @@ fn x_popup_menu_interactive(ctx: &mut Context, position: Value, menu: Value) -> 
         .map(|frame| frame.id)
         .unwrap_or(FrameId(0));
 
+    // GNU draws a TTY menu's keymap-pane title above the first item, on the
+    // menu-bar row for a drop-down (`tty_menu_activate`, src/term.c:
+    // 3595-3599); the GUI popup path renders it as a title entry instead.
+    // The pane has a submenu, so the title carries the " >" submenu marker.
+    let tty_title = if is_tty {
+        resolved.keymap_title().map(|title| format!("{title} >"))
+    } else {
+        None
+    };
     NativePopupSession {
         request_id: popup_position.request_id,
         position,
@@ -2090,7 +2099,7 @@ fn x_popup_menu_interactive(ctx: &mut Context, position: Value, menu: Value) -> 
         visible_rows,
         placement,
         frame_id,
-        title: None,
+        title: tty_title,
         selected,
     }
     .run(ctx)
