@@ -1832,18 +1832,21 @@ pub(crate) fn window_line_wrap(
 
     // Re-read through the buffer: `eval.buffers` was borrowed mutably above.
     let current_buffer = eval.edit.buffers.get(current_buffer_id);
-    let partial_width_truncates =
-        match neovm_edit::emacs_core::indent::dynamic_buffer_or_global_symbol_value_fixed(
+    let truncate_partial_width =
+        neovm_edit::emacs_core::indent::dynamic_buffer_or_global_symbol_value_fixed(
             eval.variables(),
             &[],
             current_buffer,
             &neovm_value::intern::WellKnown::TruncatePartialWidthWindows,
-        ) {
-            Some(value) if value.is_nil() => false,
-            Some(value) if value.is_fixnum() => window_cols < value.as_fixnum().unwrap(),
-            Some(_) => true,
-            None => false,
-        };
+        );
+    // One shared predicate with the edit host's scan_for_column gate
+    // (neovm-value::display_vocab): the display and indent layers must not
+    // decide partial width differently.
+    let partial_width_truncates = neovm_value::display_vocab::partial_width_truncates(
+        window_cols,
+        root_cols,
+        truncate_partial_width,
+    );
     if partial_width_truncates {
         LineWrap::Truncate
     } else {

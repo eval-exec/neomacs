@@ -173,6 +173,20 @@ pub trait EditHost {
     /// the forwarding live on the host, where the symbol table is. C2.
     fn inhibit_modification_hooks(&self) -> bool;
 
+    /// The partial-width half of GNU `scan_for_column`'s `lines_truncated`
+    /// (`src/indent.c:629-643`): true when `truncate-lines` is nil but the
+    /// window GNU would pick with `Fget_buffer_window (buffer, nil)` is a
+    /// partial-width window and `truncate-partial-width-windows` truncates
+    /// it. nil ALL-FRAMES means "the selected frame and no others"
+    /// (`src/window.c:3314-3326`), preferring the selected window.
+    ///
+    /// The default `false` is GNU's no-window answer: a host with no window
+    /// information still applies the buffer's `truncate-lines` alone (the
+    /// caller checks that slot), so `None` must not disable the shortcut.
+    fn long_line_partial_width_truncation(&self, _buffer_id: BufferId) -> bool {
+        false
+    }
+
     /// GNU's visible variable read by id in the lexical-then-visible
     /// order (`find_symbol_value` through the lexenv cache): the read
     /// the buffer-access property gate uses for its policy variables.

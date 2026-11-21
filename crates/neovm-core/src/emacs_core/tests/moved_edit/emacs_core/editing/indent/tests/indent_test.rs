@@ -1402,3 +1402,150 @@ fn current_column_long_line_approximation_is_constant_work() {
         "the approximation must not decode the line: {work:?}"
     );
 }
+
+/// One long line: `head` 'a', one TAB, then `rest` 'a' and a newline.
+/// `long-line-threshold` is 50000 and `large-hscroll-threshold` 10000, the GNU
+/// defaults the fast paths compare against.
+fn long_line_scan_buffer(
+    rest: usize,
+    truncate_lines: bool,
+    set_long_line_flag: bool,
+) -> (Context, neovm_edit::buffer::BufferId) {
+    let mut ev = crate::test_utils::runtime_startup_context();
+    ev.eval_str("(setq long-line-threshold 50000 large-hscroll-threshold 10000)")
+        .expect("set the long-line variables");
+    let buffer_id = ev.edit.buffers.current_buffer_id().expect("current buffer");
+    {
+        let buf = ev.edit.buffers.get_mut(buffer_id).expect("buffer");
+        buf.insert("a".repeat(1000).as_str());
+        buf.insert("\t");
+        buf.insert("a".repeat(rest).as_str());
+        buf.insert("\n");
+        if truncate_lines {
+            buf.set_buffer_local("truncate-lines", Value::T);
+        }
+    }
+    if set_long_line_flag {
+        assert!(
+            ev.edit
+                .buffers
+                .get_mut(buffer_id)
+                .expect("buffer")
+                .refresh_long_line_optimizations(50_000),
+            "the test line must set long_line_optimizations_p"
+        );
+    }
+    ev.eval_str("(goto-char 1)").expect("beginning of line");
+    (ev, buffer_id)
+}
+
+/// GNU `scan_for_column`'s long+truncated shortcut (`src/indent.c:629-668`)
+/// replaces the width walk with `BOL + goal` arithmetic once the clamped
+/// column exceeds `large-hscroll-threshold`.  `move-to-column` therefore
+/// returns the goal column and ignores the TAB, at constant work.
+#[test]
+fn move_to_column_long_truncated_fast_path_is_flat() {
+    crate::test_utils::init_test_tracing();
+    let mut work = Vec::new();
+    for line_len in [200_000usize, 400_000] {
+        let (mut ev, _buffer) = long_line_scan_buffer(line_len, true, true);
+        neovm_edit::test_support::authority::reset_column_scan_characters();
+        let reached = ev
+            .eval_str(&format!("(move-to-column {line_len})"))
+            .expect("move to the line's column")
+            .as_int()
+            .expect("fixnum");
+        assert_eq!(
+            reached, line_len as i64,
+            "GNU's approximation returns one column per character"
+        );
+        work.push(neovm_edit::test_support::authority::column_scan_characters());
+    }
+    assert_eq!(
+        work[0], work[1],
+        "move-to-column work must not grow with the line: {work:?}"
+    );
+    assert_eq!(
+        work[0], 0,
+        "the long+truncated shortcut must not decode the line: {work:?}"
+    );
+}
+
+/// The shortcut's gates: it needs the flag, truncated lines, and a clamped
+/// column above `large-hscroll-threshold`.
+#[test]
+fn move_to_column_long_truncated_fast_path_gates() {
+    crate::test_utils::init_test_tracing();
+
+    // Not truncated: GNU counts the TAB exactly.
+    let (mut ev, _buffer) = long_line_scan_buffer(200_000, false, true);
+    let wrapped = ev
+        .eval_str("(move-to-column 150000)")
+        .expect("wrapped move")
+        .as_int()
+        .expect("fixnum");
+    assert_ne!(wrapped, 150_000, "untruncated lines take the exact walk");
+
+    // Truncated but the buffer flag is clear.
+    let (mut ev, _buffer) = long_line_scan_buffer(200_000, true, false);
+    let flag_clear = ev
+        .eval_str("(move-to-column 150000)")
+        .expect("move without the flag")
+        .as_int()
+        .expect("fixnum");
+    assert_ne!(
+        flag_clear, 150_000,
+        "no shortcut without the long-line flag"
+    );
+
+    // Truncated with the flag, goal at or below large-hscroll-threshold.
+    let (mut ev, _buffer) = long_line_scan_buffer(200_000, true, true);
+    let below_threshold = ev
+        .eval_str("(move-to-column 5000)")
+        .expect("move below the hscroll threshold")
+        .as_int()
+        .expect("fixnum");
+    assert_ne!(
+        below_threshold, 5_000,
+        "below large-hscroll-threshold GNU walks exactly"
+    );
+}
+
+/// `current-column` reaches `scan_for_column` only through
+/// `current_column_1` (intervals/overlays/multibyte, `src/indent.c:365-370`),
+/// where GNU's long+truncated shortcut then applies when
+/// `long-line-threshold` is nil and the flag is set.  The same buffer without
+/// a property takes the simple backward scan, which counts the TAB.
+#[test]
+fn current_column_1_long_truncated_fast_path_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let (mut ev, _buffer) = long_line_scan_buffer(200_000, true, true);
+    ev.eval_str("(put-text-property 1 2 'p640 t)")
+        .expect("force the properties branch");
+    ev.eval_str("(goto-char 30001)").expect("move point");
+    neovm_edit::test_support::authority::reset_column_scan_characters();
+    let with_property = ev
+        .eval_str("(let ((long-line-threshold nil)) (current-column))")
+        .expect("current-column through current_column_1")
+        .as_int()
+        .expect("fixnum");
+    let work = neovm_edit::test_support::authority::column_scan_characters();
+    assert_eq!(
+        with_property, 30_000,
+        "current_column_1 takes the one-column-per-character shortcut"
+    );
+    assert_eq!(work, 0, "the shortcut must not decode the line");
+
+    // Control: no property -> current_column's simple backward scan, exact.
+    let (mut ev, _buffer) = long_line_scan_buffer(200_000, true, true);
+    ev.eval_str("(goto-char 30001)").expect("move point");
+    let no_property = ev
+        .eval_str("(let ((long-line-threshold nil)) (current-column))")
+        .expect("exact current-column")
+        .as_int()
+        .expect("fixnum");
+    assert_eq!(
+        no_property, 30_007,
+        "without intervals GNU's simple scan counts the TAB"
+    );
+}

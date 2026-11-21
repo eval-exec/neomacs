@@ -359,3 +359,184 @@ fn current_column_with_nil_threshold_is_exact_like_gnu() {
     );
     assert_eq!(neo_value, gnu_value, "both must count the TAB here");
 }
+
+/// Slice 2, site 2: GNU `scan_for_column`'s long+truncated shortcut
+/// (`src/indent.c:629-668`) makes `move-to-column` one column per character
+/// and ignores the TAB.  With truncate-lines t the fast path returns GNU's
+/// goal and leaves point at `BOL + goal`.
+#[test]
+fn move_to_column_long_truncated_matches_gnu() {
+    let (mut gnu, mut neo) = boot_pair("");
+    resize_both(&mut gnu, &mut neo, 40, 160);
+    read_both(&mut gnu, &mut neo, Duration::from_millis(700));
+    eval_expression(
+        &mut gnu,
+        &mut neo,
+        "(progn \
+           (switch-to-buffer (get-buffer-create \"*p640-s2-mtc*\")) \
+           (erase-buffer) \
+           (insert (make-string 1000 ?a)) \
+           (insert \"\\t\") \
+           (insert (make-string 200000 ?a)) \
+           (insert \"\\n\") \
+           (setq truncate-lines t) \
+           (goto-char 1) \
+           (redisplay t) \
+           nil)",
+    );
+    read_both(&mut gnu, &mut neo, Duration::from_secs(1));
+    let (gnu_value, neo_value) = paired_message(
+        &mut gnu,
+        &mut neo,
+        "P640MT",
+        "(list (move-to-column 150000) (point))",
+    );
+    eprintln!("issue#640 move-to-column: GNU={gnu_value} NEO={neo_value}");
+    assert_eq!(
+        gnu_value, "(150000 150001)",
+        "GNU's truncated shortcut ignores the TAB and seats point at BOL+goal"
+    );
+    assert_eq!(neo_value, gnu_value, "move-to-column must match GNU");
+}
+
+/// `current-column` reaches the scan only through `current_column_1`
+/// (intervals present, `src/indent.c:365-370`); with `long-line-threshold`
+/// nil the :348 approximation is off, so the fast path at :629 is what makes
+/// the property-less control differ.
+#[test]
+fn current_column_1_long_truncated_matches_gnu() {
+    let (mut gnu, mut neo) = boot_pair("");
+    resize_both(&mut gnu, &mut neo, 40, 160);
+    read_both(&mut gnu, &mut neo, Duration::from_millis(700));
+    eval_expression(
+        &mut gnu,
+        &mut neo,
+        "(progn \
+           (switch-to-buffer (get-buffer-create \"*p640-s2-cc1*\")) \
+           (erase-buffer) \
+           (insert (make-string 1000 ?a)) \
+           (insert \"\\t\") \
+           (insert (make-string 200000 ?a)) \
+           (insert \"\\n\") \
+           (setq truncate-lines t) \
+           (goto-char 1) \
+           (redisplay t) \
+           (setq long-line-threshold nil) \
+           (put-text-property 1 2 'p640 t) \
+           (goto-char 30001) \
+           nil)",
+    );
+    read_both(&mut gnu, &mut neo, Duration::from_secs(1));
+    let (gnu_value, neo_value) = paired_message(
+        &mut gnu,
+        &mut neo,
+        "P640C1",
+        "(list (current-column) \
+                (progn (remove-text-properties 1 2 '(p640 t)) (current-column)))",
+    );
+    eprintln!("issue#640 current_column_1: GNU={gnu_value} NEO={neo_value}");
+    assert_eq!(
+        gnu_value, "(30000 30007)",
+        "GNU: properties branch approximates, simple scan counts the TAB"
+    );
+    assert_eq!(neo_value, gnu_value, "current_column_1 must match GNU");
+}
+
+/// Partial-width rule (`src/indent.c:637-643`): a 40-column window with
+/// truncate-lines nil and `truncate-partial-width-windows` 50 truncates, so
+/// the fast path applies.
+#[test]
+fn move_to_column_partial_width_window_matches_gnu() {
+    let (mut gnu, mut neo) = boot_pair("");
+    resize_both(&mut gnu, &mut neo, 40, 160);
+    read_both(&mut gnu, &mut neo, Duration::from_millis(700));
+    eval_expression(
+        &mut gnu,
+        &mut neo,
+        "(progn \
+           (switch-to-buffer (get-buffer-create \"*p640-s2-pw*\")) \
+           (erase-buffer) \
+           (insert (make-string 1000 ?a)) \
+           (insert \"\\t\") \
+           (insert (make-string 200000 ?a)) \
+           (insert \"\\n\") \
+           (setq truncate-lines nil) \
+           (setq truncate-partial-width-windows 50) \
+           (split-window (selected-window) 40) \
+           (set-window-buffer (selected-window) (current-buffer)) \
+           (set-buffer (current-buffer)) \
+           (goto-char 1) \
+           (redisplay t) \
+           nil)",
+    );
+    read_both(&mut gnu, &mut neo, Duration::from_secs(1));
+    let (gnu_value, neo_value) = paired_message(
+        &mut gnu,
+        &mut neo,
+        "P640PW",
+        "(list (move-to-column 150000) (point))",
+    );
+    eprintln!("issue#640 partial-width move-to-column: GNU={gnu_value} NEO={neo_value}");
+    assert_eq!(
+        gnu_value, "(150000 150001)",
+        "a partial-width window truncates, so GNU takes the shortcut"
+    );
+    assert_eq!(
+        neo_value, gnu_value,
+        "the partial-width rule must match GNU"
+    );
+}
+
+/// R1: `Fget_buffer_window (buffer, nil)` with nil ALL-FRAMES searches the
+/// SELECTED frame only (`src/window.c:3314-3326`).  A buffer displayed only
+/// on another frame therefore gets no partial-width truncation: with
+/// truncate-lines nil GNU takes the exact walk, even though that other
+/// frame's window is narrow.
+#[test]
+fn move_to_column_other_frame_window_stays_exact_like_gnu() {
+    let (mut gnu, mut neo) = boot_pair("");
+    resize_both(&mut gnu, &mut neo, 40, 160);
+    read_both(&mut gnu, &mut neo, Duration::from_millis(700));
+    eval_expression(
+        &mut gnu,
+        &mut neo,
+        "(progn \
+           (let* ((orig (selected-frame)) \
+                  (buf (get-buffer-create \"*p640-s2-of*\")) \
+                  (other (make-frame))) \
+             (select-frame other) \
+             (set-window-buffer (selected-window) buf) \
+             (set-buffer buf) \
+             (erase-buffer) \
+             (insert (make-string 1000 ?a)) \
+             (insert \"\\t\") \
+             (insert (make-string 200000 ?a)) \
+             (insert \"\\n\") \
+             (setq truncate-lines nil) \
+             (setq truncate-partial-width-windows 50) \
+             (split-window (selected-window) 40) \
+             (set-window-buffer (selected-window) buf) \
+             (goto-char 1) \
+             (redisplay t) \
+             (select-frame orig) \
+             (set-buffer buf) \
+             (goto-char 1)) \
+           nil)",
+    );
+    read_both(&mut gnu, &mut neo, Duration::from_secs(1));
+    let (gnu_value, neo_value) = paired_message(
+        &mut gnu,
+        &mut neo,
+        "P640OF",
+        "(list (move-to-column 150000) (point))",
+    );
+    eprintln!("issue#640 other-frame partial width: GNU={gnu_value} NEO={neo_value}");
+    assert_eq!(
+        gnu_value, "(150000 149994)",
+        "no window in the selected frame: GNU walks exactly (point 149994)"
+    );
+    assert_eq!(
+        neo_value, gnu_value,
+        "another frame's window must not enable the partial-width shortcut"
+    );
+}
