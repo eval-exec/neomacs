@@ -264,6 +264,28 @@ pub fn builtin_make_local_variable(ctx: &mut super::eval::Context, args: &[Value
                 buf.set_buffer_local_by_sym_id(resolved, default_value);
             }
         }
+        // GNU loads a forwarded variable's new binding at once, so the C
+        // variable holds this buffer's value (`src/data.c:2334-2342`).
+        if ctx
+            .obarray
+            .blv(resolved)
+            .is_some_and(|blv| blv.fwd.is_some())
+        {
+            let alist = ctx
+                .edit
+                .buffers
+                .get(current_id)
+                .map_or(Value::NIL, |buf| buf.local_var_alist_value());
+            let _ = ctx.obarray.find_symbol_value_in_buffer(
+                resolved,
+                Some(current_id),
+                current_buf,
+                alist,
+                None,
+                0,
+                None,
+            );
+        }
     }
     Ok(args[0])
 }

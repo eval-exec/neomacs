@@ -1852,17 +1852,11 @@ impl Context {
         obarray.make_special("window-scroll-functions");
 
         // --- src/alloc.c: syms_of_alloc ---
-        // GC accounting DEFVAR_INTs (monotonic allocation counters). neomacs
-        // does not track them yet, so seed 0 so `boundp' agrees with GNU.
-        for name in [
-            "cons-cells-consed",
-            "floats-consed",
-            "vector-cells-consed",
-            "symbols-consed",
-            "string-chars-consed",
-            "intervals-consed",
-        ] {
-            obarray.define_int_variable(name, 0);
+        // GC accounting DEFVAR_INTs (monotonic allocation counters): each
+        // forwards to the counter `memory-use-counts' reports.  Idempotent
+        // with `alloc::register_bootstrap_vars', which declares the same table.
+        for (name, counter) in neovm_value::alloc::ALLOCATION_COUNTER_VARIABLES {
+            obarray.define_counter_variable(name, counter);
         }
         // --- src/profiler.c: syms_of_profiler ---
         obarray.define_int_variable("profiler-max-stack-depth", 16);

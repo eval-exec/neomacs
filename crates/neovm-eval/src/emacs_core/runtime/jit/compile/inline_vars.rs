@@ -199,6 +199,18 @@ impl FwdKind {
         }
     }
 
+    /// The fast path for one descriptor, if it has one.
+    ///
+    /// An integer forwarder that reads an allocation counter (GNU's
+    /// `*-consed` variables) keeps no value at [`Self::value_offset`], so it
+    /// takes the runtime path like a per-buffer slot.
+    fn of_descriptor(fwd: neovm_value::forward::FwdRef) -> Option<Self> {
+        if fwd.reads_allocation_counter() {
+            return None;
+        }
+        Self::of(fwd.ty())
+    }
+
     /// Where the descriptor keeps its value.
     #[doc(hidden)]
     pub fn value_offset(self) -> usize {
@@ -261,16 +273,16 @@ fn classify(sym: u32) -> Option<VarSite> {
                     // owns for its life.
                     let blv = unsafe { &*blv_ptr };
                     match blv.fwd {
-                        Some(fwd) if FwdKind::of(fwd.ty()).is_none() => VarShape::Plain,
+                        Some(fwd) if FwdKind::of_descriptor(fwd).is_none() => VarShape::Plain,
                         fwd => VarShape::Localized {
                             blv: blv_ptr as usize,
                             fwd: fwd.map_or(0, |f| f.address()),
-                            rule: fwd.and_then(|f| FwdKind::of(f.ty())),
+                            rule: fwd.and_then(FwdKind::of_descriptor),
                             remembered_defcell: None,
                         },
                     }
                 }
-                ValueCell::Forwarded(fwd) => match FwdKind::of(fwd.ty()) {
+                ValueCell::Forwarded(fwd) => match FwdKind::of_descriptor(fwd) {
                     Some(kind) => VarShape::Forwarded {
                         desc: fwd.address(),
                         kind,

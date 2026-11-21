@@ -79,6 +79,7 @@ mod condition;
 mod conditional_binding_macros_semantics;
 mod cons_list_dotted_comprehensive;
 mod cons_mutation_edge_semantics;
+mod consed_counter_bindings;
 mod conversion_format_semantics;
 mod copy;
 mod count_lines_advanced;
