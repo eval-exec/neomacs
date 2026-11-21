@@ -1293,7 +1293,7 @@ fn single_character(name: &str) -> Option<char> {
 /// Translate an Emacs-style key name to the bytes a terminal sends.
 ///
 /// Supports: `C-x`, `M-x`, `C-M-x`, `RET`, `TAB`, `ESC`, `SPC`,
-/// `DEL`, and plain characters.
+/// `DEL`, xterm function keys `F5`-`F8`/`F10`, and plain characters.
 pub fn emacs_key(key: &str) -> Vec<u8> {
     if let Some(named) = TerminalNamedKey::parse(key) {
         return vec![named.terminal_byte()];
@@ -1304,6 +1304,10 @@ pub fn emacs_key(key: &str) -> Vec<u8> {
         "C-M-SPC" | "C-M-@" => return vec![0x1b, 0x00],
         "C-/" | "C-_" => return vec![0x1f],
         "C-M-/" | "C-M-_" => return vec![0x1b, 0x1f],
+        "F5" | "f5" => return vec![0x1b, b'[', b'1', b'5', b'~'],
+        "F6" | "f6" => return vec![0x1b, b'[', b'1', b'7', b'~'],
+        "F7" | "f7" => return vec![0x1b, b'[', b'1', b'8', b'~'],
+        "F8" | "f8" => return vec![0x1b, b'[', b'1', b'9', b'~'],
         "F10" | "f10" => return vec![0x1b, b'[', b'2', b'1', b'~'],
         "UP" | "<up>" => return vec![0x1b, b'[', b'A'],
         "DOWN" | "<down>" => return vec![0x1b, b'[', b'B'],

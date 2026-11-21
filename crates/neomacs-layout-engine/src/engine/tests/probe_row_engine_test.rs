@@ -269,3 +269,314 @@ fn probe_row_is_absent_when_the_walk_ends_at_zv() {
         "an EOB walk has no following screen row to probe"
     );
 }
+
+// ── N1 (peer 6385): every input of GNU's matrix-reuse predicate ──────────
+//
+// `current_matrix_up_to_date_p` (src/xdisp.c:20557-20565) is
+//
+//   w->window_end_valid
+//   && !current_buffer->clip_changed
+//   && !current_buffer->prevent_redisplay_optimizations_p
+//   && !window_outdated (w)
+//   && !composition_break_at_point
+//   && !hscrolling_current_line_p (w);
+//
+// R14 gated the probe on the first term and the
+// `windows_or_buffers_changed` companion only.  Neo never clears
+// `window_end_valid` for the three inputs below, so the gate reads their own
+// witnesses instead.  Each unit row pins one input in isolation.
+
+/// `clip_changed` alone makes the matrix ineligible.
+#[test]
+fn matrix_reuse_gate_refuses_clip_changed() {
+    use super::super::GnuMatrixReuse;
+    assert_eq!(
+        GnuMatrixReuse::at_entry(true, false, false, false, false, false),
+        GnuMatrixReuse::Eligible
+    );
+    assert_eq!(
+        GnuMatrixReuse::at_entry(true, false, false, true, false, false),
+        GnuMatrixReuse::NotEligible
+    );
+}
+
+/// `prevent_redisplay_optimizations_p` alone makes the matrix ineligible.
+#[test]
+fn matrix_reuse_gate_refuses_prevent_redisplay_optimizations() {
+    use super::super::GnuMatrixReuse;
+    assert_eq!(
+        GnuMatrixReuse::at_entry(true, false, false, false, false, false),
+        GnuMatrixReuse::Eligible
+    );
+    assert_eq!(
+        GnuMatrixReuse::at_entry(true, false, false, false, true, false),
+        GnuMatrixReuse::NotEligible
+    );
+}
+
+/// `window_outdated` alone makes the matrix ineligible.
+#[test]
+fn matrix_reuse_gate_refuses_window_outdated() {
+    use super::super::GnuMatrixReuse;
+    assert_eq!(
+        GnuMatrixReuse::at_entry(true, false, false, false, false, false),
+        GnuMatrixReuse::Eligible
+    );
+    assert_eq!(
+        GnuMatrixReuse::at_entry(true, false, false, false, false, true),
+        GnuMatrixReuse::NotEligible
+    );
+}
+
+/// GNU `window_outdated` compares `w->last_overlay_modified` with
+/// `BUF_OVERLAY_MODIFF` (src/window.c:231-236).  Making and deleting an
+/// overlay returns its SET to the previous content, and Neo's own reuse is
+/// keyed on that set digest, but the overlay tick still moved: GNU disables
+/// its optimizations, so the probe row must run even on a cursor-only pass.
+#[test]
+fn probe_row_runs_when_an_overlay_tick_makes_the_window_outdated() {
+    let text = ("a".repeat(150) + "\n").repeat(60);
+    let (mut eval, frame_id, buffer_id, window_id) = tty_probe_frame(&text, 160, 37);
+    eval.edit.buffers.set_current(buffer_id);
+    for index in 0..60i64 {
+        let start = index * 151 + 1;
+        neovm_edit::emacs_core::textprop::builtin_put_text_property(
+            &mut eval,
+            vec![
+                Value::fixnum(start),
+                Value::fixnum(start + 150),
+                Value::symbol("p640"),
+                Value::fixnum(index),
+            ],
+        )
+        .expect("put the p640 text property");
+    }
+    install_recording_fontification_hook(&mut eval, "p640-outdated-calls");
+    let mut engine = LayoutEngine::new_without_font_metrics();
+    engine.layout_frame_rust(&mut eval, frame_id);
+    let buffer_z = eval
+        .buffer_manager()
+        .get(buffer_id)
+        .expect("buffer")
+        .point_max_lisp_char_pos();
+    let window_end = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .find_window(window_id)
+        .expect("selected window")
+        .window_end_charpos(buffer_z)
+        .expect("leaf window");
+    // Count only the second walk's hook entries.
+    eval.eval_str("(setq p640-outdated-calls nil)")
+        .expect("reset the call log");
+    // The overlay set returns to its previous (empty) content: Neo's digest
+    // still matches, but GNU's OVERLAY_MODIFF advanced.
+    eval.eval_str("(let ((ov (make-overlay 1 2))) (delete-overlay ov))")
+        .expect("bump the overlay tick without changing the overlay set");
+    eval.eval_str("(goto-char 5)").expect("move point");
+    engine.layout_frame_rust(&mut eval, frame_id);
+    let stats = engine.last_layout_stats().clone();
+    // Only the TARGET window's class counts.  The still mini-window also
+    // adds enabled body rows to the frame-wide `reused_rows`, so the reuse
+    // counters alone would not prove that this window took a fast path.
+    assert!(
+        stats.cursor_only_windows > 0,
+        "the target window must take the cursor-only class: {stats:?}"
+    );
+    let positions = recorded_fontification_positions(&mut eval, "p640-outdated-calls");
+    assert!(
+        positions.iter().any(|pos| *pos >= window_end.as_i64()),
+        "an outdated window must still enter the probe row past window-end {}: {positions:?}",
+        window_end.as_i64()
+    );
+}
+
+/// `force-mode-line-update` sets `prevent_redisplay_optimizations_p` on the
+/// displayed buffer (src/buffer.c:1538-1545) even though no text changed.
+/// The probe row must therefore run on the next cursor-only pass.
+#[test]
+fn probe_row_runs_when_force_mode_line_update_prevents_reuse() {
+    let text = ("a".repeat(150) + "\n").repeat(60);
+    let (mut eval, frame_id, buffer_id, window_id) = tty_probe_frame(&text, 160, 37);
+    eval.edit.buffers.set_current(buffer_id);
+    for index in 0..60i64 {
+        let start = index * 151 + 1;
+        neovm_edit::emacs_core::textprop::builtin_put_text_property(
+            &mut eval,
+            vec![
+                Value::fixnum(start),
+                Value::fixnum(start + 150),
+                Value::symbol("p640"),
+                Value::fixnum(index),
+            ],
+        )
+        .expect("put the p640 text property");
+    }
+    install_recording_fontification_hook(&mut eval, "p640-prevent-calls");
+    let mut engine = LayoutEngine::new_without_font_metrics();
+    engine.layout_frame_rust(&mut eval, frame_id);
+    let buffer_z = eval
+        .buffer_manager()
+        .get(buffer_id)
+        .expect("buffer")
+        .point_max_lisp_char_pos();
+    let window_end = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .find_window(window_id)
+        .expect("selected window")
+        .window_end_charpos(buffer_z)
+        .expect("leaf window");
+    eval.eval_str("(setq p640-prevent-calls nil)")
+        .expect("reset the call log");
+    eval.eval_str("(force-mode-line-update)")
+        .expect("raise the GNU prevent flag");
+    eval.eval_str("(goto-char 5)").expect("move point");
+    engine.layout_frame_rust(&mut eval, frame_id);
+    let stats = engine.last_layout_stats().clone();
+    // Only the TARGET window's class counts.  The still mini-window also
+    // adds enabled body rows to the frame-wide `reused_rows`, so the reuse
+    // counters alone would not prove that this window took a fast path.
+    assert!(
+        stats.cursor_only_windows > 0,
+        "the target window must take the cursor-only class: {stats:?}"
+    );
+    let positions = recorded_fontification_positions(&mut eval, "p640-prevent-calls");
+    assert!(
+        positions.iter().any(|pos| *pos >= window_end.as_i64()),
+        "a prevent-optimizations pass must still enter the probe row past window-end {}: {positions:?}",
+        window_end.as_i64()
+    );
+}
+
+/// GNU's predicate reads `clip_changed` only after `reconsider_clip_changes`
+/// has run (src/xdisp.c:20486, :17271-17277).  A narrowing that is restored
+/// before the redisplay leaves the durable witness set, but the window
+/// matrix still matches the buffer and its BEGV/ZV, so GNU clears the flag
+/// and stays on its cursor-movement path: it never scans the probe row.
+/// Font-lock's `save-restriction`/`widen` shape runs on nearly every
+/// keystroke, so turning it into a probe-row hook call is a hot-path
+/// divergence.
+#[test]
+fn probe_row_stays_out_after_a_restored_narrowing() {
+    let text = ("a".repeat(150) + "\n").repeat(60);
+    let (mut eval, frame_id, buffer_id, window_id) = tty_probe_frame(&text, 160, 37);
+    eval.edit.buffers.set_current(buffer_id);
+    for index in 0..60i64 {
+        let start = index * 151 + 1;
+        neovm_edit::emacs_core::textprop::builtin_put_text_property(
+            &mut eval,
+            vec![
+                Value::fixnum(start),
+                Value::fixnum(start + 150),
+                Value::symbol("p640"),
+                Value::fixnum(index),
+            ],
+        )
+        .expect("put the p640 text property");
+    }
+    install_recording_fontification_hook(&mut eval, "p640-restored-narrow-calls");
+    let mut engine = LayoutEngine::new_without_font_metrics();
+    engine.layout_frame_rust(&mut eval, frame_id);
+    let buffer_z = eval
+        .buffer_manager()
+        .get(buffer_id)
+        .expect("buffer")
+        .point_max_lisp_char_pos();
+    let window_end = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .find_window(window_id)
+        .expect("selected window")
+        .window_end_charpos(buffer_z)
+        .expect("leaf window");
+    eval.eval_str("(setq p640-restored-narrow-calls nil)")
+        .expect("reset the call log");
+    // The witness is raised by both bounds changes; the matrix still matches
+    // the restored restriction, so `reconsider_clip_changes` clears it.
+    eval.eval_str("(narrow-to-region 1 8000)")
+        .expect("narrow the buffer");
+    eval.eval_str("(widen)").expect("restore the restriction");
+    eval.eval_str("(goto-char 5)").expect("move point");
+    engine.layout_frame_rust(&mut eval, frame_id);
+    let stats = engine.last_layout_stats().clone();
+    assert!(
+        stats.cursor_only_windows > 0,
+        "a restored restriction that matches the matrix keeps the cursor-only class: {stats:?}"
+    );
+    let positions = recorded_fontification_positions(&mut eval, "p640-restored-narrow-calls");
+    assert!(
+        !positions.iter().any(|pos| *pos >= window_end.as_i64()),
+        "a restored restriction must not scan the probe row past window-end {}: {positions:?}",
+        window_end.as_i64()
+    );
+}
+
+/// A restriction that persists changes BEGV/ZV away from the matrix the
+/// window displayed: `reconsider_clip_changes` cannot clear `clip_changed`,
+/// GNU's predicate is false, and `try_window (..., TRY_WINDOW_CHECK_MARGINS)`
+/// scans the probe row.
+#[test]
+fn probe_row_runs_after_a_persistent_narrowing() {
+    let text = ("a".repeat(150) + "\n").repeat(60);
+    let (mut eval, frame_id, buffer_id, window_id) = tty_probe_frame(&text, 160, 37);
+    eval.edit.buffers.set_current(buffer_id);
+    for index in 0..60i64 {
+        let start = index * 151 + 1;
+        neovm_edit::emacs_core::textprop::builtin_put_text_property(
+            &mut eval,
+            vec![
+                Value::fixnum(start),
+                Value::fixnum(start + 150),
+                Value::symbol("p640"),
+                Value::fixnum(index),
+            ],
+        )
+        .expect("put the p640 text property");
+    }
+    install_recording_fontification_hook(&mut eval, "p640-persistent-narrow-calls");
+    let mut engine = LayoutEngine::new_without_font_metrics();
+    engine.layout_frame_rust(&mut eval, frame_id);
+    let buffer_z = eval
+        .buffer_manager()
+        .get(buffer_id)
+        .expect("buffer")
+        .point_max_lisp_char_pos();
+    let window_end = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .find_window(window_id)
+        .expect("selected window")
+        .window_end_charpos(buffer_z)
+        .expect("leaf window");
+    eval.eval_str("(setq p640-persistent-narrow-calls nil)")
+        .expect("reset the call log");
+    // ZV moves away from the matrix's value; the first 37 rows (and so the
+    // published window end) stay inside the restriction.
+    eval.eval_str("(narrow-to-region 1 8000)")
+        .expect("narrow the buffer");
+    eval.eval_str("(goto-char 5)").expect("move point");
+    engine.layout_frame_rust(&mut eval, frame_id);
+    // Neo always fully rebuilds on a ZV-only move: `WindowDelta::between`
+    // (incremental_layout.rs:124-140) treats a `buffer_size` change as
+    // `text_changed`, so this is a tripwire on the class, NOT a test of the
+    // `clip_changed` refuse-half -- a Full walk probes regardless of the
+    // gate.  Count only the target window: the mini-window is also `Full`
+    // unless it stood still, hence the exact pair.
+    let stats = engine.last_layout_stats().clone();
+    assert_eq!(
+        (stats.full_windows, stats.mini_window_still),
+        (1, 1),
+        "a persistent restriction must be the only full-class window: {stats:?}"
+    );
+    let positions = recorded_fontification_positions(&mut eval, "p640-persistent-narrow-calls");
+    assert!(
+        positions.iter().any(|pos| *pos >= window_end.as_i64()),
+        "a persistent restriction must scan the probe row past window-end {}: {positions:?}",
+        window_end.as_i64()
+    );
+}

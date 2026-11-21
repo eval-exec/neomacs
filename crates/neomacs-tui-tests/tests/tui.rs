@@ -186,6 +186,11 @@ mod tty_color_index;
 mod tty_input;
 #[path = "tty_menu_grid_oracle.rs"]
 mod tty_menu_grid_oracle;
+
+// N1 (peer 6385): the probe row after an overlay tick makes a window
+// outdated for GNU's matrix-reuse predicate.
+#[path = "p640n1_probe_row_oracle.rs"]
+mod p640n1_probe_row_oracle;
 #[cfg(test)]
 #[path = "tty_relay.rs"]
 mod tty_relay;

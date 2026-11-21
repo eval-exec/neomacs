@@ -4334,6 +4334,20 @@ impl LayoutEngine {
                         RetainedWindowMatrix {
                             matrix: entry.matrix.clone(),
                             key: displayed_key,
+                            // The buffer's prevent-optimizations revision at
+                            // this accepted display: its current value now
+                            // consumes every raise up to here, exactly as
+                            // mark_window_display_accurate_1 clears GNU's flag
+                            // (src/xdisp.c:18295-18297).
+                            redisplay_optimizations: evaluator
+                                .prevent_redisplay_optimizations_revision(
+                                    neovm_core::buffer::BufferId(key.buffer_id),
+                                ),
+                            buffer_modiff: evaluator
+                                .buffer_manager()
+                                .get(neovm_core::buffer::BufferId(key.buffer_id))
+                                .map(neovm_core::buffer::Buffer::modified_tick)
+                                .unwrap_or(0),
                             // Every enabled body row now carries real
                             // MATRIX_ROW_START/END_CHARPOS values (empty lines
                             // hold their line's position; the EOB placeholder
@@ -6378,11 +6392,61 @@ impl LayoutEngine {
         // only when `current_matrix_up_to_date_p` held at entry AND the walk
         // actually took a reuse path.  Neo's own reuse of rows under a stale
         // window end is an optimization and must not hide the probe-row hook
-        // calls GNU makes.
+        // calls GNU makes.  The three per-buffer/per-window inputs of the
+        // predicate are read from the retained matrix of the last accepted
+        // display, the state GNU keeps in `w->current_matrix` plus
+        // `w->last_modified`/`last_overlay_modified`.
+        let retained_matrix = self
+            .retained_window_matrices
+            .get(&DisplayWindowId::new(params.window_id));
+        let buffer_state = evaluator.buffer_manager().get(buf_id);
+        // GNU `window_outdated` compares `w->last_modified` with `BUF_MODIFF`
+        // and `w->last_overlay_modified` with `BUF_OVERLAY_MODIFF`
+        // (src/window.c:231-236).  `modified_tick` is MODIFF, which also moves
+        // for `restore-buffer-modified-p` (src/buffer.c:1630-1631) and for
+        // text-property changes, so it is the faithful half; the retained
+        // matrix records it at acceptance, after redisplay's own fontification.
+        let window_outdated = match (retained_matrix, buffer_state) {
+            (Some(retained), Some(buffer)) => {
+                buffer.modified_tick() != retained.buffer_modiff
+                    || buffer.overlay_modified_tick() != retained.key.overlay_modified_tick
+            }
+            _ => false,
+        };
+        // GNU `prevent_redisplay_optimizations_p` has its own per-buffer
+        // witness (raised by set-buffer-redisplay and force-mode-line-update).
+        // A moved body revision -- GNU `force-window-update` -- refuses too.
+        let prevent_redisplay_optimizations = retained_matrix.is_some_and(|retained| {
+            retained.key.body_redisplay != evaluator.body_redisplay_revision(window_id, buf_id)
+                || retained.redisplay_optimizations
+                    != evaluator.prevent_redisplay_optimizations_revision(buf_id)
+        });
+        // GNU reads `clip_changed` only after `reconsider_clip_changes (w)`
+        // (src/xdisp.c:20486), which clears it when the window's current
+        // matrix already matches the buffer and its restriction
+        // (src/xdisp.c:17271-17277).  The retained key carries exactly those
+        // matrix facts: buffer identity, BEGV and ZV.
+        let clip_changed = match (retained_matrix, buffer_state) {
+            (Some(retained), Some(buffer)) => {
+                // The key stores BEGV and ZV as `CharPos0` counts
+                // (neovm_bridge.rs:2029-2031), so compare the same form.
+                let matrix_matches = window_end_valid_at_entry
+                    && retained.key.buffer_id == buf_id.0
+                    && retained.key.buffer_begv == buffer.point_min_char_pos().get() as i64
+                    && retained.key.buffer_size == buffer.point_max_char_pos().get() as i64;
+                buffer.mode_line_clip_changed() && !matrix_matches
+            }
+            (Some(_), None) => false,
+            (None, Some(buffer)) => buffer.mode_line_clip_changed(),
+            (None, None) => false,
+        };
         let gnu_matrix_reuse = GnuMatrixReuse::at_entry(
             window_end_valid_at_entry,
             evaluator.gnu_redisplay_refuses_cursor_movement(),
             self.frame_other_windows_changed,
+            clip_changed,
+            prevent_redisplay_optimizations,
+            window_outdated,
         );
         let finished_walk = match &render_outcome {
             BufferSourceRenderAttemptOutcome::Finished {
@@ -7048,15 +7112,49 @@ impl GnuMatrixReuse {
     /// `windows_or_buffers_changed` clears `w->window_end_valid` and forces
     /// the predicate false (src/xdisp.c:20576-20586); Neo represents that
     /// pending scope with `gnu_redisplay_refuses_cursor_movement`, and the
-    /// sibling-window change flag is its frame-local companion.  A window
-    /// whose end is stale from `set-window-start`, a buffer switch or a clip
-    /// change is `NotEligible` even if it later reuses rows internally.
+    /// sibling-window change flag is its frame-local companion.
+    ///
+    /// The predicate has three more per-buffer/per-window inputs
+    /// (src/xdisp.c:20557-20565):
+    ///
+    /// * `current_buffer->clip_changed` is not read raw: `redisplay_window`
+    ///   calls `reconsider_clip_changes (w)` first (src/xdisp.c:20486,
+    ///   :17271-17277), which clears it when the window's current matrix still
+    ///   matches the buffer and its BEGV/ZV.  Neo's caller performs the same
+    ///   reconsideration against the retained matrix's buffer/BEGV/ZV before
+    ///   passing `clip_changed`; the durable witness itself is never cleared
+    ///   here (the mode-line path owns that).
+    /// * `current_buffer->prevent_redisplay_optimizations_p` has its own
+    ///   per-buffer revision, raised by `set-buffer-redisplay`
+    ///   (src/xdisp.c:929) and both `force-mode-line-update` branches
+    ///   (src/buffer.c:1538-1545) and recorded on the accepted matrix outside
+    ///   its reuse key.  `force-window-update` additionally moves the body
+    ///   revision; either move is a refusal.  Chrome-only raises never move
+    ///   the body revision.
+    /// * `window_outdated (w)` -- `w->last_modified < BUF_MODIFF` or
+    ///   `w->last_overlay_modified < BUF_OVERLAY_MODIFF` (src/window.c:231-236).
+    ///   Neo records both at acceptance (`modified_tick`, the overlay tick).
+    ///   Its own reuse keys the overlay SET on a digest, so the raw overlay
+    ///   tick must be compared here: a touch that leaves the set identical is
+    ///   still "outdated" to GNU and still disables its optimizations.
+    ///
+    /// A window that is stale for any of these is `NotEligible` even if the
+    /// walk later reuses rows internally.
     fn at_entry(
         window_end_valid: bool,
         refuses_cursor_movement: bool,
         other_windows_changed: bool,
+        clip_changed: bool,
+        prevent_redisplay_optimizations: bool,
+        window_outdated: bool,
     ) -> Self {
-        if window_end_valid && !refuses_cursor_movement && !other_windows_changed {
+        if window_end_valid
+            && !refuses_cursor_movement
+            && !other_windows_changed
+            && !clip_changed
+            && !prevent_redisplay_optimizations
+            && !window_outdated
+        {
             Self::Eligible
         } else {
             Self::NotEligible

@@ -2934,6 +2934,40 @@ impl BodyRedisplayRevision {
     }
 }
 
+/// Per-buffer revision of GNU's `prevent_redisplay_optimizations_p`.
+///
+/// GNU raises that flag from the Lisp entry points that force a chrome
+/// redisplay without changing text — `set-buffer-redisplay`
+/// (src/xdisp.c:929) and both `force-mode-line-update` branches
+/// (src/buffer.c:1538-1545) — and clears it only when a redisplay finished
+/// accurately (`mark_window_display_accurate_1`, src/xdisp.c:18295-18297).
+/// The matrix-reuse predicate reads it (src/xdisp.c:20557-20565).
+///
+/// Neomacs records each raise as a per-buffer revision in the same map as
+/// [`BodyRedisplayRevision`].  The redisplay gate refuses reuse while the
+/// retained matrix predates the buffer's current revision; recording the
+/// value beside the retained matrix (outside its equality key) is how an
+/// accepted display consumes the raise, like GNU clearing the flag.  It is
+/// deliberately NOT the body revision: chrome-only work must never relayout
+/// body text.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct RedisplayOptimizationsRevision(u64);
+
+impl RedisplayOptimizationsRevision {
+    #[doc(hidden)]
+    pub const fn new(value: u64) -> Self {
+        Self(value)
+    }
+}
+
+/// The two per-buffer redisplay counters kept in one map entry: the body
+/// revision component and the GNU prevent-optimizations revision.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct BufferRedisplayRevisions {
+    pub(crate) body: u64,
+    pub(crate) prevent: u64,
+}
+
 /// Which window bodies an explicit `force-window-update` invalidated.
 ///
 /// Mirrors the three branches of GNU `Fforce_window_update`

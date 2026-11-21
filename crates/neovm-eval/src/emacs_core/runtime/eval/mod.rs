@@ -39,7 +39,8 @@ use crate::emacs_core::eval::data::window_layout_query::{
     take_layout_query_adapter,
 };
 use crate::emacs_core::eval::data::window_state::{
-    BodyRedisplayRevision, ForcedBodyRedisplay, FrameManager,
+    BodyRedisplayRevision, BufferRedisplayRevisions, ForcedBodyRedisplay, FrameManager,
+    RedisplayOptimizationsRevision,
 };
 pub use neomacs_display_protocol::GraphicalFaceAttribute;
 use neovm_edit::buffer::{BufferId, BufferManager, CharPos0, EmacsBytePos, LispCharPos1};
@@ -3593,7 +3594,7 @@ pub struct Context {
     pub(crate) face_table: WorldSlot<FaceTable>,
     pub input_progress: neomacs_display_protocol::input_progress::InputProgress,
     body_redisplay_by_window: FxHashMap<WindowId, u64>,
-    body_redisplay_by_buffer: FxHashMap<BufferId, u64>,
+    body_redisplay_by_buffer: FxHashMap<BufferId, BufferRedisplayRevisions>,
     /// Which windows' chrome (mode/header/tab line) must be re-generated on
     /// the next redisplay. See [`ChromeDirty`].
     chrome_dirty: crate::emacs_core::eval::data::window_state::ChromeDirty,

@@ -11,7 +11,7 @@
 use super::super::Context;
 use super::super::profiler::ProfilerState;
 use super::super::redisplay_hooks::RedisplayHookOwnership;
-use crate::emacs_core::eval::data::window_state::ChromeDirty;
+use crate::emacs_core::eval::data::window_state::{BufferRedisplayRevisions, ChromeDirty};
 use neovm_edit::buffer::BufferId;
 use neovm_edit::emacs_core::display_metrics::WindowId;
 use neovm_value::value::Value;
@@ -42,7 +42,7 @@ pub(crate) struct OwnerCarried {
     /// xdisp.c per-window redisplay revisions.
     body_redisplay_by_window: FxHashMap<WindowId, u64>,
     /// xdisp.c per-buffer redisplay revisions.
-    body_redisplay_by_buffer: FxHashMap<BufferId, u64>,
+    body_redisplay_by_buffer: FxHashMap<BufferId, BufferRedisplayRevisions>,
     /// xdisp.c chrome (mode/header/tab line) dirtiness.
     chrome_dirty: ChromeDirty,
     /// xdisp.c redisplay hook ownership (`redisplay` marks).

@@ -2581,6 +2581,13 @@ pub fn builtin_set_buffer_redisplay(
     // even when it is undisplayed. This is SOME, not global ALL.
     if let Some(buffer) = eval.edit.buffers.current_buffer_id() {
         eval.gnu_mark_buffer_mode_line(buffer);
+        // GNU xdisp.c:929 also sets
+        // `current_buffer->prevent_redisplay_optimizations_p`, which makes
+        // `current_matrix_up_to_date_p` false for every window showing the
+        // buffer (src/xdisp.c:20557-20586).  Raise it as the buffer's own
+        // witness: the body-redisplay revision is reserved for an explicit
+        // body invalidation and must not relayout text here.
+        eval.gnu_mark_buffer_prevent_redisplay_optimizations(buffer);
     }
     eval.invalidate_redisplay();
     Ok(Value::NIL)

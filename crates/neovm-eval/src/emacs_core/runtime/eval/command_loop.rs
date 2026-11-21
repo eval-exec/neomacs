@@ -875,8 +875,38 @@ impl Context {
 
     #[doc(hidden)]
     pub fn mark_buffer_body_redisplay(&mut self, buffer: BufferId) {
-        let counter = self.body_redisplay_by_buffer.entry(buffer).or_insert(0);
-        *counter = counter.wrapping_add(1);
+        let entry = self.body_redisplay_by_buffer.entry(buffer).or_default();
+        entry.body = entry.body.wrapping_add(1);
+    }
+
+    /// Raise GNU `prevent_redisplay_optimizations_p` on BUFFER.
+    ///
+    /// GNU sets the flag in `set-buffer-redisplay` (src/xdisp.c:929) and in
+    /// both `force-mode-line-update` branches (src/buffer.c:1538-1545); the
+    /// matrix-reuse predicate reads it for every window showing the buffer
+    /// (src/xdisp.c:20557-20565).  It is a redisplay-scope counter beside the
+    /// body revision, never a text or body invalidation: chrome-only work must
+    /// not relayout body text.
+    #[doc(hidden)]
+    pub fn gnu_mark_buffer_prevent_redisplay_optimizations(&mut self, buffer: BufferId) {
+        let entry = self.body_redisplay_by_buffer.entry(buffer).or_default();
+        entry.prevent = entry.prevent.wrapping_add(1);
+    }
+
+    /// The GNU prevent-optimizations revision for BUFFER.
+    ///
+    /// A retained matrix records the value it was produced under; the reuse
+    /// gate refuses while the buffer's current revision is newer.
+    pub fn prevent_redisplay_optimizations_revision(
+        &self,
+        buffer: BufferId,
+    ) -> RedisplayOptimizationsRevision {
+        RedisplayOptimizationsRevision::new(
+            self.body_redisplay_by_buffer
+                .get(&buffer)
+                .map(|entry| entry.prevent)
+                .unwrap_or(0),
+        )
     }
 
     /// The body-redisplay revision that any retained layout of BUFFER inside
@@ -894,7 +924,7 @@ impl Context {
                 .unwrap_or(0),
             self.body_redisplay_by_buffer
                 .get(&buffer)
-                .copied()
+                .map(|entry| entry.body)
                 .unwrap_or(0),
         )
     }

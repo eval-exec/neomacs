@@ -531,7 +531,7 @@ static_assertions::assert_impl_all!(WindowDisplaySnapshot: Send, Sync, Clone, st
 static_assertions::assert_not_impl_any!(WindowDisplaySnapshot: Copy);
 
 pub use neovm_eval::emacs_core::eval::data::window_state::{
-    BodyRedisplayRevision, ForcedBodyRedisplay,
+    BodyRedisplayRevision, ForcedBodyRedisplay, RedisplayOptimizationsRevision,
 };
 
 /// Canonical logical input identity for one speculative layout leaf.
