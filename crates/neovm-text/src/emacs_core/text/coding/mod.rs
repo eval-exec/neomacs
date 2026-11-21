@@ -1238,6 +1238,61 @@ fn explicit_charset_entries(
     Ok(out)
 }
 
+/// GNU's shift-jis and big5 charset-list shape checks, run at define time
+/// before registration (`src/coding.c:11341-11392`): shift-jis takes three
+/// or four charsets (dimensions 1, 1, 2[, 2]); big5 takes exactly two
+/// (dimensions 1, 2).  The error data is GNU's formatted `error` string,
+/// e.g. `(error "Dimension of charset X is not one")`.
+fn validate_charset_coding_list(coding_type: &str, charsets: &[SymId]) -> Result<(), Flow> {
+    let dimension_error = |charset: SymId, expected: &str| {
+        signal(
+            "error",
+            vec![Value::string(format!(
+                "Dimension of charset {} is not {}",
+                resolve_sym(charset),
+                expected
+            ))],
+        )
+    };
+    let check_dimension = |charset: SymId, expected: i64| {
+        if super::charset::charset_dimension_by_sym(charset) != Some(expected) {
+            return Err(dimension_error(
+                charset,
+                if expected == 1 { "one" } else { "two" },
+            ));
+        }
+        Ok(())
+    };
+    match coding_type {
+        "shift-jis" => {
+            if charsets.len() != 3 && charsets.len() != 4 {
+                return Err(signal(
+                    "error",
+                    vec![Value::string("There should be three or four charsets")],
+                ));
+            }
+            check_dimension(charsets[0], 1)?;
+            check_dimension(charsets[1], 1)?;
+            check_dimension(charsets[2], 2)?;
+            if let Some(&fourth) = charsets.get(3) {
+                check_dimension(fourth, 2)?;
+            }
+        }
+        "big5" => {
+            if charsets.len() != 2 {
+                return Err(signal(
+                    "error",
+                    vec![Value::string("There should be just two charsets")],
+                ));
+            }
+            check_dimension(charsets[0], 1)?;
+            check_dimension(charsets[1], 2)?;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 pub use crate::encoding::CodingSystemInfo;
 
 impl CodingSystemInfo {
@@ -2834,7 +2889,10 @@ fn compute_coding_ascii_compat(info: &CodingSystemInfo, mode: SymbolMode) -> boo
         // iso-8-2. A non-ASCII G0 keeps the caller's argument
         // (coding.c:11070), which is nil when the Lisp definition omits
         // `:ascii-compatible-p`.
-        "iso-2022" => {
+        "iso-2022" => coding_explicit_ascii_compat(info).unwrap_or_else(|| {
+            // A coding-system-put on a static registration is an explicit
+            // override (GNU coding.c:11570-11572 applies it to every
+            // coding system); otherwise use the live rule above.
             let category = compute_coding_category(info, mode);
             if !matches!(
                 category,
@@ -2849,10 +2907,10 @@ fn compute_coding_ascii_compat(info: &CodingSystemInfo, mode: SymbolMode) -> boo
             } else {
                 info.ascii_compatible_p
             }
-        }
+        }),
         "emacs-mule" | "raw-text" => true,
         "shift-jis" | "big5" if is_defined_coding(info) => info.ascii_compatible_p,
-        "shift-jis" | "big5" => first_ascii(),
+        "shift-jis" | "big5" => coding_explicit_ascii_compat(info).unwrap_or_else(first_ascii),
         // `undecided` is defined in C with `:ascii-compatible-p t`
         // (src/coding.c `syms_of_coding`), which is what
         // `coding-system-plist` already reports for it here.  Its attribute has
@@ -4220,6 +4278,10 @@ pub fn builtin_define_coding_system_internal_with_quoting_style(
         } else {
             (Vec::new(), false)
         };
+
+    // GNU validates a shift-jis/big5 list's size and dimensions before the
+    // coding system is registered (src/coding.c:11341-11392).
+    validate_charset_coding_list(resolve_sym(coding_type), &charset_list)?;
 
     // arg[4]: ascii-compatible-p
     let ascii_compatible_p = args[4].is_truthy();

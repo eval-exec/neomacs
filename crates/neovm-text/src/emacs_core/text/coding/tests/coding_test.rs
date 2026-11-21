@@ -1067,6 +1067,165 @@ fn big5_shift_jis_and_iso2022_ascii_compat_are_fixed_at_define_time() {
     assert!(!m.is_ascii_compatible("f2r2-iso7", mode));
 }
 
+/// F3: GNU validates a shift-jis/big5 charset list's size and dimensions at
+/// define time (src/coding.c:11341-11392).  The attested error data is
+/// pinned here; the oracle row covers the same forms end to end.
+#[test]
+fn shift_jis_and_big5_charset_list_shape_errors_match_gnu() {
+    crate::test_utils::init_test_tracing();
+    let mode = neovm_value::tagged::value::SymbolMode::Bare;
+    let define_charset = |name: &'static str, dimension: i64, code_space: [i64; 8]| {
+        let code_space = Value::vector(
+            code_space
+                .iter()
+                .map(|&value| Value::fixnum(value))
+                .collect(),
+        );
+        crate::emacs_core::charset::builtin_define_charset_internal(vec![
+            Value::symbol(name),
+            Value::fixnum(dimension),
+            code_space,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::T,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+        ])
+        .expect("define charset");
+    };
+    define_charset("f3-ch1", 1, [33, 126, 0, 0, 0, 0, 0, 0]);
+    define_charset("f3-ch2", 2, [161, 254, 64, 254, 0, 0, 0, 0]);
+
+    let mut m = mgr();
+    let define_error = |m: &mut CodingSystemManager,
+                        name: &'static str,
+                        coding_type: &'static str,
+                        charsets: Vec<Value>|
+     -> (String, Vec<Value>) {
+        let args = vec![
+            Value::symbol(name),
+            Value::char('x'),
+            Value::symbol(coding_type),
+            Value::list(charsets),
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::fixnum('?' as i64),
+            Value::NIL,
+            Value::list(vec![
+                Value::keyword(":name"),
+                Value::symbol(name),
+                Value::keyword(":docstring"),
+                Value::string(""),
+            ]),
+            Value::NIL,
+        ];
+        match builtin_define_coding_system_internal(m, args, mode).kinded() {
+            Err(FlowKind::Signal(signal)) => (signal.symbol_name().to_string(), signal.data),
+            Ok(_) => panic!("{coding_type} {name} should have been rejected"),
+            Err(other) => panic!("unexpected flow: {other:?}"),
+        }
+    };
+    let ch1 = || Value::symbol("f3-ch1");
+    let ch2 = || Value::symbol("f3-ch2");
+    let error_message = |message: &str| {
+        (
+            "error".to_string(),
+            vec![Value::string(message.to_string())],
+        )
+    };
+
+    assert_eq!(
+        define_error(&mut m, "f3-sj2", "shift-jis", vec![ch1(), ch2()]),
+        error_message("There should be three or four charsets")
+    );
+    assert_eq!(
+        define_error(&mut m, "f3-sj-dim1", "shift-jis", vec![ch1(), ch2(), ch1()]),
+        error_message("Dimension of charset f3-ch2 is not one")
+    );
+    assert_eq!(
+        define_error(&mut m, "f3-sj-dim2", "shift-jis", vec![ch1(), ch1(), ch1()]),
+        error_message("Dimension of charset f3-ch1 is not two")
+    );
+    assert_eq!(
+        define_error(
+            &mut m,
+            "f3-sj4",
+            "shift-jis",
+            vec![ch1(), ch1(), ch2(), ch1()]
+        ),
+        error_message("Dimension of charset f3-ch1 is not two")
+    );
+    assert_eq!(
+        define_error(&mut m, "f3-big5-3", "big5", vec![ch1(), ch2(), ch1()]),
+        error_message("There should be just two charsets")
+    );
+    assert_eq!(
+        define_error(&mut m, "f3-big5-dim1", "big5", vec![ch2(), ch2()]),
+        error_message("Dimension of charset f3-ch2 is not one")
+    );
+    assert_eq!(
+        define_error(&mut m, "f3-big5-dim2", "big5", vec![ch1(), ch1()]),
+        error_message("Dimension of charset f3-ch1 is not two")
+    );
+    assert_eq!(
+        define_error(
+            &mut m,
+            "f3-undefined",
+            "charset",
+            vec![Value::symbol("f3-no-such-charset")]
+        ),
+        (
+            "wrong-type-argument".to_string(),
+            vec![
+                Value::symbol("charsetp"),
+                Value::symbol("f3-no-such-charset")
+            ],
+        )
+    );
+
+    // The valid shapes still register.
+    let define = |m: &mut CodingSystemManager,
+                  name: &'static str,
+                  coding_type: &'static str,
+                  charsets: Vec<Value>| {
+        let args = vec![
+            Value::symbol(name),
+            Value::char('x'),
+            Value::symbol(coding_type),
+            Value::list(charsets),
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::fixnum('?' as i64),
+            Value::NIL,
+            Value::list(vec![
+                Value::keyword(":name"),
+                Value::symbol(name),
+                Value::keyword(":docstring"),
+                Value::string(""),
+            ]),
+            Value::NIL,
+        ];
+        builtin_define_coding_system_internal(m, args, mode).expect("valid charset list");
+    };
+    define(&mut m, "f3-sj-ok", "shift-jis", vec![ch1(), ch1(), ch2()]);
+    define(&mut m, "f3-big5-ok", "big5", vec![ch1(), ch2()]);
+}
+
 #[test]
 fn coding_system_base_with_suffix() {
     crate::test_utils::init_test_tracing();
