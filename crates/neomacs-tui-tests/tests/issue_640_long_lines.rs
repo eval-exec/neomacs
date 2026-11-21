@@ -661,3 +661,55 @@ fn whole_scroll_runs_no_fontification() {
         "Neo's scroll path must not run fontification Lisp"
     );
 }
+
+/// Site 4: GNU `Frecenter` uses line-based vmotion when the buffer's
+/// long-line flag is set (`src/window.c:7293-7296`, :7400-7434), ignoring
+/// pixel line heights; point does not move.  The parent Neo path runs the
+/// display iterator.
+#[test]
+fn recenter_long_line_matches_gnu() {
+    let (mut gnu, mut neo) = boot_pair("");
+    resize_both(&mut gnu, &mut neo, 40, 160);
+    read_both(&mut gnu, &mut neo, Duration::from_millis(700));
+    eval_expression(
+        &mut gnu,
+        &mut neo,
+        "(progn \
+           (switch-to-buffer (get-buffer-create \"*p640-s4*\")) \
+           (erase-buffer) \
+           (insert (make-string 200000 ?a)) \
+           (insert \"\\n\") \
+           (let ((i 0)) (while (< i 400) (insert (format \"L%03d line\\n\" i)) (setq i (1+ i)))) \
+           (setq truncate-lines t) \
+           (goto-char 1) \
+           (forward-line 299) \
+           (redisplay t) \
+           nil)",
+    );
+    read_both(&mut gnu, &mut neo, Duration::from_secs(1));
+    let (gnu_value, neo_value) = paired_message(
+        &mut gnu,
+        &mut neo,
+        "P640S4",
+        "(let* ((ht (window-body-height)) (pt (point))) \
+           (recenter) \
+           (let ((center-ok \
+                  (list (= (point) pt) \
+                        (save-excursion (goto-char pt) (forward-line (- (/ ht 2))) \
+                                        (= (window-start) (point)))))) \
+             (recenter -5) \
+             (list center-ok \
+                   (= (point) pt) \
+                   (save-excursion (goto-char pt) (forward-line (- ht 5)) \
+                                   (= (window-start) (point))))))",
+    );
+    eprintln!("issue#640 recenter: GNU={gnu_value} NEO={neo_value}");
+    assert_eq!(
+        gnu_value, "((t t) t t)",
+        "GNU's line-based recenter placement"
+    );
+    assert_eq!(
+        neo_value, gnu_value,
+        "recenter must match GNU on a flag buffer"
+    );
+}

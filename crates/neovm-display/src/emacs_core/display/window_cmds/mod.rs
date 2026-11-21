@@ -7074,6 +7074,70 @@ pub fn builtin_recenter(
         crate::emacs_core::dispnew::pure::publish_gnu_frame_redraw(eval, fid);
     }
 
+    // GNU Frecenter (src/window.c:7293-7296) uses the display-code path only
+    // when the buffer's long-line flag is nil; the fallback at :7400-7434 is
+    // line-based: center -> ht/2, negative -> += ht, clip to the scroll
+    // margins, then vmotion (PT, -iarg).  Point itself is not moved.
+    if eval
+        .edit
+        .buffers
+        .get(buffer_id)
+        .is_some_and(|buffer| buffer.long_line_optimizations_p())
+    {
+        let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+        let body_height = window_body_height_impl(frames, buffers, vec![])
+            .ok()
+            .and_then(|value| value.as_fixnum())
+            .unwrap_or(1)
+            .max(1);
+        let margin = crate::window::ScrollMargin::from_lisp_values(
+            eval.visible_variable_value_or_nil("scroll-margin")
+                .as_fixnum()
+                .unwrap_or(0),
+            eval.visible_variable_value_or_nil("maximum-scroll-margin")
+                .as_float(),
+        )
+        .lines(body_height);
+        let iarg = placement
+            .canonical_rows(body_height)
+            .clamp(margin, (body_height - margin - 1).max(margin));
+        let (pos, _) =
+            neovm_edit::emacs_core::indent::vmotion_target(eval, buffer_id, pt, None, -iarg)?;
+        {
+            let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+            let Some(buf) = buffers.get(buffer_id) else {
+                return Ok(Value::NIL);
+            };
+            let pos_lisp = buf.emacs_byte_pos_to_lisp_char_pos(pos).as_i64();
+            if let Some(clamped) =
+                clamped_window_position_in_state(frames, buffers, fid, wid, pos_lisp)
+                && let Some(window) = frames
+                    .get_mut(fid)
+                    .and_then(|frame| frame.find_window_mut(wid))
+            {
+                crate::window::window_markers::set_window_start_with_marker(
+                    buffers, window, clamped,
+                );
+                window.invalidate_window_end();
+                if let Window::Leaf {
+                    vscroll,
+                    preserve_vscroll_p,
+                    ..
+                } = window
+                {
+                    *vscroll = 0;
+                    *preserve_vscroll_p = false;
+                }
+            }
+        }
+        eval.gnu_mark_window_redisplay(wid);
+        match redraw {
+            RecenterRedraw::Window => eval.invalidate_redisplay(),
+            RecenterRedraw::FullFrame => {}
+        }
+        return Ok(Value::NIL);
+    }
+
     // Move back `target_line` SCREEN lines, through the same display-motion
     // seam `vertical-motion` and window scrolling use. GNU's positive-ARG
     // branch runs the display iterator for exactly this --  `start_display`,

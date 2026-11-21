@@ -2181,3 +2181,85 @@ fn scroll_up_long_line_work_does_not_grow_with_the_line() {
         "the scroll must bound its work by window lines: {work:?}"
     );
 }
+
+/// A long truncated first line, 400 short lines, and point on line 300.
+fn long_line_recenter_context(long_len: usize) -> Context {
+    let mut ev = crate::test_utils::new_context();
+    let buffer = ev.edit.buffers.current_buffer_id().expect("current buffer");
+    {
+        let buf = ev.edit.buffers.get_mut(buffer).expect("buffer");
+        buf.insert("a".repeat(long_len).as_str());
+        buf.insert("\n");
+        let mut filler = String::new();
+        for index in 0..400 {
+            filler.push_str(&format!("L{index:03} line\n"));
+        }
+        buf.insert(&filler);
+        buf.set_buffer_local("truncate-lines", Value::T);
+    }
+    assert!(
+        ev.edit
+            .buffers
+            .get_mut(buffer)
+            .expect("buffer")
+            .refresh_long_line_optimizations(50_000),
+        "the long first line must set the flag"
+    );
+    ev.eval_str("(goto-char 1) (forward-line 299)")
+        .expect("point");
+    ev
+}
+
+/// GNU `Frecenter`'s long-line fallback (`src/window.c:7293-7296`,
+/// :7400-7434): center puts the start `ht/2` lines above point, a negative
+/// ARG counts up from the bottom, and point does not move.  The parent path
+/// runs the display iterator instead.
+#[test]
+fn recenter_long_line_uses_gnu_line_motion() {
+    crate::test_utils::init_test_tracing();
+    let results = eval_with_frame(
+        || long_line_recenter_context(200_000),
+        "(let* ((ht (window-body-height))
+                (pt (point)))
+           (recenter)
+           (let ((center-ok
+                  (list (= (point) pt)
+                        (save-excursion
+                          (goto-char pt)
+                          (forward-line (- (/ ht 2)))
+                          (= (window-start) (point))))))
+             (recenter -5)
+             (list center-ok
+                   (= (point) pt)
+                   (save-excursion
+                     (goto-char pt)
+                     (forward-line (- ht 5))
+                     (= (window-start) (point))))))",
+    );
+    assert_eq!(
+        results[0], "OK ((t t) t t)",
+        "recenter must take GNU's line-based fallback on a flag buffer: {results:?}"
+    );
+}
+
+/// The fallback is one vmotion pass; its work does not grow with the long
+/// line.
+#[test]
+fn recenter_long_line_work_does_not_grow_with_the_line() {
+    crate::test_utils::init_test_tracing();
+    let mut work = Vec::new();
+    for long_len in [200_000usize, 400_000] {
+        let mut ev = long_line_recenter_context(long_len);
+        neovm_edit::test_support::authority::reset_screen_line_scan_steps_for_test();
+        ev.eval_str("(recenter)").expect("recenter");
+        work.push(neovm_edit::test_support::authority::screen_line_scan_steps());
+    }
+    assert_eq!(
+        work[0], work[1],
+        "recenter work must not grow with the long line: {work:?}"
+    );
+    assert!(
+        work[0] > 0 && work[0] <= 1024,
+        "recenter must bound its work by window lines: {work:?}"
+    );
+}
