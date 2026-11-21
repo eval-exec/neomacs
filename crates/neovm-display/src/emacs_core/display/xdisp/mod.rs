@@ -9570,6 +9570,13 @@ fn next_declining_fontification_stop(
             }
         }
     }
+    // DIVERGENCE (recorded, no fix in this slice): GNU's no-delimiter branch
+    // can reuse a previously computed it->stop_charpos instead of
+    // POS + TEXT_PROP_DISTANCE_LIMIT (src/xdisp.c:4407-4409).  This
+    // non-iterator path has no retained stop_charpos and keeps the limit.
+    // The declining-hook rows that compare stop positions all contain
+    // delimiters; the no-delimiter case (a single long line) exposes no
+    // position assertion, and this path still never repeats a position.
     if stop <= pos {
         return end;
     }

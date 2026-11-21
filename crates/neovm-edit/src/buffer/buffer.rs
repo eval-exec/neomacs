@@ -4218,6 +4218,11 @@ impl Buffer {
             return None;
         }
         let mut found = None;
+        // A range straddling the gap buffer's hole is delivered as two
+        // chunks: [start..gap_start) then [gap_end..end).  `index` is local to
+        // the current chunk, so track the logical offset across chunks instead
+        // of using range.start() for both.
+        let mut offset = range.start().get();
         let _ = self
             .text
             .for_each_emacs_byte_range_chunk(range, |chunk| -> Result<(), ()> {
@@ -4225,9 +4230,10 @@ impl Buffer {
                     .iter()
                     .position(|byte| matches!(byte, b' ' | b'\t' | b'\n' | b'\x0c'))
                 {
-                    found = Some(EmacsBytePos::new(range.start().get() + index));
+                    found = Some(EmacsBytePos::new(offset + index));
                     return Err(());
                 }
+                offset += chunk.len();
                 Ok(())
             });
         found

@@ -244,3 +244,30 @@ mod transpose_anchor_test;
 #[cfg(test)]
 #[path = "foreign_marker_probe_test.rs"]
 mod foreign_marker_probe_test;
+
+/// GNU `compute_stop_pos`'s delimiter scan must report the delimiter's logical
+/// buffer position even when the scan range straddles the gap buffer's hole.
+/// `for_each_emacs_byte_range_chunk` yields two slices for such a range --
+/// `[start..gap_start)` and then `[gap_end..end)` -- so the reported position
+/// is the running logical offset plus the in-chunk index, not
+/// `range.start() + index`.
+#[test]
+fn composition_delimiter_scan_offsets_chunks_across_the_gap() {
+    crate::test_utils::init_test_tracing();
+    let mut buf = buf_with_text(&format!("{}\n", "a".repeat(200)));
+    // Move the gap into the scanned range: point at emacs byte 50 and insert
+    // one character, which leaves the gap immediately after the insertion.
+    // Redisplay does this on every edit, so the straddle is the normal case
+    // for a hook stop near edited text.
+    buf.goto_emacs_byte_pos(crate::buffer::EmacsBytePos::new(50));
+    buf.insert("x");
+    assert_eq!(buf.total_emacs_byte_len().get(), 202);
+    assert_eq!(
+        buf.first_composition_delimiter_emacs_byte(
+            crate::buffer::EmacsBytePos::new(40),
+            crate::buffer::EmacsBytePos::new(210),
+        ),
+        Some(crate::buffer::EmacsBytePos::new(201)),
+        "the newline at emacs byte 201 is in the chunk after the gap"
+    );
+}
