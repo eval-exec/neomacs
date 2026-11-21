@@ -96,6 +96,7 @@ impl FontVerticalMetrics {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FontMetricSource {
     OpenedFontProbe,
+    OpenedFontTables,
     SelectedFontProbe,
     SelectedFontTables,
     GlyphBoxFallback,
@@ -129,12 +130,21 @@ enum MetricConfidence {
     Degraded,
 }
 
+/// Native font drivers supply the frame's average width. Estimates retain the
+/// fallback spacing policy instead of pretending to be a native observation.
+#[derive(Debug, Clone, Copy)]
+enum FontAdvanceSource {
+    NativeFont,
+    Fallback,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct FontAdvanceMetrics {
     space_width: f32,
     average_width: f32,
     max_width: f32,
     fixed_pitch: bool,
+    source: FontAdvanceSource,
 }
 
 impl FontAdvanceMetrics {
@@ -169,10 +179,18 @@ impl FontAdvanceMetrics {
             average_width,
             max_width,
             fixed_pitch,
+            source: FontAdvanceSource::Fallback,
         }
     }
 
     fn from_font_probe(metrics: crate::font::probe::FontPxMetrics) -> Self {
+        Self::from_px_metrics(metrics, FontAdvanceSource::NativeFont)
+    }
+
+    fn from_px_metrics(
+        metrics: crate::font::probe::FontPxMetrics,
+        source: FontAdvanceSource,
+    ) -> Self {
         let space_width = metrics.space_width.max(0) as f32;
         let average_width = metrics.average_width.max(0) as f32;
         let max_width = metrics.max_width.max(0) as f32;
@@ -185,6 +203,7 @@ impl FontAdvanceMetrics {
             average_width,
             max_width,
             fixed_pitch,
+            source,
         }
     }
 
@@ -205,7 +224,7 @@ impl FontAdvanceMetrics {
         None
     }
 
-    fn proportional_column_width(self) -> Option<FrameColumnWidth> {
+    fn average_column_width(self) -> Option<FrameColumnWidth> {
         if valid_advance(self.average_width) {
             return Some(FrameColumnWidth::validated(self.average_width));
         }
@@ -225,10 +244,14 @@ struct FrameColumnWidth {
 impl FrameColumnWidth {
     fn from_advances(prefer_monospace: bool, font_size: f32, advances: FontAdvanceMetrics) -> Self {
         let fallback = Self::degraded((font_size * 0.6).max(1.0));
-        let selected = if prefer_monospace {
-            advances.monospace_column_width(font_size * 0.5)
-        } else {
-            advances.proportional_column_width()
+        let selected = match advances.source {
+            // GNU xterm.c x_new_font publishes font->average_width even when
+            // hinted glyph advances differ in a monospace-preferring family.
+            FontAdvanceSource::NativeFont => advances.average_column_width(),
+            FontAdvanceSource::Fallback if prefer_monospace => {
+                advances.monospace_column_width(font_size * 0.5)
+            }
+            FontAdvanceSource::Fallback => advances.average_column_width(),
         };
 
         selected
@@ -475,13 +498,45 @@ struct LayoutFontHandle {
     resolution: FontResolutionSource,
     selector_slant: FontSlant,
     source: LayoutFontSource,
-    px_metrics: Option<crate::font::probe::FontPxMetrics>,
+    px_metrics: Option<ObservedFontPxMetrics>,
     /// GNU-compatible per-glyph advances observed at the frame's physical
     /// device size.  Stored separately from logical aggregate metrics so the
     /// coordinate domains cannot be mixed accidentally.
     device_ascii_advances: Option<std::sync::Arc<crate::font::probe::DeviceAsciiAdvances>>,
     #[cfg(target_os = "linux")]
     render_options: Option<neomacs_font_materializer::fontconfig::FontRenderOptions>,
+}
+
+/// Aggregate metrics retain their origin through materialization: table
+/// estimates must not acquire the native driver's frame-width authority.
+#[derive(Debug, Clone, Copy)]
+enum ObservedFontPxMetrics {
+    Native(crate::font::probe::FontPxMetrics),
+    Tables(crate::font::probe::FontPxMetrics),
+}
+
+impl ObservedFontPxMetrics {
+    fn metrics(self) -> crate::font::probe::FontPxMetrics {
+        match self {
+            Self::Native(metrics) | Self::Tables(metrics) => metrics,
+        }
+    }
+
+    fn advances(self) -> FontAdvanceMetrics {
+        match self {
+            Self::Native(metrics) => FontAdvanceMetrics::from_font_probe(metrics),
+            Self::Tables(metrics) => {
+                FontAdvanceMetrics::from_px_metrics(metrics, FontAdvanceSource::Fallback)
+            }
+        }
+    }
+
+    fn source(self) -> FontMetricSource {
+        match self {
+            Self::Native(_) => FontMetricSource::OpenedFontProbe,
+            Self::Tables(_) => FontMetricSource::OpenedFontTables,
+        }
+    }
 }
 
 /// How a font request was answered. Distinguishing the tiers keeps traces and
@@ -1385,7 +1440,7 @@ impl FontMetricsService {
             foundry: matched.metadata.foundry.clone(),
             resolved: handle.font,
             slant: handle.selector_slant,
-            metrics: handle.px_metrics?,
+            metrics: handle.px_metrics?.metrics(),
             glyph_code: None,
         })
     }
@@ -2325,7 +2380,7 @@ impl FontMetricsService {
     ) -> Option<SelectedFontInfo> {
         let materialized = self.materialized_font_for_realized_face_char(ch, selection)?;
         let resolved = materialized.font;
-        let metrics = materialized.px_metrics?;
+        let metrics = materialized.px_metrics?.metrics();
         // Encode through the OPEN font, like GNU's `font->driver->encode_char`
         // on the realized font object. `get_font` is cosmic-text's cache of
         // parsed faces; `with_face_data` on a file-backed face would open,
@@ -2537,15 +2592,18 @@ impl FontMetricsService {
                     )
                 }
             };
-        let px_metrics = platform_px_metrics
+        let observed_px_metrics = platform_px_metrics
             .or_else(|| self.probe_resolved_font_metrics(&identity, None, font_size))
+            .map(ObservedFontPxMetrics::Native)
             .or_else(|| {
                 self.font_px_metrics_from_selected_face(
                     font_id,
                     font_size,
                     &identity.variation_coords,
                 )
+                .map(ObservedFontPxMetrics::Tables)
             });
+        let px_metrics = observed_px_metrics.map(ObservedFontPxMetrics::metrics);
         let vertical = px_metrics
             .map(|metrics| FontVerticalMetrics {
                 ascent: metrics.ascent.max(0) as f32,
@@ -2584,7 +2642,7 @@ impl FontMetricsService {
             resolution: FontResolutionSource::FacePrimary,
             selector_slant,
             source: LayoutFontSource::Swash(font_id),
-            px_metrics,
+            px_metrics: observed_px_metrics,
             device_ascii_advances,
             #[cfg(target_os = "linux")]
             render_options,
@@ -2653,7 +2711,7 @@ impl FontMetricsService {
             resolution,
             selector_slant,
             source: LayoutFontSource::FreeTypeBitmap(opened),
-            px_metrics: Some(px_metrics),
+            px_metrics: Some(ObservedFontPxMetrics::Native(px_metrics)),
             device_ascii_advances: None,
             #[cfg(target_os = "linux")]
             render_options: None,
@@ -2890,15 +2948,18 @@ impl FontMetricsService {
                     )
                 }
             };
-        let px_metrics = self
+        let observed_px_metrics = self
             .probe_resolved_font_metrics(&identity, resolved.platform.as_ref(), selection.font_size)
+            .map(ObservedFontPxMetrics::Native)
             .or_else(|| {
                 self.font_px_metrics_from_selected_face(
                     font_id,
                     selection.font_size,
                     &identity.variation_coords,
                 )
+                .map(ObservedFontPxMetrics::Tables)
             });
+        let px_metrics = observed_px_metrics.map(ObservedFontPxMetrics::metrics);
         let vertical = px_metrics
             .map(|metrics| FontVerticalMetrics {
                 ascent: metrics.ascent.max(0) as f32,
@@ -2938,7 +2999,7 @@ impl FontMetricsService {
             resolution: FontResolutionSource::FontsetFallback,
             selector_slant,
             source: LayoutFontSource::Swash(font_id),
-            px_metrics,
+            px_metrics: observed_px_metrics,
             device_ascii_advances: None,
             #[cfg(target_os = "linux")]
             render_options,
@@ -3507,7 +3568,7 @@ impl FontMetricsService {
         }) = materialized.as_ref()
         {
             let space_width = px_metrics
-                .map(|metrics| metrics.space_width as f32)
+                .map(|metrics| metrics.metrics().space_width as f32)
                 .filter(|width| valid_advance(*width))
                 .unwrap_or(font_size * 0.6);
             widths[..32].fill(space_width);
@@ -3570,7 +3631,7 @@ impl FontMetricsService {
         let measured_primary_space = materialized
             .as_ref()
             .and_then(|font| font.px_metrics)
-            .map(|font| font.space_width as f32)
+            .map(|font| font.metrics().space_width as f32)
             .filter(|width| valid_advance(*width));
         let shaped_space_width = || {
             let mut buffer = Buffer::new_empty(metrics);
@@ -3665,16 +3726,18 @@ impl FontMetricsService {
         let primary_override = self
             .materialized_font_for_face(family, weight, italic, font_size)
             .and_then(|font| font.px_metrics);
-        let (vertical, advances, effective_size, source) = if let Some(probe) = primary_override {
+        let (vertical, advances, effective_size, source) = if let Some(observed) = primary_override
+        {
+            let probe = observed.metrics();
             (
                 FontVerticalMetrics {
                     ascent: probe.ascent.max(0) as f32,
                     descent: probe.descent.max(0) as f32,
                     line_height: probe.height.max(1) as f32,
                 },
-                FontAdvanceMetrics::from_font_probe(probe),
+                observed.advances(),
                 GraphicFontSizePx::new(probe.pixel_size as f32),
-                FontMetricSource::OpenedFontProbe,
+                observed.source(),
             )
         } else {
             let (selected_font_id, measured_space_width) =

@@ -184,3 +184,134 @@ fn run_editor(plan: GuiTestPlan) -> Value {
     assert_eq!(output.exit_code, Some(0), "{files:?}");
     serde_json::from_slice(&fs::read(&files.gui_state).unwrap()).unwrap()
 }
+
+/// A family name does not turn per-glyph advances into frame columns. GNU
+/// xterm.c:27153 always publishes the opened font's native average_width.
+#[test]
+fn fontconfig_frame_columns_follow_native_average_width_against_attested_gnu() {
+    assert_eq!(std::env::var("NEOVM_ORACLE_MODE").as_deref(), Ok("verify"));
+    let gnu = PathBuf::from(std::env::var_os("NEOVM_FORCE_ORACLE_PATH").unwrap());
+    let oracle = neomacs_test_oracle::gnu::gnu_oracle();
+    assert!(oracle.is_attested(), "attested GNU oracle required");
+    assert_eq!(fs::canonicalize(&gnu).unwrap(), oracle.executable_path());
+    let root = neomacs_infra::workspace_root();
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = root.join(format!(
+        "tmp/neomacs-gui-tests/frame-native-average-{}-{nonce}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&dir).unwrap();
+    attest(&root, &dir, &gnu);
+    fs::write(dir.join("oracle-stamp.txt"), oracle.stamp()).unwrap();
+    let neo = std::env::var_os("NEOMACS_GUI_TEST_BINARY")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| root.join("target/release/neomacs"));
+    for (editor, binary) in [("gnu", &gnu), ("neo", &neo)] {
+        let version = Command::new(binary).arg("--version").output().unwrap();
+        fs::write(
+            dir.join(format!("{editor}-version.stdout")),
+            &version.stdout,
+        )
+        .unwrap();
+        fs::write(
+            dir.join(format!("{editor}-version.stderr")),
+            &version.stderr,
+        )
+        .unwrap();
+        assert!(version.status.success(), "{version:?}");
+    }
+    let fonts = dir.join("fonts");
+    fs::create_dir_all(&fonts).unwrap();
+    let font = fonts.join("NotoSansMono-variable.ttf");
+    // The accessor verifies the pinned release bytes and SHA256.
+    fs::copy(neomacs_test_fonts::noto_sans_mono_variable(), &font).unwrap();
+    let font = fs::canonicalize(font).unwrap();
+    let display = DisplayHarness::Xvfb.start_session(&dir).unwrap();
+    let resources = dir.join("Xresources");
+    fs::write(&resources, "Xft.dpi: 96\n").unwrap();
+    let xrdb = Command::new("xrdb")
+        .arg("-merge")
+        .arg(resources)
+        .envs(display.env().iter().cloned())
+        .output()
+        .unwrap();
+    assert!(xrdb.status.success(), "{xrdb:?}");
+    let mut matrix = Vec::new();
+    for policy in ["hintfull", "hintslight"] {
+        let case = dir.join(policy);
+        fs::create_dir_all(&case).unwrap();
+        let config = fontconfig(&case, &fonts, policy);
+        let mut states = Vec::new();
+        for (editor, binary) in [("gnu", &gnu), ("neo", &neo)] {
+            let mut plan = GuiTestPlan::new(
+                GuiBackend::LinuxX11,
+                &root,
+                &case,
+                GuiScenario::new(
+                    editor,
+                    root.join("crates/neomacs-gui-tests/fixtures/frame_native_average_width.el"),
+                ),
+            )
+            .with_program(binary)
+            .with_env("FONTCONFIG_FILE", config.display().to_string())
+            .with_env("GDK_BACKEND", "x11")
+            .with_env("GDK_SCALE", "1")
+            .with_env("GDK_DPI_SCALE", "1")
+            .with_env("GSETTINGS_BACKEND", "memory");
+            for (key, value) in display.env() {
+                plan = plan.with_env(key, value);
+            }
+            states.push(run_editor(plan));
+        }
+        matrix.push(json!({"policy":policy,"gnu":states[0],"neo":states[1]}));
+    }
+    // Keep every policy/editor result even when the first parity check fails.
+    fs::write(
+        dir.join("matrix.json"),
+        serde_json::to_vec_pretty(&matrix).unwrap(),
+    )
+    .unwrap();
+    for case in &matrix {
+        for (phase, size) in [("size14", 14), ("size13", 13)] {
+            let full = case["policy"] == "hintfull";
+            let average = if full && size == 13 { 7 } else { 8 };
+            let advances = match (full, size) {
+                (true, 14) => json!([8, 9, 8, 8]),
+                (true, 13) => json!([8, 8, 7, 7]),
+                _ => json!([8, 8, 8, 8]),
+            };
+            for editor in ["gnu", "neo"] {
+                let state = &case[editor][phase];
+                for (key, expected) in json!({"family":"Noto Sans Mono","weight":"regular",
+                    "slant":"normal","width":"normal","size":size,
+                    "font_average_width":average,"window_width":average,
+                    "immediate_frame_width":average,"frame_width_before_queries":average,
+                    "frame_width":average,"advances":advances,
+                    "font_max_width":if full {if size==14 {10} else {9}} else {8},
+                    "columns":80,"text_pixels":80*average})
+                .as_object()
+                .unwrap()
+                {
+                    assert_eq!(
+                        &state[key], expected,
+                        "{editor}/{phase}/{key}: {case}; {dir:?}"
+                    );
+                }
+                assert_eq!(
+                    fs::canonicalize(state["file"].as_str().unwrap()).unwrap(),
+                    font
+                );
+                if editor == "gnu" {
+                    assert!(state["font_entity"].as_str().unwrap().ends_with(" . 0)"));
+                }
+            }
+            assert_eq!(
+                case["neo"][phase]["frame_pixels"], case["gnu"][phase]["frame_pixels"],
+                "native frame resize must use the same average-width columns: {case}; {dir:?}"
+            );
+        }
+    }
+}

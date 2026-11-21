@@ -418,6 +418,98 @@ fn frame_cell_metrics_for_monospace_use_ascii_max_not_space() {
 }
 
 #[test]
+fn native_frame_columns_use_average_even_for_monospace_families() {
+    // Attested GNU 31.1 ftcrfont, pinned Noto Sans Mono with full hinting:
+    // 14px average/max/space = 8/10/8; 13px = 7/9/8. x_new_font
+    // publishes average_width, independently of the family's spacing policy.
+    // The final control is deliberately below the old monospace threshold:
+    // a positive native average is authoritative even for a narrow font.
+    for (size, average, maximum, space) in [(14, 8, 10, 8), (13, 7, 9, 8), (20, 3, 4, 1)] {
+        let probe = crate::font::probe::FontPxMetrics {
+            pixel_size: size,
+            height: 20,
+            ascent: 15,
+            descent: 5,
+            average_width: average,
+            max_width: maximum,
+            space_width: space,
+        };
+        let advances = FontAdvanceMetrics::from_font_probe(probe);
+        let cell = FrameCellMetrics::derive(
+            true,
+            size as f32,
+            FontVerticalMetrics {
+                ascent: probe.ascent as f32,
+                descent: probe.descent as f32,
+                line_height: probe.height as f32,
+            },
+            advances,
+        );
+
+        assert_eq!(cell.column_width, average as f32, "{size}px native average");
+        assert_ne!(cell.column_width, maximum as f32);
+        assert_eq!(cell.confidence, MetricConfidence::Validated);
+        assert_eq!(advances.max_width, maximum as f32);
+        assert_eq!(advances.space_width, space as f32);
+    }
+}
+
+#[test]
+fn materialized_frame_columns_preserve_native_and_table_provenance() {
+    for (size, average, maximum) in [(14, 8, 10), (13, 7, 9)] {
+        let probe = crate::font::probe::FontPxMetrics {
+            pixel_size: size,
+            height: 20,
+            ascent: 15,
+            descent: 5,
+            average_width: average,
+            max_width: maximum,
+            space_width: 8,
+        };
+        for (observed, source, expected) in [
+            (
+                ObservedFontPxMetrics::Native(probe),
+                FontMetricSource::OpenedFontProbe,
+                average,
+            ),
+            (
+                ObservedFontPxMetrics::Tables(probe),
+                FontMetricSource::OpenedFontTables,
+                maximum,
+            ),
+        ] {
+            let mut service = make_svc();
+            let family = "monospace";
+            let size = size as f32;
+            let key = service.cache_key(family, 400, false, size);
+            let mut handle = service
+                .materialized_font_for_face(family, 400, false, size)
+                .expect("materialized fixture font");
+            // Replay identical aggregate values from each origin through the
+            // real materialized cache and frame publication entry point.
+            handle.px_metrics = Some(observed);
+            service
+                .resolved_face_font_cache
+                .insert(key.clone(), Some(handle));
+
+            let FrameCellGeometry::Graphic(geometry) = service.frame_cell_geometry(
+                family,
+                400,
+                false,
+                size,
+                FrameFontDomain::for_frame(true, size),
+            ) else {
+                panic!("graphic frame geometry");
+            };
+            assert_eq!(geometry.font_size.get(), size);
+            assert_eq!(geometry.metrics.char_width, expected as f32);
+            assert_eq!(geometry.metrics.space_width, 8.0);
+            assert_eq!(service.metrics_cache[&key].source, source);
+        }
+    }
+}
+
+#[test]
 fn frame_cell_metrics_for_proportional_use_ascii_average_not_space() {
     let mut widths = [5.0f32; 128];
     widths[b' ' as usize] = 3.0;
@@ -561,7 +653,7 @@ fn frame_cell_geometry_reuses_the_effective_size_from_its_metric_observation() {
     let effective_size = service
         .materialized_font_for_face("monospace", 400, false, requested_size)
         .and_then(|font| font.px_metrics)
-        .map(|metrics| metrics.pixel_size as f32)
+        .map(|metrics| metrics.metrics().pixel_size as f32)
         .expect("test font must expose probed pixel metrics");
 
     let _ = service.font_metrics("monospace", 400, false, requested_size);
@@ -1771,7 +1863,10 @@ fn shaping_first_realization_publishes_the_native_face_metrics() {
             via_face.font, expected.font,
             "shaping-first must preserve native metrics at {size}px"
         );
-        let handle_metrics = via_face.px_metrics.expect("native handle metrics");
+        let handle_metrics = via_face
+            .px_metrics
+            .expect("native handle metrics")
+            .metrics();
         assert_eq!(via_face.font.ascent_px, handle_metrics.ascent as f32);
         assert_eq!(via_face.font.descent_px, handle_metrics.descent as f32);
         assert_eq!(
