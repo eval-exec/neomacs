@@ -2065,6 +2065,55 @@ fn make_process_pipe_merges_stderr_into_the_main_output_channel() {
     );
 }
 
+/// GNU `create_process` enlarges a subprocess's stdout pipe to the process's
+/// `readmax` when the requested `read-process-output-max` exceeds the system
+/// pipe capacity (`src/process.c:2223-2227`).  Without that, a read can never
+/// return more than the 64 KiB default pipe holds, so a consumer that raises
+/// `read-process-output-max` (consult sets 1 MiB for its async pipeline) gets
+/// one filter call per 64 KiB instead of one per buffer: consult's filter,
+/// refresh and vertico re-filtering then run 16 times as often for the same
+/// output, which is #625's unusably slow, growing full-text search.  A read on
+/// an enlarged pipe fills the requested buffer, so the largest single filter
+/// chunk exceeds the old 64 KiB cap.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[test]
+fn child_stdout_pipe_is_enlarged_to_read_process_output_max() {
+    crate::test_utils::init_test_tracing();
+    let sh = find_bin("sh");
+    let result = eval_one(&format!(
+        r#"(let ((read-process-output-max (* 1024 1024))
+                  (chunks 0)
+                  (maxlen 0))
+             (let ((p (make-process
+                       :name "readmax-pipe"
+                       :connection-type 'pipe
+                       :command '("{sh}" "-c"
+                                  "dd if=/dev/zero bs=1048576 count=2 2>/dev/null")
+                       :noquery t
+                       :filter (lambda (_p out)
+                                 (setq chunks (1+ chunks))
+                                 (setq maxlen (max maxlen (length out)))))))
+               (while (process-live-p p)
+                 (accept-process-output p 0.1))
+               (accept-process-output nil 0.1))
+             (list maxlen chunks))"#
+    ));
+    let fields = result
+        .strip_prefix("OK (")
+        .and_then(|rest| rest.strip_suffix(')'))
+        .unwrap_or_else(|| panic!("unexpected evaluation result: {result}"));
+    let maxlen: usize = fields
+        .split_whitespace()
+        .next()
+        .expect("maxlen in result")
+        .parse()
+        .expect("maxlen is an integer");
+    assert!(
+        maxlen > 65536,
+        "child stdout pipe stayed at the 64 KiB default: largest filter chunk was {maxlen} bytes"
+    );
+}
+
 #[test]
 fn make_process_stderr_pipe_name_preserves_raw_unibyte_owner_bytes() {
     crate::test_utils::init_test_tracing();

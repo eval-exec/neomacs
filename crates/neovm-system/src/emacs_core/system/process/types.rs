@@ -1413,6 +1413,37 @@ pub(super) fn process_read_buffer_len(proc: &Process) -> usize {
     proc.readmax.clamp(1, READ_PROCESS_OUTPUT_MAX_CEILING)
 }
 
+/// GNU `create_process` enlarges the child's stdout pipe to the process's
+/// `readmax` (`src/process.c:2223-2227`) so that a single `read_process_output`
+/// read can fill the whole `read-process-output-max` buffer.
+///
+/// Linux caps a pipe at 64 KiB by default.  Without this, a consumer that
+/// raises `read-process-output-max` (consult sets it to 1 MiB for its async
+/// pipeline) still gets one process-filter call per 64 KiB instead of one per
+/// buffer: for the same `rg` output, consult's filter, refresh and vertico
+/// re-filtering run 16 times as often, which is the difference between a
+/// bounded search and an unusably slow, memory-hungry one (#625).
+///
+/// GNU ignores both `fcntl` results: the pipe is usable at its old size, and
+/// requests above `/proc/sys/fs/pipe-max-size` are allowed to fail.  Platforms
+/// without `F_SETPIPE_SZ` keep the default capacity in GNU too.
+#[cfg(all(unix, any(target_os = "linux", target_os = "android")))]
+fn enlarge_child_output_pipe<F: std::os::unix::io::AsRawFd>(pipe: &F, readmax: usize) {
+    let fd = pipe.as_raw_fd();
+    // SAFETY: `fd` is an open pipe descriptor owned by `pipe`, and both
+    // commands only inspect/resize that pipe's capacity; neither retains the
+    // descriptor.  Both results are ignored, exactly as GNU ignores them.
+    let current = unsafe { libc::fcntl(fd, libc::F_GETPIPE_SZ) };
+    // GNU's condition is `readmax > fcntl (fd, F_GETPIPE_SZ)` with no success
+    // test, so a failed query (-1) still attempts the resize; keep that shape.
+    if readmax as i64 > current as i64 {
+        unsafe { libc::fcntl(fd, libc::F_SETPIPE_SZ, readmax as libc::c_int) };
+    }
+}
+
+#[cfg(not(all(unix, any(target_os = "linux", target_os = "android"))))]
+fn enlarge_child_output_pipe<F>(_pipe: &F, _readmax: usize) {}
+
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) fn update_process_adaptive_read_buffering(
     proc: &mut Process,
@@ -4916,6 +4947,7 @@ impl SystemProcessExt for ProcessManager {
         // die from SIGPIPE.
         let requested_stderr_pipe_id = process_value_to_id(&proc.stderrproc);
         let default_directory = proc.default_directory.clone();
+        let readmax = proc.readmax;
         let _ = proc;
         let mut stderr_transfer = self.take_stderr_pipe_writer(id, requested_stderr_pipe_id);
 
@@ -4937,6 +4969,8 @@ impl SystemProcessExt for ProcessManager {
         } else {
             let (reader, writer) = os_pipe::pipe()
                 .map_err(|error| format!("Failed to create child output pipe: {error}"))?;
+            // GNU enlarges the child's stdout pipe before forking it.
+            enlarge_child_output_pipe(&reader, readmax);
             let stderr_writer = writer
                 .try_clone()
                 .map_err(|error| format!("Failed to duplicate child output pipe: {error}"))?;
@@ -4983,7 +5017,12 @@ impl SystemProcessExt for ProcessManager {
 
         let stdout = match shared_output_reader {
             Some(reader) => Some(ChildOutputReader::Shared(reader)),
-            None => child.stdout.take().map(ChildOutputReader::Stdout),
+            // A separate `:stderr` leaves stdout on the pipe `Command::spawn`
+            // created; enlarge it here, where its read end first exists.
+            None => child.stdout.take().map(|stdout| {
+                enlarge_child_output_pipe(&stdout, readmax);
+                ChildOutputReader::Stdout(stdout)
+            }),
         };
 
         // Register stdout with the poller where the platform exposes child
