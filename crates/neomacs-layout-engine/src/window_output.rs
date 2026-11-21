@@ -233,6 +233,9 @@ pub(crate) struct TextWindowBegin {
     /// The displayed buffer's paragraph direction (GNU
     /// `it->paragraph_embedding`, `src/xdisp.c:3600-3611`).
     pub(crate) bidi_paragraph_directions: crate::bidi::ParagraphDirections,
+    /// Whether this window's advances are terminal cells or graphical pixels
+    /// (cursor geometry inside an RTL run differs between them).
+    pub(crate) text_geometry_units: neomacs_display_protocol::glyph_matrix::TextGeometryUnits,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -248,6 +251,8 @@ pub(crate) struct TextWindowOutputBegin {
     /// The displayed buffer's paragraph direction (GNU
     /// `it->paragraph_embedding`, `src/xdisp.c:3600-3611`).
     pub(crate) bidi_paragraph_directions: crate::bidi::ParagraphDirections,
+    /// Whether this window's advances are terminal cells or graphical pixels.
+    pub(crate) text_geometry_units: neomacs_display_protocol::glyph_matrix::TextGeometryUnits,
 }
 
 impl From<TextWindowBegin> for TextWindowOutputBegin {
@@ -262,6 +267,7 @@ impl From<TextWindowBegin> for TextWindowOutputBegin {
             selected: request.selected,
             row_capacity: request.row_capacity,
             bidi_paragraph_directions: request.bidi_paragraph_directions,
+            text_geometry_units: request.text_geometry_units,
         }
     }
 }
@@ -279,6 +285,7 @@ impl TextWindowOutputBegin {
         )
         .with_row_capacity(self.row_capacity)
         .with_bidi_paragraph_directions(self.bidi_paragraph_directions)
+        .with_text_geometry_units(self.text_geometry_units)
     }
 }
 

@@ -25,6 +25,8 @@ pub(crate) struct OutputWindowBeginRequest {
     /// The displayed buffer's paragraph direction (GNU
     /// `it->paragraph_embedding`). Defaults to UAX#9 automatic detection.
     pub(crate) bidi_paragraph_directions: crate::bidi::ParagraphDirections,
+    /// Terminal cells or graphical pixels for cursor geometry.
+    pub(crate) text_geometry_units: neomacs_display_protocol::glyph_matrix::TextGeometryUnits,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -53,6 +55,8 @@ impl OutputWindowBeginRequest {
             text_clip_bounds,
             selected,
             bidi_paragraph_directions: crate::bidi::ParagraphDirections::default(),
+            text_geometry_units: neomacs_display_protocol::glyph_matrix::TextGeometryUnits::default(
+            ),
         }
     }
 
@@ -61,6 +65,14 @@ impl OutputWindowBeginRequest {
         direction: crate::bidi::ParagraphDirections,
     ) -> Self {
         self.bidi_paragraph_directions = direction;
+        self
+    }
+
+    pub(crate) fn with_text_geometry_units(
+        mut self,
+        units: neomacs_display_protocol::glyph_matrix::TextGeometryUnits,
+    ) -> Self {
+        self.text_geometry_units = units;
         self
     }
 }
@@ -92,6 +104,16 @@ impl OutputWindowLifecycleRequest {
     ) -> Self {
         match self {
             Self::Begin(request) => Self::Begin(request.with_bidi_paragraph_directions(direction)),
+            Self::End => Self::End,
+        }
+    }
+
+    pub(crate) fn with_text_geometry_units(
+        self,
+        units: neomacs_display_protocol::glyph_matrix::TextGeometryUnits,
+    ) -> Self {
+        match self {
+            Self::Begin(request) => Self::Begin(request.with_text_geometry_units(units)),
             Self::End => Self::End,
         }
     }

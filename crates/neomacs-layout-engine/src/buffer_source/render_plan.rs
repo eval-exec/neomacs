@@ -602,7 +602,12 @@ impl BufferSourceOutputSetup {
         setup.begin_request = setup
             .begin_request
             .with_source_extent(params.source_extent)
-            .with_bidi_paragraph_directions(params.bidi_paragraph_directions);
+            .with_bidi_paragraph_directions(params.bidi_paragraph_directions)
+            .with_text_geometry_units(if params.window_system {
+                neomacs_display_protocol::glyph_matrix::TextGeometryUnits::Pixels
+            } else {
+                neomacs_display_protocol::glyph_matrix::TextGeometryUnits::TerminalCells
+            });
         setup.row_visibility_limit.allow_partial = params.window_system
             && !params.kind.is_minibuffer()
             && params.measurement_rows.is_none();

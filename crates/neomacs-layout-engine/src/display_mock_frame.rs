@@ -445,6 +445,8 @@ pub(crate) fn layout_mock_frame_content(
                 selected: window.selected,
                 row_capacity: crate::output::window_request::OutputWindowRowCapacity::Fixed,
                 bidi_paragraph_directions: crate::bidi::ParagraphDirections::default(),
+                text_geometry_units:
+                    neomacs_display_protocol::glyph_matrix::TextGeometryUnits::default(),
             },
         );
         for (row_idx, line) in window.lines.iter().enumerate() {
@@ -506,6 +508,8 @@ pub(crate) fn layout_mock_frame_content(
                 selected: mini.selected,
                 row_capacity: crate::output::window_request::OutputWindowRowCapacity::Fixed,
                 bidi_paragraph_directions: crate::bidi::ParagraphDirections::default(),
+                text_geometry_units:
+                    neomacs_display_protocol::glyph_matrix::TextGeometryUnits::default(),
             },
         );
 
@@ -599,6 +603,8 @@ pub(crate) fn layout_mock_frame_content(
                 selected: false,
                 row_capacity: crate::output::window_request::OutputWindowRowCapacity::Fixed,
                 bidi_paragraph_directions: crate::bidi::ParagraphDirections::default(),
+                text_geometry_units:
+                    neomacs_display_protocol::glyph_matrix::TextGeometryUnits::default(),
             },
         );
         for (ri, line) in cf.window.lines.iter().enumerate() {

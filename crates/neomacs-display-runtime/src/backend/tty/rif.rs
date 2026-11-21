@@ -2388,6 +2388,50 @@ impl TtyRif {
             .map_or_else(|| FaceId::new(0), |fill| fill.face_id)
     }
 
+    /// Fill `[from_col, to_col)` of a TEXT_AREA row with extend-face blanks.
+    ///
+    /// Shared by the forward tail after the glyphs and the reversed row's
+    /// prepended lead, so the two cannot resolve a different face or erase
+    /// rule.  A published FaceFillItem owns the background behind each matrix
+    /// slot; sampling the shared desired grid instead would inherit a
+    /// previous overlapping leaf's face, which GNU's frame-matrix copy never
+    /// does.
+    #[allow(clippy::too_many_arguments)]
+    fn fill_text_area_blanks(
+        &mut self,
+        state: &FrameDisplayState,
+        owner: TtyGlyphRowOwner,
+        role: GlyphRowRole,
+        screen_row: usize,
+        frame_origin_col: i64,
+        local_row: i64,
+        from_col: i64,
+        to_col: i64,
+        blank_erase: BlankErase,
+    ) {
+        let mut fill_col = from_col;
+        let screen_width = usize_to_i64_saturating(self.desired.width);
+        let mut face_run = None;
+        while fill_col < to_col && fill_col < screen_width {
+            if let Some(visible_col) = visible_cell(fill_col, self.desired.width) {
+                let local_col = fill_col.saturating_sub(frame_origin_col);
+                let face_id = self.blank_cell_face(state, owner, role, local_col, local_row);
+                let attrs = self.packed_attrs_for_run(face_id, &mut face_run);
+                self.set_desired_packed_glyph_cell(
+                    screen_row,
+                    visible_col,
+                    PackedScalarCell {
+                        ch: ' ',
+                        attrs,
+                        padding: false,
+                        blank_erase,
+                    },
+                );
+            }
+            fill_col = fill_col.saturating_add(1);
+        }
+    }
+
     fn rasterize_glyph_row(
         &mut self,
         state: &FrameDisplayState,
@@ -2430,14 +2474,35 @@ impl TtyRif {
         let screen_width = usize_to_i64_saturating(self.desired.width);
 
         for area in GlyphArea::ALL {
+            let area_glyphs = &glyph_row.glyphs[area.index()];
+            let mut text_area_origin = None;
             if let GlyphAreaPlacement::Structural(geometry) = area_layout.placement(area) {
                 col = frame_origin_col
                     .saturating_add((geometry.bounds().x / char_width).round() as i64);
                 if area == GlyphArea::Text {
+                    let area_left = col;
+                    // GNU's reversed rows prepend every glyph
+                    // (src/term.c:1563-1585, 1796, 1899), and the blanks that
+                    // push the text to the right margin are produced by the
+                    // terminal branch of `extend_face_to_end_of_line`
+                    // (src/xdisp.c:24698-24827): in a reversed row each of
+                    // those extend-face blanks is prepended too, so the LEFT
+                    // side of a short R2L row carries the end-of-line extend
+                    // face.  A terminal grid has no sub-cell positioning, so
+                    // start the text area at the same right-aligned origin the
+                    // GUI derives from `reversed_p` and fill the lead cells
+                    // below.
+                    if glyph_row.reversed_p {
+                        let area_cells =
+                            (geometry.bounds().width / char_width).round().max(0.0) as i64;
+                        let used_cells = text_area_terminal_cells(area_glyphs) as i64;
+                        col = col.saturating_add((area_cells - used_cells).max(0));
+                    }
                     col = col.saturating_add(i64::from(glyph_row.start_col));
+                    text_area_origin = Some((area_left, col));
                 }
             }
-            let glyphs = &glyph_row.glyphs[area.index()];
+            let glyphs = area_glyphs;
             let mut glyph_idx = 0;
             let mut preceding_wide_base_visible = None;
             let mut face_run = None;
@@ -2761,61 +2826,64 @@ impl TtyRif {
                         }
                     }
                 };
+                // GNU's terminal branch of `extend_face_to_end_of_line`
+                // materializes the whole remaining text area. Without an
+                // explicit `:extend` face, its attr-filtered face LOOKS
+                // default. It is nevertheless a non-default logical face when
+                // the newline/source face was non-default, and thus fails
+                // CHAR_GLYPH_SPACE_P (the font-lock comment case).
+                //
+                // The logical end of a reversed row is its visually LEFT-most
+                // glyph (the row array is in visual order), so the
+                // end-of-line face is taken from there, not from `rfind`.
+                let end_glyph = if glyph_row.reversed_p {
+                    glyphs.iter().find(|glyph| !glyph.padding)
+                } else {
+                    glyphs.iter().rfind(|glyph| !glyph.padding)
+                };
+                let blank_erase = if glyph_row.ends_at_zv {
+                    BlankErase::DefaultFace
+                } else {
+                    end_glyph
+                        .map(|glyph| {
+                            self.blank_erase_for_packed(
+                                glyph.face_id,
+                                PackedCellAttrs::new(self.resolve_attrs(glyph.face_id)),
+                                &mut default_face,
+                            )
+                        })
+                        .unwrap_or(BlankErase::DefaultFace)
+                };
+                // A reversed row's lead cells are the prepended extend-face
+                // blanks; paint them exactly like the forward tail.
+                if let Some((area_left, glyph_start)) = text_area_origin
+                    && glyph_row.reversed_p
+                    && glyph_start > area_left
+                {
+                    self.fill_text_area_blanks(
+                        state,
+                        owner,
+                        glyph_row.role,
+                        screen_row,
+                        frame_origin_col,
+                        local_row,
+                        area_left,
+                        glyph_start,
+                        blank_erase,
+                    );
+                }
                 if col < right_edge {
-                    // GNU's terminal branch of `extend_face_to_end_of_line`
-                    // materializes the whole remaining text area. Without an
-                    // explicit `:extend` face, its attr-filtered face LOOKS
-                    // default. It is nevertheless a non-default logical face
-                    // when the newline/source face was non-default, and thus
-                    // fails CHAR_GLYPH_SPACE_P (the font-lock comment case).
-                    let blank_erase = if glyph_row.ends_at_zv {
-                        BlankErase::DefaultFace
-                    } else {
-                        glyphs
-                            .iter()
-                            .rfind(|glyph| !glyph.padding)
-                            .map(|glyph| {
-                                self.blank_erase_for_packed(
-                                    glyph.face_id,
-                                    PackedCellAttrs::new(self.resolve_attrs(glyph.face_id)),
-                                    &mut default_face,
-                                )
-                            })
-                            .unwrap_or(BlankErase::DefaultFace)
-                    };
-                    let mut tail_face_run = None;
-                    while col < right_edge && col < screen_width {
-                        if let Some(col) = visible_cell(col, self.desired.width) {
-                            // A published FaceFillItem owns the resolved
-                            // background behind this matrix slot. Resolve it
-                            // by semantic window/row ownership: sampling the
-                            // shared desired grid would inherit a previous
-                            // overlapping leaf's face, which GNU's frame-matrix
-                            // copy never does.
-                            let local_col = i64::try_from(col)
-                                .unwrap_or(i64::MAX)
-                                .saturating_sub(frame_origin_col);
-                            let face_id = self.blank_cell_face(
-                                state,
-                                owner,
-                                glyph_row.role,
-                                local_col,
-                                local_row,
-                            );
-                            let attrs = self.packed_attrs_for_run(face_id, &mut tail_face_run);
-                            self.set_desired_packed_glyph_cell(
-                                screen_row,
-                                col,
-                                PackedScalarCell {
-                                    ch: ' ',
-                                    attrs,
-                                    padding: false,
-                                    blank_erase,
-                                },
-                            );
-                        }
-                        col = col.saturating_add(1);
-                    }
+                    self.fill_text_area_blanks(
+                        state,
+                        owner,
+                        glyph_row.role,
+                        screen_row,
+                        frame_origin_col,
+                        local_row,
+                        col,
+                        right_edge,
+                        blank_erase,
+                    );
                 }
             }
         }
@@ -3757,6 +3825,79 @@ fn is_run_member_padding_cell(glyph: &Glyph) -> bool {
             GlyphType::Composite { .. } | GlyphType::AutomaticComposite { .. } => true,
             _ => false,
         }
+}
+
+/// Terminal cells the TEXT_AREA loop will write for `glyphs`.
+///
+/// Mirrors `rasterize_glyph_row`'s consumption rules without touching the
+/// grid: run-member paddings after a Composite/AutomaticComposite are owned by
+/// the base glyph's terminal plan, Stretch/Surface occupy their reserved
+/// columns, zero-width characters write nothing, and a wide base contributes
+/// its own continuation cell.  Used to right-align `reversed_p` rows (GNU
+/// prepends glyphs and therefore draws them against the right margin).
+fn text_area_terminal_cells(glyphs: &[Glyph]) -> usize {
+    let mut cells = 0usize;
+    let mut glyph_idx = 0usize;
+    while glyph_idx < glyphs.len() {
+        let glyph = &glyphs[glyph_idx];
+        if glyph.padding {
+            cells += 1;
+            glyph_idx += 1;
+            continue;
+        }
+        match &glyph.glyph_type {
+            GlyphType::AutomaticComposite { text, terminal } => {
+                cells += terminal
+                    .cells
+                    .iter()
+                    .map(|cell| usize::from(cell.width_cols.max(1)))
+                    .sum::<usize>();
+                let source_paddings = text.chars().count().saturating_sub(1);
+                let present_paddings = glyphs[glyph_idx + 1..]
+                    .iter()
+                    .take(source_paddings)
+                    .take_while(|next| is_run_member_padding_cell(next))
+                    .count();
+                glyph_idx += present_paddings;
+            }
+            GlyphType::Composite { text: _ } => {
+                let run_paddings = glyphs[glyph_idx + 1..]
+                    .iter()
+                    .take_while(|g| is_run_member_padding_cell(g))
+                    .count();
+                if run_paddings == 0 {
+                    cells += 1;
+                } else {
+                    cells += run_paddings + 1;
+                    glyph_idx += run_paddings;
+                }
+            }
+            GlyphType::Stretch { width_cols } => {
+                cells += usize::from((*width_cols).max(1));
+            }
+            GlyphType::Surface { width_cols, .. } => {
+                cells += surface_tty_placeholder(usize::from((*width_cols).max(1)))
+                    .chars()
+                    .count();
+            }
+            GlyphType::Glyphless { .. } => {
+                cells += 1;
+            }
+            GlyphType::Char { ch } if neovm_core::encoding::char_width(*ch) == 0 => {}
+            _ => {
+                cells += 1;
+                let next_is_explicit_padding = glyph.wide
+                    && glyphs
+                        .get(glyph_idx + 1)
+                        .is_some_and(|next_glyph| next_glyph.padding);
+                if glyph.wide && !next_is_explicit_padding {
+                    cells += 1;
+                }
+            }
+        }
+        glyph_idx += 1;
+    }
+    cells
 }
 
 /// The per-cell grapheme text carried by a run-member padding cell.

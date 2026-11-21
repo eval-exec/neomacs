@@ -35,7 +35,7 @@ use num_enum::{IntoPrimitive, TryFromPrimitive};
 use rustc_hash::FxHashMap as HashMap;
 
 mod text_geometry;
-pub use text_geometry::{TextRowGeometry, TextSlotColumn, VisualTextGlyphIndex};
+pub use text_geometry::{TextGeometryUnits, TextRowGeometry, TextSlotColumn, VisualTextGlyphIndex};
 
 mod clone_row;
 

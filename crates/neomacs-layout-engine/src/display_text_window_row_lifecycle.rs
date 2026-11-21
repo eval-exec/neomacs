@@ -266,6 +266,7 @@ pub(crate) struct TextWindowBeginRequest {
     first_row: DisplayTextRowBegin,
     source_extent: crate::types::WindowSourceExtent,
     bidi_paragraph_directions: crate::bidi::ParagraphDirections,
+    text_geometry_units: neomacs_display_protocol::glyph_matrix::TextGeometryUnits,
 }
 
 pub(crate) struct TextWindowTailFinalizeRequest<'a> {
@@ -574,6 +575,8 @@ impl TextWindowBeginRequest {
             first_row,
             source_extent: crate::types::WindowSourceExtent::Viewport,
             bidi_paragraph_directions: crate::bidi::ParagraphDirections::default(),
+            text_geometry_units: neomacs_display_protocol::glyph_matrix::TextGeometryUnits::default(
+            ),
         }
     }
 
@@ -582,6 +585,14 @@ impl TextWindowBeginRequest {
         direction: crate::bidi::ParagraphDirections,
     ) -> Self {
         self.bidi_paragraph_directions = direction;
+        self
+    }
+
+    pub(crate) fn with_text_geometry_units(
+        mut self,
+        units: neomacs_display_protocol::glyph_matrix::TextGeometryUnits,
+    ) -> Self {
+        self.text_geometry_units = units;
         self
     }
 
@@ -624,6 +635,7 @@ impl TextWindowBeginRequest {
                 selected: self.selected,
                 first_row: self.first_row,
                 bidi_paragraph_directions: self.bidi_paragraph_directions,
+                text_geometry_units: self.text_geometry_units,
                 row_capacity: match self.source_extent {
                     crate::types::WindowSourceExtent::Viewport => {
                         crate::output::window_request::OutputWindowRowCapacity::Fixed

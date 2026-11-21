@@ -12,7 +12,9 @@ use crate::output::window_request::{OutputWindowLifecycleRequest, OutputWindowRo
 use neomacs_display_protocol::frame_glyphs::GlyphRowRole;
 use neomacs_display_protocol::frame_glyphs::PhysCursor;
 use neomacs_display_protocol::glyph_matrix::MatrixRow;
-use neomacs_display_protocol::glyph_matrix::{GlyphMatrix, GlyphRow, WindowMatrixEntry};
+use neomacs_display_protocol::glyph_matrix::{
+    GlyphMatrix, GlyphRow, TextGeometryUnits, WindowMatrixEntry,
+};
 use neomacs_display_protocol::types::{DisplayWindowId, Rect};
 
 #[cfg(test)]
@@ -63,6 +65,8 @@ pub(crate) struct OutputWindowBuildState {
     /// `it->paragraph_embedding` read from the displayed buffer's
     /// `bidi-display-reordering` / `bidi-paragraph-direction`).
     current_bidi_paragraph_directions: ParagraphDirections,
+    /// Terminal-cell or pixel geometry for this window's cursor math.
+    current_text_geometry_units: TextGeometryUnits,
 }
 
 impl OutputWindowBuildState {
@@ -77,6 +81,7 @@ impl OutputWindowBuildState {
             current_selected: false,
             current_row: 0,
             current_bidi_paragraph_directions: ParagraphDirections::default(),
+            current_text_geometry_units: TextGeometryUnits::default(),
         }
     }
 
@@ -149,6 +154,7 @@ impl OutputWindowBuildState {
         self.current_selected = false;
         self.current_row = 0;
         self.current_bidi_paragraph_directions = ParagraphDirections::default();
+        self.current_text_geometry_units = TextGeometryUnits::default();
     }
 
     pub(crate) fn install_window_lifecycle(&mut self, request: OutputWindowLifecycleRequest) {
@@ -165,6 +171,7 @@ impl OutputWindowBuildState {
                 self.current_selected = begin.selected;
                 self.current_row = 0;
                 self.current_bidi_paragraph_directions = begin.bidi_paragraph_directions;
+                self.current_text_geometry_units = begin.text_geometry_units;
             }
             OutputWindowLifecycleRequest::End => {
                 if let Some(grid) = self.current_row_grid.take() {
@@ -267,6 +274,10 @@ impl OutputWindowBuildState {
 
     pub(crate) fn current_window_text_pixel_bounds(&self) -> Rect {
         self.current_text_pixel_bounds
+    }
+
+    pub(crate) fn current_text_geometry_units(&self) -> TextGeometryUnits {
+        self.current_text_geometry_units
     }
 
     pub(crate) fn cursor_visual_column_context(&self) -> CursorVisualColumnResolutionContext<'_> {
@@ -447,6 +458,7 @@ impl OutputWindowBuildState {
                 self.current_pixel_bounds,
                 phys_cursor,
                 paragraph_direction,
+                self.current_text_geometry_units,
             );
         }
     }
@@ -765,6 +777,7 @@ impl OutputWindowRowGrid {
         pixel_bounds: Rect,
         phys_cursor: Option<&mut PhysCursor>,
         paragraph_direction: ParagraphDirection,
+        text_geometry_units: TextGeometryUnits,
     ) {
         // Reorder exactly once per row. A redundant trailing-row `Finalize`
         // (see `finalized_rows`) is a true no-op, not a second reorder.
@@ -777,6 +790,7 @@ impl OutputWindowRowGrid {
         };
         GlyphRowFinalizationContext::new(window_id, row, pixel_bounds)
             .with_bidi_paragraph_direction(paragraph_direction)
+            .with_text_geometry_units(text_geometry_units)
             .finalize_row(matrix_row, matrix_ncols, phys_cursor);
     }
 }

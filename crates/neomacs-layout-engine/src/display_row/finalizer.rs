@@ -455,6 +455,8 @@ pub(crate) struct GlyphRowFinalizationContext {
     /// The displayed buffer's paragraph direction (GNU
     /// `it->paragraph_embedding`, `src/xdisp.c:3600-3611`).
     pub(crate) paragraph_direction: ParagraphDirection,
+    /// Terminal cells or graphical pixels for cursor geometry.
+    pub(crate) text_geometry_units: neomacs_display_protocol::glyph_matrix::TextGeometryUnits,
 }
 
 impl GlyphRowFinalizationContext {
@@ -464,6 +466,8 @@ impl GlyphRowFinalizationContext {
             row,
             window_pixel_bounds,
             paragraph_direction: ParagraphDirection::Auto,
+            text_geometry_units: neomacs_display_protocol::glyph_matrix::TextGeometryUnits::default(
+            ),
         }
     }
 
@@ -472,6 +476,14 @@ impl GlyphRowFinalizationContext {
         paragraph_direction: ParagraphDirection,
     ) -> Self {
         self.paragraph_direction = paragraph_direction;
+        self
+    }
+
+    pub(crate) fn with_text_geometry_units(
+        mut self,
+        units: neomacs_display_protocol::glyph_matrix::TextGeometryUnits,
+    ) -> Self {
+        self.text_geometry_units = units;
         self
     }
 
@@ -553,14 +565,30 @@ impl<'cursor> GlyphRowFinalizer<'cursor> {
             // glyph advances. `col * char_w` assumes every glyph is one frame
             // cell wide, so a bidi row holding another face's font, a wide
             // glyph, or a stretch put the caret off the glyph it decorates.
-            let geometry = neomacs_display_protocol::glyph_matrix::TextRowGeometry::new(
+            use neomacs_display_protocol::glyph_matrix::{
+                TextGeometryUnits, TextRowGeometry, VisualTextGlyphIndex,
+            };
+            let units = self.context.text_geometry_units;
+            let geometry = TextRowGeometry::new_with_units(
                 row,
                 self.context.window_pixel_bounds,
                 char_w,
+                units,
             );
-            if let Some(x) = geometry
-                .x_at_glyph(neomacs_display_protocol::glyph_matrix::VisualTextGlyphIndex::new(col))
-            {
+            // A terminal places the cursor by materialized cell, where an RTL
+            // run's first source character owns its last visual cell.  A GUI
+            // run is one shaped glyph whose advance is not a char-width grid,
+            // so it keeps the glyph-index mapping (N-gui-rtl-cursor).
+            let x = match units {
+                // `col` is a GLYPH-ARRAY index; x_at_slot indexes materialized
+                // cells.  Convert explicitly: a tab, an image, a wide glyph or
+                // a multi-cell composition makes the two numbers diverge.
+                TextGeometryUnits::TerminalCells => geometry
+                    .slot_of_glyph(VisualTextGlyphIndex::new(col))
+                    .and_then(|slot| geometry.x_at_slot(slot)),
+                TextGeometryUnits::Pixels => geometry.x_at_glyph(VisualTextGlyphIndex::new(col)),
+            };
+            if let Some(x) = x {
                 cursor.x = x;
             }
         }

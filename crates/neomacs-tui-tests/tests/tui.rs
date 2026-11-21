@@ -8,6 +8,8 @@
 
 mod support;
 
+#[path = "bidi_paragraph_direction_tui_oracle.rs"]
+mod bidi_paragraph_direction_tui_oracle;
 mod buffer_local_completion;
 mod coding_detection;
 mod coding_save;
