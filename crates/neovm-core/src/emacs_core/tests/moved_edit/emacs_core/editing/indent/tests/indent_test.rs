@@ -1275,3 +1275,130 @@ fn install_bare_elisp_shims(ev: &mut Context) {
 fn test_ob() -> neovm_value::symbol::Obarray {
     neovm_value::symbol::Obarray::new()
 }
+
+/// Build a buffer with 1000 'a', one TAB, then `rest` 'a', set the buffer's
+/// long-line flag as redisplay would, and leave point at `point` (1-based).
+fn long_line_with_tab(line_len: usize, point: i64) -> (Context, neovm_edit::buffer::BufferId) {
+    let mut ev = crate::test_utils::runtime_startup_context();
+    ev.eval_str("(setq long-line-threshold 50000)")
+        .expect("set the long-line threshold");
+    let buffer_id = ev.edit.buffers.current_buffer_id().expect("current buffer");
+    {
+        let buf = ev.edit.buffers.get_mut(buffer_id).expect("buffer");
+        buf.insert("a".repeat(1000).as_str());
+        buf.insert("\t");
+        buf.insert("a".repeat(line_len).as_str());
+    }
+    assert!(
+        ev.edit
+            .buffers
+            .get_mut(buffer_id)
+            .expect("buffer")
+            .refresh_long_line_optimizations(50_000),
+        "the test line must set long_line_optimizations_p"
+    );
+    ev.eval_str(&format!("(goto-char {point})"))
+        .expect("move point");
+    (ev, buffer_id)
+}
+
+/// GNU `current_column` returns the character distance on a long-line buffer
+/// past `long-line-threshold` (`src/indent.c:348-351`), ignoring the TAB's
+/// width, and does NOT cache that approximation: with the same point and
+/// MODIFF, binding `long-line-threshold` to nil makes GNU recompute the exact
+/// column.
+#[test]
+fn current_column_approximates_a_long_line_without_caching() {
+    crate::test_utils::init_test_tracing();
+    let (mut ev, _buffer) = long_line_with_tab(200_000, 150_001);
+    let approximate = ev
+        .eval_str("(current-column)")
+        .expect("approximate column")
+        .as_int()
+        .expect("fixnum");
+    assert_eq!(
+        approximate, 150_000,
+        "GNU returns the character distance on a long line"
+    );
+    // The TAB at position 1001 expands to column 1008, so the exact column is
+    // 150007.  An implementation that cached the approximation would return
+    // 150000 here.
+    let exact_after_nil_threshold = ev
+        .eval_str("(let ((long-line-threshold nil)) (current-column))")
+        .expect("exact column")
+        .as_int()
+        .expect("fixnum");
+    assert_eq!(
+        exact_after_nil_threshold, 150_007,
+        "the approximation must not enter the last_known_column cache"
+    );
+}
+
+/// The approximation's gates: it needs the buffer flag, a non-nil
+/// `long-line-threshold`, and a distance strictly greater than it.
+#[test]
+fn current_column_long_line_approximation_gates() {
+    crate::test_utils::init_test_tracing();
+    // Distance 40000 <= threshold 50000: exact (TAB counted).
+    let (mut ev, _buffer) = long_line_with_tab(200_000, 40_001);
+    let below = ev
+        .eval_str("(current-column)")
+        .expect("column below threshold")
+        .as_int()
+        .expect("fixnum");
+    assert_eq!(below, 40_007, "below the threshold GNU scans the line");
+
+    // Distance 150000 > threshold, but the variable is nil: exact.
+    let (mut ev, _buffer) = long_line_with_tab(200_000, 150_001);
+    let nil_threshold = ev
+        .eval_str("(let ((long-line-threshold nil)) (current-column))")
+        .expect("column with nil threshold")
+        .as_int()
+        .expect("fixnum");
+    assert_eq!(nil_threshold, 150_007, "nil disables the approximation");
+
+    // Flag clear (line below the threshold): exact even past the distance.
+    let mut ev = crate::test_utils::runtime_startup_context();
+    ev.eval_str("(setq long-line-threshold 50000)")
+        .expect("threshold");
+    let buffer_id = ev.edit.buffers.current_buffer_id().expect("buffer");
+    {
+        let buf = ev.edit.buffers.get_mut(buffer_id).expect("buffer");
+        buf.insert("a".repeat(1000).as_str());
+        buf.insert("\t");
+        buf.insert("a".repeat(20_000).as_str());
+    }
+    ev.eval_str("(goto-char 20001)").expect("point");
+    let flag_clear = ev
+        .eval_str("(current-column)")
+        .expect("column with flag clear")
+        .as_int()
+        .expect("fixnum");
+    assert_eq!(flag_clear, 20_007, "no approximation without the flag");
+}
+
+/// The approximation must be constant work: it must not decode the line.
+#[test]
+fn current_column_long_line_approximation_is_constant_work() {
+    crate::test_utils::init_test_tracing();
+    let mut work = Vec::new();
+    for line_len in [200_000usize, 400_000] {
+        let (mut ev, _buffer) = long_line_with_tab(line_len, line_len as i64 + 1);
+        neovm_edit::test_support::authority::reset_column_scan_characters();
+        let value = ev
+            .eval_str("(current-column)")
+            .expect("approximate column")
+            .as_int()
+            .expect("fixnum");
+        assert_eq!(value, line_len as i64, "character distance");
+        work.push(neovm_edit::test_support::authority::column_scan_characters());
+    }
+    assert_eq!(
+        work[0], work[1],
+        "current-column work must not grow with the line: {work:?}"
+    );
+    assert_eq!(
+        work[0], 0,
+        "the approximation must not decode the line: {work:?}"
+    );
+}

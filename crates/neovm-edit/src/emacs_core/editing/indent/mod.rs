@@ -1536,6 +1536,15 @@ pub fn tab_width_sym_id() -> neovm_value::intern::SymId {
     *SYMBOL.get_or_init(|| neovm_value::intern::intern("tab-width"))
 }
 
+/// `long-line-threshold` (DEFVAR_LISP, src/buffer.c:5995-6042): the line
+/// length above which redisplay sets `long_line_optimizations_p`, and the
+/// gate of `current_column`'s approximation (src/indent.c:348-351).
+#[inline(always)]
+fn long_line_threshold_sym_id() -> neovm_value::intern::SymId {
+    static SYMBOL: OnceLock<neovm_value::intern::SymId> = OnceLock::new();
+    *SYMBOL.get_or_init(|| neovm_value::intern::intern("long-line-threshold"))
+}
+
 /// GNU's staticpro'd `Qinvisible`.
 #[inline(always)]
 fn invisible_prop_symbol() -> Value {
@@ -3138,9 +3147,42 @@ pub fn current_column<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult
     if let Some(column) = cached_current_column(current_id.0, point, modiff) {
         return Ok(Value::fixnum(column as i64));
     }
+    // GNU `current_column` (src/indent.c:348-351): on a buffer whose
+    // redisplay found a long line, a point farther than
+    // `long-line-threshold` from the line's beginning gets the character
+    // distance as its column.  The early return deliberately does NOT update
+    // `last_known_column`.
+    if let Some(column) = long_line_current_column_approximation(host, current_id, point) {
+        return Ok(Value::fixnum(column));
+    }
     let scan = scan_for_column(host, current_id, ColumnTarget::Position(point))?;
     set_last_known_column(current_id.0, point, modiff, scan.column);
     Ok(Value::fixnum(scan.column as i64))
+}
+
+/// GNU's `current_column` long-line approximation (`src/indent.c:348-351`):
+/// when the buffer's `long_line_optimizations_p` is set, `long-line-threshold`
+/// is a non-nil fixnum, and point is more than that many characters past the
+/// beginning of its line, return that character distance.  GNU explicitly
+/// calls this "an approximation": tabs, wide characters, control
+/// representations and display properties are ignored.
+fn long_line_current_column_approximation<H: EditHost>(
+    host: &mut H,
+    buffer_id: BufferId,
+    point: EmacsBytePos,
+) -> Option<i64> {
+    let threshold = host
+        .forwarded_variable_value(long_line_threshold_sym_id())
+        .and_then(|value| value.as_fixnum())?;
+    let (edit, _vars) = host.edit_and_vars();
+    let buffer = edit.buffers.get(buffer_id)?;
+    if !buffer.long_line_optimizations_p() {
+        return None;
+    }
+    let bol = bol_emacs_byte(buffer, point);
+    let distance = buffer.emacs_byte_pos_to_lisp_char_pos(point).as_i64()
+        - buffer.emacs_byte_pos_to_lisp_char_pos(bol).as_i64();
+    (distance > threshold).then_some(distance)
 }
 
 /// Display column (`current-column`-equivalent) of an explicit byte position in

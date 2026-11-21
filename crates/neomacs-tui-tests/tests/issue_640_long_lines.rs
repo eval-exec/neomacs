@@ -240,3 +240,122 @@ fn pre_command_hook_accessible_bounds_match_gnu() {
         "pre-command-hook must see GNU's narrowed accessible region"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Slice 2: the remaining Lisp-observable long-line paths.
+// The flag is set only by redisplay, so these rows must run in a real TUI
+// session; batch GNU can never set long_line_optimizations_p.
+// ---------------------------------------------------------------------------
+
+/// 1000 'a', one TAB (which expands to column 1008), then 200000 'a'.
+/// With the long-line flag set, GNU `current_column` returns the character
+/// distance from the line start and ignores the TAB (`src/indent.c:348-351`).
+const LONG_LINE_TAB_SETUP: &str = "(progn \
+  (switch-to-buffer (get-buffer-create \"*p640-s2*\")) \
+  (erase-buffer) \
+  (insert (make-string 1000 ?a)) \
+  (insert \"\\t\") \
+  (insert (make-string 200000 ?a)) \
+  (setq truncate-lines t) \
+  (goto-char 150001) \
+  (redisplay t) \
+  nil)";
+
+#[test]
+fn current_column_approximates_long_lines_like_gnu() {
+    let (mut gnu, mut neo) = boot_pair("");
+    resize_both(&mut gnu, &mut neo, 40, 160);
+    read_both(&mut gnu, &mut neo, Duration::from_millis(700));
+    eval_expression(&mut gnu, &mut neo, LONG_LINE_TAB_SETUP);
+    read_both(&mut gnu, &mut neo, Duration::from_secs(1));
+    let (gnu_value, neo_value) = paired_message(&mut gnu, &mut neo, "P640CC", "(current-column)");
+    eprintln!("issue#640 current-column: GNU={gnu_value} NEO={neo_value}");
+    assert_eq!(
+        gnu_value, "150000",
+        "GNU returns the character distance here"
+    );
+    assert_eq!(neo_value, gnu_value, "current-column must match GNU");
+}
+
+/// GNU's approximation returns before `last_known_column` is stored
+/// (`src/indent.c:348-351`), so binding `long-line-threshold` to nil at the
+/// same point and MODIFF makes the next call exact.
+#[test]
+fn current_column_approximation_is_not_cached_like_gnu() {
+    let (mut gnu, mut neo) = boot_pair("");
+    resize_both(&mut gnu, &mut neo, 40, 160);
+    read_both(&mut gnu, &mut neo, Duration::from_millis(700));
+    eval_expression(&mut gnu, &mut neo, LONG_LINE_TAB_SETUP);
+    read_both(&mut gnu, &mut neo, Duration::from_secs(1));
+    let (gnu_value, neo_value) = paired_message(
+        &mut gnu,
+        &mut neo,
+        "P640NC",
+        "(list (current-column) (let ((long-line-threshold nil)) (current-column)))",
+    );
+    eprintln!("issue#640 current-column cache: GNU={gnu_value} NEO={neo_value}");
+    assert_eq!(
+        gnu_value, "(150000 150007)",
+        "GNU: approximation first, exact after the nil threshold"
+    );
+    assert_eq!(neo_value, gnu_value, "the approximation must not be cached");
+}
+
+/// Control: without the flag (line below the threshold) the TAB is counted.
+#[test]
+fn current_column_below_the_long_line_threshold_is_exact() {
+    let (mut gnu, mut neo) = boot_pair("");
+    resize_both(&mut gnu, &mut neo, 40, 160);
+    read_both(&mut gnu, &mut neo, Duration::from_millis(700));
+    eval_expression(
+        &mut gnu,
+        &mut neo,
+        "(progn \
+           (switch-to-buffer (get-buffer-create \"*p640-s2-short*\")) \
+           (erase-buffer) \
+           (insert (make-string 1000 ?a)) \
+           (insert \"\\t\") \
+           (insert (make-string 40000 ?a)) \
+           (setq truncate-lines t) \
+           (goto-char 30001) \
+           (redisplay t) \
+           nil)",
+    );
+    read_both(&mut gnu, &mut neo, Duration::from_secs(1));
+    let (gnu_value, neo_value) = paired_message(&mut gnu, &mut neo, "P640SC", "(current-column)");
+    eprintln!("issue#640 current-column below threshold: GNU={gnu_value} NEO={neo_value}");
+    assert_eq!(gnu_value, "30007", "GNU counts the TAB below the threshold");
+    assert_eq!(neo_value, gnu_value, "below the threshold both are exact");
+}
+
+/// Control: `long-line-threshold` nil disables the approximation, so the flag
+/// is never set and the TAB is counted even on a 200k line.
+#[test]
+fn current_column_with_nil_threshold_is_exact_like_gnu() {
+    let (mut gnu, mut neo) = boot_pair("");
+    resize_both(&mut gnu, &mut neo, 40, 160);
+    read_both(&mut gnu, &mut neo, Duration::from_millis(700));
+    eval_expression(
+        &mut gnu,
+        &mut neo,
+        "(progn \
+           (setq long-line-threshold nil) \
+           (switch-to-buffer (get-buffer-create \"*p640-s2-nil*\")) \
+           (erase-buffer) \
+           (insert (make-string 1000 ?a)) \
+           (insert \"\\t\") \
+           (insert (make-string 200000 ?a)) \
+           (setq truncate-lines t) \
+           (goto-char 150001) \
+           (redisplay t) \
+           nil)",
+    );
+    read_both(&mut gnu, &mut neo, Duration::from_secs(1));
+    let (gnu_value, neo_value) = paired_message(&mut gnu, &mut neo, "P640NT", "(current-column)");
+    eprintln!("issue#640 current-column nil threshold: GNU={gnu_value} NEO={neo_value}");
+    assert_eq!(
+        gnu_value, "150007",
+        "nil threshold disables the approximation"
+    );
+    assert_eq!(neo_value, gnu_value, "both must count the TAB here");
+}
