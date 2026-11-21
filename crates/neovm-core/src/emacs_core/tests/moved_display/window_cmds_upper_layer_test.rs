@@ -2138,6 +2138,7 @@ fn scroll_up_long_truncated_uses_gnu_line_motion() {
            (set-window-start (selected-window) 1)
            (set-window-point (selected-window) 1)
            (goto-char 1)
+           (redisplay t)
            (scroll-up)
            (let ((start (window-start))
                  (pt (window-point)))
@@ -2171,6 +2172,7 @@ fn scroll_up_long_line_work_does_not_grow_with_the_line() {
             "(progn (set-window-start (selected-window) 1)
                     (set-window-point (selected-window) 1)
                     (goto-char 1)
+                    (redisplay t)
                     (scroll-up)
                     nil)",
         )
