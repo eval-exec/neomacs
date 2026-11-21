@@ -22851,13 +22851,16 @@ fn gc_threshold_adapts_after_collection() {
 }
 
 #[test]
-fn gc_threshold_grows_with_live_heap() {
+fn gcpace_zero_percentage_keeps_byte_budget_on_large_live_heap() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
     // Retain ~200k conses (~3.2 MB of cons cells alone) so the live heap far
     // exceeds the default 800 KB byte budget, then collect so `live_bytes` is
     // recomputed exactly at the sweep and the threshold re-synced from it.
-    ev.eval_str_each("(setq gc-live-growth-anchor (make-list 200000 0))");
+    ev.eval_str_each(
+        "(progn (setq gc-cons-threshold 800000 gc-cons-percentage 0.0)
+                (setq gc-live-growth-anchor (make-list 200000 0)))",
+    );
     ev.gc_collect();
     let retained_bytes = 200_000 * 2 * std::mem::size_of::<usize>();
     assert!(
@@ -22865,13 +22868,9 @@ fn gc_threshold_grows_with_live_heap() {
         "live heap should include the retained structure, got {}",
         ev.tagged_heap().live_bytes()
     );
-    // The live-proportional trigger requires allocating at least half the live
-    // heap before the next cycle (the elisp defaults stay floors below it).
-    assert!(
-        ev.tagged_heap().gc_threshold() >= retained_bytes / 2,
-        "threshold should grow with the live heap, got {}",
-        ev.tagged_heap().gc_threshold()
-    );
+    // GNU alloc.c consing_threshold: a zero percentage leaves only the Lisp
+    // byte budget. The old assertion encoded Neo's non-GNU live*50% floor.
+    assert_eq!(ev.tagged_heap().gc_threshold(), 800_000);
 }
 
 #[test]

@@ -184,36 +184,6 @@ const GC_THRESHOLD_FLOOR_BYTES: usize = GC_DEFAULT_THRESHOLD_BYTES / 10;
 #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) const GC_STARTUP_THRESHOLD_CEILING_BYTES: usize = 4 * 1024 * 1024;
 const GC_HI_THRESHOLD_BYTES: usize = (i64::MAX as usize) / 2;
-const GC_PERCENT_SCALE: u64 = 1_000_000;
-/// Live-proportional adaptive trigger (`effective_gc_threshold_bytes`): do not
-/// start the next cycle until at least `live_bytes × NUM/DEN` fresh bytes have
-/// been allocated, so the O(live) full-mark cost amortizes as the live heap
-/// grows (total mark work stays O(bytes allocated)) instead of re-marking the
-/// whole heap every fixed `gc-cons-threshold` bytes. The elisp-derived value
-/// (`gc-cons-threshold`/`gc-cons-percentage`) is a FLOOR this term can only
-/// raise, never lower, and `GC_HI_THRESHOLD_BYTES` still caps the result.
-const GC_LIVE_GROWTH_NUM: u128 = 1;
-const GC_LIVE_GROWTH_DEN: u128 = 2;
-
-/// The live-growth term as a percentage of the live heap, overridable for
-/// measurement with `NEOVM_GC_LIVE_GROWTH_PERCENT`.
-///
-/// The default is 50, i.e. the `NUM/DEN` above.  GNU's nearest equivalent is
-/// `gc-cons-percentage`, whose default is 10, so this term is five times GNU's
-/// and dominates whatever the user asked for: because it combines as a strict
-/// max, a `gc-cons-threshold` below it has no effect at all.  That is worth
-/// being able to measure rather than argue about, and `0` disables the term
-/// entirely, leaving GNU's contract exactly.
-fn gc_live_growth_percent() -> u128 {
-    static PERCENT: OnceLock<u128> = OnceLock::new();
-    *PERCENT.get_or_init(|| {
-        std::env::var("NEOVM_GC_LIVE_GROWTH_PERCENT")
-            .ok()
-            .and_then(|value| value.parse::<u128>().ok())
-            .filter(|percent| *percent <= 10_000)
-            .unwrap_or(GC_LIVE_GROWTH_NUM * 100 / GC_LIVE_GROWTH_DEN)
-    })
-}
 pub(crate) const INTERNAL_COMPILER_FUNCTION_OVERRIDES: &str =
     "internal--compiler-function-overrides";
 
@@ -4118,7 +4088,7 @@ pub(crate) enum LispExecution {
 #[derive(Clone, Copy, Debug)]
 struct GcRuntimeSettingsCache {
     gc_cons_threshold_bytes: usize,
-    gc_cons_percentage_scaled: Option<std::num::NonZeroU64>,
+    gc_cons_percentage: Option<f64>,
     memory_full: GcMemoryPressure,
     /// The four Lisp variables the threshold formula reads, resolved against
     /// the LIVE interner on every settings refresh (rare) instead of through
@@ -4284,7 +4254,7 @@ impl GcSettingSyms {
 const _: () = {
     assert!(std::mem::size_of::<Option<GcSettingSyms>>() == 16);
     assert!(std::mem::size_of::<GcMemoryPressure>() == 8);
-    assert!(std::mem::size_of::<GcRuntimeSettingsCache>() == 48);
+    assert!(std::mem::size_of::<GcRuntimeSettingsCache>() == 56);
     assert!(std::mem::align_of::<GcRuntimeSettingsCache>() == 8);
 };
 
@@ -4292,7 +4262,7 @@ impl Default for GcRuntimeSettingsCache {
     fn default() -> Self {
         Self {
             gc_cons_threshold_bytes: GC_DEFAULT_THRESHOLD_BYTES,
-            gc_cons_percentage_scaled: std::num::NonZeroU64::new(100_000),
+            gc_cons_percentage: Some(0.1),
             memory_full: GcMemoryPressure::Normal,
             syms: None,
             hash_test_accounting: HashTestGcAccountingSlot::default(),

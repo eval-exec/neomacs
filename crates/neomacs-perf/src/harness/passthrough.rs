@@ -59,10 +59,6 @@ const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     // Request-owned GC sidecar; the controller still owns the gate port.
     // Capture this exact path in input provenance when diagnostics are enabled.
     "NEOMACS_PERF_GC_WINDOW_FILE",
-    // GC pacing sweep: the live-proportional term as a percentage of the live
-    // heap. 0 leaves GNU's `gc-cons-threshold`/`gc-cons-percentage` contract
-    // exactly; the built-in default is 50.
-    "NEOVM_GC_LIVE_GROWTH_PERCENT",
     // OSR can reject a hot loop before compilation starts, so the JIT's
     // compilation census alone cannot explain why that loop stays interpreted.
     // Capture the opt-in rejection trace in the editor's stderr artifact.
