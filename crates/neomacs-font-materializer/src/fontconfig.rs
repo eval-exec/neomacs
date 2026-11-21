@@ -180,6 +180,24 @@ impl<'a> FontconfigContext<'a> {
             if !weight.is_finite() || !(1.0..=1000.0).contains(&weight) {
                 return None;
             }
+            // FcFreeTypeQuery describes the file's default/named instance,
+            // while the caller replays this explicit weight. Keeping Regular's
+            // names or namedinstance=false can force a Regular match and invent
+            // synthetic bold for a real variable-font weight. GNU's fresh
+            // ftfont_entity_pattern (ftfont.c:1310-1358) carries the numeric
+            // selection and file/index, not these descriptive constraints.
+            for property in [
+                c"style",
+                c"stylelang",
+                c"fullname",
+                c"fullnamelang",
+                c"postscriptname",
+                c"namedinstance",
+            ] {
+                // SAFETY: the pattern is uniquely owned and property is a
+                // terminated name. Rendering extras and file/index stay intact.
+                unsafe { fc::FcPatternDel(pattern.raw(), property.as_ptr()) };
+            }
             // SAFETY: the pattern is owned; weight conversion is pure.
             unsafe { fc::FcPatternDel(pattern.raw(), c"weight".as_ptr()) };
             pattern.integer(c"weight", unsafe {

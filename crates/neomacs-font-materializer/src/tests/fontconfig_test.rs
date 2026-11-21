@@ -2,25 +2,11 @@ use super::*;
 
 struct Config(NonNull<fc::FcConfig>);
 
-impl Drop for Config {
-    fn drop(&mut self) {
-        // SAFETY: this fixture exclusively owns the configuration.
-        unsafe { fc::FcConfigDestroy(self.0.as_ptr()) };
-    }
-}
-
-#[test]
-fn full_and_slight_hinting_preserve_noto_device_advances() {
-    let path = neomacs_test_fonts::noto_sans_variable();
-    for (policy, expected_small) in [("hintfull", 5), ("hintslight", 7)] {
-        // The fixture owns its font and rules; it neither reads nor changes the
-        // process configuration. Both policies must remain distinct in one run.
+impl Config {
+    fn new(path: &Path, rules: &str) -> Self {
         // SAFETY: allocate a new, independent configuration owned by Config.
-        let config = Config(NonNull::new(unsafe { fc::FcConfigCreate() }).unwrap());
-        let rules = CString::new(format!(
-            "<fontconfig><match target=\"pattern\"><edit name=\"hintstyle\" mode=\"assign\"><const>{policy}</const></edit><edit name=\"rgba\" mode=\"assign\"><const>none</const></edit></match></fontconfig>"
-        ))
-        .unwrap();
+        let config = Self(NonNull::new(unsafe { fc::FcConfigCreate() }).unwrap());
+        let rules = CString::new(format!("<fontconfig>{rules}</fontconfig>")).unwrap();
         unsafe extern "C" {
             fn FcConfigParseAndLoadFromMemory(
                 config: *mut fc::FcConfig,
@@ -42,8 +28,34 @@ fn full_and_slight_hinting_preserve_noto_device_advances() {
             );
             assert_ne!(fc::FcConfigBuildFonts(config.0.as_ptr()), 0);
         }
-        // SAFETY: config stays live and exclusively borrowed through this loop.
-        let context = unsafe { FontconfigContext::from_raw(config.0) };
+        config
+    }
+
+    fn context(&self) -> FontconfigContext<'_> {
+        // SAFETY: the borrow keeps this exclusively owned config live, and
+        // the helper exposes no mutation while queries borrow the context.
+        unsafe { FontconfigContext::from_raw(self.0) }
+    }
+}
+
+impl Drop for Config {
+    fn drop(&mut self) {
+        // SAFETY: this fixture exclusively owns the configuration.
+        unsafe { fc::FcConfigDestroy(self.0.as_ptr()) };
+    }
+}
+
+#[test]
+fn full_and_slight_hinting_preserve_noto_device_advances() {
+    let path = neomacs_test_fonts::noto_sans_variable();
+    for (policy, expected_small) in [("hintfull", 5), ("hintslight", 7)] {
+        // The fixture owns its font and rules; it neither reads nor changes the
+        // process configuration. Both policies must remain distinct in one run.
+        let rules = format!(
+            "<match target=\"pattern\"><edit name=\"hintstyle\" mode=\"assign\"><const>{policy}</const></edit><edit name=\"rgba\" mode=\"assign\"><const>none</const></edit></match>"
+        );
+        let config = Config::new(path, &rules);
+        let context = config.context();
         let library = freetype::Library::init().unwrap();
         let face = library.new_face(path, 0).unwrap();
         for (size, expected, average) in [(14, 13, 7), (7, expected_small, 3)] {
@@ -173,4 +185,53 @@ fn antialias_and_lcd_policy_select_the_bitmap_format() {
         mono.load_flags(false, FontRenderMode::Alpha).bits() & 0xF0000,
         LoadFlag::TARGET_MONO.bits()
     );
+}
+
+#[test]
+fn explicit_variable_weight_does_not_invent_synthetic_bold() {
+    let path = neomacs_test_fonts::noto_sans_variable();
+    // The standard synthetic-bold rule exposes a query incorrectly pinned to
+    // the raw file's Regular/default instance while requesting a real weight.
+    let config = Config::new(
+        path,
+        r#"
+<match target="font">
+<test name="weight" compare="less_eq"><const>medium</const></test>
+<test target="pattern" name="weight" compare="more"><const>medium</const></test>
+<edit name="embolden" mode="assign"><bool>true</bool></edit>
+</match>"#,
+    );
+    let context = config.context();
+    for weight in [800.0, 900.0] {
+        assert!(
+            context
+                .options_for_file_with_weight(path, 0, 1.0, Some(weight))
+                .is_some(),
+            "real weight {weight} must not require synthetic bold"
+        );
+    }
+    assert!(
+        context
+            .options_for_file_with_weight(path, 0, 1.0, None)
+            .is_some(),
+        "the unmodified default instance still resolves"
+    );
+}
+
+#[test]
+fn explicit_synthetic_bold_rendering_is_still_refused() {
+    let path = neomacs_test_fonts::noto_sans_variable();
+    for target in ["pattern", "font"] {
+        let rules = format!(
+            "<match target=\"{target}\"><edit name=\"embolden\" mode=\"assign\"><bool>true</bool></edit></match>"
+        );
+        let config = Config::new(path, &rules);
+        assert!(
+            config
+                .context()
+                .options_for_file_with_weight(path, 0, 1.0, Some(900.0))
+                .is_none(),
+            "explicit {target} synthesis must retain the native adapter guard"
+        );
+    }
 }
