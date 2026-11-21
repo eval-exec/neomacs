@@ -136,7 +136,7 @@
 use std::sync::OnceLock;
 #[cfg(unix)]
 use std::sync::atomic::AtomicI32;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 mod platform;
 
@@ -149,28 +149,28 @@ mod platform;
 /// hole ledger 180 §9.6 opened. SIGTERM/SIGHUP instead use GNU's fatal-signal
 /// path: capture the numeric status, then call kill-emacs at a safe point.
 ///
-/// **SIGCHLD is deliberately NOT here** (ledger 208).  GNU's
-/// `catch_child_signal` (src/process.c:8645-8660) exists to make the child
-/// record early and to WAKE the `pselect`; a handler here could do neither.
-/// The walk cannot run in a handler (the process table is a `HashMap` owned by
-/// the Lisp thread and iterating it allocates, which GNU's own two warnings
-/// above `handle_child_signal` forbid), and the wake never existed -- the
-/// self-pipe's read end is registered with no poller, and
-/// `polling::Poller::wait` catches `ErrorKind::Interrupted` and re-enters,
-/// measured at 3.000038747s of a 3s block after a confirmed delivery (ledger
-/// 200 §10.1).  GNU exempts exactly this case in its own words: *"WINDOWSNT
-/// doesn't need this facility because its 'pselect' emulation ... waits on a
-/// subprocess handle, which becomes signaled when the process exits"*
-/// (:7548-7552), and this port's `pidfd` is that handle.
+/// **SIGCHLD is not a `HandledSignal`**: GNU registers it with
+/// `catch_child_signal` rather than `add_user_signal`, and its Lisp-visible
+/// work is the child record, not a user event. It has its own private,
+/// flag-only handler installed by [`install`]:
 ///
-/// What was left of the trigger was an ARMING condition for the walk -- and
-/// GNU does not arm the walk with a signal either.  It arms it with
-/// `update_tick != process_tick` (:5524, :5845), a COUNTER, and that arming is
-/// only a performance short-circuit: delete it from both of GNU's wait sites
-/// and GNU is still correct, because `status_notify`'s body is guarded per
-/// process by `p->tick != p->update_tick` (:7892).  Ledger 208 gave this port
-/// that per-process pair, ran the walk unconditionally at GNU's own two sites,
-/// and the signal then had no job left.
+/// * GNU's `handle_child_signal` (src/process.c:7734-7763) walks the process
+///   alist and reaps every changed child. That walk cannot run in signal
+///   context here: the process table is a `HashMap` owned by the Lisp thread,
+///   and iterating it allocates, which GNU's own two warnings above the
+///   handler forbid.
+/// * The handler therefore only stores one relaxed atomic
+///   ([`note_child_signal`]). `ProcessManager::reap_observed_child` turns the
+///   latch into GNU's one-child `waitpid (WNOHANG | WUNTRACED | WCONTINUED)`
+///   record at an observation, and the wait's full walk clears the latch.
+///   This restores GNU's timing: an observation before the delivery sees the
+///   stale status, so a caller's await loop still enters its wait (ledger
+///   180's sentinel-in-the-let shape), while a pure spin that outlives the
+///   delivery sees `exit` (ledger 180 §9.1-9.2, ledger 184 rows 2-3).
+/// * The wake is still the `pidfd`, not a self-pipe byte: the pidfd is what
+///   GNU's WINDOWSNT `pselect` emulation uses, and this port's
+///   `polling::Poller::wait` catches `ErrorKind::Interrupted` and re-enters.
+///   The signal has no wake job left.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(usize)]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -399,6 +399,47 @@ impl InstallReport {
 static PENDING: [AtomicU32; HandledSignal::COUNT] =
     [const { AtomicU32::new(0) }; HandledSignal::COUNT];
 
+/// Set by the private SIGCHLD handler; read by child-status observations.
+///
+/// GNU's `handle_child_signal` reaps the child at signal delivery. This port's
+/// process table is a Lisp-thread-owned `HashMap`, so the handler cannot walk
+/// it; the handler only latches that a delivery happened, and the observation
+/// turns the latch into GNU's one-child `waitpid` record
+/// (`ProcessManager::reap_observed_child`). The latch is cleared when the
+/// wait's full status walk runs, so an observation before the next SIGCHLD
+/// does not reap ahead of GNU's signal timing.
+static CHILD_SIGNAL_SEEN: AtomicBool = AtomicBool::new(false);
+
+#[cfg(unix)]
+extern "C" fn note_child_signal(_signal: libc::c_int) {
+    // Async-signal-safe: one relaxed store, no allocation, no lock.
+    CHILD_SIGNAL_SEEN.store(true, Ordering::Relaxed);
+}
+
+/// Whether a SIGCHLD was delivered since the last full status walk.
+pub(crate) fn child_signal_seen() -> bool {
+    CHILD_SIGNAL_SEEN.load(Ordering::Relaxed)
+}
+
+/// Clear the latch at the start of the wait's full status walk.
+pub(crate) fn clear_child_signal_seen() {
+    CHILD_SIGNAL_SEEN.store(false, Ordering::Relaxed);
+}
+
+#[cfg(unix)]
+fn install_child_signal_flag() -> bool {
+    // SAFETY: `sigaction` receives a fully initialised action and a valid
+    // signal number; the handler only stores an atomic, which is on the
+    // async-signal-safe list. The mask is empty, matching a flag-only handler.
+    unsafe {
+        let mut action: libc::sigaction = std::mem::zeroed();
+        libc::sigemptyset(&mut action.sa_mask);
+        action.sa_sigaction = note_child_signal as usize;
+        action.sa_flags = libc::SA_RESTART;
+        libc::sigaction(libc::SIGCHLD, &action, std::ptr::null_mut()) == 0
+    }
+}
+
 /// The write end of GNU's self-pipe (`child_signal_write_fd`,
 /// src/process.c:7595).  `-1` until [`install`] creates it.
 #[cfg(unix)]
@@ -618,6 +659,14 @@ fn install_once() -> InstallReport {
             installed[index] = true;
             previous[index] = classify_previous(&old);
         }
+    }
+
+    // GNU's `catch_child_signal` (src/process.c:8645-8651) runs from
+    // `init_process_emacs`, before any child is forked. This port's handler
+    // only latches the delivery; the child record stays with the observations
+    // and the wait.
+    if !install_child_signal_flag() {
+        tracing::warn!("could not install the SIGCHLD flag handler");
     }
 
     let report = InstallReport {

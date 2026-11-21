@@ -89,6 +89,10 @@ pub(crate) fn builtin_internal_default_signal_process_impl(
     let signal_num = parse_signal_number(&args[1])?;
     match resolve_signal_process_target_in_state(processes, buffers, args.first())? {
         SignalProcessTarget::Process(id) => {
+            // Early child status: GNU's async handler has already reaped an
+            // exited child, so `p->alive` is 0 and `process_send_signal`
+            // returns -1 without a kill. Record the same before signalling.
+            processes.reap_observed_child(id);
             // `get_any_mut`, not `get_mut`: GNU's `CHECK_PROCESS` +
             // `XPROCESS (process)->pid` (src/process.c:7379-7382) does not ask
             // whether the process is still in `Vprocess_alist`.
@@ -105,9 +109,17 @@ pub(crate) fn builtin_internal_default_signal_process_impl(
             Ok(Value::fixnum(-1))
         }
         SignalProcessTarget::MissingNamedProcess => Ok(Value::NIL),
-        SignalProcessTarget::Pid(pid) => Ok(Value::fixnum(
-            sys::send_signal(pid, signal_num.into()) as i64,
-        )),
+        SignalProcessTarget::Pid(pid) => {
+            // A numeric pid that names one of this World's live children is
+            // reaped first, matching the handler: after the reap `kill` sees
+            // no process and returns -1, as GNU does.
+            if let Some(id) = processes.process_with_os_pid(pid) {
+                processes.reap_observed_child(id);
+            }
+            Ok(Value::fixnum(
+                sys::send_signal(pid, signal_num.into()) as i64
+            ))
+        }
     }
 }
 
@@ -3830,6 +3842,9 @@ pub(crate) fn builtin_signal_process_impl(
     let signal_num = parse_signal_number(&args[1])?;
     match resolve_signal_process_target_in_state(processes, buffers, args.first())? {
         SignalProcessTarget::Process(id) => {
+            // Early child status, as in `internal-default-signal-process`:
+            // GNU's async handler has already reaped an exited child.
+            processes.reap_observed_child(id);
             // `get_any_mut`, matching `internal-default-signal-process` above:
             // GNU's `CHECK_PROCESS` + `XPROCESS (process)->pid`
             // (src/process.c:7379-7382) asks the object, not the alist.  This
@@ -3849,9 +3864,17 @@ pub(crate) fn builtin_signal_process_impl(
             Ok(Value::fixnum(-1))
         }
         SignalProcessTarget::MissingNamedProcess => Ok(Value::NIL),
-        SignalProcessTarget::Pid(pid) => Ok(Value::fixnum(
-            sys::send_signal(pid, signal_num.into()) as i64,
-        )),
+        SignalProcessTarget::Pid(pid) => {
+            // A numeric pid that names one of this World's live children is
+            // reaped first, matching the handler: after the reap `kill` sees
+            // no process and returns -1, as GNU does.
+            if let Some(id) = processes.process_with_os_pid(pid) {
+                processes.reap_observed_child(id);
+            }
+            Ok(Value::fixnum(
+                sys::send_signal(pid, signal_num.into()) as i64
+            ))
+        }
     }
 }
 
@@ -3963,6 +3986,13 @@ pub(crate) fn builtin_process_attributes(
         if !handler.is_nil() {
             return eval.funcall_general(handler, vec![operation, args[0]]);
         }
+    }
+    // Early child status: GNU's SIGCHLD handler has already reaped its own
+    // child before /proc is read, so a reaped child reports nil. Reap the
+    // matching live child at this observation; a foreign zombie keeps "Z".
+    let pid = cons_to_os_pid(args[0])?;
+    if let Some(id) = eval.processes().process_with_os_pid(pid) {
+        eval.processes_mut().reap_observed_child(id);
     }
     builtin_process_attributes_impl(args)
 }

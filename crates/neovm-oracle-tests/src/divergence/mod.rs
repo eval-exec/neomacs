@@ -216,6 +216,7 @@ mod process;
 mod process_async_extra_runtime;
 mod process_coding_lifecycle;
 mod process_control_signals;
+mod process_early_status;
 mod process_shell;
 mod process_shell_deep;
 mod process_signal_deep;
