@@ -119,6 +119,42 @@ fn interval_tree_presence_outlives_property_removal_like_gnu() {
     assert!(!present(&eval), "insertion does not create a tree");
 }
 
+/// Inserting text that carries properties grafts its interval runs into the
+/// buffer's table (GNU `copy_intervals`, src/insdel.c).  A buffer whose only
+/// properties arrived with inserted text must therefore report
+/// `buffer_intervals != NULL`, and removing those properties must not discard
+/// the tree.
+#[test]
+fn interval_tree_presence_follows_inserted_propertized_text() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = eval_with_text("");
+    let buffer_id = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
+    let present = |eval: &Context| {
+        eval.edit
+            .buffers
+            .get(buffer_id)
+            .expect("buffer")
+            .text_props_tree_present()
+    };
+    assert!(!present(&eval), "an empty buffer has no interval tree");
+    eval.eval_str("(insert (propertize \"abc\" 'invisible t) \"de\")")
+        .expect("insert propertized text");
+    assert!(
+        present(&eval),
+        "grafted property runs must report GNU's interval tree"
+    );
+    eval.eval_str("(remove-text-properties (point-min) (point-max) '(invisible nil))")
+        .expect("remove the grafted property");
+    assert!(
+        present(&eval),
+        "removing the last grafted property must keep GNU's tree"
+    );
+}
+
 #[test]
 fn get_text_property_returns_nil_when_absent() {
     crate::test_utils::init_test_tracing();

@@ -484,6 +484,38 @@ fn current_column_1_removed_property_matches_gnu() {
     );
 }
 
+/// GNU creates the interval tree when text carrying properties is inserted
+/// (`copy_intervals` in `insert_1_both`, src/insdel.c), so `buffer_intervals`
+/// is non-NULL even though the buffer never had an explicit property store.
+/// `current-column` therefore takes `current_column_1` (src/indent.c:365-370)
+/// and skips the invisible text; removing the property keeps the tree.
+/// Attested GNU: (2 (nil 5)).
+#[test]
+fn current_column_after_inserting_propertized_text_matches_gnu() {
+    let (mut gnu, mut neo) = boot_pair("");
+    resize_both(&mut gnu, &mut neo, 40, 160);
+    read_both(&mut gnu, &mut neo, Duration::from_millis(700));
+    let (gnu_value, neo_value) = paired_message(
+        &mut gnu,
+        &mut neo,
+        "P640PROP",
+        "(with-temp-buffer \
+           (insert (propertize \"abc\" 'invisible t) \"de\") \
+           (list (current-column) \
+                 (progn (remove-text-properties (point-min) (point-max) '(invisible nil)) \
+                        (list (text-properties-at 1) (current-column)))))",
+    );
+    eprintln!("issue#640 inserted propertized text: GNU={gnu_value} NEO={neo_value}");
+    assert_eq!(
+        gnu_value, "(2 (nil 5))",
+        "GNU skips the inserted invisible text and keeps the tree after removal"
+    );
+    assert_eq!(
+        neo_value, gnu_value,
+        "inserted property runs must report GNU's interval tree"
+    );
+}
+
 /// Partial-width rule (`src/indent.c:637-643`): a 40-column window with
 /// truncate-lines nil and `truncate-partial-width-windows` 50 truncates, so
 /// the fast path applies.

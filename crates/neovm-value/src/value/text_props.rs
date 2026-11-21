@@ -2975,6 +2975,11 @@ impl TextPropertyTable {
     }
 
     /// Record that an interval tree now exists (GNU `create_root_interval`).
+    ///
+    /// Call this after any creation/graft and *before* any mutation that can
+    /// empty the interval set: GNU's tree is persistent, so a table that once
+    /// held an interval must keep reporting one after its last property or
+    /// interval is removed.
     #[inline]
     fn note_interval_tree_presence(&mut self) {
         if !self.intervals.is_empty() {
@@ -2984,8 +2989,14 @@ impl TextPropertyTable {
 
     /// GNU `buffer_intervals (buffer) != NULL`: an interval tree exists,
     /// even if it currently carries no properties.
+    ///
+    /// Holding an interval is itself proof of the tree: every path that
+    /// creates intervals (put/set, grafted text-property runs, casify and
+    /// transposition rebuilds) therefore reports presence without needing a
+    /// bookkeeping call at each site.  The bit additionally keeps the answer
+    /// true after pruning removes the last interval.
     pub fn interval_tree_present(&self) -> bool {
-        self.interval_tree_present
+        self.interval_tree_present || !self.intervals.is_empty()
     }
 
     /// GNU `set_buffer_intervals (buffer, NULL)`: discard the tree. Callers
@@ -3254,6 +3265,9 @@ impl TextPropertyTable {
         property_names: ReplacementPropertyNames<'_>,
     ) {
         self.mutation_tick += 1;
+        // The replacement can be empty (every grafted run nil), but the table
+        // already owned GNU's tree.
+        self.note_interval_tree_presence();
         match property_names {
             ReplacementPropertyNames::Include(names) => self.property_names.include(names),
         }
@@ -4366,6 +4380,9 @@ impl TextPropertyTable {
         if range.is_empty() {
             return;
         }
+        // GNU's tree outlives the last property: latch presence before the
+        // prune below can remove every interval.
+        self.note_interval_tree_presence();
 
         let affected = self
             .intervals
@@ -4813,6 +4830,10 @@ impl TextPropertyTable {
         if range.is_empty() {
             return;
         }
+        // Deleting the last interval-owning text keeps GNU's tree object
+        // (only `set_buffer_intervals (buffer, NULL)` discards it, and that is
+        // the buffer-level whole-text delete).
+        self.note_interval_tree_presence();
         // See adjust_for_insert_raw: keep the cached ranges positionally
         // truthful. Deletion clips; an entry emptied by the clip is removed.
         if let Ok(mut guard) = self.syntax_prop_ranges.lock()
@@ -5751,6 +5772,7 @@ pub(crate) mod b13_test_hooks {
 
             if plist.is_empty() {
             } else {
+                self.note_interval_tree_presence();
                 self.intervals.prune_trailing_empty_intervals();
             }
         }
