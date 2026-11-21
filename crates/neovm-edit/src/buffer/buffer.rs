@@ -4204,6 +4204,35 @@ impl Buffer {
             )
     }
 
+    /// GNU `compute_stop_pos`'s automatic-composition delimiter scan
+    /// (`src/xdisp.c:4380-4398`): the first space, TAB, newline, or formfeed
+    /// at or after FROM and before TO.  Those ASCII bytes never occur inside
+    /// a multibyte sequence, so a byte scan is exact.
+    pub fn first_composition_delimiter_emacs_byte(
+        &self,
+        from: EmacsBytePos,
+        to: EmacsBytePos,
+    ) -> Option<EmacsBytePos> {
+        let range = self.clamped_emacs_byte_range(EmacsByteRange::new(from, to));
+        if range.is_empty() {
+            return None;
+        }
+        let mut found = None;
+        let _ = self
+            .text
+            .for_each_emacs_byte_range_chunk(range, |chunk| -> Result<(), ()> {
+                if let Some(index) = chunk
+                    .iter()
+                    .position(|byte| matches!(byte, b' ' | b'\t' | b'\n' | b'\x0c'))
+                {
+                    found = Some(EmacsBytePos::new(range.start().get() + index));
+                    return Err(());
+                }
+                Ok(())
+            });
+        found
+    }
+
     pub fn text_props_previous_change_before_emacs_byte_pos(
         &self,
         pos: EmacsBytePos,

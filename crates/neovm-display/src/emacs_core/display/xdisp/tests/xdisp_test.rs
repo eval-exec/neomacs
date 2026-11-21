@@ -6948,6 +6948,53 @@ fn declining_fontification_function_is_not_retried_over_the_run() {
     );
 }
 
+/// With an interval tree present GNU's `compute_stop_pos`
+/// (`src/xdisp.c:4371-4461`) advances the iterator to the automatic-composition
+/// delimiter clamp: the first space, TAB, newline, or formfeed in
+/// `[POS + 100, POS + 1000]`.  A declining hook is entered at each of those
+/// stops, never twice at one position.  The properties are irrelevant to
+/// `it_props`, so the newlines (not the property edges) are the stops.
+#[test]
+fn declining_fontification_hook_advances_by_gnu_property_stops() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let buffer = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    eval.eval_str(
+        "(progn
+           (dotimes (i 8)
+             (insert (propertize (make-string 150 ?a) 'p640 i) \"\\n\"))
+           (goto-char 1)
+           (defvar p640-stop-calls nil)
+           (setq p640-stop-calls nil)
+           (set (make-local-variable 'fontification-functions)
+                (list (lambda (pos) (push pos p640-stop-calls) nil)))
+           nil)",
+    )
+    .expect("install the declining fontification function");
+    let total = eval
+        .edit
+        .buffers
+        .get(buffer)
+        .expect("buffer")
+        .total_char_len()
+        .get() as i64;
+    ensure_fontified_for_redisplay(&mut eval, buffer, 0, total).expect("fontify");
+    let calls = neovm_eval::emacs_core::print::print_value(
+        &eval
+            .eval_str("(reverse p640-stop-calls)")
+            .expect("call positions"),
+    );
+    assert_eq!(
+        calls, "(1 151 302 453 604 755 906 1057 1208)",
+        "the declining hook must follow GNU's newline stops, not every character"
+    );
+}
+
 // Test wrong arity errors
 #[test]
 fn test_wrong_arity() {

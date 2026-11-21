@@ -516,6 +516,50 @@ fn current_column_after_inserting_propertized_text_matches_gnu() {
     );
 }
 
+/// A fontification function that declines to set `fontified` must not turn
+/// one redisplay into a per-character Lisp walk.  GNU's `handle_fontified_prop`
+/// returns HANDLED_NORMALLY and the iterator advances to its next
+/// `compute_stop_pos` stop (`src/xdisp.c:4371-4461`, :4782-4786): with an
+/// interval tree present but no tracked property on the intervals, those stops
+/// are the automatic-composition delimiter clamp -- the first newline at or
+/// after `POS + 100`.  Attested GNU on this 60-line form: 39 distinct
+/// positions, beginning 1 151 302 453 604 755.  The total call count depends
+/// on how many redisplay passes run, so only the distinct list is pinned.
+#[test]
+fn declining_fontification_visits_gnu_stops_matches_gnu() {
+    let (mut gnu, mut neo) = boot_pair("");
+    resize_both(&mut gnu, &mut neo, 40, 160);
+    read_both(&mut gnu, &mut neo, Duration::from_millis(700));
+    eval_expression(
+        &mut gnu,
+        &mut neo,
+        "(progn \
+           (switch-to-buffer (get-buffer-create \"*declp*\")) (erase-buffer) \
+           (dotimes (i 60) (insert (propertize (make-string 150 ?a) 'p640 i) \"\\n\")) \
+           (goto-char 1) (defvar decl-calls nil) (setq decl-calls nil) \
+           (set (make-local-variable 'fontification-functions) \
+                (list (lambda (pos) (push pos decl-calls) nil))) \
+           (redisplay t) nil)",
+    );
+    read_both(&mut gnu, &mut neo, Duration::from_secs(1));
+    let (gnu_value, neo_value) = paired_message(
+        &mut gnu,
+        &mut neo,
+        "P640DECL",
+        "(let ((u (delete-dups (reverse decl-calls)))) \
+           (list (length u) (seq-take u 6) u))",
+    );
+    eprintln!("issue#640 declining fontification stops: GNU={gnu_value} NEO={neo_value}");
+    assert!(
+        gnu_value.starts_with("(39 (1 151 302 453 604 755)"),
+        "GNU's attested distinct stops missing: {gnu_value}"
+    );
+    assert_eq!(
+        neo_value, gnu_value,
+        "a declining hook must be entered at GNU's stops, not per character"
+    );
+}
+
 /// Partial-width rule (`src/indent.c:637-643`): a 40-column window with
 /// truncate-lines nil and `truncate-partial-width-windows` 50 truncates, so
 /// the fast path applies.

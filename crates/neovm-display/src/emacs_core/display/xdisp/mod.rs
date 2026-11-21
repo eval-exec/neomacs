@@ -9497,6 +9497,121 @@ fn next_unfontified_position(
     Ok(end)
 }
 
+/// GNU `compute_stop_pos` (`src/xdisp.c:4371-4461`) after a fontification
+/// callback declined to mark POS fontified: where the display iterator goes
+/// next before it re-examines the property handlers.
+///
+/// The stop is the earlier of:
+/// - the automatic-composition delimiter clamp: the first space, TAB,
+///   newline, or formfeed in `[POS + TEXT_PROP_DISTANCE_LIMIT,
+///   POS + 10 * TEXT_PROP_DISTANCE_LIMIT]` (`src/xdisp.c:4380-4398`);
+/// - a change of one of the properties `it_props` tracks (`fontified`,
+///   `face`, `display`, `invisible`, `composition`; `src/xdisp.c:1012-1023`)
+///   within that limit;
+/// - the next overlay boundary.
+///
+/// Without an interval tree GNU's `validate_interval_range` returns no
+/// interval, `compute_stop_pos` leaves `stop_charpos` untouched, and no
+/// further fontification stop is reached: the request ends.
+///
+/// The returned position is always greater than POS, so one request never
+/// enters the hook twice at the same position.
+fn next_declining_fontification_stop(
+    ctx: &neovm_eval::emacs_core::eval::Context,
+    buf_id: BufferId,
+    pos: i64,
+    end: i64,
+) -> i64 {
+    let Some(buffer) = ctx.edit.buffers.get(buf_id) else {
+        return end;
+    };
+    if !buffer.text_props_tree_present() {
+        return end;
+    }
+    // TEXT_PROP_DISTANCE_LIMIT (src/xdisp.c:831).
+    const PROP_DISTANCE_LIMIT: i64 = 100;
+    let auto_composition = buffer.get_multibyte()
+        && ctx
+            .visible_variable_value_or_nil("auto-composition-mode")
+            .is_truthy()
+        && ctx
+            .visible_variable_value_or_nil("composition-break-at-point")
+            .is_nil();
+    let point_max = buffer.point_max_lisp_char_pos().as_i64();
+    let mut stop = end;
+    let arbitrary_limit = pos
+        .saturating_add(PROP_DISTANCE_LIMIT)
+        .min(point_max)
+        .min(end);
+    if arbitrary_limit > pos {
+        stop = stop.min(arbitrary_limit);
+    }
+    if auto_composition {
+        let scan_from_lisp = pos.saturating_add(PROP_DISTANCE_LIMIT).min(point_max);
+        let horizon_lisp = pos.saturating_add(10 * PROP_DISTANCE_LIMIT).min(point_max);
+        let scan_from = buffer.char_pos_to_emacs_byte_pos_clamped_no_alloc(
+            LispCharPos1::new(scan_from_lisp).to_char_pos(),
+        );
+        let horizon = buffer.char_pos_to_emacs_byte_pos_clamped_no_alloc(
+            LispCharPos1::new(horizon_lisp).to_char_pos(),
+        );
+        if scan_from < horizon
+            && let Some(delimiter) =
+                buffer.first_composition_delimiter_emacs_byte(scan_from, horizon)
+        {
+            let delimiter_lisp = buffer
+                .emacs_byte_pos_to_char_pos_clamped_no_alloc(delimiter)
+                .to_lisp()
+                .as_i64();
+            // GNU's `pos--` lands on the delimiter after the advancing fetch;
+            // the iterator's next property stop is that character itself.
+            if delimiter_lisp > pos {
+                stop = stop.max(delimiter_lisp.min(end)).min(end);
+            }
+        }
+    }
+    if stop <= pos {
+        return end;
+    }
+    let pos_byte =
+        buffer.char_pos_to_emacs_byte_pos_clamped_no_alloc(LispCharPos1::new(pos).to_char_pos());
+    let stop_byte =
+        buffer.char_pos_to_emacs_byte_pos_clamped_no_alloc(LispCharPos1::new(stop).to_char_pos());
+    let tracked = [
+        Value::symbol("fontified"),
+        Value::symbol("face"),
+        Value::symbol("display"),
+        invisible_prop_symbol(),
+        Value::symbol("composition"),
+    ];
+    for name in tracked {
+        if let Some(next) = buffer
+            .text_props_next_single_change_after_emacs_byte_pos_bounded(pos_byte, name, stop_byte)
+        {
+            let next_lisp = buffer
+                .emacs_byte_pos_to_char_pos_clamped_no_alloc(next)
+                .to_lisp()
+                .as_i64();
+            if next_lisp > pos && next_lisp < stop {
+                stop = next_lisp;
+            }
+        }
+    }
+    if let Some(next) = buffer
+        .overlays()
+        .next_boundary_after_until_emacs_byte_pos_no_alloc(pos_byte, stop_byte)
+    {
+        let next_lisp = buffer
+            .emacs_byte_pos_to_char_pos_clamped_no_alloc(next)
+            .to_lisp()
+            .as_i64();
+        if next_lisp > pos && next_lisp < stop {
+            stop = next_lisp;
+        }
+    }
+    stop.max(pos.saturating_add(1)).min(end)
+}
+
 fn call_fontification_functions_at<O: FontificationDemandObserver>(
     ctx: &mut neovm_eval::emacs_core::eval::Context,
     hook_value: Value,
@@ -9592,10 +9707,11 @@ fn call_fontification_functions_at<O: FontificationDemandObserver>(
 /// GNU's `handle_fontified_prop` recomputes iterator properties only for the
 /// successful transition. Keeping callback entry separate lets the immutable
 /// layout engine retry after a successful callback. A callback that declines
-/// to mark the requested position ends the current fontification request
-/// (`src/xdisp.c:4782-4786`): it is entered once for that stop and never
-/// retried over the remaining unfontified run, so a non-fontifying hook
-/// cannot turn one redisplay into a per-character Lisp walk.
+/// to mark the requested position leaves the iterator on GNU's
+/// `compute_stop_pos` schedule (`src/xdisp.c:4782-4786`): the hook is entered
+/// once at each display stop and never twice at the same position, so a
+/// non-fontifying hook cannot turn one redisplay into a per-character Lisp
+/// walk.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum RedisplayFontificationOutcome {
     /// No fontification callback was entered. Native property inspection alone
@@ -9873,16 +9989,20 @@ fn ensure_fontified_for_redisplay_inner<O: FontificationDemandObserver>(
 
             // GNU recomputes properties only if the hook actually marked the
             // current character fontified; otherwise `handle_fontified_prop`
-            // returns HANDLED_NORMALLY and the iterator moves on -- it never
-            // walks the unfontified run to try again at the next character
-            // (src/xdisp.c:4782-4786, "This avoids an endless loop if they
-            // failed to fontify the text").  End this request at the first
-            // declining callback so the Lisp call count is bounded by the
-            // requested stops, not by the region's character count.
+            // returns HANDLED_NORMALLY and the iterator moves on to its next
+            // property stop, where the hook is entered again
+            // (src/xdisp.c:4782-4786).  Advance by GNU's `compute_stop_pos`
+            // instead of one character, so the call count follows the stops
+            // the display actually visits and never repeats a position.
             let after = get_fontified_property(ctx, pos)?;
             if after.is_nil() {
                 observer.advance(LispCharPos1::new(pos), LispCharPos1::new(pos + 1), false);
-                break;
+                let next = next_declining_fontification_stop(ctx, buf_id, pos, end);
+                if next <= pos || next >= end {
+                    break;
+                }
+                pos = next;
+                continue;
             }
             outcome = RedisplayFontificationOutcome::Fontified;
             // Reacquire restrictions, resolution controls, overlays and the
