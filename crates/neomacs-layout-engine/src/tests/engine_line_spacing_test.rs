@@ -370,12 +370,14 @@ fn newline_cursor_replay_preserves_font_and_spacing_metrics() {
 fn remapped_default_newline_cursor_replay_preserves_width() {
     for height in ["0.5", "2.0"] {
         for line_numbers in ["nil", "t"] {
-            let (mut eval, frame, buffer, window) =
+            let (mut eval, frame, _buffer, window) =
                 incr_editing_frame("mmmmmmmm\nnext\n", 800, 240);
             realize_test_gui_frame(&mut eval, frame);
             install_test_gnu_line_number_face_inheritance(&mut eval);
             eval.eval_str(&format!(
                 "(progn
+                   (internal-set-lisp-face-attribute
+                     'default :family \"DejaVu Sans Mono\" (selected-frame))
                    (set (make-local-variable 'face-remapping-alist)
                      '((default (:height {height}) default)))
                    (set (make-local-variable 'display-line-numbers) {line_numbers})
@@ -400,26 +402,20 @@ fn remapped_default_newline_cursor_replay_preserves_width() {
                 .cloned();
             let initial = initial.materialize();
             let text_width = initial.active_cursor().expect("initial text cursor").width;
-            let remapping = eval.eval_str("face-remapping-alist").unwrap();
-            let target_remapping = crate::neovm_bridge::LayoutBufferView::layout_buffer_local_value(
-                eval.buffer_manager().get(buffer).unwrap(),
-                crate::neovm_bridge::LayoutVar::FaceRemappingAlist,
-            );
-            eprintln!(
-                "remap height={height}, line-numbers={line_numbers}, buffer={buffer:?}, current={:?}, remapping={remapping:?}, target-remapping={target_remapping:?}, window-system={:?}, glyph={first_text_glyph:?}, faces={:?}, cursor={:?}",
-                eval.buffer_manager()
-                    .current_buffer()
-                    .map(|buffer| buffer.id()),
-                eval.frame_manager()
-                    .get(frame)
-                    .unwrap()
-                    .effective_window_system(),
-                initial
-                    .faces
-                    .iter()
-                    .map(|(id, face)| (id, &face.font_family, face.font_size))
-                    .collect::<Vec<_>>(),
-                initial.active_cursor(),
+            // A hand-built frame starts with the TTY family "default". GNU
+            // initializes a GUI default from its opened frame font instead
+            // (xfaces.c:6008-6043). Seed a real fixed-pitch family above: a
+            // proportional fallback's m advance need not equal its average
+            // column width, even after its size has changed correctly.
+            let glyph = first_text_glyph.expect("first buffer character");
+            let face = initial.faces.get(&glyph.face_id).unwrap();
+            let frame_face = initial.faces.get(&FaceId::new(0)).unwrap();
+            assert_eq!(&*face.font_family, "DejaVu Sans Mono");
+            assert_eq!(&*frame_face.font_family, "DejaVu Sans Mono");
+            assert!(
+                (face.font_size - frame_face.font_size * height.parse::<f32>().unwrap()).abs()
+                    < 0.001,
+                "the published text font must carry the remapped size"
             );
             assert_ne!(
                 text_width,
