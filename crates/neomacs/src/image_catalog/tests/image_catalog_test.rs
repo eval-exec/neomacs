@@ -454,13 +454,25 @@ fn pending_geometry_resolves_from_the_header_before_any_pixel_exists() {
     let ImageLookup::Pending(placeholder) = lookup(&catalog, request.clone()) else {
         panic!("a new image lookup begins pending");
     };
+    // The header probe runs off-thread, so it can publish 50x100 between the
+    // catalog reserving this slot and this lookup returning it: lookup_inner
+    // adopts header geometry that landed since the reservation.  Both
+    // observations are the same reservation, so pin the request's placeholder
+    // value directly and accept either slot here.  What this test exists for
+    // is the refinement below, while no pixel exists.
     assert_eq!(
-        (
-            placeholder.placement().width(),
-            placeholder.placement().height()
-        ),
+        placeholder_image_extent(&request).dimensions(),
         (50, 50),
-        "the slot starts on the request's pinned placeholder"
+        "the request pins the clamp-square placeholder"
+    );
+    let initial = (
+        placeholder.placement().width(),
+        placeholder.placement().height(),
+    );
+    assert!(
+        matches!(initial, (50, 50) | (50, 100)),
+        "a new slot holds the pinned placeholder or the header geometry the \
+         off-thread probe already published, got {initial:?}"
     );
     let RenderCommand::Asset(AssetCommand::ImageLoadFile { load, .. }) =
         cmd_rx.try_recv().expect("image load command")
