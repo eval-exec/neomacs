@@ -619,6 +619,12 @@ pub(crate) fn decode_sequence(data: &[u8]) -> Option<Arc<DecodedImageSequence>> 
             embedded,
         });
     }
+    if format == image::ImageFormat::WebP {
+        let count = u32::try_from(decoded.len()).ok()?;
+        for frame in &mut decoded {
+            frame.embedded = Some(ImageEmbeddedMetadata::webp(count, frame.delay));
+        }
+    }
     (!decoded.is_empty()).then(|| {
         Arc::new(DecodedImageSequence {
             frames: decoded,

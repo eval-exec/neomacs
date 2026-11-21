@@ -22,6 +22,11 @@ fn image_decode_completion_reflows_without_buffer_edit_like_gnu() {
     compare("reflow");
 }
 
+#[test]
+fn image_metadata_webp_property_order_matches_gnu() {
+    compare("webp");
+}
+
 fn compare(case: &str) {
     let root = neomacs_infra::workspace_root();
     let artifacts = root.join(format!("tmp/image-api-{case}-{}", std::process::id()));

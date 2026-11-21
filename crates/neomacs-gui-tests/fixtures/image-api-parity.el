@@ -33,7 +33,11 @@
                (image-mask-p (apply #'create-image (base64-decode-string bytes)
                                     'png t props)))
              '(nil (:mask nil) (:mask heuristic) (:heuristic-mask t))))
-   (list image-api-png image-api-alpha-png)))
+   (list image-api-png image-api-alpha-png
+         "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAMAAADD/I+4AAAABlBMVEX/AAAA/wDSh+9xAAAAAnRSTlMA/1uRIrUAAAALSURBVHicY2BgBAAABAACv3o/SgAAAABJRU5ErkJggg=="
+         "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAMAAADD/I+4AAAABlBMVEX/AAAA/wDSh+9xAAAAAnRSTlN///M2R4wAAAALSURBVHicY2BgBAAABAACv3o/SgAAAABJRU5ErkJggg=="
+         "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAIAAAB7QOjdAAAABnRSTlMA/wAAAACkwsAdAAAAD0lEQVR4nGP4z8DA8J8BAAf/Af8Bf4mnAAAAAElFTkSuQmCC"
+         )))
 
 (defun image-api-metadata ()
   (mapcar
@@ -58,6 +62,16 @@
     "R0lGODlhAQABAIAAAAAAAP///yH+Av+AA2J5ZQAh+QQBCgAAACwAAAAAAQABAAACAkQBADs="
     "R0lGODlhAQABAIAAAAAAAP///yH5BAECAAAALAAAAAABAAEAAAICRAEAIfkEAQQAAAAsAAAAAAEAAQAAAgJEAQA7"
     ))
+
+(defun image-api-webp ()
+  (mapcar
+   (lambda (index)
+     (image-metadata
+      (create-image
+       (base64-decode-string
+        "UklGRoQAAABXRUJQVlA4WAoAAAACAAAAAQAAAAAAQU5JTQYAAAAAAAAAAABBTk1GKAAAAAAAAAAAAAEAAAAAABQAAAJWUDhMDwAAAC8BAAAABxD9j/4HIqL/AQBBTk1GKAAAAAAAAAAAAAEAAAAAACgAAAJWUDhMDwAAAC8BAAAAB9D/iP4HIqL/AQA=")
+       'webp t :scale 1 :index index)))
+   '(0 1)))
 
 (defun image-api-write (value)
   (with-temp-file (getenv "NEOMACS_GUI_IMAGE_RESULT")
@@ -91,5 +105,6 @@
        ("size" (image-api-size))
        ("mask" (image-api-mask))
        ("metadata" (image-api-metadata))
+       ("webp" (image-api-webp))
        (_ (error "Unknown image API case: %s" case))))
     (run-at-time 1 nil (lambda () (kill-emacs 0)))))

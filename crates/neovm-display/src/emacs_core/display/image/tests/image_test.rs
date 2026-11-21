@@ -2380,3 +2380,20 @@ fn gif_metadata_keeps_reverse_block_order_and_unibyte_payloads() {
         assert_eq!(string.as_bytes(), bytes);
     }
 }
+
+#[test]
+fn webp_metadata_publishes_delay_before_count_like_gnu() {
+    let value = image_embedded_metadata_to_lisp(&ImageEmbeddedMetadata::webp(
+        2,
+        ImageFrameDelay::milliseconds(20, 1).unwrap(),
+    ));
+    assert_eq!(
+        list_to_vec(&value).unwrap(),
+        vec![
+            Value::symbol("delay"),
+            Value::make_float(0.02),
+            Value::symbol("count"),
+            Value::fixnum(2),
+        ]
+    );
+}

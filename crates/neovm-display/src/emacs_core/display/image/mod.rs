@@ -1468,18 +1468,25 @@ fn image_embedded_metadata_to_lisp(
     metadata: &crate::emacs_core::image_catalog::ImageEmbeddedMetadata,
 ) -> Value {
     let mut plist = Vec::with_capacity(4);
-    if let Some(count) = metadata.frame_count() {
-        plist.push(Value::symbol("count"));
-        plist.push(Value::fixnum(i64::from(count)));
-    }
-    if let Some(delay) = metadata.frame_delay() {
-        plist.push(Value::symbol("delay"));
-        plist.push(match delay {
-            crate::emacs_core::image_catalog::ImageFrameDelay::UseDefault => Value::T,
-            crate::emacs_core::image_catalog::ImageFrameDelay::Milliseconds { .. } => {
-                Value::make_float(delay.seconds().expect("numeric delay has seconds"))
-            }
-        });
+    let count = metadata
+        .frame_count()
+        .map(|count| Value::fixnum(i64::from(count)));
+    let delay = metadata.frame_delay().map(|delay| match delay {
+        crate::emacs_core::image_catalog::ImageFrameDelay::UseDefault => Value::T,
+        crate::emacs_core::image_catalog::ImageFrameDelay::Milliseconds { .. } => {
+            Value::make_float(delay.seconds().expect("numeric delay has seconds"))
+        }
+    });
+    use neomacs_display_protocol::image::ImageMetadataOrder;
+    let properties = match metadata.property_order() {
+        ImageMetadataOrder::CountThenDelay => [("count", count), ("delay", delay)],
+        ImageMetadataOrder::DelayThenCount => [("delay", delay), ("count", count)],
+    };
+    for (name, value) in properties {
+        if let Some(value) = value {
+            plist.push(Value::symbol(name));
+            plist.push(value);
+        }
     }
     if let Some(extensions) = metadata
         .gif_extensions()
