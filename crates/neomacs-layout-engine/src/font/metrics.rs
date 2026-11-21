@@ -1333,6 +1333,28 @@ impl FontMetricsService {
         Some(opened)
     }
 
+    /// Select a frame face through GNU's inherited family/foundry preferences
+    /// and materialize that exact winner, preserving its canonical family.
+    pub fn open_face_font(
+        &mut self,
+        family: &str,
+        foundry: Option<&str>,
+        weight: u16,
+        slant: FontSlant,
+        width: FontWidth,
+        pixel_size: u32,
+    ) -> Option<SelectedFontInfo> {
+        let matched = self.font_resolver.resolve_face_font(
+            family,
+            foundry,
+            weight,
+            slant,
+            width,
+            self.selection_size(pixel_size.max(1) as f32),
+        )?;
+        self.open_platform_match_font(&matched, pixel_size)
+    }
+
     /// Open one exact listed/matched platform face, as `open-font` on a font
     /// entity does.  The identity check refuses to silently return a
     /// different face when the family-only materialization cannot reproduce

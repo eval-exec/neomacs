@@ -18,7 +18,7 @@ use self::data::xwidget;
 use self::interactive_registry::InteractiveRegistry;
 use self::keymap_lookup::{list_keymap_define, list_keymap_set_parent, make_sparse_list_keymap};
 use self::protocol::tty_host::TtyFrameHostFactory;
-pub use self::protocol::{DisplayHost, FrameFontRequest};
+pub use self::protocol::{DisplayHost, FrameFontRequest, FrameFontSelection};
 pub use self::protocol::{
     FontOpeningSize, FrameFontSize, TerminalCreateRequest, TerminalDisplayTarget,
     TerminalFloatPlacement, TerminalGridSize, TerminalId,

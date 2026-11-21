@@ -370,8 +370,7 @@ use super::font::{
     is_font_spec, live_frame_designator_in_state, live_frame_font_attribute_fallback,
     opened_font_from_resolved_match, publish_face_attribute_to_frame_parameter,
     replace_alternative_font_family_alist, replace_alternative_font_registry_alist,
-    resolve_font_match, resolve_live_frame_font_request, sync_live_default_face_font_state,
-    sync_live_frame_font_state,
+    resolve_font_match, sync_live_default_face_font_state, sync_live_frame_font_state,
 };
 use neovm_value::error::{Flow, LispCondition, signal, signal_error_with_arg};
 
@@ -3712,6 +3711,7 @@ pub fn builtin_internal_set_lisp_face_attribute(
         ));
     }
 
+    let mut opened_fonts = Vec::new();
     let mut changed_live_frames = Vec::new();
     {
         let mut apply_set = |defaults_frame: bool| -> Result<(), Flow> {
@@ -3816,6 +3816,36 @@ pub fn builtin_internal_set_lisp_face_attribute(
                 validate_font_face_attr_value(&canonical_value)?;
             }
 
+            // GNU opens :font after validation and before set_lface_from_font
+            // writes attributes (xfaces.c:3675-3698). Retain the opened object
+            // for publication so a native miss leaves this domain untouched.
+            if canonical_attr == LFaceAttr::Font {
+                for target in font_face_realization_targets(eval, args.get(3))
+                    .into_iter()
+                    .filter(|target| target.defaults_frame() == defaults_frame)
+                {
+                    let resolution = if is_reset_like_face_attr_value(&canonical_value, symbol_mode)
+                    {
+                        super::font::LiveFrameFontResolution {
+                            font_value: canonical_value,
+                        }
+                    } else {
+                        super::font::try_resolve_live_frame_font_request(
+                            eval,
+                            target.reference_frame(),
+                            &canonical_value,
+                        )
+                        .map_err(|()| {
+                            let spec = font_string_text(&canonical_value)
+                                .and_then(|name| font_spec_from_name(&name).ok().flatten())
+                                .unwrap_or(canonical_value);
+                            signal("error", vec![Value::string("Font not available"), spec])
+                        })?
+                    };
+                    opened_fonts.push((target, resolution));
+                }
+            }
+
             set_face_override_id(face_id, canonical_attr, canonical_value, defaults_frame);
             if defaults_frame {
                 if let Some(vector) = ensure_global_lisp_face_vector(eval, &face_name) {
@@ -3899,11 +3929,9 @@ pub fn builtin_internal_set_lisp_face_attribute(
                 normalize_face_attr_for_set_with_eval(Some(eval), &face_name, attr_name, value)?;
             let mut public_effective_value = canonical_value;
             if canonical_attr == LFaceAttr::Font {
-                let targets = font_face_realization_targets(eval, args.get(3));
                 let mut published_live_override = false;
-                for target in targets {
+                for (target, resolution) in opened_fonts {
                     let frame_id = target.reference_frame();
-                    let resolution = resolve_live_frame_font_request(eval, frame_id, &value);
                     let effective_value = resolution.font_value;
                     set_realized_font_for_target(
                         eval,

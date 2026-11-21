@@ -91,6 +91,9 @@ mod font_coverage;
 #[path = "font_fallback_composite_ink.rs"]
 mod font_fallback_composite_ink;
 
+#[path = "font_family_fallback.rs"]
+mod font_family_fallback;
+
 #[path = "font_name_pattern_resize.rs"]
 mod font_name_pattern_resize;
 

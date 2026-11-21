@@ -690,6 +690,85 @@ impl FontResolver {
         selected
     }
 
+    /// GNU font_find_for_lface treats the face family and foundry as
+    /// preferences, independently relaxing each before scoring native entities.
+    pub fn resolve_face_font(
+        &self,
+        family: &str,
+        foundry: Option<&str>,
+        weight: u16,
+        slant: FontSlant,
+        width: FontWidth,
+        size: FontSelectionSize,
+    ) -> Option<PlatformFontMatch> {
+        let families = FontFamilySource::Face(family).capture();
+        self.resolve_face_policy(&families, foundry, weight, slant, width, size)
+    }
+
+    fn resolve_face_policy(
+        &self,
+        families: &CapturedFontFamilyPolicy,
+        foundry: Option<&str>,
+        weight: u16,
+        slant: FontSlant,
+        width: FontWidth,
+        size: FontSelectionSize,
+    ) -> Option<PlatformFontMatch> {
+        for family in families.search_order(|family| self.backend.resolve_family(family)) {
+            let scope = match family {
+                FontFamilyCandidate::Family(family) => {
+                    FontCandidateScope::Family(FontFamilyName::new(family.as_ref())?)
+                }
+                // This is GNU's family=nil enumeration, not a character's
+                // native fallback cascade or a generic monospace request.
+                FontFamilyCandidate::NativeFallback => FontCandidateScope::All,
+            };
+            let query = FontCandidateQuery {
+                scope,
+                required: RequiredFontCoverage::Any,
+                charset_ranges: Vec::new(),
+                languages: Vec::new(),
+                requested_weight: weight,
+                requested_slant: slant,
+                requested_width: width,
+                direction: TextDirection::LeftToRight,
+            };
+            let candidates = self.backend.list_candidates(&query);
+            for foundry in foundry.into_iter().map(Some).chain(std::iter::once(None)) {
+                let matching = candidates
+                    .iter()
+                    .filter(|candidate| {
+                        foundry.is_none_or(|foundry| {
+                            candidate
+                                .matched
+                                .metadata
+                                .foundry
+                                .as_ref()
+                                .is_some_and(|actual| actual.eq_ignore_ascii_case(foundry))
+                        })
+                    })
+                    .cloned()
+                    .collect();
+                let request = SelectionRequest {
+                    weight,
+                    slant,
+                    width: Some(width),
+                    spacing: None,
+                    prefer_monospace: false,
+                    queried_family: None,
+                    size,
+                };
+                if let Some(matched) =
+                    select_best_candidate(self.classify_unknown_candidate_sizes(matching), &request)
+                        .and_then(|selected| self.backend.finalize_match(selected))
+                {
+                    return Some(self.with_native_metrics(matched));
+                }
+            }
+        }
+        None
+    }
+
     /// Observe an already selected face without running style selection again.
     ///
     /// GNU opens the selected entity in `font_open_entity`; it does not choose

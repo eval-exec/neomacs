@@ -407,10 +407,13 @@ fn frame_font_request_from_value(value: &Value) -> Option<FrameFontRequest> {
         None
     };
 
-    Some(match size {
-        Some(size) => FrameFontRequest::with_size(face, size),
-        None => FrameFontRequest::from_face(face),
-    })
+    Some(
+        match size {
+            Some(size) => FrameFontRequest::with_size(face, size),
+            None => FrameFontRequest::from_face(face),
+        }
+        .for_font_specification(),
+    )
 }
 
 fn face_height_from_value(value: Value) -> Option<FaceHeight> {
@@ -475,56 +478,68 @@ pub(crate) fn resolve_live_frame_font_request(
     resolve_live_frame_font_request_in_state(frames, display_host, frame_id, requested)
 }
 
+/// Open an explicit face font before mutating its authoritative attributes.
+/// A native miss is distinct from a deferred request without a GUI host.
+pub(crate) fn try_resolve_live_frame_font_request(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    frame_id: FrameId,
+    requested: &Value,
+) -> Result<LiveFrameFontResolution, ()> {
+    let (frames, display_host) = eval.frame_manager_read_and_display_host_mut();
+    try_resolve_live_frame_font_request_in_state(frames, display_host, frame_id, requested)
+}
+
 fn resolve_live_frame_font_request_in_state(
     frames: &FrameManager,
     display_host: &mut Option<Box<dyn neovm_eval::emacs_core::eval::DisplayHost>>,
     frame_id: FrameId,
     requested: &Value,
 ) -> LiveFrameFontResolution {
-    // GNU only opens a font when the target (or, for new-frame defaults, the
-    // selected reference frame) is graphical. A TTY frame retains the Lisp
-    // selector without manufacturing native metrics.
+    try_resolve_live_frame_font_request_in_state(frames, display_host, frame_id, requested)
+        .unwrap_or(LiveFrameFontResolution {
+            font_value: *requested,
+        })
+}
+
+fn try_resolve_live_frame_font_request_in_state(
+    frames: &FrameManager,
+    display_host: &mut Option<Box<dyn neovm_eval::emacs_core::eval::DisplayHost>>,
+    frame_id: FrameId,
+    requested: &Value,
+) -> Result<LiveFrameFontResolution, ()> {
+    let retained = || LiveFrameFontResolution {
+        font_value: *requested,
+    };
     if frames
         .get(frame_id)
         .is_none_or(|frame| frame.effective_window_system().is_none())
+        || is_font_object(requested)
     {
-        return LiveFrameFontResolution {
-            font_value: *requested,
-        };
+        return Ok(retained());
     }
-
-    if is_font_object(requested) {
-        return LiveFrameFontResolution {
-            font_value: *requested,
-        };
-    }
-
     if let Some(frame) = frames.get(frame_id)
         && font_value_matches_frame_font_parameter(frame, requested)
         && let Some(font_value) =
             frame.fixed_parameter(crate::window::FrameQueryParam::FontParameter)
         && is_font(&font_value)
     {
-        return LiveFrameFontResolution { font_value };
+        return Ok(LiveFrameFontResolution { font_value });
     }
-
     let Some(request) = frame_font_request_from_value(requested) else {
-        return LiveFrameFontResolution {
-            font_value: *requested,
-        };
+        return Ok(retained());
+    };
+    let Some(host) = display_host.as_mut() else {
+        return Ok(retained());
     };
     let requested_face = request.face().clone();
-
-    let realized = display_host
-        .as_mut()
-        .and_then(|host| host.resolve_frame_font(frame_id, request).ok())
-        .flatten();
-    let font_value = realized
-        .as_ref()
-        .map(|resolved| build_frame_font_object_from_resolution(&requested_face, resolved))
-        .unwrap_or(*requested);
-
-    LiveFrameFontResolution { font_value }
+    let resolved = host
+        .resolve_frame_font(frame_id, request)
+        .ok()
+        .flatten()
+        .ok_or(())?;
+    Ok(LiveFrameFontResolution {
+        font_value: build_frame_font_object_from_resolution(&requested_face, &resolved),
+    })
 }
 
 /// GNU separates a font's realized metrics from permission to change the

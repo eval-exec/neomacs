@@ -200,12 +200,12 @@ use neovm_core::emacs_core::display_host::{
 #[cfg(feature = "video")]
 use neovm_core::emacs_core::eval::VideoResolveSource;
 use neovm_core::emacs_core::eval::{
-    FontEntityMetricsRequest, FontOtfCapability, FontSpecResolveRequest, GuiFrameHostSize,
-    ResolvedFontEntityMetrics, ResolvedFontMatch, ResolvedFontSpecMatch, ResolvedFrameFont,
-    ResolvedOpenedFont, ResolvedSurface, ResolvedVideo, ResolvedWebKit, ShaderSurfaceContent,
-    ShaderSurfaceCreateRequest, ShaderSurfaceLanguage, ShaderSurfaceUniformInit,
-    SurfaceChannelKind, SurfaceResolveRequest, VideoResolveRequest, WebKitResolveRequest,
-    WebKitResolveSource,
+    FontEntityMetricsRequest, FontOtfCapability, FontSpecResolveRequest, FrameFontSelection,
+    GuiFrameHostSize, ResolvedFontEntityMetrics, ResolvedFontMatch, ResolvedFontSpecMatch,
+    ResolvedFrameFont, ResolvedOpenedFont, ResolvedSurface, ResolvedVideo, ResolvedWebKit,
+    ShaderSurfaceContent, ShaderSurfaceCreateRequest, ShaderSurfaceLanguage,
+    ShaderSurfaceUniformInit, SurfaceChannelKind, SurfaceResolveRequest, VideoResolveRequest,
+    WebKitResolveRequest, WebKitResolveSource,
 };
 use neovm_core::emacs_core::image_catalog::{
     ImageCatalog, ImageResolveRequest, ImageSizeLimit, ReadyImage,
@@ -2705,17 +2705,41 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         let requested_family_storage = face.family_runtime_string_owned();
         let requested_family = requested_family_storage.as_deref().unwrap_or("Monospace");
         let requested_weight = face.weight.unwrap_or(FontWeight::NORMAL).css_weight();
-        let requested_italic = face.slant.map(|slant| slant.is_italic()).unwrap_or(false);
+        let requested_slant = face.slant.unwrap_or(neovm_core::face::FontSlant::Normal);
+        let requested_width = face.width.unwrap_or(neovm_core::face::FontWidth::Normal);
+        let foundry = face
+            .foundry
+            .as_ref()
+            .and_then(|value| value.as_lisp_string())
+            .map(|value| neovm_core::emacs_core::emacs_char::to_utf8_lossy(value.as_bytes()));
         let Some(font_size) = font_sizing.font_size_px_for_request(request.size()) else {
             return Ok(None);
         };
-        let selected = self.synchronized_font_metrics().select_font_for_char(
-            'M',
-            requested_family,
-            requested_weight,
-            requested_italic,
-            font_size.get(),
-        );
+        let pixel_size = (font_size.get().round() as u32).max(1);
+        let metrics = self.synchronized_font_metrics();
+        let selected = if request.selection() == FrameFontSelection::FontSpecification {
+            // An absent family retains this host's existing Monospace default;
+            // the request does not yet carry the old lface's inherited context.
+            let query = neomacs_layout_engine::font::resolver::FontEntityQuery::new(
+                neomacs_layout_engine::font_backend::FontFamilyName::new(requested_family),
+            )
+            .with_selection(neovm_core::emacs_core::eval::FontSpecSelection::OpenBySpec)
+            .with_weight(requested_weight)
+            .with_slant(requested_slant)
+            .with_width(requested_width);
+            metrics
+                .resolve_font_entity(&query)
+                .and_then(|entity| metrics.open_platform_match_font(&entity.matched, pixel_size))
+        } else {
+            metrics.open_face_font(
+                requested_family,
+                foundry.as_deref(),
+                requested_weight,
+                requested_slant,
+                requested_width,
+                pixel_size,
+            )
+        };
         let Some(font) = selected else {
             return Ok(None);
         };
