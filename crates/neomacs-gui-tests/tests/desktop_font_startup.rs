@@ -94,6 +94,28 @@ fn hidpi_scale_change_never_shrinks_the_logical_frame() {
 }
 
 fn check_desktop_font_startup(output: WaylandOutput, scenario: &str) {
+    let root = neomacs_infra::workspace_root();
+    // This fixture requires svg-tag-mode before registering its exit timer.
+    // Prepare its pinned packages in this worktree, independently of suite order.
+    let packages: Vec<_> = [
+        ("NEOMACS_GUI_SVG_LIB_DIR", "svg-lib"),
+        ("NEOMACS_GUI_SVG_TAG_MODE_DIR", "svg-tag-mode"),
+    ]
+    .into_iter()
+    .filter_map(|(variable, package)| std::env::var_os(variable).is_none().then_some(package))
+    .collect();
+    if !packages.is_empty() {
+        let status = Command::new("bash")
+            .arg(root.join("scripts/ci/setup-gui-test-packages.sh"))
+            .args(packages)
+            .current_dir(&root)
+            .status()
+            .expect("run pinned desktop-font SVG package setup");
+        assert!(
+            status.success(),
+            "pinned desktop-font SVG package setup failed: {status}"
+        );
+    }
     check_fixture(output, scenario, "desktop-font-startup.el");
 }
 
