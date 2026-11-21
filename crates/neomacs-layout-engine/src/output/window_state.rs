@@ -15,6 +15,10 @@ use neomacs_display_protocol::glyph_matrix::MatrixRow;
 use neomacs_display_protocol::glyph_matrix::{GlyphMatrix, GlyphRow, WindowMatrixEntry};
 use neomacs_display_protocol::types::{DisplayWindowId, Rect};
 
+#[cfg(test)]
+#[path = "window_state/tests/bidi_role_selection_test.rs"]
+mod bidi_role_selection_tests;
+
 /// Owned by one exclusive frame-build attempt, never shared across mutators.
 /// Numeric publication boundary and inactive-window geometry saved before an
 /// attempt begins. An active grid belongs solely to the failed attempt.
