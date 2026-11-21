@@ -285,6 +285,12 @@ pub(crate) trait LayoutBufferView {
     /// are constant in presence and value (backward companion).
     fn layout_previous_syntax_prop_state_run_start_char_pos(&self, pos: CharPos0) -> CharPos0;
     fn layout_overlays(&self) -> &OverlayList;
+    /// Exclusive character end of a window-range overlay view, or `None` for
+    /// a whole-buffer view. A walk that consumes at or past it was answered
+    /// from a subset and must be retried with the whole buffer.
+    fn layout_overlay_view_end_char(&self) -> Option<neovm_core::buffer::CharPos0> {
+        None
+    }
     /// Automatic-composition span whose first character is `pos`.
     ///
     /// These spans are compiled from the live Lisp rule table when the

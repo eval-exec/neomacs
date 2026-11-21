@@ -1091,6 +1091,10 @@ enum LeafLayoutAttempt {
     /// still overflows a profiling evaluator's stack well before the
     /// numeric budget is spent.
     Retry(Box<WindowLayoutRetry>),
+    /// The walk consumed at or past the window-range overlay view's end. The
+    /// attempt was answered from a subset and is discarded; the window loop
+    /// retries once with the whole-buffer overlay view.
+    OverlayViewExhausted,
     LogicalInputsChanged,
     MatrixCapacityUnavailable,
     /// A `when` clause the walk took by the structural rule evaluated nil
@@ -3154,6 +3158,7 @@ impl LayoutEngine {
                     MAX_WINDOW_VISIBILITY_RETRIES
                 };
                 let mut viewport_retry_phase = ViewportResolutionPhase::Resolve;
+                let mut overlay_view_full = false;
                 let window_layout = loop {
                     // A leaf hook/visibility continuation can re-enter this
                     // loop without visiting the outer transaction restart.
@@ -3188,6 +3193,7 @@ impl LayoutEngine {
                         window_geometry.reserve_terminal_right_border_col,
                         visibility_retry_budget,
                         viewport_retry_phase.clone(),
+                        overlay_view_full,
                         cursor_only_replay.take(),
                         scroll_replay.take(),
                         is_edit,
@@ -3249,6 +3255,18 @@ impl LayoutEngine {
                             visibility_retry_budget = retry.remaining_visibility_retries;
                             viewport_retry_phase = retry.viewport_resolution;
                             is_edit = false;
+                        }
+                        LeafLayoutAttempt::OverlayViewExhausted => {
+                            // The attempt read a subset of the buffer's
+                            // overlays past the range view's end. It is
+                            // discarded; one more attempt uses the
+                            // whole-buffer view, which cannot exhaust.
+                            debug_assert!(
+                                !overlay_view_full,
+                                "whole-buffer overlay view reported exhaustion"
+                            );
+                            overlay_view_full = true;
+                            continue;
                         }
                         LeafLayoutAttempt::Effect(effect) => {
                             lisp_ledger.acknowledge_scroll_hook(&effect);
@@ -5786,6 +5804,48 @@ impl LayoutEngine {
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// The overlay-view character span for one window attempt.
+    ///
+    /// The view must cover what the walk consumes. The accepted previous
+    /// window end is the measured consumed span; a full visible budget of
+    /// margin covers ordinary growth. `None` (whole-buffer view) on the first
+    /// frame or when no previous span is recorded. Invisible overlays can make
+    /// the walk consume far past this span; that attempt is rejected and
+    /// retried with the whole-buffer view, so a range view never commits a
+    /// subset answer.
+    fn overlay_view_char_span_for(
+        &self,
+        params: &WindowParams,
+        buffer: &neovm_core::buffer::Buffer,
+    ) -> Option<(usize, usize)> {
+        // `visible_char_bound` returns an unbounded budget when the source
+        // extent is AccessibleEnd; the overlay view must stay window-sized in
+        // that mode too, so derive the viewport rows from the text-area
+        // geometry instead of the source-interpretation row count.
+        let cols = (params.text_bounds.width / params.char_width.max(1.0)).ceil() as usize;
+        let rows = (params.text_bounds.height / params.char_height.max(1.0))
+            .ceil()
+            .max(1.0) as usize;
+        let screenful = rows.saturating_mul(cols).max(1);
+        let budget = screenful.saturating_mul(4).max(8192);
+        let first = (params.window_start.max(0) as usize).saturating_sub(screenful);
+        let minimum_end = first.saturating_add(budget);
+        let previous_end = self
+            .retained_window_matrices
+            .get(&DisplayWindowId::new(params.window_id))
+            .and_then(|matrix| matrix.display_snapshot.visible_buffer_span())
+            .map(|span| {
+                neovm_core::buffer::CharPos0::from_lisp(span.end())
+                    .get()
+                    .saturating_add(1)
+            })?;
+        let end = previous_end
+            .max(minimum_end)
+            .saturating_add(budget)
+            .min(buffer.total_char_end_pos().get());
+        Some((first.min(end), end))
+    }
+
     fn layout_window_rust<FS: crate::neovm_bridge::FaceServices>(
         &mut self,
         evaluator: &mut neovm_core::emacs_core::Context,
@@ -5797,6 +5857,9 @@ impl LayoutEngine {
         reserve_right_border_col: bool,
         remaining_visibility_retries: usize,
         viewport_resolution: ViewportResolutionPhase,
+        // A walk that consumed at or past a window-range overlay view must be
+        // retried once with the whole-buffer view. `true` selects it.
+        overlay_view_full: bool,
         // Phase A (gather) classified this window's incremental fast path against
         // the *original* params (before any echo-buffer swap below), reading the
         // same retained key the predicate was snapshotted from. Phase B (here)
@@ -6077,10 +6140,16 @@ impl LayoutEngine {
         // fontification and incremental classification.
         let layout_buffer = match evaluator.buffer_manager().get(buf_id) {
             Some(buffer) => {
+                let overlay_span = if overlay_view_full {
+                    None
+                } else {
+                    self.overlay_view_char_span_for(params, buffer)
+                };
                 super::neovm_bridge::LayoutBufferSnapshot::from_buffer_for_window_with_symbols(
                     buffer,
                     evaluator.variables(),
                     Some(visible_char_bound(params)),
+                    overlay_span,
                     display_target,
                     evaluator.symbol_mode(),
                 )
@@ -6217,6 +6286,7 @@ impl LayoutEngine {
             ),
             BufferSourceRenderAttemptOutcome::Skipped
             | BufferSourceRenderAttemptOutcome::LogicalInputsChanged
+            | BufferSourceRenderAttemptOutcome::OverlayViewExhausted
             | BufferSourceRenderAttemptOutcome::GlyphMatrixCapacityExhausted
             | BufferSourceRenderAttemptOutcome::GnuMiniEobCursorUnavailable { .. }
             | BufferSourceRenderAttemptOutcome::Retry { .. }
@@ -6449,6 +6519,12 @@ impl LayoutEngine {
                     evaluator.reject_redisplay_window_end_attempt(attempt);
                 }
                 return LeafLayoutAttempt::LogicalInputsChanged;
+            }
+            BufferSourceRenderAttemptOutcome::OverlayViewExhausted => {
+                if let Some(attempt) = window_end_attempt.take() {
+                    evaluator.reject_redisplay_window_end_attempt(attempt);
+                }
+                return LeafLayoutAttempt::OverlayViewExhausted;
             }
             BufferSourceRenderAttemptOutcome::GnuMiniEobCursorUnavailable { boundary } => {
                 if let Some(attempt) = window_end_attempt.take() {

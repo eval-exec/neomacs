@@ -1414,7 +1414,8 @@ impl OverlayList {
                 .content_component_sum
                 .set(self.content_component_sum.get().wrapping_add(hash)),
             OverlayContentComponent::CategoryIndirection => {
-                self.content_unhashable.set(self.content_unhashable.get() + 1);
+                self.content_unhashable
+                    .set(self.content_unhashable.get() + 1);
             }
         }
     }
@@ -1432,11 +1433,7 @@ impl OverlayList {
         }
     }
 
-    fn replace_overlay_content_component(
-        &self,
-        previous: OverlayContentComponent,
-        overlay: Value,
-    ) {
+    fn replace_overlay_content_component(&self, previous: OverlayContentComponent, overlay: Value) {
         self.subtract_overlay_content_component(previous);
         self.add_overlay_content_component(overlay);
     }

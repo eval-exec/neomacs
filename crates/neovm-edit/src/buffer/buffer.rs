@@ -5069,18 +5069,11 @@ impl Buffer {
     }
 
     /// Immutable overlay view containing only the overlays a layout walk can
-    /// observe inside the character window `[first, first + budget)`.
-    pub fn overlay_snapshot_in_char_range(
-        &self,
-        first: usize,
-        budget: usize,
-    ) -> OverlaySnapshot {
-        let end = first
-            .saturating_add(budget)
-            .min(self.total_char_end_pos().get());
+    /// observe inside the character span `[first, end)`.
+    pub fn overlay_snapshot_in_char_span(&self, first: usize, end: usize) -> OverlaySnapshot {
+        let end = end.min(self.total_char_end_pos().get());
         let start = self.char_pos_to_emacs_byte_pos_clamped_no_alloc(CharPos0::new(first));
-        let end_byte =
-            self.char_pos_to_emacs_byte_pos_clamped_no_alloc(CharPos0::new(end));
+        let end_byte = self.char_pos_to_emacs_byte_pos_clamped_no_alloc(CharPos0::new(end));
         self.overlays
             .snapshot_in_range(EmacsByteRange::new(start, end_byte))
     }

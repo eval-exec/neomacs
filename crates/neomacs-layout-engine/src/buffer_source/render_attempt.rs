@@ -189,6 +189,10 @@ pub(crate) enum BufferSourceRenderAttemptOutcome {
     /// source projection. The frame transaction must discard this attempt and
     /// recollect the live window/buffer pair.
     LogicalInputsChanged,
+    /// The walk consumed at or past a window-range overlay view's end, so
+    /// some displayed-region overlays were absent. The checkpoint was
+    /// restored; the leaf must retry once with the whole-buffer view.
+    OverlayViewExhausted,
     /// Actual EOB producer rows did not admit point. The evaluator-owned GNU
     /// mini redisplay must visit its bounded conservative/recenter sites.
     GnuMiniEobCursorUnavailable {

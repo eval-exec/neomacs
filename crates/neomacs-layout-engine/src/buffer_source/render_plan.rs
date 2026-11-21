@@ -1248,6 +1248,24 @@ impl BufferSourceOutputSetup {
                     Ok(metrics) => metrics,
                     Err(changed) => return changed.into(),
                 };
+            // The walk may have consumed past a window-range overlay
+            // view. Nothing is installed yet; restore the checkpoint and
+            // retry the leaf once with the whole-buffer view so a subset
+            // answer can never be committed.
+            if buffer.layout_overlay_view_end_char().is_some_and(|end| {
+                redisplay_positions
+                    .window_end_position()
+                    .anchor()
+                    .char_pos()
+                    .get()
+                    >= end.get()
+            }) {
+                crate::window_output::restore_text_window_retry_checkpoint(
+                    output.reborrow(),
+                    retry_checkpoint,
+                );
+                return BufferSourceRenderAttemptOutcome::OverlayViewExhausted;
+            }
             tail_context.finish_and_install(
                 TextWindowFinishState::new(output, output_emitter, evaluator),
                 measured_chrome_heights,
@@ -1861,6 +1879,24 @@ impl BufferSourceOutputSetup {
                     Err(changed) => return changed.into(),
                 };
 
+            // The walk may have consumed past a window-range overlay
+            // view. Nothing is installed yet; restore the checkpoint and
+            // retry the leaf once with the whole-buffer view so a subset
+            // answer can never be committed.
+            if buffer.layout_overlay_view_end_char().is_some_and(|end| {
+                redisplay_positions
+                    .window_end_position()
+                    .anchor()
+                    .char_pos()
+                    .get()
+                    >= end.get()
+            }) {
+                crate::window_output::restore_text_window_retry_checkpoint(
+                    output.reborrow(),
+                    retry_checkpoint,
+                );
+                return BufferSourceRenderAttemptOutcome::OverlayViewExhausted;
+            }
             tail_context.finish_and_install(
                 TextWindowFinishState::new(output, output_emitter, evaluator),
                 measured_chrome_heights,
@@ -2142,6 +2178,24 @@ impl BufferSourceOutputSetup {
         } else {
             crate::buffer_source::render_attempt::QueryRowCoverage::Complete
         };
+        // The walk may have consumed past a window-range overlay view.
+        // Nothing is installed yet; restore the checkpoint and retry the
+        // leaf once with the whole-buffer view so a subset answer can never
+        // be committed.
+        if buffer.layout_overlay_view_end_char().is_some_and(|end| {
+            redisplay_positions
+                .window_end_position()
+                .anchor()
+                .char_pos()
+                .get()
+                >= end.get()
+        }) {
+            crate::window_output::restore_text_window_retry_checkpoint(
+                output.reborrow(),
+                retry_checkpoint,
+            );
+            return BufferSourceRenderAttemptOutcome::OverlayViewExhausted;
+        }
         tail_context.finish_and_install(
             TextWindowFinishState::new(output, output_emitter, evaluator),
             measured_chrome_heights,
