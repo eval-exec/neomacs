@@ -120,6 +120,10 @@ fn zero_span_padding_glyph_does_not_own_a_cursor_slot() {
     let mut pad = Glyph::padding_for(FaceId::new(0), 0);
     pad.pixel_width = 8.0;
     let mut row = GlyphRow::new(GlyphRowRole::Text);
+    // TextRowGeometry derives the right-aligned origin (width minus the
+    // non-padding advances) only for a reversed row; the zero-span ownership
+    // rule under test is exercised on that right-aligned row.
+    row.reversed_p = true;
     row.glyphs[GlyphArea::Text.index()] = vec![
         pad,
         Glyph::char('a', FaceId::new(0), 1).with_pixel_width(8.0),

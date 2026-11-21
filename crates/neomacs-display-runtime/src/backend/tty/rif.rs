@@ -2408,7 +2408,7 @@ impl TtyRif {
         from_col: i64,
         to_col: i64,
         blank_erase: BlankErase,
-    ) {
+    ) -> i64 {
         let mut fill_col = from_col;
         let screen_width = usize_to_i64_saturating(self.desired.width);
         let mut face_run = None;
@@ -2430,6 +2430,7 @@ impl TtyRif {
             }
             fill_col = fill_col.saturating_add(1);
         }
+        fill_col
     }
 
     fn rasterize_glyph_row(
@@ -2860,7 +2861,7 @@ impl TtyRif {
                     && glyph_row.reversed_p
                     && glyph_start > area_left
                 {
-                    self.fill_text_area_blanks(
+                    let _ = self.fill_text_area_blanks(
                         state,
                         owner,
                         glyph_row.role,
@@ -2873,7 +2874,10 @@ impl TtyRif {
                     );
                 }
                 if col < right_edge {
-                    self.fill_text_area_blanks(
+                    // Keep the pre-refactor contract: the text-area tail
+                    // advances the pen, so a FollowingPreviousArea right
+                    // margin starts where the filled text area ended.
+                    col = self.fill_text_area_blanks(
                         state,
                         owner,
                         glyph_row.role,
