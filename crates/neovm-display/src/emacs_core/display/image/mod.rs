@@ -1481,6 +1481,21 @@ fn image_embedded_metadata_to_lisp(
             }
         });
     }
+    if let Some(extensions) = metadata
+        .gif_extensions()
+        .filter(|blocks| !blocks.is_empty())
+    {
+        plist.push(Value::symbol("extension-data"));
+        // giflib records file order; GNU prepends each FUNCTION/BYTES pair.
+        let mut blocks = Vec::with_capacity(extensions.len() * 2);
+        for block in extensions.iter().rev() {
+            blocks.push(Value::fixnum(i64::from(block.function)));
+            blocks.push(Value::heap_string(
+                neovm_value::heap_types::LispString::from_unibyte_slice(&block.bytes),
+            ));
+        }
+        plist.push(Value::list(blocks));
+    }
     if let Some(start) = metadata.loop_start() {
         plist.push(Value::symbol("loop-start"));
         plist.push(Value::fixnum(i64::from(start)));

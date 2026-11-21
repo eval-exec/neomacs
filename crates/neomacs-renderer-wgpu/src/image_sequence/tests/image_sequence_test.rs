@@ -241,3 +241,20 @@ fn sequence_cache_has_an_exact_decoded_byte_budget_and_does_not_keep_stills() {
     ));
     assert!(!cache.contains(sequence(3)));
 }
+
+#[test]
+fn single_gif_keeps_graphics_control_delay_metadata() {
+    // GNU image.c:10276-10314 publishes GCE data even for a single frame.
+    let bytes = b"GIF89a\x01\0\x01\0\x80\0\0\0\0\0\xff\xff\xff\x21\xf9\x04\x01\x0a\0\0\0\x2c\0\0\0\0\x01\0\x01\0\0\x02\x02\x44\x01\0\x3b";
+    let sequence = decode_sequence(bytes).expect("one-frame GIF");
+    let (_, metadata) = sequence
+        .frame(ImageFrameIndex::new(0))
+        .unwrap()
+        .into_parts();
+    assert_eq!(metadata.frame_count(), None);
+    assert_eq!(
+        metadata.frame_delay(),
+        ImageFrameDelay::milliseconds(100, 1),
+        "a single-frame GIF still owns its GCE delay"
+    );
+}

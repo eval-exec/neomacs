@@ -263,3 +263,6 @@ mod desktop_text_scaling;
 
 #[path = "font_hinting_weight.rs"]
 mod font_hinting_weight;
+
+#[path = "image_api_parity.rs"]
+mod image_api_parity;
