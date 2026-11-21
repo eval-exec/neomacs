@@ -102,3 +102,67 @@ fn unavailable_explicit_font_preserves_face_and_frame_state() {
         before_font
     );
 }
+
+#[test]
+fn frame_t_font_on_selected_tty_validates_without_changing_defaults() {
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let frame = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
+    assert!(
+        eval.frame_manager()
+            .get(frame)
+            .unwrap()
+            .effective_window_system()
+            .is_none()
+    );
+    let defaults = ensure_global_lisp_face_vector(&mut eval, "default").unwrap();
+    let before = defaults.as_vector_data().unwrap().as_slice().to_vec();
+    for font in [Value::string("Monospace-12"), integer_font_spec()] {
+        builtin_internal_set_lisp_face_attribute(
+            &mut eval,
+            vec![
+                Value::symbol("default"),
+                Value::keyword("font"),
+                font,
+                Value::T,
+            ],
+        )
+        .expect("a valid font is ignored for TTY new-frame defaults");
+        assert_eq!(
+            defaults.as_vector_data().unwrap().as_slice(),
+            before.as_slice()
+        );
+    }
+    for font in [Value::fixnum(42), Value::NIL] {
+        assert!(
+            builtin_internal_set_lisp_face_attribute(
+                &mut eval,
+                vec![
+                    Value::symbol("default"),
+                    Value::keyword("font"),
+                    font,
+                    Value::T,
+                ]
+            )
+            .is_err(),
+            "validation must precede the TTY no-store gate"
+        );
+        assert_eq!(
+            defaults.as_vector_data().unwrap().as_slice(),
+            before.as_slice()
+        );
+    }
+    builtin_internal_set_lisp_face_attribute(
+        &mut eval,
+        vec![
+            Value::symbol("default"),
+            Value::keyword("font"),
+            Value::symbol("unspecified"),
+            Value::T,
+        ],
+    )
+    .expect("reset values are stored even with a selected TTY");
+    assert_eq!(
+        lisp_face_vector_attr(defaults, LFaceAttr::Font),
+        Some(ignore_defface_symbol())
+    );
+}

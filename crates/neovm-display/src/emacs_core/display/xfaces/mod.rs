@@ -3814,6 +3814,18 @@ pub fn builtin_internal_set_lisp_face_attribute(
                 && !is_reset_like_face_attr_value(&canonical_value, symbol_mode)
             {
                 validate_font_face_attr_value(&canonical_value)?;
+                if defaults_frame {
+                    let selected = super::window_cmds::ensure_selected_frame_id(eval);
+                    if eval.frame_manager().get(selected).is_none_or(|frame| {
+                        !FrameFontRealization::for_frame(frame).stores_face_font_attributes()
+                    }) {
+                        // GNU xfaces.c:3671-3698 validates FRAME=t against the
+                        // selected frame, then neither opens nor stores a font
+                        // when that reference frame is a TTY. Reset sentinels
+                        // take the separate storage arm and bypass this gate.
+                        return Ok(());
+                    }
+                }
             }
 
             // GNU opens :font after validation and before set_lface_from_font
