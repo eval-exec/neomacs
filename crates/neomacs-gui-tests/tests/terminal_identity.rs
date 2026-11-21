@@ -51,17 +51,14 @@ fn neomacs_binary() -> PathBuf {
 
 fn owned_artifacts(scenario: &str) -> PathBuf {
     let root = workspace_root().join("target/neomacs-gui-tests");
-    fs::create_dir_all(&root).unwrap();
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("artifact timestamp")
         .as_nanos();
-    let artifacts = root.join(format!(
+    neomacs_gui_tests::fresh_artifact_dir(root.join(format!(
         "terminal-identity-{}-{scenario}-{unique}",
         std::process::id()
-    ));
-    fs::create_dir(&artifacts).unwrap();
-    artifacts
+    )))
 }
 
 fn remove_backend_forces(command: &mut Command) {
