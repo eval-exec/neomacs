@@ -444,6 +444,46 @@ fn current_column_1_long_truncated_matches_gnu() {
     assert_eq!(neo_value, gnu_value, "current_column_1 must match GNU");
 }
 
+/// GNU's interval tree is tree PRESENCE, not "has a property":
+/// `remove-text-properties` validates with `soft` and never discards the
+/// root (`src/textprop.c:1607-1619`), so after the last property is removed
+/// `buffer_intervals` is still non-NULL and `current-column` still takes
+/// `current_column_1` (`src/indent.c:365-370`) and its long+truncated
+/// shortcut.  Attested: GNU prints 30000.
+#[test]
+fn current_column_1_removed_property_matches_gnu() {
+    let (mut gnu, mut neo) = boot_pair("");
+    resize_both(&mut gnu, &mut neo, 40, 160);
+    read_both(&mut gnu, &mut neo, Duration::from_millis(700));
+    eval_expression(
+        &mut gnu,
+        &mut neo,
+        "(progn \
+           (setq long-line-threshold 50000 large-hscroll-threshold 10000) \
+           (switch-to-buffer (get-buffer-create \"*p640-c1-removed*\")) \
+           (erase-buffer) \
+           (insert (make-string 1000 ?a)) (insert \"\\t\") \
+           (insert (make-string 200000 ?a)) (insert \"\\n\") \
+           (setq truncate-lines t) (goto-char 30001) \
+           (redisplay t) \
+           (put-text-property 1 2 'p640 t) \
+           (remove-text-properties 1 2 '(p640 nil)) \
+           (setq long-line-threshold nil) \
+           nil)",
+    );
+    read_both(&mut gnu, &mut neo, Duration::from_secs(1));
+    let (gnu_value, neo_value) = paired_message(&mut gnu, &mut neo, "P640C1R", "(current-column)");
+    eprintln!("issue#640 removed-property current_column_1: GNU={gnu_value} NEO={neo_value}");
+    assert_eq!(
+        gnu_value, "30000",
+        "GNU keeps the interval tree after remove-text-properties"
+    );
+    assert_eq!(
+        neo_value, gnu_value,
+        "the removed-property row must match GNU"
+    );
+}
+
 /// Partial-width rule (`src/indent.c:637-643`): a 40-column window with
 /// truncate-lines nil and `truncate-partial-width-windows` 50 truncates, so
 /// the fast path applies.
@@ -720,13 +760,13 @@ fn recenter_long_line_matches_gnu() {
              (recenter -5) \
              (list center-ok \
                    (= (point) pt) \
-                   (save-excursion (goto-char pt) (forward-line (- ht 5)) \
+                   (save-excursion (goto-char pt) (forward-line (- 5 ht)) \
                                    (= (window-start) (point))))))",
     );
     eprintln!("issue#640 recenter: GNU={gnu_value} NEO={neo_value}");
     assert_eq!(
-        gnu_value, "((t t) t nil)",
-        "GNU's line-based recenter placement (the -5 start is model-sensitive)"
+        gnu_value, "((t t) t t)",
+        "GNU's line-based recenter placement at -5 lines from the top"
     );
     assert_eq!(
         neo_value, gnu_value,

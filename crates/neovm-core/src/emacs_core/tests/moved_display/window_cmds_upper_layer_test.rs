@@ -2126,18 +2126,29 @@ fn scroll_up_long_truncated_uses_gnu_line_motion() {
     crate::test_utils::init_test_tracing();
     let results = eval_with_frame(
         || long_line_scroll_context(200_000),
-        "(progn
+        "(let* ((ht (window-body-height))
+                (ns (if (boundp 'next-screen-context-lines)
+                        next-screen-context-lines
+                      2))
+                (n (max 1 (- ht ns))))
            (set-window-start (selected-window) 1)
            (set-window-point (selected-window) 1)
            (goto-char 1)
            (scroll-up)
-           (list (> (window-start) 1)
-                 (>= (window-point) (window-start))
-                 (= (point) (window-point))))",
+           (let ((start (window-start))
+                 (pt (window-point)))
+             (save-excursion
+               (goto-char 1)
+               (forward-line n)
+               (let ((expected-start (point)))
+                 (forward-line (/ ht 2))
+                 (list (= start expected-start)
+                       (= pt (point))
+                       (= pt (point-max)))))))",
     );
     assert_eq!(
-        results[0], "OK (t t t)",
-        "whole scroll-up must move the long-lines viewport: {results:?}"
+        results[0], "OK (t t nil)",
+        "whole scroll-up must take GNU's long-lines motion: {results:?}"
     );
 }
 
@@ -2208,17 +2219,25 @@ fn recenter_long_line_uses_gnu_line_motion() {
     crate::test_utils::init_test_tracing();
     let results = eval_with_frame(
         || long_line_recenter_context(200_000),
-        "(let ((before (window-start))
+        "(let* ((ht (window-body-height))
                 (pt (point)))
            (recenter)
            (let ((center-ok
                   (list (= (point) pt)
-                        (/= (window-start) before))))
+                        (save-excursion
+                          (goto-char pt)
+                          (forward-line (- (/ ht 2)))
+                          (= (window-start) (point))))))
              (recenter -5)
-             (list center-ok (= (point) pt))))",
+             (list center-ok
+                   (= (point) pt)
+                   (save-excursion
+                     (goto-char pt)
+                     (forward-line (- 5 ht))
+                     (= (window-start) (point))))))",
     );
     assert_eq!(
-        results[0], "OK ((t t) t)",
+        results[0], "OK ((t t) t t)",
         "recenter must take GNU's line-based fallback on a flag buffer: {results:?}"
     );
 }
