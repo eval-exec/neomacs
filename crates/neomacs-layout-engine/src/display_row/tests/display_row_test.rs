@@ -3002,6 +3002,43 @@ fn display_row_measurement_policy_builds_measured_face_with_line_metrics() {
 }
 
 #[test]
+fn measured_font_width_can_shrink_below_the_frame_grid() {
+    let base = base_face();
+    let fallback = DisplayRowFallbackMetrics::from_default_face_extents(11.0, 22.0, 17.0);
+    for width in [4.0_f32, 8.0, 16.0] {
+        for mode in [
+            DisplayRowMeasurementMode::ConcreteFont,
+            DisplayRowMeasurementMode::LogicalCells,
+        ] {
+            let mut font_metrics = None;
+            let measured = DisplayRowMeasurementPolicy::for_mode(mode).measured_face(
+                FaceId::new(8),
+                &base,
+                Some(FontMetrics {
+                    char_width: width,
+                    space_width: width,
+                    ascent: 10.0,
+                    descent: 3.0,
+                    line_height: 13.0,
+                }),
+                fallback.char_width(),
+                fallback,
+                &mut font_metrics,
+            );
+            let expected = match mode {
+                DisplayRowMeasurementMode::ConcreteFont => width,
+                DisplayRowMeasurementMode::LogicalCells => width.max(fallback.char_width()),
+            };
+            assert_eq!(
+                measured.metrics().char_width(),
+                expected,
+                "font width {width}, measurement mode {mode:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn display_row_measured_face_exposes_face_identity() {
     let base = base_face();
     let policy = DisplayRowMeasurementPolicy::for_mode(DisplayRowMeasurementMode::LogicalCells);
