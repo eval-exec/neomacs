@@ -376,9 +376,9 @@ fn remapped_default_newline_cursor_replay_preserves_width() {
             install_test_gnu_line_number_face_inheritance(&mut eval);
             eval.eval_str(&format!(
                 "(progn
-                   (setq-local face-remapping-alist
+                   (set (make-local-variable 'face-remapping-alist)
                      '((default (:height {height}) default)))
-                   (setq-local display-line-numbers {line_numbers})
+                   (set (make-local-variable 'display-line-numbers) {line_numbers})
                    (set-window-point (selected-window) 1))"
             ))
             .unwrap();
