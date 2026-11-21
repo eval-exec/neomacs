@@ -80,9 +80,26 @@ fn alpha_lower_limit_variable_projects_without_replaying_alpha_policy() {
     let limits = host.alpha_limits.clone();
     let operations = host.alpha_operations.clone();
     ev.set_display_host(Box::new(host));
-    let results = ev.eval_str_each("(setq frame-alpha-lower-limit 20) (let ((frame-alpha-lower-limit 60)) (setq frame-alpha-lower-limit 70)) (defvaralias 'alpha-limit-alias 'frame-alpha-lower-limit) (set 'alpha-limit-alias 40)");
-    assert!(results.iter().all(Result::is_ok), "{results:?}");
-    assert_eq!(*limits.borrow(), vec![0.2, 0.6, 0.7, 0.2, 0.2, 0.4]);
+    // Each binding change publishes once: the default-binding storage writer
+    // publishes the unwind restoration, so unbinding must not publish it again.
+    // Aliasing an already-bound base does not store or republish its value.
+    let cases: [(&str, &[f32]); 4] = [
+        ("(setq frame-alpha-lower-limit 20)", &[0.2]),
+        (
+            "(let ((frame-alpha-lower-limit 60)) (setq frame-alpha-lower-limit 70))",
+            &[0.2, 0.6, 0.7, 0.2],
+        ),
+        (
+            "(defvaralias 'alpha-limit-alias 'frame-alpha-lower-limit)",
+            &[0.2, 0.6, 0.7, 0.2],
+        ),
+        ("(set 'alpha-limit-alias 40)", &[0.2, 0.6, 0.7, 0.2, 0.4]),
+    ];
+    for (form, expected) in cases {
+        let result = ev.eval_str(form);
+        assert!(result.is_ok(), "{form}: {result:?}");
+        assert_eq!(limits.borrow().as_slice(), expected, "{form}");
+    }
     assert!(operations.borrow().is_empty());
 }
 
