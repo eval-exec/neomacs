@@ -456,6 +456,13 @@ fn native_frame_columns_use_average_even_for_monospace_families() {
 
 #[test]
 fn materialized_frame_columns_preserve_native_and_table_provenance() {
+    // The standard catalog's "monospace" alias is Noto Sans Mono, whose
+    // spacing metadata is proportional. This test needs an actual spacing-100
+    // family so the fallback max policy differs from the native average policy.
+    let catalog = crate::font::metrics::test_catalog::TestFontCatalog::from_files(&[
+        neomacs_test_fonts::dejavu_2_37().mono_regular(),
+    ])
+    .expect("pinned fixed-pitch fixture catalog");
     for (size, average, maximum) in [(14, 8, 10), (13, 7, 9)] {
         let probe = crate::font::probe::FontPxMetrics {
             pixel_size: size,
@@ -478,8 +485,12 @@ fn materialized_frame_columns_preserve_native_and_table_provenance() {
                 maximum,
             ),
         ] {
-            let mut service = make_svc();
+            let mut service = catalog.metrics_service();
             let family = "monospace";
+            assert!(
+                service.font_resolver.family_prefers_monospace(family),
+                "the fixture must exercise the fallback monospace policy"
+            );
             let size = size as f32;
             let key = service.cache_key(family, 400, false, size);
             let mut handle = service
@@ -501,10 +512,10 @@ fn materialized_frame_columns_preserve_native_and_table_provenance() {
             ) else {
                 panic!("graphic frame geometry");
             };
+            assert_eq!(service.metrics_cache[&key].source, source);
             assert_eq!(geometry.font_size.get(), size);
             assert_eq!(geometry.metrics.char_width, expected as f32);
             assert_eq!(geometry.metrics.space_width, 8.0);
-            assert_eq!(service.metrics_cache[&key].source, source);
         }
     }
 }
