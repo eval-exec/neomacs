@@ -2093,7 +2093,11 @@ fn scroll_down_skips_invisible_logical_lines_when_measuring_a_page() {
 /// long-line flag set as redisplay would set it.
 fn long_line_scroll_context(long_len: usize) -> Context {
     let mut ev = crate::test_utils::new_context();
-    let buffer = ev.edit.buffers.current_buffer_id().expect("current buffer");
+    // `eval_with_frame` creates and selects its own empty `*scratch*` buffer
+    // after this context is built, so the text lives in a namespaced buffer
+    // and each form switches the selected window to it explicitly.
+    let buffer = ev.edit.buffers.create_buffer("*p640-scroll*");
+    ev.edit.buffers.set_current(buffer);
     {
         let buf = ev.edit.buffers.get_mut(buffer).expect("buffer");
         buf.insert("a".repeat(long_len).as_str());
@@ -2118,6 +2122,7 @@ fn long_line_scroll_context(long_len: usize) -> Context {
         "the long first line must set the flag"
     );
     ev.eval_str("(goto-char 1)").expect("point");
+    ev.store_variable_by_name("p640-scroll-buffer", Value::make_buffer(buffer));
     ev
 }
 
@@ -2130,26 +2135,29 @@ fn scroll_up_long_truncated_uses_gnu_line_motion() {
     crate::test_utils::init_test_tracing();
     let results = eval_with_frame(
         || long_line_scroll_context(200_000),
-        "(let* ((ht (window-body-height))
-                (ns (if (boundp 'next-screen-context-lines)
-                        next-screen-context-lines
-                      2))
-                (n (max 1 (- ht ns))))
-           (set-window-start (selected-window) 1)
-           (set-window-point (selected-window) 1)
-           (goto-char 1)
-           (redisplay t)
-           (scroll-up)
-           (let ((start (window-start))
-                 (pt (window-point)))
-             (save-excursion
-               (goto-char 1)
-               (forward-line n)
-               (let ((expected-start (point)))
-                 (forward-line (/ ht 2))
-                 (list (= start expected-start)
-                       (= pt (point))
-                       (= pt (point-max)))))))
+        "(progn
+           (set-buffer p640-scroll-buffer)
+           (set-window-buffer (selected-window) (current-buffer))
+           (let* ((ht (window-body-height))
+                  (ns (if (boundp 'next-screen-context-lines)
+                          next-screen-context-lines
+                        2))
+                  (n (max 1 (- ht ns))))
+             (set-window-start (selected-window) 1)
+             (set-window-point (selected-window) 1)
+             (goto-char 1)
+             (redisplay t)
+             (scroll-up)
+             (let ((start (window-start))
+                   (pt (window-point)))
+               (save-excursion
+                 (goto-char 1)
+                 (forward-line n)
+                 (let ((expected-start (point)))
+                   (forward-line (/ ht 2))
+                   (list (= start expected-start)
+                         (= pt (point))
+                         (= pt (point-max))))))))
            (window-body-height)",
     );
     assert_eq!(
@@ -2169,7 +2177,9 @@ fn scroll_up_long_line_work_does_not_grow_with_the_line() {
         let mut ev = long_line_scroll_context(long_len);
         neovm_edit::test_support::authority::reset_screen_line_scan_steps_for_test();
         ev.eval_str(
-            "(progn (set-window-start (selected-window) 1)
+            "(progn (set-buffer p640-scroll-buffer)
+                    (set-window-buffer (selected-window) (current-buffer))
+                    (set-window-start (selected-window) 1)
                     (set-window-point (selected-window) 1)
                     (goto-char 1)
                     (redisplay t)
