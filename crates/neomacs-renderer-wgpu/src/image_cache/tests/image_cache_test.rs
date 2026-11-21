@@ -2902,3 +2902,22 @@ fn disabled_animation_policy_never_serves_a_warmed_computed_sequence() {
     assert_ne!(warmed.rgba, disabled_after.rgba);
     assert_eq!(cold_disabled.rgba, disabled_after.rgba);
 }
+
+#[test]
+fn png_empty_indexed_trns_is_ignored_before_mask_classification() {
+    // GNU libpng ignores this invalid ancillary chunk. png 0.18's
+    // start_chunk accepts tRNS lengths 1..=256 and rejects (skips) length 0
+    // before parse_trns can populate Info::trns.
+    let data = png_mask_fixture(png::ColorType::Indexed, Some(&[]), &[0, 1]);
+    assert!(data.windows(8).any(|bytes| bytes == b"\0\0\0\0tRNS"));
+    let reader = png::Decoder::new(Cursor::new(&data)).read_info().unwrap();
+    assert!(reader.info().trns.is_none());
+    let decoded = ImageCache::decode_data_with_metadata(
+        &data,
+        ImageSizeSpec::default(),
+        ImageRotation::None,
+        (0, 0),
+    )
+    .unwrap();
+    assert_eq!(decoded.metadata.mask, ImageMaskKind::None);
+}
