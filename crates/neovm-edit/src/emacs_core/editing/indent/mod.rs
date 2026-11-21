@@ -1536,16 +1536,6 @@ pub fn tab_width_sym_id() -> neovm_value::intern::SymId {
     *SYMBOL.get_or_init(|| neovm_value::intern::intern("tab-width"))
 }
 
-/// `large-hscroll-threshold` (DEFVAR_INT, src/buffer.c:6044): the character
-/// distance from a line's beginning above which GNU's hscroll pass jumps
-/// (`fast_move_it_horizontally`, src/xdisp.c:16797-16807) instead of walking
-/// the line.
-#[inline(always)]
-fn large_hscroll_threshold_sym_id() -> neovm_value::intern::SymId {
-    static SYMBOL: OnceLock<neovm_value::intern::SymId> = OnceLock::new();
-    *SYMBOL.get_or_init(|| neovm_value::intern::intern("large-hscroll-threshold"))
-}
-
 /// GNU's staticpro'd `Qinvisible`.
 #[inline(always)]
 fn invisible_prop_symbol() -> Value {
@@ -3174,43 +3164,8 @@ pub fn display_column_at_emacs_byte_pos<H: EditHost>(
         };
         buf.accessible_emacs_byte_region().clamp(pos)
     };
-    if let Some(column) = long_line_hscroll_column(host, buffer_id, clamped) {
-        return Ok(column);
-    }
     let scan = scan_for_column(host, buffer_id, ColumnTarget::Position(clamped))?;
     Ok(scan.column)
-}
-
-/// GNU's long-line shortcut in `hscroll_window_tree` (src/xdisp.c:16797-16807):
-/// when the buffer's long-line optimization flag is set and point lies more
-/// than `large-hscroll-threshold` characters past the beginning of its line,
-/// GNU jumps to point with `fast_move_it_horizontally` instead of walking the
-/// display, and approximates the cursor column as one column per character.
-///
-/// The approximation is deliberate on GNU's side: `fast_move_it_horizontally`
-/// reseats at the character position and the caller adds `nchars` frame
-/// columns, ignoring tabs, wide characters and display vectors. Mirroring it
-/// keeps the computed hscroll equal to GNU's on those lines, and makes the
-/// work flat as the line grows. The fast path is only reachable where GNU
-/// takes it — inside the auto-hscroll measurement for a truncated line.
-fn long_line_hscroll_column<H: EditHost>(
-    host: &mut H,
-    buffer_id: crate::buffer::BufferId,
-    pos: EmacsBytePos,
-) -> Option<usize> {
-    let threshold = host
-        .forwarded_variable_value(large_hscroll_threshold_sym_id())
-        .and_then(|value| value.as_fixnum())
-        .unwrap_or(10_000);
-    let (edit, _vars) = host.edit_and_vars();
-    let buf = edit.buffers.get(buffer_id)?;
-    if !buf.long_line_optimizations_p() {
-        return None;
-    }
-    let bol = bol_emacs_byte(buf, pos);
-    let nchars = buf.emacs_byte_pos_to_lisp_char_pos(pos).as_i64()
-        - buf.emacs_byte_pos_to_lisp_char_pos(bol).as_i64();
-    (nchars > threshold).then(|| nchars.max(0) as usize)
 }
 
 /// The character after point as a deletion range, clamped like
