@@ -1166,7 +1166,7 @@ pub(crate) fn substitute_object_in_subtree(
         object,
         placeholder,
         mode,
-        seen: Vec::new(),
+        seen: rustc_hash::FxHashSet::default(),
     };
     let result = walk.substitute(object)?;
     debug_assert!(eq_value(&result, &object));
@@ -1178,12 +1178,16 @@ struct SubstituteWalk {
     object: Value,
     placeholder: Value,
     mode: SymbolMode,
-    seen: Vec<Value>,
+    /// The containers entered so far, by identity (`eq` compares bits).
+    seen: rustc_hash::FxHashSet<usize>,
 }
 
 impl SubstituteWalk {
     /// What a slot holding SUBTREE holds after the walk: OBJECT for the
     /// placeholder, otherwise SUBTREE with its contents substituted.
+    ///
+    /// A list's cdr chain is walked in a loop, so only nesting depth (cars,
+    /// slots) costs native stack, not list length.
     fn substitute(&mut self, subtree: Value) -> Result<Value, Flow> {
         if eq_value(&subtree, &self.placeholder) {
             return Ok(self.object);
@@ -1202,24 +1206,37 @@ impl SubstituteWalk {
         } else {
             None
         };
-        if self.seen.iter().any(|seen| eq_value(seen, &subtree)) {
+        if !self.seen.insert(subtree.bits()) {
             return Ok(subtree);
         }
-        self.seen.push(subtree);
 
         match subtree.kind() {
             ValueKind::Cons => {
                 // GNU stores the car before it walks the cdr, so an error in
                 // the cdr leaves the car substituted.
-                let car = subtree.cons_car();
-                let new_car = self.substitute(car)?;
-                if !eq_value(&new_car, &car) {
-                    subtree.set_car(new_car);
-                }
-                let cdr = subtree.cons_cdr();
-                let new_cdr = self.substitute(cdr)?;
-                if !eq_value(&new_cdr, &cdr) {
-                    subtree.set_cdr(new_cdr);
+                let mut cell = subtree;
+                loop {
+                    let car = cell.cons_car();
+                    let new_car = self.substitute(car)?;
+                    if !eq_value(&new_car, &car) {
+                        cell.set_car(new_car);
+                    }
+                    let cdr = cell.cons_cdr();
+                    // A cons cdr that is neither the placeholder nor already
+                    // seen is one `substitute` would enter and return
+                    // unchanged: walk it in this loop instead.
+                    if cdr.is_cons()
+                        && !eq_value(&cdr, &self.placeholder)
+                        && self.seen.insert(cdr.bits())
+                    {
+                        cell = cdr;
+                        continue;
+                    }
+                    let new_cdr = self.substitute(cdr)?;
+                    if !eq_value(&new_cdr, &cdr) {
+                        cell.set_cdr(new_cdr);
+                    }
+                    break;
                 }
             }
             ValueKind::String => {

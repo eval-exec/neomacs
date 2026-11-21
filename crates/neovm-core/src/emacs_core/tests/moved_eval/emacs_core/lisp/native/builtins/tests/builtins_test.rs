@@ -8984,6 +8984,34 @@ fn lread_substitute_object_in_subtree_replaces_the_placeholder_in_place() {
 }
 
 #[test]
+fn lread_substitute_object_in_subtree_walks_a_long_list_in_a_loop() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::test_utils::new_context();
+
+    // A list's cdr chain is walked in a loop, so a list this long does not
+    // overflow the native stack (GNU 31.1 recurses on the cdr and crashes
+    // with SIGSEGV on both forms below).
+    let rendered = format_eval_result(&eval.eval_str(
+        r#"(let* ((ph (cons nil nil))
+                  (long (nconc (make-list 1000000 1) (list ph (vector ph)))))
+             (list (lread--substitute-object-in-subtree long ph t)
+                   (eq (car (nthcdr 1000000 long)) long)
+                   (eq (aref (car (nthcdr 1000001 long)) 0) long)))"#,
+    ));
+    assert_eq!(rendered, "OK (nil t t)");
+
+    // The reader's `#N=` takes the same walk.
+    let rendered = format_eval_result(&eval.eval_str(
+        r##"(let ((v (car (read-from-string
+                           (concat "#1=[(" (mapconcat #'number-to-string
+                                                      (make-list 1000000 7) " ")
+                                   ") #1#]")))))
+              (list (eq (aref v 1) v) (length (aref v 0))))"##,
+    ));
+    assert_eq!(rendered, "OK (t 1000000)");
+}
+
+#[test]
 fn kill_emacs_eval_requests_shutdown_and_stops_command_loop() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
