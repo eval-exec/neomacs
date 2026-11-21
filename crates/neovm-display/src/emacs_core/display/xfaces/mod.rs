@@ -3847,11 +3847,11 @@ pub fn builtin_internal_set_lisp_face_attribute(
                             target.reference_frame(),
                             &canonical_value,
                         )
-                        .map_err(|()| {
-                            let spec = font_string_text(&canonical_value)
-                                .and_then(|name| font_spec_from_name(&name).ok().flatten())
-                                .unwrap_or(canonical_value);
-                            signal("error", vec![Value::string("Font not available"), spec])
+                        .map_err(|unavailable| {
+                            signal(
+                                "error",
+                                vec![Value::string("Font not available"), unavailable.spec],
+                            )
                         })?
                     };
                     opened_fonts.push((target, resolution));

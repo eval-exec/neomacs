@@ -51,6 +51,7 @@
                (message . ,(cadr err))
                (family . ,(and (fontp spec) (format "%s" (font-get spec :family))))
                (size . ,(and (fontp spec) (font-get spec :size)))
+               (user_spec . ,(and (fontp spec) (font-get spec :user-spec)))
                (printed . ,(format "%S" err)))
              fallback-errors)))))
 
@@ -69,10 +70,13 @@
                            ((equal scope "t") t)
                            (t '(selected-frame)))))
     (setq fallback-setter
-          (if (equal (getenv "FONT_FALLBACK_OPERATION") "font-spec")
-              `(set-face-attribute 'default ,frame-form :font
-                                   (font-spec :family ,family :size 14))
-            `(set-face-attribute 'default ,frame-form :family ,family))))
+          (cond
+           ((equal (getenv "FONT_FALLBACK_OPERATION") "font-spec")
+            `(set-face-attribute 'default ,frame-form :font
+                                 (font-spec :family ,family :size 14)))
+           ((equal (getenv "FONT_FALLBACK_OPERATION") "font-name")
+            `(set-face-attribute 'default ,frame-form :font ,family))
+           (t `(set-face-attribute 'default ,frame-form :family ,family)))))
   (fallback-record "setter" (lambda () (format "%S" (eval fallback-setter t))))
   ;; This must be the first observation after the setter returns or signals.
   (fallback-record "immediate" #'fallback-raw)

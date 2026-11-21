@@ -363,6 +363,11 @@ pub(crate) struct LiveFrameFontResolution {
     pub(crate) font_value: Value,
 }
 
+/// The last attempted selector, including GNU's whole-name retry, is error data.
+pub(crate) struct UnavailableFrameFont {
+    pub(crate) spec: Value,
+}
+
 pub(crate) fn frame_font_request_from_named_font_string(name: &str) -> Option<FrameFontRequest> {
     // Internal frame selection has an Option boundary, so it cannot deliver
     // Lisp conditions; malformed candidates remain an ordinary selection miss.
@@ -484,7 +489,7 @@ pub(crate) fn try_resolve_live_frame_font_request(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     frame_id: FrameId,
     requested: &Value,
-) -> Result<LiveFrameFontResolution, ()> {
+) -> Result<LiveFrameFontResolution, UnavailableFrameFont> {
     let (frames, display_host) = eval.frame_manager_read_and_display_host_mut();
     try_resolve_live_frame_font_request_in_state(frames, display_host, frame_id, requested)
 }
@@ -506,7 +511,7 @@ fn try_resolve_live_frame_font_request_in_state(
     display_host: &mut Option<Box<dyn neovm_eval::emacs_core::eval::DisplayHost>>,
     frame_id: FrameId,
     requested: &Value,
-) -> Result<LiveFrameFontResolution, ()> {
+) -> Result<LiveFrameFontResolution, UnavailableFrameFont> {
     let retained = || LiveFrameFontResolution {
         font_value: *requested,
     };
@@ -525,21 +530,97 @@ fn try_resolve_live_frame_font_request_in_state(
     {
         return Ok(LiveFrameFontResolution { font_value });
     }
-    let Some(request) = frame_font_request_from_value(requested) else {
-        return Ok(retained());
-    };
     let Some(host) = display_host.as_mut() else {
         return Ok(retained());
     };
-    let requested_face = request.face().clone();
-    let resolved = host
-        .resolve_frame_font(frame_id, request)
-        .ok()
-        .flatten()
-        .ok_or(())?;
-    Ok(LiveFrameFontResolution {
-        font_value: build_frame_font_object_from_resolution(&requested_face, &resolved),
-    })
+    let mut spec = font_string_text(requested)
+        .and_then(|name| font_spec_from_name(&name).ok().flatten())
+        .unwrap_or(*requested);
+    if requested.is_string() {
+        // font_spec_from_name retains the original user selector in GNU;
+        // unlike public (font-spec :name ...), this is an opening request.
+        let _ = spec.with_vector_data_mut(|fields| font_parse_set(fields, "user-spec", *requested));
+    }
+    let mut retry_size = None;
+    loop {
+        let Some(mut request) = frame_font_request_from_value(&spec) else {
+            return Ok(retained());
+        };
+        if let Some(size) = retry_size.take() {
+            request =
+                FrameFontRequest::with_size(request.face().clone(), size).for_font_specification();
+        }
+        let requested_face = request.face().clone();
+        if let Some(resolved) = host.resolve_frame_font(frame_id, request).ok().flatten() {
+            return Ok(LiveFrameFontResolution {
+                font_value: build_frame_font_object_from_resolution(&requested_face, &resolved),
+            });
+        }
+        let Some(retry) = named_font_family_retry(requested, spec) else {
+            return Err(UnavailableFrameFont { spec });
+        };
+        spec = retry;
+        // GNU's whole-name retry clears the selector size and uses the lface's
+        // existing size. A frame request has its current opened size available.
+        retry_size = frames
+            .get(frame_id)
+            .and_then(|frame| FrameFontSize::pixels(frame.font_pixel_size.round() as i64));
+    }
+}
+
+/// GNU font_load_for_lface (font.c:3444-3481) retries a missing "Family-17"
+/// as the literal family "Family-17", and exposes that failed spec on error.
+fn named_font_family_retry(requested: &Value, spec: Value) -> Option<Value> {
+    let name = font_string_text(requested)?;
+    let dash = name.rfind('-')?;
+    let tail = &name[dash + 1..];
+    let bytes = tail.as_bytes();
+    if !bytes.first().is_some_and(u8::is_ascii_digit) {
+        return None;
+    }
+    let mut end = bytes
+        .iter()
+        .take_while(|byte| byte.is_ascii_digit())
+        .count();
+    if bytes.get(end) == Some(&b'.') {
+        end += 1;
+        end += bytes[end..]
+            .iter()
+            .take_while(|byte| byte.is_ascii_digit())
+            .count();
+    }
+    if matches!(bytes.get(end), Some(b'e' | b'E')) {
+        let mut exponent = end + 1;
+        if matches!(bytes.get(exponent), Some(b'+' | b'-')) {
+            exponent += 1;
+        }
+        let digits = bytes[exponent..]
+            .iter()
+            .take_while(|byte| byte.is_ascii_digit())
+            .count();
+        if digits > 0 {
+            end = exponent + digits;
+        }
+    }
+    let size = tail[..end].parse::<f64>().ok().filter(|size| *size > 0.0)?;
+    let fields = font_value_fields(&spec)?;
+    let parsed_size = font_vector_get_flexible(fields, "size")?;
+    let parsed_size = match parsed_size.kind() {
+        ValueKind::Fixnum(size) => size as f64,
+        ValueKind::Float => parsed_size.xfloat(),
+        _ => return None,
+    };
+    if parsed_size != size {
+        return None;
+    }
+    let mut fields = fields.to_vec();
+    font_parse_set(
+        &mut fields,
+        "family",
+        Value::from_sym_id(intern(&name[..dash + 1 + end])),
+    );
+    font_parse_set(&mut fields, "size", Value::NIL);
+    Some(Value::vector(fields))
 }
 
 /// GNU separates a font's realized metrics from permission to change the

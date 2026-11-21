@@ -79,6 +79,13 @@ fn default_family_fallback_realization_and_height_remap_match_attested_gnu() {
         ("all-frames", ALPHA, MONO, "nil", "family"),
         ("new-frame-default", BETA, MONO, "t", "family"),
         ("mandatory-family", ALPHA, MONO, "selected", "font-spec"),
+        (
+            "mandatory-name",
+            "Missing Font-17",
+            MONO,
+            "selected",
+            "font-name",
+        ),
         ("from-sans", ALPHA, "DejaVu Sans", "selected", "family"),
         ("from-serif", ALPHA, "DejaVu Serif", "selected", "family"),
     ] {
@@ -246,7 +253,7 @@ fn compare(row: &Value, dir: &Path) {
     assert_eq!(comparable(&row["neo"]), comparable(expected), "{label}");
     assert_eq!(
         expected["errors"].as_array().unwrap().len(),
-        usize::from(row["operation"] == "font-spec"),
+        usize::from(row["operation"] != "family"),
         "{label}"
     );
     for phase in PHASES {

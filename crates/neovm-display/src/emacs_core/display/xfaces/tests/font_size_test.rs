@@ -166,3 +166,89 @@ fn frame_t_font_on_selected_tty_validates_without_changing_defaults() {
         Some(ignore_defface_symbol())
     );
 }
+
+#[test]
+fn unavailable_numeric_font_name_retries_the_literal_family() {
+    struct LiteralFamilyHost {
+        calls: Rc<RefCell<Vec<(String, FrameFontSize)>>>,
+        resolved: ResolvedFrameFont,
+    }
+    impl DisplayHost for LiteralFamilyHost {
+        fn realize_gui_frame(&mut self, _: GuiFrameHostRequest) -> Result<(), String> {
+            Ok(())
+        }
+        fn resize_gui_frame(&mut self, _: GuiFrameHostRequest) -> Result<(), String> {
+            Ok(())
+        }
+        fn resolve_frame_font(
+            &mut self,
+            _: FrameId,
+            request: FrameFontRequest,
+        ) -> Result<Option<ResolvedFrameFont>, String> {
+            let family = request.face().family_runtime_string_owned().unwrap();
+            self.calls
+                .borrow_mut()
+                .push((family.clone(), request.size()));
+            Ok((family == "Missing Font-17").then(|| self.resolved.clone()))
+        }
+    }
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let frame = crate::test_utils::xfaces_upper_layer_helpers::ensure_selected_gui_frame(&mut eval);
+    eval.frame_manager_mut()
+        .get_mut(frame)
+        .unwrap()
+        .font_pixel_size = 15.0;
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    eval.set_display_host(Box::new(LiteralFamilyHost {
+        calls: Rc::clone(&calls),
+        resolved: crate::test_utils::xfaces_upper_layer_helpers::resolved_frame_font(
+            "Missing Font-17",
+            "LiteralFamily-Regular",
+            110,
+            FontPxProbeResult {
+                pixel_size: 15,
+                height: 19,
+                ascent: 15,
+                descent: 4,
+                max_width: 8,
+                space_width: 8,
+                average_width: 8,
+            },
+        ),
+    }));
+    builtin_internal_set_lisp_face_attribute(
+        &mut eval,
+        vec![
+            Value::symbol("default"),
+            Value::keyword("font"),
+            Value::string("Missing Font-17"),
+            Value::make_frame(frame.0),
+        ],
+    )
+    .expect("the literal family retry can supply an available font");
+    assert_eq!(
+        calls.borrow().as_slice(),
+        &[
+            (
+                "Missing Font".to_owned(),
+                FrameFontSize::points(17.0).unwrap()
+            ),
+            (
+                "Missing Font-17".to_owned(),
+                FrameFontSize::pixels(15).unwrap()
+            ),
+        ]
+    );
+    let font = eval
+        .frame_manager()
+        .get(frame)
+        .unwrap()
+        .fixed_parameter(crate::window::FrameQueryParam::FontParameter)
+        .unwrap();
+    assert_eq!(
+        crate::emacs_core::font::font_get(vec![font, Value::keyword("family")])
+            .unwrap()
+            .as_bare_symbol_name(),
+        Some("Missing Font-17")
+    );
+}
