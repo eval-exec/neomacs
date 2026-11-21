@@ -441,9 +441,11 @@ impl TaggedHeap {
                     // Survivor: relink onto the (fresh) young list.
                     (*current).next = self.all_objects;
                     self.all_objects = current;
-                    self.sweep_noncons_live_bytes = self
-                        .sweep_noncons_live_bytes
-                        .saturating_add(self.collector_object_bytes(current));
+                    if !(*current).flags.image_resident() {
+                        self.sweep_noncons_live_bytes = self
+                            .sweep_noncons_live_bytes
+                            .saturating_add(self.collector_object_bytes(current));
+                    }
                 } else {
                     self.non_cons_object_addrs.remove(&(current as usize));
                     self.unregister_vector_object(current);
@@ -556,11 +558,6 @@ impl TaggedHeap {
             self.recompute_old_bytes_world_stopped();
         }
 
-        let mapped_cons_live: usize = self
-            .mapped_cons_ranges
-            .iter()
-            .map(MappedConsRange::live_count)
-            .sum();
         // The live count the next threshold derives from comes from what the
         // sweep visited: the blocks and pages that existed at termination.
         // What they hold that was allocated during the mark window was born
@@ -574,15 +571,11 @@ impl TaggedHeap {
         // only paces the next cycle sooner.
         let cons_live_bytes = self
             .sweep_cons_live_cells
-            .saturating_add(mapped_cons_live)
             .saturating_mul(size_of::<ConsCell>());
-        let mapped_object_live_bytes = self.mapped_non_cons_live_bytes();
         self.live_bytes = cons_live_bytes
             .saturating_add(self.sweep_noncons_live_bytes)
-            .saturating_add(mapped_object_live_bytes)
             .saturating_add(self.old_noncons_bytes())
-            .saturating_sub(self.sweep_mark_window_alloc_bytes)
-            .max(mapped_object_live_bytes);
+            .saturating_sub(self.sweep_mark_window_alloc_bytes);
 
         self.gc_collections += 1;
         self.sweep_lifetime_us += self.sweep_slice_us_total;
@@ -1272,14 +1265,7 @@ impl TaggedHeap {
             .saturating_add(new_live);
         let candidates = self.cons_allocator.take_empty_candidates();
         let _ = self.release_empty_cons_candidates(candidates);
-        let mapped_live: usize = self
-            .mapped_cons_ranges
-            .iter()
-            .map(MappedConsRange::live_count)
-            .sum();
-        new_live
-            .saturating_add(mapped_live)
-            .saturating_mul(size_of::<ConsCell>())
+        new_live.saturating_mul(size_of::<ConsCell>())
     }
 
     // Select once for the whole sweep, rather than checking the generation
@@ -1422,14 +1408,7 @@ impl TaggedHeap {
             .allocated_count
             .saturating_sub(old_live)
             .saturating_add(new_live);
-        let mapped_live = self
-            .mapped_cons_ranges
-            .iter()
-            .map(MappedConsRange::live_count)
-            .sum::<usize>();
-        new_live
-            .saturating_add(mapped_live)
-            .saturating_mul(size_of::<ConsCell>())
+        new_live.saturating_mul(size_of::<ConsCell>())
     }
 
     /// Complete GEN1 inventory from sweep deltas after every region closes.
@@ -1688,7 +1667,10 @@ impl TaggedHeap {
                 debug_assert!(!(*current).tenured, "tenured object on the young list");
                 if (*current).is_marked_at(parity) {
                     // Keep it — advance prev
-                    live_bytes = live_bytes.saturating_add(self.collector_object_bytes(current));
+                    if !(*current).flags.image_resident() {
+                        live_bytes =
+                            live_bytes.saturating_add(self.collector_object_bytes(current));
+                    }
                     prev = std::ptr::addr_of_mut!((*current).next);
                     current = next;
                 } else {
@@ -1890,25 +1872,6 @@ impl TaggedHeap {
             veclike_total + string_total + cons_total + float_total,
             veclike_marked + string_marked + cons_marked + float_marked,
         )
-    }
-
-    pub(super) fn mapped_non_cons_live_bytes(&self) -> usize {
-        self.mapped_float_ranges
-            .iter()
-            .map(|range| range.live_count().saturating_mul(size_of::<FloatObj>()))
-            .chain(
-                self.mapped_veclike_objects
-                    .iter()
-                    .filter(|object| object.marked)
-                    .map(|object| object.byte_len),
-            )
-            .chain(
-                self.mapped_string_objects
-                    .iter()
-                    .filter(|object| object.marked)
-                    .map(|object| object.byte_len),
-            )
-            .sum()
     }
 
     /// Reclaim one detached residual Box according to its caller's lifecycle.

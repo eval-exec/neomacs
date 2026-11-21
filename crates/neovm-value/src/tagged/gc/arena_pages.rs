@@ -1111,7 +1111,10 @@ impl<T: PagedObject> ObjectArena<T> {
                             // Joined marker, stopped mutators: restore GEN-3
                             // only after every mark reader has finished.
                             header.marked.store(UNMARKED_AT_REST, Ordering::Relaxed);
-                        } else {
+                        } else if !header.flags.image_resident() {
+                            // The first sweep precedes image promotion. Loader
+                            // provenance already proves these survivors immortal;
+                            // they must not enlarge gc-cons-percentage's census.
                             live_bytes = live_bytes.saturating_add(
                                 TaggedHeap::object_bytes_from_header(slot as *const GcHeader),
                             );

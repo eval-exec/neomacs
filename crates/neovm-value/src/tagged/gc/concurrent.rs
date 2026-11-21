@@ -124,11 +124,9 @@ impl TaggedHeap {
     /// Complete the first partition cycle once its (possibly deferred) sweep
     /// has drained: promote survivors, blacken the image, build the initial
     /// remembered set — exactly `complete_collection`'s end-of-first-cycle
-    /// block, run at the concurrent cycle's completion point instead. Also
-    /// restores the mapped contribution to `live_bytes`, which the
-    /// termination's accounting undercounted (mapped objects are never marked
-    /// during the concurrent first cycle; blackening makes the marked-based
-    /// sums whole). No-op on every later cycle and on dump-less heaps.
+    /// block, run at the concurrent cycle's completion point instead.
+    /// The completed sweep's pacing census excludes the immortal image before
+    /// and after blackening. No-op on later cycles and on dump-less heaps.
     ///
     /// Acts only on an ARMED concurrent first cycle: with nothing armed there
     /// is no trace and sweep behind the call, and promoting then would tenure
@@ -146,15 +144,6 @@ impl TaggedHeap {
             self.refresh_generation_major_baseline_world_stopped();
         }
         self.first_cycle_concurrent = false;
-        let mapped_cons_bytes: usize = self
-            .mapped_cons_ranges
-            .iter()
-            .map(|range| range.live_count().saturating_mul(size_of::<ConsCell>()))
-            .sum();
-        self.live_bytes = self
-            .live_bytes
-            .saturating_add(self.mapped_non_cons_live_bytes())
-            .saturating_add(mapped_cons_bytes);
     }
 
     /// Stop-the-world cycle entry: `collect_exact`, and the driver's forced

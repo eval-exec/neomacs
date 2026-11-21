@@ -113,6 +113,7 @@ pub struct CollectionReport {
     pub roots: usize,
     pub frozen_owners: usize,
     pub cycle: usize,
+    /// Last completed collectible-heap census, excluding immortal image rows.
     pub live_bytes: usize,
     /// Post-sweep global charged live balance, retained canonically in owner 0.
     pub allocated_count: usize,

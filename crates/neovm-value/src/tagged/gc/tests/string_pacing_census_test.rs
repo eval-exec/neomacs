@@ -42,6 +42,8 @@ fn string_gc_pacing_counts_collectible_survivors_not_image_residents() {
             let image_box = heap.alloc_hash_table(LispHashTable::new(HashTableTest::Eq));
             heap.note_image_object(image);
             heap.note_image_object(image_box);
+            // SAFETY: mapped points to an initialized StringObj whose stable
+            // fixture storage outlives this heap and every use of this value.
             let mapped_value = unsafe { TaggedValue::from_string_ptr(mapped) };
             let roots = [runtime, image, image_box, mapped_value];
             let allocation_counts = heap.memory_use_counts_snapshot();

@@ -2227,11 +2227,9 @@ impl TaggedHeap {
         if self.generational.major_in_progress {
             self.recompute_old_bytes_world_stopped();
         }
-        let mapped_object_live_bytes = self.mapped_non_cons_live_bytes();
         self.live_bytes = cons_live_bytes
             .saturating_add(object_live_bytes)
             .saturating_add(page_live_bytes)
-            .saturating_add(mapped_object_live_bytes)
             .saturating_add(self.old_noncons_bytes());
         self.reset_bytes_since_gc();
         self.trace_region_stats();
