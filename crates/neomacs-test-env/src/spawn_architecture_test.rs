@@ -114,6 +114,11 @@ const EXCEPTIONS: &[Exception] = &[
         reason: "Ruby/gem toolchain command prefix",
     },
     Exception {
+        path_suffix: "neomacs-melpa-tests/src/gui_parity_tests/gui_font_hermeticity_test.rs",
+        argument: "program",
+        reason: "fontconfig CLI (fc-list/fc-match) run under the pair's pinned FONTCONFIG_FILE",
+    },
+    Exception {
         path_suffix: "neomacs-tui-tests/src/lib.rs",
         argument: "program",
         reason: "the TUI PTY exception: `CanonicalEnvironment::apply_env_pairs` pins the PTY child",
