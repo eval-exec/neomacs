@@ -3754,6 +3754,13 @@ fn reaped_pty_process_releases_live_io_but_preserves_stale_status() {
                             :connection-type 'pty)))
                  (while (eq (process-status proc) 'run)
                    (accept-process-output proc 0.1))
+                 ;; The SIGCHLD record can settle the status before the
+                 ;; loop's first check (ledger 180), leaving the terminal
+                 ;; process retained because no wait ran `status_notify'.
+                 ;; This wait is where GNU takes the
+                 ;; `delete-exited-processes' decision (process.c:7926-7937).
+                 (when (memq proc (process-list))
+                   (accept-process-output proc 0.1))
                  (list (process-status proc)
                        (get-process "reaped-pty-resource-owner")))"#
         ),
@@ -7674,6 +7681,13 @@ fn process_live_p_loop_runs_pending_default_sentinel() {
                    (set-process-query-on-exit-flag proc nil)
                    (while (apio-live-p proc)
                      (accept-process-output proc 1))
+                   ;; GNU's SIGCHLD handler can settle `process-status'
+                   ;; before the loop's first check (ledger 180), so the loop
+                   ;; may exit before any wait ran `status_notify'. The
+                   ;; explicit wait is the status_notify this row asserts:
+                   ;; it drains XMIDY and then runs the default sentinel.
+                   (when (memq proc (process-list))
+                     (accept-process-output proc 0.1))
                    (prog1 (progn (set-buffer buf) (buffer-string))
                      (fmakunbound 'apio-live-p)
                      (kill-buffer buf))))"#
@@ -11837,6 +11851,12 @@ fn process_reaching_terminal_status_dirties_chrome() {
              (while (and (< n 100) (eq (process-status p) 'run))
                (accept-process-output p 0.1)
                (setq n (+ n 1)))
+             ;; GNU's SIGCHLD record can settle the status before the
+             ;; loop's first check (ledger 180); the mode-line dirty flag is
+             ;; set by `status_notify' (process.c:7940), so the row needs the
+             ;; wait that runs it.
+             (when (memq p (process-list))
+               (accept-process-output p 0.1))
              (symbol-name (process-status p)))"#,
     );
     assert!(result.is_ok(), "the child must run: {result:?}");
