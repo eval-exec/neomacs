@@ -40,6 +40,9 @@ mod oracle_copy_lisp_face_defaults;
 #[path = "oracle_default_threads.rs"]
 mod oracle_default_threads;
 
+#[path = "oracle_gc_pacing.rs"]
+mod oracle_gc_pacing;
+
 #[path = "oracle_divergence.rs"]
 mod oracle_divergence;
 
