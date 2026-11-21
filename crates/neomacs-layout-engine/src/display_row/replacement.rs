@@ -660,15 +660,18 @@ impl DisplayReplacementItemAppendTemplate {
     }
 
     fn from_stretch(item: DisplayReplacementStretchSourceItem) -> Option<Self> {
-        (item.width_px() > 0.0).then(|| {
-            Self::active_face(
-                item.display_item_kind(),
-                DisplayReplacementItemRowGeometryUpdate::BeforeAppendGlyphMetrics {
-                    height_px: item.height_px(),
-                    ascent_px: item.ascent_px(),
-                },
-            )
-        })
+        // A zero-width stretch is not nothing: GNU sets `it->ascent` and
+        // `it->descent` from its `:height`/`:ascent` even though it appends no
+        // glyph (`produce_stretch_glyph`, xdisp.c:32988-33002).  Keep the
+        // row-geometry update and let the row builder drop the zero-width
+        // glyph; only the covered source characters disappear.
+        Some(Self::active_face(
+            item.display_item_kind(),
+            DisplayReplacementItemRowGeometryUpdate::BeforeAppendGlyphMetrics {
+                height_px: item.height_px(),
+                ascent_px: item.ascent_px(),
+            },
+        ))
     }
 
     fn from_media_resolution(item: DisplayReplacementMediaSourceResolution) -> Self {

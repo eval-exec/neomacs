@@ -2052,7 +2052,12 @@ impl DisplaySpaceWidthPolicy {
     }
 
     fn zero_width_allowed(self) -> bool {
-        matches!(self, Self::AlignTo(_))
+        // GNU `produce_stretch_glyph` sets `zero_width_ok_p` for a valid
+        // explicit `:width` as well as for `:align-to` (xdisp.c:32832 and
+        // :32911); only the no-operand default is forced to one column
+        // (xdisp.c:32917).  ebox's row strut is exactly a valid `:width 0`
+        // with a `:height`, and GNU gives it zero advance.
+        matches!(self, Self::Explicit(_) | Self::AlignTo(_))
     }
 
     fn resolve(

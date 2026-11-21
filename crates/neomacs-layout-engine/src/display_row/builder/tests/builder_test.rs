@@ -597,7 +597,10 @@ fn display_row_progress_writer_uses_thin_space_glyphless_width() {
 
     let progress = writer.push_item(glyphless_item('\u{2009}', GlyphlessMethod::ThinSpace));
 
-    assert_eq!(progress.end(), DisplayRowPosition::new(2.0, 1));
+    // GNU's `produce_glyphless_glyph` sets `it->pixel_width` to
+    // `THIN_SPACE_WIDTH`, which is 1 pixel on a window system
+    // (xdisp.c:1120 and xdisp.c:33455), not a fraction of the cell width.
+    assert_eq!(progress.end(), DisplayRowPosition::new(1.0, 1));
     let glyph = &row.glyphs[GlyphArea::Text.index()][0];
     assert_eq!(
         glyph.glyph_type,
@@ -606,7 +609,7 @@ fn display_row_progress_writer_uses_thin_space_glyphless_width() {
             presentation: GlyphlessPresentation::ThinSpace,
         }
     );
-    assert_eq!(glyph.pixel_width, 2.0);
+    assert_eq!(glyph.pixel_width, 1.0);
 }
 
 #[test]

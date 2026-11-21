@@ -3588,7 +3588,12 @@ impl<'layout, 'row, 'measurer> DisplayRowWriter<'layout, 'row, 'measurer> {
         match glyphless.method {
             GlyphlessMethod::ZeroWidth => None,
             GlyphlessMethod::ThinSpace => {
-                Some((GlyphlessPresentation::ThinSpace, char_width_px * 0.25))
+                // GNU's docstring for `glyphless-char-display-control`:
+                // thin-space is a "thin (1-pixel width) space" on a graphical
+                // frame, and one character cell on a terminal.  A quarter of
+                // the frame cell made every `Cf` character (ZWSP in the ETAF
+                // corpus) two pixels wide where GNU measures one.
+                Some((GlyphlessPresentation::ThinSpace, 1.0))
             }
             GlyphlessMethod::EmptyBox => Some((GlyphlessPresentation::EmptyBox, {
                 let width_cols = base_width_cols(glyphless.ch).clamp(1, 4);
