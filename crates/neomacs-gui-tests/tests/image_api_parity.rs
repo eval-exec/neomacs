@@ -28,6 +28,11 @@ fn image_metadata_webp_property_order_matches_gnu() {
 }
 
 #[test]
+fn image_metadata_tiff_pages_and_dimensions_match_gnu() {
+    compare("tiff");
+}
+
+#[test]
 fn image_mask_bitmap_policy_matches_gnu() {
     compare("mask");
 }
@@ -74,6 +79,12 @@ fn compare(case: &str) {
         assert!(!output.timed_out, "{editor}: {output:#?}");
         assert_eq!(output.exit_code, Some(0), "{editor}: {output:#?}");
         values.push(fs::read_to_string(&result).expect("editor must write image API result"));
+    }
+    if case == "reflow" {
+        assert_eq!(
+            values[0], "(t t)\n",
+            "GNU must observe the decoded geometry"
+        );
     }
     assert_eq!(values[1], values[0], "{case}; artifacts: {artifacts:?}");
 }

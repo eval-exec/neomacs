@@ -73,6 +73,18 @@
        'webp t :scale 1 :index index)))
    '(0 1)))
 
+(defun image-api-tiff ()
+  (mapcar
+   (lambda (index)
+     (let ((image (create-image
+                   (base64-decode-string
+                    "SUkqAAgAAAAKAAABBAABAAAAAgAAAAEBBAABAAAAAQAAAAIBAwADAAAAhgAAAAMBAwABAAAAAQAAAAYBAwABAAAAAgAAABEBBAABAAAAjAAAABUBAwABAAAAAwAAABYBBAABAAAAAQAAABcBBAABAAAABgAAABwBAwABAAAAAQAAAJIAAAAIAAgACAD/AAD/AAAKAAABBAABAAAAAwAAAAEBBAABAAAAAgAAAAIBAwADAAAAEAEAAAMBAwABAAAAAQAAAAYBAwABAAAAAgAAABEBBAABAAAAFgEAABUBAwABAAAAAwAAABYBBAABAAAAAgAAABcBBAABAAAAEgAAABwBAwABAAAAAQAAAAAAAAAIAAgACAAA/wAA/wAA/wAA/wAA/wAA/wA=")
+                   'tiff t :scale 1 :index index)))
+       (condition-case e
+           (list (image-size image t) (image-metadata image))
+         (error (list 'error (error-message-string e))))))
+   '(0 1)))
+
 (defun image-api-write (value)
   (with-temp-file (getenv "NEOMACS_GUI_IMAGE_RESULT")
     (let ((print-length nil) (print-level nil))
@@ -106,5 +118,6 @@
        ("mask" (image-api-mask))
        ("metadata" (image-api-metadata))
        ("webp" (image-api-webp))
+       ("tiff" (image-api-tiff))
        (_ (error "Unknown image API case: %s" case))))
     (run-at-time 1 nil (lambda () (kill-emacs 0)))))

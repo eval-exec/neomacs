@@ -25,7 +25,7 @@ use neomacs_display_protocol::{
 };
 use neomacs_display_runtime::render_thread::{
     ImageDecodeClient, ImageDecodeTerminal, ImageProbeSource, ImageTerminalProbe,
-    SharedImageRenderState, probe_image_layout,
+    SharedImageRenderState, probe_image_layout_for_frame,
 };
 use neomacs_display_runtime::thread_comm::{AssetCommand, RenderCommand};
 use neovm_core::emacs_core::image_catalog::{
@@ -926,7 +926,13 @@ fn probe_layout(probe: &HeaderProbeRequest) -> Option<ImageLayoutExtent> {
         }
         ImageResolveSource::Data(data) => ImageProbeSource::Data(data.bytes()),
     };
-    probe_image_layout(source, request.size, request.rotation, request.realization)
+    probe_image_layout_for_frame(
+        source,
+        request.frame,
+        request.size,
+        request.rotation,
+        request.realization,
+    )
 }
 
 fn probed_layout(
@@ -1185,11 +1191,18 @@ fn placeholder_image_extent(request: &ImageResolveRequest) -> ImageLayoutExtent 
 /// The request a resolved geometry is keyed on: everything the header probe
 /// reads except the animation frame.
 ///
-/// Frames of a raster source composite onto the canvas its header names, so the
-/// probe's answer cannot depend on which frame is selected. Keying without the
-/// frame is what lets an animation resolve its geometry once instead of once
-/// per frame — see [`AsyncImageCatalog::geometry_layouts`].
+/// Animated raster frames composite onto one canvas, so they can share a
+/// resolved extent. TIFF pages keep their index because each directory can
+/// describe different dimensions. See [`AsyncImageCatalog::geometry_layouts`].
 fn geometry_key(request: &ImageResolveRequest) -> ImageResolveRequest {
+    // TIFF :index selects independent pages, whose dimensions can differ.
+    // Animated formats share a compositing canvas across every frame instead.
+    if matches!(
+        request.identity.format(),
+        neomacs_display_protocol::image_diagnostic::ImageFormatName::Tiff
+    ) {
+        return request.clone();
+    }
     ImageResolveRequest {
         frame: Default::default(),
         ..request.clone()

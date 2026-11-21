@@ -992,12 +992,16 @@ impl ImageCache {
                     let failure_source = DecodeFailureSource::of(&source);
                     let result = catch_unwind(AssertUnwindSafe(|| {
                         let admitted = match &source {
-                            ImageSource::File { path, .. } => {
-                                crate::admit(crate::ImageProbeSource::File(path), limit)
-                            }
-                            ImageSource::Data { data, .. } => {
-                                crate::admit(crate::ImageProbeSource::Data(data.as_slice()), limit)
-                            }
+                            ImageSource::File { path, .. } => crate::image_probe::admit_frame(
+                                crate::ImageProbeSource::File(path),
+                                frame,
+                                limit,
+                            ),
+                            ImageSource::Data { data, .. } => crate::image_probe::admit_frame(
+                                crate::ImageProbeSource::Data(data.as_slice()),
+                                frame,
+                                limit,
+                            ),
                             _ => Ok(()),
                         };
                         admitted.map_err(|_| ImageDiagnostic::InvalidSize)?;

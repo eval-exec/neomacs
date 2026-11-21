@@ -816,3 +816,27 @@ fn public_catalog_invalidation_retires_cpu_metadata_before_gpu_admission() {
         "a retired source identity cannot be reused by the next lookup"
     );
 }
+
+#[test]
+fn tiff_pages_keep_independent_known_geometry() {
+    use neomacs_display_protocol::image_diagnostic::{ImageFormatName, ImageLoadIdentity};
+    let (tx, _rx) = neomacs_display_runtime::thread_comm::RenderCommandSender::unbounded();
+    let metadata = Arc::new(ImageRenderState::default());
+    let catalog = test_catalog(tx, None, metadata, None);
+    let mut first = file_request("pages.tiff");
+    first.identity =
+        ImageLoadIdentity::new(ImageFormatName::Tiff, first.identity.subject().clone());
+    let mut second = first.clone();
+    second.frame = ImageFrameIndex::new(1);
+    catalog.remember_geometry(&first, ImageLayoutExtent::new(2, 1));
+    assert_eq!(catalog.known_geometry(&second), None);
+    catalog.remember_geometry(&second, ImageLayoutExtent::new(3, 2));
+    assert_eq!(
+        catalog.known_geometry(&first),
+        Some(ImageLayoutExtent::new(2, 1))
+    );
+    assert_eq!(
+        catalog.known_geometry(&second),
+        Some(ImageLayoutExtent::new(3, 2))
+    );
+}

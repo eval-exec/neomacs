@@ -818,7 +818,9 @@ pub struct ImageEmbeddedMetadata {
 }
 
 /// Decoder-specific order of the observable Lisp metadata plist.
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Hash, PartialEq, serde::Serialize, serde::Deserialize,
+)]
 pub enum ImageMetadataOrder {
     #[default]
     CountThenDelay,
@@ -858,6 +860,15 @@ impl ImageEmbeddedMetadata {
             property_order: ImageMetadataOrder::CountThenDelay,
             gif_extensions: None,
             introduction: None,
+        }
+    }
+
+    /// TIFF directory count is navigation metadata, without an animation delay.
+    #[must_use]
+    pub fn pages(frame_count: u32) -> Self {
+        Self {
+            frame_count: std::num::NonZeroU32::new(frame_count).filter(|count| count.get() > 1),
+            ..Self::EMPTY
         }
     }
 

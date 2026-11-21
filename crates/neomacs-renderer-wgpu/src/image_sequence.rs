@@ -334,6 +334,12 @@ impl ImageSequenceCache {
         data: &[u8],
         frame: ImageFrameIndex,
     ) -> ImageSequenceResolution {
+        if matches!(image::guess_format(data), Ok(image::ImageFormat::Tiff)) {
+            return match tiff_pages::decode(data, frame) {
+                Some(frame) => ImageSequenceResolution::Frame(frame),
+                None => ImageSequenceResolution::MissingFrame,
+            };
+        }
         self.resolve_with(
             sequence,
             frame,
@@ -639,3 +645,12 @@ pub(crate) fn decode_sequence(data: &[u8]) -> Option<Arc<DecodedImageSequence>> 
 mod tests;
 
 mod gif_metadata;
+
+mod tiff_pages;
+
+pub(crate) fn probe_tiff_frame(
+    data: &[u8],
+    frame: ImageFrameIndex,
+) -> Option<neomacs_display_protocol::ImageNativeExtent> {
+    tiff_pages::probe(data, frame)
+}

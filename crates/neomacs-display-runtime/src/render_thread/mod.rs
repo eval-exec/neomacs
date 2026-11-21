@@ -73,7 +73,9 @@ pub use thread_handle::RenderThread;
 
 /// Header-only image geometry, for placing an image whose pixels have not been
 /// decoded yet (see `neomacs_renderer_wgpu::image_probe`).
-pub use neomacs_renderer_wgpu::image_probe::{ImageProbeSource, probe_image_layout};
+pub use neomacs_renderer_wgpu::image_probe::{
+    ImageProbeSource, probe_image_layout, probe_image_layout_for_frame,
+};
 
 /// Rows of an image whose decode is still running, as published by
 /// `ImageDecodeTerminal::Band`.
