@@ -422,9 +422,33 @@ static CHILD_SIGNAL_SEEN: AtomicBool = AtomicBool::new(false);
 /// for `SIG_DFL`/`SIG_IGN`. `note_child_signal` calls it after latching, as
 /// `handle_child_signal` ends `lib_child_handler (sig);` (:7769), so a library
 /// that installed its own child handler (Glib before 2.73.2, GNUstep) keeps
-/// receiving the signal while this port records the child.
+/// receiving the signal while this port records the child. A predecessor with
+/// `SA_SIGINFO` is not recorded: its real ABI takes three arguments, and
+/// calling it with this one is undefined behaviour (GNU only easserts it
+/// cannot happen, src/process.c:8652-8653).
 #[cfg(unix)]
 static LIB_CHILD_HANDLER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// The one address-to-callback conversion in this module, shared by the
+/// SIGCHLD chain and the fatal-fault chain.
+///
+/// A `sigaction` names its handler as an integer by ABI; there is no safe
+/// route from that integer to a function pointer. Keeping the conversion in
+/// one place means the transmute ratchet sees one audited site rather than
+/// one per chain.
+///
+/// # Safety
+/// `address` was read from a `sigaction` this process installed or inherited,
+/// and `T` is the exact callback type that disposition carries: a one-argument
+/// handler for a disposition without `SA_SIGINFO`, a three-argument
+/// `FaultHandler` for one with it. `T` must be pointer-sized.
+#[cfg(unix)]
+unsafe fn handler_from_address<T>(address: usize) -> T {
+    assert_eq!(std::mem::size_of::<T>(), std::mem::size_of::<usize>());
+    // SAFETY: the caller fixes `T` as the installed callback type, so reading
+    // `size_of::<T>()` bytes from the `usize` names exactly those bits.
+    unsafe { std::mem::transmute_copy::<usize, T>(&address) }
+}
 
 #[cfg(unix)]
 extern "C" fn note_child_signal(signal: libc::c_int) {
@@ -433,11 +457,10 @@ extern "C" fn note_child_signal(signal: libc::c_int) {
     let handler = LIB_CHILD_HANDLER.load(Ordering::Acquire);
     if handler != 0 {
         // SAFETY: `install_child_signal_flag` stores only a previous handler
-        // that was neither `SIG_DFL` nor `SIG_IGN`, captured by `sigaction`
-        // for this same signal and called with the signal number, exactly as
-        // GNU calls `lib_child_handler (sig)`. Signals are asynchronous, so
-        // the call is not a Rust borrow of any state guarded by a lock.
-        let handler: extern "C" fn(libc::c_int) = unsafe { std::mem::transmute(handler) };
+        // that was neither `SIG_DFL` nor `SIG_IGN` and does not carry
+        // `SA_SIGINFO`, so the one-argument signature below is its real ABI;
+        // GNU calls it the same way (`lib_child_handler (sig)`, :7769).
+        let handler: extern "C" fn(libc::c_int) = unsafe { handler_from_address(handler) };
         handler(signal);
     }
 }
@@ -457,8 +480,10 @@ pub(crate) fn clear_child_signal_seen() {
 ///
 /// * block SIGCHLD across the swap, as `block_child_signal` does;
 /// * install `note_child_signal`;
-/// * keep whatever handler was installed before, so `note_child_signal` can
-///   chain it (`lib_child_handler (sig)`, src/process.c:7657, :7769).
+/// * keep a one-argument handler installed before, so `note_child_signal` can
+///   chain it (`lib_child_handler (sig)`, src/process.c:7657, :7769); a
+///   `SA_SIGINFO` predecessor is refused with an install-time diagnostic
+///   because the chain's one-argument call would be undefined behaviour.
 ///
 /// GNU replaces the disposition with `deliver_child_signal` here. Ledger 208
 /// had removed it entirely; 456ab01b28 re-added it as GNU's flag-only
@@ -467,8 +492,8 @@ pub(crate) fn clear_child_signal_seen() {
 fn install_child_signal_flag() -> bool {
     // SAFETY: `sigaction` receives a fully initialised action and a valid
     // signal number; the handler only stores an atomic and calls a handler the
-    // kernel itself installed, both on the async-signal-safe list. The mask is
-    // empty, matching a flag-only handler.
+    // process installed, both on the async-signal-safe list. The mask is
+    // empty, matching a flag-writing handler.
     unsafe {
         let mut action: libc::sigaction = std::mem::zeroed();
         libc::sigemptyset(&mut action.sa_mask);
@@ -488,7 +513,19 @@ fn install_child_signal_flag() -> bool {
             && old_action.sa_sigaction != libc::SIG_DFL
             && old_action.sa_sigaction != libc::SIG_IGN
         {
-            LIB_CHILD_HANDLER.store(old_action.sa_sigaction, Ordering::Release);
+            if old_action.sa_flags & libc::SA_SIGINFO != 0 {
+                // GNU easserts the replaced handler has no SA_SIGINFO
+                // (src/process.c:8652-8653), but only in a debug build; a
+                // three-argument handler called with one argument is UB in
+                // signal context. Refuse to chain, and say so here, at
+                // install time, rather than guess the wrong ABI later.
+                tracing::warn!(
+                    "SIGCHLD predecessor carries SA_SIGINFO; not chaining it \
+                     (the one-argument chain would be undefined behaviour)"
+                );
+            } else {
+                LIB_CHILD_HANDLER.store(old_action.sa_sigaction, Ordering::Release);
+            }
         }
 
         libc::sigprocmask(libc::SIG_SETMASK, &old_set, std::ptr::null_mut());
@@ -1041,13 +1078,13 @@ fn previous_fault_handler(sig: libc::c_int) -> Option<FaultHandler> {
     if flags & libc::SA_SIGINFO == 0 {
         return None;
     }
-    // SAFETY: this is the one peer-signed transmute exception for the fatal
-    // P4 work (TRANSMUTE_CEILING 6 -> 7, pid f70ad89b). `sa_sigaction` is an
-    // integer by ABI and there is no safe route from an integer to a function
-    // pointer. The value was read back from a sigaction this process
-    // installed; SIG_DFL/SIG_IGN are filtered above and SA_SIGINFO fixes the
-    // three-argument signature, so the bits name a valid callback.
-    Some(unsafe { std::mem::transmute::<usize, FaultHandler>(action) })
+    // SAFETY: the P4 fatal-fault chain's peer-signed conversion (the
+    // TRANSMUTE_CEILING 6 -> 7 entry, pid f70ad89b) now goes through the
+    // module's single `handler_from_address` helper. The value was read back
+    // from a sigaction this process installed; SIG_DFL/SIG_IGN are filtered
+    // above and SA_SIGINFO fixes the three-argument signature, so the bits
+    // name a valid callback.
+    Some(unsafe { handler_from_address::<FaultHandler>(action) })
 }
 
 /// Die by `sig` the way GNU's `terminate_due_to_signal` ends: unblock it,

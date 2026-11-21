@@ -786,6 +786,75 @@ fn this_port_claims_sigchld_and_chains_the_previous_handler() {
     );
 }
 
+/// A `SA_SIGINFO` predecessor is refused, not called with the wrong ABI.
+///
+/// GNU's `catch_child_signal` asserts the replaced handler has no
+/// `SA_SIGINFO` (src/process.c:8652-8653), but only in a debug build, and its
+/// expected predecessors (Glib, GNUstep) are one-argument handlers. A Rust
+/// library may install a three-argument SIGCHLD handler; calling it through
+/// the one-argument chain is undefined behaviour inside signal context. This
+/// port therefore records the flag at install and refuses to chain, with the
+/// diagnostic made there rather than in the handler.
+#[cfg(unix)]
+#[test]
+fn this_port_refuses_to_chain_a_siginfo_child_handler() {
+    static CALLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    extern "C" fn previous_siginfo_handler(
+        _signal: libc::c_int,
+        _info: *mut libc::siginfo_t,
+        _context: *mut libc::c_void,
+    ) {
+        CALLED.store(true, std::sync::atomic::Ordering::Release);
+    }
+
+    // SAFETY: `action` is fully initialised with the three-argument ABI and
+    // SA_SIGINFO set; the handler only stores an atomic.
+    unsafe {
+        let mut action: libc::sigaction = std::mem::zeroed();
+        libc::sigemptyset(&mut action.sa_mask);
+        action.sa_sigaction = previous_siginfo_handler as usize;
+        action.sa_flags = libc::SA_SIGINFO | libc::SA_RESTART;
+        assert_eq!(
+            libc::sigaction(libc::SIGCHLD, &action, std::ptr::null_mut()),
+            0,
+            "could not install the SA_SIGINFO predecessor"
+        );
+    }
+
+    let _report = os_signal::install();
+    // SAFETY: query only.
+    let disposition = unsafe {
+        let mut old: libc::sigaction = std::mem::zeroed();
+        assert_eq!(
+            libc::sigaction(libc::SIGCHLD, std::ptr::null(), &mut old),
+            0,
+            "could not read SIGCHLD's disposition"
+        );
+        old.sa_sigaction
+    };
+    assert_ne!(
+        disposition,
+        libc::SIG_DFL,
+        "install() must still claim SIGCHLD over an SA_SIGINFO predecessor"
+    );
+    assert_ne!(
+        disposition, previous_siginfo_handler as usize,
+        "install() must replace the predecessor"
+    );
+
+    kill_self(libc::SIGCHLD);
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    assert!(
+        !CALLED.load(std::sync::atomic::Ordering::Acquire),
+        "the SA_SIGINFO predecessor must not be called through the \
+         one-argument chain; that ABI mismatch is undefined behaviour"
+    );
+    assert!(
+        !os_signal::pending(),
+        "SIGCHLD still never assigns `pending_signals'"
+    );
+}
+
 /// Windows has no POSIX SIGUSR dispositions, so this module must expose no
 /// signal entries and must not create an install-time wake mechanism.
 #[cfg(windows)]
