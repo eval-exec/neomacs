@@ -403,19 +403,19 @@ fn a_banded_decode_agrees_with_the_whole_image_path_for_every_row_format() {
     }
 }
 
-/// The mask identity GNU's `:mask` reads is a property of the *source* pixels,
-/// so a banded decode classifies them as they arrive rather than reading the
-/// raster it built: a source whose alphas are only ever clear or opaque has
-/// pixels in between once they have been filtered, and asking the raster would
-/// be asking the filter.
+/// PNG's mask identity comes from the encoded transparency representation,
+/// rather than the filtered raster. Native alpha and binary tRNS can have
+/// identical pixels, but GNU creates a clipping mask only for the latter
+/// (`image.c:8407-8423,8507-8513`).
 #[test]
 fn the_mask_comes_from_the_source_pixels_not_from_the_raster() {
     let (width, height) = (40, 20);
-    let mut pixels = vec![0_u8; width as usize * height as usize * 4];
-    for (index, texel) in pixels.chunks_exact_mut(4).enumerate() {
-        texel.copy_from_slice(&[0x40, 0x80, 0xc0, if index % 3 == 0 { 0 } else { 255 }]);
-    }
-    let data = png_of(width, height, pixels);
+    let data = png_paletted(
+        width,
+        height,
+        vec![0x40, 0x80, 0xc0, 0x40, 0x80, 0xc0],
+        Some(vec![0, 255]),
+    );
     let BandSource::Banded(source) = open_banded_at(&data, 20, 10) else {
         panic!("a PNG has a row-wise decoder");
     };
@@ -424,7 +424,7 @@ fn the_mask_comes_from_the_source_pixels_not_from_the_raster() {
     assert_eq!(
         raster.mask(),
         ImageMaskKind::Clipping,
-        "the source's own alphas are clear or opaque"
+        "the encoded binary tRNS creates GNU's clipping mask"
     );
     assert!(
         raster
@@ -448,6 +448,61 @@ fn the_mask_comes_from_the_source_pixels_not_from_the_raster() {
         raster.expect("a completed source").mask(),
         ImageMaskKind::AlphaChannel
     );
+}
+
+#[test]
+fn native_png_binary_alpha_remains_an_alpha_channel_after_minification() {
+    let (width, height) = (40, 20);
+    let pixels = (0..width * height)
+        .flat_map(|index| [0x40, 0x80, 0xc0, if index % 3 == 0 { 0 } else { 255 }])
+        .collect();
+    let data = png_of(width, height, pixels);
+    let BandSource::Banded(source) = open_banded_at(&data, 20, 10) else {
+        panic!("a PNG has a row-wise decoder");
+    };
+    let (_, raster) = drain(source);
+    let raster = raster.expect("completed native-alpha PNG");
+    assert_eq!(raster.mask(), ImageMaskKind::AlphaChannel);
+    assert!(
+        raster
+            .into_rgba()
+            .chunks_exact(4)
+            .any(|pixel| pixel[3] != 0 && pixel[3] != 255),
+        "render alpha survives while mask identity follows the encoding"
+    );
+}
+
+#[test]
+fn sixteen_bit_png_mask_origin_survives_row_expansion() {
+    for (color, trns, expected) in [
+        (
+            png::ColorType::GrayscaleAlpha,
+            None,
+            ImageMaskKind::AlphaChannel,
+        ),
+        (png::ColorType::Rgba, None, ImageMaskKind::AlphaChannel),
+        (
+            png::ColorType::Grayscale,
+            Some(vec![0x12, 0x34]),
+            ImageMaskKind::Clipping,
+        ),
+        (
+            png::ColorType::Rgb,
+            Some(vec![0x12, 0x34, 0xab, 0xcd, 0x00, 0x01]),
+            ImageMaskKind::Clipping,
+        ),
+    ] {
+        let data = png_sixteen(9, 4, color, trns);
+        let BandSource::Banded(source) = open_banded(&data) else {
+            panic!("a sixteen-bit PNG has a row-wise decoder");
+        };
+        let (_, raster) = drain(source);
+        assert_eq!(
+            raster.expect("sixteen-bit PNG").mask(),
+            expected,
+            "{color:?}"
+        );
+    }
 }
 
 /// A 16-bit PNG of `width` x `height`, its samples taken from

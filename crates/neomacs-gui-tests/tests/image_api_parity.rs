@@ -27,6 +27,11 @@ fn image_metadata_webp_property_order_matches_gnu() {
     compare("webp");
 }
 
+#[test]
+fn image_mask_bitmap_policy_matches_gnu() {
+    compare("mask");
+}
+
 fn compare(case: &str) {
     let root = neomacs_infra::workspace_root();
     let artifacts = root.join(format!("tmp/image-api-{case}-{}", std::process::id()));
