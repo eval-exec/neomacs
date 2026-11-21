@@ -31,7 +31,7 @@ fn synthetic_key(window_start: i64, point: i64) -> RetainedWindowKey {
         wrap_mode: LineWrapMode::Truncate,
         word_wrap: false,
         word_wrap_policy: Default::default(),
-        bidi_paragraph_direction: Default::default(),
+        bidi_paragraph_directions: Default::default(),
         tab_width: 8,
         char_width: 8.0,
         char_height: 16.0,

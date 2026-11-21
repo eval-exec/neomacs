@@ -94,6 +94,10 @@ enum Case {
     LeftToRight,
     RightToLeft,
     Off,
+    /// An all-LTR line under an explicit `right-to-left` paragraph: GNU pins
+    /// the base to R2L, so the row is right-aligned and its L characters sit
+    /// at level 2.  The expectation is taken from the paired GNU arm.
+    RightToLeftAscii,
 }
 
 impl Case {
@@ -105,6 +109,7 @@ impl Case {
             Case::LeftToRight => "direction-left-to-right",
             Case::RightToLeft => "direction-right-to-left",
             Case::Off => "reordering-nil",
+            Case::RightToLeftAscii => "right-to-left-ascii",
         }
     }
 
@@ -112,7 +117,14 @@ impl Case {
         match self {
             Case::Auto | Case::Off => "nil",
             Case::LeftToRight => "left-to-right",
-            Case::RightToLeft => "right-to-left",
+            Case::RightToLeft | Case::RightToLeftAscii => "right-to-left",
+        }
+    }
+
+    fn text_env(self) -> &'static str {
+        match self {
+            Case::RightToLeftAscii => "ascii",
+            _ => "arabic",
         }
     }
 
@@ -126,10 +138,13 @@ impl Case {
     /// Pinned GNU 31.1 GUI: `JA`/`JIM` sit at the right margin for nil and
     /// `right-to-left`, and at the left margin for `left-to-right` and a nil
     /// `bidi-display-reordering`.
-    fn gnu_alignment(self) -> &'static str {
+    /// Pinned GNU 31.1 expectation, or `None` when the paired GNU arm itself
+    /// is the expectation (the all-LTR row under right-to-left).
+    fn gnu_alignment(self) -> Option<&'static str> {
         match self {
-            Case::Auto | Case::RightToLeft => "right",
-            Case::LeftToRight | Case::Off => "left",
+            Case::Auto | Case::RightToLeft => Some("right"),
+            Case::LeftToRight | Case::Off => Some("left"),
+            Case::RightToLeftAscii => None,
         }
     }
 }
@@ -153,6 +168,7 @@ fn capture_frame(
         .arg(root.join(FIXTURE))
         .env("R2_DIR", case.direction_env())
         .env("R2_REORDER", case.reordering_env())
+        .env("R2_TEXT", case.text_env())
         .env("FONTCONFIG_FILE", fontconfig)
         .env("GDK_BACKEND", "x11");
     for (key, value) in session_env {
@@ -345,13 +361,15 @@ fn bidi_paragraph_direction_controls_rtl_alignment_like_gnu() {
             case,
         );
         let gnu_alignment = painted_alignment(&gnu_png);
-        assert_eq!(
-            gnu_alignment,
-            case.gnu_alignment(),
-            "GNU authority changed for {}; screenshot: {}",
-            case.label(),
-            gnu_png.display()
-        );
+        if let Some(expected) = case.gnu_alignment() {
+            assert_eq!(
+                gnu_alignment,
+                expected,
+                "GNU authority changed for {}; screenshot: {}",
+                case.label(),
+                gnu_png.display()
+            );
+        }
 
         let neo_png = capture_frame(
             &neo_program,

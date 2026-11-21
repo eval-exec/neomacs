@@ -205,7 +205,7 @@ pub struct RetainedWindowKey {
     /// The buffer's paragraph direction at layout time (GNU
     /// `it->paragraph_embedding`). Changing it changes every row's visual
     /// order and alignment, so retained rows must not be reused across it.
-    pub bidi_paragraph_direction: crate::bidi::ParagraphDirection,
+    pub bidi_paragraph_directions: crate::bidi::ParagraphDirections,
     pub tab_width: i32,
     pub char_width: f32,
     pub char_height: f32,
@@ -368,7 +368,7 @@ impl RetainedWindowKey {
             wrap_mode: p.wrap_mode,
             word_wrap: p.word_wrap,
             word_wrap_policy: p.word_wrap_policy.clone(),
-            bidi_paragraph_direction: p.bidi_paragraph_direction,
+            bidi_paragraph_directions: p.bidi_paragraph_directions,
             tab_width: p.tab_width,
             char_width: p.char_width,
             char_height: p.char_height,

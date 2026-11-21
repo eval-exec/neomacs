@@ -232,7 +232,7 @@ pub(crate) struct TextWindowBegin {
     pub(crate) row_capacity: crate::output::window_request::OutputWindowRowCapacity,
     /// The displayed buffer's paragraph direction (GNU
     /// `it->paragraph_embedding`, `src/xdisp.c:3600-3611`).
-    pub(crate) bidi_paragraph_direction: crate::bidi::ParagraphDirection,
+    pub(crate) bidi_paragraph_directions: crate::bidi::ParagraphDirections,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -247,7 +247,7 @@ pub(crate) struct TextWindowOutputBegin {
     pub(crate) row_capacity: crate::output::window_request::OutputWindowRowCapacity,
     /// The displayed buffer's paragraph direction (GNU
     /// `it->paragraph_embedding`, `src/xdisp.c:3600-3611`).
-    pub(crate) bidi_paragraph_direction: crate::bidi::ParagraphDirection,
+    pub(crate) bidi_paragraph_directions: crate::bidi::ParagraphDirections,
 }
 
 impl From<TextWindowBegin> for TextWindowOutputBegin {
@@ -261,7 +261,7 @@ impl From<TextWindowBegin> for TextWindowOutputBegin {
             text_clip_bounds: request.text_clip_bounds,
             selected: request.selected,
             row_capacity: request.row_capacity,
-            bidi_paragraph_direction: request.bidi_paragraph_direction,
+            bidi_paragraph_directions: request.bidi_paragraph_directions,
         }
     }
 }
@@ -278,7 +278,7 @@ impl TextWindowOutputBegin {
             self.selected,
         )
         .with_row_capacity(self.row_capacity)
-        .with_bidi_paragraph_direction(self.bidi_paragraph_direction)
+        .with_bidi_paragraph_directions(self.bidi_paragraph_directions)
     }
 }
 

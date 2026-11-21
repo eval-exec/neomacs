@@ -9,6 +9,7 @@
 ;;
 ;; R2_DIR      nil | left-to-right | right-to-left
 ;; R2_REORDER  t | nil
+;; R2_TEXT     arabic (the reporter's bytes) | ascii ("ab", an all-LTR row)
 ;;
 ;; Chrome is turned off so the first narrow band is body text in both engines.
 
@@ -27,9 +28,12 @@
             (unless (equal dir "nil")
               (intern dir))))
     (erase-buffer)
-    (insert (decode-coding-string
-             (unibyte-string #xd8 #xac #xd8 #xa7 #x0a #xd8 #xac #x0a)
-             'utf-8))
+    (insert
+     (if (equal (getenv "R2_TEXT") "ascii")
+         "ab\n"
+       (decode-coding-string
+        (unibyte-string #xd8 #xac #xd8 #xa7 #x0a #xd8 #xac #x0a)
+        'utf-8)))
     (goto-char (point-min))
     (set-buffer-modified-p nil))
   (switch-to-buffer buf))

@@ -713,7 +713,13 @@ pub(crate) fn reorder_row_bidi_with_direction(
     // digits to level 2, but 2 is even — every consumer tests `bidi_level & 1`,
     // and an all-even row has no odd run for rule L2 to reverse, so the result is
     // observably identical to a full resolve.
-    if let Some(identity) = LtrBidiUnits::certify(&units) {
+    // The identity shortcut is sound only when the paragraph base level is
+    // even: with an explicit `right-to-left` direction GNU pins the base to
+    // R2L (`bidi_paragraph_init`), so even an all-LTR row is reversed_p and
+    // its L characters resolve at level 2.
+    if matches!(base_dir, BidiDir::Auto | BidiDir::LTR)
+        && let Some(identity) = LtrBidiUnits::certify(&units)
+    {
         return identity.finish(row, phys_cursor_col);
     }
     let chars: String = units.iter().map(|unit| unit.ch).collect();

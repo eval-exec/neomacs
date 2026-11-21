@@ -190,6 +190,33 @@ impl ParagraphDirection {
     }
 }
 
+/// The two paragraph directions a window carries.
+///
+/// GNU resolves buffer text under the displayed buffer's BVARs
+/// (`src/xdisp.c:3600-3611`), but chrome rows are Lisp display strings drawn
+/// by `display_mode_line` (`src/xdisp.c:28165`) and `display_tab_bar`
+/// (`src/xdisp.c:14727`), which set `it->paragraph_embedding = L2R`
+/// unconditionally, and `reseat_to_string` gates string reordering on the
+/// DEFAULT `bidi-display-reordering` (`buffer_defaults`), not the buffer's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ParagraphDirections {
+    /// Buffer text and the minibuffer's own text.
+    pub text: ParagraphDirection,
+    /// Mode/header/tab-line and tab-bar glyph rows.
+    pub chrome: ParagraphDirection,
+}
+
+impl Default for ParagraphDirections {
+    /// GNU defaults: text is UAX#9 automatic and chrome is L2R
+    /// (`bidi-display-reordering` defaults to t).
+    fn default() -> Self {
+        Self {
+            text: ParagraphDirection::Auto,
+            chrome: ParagraphDirection::LeftToRight,
+        }
+    }
+}
+
 /// Bracket type for the Paired Bracket Algorithm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BracketType {

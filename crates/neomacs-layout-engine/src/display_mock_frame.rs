@@ -444,7 +444,7 @@ pub(crate) fn layout_mock_frame_content(
                 text_clip_bounds: window.pixel_bounds,
                 selected: window.selected,
                 row_capacity: crate::output::window_request::OutputWindowRowCapacity::Fixed,
-                bidi_paragraph_direction: crate::bidi::ParagraphDirection::Auto,
+                bidi_paragraph_directions: crate::bidi::ParagraphDirections::default(),
             },
         );
         for (row_idx, line) in window.lines.iter().enumerate() {
@@ -505,7 +505,7 @@ pub(crate) fn layout_mock_frame_content(
                 text_clip_bounds: mini.pixel_bounds,
                 selected: mini.selected,
                 row_capacity: crate::output::window_request::OutputWindowRowCapacity::Fixed,
-                bidi_paragraph_direction: crate::bidi::ParagraphDirection::Auto,
+                bidi_paragraph_directions: crate::bidi::ParagraphDirections::default(),
             },
         );
 
@@ -598,7 +598,7 @@ pub(crate) fn layout_mock_frame_content(
                 text_clip_bounds: cf.window.pixel_bounds,
                 selected: false,
                 row_capacity: crate::output::window_request::OutputWindowRowCapacity::Fixed,
-                bidi_paragraph_direction: crate::bidi::ParagraphDirection::Auto,
+                bidi_paragraph_directions: crate::bidi::ParagraphDirections::default(),
             },
         );
         for (ri, line) in cf.window.lines.iter().enumerate() {

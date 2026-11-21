@@ -637,24 +637,46 @@ pub(crate) fn visible_value(
     evaluator.builtin_var_value(id)
 }
 
-/// GNU `it->paragraph_embedding` (`src/xdisp.c:3600-3611`): a nil
-/// `bidi-display-reordering` turns bidi off entirely; a `bidi-paragraph-direction`
-/// of `left-to-right`/`right-to-left` pins the base level, and every other
-/// value (including nil) selects UAX#9 P2/P3 first-strong-character detection.
-fn layout_paragraph_direction<B: LayoutBufferView + ?Sized>(
-    buffer: &B,
-) -> crate::bidi::ParagraphDirection {
-    use crate::bidi::ParagraphDirection;
-    if buffer_local_value(buffer, LayoutVar::BidiDisplayReordering)
+/// GNU's paragraph directions for one window.
+///
+/// Buffer text follows the displayed buffer's BVARs (`src/xdisp.c:3600-3611`):
+/// a nil `bidi-display-reordering` turns bidi off entirely, a
+/// `bidi-paragraph-direction` of `left-to-right`/`right-to-left` pins the base
+/// level, and every other value (including nil) selects UAX#9 P2/P3.  The read
+/// goes through `effective_buffer_value`, GNU's `find_symbol_value` with this
+/// buffer current, so a live `let` of the variable is visible just like the
+/// buffer slot.
+///
+/// Chrome rows are display strings: `display_mode_line` (mode, header and tab
+/// lines, `src/xdisp.c:28165`) and `display_tab_bar` (`src/xdisp.c:14727`) set
+/// `it->paragraph_embedding = L2R` unconditionally, and `reseat_to_string`
+/// gates string reordering on the DEFAULT `bidi-display-reordering`
+/// (`buffer_defaults`), not the buffer's.
+fn layout_paragraph_directions(
+    buffer: &Buffer,
+    vars: VariableView<'_>,
+) -> crate::bidi::ParagraphDirections {
+    use crate::bidi::{ParagraphDirection, ParagraphDirections};
+    let text = if effective_buffer_value(buffer, vars, LayoutVar::BidiDisplayReordering)
         .is_none_or(|value| value.is_nil())
     {
-        return ParagraphDirection::Off;
-    }
-    match buffer_local_value(buffer, LayoutVar::BidiParagraphDirection) {
-        Some(value) if value == Value::symbol("left-to-right") => ParagraphDirection::LeftToRight,
-        Some(value) if value == Value::symbol("right-to-left") => ParagraphDirection::RightToLeft,
-        _ => ParagraphDirection::Auto,
-    }
+        ParagraphDirection::Off
+    } else {
+        match effective_buffer_value(buffer, vars, LayoutVar::BidiParagraphDirection) {
+            Some(value) if value == Value::symbol("left-to-right") => {
+                ParagraphDirection::LeftToRight
+            }
+            Some(value) if value == Value::symbol("right-to-left") => {
+                ParagraphDirection::RightToLeft
+            }
+            _ => ParagraphDirection::Auto,
+        }
+    };
+    let chrome = match vars.default_value(LayoutVar::BidiDisplayReordering.sym_id()) {
+        Some(value) if !value.is_nil() => ParagraphDirection::LeftToRight,
+        _ => ParagraphDirection::Off,
+    };
+    ParagraphDirections { text, chrome }
 }
 
 pub(crate) fn buffer_local_value<B: LayoutBufferView + ?Sized>(
@@ -1986,7 +2008,7 @@ pub fn window_params_from_neovm_with_font_sizing(
     // (issue #556).
     let frame_foreground = face_resolver.default_face().fg;
 
-    let bidi_paragraph_direction = layout_paragraph_direction(buffer);
+    let bidi_paragraph_directions = layout_paragraph_directions(buffer, vars);
     let glyph_matrix_input = window.display()?.glyph_matrix_row_scale.snapshot();
     Some(WindowParams {
         // Filled in by `resolve_window_display_source_params`, the one place
@@ -2056,7 +2078,7 @@ pub fn window_params_from_neovm_with_font_sizing(
         wrap_mode,
         word_wrap,
         word_wrap_policy,
-        bidi_paragraph_direction,
+        bidi_paragraph_directions,
         tab_width,
         scroll_conservatively,
         scroll_step,

@@ -24,7 +24,7 @@ pub(crate) struct OutputWindowBeginRequest {
     pub(crate) selected: bool,
     /// The displayed buffer's paragraph direction (GNU
     /// `it->paragraph_embedding`). Defaults to UAX#9 automatic detection.
-    pub(crate) bidi_paragraph_direction: crate::bidi::ParagraphDirection,
+    pub(crate) bidi_paragraph_directions: crate::bidi::ParagraphDirections,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -52,15 +52,15 @@ impl OutputWindowBeginRequest {
             text_pixel_bounds,
             text_clip_bounds,
             selected,
-            bidi_paragraph_direction: crate::bidi::ParagraphDirection::Auto,
+            bidi_paragraph_directions: crate::bidi::ParagraphDirections::default(),
         }
     }
 
-    pub(crate) fn with_bidi_paragraph_direction(
+    pub(crate) fn with_bidi_paragraph_directions(
         mut self,
-        direction: crate::bidi::ParagraphDirection,
+        direction: crate::bidi::ParagraphDirections,
     ) -> Self {
-        self.bidi_paragraph_direction = direction;
+        self.bidi_paragraph_directions = direction;
         self
     }
 }
@@ -86,12 +86,12 @@ impl OutputWindowLifecycleRequest {
         ))
     }
 
-    pub(crate) fn with_bidi_paragraph_direction(
+    pub(crate) fn with_bidi_paragraph_directions(
         self,
-        direction: crate::bidi::ParagraphDirection,
+        direction: crate::bidi::ParagraphDirections,
     ) -> Self {
         match self {
-            Self::Begin(request) => Self::Begin(request.with_bidi_paragraph_direction(direction)),
+            Self::Begin(request) => Self::Begin(request.with_bidi_paragraph_directions(direction)),
             Self::End => Self::End,
         }
     }

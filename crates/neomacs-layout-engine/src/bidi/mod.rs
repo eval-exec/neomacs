@@ -29,4 +29,7 @@ pub mod types;
 pub use reorder::{apply_mirroring, reorder_line, reorder_visual};
 pub use resolver::{paragraph_base_level, resolve_levels};
 pub use tables::{bidi_class, bidi_mirror, bracket_type};
-pub use types::{BidiClass, BidiDir, BracketType, MAX_DEPTH, ParagraphDirection, ResolvedChar};
+pub use types::{
+    BidiClass, BidiDir, BracketType, MAX_DEPTH, ParagraphDirection, ParagraphDirections,
+    ResolvedChar,
+};
