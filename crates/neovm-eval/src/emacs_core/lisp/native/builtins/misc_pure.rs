@@ -358,6 +358,17 @@ impl super::eval::Context {
         );
     }
 
+    /// Append an already-formatted Lisp string as one diagnostic line to the
+    /// configured messages buffer without changing the echo area.
+    ///
+    /// GNU `add_to_log` hands its `Fformat_message` result straight to
+    /// `message_dolog`, which takes multibyte text; this entry preserves that
+    /// for callers that already hold the Lisp string (a printed error datum
+    /// can carry raw bytes a `&str` conversion would drop).
+    pub fn add_to_log_lisp_string(&mut self, message: &neovm_value::heap_types::LispString) {
+        message_dolog(self, message, MessageLogTermination::Line);
+    }
+
     /// Append printer output to `*Messages*` without terminating its line.
     /// GNU's `printchar`/`strout` use exactly this form when `standard-output`
     /// is the interactive echo area.

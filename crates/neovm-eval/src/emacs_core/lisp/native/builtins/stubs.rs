@@ -1198,7 +1198,7 @@ pub fn builtin_garbage_collect_maybe(
         // GNU returns t when the threshold is reached even if the requested
         // collection is inhibited by a user test.
         if !inhibited {
-            eval.gc_collect_exact();
+            eval.gc_collect_exact_flow()?;
         }
         Ok(Value::T)
     } else {

@@ -1857,6 +1857,22 @@ impl TaggedHeap {
         std::mem::take(&mut self.doomed_finalizer_functions)
     }
 
+    /// Put functions taken by [`Self::take_doomed_finalizer_functions`] back
+    /// at the FRONT of the queue after a non-local exit stopped the batch.
+    /// GNU `run_finalizers` unchains one finalizer at a time, so the ones a
+    /// throw did not reach stay on `doomed_finalizers` for a later
+    /// collection; functions a nested collection queued during the run follow
+    /// them. The queue is an internal runtime root, so requeueing here roots
+    /// every returned function for the next cycle.
+    pub fn requeue_doomed_finalizer_functions(
+        &mut self,
+        functions: impl IntoIterator<Item = TaggedValue>,
+    ) {
+        let mut requeued: Vec<TaggedValue> = functions.into_iter().collect();
+        requeued.append(&mut self.doomed_finalizer_functions);
+        self.doomed_finalizer_functions = requeued;
+    }
+
     /// Number of live finalizer objects still registered. `dump-emacs-portable`
     /// consults this after its pre-dump collection: the portable dump cannot
     /// represent finalizer objects (the writer arms refuse them), so a

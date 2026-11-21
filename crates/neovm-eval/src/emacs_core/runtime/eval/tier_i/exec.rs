@@ -388,7 +388,7 @@ impl Context {
         let result = self.maybe_grow_eval_stack(|ctx| {
             ctx.maybe_quit_before_gc()?;
             if ctx.gc_safe_point_exact_should_collect() {
-                ctx.collect_at_eval_safe_point(f.form);
+                ctx.collect_at_eval_safe_point(f.form)?;
             }
             if f.leaf_args
                 && act.lazy_frames

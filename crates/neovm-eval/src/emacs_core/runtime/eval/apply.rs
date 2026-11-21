@@ -2464,8 +2464,11 @@ impl Context {
             CallableRoot::Specpdl
         };
         let result = {
-            if self.gc_safe_point_exact_should_collect() {
-                self.gc_collect_from_current_roots();
+            if self.gc_safe_point_exact_should_collect()
+                && let Err(flow) = self.gc_collect_from_current_roots_flow()
+            {
+                self.depth -= 1;
+                return self.finish_traced_call(bt_count, Err(flow));
             }
             // GNU Ffuncall eval.c:3185-3190 in order: record_in_backtrace,
             // maybe_gc, then `if (debug_on_next_call) do_debug_on_call
@@ -2930,8 +2933,11 @@ impl Context {
         let bt_count = self.specpdl.len();
         self.push_backtrace_frame(designator, &args);
         let result = {
-            if self.gc_safe_point_exact_should_collect() {
-                self.gc_collect_from_current_roots();
+            if self.gc_safe_point_exact_should_collect()
+                && let Err(flow) = self.gc_collect_from_current_roots_flow()
+            {
+                self.depth -= 1;
+                return self.finish_traced_call(bt_count, Err(flow));
             }
             let entered = match self.take_debug_on_call_arm(DebugOnCallCode::Funcall) {
                 Some(arm) => self.do_debug_on_call(arm),
@@ -3002,8 +3008,11 @@ impl Context {
         let bt_count = self.specpdl.len();
         self.push_backtrace_frame(designator, std::slice::from_ref(&arg0));
         let result = {
-            if self.gc_safe_point_exact_should_collect() {
-                self.gc_collect_from_current_roots();
+            if self.gc_safe_point_exact_should_collect()
+                && let Err(flow) = self.gc_collect_from_current_roots_flow()
+            {
+                self.depth -= 1;
+                return self.finish_traced_call(bt_count, Err(flow));
             }
             let entered = match self.take_debug_on_call_arm(DebugOnCallCode::Funcall) {
                 Some(arm) => self.do_debug_on_call(arm),
@@ -3048,8 +3057,11 @@ impl Context {
         let bt_count = self.specpdl.len();
         self.push_backtrace_frame(designator, &[arg0, arg1]);
         let result = {
-            if self.gc_safe_point_exact_should_collect() {
-                self.gc_collect_from_current_roots();
+            if self.gc_safe_point_exact_should_collect()
+                && let Err(flow) = self.gc_collect_from_current_roots_flow()
+            {
+                self.depth -= 1;
+                return self.finish_traced_call(bt_count, Err(flow));
             }
             let entered = match self.take_debug_on_call_arm(DebugOnCallCode::Funcall) {
                 Some(arm) => self.do_debug_on_call(arm),
@@ -3106,8 +3118,11 @@ impl Context {
         let bt_count = self.specpdl.len();
         self.push_backtrace_frame(function, std::slice::from_ref(&arg0));
         let result = {
-            if self.gc_safe_point_exact_should_collect() {
-                self.gc_collect_from_current_roots();
+            if self.gc_safe_point_exact_should_collect()
+                && let Err(flow) = self.gc_collect_from_current_roots_flow()
+            {
+                self.depth -= 1;
+                return self.finish_traced_call(bt_count, Err(flow));
             }
             let entered = match self.take_debug_on_call_arm(DebugOnCallCode::Funcall) {
                 Some(arm) => self.do_debug_on_call(arm),
@@ -3292,8 +3307,11 @@ impl Context {
         let args = [arg0, arg1];
         self.push_backtrace_frame(function, &args);
         let result = {
-            if self.gc_safe_point_exact_should_collect() {
-                self.gc_collect_from_current_roots();
+            if self.gc_safe_point_exact_should_collect()
+                && let Err(flow) = self.gc_collect_from_current_roots_flow()
+            {
+                self.depth -= 1;
+                return self.finish_traced_call(bt_count, Err(flow));
             }
             let entered = match self.take_debug_on_call_arm(DebugOnCallCode::Funcall) {
                 Some(arm) => self.do_debug_on_call(arm),

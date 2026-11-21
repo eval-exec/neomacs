@@ -810,7 +810,7 @@ pub fn builtin_garbage_collect(eval: &mut super::eval::Context, args: Vec<Value>
     if eval.gc_inhibit_depth > 0 && neovm_value::hashtab::hash_test_parity_enabled() {
         return Ok(Value::NIL);
     }
-    eval.gc_collect_exact();
+    eval.gc_collect_exact_flow()?;
     // Return GC stats.
     super::builtins_extra::builtin_garbage_collect_stats()
 }
