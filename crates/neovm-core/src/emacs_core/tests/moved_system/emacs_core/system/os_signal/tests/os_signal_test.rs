@@ -855,6 +855,76 @@ fn this_port_refuses_to_chain_a_siginfo_child_handler() {
     );
 }
 
+/// A library that claims SIGCHLD after `install()` does not silence Neo.
+///
+/// GNU calls `catch_child_signal` again after Glib, GNUstep or WebKit touch
+/// the disposition (src/xgselect.c:268; src/xwidget.c:382, :3128, :4281,
+/// :4303). `reclaim_child_signal` is that re-claim: it restores the latch
+/// handler, keeps the foreign one, and chains it on the next delivery.
+#[cfg(unix)]
+#[test]
+fn reclaiming_after_a_foreign_handler_keeps_the_latch_and_chains_it() {
+    static FOREIGN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    extern "C" fn foreign_child_handler(_signal: libc::c_int) {
+        FOREIGN.store(true, std::sync::atomic::Ordering::Release);
+    }
+
+    let _ = os_signal::install();
+    os_signal::clear_child_signal_seen();
+
+    // A library claims SIGCHLD after the port's install.
+    // SAFETY: `action` is fully initialised; the handler only stores an atomic.
+    unsafe {
+        let mut action: libc::sigaction = std::mem::zeroed();
+        libc::sigemptyset(&mut action.sa_mask);
+        action.sa_sigaction = foreign_child_handler as usize;
+        action.sa_flags = libc::SA_RESTART;
+        assert_eq!(
+            libc::sigaction(libc::SIGCHLD, &action, std::ptr::null_mut()),
+            0,
+            "could not install the foreign child handler"
+        );
+    }
+
+    assert!(
+        os_signal::reclaim_child_signal(),
+        "the re-claim must install the flag handler again"
+    );
+
+    // SAFETY: query only.
+    let disposition = unsafe {
+        let mut old: libc::sigaction = std::mem::zeroed();
+        assert_eq!(
+            libc::sigaction(libc::SIGCHLD, std::ptr::null(), &mut old),
+            0,
+            "could not read SIGCHLD's disposition"
+        );
+        old.sa_sigaction
+    };
+    assert_ne!(disposition, libc::SIG_DFL, "the re-claim was lost");
+    assert_ne!(
+        disposition, foreign_child_handler as usize,
+        "the re-claim must replace the foreign disposition"
+    );
+
+    kill_self(libc::SIGCHLD);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while !(FOREIGN.load(std::sync::atomic::Ordering::Acquire) && os_signal::child_signal_seen())
+        && std::time::Instant::now() < deadline
+    {
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert!(
+        os_signal::child_signal_seen(),
+        "the latch must fire after a re-claim"
+    );
+    assert!(
+        FOREIGN.load(std::sync::atomic::Ordering::Acquire),
+        "the foreign handler must still be chained after a re-claim"
+    );
+    os_signal::clear_child_signal_seen();
+}
+
 /// Windows has no POSIX SIGUSR dispositions, so this module must expose no
 /// signal entries and must not create an install-time wake mechanism.
 #[cfg(windows)]

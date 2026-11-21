@@ -484,11 +484,13 @@ extern "C" fn note_child_signal(signal: libc::c_int) {
 }
 
 /// Whether a SIGCHLD was delivered since the last full status walk.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn child_signal_seen() -> bool {
     CHILD_SIGNAL_SEEN.load(Ordering::Relaxed)
 }
 
 /// Clear the latch at the start of the wait's full status walk.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn clear_child_signal_seen() {
     CHILD_SIGNAL_SEEN.store(false, Ordering::Relaxed);
 }
@@ -548,6 +550,32 @@ fn install_child_signal_flag() -> bool {
 
         libc::sigprocmask(libc::SIG_SETMASK, &old_set, std::ptr::null_mut());
         installed
+    }
+}
+
+/// Re-claim SIGCHLD after a library replaced the disposition, the way GNU
+/// calls `catch_child_signal` again after Glib, GNUstep or WebKit touch it
+/// (src/xgselect.c:268; src/xwidget.c:382, :3128, :4281, :4303).
+///
+/// One claim cannot survive a library that installs its own SIGCHLD handler:
+/// the kernel delivers to the newest disposition, so this port's latch would
+/// go silent. Re-running the swap restores `note_child_signal` and preserves
+/// whatever handler is now installed, so the next delivery both latches and
+/// chains it. Idempotent and async-signal-safe requirements are the same as
+/// the first install; it runs on the owning thread, never in a handler.
+///
+/// Neo's claim point is the WebKit/WPE stack (glib `GMainContext`); its
+/// equivalent of GNU's `glib_installs_sigchld_handler` gate is the caller's,
+/// because the pinned Glib decides from its version and pidfd support
+/// (src/process.c:8705-8731).
+pub fn reclaim_child_signal() -> bool {
+    #[cfg(unix)]
+    {
+        install_child_signal_flag()
+    }
+    #[cfg(not(unix))]
+    {
+        false
     }
 }
 

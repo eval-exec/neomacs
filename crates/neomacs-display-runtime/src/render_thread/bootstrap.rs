@@ -289,7 +289,13 @@ impl RenderApp {
                 }
             } else {
                 match neomacs_webview::WebViewSystem::new(config, self.webview_wake.clone()) {
-                    Ok(system) => self.webview_system = Some(system),
+                    Ok(system) => {
+                        self.webview_system = Some(system);
+                        // GNU re-claims SIGCHLD after WebKit/Glib touch it
+                        // (src/xwidget.c:382, :3128, :4281, :4303); the WPE
+                        // stack is Neo's corresponding claim point.
+                        neovm_core::emacs_core::os_signal::reclaim_child_signal();
+                    }
                     Err(error) => {
                         tracing::warn!(?error, "failed to initialize the WebView system");
                     }
