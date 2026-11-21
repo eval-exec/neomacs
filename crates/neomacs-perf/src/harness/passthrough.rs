@@ -5,6 +5,8 @@
 const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     // Paired binaries must be able to load the same frozen Lisp runtime.
     "NEOMACS_RUNTIME_ROOT",
+    // Worker isolate boot-width sweep for the perf scenarios.
+    "NEOMACS_WORKER_THREADS",
     // Independent redisplay controls; preserve upstream policy forwarding.
     "NEOMACS_PERF_SUSTAINED_VISIBLE",
     "NEOMACS_PERF_SUSTAINED_EDIT_CASE",

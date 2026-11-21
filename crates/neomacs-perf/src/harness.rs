@@ -652,6 +652,11 @@ impl PerfHarness {
             ScenarioId::BytecodeCallLoop => {
                 scenarios::bytecode::prepare(&self.workspace_root, request, run_directory)
             }
+            ScenarioId::WorkerIsolatesLoop
+            | ScenarioId::WorkerIsolatesJson
+            | ScenarioId::WorkerIsolatesBoot => {
+                scenarios::worker_isolates::prepare(&self.workspace_root, request, run_directory)
+            }
             ScenarioId::ElispBenchmarks => {
                 scenarios::elisp_benchmarks::prepare(&self.workspace_root, request, run_directory)
             }
@@ -1067,6 +1072,7 @@ enum PreparedWorkload {
     MxTabCompletionSteady,
     Scrolling,
     BytecodeCallLoop,
+    WorkerIsolates,
     VmLoop,
     BuiltinCall,
     SearchShape,
@@ -1753,6 +1759,7 @@ enum ScenarioResult {
     MxTabCompletionSteady(scenarios::mx_tab::MxTabCompletionSteadyResult),
     Scrolling(scenarios::scrolling::ScrollingResult),
     BytecodeCallLoop(scenarios::bytecode::BytecodeCallLoopResult),
+    WorkerIsolates(scenarios::worker_isolates::WorkerIsolatesResult),
     VmLoop(scenarios::vm_loop::VmLoopResult),
     BuiltinCall(scenarios::builtin_call::BuiltinCallResult),
     SearchShape(scenarios::search_shape::SearchShapeResult),
@@ -1780,6 +1787,7 @@ impl ScenarioResult {
             Self::MxTabCompletionSteady(result) => result.base.elapsed_us,
             Self::Scrolling(result) => result.elapsed_us,
             Self::BytecodeCallLoop(result) => result.elapsed_us,
+            Self::WorkerIsolates(result) => result.elapsed_us,
             Self::VmLoop(result) => result.elapsed_us(),
             Self::BuiltinCall(result) => result.elapsed_us(),
             Self::SearchShape(result) => result.elapsed_us(),
@@ -1847,6 +1855,11 @@ fn parse_scenario_result(
         | ScenarioId::DynamicRebindingLoop => serde_json::from_str(raw).map(ScenarioResult::VmLoop),
         ScenarioId::BytecodeCallLoop => {
             serde_json::from_str(raw).map(ScenarioResult::BytecodeCallLoop)
+        }
+        ScenarioId::WorkerIsolatesLoop
+        | ScenarioId::WorkerIsolatesJson
+        | ScenarioId::WorkerIsolatesBoot => {
+            serde_json::from_str(raw).map(ScenarioResult::WorkerIsolates)
         }
         ScenarioId::ElispBenchmarks => {
             serde_json::from_str(raw).map(ScenarioResult::ElispBenchmarks)
@@ -2091,6 +2104,9 @@ fn result_verdict(
         ScenarioResult::BytecodeCallLoop(result) => {
             scenarios::bytecode::validate_bytecode_call_loop_result(request, result)
         }
+        ScenarioResult::WorkerIsolates(result) => {
+            scenarios::worker_isolates::validate(request, result)
+        }
         ScenarioResult::ElispBenchmarks(result) => {
             scenarios::elisp_benchmarks::validate_elisp_benchmarks_result(request, result)
         }
@@ -2159,6 +2175,9 @@ fn valid_measurements(result: &ScenarioResult, wall_elapsed_us: u128) -> Vec<Mea
         }
         ScenarioResult::BytecodeCallLoop(result) => {
             scenarios::bytecode::valid_bytecode_call_loop_measurements(result, wall_elapsed_us)
+        }
+        ScenarioResult::WorkerIsolates(result) => {
+            scenarios::worker_isolates::measurements(result, wall_elapsed_us)
         }
         ScenarioResult::ElispBenchmarks(result) => {
             scenarios::elisp_benchmarks::valid_elisp_benchmarks_measurements(

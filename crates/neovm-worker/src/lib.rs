@@ -7,23 +7,32 @@ use neovm_host_abi::{
     TaskOptions, TaskPriority,
 };
 use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
+
+pub mod isolate;
+pub mod lisp;
+pub mod transfer;
 
 pub const CORE_BACKEND: &str = neovm_core::CORE_BACKEND;
 
 type ExecuteFn =
     dyn Fn(&LispValue, &TaskOptions, &TaskContext) -> Result<LispValue, TaskError> + Send + Sync;
-type ElispFactoryFn = dyn Fn() -> Result<Box<Context>, WorkerStartError> + Send + Sync;
+pub type ElispFactoryFn = dyn Fn() -> Result<Box<Context>, WorkerStartError> + Send + Sync;
 
 /// Only factories and host executors travel to workers. An Elisp factory
 /// returns its owner-local Context after being invoked on that worker.
+///
+/// `Isolate` is the RFC's worker isolate: every worker invokes the factory
+/// once for a heap of its own, and a task is a transfer-encoded call (see
+/// [`transfer`]) rather than source text.
 #[derive(Clone)]
 enum Executor {
     Shared(Arc<ExecuteFn>),
     Elisp(Arc<ElispFactoryFn>),
+    Isolate(Arc<ElispFactoryFn>),
 }
 
 impl std::fmt::Debug for Executor {
@@ -37,17 +46,33 @@ impl std::fmt::Debug for Executor {
                 .debug_struct("Elisp")
                 .field("factory_strong_count", &Arc::strong_count(factory))
                 .finish(),
+            Self::Isolate(factory) => f
+                .debug_struct("Isolate")
+                .field("factory_strong_count", &Arc::strong_count(factory))
+                .finish(),
         }
     }
 }
 
 static_assertions::assert_impl_all!(Executor: Send, Sync, std::fmt::Debug);
 
+/// Raises the owner's cross-thread quit so a running task's next safepoint
+/// signals `quit`; the only way another thread reaches a worker's Context.
+#[derive(Clone)]
+struct Interrupt(Arc<dyn Fn() + Send + Sync>);
+
+impl std::fmt::Debug for Interrupt {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Interrupt")
+    }
+}
+
 /// One worker's executor. Lisp state persists across its tasks, and its
 /// Context, registries and installed TLS never leave this owner thread.
 enum LocalExecutor {
     Shared(Arc<ExecuteFn>),
     Elisp(Box<Context>),
+    Isolate(Box<Context>),
 }
 
 impl std::fmt::Debug for LocalExecutor {
@@ -59,6 +84,10 @@ impl std::fmt::Debug for LocalExecutor {
                 .finish(),
             Self::Elisp(_) => f
                 .debug_struct("Elisp")
+                .field("owner_thread", &thread::current().id())
+                .finish(),
+            Self::Isolate(_) => f
+                .debug_struct("Isolate")
                 .field("owner_thread", &thread::current().id())
                 .finish(),
         }
@@ -77,6 +106,22 @@ impl LocalExecutor {
                 evaluator.setup_thread_locals();
                 Ok(Self::Elisp(evaluator))
             }
+            Executor::Isolate(factory) => {
+                let mut evaluator = factory()?;
+                evaluator.setup_thread_locals();
+                Ok(Self::Isolate(evaluator))
+            }
+        }
+    }
+
+    /// The hook that interrupts this owner's running task, if it has one.
+    fn interrupt(&self) -> Option<Interrupt> {
+        match self {
+            Self::Shared(_) | Self::Elisp(_) => None,
+            Self::Isolate(evaluator) => {
+                let quit = evaluator.quit_requested.clone();
+                Some(Interrupt(Arc::new(move || quit.request())))
+            }
         }
     }
 
@@ -89,13 +134,23 @@ impl LocalExecutor {
         match self {
             Self::Shared(executor) => executor(form, opts, context),
             Self::Elisp(evaluator) => execute_elisp(evaluator, form),
+            Self::Isolate(evaluator) => isolate::run_call(evaluator, form),
+        }
+    }
+
+    /// Lower a quit a cancel raised against the task that just finished, so
+    /// it cannot fire inside this owner's next task.
+    fn lower_quit(&mut self) {
+        if let Self::Isolate(evaluator) = self {
+            evaluator.quit_requested.clear();
+            evaluator.set_variable("quit-flag", neovm_core::Value::NIL);
         }
     }
 
     fn finish(self) -> Result<(), neovm_core::emacs_core::eval::ContextShutdownError> {
         match self {
             Self::Shared(_) => Ok(()),
-            Self::Elisp(evaluator) => evaluator.shutdown(),
+            Self::Elisp(evaluator) | Self::Isolate(evaluator) => evaluator.shutdown(),
         }
     }
 }
@@ -202,6 +257,10 @@ struct TaskEntry {
     status: Mutex<TaskStatus>,
     result: Mutex<Option<Result<LispValue, TaskError>>>,
     done: Condvar,
+    /// Installed by the owner for the task's run; `cancel` calls it under
+    /// this lock, and the owner clears it under the same lock before it
+    /// lowers its quit, so no interrupt can land on the owner's next task.
+    interrupt: Mutex<Option<Interrupt>>,
 }
 
 impl TaskEntry {
@@ -215,6 +274,7 @@ impl TaskEntry {
             status: Mutex::new(TaskStatus::Queued),
             result: Mutex::new(None),
             done: Condvar::new(),
+            interrupt: Mutex::new(None),
         }
     }
 
@@ -528,6 +588,7 @@ impl ChannelEvents {
 
 pub struct WorkerRuntime {
     config: WorkerConfig,
+    worker_count: AtomicUsize,
     next_task: AtomicU64,
     next_channel: AtomicU64,
     select_cursor: AtomicU64,
@@ -539,6 +600,11 @@ pub struct WorkerRuntime {
     metrics: Arc<RuntimeMetrics>,
     executor: Executor,
     elisp_started: AtomicBool,
+    /// Stack size for owner threads; `None` leaves the platform default.
+    worker_stack_bytes: Option<usize>,
+    /// How long each owner took to construct its Context, in start order.
+    boot_times: Mutex<Vec<Duration>>,
+    startup_error: Mutex<Option<String>>,
     /// The first exit a task ordered, if any. Latched rather than merely
     /// returned to that task's awaiter: a host must be able to obey a
     /// kill-emacs it never awaited.
@@ -559,6 +625,20 @@ impl WorkerRuntime {
         Self::with_executor_factory(config, Executor::Elisp(Arc::new(create_elisp_context)))
     }
 
+    /// Configure worker isolates: `factory` runs once on every owner thread
+    /// and returns that thread's own Context; tasks are transfer-encoded
+    /// calls executed by [`isolate::run_call`].
+    pub fn with_isolate_executor(config: WorkerConfig, factory: Arc<ElispFactoryFn>) -> Self {
+        Self::with_executor_factory(config, Executor::Isolate(factory))
+    }
+
+    /// Give owner threads an explicit stack. A shipped binary has no
+    /// `RUST_MIN_STACK`, and the evaluator recurses deeply.
+    pub fn with_worker_stack_bytes(mut self, bytes: usize) -> Self {
+        self.worker_stack_bytes = Some(bytes);
+        self
+    }
+
     pub fn with_executor<F>(config: WorkerConfig, executor: F) -> Self
     where
         F: Fn(&LispValue, &TaskOptions, &TaskContext) -> Result<LispValue, TaskError>
@@ -572,6 +652,7 @@ impl WorkerRuntime {
     fn with_executor_factory(config: WorkerConfig, executor: Executor) -> Self {
         Self {
             config,
+            worker_count: AtomicUsize::new(config.threads),
             next_task: AtomicU64::new(1),
             next_channel: AtomicU64::new(1),
             select_cursor: AtomicU64::new(0),
@@ -583,12 +664,52 @@ impl WorkerRuntime {
             metrics: Arc::new(RuntimeMetrics::default()),
             executor,
             elisp_started: AtomicBool::new(false),
+            worker_stack_bytes: None,
+            boot_times: Mutex::new(Vec::new()),
+            startup_error: Mutex::new(None),
             shutdown: Arc::new(Mutex::new(None)),
         }
     }
 
+    /// Context construction time of every owner that has reported ready.
+    pub fn boot_times(&self) -> Vec<Duration> {
+        self.boot_times
+            .lock()
+            .expect("boot times mutex poisoned")
+            .clone()
+    }
+
+    /// Drop a finished task's entry so its result memory is released.
+    /// Returns false while the task is still queued or running.
+    pub fn forget_task(&self, handle: TaskHandle) -> bool {
+        let mut tasks = self.tasks.write().expect("tasks map rwlock poisoned");
+        let finished = tasks
+            .get(&handle.0)
+            .map(|task| matches!(task.status(), TaskStatus::Completed | TaskStatus::Cancelled))
+            .unwrap_or(false);
+        if finished {
+            tasks.remove(&handle.0);
+        }
+        finished
+    }
+
     pub fn config(&self) -> WorkerConfig {
-        self.config
+        WorkerConfig {
+            threads: self.worker_count.load(Ordering::Acquire),
+            ..self.config
+        }
+    }
+
+    pub(crate) fn configure_worker_count(&self, threads: usize) {
+        debug_assert!(!self.elisp_started.load(Ordering::Acquire));
+        self.worker_count.store(threads, Ordering::Release);
+    }
+
+    pub(crate) fn startup_error(&self) -> Option<String> {
+        self.startup_error
+            .lock()
+            .expect("startup error mutex poisoned")
+            .clone()
     }
 
     pub fn stats(&self) -> RuntimeStats {
@@ -748,9 +869,21 @@ impl WorkerRuntime {
         };
 
         task.context.cancel();
-        if task.mark_cancelled() {
+        let newly_cancelled = task.mark_cancelled();
+        if newly_cancelled {
             self.metrics.cancelled.fetch_add(1, Ordering::Relaxed);
             self.enqueue_finished(handle);
+        }
+        if newly_cancelled {
+            // Held across the call: the owner clears the hook under this lock
+            // before lowering its quit, so a raise here cannot outlive the task.
+            let interrupt = task
+                .interrupt
+                .lock()
+                .expect("task interrupt mutex poisoned");
+            if let Some(interrupt) = interrupt.as_ref() {
+                (interrupt.0)();
+            }
         }
         true
     }
@@ -768,12 +901,58 @@ impl WorkerRuntime {
     }
 
     pub fn close(&self) {
-        let mut state = self
+        let pending = {
+            let mut state = self
+                .queue
+                .state
+                .lock()
+                .expect("worker queue mutex poisoned");
+            state.closed = true;
+            let mut pending = Vec::with_capacity(state.len());
+            while let Some(handle) = state.pop() {
+                pending.push(handle);
+            }
+            pending
+        };
+        for handle in pending {
+            let task = self
+                .tasks
+                .read()
+                .expect("tasks map rwlock poisoned")
+                .get(&handle.0)
+                .cloned();
+            if let Some(task) = task {
+                if task.mark_cancelled() {
+                    self.metrics.cancelled.fetch_add(1, Ordering::Relaxed);
+                    self.enqueue_finished(handle);
+                }
+            }
+        }
+        // Interrupt running Lisp so a spinner can observe quit and release
+        // its owner. Shared host executors have no interrupt hook and finish.
+        let running: Vec<_> = self
+            .tasks
+            .read()
+            .expect("tasks map rwlock poisoned")
+            .iter()
+            .filter_map(|(&handle, task)| {
+                (task.status() == TaskStatus::Running
+                    && task
+                        .interrupt
+                        .lock()
+                        .expect("task interrupt mutex poisoned")
+                        .is_some())
+                .then_some(TaskHandle(handle))
+            })
+            .collect();
+        for handle in running {
+            self.cancel(handle);
+        }
+        let state = self
             .queue
             .state
             .lock()
             .expect("worker queue mutex poisoned");
-        state.closed = true;
         drop(state);
         self.queue.ready.notify_all();
     }
@@ -796,22 +975,36 @@ impl WorkerRuntime {
     /// already started. An initialization failure closes the queue and gives
     /// queued tasks a failure result before returning to the caller.
     pub fn try_start_workers(&self) -> Result<Vec<thread::JoinHandle<()>>, WorkerStartError> {
-        let is_elisp = matches!(&self.executor, Executor::Elisp(_));
-        let worker_count = if is_elisp {
-            if self.config.threads == 0 {
-                let err = WorkerStartError::NoWorkers;
-                self.fail_startup(&err);
-                return Err(err);
+        let worker_count = match &self.executor {
+            Executor::Elisp(_) => {
+                if self.worker_count.load(Ordering::Acquire) == 0 {
+                    let err = WorkerStartError::NoWorkers;
+                    self.fail_startup(&err);
+                    return Err(err);
+                }
+                self.elisp_started
+                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                    .map_err(|_| WorkerStartError::AlreadyStarted)?;
+                1
             }
-            self.elisp_started
-                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-                .map_err(|_| WorkerStartError::AlreadyStarted)?;
-            1
-        } else {
-            self.config.threads
+            // Isolates are independent heaps: one owner per configured
+            // thread, started once.
+            Executor::Isolate(_) => {
+                if self.worker_count.load(Ordering::Acquire) == 0 {
+                    let err = WorkerStartError::NoWorkers;
+                    self.fail_startup(&err);
+                    return Err(err);
+                }
+                self.elisp_started
+                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                    .map_err(|_| WorkerStartError::AlreadyStarted)?;
+                self.worker_count.load(Ordering::Acquire)
+            }
+            Executor::Shared(_) => self.worker_count.load(Ordering::Acquire),
         };
 
         let mut joins: Vec<thread::JoinHandle<()>> = Vec::with_capacity(worker_count);
+        let mut pending = Vec::with_capacity(worker_count);
         for _ in 0..worker_count {
             let queue = Arc::clone(&self.queue);
             let tasks = Arc::clone(&self.tasks);
@@ -820,11 +1013,16 @@ impl WorkerRuntime {
             let executor = self.executor.clone();
             let shutdown = Arc::clone(&self.shutdown);
             let (ready, readiness) = std::sync::mpsc::sync_channel(1);
-            let worker = thread::Builder::new().spawn(move || {
+            let mut builder = thread::Builder::new();
+            if let Some(bytes) = self.worker_stack_bytes {
+                builder = builder.stack_size(bytes);
+            }
+            let worker = builder.spawn(move || {
                 // No Context has crossed the spawn boundary. Its construction
                 // and all TLS installation happen in this closure.
                 // An initialization panic publishes no local executor; the
                 // caller closes the queue and completes its pending tasks.
+                let boot_started = Instant::now();
                 let initialization = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     LocalExecutor::initialize(executor)
                 }));
@@ -839,10 +1037,11 @@ impl WorkerRuntime {
                         return;
                     }
                 };
-                if ready.send(Ok(())).is_err() {
+                if ready.send(Ok(boot_started.elapsed())).is_err() {
                     executor.finish().expect("worker shutdown");
                     return;
                 }
+                let interrupt = executor.interrupt();
                 loop {
                     let handle = {
                         let mut state = queue.state.lock().expect("worker queue mutex poisoned");
@@ -883,11 +1082,37 @@ impl WorkerRuntime {
                         continue;
                     }
 
+                    // The hook goes in BEFORE the task is Running: a cancel
+                    // that sees Running must find it, or the body would run
+                    // to completion uninterrupted.
+                    if let Some(interrupt) = &interrupt {
+                        *task
+                            .interrupt
+                            .lock()
+                            .expect("task interrupt mutex poisoned") = Some(interrupt.clone());
+                    }
                     if !task.mark_running() {
+                        if interrupt.is_some() {
+                            *task
+                                .interrupt
+                                .lock()
+                                .expect("task interrupt mutex poisoned") = None;
+                            executor.lower_quit();
+                        }
                         continue;
                     }
-
                     let execution = executor.execute(&task.form, &task.opts, &task.context);
+                    // Under the lock a cancel holds while raising; once
+                    // cleared, the quit this owner lowers next is the last
+                    // one this task can receive. Clear even for an executor
+                    // whose hook was installed by a host or runtime test.
+                    *task
+                        .interrupt
+                        .lock()
+                        .expect("task interrupt mutex poisoned") = None;
+                    if interrupt.is_some() {
+                        executor.lower_quit();
+                    }
                     let was_cancelled = matches!(execution, Err(TaskError::Cancelled));
                     if let Err(TaskError::Shutdown(order)) = &execution {
                         // The process was told to exit. That outranks every
@@ -938,22 +1163,44 @@ impl WorkerRuntime {
                     return Err(err);
                 }
             };
+            joins.push(worker);
+            pending.push(readiness);
+        }
+        // Owners boot concurrently; the wait is for the slowest, not the sum.
+        let mut failure = None;
+        for readiness in pending {
             match readiness.recv() {
-                Ok(Ok(())) => joins.push(worker),
-                outcome => {
-                    let err = match outcome {
-                        Ok(Err(err)) => err,
-                        Err(_) => WorkerStartError::InitializationChannelClosed,
-                        Ok(Ok(())) => unreachable!(),
-                    };
-                    self.fail_startup(&err);
-                    let _ = worker.join();
-                    for worker in joins {
-                        let _ = worker.join();
-                    }
-                    return Err(err);
+                Ok(Ok(boot)) => self
+                    .boot_times
+                    .lock()
+                    .expect("boot times mutex poisoned")
+                    .push(boot),
+                Ok(Err(err)) => {
+                    failure.get_or_insert(err);
+                }
+                Err(_) => {
+                    failure.get_or_insert(WorkerStartError::InitializationChannelClosed);
                 }
             }
+        }
+        if let Some(err) = failure {
+            let ready_owners = self
+                .boot_times
+                .lock()
+                .expect("boot times mutex poisoned")
+                .len();
+            if matches!(self.executor, Executor::Isolate(_)) && ready_owners > 0 {
+                *self
+                    .startup_error
+                    .lock()
+                    .expect("startup error mutex poisoned") = Some(err.to_string());
+                return Ok(joins);
+            }
+            self.fail_startup(&err);
+            for worker in joins {
+                let _ = worker.join();
+            }
+            return Err(err);
         }
         Ok(joins)
     }
@@ -1250,7 +1497,7 @@ fn channel_error_to_signal(err: ChannelError) -> Signal {
     }
 }
 
-fn eval_error_to_task_error(err: EvalError) -> TaskError {
+pub(crate) fn eval_error_to_task_error(err: EvalError) -> TaskError {
     match err {
         EvalError::Signal {
             symbol,
