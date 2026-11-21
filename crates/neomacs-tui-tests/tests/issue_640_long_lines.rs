@@ -52,7 +52,7 @@ fn paired_message(
     eval_expression(
         gnu,
         neo,
-        &format!("(message \"{tag}BEGIN%S:{tag}END\" {expr})"),
+        &format!("(message \"{tag}BEGIN%S{tag}END\" {expr})"),
     );
     read_both(gnu, neo, Duration::from_millis(700));
     let gnu_text = read_marked(gnu, tag).unwrap_or_else(|| {
