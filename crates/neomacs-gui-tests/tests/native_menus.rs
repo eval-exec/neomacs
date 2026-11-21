@@ -98,7 +98,7 @@ fn vanilla_menu_and_resize_preserve_glyph_pixels_like_gnu() {
             .map(str::to_owned)
     });
     observe_vanilla_menu_resize(display.env(), &window, &ready, &artifacts, &mut editor);
-    input(display.env(), &["key", "F12"]);
+    exit_vanilla_fixture(display.env());
     let status = wait_for("GNU vanilla fixture shutdown", &artifacts, || {
         editor.0.try_wait().unwrap()
     });
@@ -113,9 +113,19 @@ fn vanilla_menu_and_resize_preserve_glyph_pixels_like_gnu() {
         |env, window, ready, artifacts, editor, compositor| {
             observe_vanilla_menu_resize(env, window, ready, artifacts, editor);
             alive(compositor, "compositor after vanilla resize", artifacts);
-            input(env, &["key", "F12"]);
+            exit_vanilla_fixture(env);
         },
     );
+}
+
+fn exit_vanilla_fixture(env: &[(String, String)]) {
+    // The final observation deliberately types a standalone Escape. GNU
+    // leaves its ESC-prefix pending (subr.el:1719-1729), so a bare F12 here
+    // becomes undefined "ESC <f12>" instead of the fixture's exit command.
+    // Clear that prefix only after every pixel assertion has completed.
+    input(env, &["key", "--clearmodifiers", "ctrl+g"]);
+    thread::sleep(Duration::from_millis(100));
+    input(env, &["key", "--clearmodifiers", "F12"]);
 }
 
 fn observe_vanilla_menu_resize(
