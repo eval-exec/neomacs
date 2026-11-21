@@ -2316,12 +2316,13 @@ impl Context {
     }
 
     /// Run the functions queued for finalizer objects the just-finished cycle
-    /// found unreachable — GNU `run_finalizers` (alloc.c). The whole batch is
-    /// taken up front, so a finalizer created (and doomed) during one of these
-    /// calls lands in a later batch after a later cycle. Each function is
-    /// called with zero args; errors are ignored so one failing finalizer
-    /// cannot block the rest (GNU wraps each call in a catch-all
-    /// `internal_condition_case`).
+    /// found unreachable — GNU `run_finalizers` (alloc.c:3934-3951). The whole
+    /// batch is taken up front, so a finalizer created (and doomed) during one
+    /// of these calls lands in a later batch after a later cycle. Each function
+    /// is called with zero args under `inhibit-quit` bound to t, and a
+    /// signalled error is logged as `finalizer failed: %S`, matching GNU
+    /// `run_finalizer_function` (alloc.c:3921-3932) and
+    /// `run_finalizer_handler` (alloc.c:3914-3919).
     #[doc(hidden)]
     pub fn run_doomed_finalizers(&mut self) {
         let functions = self.tagged_heap.take_doomed_finalizer_functions();
@@ -2337,10 +2338,52 @@ impl Context {
         }
         self.with_gc_inhibited(|eval| {
             for function in functions {
-                let _ = eval.funcall_general(function, Vec::<Value>::new());
+                // GNU `run_finalizer_function` specbinds `inhibit-quit' to t
+                // before the protected call and unwinds it per call
+                // (alloc.c:3927-3931). A binding failure is outside GNU's
+                // condition-case, so the function cannot be run.
+                let specpdl_count = eval.specpdl.len();
+                if eval
+                    .try_specbind_or_unwind_to(
+                        specpdl_count,
+                        neovm_value::intern::intern("inhibit-quit"),
+                        Value::T,
+                    )
+                    .is_err()
+                {
+                    continue;
+                }
+                let result = eval.funcall_general(function, Vec::<Value>::new());
+                let result = eval.unbind_to_with_result(specpdl_count, result);
+                // GNU `internal_condition_case_1` hands a signalled error to
+                // `run_finalizer_handler`, which logs it; other non-local
+                // exits are not signals and stay as they were.
+                if let Err(flow) = result {
+                    if let neovm_value::error::FlowKind::Signal(signal) = flow.into_kind() {
+                        let data = eval.signal_error_data_value(&signal);
+                        eval.log_finalizer_failure(data);
+                    }
+                }
             }
         });
         restore_scratch_gc_roots(saved_roots);
+    }
+
+    /// GNU `run_finalizer_handler` (alloc.c:3914-3919): `add_to_log
+    /// ("finalizer failed: %S", args)`. `vadd_to_log` (xdisp.c:12266-12285)
+    /// formats through `format-message` and appends the line with
+    /// `message_dolog`, so the diagnostic lands in the messages buffer without
+    /// reaching the echo area and obeys `message-log-max` (nil suppresses it).
+    fn log_finalizer_failure(&mut self, error_data: Value) {
+        let Ok(formatted) = crate::emacs_core::builtins::strings::builtin_format_message_slice(
+            self,
+            &[Value::string("finalizer failed: %S"), error_data],
+        ) else {
+            return;
+        };
+        if let Some(text) = formatted.as_utf8_str() {
+            self.add_to_log(text);
+        }
     }
 
     /// Destroy the GPU objects of every shader-surface handle the
