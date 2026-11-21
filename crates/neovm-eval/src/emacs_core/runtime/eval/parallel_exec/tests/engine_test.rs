@@ -728,6 +728,73 @@ fn effective_read_write_and_bound_use_the_pure_rule() {
     );
 }
 
+/// A valid plain key is not a safepoint: the caller may hold an unrooted
+/// value on the Rust stack (`write_plain`'s `value`). Only a stale key polls,
+/// once, immediately before the escape it records.
+#[test]
+fn plain_access_polls_only_the_stale_key_path() {
+    let mut stepper = engine(TestSlots::empty());
+    stepper
+        .read_plain(&key(), || Value::fixnum(1))
+        .expect("a valid key reads");
+    stepper
+        .write_plain(&key(), Value::fixnum(2), |_| {})
+        .expect("a valid key writes");
+    assert!(
+        stepper
+            .bound_plain(&key(), || true)
+            .expect("a valid key is bound")
+    );
+    assert_eq!(
+        stepper.poll_handler().edge_count(PollEdge::SerialRequest),
+        0,
+        "a valid plain access must not reach a safepoint"
+    );
+    assert!(stepper.escape_handler().requests.is_empty());
+
+    let mut stepper = engine(TestSlots::empty());
+    let called = Cell::new(false);
+    let stale_read = stepper.read_plain(&stale_key(), || {
+        called.set(true);
+        Value::fixnum(1)
+    });
+    assert!(matches!(stale_read, Err(PlainStop::Escape(_))));
+    assert!(!called.get(), "a stale key does not read");
+    assert_eq!(
+        stepper.poll_handler().edge_count(PollEdge::SerialRequest),
+        1,
+        "the stale-key poll runs once, before the escape"
+    );
+    assert_eq!(stepper.escape_handler().requests.len(), 1);
+    assert_eq!(
+        stepper.escape_handler().requests[0].class,
+        EscapeClass::StaleEffectiveKey
+    );
+
+    let mut stepper = engine(TestSlots::empty());
+    let stale_write = stepper.write_plain(&stale_key(), Value::fixnum(3), |_| {
+        panic!("a stale key does not write")
+    });
+    assert!(
+        matches!(stale_write, Err(PlainStop::Escape(_))),
+        "the unrooted write value is abandoned, never stored"
+    );
+    assert_eq!(
+        stepper.poll_handler().edge_count(PollEdge::SerialRequest),
+        1
+    );
+    assert_eq!(stepper.escape_handler().requests.len(), 1);
+
+    let mut stepper = engine(TestSlots::empty());
+    let stale_bound = stepper.bound_plain(&stale_key(), || panic!("a stale key does not bound"));
+    assert!(matches!(stale_bound, Err(PlainStop::Escape(_))));
+    assert_eq!(
+        stepper.poll_handler().edge_count(PollEdge::SerialRequest),
+        1
+    );
+    assert_eq!(stepper.escape_handler().requests.len(), 1);
+}
+
 #[test]
 fn every_outcome_reports_depth_and_live_roots() {
     let mut ctx = context();
@@ -1233,7 +1300,8 @@ fn poll_fault_unwinds_to_idle_and_the_engine_restarts() {
     assert_eq!(done_value(&mut stepper, again), Value::fixnum(2));
     assert_clear(&stepper);
 
-    // The plain-access edge surfaces the same refusal without touching state.
+    // The stale-key poll surfaces the same refusal without touching state and
+    // without recording the escape it preempted.
     let mut stepper = Stage1::new(
         TestSlots::empty(),
         RecordingEscape::new(),
@@ -1242,10 +1310,14 @@ fn poll_fault_unwinds_to_idle_and_the_engine_restarts() {
         EraId::new(3),
         ShapeGeneration::new(7),
     );
-    let plain = stepper.read_plain(&key(), || Value::fixnum(9));
+    let plain = stepper.read_plain(&stale_key(), || Value::fixnum(9));
     let PlainStop::Poll(RendezvousError::Capacity) = plain.expect_err("poll refusal") else {
-        panic!("the guard-key poll refusal must surface");
+        panic!("the stale-key poll refusal must surface");
     };
+    assert!(
+        stepper.escape_handler().requests.is_empty(),
+        "a refused poll records no escape"
+    );
     assert_clear(&stepper);
     let again = stepper.start(&mut ctx, body(&[Value::fixnum(3)]), wide());
     assert_eq!(done_value(&mut stepper, again), Value::fixnum(3));

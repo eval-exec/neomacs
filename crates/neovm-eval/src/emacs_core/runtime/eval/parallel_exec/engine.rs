@@ -355,15 +355,17 @@ where
         Ok(bound_effective(&self.slots, key, canonical_bound))
     }
 
-    /// Poll the serial-request edge, then apply the pure key rule. The poll
-    /// runs even for a valid key (it is the access edge), and it never
-    /// replaces the escape below.
+    /// Apply the pure key rule. A valid key never polls: its caller may hold
+    /// an unrooted value on the Rust stack (for example `write_plain`'s
+    /// `value`), and `publish_scan` cannot see it. Only the stale-key path
+    /// polls, immediately before recording the escape that abandons the
+    /// access; a refusal then records no escape.
     fn guard_key(&mut self, key: &EffectivePlainKey<'_>) -> Result<(), PlainStop> {
-        if let Err(error) = self.poll.serial_request(&self.arena) {
-            return Err(PlainStop::Poll(error));
-        }
         if key.is_valid_for(self.era, self.shape) {
             return Ok(());
+        }
+        if let Err(error) = self.poll.serial_request(&self.arena) {
+            return Err(PlainStop::Poll(error));
         }
         let request = EscapeRequest {
             class: EscapeClass::StaleEffectiveKey,
