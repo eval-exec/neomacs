@@ -429,24 +429,42 @@ static CHILD_SIGNAL_SEEN: AtomicBool = AtomicBool::new(false);
 #[cfg(unix)]
 static LIB_CHILD_HANDLER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
+/// Callback ABIs `handler_from_address` may decode.
+///
+/// The associated constant is evaluated when the helper is monomorphized, so
+/// a callback whose size is not a pointer fails the build instead of taking a
+/// panic branch inside signal context.
+#[cfg(unix)]
+trait SignalHandlerAbi: Copy {
+    const POINTER_SIZED: () = assert!(std::mem::size_of::<Self>() == std::mem::size_of::<usize>());
+}
+
+#[cfg(unix)]
+impl SignalHandlerAbi for extern "C" fn(libc::c_int) {}
+
+#[cfg(unix)]
+impl SignalHandlerAbi for FaultHandler {}
+
 /// The one address-to-callback conversion in this module, shared by the
 /// SIGCHLD chain and the fatal-fault chain.
 ///
 /// A `sigaction` names its handler as an integer by ABI; there is no safe
 /// route from that integer to a function pointer. Keeping the conversion in
 /// one place means the transmute ratchet sees one audited site rather than
-/// one per chain.
+/// one per chain (the guard counts `transmute_copy` against the same
+/// ceiling).
 ///
 /// # Safety
 /// `address` was read from a `sigaction` this process installed or inherited,
 /// and `T` is the exact callback type that disposition carries: a one-argument
 /// handler for a disposition without `SA_SIGINFO`, a three-argument
-/// `FaultHandler` for one with it. `T` must be pointer-sized.
+/// `FaultHandler` for one with it.
 #[cfg(unix)]
-unsafe fn handler_from_address<T>(address: usize) -> T {
-    assert_eq!(std::mem::size_of::<T>(), std::mem::size_of::<usize>());
-    // SAFETY: the caller fixes `T` as the installed callback type, so reading
-    // `size_of::<T>()` bytes from the `usize` names exactly those bits.
+unsafe fn handler_from_address<T: SignalHandlerAbi>(address: usize) -> T {
+    let () = T::POINTER_SIZED;
+    // SAFETY: the caller fixes `T` as the installed callback type; the
+    // associated constant above has proved `T` is pointer-sized where this is
+    // monomorphized, so the read names exactly those bits.
     unsafe { std::mem::transmute_copy::<usize, T>(&address) }
 }
 
