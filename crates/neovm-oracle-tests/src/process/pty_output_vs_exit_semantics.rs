@@ -60,6 +60,11 @@ fn expect_payload(transcript: &str) -> String {
     format!("{:?}", transcript.replace('\0', "\\0").replace('\r', "\\r"))
 }
 
+/// Whether this probe run outlived the Darwin drain window.
+fn over_drain_window(transcript: &str, stall: Option<f64>, window: f64) -> bool {
+    transcript.contains("INCONCLUSIVE") || stall.is_some_and(|stall| stall > window)
+}
+
 /// Report the measured spawn-to-first-read stall. Part 2 of the flake item:
 /// Neomacs being materially slower than GNU here is a product latency
 /// divergence, not a test problem, so say it loudly when the numbers differ.
@@ -152,40 +157,66 @@ fn pty_output_read_immediately_is_host_keyed() {
     let mode = OracleMode::from_env();
     match mode {
         OracleMode::Snapshot => {
-            let neo = run_neovm_eval(&form).expect("neomacs pty probe should run");
-            let (stall, stripped) = parse_stall(&neo);
-            report_prompt_latency(stall, None, DARWIN_DRAIN_WINDOW_SECS);
-            if neo.contains("INCONCLUSIVE")
-                || stall.is_some_and(|stall| stall > DARWIN_DRAIN_WINDOW_SECS)
-            {
-                eprintln!(
-                    "INCONCLUSIVE pty_output_read_immediately_is_host_keyed: \
-                     spawn-to-first-read stall {stall:?} exceeds the \
-                     {DARWIN_DRAIN_WINDOW_SECS}s Darwin drain window"
-                );
-                return;
-            }
+            let first = run_neovm_eval(&form).expect("neomacs pty probe should run");
+            let (first_stall, first_stripped) = parse_stall(&first);
+            report_prompt_latency(first_stall, None, DARWIN_DRAIN_WINDOW_SECS);
+            let stripped = if over_drain_window(&first, first_stall, DARWIN_DRAIN_WINDOW_SECS) {
+                // No GNU baseline in snapshot mode: retry once, and only an
+                // over-window retry is excused as host noise.
+                let retry = run_neovm_eval(&form).expect("neomacs pty probe retry should run");
+                let (retry_stall, retry_stripped) = parse_stall(&retry);
+                eprintln!("pty-prompt-latency: neo-retry={retry_stall:?}s");
+                if over_drain_window(&retry, retry_stall, DARWIN_DRAIN_WINDOW_SECS) {
+                    eprintln!(
+                        "INCONCLUSIVE pty_output_read_immediately_is_host_keyed: \
+                         retry spawn-to-first-read stall {retry_stall:?} still \
+                         exceeds the {DARWIN_DRAIN_WINDOW_SECS}s Darwin drain \
+                         window (no GNU baseline in snapshot mode)"
+                    );
+                    return;
+                }
+                retry_stripped
+            } else {
+                first_stripped
+            };
             expected.assert_eq(&expect_payload(&stripped));
         }
         OracleMode::Verify | OracleMode::Live => {
             let oracle = run_oracle_eval(&form).expect("oracle pty probe should run");
-            let neo = run_neovm_eval(&form).expect("neomacs pty probe should run");
-            let (neo_stall, neo_stripped) = parse_stall(&neo);
             let (gnu_stall, gnu_stripped) = parse_stall(&oracle);
-            report_prompt_latency(neo_stall, gnu_stall, DARWIN_DRAIN_WINDOW_SECS);
-            if neo.contains("INCONCLUSIVE")
-                || oracle.contains("INCONCLUSIVE")
-                || neo_stall.is_some_and(|stall| stall > DARWIN_DRAIN_WINDOW_SECS)
-                || gnu_stall.is_some_and(|stall| stall > DARWIN_DRAIN_WINDOW_SECS)
-            {
+            let first = run_neovm_eval(&form).expect("neomacs pty probe should run");
+            let (first_stall, first_stripped) = parse_stall(&first);
+            report_prompt_latency(first_stall, gnu_stall, DARWIN_DRAIN_WINDOW_SECS);
+            if over_drain_window(&oracle, gnu_stall, DARWIN_DRAIN_WINDOW_SECS) {
+                // GNU's own read missed the window: the host was slow for
+                // both editors, so this run cannot judge the product.
                 eprintln!(
                     "INCONCLUSIVE pty_output_read_immediately_is_host_keyed: \
-                     neo stall {neo_stall:?}, GNU stall {gnu_stall:?}, window \
-                     {DARWIN_DRAIN_WINDOW_SECS}s — the host may have discarded \
-                     the unread pty output"
+                     GNU spawn-to-first-read stall {gnu_stall:?} exceeds the \
+                     {DARWIN_DRAIN_WINDOW_SECS}s Darwin drain window; the host \
+                     was slow for both editors"
                 );
                 return;
             }
+            let (neo, neo_stripped) =
+                if over_drain_window(&first, first_stall, DARWIN_DRAIN_WINDOW_SECS) {
+                    // Only Neo's read was late while GNU's was prompt. That can
+                    // be a one-off load spike; a retry inside the window is
+                    // judged normally, and a persistent over-window Neo stall
+                    // is a product latency divergence, not host noise.
+                    let retry = run_neovm_eval(&form).expect("neomacs pty probe retry should run");
+                    let (retry_stall, retry_stripped) = parse_stall(&retry);
+                    eprintln!("pty-prompt-latency: neo-retry={retry_stall:?}s");
+                    if over_drain_window(&retry, retry_stall, DARWIN_DRAIN_WINDOW_SECS) {
+                        panic!(
+                            "Neo spawn-to-first-read persistently exceeds the Darwin \
+                             drain window (neo {retry_stall:?}s, gnu {gnu_stall:?}s)"
+                        );
+                    }
+                    (retry, retry_stripped)
+                } else {
+                    (first, first_stripped)
+                };
             if mode == OracleMode::Verify {
                 expected.assert_eq(&expect_payload(&gnu_stripped));
             }
@@ -197,13 +228,12 @@ fn pty_output_read_immediately_is_host_keyed() {
         OracleMode::Refresh => {
             let oracle = run_oracle_eval(&form).expect("oracle pty probe should run");
             let (stall, stripped) = parse_stall(&oracle);
-            if oracle.contains("INCONCLUSIVE")
-                || stall.is_some_and(|stall| stall > DARWIN_DRAIN_WINDOW_SECS)
-            {
+            if over_drain_window(&oracle, stall, DARWIN_DRAIN_WINDOW_SECS) {
                 eprintln!(
                     "INCONCLUSIVE pty_output_read_immediately_is_host_keyed: \
                      oracle spawn-to-first-read stall {stall:?} exceeds the \
-                     {DARWIN_DRAIN_WINDOW_SECS}s Darwin drain window"
+                     {DARWIN_DRAIN_WINDOW_SECS}s Darwin drain window; no \
+                     expectation can be derived from this run"
                 );
                 return;
             }
