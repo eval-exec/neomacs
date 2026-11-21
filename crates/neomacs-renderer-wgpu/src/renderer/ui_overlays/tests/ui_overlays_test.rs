@@ -130,3 +130,44 @@ fn toolbar_icon_quad_matches_the_texture_extent_at_device_pixel_edges() {
         }
     }
 }
+
+/// Overlay chrome text (menu-bar labels, popup items, tooltips) is placed on
+/// the device-pixel grid, the same whole-pixel rule the row text pipeline uses
+/// (`content::snap_glyph_origin`).  The placed quad origin must be integral in
+/// device space and may move at most half a device pixel from the unsnapped
+/// origin, so layout/hitboxes are unchanged.
+#[test]
+fn overlay_glyph_snapping_lands_on_the_device_grid_within_half_a_pixel() {
+    use crate::renderer::snap_overlay_glyph_origin;
+
+    for scale in [1.0_f32, 1.25, 1.5, 1.7, 2.0] {
+        // Fractional inputs like a menu label centered in a chrome band
+        // (`(18 - 13) / 2 = 2.5`) plus a raster bearing.
+        let (x, y, bearing_x, bearing_y, ascent) = (3.13_f32, 2.5_f32, 1.0_f32, 3.0_f32, 13.0_f32);
+        let (snapped_x, snapped_y) =
+            snap_overlay_glyph_origin(x, y, bearing_x, bearing_y, ascent, scale);
+        let unsnapped_x = x * scale + bearing_x;
+        let unsnapped_y = y * scale + ascent * scale - bearing_y;
+        let physical_x = snapped_x * scale;
+        let physical_y = snapped_y * scale;
+
+        assert!(
+            (physical_x - physical_x.round()).abs() < 1e-3,
+            "x origin {physical_x} is not on the device grid at scale {scale}"
+        );
+        assert!(
+            (physical_y - physical_y.round()).abs() < 1e-3,
+            "y origin {physical_y} is not on the device grid at scale {scale}"
+        );
+        assert!(
+            (physical_x - unsnapped_x).abs() <= 0.5 + 1e-3,
+            "x origin moved more than half a device pixel at scale {scale}: \
+             {physical_x} vs {unsnapped_x}"
+        );
+        assert!(
+            (physical_y - unsnapped_y).abs() <= 0.5 + 1e-3,
+            "y origin moved more than half a device pixel at scale {scale}: \
+             {physical_y} vs {unsnapped_y}"
+        );
+    }
+}

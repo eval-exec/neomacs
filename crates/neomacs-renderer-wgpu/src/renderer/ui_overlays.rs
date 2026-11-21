@@ -111,8 +111,14 @@ impl WgpuRenderer {
             let tex_u_max = uv.max()[0];
             let tex_v_min = uv.min()[1];
             let tex_v_max = uv.max()[1];
-            let glyph_x = *x + metrics.bearing_x / sf;
-            let glyph_y = *y + font_ascent - metrics.bearing_y / sf;
+            let (glyph_x, glyph_y) = super::snap_overlay_glyph_origin(
+                *x,
+                *y,
+                metrics.bearing_x,
+                metrics.bearing_y,
+                font_ascent,
+                sf,
+            );
             let glyph_w = content_rect.width() as f32 / sf;
             let glyph_h = content_rect.height() as f32 / sf;
 

@@ -2244,3 +2244,36 @@ impl GlyphCoverageMask {
         }
     }
 }
+
+/// Device-pixel grid placement for an overlay glyph texture's top-left.
+///
+/// Chrome text (menu-bar labels, popup menu items, tooltips) is drawn from
+/// pre-rasterized whole-label or per-glyph textures at a *logical* position
+/// whose fractional part comes from centering the label in a chrome band and
+/// from accumulated advances.  Drawing such a texture at a fractional device
+/// position makes the linear sampler resample every stem into a soft edge.
+/// The row/text pipeline solves the same problem by placing whole-pixel glyph
+/// origins (`content::snap_glyph_origin`, bins forced to `Zero` — whole-pixel
+/// placement is GNU's behavior and avoids per-position atlas variants), so
+/// overlay text uses the same rule: round the final physical origin and return
+/// it in logical units.
+///
+/// `bearing_*` and `font_ascent`-scaled values are physical pixels; the result
+/// is within half a physical pixel of the unsnapped origin.
+pub fn snap_overlay_glyph_origin(
+    x: f32,
+    y: f32,
+    bearing_x: f32,
+    bearing_y: f32,
+    font_ascent: f32,
+    scale: f32,
+) -> (f32, f32) {
+    let scale = if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    };
+    let physical_x = (x * scale + bearing_x).round();
+    let physical_y = (y * scale + font_ascent * scale - bearing_y).round();
+    (physical_x / scale, physical_y / scale)
+}
