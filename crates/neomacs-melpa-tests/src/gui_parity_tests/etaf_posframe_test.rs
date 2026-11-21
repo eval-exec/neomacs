@@ -54,6 +54,9 @@ const GUI_PROBE: &str = r####"
                  :theme 'light))
          (frame (etaf-posframe-panel-frame panel)))
     (redisplay t)
+    ;; ebox refits mounted viewports through its settle timer after a
+    ;; buffer/window change (ebox-viewport-settle-delay).
+    (sleep-for 0.25)
     (let ((before (etaf-pf-parity-facts frame))
           (panels (length (etaf-posframe-panels))))
       (etaf-posframe-hide panel)
@@ -79,10 +82,12 @@ fn etaf_posframe_real_gui_panel_matches_gnu() {
 
     // Strict parity: Neomacs must produce GNU's exact observation.  Under the
     // harness's one pinned FONTCONFIG_FILE both engines resolve the same Han
-    // fallback, so the row strut and the 22 px line agree; the open divergence
-    // is the child-frame anchor (top 17 in GNU, 68 here).  `:live` records
-    // that `frame-live-p' agrees with `framep'; the terminal type itself is
-    // backend identity (`x' vs `neo').
+    // fallback, so the row strut and the 22 px line agree.  The `(cells 1 1)`
+    // anchor now also agrees: `window-pixel-top' is window-area-relative in
+    // GNU, so the child frame's 1-row offset is 17 px in both engines rather
+    // than a 68 px offset that included Neomacs' own menu and tool bars.
+    // `:live` records that `frame-live-p' agrees with `framep'; the terminal
+    // type itself is backend identity (`x' vs `neo').
     let expected_gnu = expect![[
         r##"OK (:before (:live t :has-parent t :visible t :width 20 :height 1 :left 16 :top 17 :window-width 20 :window-height 1 :pixel-width 160 :pixel-height 22 :char-width 8 :char-height 17 :background "#f7f7f7" :foreground "#000000" :text "​panel parity") :panels-before 1 :frame-after-hide nil :panels-after-hide 0 :frame-live-after-hide nil)"##
     ]];

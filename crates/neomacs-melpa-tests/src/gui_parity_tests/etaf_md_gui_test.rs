@@ -45,6 +45,9 @@ Body text for parity.
     (unwind-protect
         (with-current-buffer buffer
           (redisplay t)
+          ;; ebox refits mounted viewports through its settle timer after a
+          ;; buffer/window change (ebox-viewport-settle-delay).
+          (sleep-for 0.25)
           (let* ((window (get-buffer-window buffer t))
                  (title-pos (save-excursion
                               (goto-char (point-min))

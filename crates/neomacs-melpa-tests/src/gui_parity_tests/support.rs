@@ -1,5 +1,4 @@
 use std::fs::{self, File};
-use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
