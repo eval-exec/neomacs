@@ -1248,18 +1248,20 @@ impl BufferSourceOutputSetup {
                     Ok(metrics) => metrics,
                     Err(changed) => return changed.into(),
                 };
-            // The walk may have consumed past a window-range overlay
-            // view. Nothing is installed yet; restore the checkpoint and
-            // retry the leaf once with the whole-buffer view so a subset
-            // answer can never be committed.
-            if buffer.layout_overlay_view_end_char().is_some_and(|end| {
-                redisplay_positions
-                    .window_end_position()
-                    .anchor()
-                    .char_pos()
-                    .get()
-                    >= end.get()
-            }) {
+            // The walk may have read before the window-range overlay view's
+            // start, or consumed at/past its end. Either answer comes from a
+            // subset. Nothing is installed yet; restore the checkpoint and
+            // retry the leaf once with the whole-buffer view.
+            if buffer.layout_overlay_view_start_underflow()
+                || buffer.layout_overlay_view_end_char().is_some_and(|end| {
+                    redisplay_positions
+                        .window_end_position()
+                        .anchor()
+                        .char_pos()
+                        .get()
+                        >= end.get()
+                })
+            {
                 crate::window_output::restore_text_window_retry_checkpoint(
                     output.reborrow(),
                     retry_checkpoint,
@@ -1879,18 +1881,20 @@ impl BufferSourceOutputSetup {
                     Err(changed) => return changed.into(),
                 };
 
-            // The walk may have consumed past a window-range overlay
-            // view. Nothing is installed yet; restore the checkpoint and
-            // retry the leaf once with the whole-buffer view so a subset
-            // answer can never be committed.
-            if buffer.layout_overlay_view_end_char().is_some_and(|end| {
-                redisplay_positions
-                    .window_end_position()
-                    .anchor()
-                    .char_pos()
-                    .get()
-                    >= end.get()
-            }) {
+            // The walk may have read before the window-range overlay view's
+            // start, or consumed at/past its end. Either answer comes from a
+            // subset. Nothing is installed yet; restore the checkpoint and
+            // retry the leaf once with the whole-buffer view.
+            if buffer.layout_overlay_view_start_underflow()
+                || buffer.layout_overlay_view_end_char().is_some_and(|end| {
+                    redisplay_positions
+                        .window_end_position()
+                        .anchor()
+                        .char_pos()
+                        .get()
+                        >= end.get()
+                })
+            {
                 crate::window_output::restore_text_window_retry_checkpoint(
                     output.reborrow(),
                     retry_checkpoint,
@@ -2178,18 +2182,20 @@ impl BufferSourceOutputSetup {
         } else {
             crate::buffer_source::render_attempt::QueryRowCoverage::Complete
         };
-        // The walk may have consumed past a window-range overlay view.
-        // Nothing is installed yet; restore the checkpoint and retry the
-        // leaf once with the whole-buffer view so a subset answer can never
-        // be committed.
-        if buffer.layout_overlay_view_end_char().is_some_and(|end| {
-            redisplay_positions
-                .window_end_position()
-                .anchor()
-                .char_pos()
-                .get()
-                >= end.get()
-        }) {
+        // The walk may have read before the window-range overlay view's
+        // start, or consumed at/past its end. Either answer comes from a
+        // subset. Nothing is installed yet; restore the checkpoint and retry
+        // the leaf once with the whole-buffer view.
+        if buffer.layout_overlay_view_start_underflow()
+            || buffer.layout_overlay_view_end_char().is_some_and(|end| {
+                redisplay_positions
+                    .window_end_position()
+                    .anchor()
+                    .char_pos()
+                    .get()
+                    >= end.get()
+            })
+        {
             crate::window_output::restore_text_window_retry_checkpoint(
                 output.reborrow(),
                 retry_checkpoint,

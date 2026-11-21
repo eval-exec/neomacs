@@ -8,6 +8,8 @@
 
 use super::*;
 
+use crate::buffer::position::EmacsBytePos;
+
 fn serials_at(list: &OverlayList, pos: usize) -> Vec<u64> {
     overlays_at(list, pos)
         .into_iter()
@@ -52,6 +54,45 @@ fn window_view_matches_the_full_snapshot_inside_its_range() {
             "range {start}..{end}"
         );
     }
+}
+
+#[test]
+fn window_view_reports_a_query_below_its_capture_floor() {
+    crate::test_utils::init_test_tracing();
+    let mut list = OverlayList::new();
+    for (start, end) in [(0, 10), (50, 60), (95, 105), (1_000, 1_001)] {
+        let overlay = alloc_overlay(start, end);
+        list.insert_overlay(overlay);
+    }
+
+    let view = list.snapshot_in_range(emacs_byte_range(100, 1_000));
+    // The capture starts one position before the span so an overlay ending
+    // exactly at the span start is present for its after-string. Queries at
+    // or above that floor are complete.
+    let _ = view.overlays_at_emacs_byte_pos(EmacsBytePos::new(99));
+    let _ = view.overlays_in_emacs_byte_range(emacs_byte_range(100, 200));
+    let _ = view.next_boundary_after_emacs_byte_pos(EmacsBytePos::new(200));
+    assert!(!view.overlay_view_query_underflowed());
+
+    let _ = view.overlays_at_emacs_byte_pos(EmacsBytePos::new(98));
+    assert!(
+        view.overlay_view_query_underflowed(),
+        "a point query below the view floor must request the whole-buffer retry"
+    );
+
+    let below = list.snapshot_in_range(emacs_byte_range(100, 1_000));
+    let _ = below.overlays_in_emacs_byte_range(emacs_byte_range(50, 90));
+    assert!(
+        below.overlay_view_query_underflowed(),
+        "a range query below the view floor must request the whole-buffer retry"
+    );
+
+    let full = list.snapshot();
+    let _ = full.overlays_at_emacs_byte_pos(EmacsBytePos::ZERO);
+    assert!(
+        !full.overlay_view_query_underflowed(),
+        "a whole-buffer snapshot has no capture floor"
+    );
 }
 
 #[test]

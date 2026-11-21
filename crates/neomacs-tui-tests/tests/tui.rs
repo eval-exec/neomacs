@@ -37,6 +37,8 @@ mod redisplay_transitions;
 
 #[path = "overlay_face_render.rs"]
 mod overlay_face_render;
+#[path = "overlay_window_view_oracle.rs"]
+mod overlay_window_view_oracle;
 #[path = "package_tui/mod.rs"]
 mod package_tui;
 

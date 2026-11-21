@@ -451,6 +451,41 @@ mod category_capture_tests {
     }
 
     #[test]
+    fn window_snapshot_reports_an_overlay_query_below_the_span_start() {
+        let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+        eval.eval_str(
+            "(progn (insert (make-string 2048 ?x))
+                    (overlay-put (make-overlay 6 7) 'face 'bold)
+                    (overlay-put (make-overlay 200 201) 'face 'italic))",
+        )
+        .unwrap();
+        let id = eval.buffer_manager().current_buffer().unwrap().id();
+        let buffer = eval.buffer_manager().get(id).unwrap();
+        let snapshot = LayoutBufferSnapshot::from_buffer_for_window_with_symbols(
+            buffer,
+            eval.variables(),
+            Some((0, 64)),
+            Some((100, 200)),
+            crate::display_property::DisplayPropertyTarget::Graphical,
+            SymbolMode::Bare,
+        );
+        let _ = snapshot
+            .layout_overlays()
+            .overlays_at_emacs_byte_pos(EmacsBytePos::new(150));
+        assert!(
+            !snapshot.layout_overlay_view_start_underflow(),
+            "an in-span query is complete"
+        );
+        let _ = snapshot
+            .layout_overlays()
+            .overlays_at_emacs_byte_pos(EmacsBytePos::new(50));
+        assert!(
+            snapshot.layout_overlay_view_start_underflow(),
+            "a layout query below the span start must request the whole-buffer retry"
+        );
+    }
+
+    #[test]
     fn category_capture_keeps_text_and_overlay_symbol_properties() {
         let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
         eval.eval_str(
@@ -793,6 +828,10 @@ impl LayoutBufferView for LayoutBufferSnapshot {
 
     fn layout_overlay_view_end_char(&self) -> Option<CharPos0> {
         self.overlay_view_span.map(|(_, end)| end)
+    }
+
+    fn layout_overlay_view_start_underflow(&self) -> bool {
+        self.overlays.overlay_view_query_underflowed()
     }
 
     fn layout_automatic_composition_starting_at(&self, pos: CharPos0) -> Option<CharRange> {

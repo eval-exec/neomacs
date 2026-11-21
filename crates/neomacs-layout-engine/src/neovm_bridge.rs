@@ -291,6 +291,12 @@ pub(crate) trait LayoutBufferView {
     fn layout_overlay_view_end_char(&self) -> Option<neovm_core::buffer::CharPos0> {
         None
     }
+    /// True when this attempt queried the overlay view below its captured
+    /// start. Such an answer may be missing overlays from before the view, so
+    /// the walk must be retried with the whole-buffer view.
+    fn layout_overlay_view_start_underflow(&self) -> bool {
+        false
+    }
     /// Automatic-composition span whose first character is `pos`.
     ///
     /// These spans are compiled from the live Lisp rule table when the

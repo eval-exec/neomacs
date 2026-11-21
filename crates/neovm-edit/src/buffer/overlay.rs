@@ -265,6 +265,13 @@ pub struct OverlayList {
     content_component_sum: Cell<u64>,
     content_unhashable: Cell<usize>,
     content_dirty: Cell<bool>,
+    // A window-range view captured by `snapshot_in_range` answers completely
+    // only for positions at or after the capture floor. A layout query below
+    // that floor sees a subset of the overlays, so redisplay must discard the
+    // attempt and retry with the whole-buffer view. None on a whole-buffer
+    // list, which makes the start-side check a no-op there.
+    view_query_floor: Option<EmacsBytePos>,
+    view_query_underflow: Cell<bool>,
 }
 #[cfg(any(test, feature = "test-support"))]
 pub struct OverlayList {
@@ -278,6 +285,8 @@ pub struct OverlayList {
     content_component_sum: Cell<u64>,
     content_unhashable: Cell<usize>,
     content_dirty: Cell<bool>,
+    view_query_floor: Option<EmacsBytePos>,
+    view_query_underflow: Cell<bool>,
 }
 
 /// An evaluator-owned immutable overlay index. Like overlay plist values,
@@ -344,7 +353,12 @@ impl OverlayList {
     /// `range`. Unlike [`Self::snapshot`] it copies only the in-range entries,
     /// so its cost follows the window, not the buffer's overlay count.
     pub(crate) fn snapshot_in_range(&self, range: EmacsByteRange) -> OverlaySnapshot {
-        OverlaySnapshot(Rc::new(self.snapshot_clone_in_range(range)))
+        let mut view = self.snapshot_clone_in_range(range);
+        // The captured view is complete from this floor up: the index query
+        // above starts one position before the span so that an overlay ending
+        // exactly at `range.start` is still present for its after-string.
+        view.view_query_floor = Some(Self::view_query_range(range).start());
+        OverlaySnapshot(Rc::new(view))
     }
 
     fn invalidate_snapshot(&mut self) {
@@ -1088,6 +1102,8 @@ impl OverlayList {
             content_component_sum: Cell::new(0),
             content_unhashable: Cell::new(0),
             content_dirty: Cell::new(false),
+            view_query_floor: None,
+            view_query_underflow: Cell::new(false),
         }
     }
 
@@ -1284,7 +1300,22 @@ impl OverlayList {
         self.content_dirty.set(true);
     }
 
+    /// Note that a layout query starts at `pos`. A window-range view is
+    /// complete only at or above its capture floor.
+    fn note_overlay_view_query(&self, pos: EmacsBytePos) {
+        if self.view_query_floor.is_some_and(|floor| pos < floor) {
+            self.view_query_underflow.set(true);
+        }
+    }
+
+    /// Whether a window-range view was queried below its capture floor.
+    /// Always false for a whole-buffer list.
+    pub fn overlay_view_query_underflowed(&self) -> bool {
+        self.view_query_underflow.get()
+    }
+
     pub fn overlays_at_emacs_byte_pos(&self, pos: EmacsBytePos) -> Vec<Value> {
+        self.note_overlay_view_query(pos);
         self.index.overlays_at(pos)
     }
 
@@ -1293,6 +1324,7 @@ impl OverlayList {
         &self,
         pos: EmacsBytePos,
     ) -> impl Iterator<Item = Value> + '_ {
+        self.note_overlay_view_query(pos);
         self.index.overlays_at_iter(pos)
     }
 
@@ -1304,6 +1336,7 @@ impl OverlayList {
     /// of narrowing (buffer.c:4012; itree.c:1200-1205). Empty intervals at Z
     /// are therefore omitted when BEG differs from Z.
     pub(crate) fn overlays_in_gnu_full_region(&self, range: EmacsByteRange) -> Vec<Value> {
+        self.note_overlay_view_query(range.start());
         self.index.overlays_intersecting(range)
     }
 
@@ -1482,6 +1515,7 @@ impl OverlayList {
         range: EmacsByteRange,
         accessible_end: EmacsBytePos,
     ) -> Vec<Value> {
+        self.note_overlay_view_query(range.start());
         self.index.overlays_in_region(range, accessible_end)
     }
 
@@ -1491,6 +1525,7 @@ impl OverlayList {
         range: EmacsByteRange,
         accessible_end: EmacsBytePos,
     ) -> impl Iterator<Item = Value> + '_ {
+        self.note_overlay_view_query(range.start());
         self.index.overlays_in_region_iter(range, accessible_end)
     }
 
@@ -2017,6 +2052,7 @@ impl OverlayList {
         pos: EmacsBytePos,
         limit: EmacsBytePos,
     ) -> Option<EmacsBytePos> {
+        self.note_overlay_view_query(pos);
         self.index.next_boundary_after(pos, limit)
     }
 
@@ -2029,6 +2065,7 @@ impl OverlayList {
         pos: EmacsBytePos,
         limit: EmacsBytePos,
     ) -> Option<EmacsBytePos> {
+        self.note_overlay_view_query(pos);
         self.index.next_boundary_after_no_alloc(pos, limit)
     }
 
@@ -2045,6 +2082,7 @@ impl OverlayList {
         pos: EmacsBytePos,
         limit: EmacsBytePos,
     ) -> Option<EmacsBytePos> {
+        self.note_overlay_view_query(pos);
         self.index.previous_boundary_before(pos, limit)
     }
 
