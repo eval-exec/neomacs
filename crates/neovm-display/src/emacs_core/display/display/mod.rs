@@ -1375,20 +1375,20 @@ pub fn builtin_x_frame_edges(args: Vec<Value>) -> EvalResult {
     Ok(Value::NIL)
 }
 
-/// (x-frame-geometry &optional FRAME) -> nil in batch/no-X context.
+/// (x-frame-geometry &optional FRAME) -> GNU's `frame-geometry` alist.
+///
+/// GNU's `frame-geometry` dispatches to this function on an X frame
+/// (lisp/frame.el:2164-2214) and `Fx_frame_geometry` returns the same
+/// `frame_geometry` value (src/xfns.c:7006-7008).  Neomacs reports the
+/// geometry for a window-system frame and nil when the frame has none, the
+/// same answer `neomacs-frame-geometry` gives through `frame-geometry`.
+/// GNU's `frame_geometry` starts with `decode_live_frame (frame)`
+/// (src/xfns.c:6783), so a frame value that is not live signals
+/// `wrong-type-argument frame-live-p` through the shared validation.
 #[doc(hidden)]
-pub fn builtin_x_frame_geometry(args: Vec<Value>) -> EvalResult {
+pub fn builtin_x_frame_geometry(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_max_args("x-frame-geometry", &args, 1)?;
-    if let Some(frame) = args.first()
-        && !frame.is_nil()
-        && !frame.is_frame()
-    {
-        return Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("frame-live-p"), *frame],
-        ));
-    }
-    Ok(Value::NIL)
+    neovm_eval::emacs_core::builtins::neomacs_frame_geometry_value(ctx, args.first())
 }
 
 /// (x-frame-list-z-order &optional DISPLAY) -> error in batch/no-X context.

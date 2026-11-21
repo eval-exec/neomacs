@@ -190,7 +190,22 @@ pub fn builtin_neomacs_frame_geometry(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args_range("neomacs-frame-geometry", &args, 0, 1)?;
-    let Some(geometry) = neomacs_gui_frame_geometry(ctx, args.first())? else {
+    neomacs_frame_geometry_value(ctx, args.first())
+}
+
+/// The `frame_geometry` alist for a live Neomacs window.
+///
+/// GNU's `frame-geometry` dispatches to `x-frame-geometry` on an X frame
+/// (lisp/frame.el:2164-2214), so the two names answer one value; Neomacs
+/// shares this builder between `neomacs-frame-geometry` (its `frame-geometry`
+/// arm, lisp/frame.el `'neo`) and `x-frame-geometry`.  A frame with no
+/// window system has no rectangle to report and answers nil.
+#[doc(hidden)]
+pub fn neomacs_frame_geometry_value(
+    ctx: &crate::emacs_core::eval::Context,
+    frame: Option<&Value>,
+) -> Result<Value, Flow> {
+    let Some(geometry) = neomacs_gui_frame_geometry(ctx, frame)? else {
         return Ok(Value::NIL);
     };
     let menu_width = if geometry.menu_bar_height > 0 {

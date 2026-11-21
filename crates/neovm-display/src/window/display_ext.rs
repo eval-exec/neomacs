@@ -500,6 +500,16 @@ impl DisplayFrameExt for Frame {
         self.set_known_parameter(FrameParam::RightFringe, Value::fixnum(8));
         self.set_known_parameter(FrameParam::InternalBorderWidth, Value::fixnum(0));
         self.set_known_parameter(FrameParam::BorderWidth, Value::fixnum(0));
+        // GNU's `allocate_frame` initializes `tool-bar-position` to `top`
+        // (src/frame.c:1167 `fset_tool_bar_position (f, Qtop)`), and GTK frame
+        // creation passes that initialized value through
+        // `gui_default_parameter (... Qtool_bar_position,
+        // FRAME_TOOL_BAR_POSITION (f), ...)` (src/xfns.c:5298-5299), whether
+        // or not the tool bar is enabled.  Neo draws the bar at the top and
+        // frame-geometry already reports that fallback, so seeding the
+        // parameter makes the frame parameter agree with what is on screen
+        // instead of answering nil.
+        self.set_known_parameter(FrameParam::ToolBarPosition, Value::symbol("top"));
     }
 
     fn parameter(&self, key: &str) -> Option<Value> {

@@ -17,6 +17,14 @@
 //! contract (outer height = inner + tab + menu + tool + 2 * border, bar sizes
 //! present with the frame's width, bars external, tool bar at the top).
 //!
+//! Known toolkit divergence, in this row's pinned numbers: the GTK3 oracle
+//! realizes a 66 px external band (menu-bar-size 25 + tool-bar-size 41) and
+//! `frame-outer-height` 661 (678 with `tool-bar-style' `both').  A separate
+//! `--quick` probe at DejaVu Sans Mono 10 pt measured 69 px (28 + 41) and 664,
+//! i.e. the absolute band follows toolkit chrome and font metrics.  Neomacs
+//! realizes its own band; both engines count their own, which is why the row
+//! pins GNU's absolute numbers only and compares the contract across engines.
+//!
 //! The `(cells 1 1)` anchor is checked with the bars explicitly ON so a
 //! child-frame user sees GNU's 17 px one-cell offset.
 
@@ -82,7 +90,11 @@ const GUI_PROBE: &str = r####"
                       :frame-height (frame-height)
                       :frame-char-height (frame-char-height)
                       :body-height (window-body-height window)
-                      :body-width (window-body-width window)))
+                      :body-width (window-body-width window)
+                      ;; GNU `frame-geometry' dispatches to `x-frame-geometry'
+                      ;; on an X frame (lisp/frame.el:2164-2214), so both
+                      ;; names must answer one alist on both engines.
+                      :x-frame-eq (equal (x-frame-geometry) (frame-geometry))))
          (image (chrome-snap)))
     ;; A second toolbar style changes the external bar's pixel height in GNU;
     ;; the window origin and the inner height must not move, and the bar sizes
@@ -141,7 +153,7 @@ fn gui_frame_with_bars_on_has_gnu_window_geometry() {
     // style `both` (tool-bar-size 41 -> 58), menu-bar-size (832 . 25), and the
     // window area and inner height unchanged at 0 / 595.
     let expected_gnu = expect![[
-        r#"OK ((:chrome (:menu-bar-lines 1 :tool-bar-lines 1 :window-pixel-top 0 :window-pixel-left 0 :window-inside-pixel-edges (8 0 808 561) :frame-inner-height 595 :frame-inner-width 832 :frame-height 35 :frame-char-height 17 :body-height 33 :body-width 100) :contract-image t :contract-both t :anchor (:top 17 :left 16 :child-window-pixel-top 0 :child-window-pixel-left 0 :child-frame-inner-height 22)) (:geometry ((:outer-size (832 . 661) :menu-bar-size (832 . 25) :tool-bar-size (832 . 41) :tab-bar-size (0 . 0) :outer-height 661 :outer-width 832 :contract t) (:outer-size (832 . 678) :menu-bar-size (832 . 25) :tool-bar-size (832 . 58) :tab-bar-size (0 . 0) :outer-height 678 :outer-width 832 :contract t))))"#
+        r#"OK ((:chrome (:menu-bar-lines 1 :tool-bar-lines 1 :window-pixel-top 0 :window-pixel-left 0 :window-inside-pixel-edges (8 0 808 561) :frame-inner-height 595 :frame-inner-width 832 :frame-height 35 :frame-char-height 17 :body-height 33 :body-width 100 :x-frame-eq t) :contract-image t :contract-both t :anchor (:top 17 :left 16 :child-window-pixel-top 0 :child-window-pixel-left 0 :child-frame-inner-height 22)) (:geometry ((:outer-size (832 . 661) :menu-bar-size (832 . 25) :tool-bar-size (832 . 41) :tab-bar-size (0 . 0) :outer-height 661 :outer-width 832 :contract t) (:outer-size (832 . 678) :menu-bar-size (832 . 25) :tool-bar-size (832 . 58) :tab-bar-size (0 . 0) :outer-height 678 :outer-width 832 :contract t))))"#
     ]];
     expected_gnu.assert_eq(&pair.gnu_behavior.to_string());
 

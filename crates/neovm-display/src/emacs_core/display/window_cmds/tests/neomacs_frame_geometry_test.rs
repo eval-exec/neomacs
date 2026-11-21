@@ -12,7 +12,9 @@ use neovm_value::value::Value;
 use neovm_eval::emacs_core::eval::Context;
 use neovm_eval::emacs_core::print::print_value;
 
-use crate::window::DisplayFrameManagerExt;
+use crate::emacs_core::display::builtin_x_frame_geometry;
+use crate::window::{DisplayFrameExt, DisplayFrameManagerExt};
+use neovm_eval::emacs_core::builtins::builtin_neomacs_frame_geometry;
 
 fn gui_frame_context() -> (Context, neovm_value::display_vocab::FrameId) {
     crate::test_utils::init_test_tracing();
@@ -117,6 +119,59 @@ fn frame_geometry_counts_the_external_bar_band_without_moving_it() {
         answer(&mut ctx, "(frame-native-height)"),
         "641",
         "692 physical - 51 external bars; the tab bar and border stay inside"
+    );
+    // GNU's `frame-geometry` dispatches to `x-frame-geometry` on an X frame
+    // (lisp/frame.el:2164-2214), so the two names answer one alist.  Drive
+    // the primitives directly: this display unit runtime binds
+    // `x-frame-geometry` to the absent-layer upper stand-in, so a Lisp form
+    // would panic instead of exercising the builtin.
+    let x_geometry = builtin_x_frame_geometry(&mut ctx, vec![]).expect("x-frame-geometry");
+    let neomacs_geometry =
+        builtin_neomacs_frame_geometry(&mut ctx, vec![]).expect("neomacs-frame-geometry");
+    assert_eq!(
+        print_value(&x_geometry),
+        print_value(&neomacs_geometry),
+        "x-frame-geometry must report the same geometry as frame-geometry"
+    );
+}
+
+/// GNU's `allocate_frame` initializes `tool-bar-position` to `top`
+/// (src/frame.c:1167 `fset_tool_bar_position (f, Qtop)`), and GTK frame
+/// creation passes that initialized value through
+/// `gui_default_parameter (... Qtool_bar_position, FRAME_TOOL_BAR_POSITION (f),
+/// ...)` (src/xfns.c:5298-5299), whether or not the bar is enabled; Neo draws
+/// the bar at the top and must report the same parameter.
+#[test]
+fn gui_frame_defaults_seed_tool_bar_position_top() {
+    let (mut ctx, frame_id) = gui_frame_context();
+    ctx.frame_manager_mut()
+        .get_mut(frame_id)
+        .expect("frame")
+        .install_gnu_gui_default_parameters();
+    assert_eq!(
+        answer(&mut ctx, "(frame-parameter nil 'tool-bar-position)"),
+        "top"
+    );
+}
+
+/// A frame outside a window system has no rectangle to report; both names
+/// keep the existing nil answer for that state.
+#[test]
+fn x_frame_geometry_is_nil_without_a_window_system() {
+    let (mut ctx, frame_id) = gui_frame_context();
+    ctx.frame_manager_mut()
+        .get_mut(frame_id)
+        .expect("frame")
+        .set_window_system(None);
+    assert!(
+        builtin_x_frame_geometry(&mut ctx, vec![])
+            .expect("x-frame-geometry")
+            .is_nil()
+    );
+    assert!(
+        builtin_neomacs_frame_geometry(&mut ctx, vec![])
+            .expect("neomacs-frame-geometry")
+            .is_nil()
     );
 }
 
