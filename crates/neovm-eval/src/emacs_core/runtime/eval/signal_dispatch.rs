@@ -152,18 +152,39 @@ impl Context {
 
     #[doc(hidden)]
     pub fn has_active_condition_handler_for_signal(&self, sig: &SignalData) -> bool {
+        // One read of the signalled symbol's conditions, then GNU's
+        // `find_handler_clause` membership test for each active clause.
+        let conditions = self
+            .obarray
+            .get_property_id(sig.symbol, error_conditions_symbol());
         self.condition_stack.iter().rev().any(|frame| match frame {
-            ConditionFrame::ConditionCase { conditions, .. }
-            | ConditionFrame::HandlerBind { conditions, .. } => {
-                neovm_value::errors::signal_matches_condition_value_sym(
-                    &self.obarray,
-                    sig.symbol,
-                    conditions,
-                    self.symbol_mode(),
-                )
+            ConditionFrame::ConditionCase {
+                conditions: pattern,
+                ..
             }
+            | ConditionFrame::HandlerBind {
+                conditions: pattern,
+                ..
+            } => neovm_value::errors::signal_matches_conditions(
+                conditions.as_ref(),
+                pattern,
+                self.symbol_mode(),
+            ),
             _ => false,
         })
+    }
+
+    /// GNU `signal_quit_p` (src/eval.c:2199-2210): the signalled symbol is
+    /// `quit`, or `quit` is one of its `error-conditions`.
+    #[doc(hidden)]
+    pub fn signal_is_quit(&self, sig: &SignalData) -> bool {
+        sig.symbol == quit_symbol()
+            || neovm_value::errors::signal_conditions_contain(
+                &self.obarray,
+                sig.symbol,
+                quit_symbol(),
+                self.symbol_mode(),
+            )
     }
 
     #[doc(hidden)]
@@ -514,12 +535,7 @@ impl Context {
             return Ok(());
         }
 
-        let debug_setting = if neovm_value::errors::signal_matches_condition_value_sym(
-            &self.obarray,
-            sig.symbol,
-            &Value::from_sym_id(quit_symbol()),
-            self.symbol_mode(),
-        ) {
+        let debug_setting = if self.signal_is_quit(sig) {
             self.builtin_var_value(debug_on_quit_symbol())
                 .unwrap_or(Value::NIL)
         } else {
@@ -653,12 +669,7 @@ impl Context {
     /// loop.  So this is infallible: a matcher failure is a `Diagnostic'.
     #[doc(hidden)]
     pub fn command_error_severity(&mut self, sig: &SignalData) -> CommandErrorSeverity {
-        if neovm_value::errors::signal_matches_condition_value_sym(
-            &self.obarray,
-            sig.symbol,
-            &Value::from_sym_id(quit_symbol()),
-            self.symbol_mode(),
-        ) {
+        if self.signal_is_quit(sig) {
             return CommandErrorSeverity::Routine;
         }
         let conditions = self.signal_conditions_value(sig);

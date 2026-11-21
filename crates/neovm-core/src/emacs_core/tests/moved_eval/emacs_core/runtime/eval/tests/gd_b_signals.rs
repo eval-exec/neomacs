@@ -154,6 +154,62 @@ fn invalid_error_symbol_reissues_with_its_own_hook_read() {
     );
 }
 
+/// `has_active_condition_handler_for_signal` is the same `find_handler_clause`
+/// question over the active clause stack: membership in the signalled
+/// symbol's `error-conditions`, with no "the clause names the signalled
+/// symbol" shortcut (src/eval.c:2241-2263).
+#[test]
+fn active_condition_handler_uses_error_conditions_membership() {
+    let mut ev = runtime_startup_context();
+    ev.eval_str(
+        "(define-error 'gd-b-active \"Active\" '(error))
+         (put 'gd-b-active 'error-conditions '(gd-b-other error))",
+    )
+    .unwrap();
+    ev.push_condition_frame(ConditionFrame::ConditionCase {
+        conditions: Value::symbol("gd-b-active"),
+        resume: ResumeTarget::InterpreterConditionCase {
+            handler_index: 0,
+            condition_stack_base: 0,
+        },
+    });
+    let FlowKind::Signal(sig) = signal("gd-b-active", vec![]).into_kind() else {
+        panic!("signal should create Flow::Signal");
+    };
+    assert!(
+        !ev.has_active_condition_handler_for_signal(&sig),
+        "a clause naming the signalled symbol must not match a list that omits it"
+    );
+    ev.eval_str("(put 'gd-b-active 'error-conditions '(gd-b-active gd-b-other error))")
+        .unwrap();
+    assert!(ev.has_active_condition_handler_for_signal(&sig));
+}
+
+/// GNU `signal_quit_p` (src/eval.c:2199-2210): identity with `quit`, or
+/// `quit` in the signalled symbol's `error-conditions`.  The identity half
+/// survives a customized list that omits it; a different symbol with `quit`
+/// in its list is a quit too.
+#[test]
+fn signal_quit_predicate_has_gnu_identity_and_membership() {
+    let mut ev = runtime_startup_context();
+    let quit_signal = |name: &str| {
+        let FlowKind::Signal(sig) = signal(name, vec![]).into_kind() else {
+            panic!("signal should create Flow::Signal");
+        };
+        sig
+    };
+    ev.eval_str("(put 'gd-b-my-quit 'error-conditions '(quit))")
+        .unwrap();
+    assert!(ev.signal_is_quit(&quit_signal("gd-b-my-quit")));
+    assert!(!ev.signal_is_quit(&quit_signal("error")));
+    ev.eval_str("(put 'quit 'error-conditions '(error))")
+        .unwrap();
+    assert!(
+        ev.signal_is_quit(&quit_signal("quit")),
+        "the identity half must survive a list that omits quit"
+    );
+}
+
 #[test]
 fn compiled_debugger_observes_leaf_debug_on_error_binding() {
     #[cfg(feature = "jit")]

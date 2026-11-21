@@ -85,6 +85,9 @@ mod oracle_face_theme;
 #[path = "oracle_signal_conditions_once.rs"]
 mod oracle_signal_conditions_once;
 
+#[path = "oracle_signal_matcher_callers.rs"]
+mod oracle_signal_matcher_callers;
+
 #[path = "oracle_filelock_identity.rs"]
 mod oracle_filelock_identity;
 

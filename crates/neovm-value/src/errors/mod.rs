@@ -123,30 +123,10 @@ pub fn signal_matches_condition_value_sym(
     pattern: &Value,
     symbol_mode: SymbolMode,
 ) -> bool {
-    // The signal's own conditions, read by identity (falling back to just the
-    // symbol itself, matching `signal_matches_hierarchical`'s exact-match rule).
+    // The signal's own conditions, read by identity.  An uninterned error
+    // symbol carries them on that exact symbol object.
     let conditions = obarray.get_property_id(signal_sym, error_conditions_sym_id());
-    signal_matches_pattern_against_conditions(signal_sym, conditions.as_ref(), pattern, symbol_mode)
-}
-
-/// Identity-aware hierarchical match for one signal and one condition.
-///
-/// This is the object-level counterpart of [`signal_matches_hierarchical`]
-/// for runtime paths where GNU compares Lisp symbol objects rather than their
-/// potentially raw or mutable names.
-pub fn signal_matches_hierarchical_sym(
-    obarray: &Obarray,
-    signal_sym: SymId,
-    condition_sym: SymId,
-    symbol_mode: SymbolMode,
-) -> bool {
-    let conditions = obarray.get_property_id(signal_sym, error_conditions_sym_id());
-    signal_matches_symbol_against_conditions(
-        signal_sym,
-        conditions.as_ref(),
-        condition_sym,
-        symbol_mode,
-    )
+    signal_matches_conditions(conditions.as_ref(), pattern, symbol_mode)
 }
 
 /// GNU `find_handler_clause` (src/eval.c:2241-2263): match the clause
@@ -164,49 +144,34 @@ pub fn signal_matches_conditions(
     find_clause_pattern(conditions, pattern, symbol_mode)
 }
 
-fn signal_matches_pattern_against_conditions(
+/// Identity-aware hierarchical match for one signal and one condition.
+///
+/// This is the object-level counterpart of [`signal_matches_hierarchical`]
+/// for runtime paths where GNU compares Lisp symbol objects rather than their
+/// potentially raw or mutable names.
+pub fn signal_matches_hierarchical_sym(
+    obarray: &Obarray,
     signal_sym: SymId,
-    conditions: Option<&Value>,
-    pattern: &Value,
-    symbol_mode: SymbolMode,
-) -> bool {
-    match pattern.kind() {
-        ValueKind::T => true,
-        ValueKind::Nil => false,
-        ValueKind::Cons => list_to_vec(pattern).is_some_and(|items| {
-            items.iter().any(|item| {
-                signal_matches_pattern_against_conditions(signal_sym, conditions, item, symbol_mode)
-            })
-        }),
-        _ => {
-            let Some(cond_id) = crate::value::symbol_id(pattern, symbol_mode) else {
-                return false;
-            };
-            signal_matches_symbol_against_conditions(signal_sym, conditions, cond_id, symbol_mode)
-        }
-    }
-}
-
-fn signal_matches_symbol_against_conditions(
-    signal_sym: SymId,
-    conditions: Option<&Value>,
     condition_sym: SymId,
     symbol_mode: SymbolMode,
 ) -> bool {
-    if pattern_is_catch_all(condition_sym) || condition_sym == signal_sym {
-        return true;
-    }
-    let Some(conditions) = conditions else {
-        return false;
-    };
-    let mut tail = *conditions;
-    while tail.is_cons() {
-        if tail.cons_car().as_symbol_id(symbol_mode) == Some(condition_sym) {
-            return true;
-        }
-        tail = tail.cons_cdr();
-    }
-    false
+    let conditions = obarray.get_property_id(signal_sym, error_conditions_sym_id());
+    find_clause_symbol(conditions.as_ref(), condition_sym, symbol_mode)
+}
+
+/// GNU `Fmemq (condition, (get signal 'error-conditions))`.
+///
+/// Membership only.  Callers that need GNU's identity half (for example
+/// `signal_quit_p`, src/eval.c:2199-2210) add it themselves: the debugger and
+/// the command-error severity do exactly that.
+pub fn signal_conditions_contain(
+    obarray: &Obarray,
+    signal_sym: SymId,
+    condition_sym: SymId,
+    symbol_mode: SymbolMode,
+) -> bool {
+    let conditions = obarray.get_property_id(signal_sym, error_conditions_sym_id());
+    find_clause_symbol(conditions.as_ref(), condition_sym, symbol_mode)
 }
 
 fn find_clause_pattern(
