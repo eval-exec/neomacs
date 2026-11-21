@@ -56,6 +56,11 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
    |   pub struct Receiver<T> {
    |   ---------------------- doesn't satisfy `_: Sync`
    |
+  ::: $RUST/core/src/any.rs
+   |
+   |   pub trait Any: 'static {
+   |   ---------------------- doesn't satisfy `(dyn std::any::Any + 'static): Send`
+   |
   ::: $RUST/alloc/src/rc.rs
    |
    | / pub struct Rc<
@@ -69,11 +74,6 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
    | |     #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global,
    | | > {
    | |_- doesn't satisfy `_: Send`
-   |
-  ::: $RUST/core/src/any.rs
-   |
-   |   pub trait Any: 'static {
-   |   ---------------------- doesn't satisfy `(dyn std::any::Any + 'static): Send`
    |
   ::: $RUST/core/src/cell/once.rs
    |
