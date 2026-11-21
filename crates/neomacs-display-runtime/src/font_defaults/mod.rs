@@ -2,7 +2,7 @@
 //!
 //! No native settings handles cross into the evaluator or rendering protocol.
 
-use neomacs_display_protocol::GraphicalBackend;
+use neomacs_display_protocol::{Dpi, GraphicalBackend};
 use neovm_core::emacs_core::display_host::SystemFonts;
 
 mod policy;
@@ -21,6 +21,7 @@ cfg_select! {
 /// retains this observer until shutdown; only owned observations enter input.
 pub struct FontDefaultsObserver {
     initial: GuiFontDefaults,
+    initial_text_dpi: Option<Dpi>,
     changes: crossbeam_channel::Receiver<SystemFonts>,
     _subscription: NativeSubscription,
 }
@@ -37,6 +38,7 @@ impl FontDefaultsObserver {
     fn unsupported(initial: GuiFontDefaults) -> Self {
         Self {
             initial,
+            initial_text_dpi: None,
             changes: crossbeam_channel::never(),
             _subscription: NativeSubscription::Unsupported,
         }
@@ -44,6 +46,12 @@ impl FontDefaultsObserver {
 
     pub fn initial(&self) -> &GuiFontDefaults {
         &self.initial
+    }
+
+    /// Startup logical text DPI, before compositor backing scale is applied.
+    /// Font-name subscriptions remain independent of this initial observation.
+    pub fn initial_text_dpi(&self) -> Option<Dpi> {
+        self.initial_text_dpi
     }
 
     /// The input bridge is the sole consumer. Unsupported subscriptions never

@@ -257,3 +257,6 @@ mod printer_quit;
 
 #[path = "line_number_scaled_cursor.rs"]
 mod line_number_scaled_cursor;
+
+#[path = "desktop_text_scaling.rs"]
+mod desktop_text_scaling;

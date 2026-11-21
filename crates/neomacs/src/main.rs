@@ -431,9 +431,17 @@ fn finish_gui_connection(
     let font_observer =
         neomacs_display_runtime::font_defaults::observe_font_defaults(identity.backend())
             .map_err(|error| format!("failed to observe desktop fonts: {error}"))?;
+    // Native Wayland consumes logical text DPI from the same settings owner
+    // that discovered the desktop fonts. Backing scale remains frame-local.
+    let observation = match (host.observation(), font_observer.initial_text_dpi()) {
+        (neomacs_display_protocol::DisplayObservation::Wayland, Some(dpi)) => {
+            neomacs_display_protocol::DisplayObservation::WaylandWithTextDpi(dpi)
+        }
+        (observation, _) => observation,
+    };
     let mut display = bootstrap_gui_display_config(
         interactivity,
-        gui_frame_font_scale_from_observation(host.observation()),
+        gui_frame_font_scale_from_observation(observation),
         identity,
     );
     display.font_defaults = font_observer.initial().clone();
