@@ -339,6 +339,21 @@ the point of keeping both."
     (require 'magit)
     (magit-status-setup-buffer
      (neomacs-perf-workload--required-environment "NEOMACS_PERF_REPOSITORY")))
+   ((equal scenario "magit-log-doubling")
+    (require 'magit)
+    ;; Keep these limits in step with MAGIT_LOG_INITIAL_LIMIT and
+    ;; MAGIT_LOG_DOUBLINGS in magit_repository.rs.  The generated history has
+    ;; exactly MAGIT_LOG_COMMITS commits, so the fifth doubling reaches all
+    ;; of them.  Run from the prepared repository: the harness's process
+    ;; current directory is the workspace checkout, which is neither the
+    ;; fixture nor deterministic across runs.
+    (let* ((repository
+            (neomacs-perf-workload--required-environment
+             "NEOMACS_PERF_REPOSITORY"))
+           (default-directory (file-name-as-directory repository))
+           (buffer (magit-log-all '("--graph" "-n1024" "--decorate"))))
+      (when (buffer-live-p buffer)
+        (set-buffer buffer))))
    (t
     (insert-file-contents
      (neomacs-perf-workload--required-environment "NEOMACS_PERF_SOURCE"))
@@ -489,6 +504,31 @@ the point of keeping both."
           ("magit-status"
            (setq regex-us (+ regex-us (neomacs-perf-workload--time
                                        #'magit-refresh))))
+          ("magit-log-doubling"
+           ;; Keep these limits in step with MAGIT_LOG_INITIAL_LIMIT and
+           ;; MAGIT_LOG_DOUBLINGS in magit_repository.rs.
+           (unless (member "-n1024" magit-buffer-log-args)
+             (setq magit-buffer-log-args '("--graph" "-n1024" "--decorate"))
+             (magit-refresh))
+           (setq regex-us
+                 (+ regex-us
+                    (neomacs-perf-workload--time
+                     (lambda ()
+                       (dotimes (_ 5)
+                         (magit-log-double-commit-limit)
+                         ;; Batch redisplay is a no-op; a GUI run pays the
+                         ;; user-visible paint of the growing 2.3 MB log.
+                         (redisplay t))))))
+           (unless (member "-n32768" magit-buffer-log-args)
+             (error "magit-log-doubling ended with arguments %S"
+                    magit-buffer-log-args))
+           ;; The 32,768 lean fixture commits produce about 1.1 MB; the
+           ;; initial 1,024-commit buffer is tens of kilobytes. The exact
+           ;; final limit is checked above; this catches a wash that silently
+           ;; stayed small.
+           (unless (> (buffer-size) 1000000)
+             (error "magit-log-doubling washed only %d bytes"
+                    (buffer-size))))
           ("large-file-editing"
            (setq type-us (+ type-us (neomacs-perf-workload--time
                                      #'neomacs-perf-workload--type-phase))

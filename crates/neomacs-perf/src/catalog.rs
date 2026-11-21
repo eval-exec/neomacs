@@ -185,6 +185,17 @@ pub enum ScenarioId {
     /// `magit-status`, so comparing it against `magit-status-compiled`
     /// isolates the REPOSITORY as the only variable between them.
     MagitStatusHeavy,
+    /// The log-wash path, which `magit-status` does not cover: start
+    /// `magit-log-all` at `-n1024` and perform five
+    /// `magit-log-double-commit-limit` refreshes to `-n32768` over a
+    /// deterministic 32,768-commit history.
+    ///
+    /// This is the workload behind the measured 10.8x gap against GNU Emacs.
+    /// The batch frontend isolates Magit's per-commit wash
+    /// (`magit-wash-sequence`); the GUI frontend adds the redisplay of the
+    /// growing log, which is the user-visible path. It is deliberately heavy
+    /// and opt-in, not part of the standard suite.
+    MagitLogDoubling,
     /// One `jsonrpc` round trip per operation at the size a language server
     /// actually sends: serialize a request, then parse a
     /// `textDocument/publishDiagnostics` reply.
@@ -778,6 +789,22 @@ const SCENARIOS: &[ScenarioSpec] = &[
         primary_metric: MetricName::PerOperationWallTime,
         cross_editor_parity_metrics: &[],
     },
+    ScenarioSpec {
+        id: ScenarioId::MagitLogDoubling,
+        description: "Five Magit log refreshes doubling -n1024 to -n32768 over a deterministic 32,768-commit history",
+        // GUI is the user-visible path: it pays the redisplay of the growing
+        // log after every doubling. `--frontend batch` isolates the wash.
+        default_frontend: Frontend::Gui {
+            width: 1200,
+            height: 800,
+        },
+        // One operation is the complete five-doubling sequence. The row is
+        // heavy and opt-in, so it stays out of the standard suite; a caller
+        // that needs multiple samples asks for them explicitly.
+        default_iterations: NonZeroU32::new(1).expect("non-zero scenario default"),
+        primary_metric: MetricName::PerOperationWallTime,
+        cross_editor_parity_metrics: &[],
+    },
 ];
 
 pub fn scenarios() -> &'static [ScenarioSpec] {
@@ -844,6 +871,7 @@ pub const fn scenario(id: ScenarioId) -> &'static ScenarioSpec {
         ScenarioId::ProcessOutput => &SCENARIOS[20],
         ScenarioId::FileOpen => &SCENARIOS[19],
         ScenarioId::MagitStatusHeavy => &SCENARIOS[18],
+        ScenarioId::MagitLogDoubling => &SCENARIOS[54],
         ScenarioId::OrgEditingHeavy => &SCENARIOS[17],
         ScenarioId::MxTabCompletionSteady => &SCENARIOS[52],
         ScenarioId::Scrolling => &SCENARIOS[53],

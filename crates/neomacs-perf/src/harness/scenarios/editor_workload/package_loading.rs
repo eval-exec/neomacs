@@ -19,6 +19,7 @@ pub(crate) fn scenario_load_suffixes(scenario: ScenarioId) -> LoadSuffixes {
         ScenarioId::MagitStatusCompiled
             | ScenarioId::OrgJournalOpenCompiled
             | ScenarioId::MagitStatusHeavy
+            | ScenarioId::MagitLogDoubling
     ) {
         return LoadSuffixes::EmacsDefault;
     }
