@@ -87,10 +87,19 @@ impl ResolvedMenu {
 /// displayed nothing and returned nil.  GNU displays all three forms;
 /// only the returned value differs: a list of event paths for keymaps,
 /// the chosen item's VALUE for the old-fashioned form.
+///
+/// `keymap_pane_title` controls the prompt-derived pane name that GNU gives
+/// a keymap pane (`Fkeymap_prompt`).  A true popup (GUI `x-popup-menu`)
+/// renders that pane name as a title row; a TTY menu and a menu-bar
+/// dropdown do not: GNU's TTY Help menu starts directly with its first
+/// item and the active heading is marked in the menu-bar row instead, and
+/// the toolkit menu-bar dropdown has no in-menu title.  The old-fashioned
+/// form's explicit TITLE/PANE names are always kept.
 pub(crate) fn resolve_popup(
     ctx: &mut Context,
     menu: Value,
     is_tty: bool,
+    keymap_pane_title: bool,
 ) -> Result<ResolvedMenu, Flow> {
     let mut result = ResolvedMenu {
         entries: Vec::new(),
@@ -104,13 +113,13 @@ pub(crate) fn resolve_popup(
     let map = keymap::get_keymap_in_runtime(ctx, &menu, false, false)?;
     if keymap::is_list_keymap(&map, ctx.symbol_mode()) {
         result._roots.keep(map);
-        return finish_keymap_pane(ctx, map, is_tty, result);
+        return finish_keymap_pane(ctx, map, is_tty, keymap_pane_title, result);
     }
     // `else if (CONSP (menu) && KEYMAPP (XCAR (menu)))`: the first
     // element must itself be a keymap object; the remaining elements are
     // resolved with the erroring `get_keymap` inside the branch.
     if menu.is_cons() && keymap::is_list_keymap(&menu.cons_car(), ctx.symbol_mode()) {
-        return resolve_keymap_list(ctx, menu, is_tty, result);
+        return resolve_keymap_list(ctx, menu, is_tty, keymap_pane_title, result);
     }
     // `else { title = Fcar (menu); CHECK_STRING (title); list_of_panes
     // (Fcdr (menu)); }`
@@ -123,11 +132,14 @@ fn finish_keymap_pane(
     ctx: &mut Context,
     map: Value,
     is_tty: bool,
+    keymap_pane_title: bool,
     mut out: ResolvedMenu,
 ) -> Result<ResolvedMenu, Flow> {
-    let prompt = keymap_prompt(ctx, map);
-    out._roots.keep(prompt);
-    push_label_row(prompt, &mut out);
+    if keymap_pane_title {
+        let prompt = keymap_prompt(ctx, map);
+        out._roots.keep(prompt);
+        push_label_row(prompt, &mut out);
+    }
     append(ctx, map, is_tty, &mut MenuTraversal::default(), &mut out)?;
     Ok(out)
 }
@@ -141,6 +153,7 @@ fn resolve_keymap_list(
     ctx: &mut Context,
     menu: Value,
     is_tty: bool,
+    keymap_pane_title: bool,
     mut out: ResolvedMenu,
 ) -> Result<ResolvedMenu, Flow> {
     let mut maps = Vec::new();
@@ -159,13 +172,15 @@ fn resolve_keymap_list(
         rest = rest.cons_cdr();
     }
     for (index, map) in maps.iter().enumerate() {
-        let pane_name = if index == 0 && !title.is_nil() {
-            title
-        } else {
-            keymap_prompt(ctx, *map)
-        };
-        out._roots.keep(pane_name);
-        push_label_row(pane_name, &mut out);
+        if keymap_pane_title {
+            let pane_name = if index == 0 && !title.is_nil() {
+                title
+            } else {
+                keymap_prompt(ctx, *map)
+            };
+            out._roots.keep(pane_name);
+            push_label_row(pane_name, &mut out);
+        }
         append(ctx, *map, is_tty, &mut MenuTraversal::default(), &mut out)?;
     }
     Ok(out)

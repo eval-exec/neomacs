@@ -3388,7 +3388,7 @@ fn x_popup_menu_old_fashioned_list_decodes_panes_and_values() {
                   ("Other Item" . (nested value))))"#,
         )
         .expect("menu literal");
-    let resolved = crate::emacs_core::menu::resolve_popup(&mut eval, menu, false).unwrap();
+    let resolved = crate::emacs_core::menu::resolve_popup(&mut eval, menu, false, true).unwrap();
     let rows: Vec<_> = resolved
         .entries()
         .iter()
@@ -3452,7 +3452,7 @@ fn x_popup_menu_keymap_list_decodes_one_pane_per_keymap() {
                  (list context other))"#,
         )
         .expect("keymap list");
-    let resolved = crate::emacs_core::menu::resolve_popup(&mut eval, menu, false).unwrap();
+    let resolved = crate::emacs_core::menu::resolve_popup(&mut eval, menu, false, true).unwrap();
     let labels: Vec<_> = resolved
         .entries()
         .iter()
@@ -3477,7 +3477,7 @@ fn x_popup_menu_keymap_list_decodes_one_pane_per_keymap() {
 
     // `get_keymap (XCAR (tem), 1, 0)` signals on a non-keymap element.
     let bad = eval.eval_str("(list (make-sparse-keymap) 42)").unwrap();
-    let error = crate::emacs_core::menu::resolve_popup(&mut eval, bad, false).kinded();
+    let error = crate::emacs_core::menu::resolve_popup(&mut eval, bad, false, true).kinded();
     match error {
         Err(FlowKind::Signal(signal)) => {
             assert_eq!(signal.symbol_name(), "wrong-type-argument");
@@ -3507,6 +3507,37 @@ fn x_popup_menu_t_position_uses_the_recorded_mouse_position() {
     let mut fresh = Context::new(crate::test_utils::unit_runtime());
     let origin = super::popup_menu_position(&mut fresh, Value::T).estimated_origin();
     assert_eq!(origin, neomacs_display_protocol::Point::ZERO);
+}
+
+/// A keymap pane's synthesized name is a title row only for a true popup.
+/// GNU's TTY Help menu starts directly with its first item (the active
+/// heading is marked in the menu-bar row), and a toolkit menu-bar dropdown
+/// has no in-menu title either; the GUI `x-popup-menu` popup does render
+/// the pane name.
+#[test]
+fn x_popup_menu_keymap_pane_title_is_suppressed_for_tty_and_menu_bar() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let menu = eval
+        .eval_str(
+            r#"(let ((map (make-sparse-keymap "Context")))
+                 (define-key map [choose] '(menu-item "Choose"))
+                 map)"#,
+        )
+        .expect("keymap");
+    let with_title = crate::emacs_core::menu::resolve_popup(&mut eval, menu, true, true).unwrap();
+    assert_eq!(with_title.entries()[0].label, "Context");
+    assert_eq!(with_title.entries()[1].label, "Choose");
+
+    let without_title =
+        crate::emacs_core::menu::resolve_popup(&mut eval, menu, true, false).unwrap();
+    assert_eq!(without_title.entries().len(), 1);
+    assert_eq!(without_title.entries()[0].label, "Choose");
+    assert_eq!(
+        without_title.events(),
+        &with_title.events()[1..],
+        "suppressing the title must not change the item events"
+    );
 }
 
 #[test]
@@ -5382,7 +5413,7 @@ fn old_style_menu_help_keeps_the_real_submenu_definition() {
         definition,
         neovm_value::tagged::SymbolMode::Bare,
     );
-    let resolved = crate::emacs_core::menu::resolve_popup(&mut eval, menu, true).unwrap();
+    let resolved = crate::emacs_core::menu::resolve_popup(&mut eval, menu, true, true).unwrap();
     let entry = &resolved.entries()[0];
 
     assert_eq!(entry.help.as_deref(), Some("Open child choices"));

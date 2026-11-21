@@ -1495,12 +1495,17 @@ fn popup_menu_string(value: Value) -> Option<String> {
 struct PopupMenuPosition {
     request_id: Option<neomacs_display_protocol::menu::MenuBarRequestId>,
     placement: neomacs_display_protocol::PopupPlacement,
+    /// POSITION came from a menu-bar posn: the dropdown hangs from its
+    /// heading, so the heading already names the menu and a synthesized
+    /// keymap-pane title row would not match the toolkit dropdown.
+    menu_bar_anchor: bool,
 }
 
 impl PopupMenuPosition {
     fn at(x: f32, y: f32) -> Self {
         Self {
             request_id: None,
+            menu_bar_anchor: false,
             // Lisp normalizes mouse events to ((X Y) WINDOW), so both event
             // and coordinate forms need native menu constraints. The point
             // is a preferred origin, not permission to extend offscreen.
@@ -1673,6 +1678,7 @@ fn popup_menu_position(ctx: &mut Context, position: Value) -> PopupMenuPosition 
         return PopupMenuPosition {
             placement,
             request_id,
+            menu_bar_anchor: menu_bar,
         };
     }
     tracing::debug!(
@@ -2018,10 +2024,17 @@ fn x_popup_menu_interactive(ctx: &mut Context, position: Value, menu: Value) -> 
     // None). On TTY each submenu collapses to one `" >"` line instead of being
     // inlined; on a window-system frame the toolkit owns nested panes.
     let is_tty = selected_frame_window_system_symbol(ctx).is_none();
+    let popup_position = popup_menu_position(ctx, position);
+    // GNU gives a keymap pane a name from `Fkeymap_prompt` (src/menu.c:
+    // 1301-1320).  A true GUI popup renders it as a title row; a TTY menu
+    // and a menu-bar dropdown do not (GNU's TTY Help menu starts with its
+    // first item and marks the active heading in the menu-bar row; the
+    // toolkit menu-bar dropdown has no in-menu title).
+    let keymap_pane_title = !is_tty && !popup_position.menu_bar_anchor;
     // GNU `x_popup_menu_1` decodes all three MENU shapes -- a keymap, a
     // list of keymaps, or an old-fashioned `(TITLE PANE...)` list -- for
     // both window-system and TTY frames (src/menu.c:1294-1364).
-    let resolved = super::menu::resolve_popup(ctx, menu, is_tty)?;
+    let resolved = super::menu::resolve_popup(ctx, menu, is_tty, keymap_pane_title)?;
     let entries = resolved.entries();
     let events = resolved.events();
     if entries.is_empty() {
@@ -2037,7 +2050,6 @@ fn x_popup_menu_interactive(ctx: &mut Context, position: Value, menu: Value) -> 
         return Ok(Value::NIL);
     }
 
-    let popup_position = popup_menu_position(ctx, position);
     let placement = popup_position.placement;
     let estimated_origin = popup_position.estimated_origin();
     let (x, y) = (estimated_origin.x, estimated_origin.y);
