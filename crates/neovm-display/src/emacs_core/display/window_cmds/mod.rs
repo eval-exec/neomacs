@@ -6571,6 +6571,126 @@ fn scroll_lines_in_state(
         .unwrap_or(2);
     (wh - ctx).max(1) * direction
 }
+/// GNU `window_scroll_for_long_lines` (`src/window.c:6242-6315`), reached
+/// from `window_scroll` when `whole && long_lines_truncated`
+/// (`src/window.c:6157-6182`).  Whole-window scrolls only: nil ARG and `-`
+/// are whole, a numeric ARG is not (`src/window.c:7008-7014`).
+///
+/// The path is deliberately simplified exactly as GNU's: `n` is multiplied by
+/// `max (1, ht - next-screen-context-lines)`, motion goes through `vmotion`
+/// (`MotionEngine::ComputeMotion`), and scroll-margin /
+/// scroll-preserve-screen-position are not honored.  No Lisp runs on this
+/// path, so GNU's `specbind (Qfontification_functions, Qnil)`
+/// (`src/window.c:6178-6179`) has no observable counterpart here; the TUI row
+/// pins that a whole scroll runs no fontification function.
+fn try_scroll_long_lines(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    arg: Option<&Value>,
+    direction: i64,
+) -> Result<bool, Flow> {
+    use neovm_edit::emacs_core::edit_host::EditHost;
+    let minus = arg.is_some_and(|value| value.as_bare_symbol_name() == Some("-"));
+    let whole = match arg {
+        None => true,
+        Some(value) if value.is_nil() => true,
+        Some(_) => minus,
+    };
+    if !whole {
+        return Ok(false);
+    }
+    let frame = ensure_selected_frame_id(eval);
+    let Some(wid) = eval
+        .frame_manager()
+        .get(frame)
+        .map(|frame| frame.selected_window)
+    else {
+        return Ok(false);
+    };
+    let Some(buffer_id) = eval
+        .frame_manager()
+        .get(frame)
+        .and_then(|frame| frame.find_window(wid))
+        .and_then(|window| window.buffer_id())
+    else {
+        return Ok(false);
+    };
+    let truncated = {
+        let Some(buffer) = eval.edit.buffers.get(buffer_id) else {
+            return Ok(false);
+        };
+        if !buffer.long_line_optimizations_p() {
+            return Ok(false);
+        }
+        buffer.truncate_lines_p() || EditHost::long_line_partial_width_truncation(eval, buffer_id)
+    };
+    if !truncated {
+        return Ok(false);
+    }
+
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let body_height = window_body_height_impl(frames, buffers, vec![])
+        .ok()
+        .and_then(|value| value.as_fixnum())
+        .unwrap_or(1)
+        .max(1);
+    let next_screen_context_lines = eval
+        .builtin_var_value_by_name("next-screen-context-lines")
+        .and_then(|value| value.as_fixnum())
+        .unwrap_or(2)
+        .clamp(0, 1_000_000);
+    // GNU `window_scroll_for_long_lines`: n *= max (1, ht - nscls).
+    let sign = if minus { -direction } else { direction };
+    let lines = sign * (body_height - next_screen_context_lines).max(1);
+
+    let (point, begv, zv) = {
+        let Some(buffer) = eval.edit.buffers.get(buffer_id) else {
+            return Ok(false);
+        };
+        let accessible = buffer.accessible_emacs_byte_region();
+        (
+            accessible.clamp(buffer.point_emacs_byte_pos()),
+            accessible.start(),
+            accessible.end(),
+        )
+    };
+    let lose = lines < 0 && point == begv;
+    let (start, _moved) =
+        neovm_edit::emacs_core::indent::vmotion_target(eval, buffer_id, point, None, lines)?;
+    if lose {
+        return Err(scroll_down_batch_error());
+    }
+    if start >= zv {
+        return Err(scroll_up_batch_error());
+    }
+    // GNU points point at ht/2 from the new start, forward for n > 0.
+    let center_lines = if lines > 0 {
+        body_height / 2
+    } else {
+        -(body_height / 2)
+    };
+    let (center, _) =
+        neovm_edit::emacs_core::indent::vmotion_target(eval, buffer_id, start, None, center_lines)?;
+    let (start_lisp, point_lisp) = {
+        let Some(buffer) = eval.edit.buffers.get(buffer_id) else {
+            return Ok(false);
+        };
+        (
+            buffer.emacs_byte_pos_to_lisp_char_pos(start),
+            buffer.emacs_byte_pos_to_lisp_char_pos(center),
+        )
+    };
+    crate::window::WindowScrollUpdate {
+        frame,
+        window: wid,
+        buffer: buffer_id,
+        start: start_lisp,
+        point: point_lisp,
+        hidden_top_pixels: 0,
+    }
+    .commit(eval)?;
+    Ok(true)
+}
+
 /// `(scroll-up &optional ARG)` — scroll text upward (forward in buffer).
 ///
 /// Mirror GNU Emacs Fscroll_up (window.c): move point forward by ARG lines
@@ -6592,6 +6712,10 @@ pub fn builtin_scroll_up(
             // GNU window.c:6163, before Lisp-bearing motion queries.
             eval.gnu_mark_window_redisplay(window);
         }
+    }
+    if try_scroll_long_lines(eval, arg.as_ref(), 1)? {
+        eval.invalidate_redisplay();
+        return Ok(Value::NIL);
     }
     if crate::emacs_core::xdisp::motion::paging::try_scroll(eval, arg, 1)? {
         eval.invalidate_redisplay();
@@ -6630,6 +6754,10 @@ pub fn builtin_scroll_down(
             // GNU window.c:6163, before Lisp-bearing motion queries.
             eval.gnu_mark_window_redisplay(window);
         }
+    }
+    if try_scroll_long_lines(eval, arg.as_ref(), -1)? {
+        eval.invalidate_redisplay();
+        return Ok(Value::NIL);
     }
     if crate::emacs_core::xdisp::motion::paging::try_scroll(eval, arg, -1)? {
         eval.invalidate_redisplay();

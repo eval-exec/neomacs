@@ -41,6 +41,13 @@ pub fn reset_screen_line_scan_steps_for_test() {
     crate::emacs_core::indent::reset_screen_line_scan_steps_for_test();
 }
 
+/// FENCE (slice-2 work rows): read the screen-line scan-step counter. The
+/// counter stays `pub(crate)`; this is the cross-crate read route used by the
+/// scroll/recenter work rows.
+pub fn screen_line_scan_steps() -> usize {
+    crate::emacs_core::indent::screen_line_scan_steps_for_test()
+}
+
 /// P1-CLASSES-ALL-CRATES FENCE (LEAD 10:1xZ retraction): zero the
 /// display-stop recompute counter for the display fixtures. A reset is a
 /// write; the original stays pub(crate) with no visibility widening.

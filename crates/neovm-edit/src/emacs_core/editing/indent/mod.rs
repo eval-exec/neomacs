@@ -1360,6 +1360,41 @@ pub fn scan_screen_line_motion_target<H: EditHost>(
     window: Option<Value>,
     lines: i64,
 ) -> Result<ScreenLineMotionScan, Flow> {
+    let engine = host.motion_engine();
+    scan_screen_line_motion_target_with_engine(host, current_buffer, point, window, lines, engine)
+}
+
+/// GNU `vmotion` (`src/indent.c:1963`, which calls `compute_motion`): the
+/// motion engine GNU's `window_scroll_for_long_lines` (`src/window.c:6242`)
+/// and `Frecenter`'s long-line fallback (`src/window.c:7434`) use directly,
+/// even when a display iterator is live.  Returns the target and the number
+/// of lines actually moved.
+pub fn vmotion_target<H: EditHost>(
+    host: &mut H,
+    current_buffer: BufferId,
+    point: EmacsBytePos,
+    window: Option<Value>,
+    lines: i64,
+) -> Result<(EmacsBytePos, i64), Flow> {
+    let scan = scan_screen_line_motion_target_with_engine(
+        host,
+        current_buffer,
+        point,
+        window,
+        lines,
+        MotionEngine::ComputeMotion,
+    )?;
+    Ok((scan.target, scan.moved))
+}
+
+fn scan_screen_line_motion_target_with_engine<H: EditHost>(
+    host: &mut H,
+    current_buffer: BufferId,
+    point: EmacsBytePos,
+    window: Option<Value>,
+    lines: i64,
+    engine: MotionEngine,
+) -> Result<ScreenLineMotionScan, Flow> {
     let point = {
         let Some(buf) = host.edit_and_vars().0.buffers.get(current_buffer) else {
             return Ok(ScreenLineMotionScan {
@@ -1372,7 +1407,6 @@ pub fn scan_screen_line_motion_target<H: EditHost>(
     };
 
     let screen_width = vertical_motion_screen_extent(host, window).last_visible_col;
-    let engine = host.motion_engine();
     let wrap = host.window_line_wrap(current_buffer, window, engine);
     let mut target =
         current_screen_line_start_with_truncation(host, current_buffer, point, screen_width, wrap)?
@@ -2708,8 +2742,7 @@ fn long_truncated_column_scan<H: EditHost>(
     // GNU `:635-643`: truncate-lines, else the partial-width rule (which the
     // host answers; a host with no window information returns false and GNU
     // then also applies only truncate-lines).
-    let truncate_lines =
-        !buf.slots[crate::buffer::buffer::BUFFER_SLOT_TRUNCATE_LINES.index()].is_nil();
+    let truncate_lines = buf.truncate_lines_p();
     if !(truncate_lines || partial_width_truncation) {
         return Ok(None);
     }

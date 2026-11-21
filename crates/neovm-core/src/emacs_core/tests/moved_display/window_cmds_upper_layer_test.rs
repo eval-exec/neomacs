@@ -2088,3 +2088,96 @@ fn scroll_down_skips_invisible_logical_lines_when_measuring_a_page() {
     );
     assert_eq!(results[0], "OK (35 2 1 70 nil)");
 }
+
+/// A truncated long line followed by 200 short lines, with the buffer's
+/// long-line flag set as redisplay would set it.
+fn long_line_scroll_context(long_len: usize) -> Context {
+    let mut ev = crate::test_utils::new_context();
+    let buffer = ev.edit.buffers.current_buffer_id().expect("current buffer");
+    {
+        let buf = ev.edit.buffers.get_mut(buffer).expect("buffer");
+        buf.insert("a".repeat(long_len).as_str());
+        buf.insert("\n");
+        let mut filler = String::new();
+        for index in 0..200 {
+            filler.push_str(&format!("L{index:03} line\n"));
+        }
+        buf.insert(&filler);
+        buf.set_buffer_local("truncate-lines", Value::T);
+    }
+    assert!(
+        ev.edit
+            .buffers
+            .get_mut(buffer)
+            .expect("buffer")
+            .refresh_long_line_optimizations(50_000),
+        "the long first line must set the flag"
+    );
+    ev.eval_str("(goto-char 1)").expect("point");
+    ev
+}
+
+/// GNU `window_scroll_for_long_lines` (`src/window.c:6242-6315`): a whole
+/// `scroll-up` on a long truncated line moves `max(1, ht - nscls)` lines and
+/// leaves point at `ht/2` lines below the new window start.  The parent path
+/// (screen-line plan) is not this algorithm.
+#[test]
+fn scroll_up_long_truncated_uses_gnu_line_motion() {
+    crate::test_utils::init_test_tracing();
+    let results = eval_with_frame(
+        || long_line_scroll_context(200_000),
+        "(let* ((ht (window-body-height))
+                (ns (if (boundp 'next-screen-context-lines)
+                        next-screen-context-lines
+                      2))
+                (n (max 1 (- ht ns))))
+           (set-window-start (selected-window) 1)
+           (set-window-point (selected-window) 1)
+           (goto-char 1)
+           (scroll-up)
+           (let ((start (window-start))
+                 (pt (window-point)))
+             (save-excursion
+               (goto-char 1)
+               (forward-line n)
+               (let ((expected-start (point)))
+                 (forward-line (/ ht 2))
+                 (list (= start expected-start)
+                       (= pt (point))
+                       (= pt (point-max)))))))",
+    );
+    assert_eq!(
+        results[0], "OK (t t nil)",
+        "whole scroll-up must take GNU's long-lines motion: {results:?}"
+    );
+}
+
+/// The long-lines scroll must not scan the long line: the work is bounded by
+/// the number of window lines moved, so a 200k and a 400k first line cost the
+/// same.  GNU's own vmotion runs one compute_motion pass per line moved.
+#[test]
+fn scroll_up_long_line_work_does_not_grow_with_the_line() {
+    crate::test_utils::init_test_tracing();
+    let mut work = Vec::new();
+    for long_len in [200_000usize, 400_000] {
+        let mut ev = long_line_scroll_context(long_len);
+        neovm_edit::test_support::authority::reset_screen_line_scan_steps_for_test();
+        ev.eval_str(
+            "(progn (set-window-start (selected-window) 1)
+                    (set-window-point (selected-window) 1)
+                    (goto-char 1)
+                    (scroll-up)
+                    nil)",
+        )
+        .expect("scroll-up");
+        work.push(neovm_edit::test_support::authority::screen_line_scan_steps());
+    }
+    assert_eq!(
+        work[0], work[1],
+        "scroll work must not grow with the long line: {work:?}"
+    );
+    assert!(
+        work[0] > 0 && work[0] <= 512,
+        "the scroll must bound its work by window lines: {work:?}"
+    );
+}

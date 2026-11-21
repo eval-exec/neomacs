@@ -3451,6 +3451,13 @@ impl Buffer {
         self.long_line_optimizations_p
     }
 
+    /// GNU `BVAR (buffer, truncate_lines)`: lines too wide for the window are
+    /// truncated rather than continued. Read by the long-line redisplay
+    /// shortcuts (`src/indent.c:635`, `src/window.c:6157`).
+    pub fn truncate_lines_p(&self) -> bool {
+        !self.slots[BUFFER_SLOT_TRUNCATE_LINES.index()].is_nil()
+    }
+
     /// Rescan the accessible region for a line longer than `threshold`
     /// characters, following GNU `redisplay_window` (`src/xdisp.c:20646-20663`):
     /// stop at the first line over the threshold, and rescan a buffer that has
