@@ -4815,6 +4815,15 @@ impl Buffer {
         self.text.mode_line_clipped(self.id)
     }
 
+    /// Acknowledge the restriction-change witness, as an accepted redisplay
+    /// does. A redisplay-internal restriction that is restored before the pass
+    /// ends was never a user restriction change, so it must not leave the
+    /// frame marked for a mode-line/whole-frame redisplay.
+    #[doc(hidden)]
+    pub fn acknowledge_mode_line_clip(&self) {
+        self.text.acknowledge_mode_line_clip(self.id);
+    }
+
     pub(in crate::buffer) fn set_accessible_region_anchors_unchecked(
         &mut self,
         start: TextPositionAnchor,

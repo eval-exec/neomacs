@@ -456,7 +456,10 @@ fn actual_source_killing_callback_preserves_legacy_outcome_and_never_no_demand()
 
 /// The accessible `[point-min, point-max]` a `fontification-functions` callback
 /// sees for one long-line buffer, plus the callback count.
-fn observed_long_line_fontification_range(line_len: usize, from_char0: i64) -> (i64, i64, i64) {
+fn observed_long_line_fontification_range(
+    line_len: usize,
+    from_char0: i64,
+) -> (i64, i64, i64, i64, i64, bool) {
     let mut eval = crate::test_utils::new_context();
     eval.eval_str("(setq long-line-threshold 50000)")
         .expect("set the long-line threshold");
@@ -489,6 +492,11 @@ fn observed_long_line_fontification_range(line_len: usize, from_char0: i64) -> (
 "#,
     )
     .expect("install the fontification probe");
+    let point_before = eval
+        .eval_str("(point)")
+        .expect("point before fontification")
+        .as_int()
+        .expect("fixnum");
     ensure_fontified_for_redisplay(&mut eval, buffer, from_char0, from_char0 + 1).expect("fontify");
     let calls = eval
         .eval_str("p640-calls")
@@ -505,7 +513,17 @@ fn observed_long_line_fontification_range(line_len: usize, from_char0: i64) -> (
         .expect("probe point-max")
         .as_int()
         .expect("fixnum");
-    (calls, min, max)
+    let point_after = eval
+        .eval_str("(point)")
+        .expect("point after fontification")
+        .as_int()
+        .expect("fixnum");
+    let clip_after = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .mode_line_clip_changed();
+    (calls, min, max, point_before, point_after, clip_after)
 }
 
 /// GNU `handle_fontified_prop` (`src/xdisp.c:4702-4719`): in a buffer with a
@@ -518,9 +536,9 @@ fn fontification_callback_range_is_bounded_and_flat_on_a_long_line() {
     crate::test_utils::init_test_tracing();
     // Same callback position, two line lengths above the threshold. GNU's
     // narrowed window is exactly the same for both.
-    let (calls_short, min_short, max_short) =
+    let (calls_short, min_short, max_short, point_short_before, point_short, clip_short) =
         observed_long_line_fontification_range(700_000, 400_000);
-    let (calls_long, min_long, max_long) =
+    let (calls_long, min_long, max_long, point_long_before, point_long, clip_long) =
         observed_long_line_fontification_range(1_400_000, 400_000);
     assert!(calls_short >= 1, "the probe was never entered");
     assert!(calls_long >= 1, "the probe was never entered");
@@ -542,12 +560,32 @@ fn fontification_callback_range_is_bounded_and_flat_on_a_long_line() {
     // 0-based conversion the range started at 2 and a callback at position 1
     // ran outside its own narrowing, which made every layout retry fontify
     // the first position again.
-    let (calls_start, min_start, max_start) = observed_long_line_fontification_range(700_000, 0);
+    let (calls_start, min_start, max_start, point_start_before, point_start, clip_start) =
+        observed_long_line_fontification_range(700_000, 0);
     assert!(calls_start >= 1, "the probe was never entered");
     assert_eq!(
         (min_start, max_start),
         (1, 250_001),
         "the callback at point-min must be inside GNU's narrowed region"
+    );
+    assert_eq!(
+        point_start, point_start_before,
+        "the point-min callback moved point"
+    );
+    assert!(!clip_start, "the point-min callback left clip_changed");
+    // The callback narrowed far from point must not move window point, and
+    // the transient restriction must not leave the frame marked clipped.
+    assert_eq!(
+        point_short, point_short_before,
+        "fontification narrowing moved point"
+    );
+    assert_eq!(
+        point_long, point_long_before,
+        "fontification narrowing moved point"
+    );
+    assert!(
+        !clip_short && !clip_long,
+        "transient narrowing left clip_changed"
     );
     assert!(
         max_short - min_short <= 500_000 + 128,

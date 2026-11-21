@@ -9591,12 +9591,23 @@ fn call_fontification_functions_at<O: FontificationDemandObserver>(
     // POS when the buffer has a long line (`src/xdisp.c:4702-4719`).
     let narrowed =
         long_line_fontification_narrowing(ctx, pos).and_then(|(buffer_id, range, label)| {
+            // GNU `labeled_narrow_to_region` records `restore_point_unwind`
+            // (src/editfns.c:2890-2895) and its narrowing is transient. Keep
+            // both facts: a callback position can be far from window point,
+            // and the restriction round-trip must not mark the frame for a
+            // user-visible clip redisplay.
+            let (clip_before, point_before) = ctx.edit.buffers.get(buffer_id).map(|buffer| {
+                (
+                    buffer.mode_line_clip_changed(),
+                    buffer.point_emacs_byte_pos(),
+                )
+            })?;
             let saved = ctx.edit.buffers.save_current_restriction_state()?;
             ctx.edit
                 .buffers
                 .internal_labeled_narrow_to_emacs_byte_range(buffer_id, range, label)
                 .is_some()
-                .then_some(saved)
+                .then_some((buffer_id, saved, clip_before, point_before))
         });
 
     // GNU `handle_fontified_prop` calls each function with `dsafe_call1`,
@@ -9631,8 +9642,15 @@ fn call_fontification_functions_at<O: FontificationDemandObserver>(
         }
     }
 
-    if let Some(saved) = narrowed {
+    if let Some((buffer_id, saved, clip_before, point_before)) = narrowed {
         ctx.edit.buffers.restore_saved_restriction_state(saved);
+        let _ = ctx
+            .edit
+            .buffers
+            .goto_buffer_emacs_byte_pos(buffer_id, point_before);
+        if !clip_before && let Some(buffer) = ctx.edit.buffers.get(buffer_id) {
+            buffer.acknowledge_mode_line_clip();
+        }
     }
 
     if let Err(flow) = ctx.unbind_to_with_result(binding_count, Ok(Value::NIL)) {
