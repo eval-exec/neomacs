@@ -20,6 +20,8 @@ mod frame_bar_parameters;
 mod frame_focus;
 mod idle_timer_output;
 mod kill_emacs_shutdown;
+#[path = "minibuffer_quit_cleanup.rs"]
+mod minibuffer_quit_cleanup;
 mod pixel_measurement;
 mod process_plist_isolation;
 mod process_send_encoding;
