@@ -5973,9 +5973,17 @@ impl LayoutEngine {
         let accessible_end = params.accessible_end_charpos().get();
         let window_start = params.window_start_charpos().get().max(accessible_start);
         let max_rows = i64::try_from(params.source_interpretation_rows()).unwrap_or(i64::MAX);
-        let fontify_end = window_start
+        // Conservative span for the display-condition (`when`) scan.  This is
+        // not a fontification end: GNU's display iterator calls
+        // fontification-functions at the stops it actually displays, and a
+        // char budget here is observable through the hook's `pos` argument.
+        let condition_scan_end = window_start
             .saturating_add(max_rows.saturating_mul(200))
             .min(accessible_end);
+        // GNU's first fontification stop is the window start.  Every later
+        // visible stop is found by the coverage pass below, whose spans come
+        // from the completed row walk's real visible positions.
+        let fontification_prepass_end = window_start;
         let Some(freshness_before_fontification) =
             evaluator.window_layout_attempt_freshness(frame_id, window_id, buf_id)
         else {
@@ -5986,7 +5994,7 @@ impl LayoutEngine {
             evaluator,
             buf_id,
             window_start,
-            fontify_end,
+            window_start.saturating_add(1).min(accessible_end),
             params.point_charpos().get() as i64 + 1,
         );
         // `(when FORM . SPEC)` display specs need Lisp, which the walk cannot
@@ -6051,13 +6059,13 @@ impl LayoutEngine {
             && evaluator.gnu_redisplay_hooks_policy_enabled()
         {
             let condition_end =
-                mini_source_stop::condition_end_boundary(evaluator, params, fontify_end);
+                mini_source_stop::condition_end_boundary(evaluator, params, condition_scan_end);
             crate::display_when::evaluate_window_display_when_forms_at_end(
                 evaluator,
                 buf_id,
                 Some(window_id.0),
                 neovm_core::buffer::CharPos0::new(window_start.max(0) as usize),
-                neovm_core::buffer::CharPos0::new(fontify_end.max(0) as usize),
+                neovm_core::buffer::CharPos0::new(condition_scan_end.max(0) as usize),
                 display_target,
                 condition_end,
             )
@@ -6067,7 +6075,7 @@ impl LayoutEngine {
                 buf_id,
                 Some(window_id.0),
                 neovm_core::buffer::CharPos0::new(window_start.max(0) as usize),
-                neovm_core::buffer::CharPos0::new(fontify_end.max(0) as usize),
+                neovm_core::buffer::CharPos0::new(condition_scan_end.max(0) as usize),
                 display_target,
             )
         };
@@ -6340,13 +6348,13 @@ impl LayoutEngine {
             return LeafLayoutAttempt::LogicalInputsChanged;
         }
 
-        // The contiguous pre-pass above is an optimization, not a semantic
-        // visibility boundary.  A provisional row walk can jump over an
-        // arbitrarily large invisible/folded span and reach visible positions
-        // beyond that estimate.  GNU handles `fontified` at exactly those
-        // iterator stops.  Our immutable walk records the equivalent visible
-        // positions; fontify any uncovered sparse spans and retry from a fresh
-        // snapshot before accepting their provisional glyphs.
+        // Fontification above is deliberately only the window start -- GNU's
+        // display iterator's first stop.  The walk below is the only source of
+        // the remaining visible stops, so the coverage pass records exactly
+        // the positions the iterator actually displays (GNU
+        // `handle_fontified_prop`, src/xdisp.c:4702-4786) rather than a char
+        // budget, and fontifies any uncovered sparse spans before retrying
+        // from a fresh snapshot.
         if matches!(
             &render_outcome,
             BufferSourceRenderAttemptOutcome::Finished { .. }
@@ -6358,8 +6366,9 @@ impl LayoutEngine {
                 .map(WindowPresentationSnapshot::display_snapshot)
                 .find(|snapshot| snapshot.window_id == window_id)
                 .map(|snapshot| {
-                    let prepass_end =
-                        neovm_core::buffer::CharPos0::new(fontify_end.max(0) as usize);
+                    let prepass_end = neovm_core::buffer::CharPos0::new(
+                        fontification_prepass_end.max(0) as usize,
+                    );
                     if admitted_edit_sync_fontify_attempt {
                         VisibleFontificationCoverage::inspect_for_edit_sync(
                             buffer,

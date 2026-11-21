@@ -113,9 +113,13 @@ fn scene(setup: &str) -> (Context, BufferId) {
     (eval, buffer)
 }
 
+/// GNU visits only the iterator stops whose `fontified` is nil: with
+/// "abcdefghij", fontified t everywhere except 2-4 and 7-9, and a hook that
+/// never marks, one `(redisplay t)` enters the hook at 2 and 7 only
+/// (attested oracle, tmux 160x40; 8 calls across redisplay passes, positions
+/// (2 7)).  The list is consed, so the trace is (7 2).
 #[test]
-#[test]
-fn nil_islands_preserve_legacy_callback_positions_even_when_callbacks_leave_nil() {
+fn nil_islands_enter_only_gnu_stops_even_when_callbacks_leave_nil() {
     let setup = format!(
         "{NO_MARK_HOOK} (put-text-property 1 (point-max) 'fontified t) \
         (put-text-property 2 4 'fontified nil) (put-text-property 7 9 'fontified nil)"
@@ -138,7 +142,7 @@ fn nil_islands_preserve_legacy_callback_positions_even_when_callbacks_leave_nil(
             &eval.eval_str("ttykey-demand-calls").unwrap(),
         ));
     }
-    assert_eq!(traces, vec!["(8 7 3 2)", "(8 7 3 2)"]);
+    assert_eq!(traces, vec!["(7 2)", "(7 2)"]);
 }
 
 #[test]

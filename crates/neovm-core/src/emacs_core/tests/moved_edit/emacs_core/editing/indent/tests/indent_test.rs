@@ -1472,41 +1472,47 @@ fn move_to_column_long_truncated_fast_path_is_flat() {
 }
 
 /// The shortcut's gates: it needs the flag, truncated lines, and a clamped
-/// column above `large-hscroll-threshold`.
+/// column above `large-hscroll-threshold`.  `move-to-column` RETURNS the goal
+/// column on both paths, so the distinguishing observation is POINT:
+/// the exact walk counts the TAB (149994 for goal 150000; 4994 for goal 5000)
+/// and the fast path treats every character as one column (150001).
 #[test]
 fn move_to_column_long_truncated_fast_path_gates() {
     crate::test_utils::init_test_tracing();
 
     // Not truncated: GNU counts the TAB exactly.
     let (mut ev, _buffer) = long_line_scan_buffer(200_000, false, true);
-    let wrapped = ev
-        .eval_str("(move-to-column 150000)")
+    let wrapped_point = ev
+        .eval_str("(progn (move-to-column 150000) (point))")
         .expect("wrapped move")
         .as_int()
         .expect("fixnum");
-    assert_ne!(wrapped, 150_000, "untruncated lines take the exact walk");
+    assert_eq!(
+        wrapped_point, 149_994,
+        "untruncated lines take the exact walk"
+    );
 
     // Truncated but the buffer flag is clear.
     let (mut ev, _buffer) = long_line_scan_buffer(200_000, true, false);
-    let flag_clear = ev
-        .eval_str("(move-to-column 150000)")
+    let flag_clear_point = ev
+        .eval_str("(progn (move-to-column 150000) (point))")
         .expect("move without the flag")
         .as_int()
         .expect("fixnum");
-    assert_ne!(
-        flag_clear, 150_000,
+    assert_eq!(
+        flag_clear_point, 149_994,
         "no shortcut without the long-line flag"
     );
 
     // Truncated with the flag, goal at or below large-hscroll-threshold.
     let (mut ev, _buffer) = long_line_scan_buffer(200_000, true, true);
-    let below_threshold = ev
-        .eval_str("(move-to-column 5000)")
+    let below_threshold_point = ev
+        .eval_str("(progn (move-to-column 5000) (point))")
         .expect("move below the hscroll threshold")
         .as_int()
         .expect("fixnum");
-    assert_ne!(
-        below_threshold, 5_000,
+    assert_eq!(
+        below_threshold_point, 4_994,
         "below large-hscroll-threshold GNU walks exactly"
     );
 }

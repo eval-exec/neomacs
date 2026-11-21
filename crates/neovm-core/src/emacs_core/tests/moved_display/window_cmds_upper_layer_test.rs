@@ -2099,7 +2099,11 @@ fn long_line_scroll_context(long_len: usize) -> Context {
         buf.insert("a".repeat(long_len).as_str());
         buf.insert("\n");
         let mut filler = String::new();
-        for index in 0..200 {
+        // The unit frame can be tall: a whole GNU scroll moves
+        // max(1, ht - next-screen-context-lines) lines, so keep more than
+        // 3 * any plausible ht.  Starting from the window start (GNU's
+        // window_scroll_for_long_lines) must still land before ZV.
+        for index in 0..2000 {
             filler.push_str(&format!("L{index:03} line\n"));
         }
         buf.insert(&filler);
@@ -2144,7 +2148,8 @@ fn scroll_up_long_truncated_uses_gnu_line_motion() {
                  (forward-line (/ ht 2))
                  (list (= start expected-start)
                        (= pt (point))
-                       (= pt (point-max)))))))",
+                       (= pt (point-max)))))))
+           (window-body-height)",
     );
     assert_eq!(
         results[0], "OK (t t nil)",

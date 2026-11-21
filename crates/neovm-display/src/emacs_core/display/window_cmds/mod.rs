@@ -6642,20 +6642,56 @@ fn try_scroll_long_lines(
     let sign = if minus { -direction } else { direction };
     let lines = sign * (body_height - next_screen_context_lines).max(1);
 
-    let (point, begv, zv) = {
+    let (point, point_lisp, begv, zv) = {
         let Some(buffer) = eval.edit.buffers.get(buffer_id) else {
             return Ok(false);
         };
         let accessible = buffer.accessible_emacs_byte_region();
         (
             accessible.clamp(buffer.point_emacs_byte_pos()),
+            buffer.point_lisp_char_pos(),
             accessible.start(),
             accessible.end(),
         )
     };
-    let lose = lines < 0 && point == begv;
+    // GNU `window_scroll_for_long_lines` starts the motion from the WINDOW
+    // START when point is fully visible; otherwise it first brings point
+    // inside with `vmotion (PT, -(ht/2))` and starts there
+    // (src/window.c:6248-6266).  It never starts from point unconditionally.
+    let point_visible = super::xdisp::builtin_pos_visible_in_window_p_ctx(
+        eval,
+        vec![
+            Value::fixnum(point_lisp.as_i64()),
+            Value::make_window(wid.0),
+        ],
+    )
+    .map(|value| value.is_truthy())
+    .unwrap_or(false);
+    let base = if point_visible {
+        eval.frame_manager()
+            .get(frame)
+            .and_then(|frame| frame.find_window(wid))
+            .and_then(|window| window.window_start())
+            .and_then(|start| {
+                eval.edit
+                    .buffers
+                    .get(buffer_id)
+                    .map(|buffer| buffer.lisp_pos_to_emacs_byte_pos(start))
+            })
+            .unwrap_or(point)
+    } else {
+        neovm_edit::emacs_core::indent::vmotion_target(
+            eval,
+            buffer_id,
+            point,
+            None,
+            -(body_height / 2),
+        )?
+        .0
+    };
+    let lose = lines < 0 && base == begv;
     let (start, _moved) =
-        neovm_edit::emacs_core::indent::vmotion_target(eval, buffer_id, point, None, lines)?;
+        neovm_edit::emacs_core::indent::vmotion_target(eval, buffer_id, base, None, lines)?;
     if lose {
         return Err(scroll_down_batch_error());
     }

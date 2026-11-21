@@ -707,6 +707,50 @@ fn scroll_up_long_truncated_line_matches_gnu() {
     );
 }
 
+/// GNU `window_scroll_for_long_lines` (`src/window.c:6248-6266`) starts the
+/// whole scroll from the WINDOW START when point is fully visible (it sets
+/// point to `w->start` before `vmotion`), and only uses
+/// `vmotion (PT, -(ht/2))` when point is outside.  With point at line 5 and
+/// window start 1 the new start and point are therefore counted from the
+/// window start.  Attested GNU (tmux 160x40): `(200032 200342 200522 37)`.
+#[test]
+fn scroll_up_starts_from_window_start_matches_gnu() {
+    let (mut gnu, mut neo) = boot_pair("");
+    resize_both(&mut gnu, &mut neo, 40, 160);
+    read_both(&mut gnu, &mut neo, Duration::from_millis(700));
+    eval_expression(
+        &mut gnu,
+        &mut neo,
+        "(progn \
+           (setq long-line-threshold 50000 large-hscroll-threshold 10000) \
+           (switch-to-buffer (get-buffer-create \"*p640-s5*\")) \
+           (erase-buffer) \
+           (insert (make-string 200000 ?a)) \
+           (insert \"\\n\") \
+           (let ((i 0)) (while (< i 200) (insert (format \"L%03d line\\n\" i)) (setq i (1+ i)))) \
+           (setq truncate-lines t) \
+           (goto-char 1) (forward-line 4) \
+           (set-window-start (selected-window) 1) \
+           (redisplay t) \
+           nil)",
+    );
+    read_both(&mut gnu, &mut neo, Duration::from_secs(1));
+    let (gnu_value, neo_value) = paired_message(
+        &mut gnu,
+        &mut neo,
+        "P640S5",
+        "(let ((before (point))) \
+           (scroll-up) \
+           (list before (window-start) (window-point) (window-body-height)))",
+    );
+    eprintln!("issue#640 scroll from window start: GNU={gnu_value} NEO={neo_value}");
+    assert_eq!(
+        gnu_value, "(200032 200342 200522 37)",
+        "GNU counts the whole scroll from the window start"
+    );
+    assert_eq!(neo_value, gnu_value, "whole scroll-up must match GNU");
+}
+
 /// Numeric ARG is not a whole scroll (`src/window.c:7008-7014`): GNU stays on
 /// its ordinary path and must not take the long-lines algorithm.
 #[test]
