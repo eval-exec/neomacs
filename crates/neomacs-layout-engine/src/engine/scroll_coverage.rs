@@ -325,6 +325,7 @@ impl ScrollCoverage {
             admission.window.get() as u64,
             regions.outer,
             admission.retained.matrix.ncols,
+            admission.retained.key.bidi_paragraph_direction,
             #[cfg(any(test, feature = "redisplay-test-policy"))]
             admission
                 .retained

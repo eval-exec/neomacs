@@ -311,6 +311,9 @@ pub struct WindowParams {
     /// Whether to wrap at word boundaries
     pub word_wrap: bool,
     pub word_wrap_policy: neovm_core::window::WordWrapPolicy,
+    /// The displayed buffer's paragraph direction (GNU
+    /// `it->paragraph_embedding`, `src/xdisp.c:3600-3611`).
+    pub bidi_paragraph_direction: crate::bidi::ParagraphDirection,
     /// Tab width in columns
     pub tab_width: i32,
     /// Custom tab stop positions (column numbers), from tab-stop-list buffer-local.

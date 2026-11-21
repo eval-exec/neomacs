@@ -1,5 +1,6 @@
 //! Mutable output window state owned while layout builds a frame snapshot.
 
+use crate::bidi::ParagraphDirection;
 use crate::display_cursor::{CursorVisualColumnResolutionContext, CursorVisualColumnRows};
 use crate::display_row::finalizer::GlyphRowFinalizationContext;
 use crate::output::row_request::{
@@ -54,6 +55,10 @@ pub(crate) struct OutputWindowBuildState {
     current_text_clip_bounds: Rect,
     current_selected: bool,
     current_row: usize,
+    /// The paragraph direction of the window being built (GNU
+    /// `it->paragraph_embedding` read from the displayed buffer's
+    /// `bidi-display-reordering` / `bidi-paragraph-direction`).
+    current_bidi_paragraph_direction: ParagraphDirection,
 }
 
 impl OutputWindowBuildState {
@@ -67,6 +72,7 @@ impl OutputWindowBuildState {
             current_text_clip_bounds: Rect::new(0.0, 0.0, 0.0, 0.0),
             current_selected: false,
             current_row: 0,
+            current_bidi_paragraph_direction: ParagraphDirection::Auto,
         }
     }
 
@@ -138,6 +144,7 @@ impl OutputWindowBuildState {
         self.current_window_id = 0;
         self.current_selected = false;
         self.current_row = 0;
+        self.current_bidi_paragraph_direction = ParagraphDirection::Auto;
     }
 
     pub(crate) fn install_window_lifecycle(&mut self, request: OutputWindowLifecycleRequest) {
@@ -153,6 +160,7 @@ impl OutputWindowBuildState {
                 self.current_text_clip_bounds = begin.text_clip_bounds;
                 self.current_selected = begin.selected;
                 self.current_row = 0;
+                self.current_bidi_paragraph_direction = begin.bidi_paragraph_direction;
             }
             OutputWindowLifecycleRequest::End => {
                 if let Some(grid) = self.current_row_grid.take() {
@@ -408,12 +416,32 @@ impl OutputWindowBuildState {
     }
 
     fn finalize_output_row(&mut self, row: usize, phys_cursor: Option<&mut PhysCursor>) {
+        // Buffer text (and the minibuffer's own text) resolves under the
+        // displayed buffer's paragraph direction.  Chrome rows are Lisp
+        // display strings: GNU hands those to `display_string`, whose
+        // `bidi_paragraph_init` detects the direction from the string itself
+        // (NEUTRAL_DIR), so the window's buffer direction must not pin them.
+        let paragraph_direction = match self
+            .current_row_grid
+            .as_ref()
+            .and_then(|grid| grid.row(row))
+            .map(|row| row.role)
+        {
+            Some(
+                GlyphRowRole::ModeLine
+                | GlyphRowRole::HeaderLine
+                | GlyphRowRole::TabLine
+                | GlyphRowRole::TabBar,
+            ) => ParagraphDirection::Auto,
+            _ => self.current_bidi_paragraph_direction,
+        };
         if let Some(grid) = self.current_row_grid.as_mut() {
             grid.finalize_row(
                 self.current_window_id,
                 row,
                 self.current_pixel_bounds,
                 phys_cursor,
+                paragraph_direction,
             );
         }
     }
@@ -731,6 +759,7 @@ impl OutputWindowRowGrid {
         row: usize,
         pixel_bounds: Rect,
         phys_cursor: Option<&mut PhysCursor>,
+        paragraph_direction: ParagraphDirection,
     ) {
         // Reorder exactly once per row. A redundant trailing-row `Finalize`
         // (see `finalized_rows`) is a true no-op, not a second reorder.
@@ -741,11 +770,9 @@ impl OutputWindowRowGrid {
         let Some(matrix_row) = self.row_mut(row) else {
             return;
         };
-        GlyphRowFinalizationContext::new(window_id, row, pixel_bounds).finalize_row(
-            matrix_row,
-            matrix_ncols,
-            phys_cursor,
-        );
+        GlyphRowFinalizationContext::new(window_id, row, pixel_bounds)
+            .with_bidi_paragraph_direction(paragraph_direction)
+            .finalize_row(matrix_row, matrix_ncols, phys_cursor);
     }
 }
 

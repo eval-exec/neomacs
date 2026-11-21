@@ -28,6 +28,7 @@ pub(crate) fn position_buffer_rows(
     window_id: u64,
     window_bounds: neomacs_display_protocol::types::Rect,
     matrix_ncols: usize,
+    paragraph_direction: crate::bidi::ParagraphDirection,
     #[cfg(any(test, feature = "redisplay-test-policy"))]
     mode: neovm_core::window::PosnObjectExtentMode,
 ) -> Result<PreparedBody, RowProgramError> {
@@ -127,6 +128,7 @@ pub(crate) fn position_buffer_rows(
             text_row_base + index,
             window_bounds,
         )
+        .with_bidi_paragraph_direction(paragraph_direction)
         .finalize_row(&mut computed.row, matrix_ncols, None);
         // Decoration depends on the finalized paragraph direction. Resolve
         // it after bidi, just as the visible window's fringe pass does.

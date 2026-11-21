@@ -11515,6 +11515,7 @@ fn test_display_space_window_params() -> WindowParams {
         horizontal_scroll_bar: false,
         scroll_bar_pixel_width: 0.0,
         scroll_bar_pixel_height: 0.0,
+        bidi_paragraph_direction: Default::default(),
     }
 }
 

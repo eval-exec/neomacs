@@ -1,4 +1,4 @@
-use crate::bidi::{self, BidiDir};
+use crate::bidi::{self, BidiDir, ParagraphDirection};
 use neomacs_display_protocol::glyph_matrix::{
     Glyph, GlyphArea, GlyphProvenance, GlyphRow, GlyphType,
 };
@@ -669,6 +669,16 @@ fn has_bidi_finalization(row: &GlyphRow) -> bool {
 }
 
 pub(crate) fn reorder_row_bidi(row: &mut GlyphRow, phys_cursor_col: Option<u16>) -> Option<u16> {
+    reorder_row_bidi_with_direction(row, phys_cursor_col, ParagraphDirection::Auto)
+}
+
+/// Rewrite the row into visual order under the buffer's requested paragraph
+/// direction (GNU `it->paragraph_embedding`, `src/xdisp.c:3600-3611`).
+pub(crate) fn reorder_row_bidi_with_direction(
+    row: &mut GlyphRow,
+    phys_cursor_col: Option<u16>,
+    paragraph_direction: ParagraphDirection,
+) -> Option<u16> {
     debug_assert!(
         !has_bidi_finalization(row),
         "reorder_row_bidi ran twice on the same row: rows must reorder exactly \
@@ -686,6 +696,13 @@ pub(crate) fn reorder_row_bidi(row: &mut GlyphRow, phys_cursor_col: Option<u16>)
         return None;
     }
 
+    // GNU with `bidi-display-reordering` nil never runs the bidi iterator:
+    // text keeps its logical order and every glyph is level 0, whatever the
+    // buffer text contains (`src/xdisp.c:20330-20345`).
+    let Some(base_dir) = paragraph_direction.base_dir() else {
+        return LtrBidiUnits { units: &units }.finish(row, phys_cursor_col);
+    };
+
     // Fast path: when every representative char is below U+0590 (the first RTL
     // block) the row has no R/AL/AN and no explicit bidi controls, so UAX#9
     // resolves all chars to even (LTR) levels with paragraph base 0 — visual
@@ -700,9 +717,8 @@ pub(crate) fn reorder_row_bidi(row: &mut GlyphRow, phys_cursor_col: Option<u16>)
         return identity.finish(row, phys_cursor_col);
     }
     let chars: String = units.iter().map(|unit| unit.ch).collect();
-    let levels = bidi::resolve_levels(&chars, BidiDir::Auto);
-    // Preserve the existing non-LTR resolver and paragraph alignment path.
-    let reversed_p = bidi::paragraph_base_level(&chars, BidiDir::Auto) & 1 == 1;
+    let levels = bidi::resolve_levels(&chars, base_dir);
+    let reversed_p = bidi::paragraph_base_level(&chars, base_dir) & 1 == 1;
     if levels.len() != units.len() {
         return None;
     }

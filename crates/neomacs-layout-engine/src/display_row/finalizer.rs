@@ -6,6 +6,7 @@
 //! completed row is installed. Keeping both phases here gives display sources
 //! one narrow destination without mixing source acquisition into row policy.
 
+use crate::bidi::ParagraphDirection;
 use crate::display_cursor::cursor_window_matches_current;
 use crate::display_item::{DisplayLineHeightPolicy, DisplayRowBreak};
 use crate::display_row::builder::DisplayRowVerticalMetrics;
@@ -451,6 +452,9 @@ pub(crate) struct GlyphRowFinalizationContext {
     pub(crate) window_id: u64,
     pub(crate) row: usize,
     pub(crate) window_pixel_bounds: Rect,
+    /// The displayed buffer's paragraph direction (GNU
+    /// `it->paragraph_embedding`, `src/xdisp.c:3600-3611`).
+    pub(crate) paragraph_direction: ParagraphDirection,
 }
 
 impl GlyphRowFinalizationContext {
@@ -459,7 +463,16 @@ impl GlyphRowFinalizationContext {
             window_id,
             row,
             window_pixel_bounds,
+            paragraph_direction: ParagraphDirection::Auto,
         }
+    }
+
+    pub(crate) fn with_bidi_paragraph_direction(
+        mut self,
+        paragraph_direction: ParagraphDirection,
+    ) -> Self {
+        self.paragraph_direction = paragraph_direction;
+        self
     }
 
     pub(crate) fn finalize_row(
@@ -503,7 +516,11 @@ impl<'cursor> GlyphRowFinalizer<'cursor> {
             .filter(|cursor| self.context.cursor_matches(cursor))
             .map(|cursor| cursor.col);
 
-        let remapped_cursor_col = crate::glyph_row_writer::reorder_row_bidi(row, phys_cursor_col);
+        let remapped_cursor_col = crate::glyph_row_writer::reorder_row_bidi_with_direction(
+            row,
+            phys_cursor_col,
+            self.context.paragraph_direction,
+        );
         let char_width = if self.matrix_ncols > 0 {
             self.context.window_pixel_bounds.width / self.matrix_ncols as f32
         } else {

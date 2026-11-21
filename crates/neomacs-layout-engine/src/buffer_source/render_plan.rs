@@ -599,7 +599,10 @@ impl BufferSourceOutputSetup {
             max_rows,
             walk_setup,
         );
-        setup.begin_request = setup.begin_request.with_source_extent(params.source_extent);
+        setup.begin_request = setup
+            .begin_request
+            .with_source_extent(params.source_extent)
+            .with_bidi_paragraph_direction(params.bidi_paragraph_direction);
         setup.row_visibility_limit.allow_partial = params.window_system
             && !params.kind.is_minibuffer()
             && params.measurement_rows.is_none();

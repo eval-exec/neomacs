@@ -108,6 +108,7 @@ fn window_params_construction() {
         horizontal_scroll_bar: false,
         scroll_bar_pixel_width: 0.0,
         scroll_bar_pixel_height: 0.0,
+        bidi_paragraph_direction: Default::default(),
     };
     assert_eq!(params.window_id, 12345);
     assert_eq!(params.buffer_id, 67890);
@@ -216,6 +217,7 @@ fn window_params_minibuffer() {
         horizontal_scroll_bar: false,
         scroll_bar_pixel_width: 0.0,
         scroll_bar_pixel_height: 0.0,
+        bidi_paragraph_direction: Default::default(),
     };
     assert!(params.is_minibuffer());
     assert_eq!(params.mode_line_height, 0.0);
@@ -306,6 +308,7 @@ fn window_params_clone() {
         horizontal_scroll_bar: false,
         scroll_bar_pixel_width: 0.0,
         scroll_bar_pixel_height: 0.0,
+        bidi_paragraph_direction: Default::default(),
     };
     let cloned = params.clone();
     assert_eq!(cloned.window_id, params.window_id);

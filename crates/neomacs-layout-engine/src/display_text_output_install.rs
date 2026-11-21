@@ -37,6 +37,7 @@ pub(crate) struct DisplayOutputTextWindowBeginInstallRequest {
     text_clip_bounds: Rect,
     selected: bool,
     row_capacity: crate::output::window_request::OutputWindowRowCapacity,
+    bidi_paragraph_direction: crate::bidi::ParagraphDirection,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -82,7 +83,16 @@ impl DisplayOutputTextWindowBeginInstallRequest {
             text_clip_bounds,
             selected,
             row_capacity: crate::output::window_request::OutputWindowRowCapacity::Fixed,
+            bidi_paragraph_direction: crate::bidi::ParagraphDirection::Auto,
         }
+    }
+
+    pub(crate) fn with_bidi_paragraph_direction(
+        mut self,
+        direction: crate::bidi::ParagraphDirection,
+    ) -> Self {
+        self.bidi_paragraph_direction = direction;
+        self
     }
 
     pub(crate) fn with_row_capacity(
@@ -104,7 +114,8 @@ impl DisplayOutputTextWindowBeginInstallRequest {
                 self.text_clip_bounds,
                 self.selected,
             )
-            .with_row_capacity(self.row_capacity),
+            .with_row_capacity(self.row_capacity)
+            .with_bidi_paragraph_direction(self.bidi_paragraph_direction),
         );
     }
 }

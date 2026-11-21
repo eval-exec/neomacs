@@ -80,6 +80,7 @@ impl MeasuredPositionChrome {
                 text_clip_bounds: layout_box.body(),
                 selected: params.selected,
                 row_capacity: OutputWindowRowCapacity::Growing,
+                bidi_paragraph_direction: params.bidi_paragraph_direction,
             },
         );
         let mut emitter = WindowOutputEmitter::new_speculative(

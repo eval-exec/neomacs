@@ -156,6 +156,40 @@ impl BidiDir {
     }
 }
 
+/// The paragraph direction a displayed buffer asks for.
+///
+/// GNU derives this per window at `start_display` (`src/xdisp.c:3600-3611`):
+/// it reads the buffer-local `bidi-display-reordering` and
+/// `bidi-paragraph-direction` and stores `it->paragraph_embedding`, which
+/// `bidi_paragraph_init` (`src/bidi.c:1713`) turns into the base level.  A nil
+/// `bidi-display-reordering` disables reordering entirely (`Off`); a
+/// `bidi-paragraph-direction` of `'left-to-right`/`'right-to-left` pins the base
+/// level, and every other value (including nil) uses UAX#9 P2/P3.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum ParagraphDirection {
+    /// `bidi-paragraph-direction` nil (or any non-direction value).
+    #[default]
+    Auto,
+    /// `bidi-paragraph-direction` is `left-to-right`.
+    LeftToRight,
+    /// `bidi-paragraph-direction` is `right-to-left`.
+    RightToLeft,
+    /// `bidi-display-reordering` is nil: no reordering at all.
+    Off,
+}
+
+impl ParagraphDirection {
+    /// The resolver base direction, or `None` when reordering is disabled.
+    pub fn base_dir(self) -> Option<BidiDir> {
+        match self {
+            ParagraphDirection::Auto => Some(BidiDir::Auto),
+            ParagraphDirection::LeftToRight => Some(BidiDir::LTR),
+            ParagraphDirection::RightToLeft => Some(BidiDir::RTL),
+            ParagraphDirection::Off => None,
+        }
+    }
+}
+
 /// Bracket type for the Paired Bracket Algorithm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BracketType {

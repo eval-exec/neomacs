@@ -265,6 +265,7 @@ pub(crate) struct TextWindowBeginRequest {
     selected: bool,
     first_row: DisplayTextRowBegin,
     source_extent: crate::types::WindowSourceExtent,
+    bidi_paragraph_direction: crate::bidi::ParagraphDirection,
 }
 
 pub(crate) struct TextWindowTailFinalizeRequest<'a> {
@@ -572,7 +573,16 @@ impl TextWindowBeginRequest {
             selected,
             first_row,
             source_extent: crate::types::WindowSourceExtent::Viewport,
+            bidi_paragraph_direction: crate::bidi::ParagraphDirection::Auto,
         }
+    }
+
+    pub(crate) fn with_bidi_paragraph_direction(
+        mut self,
+        direction: crate::bidi::ParagraphDirection,
+    ) -> Self {
+        self.bidi_paragraph_direction = direction;
+        self
     }
 
     pub(crate) fn with_source_extent(mut self, extent: crate::types::WindowSourceExtent) -> Self {
@@ -613,6 +623,7 @@ impl TextWindowBeginRequest {
                 text_clip_bounds: self.text_clip_bounds,
                 selected: self.selected,
                 first_row: self.first_row,
+                bidi_paragraph_direction: self.bidi_paragraph_direction,
                 row_capacity: match self.source_extent {
                     crate::types::WindowSourceExtent::Viewport => {
                         crate::output::window_request::OutputWindowRowCapacity::Fixed

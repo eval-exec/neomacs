@@ -22,6 +22,9 @@ pub(crate) struct OutputWindowBeginRequest {
     pub(crate) text_pixel_bounds: Rect,
     pub(crate) text_clip_bounds: Rect,
     pub(crate) selected: bool,
+    /// The displayed buffer's paragraph direction (GNU
+    /// `it->paragraph_embedding`). Defaults to UAX#9 automatic detection.
+    pub(crate) bidi_paragraph_direction: crate::bidi::ParagraphDirection,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -49,7 +52,16 @@ impl OutputWindowBeginRequest {
             text_pixel_bounds,
             text_clip_bounds,
             selected,
+            bidi_paragraph_direction: crate::bidi::ParagraphDirection::Auto,
         }
+    }
+
+    pub(crate) fn with_bidi_paragraph_direction(
+        mut self,
+        direction: crate::bidi::ParagraphDirection,
+    ) -> Self {
+        self.bidi_paragraph_direction = direction;
+        self
     }
 }
 
@@ -72,6 +84,16 @@ impl OutputWindowLifecycleRequest {
             text_clip_bounds,
             selected,
         ))
+    }
+
+    pub(crate) fn with_bidi_paragraph_direction(
+        self,
+        direction: crate::bidi::ParagraphDirection,
+    ) -> Self {
+        match self {
+            Self::Begin(request) => Self::Begin(request.with_bidi_paragraph_direction(direction)),
+            Self::End => Self::End,
+        }
     }
 
     pub(crate) fn with_row_capacity(self, capacity: OutputWindowRowCapacity) -> Self {

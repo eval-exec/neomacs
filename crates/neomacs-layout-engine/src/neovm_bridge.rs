@@ -637,6 +637,26 @@ pub(crate) fn visible_value(
     evaluator.builtin_var_value(id)
 }
 
+/// GNU `it->paragraph_embedding` (`src/xdisp.c:3600-3611`): a nil
+/// `bidi-display-reordering` turns bidi off entirely; a `bidi-paragraph-direction`
+/// of `left-to-right`/`right-to-left` pins the base level, and every other
+/// value (including nil) selects UAX#9 P2/P3 first-strong-character detection.
+fn layout_paragraph_direction<B: LayoutBufferView + ?Sized>(
+    buffer: &B,
+) -> crate::bidi::ParagraphDirection {
+    use crate::bidi::ParagraphDirection;
+    if buffer_local_value(buffer, LayoutVar::BidiDisplayReordering)
+        .is_none_or(|value| value.is_nil())
+    {
+        return ParagraphDirection::Off;
+    }
+    match buffer_local_value(buffer, LayoutVar::BidiParagraphDirection) {
+        Some(value) if value == Value::symbol("left-to-right") => ParagraphDirection::LeftToRight,
+        Some(value) if value == Value::symbol("right-to-left") => ParagraphDirection::RightToLeft,
+        _ => ParagraphDirection::Auto,
+    }
+}
+
 pub(crate) fn buffer_local_value<B: LayoutBufferView + ?Sized>(
     buffer: &B,
     var: LayoutVar,
@@ -1966,6 +1986,7 @@ pub fn window_params_from_neovm_with_font_sizing(
     // (issue #556).
     let frame_foreground = face_resolver.default_face().fg;
 
+    let bidi_paragraph_direction = layout_paragraph_direction(buffer);
     let glyph_matrix_input = window.display()?.glyph_matrix_row_scale.snapshot();
     Some(WindowParams {
         // Filled in by `resolve_window_display_source_params`, the one place
@@ -2035,6 +2056,7 @@ pub fn window_params_from_neovm_with_font_sizing(
         wrap_mode,
         word_wrap,
         word_wrap_policy,
+        bidi_paragraph_direction,
         tab_width,
         scroll_conservatively,
         scroll_step,
