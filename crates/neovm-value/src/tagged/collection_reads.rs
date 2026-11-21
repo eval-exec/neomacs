@@ -450,9 +450,15 @@ impl CollectionReads {
     }
 
     pub fn unchanged(&self) -> bool {
-        self.reads
-            .dependencies()
-            .is_some_and(|(reads, revision)| unchanged_since(reads, revision, self.owner.store()))
+        self.reads.validate(self.owner.store())
+    }
+
+    /// Actual full mutation-journal validations performed by this lease.
+    /// The counter stays in its pooled heap storage, outside redisplay TLS.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn full_validation_invocations_for_test(&self) -> usize {
+        self.reads.full_validation_invocations_for_test()
     }
 
     /// A nested cache hit reads its original dependencies transitively.
@@ -1288,6 +1294,10 @@ mod allocation_tests;
 #[cfg(test)]
 #[path = "collection_reads/tests/recent_clear_test.rs"]
 mod recent_clear_tests;
+
+#[cfg(test)]
+#[path = "collection_reads/tests/validation_cache_test.rs"]
+mod validation_cache_tests;
 
 /// Round 3w (plan-3w.md section 7, C1): this World state lives in a
 /// thread-local while its World's Baton holder runs, and in the World while

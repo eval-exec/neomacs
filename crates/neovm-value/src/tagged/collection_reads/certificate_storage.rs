@@ -4,12 +4,22 @@
 //! origin World and returns the buffer there, even after switching Worlds.
 use super::{LispCollectionRevision, capture_storage::CaptureReads};
 use rustc_hash::FxHashSet;
+use std::cell::Cell;
 use std::mem::{MaybeUninit, align_of, size_of};
+
+#[derive(Clone, Copy, Debug)]
+struct Validation {
+    sequence: u64,
+    unchanged: bool,
+}
 
 #[derive(Debug)]
 struct CertificateStorage {
     reads: FxHashSet<usize>,
     revision: LispCollectionRevision,
+    validation: Cell<Option<Validation>>,
+    #[cfg(any(test, feature = "test-support"))]
+    full_validation_invocations: Cell<usize>,
 }
 
 #[derive(Default)]
@@ -48,10 +58,16 @@ impl CertificatePool {
             Box::new(CertificateStorage {
                 reads: FxHashSet::default(),
                 revision,
+                validation: Cell::new(None),
+                #[cfg(any(test, feature = "test-support"))]
+                full_validation_invocations: Cell::new(0),
             })
         });
         storage.reads.extend(reads.keys().copied());
         storage.revision = revision;
+        storage.validation.set(None);
+        #[cfg(any(test, feature = "test-support"))]
+        storage.full_validation_invocations.set(0);
         CertificateLease {
             storage: Some(storage),
             _reserve: [MaybeUninit::uninit(); LEASE_RESERVE],
@@ -85,6 +101,41 @@ const _: () = {
 };
 
 impl CertificateLease {
+    pub(super) fn validate(&self, store: &super::StoreState) -> bool {
+        let Some(storage) = self.storage.as_ref() else {
+            return false;
+        };
+        let sequence = store.sequence();
+        if let Some(validation) = storage.validation.get()
+            && validation.sequence == sequence
+        {
+            return validation.unchanged;
+        }
+        #[cfg(any(test, feature = "test-support"))]
+        storage
+            .full_validation_invocations
+            .set(storage.full_validation_invocations.get() + 1);
+        // The owner's journal cannot change without advancing its sequence;
+        // this numeric validation runs no callbacks or safepoints. Keep the
+        // ORIGINAL capture revision: successful checks never renew its bounded
+        // history. World admission, lifetime and transitive observation remain
+        // the caller's responsibility even when this predicate is memoized.
+        let unchanged = super::unchanged_since(&storage.reads, storage.revision, store);
+        storage.validation.set(Some(Validation {
+            sequence,
+            unchanged,
+        }));
+        unchanged
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn full_validation_invocations_for_test(&self) -> usize {
+        self.storage
+            .as_ref()
+            .map_or(0, |storage| storage.full_validation_invocations.get())
+    }
+
+    #[cfg(test)]
     pub(super) fn dependencies(&self) -> Option<(&FxHashSet<usize>, LispCollectionRevision)> {
         self.storage
             .as_ref()
@@ -151,7 +202,39 @@ mod tests {
         assert!(lease.dependencies().is_none());
         assert_eq!(lease.iter().count(), 0);
         assert!(!lease.contains(&7));
+        assert_eq!(lease.full_validation_invocations_for_test(), 0);
         pool.recycle(&mut lease);
         assert_eq!(pool.free.len(), 1, "retirement cannot return a lease twice");
+    }
+
+    #[test]
+    fn reacquired_certificate_resets_validation_at_the_same_sequence() {
+        let mut pool = CertificatePool::default();
+        let mut reads = CaptureReads::default();
+        let original = LispCollectionRevision::current();
+        assert!(reads.insert_first(8, original));
+        let mut lease = pool.acquire(&reads, original);
+        super::super::with_store(|store| {
+            let revision = store.advance();
+            store.record(8, revision);
+            assert!(!lease.validate(store));
+            assert_eq!(lease.full_validation_invocations_for_test(), 1);
+            let sequence = store.sequence();
+            pool.recycle(&mut lease);
+
+            reads.clear();
+            let current = LispCollectionRevision::from_sequence(sequence);
+            assert!(reads.insert_first(16, current));
+            let mut next = pool.acquire(&reads, current);
+            assert_eq!(next.full_validation_invocations_for_test(), 0);
+            assert_eq!(store.sequence(), sequence);
+            assert!(
+                next.validate(store),
+                "a prior rejection at this sequence belongs to the retired lease"
+            );
+            assert_eq!(next.full_validation_invocations_for_test(), 1);
+            assert_eq!(pool.count, 1, "the same backing allocation must be reused");
+            pool.recycle(&mut next);
+        });
     }
 }
