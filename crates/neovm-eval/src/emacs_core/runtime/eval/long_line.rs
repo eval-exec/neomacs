@@ -25,6 +25,30 @@ pub struct LongLineNarrowing {
     point_before: EmacsBytePos,
 }
 
+/// GNU `get_large_narrowing_begv/zv` (`src/xdisp.c:3793-3822`) in 1-based
+/// Lisp positions, together with the whole buffer's BEG/Z.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LongLineNarrowingBounds {
+    /// First position of the narrowed region (1-based, inclusive).
+    pub beg: i64,
+    /// End of the narrowed region (1-based, exclusive).
+    pub zv: i64,
+    /// Whole-buffer start (GNU `BEG`, 1-based).
+    pub buffer_start: i64,
+    /// Whole-buffer end (GNU `Z`, 1-based, exclusive).
+    pub buffer_end: i64,
+}
+
+impl LongLineNarrowingBounds {
+    /// GNU installs no restriction when the region already covers the whole
+    /// buffer (`begv != BEG || zv != Z`, src/xdisp.c:4713 and
+    /// src/keyboard.c:1994). The comparison is against BEG/Z, not BEGV/ZV, so
+    /// a narrowed buffer still gets the labeled restriction.
+    pub fn covers_whole_buffer(self) -> bool {
+        self.beg <= self.buffer_start && self.zv >= self.buffer_end
+    }
+}
+
 impl Context {
     /// Refresh the current buffer's `long_line_optimizations_p` flag, as GNU
     /// `redisplay_window` does (`src/xdisp.c:20646-20663`). The buffer method
@@ -40,20 +64,16 @@ impl Context {
         }
     }
 
-    /// Enter GNU's large-narrowing region around `pos` (a 1-based Lisp
-    /// position) when the current buffer has a long line and
-    /// `long-line-optimizations-region-size` is positive.
+    /// GNU's `get_large_narrowing_begv/zv` (`src/xdisp.c:3793-3822`) around
+    /// `pos` (a 1-based Lisp position), when the current buffer has a long
+    /// line and `long-line-optimizations-region-size` is positive.
     ///
-    /// `get_large_narrowing_begv/zv` (`src/xdisp.c:3793-3822`) are in 1-based
-    /// buffer positions; `CharPos0` is 0-based, so the conversions subtract
-    /// one. The walk back to the beginning of the line is bounded by
-    /// `long-line-optimizations-bol-search-limit`.
+    /// The region is `pos +/- region-size/2`, clamped to the accessible
+    /// region, with the beginning moved back to the line start for at most
+    /// `long-line-optimizations-bol-search-limit` characters. `CharPos0` is
+    /// 0-based, so byte conversions subtract one.
     #[doc(hidden)]
-    pub fn enter_long_line_narrowing(
-        &mut self,
-        pos: i64,
-        label: &'static str,
-    ) -> Option<LongLineNarrowing> {
+    pub fn long_line_narrowing_bounds(&self, pos: i64) -> Option<LongLineNarrowingBounds> {
         let region_size = self
             .builtin_var_value_by_name("long-line-optimizations-region-size")
             .and_then(|value| value.as_int())?;
@@ -85,12 +105,75 @@ impl Context {
             beg -= 1;
             limit -= 1;
         }
-        if beg >= zv {
+        (beg < zv).then_some(LongLineNarrowingBounds {
+            beg,
+            zv,
+            // GNU BEG is the buffer's first position; Z is one past its last
+            // character. Neo stores the whole-buffer length independently of
+            // the accessible restriction.
+            buffer_start: 1,
+            buffer_end: buffer.total_char_len().get() as i64 + 1,
+        })
+    }
+
+    /// Enter GNU's large-narrowing region for a fontification call.
+    ///
+    /// GNU `handle_fontified_prop` (`src/xdisp.c:4702-4715`) does not centre
+    /// on the fontified position: its iterator caches `large_narrowing_begv/zv`
+    /// computed from `window_point` (`reseat`, src/xdisp.c:8008-8011), and
+    /// recomputes at `IT_CHARPOS` only when the fontified position falls
+    /// outside the cache — and that fallback is per call; it does not replace
+    /// the iterator's window-point-centred cache. `window_bounds` is that
+    /// cache (computed once per display walk from the window's point).
+    ///
+    /// Like GNU (`src/xdisp.c:4713`), no restriction is installed when the
+    /// computed region covers the whole buffer.
+    #[doc(hidden)]
+    pub fn enter_long_line_narrowing_for_fontification(
+        &mut self,
+        window_bounds: Option<LongLineNarrowingBounds>,
+        pos: i64,
+        label: &'static str,
+    ) -> Option<LongLineNarrowing> {
+        let bounds = match window_bounds {
+            Some(bounds) if pos >= bounds.beg && pos <= bounds.zv => bounds,
+            _ => self.long_line_narrowing_bounds(pos)?,
+        };
+        self.enter_long_line_narrowing_bounds(bounds, label)
+    }
+
+    /// Enter GNU's large-narrowing region around `pos`, recomputing the
+    /// bounds for every call. This is the command-hook shape
+    /// (`src/keyboard.c:1983-2001`), where GNU narrows around point anew.
+    #[doc(hidden)]
+    pub fn enter_long_line_narrowing(
+        &mut self,
+        pos: i64,
+        label: &'static str,
+    ) -> Option<LongLineNarrowing> {
+        let bounds = self.long_line_narrowing_bounds(pos)?;
+        self.enter_long_line_narrowing_bounds(bounds, label)
+    }
+
+    /// Install the restriction for already-computed bounds. GNU skips the
+    /// restriction entirely when it would cover the whole accessible region
+    /// (`if (begv != BEGV || zv != ZV)`, src/xdisp.c:4713 and
+    /// src/keyboard.c:1994), so the label is absent and no save/restore work
+    /// happens.
+    #[doc(hidden)]
+    pub fn enter_long_line_narrowing_bounds(
+        &mut self,
+        bounds: LongLineNarrowingBounds,
+        label: &'static str,
+    ) -> Option<LongLineNarrowing> {
+        if bounds.covers_whole_buffer() {
             return None;
         }
+        let buffer_id = self.edit.buffers.current_buffer_id()?;
+        let buffer = self.edit.buffers.get(buffer_id)?;
         let range = EmacsByteRange::new(
-            buffer.char_pos_to_emacs_byte_pos_clamped(CharPos0::new((beg - 1) as usize)),
-            buffer.char_pos_to_emacs_byte_pos_clamped(CharPos0::new((zv - 1) as usize)),
+            buffer.char_pos_to_emacs_byte_pos_clamped(CharPos0::new((bounds.beg - 1) as usize)),
+            buffer.char_pos_to_emacs_byte_pos_clamped(CharPos0::new((bounds.zv - 1) as usize)),
         );
         let clip_before = buffer.mode_line_clip_changed();
         let point_before = buffer.point_emacs_byte_pos();

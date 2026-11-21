@@ -126,6 +126,52 @@ fn fontification_functions_accessible_bounds_match_gnu() {
     );
 }
 
+/// GNU's fontification narrowing is centred on the redisplayed window's
+/// point, not on the fontified position (`reseat`, `src/xdisp.c:8008-8011`;
+/// `handle_fontified_prop`, `src/xdisp.c:4702-4715`). With point at 400000 and
+/// the window starting at 390001, the first fontification call runs inside
+/// the point-centred cache and must see its bounds: 149872..650000.
+#[test]
+fn fontification_narrowing_centres_on_window_point() {
+    let (mut gnu, mut neo) = boot_pair("");
+    resize_both(&mut gnu, &mut neo, 40, 160);
+    read_both(&mut gnu, &mut neo, Duration::from_millis(700));
+    eval_expression(
+        &mut gnu,
+        &mut neo,
+        "(progn \
+           (switch-to-buffer (get-buffer-create \"*p640-point*\")) \
+           (erase-buffer) \
+           (insert (make-string 1200000 ?a)) \
+           (setq truncate-lines t) \
+           (defvar p640-pmin nil) \
+           (defvar p640-pmax nil) \
+           (setq p640-pmin nil p640-pmax nil) \
+           (set (make-local-variable 'fontification-functions) \
+                (list (lambda (pos) \
+                        (unless p640-pmin \
+                          (setq p640-pmin (point-min) p640-pmax (point-max))) \
+                        (put-text-property pos (min (point-max) (+ pos 100000)) \
+                                           'fontified t) \
+                        nil))) \
+           (goto-char 400000) \
+           (set-window-start nil 390001) \
+           (redisplay t))",
+    );
+    read_both(&mut gnu, &mut neo, Duration::from_secs(1));
+    let (gnu_value, neo_value) =
+        paired_message(&mut gnu, &mut neo, "P640WP", "(list p640-pmin p640-pmax)");
+    eprintln!("issue#640 window-point fontification bounds: GNU={gnu_value} NEO={neo_value}");
+    assert_eq!(
+        gnu_value, "(149872 650000)",
+        "GNU's window-point-centred large-narrowing bounds"
+    );
+    assert_eq!(
+        neo_value, gnu_value,
+        "fontification-functions must see the window-point-centred region"
+    );
+}
+
 /// GNU's hscroll pass measures the cursor column on a truncated line with
 /// `fast_move_it_horizontally` above `large-hscroll-threshold`
 /// (`src/xdisp.c:16797-16807`), which advances one frame column per character

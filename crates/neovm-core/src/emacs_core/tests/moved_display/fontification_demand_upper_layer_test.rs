@@ -459,6 +459,7 @@ fn actual_source_killing_callback_preserves_legacy_outcome_and_never_no_demand()
 fn observed_long_line_fontification_range(
     line_len: usize,
     from_char0: i64,
+    window_point: Option<i64>,
 ) -> (i64, i64, i64, i64, i64, bool) {
     let mut eval = crate::test_utils::new_context();
     eval.eval_str("(setq long-line-threshold 50000)")
@@ -497,7 +498,18 @@ fn observed_long_line_fontification_range(
         .expect("point before fontification")
         .as_int()
         .expect("fixnum");
-    ensure_fontified_for_redisplay(&mut eval, buffer, from_char0, from_char0 + 1).expect("fontify");
+    match window_point {
+        Some(window_point) => ensure_fontified_for_redisplay_for_window(
+            &mut eval,
+            buffer,
+            from_char0,
+            from_char0 + 1,
+            window_point,
+        )
+        .expect("fontify"),
+        None => ensure_fontified_for_redisplay(&mut eval, buffer, from_char0, from_char0 + 1)
+            .expect("fontify"),
+    };
     let calls = eval
         .eval_str("p640-calls")
         .expect("probe calls")
@@ -537,9 +549,9 @@ fn fontification_callback_range_is_bounded_and_flat_on_a_long_line() {
     // Same callback position, two line lengths above the threshold. GNU's
     // narrowed window is exactly the same for both.
     let (calls_short, min_short, max_short, point_short_before, point_short, clip_short) =
-        observed_long_line_fontification_range(700_000, 400_000);
+        observed_long_line_fontification_range(700_000, 400_000, None);
     let (calls_long, min_long, max_long, point_long_before, point_long, clip_long) =
-        observed_long_line_fontification_range(1_400_000, 400_000);
+        observed_long_line_fontification_range(1_400_000, 400_000, None);
     assert!(calls_short >= 1, "the probe was never entered");
     assert!(calls_long >= 1, "the probe was never entered");
     assert_eq!(
@@ -561,7 +573,7 @@ fn fontification_callback_range_is_bounded_and_flat_on_a_long_line() {
     // ran outside its own narrowing, which made every layout retry fontify
     // the first position again.
     let (calls_start, min_start, max_start, point_start_before, point_start, clip_start) =
-        observed_long_line_fontification_range(700_000, 0);
+        observed_long_line_fontification_range(700_000, 0, None);
     assert!(calls_start >= 1, "the probe was never entered");
     assert_eq!(
         (min_start, max_start),
@@ -592,4 +604,81 @@ fn fontification_callback_range_is_bounded_and_flat_on_a_long_line() {
         "fontification range {} exceeds long-line-optimizations-region-size plus the BOL search limit",
         max_short - min_short
     );
+}
+
+/// GNU's fontification narrowing is centred on the redisplayed window's
+/// point, not on the fontified position (`reseat`, src/xdisp.c:8008-8011;
+/// `handle_fontified_prop`, src/xdisp.c:4702-4715). A fontified position
+/// inside that cached region must see the window-point bounds; centring on
+/// the position would shift them by the distance between the two.
+#[test]
+fn fontification_narrowing_is_centred_on_window_point() {
+    crate::test_utils::init_test_tracing();
+    // Point at Lisp 400000, fontifying from Lisp 390001. GNU's cache is
+    // 400000 +/- 250000 = 150000..650000, walked back by the 128-character BOL
+    // search limit to 149872 (the line has no newline). Centring on the
+    // fontified position would give 139873..640001.
+    let (calls, min, max, point_before, point_after, clip) =
+        observed_long_line_fontification_range(1_200_000, 390_000, Some(400_000));
+    assert!(calls >= 1, "the probe was never entered");
+    assert_eq!(
+        (min, max),
+        (149_872, 650_000),
+        "fontification-functions must see the window-point-centred region"
+    );
+    assert_eq!(point_after, point_before, "fontification moved point");
+    assert!(!clip, "the transient narrowing left clip_changed");
+}
+
+/// GNU installs the labeled long-line restriction only when it changes the
+/// restriction (`begv != BEG || zv != Z`, src/xdisp.c:4713 and
+/// src/keyboard.c:1994). A long-line buffer smaller than
+/// `long-line-optimizations-region-size` covers the whole buffer, so no
+/// restriction is installed and no save/restore work happens.
+#[test]
+fn full_buffer_long_line_region_installs_no_narrowing() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::test_utils::new_context();
+    eval.eval_str("(setq long-line-threshold 50000)")
+        .expect("set the long-line threshold");
+    let buffer = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    eval.edit
+        .buffers
+        .get_mut(buffer)
+        .expect("buffer")
+        .insert(&"a".repeat(60_000));
+    eval.refresh_long_line_optimizations(buffer);
+    let bounds = eval
+        .long_line_narrowing_bounds(1)
+        .expect("a 60k line is above the threshold");
+    assert!(
+        bounds.covers_whole_buffer(),
+        "a buffer smaller than the region is the whole-buffer no-op case: {bounds:?}"
+    );
+    assert!(
+        eval.enter_long_line_narrowing(1, "full-buffer-noop")
+            .is_none(),
+        "GNU installs no restriction when it would cover the whole buffer"
+    );
+
+    // Control: once the buffer is larger than the region, the restriction
+    // is installed and can be undone.
+    eval.edit
+        .buffers
+        .get_mut(buffer)
+        .expect("buffer")
+        .insert(&"a".repeat(1_200_000));
+    eval.refresh_long_line_optimizations(buffer);
+    let bounds = eval
+        .long_line_narrowing_bounds(1)
+        .expect("a 1.26M line is above the threshold");
+    assert!(!bounds.covers_whole_buffer(), "{bounds:?}");
+    let narrowing = eval
+        .enter_long_line_narrowing(1, "large-restriction")
+        .expect("a bounded region installs the labeled restriction");
+    eval.exit_long_line_narrowing(narrowing);
 }

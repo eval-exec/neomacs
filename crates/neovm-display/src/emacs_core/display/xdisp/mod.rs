@@ -9501,6 +9501,7 @@ fn call_fontification_functions_at<O: FontificationDemandObserver>(
     ctx: &mut neovm_eval::emacs_core::eval::Context,
     hook_value: Value,
     pos: i64,
+    window_bounds: Option<neovm_eval::emacs_core::eval::long_line::LongLineNarrowingBounds>,
     observer: &mut O,
 ) {
     let hook_sym = FONTIFICATION_FUNCTIONS.id();
@@ -9529,10 +9530,14 @@ fn call_fontification_functions_at<O: FontificationDemandObserver>(
         return;
     }
 
-    // GNU runs the fontification functions on a labeled narrowing around
-    // POS when the buffer has a long line (`src/xdisp.c:4702-4719`).
-    let narrowed =
-        ctx.enter_long_line_narrowing(pos, "long-line-optimizations-in-fontification-functions");
+    // GNU runs the fontification functions on a labeled narrowing centred on
+    // the redisplayed window's point, falling back to POS only when POS is
+    // outside that cached region (`src/xdisp.c:4702-4715`, 8008-8011).
+    let narrowed = ctx.enter_long_line_narrowing_for_fontification(
+        window_bounds,
+        pos,
+        "long-line-optimizations-in-fontification-functions",
+    );
 
     // GNU `handle_fontified_prop` calls each function with `dsafe_call1`,
     // which binds `inhibit-redisplay` and logs ordinary errors without
@@ -9642,6 +9647,28 @@ pub fn ensure_fontified_for_redisplay(
     )
 }
 
+/// [`ensure_fontified_for_redisplay`] for a specific window, whose point
+/// centres GNU's large narrowing (src/xdisp.c:8008-8011, 4702-4715).
+///
+/// `window_point` is a 1-based Lisp position.
+pub fn ensure_fontified_for_redisplay_for_window(
+    ctx: &mut neovm_eval::emacs_core::eval::Context,
+    buf_id: BufferId,
+    from_char: i64,
+    to_char: i64,
+    window_point: i64,
+) -> Result<RedisplayFontificationOutcome, Flow> {
+    ensure_fontified_for_redisplay_inner(
+        ctx,
+        buf_id,
+        from_char,
+        to_char,
+        fontification_boundary::mode(),
+        &mut NoFontificationDemand,
+        Some(window_point),
+    )
+}
+
 /// Test-support fence route (display upper-layer re-home): the private
 /// boundary-mode entry point stays private; this crate-visible wrapper is the
 /// only path the signed AUTHORITY delegate uses.
@@ -9670,6 +9697,7 @@ fn ensure_fontified_for_redisplay_with_mode(
         to_char,
         mode,
         &mut NoFontificationDemand,
+        None,
     )
 }
 
@@ -9689,6 +9717,32 @@ pub fn ensure_fontified_for_redisplay_with_demand(
         to_char,
         fontification_boundary::mode(),
         demand,
+        None,
+    );
+    if result.is_err() {
+        demand.abort();
+    }
+    result
+}
+
+/// [`ensure_fontified_for_redisplay_with_demand`] for a specific window;
+/// `window_point` is a 1-based Lisp position.
+pub fn ensure_fontified_for_redisplay_with_demand_for_window(
+    ctx: &mut neovm_eval::emacs_core::eval::Context,
+    buf_id: BufferId,
+    from_char: i64,
+    to_char: i64,
+    demand: &mut RedisplayFontificationDemand,
+    window_point: i64,
+) -> Result<RedisplayFontificationOutcome, Flow> {
+    let result = ensure_fontified_for_redisplay_inner(
+        ctx,
+        buf_id,
+        from_char,
+        to_char,
+        fontification_boundary::mode(),
+        demand,
+        Some(window_point),
     );
     if result.is_err() {
         demand.abort();
@@ -9705,7 +9759,7 @@ pub(crate) fn ensure_fontified_for_redisplay_inner_for_test(
     mode: neovm_edit::emacs_core::textprop::FontificationBoundaryMode,
     observer: &mut fontification_demand::RedisplayFontificationDemand,
 ) -> Result<RedisplayFontificationOutcome, neovm_value::error::Flow> {
-    ensure_fontified_for_redisplay_inner(ctx, buf_id, from_char, to_char, mode, observer)
+    ensure_fontified_for_redisplay_inner(ctx, buf_id, from_char, to_char, mode, observer, None)
 }
 
 fn ensure_fontified_for_redisplay_inner<O: FontificationDemandObserver>(
@@ -9715,12 +9769,17 @@ fn ensure_fontified_for_redisplay_inner<O: FontificationDemandObserver>(
     to_char: i64,
     mode: FontificationBoundaryMode,
     observer: &mut O,
+    window_point: Option<i64>,
 ) -> Result<RedisplayFontificationOutcome, Flow> {
     // GNU `redisplay_window` (`src/xdisp.c:20646-20663`) refreshes the
     // buffer's long-line flag while displaying it. The fontification narrowing
     // below and `long-line-optimizations-p` read it. The buffer method owns
     // GNU's eight-modification-tick hysteresis.
     ctx.refresh_long_line_optimizations(buf_id);
+
+    // GNU seeds the iterator's large-narrowing cache from `window_point`
+    // (`reseat`, src/xdisp.c:8008-8011). The cache is per display walk.
+    let window_bounds = window_point.and_then(|point| ctx.long_line_narrowing_bounds(point));
 
     let Some((point_min, point_max)) = ctx.edit.buffers.get(buf_id).map(|buffer| {
         (
@@ -9801,7 +9860,7 @@ fn ensure_fontified_for_redisplay_inner<O: FontificationDemandObserver>(
             // Mark before entering Lisp, including callbacks which fail,
             // decline to fontify, or remove the current buffer.
             outcome = outcome.merge(RedisplayFontificationOutcome::CallbacksUnchanged);
-            call_fontification_functions_at(ctx, hook_value, pos, observer);
+            call_fontification_functions_at(ctx, hook_value, pos, window_bounds, observer);
             if ctx.edit.buffers.current_buffer_id() != Some(buf_id) {
                 ctx.restore_current_buffer_if_live(buf_id);
             }

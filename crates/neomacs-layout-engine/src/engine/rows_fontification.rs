@@ -81,11 +81,19 @@ impl RowsFontificationDemand {
         source: BufferId,
         from: i64,
         to: i64,
+        window_point: i64,
     ) -> RedisplayFontificationOutcome {
         let Self::Observing { demand, .. } = self else {
-            return LayoutEngine::ensure_fontified_rust(ctx, source, from, to);
+            return LayoutEngine::ensure_fontified_rust(ctx, source, from, to, window_point);
         };
-        match xdisp::ensure_fontified_for_redisplay_with_demand(ctx, source, from, to, demand) {
+        match xdisp::ensure_fontified_for_redisplay_with_demand_for_window(
+            ctx,
+            source,
+            from,
+            to,
+            demand,
+            window_point,
+        ) {
             Ok(outcome) => outcome,
             Err(error) => {
                 // Identical error policy to the legacy layout bridge. The

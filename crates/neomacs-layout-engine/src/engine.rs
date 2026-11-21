@@ -5982,10 +5982,13 @@ impl LayoutEngine {
             return LeafLayoutAttempt::LogicalInputsChanged;
         };
         lisp_ledger.rows_fontification.begin_leaf(window_id, buf_id);
-        let fontification_outcome =
-            lisp_ledger
-                .rows_fontification
-                .ensure(evaluator, buf_id, window_start, fontify_end);
+        let fontification_outcome = lisp_ledger.rows_fontification.ensure(
+            evaluator,
+            buf_id,
+            window_start,
+            fontify_end,
+            params.point_charpos().get() as i64 + 1,
+        );
         // `(when FORM . SPEC)` display specs need Lisp, which the walk cannot
         // run while it holds the buffer: evaluate the forms of the span the
         // walk can reach (the same one fontification just covered) here, so
@@ -6392,6 +6395,7 @@ impl LayoutEngine {
                         buf_id,
                         span.start(),
                         span.end(),
+                        params.point_charpos().get() as i64 + 1,
                     );
                     requires_replay |= outcome.requires_layout_retry();
                     if evaluator.frame_manager().window_topology_generation() != topology_generation
@@ -6921,9 +6925,14 @@ impl LayoutEngine {
         buf_id: neovm_core::buffer::BufferId,
         from: i64,
         to: i64,
+        window_point: i64,
     ) -> neovm_core::emacs_core::xdisp::RedisplayFontificationOutcome {
-        match neovm_core::emacs_core::xdisp::ensure_fontified_for_redisplay(
-            evaluator, buf_id, from, to,
+        match neovm_core::emacs_core::xdisp::ensure_fontified_for_redisplay_for_window(
+            evaluator,
+            buf_id,
+            from,
+            to,
+            window_point,
         ) {
             Ok(outcome) => outcome,
             Err(e) => {
