@@ -843,7 +843,7 @@ impl CommandLoopHost for Context {
             // hook function is removed instead of re-firing on every
             // command. Finding 7 — GNU `keyboard.c:1510`
             // (`safe_run_hooks_maybe_narrowed (Qpre_command_hook, ...)`).
-            self.safe_run_hook_if_bound(CommandLoopHook::PreCommand.id())?;
+            self.safe_run_hook_maybe_narrowed(CommandLoopHook::PreCommand.id())?;
 
             // GNU `keyboard.c:1530-1534` adds undo boundaries here, after
             // `pre-command-hook` and before command execution, so the
@@ -908,7 +908,7 @@ impl CommandLoopHost for Context {
             // Run post-command-hook via safe-run-hooks (Finding 7).
             // GNU `command_loop_1` calls `safe_run_hooks (Qpost_command_hook)`
             // at keyboard.c:1563.
-            self.safe_run_hook_if_bound(CommandLoopHook::PostCommand.id())?;
+            self.safe_run_hook_maybe_narrowed(CommandLoopHook::PostCommand.id())?;
             input_measurement.complete(|frame| self.input_latency_viewport(frame));
 
             // GNU `command_loop_1` (src/keyboard.c:1342-1345): "If displaying a
@@ -1066,7 +1066,7 @@ impl CommandLoopHost for Context {
             .unwrap_or(Value::NIL)
             .is_nil()
         {
-            self.safe_run_hook_if_bound(CommandLoopHook::PostCommand.id())?;
+            self.safe_run_hook_maybe_narrowed(CommandLoopHook::PostCommand.id())?;
 
             if self
                 .eval_symbol_by_id(CommandLoopSymbol::DelayedWarningsList.id())

@@ -3957,6 +3957,7 @@ fn dump_buffer(encoder: &mut DumpEncoder, buf: &Buffer) -> DumpBuffer {
         save_modified_tick: Some(buf.save_modified_tick()),
         autosave_modified_tick: Some(buf.autosave_modified_tick()),
         auto_save_failure_time: buf.auto_save_failure_time(),
+        long_line_optimizations_p: buf.long_line_optimizations_p(),
         modtime_sec,
         modtime_nsec,
         modtime_size: buf.modtime_size(),
@@ -6196,6 +6197,7 @@ fn load_buffer(
         accessible_end: dump_text_position_anchor(zv_char, db.zv),
         autosave_modified_tick,
         auto_save_failure_time: db.auto_save_failure_time,
+        long_line_optimizations_p: db.long_line_optimizations_p,
         modtime: neovm_edit::buffer::VisitedFileModtime::from_dump_halves(
             db.modtime_sec,
             db.modtime_nsec,

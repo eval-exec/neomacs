@@ -2357,6 +2357,8 @@ pub struct BufferDumpParts {
     /// GNU `struct buffer.auto_save_failure_time`. Seconds since the epoch,
     /// or 0 when unset. The pdump image copies it (`pdumper.c:2855`).
     pub auto_save_failure_time: i64,
+    /// GNU `struct buffer.long_line_optimizations_p` (`pdumper.c:2866`).
+    pub long_line_optimizations_p: bool,
     pub last_window_start: LispCharPos1,
     pub last_selected_window: Option<WindowId>,
     pub inhibit_buffer_hooks: bool,
@@ -2777,6 +2779,16 @@ impl Buffer {
         mem::swap(&mut self.state_markers, &mut other.state_markers);
         mem::swap(&mut self.undo_state, &mut other.undo_state);
         mem::swap(&mut self.overlays, &mut other.overlays);
+        // GNU `buffer-swap-text` swaps the long-line flag with the text
+        // (`src/buffer.c:2630`).
+        mem::swap(
+            &mut self.long_line_optimizations_p,
+            &mut other.long_line_optimizations_p,
+        );
+        mem::swap(
+            &mut self.long_line_scan_tick,
+            &mut other.long_line_scan_tick,
+        );
         self.swap_slot_with(other, BUFFER_SLOT_MARK_ACTIVE);
         self.swap_slot_with(other, BUFFER_SLOT_ENABLE_MULTIBYTE_CHARACTERS);
         self.swap_slot_with(other, BUFFER_SLOT_BIDI_DISPLAY_REORDERING);
@@ -2956,8 +2968,6 @@ impl Buffer {
         assert!(parts.name.is_string(), "buffer name must be a Lisp string");
         Self {
             line_number_anchor: std::cell::Cell::new(None),
-            long_line_optimizations_p: false,
-            long_line_scan_tick: 0,
             id: parts.id,
             name: parts.name,
             last_name: parts.last_name,
@@ -2969,6 +2979,8 @@ impl Buffer {
             accessible_end: parts.accessible_end,
             autosave_modified_tick: parts.autosave_modified_tick,
             auto_save_failure_time: parts.auto_save_failure_time,
+            long_line_optimizations_p: parts.long_line_optimizations_p,
+            long_line_scan_tick: 0,
             last_window_start: parts.last_window_start,
             last_selected_window: parts.last_selected_window,
             inhibit_buffer_hooks: parts.inhibit_buffer_hooks,

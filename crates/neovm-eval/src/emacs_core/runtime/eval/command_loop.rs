@@ -598,6 +598,32 @@ impl Context {
         self.unbind_to_with_result(specpdl_count, result)
     }
 
+    /// GNU `safe_run_hooks_maybe_narrowed` (`src/keyboard.c:1983-2001`):
+    /// `safe_run_hooks` for `pre-command-hook` and `post-command-hook`, with
+    /// the long-line restriction around point applied while the hook runs.
+    #[doc(hidden)]
+    pub fn safe_run_hook_maybe_narrowed(&mut self, hook_sym: SymId) -> EvalResult {
+        let specpdl_count = self.specpdl.len();
+        self.try_specbind_or_unwind_to(
+            specpdl_count,
+            CommandLoopSymbol::InhibitQuit.id(),
+            Value::T,
+        )?;
+        let point = self
+            .edit
+            .buffers
+            .current_buffer()
+            .map(|buffer| buffer.point_lisp_char_pos().as_i64());
+        let narrowing = point.and_then(|pos| {
+            self.enter_long_line_narrowing(pos, "long-line-optimizations-in-command-hooks")
+        });
+        let result = super::super::hook_runtime::safe_run_named_hook(self, hook_sym, &[]);
+        if let Some(narrowing) = narrowing {
+            self.exit_long_line_narrowing(narrowing);
+        }
+        self.unbind_to_with_result(specpdl_count, result)
+    }
+
     #[doc(hidden)]
     pub fn with_executing_kbd_macro_runtime<F>(
         &mut self,

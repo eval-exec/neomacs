@@ -115,6 +115,7 @@ pub(crate) mod derived_counters;
 mod edit_host;
 mod lexenv_cache;
 mod lexical_symbols;
+pub mod long_line;
 mod text_host;
 pub(crate) use self::lexenv_cache::LexenvAssqCache;
 pub(crate) use callback::{CheckedNativeCallback, native_callback_cache_enabled};

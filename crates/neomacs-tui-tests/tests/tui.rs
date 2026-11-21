@@ -98,6 +98,7 @@ mod issue_446_align_to_hscroll;
 mod issue_470;
 #[path = "issue_621_mouse_drag_selection.rs"]
 mod issue_621_mouse_drag_selection;
+mod issue_640_long_lines;
 
 // N4 (peer 6163): paired TTY drop-down menu grid.
 #[path = "issue_654_centered_cursor.rs"]
