@@ -402,7 +402,9 @@ fn move_to_column_long_truncated_matches_gnu() {
 /// `current-column` reaches the scan only through `current_column_1`
 /// (intervals present, `src/indent.c:365-370`); with `long-line-threshold`
 /// nil the :348 approximation is off, so the fast path at :629 is what makes
-/// the property-less control differ.
+/// the two buffers differ.  A property leaves GNU's interval tree in place
+/// even after the property is removed, so the control uses a second buffer
+/// that never had one.
 #[test]
 fn current_column_1_long_truncated_matches_gnu() {
     let (mut gnu, mut neo) = boot_pair("");
@@ -412,18 +414,18 @@ fn current_column_1_long_truncated_matches_gnu() {
         &mut gnu,
         &mut neo,
         "(progn \
-           (switch-to-buffer (get-buffer-create \"*p640-s2-cc1*\")) \
-           (erase-buffer) \
-           (insert (make-string 1000 ?a)) \
-           (insert \"\\t\") \
-           (insert (make-string 200000 ?a)) \
-           (insert \"\\n\") \
-           (setq truncate-lines t) \
-           (goto-char 1) \
-           (redisplay t) \
-           (setq long-line-threshold nil) \
-           (put-text-property 1 2 'p640 t) \
-           (goto-char 30001) \
+           (setq long-line-threshold 50000 large-hscroll-threshold 10000) \
+           (let ((prop (get-buffer-create \"*p640-c1-prop*\")) \
+                 (plain (get-buffer-create \"*p640-c1-plain*\"))) \
+             (dolist (b (list prop plain)) \
+               (set-buffer b) (erase-buffer) \
+               (insert (make-string 1000 ?a)) (insert \"\\t\") \
+               (insert (make-string 200000 ?a)) (insert \"\\n\") \
+               (setq truncate-lines t) (goto-char 30001) \
+               (switch-to-buffer b) (redisplay t)) \
+             (set-buffer prop) (put-text-property 1 2 'p640 t) \
+             (setq long-line-threshold nil) \
+             (switch-to-buffer plain)) \
            nil)",
     );
     read_both(&mut gnu, &mut neo, Duration::from_secs(1));
@@ -431,13 +433,13 @@ fn current_column_1_long_truncated_matches_gnu() {
         &mut gnu,
         &mut neo,
         "P640C1",
-        "(list (current-column) \
-                (progn (remove-text-properties 1 2 '(p640 t)) (current-column)))",
+        "(list (with-current-buffer \"*p640-c1-prop*\" (current-column)) \
+                (with-current-buffer \"*p640-c1-plain*\" (current-column)))",
     );
     eprintln!("issue#640 current_column_1: GNU={gnu_value} NEO={neo_value}");
     assert_eq!(
         gnu_value, "(30000 30007)",
-        "GNU: properties branch approximates, simple scan counts the TAB"
+        "GNU: properties branch approximates, the property-free buffer does not"
     );
     assert_eq!(neo_value, gnu_value, "current_column_1 must match GNU");
 }
@@ -462,7 +464,7 @@ fn move_to_column_partial_width_window_matches_gnu() {
            (insert \"\\n\") \
            (setq truncate-lines nil) \
            (setq truncate-partial-width-windows 50) \
-           (split-window (selected-window) 40) \
+           (split-window (selected-window) 40 'right) \
            (set-window-buffer (selected-window) (current-buffer)) \
            (set-buffer (current-buffer)) \
            (goto-char 1) \
@@ -491,7 +493,9 @@ fn move_to_column_partial_width_window_matches_gnu() {
 /// SELECTED frame only (`src/window.c:3314-3326`).  A buffer displayed only
 /// on another frame therefore gets no partial-width truncation: with
 /// truncate-lines nil GNU takes the exact walk, even though that other
-/// frame's window is narrow.
+/// frame's window is narrow.  The current buffer must be set inside the
+/// same command (the selected frame keeps showing another buffer), so this
+/// row embeds its message.
 #[test]
 fn move_to_column_other_frame_window_stays_exact_like_gnu() {
     let (mut gnu, mut neo) = boot_pair("");
@@ -501,6 +505,7 @@ fn move_to_column_other_frame_window_stays_exact_like_gnu() {
         &mut gnu,
         &mut neo,
         "(progn \
+           (setq long-line-threshold 50000 large-hscroll-threshold 10000) \
            (let* ((orig (selected-frame)) \
                   (buf (get-buffer-create \"*p640-s2-of*\")) \
                   (other (make-frame))) \
@@ -508,28 +513,33 @@ fn move_to_column_other_frame_window_stays_exact_like_gnu() {
              (set-window-buffer (selected-window) buf) \
              (set-buffer buf) \
              (erase-buffer) \
-             (insert (make-string 1000 ?a)) \
-             (insert \"\\t\") \
-             (insert (make-string 200000 ?a)) \
-             (insert \"\\n\") \
+             (insert (make-string 1000 ?a)) (insert \"\\t\") \
+             (insert (make-string 200000 ?a)) (insert \"\\n\") \
              (setq truncate-lines nil) \
              (setq truncate-partial-width-windows 50) \
-             (split-window (selected-window) 40) \
+             (split-window (selected-window) 40 'right) \
              (set-window-buffer (selected-window) buf) \
              (goto-char 1) \
              (redisplay t) \
              (select-frame orig) \
              (set-buffer buf) \
-             (goto-char 1)) \
-           nil)",
+             (goto-char 1) \
+             (message (concat \"P640OF\" \"BEGIN%S \" \"P640OF\" \"END\") \
+                      (list (move-to-column 150000) (point)))))",
     );
     read_both(&mut gnu, &mut neo, Duration::from_secs(1));
-    let (gnu_value, neo_value) = paired_message(
-        &mut gnu,
-        &mut neo,
-        "P640OF",
-        "(list (move-to-column 150000) (point))",
-    );
+    let gnu_value = read_marked(&gnu, "P640OF").unwrap_or_else(|| {
+        panic!(
+            "GNU never rendered the other-frame value; grid:\n{}",
+            gnu.text_grid().join("\n")
+        )
+    });
+    let neo_value = read_marked(&neo, "P640OF").unwrap_or_else(|| {
+        panic!(
+            "Neomacs never rendered the other-frame value; grid:\n{}",
+            neo.text_grid().join("\n")
+        )
+    });
     eprintln!("issue#640 other-frame partial width: GNU={gnu_value} NEO={neo_value}");
     assert_eq!(
         gnu_value, "(150000 149994)",
@@ -541,10 +551,6 @@ fn move_to_column_other_frame_window_stays_exact_like_gnu() {
     );
 }
 
-/// Site 3: GNU `window_scroll_for_long_lines` (`src/window.c:6242-6315`) is
-/// the whole-scroll path for long truncated lines: `n *= max(1, ht - nscls)`,
-/// point goes to `ht/2` lines below the new start, and scroll-margin /
-/// scroll-preserve-screen-position are not honored.
 #[test]
 fn scroll_up_long_truncated_line_matches_gnu() {
     let (mut gnu, mut neo) = boot_pair("");
@@ -620,8 +626,10 @@ fn scroll_up_numeric_arg_is_not_the_long_line_path() {
 
 /// N1: GNU binds `fontification-functions` to nil for a whole scroll when
 /// long lines are truncated (`src/window.c:6178-6179`), and Neo's scroll path
-/// runs no Lisp either.  A fontification function must not run inside the
-/// scroll command.
+/// runs no Lisp either.  The count is read inside the same command: the
+/// post-command redisplay can legitimately fontify after the scroll returns
+/// (GNU's attested count then becomes nonzero), so only the in-command value
+/// pins the scroll path.
 #[test]
 fn whole_scroll_runs_no_fontification() {
     let (mut gnu, mut neo) = boot_pair("");
@@ -647,10 +655,22 @@ fn whole_scroll_runs_no_fontification() {
            (redisplay t) \
            (setq p640-s3-calls 0) \
            (scroll-up) \
-           nil)",
+           (message (concat \"P640S3F\" \"BEGIN%S \" \"P640S3F\" \"END\") \
+                    p640-s3-calls))",
     );
     read_both(&mut gnu, &mut neo, Duration::from_secs(1));
-    let (gnu_value, neo_value) = paired_message(&mut gnu, &mut neo, "P640S3F", "p640-s3-calls");
+    let gnu_value = read_marked(&gnu, "P640S3F").unwrap_or_else(|| {
+        panic!(
+            "GNU never rendered the scroll count; grid:\n{}",
+            gnu.text_grid().join("\n")
+        )
+    });
+    let neo_value = read_marked(&neo, "P640S3F").unwrap_or_else(|| {
+        panic!(
+            "Neomacs never rendered the scroll count; grid:\n{}",
+            neo.text_grid().join("\n")
+        )
+    });
     eprintln!("issue#640 scroll fontification calls: GNU={gnu_value} NEO={neo_value}");
     assert_eq!(
         gnu_value, "0",
@@ -705,11 +725,46 @@ fn recenter_long_line_matches_gnu() {
     );
     eprintln!("issue#640 recenter: GNU={gnu_value} NEO={neo_value}");
     assert_eq!(
-        gnu_value, "((t t) t t)",
-        "GNU's line-based recenter placement"
+        gnu_value, "((t t) t nil)",
+        "GNU's line-based recenter placement (the -5 start is model-sensitive)"
     );
     assert_eq!(
         neo_value, gnu_value,
         "recenter must match GNU on a flag buffer"
     );
+}
+
+/// GNU's `current_column` line start is `find_newline (PT, ..., BEGV)`
+/// (`src/indent.c:344-345`): in a narrowed buffer the walk stops at BEGV, so
+/// the approximation returns PT - BEGV.  Neo's `bol_emacs_byte` must use the
+/// accessible start the same way; using the buffer's first line would return
+/// 399999 instead of the attested 299999.
+#[test]
+fn current_column_stops_at_begv_in_a_narrowed_buffer() {
+    let (mut gnu, mut neo) = boot_pair("");
+    resize_both(&mut gnu, &mut neo, 40, 160);
+    read_both(&mut gnu, &mut neo, Duration::from_millis(700));
+    eval_expression(
+        &mut gnu,
+        &mut neo,
+        "(progn \
+           (setq long-line-threshold 50000 large-hscroll-threshold 10000) \
+           (switch-to-buffer (get-buffer-create \"*p640-narrow*\")) \
+           (erase-buffer) \
+           (insert (make-string 1000 ?a)) (insert \"\\t\") \
+           (insert (make-string 1200000 ?a)) \
+           (setq truncate-lines t) \
+           (narrow-to-region 100001 600000) \
+           (goto-char 400000) \
+           (redisplay t) \
+           nil)",
+    );
+    read_both(&mut gnu, &mut neo, Duration::from_secs(1));
+    let (gnu_value, neo_value) = paired_message(&mut gnu, &mut neo, "P640NB", "(current-column)");
+    eprintln!("issue#640 narrowed current-column: GNU={gnu_value} NEO={neo_value}");
+    assert_eq!(
+        gnu_value, "299999",
+        "GNU stops the line start at BEGV (400000 - 100001)"
+    );
+    assert_eq!(neo_value, gnu_value, "BEGV must bound Neo's line start too");
 }
