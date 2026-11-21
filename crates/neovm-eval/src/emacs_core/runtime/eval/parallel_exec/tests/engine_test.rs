@@ -1108,7 +1108,7 @@ fn wired_serial_request_parks_before_the_escape() {
             era_input(
                 context,
                 vec![Value::list(vec![
-                    Value::symbol("cons"),
+                    Value::symbol("+"),
                     Value::fixnum(1),
                     Value::fixnum(2),
                 ])],
@@ -1212,10 +1212,10 @@ fn wired_poll_edges_do_not_dispatch_serially() {
     );
 
     let mut stepper = engine(TestSlots::empty());
-    let form = call("cons", &[Value::fixnum(1), Value::fixnum(2)]);
+    let form = call("+", &[Value::fixnum(1), Value::fixnum(2)]);
     let outcome = stepper.start(&mut ctx, body(&[form]), wide());
     let StepOutcome::Escaped(request) = outcome else {
-        panic!("cons is a World arm");
+        panic!("+ is a World arm");
     };
     assert!(matches!(request.class, EscapeClass::World(_)));
     assert!(eq_value(&request.form, &form));
