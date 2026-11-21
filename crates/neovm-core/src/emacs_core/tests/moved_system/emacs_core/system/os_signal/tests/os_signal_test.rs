@@ -799,7 +799,11 @@ fn this_port_claims_sigchld_and_chains_the_previous_handler() {
 #[test]
 fn this_port_refuses_to_chain_a_siginfo_child_handler() {
     static CALLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-    extern "C" fn previous_siginfo_handler(
+    /// # Safety
+    /// Installed only as an `SA_SIGINFO` SIGCHLD handler, so the kernel
+    /// supplies a valid signal number and the `siginfo_t`/`ucontext_t`
+    /// pointers its disposition guarantees. The body only stores an atomic.
+    unsafe extern "C" fn previous_siginfo_handler(
         _signal: libc::c_int,
         _info: *mut libc::siginfo_t,
         _context: *mut libc::c_void,

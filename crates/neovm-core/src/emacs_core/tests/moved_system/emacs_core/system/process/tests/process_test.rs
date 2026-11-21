@@ -3759,8 +3759,9 @@ fn reaped_pty_process_releases_live_io_but_preserves_stale_status() {
                  ;; process retained because no wait ran `status_notify'.
                  ;; This wait is where GNU takes the
                  ;; `delete-exited-processes' decision (process.c:7926-7937).
-                 (when (memq proc (process-list))
-                   (accept-process-output proc 0.1))
+                 ;; `if` is a special form; `when` is subr.el, absent here.
+                 (if (memq proc (process-list))
+                     (accept-process-output proc 0.1))
                  (list (process-status proc)
                        (get-process "reaped-pty-resource-owner")))"#
         ),
@@ -7686,8 +7687,9 @@ fn process_live_p_loop_runs_pending_default_sentinel() {
                    ;; may exit before any wait ran `status_notify'. The
                    ;; explicit wait is the status_notify this row asserts:
                    ;; it drains XMIDY and then runs the default sentinel.
-                   (when (memq proc (process-list))
-                     (accept-process-output proc 0.1))
+                   ;; `if` is a special form; `when` is subr.el, absent here.
+                   (if (memq proc (process-list))
+                       (accept-process-output proc 0.1))
                    (prog1 (progn (set-buffer buf) (buffer-string))
                      (fmakunbound 'apio-live-p)
                      (kill-buffer buf))))"#
@@ -11854,9 +11856,9 @@ fn process_reaching_terminal_status_dirties_chrome() {
              ;; GNU's SIGCHLD record can settle the status before the
              ;; loop's first check (ledger 180); the mode-line dirty flag is
              ;; set by `status_notify' (process.c:7940), so the row needs the
-             ;; wait that runs it.
-             (when (memq p (process-list))
-               (accept-process-output p 0.1))
+             ;; wait that runs it. `if` is a special form; `when` is subr.el.
+             (if (memq p (process-list))
+                 (accept-process-output p 0.1))
              (symbol-name (process-status p)))"#,
     );
     assert!(result.is_ok(), "the child must run: {result:?}");
