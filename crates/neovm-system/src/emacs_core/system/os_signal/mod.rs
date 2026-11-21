@@ -515,10 +515,19 @@ fn sigaction_noninteractive() -> bool {
 /// it), SIGPROF (only with GNU's `PROFILER_CPU_SUPPORT` configure option;
 /// this build has no CPU profiler), SIGWINCH; and, only when interactive,
 /// SIGINT, SIGQUIT and SIGIO (GNU's `USABLE_SIGIO`; `SIGPOLL` is the same
-/// number where it exists). Flags are `emacs_sigaction_flags`
-/// (src/sysdep.c:1655-1673): `SA_RESTART` only when noninteractive, because
-/// interactive Emacs wants a signal to interrupt a long syscall so pending
-/// input is polled.
+/// number where it exists).
+///
+/// Flags deviate from `emacs_sigaction_flags` (src/sysdep.c:1655-1673) on
+/// purpose: `SA_RESTART` is set in BOTH modes, where GNU drops it when
+/// interactive so a long syscall is interrupted to poll pending input. This
+/// port does not poll pending input in that window; its wake is the self-pipe
+/// and the pidfd, and the one wait it must interrupt is `epoll_wait`, which
+/// signal(7) lists among the calls that are "never restarted after being
+/// interrupted by a signal handler, regardless of the use of SA_RESTART". So
+/// SA_RESTART costs nothing here and spares every other blocking call on the
+/// render, tty-input and worker threads a spurious EINTR; std's `read`/`write`
+/// do not retry `Interrupted`. (This is the internal deviation the pre-N2
+/// install_once comment recorded.)
 #[cfg(unix)]
 fn emacs_sigaction_init(handler: usize, noninteractive: bool) -> libc::sigaction {
     let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
@@ -537,7 +546,7 @@ fn emacs_sigaction_init(handler: usize, noninteractive: bool) -> libc::sigaction
         }
     }
     action.sa_sigaction = handler;
-    action.sa_flags = if noninteractive { libc::SA_RESTART } else { 0 };
+    action.sa_flags = libc::SA_RESTART;
     action
 }
 
@@ -558,9 +567,9 @@ fn emacs_sigaction_init(handler: usize, noninteractive: bool) -> libc::sigaction
 #[cfg(unix)]
 fn install_child_signal_flag() -> bool {
     // SAFETY: `sigaction` receives a fully initialised action and a valid
-    // signal number; the handler only stores an atomic and calls a handler the
-    // process installed, both on the async-signal-safe list. The mask is
-    // empty, matching a flag-writing handler.
+    // signal number; the action goes through `emacs_sigaction_init`, and the
+    // handler only stores an atomic and calls a handler the process
+    // installed, both on the async-signal-safe list.
     unsafe {
         let action = emacs_sigaction_init(note_child_signal as usize, sigaction_noninteractive());
 

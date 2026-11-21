@@ -940,9 +940,10 @@ fn installed_sigchld_action() -> libc::sigaction {
 ///
 /// Mask always: SIGALRM, SIGCHLD, SIGWINCH (SIGDANGER where the platform
 /// defines it, SIGPROF only with GNU's PROFILER_CPU_SUPPORT); interactive
-/// adds SIGINT, SIGQUIT and SIGIO. Flags: `emacs_sigaction_flags` puts
-/// SA_RESTART on the batch action only (src/sysdep.c:1655-1673,
-/// :1679-1707).
+/// adds SIGINT, SIGQUIT and SIGIO. Flags: this port keeps SA_RESTART in both
+/// modes, a recorded deviation from `emacs_sigaction_flags`
+/// (src/sysdep.c:1655-1673): the wake is the self-pipe/pidfd, and
+/// `epoll_wait` is never restarted whatever the flag says.
 #[cfg(unix)]
 #[test]
 fn sigchld_mask_and_flags_match_gnu_in_batch_mode() {
@@ -972,8 +973,9 @@ fn sigchld_mask_and_flags_match_gnu_in_batch_mode() {
 }
 
 /// The interactive half of the same pin: SIGINT/SIGQUIT/SIGIO are blocked
-/// while SIGCHLD runs, and SA_RESTART is absent so long syscalls interrupt
-/// for pending input.
+/// while SIGCHLD runs, and SA_RESTART stays set — the same recorded deviation
+/// from GNU's interactive flags, so no blocking call takes a spurious EINTR
+/// on every child signal.
 #[cfg(unix)]
 #[test]
 fn sigchld_mask_and_flags_match_gnu_in_interactive_mode() {
@@ -994,10 +996,11 @@ fn sigchld_mask_and_flags_match_gnu_in_interactive_mode() {
             "interactive SIGCHLD mask must contain signal {sig}"
         );
     }
-    assert_eq!(
+    assert_ne!(
         action.sa_flags & libc::SA_RESTART,
         0,
-        "interactive emacs_sigaction_flags omits SA_RESTART"
+        "this port keeps SA_RESTART interactively (recorded deviation: the \
+         self-pipe/pidfd wake, and epoll_wait never restarts)"
     );
 }
 
