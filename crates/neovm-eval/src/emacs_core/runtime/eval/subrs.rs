@@ -3525,7 +3525,7 @@ crate::emacs_core::subr::define_subrs! {
     )),
     crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "lread--substitute-object-in-subtree",
-        NativeFn::ContextVec(|_ctx, args| builtin_lread_substitute_object_in_subtree(args)),
+        NativeFn::ContextVec(builtin_lread_substitute_object_in_subtree),
         SubrArity::new(3, Some(3)),
     )),
     crate::emacs_core::subr::world_subr!(SubrSpec::new(

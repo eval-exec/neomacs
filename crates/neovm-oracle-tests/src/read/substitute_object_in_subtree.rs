@@ -1,0 +1,126 @@
+//! Oracle parity tests for `lread--substitute-object-in-subtree`.
+//!
+//! GNU `Flread__substitute_object_in_subtree` and `substitute_object_recurse`
+//! (src/lread.c) put a `#N=` object everywhere its placeholder occurs, in
+//! place. The reader uses them for its own `#N=`, and edebug's reader
+//! (`edebug-read-special`, lisp/emacs-lisp/edebug.el) calls the subr.
+
+use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
+
+#[test]
+fn oracle_prop_lread_substitute_object_in_subtree_walks_containers() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // Conses, vectors, records, byte-code constants, interpreted-closure
+    // environments and string text properties are substituted in place;
+    // hash tables and bool-vectors are left alone. Atoms, an OBJECT that is
+    // the placeholder itself, and a COMPLETED hash table all return nil.
+    let form = r#"(let* ((ph (cons nil nil))
+       (s (propertize "ab" 'p ph 'q (list ph)))
+       (f (make-byte-code 0 "\300\207" (vector ph) 1))
+       (c (make-interpreted-closure nil '(x) (list (cons 'x ph))))
+       (h (make-hash-table :test 'eq))
+       (obj (list 1 ph (vector 2 ph) (cons ph 3) (record 'r ph) s f c h
+                  (make-bool-vector 2 t)))
+       (ph2 (cons nil nil))
+       (small (list 1 ph2 (vector 2 ph2) (cons ph2 3))))
+  (puthash 'k ph h)
+  (list (lread--substitute-object-in-subtree obj ph t)
+        (eq (nth 1 obj) obj)
+        (eq (aref (nth 2 obj) 1) obj)
+        (eq (car (nth 3 obj)) obj)
+        (eq (aref (nth 4 obj) 1) obj)
+        (eq (get-text-property 1 'p s) obj)
+        (eq (car (get-text-property 0 'q s)) obj)
+        (eq (aref (aref f 2) 0) obj)
+        (eq (funcall c) obj)
+        (eq (gethash 'k h) ph)
+        (progn (lread--substitute-object-in-subtree small ph2 t)
+               (let ((print-circle t)) (prin1-to-string small)))
+        (lread--substitute-object-in-subtree 1 2 3)
+        (lread--substitute-object-in-subtree ph ph t)
+        (let ((l (list 1 2))) (lread--substitute-object-in-subtree l ph t) l)
+        (let* ((l (list 1 ph)) (done (make-hash-table :test 'eq)))
+          (puthash l nil done)
+          (lread--substitute-object-in-subtree l ph done)
+          (eq (nth 1 l) l))))"#;
+    let expect = expect_test::expect![[
+        r##""OK (nil t t t t t t t t t \"#1=(1 #1# [2 #1#] (#1# . 3))\" nil nil (1 2) t)""##
+    ]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+#[test]
+fn oracle_prop_lread_substitute_object_in_subtree_signals_sequencep() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // Any other pseudovector signals `(wrong-type-argument sequencep X)`
+    // after the slots walked before it were substituted. A symbol with
+    // position is such a pseudovector unless `symbols-with-pos-enabled`.
+    let form = r#"(let* ((ph (cons nil nil))
+       (obj (list ph (current-buffer) ph))
+       (v (vector ph (make-marker) ph))
+       (e1 (condition-case e (lread--substitute-object-in-subtree obj ph t) (error e)))
+       (e2 (condition-case e (lread--substitute-object-in-subtree v ph t) (error e)))
+       (pos (list (position-symbol 'a 5) ph)))
+  (list (car e1) (car (cdr e1)) (bufferp (nth 2 e1))
+        (eq (car obj) obj) (eq (nth 2 obj) ph)
+        (car e2) (car (cdr e2)) (markerp (nth 2 e2))
+        (eq (aref v 0) v) (eq (aref v 2) ph)
+        (car (condition-case e (lread--substitute-object-in-subtree pos ph t) (error e)))
+        (let ((symbols-with-pos-enabled t))
+          (lread--substitute-object-in-subtree pos ph t)
+          (eq (nth 1 pos) pos))))"#;
+    let expect = expect_test::expect![[
+        r#""OK (wrong-type-argument sequencep t t t wrong-type-argument sequencep t t t wrong-type-argument t)""#
+    ]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+#[test]
+fn oracle_prop_read_circle_substitutes_like_the_subr() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // The reader's own `#N=` goes through the same walk: it reaches a
+    // byte-code literal's constants, and a positioned symbol in a non-cons
+    // `#N=` object signals `sequencep` unless `symbols-with-pos-enabled`.
+    let form = r##"(let ((x (read "#1=#[0 \"\\300\\207\" [#1#] 1]")))
+  (list (eq (aref (aref x 2) 0) x)
+        (car (condition-case e (read-positioning-symbols "#1=[a #1#]") (error e)))
+        (let ((symbols-with-pos-enabled t))
+          (let ((v (read-positioning-symbols "#1=[a #1#]")))
+            (eq (aref v 1) v)))))"##;
+    let expect = expect_test::expect![[r#""OK (t wrong-type-argument t)""#]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+#[test]
+fn oracle_prop_edebug_eval_top_level_form_keeps_circular_literals() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // `edebug-eval-top-level-form` reads `#N=` through `edebug-read-special`,
+    // which calls the subr. Its `eval-expression` prints each value to
+    // stdout, hence the transcript prefix.
+    let form = r#"(progn
+  (require 'edebug)
+  (defvar neo-v nil)
+  (let ((edebug-all-forms t) (edebug-all-defs t) (edebug-initial-mode 'Go-nonstop)
+        (print-circle t))
+    (with-temp-buffer
+      (emacs-lisp-mode)
+      (insert "(setq neo-v '#1=(a . #1#))")
+      (goto-char (point-min))
+      (edebug-eval-top-level-form))
+    (with-temp-buffer
+      (emacs-lisp-mode)
+      (insert "(defun neo-f () (list '#1=(b . #1#) [#2=(c) #2#] '#3=[d #3#]))")
+      (goto-char (point-min))
+      (edebug-eval-top-level-form))
+    (let ((r (neo-f)))
+      (list (eq (cdr neo-v) neo-v) (car neo-v)
+            (eq (cdr (car r)) (car r))
+            (eq (aref (nth 1 r) 0) (aref (nth 1 r) 1))
+            (eq (aref (nth 2 r) 1) (nth 2 r))))))"#;
+    let expect = expect_test::expect![[r##""#1=(a . #1#)neo-fOK (t a t t t)""##]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}

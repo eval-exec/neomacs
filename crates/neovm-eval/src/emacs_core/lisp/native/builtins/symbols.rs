@@ -5724,18 +5724,24 @@ pub fn builtin_kill_emacs(eval: &mut super::eval::Context, args: Vec<Value>) -> 
     eval.shutdown_with_hooks(request)
 }
 
-/// `(lower-frame &optional FRAME)`
+/// `(lread--substitute-object-in-subtree OBJECT PLACEHOLDER COMPLETED)`
 ///
-/// GNU `Flower_frame` opens with `decode_live_frame (frame)` (`src/frame.c`),
-/// so a window, a symbol, or anything else that is not a live frame is
-/// rejected against `frame-live-p` before any lowering is attempted.  The
-/// lowering itself has no effect without a window system, but the type check
-/// is not conditional on one -- accepting every argument silently is how a
-/// caller passing the wrong object learns nothing.
-
+/// GNU `Flread__substitute_object_in_subtree` (`src/lread.c`): put OBJECT
+/// wherever PLACEHOLDER occurs inside it, in place, and return nil. edebug's
+/// `#N=` reader (`edebug-read-special`) calls it. COMPLETED only names the
+/// nodes GNU remembers against cycles; the shared reader walk remembers every
+/// container instead (`value_reader::substitute_object_in_subtree`).
 #[doc(hidden)]
-pub fn builtin_lread_substitute_object_in_subtree(args: Vec<Value>) -> EvalResult {
+pub fn builtin_lread_substitute_object_in_subtree(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
     expect_args("lread--substitute-object-in-subtree", &args, 3)?;
+    crate::emacs_core::value_reader::substitute_object_in_subtree(
+        args[0],
+        args[1],
+        eval.symbol_mode(),
+    )?;
     Ok(Value::NIL)
 }
 
