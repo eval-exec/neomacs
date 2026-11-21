@@ -17807,35 +17807,30 @@ fn a_just_this_one_wait_notifies_another_childs_sentinel_like_gnu() {
     );
 }
 
-/// A write that hits `EPIPE` must not decide the child's fate: GNU's EPIPE
-/// arm in `send_process` (src/process.c:6940-6946 on master, as of
-/// e381cf1fc97, 2025-08-15) closes the write fd and signals `"Process %s no
-/// longer connected to pipe; closed it"` -- and touches NOTHING else.  The
-/// child's real status arrives through the SIGCHLD record and
-/// `status_notify` runs the sentinel with it.  (The emacs-31.1 release still
-/// has the pre-e381cf1fc97 arm at :6923-6931, which synthesizes
-/// `(exit . 256)` and bumps the tick; this port follows master.)
+/// A send after SIGCHLD recorded the child reports GNU's "not running"
+/// status, not the pipe-break message.
 ///
-/// This port used to write `(exit . 256)` into the settled status right in
-/// the EPIPE branch.  A terminal status makes the child ineligible for the
-/// reap sweep (`SweepableChild::of` admits only `run`/`stop`), and the branch
-/// set no `status_notify_pending`, so the real exit was never recorded and
-/// the SENTINEL NEVER RAN.  Lisp-visible consequence, measured with lsp-mode
-/// against a crashing nixd: `lsp--handle-process-exit` never runs, the dead
-/// workspace stays in the session, and every later `process-send-string`
-/// reports "Process nixd-lsp not running: exited abnormally with code 256"
-/// forever.
+/// `send_process` settles the recorded status first: `if (p->raw_status_new)
+/// update_status (p); if (! EQ (p->status, Qrun)) error ("Process %s not
+/// running: %s", ...)` (src/process.c:6725-6728).  By the time Lisp sends,
+/// `handle_child_signal` has already recorded the exit
+/// (src/process.c:7734-7763), so the "no longer connected to pipe" arm
+/// (:6923-6931 in emacs-31.1) is unreachable for a child that has been
+/// reaped.  This port now makes the same record at its
+/// `UpdateStatusSite::SendProcess` observation, so the send reports the real
+/// exit (attested GNU 31.1 and Neomacs both print
+/// `Process epipe-child not running: exited abnormally with code 7`).
 ///
-/// The scenario needs the send to beat the reap sweep to the dead child,
-/// which no Lisp program can arrange (any wait sweeps first) -- so the pause
-/// between spawn and send is a host-level sleep with no Lisp wait in it.
-/// GNU itself cannot reach the EPIPE arm this way (its SIGCHLD is
-/// asynchronous, so the send finds the status already settled); the pinned
-/// divergence that statuses here settle only at wait sites (ledger 180/184)
-/// is exactly what makes the arm reachable, and therefore what its contract
-/// protects.
+/// The EPIPE arm itself still must not decide the child's fate when it is
+/// reachable (a pipe break while the status still reads run); that contract
+/// is documented at the branch in `types.rs`.
+///
+/// The scenario needs the send to beat the wait's sweep to the dead child,
+/// which no Lisp program can arrange, so the pause between spawn and send is
+/// a host-level sleep with no Lisp wait in it; the SIGCHLD latch supplies
+/// GNU's timing at the send's own observation.
 #[test]
-fn epipe_on_send_leaves_the_real_child_status_for_the_next_wait_to_reap() {
+fn a_sigchld_recorded_child_reports_not_running_at_the_next_send_like_gnu() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::runtime_startup_context();
     let sh = find_bin("sh");
@@ -17860,8 +17855,8 @@ fn epipe_on_send_leaves_the_real_child_status_for_the_next_wait_to_reap() {
     );
     assert_eq!(result, "OK t");
 
-    // The child exits immediately; nothing here runs a Lisp wait, so no
-    // sweep records its death before the send below.
+    // The child exits immediately; nothing here runs a Lisp wait, so only the
+    // SIGCHLD latch records its death before the send's observation.
     std::thread::sleep(Duration::from_millis(400));
 
     let send = eval_one_in_context(
@@ -17871,12 +17866,15 @@ fn epipe_on_send_leaves_the_real_child_status_for_the_next_wait_to_reap() {
              (error (error-message-string err)))"#,
     );
     assert_eq!(
-        send, r#"OK "Process epipe-child no longer connected to pipe; closed it""#,
-        "GNU's EPIPE arm closes the pipe and says so"
+        send,
+        r##"OK "Process epipe-child not running: exited abnormally with code 7
+""##,
+        "GNU's send_process settles the SIGCHLD record before testing status \
+         (src/process.c:6725-6728); attested GNU 31.1 prints the same string"
     );
 
-    // GNU: the EPIPE arm did not settle a status, so the child is still
-    // sweepable; the next wait reaps the REAL exit and runs the sentinel.
+    // The status the send reported is the child's real exit; the next wait
+    // runs the sentinel with it.
     let after = eval_one_in_context(
         &mut eval,
         r#"(progn

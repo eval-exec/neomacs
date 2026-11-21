@@ -152,7 +152,7 @@ mod platform;
 /// **SIGCHLD is not a `HandledSignal`**: GNU registers it with
 /// `catch_child_signal` rather than `add_user_signal`, and its Lisp-visible
 /// work is the child record, not a user event. It has its own private,
-/// flag-only handler installed by [`install`]:
+/// flag-writing handler installed by [`install`]:
 ///
 /// * GNU's `handle_child_signal` (src/process.c:7734-7763) walks the process
 ///   alist and reaps every changed child. That walk cannot run in signal
@@ -171,6 +171,13 @@ mod platform;
 ///   GNU's WINDOWSNT `pselect` emulation uses, and this port's
 ///   `polling::Poller::wait` catches `ErrorKind::Interrupted` and re-enters.
 ///   The signal has no wake job left.
+/// * `catch_child_signal` (src/process.c:8645-8662) also preserves the handler
+///   it replaces and calls it from `handle_child_signal`'s last line
+///   (`lib_child_handler (sig)`, :7657, :7769), which keeps Glib's or
+///   GNUstep's own child tracking working. [`install_child_signal_flag`] makes
+///   the same swap and [`note_child_signal`] chains the preserved handler.
+///   Ledger 208 had removed the disposition; this is the entry for re-adding
+///   it, with that source citation, rather than only the flag write.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(usize)]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -410,10 +417,29 @@ static PENDING: [AtomicU32; HandledSignal::COUNT] =
 /// does not reap ahead of GNU's signal timing.
 static CHILD_SIGNAL_SEEN: AtomicBool = AtomicBool::new(false);
 
+/// GNU's `lib_child_handler` (src/process.c:7657): the handler that was
+/// installed for SIGCHLD before `catch_child_signal` claimed the signal, or 0
+/// for `SIG_DFL`/`SIG_IGN`. `note_child_signal` calls it after latching, as
+/// `handle_child_signal` ends `lib_child_handler (sig);` (:7769), so a library
+/// that installed its own child handler (Glib before 2.73.2, GNUstep) keeps
+/// receiving the signal while this port records the child.
 #[cfg(unix)]
-extern "C" fn note_child_signal(_signal: libc::c_int) {
+static LIB_CHILD_HANDLER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(unix)]
+extern "C" fn note_child_signal(signal: libc::c_int) {
     // Async-signal-safe: one relaxed store, no allocation, no lock.
     CHILD_SIGNAL_SEEN.store(true, Ordering::Relaxed);
+    let handler = LIB_CHILD_HANDLER.load(Ordering::Acquire);
+    if handler != 0 {
+        // SAFETY: `install_child_signal_flag` stores only a previous handler
+        // that was neither `SIG_DFL` nor `SIG_IGN`, captured by `sigaction`
+        // for this same signal and called with the signal number, exactly as
+        // GNU calls `lib_child_handler (sig)`. Signals are asynchronous, so
+        // the call is not a Rust borrow of any state guarded by a lock.
+        let handler: extern "C" fn(libc::c_int) = unsafe { std::mem::transmute(handler) };
+        handler(signal);
+    }
 }
 
 /// Whether a SIGCHLD was delivered since the last full status walk.
@@ -426,17 +452,47 @@ pub(crate) fn clear_child_signal_seen() {
     CHILD_SIGNAL_SEEN.store(false, Ordering::Relaxed);
 }
 
+/// Claim SIGCHLD the way GNU's `catch_child_signal` does
+/// (src/process.c:8645-8662 led down to the flag-only handler above):
+///
+/// * block SIGCHLD across the swap, as `block_child_signal` does;
+/// * install `note_child_signal`;
+/// * keep whatever handler was installed before, so `note_child_signal` can
+///   chain it (`lib_child_handler (sig)`, src/process.c:7657, :7769).
+///
+/// GNU replaces the disposition with `deliver_child_signal` here. Ledger 208
+/// had removed it entirely; 456ab01b28 re-added it as GNU's flag-only
+/// equivalent, and this function is that entry's citation for the install.
 #[cfg(unix)]
 fn install_child_signal_flag() -> bool {
     // SAFETY: `sigaction` receives a fully initialised action and a valid
-    // signal number; the handler only stores an atomic, which is on the
-    // async-signal-safe list. The mask is empty, matching a flag-only handler.
+    // signal number; the handler only stores an atomic and calls a handler the
+    // kernel itself installed, both on the async-signal-safe list. The mask is
+    // empty, matching a flag-only handler.
     unsafe {
         let mut action: libc::sigaction = std::mem::zeroed();
         libc::sigemptyset(&mut action.sa_mask);
         action.sa_sigaction = note_child_signal as usize;
         action.sa_flags = libc::SA_RESTART;
-        libc::sigaction(libc::SIGCHLD, &action, std::ptr::null_mut()) == 0
+
+        let mut set: libc::sigset_t = std::mem::zeroed();
+        let mut old_set: libc::sigset_t = std::mem::zeroed();
+        libc::sigemptyset(&mut set);
+        libc::sigaddset(&mut set, libc::SIGCHLD);
+        libc::sigprocmask(libc::SIG_BLOCK, &set, &mut old_set);
+
+        let mut old_action: libc::sigaction = std::mem::zeroed();
+        let installed = libc::sigaction(libc::SIGCHLD, &action, &mut old_action) == 0;
+        if installed
+            && old_action.sa_sigaction != note_child_signal as usize
+            && old_action.sa_sigaction != libc::SIG_DFL
+            && old_action.sa_sigaction != libc::SIG_IGN
+        {
+            LIB_CHILD_HANDLER.store(old_action.sa_sigaction, Ordering::Release);
+        }
+
+        libc::sigprocmask(libc::SIG_SETMASK, &old_set, std::ptr::null_mut());
+        installed
     }
 }
 
