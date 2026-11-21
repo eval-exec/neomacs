@@ -4123,6 +4123,7 @@ dependencies = [
  "enum_dispatch",
  "flate2",
  "fontdb",
+ "freetype-rs",
  "image",
  "image-extras",
  "imagesize 0.15.0",
@@ -4150,6 +4151,7 @@ dependencies = [
  "tracing-test",
  "wgpu",
  "wgpu-hal",
+ "yeslogic-fontconfig-sys",
  "zune-jpeg",
 ]
 

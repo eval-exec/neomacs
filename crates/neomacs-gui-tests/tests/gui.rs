@@ -260,3 +260,6 @@ mod line_number_scaled_cursor;
 
 #[path = "desktop_text_scaling.rs"]
 mod desktop_text_scaling;
+
+#[path = "font_hinting_weight.rs"]
+mod font_hinting_weight;

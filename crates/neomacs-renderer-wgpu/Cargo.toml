@@ -47,6 +47,10 @@ neomacs-font-materializer.workspace = true
 neomacs-layout-engine.workspace = true
 neomacs-video = { workspace = true, optional = true }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+freetype-rs = { version = "0.38.0" }
+yeslogic-fontconfig-sys.workspace = true
+
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-core-foundation.workspace = true
 objc2-core-graphics.workspace = true

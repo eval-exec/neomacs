@@ -4,6 +4,8 @@
 
 pub mod allocator;
 mod bitmap_fonts;
+#[cfg(target_os = "linux")]
+mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
 pub mod pages;
@@ -569,6 +571,8 @@ pub struct WgpuGlyphAtlas {
     atlas_config: GlyphAtlasConfig,
     font_system: FontSystem,
     scale_context: ScaleContext,
+    #[cfg(target_os = "linux")]
+    native_rasterizer: linux::NativeRasterizer,
     #[cfg(target_os = "macos")]
     native_rasterizer: macos::NativeRasterizer,
     bind_group_layout: wgpu::BindGroupLayout,
@@ -716,6 +720,8 @@ impl WgpuGlyphAtlas {
                 fontdb::Database::new(),
             ),
             scale_context: ScaleContext::new(),
+            #[cfg(target_os = "linux")]
+            native_rasterizer: linux::NativeRasterizer::default(),
             #[cfg(target_os = "macos")]
             native_rasterizer: macos::NativeRasterizer::default(),
             bind_group_layout,
@@ -1482,6 +1488,17 @@ impl WgpuGlyphAtlas {
             .font_system
             .get_font(cache_key.font_id, cache_key.font_weight)?;
 
+        // FreeType can replay Fontconfig's light/full hinting policy, while
+        // Swash's public hint switch cannot represent that distinction.
+        #[cfg(target_os = "linux")]
+        if let Some(info) = self.font_system.db().face(cache_key.font_id)
+            && let Some(image) =
+                self.native_rasterizer
+                    .rasterize(&font, info, cache_key, render_mode)
+        {
+            return Some(image);
+        }
+
         // The native macOS adapter publishes a grayscale coverage mask. Keep
         // it on the Alpha path; a future subpixel mode must stay on Swash (or
         // grow a subpixel mask of its own).
@@ -2134,7 +2151,7 @@ impl WgpuGlyphAtlas {
         self.resolved_fonts_by_fontdb.clear();
         self.color_font_assets.clear();
         self.color_glyph_rasterizer.clear();
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         self.native_rasterizer.clear();
         self.color_font_ids.clear();
         // A missing/replaced platform font can become available after the
