@@ -13,8 +13,9 @@ use neovm_value::tagged::transport::SharedRoot;
 
 pub(crate) use neovm_value::tagged::gc::PollOutcome;
 
-/// Called by the E4 engine's form-return edge. The engine is test-only until
-/// the executor lands, so the compiler still sees this as dead.
+/// Called by the E4 engine's compound-form entry and its form-return
+/// boundary. The engine is test-only until the executor lands, so the compiler
+/// still sees this as dead.
 #[cfg_attr(
     not(test),
     expect(dead_code, reason = "the test-only E4 engine calls this")
@@ -26,9 +27,11 @@ pub(crate) fn poll_interp_call_entry(
     owner.poll(roots)
 }
 
+/// Called by the E4 engine's `progn` body step. The engine is test-only until
+/// the executor lands, so the compiler still sees this as dead.
 #[cfg_attr(
     not(test),
-    expect(dead_code, reason = "READY-E2B, wired by the E4 engine slice")
+    expect(dead_code, reason = "the test-only E4 engine calls this")
 )]
 pub(crate) fn poll_interp_back_edge(
     owner: &mut Mutator<'_>,
@@ -39,7 +42,10 @@ pub(crate) fn poll_interp_back_edge(
 
 #[cfg_attr(
     not(test),
-    expect(dead_code, reason = "READY-E2B, wired by the E4 engine slice")
+    expect(
+        dead_code,
+        reason = "waiting for the parallel bytecode VM executor (E4 §5 VM roster)"
+    )
 )]
 pub(crate) fn poll_vm_back_edge(
     owner: &mut Mutator<'_>,
@@ -50,7 +56,10 @@ pub(crate) fn poll_vm_back_edge(
 
 #[cfg_attr(
     not(test),
-    expect(dead_code, reason = "READY-E2B, wired by the E4 engine slice")
+    expect(
+        dead_code,
+        reason = "waiting for the parallel bytecode VM executor (E4 §5 VM roster)"
+    )
 )]
 pub(crate) fn poll_vm_call(
     owner: &mut Mutator<'_>,

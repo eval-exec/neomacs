@@ -60,10 +60,36 @@ pub(crate) trait SerialEscape {
 /// [`Mutator::poll`](neovm_value::tagged::gc::Mutator::poll) retries `Busy`
 /// internally; an `Err` that reaches the engine is a genuine owner refusal
 /// and becomes [`EngineFault::Poll`].
+///
+/// # Publication invariant (R1)
+///
+/// At every call, each Lisp [`Value`] that must survive the poll is reachable
+/// either from the published [`FrameArena`] or from an owner record the
+/// production impl includes in its batch. A caller, or a production holder,
+/// must not carry an unrooted `Value` across the call.
+///
+/// The harness satisfies this by construction at its three sites: the form is
+/// the top frame's `cursor`, the previous body is the frame's `body`, and an
+/// escape's form is reachable from `cursor`. `Stage1`'s `slots`, `ops` and
+/// `escape` fields and the `&mut Context` argument are **outside**
+/// `publish_scan`; a production executor must publish them or prove them
+/// value-free at a poll.
+///
+/// One existing escape edge shows the boundary of the proof: `eval_arg_list`
+/// calls `record` (and so [`OwnerPoll::serial_request`]) while its
+/// `args` vector holds earlier arguments. That vector is abandoned on the
+/// escape path (the engine drops it without storing it), and every element is
+/// a quoted payload or a literal atom that is a sub-object of the frame's
+/// cursor form, so nothing in it needs to survive the poll. A caller may not
+/// generalize that: a value that is stored after the poll must be rooted
+/// before it.
 pub(crate) trait OwnerPoll {
-    /// Form-return boundary: every completed top-level form and every return
-    /// from a nested `progn` arrives here.
+    /// Compound-form entry: every form `eval_call` receives, including the
+    /// `quote`/`progn` special cases.
     fn interp_call_entry(&mut self, arena: &FrameArena) -> Result<PollOutcome, RendezvousError>;
+
+    /// The `progn` body step: one poll per form fetched into a frame's cursor.
+    fn interp_back_edge(&mut self, arena: &FrameArena) -> Result<PollOutcome, RendezvousError>;
 
     /// The edge immediately before a serial escape is recorded.
     fn serial_request(&mut self, arena: &FrameArena) -> Result<PollOutcome, RendezvousError>;
@@ -418,6 +444,12 @@ where
                 {
                     return StepOutcome::Fault(EngineFault::StaleFrame);
                 }
+                // The `progn` body step. Both live values were just stored on
+                // the top frame: `form` is its cursor, `rest` its body, and
+                // `publish_scan` walks both. Nothing else is live here.
+                if let Err(error) = self.poll.interp_back_edge(&self.arena) {
+                    return StepOutcome::Fault(EngineFault::Poll(error));
+                }
                 continue;
             }
             let form = frame.cursor;
@@ -551,6 +583,12 @@ where
     }
 
     fn eval_call(&mut self, ctx: &mut Context, form: Value) -> FormStep {
+        // Compound-form entry, before head resolution or argument evaluation.
+        // `form` is the top frame's cursor, so `publish_scan` already sees it;
+        // no argument vector exists yet.
+        if let Err(error) = self.poll.interp_call_entry(&self.arena) {
+            return FormStep::Stop(StepOutcome::Fault(EngineFault::Poll(error)));
+        }
         let head = form.cons_car();
         let tail = form.cons_cdr();
         let Some(name) = head.as_symbol_name(SymbolMode::Bare) else {
