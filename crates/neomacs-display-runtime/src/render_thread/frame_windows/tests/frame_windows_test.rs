@@ -25,6 +25,55 @@ fn default_geometry_hints() -> GuiFrameGeometryHints {
     }
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn display_raster_policy_survives_device_teardown_and_primary_readoption() {
+    use crate::display_raster::DisplayRasterOptions;
+    use neomacs_font_materializer::fontconfig::{
+        SurfaceFontOptions, SurfaceSubpixelOrder, XftResources,
+    };
+    let options = DisplayRasterOptions::X11(SurfaceFontOptions::from_xlib_resources(
+        XftResources::default(),
+        SurfaceSubpixelOrder::Unknown,
+    ));
+    let mut manager = GuiFrameWindowManager::new();
+    manager.set_font_raster_options(options);
+    manager.set_primary_pending(GuiFrameWindowState {
+        visibility: WindowVisibility::Visible,
+        pending_scale_factor: None,
+        lifecycle: FrameLifecycle::Pending {
+            width: 800,
+            height: 600,
+            scale_factor: 1.0,
+            mouse_hidden_for_typing: false,
+            ime_enabled: false,
+            last_ime_cursor_area: None,
+            chrome: Default::default(),
+            geometry_hints: None,
+            pending_position: None,
+        },
+        render: GuiFrameRenderState::new_without_device(
+            42,
+            false,
+            neomacs_display_protocol::frame_time::observe_platform_now(),
+        ),
+    });
+    manager.adopt_primary_frame_id(42);
+    assert_eq!(manager.get(42).unwrap().render.font_raster_options, options);
+    manager.clear_gpu_resident_state();
+    assert_eq!(manager.get(42).unwrap().render.font_raster_options, options);
+
+    let detached = manager.take_primary_window().unwrap();
+    manager.clear_primary_mapping();
+    manager.set_font_raster_options(DisplayRasterOptions::Wayland);
+    manager.set_primary_pending(detached);
+    manager.adopt_primary_frame_id(42);
+    assert_eq!(
+        manager.get(42).unwrap().render.font_raster_options,
+        DisplayRasterOptions::Wayland
+    );
+}
+
 #[test]
 fn gui_text_input_policy_enables_native_ime_on_window_creation() {
     let policy = NativeTextInputPolicy::for_gui_frame();

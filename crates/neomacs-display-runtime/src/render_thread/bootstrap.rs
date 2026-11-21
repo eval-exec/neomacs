@@ -561,6 +561,7 @@ fn run_render_loop_with_startup(
     };
 
     tracing::info!("Render thread entering winit event loop");
+    let font_raster_options = crate::display_scale::observe_font_raster_options(&event_loop);
     let preparation_proxy = event_loop.create_proxy();
     let exit_input = comms.input_tx.clone();
     let command_rx = comms.cmd_rx.clone();
@@ -582,6 +583,10 @@ fn run_render_loop_with_startup(
                 shared_terminals,
             );
             let mut app = app;
+            app.font_raster_options = font_raster_options;
+            app.frame_windows
+                .set_font_raster_options(font_raster_options);
+            app.tooltips.set_font_raster_options(font_raster_options);
             match super::frame_preparation::FramePreparation::spawn(
                 app.comms.frame_rx.clone(),
                 move || preparation_proxy.wake_up(),

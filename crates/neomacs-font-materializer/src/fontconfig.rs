@@ -16,6 +16,11 @@ use std::{
 // Fontconfig exposes this since 2.11.91; the raw binding omits it.
 unsafe extern "C" {
     fn FcWeightFromOpenType(weight: i32) -> i32;
+    fn strtol(
+        value: *const std::ffi::c_char,
+        end: *mut *mut std::ffi::c_char,
+        base: std::ffi::c_int,
+    ) -> std::ffi::c_long;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -32,12 +37,153 @@ enum Hinting {
     Full,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Filter {
     None,
     Default,
     Light,
     Legacy,
+}
+
+/// Borrowed XGetDefault("Xft", ...) values for one Xlib screen.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct XftResources<'a> {
+    pub antialias: Option<&'a str>,
+    pub hinting: Option<&'a str>,
+    pub hintstyle: Option<&'a str>,
+    pub rgba: Option<&'a str>,
+    pub lcdfilter: Option<&'a str>,
+}
+
+/// Physical color-component order reported by XRender or Xft.rgba.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SurfaceSubpixelOrder {
+    #[default]
+    Unknown,
+    Rgb,
+    Bgr,
+    VRgb,
+    VBgr,
+    None,
+}
+
+impl SurfaceSubpixelOrder {
+    pub fn from_xrender(value: i32) -> Self {
+        match value {
+            1 => Self::Rgb,
+            2 => Self::Bgr,
+            3 => Self::VRgb,
+            4 => Self::VBgr,
+            5 => Self::None,
+            _ => Self::Unknown,
+        }
+    }
+
+    fn from_fontconfig(value: i32) -> Self {
+        // Fontconfig and XRender use the same order constants.
+        Self::from_xrender(value)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum SurfaceAntialias {
+    #[default]
+    Default,
+    None,
+    Gray,
+    Subpixel(SurfaceSubpixelOrder),
+}
+
+/// Cairo surface font options, distinct from the font pattern's metric policy.
+/// Default leaves the font pattern in charge (including the Wayland path).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SurfaceFontOptions {
+    antialias: SurfaceAntialias,
+    hinting: Option<Hinting>,
+    // None is Cairo DEFAULT/inherit, distinct from explicit FC_LCD_DEFAULT.
+    lcd_filter: Option<Filter>,
+}
+
+impl SurfaceFontOptions {
+    /// Mirror cairo-xlib-screen.c's screen defaults and Xft precedence.
+    pub fn from_xlib_resources(
+        resources: XftResources<'_>,
+        server_order: SurfaceSubpixelOrder,
+    ) -> Self {
+        let hinting = if !resources.hinting.and_then(xft_boolean).unwrap_or(true) {
+            Some(Hinting::None)
+        } else {
+            match resources.hintstyle.and_then(xft_integer).unwrap_or(3) {
+                0 => Some(Hinting::None),
+                1 => Some(Hinting::Slight),
+                2 => Some(Hinting::Medium),
+                3 => Some(Hinting::Full),
+                _ => None,
+            }
+        };
+        let order = resources
+            .rgba
+            .and_then(xft_integer)
+            .map(SurfaceSubpixelOrder::from_fontconfig)
+            .unwrap_or(server_order);
+        let antialias = if !resources.antialias.and_then(xft_boolean).unwrap_or(true) {
+            SurfaceAntialias::None
+        } else {
+            match order {
+                SurfaceSubpixelOrder::Unknown | SurfaceSubpixelOrder::None => {
+                    SurfaceAntialias::Gray
+                }
+                _ => SurfaceAntialias::Subpixel(order),
+            }
+        };
+        let lcd_filter = match resources.lcdfilter.and_then(xft_integer) {
+            Some(0) => Some(Filter::None),
+            Some(1) => Some(Filter::Default),
+            Some(2) => Some(Filter::Light),
+            Some(3) => Some(Filter::Legacy),
+            _ => None,
+        };
+        Self {
+            antialias,
+            hinting,
+            lcd_filter,
+        }
+    }
+
+    /// None inherits the atlas's pattern order. Explicit gray/mono surfaces
+    /// disable LCD even when the font pattern requests RGB antialiasing.
+    pub fn raster_subpixel_order(self) -> Option<SurfaceSubpixelOrder> {
+        match self.antialias {
+            SurfaceAntialias::Default => None,
+            SurfaceAntialias::None | SurfaceAntialias::Gray => Some(SurfaceSubpixelOrder::None),
+            SurfaceAntialias::Subpixel(order) => Some(order),
+        }
+    }
+}
+
+fn xft_boolean(value: &str) -> Option<bool> {
+    match value.as_bytes() {
+        [b't' | b'T' | b'y' | b'Y' | b'1', ..] => Some(true),
+        [b'f' | b'F' | b'n' | b'N' | b'0', ..] => Some(false),
+        [b'o', b'n' | b'N', ..] => Some(true),
+        [b'o', b'f' | b'F', ..] => Some(false),
+        _ => None,
+    }
+}
+
+fn xft_integer(value: &str) -> Option<i32> {
+    let value = CString::new(value).ok()?;
+    let mut constant = 0;
+    // SAFETY: terminated input remains live and Fontconfig writes one integer;
+    // FcNameConstant borrows its input and does not retain or mutate it.
+    if unsafe { fc::FcNameConstant(value.as_ptr().cast_mut().cast(), &mut constant) } != 0 {
+        return Some(constant);
+    }
+    let mut end = ptr::null_mut();
+    // SAFETY: terminated input and writable end pointer. Base zero and accepting
+    // any consumed prefix match Cairo's get_integer_default, including hex/octal.
+    let parsed = unsafe { strtol(value.as_ptr(), &mut end, 0) };
+    (end != value.as_ptr().cast_mut()).then_some(parsed as i32)
 }
 
 impl Filter {
@@ -59,6 +205,29 @@ pub struct FontRenderOptions {
     horizontal_lcd: bool,
     metrics_mode: FontRenderMode,
     lcd_filter: Filter,
+}
+
+/// Merged raster-only policy. It deliberately exposes no metric probe API.
+#[derive(Clone, Copy, Debug)]
+pub struct RasterFontOptions(FontRenderOptions);
+
+impl RasterFontOptions {
+    pub fn load_flags(self, disable_hinting: bool, requested: FontRenderMode) -> LoadFlag {
+        let flags = self.0.load_flags(disable_hinting, requested);
+        if self.0.antialias {
+            flags
+        } else {
+            flags | LoadFlag::MONOCHROME
+        }
+    }
+
+    pub fn render_mode(self, requested: FontRenderMode) -> RenderMode {
+        self.0.render_mode(requested)
+    }
+
+    pub fn lcd_filter(self) -> LcdFilter {
+        self.0.lcd_filter()
+    }
 }
 
 /// Fontconfig authority borrowed for one policy query. No context is globalized.
@@ -289,6 +458,37 @@ impl<'a> FontconfigContext<'a> {
 }
 
 impl FontRenderOptions {
+    /// Cairo's FT merge gives explicit surface settings precedence, except
+    /// that the font pattern's NONE values disable hinting, AA or filtering.
+    /// This copy affects masks only; this font's metric policy stays intact.
+    pub fn for_surface(self, surface: SurfaceFontOptions) -> RasterFontOptions {
+        let mut raster = self;
+        // With antialias=false Cairo never loads the pattern's hintstyle or
+        // LCD filter; those remain DEFAULT until the surface merge.
+        let pattern_hinting = self.antialias.then_some(self.hinting);
+        raster.hinting = if pattern_hinting == Some(Hinting::None) {
+            Hinting::None
+        } else {
+            // Cairo ignores pattern hintstyle when pattern AA is disabled;
+            // unresolved DEFAULT then loads the hinted monochrome target.
+            surface.hinting.or(pattern_hinting).unwrap_or(Hinting::Full)
+        };
+        raster.antialias = self.antialias && surface.antialias != SurfaceAntialias::None;
+        raster.horizontal_lcd = match surface.antialias {
+            SurfaceAntialias::Default => self.horizontal_lcd,
+            SurfaceAntialias::Subpixel(SurfaceSubpixelOrder::Rgb | SurfaceSubpixelOrder::Bgr) => {
+                true
+            }
+            _ => false,
+        };
+        raster.lcd_filter = if self.antialias && self.lcd_filter == Filter::None {
+            Filter::None
+        } else {
+            surface.lcd_filter.unwrap_or(self.lcd_filter)
+        };
+        RasterFontOptions(raster)
+    }
+
     /// Preserve the configured native hinting target for device advances.
     pub fn metrics_load_flags(self) -> LoadFlag {
         self.load_flags(false, self.metrics_mode) & !LoadFlag::NO_BITMAP
@@ -412,3 +612,7 @@ impl Drop for Pattern {
 #[cfg(test)]
 #[path = "tests/fontconfig_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/surface_font_options_test.rs"]
+mod surface_tests;

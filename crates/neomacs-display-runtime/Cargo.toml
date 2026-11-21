@@ -140,6 +140,7 @@ objc2-app-kit = { workspace = true, features = [
 ] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+neomacs-font-materializer.workspace = true
 neovm-core = { workspace = true, features = ["desktop-font-settings"] }
 # 0.22.9 references GDBusActionGroupClass absent from gio-sys 0.22.8.
 gio = { version = "=0.22.8", default-features = false }

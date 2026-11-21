@@ -968,7 +968,7 @@ impl WgpuGlyphAtlas {
                         normalize_subpixel_mask(
                             &image.data,
                             (width as usize) * (height as usize),
-                            self.subpixel_order,
+                            self.effective_subpixel_order(),
                         ),
                         GlyphPixelKind::SubpixelRgba,
                     )
@@ -2133,6 +2133,18 @@ impl WgpuGlyphAtlas {
         attrs
     }
 
+    /// Install the surface's raster policy separately from font metrics.
+    /// A changed policy invalidates masks and UVs, including composed glyphs.
+    #[cfg(target_os = "linux")]
+    pub fn set_font_surface_options(
+        &mut self,
+        options: neomacs_font_materializer::fontconfig::SurfaceFontOptions,
+    ) {
+        if self.native_rasterizer.set_surface_options(options) {
+            self.clear();
+        }
+    }
+
     /// Clear the cache
     pub fn clear(&mut self) {
         tracing::debug!(
@@ -2439,7 +2451,27 @@ impl WgpuGlyphAtlas {
     }
 
     pub fn subpixel_enabled(&self) -> bool {
-        self.subpixel_order.allows_horizontal_subpixel()
+        self.effective_subpixel_order().allows_horizontal_subpixel()
+    }
+
+    fn effective_subpixel_order(&self) -> FontconfigSubpixelOrder {
+        #[cfg(target_os = "linux")]
+        if let Some(order) = self
+            .native_rasterizer
+            .surface_options()
+            .raster_subpixel_order()
+        {
+            use neomacs_font_materializer::fontconfig::SurfaceSubpixelOrder;
+            return match order {
+                SurfaceSubpixelOrder::Unknown => FontconfigSubpixelOrder::Unknown,
+                SurfaceSubpixelOrder::None => FontconfigSubpixelOrder::None,
+                SurfaceSubpixelOrder::Rgb => FontconfigSubpixelOrder::Rgb,
+                SurfaceSubpixelOrder::Bgr => FontconfigSubpixelOrder::Bgr,
+                SurfaceSubpixelOrder::VRgb => FontconfigSubpixelOrder::VRgb,
+                SurfaceSubpixelOrder::VBgr => FontconfigSubpixelOrder::VBgr,
+            };
+        }
+        self.subpixel_order
     }
 
     fn render_mode(&self, enable_subpixel: bool) -> GlyphRenderMode {

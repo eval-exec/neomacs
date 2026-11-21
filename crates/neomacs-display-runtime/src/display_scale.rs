@@ -7,6 +7,30 @@ use std::sync::OnceLock;
 use winit::event_loop::EventLoop;
 
 #[cfg(target_os = "linux")]
+mod raster;
+
+/// Capture rendering defaults only for the backend winit actually selected.
+/// This snapshot never participates in font selection or metric probing.
+pub(crate) fn observe_font_raster_options(
+    event_loop: &EventLoop,
+) -> crate::display_raster::DisplayRasterOptions {
+    #[cfg(target_os = "linux")]
+    {
+        let backend = if event_loop.is_wayland() {
+            SelectedLinuxBackend::Wayland
+        } else {
+            SelectedLinuxBackend::X11
+        };
+        raster::observe(backend)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = event_loop;
+        crate::display_raster::DisplayRasterOptions::Other
+    }
+}
+
+#[cfg(target_os = "linux")]
 use std::ffi::CStr;
 #[cfg(target_os = "linux")]
 use std::ptr;
@@ -227,6 +251,52 @@ fn query_x11_display() -> X11DisplayObservation {
     unsafe { (xlib.XCloseDisplay)(display) };
 
     raw.validate()
+}
+
+#[cfg(target_os = "linux")]
+fn query_x11_font_resources() -> raster::Resources {
+    use raster::Resources;
+    use x11_dl::xrender;
+    let Ok(xlib) = xlib::Xlib::open() else {
+        return Resources::default();
+    };
+    // SAFETY: this worker opens and exclusively owns the connection below.
+    let display = unsafe { (xlib.XOpenDisplay)(ptr::null()) };
+    if display.is_null() {
+        return Resources::default();
+    }
+    let resource = |name: &CStr| {
+        // SAFETY: connection and static C strings are live. Xlib owns the
+        // result; copy it before XCloseDisplay and before leaving this worker.
+        let value = unsafe { (xlib.XGetDefault)(display, c"Xft".as_ptr(), name.as_ptr()) };
+        (!value.is_null()).then(|| {
+            unsafe { CStr::from_ptr(value) }
+                .to_string_lossy()
+                .into_owned()
+        })
+    };
+    let mut resources = Resources {
+        antialias: resource(c"antialias"),
+        hinting: resource(c"hinting"),
+        hintstyle: resource(c"hintstyle"),
+        rgba: resource(c"rgba"),
+        lcdfilter: resource(c"lcdfilter"),
+        ..Resources::default()
+    };
+    if let Ok(render) = xrender::Xrender::open() {
+        let (mut event, mut error) = (0, 0);
+        // SAFETY: all queries use the worker-owned connection, with writable
+        // extension outputs and its own default screen. Absence means UNKNOWN.
+        unsafe {
+            if (render.XRenderQueryExtension)(display, &mut event, &mut error) != 0 {
+                resources.subpixel_order =
+                    (render.XRenderQuerySubpixelOrder)(display, (xlib.XDefaultScreen)(display));
+            }
+        }
+    }
+    // SAFETY: strings have been copied; no native handles escape this worker.
+    unsafe { (xlib.XCloseDisplay)(display) };
+    resources
 }
 
 // Every test here drives the X11/Wayland probe, whose types exist only

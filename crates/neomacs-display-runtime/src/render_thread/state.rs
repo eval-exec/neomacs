@@ -891,6 +891,7 @@ pub(super) struct RenderGpuContext {
 }
 
 pub(super) struct RenderApp {
+    pub(super) font_raster_options: crate::display_raster::DisplayRasterOptions,
     pub(super) comms: RenderComms,
     pub(super) menus: crate::menus::MenuPresentation,
     pub(super) tooltips: crate::tooltips::Tooltips,
@@ -1148,6 +1149,7 @@ impl RenderApp {
 
         Self {
             comms,
+            font_raster_options: Default::default(),
             window_icon: crate::window_icon::WindowIconService::new(),
             presentation_observer: crate::presentation_feedback::PresentationObserver::new(),
             clipboard: Err("clipboard is unavailable before display initialization".to_owned()),

@@ -9,7 +9,7 @@ use super::{GlyphRenderMode, RasterContent, RasterGlyphImage};
 use cosmic_text::{CacheKey, CacheKeyFlags, Font};
 use freetype::{Face, Library, Matrix, RenderMode, Vector, bitmap::PixelMode};
 use neomacs_font_materializer::fontconfig::{
-    FontRenderMode, FontRenderOptions as RenderOptions, FontconfigContext,
+    FontRenderMode, FontRenderOptions as RenderOptions, FontconfigContext, SurfaceFontOptions,
 };
 use rustc_hash::FxHashMap;
 use std::{borrow::Borrow, sync::Arc};
@@ -36,6 +36,7 @@ pub(super) struct NativeRasterizer {
     // No font-data copy or independent file lookup occurs when opening a face.
     faces: FxHashMap<fontdb::ID, Option<OpenedFace>>,
     options: FxHashMap<(fontdb::ID, u32), Option<RenderOptions>>,
+    surface_options: SurfaceFontOptions,
 }
 
 impl Default for NativeRasterizer {
@@ -44,11 +45,26 @@ impl Default for NativeRasterizer {
             library: Library::init().ok(),
             faces: FxHashMap::default(),
             options: FxHashMap::default(),
+            surface_options: SurfaceFontOptions::default(),
         }
     }
 }
 
 impl NativeRasterizer {
+    pub(super) fn surface_options(&self) -> SurfaceFontOptions {
+        self.surface_options
+    }
+
+    /// Return whether cached masks/options must be invalidated by the owner.
+    pub(super) fn set_surface_options(&mut self, options: SurfaceFontOptions) -> bool {
+        if self.surface_options == options {
+            return false;
+        }
+        self.surface_options = options;
+        self.clear();
+        true
+    }
+
     pub(super) fn clear(&mut self) {
         self.faces.clear();
         self.options.clear();
@@ -83,6 +99,7 @@ impl NativeRasterizer {
             .entry((key.font_id, key.font_size_bits))
             .or_insert_with(|| FontconfigContext::system()?.options_for_face(info, size))
             .as_ref()?;
+        let options = options.for_surface(self.surface_options);
         let library = self.library.as_ref()?;
         let opened = self
             .faces

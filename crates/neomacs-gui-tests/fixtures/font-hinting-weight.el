@@ -15,12 +15,22 @@
   (switch-to-buffer (get-buffer-create "*font-hinting-weight*"))
   (setq-local mode-line-format nil header-line-format nil
               cursor-type nil line-spacing nil)
-  ;; The reporter's default face: 12 points at the private display's 96 DPI.
-  (set-face-attribute 'default nil :family "IBM Plex Sans" :height 120
-                      :weight 'normal :slant 'normal
+  ;; Original report: Plex12pt. Later glyph dump: FiraCode semi-light13.5pt.
+  (set-face-attribute 'default nil
+                      :family (or (getenv "NEOMACS_FONT_WEIGHT_FAMILY") "IBM Plex Sans")
+                      :height (string-to-number (or (getenv "NEOMACS_FONT_WEIGHT_HEIGHT") "120"))
+                      :weight (intern (or (getenv "NEOMACS_FONT_WEIGHT_FIRST_WEIGHT") "normal")) :slant 'normal
                       :foreground "black" :background "white")
+  ;; Hold the physical size fixed in the no-Xft-resource arm, whose server
+  ;; geometry need not have exactly96DPI. Integer font-spec sizes are pixels.
+  (when (getenv "NEOMACS_FONT_WEIGHT_PIXEL_SIZE")
+    (set-face-attribute 'default nil :font
+                        (font-spec :family (getenv "NEOMACS_FONT_WEIGHT_FAMILY")
+                                   :size (string-to-number (getenv "NEOMACS_FONT_WEIGHT_PIXEL_SIZE"))
+                                   :weight (intern (getenv "NEOMACS_FONT_WEIGHT_FIRST_WEIGHT"))
+                                   :slant 'normal)))
   (erase-buffer)
-  (dolist (weight '(normal bold))
+  (dolist (weight (list (intern (or (getenv "NEOMACS_FONT_WEIGHT_FIRST_WEIGHT") "normal")) 'bold))
     (push (cons weight (point)) font-hinting-weight-positions)
     (insert (propertize "Hamburgefontsiv 0123456789" 'face `(:weight ,weight))
             "\n\n"))
@@ -69,8 +79,8 @@
     (with-temp-file (getenv "NEOMACS_FONT_WEIGHT_GNU_PNG")
       (set-buffer-multibyte nil)
       (insert (x-export-frames nil 'png))))
-  ;; Leave time for Neo's continuously refreshed GPU surface readback.
-  (run-at-time 0.5 nil (lambda () (kill-emacs 0))))
+  ;; The oracle is the visible window. Leave time for the harness to grab it.
+  (run-at-time 3 nil (lambda () (kill-emacs 0))))
 
 (defun font-hinting-weight-guard (function &rest arguments)
   (condition-case error-data

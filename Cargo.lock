@@ -3915,6 +3915,7 @@ dependencies = [
  "image",
  "libc",
  "neomacs-display-protocol",
+ "neomacs-font-materializer",
  "neomacs-infra",
  "neomacs-layout-engine",
  "neomacs-renderer-wgpu",

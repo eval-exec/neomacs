@@ -295,6 +295,7 @@ impl ActivePresentationTransition {
 
 /// Frame-owned render, input, overlay, and transient visual state.
 pub(crate) struct GuiFrameRenderState {
+    font_raster_options: crate::display_raster::DisplayRasterOptions,
     /// The Emacs frame_id that owns this window (used for routing).
     pub emacs_frame_id: u64,
     /// Chromeless glyph composition and rendering state.
@@ -481,7 +482,10 @@ impl GuiFrameRenderState {
     ) -> Self {
         Self::with_glyph_atlas(
             emacs_frame_id,
-            Some(WgpuGlyphAtlas::new_with_scale(device, scale_factor as f32)),
+            Some(
+                crate::display_raster::DisplayRasterOptions::default()
+                    .glyph_atlas(device, scale_factor as f32),
+            ),
             fps_enabled,
             at,
         )
@@ -512,6 +516,7 @@ impl GuiFrameRenderState {
     ) -> Self {
         Self {
             emacs_frame_id,
+            font_raster_options: Default::default(),
             compositor: FrameCompositor::new(glyph_atlas),
             present_state: GuiFramePresentState::Suspended,
             chrome: ChromeState::default(),
@@ -545,8 +550,17 @@ impl GuiFrameRenderState {
 
     pub(super) fn populate_glyph_atlas(&mut self, device: &wgpu::Device, scale_factor: f64) {
         if self.compositor.glyph_atlas.is_none() {
-            self.compositor.glyph_atlas =
-                Some(WgpuGlyphAtlas::new_with_scale(device, scale_factor as f32));
+            self.compositor.glyph_atlas = Some(
+                self.font_raster_options
+                    .glyph_atlas(device, scale_factor as f32),
+            );
+        }
+    }
+
+    fn set_font_raster_options(&mut self, options: crate::display_raster::DisplayRasterOptions) {
+        self.font_raster_options = options;
+        if let Some(atlas) = self.compositor.glyph_atlas.as_mut() {
+            options.apply(atlas);
         }
     }
 
@@ -1968,6 +1982,7 @@ impl FrameKey {
 
 /// Manages top-level GUI frame windows in the render thread.
 pub(crate) struct GuiFrameWindowManager {
+    font_raster_options: crate::display_raster::DisplayRasterOptions,
     /// All top-level frame windows, keyed by [`FrameKey`].
     pub windows: HashMap<FrameKey, GuiFrameWindowState>,
     /// Winit WindowId → Emacs frame_id (reverse mapping for event dispatch)
@@ -2010,6 +2025,7 @@ pub(crate) struct PendingWindow {
 impl GuiFrameWindowManager {
     pub fn new() -> Self {
         Self {
+            font_raster_options: Default::default(),
             windows: HashMap::new(),
             winit_to_emacs: HashMap::new(),
             primary_emacs_frame_id: None,
@@ -2021,6 +2037,14 @@ impl GuiFrameWindowManager {
             fps_enabled: false,
             option_as_alt: neomacs_display_protocol::OptionAsAltShape::Both,
         }
+    }
+
+    pub(super) fn set_font_raster_options(
+        &mut self,
+        options: crate::display_raster::DisplayRasterOptions,
+    ) {
+        self.font_raster_options = options;
+        self.for_each_top_level_window_mut(|state| state.render.set_font_raster_options(options));
     }
 
     pub(super) fn cursor_target_for_frame(
@@ -2090,7 +2114,10 @@ impl GuiFrameWindowManager {
         self.windows.get_mut(&self.primary_frame_key())
     }
 
-    pub(super) fn set_primary_pending(&mut self, window_state: GuiFrameWindowState) {
+    pub(super) fn set_primary_pending(&mut self, mut window_state: GuiFrameWindowState) {
+        window_state
+            .render
+            .set_font_raster_options(self.font_raster_options);
         self.windows.insert(FrameKey::Pending, window_state);
         self.sync_primary_mapping();
     }
@@ -2433,6 +2460,7 @@ impl GuiFrameWindowManager {
                         self.fps_enabled,
                         neomacs_display_protocol::frame_time::observe_platform_now(),
                     );
+                    render.set_font_raster_options(self.font_raster_options);
                     render.set_surface_state(
                         SurfaceState::from_device_size(
                             phys.width,
