@@ -149,6 +149,21 @@ pub fn signal_matches_hierarchical_sym(
     )
 }
 
+/// GNU `find_handler_clause` (src/eval.c:2241-2263): match the clause
+/// `pattern` against an already-read `error-conditions` list.
+///
+/// Matching is membership of every clause handler in `conditions`, with `t`
+/// as the catch-all.  There is deliberately no "the clause names the
+/// signalled symbol" shortcut: GNU has none, so a customized list that omits
+/// the signalled symbol does not match that symbol's own clause.
+pub fn signal_matches_conditions(
+    conditions: Option<&Value>,
+    pattern: &Value,
+    symbol_mode: SymbolMode,
+) -> bool {
+    find_clause_pattern(conditions, pattern, symbol_mode)
+}
+
 fn signal_matches_pattern_against_conditions(
     signal_sym: SymId,
     conditions: Option<&Value>,
@@ -179,6 +194,49 @@ fn signal_matches_symbol_against_conditions(
     symbol_mode: SymbolMode,
 ) -> bool {
     if pattern_is_catch_all(condition_sym) || condition_sym == signal_sym {
+        return true;
+    }
+    let Some(conditions) = conditions else {
+        return false;
+    };
+    let mut tail = *conditions;
+    while tail.is_cons() {
+        if tail.cons_car().as_symbol_id(symbol_mode) == Some(condition_sym) {
+            return true;
+        }
+        tail = tail.cons_cdr();
+    }
+    false
+}
+
+fn find_clause_pattern(
+    conditions: Option<&Value>,
+    pattern: &Value,
+    symbol_mode: SymbolMode,
+) -> bool {
+    match pattern.kind() {
+        ValueKind::T => true,
+        ValueKind::Nil => false,
+        ValueKind::Cons => list_to_vec(pattern).is_some_and(|items| {
+            items
+                .iter()
+                .any(|item| find_clause_pattern(conditions, item, symbol_mode))
+        }),
+        _ => {
+            let Some(cond_id) = crate::value::symbol_id(pattern, symbol_mode) else {
+                return false;
+            };
+            find_clause_symbol(conditions, cond_id, symbol_mode)
+        }
+    }
+}
+
+fn find_clause_symbol(
+    conditions: Option<&Value>,
+    condition_sym: SymId,
+    symbol_mode: SymbolMode,
+) -> bool {
+    if pattern_is_catch_all(condition_sym) {
         return true;
     }
     let Some(conditions) = conditions else {
