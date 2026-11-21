@@ -254,3 +254,6 @@ mod category_word_wrap;
 
 #[path = "printer_quit.rs"]
 mod printer_quit;
+
+#[path = "line_number_scaled_cursor.rs"]
+mod line_number_scaled_cursor;
