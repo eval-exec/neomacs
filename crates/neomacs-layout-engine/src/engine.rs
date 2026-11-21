@@ -5973,6 +5973,17 @@ impl LayoutEngine {
         let accessible_end = params.accessible_end_charpos().get();
         let window_start = params.window_start_charpos().get().max(accessible_start);
         let max_rows = i64::try_from(params.source_interpretation_rows()).unwrap_or(i64::MAX);
+        // GNU reads `w->window_end_valid` once, at the start of
+        // `redisplay_window`, and it is one input of
+        // `current_matrix_up_to_date_p` (src/xdisp.c:20557-20586). The walk
+        // below REPUBLISHES it, so the probe gate must read this entry value,
+        // not the one the completed walk leaves behind.
+        let window_end_valid_at_entry = evaluator
+            .frame_manager()
+            .get(frame_id)
+            .and_then(|frame| frame.find_window(window_id))
+            .and_then(neovm_core::window::Window::window_end_valid)
+            == Some(true);
         // Speculative pre-walk span.  It lets a fontifying hook (jit-lock
         // style) mark text before the walk, and it also bounds the
         // display-condition (`when`) scan.  A hook that DECLINES ends the
@@ -6362,6 +6373,17 @@ impl LayoutEngine {
         // remaining unfontified stop is declined, yielding
         // CallbacksUnchanged; the visible pass then restarts from the window
         // start and covers the declined stops.
+        //
+        // GNU's reuse decision, not Neo's: `partial_line_height` is skipped
+        // only when `current_matrix_up_to_date_p` held at entry AND the walk
+        // actually took a reuse path.  Neo's own reuse of rows under a stale
+        // window end is an optimization and must not hide the probe-row hook
+        // calls GNU makes.
+        let gnu_matrix_reuse = GnuMatrixReuse::at_entry(
+            window_end_valid_at_entry,
+            evaluator.gnu_redisplay_refuses_cursor_movement(),
+            self.frame_other_windows_changed,
+        );
         let finished_walk = match &render_outcome {
             BufferSourceRenderAttemptOutcome::Finished {
                 redisplay_positions,
@@ -6370,27 +6392,21 @@ impl LayoutEngine {
                 ..
             } => Some((
                 redisplay_positions.window_end_lisp(),
-                // Only a real `try_window` walk reaches
-                // `partial_line_height`.  A cursor-only replay is GNU
-                // `try_cursor_movement` (src/xdisp.c:19838-19876) and a
-                // reused-matrix scroll is `try_window_reusing_current_matrix`;
-                // neither re-walks to the window bottom.
-                !*cursor_only && reused_matrix_rows.is_none(),
+                gnu_matrix_reuse.skips_probe(*cursor_only || reused_matrix_rows.is_some()),
             )),
             _ => None,
         };
-        if let Some((window_end, check_margins_walk)) = finished_walk {
+        if let Some((window_end, skip_probe)) = finished_walk {
             // GNU `partial_line_height` (`src/xdisp.c:11630-11661`): when
             // `try_window` ran with TRY_WINDOW_CHECK_MARGINS, it re-walks to
             // the window bottom and then scans the FIRST screen row after the
             // window end, entering fontification hooks at that row's stops
             // (the sole call site is `try_window`, src/xdisp.c:21718).  That
-            // row starts at the walk's published window end, and the gates
-            // are GNU's; every other walk stays on the plain visible walk.
-            let probe = if check_margins_walk {
-                fontification_probe_row(evaluator, params, frame_id, window_id, buf_id, window_end)
-            } else {
+            // row starts at the walk's published window end.
+            let probe = if skip_probe {
                 neovm_core::emacs_core::xdisp::ProbeRow::None
+            } else {
+                fontification_probe_row(evaluator, params, frame_id, window_id, buf_id, window_end)
             };
             let coverage = self
                 .window_snapshots
@@ -7007,6 +7023,55 @@ impl LayoutEngine {
     }
 }
 
+/// GNU's matrix-reuse eligibility for one window redisplay
+/// (`current_matrix_up_to_date_p`, src/xdisp.c:20557-20586).
+///
+/// `redisplay_window` reads `w->window_end_valid` at ENTRY and only consults
+/// `try_cursor_movement` (`:20923`) and
+/// `try_window_reusing_current_matrix` (`:21041`) when the predicate holds.
+/// The same-start branch otherwise falls into
+/// `try_window (..., TRY_WINDOW_CHECK_MARGINS)` (`:21052`), so this is also
+/// the gate for `partial_line_height`'s probe row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GnuMatrixReuse {
+    /// The predicate held at entry: GNU may display this window from the
+    /// current matrix and `partial_line_height` does not run.
+    Eligible,
+    /// GNU re-walks with `try_window (..., TRY_WINDOW_CHECK_MARGINS)`.
+    NotEligible,
+}
+
+impl GnuMatrixReuse {
+    /// `window_end_valid` must be the value from the START of this window's
+    /// redisplay: the walk republishes it.
+    ///
+    /// `windows_or_buffers_changed` clears `w->window_end_valid` and forces
+    /// the predicate false (src/xdisp.c:20576-20586); Neo represents that
+    /// pending scope with `gnu_redisplay_refuses_cursor_movement`, and the
+    /// sibling-window change flag is its frame-local companion.  A window
+    /// whose end is stale from `set-window-start`, a buffer switch or a clip
+    /// change is `NotEligible` even if it later reuses rows internally.
+    fn at_entry(
+        window_end_valid: bool,
+        refuses_cursor_movement: bool,
+        other_windows_changed: bool,
+    ) -> Self {
+        if window_end_valid && !refuses_cursor_movement && !other_windows_changed {
+            Self::Eligible
+        } else {
+            Self::NotEligible
+        }
+    }
+
+    /// GNU runs `partial_line_height` unless the predicate held AND the walk
+    /// reused the current matrix.  When the predicate held but Neo rebuilt
+    /// the rows, GNU's own fallback would have called `try_window` with the
+    /// check-margins flag, so the probe still runs.
+    fn skips_probe(self, walk_reused_rows: bool) -> bool {
+        self == Self::Eligible && walk_reused_rows
+    }
+}
+
 /// GNU `partial_line_height`'s probe row (`src/xdisp.c:11630-11661`).
 ///
 /// `try_window` runs it only under `TRY_WINDOW_CHECK_MARGINS` with
@@ -7016,7 +7081,9 @@ impl LayoutEngine {
 /// `try_window (..., 0)`.  Neo has no carried check-margins bit: this helper
 /// represents that gate by refusing every non-presentation walk (query
 /// target, measurement rows/pixels, accessible-end extent) and every
-/// `force_start` walk.  `partial_line_height` walks to the window bottom
+/// `force_start` walk; the matrix-reuse half of the gate is
+/// [`GnuMatrixReuse`], applied by the caller.  `partial_line_height` walks to
+/// the window bottom
 /// and, unless that walk hits EOB, scans the FIRST screen row after the
 /// window end with `move_it_by_lines (&it, 1)`.  The returned typed probe is
 /// that row's exclusive Lisp end.  A long-line truncated buffer returns early

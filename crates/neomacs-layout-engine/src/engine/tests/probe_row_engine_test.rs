@@ -127,6 +127,121 @@ fn probe_row_starts_at_the_published_window_end() {
     );
 }
 
+/// Install a declining fontification function that records every position it
+/// is entered at.
+///
+/// The unit runtime has no `make-local-variable`, so the hook value is built
+/// from special forms and core subrs (`list`, `lambda`, `cons`) and stored
+/// from Rust.
+fn install_recording_fontification_hook(eval: &mut Context, variable: &str) {
+    eval.eval_str(&format!("(defvar {variable} nil)"))
+        .expect("defvar the call log");
+    eval.eval_str(&format!("(setq {variable} nil)"))
+        .expect("reset the call log");
+    let hook = eval
+        .eval_str(&format!(
+            "(list (lambda (pos) (setq {variable} (cons pos {variable})) nil))"
+        ))
+        .expect("build the declining hook");
+    eval.store_variable_by_name("fontification-functions", hook);
+}
+
+/// The hook's recorded positions in entry order (the hook conses, so the list
+/// reads newest-first; reverse it in Rust rather than with `reverse`).
+fn recorded_fontification_positions(eval: &mut Context, variable: &str) -> Vec<i64> {
+    let value = eval.eval_str(variable).expect("read the call log");
+    let mut positions: Vec<i64> = neovm_core::emacs_core::value::list_to_vec(&value)
+        .expect("the call log is a list")
+        .into_iter()
+        .map(|entry| entry.as_int().expect("fixnum position"))
+        .collect();
+    positions.reverse();
+    positions
+}
+
+/// GNU's probe row follows `current_matrix_up_to_date_p`, not Neo's reuse
+/// choice.
+///
+/// `Fset_window_start` with NOFORCE never sets `optional_new_start`
+/// (src/window.c:1961-1972); it only moves the marker, clears
+/// `w->window_end_valid` and asks for redisplay.  The predicate is therefore
+/// false at entry, the same-start branch skips
+/// `try_window_reusing_current_matrix` and calls
+/// `try_window (..., TRY_WINDOW_CHECK_MARGINS)` (src/xdisp.c:21041-21052,
+/// predicate :20557-20586), and `partial_line_height` probes.  Neo may still
+/// reuse the retained rows internally; that is an optimization and must not
+/// hide the hook calls Lisp sees.
+#[test]
+fn probe_row_survives_row_reuse_after_noforce_set_window_start() {
+    let text = ("a".repeat(150) + "\n").repeat(60);
+    let (mut eval, frame_id, buffer_id, window_id) = tty_probe_frame(&text, 160, 37);
+    eval.edit.buffers.set_current(buffer_id);
+    // An interval tree makes a declining hook advance by GNU's stops; the
+    // untracked property has no display effect.
+    for index in 0..60i64 {
+        let start = index * 151 + 1;
+        neovm_edit::emacs_core::textprop::builtin_put_text_property(
+            &mut eval,
+            vec![
+                Value::fixnum(start),
+                Value::fixnum(start + 150),
+                Value::symbol("p640"),
+                Value::fixnum(index),
+            ],
+        )
+        .expect("put the p640 text property");
+    }
+    install_recording_fontification_hook(&mut eval, "p640-probe-reuse-calls");
+    let mut engine = LayoutEngine::new_without_font_metrics();
+    engine.layout_frame_rust(&mut eval, frame_id);
+    let buffer_z = eval
+        .buffer_manager()
+        .get(buffer_id)
+        .expect("buffer")
+        .point_max_lisp_char_pos();
+    let window_end = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .find_window(window_id)
+        .expect("selected window")
+        .window_end_charpos(buffer_z)
+        .expect("leaf window");
+    assert_eq!(
+        window_end.as_i64(),
+        5588,
+        "the first walk publishes the standard window end"
+    );
+    // Count only the second walk's hook entries.
+    eval.eval_str("(setq p640-probe-reuse-calls nil)")
+        .expect("reset the call log");
+    // Same start, unchanged buffer, NOFORCE: GNU clears the end record.
+    eval.eval_str("(set-window-start nil 1 t)")
+        .expect("NOFORCE set-window-start");
+    assert_eq!(
+        eval.frame_manager()
+            .get(frame_id)
+            .expect("frame")
+            .find_window(window_id)
+            .expect("selected window")
+            .window_end_valid(),
+        Some(false),
+        "set-window-start invalidates the published window end without moving the start"
+    );
+    engine.layout_frame_rust(&mut eval, frame_id);
+    let stats = engine.last_layout_stats().clone();
+    assert!(
+        stats.reused_rows + stats.reused_shifted_rows > 0,
+        "the fixture must take a Neo row-reuse path: {stats:?}"
+    );
+    let positions = recorded_fontification_positions(&mut eval, "p640-probe-reuse-calls");
+    assert!(
+        positions.iter().any(|pos| *pos >= window_end.as_i64()),
+        "the reused walk must still enter the probe row past window-end {}: {positions:?}",
+        window_end.as_i64()
+    );
+}
+
 /// When the walk ends at ZV, GNU's `move_it_to` reports `IT_EOB` and
 /// `partial_line_height` never scans a following row, so the request must
 /// carry no probe.
