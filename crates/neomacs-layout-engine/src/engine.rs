@@ -5994,6 +5994,7 @@ impl LayoutEngine {
             fontify_end,
             params.point_charpos().get() as i64 + 1,
             neovm_core::emacs_core::xdisp::RedisplayFontificationRequest::Prepass,
+            neovm_core::emacs_core::xdisp::ProbeRow::None,
         );
         // `(when FORM . SPEC)` display specs need Lisp, which the walk cannot
         // run while it holds the buffer: evaluate the forms of the span the
@@ -6346,17 +6347,43 @@ impl LayoutEngine {
             return LeafLayoutAttempt::LogicalInputsChanged;
         }
 
-        // Fontification above is deliberately only the window start -- GNU's
-        // display iterator's first stop.  The walk below is the only source of
-        // the remaining visible stops, so the coverage pass records exactly
-        // the positions the iterator actually displays (GNU
-        // `handle_fontified_prop`, src/xdisp.c:4702-4786) rather than a char
-        // budget, and fontifies any uncovered sparse spans before retrying
-        // from a fresh snapshot.
+        // Two fontification requests precede this comment's pass.  The
+        // speculative PREPASS above covers the budget span for hooks that MARK
+        // text; a hook that declines ends that request at its first declined
+        // stop.  The VISIBLE pass below starts from the completed row walk's
+        // own positions, so it follows the stops GNU's iterator actually
+        // displays (handle_fontified_prop, src/xdisp.c:4702-4786), including
+        // GNU's one-row probe past the window end when the walk qualifies.
+        // Sparse spans are fontified before retrying from a fresh snapshot.
+        //
+        // Convergence with a mixed hook (marks one stop, declines a later
+        // one): the prepass reports Fontified, which forces a retry; that
+        // retry's prepass starts on the now-fontified text and its first
+        // remaining unfontified stop is declined, yielding
+        // CallbacksUnchanged; the visible pass then restarts from the window
+        // start and covers the declined stops.
         if matches!(
             &render_outcome,
             BufferSourceRenderAttemptOutcome::Finished { .. }
         ) {
+            // GNU `partial_line_height` (`src/xdisp.c:11630-11661`): when
+            // `try_window` ran with TRY_WINDOW_CHECK_MARGINS, it re-walks to
+            // the window bottom and then scans the FIRST screen row after the
+            // window end, entering fontification hooks at that row's stops.
+            // The row comes from this walk's own visible span, and the gates
+            // are GNU's; every other caller stays on the plain visible walk.
+            let probe = self
+                .window_snapshots
+                .iter()
+                .rev()
+                .map(WindowPresentationSnapshot::display_snapshot)
+                .find(|snapshot| snapshot.window_id == window_id)
+                .map(|snapshot| {
+                    fontification_probe_row(
+                        evaluator, params, frame_id, window_id, buf_id, snapshot,
+                    )
+                })
+                .unwrap_or(neovm_core::emacs_core::xdisp::ProbeRow::None);
             let coverage = self
                 .window_snapshots
                 .iter()
@@ -6405,7 +6432,14 @@ impl LayoutEngine {
                 // buffer yields dozens of sparse visible runs -- more than the
                 // retry budget -- so that shape could never converge.
                 let mut requires_replay = false;
-                for span in plan.spans() {
+                let spans: Vec<_> = plan.spans().collect();
+                let last_span = spans.len().checked_sub(1);
+                for (index, span) in spans.iter().enumerate() {
+                    let span_probe = if Some(index) == last_span {
+                        probe
+                    } else {
+                        neovm_core::emacs_core::xdisp::ProbeRow::None
+                    };
                     let outcome = lisp_ledger.rows_fontification.ensure(
                         evaluator,
                         buf_id,
@@ -6413,6 +6447,7 @@ impl LayoutEngine {
                         span.end(),
                         params.point_charpos().get() as i64 + 1,
                         neovm_core::emacs_core::xdisp::RedisplayFontificationRequest::VisibleWalk,
+                        span_probe,
                     );
                     requires_replay |= outcome.requires_layout_retry();
                     if evaluator.frame_manager().window_topology_generation() != topology_generation
@@ -6943,6 +6978,7 @@ impl LayoutEngine {
         from: i64,
         to: i64,
         request: neovm_core::emacs_core::xdisp::RedisplayFontificationRequest,
+        probe: neovm_core::emacs_core::xdisp::ProbeRow,
         window_point: i64,
     ) -> neovm_core::emacs_core::xdisp::RedisplayFontificationOutcome {
         match neovm_core::emacs_core::xdisp::ensure_fontified_for_redisplay_for_window_request(
@@ -6951,6 +6987,7 @@ impl LayoutEngine {
             from,
             to,
             request,
+            probe,
             window_point,
         ) {
             Ok(outcome) => outcome,
@@ -6959,6 +6996,110 @@ impl LayoutEngine {
                 neovm_core::emacs_core::xdisp::RedisplayFontificationOutcome::CallbacksUnchanged
             }
         }
+    }
+}
+
+/// GNU `partial_line_height`'s probe row (`src/xdisp.c:11630-11661`).
+///
+/// `try_window` runs it only under `TRY_WINDOW_CHECK_MARGINS` with
+/// `w->vscroll == 0` in a non-minibuffer window (`src/xdisp.c:21696-21722`);
+/// the flag is passed on the same-window-start path (`:21052`) and recenter
+/// (`:21402`) but not on a forced start (`:20767`, `:20901`) or a plain
+/// `try_window (..., 0)`.  Neo has no carried check-margins bit: this helper
+/// represents that gate by refusing every non-presentation walk (query
+/// target, measurement rows/pixels, accessible-end extent) and every
+/// `force_start` walk.  `partial_line_height` walks to the window bottom
+/// and, unless that walk hits EOB, scans the FIRST screen row after the
+/// window end with `move_it_by_lines (&it, 1)`.  The returned typed probe is
+/// that row's exclusive Lisp end.  A long-line truncated buffer returns early
+/// (`:11636-11638`).
+///
+/// The row is measured from the completed walk's own visible span with the
+/// display line-motion engine (`MotionEngine::ComputeMotion`), not from a
+/// character count, so wrapping and truncation decide its boundary.
+fn fontification_probe_row(
+    evaluator: &mut neovm_core::emacs_core::Context,
+    params: &crate::types::WindowParams,
+    frame_id: neovm_core::window::FrameId,
+    window_id: neovm_core::window::WindowId,
+    buf_id: neovm_core::buffer::BufferId,
+    snapshot: &neovm_core::window::WindowDisplaySnapshot,
+) -> neovm_core::emacs_core::xdisp::ProbeRow {
+    use neovm_core::emacs_core::xdisp::ProbeRow;
+    // `force_start` bypasses TRY_WINDOW_CHECK_MARGINS (src/xdisp.c:20767,
+    // :20901): one pass, no probe row.
+    if params.force_start {
+        return ProbeRow::None;
+    }
+    // Neo does not carry GNU's TRY_WINDOW_CHECK_MARGINS bit; these params
+    // identify the walks that are not a margin-checked presentation walk
+    // (`try_window (..., 0)` and synchronous measurement/query walks), and
+    // they get no probe.
+    if params.query_target.is_some()
+        || params.measurement_rows.is_some()
+        || params.measurement_pixels.is_some()
+        || params.source_extent == crate::types::WindowSourceExtent::AccessibleEnd
+    {
+        return ProbeRow::None;
+    }
+    // `try_window`'s own gates (src/xdisp.c:21696-21722).
+    if params.is_minibuffer() {
+        return ProbeRow::None;
+    }
+    let Some(window) = evaluator
+        .frame_manager()
+        .get(frame_id)
+        .and_then(|frame| frame.find_window(window_id))
+    else {
+        return ProbeRow::None;
+    };
+    if let neovm_core::window::Window::Leaf { vscroll, .. } = window
+        && *vscroll != 0
+    {
+        return ProbeRow::None;
+    }
+    let Some(buffer) = evaluator.edit.buffers.get(buf_id) else {
+        return ProbeRow::None;
+    };
+    // `partial_line_height` returns early for a long-line truncated buffer
+    // (src/xdisp.c:11636-11638).
+    if buffer.long_line_optimizations_p()
+        && params.wrap_mode == crate::types::LineWrapMode::Truncate
+    {
+        return ProbeRow::None;
+    }
+    let Some(span) = snapshot.visible_buffer_span() else {
+        return ProbeRow::None;
+    };
+    let probe_start = span.end();
+    // The window-bottom walk reached EOB: GNU returns before the probe.
+    if probe_start.as_i64() >= buffer.point_max_lisp_char_pos().as_i64() {
+        return ProbeRow::None;
+    }
+    let start_byte = buffer.lisp_pos_to_emacs_byte_pos(probe_start);
+    // Pass the laid-out window, not the selected one: GNU's
+    // `move_it_by_lines` uses THIS window's width and wrap decision.
+    let window_value = Value::make_window(window_id.0);
+    let Ok((end_byte, moved)) = neovm_core::emacs_core::indent::vmotion_target(
+        evaluator,
+        buf_id,
+        start_byte,
+        Some(window_value),
+        1,
+    ) else {
+        return ProbeRow::None;
+    };
+    if moved == 0 || end_byte <= start_byte {
+        return ProbeRow::None;
+    }
+    let Some(buffer) = evaluator.edit.buffers.get(buf_id) else {
+        return ProbeRow::None;
+    };
+    let end_lisp = buffer.emacs_byte_pos_to_lisp_char_pos(end_byte).as_i64();
+    if end_lisp <= probe_start.as_i64() {
+        ProbeRow::None
+    } else {
+        ProbeRow::Through(end_lisp)
     }
 }
 

@@ -9760,6 +9760,21 @@ pub enum RedisplayFontificationRequest {
     VisibleWalk,
 }
 
+/// The first screen row after a window's last visible row.
+///
+/// GNU `partial_line_height` (src/xdisp.c:11630-11661) re-walks to the window
+/// bottom and then `move_it_by_lines (&it, 1)` scans this row, so
+/// `handle_stop` enters the hook at each of its unfontified stops.  The
+/// layout engine supplies the row's exclusive Lisp end on the last visible
+/// span only; every other request carries [`ProbeRow::None`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ProbeRow {
+    #[default]
+    None,
+    /// Exclusive Lisp end of the first screen row after the window end.
+    Through(i64),
+}
+
 /// Fontify a visible buffer region the same way GNU redisplay does from
 /// `handle_fontified_prop`.
 ///
@@ -9801,6 +9816,7 @@ pub fn ensure_fontified_for_redisplay_for_window(
         fontification_boundary::mode(),
         &mut NoFontificationDemand,
         RedisplayFontificationRequest::VisibleWalk,
+        ProbeRow::None,
         Some(window_point),
     )
 }
@@ -9834,6 +9850,7 @@ fn ensure_fontified_for_redisplay_with_mode(
         mode,
         &mut NoFontificationDemand,
         RedisplayFontificationRequest::VisibleWalk,
+        ProbeRow::None,
         None,
     )
 }
@@ -9855,6 +9872,7 @@ pub fn ensure_fontified_for_redisplay_with_demand(
         fontification_boundary::mode(),
         demand,
         RedisplayFontificationRequest::VisibleWalk,
+        ProbeRow::None,
         None,
     );
     if result.is_err() {
@@ -9881,6 +9899,7 @@ pub fn ensure_fontified_for_redisplay_with_demand_for_window(
         fontification_boundary::mode(),
         demand,
         RedisplayFontificationRequest::VisibleWalk,
+        ProbeRow::None,
         Some(window_point),
     );
     if result.is_err() {
@@ -9900,6 +9919,7 @@ pub fn ensure_fontified_for_redisplay_with_demand_for_window_request(
     to_char: i64,
     demand: &mut RedisplayFontificationDemand,
     request: RedisplayFontificationRequest,
+    probe: ProbeRow,
     window_point: i64,
 ) -> Result<RedisplayFontificationOutcome, Flow> {
     let result = ensure_fontified_for_redisplay_inner(
@@ -9910,6 +9930,7 @@ pub fn ensure_fontified_for_redisplay_with_demand_for_window_request(
         fontification_boundary::mode(),
         demand,
         request,
+        probe,
         Some(window_point),
     );
     if result.is_err() {
@@ -9926,6 +9947,7 @@ pub fn ensure_fontified_for_redisplay_for_window_request(
     from_char: i64,
     to_char: i64,
     request: RedisplayFontificationRequest,
+    probe: ProbeRow,
     window_point: i64,
 ) -> Result<RedisplayFontificationOutcome, Flow> {
     ensure_fontified_for_redisplay_inner(
@@ -9936,6 +9958,7 @@ pub fn ensure_fontified_for_redisplay_for_window_request(
         fontification_boundary::mode(),
         &mut NoFontificationDemand,
         request,
+        probe,
         Some(window_point),
     )
 }
@@ -9957,6 +9980,7 @@ pub(crate) fn ensure_fontified_for_redisplay_inner_for_test(
         mode,
         observer,
         RedisplayFontificationRequest::VisibleWalk,
+        ProbeRow::None,
         None,
     )
 }
@@ -9969,6 +9993,7 @@ fn ensure_fontified_for_redisplay_inner<O: FontificationDemandObserver>(
     mode: FontificationBoundaryMode,
     observer: &mut O,
     request: RedisplayFontificationRequest,
+    probe: ProbeRow,
     window_point: Option<i64>,
 ) -> Result<RedisplayFontificationOutcome, Flow> {
     // GNU `redisplay_window` (`src/xdisp.c:20646-20663`) refreshes the
@@ -9992,7 +10017,14 @@ fn ensure_fontified_for_redisplay_inner<O: FontificationDemandObserver>(
     };
 
     let start = from_char.saturating_add(1).clamp(point_min, point_max);
-    let end = to_char.saturating_add(1).clamp(start, point_max);
+    // GNU's probe row extends the visible walk through the first screen row
+    // after the window end; the schedule below then visits its stops.
+    let requested_end = to_char.saturating_add(1);
+    let end = match probe {
+        ProbeRow::None => requested_end,
+        ProbeRow::Through(probe_end) => requested_end.max(probe_end),
+    }
+    .clamp(start, point_max);
     observer.begin(buf_id, LispCharPos1::new(start), LispCharPos1::new(end));
     // The buffer interval proof does not certify effective overlay precedence.
     if O::ENABLED

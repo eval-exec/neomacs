@@ -10,7 +10,7 @@ use neovm_core::{
     emacs_core::{
         Context,
         xdisp::{
-            self, RedisplayFontificationDemand, RedisplayFontificationOutcome,
+            self, ProbeRow, RedisplayFontificationDemand, RedisplayFontificationOutcome,
             RedisplayFontificationRequest,
         },
     },
@@ -86,6 +86,7 @@ impl RowsFontificationDemand {
         to: i64,
         window_point: i64,
         request: RedisplayFontificationRequest,
+        probe: ProbeRow,
     ) -> RedisplayFontificationOutcome {
         let Self::Observing { demand, .. } = self else {
             return LayoutEngine::ensure_fontified_rust(
@@ -94,6 +95,7 @@ impl RowsFontificationDemand {
                 from,
                 to,
                 request,
+                probe,
                 window_point,
             );
         };
@@ -104,6 +106,7 @@ impl RowsFontificationDemand {
             to,
             demand,
             request,
+            probe,
             window_point,
         ) {
             Ok(outcome) => outcome,

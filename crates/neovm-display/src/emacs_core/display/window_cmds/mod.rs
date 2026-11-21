@@ -6689,24 +6689,9 @@ fn try_scroll_long_lines(
         )?
         .0
     };
-    tracing::debug!(
-        target: "neovm_display::emacs_core::window_cmds",
-        point = point.get(),
-        base = base.get(),
-        point_visible,
-        body_height,
-        lines,
-        "window_scroll_for_long_lines: motion base"
-    );
     let lose = lines < 0 && base == begv;
     let (start, _moved) =
         neovm_edit::emacs_core::indent::vmotion_target(eval, buffer_id, base, None, lines)?;
-    tracing::debug!(
-        target: "neovm_display::emacs_core::window_cmds",
-        start = start.get(),
-        zv = zv.get(),
-        "window_scroll_for_long_lines: motion result"
-    );
     if lose {
         return Err(scroll_down_batch_error());
     }
