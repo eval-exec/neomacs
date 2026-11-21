@@ -495,7 +495,19 @@ pub fn builtin_frame_native_height(
         .get(fid)
         .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
     Ok(Value::fixnum(if frame_uses_window_system_pixels(frame) {
-        frame.height as i64
+        // GNU's Gtk+ and NS builds report the native frame without the menu
+        // and tool bars (src/frame.c:4401-4418), the same bars `frame-edges`
+        // and `frame-outer-height` include.  Neomacs paints those bars inside
+        // its own window, so its stored pixel height counts them; subtract
+        // the bar band here to expose GNU's native-frame value.  The tab bar
+        // stays included, matching `frame-inner-height`'s own subtraction of
+        // `tab-bar-height` (lisp/frame.el:1913).
+        let external_bar_height = if frame.displays_chrome {
+            frame.external_bar_height()
+        } else {
+            0
+        };
+        frame.height.saturating_sub(external_bar_height) as i64
     } else {
         frame_total_lines(frame)
     }))

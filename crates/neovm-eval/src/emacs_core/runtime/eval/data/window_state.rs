@@ -7350,6 +7350,22 @@ impl Frame {
             .saturating_add(self.tab_bar_height) as f32
     }
 
+    /// Height of the menu and tool bar band Neomacs paints at the top of its
+    /// window, in pixels.
+    ///
+    /// GNU's Gtk+ and NS builds keep the menu bar and tool bar outside the
+    /// native frame (`Fframe_native_height`'s doc in src/frame.c:4401-4418:
+    /// the native height "does not include the tool bar or menu bar"), so
+    /// `frame-pixel-height` must not count them.  The tab bar stays inside
+    /// the native frame: `frame-inner-height` subtracts it separately
+    /// (lisp/frame.el:1913).  `compact_bar_height` is Neomacs' exclusive
+    /// replacement for the menu/tool band, so it belongs to the same group.
+    pub fn external_bar_height(&self) -> u32 {
+        self.menu_bar_height
+            .saturating_add(self.tool_bar_height)
+            .saturating_add(self.compact_bar_height)
+    }
+
     pub(crate) fn default_vertical_scroll_bar_side(&self) -> Option<&'static str> {
         let raw = self
             .known_parameter(FrameParam::VerticalScrollBars)
