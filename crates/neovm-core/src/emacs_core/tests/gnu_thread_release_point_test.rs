@@ -199,7 +199,15 @@ const SIGNAL_BLOCKED_MUTEX_FORM: &str = r#"
   (setq gnu-rp-w (make-thread (lambda ()
                                 (mutex-lock gnu-rp-m)
                                 (setq gnu-rp-x t))))
-  (sleep-for 0.02)
+  ;; GNU's probe sleeps 20 ms and relies on the worker having reached the
+  ;; contended mutex. On a loaded runner that deadline can expire before the
+  ;; simulated select release point runs the created worker, so settle on the
+  ;; blocked state this form is about; thread-yield is GNU's other release
+  ;; point and the asserted tuple is unchanged.
+  (let ((deadline (+ (float-time) 5.0)))
+    (while (and (< (float-time) deadline)
+                (null (eq (thread--blocker gnu-rp-w) gnu-rp-m)))
+      (thread-yield)))
   (let ((blocked (list (thread-live-p gnu-rp-w)
                        (eq (thread--blocker gnu-rp-w) gnu-rp-m))))
     (thread-signal gnu-rp-w 'error '("blocked-oops"))
@@ -224,7 +232,13 @@ const SIGNAL_BLOCKED_CONDITION_FORM: &str = r#"
                                 (condition-wait gnu-rp-cv)
                                 (setq gnu-rp-state 'woken)
                                 (mutex-unlock gnu-rp-m))))
-  (sleep-for 0.02)
+  ;; GNU's probe sleeps 20 ms and relies on the worker having reached the
+  ;; condition wait. Settle on that blocked state for the same reason as the
+  ;; mutex form above; the asserted tuple is unchanged.
+  (let ((deadline (+ (float-time) 5.0)))
+    (while (and (< (float-time) deadline)
+                (null (eq (thread--blocker gnu-rp-w) gnu-rp-cv)))
+      (thread-yield)))
   (let ((blocked (list (thread-live-p gnu-rp-w)
                        (eq (thread--blocker gnu-rp-w) gnu-rp-cv))))
     (thread-signal gnu-rp-w 'error '("cv-oops"))
