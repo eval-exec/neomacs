@@ -438,6 +438,44 @@ fn publish_scan_copies_every_owner_source_once() {
     );
 }
 
+/// The arena's scan enters each canonical group once, including the two
+/// groups this arena currently leaves empty (`bc`, `jit_window`).
+///
+/// The per-group counts come from the arena walk and the total comes from the
+/// independent publication path (`publish_scan`, which folds
+/// `for_each_owner_root` into `ArenaScan`). A source dropped from either path
+/// makes the total disagree, and a source mapped to the wrong group makes the
+/// vector disagree; both are red.
+#[test]
+fn arena_scan_enters_each_group_once_including_empty_groups() {
+    let context = Context::new(unit_runtime());
+    let arena = loaded_arena();
+    let mut counts = [0usize; RootGroup::ALL.len()];
+    arena.trace_roots(&mut |group, _value| {
+        let index = RootGroup::ALL
+            .iter()
+            .position(|known| *known == group)
+            .expect("every visited group is in RootGroup::ALL");
+        counts[index] += 1;
+    });
+    // RootGroup::ALL order: VmFrames, EvalTemp, Bc, JitWindow, Handlers,
+    // Specpdl, Misc. `loaded_arena` has five interp roots, four VM
+    // frame/operand roots, two handler roots, one binding, one registry root.
+    assert_eq!(counts, [4, 5, 0, 0, 2, 1, 1]);
+    assert_eq!(counts[RootGroup::Bc as usize], 0);
+    assert_eq!(counts[RootGroup::JitWindow as usize], 0);
+
+    let mut published = Vec::new();
+    arena
+        .publish_scan(context.tagged_heap(), &mut published)
+        .expect("a closed region publishes");
+    assert_eq!(
+        counts.iter().sum::<usize>(),
+        published.len(),
+        "the per-group roster and the published roster must carry the same roots exactly once"
+    );
+}
+
 #[test]
 fn publish_scan_publishes_the_operand_stack_once() {
     let context = Context::new(unit_runtime());
