@@ -983,6 +983,10 @@ impl std::ops::Index<&HashKey> for HashTableStorage {
     }
 }
 
+fn vec_storage_bytes<T>(values: &Vec<T>) -> usize {
+    values.capacity().saturating_mul(size_of::<T>())
+}
+
 impl HashTableStorage {
     /// Relaxed load of the sealed authority word. The atomic stays private
     /// so a caller cannot store through this route.
@@ -1703,25 +1707,18 @@ impl HashTableStorage {
 
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn known_storage_bytes(&self) -> usize {
+        self.materialized_storage_bytes()
+            .saturating_add(self.pending.as_deref().map_or(0, vec_storage_bytes))
+    }
+
+    /// Runtime backing, excluding parked decoded image entries. GNU thaws
+    /// hash/index/next arrays eagerly and counts key/value storage on growth;
+    /// Neo materializes its index and slots together on first access.
+    pub(crate) fn materialized_storage_bytes(&self) -> usize {
         self.index
-            .capacity()
-            .saturating_mul(size_of::<hash_index::IndexEntry>())
-            .saturating_add(
-                self.pending
-                    .as_deref()
-                    .map_or(0, |p| p.capacity())
-                    .saturating_mul(size_of::<(HashKey, Value, Option<Value>)>()),
-            )
-            .saturating_add(
-                self.slots
-                    .capacity()
-                    .saturating_mul(size_of::<Option<HashTableEntry>>()),
-            )
-            .saturating_add(
-                self.free_slots
-                    .capacity()
-                    .saturating_mul(size_of::<usize>()),
-            )
+            .storage_bytes()
+            .saturating_add(vec_storage_bytes(&self.slots))
+            .saturating_add(vec_storage_bytes(&self.free_slots))
     }
 
     /// What a proof-2 sealed edit charges its owner for growth (§4 Rev R3):
@@ -4009,6 +4006,9 @@ impl TaggedValue {
         if with_tagged_heap(|heap| heap.tagged_heap_generational_enabled()) {
             note_heap_write(self, HeapWriteKind::HashTableData);
         }
+        // SAFETY: this cold serial path owns the initialized table until
+        // hydration completes and the caller publishes its shared reference.
+        let _storage_charge = unsafe { crate::tagged::gc::SerialHashTableStorageCharge::new(ptr) };
         // SAFETY: as_hash_table has checked the type and holds no reference
         // to the payload until this pre-publication hydration has completed.
         unsafe { (*ptr).table.hydrate_pending() };
@@ -4030,6 +4030,10 @@ impl TaggedValue {
         self,
         f: impl FnOnce(&mut LispHashTable) -> R,
     ) -> Option<R> {
+        // SAFETY: this public serial entry supplies the inactive mutation
+        // contract. Sealed owners use mutate's shared body and charge there.
+        let _storage_charge =
+            unsafe { crate::tagged::gc::SerialHashTableStorageCharge::for_value(self) };
         // SAFETY: the caller supplies the same inactive-mutation contract.
         unsafe { mutate::with_hash_table_mut_inactive(self, f) }
     }

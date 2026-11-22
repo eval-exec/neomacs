@@ -2230,7 +2230,8 @@ impl TaggedHeap {
         self.live_bytes = cons_live_bytes
             .saturating_add(object_live_bytes)
             .saturating_add(page_live_bytes)
-            .saturating_add(self.old_noncons_bytes());
+            .saturating_add(self.old_noncons_bytes())
+            .saturating_add(self.image_hash_table_storage_bytes());
         self.reset_bytes_since_gc();
         self.trace_region_stats();
         // Pacer: a stop-the-world cycle has no concurrent mark window; drop

@@ -61,7 +61,7 @@ impl TaggedHeap {
         let mut bytes = conses * size_of::<ConsCell>();
         let mut visit = |ptr: *mut GcHeader| {
             let header = unsafe { &*ptr };
-            if header.tenured && !header.generation.permanent() {
+            if header.tenured && !header.generation.permanent() && !header.flags.image_resident() {
                 bytes = bytes.saturating_add(self.collector_object_bytes(ptr));
             }
         };

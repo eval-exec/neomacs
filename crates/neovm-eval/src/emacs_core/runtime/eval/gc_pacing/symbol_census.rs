@@ -61,6 +61,16 @@ impl Context {
         census.last_gc_symbols = SEED_SYMBOL_COUNT.saturating_add(runtime);
     }
 
+    /// GNU's percentage census includes its fixed symbol array and symbols
+    /// outside the image. Use Neo's actual symbol representation size.
+    #[inline]
+    pub(crate) fn gc_cons_percentage_live_bytes(&self) -> usize {
+        self.tagged_heap.live_bytes().saturating_add(
+            self.gc_symbols_used()
+                .saturating_mul(neovm_value::symbol::LISP_SYMBOL_SIZE),
+        )
+    }
+
     #[inline]
     pub(crate) fn gc_symbols_used(&self) -> usize {
         self.global_state().gc_symbol_census.last_gc_symbols
@@ -70,3 +80,7 @@ impl Context {
 #[cfg(test)]
 #[path = "tests/symbol_census_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/percentage_census_test.rs"]
+mod percentage_tests;

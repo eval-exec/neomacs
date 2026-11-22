@@ -456,10 +456,11 @@ the newest block or page's bump tail, else a fresh one).
 
 ## The adaptive pacer
 
-After each sweep the heap recomputes `live_bytes` from collectible runtime
-conses, objects and arena survivors, then resets `bytes_since_gc`. Immortal
-mapped and loader-proven image residents are excluded, including before
-first-cycle promotion. Ordinary-old runtime survivors remain included.
+After each sweep the heap recomputes `live_bytes` from runtime conses, objects
+and arena survivors, plus runtime-owned hash backing behind mapped and
+loader-stamped image headers, then resets `bytes_since_gc`. Image object
+storage is excluded, including before first-cycle promotion and from the
+ordinary-old byte total. Ordinary-old runtime survivors remain included.
 `should_collect()`
 is simply `bytes_since_gc >= gc_threshold`. The evaluator's
 `effective_gc_threshold_bytes` uses GNU's `consing_threshold` formula, shared
@@ -468,7 +469,9 @@ with GC-inhibited hash callbacks, and caps it at `GC_HI_THRESHOLD_BYTES`:
 1. `gc-cons-threshold` (elisp), floored at `GC_THRESHOLD_FLOOR_BYTES` — the
    GNU floor.
 2. If `gc-cons-percentage` is a Lisp float, raise the budget to
-   `(live_bytes + bytes_since_gc/2) * percentage` when larger. The multiplication
+    `(live_bytes + symbol_bytes + bytes_since_gc/2) * percentage` when larger.
+    `symbol_bytes` uses the World-owned last-GC symbol count and Neo's actual
+    `LispSymbol` size, including its fixed seed array. The multiplication
    uses the original double and truncates toward zero. NaN and negative values
    leave the byte budget in force; positive infinity selects `GC_HI`.
 
@@ -479,11 +482,27 @@ host's startup ceiling and opt-in profiling cap can lower the budget; an explici
 through `set_gc_threshold_from_runtime`).
 
 `live_bytes` in GC traces, collection reports and published GC statistics is
-this pacing census. Full heap memory inventory retains mapped/image-resident
+the heap portion of this census; the evaluator adds symbol bytes at the normal
+and GC-inhibited threshold entry points. Full heap memory inventory retains mapped/image-resident
 objects. The layout diagnostic `managed_live_bytes` adds
 mapped object storage and subsequent allocation to the collectible census;
 page backing and payload capacities are reported separately. These quantities
 describe managed storage, not allocator-resident memory or process RSS.
+
+Hash backing uses the actual index, slot and free-vector capacities, excluding
+parked decoded image entries. Neo materializes index and slots together on
+first access; GNU thaws hash/next/index eagerly and counts key/value storage
+only after growth. This representation difference is an explicit approximation.
+Serial hydration and capacity growth charge their positive storage delta once.
+The shared inactive mutation body remains uncharged: sealed owners already
+charge their own state around it. Ownership, promotion, and physical promotion
+telemetry remain unchanged by the image-byte exclusion.
+
+The image-hash census visits only a dedicated cold registry populated at
+owned image stamping and mapped hash registration, and removes owned entries
+before reclamation. Ordinary minor cycles never filter all owned or mapped
+headers. Tests and `NEOVM_GC_VERIFY_PARTITION=1` compare this registry with the
+full provenance walk before reading its table pointers.
 
 The `(garbage-collect)` return rows use a separate, cold snapshot requested by
 the eval and bytecode entry points. Completed-cycle publication captures USED,

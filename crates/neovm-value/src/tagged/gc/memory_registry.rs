@@ -87,9 +87,10 @@ impl TaggedHeap {
         }
     }
 
-    /// Last-sweep collectible heap census used by gc-cons-percentage.
-    /// Immortal mapped/image-resident objects belong to memory inventory,
-    /// not this allocation budget (GNU alloc.c total_bytes_of_live_objects).
+    /// Last-sweep runtime-owned heap census used by gc-cons-percentage.
+    /// Image object storage is excluded, but separately owned hash backing
+    /// counts (GNU alloc.c total_hash_table_bytes). External symbol cells
+    /// are added by the evaluator's percentage census.
     pub fn live_bytes(&self) -> usize {
         self.live_bytes
     }
@@ -363,6 +364,9 @@ impl TaggedHeap {
         debug_assert!(prev.is_none(), "mapped vectorlike object registered twice");
         self.mapped_veclike_objects
             .push(MappedVecLikeObject::new(header, byte_len));
+        // SAFETY: this loader registration proves the complete mapped header
+        // remains live until heap teardown.
+        unsafe { self.register_image_hash_table(header) };
         let state = self.current_mutator_gc_mut();
         state.allocated_count = state.allocated_count.saturating_add(1);
     }
@@ -423,7 +427,11 @@ impl TaggedHeap {
         // image is published, so no mark or mutator reads the byte.
         unsafe {
             let header = &mut *(addr as *mut GcHeader);
+            let veclike = header.kind == HeapObjectKind::VecLike;
             header.flags = header.flags.with_image_resident();
+            if veclike {
+                self.register_image_hash_table(addr as *const VecLikeHeader);
+            }
         }
         ImageStamp::Stamped
     }

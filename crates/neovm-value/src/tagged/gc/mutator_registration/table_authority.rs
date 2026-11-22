@@ -366,9 +366,10 @@ impl<'access> TableMut<'access> {
     /// §2.2). No Lisp, no safepoint, no allocation inside `f`. Storage
     /// growth inside the edit is charged to the minting owner (§4 Rev R3)
     /// HERE, by measuring the table's `sealed_storage_bytes` around the
-    /// body in this same inactive window: the serial Vec growth sites stay
-    /// exactly main's code, so Sim's pacing is untouched and no TLS is
-    /// involved.
+    /// body in this same inactive window. The private inactive body stays
+    /// uncharged because this wrapper charges its owner's delta. Public
+    /// serial wrappers charge backing growth separately; no heap TLS is
+    /// involved in this sealed owner's charge.
     pub fn edit<R>(&mut self, f: impl FnOnce(&mut LispHashTable) -> R) -> R {
         let owner_gc = self.owner_gc;
         // SAFETY: WRITER is held, so no sealed reader is in flight and the

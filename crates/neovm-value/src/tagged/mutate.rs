@@ -621,6 +621,9 @@ pub fn with_hash_table_mut<R>(
     if super::gc::concurrent_hash_mutation_active() {
         return with_hash_table_mut_concurrent(value, f);
     }
+    // SAFETY: this branch owns serial access, and the inactive mutation
+    // contract forbids a callback or collection before the guard drops.
+    let _storage_charge = unsafe { super::gc::SerialHashTableStorageCharge::for_value(value) };
     // SAFETY: this mutation contains no collector transition. The caller's
     // closure obeys the ordinary heap-mutation contract, which forbids GC.
     unsafe { with_hash_table_mut_inactive(value, f) }
@@ -692,6 +695,9 @@ pub(crate) fn with_hash_table_mut_concurrent<R>(
         super::gc::prepare_concurrent_hash_write(value, guard);
     }
     let ptr = value.as_veclike_ptr().unwrap() as *mut HashTableObj;
+    // SAFETY: serial Tier-H access holds the mutation lease through this
+    // scope; the table's mutable borrow ends before the charge guard drops.
+    let _storage_charge = unsafe { super::gc::SerialHashTableStorageCharge::new(ptr) };
     unsafe {
         // Lazy dump hydration before the caller sees the table (see
         // `Value::as_hash_table`).

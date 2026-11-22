@@ -774,8 +774,8 @@ pub struct TaggedHeap {
 
     /// GC threshold in approximate Lisp heap bytes.
     gc_threshold: usize,
-    /// Collectible live heap bytes after the last sweep, for Lisp GC pacing.
-    /// Immortal mapped and loader-proven image residents are excluded.
+    /// Runtime-owned live bytes after the last sweep, for Lisp GC pacing.
+    /// Image object storage is excluded; owned hash backing still counts.
     live_bytes: usize,
 
     /// Mark-start pacing state — INSTRUMENTATION ONLY. The reactive
@@ -2460,6 +2460,8 @@ mod gc_statistics;
 #[cfg(feature = "gc-memory-telemetry")]
 mod memory_inventory;
 mod memory_registry;
+mod pacing_census;
+pub(crate) use pacing_census::SerialHashTableStorageCharge;
 #[cfg(feature = "gc-memory-telemetry")]
 pub mod memory_telemetry;
 mod native_deferred;

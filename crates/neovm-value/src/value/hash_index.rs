@@ -108,6 +108,12 @@ impl HashIndex {
         self.table.capacity()
     }
 
+    pub(super) fn storage_bytes(&self) -> usize {
+        self.table
+            .capacity()
+            .saturating_mul(size_of::<IndexEntry>())
+    }
+
     pub(super) fn clear(&mut self) {
         self.table.clear();
     }

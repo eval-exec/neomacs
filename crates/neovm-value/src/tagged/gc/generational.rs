@@ -412,8 +412,15 @@ impl TaggedHeap {
                 if !header.tenured {
                     debug_assert!(header.is_marked_at(self.mark_parity));
                     header.promote_to_old_generation();
+                    let image_resident = header.flags.image_resident();
                     let bytes = self.collector_object_bytes(ptr);
-                    self.generational.old_bytes = self.generational.old_bytes.saturating_add(bytes);
+                    // Image provenance excludes this storage even before a
+                    // partition cycle makes it permanent. Runtime hash
+                    // backing joins the completed census separately.
+                    if !image_resident {
+                        self.generational.old_bytes =
+                            self.generational.old_bytes.saturating_add(bytes);
+                    }
                     newly_promoted_header_bytes = newly_promoted_header_bytes.saturating_add(bytes);
                 }
             }

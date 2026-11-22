@@ -120,7 +120,7 @@ impl Context {
         let mut threshold = super::gc_pacing::consing_threshold(
             accounting.entry_threshold_bytes(),
             accounting.entry_percentage(),
-            self.tagged_heap.live_bytes(),
+            self.gc_cons_percentage_live_bytes(),
             accounting.charged_bytes_at_start(),
         );
         if accounting.startup_ceiling() {

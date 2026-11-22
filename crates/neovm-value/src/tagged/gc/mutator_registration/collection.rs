@@ -121,7 +121,8 @@ pub struct CollectionReport {
     /// otherwise keep an object alive for one collection.
     pub frozen_root_words: usize,
     pub cycle: usize,
-    /// Last completed collectible-heap census, excluding immortal image rows.
+    /// Last completed runtime-owned heap census, excluding image object
+    /// storage while retaining separately owned hash backing.
     pub live_bytes: usize,
     /// Post-sweep global charged live balance, retained canonically in owner 0.
     pub allocated_count: usize,

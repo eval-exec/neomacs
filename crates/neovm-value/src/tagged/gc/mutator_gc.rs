@@ -296,6 +296,7 @@ struct MutatorSatbRegistry {
     observations: std::cell::OnceCell<super::super::collection_reads::ObservationWorld>,
     /// Explicit return-row observer state, outside the pinned heap layout.
     gc_rows: super::gc_statistics::GarbageCollectSnapshot,
+    image_hash_tables: super::pacing_census::ImageHashTableRegistry,
 }
 
 #[repr(transparent)]
@@ -322,6 +323,16 @@ const _: () = {
 };
 
 impl MutatorSatbSlot {
+    pub(super) fn image_hash_tables(&self) -> &super::pacing_census::ImageHashTableRegistry {
+        &self.0.image_hash_tables
+    }
+
+    pub(super) fn image_hash_tables_mut(
+        &mut self,
+    ) -> &mut super::pacing_census::ImageHashTableRegistry {
+        &mut self.0.image_hash_tables
+    }
+
     pub(super) fn gc_rows(&self) -> &super::gc_statistics::GarbageCollectSnapshot {
         &self.0.gc_rows
     }
@@ -369,6 +380,7 @@ impl MutatorSatbSlot {
             collector_tables: None,
             observations: std::cell::OnceCell::new(),
             gc_rows: Default::default(),
+            image_hash_tables: Default::default(),
         }))
     }
 
@@ -384,14 +396,15 @@ impl MutatorSatbSlot {
         self.0.observations.get()
     }
 
-    /// Include this Box, the cfg(test) descriptor/location index allocations,
-    /// and resident young-log Vec payloads. SATB buffers/hash payloads remain
+    /// Include this Box, image-hash address backing, cfg(test) descriptor/
+    /// location indexes, and resident young-log Vec payloads. SATB buffers/hash payloads remain
     /// accounted separately per owner, without double counting. A worker loan
     /// owns its Vec outside the registry until return; stopped preflight rejects
     /// outstanding loans, so a stopped inventory contains every young payload.
     #[cfg(feature = "gc-memory-telemetry")]
     pub(super) fn allocation_bytes(&self) -> usize {
         let bytes = std::mem::size_of::<MutatorSatbRegistry>()
+            + self.0.image_hash_tables.backing_bytes()
             + self.0.young_control.allocation_bytes()
             + self.0.current.young.resident_allocation_bytes();
         #[cfg(not(any(test, feature = "test-support")))]

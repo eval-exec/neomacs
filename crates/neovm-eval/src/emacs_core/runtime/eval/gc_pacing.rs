@@ -786,7 +786,7 @@ impl Context {
         let mut threshold = consing_threshold(
             self.gc_runtime_settings_cache.gc_cons_threshold_bytes,
             self.gc_runtime_settings_cache.gc_cons_percentage,
-            self.tagged_heap.live_bytes(),
+            self.gc_cons_percentage_live_bytes(),
             self.tagged_heap.bytes_since_gc(),
         );
         if self

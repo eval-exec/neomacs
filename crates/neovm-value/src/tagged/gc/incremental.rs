@@ -575,7 +575,8 @@ impl TaggedHeap {
         self.live_bytes = cons_live_bytes
             .saturating_add(self.sweep_noncons_live_bytes)
             .saturating_add(self.old_noncons_bytes())
-            .saturating_sub(self.sweep_mark_window_alloc_bytes);
+            .saturating_sub(self.sweep_mark_window_alloc_bytes)
+            .saturating_add(self.image_hash_table_storage_bytes());
 
         self.gc_collections += 1;
         self.sweep_lifetime_us += self.sweep_slice_us_total;
@@ -1908,6 +1909,7 @@ impl TaggedHeap {
                         drop(Box::from_raw(ptr as *mut BoolVectorObj))
                     },
                     VecLikeType::HashTable => unsafe {
+                        self.unregister_image_hash_table(ptr);
                         // A swept weak table must leave the always-swept
                         // registry, or the next cycle's weak worklist would
                         // inspect freed memory. Only registered tables are
