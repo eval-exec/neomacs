@@ -2752,15 +2752,17 @@ impl ImageCache {
             .collect()
     }
 
-    /// Clear entire cache
-    pub fn clear(&mut self) {
+    /// Clear the cache of the images that existed at the caller's admission
+    /// cutoff. Decodes admitted after `through` survive: they were requested
+    /// after the clear, even if their CPU job started eagerly.
+    pub fn clear(&mut self, through: u64) {
         // Every resident texture was charged to the media budget when it was
         // created.  A wholesale clear drops them all at once, so it must
         // release exactly those charges, like every per-image retire path;
         // otherwise the budget keeps counting images that no longer exist.
         self.accounting
             .extend(Self::cleared_image_accounting(self.textures.keys()));
-        self.decoder.client.clear();
+        self.decoder.client.clear_through(through);
         self.loads.clear();
         self.residency.clear();
         self.retained_images = RetainedImageSet::default();

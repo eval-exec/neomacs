@@ -902,7 +902,11 @@ impl ImageCatalog for AsyncImageCatalog {
         // matching entry; the published total changes either way.
         let clears_everything = matches!(&target, ImageInvalidation::All);
         if clears_everything {
-            let command = RenderCommand::Asset(AssetCommand::ClearImageCache);
+            // Free only what existed when the clear was issued: an eager CPU
+            // decode submitted after this ticket belongs to a later load and
+            // must not be retired by this physical clear.
+            let through = self.image_decode_client.admission_ticket();
+            let command = RenderCommand::Asset(AssetCommand::ClearImageCache { through });
             let _delivery = self.send_ordered_cache_command(command, ordered_deadline);
         }
         if clears_everything || matches!(result, ImageInvalidationResult::Changed) {

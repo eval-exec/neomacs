@@ -1840,7 +1840,7 @@ fn clear_image_cache_usage_read_stays_post_clear_with_a_full_command_channel() {
         std::thread::sleep(std::time::Duration::from_millis(20));
         while let Ok(command) = cmd_rx.recv_timeout(std::time::Duration::from_millis(500)) {
             match command {
-                RenderCommand::Asset(AssetCommand::ClearImageCache) => {
+                RenderCommand::Asset(AssetCommand::ClearImageCache { .. }) => {
                     order_for_thread.lock().expect("order lock").push("clear");
                     state_for_thread.publish_cache_usage(ImageCacheUsage::default());
                 }
@@ -1900,7 +1900,7 @@ fn clear_image_cache_read_waits_out_a_stalled_render_thread() {
         std::thread::sleep(std::time::Duration::from_millis(250));
         while let Ok(command) = cmd_rx.recv_timeout(std::time::Duration::from_secs(2)) {
             match command {
-                RenderCommand::Asset(AssetCommand::ClearImageCache) => {
+                RenderCommand::Asset(AssetCommand::ClearImageCache { .. }) => {
                     order_for_thread.lock().expect("order lock").push("clear");
                     state_for_thread.publish_cache_usage(ImageCacheUsage::default());
                 }

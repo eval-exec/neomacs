@@ -263,3 +263,33 @@ fn retirement_before_deferred_submission_cannot_resurrect_identity() {
             .is_ok()
     );
 }
+
+/// A wholesale clear carries an admission ticket. Decodes submitted after
+/// that ticket (an eager CPU job for a load requested after the clear) must
+/// survive the renderer's physical clear, while pre-cutoff jobs are retired.
+/// This is the shared-decoder boundary GNU's synchronous clear leaves behind.
+#[test]
+fn clear_through_retires_only_jobs_admitted_before_the_cutoff() {
+    let mut decoder = ImageDecoder::new();
+    let client = decoder.client();
+    let before = token(301, 1);
+    submit(&client, before, png(), ImageSizeLimit::UNLIMITED);
+    let cutoff = client.admission_ticket();
+    assert!(client.accepts(before), "the pre-clear decode is current");
+    let after = token(302, 1);
+    submit(&client, after, png(), ImageSizeLimit::UNLIMITED);
+    assert!(client.accepts(after));
+
+    client.clear_through(cutoff);
+    assert!(
+        !client.accepts(before),
+        "a decode admitted before the clear must be retired"
+    );
+    assert!(
+        client.accepts(after),
+        "a decode admitted after the clear ticket must survive"
+    );
+
+    client.clear_through(u64::MAX);
+    assert!(!client.accepts(after), "a full clear retires every decode");
+}

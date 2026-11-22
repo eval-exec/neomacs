@@ -204,9 +204,9 @@ impl RenderApp {
                 }
                 self.publish_image_cache_usage();
             }
-            AssetCommand::ClearImageCache => {
+            AssetCommand::ClearImageCache { through } => {
                 if let Some(ref mut renderer) = self.renderer {
-                    renderer.clear_image_cache();
+                    renderer.clear_image_cache(through);
                 }
                 // Toolbar textures live in the same renderer image cache but
                 // are keyed outside the catalog, so their residency map must be

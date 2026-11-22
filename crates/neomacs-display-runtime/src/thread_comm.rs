@@ -586,7 +586,11 @@ pub enum AssetCommand {
     /// shared catalog is this frontend's analogue of all frames, so editor
     /// images and tool-bar icons are evicted together.  FILTER nil (selected
     /// frame) and FILTER t (all frames) therefore have the same effect here.
-    ClearImageCache,
+    ClearImageCache {
+        /// Admission ticket of the shared decoder at clear time. Decodes
+        /// submitted after it were requested after the clear and survive.
+        through: u64,
+    },
     /// Recompute the renderer's retained-image usage and publish it, then
     /// acknowledge.
     ///

@@ -290,8 +290,8 @@ impl WgpuRenderer {
     ///
     /// GNU `clear-image-cache` frees the frame image caches; this is the
     /// shared-cache equivalent, used by the render thread's wholesale clear.
-    pub fn clear_image_cache(&mut self) {
-        self.caches.image.clear();
+    pub fn clear_image_cache(&mut self, through: u64) {
+        self.caches.image.clear(through);
     }
 
     /// Replace the complete set of image identities retained by render
