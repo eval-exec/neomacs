@@ -3,6 +3,9 @@ use neovm_value::intern::intern;
 
 use crate::buffer::BufferId;
 
+#[path = "content_accounting_test.rs"]
+mod content_accounting_test;
+
 #[test]
 fn insert_and_delete_overlay_preserves_object_identity() {
     crate::test_utils::init_test_tracing();

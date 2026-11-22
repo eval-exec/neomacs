@@ -1442,6 +1442,11 @@ impl OverlayList {
     }
 
     fn add_overlay_content_component(&self, overlay: Value) {
+        // Dirty totals are not authoritative. The next digest rebuilds from
+        // the current owner set, including this insertion or replacement.
+        if self.content_dirty.get() {
+            return;
+        }
         match self.overlay_content_component(overlay) {
             OverlayContentComponent::Hashable(hash) => self
                 .content_component_sum
@@ -1454,6 +1459,11 @@ impl OverlayList {
     }
 
     fn subtract_overlay_content_component(&self, component: OverlayContentComponent) {
+        // A bulk edit or restore may have invalidated every cached component.
+        // Do not subtract from stale totals; keep them dirty until rebuilt.
+        if self.content_dirty.get() {
+            return;
+        }
         match component {
             OverlayContentComponent::Hashable(hash) => self
                 .content_component_sum
@@ -2109,6 +2119,8 @@ impl OverlayList {
             .index
             .attach_batch(&entries, OverlayBatchOrder::AscendingQueryOrder);
         debug_assert!(attached, "fresh overlay list rejected its dump batch");
+        // Batch attachment bypasses the incremental component updates.
+        list.content_dirty.set(true);
         list
     }
 
