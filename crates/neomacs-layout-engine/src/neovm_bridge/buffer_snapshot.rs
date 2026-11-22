@@ -1011,6 +1011,23 @@ impl LayoutBufferSnapshot {
             .map(|range| range.start().get())
     }
 
+    /// The captured automatic-composition spans as `(start, end)` char ranges,
+    /// ascending.  The leaf retains the resolved widths for exactly these
+    /// spans, so a later layout with unchanged composition inputs can seed
+    /// them without re-entering `font-at`/`find-composition-internal`.
+    pub(crate) fn automatic_composition_span_ranges(
+        &self,
+    ) -> impl Iterator<Item = (usize, usize)> + '_ {
+        self.automatic_composition_spans
+            .iter()
+            .map(|range| (range.start().get(), range.end().get()))
+    }
+
+    /// The advances resolved for this snapshot, keyed by span start.
+    pub(crate) fn resolved_automatic_composition_advances(&self) -> &FxHashMap<usize, f32> {
+        &self.automatic_composition_advances
+    }
+
     /// Resolve every automatic composition in `resolve` to its gstring width
     /// on the evaluator thread (GNU `autocmp_chars` +
     /// `composition_gstring_width`).
@@ -1030,11 +1047,15 @@ impl LayoutBufferSnapshot {
     /// resolved rule gstring is put in the evaluator's GNU-shaped-gstring
     /// cache (`composition_gstring_put_cache`), so later layouts reuse it
     /// without running the rule.
+    /// `seeded` supplies widths retained by the previous layout for spans
+    /// whose composition inputs are unchanged; those spans skip the Lisp
+    /// search entirely.
     pub(crate) fn resolve_automatic_composition_advances(
         &mut self,
         evaluator: &mut neovm_core::emacs_core::eval::Context,
         buffer_id: neovm_core::buffer::BufferId,
         resolve: std::ops::Range<usize>,
+        seeded: &FxHashMap<(usize, usize), f32>,
     ) {
         if self.automatic_composition_spans.is_empty() {
             return;
@@ -1057,6 +1078,10 @@ impl LayoutBufferSnapshot {
                 // shaping every composition there costs Lisp per span per
                 // layout attempt and starved input on rich buffers.
                 if !resolve.contains(&start) {
+                    continue;
+                }
+                if let Some(width) = seeded.get(&(start, span.end().get())) {
+                    advances.insert(start, *width);
                     continue;
                 }
                 let pos = Value::fixnum(start as i64 + 1);

@@ -893,6 +893,10 @@ pub struct LayoutEngine {
     /// Last accepted layout per window, used by cursor, scroll, and edit
     /// replay. Speculative attempts never replace this state.
     retained_window_matrices: rustc_hash::FxHashMap<DisplayWindowId, RetainedWindowMatrix>,
+    /// Resolved automatic-composition widths for the current frame's windows,
+    /// parked and loaded with `retained_window_matrices`.
+    retained_composition_advances:
+        rustc_hash::FxHashMap<DisplayWindowId, RetainedCompositionAdvances>,
     prepared_viewports: PreparedViewports,
     scroll_coverage: scroll_coverage::ScrollCoverage,
     /// Every OTHER frame's retained state, parked while this one is laid out.
@@ -1372,6 +1376,52 @@ struct RetainedFrameState {
     matrices: rustc_hash::FxHashMap<DisplayWindowId, RetainedWindowMatrix>,
     chrome_metrics: rustc_hash::FxHashMap<DisplayWindowId, WindowChromeMetrics>,
     scroll_preview_coverage: scroll_preview::ScrollPreviewCoverage,
+    composition_advances: rustc_hash::FxHashMap<DisplayWindowId, RetainedCompositionAdvances>,
+}
+
+/// Shaped automatic-composition widths retained for one window.
+///
+/// GNU's display reuses a matrix row without re-shaping its compositions; the
+/// equivalent here is to keep each resolved span's `composition_gstring_width`
+/// while the inputs that decide it are unchanged.  The advances map is rebuilt
+/// for the spans of one layout, so it stays bounded by the snapshot's captured
+/// span list.
+struct RetainedCompositionAdvances {
+    buffer_id: neovm_core::buffer::BufferId,
+    buffer_modiff: i64,
+    overlay_modified_tick: i64,
+    face_change_count: u64,
+    fontset_generation: u64,
+    window_parameters_generation: u64,
+    char_width_bits: u32,
+    advances: rustc_hash::FxHashMap<(usize, usize), f32>,
+}
+
+impl RetainedCompositionAdvances {
+    /// Whether these advances still describe the same composition inputs.
+    /// Text/property changes move `buffer_modiff`; overlay changes move
+    /// `overlay_modified_tick`; face and fontset definitions move their
+    /// generations; a per-window face parameter moves the window parameter
+    /// generation.  `char_width_bits` catches a window font-size change that
+    /// only the layout parameters record.
+    fn is_current_for(
+        &self,
+        buffer_id: neovm_core::buffer::BufferId,
+        buffer_modiff: i64,
+        overlay_modified_tick: i64,
+        face_change_count: u64,
+        fontset_generation: u64,
+        window_parameters_generation: u64,
+        char_width_bits: u32,
+    ) -> bool {
+        self.buffer_id == buffer_id
+            && self.buffer_modiff == buffer_modiff
+            && self.overlay_modified_tick == overlay_modified_tick
+            && self.face_change_count == face_change_count
+            && self.fontset_generation == fontset_generation
+            && self.window_parameters_generation == window_parameters_generation
+            && self.char_width_bits == char_width_bits
+    }
 }
 
 /// An upper bound on the characters a window can display, as
@@ -1527,6 +1577,7 @@ impl LayoutEngine {
         self.face_composed_sources = None;
         self.face_tty_realization = None;
         self.retained_window_matrices.clear();
+        self.retained_composition_advances.clear();
         self.prepared_viewports = PreparedViewports::default();
         self.scroll_coverage.cancel();
         self.retained_window_chrome_metrics.clear();
@@ -1724,6 +1775,7 @@ impl LayoutEngine {
             face_composed_sources: None,
             face_tty_realization: None,
             retained_window_matrices: rustc_hash::FxHashMap::default(),
+            retained_composition_advances: rustc_hash::FxHashMap::default(),
             prepared_viewports: PreparedViewports::default(),
             scroll_coverage: scroll_coverage::ScrollCoverage::default(),
             retained_by_frame: rustc_hash::FxHashMap::default(),
@@ -1769,6 +1821,7 @@ impl LayoutEngine {
             face_composed_sources: None,
             face_tty_realization: None,
             retained_window_matrices: rustc_hash::FxHashMap::default(),
+            retained_composition_advances: rustc_hash::FxHashMap::default(),
             prepared_viewports: PreparedViewports::default(),
             scroll_coverage: scroll_coverage::ScrollCoverage::default(),
             retained_by_frame: rustc_hash::FxHashMap::default(),
@@ -5245,6 +5298,7 @@ impl LayoutEngine {
                     matrices: std::mem::take(&mut self.retained_window_matrices),
                     chrome_metrics: std::mem::take(&mut self.retained_window_chrome_metrics),
                     scroll_preview_coverage: std::mem::take(&mut self.scroll_preview_coverage),
+                    composition_advances: std::mem::take(&mut self.retained_composition_advances),
                 },
             );
         }
@@ -5252,6 +5306,7 @@ impl LayoutEngine {
         self.retained_window_matrices = loaded.matrices;
         self.retained_window_chrome_metrics = loaded.chrome_metrics;
         self.scroll_preview_coverage = loaded.scroll_preview_coverage;
+        self.retained_composition_advances = loaded.composition_advances;
         self.retained_frame = Some(frame_id);
     }
 
@@ -6023,6 +6078,14 @@ impl LayoutEngine {
                         .min()
                 })
             });
+        tracing::debug!(
+            target: "neomacs_layout_engine::composition_resolver",
+            replay = scroll_replay.is_some(),
+            cursor_only = cursor_only_replay.is_some(),
+            ?replay_composition_walk,
+            ?replay_first_reused_below_start,
+            "composition walk scope"
+        );
         let face_resolver = face_services.resolver();
         #[cfg(test)]
         let _viewport_retry_depth = viewport_retry_depth_probe::Guard::enter();
@@ -6388,10 +6451,84 @@ impl LayoutEngine {
                 resolve_start = resolve_start.min(from);
                 resolve_end = resolve_end.max(through);
             }
+            // Reuse the previous layout's shaped widths when the inputs that
+            // decide them did not move.  This is the GNU matrix-row reuse for
+            // compositions: a scroll that keeps faces, overlays and text
+            // unchanged does not re-enter `font-at` or the rule search.
+            let (composition_buffer_modiff, composition_overlay_modified_tick) = evaluator
+                .buffer_manager()
+                .get(buf_id)
+                .map(|buffer| (buffer.modified_tick(), buffer.overlay_modified_tick()))
+                .unwrap_or((i64::MIN, i64::MIN));
+            let composition_face_change_count = evaluator.face_change_count();
+            let composition_fontset_generation =
+                neovm_core::emacs_core::fontset::fontset_generation();
+            let composition_window_parameters_generation = evaluator
+                .frame_manager()
+                .get(frame_id)
+                .and_then(|frame| frame.window_layout_inputs(window_id))
+                .map(|inputs| inputs.window_parameters_generation)
+                .unwrap_or(0);
+            let composition_char_width_bits = params.char_width.to_bits();
+            let composition_window = DisplayWindowId::new(params.window_id);
+            let seeded_composition_advances = self
+                .retained_composition_advances
+                .get(&composition_window)
+                .filter(|cache| {
+                    cache.is_current_for(
+                        buf_id,
+                        composition_buffer_modiff,
+                        composition_overlay_modified_tick,
+                        composition_face_change_count,
+                        composition_fontset_generation,
+                        composition_window_parameters_generation,
+                        composition_char_width_bits,
+                    )
+                })
+                .map(|cache| cache.advances.clone())
+                .unwrap_or_default();
+            let composition_resolve_started = std::time::Instant::now();
             layout_buffer.resolve_automatic_composition_advances(
                 evaluator,
                 buf_id,
                 resolve_start..resolve_end,
+                &seeded_composition_advances,
+            );
+            tracing::debug!(
+                target: "neomacs_layout_engine::composition_resolver",
+                micros = composition_resolve_started.elapsed().as_micros() as u64,
+                seeded = seeded_composition_advances.len(),
+                resolve_start,
+                resolve_end,
+                "composition resolve timing"
+            );
+            let resolved_advances = layout_buffer.resolved_automatic_composition_advances();
+            let mut retained_advances = rustc_hash::FxHashMap::default();
+            for (start, end) in layout_buffer.automatic_composition_span_ranges() {
+                // Keep the previous layout's width for spans this layout did
+                // not resolve (outside its range): a replay frame's narrow
+                // band must not erase the widths a full-screen pass resolved,
+                // or the next full pass would re-enter Lisp for the screen.
+                let width = resolved_advances
+                    .get(&start)
+                    .copied()
+                    .or_else(|| seeded_composition_advances.get(&(start, end)).copied());
+                if let Some(width) = width {
+                    retained_advances.insert((start, end), width);
+                }
+            }
+            self.retained_composition_advances.insert(
+                composition_window,
+                RetainedCompositionAdvances {
+                    buffer_id: buf_id,
+                    buffer_modiff: composition_buffer_modiff,
+                    overlay_modified_tick: composition_overlay_modified_tick,
+                    face_change_count: composition_face_change_count,
+                    fontset_generation: composition_fontset_generation,
+                    window_parameters_generation: composition_window_parameters_generation,
+                    char_width_bits: composition_char_width_bits,
+                    advances: retained_advances,
+                },
             );
             resolved_composition_range = Some(resolve_start..resolve_end);
         }
@@ -6534,6 +6671,16 @@ impl LayoutEngine {
                 coverage_end,
                 &resolved,
             ) {
+                tracing::debug!(
+                    target: "neomacs_layout_engine::composition_resolver",
+                    missed_start = missed.start,
+                    missed_end = missed.end,
+                    walk_start,
+                    coverage_end,
+                    resolve_start = resolved.start,
+                    resolve_end = resolved.end,
+                    "automatic composition coverage retry"
+                );
                 if let Some(attempt) = window_end_attempt.take() {
                     evaluator.reject_redisplay_window_end_attempt(attempt);
                 }
