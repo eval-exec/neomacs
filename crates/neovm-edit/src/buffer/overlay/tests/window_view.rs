@@ -760,3 +760,56 @@ fn window_view_copy_memo_values_are_rooted_and_replaced() {
     assert!(roots.iter().any(|value| eq_value(value, &next_copy)));
     assert_ne!(next_copy.bits(), memo_copy.bits());
 }
+
+/// The #702 counter row at Magit scale: one overlay per line plus hl-line,
+/// 200 `next-line` keys from the midpoint of a small and a large log. Per-key
+/// copies must follow the visible window (the entering line and the moved
+/// highlight), not the buffer's overlay count, and must not grow with the log.
+#[test]
+fn hl_line_scrolling_copies_follow_the_window_not_the_buffer() {
+    crate::test_utils::init_test_tracing();
+    const LINE_BYTES: usize = 80;
+    const WINDOW_LINES: usize = 50;
+    const KEYS: usize = 200;
+
+    fn copies_for(lines: usize) -> usize {
+        let face = Value::symbol("face");
+        let highlight = Value::symbol("highlight");
+        let mut list = OverlayList::new();
+        for line in 0..lines {
+            list.insert_overlay(alloc_overlay(line * LINE_BYTES, line * LINE_BYTES + 1));
+        }
+        let first = lines / 2;
+        let hl = alloc_overlay(first * LINE_BYTES, first * LINE_BYTES + 1);
+        list.insert_overlay(hl);
+        list.overlay_put(hl, face, highlight).unwrap();
+
+        let mut copies = 0;
+        for step in 0..KEYS {
+            let line = first + step;
+            list.move_overlay_to_emacs_byte_range(
+                hl,
+                emacs_byte_range(line * LINE_BYTES, line * LINE_BYTES + 1),
+            );
+            reset_overlay_snapshot_copy_count();
+            let _view = list.snapshot_in_range(emacs_byte_range(
+                line * LINE_BYTES,
+                (line + WINDOW_LINES) * LINE_BYTES,
+            ));
+            copies += overlay_snapshot_copy_count();
+        }
+        copies
+    }
+
+    let small = copies_for(2_048);
+    let large = copies_for(65_536);
+    eprintln!("hl_line_scrolling copies: 2K={small} 64K={large} keys={KEYS}");
+    assert!(
+        small <= (WINDOW_LINES + 2) + 3 * KEYS,
+        "2K-line scrolling copied {small} overlays for {KEYS} keys"
+    );
+    assert_eq!(
+        small, large,
+        "per-key copies grew with the buffer's overlay count"
+    );
+}
