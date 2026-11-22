@@ -802,6 +802,14 @@ where
         branch_pc: usize,
         program: VmProgram<'_>,
     ) -> Step {
+        let effect = static_stack_effect(&op);
+        // Malformed code: an opcode reached without the operands its static
+        // effect consumes is the Scalar and Sealed arms' `Invalid byte-code`,
+        // refused before any poll or request. The underflow check below is
+        // the backstop.
+        if operands.len() < usize::from(effect.consumed) {
+            return invalid();
+        }
         if matches!(
             op,
             Op::Call(_) | Op::Apply(_) | Op::CallBuiltin(..) | Op::CallBuiltinSym(..)
@@ -831,7 +839,6 @@ where
             } => (consumed, produced, jump),
         };
         // R3: the typed effect, before anything is applied.
-        let effect = static_stack_effect(&op);
         let got_produced = u16::try_from(produced.len()).unwrap_or(u16::MAX);
         if consumed != effect.consumed || got_produced != effect.produced {
             tracing::error!(

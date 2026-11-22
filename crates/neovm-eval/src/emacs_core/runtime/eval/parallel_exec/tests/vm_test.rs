@@ -1066,20 +1066,51 @@ fn vm_an_escape_completion_with_the_wrong_arity_is_a_typed_fault_and_keeps_the_s
 }
 
 #[test]
-fn vm_an_escape_completion_that_consumes_more_than_the_segment_holds_is_a_typed_fault() {
-    let ops = vec![Op::Nil, Op::Eq, Op::Return];
-    let mut engine = harness();
-    let outcome = engine.run(&mut context(), program(&ops));
-    assert!(matches!(
-        fault_of(outcome),
-        EngineFault::EscapeStackUnderflow {
-            op: Op::Eq,
-            consumed: 2,
-            available: 1,
-        }
-    ));
-    let frame = engine.frame_id().expect("the frame stays");
-    assert_eq!(engine.arena().vm_segment(frame), Some(&[Value::NIL][..]));
+fn vm_an_escape_requested_without_its_operands_signals_invalid_byte_code_before_any_poll() {
+    // An escaping opcode reached with fewer operands than its static effect
+    // consumes is malformed code, the Scalar and Sealed arms' `Invalid
+    // byte-code` (lead C3), refused before any poll or request.
+    // `EscapeStackUnderflow` stays in the stub as the backstop; the handler
+    // sees the arena by shared reference, so no completion can reach it.
+    let cases: Vec<(&str, Vec<Op>)> = vec![
+        (
+            "binary opcode, one operand",
+            vec![Op::Nil, Op::Eq, Op::Return],
+        ),
+        ("unary opcode, none", vec![Op::SymbolValue, Op::Return]),
+        ("call without its callee", vec![Op::Call(0), Op::Return]),
+        ("return over an empty segment", vec![Op::Return]),
+    ];
+    let mut ctx = context();
+    for (name, ops) in cases {
+        let mut engine = harness();
+        let outcome = engine.run(&mut ctx, program(&ops));
+        let flow = match outcome {
+            VmOutcome::Signaled(flow) => flow,
+            other => panic!("{name}: expected a signal, got {other:?}"),
+        };
+        assert_eq!(
+            signal_key(&flow),
+            (
+                "error".to_string(),
+                vec![Value::string("Invalid byte-code")]
+            ),
+            "{name}"
+        );
+        assert_eq!(
+            engine.escape_handler().requests.len(),
+            0,
+            "{name}: no request"
+        );
+        assert_eq!(engine.poll_handler().edges, Vec::new(), "{name}: no poll");
+        assert_clear(&engine);
+        let outcome = engine.run(&mut ctx, program(&[Op::Nil, Op::Return]));
+        assert_eq!(
+            done_value(&mut engine, outcome),
+            Value::NIL,
+            "{name}: restart"
+        );
+    }
 }
 
 #[test]
