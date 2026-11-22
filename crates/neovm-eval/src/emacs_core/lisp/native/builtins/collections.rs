@@ -1583,13 +1583,10 @@ pub fn builtin_remhash_values(
     match table.kind() {
         ValueKind::Veclike(VecLikeType::HashTable) => {
             check_mutable_hash_table(table)?;
-            let test = table.as_hash_table().unwrap().test;
             // SAFETY: the entry rejected Tier-H; this path calls no Lisp or GC.
             unsafe {
-                table.with_hash_table_mut_inactive(|ht| {
-                    ht.data
-                        .try_remove_by_value(key_value, test, symbols_with_pos_enabled)
-                        .map(|_| ())
+                table.with_hash_table_write_inactive(|table| {
+                    table.remove(key_value, symbols_with_pos_enabled)
                 })
             }
             .unwrap_or(Ok(()))?;

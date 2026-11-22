@@ -53,27 +53,86 @@ impl<'a> HashTableWrite<'a> {
             HashProbe::Absent(hash) => {
                 self.table.maybe_resize_for_insert(true);
                 let hash_key = key.to_hash_key_for_insert(test, symbols_with_pos_enabled);
-                debug_assert_eq!(hash, stored_hash(&hash_key, key));
-                let slot = self
-                    .table
-                    .data
-                    .alloc_slot_with_growth(key, value, &mut charge_growth);
-                // The capability's fixed serial-owner extent justifies the
-                // trusted reporter's lazy owner lookup. Shared storage itself
-                // neither consults TLS nor selects an allocation owner.
-                self.table.data.index.insert_new_with_growth(
+                self.table.data.insert_absent_with_growth(
                     hash,
                     hash_key,
-                    slot,
-                    &mut charge_growth,
+                    key,
+                    value,
+                    charge_growth,
                 );
             }
+        }
+        Ok(())
+    }
+
+    /// Probe once, then unlink the found entry. Spare free-list capacity
+    /// requires no allocation census or allocation-accounting owner lookup.
+    #[inline]
+    pub fn remove(&mut self, key: Value, symbols_with_pos_enabled: bool) -> Result<(), Flow> {
+        let Some((hash, slot)) =
+            self.table
+                .data
+                .try_entry_by_value(key, self.table.test, symbols_with_pos_enabled)?
+        else {
+            return Ok(());
+        };
+        if self.table.data.free_slots.len() == self.table.data.free_slots.capacity() {
+            self.table
+                .data
+                .remove_found_with_growth(hash, slot, charge_growth);
+        } else {
+            self.table.data.remove_found(hash, slot);
         }
         Ok(())
     }
 }
 
 impl HashTableStorage {
+    /// Retain the original out-of-line insertion boundary. Inlining the
+    /// allocating body into the native hot loop displaced journal inlining
+    /// and added nine instructions to the measured fixed-key overwrite path.
+    #[inline(never)]
+    pub(super) fn insert_absent_with_growth(
+        &mut self,
+        hash: u64,
+        hash_key: HashKey,
+        key: Value,
+        value: Value,
+        mut report: impl FnMut(usize),
+    ) {
+        debug_assert_eq!(hash, stored_hash(&hash_key, key));
+        let slot = self.alloc_slot_with_growth(key, value, &mut report);
+        self.index
+            .insert_new_with_growth(hash, hash_key, slot, &mut report);
+    }
+
+    /// The unmetered removal body, also used by detached and sealed callers.
+    /// The caller already found this exact slot; no comparison is repeated.
+    #[inline]
+    pub(super) fn remove_found(&mut self, hash: u64, slot: usize) -> Option<Value> {
+        let removed = self
+            .index
+            .remove_matching(hash, |entry| entry.slot == slot)
+            .expect("the entry just found is in the index");
+        // Use the removed key so user-hash memo maps retain their invariant.
+        self.forget_user_hash(&removed.key);
+        self.remove_slot(slot)
+    }
+
+    /// Only a full reusable-slot Vec can allocate during removal. Measure
+    /// before unlinking: hashbrown's usable index capacity may fall on erase,
+    /// and the serial contract charges the positive net materialized delta.
+    #[cold]
+    #[inline(never)]
+    fn remove_found_with_growth(&mut self, hash: u64, slot: usize, mut report: impl FnMut(usize)) {
+        let before = self.materialized_storage_bytes();
+        self.remove_found(hash, slot);
+        let grown = self.materialized_storage_bytes().saturating_sub(before);
+        if grown != 0 {
+            report(grown);
+        }
+    }
+
     /// With a no-op reporter this is also the detached/sealed allocation
     /// body. Only an exhausted Vec takes a capacity snapshot.
     #[inline]

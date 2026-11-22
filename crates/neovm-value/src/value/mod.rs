@@ -1380,14 +1380,7 @@ impl HashTableStorage {
         else {
             return Ok(None);
         };
-        let removed = self
-            .index
-            .remove_matching(hash, |entry| entry.slot == slot)
-            .expect("the entry just found is in the index");
-        // The removed key is what `forget_user_hash` needs to keep the memo
-        // maps from going stale.
-        self.forget_user_hash(&removed.key);
-        Ok(self.remove_slot(slot))
+        Ok(self.remove_found(hash, slot))
     }
 
     pub fn get_mut(&mut self, key: &HashKey) -> Option<&mut Value> {
@@ -4032,7 +4025,7 @@ impl TaggedValue {
         unsafe { mutate::with_hash_table_mut_inactive(self, f) }
     }
 
-    /// Edit through operations that report only actual backing growth.
+    /// Edit through operations that report positive net backing growth.
     /// Unlike the unrestricted mutation closure, this capability cannot
     /// replace the table or expose its storage, so overwrites need no census.
     ///

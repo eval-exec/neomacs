@@ -512,6 +512,13 @@ Extend the typed insert/grow/COW operations into a capability with explicit
 replacement and growth publication. Once every production mutation uses those
 operations, remove both generic completion guards and the initial/final
 backing ABA limitation. Until then, preserve the generic replacement contract.
+The same follow-up should evaluate GNU's preallocated `next[]` free chain
+(`fns.c:5161-5196`), which makes removal allocation-free. Neo currently grows a
+separate reusable-slot Vec lazily. Preallocating it requires a capacity invariant
+across constructors, clone, reserve, insertion and dump hydration, and changes
+real backing bytes and their census. R4 retains that allocation policy and bills
+only the positive net materialized delta on a removal whose free-list push can
+allocate; tombstone-driven index-capacity decreases remain in the same net domain.
 
 The internal design follows Rust's [slice views](https://doc.rust-lang.org/book/ch04-03-slices.html)
 and [disjoint borrowing](https://doc.rust-lang.org/nomicon/borrow-splitting.html):
