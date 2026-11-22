@@ -80,7 +80,7 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
    | |     T: ?Sized,
    | |     #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global,
    | | > {
-   | |_- doesn't satisfy 16 bounds
+   | |_- doesn't satisfy 17 bounds
 ...
    | / pub struct Weak<
    | |     T: ?Sized,
@@ -296,7 +296,7 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `neovm_core::Context: std::marker::Sync`
            `Rc<()>: std::marker::Sync`
            which is required by `neovm_core::Context: std::marker::Sync`
-           `Rc<RefCell<Vec<std::rc::Weak<[TaggedValue]>>>>: Send`
+           `Rc<owned_roots::RootLeases>: Send`
            which is required by `neovm_core::Context: std::marker::Sync`
            `Rc<()>: Send`
            which is required by `neovm_core::Context: std::marker::Sync`
