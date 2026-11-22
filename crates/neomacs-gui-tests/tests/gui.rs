@@ -43,6 +43,8 @@ mod commit_editing;
 #[path = "compact_frame_geometry.rs"]
 mod compact_frame_geometry;
 
+#[path = "bidi_gui_cursor_785_oracle.rs"]
+mod bidi_gui_cursor_785_oracle;
 #[path = "bidi_paragraph_direction_785_r2_gui_oracle.rs"]
 mod bidi_paragraph_direction_785_r2_gui_oracle;
 #[path = "composite_shaping_785_gui_oracle.rs"]
