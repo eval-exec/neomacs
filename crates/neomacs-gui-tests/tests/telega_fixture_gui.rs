@@ -333,7 +333,6 @@ fn telega_frontend_repaints_a_delayed_avatar_after_update_file() {
 fn telega_frontend_replaces_a_chat_photo_without_restarting() {
     let fixture = Fixture::start(AvatarAvailability::ReadyOnDisk, "replacement");
     fixture.wait_for_ready();
-
     let (before_snapshot, before_png, _) = fixture.corresponding_state("before-replacement");
     let before_rows =
         fixture.assert_visible_avatar_rows(&before_snapshot, &before_png, "before replacement");
@@ -855,8 +854,33 @@ impl Fixture {
         );
         self.wait_for_rendered_rows(8);
         // Chat arrivals may preserve a point near the old insertion boundary.
+        // Wait until the fixture reports the character content has settled
+        // (two checkpoint ticks with the same chars-modified-tick/size), so
+        // the viewport command below cannot race the last insert.
+        self.wait_for(
+            "waiting for the fetched chats to settle",
+            Duration::from_secs(30),
+            || {
+                let checkpoint = self.read_checkpoint()?;
+                (checkpoint["chats-settled"] == Value::Bool(true)).then_some(checkpoint)
+            },
+        );
         // Establish the initial viewport through the real command binding.
+        // `window-start' is already 1 on the fresh window, so wait for the
+        // command's observable effect -- point AND window-start at the buffer
+        // top -- rather than for an already-true value.  A dropped key must
+        // fail here, not be masked by retries.
         self.press_key("ctrl+Home");
+        let checkpoint = self.wait_for(
+            "waiting for Ctrl+Home to move point and window-start to 1",
+            Duration::from_secs(15),
+            || {
+                let checkpoint = self.read_checkpoint()?;
+                (checkpoint["window-start"].as_u64() == Some(1)
+                    && checkpoint["point"].as_u64() == Some(1))
+                .then_some(checkpoint)
+            },
+        );
         self.wait_for_window_start(1);
         self.read_checkpoint().unwrap_or(checkpoint)
     }
