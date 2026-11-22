@@ -34,7 +34,7 @@ use neovm_core::emacs_core::Context;
 use neovm_core::emacs_core::display_spec::{DisplayPropertySpecs, display_spec_when_parts};
 use neovm_core::emacs_core::display_when::{DisplayWhenSite, DisplayWhenSiteKey};
 use neovm_core::emacs_core::intern::WellKnown;
-use neovm_core::emacs_core::value::{Value, get_string_text_properties_table_for_value};
+use neovm_core::emacs_core::value::{Value, borrow_string_text_properties_table_for_value};
 use rustc_hash::FxHashMap;
 
 use crate::neovm_bridge::{LayoutBufferView, RustTextPropAccess};
@@ -969,7 +969,9 @@ fn collect_prefix_string_when_forms(
     let Some(lisp_string) = string.as_lisp_string() else {
         return;
     };
-    let Some(props) = get_string_text_properties_table_for_value(string) else {
+    // Discovery only copies existing form values into `sites`; it runs no
+    // Lisp or GC. The table borrow ends before those forms are evaluated.
+    let Some(props) = borrow_string_text_properties_table_for_value(string) else {
         return;
     };
     let display = Value::symbol(&crate::fixed_symbols::DISPLAY);
