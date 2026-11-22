@@ -19709,6 +19709,395 @@ fn explicit_gc_inside_an_in_flight_automatic_cycle_keeps_referenced_processes() 
     // armed set is empty for the outer automatic cycle's finish.
 }
 
+/// Drive exactly one automatic cycle by consing past `gc-cons-threshold`
+/// through the evaluator's safe points.
+fn drive_one_automatic_cycle(ev: &mut Context) {
+    // SAFETY: test-only owner-thread heap setup through the non-swappable
+    // mutable accessor contract; the view is used in place.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1);
+    let gc_start = ev.gc_count_for_test();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while ev.gc_count_for_test() == gc_start && std::time::Instant::now() < deadline {
+        ev.eval_str_each("(make-list 64 0)");
+        ev.gc_safe_point();
+    }
+    assert!(
+        ev.gc_count_for_test() > gc_start,
+        "an automatic cycle must complete"
+    );
+}
+
+/// A dead process that Lisp keeps referencing owes its deciding major once.
+/// The next automatic cycle is that major; every later automatic cycle must
+/// remain free to run a minor, which traces the decided record as an ordinary
+/// root as before #776.
+#[test]
+fn a_referenced_dead_process_forces_at_most_one_major() {
+    crate::test_utils::init_test_tracing();
+    let cat_bin = find_bin("cat");
+    let mut ev = crate::test_utils::new_context();
+    // Bootstrap the dump-less heap to its first major.
+    ev.eval_str_each("(setq gc-auto-root (cons 1 2))");
+    // SAFETY: same test-only setup contract as above.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(64);
+    while ev.gc_count_for_test() == 0 {
+        ev.eval_str_each("(make-list 64 0)");
+        ev.gc_safe_point();
+    }
+
+    let created = eval_lexical_with_retired_wait(
+        &mut ev,
+        &format!(
+            r#"(setq forced-payloads (make-hash-table :test 'eq :weakness 'key)
+                     forced-done nil
+                     forced-proc nil)
+               (let* ((payload (make-list 64 'f))
+                      (p (make-process
+                          :name "forced-once"
+                          :buffer nil
+                          :command (list "{cat_bin}")
+                          :connection-type 'pipe
+                          :noquery t
+                          :sentinel (lambda (_p _m)
+                                      payload
+                                      (setq forced-done t)))))
+                 (puthash payload t forced-payloads)
+                 (setq forced-proc p))
+               (list (process-status forced-proc)
+                     (hash-table-count forced-payloads))"#
+        ),
+    );
+    assert_eq!(created, "OK (run 1)");
+
+    // One automatic minor while the process lives promotes its object.
+    drive_one_automatic_cycle(&mut ev);
+    let killed = eval_lexical_with_retired_wait(
+        &mut ev,
+        r#"(progn
+             (kill-process forced-proc)
+             (retired-wait 'forced-done)
+             (null (get-process "forced-once")))"#,
+    );
+    assert_eq!(killed, "OK t");
+    assert_eq!(ev.processes().deleted_processes.len(), 1);
+
+    // The cycle right after retirement is the one forced major.
+    drive_one_automatic_cycle(&mut ev);
+    let kept = ev.eval_str_each(
+        "(list (process-name forced-proc)
+               (hash-table-count forced-payloads))",
+    );
+    assert_eq!(format_eval_result(&kept[0]), "OK (\"forced-once\" 1)");
+
+    // The debt is settled: a fresh promoted dead weak key must survive the
+    // next automatic cycle, which would free it if that cycle were another
+    // forced major.
+    ev.eval_str_each(
+        "(setq forced-minor-table (make-hash-table :test 'eq :weakness 'key)
+               forced-minor-key (make-list 64 'm))
+         (puthash forced-minor-key t forced-minor-table)",
+    );
+    drive_one_automatic_cycle(&mut ev);
+    ev.eval_str_each("(setq forced-minor-key nil)");
+    drive_one_automatic_cycle(&mut ev);
+    let minor_count = ev.eval_str_each("(hash-table-count forced-minor-table)");
+    assert_eq!(
+        format_eval_result(&minor_count[0]),
+        "OK 1",
+        "a later automatic cycle must be a minor: a second forced major would free the old dead key"
+    );
+
+    // Over twenty further automatic cycles the referenced record and its
+    // field stay resolvable, and no cycle needs to force another major.
+    for _ in 0..20 {
+        drive_one_automatic_cycle(&mut ev);
+        let alive = ev.eval_str_each(
+            "(list (process-name forced-proc)
+                   (hash-table-count forced-payloads))",
+        );
+        assert_eq!(format_eval_result(&alive[0]), "OK (\"forced-once\" 1)");
+    }
+    assert_eq!(ev.processes().deleted_processes.len(), 1);
+}
+
+/// Once the deciding major has run, a dropped reference to the old dead
+/// process is reclaimed at the next naturally due major, the same class the
+/// empty-batch row pins for any old object: no further major is forced for it.
+#[test]
+fn a_dropped_reference_to_a_decided_dead_process_frees_at_the_next_due_major() {
+    crate::test_utils::init_test_tracing();
+    let cat_bin = find_bin("cat");
+    let mut ev = crate::test_utils::new_context();
+    ev.eval_str_each("(setq gc-auto-root (cons 1 2))");
+    // SAFETY: same test-only setup contract as above.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(64);
+    while ev.gc_count_for_test() == 0 {
+        ev.eval_str_each("(make-list 64 0)");
+        ev.gc_safe_point();
+    }
+
+    let created = eval_lexical_with_retired_wait(
+        &mut ev,
+        &format!(
+            r#"(setq decided-payloads
+                     (list (make-hash-table :test 'eq :weakness 'key)
+                           (make-hash-table :test 'eq :weakness 'key)
+                           (make-hash-table :test 'eq :weakness 'key))
+                     decided-done nil
+                     decided-proc nil)
+               (let* ((sentinel-payload (make-list 64 's))
+                      (filter-payload (make-list 64 'f))
+                      (plist-payload (make-list 64 'p))
+                      (p (make-process
+                          :name "decided-once"
+                          :buffer nil
+                          :command (list "{cat_bin}")
+                          :connection-type 'pipe
+                          :noquery t
+                          :sentinel (lambda (_p _m)
+                                      sentinel-payload
+                                      (setq decided-done t)))))
+                 (puthash sentinel-payload t (nth 0 decided-payloads))
+                 (set-process-filter p (lambda (_p _s) filter-payload))
+                 (puthash filter-payload t (nth 1 decided-payloads))
+                 (set-process-plist p (list 'payload plist-payload))
+                 (puthash plist-payload t (nth 2 decided-payloads))
+                 (setq decided-proc p))
+               (list (process-status decided-proc)
+                     (mapcar #'hash-table-count decided-payloads))"#
+        ),
+    );
+    assert_eq!(created, "OK (run (1 1 1))");
+
+    drive_one_automatic_cycle(&mut ev);
+    let killed = eval_lexical_with_retired_wait(
+        &mut ev,
+        r#"(progn
+             (kill-process decided-proc)
+             (retired-wait 'decided-done)
+             (null (get-process "decided-once")))"#,
+    );
+    assert_eq!(killed, "OK t");
+    assert_eq!(ev.processes().deleted_processes.len(), 1);
+
+    // The forced major settles the record while Lisp still references it.
+    drive_one_automatic_cycle(&mut ev);
+    let kept = ev.eval_str_each("(mapcar #'hash-table-count decided-payloads)");
+    assert_eq!(format_eval_result(&kept[0]), "OK (1 1 1)");
+    assert_eq!(ev.processes().deleted_processes.len(), 1);
+
+    // Drop the last reference. No major is forced for this decided record;
+    // reclamation waits for the next naturally due major.
+    ev.eval_str_each("(setq decided-proc nil)");
+    let mut cycles = 0;
+    while ev.processes().deleted_processes.len() > 0 && cycles < 400 {
+        drive_one_automatic_cycle(&mut ev);
+        cycles += 1;
+    }
+    assert_eq!(
+        ev.processes().deleted_processes.len(),
+        0,
+        "a naturally due major must reclaim the decided record"
+    );
+    let freed = ev.eval_str_each("(mapcar #'hash-table-count decided-payloads)");
+    assert_eq!(format_eval_result(&freed[0]), "OK (0 0 0)");
+}
+
+/// Consing past `gc-cons-threshold` alone must reclaim a promoted dead
+/// process's sentinel, filter and plist.
+///
+/// A generational heap runs minors between its majors, and a minor treats a
+/// promoted object as black; GNU's one mark-sweep per collection frees the
+/// fields in the very next collection. A non-empty retired-process batch
+/// therefore makes the automatic cycle a major even when minor admission is
+/// due. No explicit `(garbage-collect)` runs here and the generational switch
+/// stays at its default.
+#[test]
+fn automatic_consing_collections_reclaim_a_dead_processes_fields() {
+    crate::test_utils::init_test_tracing();
+    let cat_bin = find_bin("cat");
+    let mut ev = crate::test_utils::new_context();
+    let saved_threshold = ev.tagged_heap().gc_threshold();
+    // Bootstrap the dump-less heap to its first major, so the next automatic
+    // cycle would otherwise be a minor.
+    ev.eval_str_each("(setq gc-auto-root (cons 1 2))");
+    // SAFETY: test-only owner-thread heap setup through the non-swappable
+    // mutable accessor contract; the view is used in place.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(64);
+    while ev.gc_count_for_test() == 0 {
+        ev.eval_str_each("(make-list 64 0)");
+        ev.gc_safe_point();
+    }
+    assert!(
+        ev.tagged_heap().should_run_minor(false, false),
+        "the cycle after the bootstrap major must be minor-eligible"
+    );
+
+    // A live process, so one minor promotes its object to the old generation;
+    // a promoted dead process is invisible to every later minor. The sentinel,
+    // filter and plist each capture a distinct payload tracked by its own
+    // key-weak table.
+    let created = eval_lexical_with_retired_wait(
+        &mut ev,
+        &format!(
+            r#"(setq retired-field-payloads
+                     (list (make-hash-table :test 'eq :weakness 'key)
+                           (make-hash-table :test 'eq :weakness 'key)
+                           (make-hash-table :test 'eq :weakness 'key))
+                     retired-done nil
+                     retired-fields-proc nil)
+               (let* ((sentinel-payload (make-list 64 's))
+                      (filter-payload (make-list 64 'f))
+                      (plist-payload (make-list 64 'p))
+                      (p (make-process
+                          :name "retired-fields-auto"
+                          :buffer nil
+                          :command (list "{cat_bin}")
+                          :connection-type 'pipe
+                          :noquery t
+                          :sentinel (lambda (_p _m)
+                                      sentinel-payload
+                                      (setq retired-done t)))))
+                 (puthash sentinel-payload t (nth 0 retired-field-payloads))
+                 (set-process-filter p (lambda (_p _s) filter-payload))
+                 (puthash filter-payload t (nth 1 retired-field-payloads))
+                 (set-process-plist p (list 'payload plist-payload))
+                 (puthash plist-payload t (nth 2 retired-field-payloads))
+                 (setq retired-fields-proc p))
+               (list (process-status retired-fields-proc)
+                     (mapcar #'hash-table-count retired-field-payloads))"#
+        ),
+    );
+    assert_eq!(created, "OK (run (1 1 1))");
+
+    // One automatic cycle while the process is still alive: its object is a
+    // survivor and is promoted to the old generation.
+    // SAFETY: same test-only setup contract as above.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1);
+    let gc_start = ev.gc_count_for_test();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while ev.gc_count_for_test() == gc_start && std::time::Instant::now() < deadline {
+        ev.eval_str_each("(make-list 64 0)");
+        ev.gc_safe_point();
+    }
+    assert!(
+        ev.gc_count_for_test() > gc_start,
+        "consing past gc-cons-threshold must complete the promotion cycle"
+    );
+    let status = ev.eval_str_each("(process-status retired-fields-proc)");
+    assert_eq!(format_eval_result(&status[0]), "OK run");
+
+    // While the program still references the dead process, an automatic
+    // cycle must keep its record and fields resolvable: GNU keeps the process
+    // on Vprocess_alist until the last reference is gone.
+    // SAFETY: same test-only setup contract as above.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(usize::MAX / 4);
+    let killed = eval_lexical_with_retired_wait(
+        &mut ev,
+        r#"(progn
+             (kill-process retired-fields-proc)
+             (retired-wait 'retired-done)
+             (list (null (get-process "retired-fields-auto"))
+                   (process-name retired-fields-proc)
+                   (mapcar #'hash-table-count retired-field-payloads)))"#,
+    );
+    assert_eq!(killed, "OK (t \"retired-fields-auto\" (1 1 1))");
+    ev.eval_str_each("(setq retired-fields-proc nil)");
+    assert_eq!(ev.processes().deleted_processes.len(), 1);
+
+    // Only automatic collections from here: a tiny threshold plus consing,
+    // driven through the evaluator's safe points. No `garbage-collect`.
+    // SAFETY: same test-only setup contract as above.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1);
+    let gc_start = ev.gc_count_for_test();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while ev.gc_count_for_test() == gc_start && std::time::Instant::now() < deadline {
+        ev.eval_str_each("(make-list 64 0)");
+        ev.gc_safe_point();
+    }
+    assert!(
+        ev.gc_count_for_test() > gc_start,
+        "consing past gc-cons-threshold must complete the automatic cycle"
+    );
+
+    let counts = ev.eval_str_each("(mapcar #'hash-table-count retired-field-payloads)");
+    assert_eq!(format_eval_result(&counts[0]), "OK (0 0 0)");
+    let advanced = ev.eval_str_each("(> gcs-done 0)");
+    assert_eq!(format_eval_result(&advanced[0]), "OK t");
+    assert_eq!(
+        ev.processes().deleted_processes.len(),
+        0,
+        "the automatic cycle must drop the retired record"
+    );
+    // SAFETY: same test-only setup contract as above.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(saved_threshold);
+}
+
+/// The forced major is conditional on a retired-process batch: with an empty
+/// batch the automatic driver must keep selecting generational minors, or
+/// ordinary consing would silently lose the minor path. A promoted (old) dead
+/// weak key survives a minor and is freed by a major, so it observes the
+/// selected kind without a new test API.
+#[test]
+fn automatic_cycles_without_a_retired_process_still_run_minors() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = crate::test_utils::new_context();
+    // Bootstrap the dump-less heap to its first major.
+    ev.eval_str_each("(setq gc-auto-root (cons 1 2))");
+    // SAFETY: test-only owner-thread heap setup through the non-swappable
+    // mutable accessor contract; the view is used in place.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(64);
+    while ev.gc_count_for_test() == 0 {
+        ev.eval_str_each("(make-list 64 0)");
+        ev.gc_safe_point();
+    }
+
+    // Promote a survivor with one automatic minor while it is rooted.
+    ev.eval_str_each(
+        "(setq auto-minor-table (make-hash-table :test 'eq :weakness 'key)
+               auto-minor-key (make-list 64 'k))
+         (puthash auto-minor-key t auto-minor-table)",
+    );
+    // SAFETY: same test-only setup contract as above.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1);
+    let gc_start = ev.gc_count_for_test();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while ev.gc_count_for_test() == gc_start && std::time::Instant::now() < deadline {
+        ev.eval_str_each("(make-list 64 0)");
+        ev.gc_safe_point();
+    }
+    assert!(
+        ev.gc_count_for_test() > gc_start,
+        "the promotion cycle must complete"
+    );
+    assert!(
+        ev.tagged_heap().should_run_minor(false, false),
+        "with no retired batch the next automatic cycle is still minor-eligible"
+    );
+
+    // Drop the strong reference: only the weak table names the old key.
+    ev.eval_str_each("(setq auto-minor-key nil)");
+    // SAFETY: same test-only setup contract as above.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1);
+    let gc_start = ev.gc_count_for_test();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while ev.gc_count_for_test() == gc_start && std::time::Instant::now() < deadline {
+        ev.eval_str_each("(make-list 64 0)");
+        ev.gc_safe_point();
+    }
+    assert!(
+        ev.gc_count_for_test() > gc_start,
+        "the empty-batch automatic cycle must complete"
+    );
+
+    let count = ev.eval_str_each("(hash-table-count auto-minor-table)");
+    assert_eq!(
+        format_eval_result(&count[0]),
+        "OK 1",
+        "an empty retired batch must keep the automatic cycle a minor: a major would free the old dead key"
+    );
+}
+
 /// #776 residual: the automatic safe-point collector, not only the explicit
 /// `(garbage-collect)`, must reclaim a dead process nothing refers to.
 ///

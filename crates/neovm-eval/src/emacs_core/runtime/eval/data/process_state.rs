@@ -414,6 +414,13 @@ pub struct ProcessIdState {
     /// Boxed with the rest of this state, so ProcessManager's pinned size and
     /// the Context/JIT layout are unchanged.
     pub armed_retired_processes: std::collections::HashSet<ProcessId>,
+    /// #776: records retired since the last major that the automatic driver
+    /// still owes their deciding major. A non-empty set forces at most ONE
+    /// major per retirement batch; the driver clears each id when that major
+    /// is armed, and later automatic cycles may be minors that trace the
+    /// record as an ordinary root again. Written by retirement (insert) and
+    /// by the major arming in take_retired_processes_for_gc.
+    pub must_force_major: std::collections::HashSet<ProcessId>,
 }
 
 /// Opaque, thread-safe handle a cross-thread producer uses to wake the blocked
@@ -2331,6 +2338,7 @@ impl ProcessManager {
                 next_id: 1,
                 last_read_process: 0,
                 armed_retired_processes: std::collections::HashSet::new(),
+                must_force_major: std::collections::HashSet::new(),
             }),
             process_tick: 0,
             default_read_config: ProcessReadConfig::default(),
@@ -2339,23 +2347,57 @@ impl ProcessManager {
         }
     }
 
-    /// Arm every retired record's id for the next collection and return its
-    /// fields and ids. The records stay in `deleted_processes`, so Lisp
-    /// accessors resolve through the manager during a concurrent mark; only
-    /// the armed ids are skipped by the root walk.
+    /// Record that `id` just retired and still owes its deciding major.
+    /// Called by the system crate's reaping path.
+    #[doc(hidden)]
+    pub fn note_retired_process(&mut self, id: ProcessId) {
+        self.ids.must_force_major.insert(id);
+    }
+
+    /// True when a retired record still owes its deciding major.
+    pub(crate) fn has_pending_forced_retired_process(&self) -> bool {
+        self.deleted_processes
+            .keys()
+            .any(|id| self.ids.must_force_major.contains(id))
+    }
+
+    /// Arm retired records for the next collection and return their fields
+    /// and ids. The records stay in `deleted_processes`, so Lisp accessors
+    /// resolve through the manager during a concurrent mark; only the armed
+    /// ids are skipped by the root walk.
+    ///
+    /// `arm_all` is true when this cycle is a major (forced or naturally
+    /// due): every record is armed and every taken id stops owing a major.
+    /// A minor cycle arms nothing: decided records stay in the root walk as
+    /// before #776, and the arm-time ephemeron is created again only when
+    /// the next major is due.
     pub(crate) fn take_retired_processes_for_gc(
         &mut self,
+        arm_all: bool,
     ) -> (Vec<(ProcessId, Vec<Value>)>, Vec<ProcessId>) {
-        // The records stay in `deleted_processes`: Lisp can run during a
-        // concurrent mark, and its process accessors resolve through the
-        // manager. Arming only hides them from the root trace.
-        let ephemerons = self
-            .deleted_processes
+        let ids: Vec<ProcessId> = if arm_all {
+            self.deleted_processes.keys().copied().collect()
+        } else {
+            self.deleted_processes
+                .keys()
+                .copied()
+                .filter(|id| self.ids.must_force_major.contains(id))
+                .collect()
+        };
+        let ephemerons = ids
             .iter()
-            .map(|(id, process)| (*id, process.gc_fields().to_vec()))
+            .filter_map(|id| {
+                self.deleted_processes
+                    .get(id)
+                    .map(|process| (*id, process.gc_fields().to_vec()))
+            })
             .collect();
-        let ids: Vec<ProcessId> = self.deleted_processes.keys().copied().collect();
         self.ids.armed_retired_processes.extend(ids.iter().copied());
+        if arm_all {
+            for id in &ids {
+                self.ids.must_force_major.remove(id);
+            }
+        }
         (ephemerons, ids)
     }
 
@@ -2369,6 +2411,9 @@ impl ProcessManager {
             self.deleted_processes.remove(id);
         }
         self.ids.armed_retired_processes.clear();
+        self.ids
+            .must_force_major
+            .retain(|id| self.deleted_processes.contains_key(id));
         debug_assert!(
             self.ids.armed_retired_processes.is_empty(),
             "finish must disarm every retired id"

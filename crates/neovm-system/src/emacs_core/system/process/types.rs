@@ -6039,6 +6039,8 @@ impl SystemProcessExt for ProcessManager {
         if let Some(mut proc) = self.processes.remove(&id) {
             Self::deactivate_process_io(self.wait_backend.poller(), &mut proc);
             self.deleted_processes.insert(id, proc);
+            // #776: this record still owes its deciding major.
+            self.note_retired_process(id);
         }
     }
 

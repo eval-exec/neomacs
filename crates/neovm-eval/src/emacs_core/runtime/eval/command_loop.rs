@@ -1664,8 +1664,10 @@ impl Context {
                 (*heap_ptr).arm_killed_buffer_ephemerons(ephemerons);
                 // Arm process ephemerons before begin_stw_collection seeds the
                 // process registry as an internal root.
+                // A full collection decides every retired record, so it
+                // arms all of them and settles every owed forced major.
                 let (ephemerons, retired_processes) =
-                    self.processes.take_retired_processes_for_gc();
+                    self.processes.take_retired_processes_for_gc(true);
                 (*heap_ptr).arm_retired_process_ephemerons(ephemerons);
                 // Arm deleted-frame ephemerons before begin_stw_collection
                 // seeds the frame registry as an internal root. A frame that
@@ -1796,19 +1798,35 @@ impl Context {
                         return Ok(());
                     }
                     MarkPhase::Idle => {
-                        // #776: this call starts a new automatic cycle (minor,
-                        // concurrent, or synchronous STW below). Arm the
-                        // retired-process records before it seeds any root.
-                        self.begin_automatic_retired_process_cycle(heap_ptr);
-                        if self.gc_stress && (*heap_ptr).tagged_heap_generational_enabled() {
+                        // #776: settle the previous cycle before deciding this
+                        // one; an abandoned batch is restored here.
+                        self.finish_automatic_retired_process_cycle(heap_ptr);
+                        // A retired process record is decided by a major: a
+                        // generational minor treats a promoted object as black
+                        // and would keep the dead process's fields until a
+                        // major becomes due, while GNU frees them in the next
+                        // collection. A record that still owes its deciding
+                        // major forces this cycle to be one (concurrent when
+                        // admitted, synchronous STW otherwise); the major is
+                        // armed with every record and settles the debt, so at
+                        // most one major is forced per retirement batch.
+                        let stress_cycle =
+                            self.gc_stress && (*heap_ptr).tagged_heap_generational_enabled();
+                        let minor_due = (*heap_ptr).should_run_minor(
+                            self.gc_runtime_settings_cache.memory_full.is_full(),
+                            stress_cycle,
+                        );
+                        let force_major = self.processes.has_pending_forced_retired_process();
+                        let minor = minor_due && !force_major;
+                        // A major (forced or naturally due) arms every record;
+                        // a minor arms none and keeps decided records in the
+                        // ordinary root walk, as before #776.
+                        self.begin_automatic_retired_process_cycle(heap_ptr, !minor);
+                        if stress_cycle {
                             // A fresh automatic stress cycle is synchronous. Choose its
                             // generation before advancing the next-cycle stride; an
                             // explicit full collection and every continuation took the
                             // earlier branches and never advance this counter here.
-                            let minor = (*heap_ptr).should_run_minor(
-                                self.gc_runtime_settings_cache.memory_full.is_full(),
-                                true,
-                            );
                             (*heap_ptr).note_generation_stress_cycle_started();
                             if minor {
                                 (*heap_ptr).begin_minor_collection().expect(
@@ -1823,10 +1841,7 @@ impl Context {
                                 (*heap_ptr).complete_collection();
                             }
                             cycle_completed = true;
-                        } else if (*heap_ptr).should_run_minor(
-                            self.gc_runtime_settings_cache.memory_full.is_full(),
-                            false,
-                        ) {
+                        } else if minor {
                             // Minor marking stops every registered mutator and visits
                             // their roots. Promotion completes before mutating resumes;
                             // the existing sweep continuation records cycle completion.
@@ -2003,14 +2018,14 @@ impl Context {
     /// guard. An automatic cycle may span several safe-point driver calls
     /// (concurrent mark, deferred sweep), so the taken batch lives on the
     /// Context until [`Self::finish_automatic_retired_process_cycle`] applies
-    /// the completed cycle's result. A stale batch from an abandoned cycle is
-    /// restored first, so records are never lost or armed twice.
+    /// the completed cycle's result. The caller settles a stale batch from an
+    /// abandoned cycle first, so records are never lost or armed twice.
     fn begin_automatic_retired_process_cycle(
         &mut self,
         heap: *mut neovm_value::tagged::gc::TaggedHeap,
+        arm_all: bool,
     ) {
-        self.finish_automatic_retired_process_cycle(heap);
-        let (ephemerons, taken) = self.processes.take_retired_processes_for_gc();
+        let (ephemerons, taken) = self.processes.take_retired_processes_for_gc(arm_all);
         if taken.is_empty() {
             return;
         }
