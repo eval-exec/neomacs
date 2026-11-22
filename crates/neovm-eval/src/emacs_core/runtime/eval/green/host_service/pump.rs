@@ -630,9 +630,10 @@ impl MainNativePump {
                     let service = MainServiceTurn::from_main_wake(key, baton, control, receiver);
                     let route = self.route(control);
                     let continuation = self.backend.continuation();
-                    // A `Start` turn occurs once per pump entry; a driving
-                    // turn never needs the host again.
-                    let host = host.take();
+                    // The run loop can re-enter `Start` (a pump wake can carry
+                    // another ServiceTurn), so reborrow the host for this turn
+                    // instead of consuming it.
+                    let host = host.as_mut().map(|host| &mut **host);
                     let step = service.serve_step(host, |key, native, host| {
                         self.backend.start(key, native, route, host)
                     });

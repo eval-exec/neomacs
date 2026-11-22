@@ -664,7 +664,7 @@ impl Context {
                 vec![Value::string("Display host is closed")],
             )),
             HostOwnerTurn::Final(SelectionTerminal::Interrupted(reason)) => match reason {
-                CancelReason::TargetSignal | CancelReason::TargetQuit => {
+                CancelReason::TargetSignal => {
                     let key = self.green_key().expect("a routed owner is seated");
                     self.green_raise_pending_signal(key)?;
                     // A cancellation that reports a target signal while no
@@ -674,6 +674,10 @@ impl Context {
                         "target signal vanished before its delivery point",
                     ))
                 }
+                // A target quit is not a pending thread signal: GNU delivers
+                // it as a quit at the target's next quit check, so surface the
+                // quit flow instead of the signal-pending check.
+                CancelReason::TargetQuit => Err(signal(LispCondition::Quit, vec![])),
                 CancelReason::OwnerEnded => Err(signal(
                     LispCondition::Error,
                     vec![Value::string("Host request interrupted: owner ended")],

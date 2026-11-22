@@ -443,6 +443,10 @@ mod jit_inline2_tests;
 #[path = "../tests/green_signal_depth_test.rs"]
 mod signal_depth_tests;
 
+#[cfg(test)]
+#[path = "../tests/green_host_refusal_test.rs"]
+mod host_refusal_tests;
+
 // Approved private fixtures; core supplies the canonical runtime factory.
 #[cfg(feature = "test-support")]
 #[path = "../tests/green_switch_class_b_driver.rs"]

@@ -1093,6 +1093,35 @@ mod cut4b {
         assert!(!ctx.in_hosted_green_session());
     }
 
+    /// GNU's x-own-selection-internal does not release the global lock, so no
+    /// other Lisp thread may run between the routed request and its reply.
+    /// Worker B is runnable from creation; if the service hop yields to it,
+    /// A reads 2 instead of 1. Run many interleavings.
+    #[test]
+    fn routed_selection_adds_no_worker_scheduling_point() {
+        let (mut ctx, _state) = hosted_green_context();
+        let form = r#"
+(progn
+  (setq c4b-atomic-x 0)
+  (let ((b (make-thread (lambda () (setq c4b-atomic-x 2)))))
+    (let ((a (make-thread (lambda ()
+                            (setq c4b-atomic-x 1)
+                            (neomacs-clipboard-set "atomic")
+                            c4b-atomic-x))))
+      (let ((result (thread-join a)))
+        (thread-join b)
+        result))))
+"#;
+        for iteration in 0..50 {
+            let out = ctx.eval_str(form).expect("atomicity iteration");
+            assert_eq!(
+                out,
+                Value::fixnum(1),
+                "another Lisp thread ran inside the routed set (iteration {iteration})"
+            );
+        }
+    }
+
     #[test]
     fn routed_and_serial_lowerings_agree_on_every_entry() {
         use crate::host_effect::selection::SelectionRequest;
