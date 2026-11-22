@@ -3396,7 +3396,7 @@ crate::emacs_core::subr::define_subrs! {
     )),
     crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "event-convert-list",
-        NativeFn::ContextVec(|ctx, args| builtin_event_convert_list(args, ctx.symbol_mode())),
+        NativeFn::ContextVec(|ctx, args| builtin_event_convert_list(ctx, args)),
         SubrArity::new(1, Some(1)),
     )),
     crate::emacs_core::subr::world_subr!(SubrSpec::new(
