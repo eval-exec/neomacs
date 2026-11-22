@@ -18,6 +18,13 @@
 //! dispatch modes: signal to a worker, `thread-yield`, mutex handoff,
 //! condition notify, and the dynamic and buffer-local binding rows.
 //!
+//! The last nine rows (`assert_green_default_threads_oracle`) complete the
+//! 19-case E8-S suite. They match GNU only under Green: a condition wait or a
+//! join interrupted by `thread-signal`, a writer thread releasing main's
+//! blocking `sleep-for' / `accept-process-output' / process wait, and the
+//! killed-current-buffer dispositions. They are the S3 gate's GNU rows and
+//! join the default mode list when the default dispatch becomes Green.
+//!
 //! GNU picks which thread runs after a `thread-yield' by OS scheduling, so
 //! every form reaches its answer through joins, mutexes, conditions, or a
 //! flag, never through one particular interleaving.  A simulated worker only
@@ -38,6 +45,18 @@ const THREAD_MODES: &[&[(&str, &str)]] = &[&[], &[("NEOVM_THREADS", "green")]];
 
 fn assert_default_threads_oracle(form: &str, expected: expect_test::Expect) {
     common::assert_oracle_parity_under_envs_expect(form, THREAD_MODES, expected);
+}
+
+/// The Green mode alone. The cases below match GNU 31.1 only with real
+/// Baton-serial threads: simulated threads cannot release the Baton on a
+/// blocking read, deliver a signal into a wait, or move a thread off a killed
+/// buffer. They pin the S3 qualification gate (pentry DESIGN section 12): when
+/// the default `make-thread' dispatch becomes Green, they move to the default
+/// mode list with the rest of this suite.
+const GREEN_DEFAULT_MODE: &[&[(&str, &str)]] = &[&[("NEOVM_THREADS", "green")]];
+
+fn assert_green_default_threads_oracle(form: &str, expected: expect_test::Expect) {
+    common::assert_oracle_parity_under_envs_expect(form, GREEN_DEFAULT_MODE, expected);
 }
 
 #[test]
@@ -490,5 +509,274 @@ fn p15_unreferenced_held_mutex_has_no_implicit_root() {
       (list held-count retained-count (hash-table-count paired)))))
 "##,
         expect_test::expect![[r#""OK (0 2 0)""#]],
+    );
+}
+
+#[test]
+fn e8s_condition_wait_interrupted_by_thread_signal() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    assert_green_default_threads_oracle(
+        r##"
+(let* ((m (make-mutex)) (c (make-condition-variable m)) (ready nil)
+       (th (make-thread
+            (lambda ()
+              (mutex-lock m) (mutex-lock m)
+              (setq ready t)
+              (let ((e (condition-case err
+                          (let ((rounds 0))
+                            (while (< rounds 200000)
+                              (setq rounds (1+ rounds))
+                              (condition-wait c))
+                            'not-signalled)
+                        (error err))))
+                (mutex-unlock m) (mutex-unlock m)
+                (list (if (eq e 'not-signalled) e (car (cdr e))) 'recursion-restored)))
+            "e8s-condition-signal")))
+  (while (not ready) (thread-yield))
+  ;; Taking m proves the target released it (every recursion level) for its wait.
+  (mutex-lock m)
+  (thread-signal th 'error '("wake-condition"))
+  (mutex-unlock m)
+  ;; thread-join re-raises the pending signal recorded at its entry, in the
+  ;; JOINER, even when the target handles the signal; the second join returns
+  ;; the target's own value (GNU thread.c:1131-1151, raise at 146-154).
+  (list (condition-case e (thread-join th) (error (list 'join-raised (car (cdr e)))))
+        (thread-join th)
+        (thread-last-error t)))
+"##,
+        expect_test::expect![[
+            r#""OK ((join-raised \"wake-condition\") (\"wake-condition\" recursion-restored) nil)""#
+        ]],
+    );
+}
+
+#[test]
+fn e8s_thread_signal_to_a_join_waiter_ends_the_join() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    assert_green_default_threads_oracle(
+        r##"
+(let* ((m (make-mutex)) (ready nil) (target nil)
+       (blocker (make-thread (lambda () (mutex-lock m) (mutex-unlock m))
+                             "e8s-blocker")))
+  (mutex-lock m)
+  (setq target
+        (make-thread (lambda ()
+                       (setq ready t)
+                       (condition-case e (thread-join blocker)
+                         (error (car (cdr e)))))
+                     "e8s-join-waiter"))
+  (while (not ready) (thread-yield))
+  (thread-signal target 'error '("wake-join"))
+  ;; The signal ends the target's own join of the blocker (the target catches
+  ;; it); main's join re-raises the entry snapshot, then returns the target's
+  ;; value, and the released blocker finishes normally.
+  (list (condition-case e (thread-join target) (error (list 'join-raised (car (cdr e)))))
+        (mutex-unlock m)
+        (thread-join target)
+        (thread-join blocker)))
+"##,
+        expect_test::expect![[r#""OK ((join-raised \"wake-join\") nil \"wake-join\" nil)""#]],
+    );
+}
+
+#[test]
+fn e8s_blocking_io_writer_thread_releases_main_sleep_for() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    assert_green_default_threads_oracle(
+        r##"
+(let ((ran nil))
+  (let ((th (make-thread (lambda () (sleep-for 0.1) (push 'writer-ran ran))
+                         "e8s-sleep-writer")))
+    ;; The writer thread must run DURING main's sleep for `ran' to be set:
+    ;; this is the blocking-I/O Baton release, not a timeout race.
+    (sleep-for 0.5)
+    (let ((during (car ran)))
+      (list during (thread-join th) (car ran)))))
+"##,
+        expect_test::expect![[r#""OK (writer-ran (writer-ran) writer-ran)""#]],
+    );
+}
+
+#[test]
+fn e8s_blocking_io_writer_thread_releases_accept_process_output() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    assert_green_default_threads_oracle(
+        r##"
+(let* ((filter-out nil)
+       (proc (make-process :name "e8s-cat" :command '("cat")
+                           :noquery t :connection-type 'pipe
+                           :filter (lambda (_p s) (push (substring s 0) filter-out))
+                           :sentinel (lambda (_p _e) nil)))
+       (th (make-thread (lambda ()
+                          (sleep-for 0.2)
+                          (process-send-string proc "e8s-byte"))
+                        "e8s-cat-writer")))
+  (unwind-protect
+      ;; `cat' echoes what is written to it; main cannot write while blocked
+      ;; in this accept, so only the writer thread running DURING the wait can
+      ;; produce the echoed output that ends it before the 3s timeout.  (A
+      ;; `make-pipe-process' has no loopback in GNU 31.1: even a main-thread
+      ;; send never reaches its own filter, so it cannot carry this case.)
+      (let ((woken (accept-process-output proc 3.0)))
+        (list woken (car filter-out)))
+    (thread-join th)
+    (delete-process proc)))
+"##,
+        expect_test::expect![[r#""OK (t \"e8s-byte\")""#]],
+    );
+}
+
+#[test]
+fn e8s_blocking_io_writer_thread_releases_any_process_wait() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    assert_green_default_threads_oracle(
+        r##"
+(let* ((filter-out nil)
+       (proc (make-process :name "e8s-any-cat" :command '("cat")
+                           :noquery t :connection-type 'pipe
+                           :filter (lambda (_p s) (push (substring s 0) filter-out))
+                           :sentinel (lambda (_p _e) nil)))
+       (th (make-thread (lambda ()
+                          (sleep-for 0.2)
+                          (process-send-string proc "e8s-any-byte"))
+                        "e8s-any-writer")))
+  (unwind-protect
+      ;; No PROCESS argument: the wait is for any process output, which only
+      ;; the writer thread's echoed send can produce while main is blocked.
+      (let ((woken (accept-process-output nil 3.0)))
+        (list woken (car filter-out)))
+    (thread-join th)
+    (delete-process proc)))
+"##,
+        expect_test::expect![[r#""OK (t \"e8s-any-byte\")""#]],
+    );
+}
+
+#[test]
+fn e8s_killed_current_buffer_signals_and_moves_the_thread() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    assert_green_default_threads_oracle(
+        r##"
+(let* ((buffer (get-buffer-create "e8s-killed"))
+       (mutex (make-mutex))
+       (condition (make-condition-variable mutex))
+       (waiting nil)
+       (go nil)
+       (worker
+        (with-current-buffer buffer
+          (make-thread
+           (lambda ()
+             (with-mutex mutex
+               (setq waiting t)
+               (condition-case err
+                   (let ((rounds 0))
+                     (while (and (not go) (< rounds 200000))
+                       (setq rounds (1+ rounds))
+                       (condition-wait condition))
+                     'not-signalled)
+                 (error (list 'signalled err
+                              (eq (current-buffer) buffer)
+                              (buffer-live-p (current-buffer)))))))
+           "e8s-killed-worker"))))
+  (while (not waiting) (thread-yield))
+  (let ((killed (kill-buffer buffer)))
+    (with-mutex mutex
+      (setq go t)
+      (condition-notify condition))
+    (list killed (buffer-live-p buffer)
+          (condition-case e (thread-join worker)
+            (error (list 'join-raised (car e))))
+          (thread-join worker))))
+"##,
+        expect_test::expect![[
+            r#""OK (t nil (join-raised thread-buffer-killed) (signalled (thread-buffer-killed) nil t))""#
+        ]],
+    );
+}
+
+#[test]
+fn e8s_buffer_disposition_t_keeps_the_buffer() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    assert_green_default_threads_oracle(
+        r##"
+(let* ((kept (get-buffer-create "e8s-kept"))
+       (release nil)
+       (parked 0)
+       (keeper (with-current-buffer kept
+                 (make-thread (lambda ()
+                                (setq parked (1+ parked))
+                                (while (not release) (thread-yield))
+                                (list (buffer-name)
+                                      (thread-buffer-disposition
+                                       (current-thread))))
+                              "e8s-keeper" t))))
+  (while (< parked 1) (thread-yield))
+  (let ((results (list (kill-buffer kept) (buffer-live-p kept))))
+    (setq release t)
+    (append results (list (thread-join keeper)))))
+"##,
+        expect_test::expect![[r#""OK (nil t (\"e8s-kept\" t))""#]],
+    );
+}
+
+#[test]
+fn e8s_buffer_disposition_silently_switches_without_signal() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    assert_green_default_threads_oracle(
+        r##"
+(let* ((quiet (get-buffer-create "e8s-quiet"))
+       (release nil)
+       (parked 0)
+       (hider (with-current-buffer quiet
+                (make-thread (lambda ()
+                               (setq parked (1+ parked))
+                               (while (not release) (thread-yield))
+                               (list (eq (current-buffer) quiet)
+                                     (buffer-live-p (current-buffer))
+                                     (thread-buffer-disposition
+                                      (current-thread))))
+                             "e8s-hider" 'silently))))
+  (while (< parked 1) (thread-yield))
+  (let ((results (list (kill-buffer quiet) (buffer-live-p quiet))))
+    (setq release t)
+    (append results (list (thread-join hider)))))
+"##,
+        expect_test::expect![[r#""OK (t nil (nil t silently))""#]],
+    );
+}
+
+#[test]
+fn e8s_buffer_disposition_custom_signal_name() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    assert_green_default_threads_oracle(
+        r##"
+(let* ((buffer (get-buffer-create "e8s-custom"))
+       (mutex (make-mutex))
+       (condition (make-condition-variable mutex))
+       (waiting nil)
+       (go nil)
+       (worker
+        (with-current-buffer buffer
+          (make-thread
+           (lambda ()
+             (with-mutex mutex
+               (setq waiting t)
+               (condition-case err
+                   (let ((rounds 0))
+                     (while (and (not go) (< rounds 200000))
+                       (setq rounds (1+ rounds))
+                       (condition-wait condition))
+                     'not-signalled)
+                 (error (list 'signalled (car err)
+                              (bufferp (current-buffer)))))))
+           "e8s-custom-worker" 'e8s-buffer-signal))))
+  (while (not waiting) (thread-yield))
+  (let ((killed (kill-buffer buffer)))
+    (with-mutex mutex
+      (setq go t)
+      (condition-notify condition))
+    (list killed (thread-join worker))))
+"##,
+        expect_test::expect![[r#""ERR (thread-buffer-killed)""#]],
     );
 }
