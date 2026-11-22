@@ -222,8 +222,10 @@ pub(crate) struct VmEscapeRequest {
 #[derive(Debug)]
 pub(crate) enum EscapeStack {
     /// The fall-through effect. `jump` is a branch target inside the same
-    /// code (a `Switch` hit; a handler landing pad in V8), taken in place of
-    /// the next pc.
+    /// code, taken in place of the next pc; only `Switch` reports one (a hit
+    /// leaves through `op_branch`, bytecode.c:1752-1758). Any other opcode
+    /// reporting a jump is a [`EngineFault::DispatchContract`]. V8's handler
+    /// landing pads get their own shape.
     Completed {
         consumed: u16,
         produced: Vec<Value>,
@@ -789,8 +791,8 @@ where
 
     /// The ONE escape stub (r1 §4.2), in order: the call poll, the
     /// serial-request poll, the request, the completion, R2 (a `Flow` ends
-    /// the run), R3 (the typed effect), the available operands, R1 (both
-    /// LIFOs), then the store.
+    /// the run), R3 (the typed effect, the jump with it), the available
+    /// operands, R1 (both LIFOs), then the store.
     fn escape(
         &mut self,
         op: Op,
@@ -848,6 +850,21 @@ where
                 got_produced,
             }));
         }
+        // With R3, before anything is applied: only `Switch` reports a jump
+        // (a hit leaves through `op_branch`, bytecode.c:1752-1758). A
+        // `Return` that reports one is refused here, so the record mirror
+        // below never runs for it.
+        let jump = match jump {
+            Some(target) if !matches!(op, Op::Switch) => {
+                tracing::error!(
+                    op = ?op,
+                    target,
+                    "escape completion reports a jump for an opcode that cannot branch"
+                );
+                return Step::Stop(VmOutcome::Fault(EngineFault::DispatchContract(op)));
+            }
+            jump => jump,
+        };
         let Some(available) = self
             .arena
             .vm(frame)
@@ -908,9 +925,6 @@ where
             self.arena.handlers_mut().push(*token);
         }
         if matches!(op, Op::Return) {
-            if jump.is_some() {
-                return Step::Stop(VmOutcome::Fault(EngineFault::DispatchContract(op)));
-            }
             return self.return_from_frame(frame, produced);
         }
         if let Err(fault) = self.store(

@@ -349,7 +349,8 @@ fn completion(op: &Op, produced: Vec<Value>) -> EscapeCompletion {
     }
 }
 
-/// A completed escape that also jumps (a `Switch` hit; a back edge).
+/// A completed escape that also jumps: a `Switch` hit, the only opcode
+/// that may report one.
 fn completion_jumping(op: &Op, produced: Vec<Value>, jump: u32) -> EscapeCompletion {
     EscapeCompletion {
         stack: EscapeStack::Completed {
@@ -764,23 +765,25 @@ fn vm_the_dispatch_table_and_the_inventory_agree_on_all_89_opcodes() {
 
 #[test]
 fn vm_escape_result_is_in_the_published_segment_before_the_next_poll() {
-    // The first Length escape reports a cons and jumps back to pc 0: the
-    // back-edge poll that follows must see the cons in the published
-    // segment. The second reports t (segment [cons t]); GotoIfNil pops the
-    // t; Return escapes over [cons].
+    // The first Switch escape reports a hit and jumps back to pc 0
+    // (`Bswitch` leaves through `op_branch`, bytecode.c:1752-1758): the
+    // back-edge poll that follows must see the applied effect in the
+    // published segment, the table and the key gone and the cons below
+    // them still there. The second reports a miss; Return escapes over
+    // [cons cons] and reports the default nil.
     let mut ctx = context();
-    let ops = vec![Op::Nil, Op::Length, Op::GotoIfNil(0), Op::Return];
+    let ops = vec![Op::Constant(0), Op::Nil, Op::Nil, Op::Switch, Op::Return];
     let cons = Value::cons(Value::T, Value::NIL);
     let script = vec![
-        Some(completion_jumping(&Op::Length, vec![cons], 0)),
-        Some(completion(&Op::Length, vec![Value::T])),
+        Some(completion_jumping(&Op::Switch, Vec::new(), 0)),
+        Some(completion(&Op::Switch, Vec::new())),
     ];
     let mut engine = VmExec::new(
         RecordingEscape::with_script(script),
         HarnessVmSealed,
         RecordingPoll::new(),
     );
-    let outcome = engine.run(&mut ctx, program(&ops));
+    let outcome = engine.run(&mut ctx, program_with(&ops, &[cons]));
     assert_eq!(done_value(&mut engine, outcome), Value::NIL);
     let poll = engine.poll_handler();
     assert_eq!(
@@ -802,9 +805,95 @@ fn vm_escape_result_is_in_the_published_segment_before_the_next_poll() {
     assert_eq!(escape.requests.len(), 3);
     assert_eq!(
         escape.segments,
-        vec![vec![Value::NIL], vec![cons, Value::NIL], vec![cons]]
+        vec![
+            vec![cons, Value::NIL, Value::NIL],
+            vec![cons, cons, Value::NIL, Value::NIL],
+            vec![cons, cons]
+        ]
     );
     assert_clear(&engine);
+}
+
+#[test]
+fn vm_a_completion_that_jumps_for_an_opcode_other_than_switch_is_a_typed_fault() {
+    // Only `Switch` reports a jump (lead C1). For any other opcode the typed
+    // fault is raised with R3, before the record mirror and the segment are
+    // touched (C2), and the scene stays.
+    let mut ctx = context();
+    // (program, script, faulting op, the LIFOs that must be untouched)
+    let cases: Vec<(Vec<Op>, Vec<Option<EscapeCompletion>>, Op, Lifo)> = vec![
+        (
+            vec![Op::Nil, Op::Length, Op::Return],
+            vec![Some(completion_jumping(&Op::Length, vec![Value::T], 0))],
+            Op::Length,
+            Vec::new(),
+        ),
+        (
+            // The first escape seeds the bindings with one serial token;
+            // Return then reports a jump and pops that token.
+            vec![Op::Nil, Op::PushConditionCase(4), Op::Nil, Op::Return],
+            vec![
+                Some(EscapeCompletion {
+                    records: RecordDelta {
+                        popped: Vec::new(),
+                        pushed: vec![token(1)],
+                    },
+                    ..completion(&Op::PushConditionCase(4), Vec::new())
+                }),
+                Some(EscapeCompletion {
+                    records: RecordDelta {
+                        popped: vec![token(1)],
+                        pushed: Vec::new(),
+                    },
+                    ..completion_jumping(&Op::Return, vec![Value::T], 0)
+                }),
+            ],
+            Op::Return,
+            vec![Some(1)],
+        ),
+    ];
+    for (ops, script, op, bindings) in cases {
+        let mut engine = VmExec::new(
+            RecordingEscape::with_script(script),
+            HarnessVmSealed,
+            RecordingPoll::new(),
+        );
+        let outcome = engine.run(&mut ctx, program(&ops));
+        assert!(
+            matches!(fault_of(outcome), EngineFault::DispatchContract(op2) if op2 == op),
+            "{op:?}"
+        );
+        let frame = engine
+            .frame_id()
+            .unwrap_or_else(|| panic!("{op:?}: the frame stays"));
+        let segment = engine
+            .arena()
+            .vm_segment(frame)
+            .unwrap_or_else(|| panic!("{op:?}: the segment stays"));
+        assert_eq!(segment.last(), Some(&Value::NIL), "{op:?}: segment");
+        assert_eq!(engine.arena_depth(), 1, "{op:?}");
+        assert_eq!(
+            lifos(engine.arena()),
+            (bindings, Vec::new()),
+            "{op:?}: the mirror never ran"
+        );
+        assert_eq!(
+            engine.escape_handler().requests.len(),
+            if op == Op::Return { 2 } else { 1 },
+            "{op:?}: one request per escape before the fault"
+        );
+        assert_eq!(
+            engine.poll_handler().edges,
+            vec![PollEdge::SerialRequest; if op == Op::Return { 2 } else { 1 }],
+            "{op:?}: no back-edge poll for the refused jump"
+        );
+        // A contract fault refuses further work.
+        let outcome = engine.run(&mut ctx, program(&[Op::Nil, Op::Return]));
+        assert!(
+            matches!(outcome, VmOutcome::Fault(EngineFault::Poisoned)),
+            "{op:?}"
+        );
+    }
 }
 
 #[test]
