@@ -32,7 +32,8 @@ impl<'a> HashTableWrite<'a> {
 
     /// Overwrites touch only the value slot: no capacity read, growth
     /// reporter, or allocation-accounting heap lookup is needed.
-    #[inline]
+    /// Keep the capability wrapper in the native probe's original extent.
+    #[inline(always)]
     pub fn put(
         &mut self,
         key: Value,
@@ -67,7 +68,8 @@ impl<'a> HashTableWrite<'a> {
 
     /// Preserve the original removal seam while the free-list push cannot
     /// allocate. Only a full free list needs the cold net-growth meter.
-    #[inline]
+    /// Retain the underlying removal operation's original inline placement.
+    #[inline(always)]
     pub fn remove(&mut self, key: Value, symbols_with_pos_enabled: bool) -> Result<(), Flow> {
         let test = self.table.test;
         if self.table.data.free_slots.len() < self.table.data.free_slots.capacity() {
