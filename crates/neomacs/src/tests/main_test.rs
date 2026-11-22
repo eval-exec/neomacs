@@ -1820,6 +1820,7 @@ fn clear_image_cache_usage_read_stays_post_clear_with_a_full_command_channel() {
     let (cmd_tx, cmd_rx) =
         RenderCommandSender::bounded(std::num::NonZeroUsize::new(1).expect("non-zero capacity"));
     let image_state = Arc::new(neomacs_display_runtime::render_thread::ImageRenderState::default());
+    image_state.mark_renderer_ready();
     let catalog = test_image_catalog(&cmd_tx, Arc::clone(&image_state));
     image_state.publish_cache_usage(ImageCacheUsage::new(4_096, 0));
 
@@ -1881,6 +1882,7 @@ fn clear_image_cache_read_waits_out_a_stalled_render_thread() {
     let (cmd_tx, cmd_rx) =
         RenderCommandSender::bounded(std::num::NonZeroUsize::new(1).expect("non-zero capacity"));
     let image_state = Arc::new(neomacs_display_runtime::render_thread::ImageRenderState::default());
+    image_state.mark_renderer_ready();
     let catalog = test_image_catalog(&cmd_tx, Arc::clone(&image_state));
     image_state.publish_cache_usage(ImageCacheUsage::new(4_096, 0));
     cmd_tx
@@ -1923,6 +1925,241 @@ fn clear_image_cache_read_waits_out_a_stalled_render_thread() {
         *order.lock().expect("order lock"),
         vec!["clear", "publish"],
         "the publish must be processed after the wholesale clear"
+    );
+}
+
+/// Early init: `clear-image-cache` then `image-cache-size` before the
+/// renderer has a GPU. The renderer owns no image bytes yet, so the read must
+/// answer from the catalog's own post-clear accounting instead of waiting for
+/// a publish from a renderer that is itself waiting on first-frame readiness.
+#[test]
+fn clear_image_cache_read_before_gpu_startup_does_not_wait_for_the_renderer() {
+    use neomacs_display_protocol::ImageCacheUsage;
+    use neomacs_display_runtime::thread_comm::RenderCommandSender;
+    use neovm_core::emacs_core::image_catalog::ImageInvalidation;
+
+    let (cmd_tx, cmd_rx) = RenderCommandSender::unbounded();
+    let image_state = Arc::new(neomacs_display_runtime::render_thread::ImageRenderState::default());
+    // A pre-clear total from the stale snapshot must not leak out while the
+    // renderer has no GPU.
+    image_state.publish_cache_usage(ImageCacheUsage::new(4_096, 0));
+
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let state_for_catalog = Arc::clone(&image_state);
+    let sender_for_catalog = cmd_tx.clone();
+    let reader = std::thread::spawn(move || {
+        let catalog = test_image_catalog(&sender_for_catalog, state_for_catalog);
+        let _ = catalog.invalidate(ImageInvalidation::All);
+        let _ = done_tx.send(catalog.cached_size_bytes());
+    });
+    // Nobody drains `cmd_rx`: before the GPU exists the read must not wait on
+    // a renderer answer that cannot come.
+    let result = done_rx.recv_timeout(std::time::Duration::from_secs(2));
+    assert_eq!(
+        result,
+        Ok(0),
+        "a cache read before GPU startup must not wait for the renderer"
+    );
+    drop(cmd_rx);
+    drop(reader);
+}
+
+/// A renderer that exits with the usage acknowledgement still queued must not
+/// leave the evaluator blocked forever: crossbeam retains a buffered command
+/// while the evaluator's sender clones live, so the ack sender would never
+/// drop. The read must stop on the renderer-exit signal and answer with the
+/// known post-clear total, never the pre-clear snapshot.
+#[test]
+fn clear_image_cache_read_stops_when_the_renderer_exits_with_the_ack_queued() {
+    use neomacs_display_protocol::ImageCacheUsage;
+    use neomacs_display_runtime::thread_comm::RenderCommandSender;
+    use neovm_core::emacs_core::image_catalog::ImageInvalidation;
+
+    // The production channel is the bounded array flavor; that is the flavor
+    // whose buffered messages survive a receiver drop while sender clones
+    // remain.
+    let (cmd_tx, cmd_rx) =
+        RenderCommandSender::bounded(std::num::NonZeroUsize::new(64).expect("non-zero capacity"));
+    let image_state = Arc::new(neomacs_display_runtime::render_thread::ImageRenderState::default());
+    image_state.mark_renderer_ready();
+    image_state.publish_cache_usage(ImageCacheUsage::new(4_096, 0));
+
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let state_for_catalog = Arc::clone(&image_state);
+    let sender_for_catalog = cmd_tx.clone();
+    let reader = std::thread::spawn(move || {
+        let catalog = test_image_catalog(&sender_for_catalog, state_for_catalog);
+        let _ = catalog.invalidate(ImageInvalidation::All);
+        let _ = done_tx.send(catalog.cached_size_bytes());
+    });
+    // Wait until the read has queued the clear and its publish.
+    for _ in 0..400 {
+        if cmd_rx.len() >= 2 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(
+        cmd_rx.len() >= 2,
+        "the read did not queue its publish behind the clear"
+    );
+    // The renderer exits without answering and its receiver goes away; the
+    // evaluator's sender clone (inside the catalog) keeps the queued ack
+    // alive, which is exactly the hang this row pins.
+    image_state.mark_renderer_exited();
+    drop(cmd_rx);
+
+    let result = done_rx.recv_timeout(std::time::Duration::from_secs(2));
+    assert_eq!(
+        result,
+        Ok(0),
+        "a cache read must stop when the renderer exits with its ack queued"
+    );
+    drop(reader);
+}
+
+/// Named Invariant-7 exception: a PARTIAL invalidation (here an animation
+/// retire) followed by renderer exit. The post-invalidation total exists only
+/// in the renderer's published accounting, so without the renderer the
+/// catalog returns the last published total -- never a fabricated zero --
+/// and keeps the pending flag for a later retry once the renderer can answer.
+#[test]
+fn partial_invalidation_read_on_renderer_exit_is_a_named_invariant_7_exception() {
+    use neomacs_display_protocol::ImageCacheUsage;
+    use neomacs_display_runtime::thread_comm::RenderCommandSender;
+
+    let (cmd_tx, cmd_rx) =
+        RenderCommandSender::bounded(std::num::NonZeroUsize::new(64).expect("non-zero capacity"));
+    let image_state = Arc::new(neomacs_display_runtime::render_thread::ImageRenderState::default());
+    image_state.mark_renderer_ready();
+    image_state.publish_cache_usage(ImageCacheUsage::new(4_096, 0));
+
+    let (queued_tx, queued_rx) = std::sync::mpsc::channel();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let state_for_catalog = Arc::clone(&image_state);
+    let sender_for_catalog = cmd_tx.clone();
+    let reader = std::thread::spawn(move || {
+        let catalog = test_image_catalog(&sender_for_catalog, state_for_catalog);
+        // A real animation sequence must exist for `invalidate_animation` to
+        // admit a retire; a headerless data source registers one without
+        // needing the renderer.
+        let request = ImageResolveRequest {
+            spec: test_image_spec_identity("invariant-7"),
+            source: ImageResolveSource::Data(ImageDataSource::Isolated(EncodedBytes::new(
+                b"not an image".to_vec(),
+            ))),
+            identity: test_file_image_identity("invariant-7"),
+            size: ImageSizeSpec::new(AxisSize::AtMost(50), AxisSize::AtMost(50)),
+            rotation: ImageRotation::None,
+            colors: ImageColorContext::default(),
+            mask: Default::default(),
+            frame: ImageFrameIndex::new(3),
+            animation: ImageAnimationPolicy::disabled(),
+            realization: Default::default(),
+        };
+        let _ = unbounded_lookup(&catalog, request);
+        let _ = catalog.invalidate_animation(ImageAnimationInvalidation::All);
+        let _ = queued_tx.send(());
+        let _ = done_tx.send(catalog.cached_size_bytes());
+    });
+    queued_rx
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .expect("the retire was admitted");
+    // Give the read time to queue its publish behind the retire: on the
+    // pre-fix product that is the command whose ack can never arrive.
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    image_state.mark_renderer_exited();
+    drop(cmd_rx);
+
+    let result = done_rx.recv_timeout(std::time::Duration::from_secs(2));
+    assert_eq!(
+        result,
+        Ok(4_096),
+        "a partial invalidation read on renderer exit must return the last published total"
+    );
+    drop(reader);
+}
+
+/// Clear, then a source that never becomes drawable, then the renderer exits:
+/// GNU charges nothing for a non-drawable source, so the clear's known zero
+/// stands. A post-clear load that actually becomes READY is the separate
+/// evaluator-ledger case and must invalidate the zero.
+#[test]
+fn clear_then_failed_load_then_renderer_exit_is_zero() {
+    use neomacs_display_protocol::ImageCacheUsage;
+    use neomacs_display_runtime::thread_comm::RenderCommandSender;
+    use neovm_core::emacs_core::image_catalog::ImageInvalidation;
+
+    let (cmd_tx, cmd_rx) =
+        RenderCommandSender::bounded(std::num::NonZeroUsize::new(64).expect("non-zero capacity"));
+    let image_state = Arc::new(neomacs_display_runtime::render_thread::ImageRenderState::default());
+    image_state.mark_renderer_ready();
+    image_state.publish_cache_usage(ImageCacheUsage::new(4_096, 0));
+
+    let (queued_tx, queued_rx) = std::sync::mpsc::channel();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let state_for_catalog = Arc::clone(&image_state);
+    let sender_for_catalog = cmd_tx.clone();
+    let reader = std::thread::spawn(move || {
+        let catalog = test_image_catalog(&sender_for_catalog, state_for_catalog);
+        let _ = catalog.invalidate(ImageInvalidation::All);
+        let request = ImageResolveRequest {
+            spec: test_image_spec_identity("after-clear-load"),
+            source: ImageResolveSource::Data(ImageDataSource::Isolated(EncodedBytes::new(
+                b"not an image".to_vec(),
+            ))),
+            identity: test_file_image_identity("after-clear-load"),
+            size: ImageSizeSpec::new(AxisSize::AtMost(50), AxisSize::AtMost(50)),
+            rotation: ImageRotation::None,
+            colors: ImageColorContext::default(),
+            mask: Default::default(),
+            frame: ImageFrameIndex::new(3),
+            animation: ImageAnimationPolicy::disabled(),
+            realization: Default::default(),
+        };
+        let _ = unbounded_lookup(&catalog, request);
+        let _ = queued_tx.send(());
+        let _ = done_tx.send(catalog.cached_size_bytes());
+    });
+    queued_rx
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .expect("the clear and load were admitted");
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    image_state.mark_renderer_exited();
+    drop(cmd_rx);
+
+    let result = done_rx.recv_timeout(std::time::Duration::from_secs(2));
+    assert_eq!(
+        result,
+        Ok(0),
+        "a non-drawable load after a clear charges nothing in GNU, so the clear's zero stands"
+    );
+    drop(reader);
+}
+
+/// A whole-cache clear issued after the renderer exited: the renderer-owned
+/// cache is gone with the renderer, so the known post-clear zero is the answer,
+/// never the last pre-clear total.
+#[test]
+fn clear_after_renderer_exit_reports_the_known_post_clear_zero() {
+    use neomacs_display_protocol::ImageCacheUsage;
+    use neomacs_display_runtime::thread_comm::RenderCommandSender;
+    use neovm_core::emacs_core::image_catalog::ImageInvalidation;
+
+    let (cmd_tx, cmd_rx) =
+        RenderCommandSender::bounded(std::num::NonZeroUsize::new(64).expect("non-zero capacity"));
+    let image_state = Arc::new(neomacs_display_runtime::render_thread::ImageRenderState::default());
+    image_state.mark_renderer_ready();
+    image_state.publish_cache_usage(ImageCacheUsage::new(4_096, 0));
+    let catalog = test_image_catalog(&cmd_tx, Arc::clone(&image_state));
+    image_state.mark_renderer_exited();
+    drop(cmd_rx);
+
+    let _ = catalog.invalidate(ImageInvalidation::All);
+    assert_eq!(
+        catalog.cached_size_bytes(),
+        0,
+        "a clear issued after renderer exit must report the known zero, not the stale total"
     );
 }
 

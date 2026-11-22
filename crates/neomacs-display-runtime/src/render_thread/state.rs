@@ -120,6 +120,47 @@ pub struct ImageRenderState {
     terminals: Mutex<HashMap<ImageLoadToken, ImageDecodeTerminal>>,
     terminal_changed: Condvar,
     cache_bytes: AtomicU64,
+    /// Lifecycle of the renderer that owns the image cache. A synchronous
+    /// cache read must know whether there is a renderer that can retain
+    /// images at all (before the GPU exists it cannot, and waiting for a
+    /// publish would deadlock early init against first-frame readiness) and
+    /// whether it has exited (a queued acknowledgement can never arrive).
+    renderer_phase: std::sync::atomic::AtomicU8,
+}
+
+/// Lifecycle of the renderer that owns the image cache.
+///
+/// A synchronous cache read must know whether there is a renderer that can
+/// retain images at all (before the GPU exists it cannot, and waiting for a
+/// publish would deadlock early init against first-frame readiness) and
+/// whether it has exited (a queued acknowledgement can never arrive).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum RendererPhase {
+    /// No GPU is installed: the renderer owns no image bytes yet, so a cache
+    /// read is answered from the catalog's own snapshot.
+    NotStarted = 0,
+    /// The renderer can process image commands and publish cache usage.
+    Ready = 1,
+    /// The renderer exited (or is exiting); no further acknowledgement will
+    /// come.
+    Exited = 2,
+}
+
+impl RendererPhase {
+    fn from_byte(byte: u8) -> Self {
+        match byte {
+            byte if byte == Self::NotStarted as u8 => Self::NotStarted,
+            byte if byte == Self::Ready as u8 => Self::Ready,
+            byte if byte == Self::Exited as u8 => Self::Exited,
+            other => {
+                debug_assert!(false, "unknown renderer phase byte {other}");
+                // Treat an unknown phase as final: a waiter must not hang on
+                // a state this build does not understand.
+                Self::Exited
+            }
+        }
+    }
 }
 
 impl Default for ImageRenderState {
@@ -128,6 +169,7 @@ impl Default for ImageRenderState {
             terminals: Mutex::new(HashMap::new()),
             terminal_changed: Condvar::new(),
             cache_bytes: AtomicU64::new(0),
+            renderer_phase: std::sync::atomic::AtomicU8::new(RendererPhase::NotStarted as u8),
         }
     }
 }
@@ -261,6 +303,46 @@ impl ImageRenderState {
     #[must_use]
     pub fn cached_size_bytes(&self) -> u64 {
         self.cache_bytes.load(Ordering::Acquire)
+    }
+
+    /// The renderer lifecycle state observed by waiters.
+    #[must_use]
+    pub fn renderer_phase(&self) -> RendererPhase {
+        RendererPhase::from_byte(self.renderer_phase.load(Ordering::Acquire))
+    }
+
+    /// Record that the renderer installed its GPU and can now process image
+    /// commands. Idempotent across device-loss reinstalls; an exit is final.
+    pub fn mark_renderer_ready(&self) {
+        let _ = self.renderer_phase.compare_exchange(
+            RendererPhase::NotStarted as u8,
+            RendererPhase::Ready as u8,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+    }
+
+    /// Record that the renderer exited. Waiters stop waiting on the next
+    /// poll: any acknowledgement still queued behind the evaluator's sender
+    /// clones can never arrive. Called before teardown can block.
+    pub fn mark_renderer_exited(&self) {
+        self.renderer_phase
+            .store(RendererPhase::Exited as u8, Ordering::Release);
+    }
+
+    /// Whether the renderer has exited (or is exiting).
+    #[must_use]
+    pub fn renderer_exited(&self) -> bool {
+        self.renderer_phase() == RendererPhase::Exited
+    }
+
+    /// Whether the renderer has a GPU and can retain image bytes. False until
+    /// the first install, so a cache read during early init is answered
+    /// locally instead of waiting for a renderer that is itself waiting on
+    /// first-frame readiness.
+    #[must_use]
+    pub fn renderer_can_retain_images(&self) -> bool {
+        self.renderer_phase() == RendererPhase::Ready
     }
 }
 
