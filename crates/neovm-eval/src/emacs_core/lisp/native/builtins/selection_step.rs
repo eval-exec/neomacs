@@ -720,3 +720,177 @@ mod tests {
         neovm_value::tagged::gc::clear_tagged_heap_root_if_installed(clear_heap);
     }
 }
+
+/// Cut-4b red rows. A hosted Green worker must reach main's display host;
+/// today `installed` returns `InlineSerialMain` for every worker (its
+/// per-owner phase is `Uninstalled`), the worker finds no `display_host`, and
+/// the direct body writes the worker's TLS cache instead. These rows fail on
+/// that tip and pass once the routed boundary is installed.
+#[cfg(test)]
+mod cut4b_red {
+    use super::super::{
+        builtin_neomacs_clipboard_get, builtin_neomacs_clipboard_set,
+        builtin_neomacs_primary_selection_get, builtin_neomacs_primary_selection_owner,
+        builtin_neomacs_primary_selection_set,
+    };
+    use crate::emacs_core::eval::{Context, ThreadingMode};
+    use crate::emacs_core::print::print_value;
+    use neomacs_display_protocol::SelectionOwner;
+    use neovm_value::value::Value;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    #[derive(Default)]
+    struct ClipboardState {
+        clipboard: Option<String>,
+        primary: Option<String>,
+        owner: Option<SelectionOwner>,
+        fail_clipboard: Option<String>,
+    }
+
+    #[derive(Clone, Default)]
+    struct SharedClipboardHost {
+        state: Rc<RefCell<ClipboardState>>,
+    }
+
+    impl crate::emacs_core::eval::protocol::DisplayHost for SharedClipboardHost {
+        fn realize_gui_frame(
+            &mut self,
+            _request: crate::emacs_core::eval::GuiFrameHostRequest,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn resize_gui_frame(
+            &mut self,
+            _request: crate::emacs_core::eval::GuiFrameHostRequest,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn set_clipboard_text(&mut self, text: Option<&str>) -> Result<(), String> {
+            if let Some(error) = self.state.borrow().fail_clipboard.clone() {
+                return Err(error);
+            }
+            self.state.borrow_mut().clipboard = text.map(str::to_owned);
+            Ok(())
+        }
+
+        fn clipboard_text(&mut self) -> Result<Option<String>, String> {
+            Ok(self.state.borrow().clipboard.clone())
+        }
+
+        fn set_primary_selection_text(&mut self, text: Option<&str>) -> Result<(), String> {
+            self.state.borrow_mut().primary = text.map(str::to_owned);
+            Ok(())
+        }
+
+        fn primary_selection_text(&mut self) -> Result<Option<String>, String> {
+            Ok(self.state.borrow().primary.clone())
+        }
+
+        fn primary_selection_owner(&mut self) -> Result<SelectionOwner, String> {
+            Ok(self.state.borrow().owner.unwrap_or(SelectionOwner::None))
+        }
+    }
+
+    /// A real Green runtime, then a host attached (so the C4c refusal is not
+    /// hit), then Lisp runs as main. The worker is a real owner carrier.
+    fn hosted_green_context() -> (Context, Rc<RefCell<ClipboardState>>) {
+        let mut ctx = Context::new_with_threading(
+            ThreadingMode::Green,
+            crate::test_utils::unit_runtime(),
+        );
+        ctx.start_green_threads().expect("green runtime starts");
+        let state = Rc::new(RefCell::new(ClipboardState::default()));
+        ctx.set_display_host(Box::new(SharedClipboardHost {
+            state: Rc::clone(&state),
+        }));
+        (ctx, state)
+    }
+
+    fn worker(form: &str) -> String {
+        format!("(thread-join (make-thread (lambda () {form})))")
+    }
+
+    #[test]
+    fn routed_worker_set_reaches_the_main_host() {
+        let (mut ctx, state) = hosted_green_context();
+        let out = ctx
+            .eval_str(&worker(r#"(neomacs-clipboard-set "routed")"#))
+            .expect("worker set");
+        assert_eq!(out, Value::NIL);
+        assert_eq!(
+            state.borrow().clipboard.as_deref(),
+            Some("routed"),
+            "the main host must receive the worker's clipboard set"
+        );
+    }
+
+    #[test]
+    fn routed_worker_get_reads_the_main_host() {
+        let (mut ctx, state) = hosted_green_context();
+        ctx.eval_str(r#"(neomacs-clipboard-set "p")"#)
+            .expect("prime the host");
+        assert_eq!(state.borrow().clipboard.as_deref(), Some("p"));
+        let out = ctx
+            .eval_str(&worker("(neomacs-clipboard-get)"))
+            .expect("worker get");
+        assert_eq!(out, Value::string("p"));
+    }
+
+    #[test]
+    fn routed_worker_primary_reaches_the_main_host() {
+        let (mut ctx, state) = hosted_green_context();
+        ctx.eval_str(r#"(neomacs-primary-selection-set "prim")"#)
+            .expect("prime primary");
+        assert_eq!(state.borrow().primary.as_deref(), Some("prim"));
+        let out = ctx
+            .eval_str(&worker("(neomacs-primary-selection-get)"))
+            .expect("worker primary get");
+        assert_eq!(out, Value::string("prim"));
+    }
+
+    #[test]
+    fn routed_worker_owner_reports_the_main_host_owner() {
+        let (mut ctx, state) = hosted_green_context();
+        for (owner, symbol) in [
+            (SelectionOwner::ThisProcess, "this-process"),
+            (SelectionOwner::OtherProcess, "other-process"),
+            (SelectionOwner::None, "none"),
+            (SelectionOwner::Unknown, "unknown"),
+        ] {
+            state.borrow_mut().owner = Some(owner);
+            let out = ctx
+                .eval_str(&worker("(neomacs-primary-selection-owner)"))
+                .expect("worker owner");
+            assert_eq!(out, Value::symbol(symbol));
+        }
+    }
+
+    #[test]
+    fn routed_worker_host_error_is_the_direct_body_signal() {
+        let (mut ctx, state) = hosted_green_context();
+        state.borrow_mut().fail_clipboard = Some("boom".to_string());
+        let form = worker(
+            r#"(condition-case e (neomacs-clipboard-set "x") (error (list 'caught (car e) (cdr e))))"#,
+        );
+        let out = ctx.eval_str(&form).expect("worker error");
+        assert_eq!(print_value(&out), "(caught error (\"boom\"))");
+    }
+
+    #[test]
+    fn serial_main_host_calls_still_work_in_the_same_session() {
+        let (mut ctx, state) = hosted_green_context();
+        builtin_neomacs_clipboard_set(&mut ctx, vec![Value::string("main")]).unwrap();
+        assert_eq!(state.borrow().clipboard.as_deref(), Some("main"));
+        let got = builtin_neomacs_clipboard_get(&mut ctx, vec![]).unwrap();
+        assert_eq!(got, Value::string("main"));
+        builtin_neomacs_primary_selection_set(&mut ctx, vec![Value::string("pmain")]).unwrap();
+        assert_eq!(state.borrow().primary.as_deref(), Some("pmain"));
+        let got = builtin_neomacs_primary_selection_get(&mut ctx, vec![]).unwrap();
+        assert_eq!(got, Value::string("pmain"));
+        let owner = builtin_neomacs_primary_selection_owner(&mut ctx, vec![]).unwrap();
+        assert_eq!(print_value(&owner), "none");
+    }
+}
