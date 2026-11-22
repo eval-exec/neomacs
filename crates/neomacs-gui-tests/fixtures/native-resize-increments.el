@@ -12,6 +12,7 @@
 (defvar resize-increments-restore-submission 0)
 (defvar resize-increments-decorated nil)
 (defvar resize-increments-timer nil)
+(defvar resize-increments-last-state nil)
 
 (defun resize-increments-receipt ()
   (let ((file (getenv "NEOMACS_GUI_PRESENTATION_RECEIPT")))
@@ -30,15 +31,33 @@
              (natnump (plist-get receipt :nanoseconds))
              (< (plist-get receipt :nanoseconds) 1000000000)))))
 
-(defun resize-increments-wait-until (predicate on-success)
+(defun resize-increments-log-state (stage expected)
+  "Publish the observed resize geometry when it changes."
+  (let* ((frame resize-increments-main)
+         (receipt (resize-increments-receipt))
+         (line (format
+                "RESIZE-INCREMENTS-STATE stage=%s columns=%S width=%S height=%S expected=%s submission=%S"
+                stage
+                (and frame (frame-width frame))
+                (and frame (frame-pixel-width frame))
+                (and frame (frame-pixel-height frame))
+                expected
+                (plist-get receipt :submission))))
+    (unless (equal line resize-increments-last-state)
+      (setq resize-increments-last-state line)
+      (princ (concat line "\n") 'external-debugging-output))))
+
+(defun resize-increments-wait-until (stage expected predicate on-success)
   "Poll PREDICATE every 20 ms and call ON-SUCCESS.
 No wall-clock stage deadline: the predicate carries the geometry change and
 the compositor's presentation receipt, and the harness's process timeout is
-the only bound on a missing receipt."
+the only bound on a missing receipt.  Publish the observed state whenever it
+changes so a timeout still names the numbers."
   (setq resize-increments-timer
         (run-at-time
          0 0.02
          (lambda ()
+           (resize-increments-log-state stage expected)
            (when (funcall predicate)
              (cancel-timer resize-increments-timer)
              (setq resize-increments-timer nil)
@@ -50,6 +69,8 @@ the only bound on a missing receipt."
 
 (defun resize-increments-check-restored ()
   (resize-increments-wait-until
+   "restored"
+   (format "91/%S" resize-increments-floating-width)
    (lambda ()
      (and (= (frame-width resize-increments-main) 91)
           (= (frame-pixel-width resize-increments-main)
@@ -98,6 +119,8 @@ the only bound on a missing receipt."
   (let ((submission (or (plist-get (resize-increments-receipt) :submission) 0)))
     (set-frame-parameter resize-increments-main 'fullscreen 'fullboth)
     (resize-increments-wait-until
+     "fullscreen"
+     (format ">%S" resize-increments-floating-width)
      (lambda ()
        (and (> (frame-pixel-width resize-increments-main)
                resize-increments-floating-width)
@@ -111,6 +134,8 @@ the only bound on a missing receipt."
    (let ((submission (or (plist-get (resize-increments-receipt) :submission) 0)))
      (set-frame-width resize-increments-main 91)
      (resize-increments-wait-until
+      "resize"
+      "91"
       (lambda ()
         (and (= (frame-width resize-increments-main) 91)
              (resize-increments-presented submission)))

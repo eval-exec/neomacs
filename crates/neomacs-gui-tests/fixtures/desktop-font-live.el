@@ -27,9 +27,11 @@
   ;; turned a loaded machine's D-Bus/GSettings propagation into a spurious
   ;; failure, while the predicate itself is the settings-change receipt.
   (condition-case err
-      (cond ((funcall predicate) (funcall continuation))
-            (t (run-at-time 0.05 nil #'desktop-font-live-await
-                            predicate continuation)))
+      (progn
+        (desktop-font-live-log-state)
+        (cond ((funcall predicate) (funcall continuation))
+              (t (run-at-time 0.05 nil #'desktop-font-live-await
+                              predicate continuation))))
     (error (desktop-font-live-log "LIVE-FONT-FAIL %S" err) (kill-emacs 1))))
 
 (defun desktop-font-live-write (key value)
@@ -39,10 +41,24 @@
                              "org.gnome.desktop.interface" key value))
     (error "Isolated GSettings writer failed")))
 
+(defvar desktop-font-live-current-stage "startup")
+(defvar desktop-font-live-last-state nil)
+
 (defun desktop-font-live-frame-state ()
   (list (face-attribute 'default :family) (face-attribute 'default :height)
         (frame-parameter nil 'font) (window-font-width) (window-font-height)
         (frame-width) (frame-height) (frame-pixel-width) (frame-pixel-height)))
+
+(defun desktop-font-live-log-state ()
+  "Publish the observed live-font stage state when it changes."
+  (let* ((receipt (desktop-font-live-receipt))
+         (line (format "DESKTOP-FONT-LIVE-STATE stage=%s state=%S receipt-submission=%S"
+                       desktop-font-live-current-stage
+                       (desktop-font-live-frame-state)
+                       (plist-get receipt :submission))))
+    (unless (equal line desktop-font-live-last-state)
+      (setq desktop-font-live-last-state line)
+      (princ (concat line "\n") 'external-debugging-output))))
 
 (defun desktop-font-live-unchanged (before font)
   (unless (and (equal before (desktop-font-live-frame-state))
@@ -382,19 +398,33 @@ keyfile contents the keyfile backend would read."
                   (desktop-font-live-state) (desktop-font-live-probe)))
          (desktop-font-live-log "LIVE-FONT-BEFORE %S" (desktop-font-live-state))
          (pcase (getenv "NEOMACS_GUI_LIVE_FONT_CASE")
-           ("opt-in" (desktop-font-live-opt-in))
-           ("opt-out" (desktop-font-live-opt-out))
-           ("explicit-and-future" (desktop-font-live-explicit-and-future))
-           ("geometry" (desktop-font-live-geometry))
-           ("repeated" (desktop-font-live-repeated))
-           ("inhibited" (desktop-font-live-inhibited))
-           ("child" (desktop-font-live-child))
-           ("child-chrome" (desktop-font-live-child t))
-           ("child-scrollbar" (desktop-font-live-child 'scrollbar))
-           ("minimum" (desktop-font-live-minimum))
-           ("minimum-vertical" (desktop-font-live-minimum t))
-           ("grown-minibuffer" (desktop-font-live-grown-minibuffer))
-           ("overlapping-resize" (desktop-font-live-overlapping-resize))
-           ("fullscreen" (desktop-font-live-fullscreen))
+           ("opt-in" (setq desktop-font-live-current-stage "opt-in")
+            (desktop-font-live-opt-in))
+           ("opt-out" (setq desktop-font-live-current-stage "opt-out")
+            (desktop-font-live-opt-out))
+           ("explicit-and-future" (setq desktop-font-live-current-stage "explicit-and-future")
+            (desktop-font-live-explicit-and-future))
+           ("geometry" (setq desktop-font-live-current-stage "geometry")
+            (desktop-font-live-geometry))
+           ("repeated" (setq desktop-font-live-current-stage "repeated")
+            (desktop-font-live-repeated))
+           ("inhibited" (setq desktop-font-live-current-stage "inhibited")
+            (desktop-font-live-inhibited))
+           ("child" (setq desktop-font-live-current-stage "child")
+            (desktop-font-live-child))
+           ("child-chrome" (setq desktop-font-live-current-stage "child-chrome")
+            (desktop-font-live-child t))
+           ("child-scrollbar" (setq desktop-font-live-current-stage "child-scrollbar")
+            (desktop-font-live-child 'scrollbar))
+           ("minimum" (setq desktop-font-live-current-stage "minimum")
+            (desktop-font-live-minimum))
+           ("minimum-vertical" (setq desktop-font-live-current-stage "minimum-vertical")
+            (desktop-font-live-minimum t))
+           ("grown-minibuffer" (setq desktop-font-live-current-stage "grown-minibuffer")
+            (desktop-font-live-grown-minibuffer))
+           ("overlapping-resize" (setq desktop-font-live-current-stage "overlapping-resize")
+            (desktop-font-live-overlapping-resize))
+           ("fullscreen" (setq desktop-font-live-current-stage "fullscreen")
+            (desktop-font-live-fullscreen))
            (_ (error "Unknown live font case: %S" (getenv "NEOMACS_GUI_LIVE_FONT_CASE")))))
      (error (desktop-font-live-log "LIVE-FONT-FAIL %S" err) (kill-emacs 1)))))

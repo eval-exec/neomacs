@@ -317,13 +317,25 @@ fn check_fixture_with_font(
     let result = plan
         .run_with(
             &mut ProcessGuiCommandRunner,
-            // The presentation fixture has four independently bounded 12s
-            // stages. Leave room for those plus startup/teardown at 8K.
+            // The presentation fixture advances only on compositor receipts;
+            // 60 s bounds all four stages plus startup/teardown at 8K.
             GuiRunOptions::with_timeout(Duration::from_secs(60)),
         )
         .unwrap();
-    assert!(!result.timed_out, "{result:#?}");
-    assert_eq!(result.exit_code, Some(0), "{result:#?}");
-    assert_eq!(result.status, GuiRunStatus::Passed, "{result:#?}");
+    let editor_state = neomacs_gui_tests::last_editor_state_line(&result.artifacts.stderr);
+    assert!(
+        !result.timed_out,
+        "{result:#?}\nlast editor state: {editor_state}"
+    );
+    assert_eq!(
+        result.exit_code,
+        Some(0),
+        "{result:#?}\nlast editor state: {editor_state}"
+    );
+    assert_eq!(
+        result.status,
+        GuiRunStatus::Passed,
+        "{result:#?}\nlast editor state: {editor_state}"
+    );
     result
 }

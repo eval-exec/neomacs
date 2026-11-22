@@ -808,6 +808,23 @@ pub trait GuiCommandRunner {
     ) -> io::Result<GuiCommandOutput>;
 }
 
+/// The last `*-STATE` line a GUI fixture wrote to its stderr log.
+///
+/// Fixtures publish observed geometry and receipt state while they wait for
+/// the native receipt that ends a stage.  The harness process timeout is the
+/// only wall-clock bound, so quoting this line in the timeout panic keeps a
+/// red diagnosable without reintroducing a per-stage deadline.
+pub fn last_editor_state_line(path: impl AsRef<Path>) -> String {
+    let bytes = fs::read(path).unwrap_or_default();
+    let text = String::from_utf8_lossy(&bytes);
+    text.lines()
+        .rev()
+        .find(|line| line.contains("-STATE "))
+        .unwrap_or("no *-STATE line in editor stderr")
+        .trim()
+        .to_owned()
+}
+
 /// Create a fresh GUI artifact leaf directory, creating its parent chain first.
 ///
 /// A GUI suite can run first in a fresh worktree, where

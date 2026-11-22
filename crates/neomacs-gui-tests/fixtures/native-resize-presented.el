@@ -12,6 +12,8 @@
   (setq native-presented-stage stage
         native-presented-submission (plist-get receipt :submission)))
 
+(defvar native-presented-last-state nil)
+
 (defun native-presented-receipt ()
   (let ((file (getenv "NEOMACS_GUI_PRESENTATION_RECEIPT")))
     (when (and file (file-exists-p file))
@@ -19,9 +21,24 @@
         (insert-file-contents file)
         (read (current-buffer))))))
 
+(defun native-presented-log-state (receipt)
+  "Publish the observed presentation state when it changes."
+  (let* ((expected (pcase native-presented-stage
+                     ('startup 832) ('resized 942)
+                     ('fullscreen 3840) ('restored 942)))
+         (line (format "NATIVE-PRESENTED-STATE stage=%s width=%S expected=%S submission=%S"
+                       native-presented-stage
+                       (plist-get receipt :width)
+                       expected
+                       (plist-get receipt :submission))))
+    (unless (equal line native-presented-last-state)
+      (setq native-presented-last-state line)
+      (princ (concat line "\n") 'external-debugging-output))))
+
 (defun native-presented-advance ()
   (condition-case err
       (let ((receipt (native-presented-receipt)))
+        (native-presented-log-state receipt)
         (when receipt
           (unless (and (eq (plist-get receipt :outcome) 'presented)
                        (integerp (plist-get receipt :clock-id))

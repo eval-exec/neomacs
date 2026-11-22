@@ -24,6 +24,17 @@
              (natnump (plist-get receipt :nanoseconds))
              (< (plist-get receipt :nanoseconds) 1000000000)))))
 
+(defvar desktop-font-startup-last-state nil)
+(defun desktop-font-startup-log-state (stage expected submission)
+  "Publish the observed startup-resize geometry when it changes."
+  (let ((line (format
+               "DESKTOP-FONT-STARTUP-STATE stage=%s columns=%S width=%S height=%S expected=%s submission=%S"
+               stage (frame-width) (frame-pixel-width) (frame-pixel-height)
+               expected submission)))
+    (unless (equal line desktop-font-startup-last-state)
+      (setq desktop-font-startup-last-state line)
+      (princ (concat line "\n") 'external-debugging-output))))
+
 (run-at-time
  1 nil
  (lambda ()
@@ -75,6 +86,8 @@
                  (run-at-time
                   0 0.02
                   (lambda ()
+                    (desktop-font-startup-log-state
+                     "resized" (format "91/%S" original-height) submission)
                     (when (and (= (frame-width) 91)
                                (= (frame-pixel-height) original-height)
                                (desktop-font-startup-presented submission))
