@@ -1959,6 +1959,12 @@ impl Context {
         // the heap. This take publishes that sum once.
         self.publish_completed_cycle(start.elapsed());
         self.sync_gc_threshold_from_runtime_settings();
+        // E3.2: a stopped sweep recorded user-ptr/module-function/SQLite
+        // payloads instead of running native code under AllStopped. GNU runs
+        // those finalizers inside the sweep, so drain them here, before any
+        // doomed Lisp finalizer or `post-gc-hook` can run and before control
+        // returns to Lisp from this collection.
+        self.tagged_heap.drain_pending_native_destroys();
         // Destroy the GPU objects of shader-surface handles this cycle swept.
         // Every completed collection funnels through this block (explicit
         // `garbage-collect` and the safe-point paths above), so this is the

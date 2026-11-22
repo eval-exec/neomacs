@@ -149,10 +149,17 @@ fn supported(heap: &TaggedHeap) -> Result<(), CollectionError> {
             }
             let ptr = header.cast::<VecLikeHeader>();
             match (*ptr).type_tag {
-                // These own native callbacks that the stop cannot run yet. A
-                // stopped major records resource ids and queues finalizer
-                // functions; it never enters a native callback.
-                VecLikeType::UserPtr | VecLikeType::ModuleFunction | VecLikeType::Sqlite => {
+                // E3.2: the stopped sweep detaches a user-ptr/module-function
+                // payload into the pending-native batch instead of invoking
+                // its finalizer under the stopped heap loan; the stopped
+                // completion drains it after the loan and before owners
+                // resume (the completed-cycle block is the serial backstop),
+                // matching GNU's in-sweep ordering. SQLite stays refused
+                // until the GNU-observable DB-lifecycle row decides its
+                // admission (its explicit drop may close where GNU's
+                // cleanup_vector is a no-op).
+                VecLikeType::UserPtr | VecLikeType::ModuleFunction => Ok(()),
+                VecLikeType::Sqlite => {
                     #[cfg(any(test, feature = "test-support"))]
                     eprintln!(
                         "A5 unsupported callback-bearing payload: {:?}",
@@ -238,6 +245,15 @@ fn supported(heap: &TaggedHeap) -> Result<(), CollectionError> {
         inspect(item.header.cast::<GcHeader>())?;
     }
     Ok(())
+}
+
+/// Test-support entry to the stopped admission preflight without constructing
+/// a full owner protocol. The accessor stays crate-private; the value-crate
+/// collection tests exercise the same `supported` path the keeper uses.
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub(super) fn supported_for_test(heap: &TaggedHeap) -> Result<(), CollectionError> {
+    supported(heap)
 }
 
 impl<'heap, K: EraKeeper> EraCore<'heap, K> {
@@ -533,7 +549,30 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
         });
         #[cfg(any(test, feature = "test-support"))]
         super::a8_probes::mark(super::a8_probes::MARK_SWEEP_DONE, stopped.epoch().get(), 0);
-        traced
+        // E3.2: the stopped sweep deferred native finalizers; run them now,
+        // after the heap loan and image restoration and before this call can
+        // return to the owner/Baton side (owners are still stopped). This also
+        // clears the deferral mode on the error paths.
+        let drained = self.drain_stopped_native_batch();
+        let report = traced?;
+        drained?;
+        Ok(report)
+    }
+
+    /// Drain the batch a stopped job detached, on the caller's thread, once
+    /// the stopped heap loan has ended. The batch's mode is cleared by the
+    /// drain, so a later serial collection reclaims native payloads inline.
+    #[cold]
+    fn drain_stopped_native_batch(&self) -> Result<usize, RendezvousError> {
+        let mut collector = self
+            .collector
+            .try_borrow_mut()
+            .map_err(|_| RendezvousError::Busy)?;
+        let heap = collector
+            .as_mut()
+            .ok_or(RendezvousError::Publication)?
+            .registration_heap_mut();
+        Ok(heap.drain_pending_native_destroys())
     }
 }
 
@@ -632,6 +671,12 @@ impl<'heap, 'stop, 'era> StoppedCollectorJob<'heap, 'stop, 'era> {
         for item in &images.work {
             trace_work(heap, item);
         }
+        // E3.2: the stopped job must not run a native finalizer or SQLite
+        // teardown while it holds the stopped heap loan. The sweep detaches
+        // such payloads into the heap's pending-native batch; the stopped
+        // completion drains it after the loan and before owners resume (the
+        // evaluator's completed-cycle block is the serial backstop).
+        heap.begin_native_deferral();
         match self.kind {
             GenerationCycle::Major => {
                 // This scoped keeper job never sends/clones a live heap borrow.

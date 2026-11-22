@@ -279,6 +279,7 @@ const _: () = {
                 + size_of::<super::memory_registry::EphemeronRecords>()
                 + size_of::<super::cycle_time_bank::GcCycleTimeBank>()
                 + size_of::<super::publication_roots::PublishedPayloadRoots>()
+                + size_of::<Option<super::native_deferred::PendingNativeDestroys>>()
     );
     assert!(align_of::<TaggedHeap>() == 8);
     assert!(offset_of!(TaggedHeap, mutator_gc) == 24);

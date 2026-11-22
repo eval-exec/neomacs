@@ -17,6 +17,13 @@ use neovm_value::test_support::authority::{
     prepare_stopped_adapter_ephemerons, prepare_stopped_adapter_resources,
     set_generational_enabled_for_test,
 };
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+unsafe extern "C" fn count_native_finalizer(data: *mut std::ffi::c_void) {
+    // SAFETY: each fixture registers a live AtomicUsize for the duration of
+    // the stopped collection and its post-stop drain.
+    unsafe { &*data.cast::<AtomicUsize>() }.fetch_add(1, Ordering::Relaxed);
+}
 
 fn clean_context() -> Context {
     // The canonical core boot installs the eval hooks and builds the Context.
@@ -33,6 +40,32 @@ fn run_stopped_major(context: &mut Context) -> Result<(), String> {
         let mut stopped = era.stop().expect("stopped world");
         era.collect_stopped(&mut stopped, baton_collect_parallel_world_roots)
             .expect("stopped major collection");
+        stopped.complete().expect("stop completion");
+        let (collector, keeper) = projection.finish().expect("era finish");
+        (collector, keeper, ())
+    })
+    .map_err(|error| format!("{error:?}"))
+}
+
+/// One ordinary-admission stopped major that observes the deferred-native
+/// batch and the caller's counters BETWEEN `collect_stopped` and
+/// `stopped.complete()`. A drain moved to era finish (after owners resume)
+/// would leave the batch and the finalizer unsettled here.
+fn run_stopped_major_observing_batch(
+    context: &mut Context,
+    mut observe: impl FnMut(Option<usize>),
+) -> Result<(), String> {
+    admit_owned_proof_parallel_for_test(context, |projection| {
+        let era = projection.era();
+        let mut stopped = era.stop().expect("stopped world");
+        era.collect_stopped(&mut stopped, baton_collect_parallel_world_roots)
+            .expect("stopped major collection");
+        let batch = era
+            .with_stopped_heap_for_test(&stopped, |heap| {
+                heap.pending_native_destroy_count_for_test()
+            })
+            .expect("observe the stopped native batch");
+        observe(batch);
         stopped.complete().expect("stop completion");
         let (collector, keeper) = projection.finish().expect("era finish");
         (collector, keeper, ())
@@ -184,7 +217,7 @@ fn stopped_major_reclaims_unreached_ephemeron_registries() {
 }
 
 #[test]
-fn stopped_major_still_refuses_callback_payloads() {
+fn stopped_major_admits_callback_payloads() {
     let mut context = clean_context();
     let heap = unsafe { context.tagged_heap_mut() };
     let _user_ptr = heap.alloc_user_ptr(std::ptr::null_mut(), None);
@@ -198,50 +231,96 @@ fn stopped_major_still_refuses_callback_payloads() {
     );
 
     let outcome = run_stopped_major(&mut context);
-    let error = outcome.expect_err("a callback payload must stay refused");
     assert!(
-        error.contains("Publication"),
-        "admission refuses a native callback payload: {error}"
+        outcome.is_ok(),
+        "a stopped sweep defers these payloads instead of refusing them: {outcome:?}"
+    );
+    assert_eq!(
+        unsafe { context.tagged_heap_mut() }.pending_native_destroy_count_for_test(),
+        None,
+        "the post-stop drain consumes the batch"
     );
 }
 
-/// E3 s4': each callback-bearing payload refuses on its own heap. The
-/// combined test above allocates UserPtr and ModuleFunction together, so the
-/// catalog walk could reach either first and mask the other; Sqlite has no
-/// other stopped-major cover at all. One fresh context per payload makes
-/// each refusal independent of walk order.
+/// E3.2 real collect_stopped row: a counting user-ptr finalizer runs exactly
+/// once, on the owner side of the stopped job (the batch is empty on return).
 #[test]
-fn stopped_major_still_refuses_a_user_ptr_payload_alone() {
+fn stopped_major_defers_a_user_ptr_finalizer_and_drains_before_resume() {
+    let count = AtomicUsize::new(0);
     let mut context = clean_context();
     let heap = unsafe { context.tagged_heap_mut() };
-    let _user_ptr = heap.alloc_user_ptr(std::ptr::null_mut(), None);
+    let data = std::ptr::from_ref(&count).cast_mut().cast();
+    let _user_ptr = heap.alloc_user_ptr(data, Some(count_native_finalizer));
 
-    let outcome = run_stopped_major(&mut context);
-    let error = outcome.expect_err("a user_ptr payload must stay refused");
+    let outcome = run_stopped_major_observing_batch(&mut context, |batch| {
+        assert_eq!(
+            count.load(Ordering::Relaxed),
+            1,
+            "the deferred finalizer must already have run before stopped.complete()"
+        );
+        assert_eq!(
+            batch, None,
+            "the stopped completion must have consumed the batch before owners resume"
+        );
+    });
     assert!(
-        error.contains("Publication"),
-        "admission refuses a user_ptr payload: {error}"
+        outcome.is_ok(),
+        "user-ptr payload must be admitted: {outcome:?}"
+    );
+    assert_eq!(
+        count.load(Ordering::Relaxed),
+        1,
+        "the deferred finalizer ran once before the stopped job returned"
+    );
+    assert_eq!(
+        unsafe { context.tagged_heap_mut() }.pending_native_destroy_count_for_test(),
+        None,
+        "no finalizer is still owed"
+    );
+
+    Box::new(context).shutdown().unwrap();
+    assert_eq!(
+        count.load(Ordering::Relaxed),
+        1,
+        "shutdown does not call the drained finalizer again"
     );
 }
 
 #[test]
-fn stopped_major_still_refuses_a_module_function_payload_alone() {
+fn stopped_major_admits_a_module_function_and_drains_its_finalizer() {
+    let count = AtomicUsize::new(0);
     let mut context = clean_context();
     let heap = unsafe { context.tagged_heap_mut() };
-    let _module_function = heap.alloc_module_function(
+    let data = std::ptr::from_ref(&count).cast_mut().cast();
+    let function = heap.alloc_module_function(
         0,
         0,
         std::ptr::null(),
-        std::ptr::null_mut(),
+        data,
         TaggedValue::NIL,
         TaggedValue::NIL,
     );
+    // SAFETY: this fixture exclusively owns the initialized module function;
+    // its data points to count, which outlives the stopped collection.
+    unsafe {
+        (*(function.as_veclike_ptr().unwrap()
+            as *mut neovm_value::tagged::header::ModuleFunctionObj))
+            .finalizer = Some(count_native_finalizer);
+    }
 
     let outcome = run_stopped_major(&mut context);
-    let error = outcome.expect_err("a module_function payload must stay refused");
     assert!(
-        error.contains("Publication"),
-        "admission refuses a module_function payload: {error}"
+        outcome.is_ok(),
+        "module-function payload must be admitted: {outcome:?}"
+    );
+    assert_eq!(
+        count.load(Ordering::Relaxed),
+        1,
+        "the deferred module finalizer ran once before resume"
+    );
+    assert_eq!(
+        unsafe { context.tagged_heap_mut() }.pending_native_destroy_count_for_test(),
+        None
     );
 }
 

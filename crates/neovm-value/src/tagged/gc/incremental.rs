@@ -1988,6 +1988,10 @@ impl TaggedHeap {
                         drop(Box::from_raw(ptr as *mut FinalizerObj))
                     },
                     VecLikeType::Sqlite => {
+                        if self.deferring_native_reclaims() {
+                            self.push_deferred_sqlite(ptr as *mut SqliteObj);
+                            return;
+                        }
                         if mode == ReclamationMode::Explicit || !cfg!(feature = "sqlite") {
                             // SAFETY: this detached allocation owns its SQLite
                             // identity; explicit reclaim permits native close
@@ -2013,6 +2017,10 @@ impl TaggedHeap {
                     }
                     VecLikeType::UserPtr => {
                         let up = ptr as *mut UserPtrObj;
+                        if self.deferring_native_reclaims() {
+                            self.push_deferred_user_ptr(up);
+                            return;
+                        }
                         if mode == ReclamationMode::Explicit {
                             // SAFETY: the detached initialized object exclusively
                             // owns its finalizer field. Remove it before invoking
@@ -2033,6 +2041,10 @@ impl TaggedHeap {
                     }
                     VecLikeType::ModuleFunction => {
                         let mf = ptr as *mut ModuleFunctionObj;
+                        if self.deferring_native_reclaims() {
+                            self.push_deferred_module_function(mf);
+                            return;
+                        }
                         if mode == ReclamationMode::Explicit {
                             // SAFETY: this detached object exclusively owns the
                             // initialized field. Taking it prevents a second

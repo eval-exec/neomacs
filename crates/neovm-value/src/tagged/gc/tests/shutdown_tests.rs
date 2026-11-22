@@ -82,6 +82,59 @@ fn ordinary_sweep_runs_foreign_finalizers_once() {
     assert_eq!(count.load(Ordering::Relaxed), 2);
 }
 
+/// E3.2: a stopped sweep detaches the payloads and runs no native code. The
+/// drain then runs each finalizer once, on the caller's (Baton) side.
+#[test]
+fn stopped_native_deferral_defers_finalizers_until_the_drain() {
+    let count = AtomicUsize::new(0);
+    let mut heap = TaggedHeap::new();
+    allocate_counted_native_objects(&mut heap, &count);
+    heap.begin_native_deferral_for_test();
+    heap.collect_exact(std::iter::empty());
+    assert_eq!(
+        count.load(Ordering::Relaxed),
+        0,
+        "the sweep must not invoke a foreign finalizer while deferring"
+    );
+    assert_eq!(heap.pending_native_destroy_count_for_test(), Some(2));
+    assert_eq!(heap.drain_pending_native_destroys(), 2);
+    assert_eq!(count.load(Ordering::Relaxed), 2);
+    assert_eq!(heap.pending_native_destroy_count_for_test(), None);
+    assert_eq!(heap.drain_pending_native_destroys(), 0);
+    assert_eq!(count.load(Ordering::Relaxed), 2);
+    heap.shutdown().unwrap();
+    assert_eq!(count.load(Ordering::Relaxed), 2);
+}
+
+/// A deferral left owed (the stopped job's drain did not run, e.g. an error
+/// path) must not make explicit shutdown skip the finalizers it always ran.
+#[test]
+fn explicit_shutdown_after_a_stopped_deferral_runs_owed_finalizers_once() {
+    let count = AtomicUsize::new(0);
+    let mut heap = TaggedHeap::new();
+    allocate_counted_native_objects(&mut heap, &count);
+    heap.begin_native_deferral_for_test();
+    heap.collect_exact(std::iter::empty());
+    assert_eq!(count.load(Ordering::Relaxed), 0);
+    assert_eq!(heap.pending_native_destroy_count_for_test(), Some(2));
+    heap.shutdown().unwrap();
+    assert_eq!(count.load(Ordering::Relaxed), 2);
+}
+
+/// A batch never drained because the heap is torn down still runs no callback;
+/// teardown only frees the inert Rust boxes.
+#[test]
+fn undrained_native_deferral_never_runs_finalizers_on_heap_drop() {
+    let count = AtomicUsize::new(0);
+    let mut heap = TaggedHeap::new();
+    allocate_counted_native_objects(&mut heap, &count);
+    heap.begin_native_deferral_for_test();
+    heap.collect_exact(std::iter::empty());
+    assert_eq!(heap.pending_native_destroy_count_for_test(), Some(2));
+    drop(heap);
+    assert_eq!(count.load(Ordering::Relaxed), 0);
+}
+
 #[test]
 fn failed_shutdown_skips_foreign_finalizers() {
     let count = AtomicUsize::new(0);

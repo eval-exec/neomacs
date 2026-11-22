@@ -925,6 +925,11 @@ impl TaggedHeap {
             .map_err(|_| MarkFinishError::PoisonedCollectorState)?
             .acknowledge();
         crate::tagged::gc::clear_tagged_heap_if_installed(&self);
+        // E3.2: an explicit shutdown must run every owed native finalizer. The
+        // stopped-collection deferral mode may still be set on an error path;
+        // drain it first so the explicit intrusive reclaim below does not
+        // defer again (the batch Drop would skip the callbacks).
+        self.drain_pending_native_destroys();
         self.reclaim_intrusive_objects(ReclamationMode::Explicit);
         Ok(())
     }

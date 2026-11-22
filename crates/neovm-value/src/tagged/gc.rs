@@ -1092,6 +1092,12 @@ pub struct TaggedHeap {
     cycle_time_bank: cycle_time_bank::GcCycleTimeBank,
     /// Heads published by payload owners, keyed by a minted id.
     published_payload_roots: publication_roots::PublishedPayloadRoots,
+    /// Native payloads a stopped sweep detached instead of reclaiming inline;
+    /// `Some` while a stopped job's records are owed. The stopped completion
+    /// drains the batch after the heap loan and before owners resume; the
+    /// evaluator's completed-cycle block is the serial backstop (E3.2).
+    /// Trailing, so no pinned offset moves.
+    pending_native_destroys: Option<native_deferred::PendingNativeDestroys>,
 }
 
 impl Default for TaggedHeap {
@@ -1226,6 +1232,7 @@ impl TaggedHeap {
             ephemeron_records: memory_registry::EphemeronRecords::default(),
             cycle_time_bank: cycle_time_bank::GcCycleTimeBank::default(),
             published_payload_roots: publication_roots::PublishedPayloadRoots::default(),
+            pending_native_destroys: None,
             dirty_owner_bits: FxHashSet::default(),
             dirty_writes: Vec::new(),
             gc_collections: 0,
@@ -2455,6 +2462,7 @@ mod memory_inventory;
 mod memory_registry;
 #[cfg(feature = "gc-memory-telemetry")]
 pub mod memory_telemetry;
+mod native_deferred;
 
 mod birth_logs;
 mod concurrent;
