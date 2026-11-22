@@ -677,12 +677,14 @@ impl OverlayIndex {
             "new interval already existed in GNU order mirror"
         );
         drop(intervals);
+        // Initialize the fresh attachment before property reads observe it.
+        // A later handle write would invalidate an enclosing read capture.
+        set_overlay_position_handle(overlay, &self.intervals);
         self.add_property_keys(&overlay_direct_property_keys(overlay));
         if let Some(endpoints) = self.endpoints.get_mut() {
             assert!(endpoints.insert(range.start(), EndpointKind::Start, overlay));
             assert!(endpoints.insert(range.end(), EndpointKind::End, overlay));
         }
-        set_overlay_position_handle(overlay, &self.intervals);
         true
     }
 
@@ -737,8 +739,10 @@ impl OverlayIndex {
         self.endpoints = OnceLock::new();
         self.direct_property_keys.clear();
         for (overlay, _) in entries {
-            self.add_property_keys(&overlay_direct_property_keys(*overlay));
+            // Snapshot attachment can run inside a collection-read capture.
+            // Finish owner initialization before observing its property keys.
             set_overlay_position_handle(*overlay, &self.intervals);
+            self.add_property_keys(&overlay_direct_property_keys(*overlay));
         }
         true
     }
@@ -1694,3 +1698,7 @@ mod tests;
 #[cfg(test)]
 #[path = "overlay_index/tests/nonalloc_boundary.rs"]
 mod nonalloc_boundary;
+
+#[cfg(test)]
+#[path = "overlay_index/tests/observed_attachment.rs"]
+mod observed_attachment;
