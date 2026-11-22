@@ -798,7 +798,13 @@ unsafe fn with_pending_hash_table_mut<const METERED: bool, R>(
     unsafe { with_verified_hash_table_mut::<false, R>(ptr, f) }
 }
 
-#[inline]
+/// Preserve the original inlined payload-loan body. An opaque forwarding ABI
+/// here spills the callback environment and result storage on every edit.
+///
+/// # Safety
+/// `ptr` names a live, hydrated table in the caller's exclusive inactive-owner
+/// extent. The callback must not call Lisp, collect, or escape its payload loan.
+#[inline(always)]
 unsafe fn with_verified_hash_table_mut<const METERED: bool, R>(
     ptr: *mut HashTableObj,
     f: impl FnOnce(&mut LispHashTable) -> R,

@@ -158,6 +158,9 @@ impl SerialHashTableStorageCharge {
 }
 
 impl Drop for SerialHashTableStorageCharge {
+    // Keep the small unchanged-capacity comparison visible for scalar
+    // replacement; byte conversion and owner billing remain out of line.
+    #[inline]
     fn drop(&mut self) {
         // SAFETY: the guard's contract keeps the table live; the caller's
         // payload borrow has ended, including when a host closure unwinds.
