@@ -221,6 +221,32 @@ pub(crate) enum EffectiveWrite {
     Canonical,
 }
 
+/// The single write transition shared by the closure family and the composed
+/// `PlainAccess` entry points: a Bound slot is replaced in place; NoBinding
+/// means the caller performs the canonical write.
+#[inline]
+fn write_effective_decision<S: OwnerSlots + ?Sized>(
+    slots: &S,
+    key: &EffectivePlainKey<'_>,
+) -> EffectiveWrite {
+    match slots.slot_state(key.slot(), key.channel()) {
+        SlotState::Bound(_) => EffectiveWrite::OwnerSlot,
+        SlotState::NoBinding => EffectiveWrite::Canonical,
+    }
+}
+
+/// `set-default`/`setq-default` use the Default channel for the decision.
+#[inline]
+fn write_default_decision<S: OwnerSlots + ?Sized>(
+    slots: &S,
+    key: &EffectivePlainKey<'_>,
+) -> EffectiveWrite {
+    match slots.slot_state(key.slot(), Channel::Default) {
+        SlotState::Bound(_) => EffectiveWrite::OwnerSlot,
+        SlotState::NoBinding => EffectiveWrite::Canonical,
+    }
+}
+
 /// Rule §4.2 items 2-3: a Bound slot is replaced; NoBinding delegates the
 /// write to canonical storage.
 pub(crate) fn write_effective<S: OwnerSlotsMut + ?Sized>(
@@ -229,8 +255,8 @@ pub(crate) fn write_effective<S: OwnerSlotsMut + ?Sized>(
     value: Value,
     canonical: impl FnOnce(Value),
 ) -> EffectiveWrite {
-    match slots.slot_state(key.slot(), key.channel()) {
-        SlotState::Bound(_) => {
+    match write_effective_decision(slots, key) {
+        EffectiveWrite::OwnerSlot => {
             slots.set_slot_state(
                 key.slot(),
                 key.channel(),
@@ -238,7 +264,7 @@ pub(crate) fn write_effective<S: OwnerSlotsMut + ?Sized>(
             );
             EffectiveWrite::OwnerSlot
         }
-        SlotState::NoBinding => {
+        EffectiveWrite::Canonical => {
             canonical(value);
             EffectiveWrite::Canonical
         }
@@ -253,8 +279,8 @@ pub(crate) fn write_default_effective<S: OwnerSlotsMut + ?Sized>(
     value: Value,
     canonical: impl FnOnce(Value),
 ) -> EffectiveWrite {
-    match slots.slot_state(key.slot(), Channel::Default) {
-        SlotState::Bound(_) => {
+    match write_default_decision(slots, key) {
+        EffectiveWrite::OwnerSlot => {
             slots.set_slot_state(
                 key.slot(),
                 Channel::Default,
@@ -262,7 +288,7 @@ pub(crate) fn write_default_effective<S: OwnerSlotsMut + ?Sized>(
             );
             EffectiveWrite::OwnerSlot
         }
-        SlotState::NoBinding => {
+        EffectiveWrite::Canonical => {
             canonical(value);
             EffectiveWrite::Canonical
         }
@@ -302,8 +328,10 @@ pub(crate) fn default_bound_effective<S: OwnerSlots + ?Sized>(
 /// once it owns the descriptor; the refusal stays typed either way.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PlainRefusal {
-    /// nil, t, a keyword or a `defconst` symbol: `setq` signals
-    /// `setting-constant`, so the operation stays on the serial path.
+    /// A symbol whose constant/NoWrite flag is set (nil, t, keywords): `setq`
+    /// signals `setting-constant`, so the operation stays on the serial path.
+    /// GNU `defconst` does not itself enforce constancy (eval.c:1018-1024); the
+    /// flag, not the defining form, is the predicate (Neo's `is_constant_id`).
     Constant,
     /// Not an untrapped Plain or projected-Plain variable.
     NotPlain,
@@ -342,14 +370,18 @@ impl PlainAdmission {
 ///
 /// `backing` is `SymbolBacking::classify`'s result, so a new backing kind is a
 /// compile error here rather than a wildcard. `constant` is the symbol's
-/// constant flag (`nil`, `t`, keywords, `defconst`); `projected` is the owner
-/// slot descriptor published for a projected Plain variable. E4-P2 supplies
-/// both from the owner slab lease and C3; the harness supplies them directly.
+/// constant/NoWrite flag (nil, t, keywords; NOT a bare `defconst` name, see
+/// eval.c:1018-1024); `projected` is the owner slot descriptor published for a
+/// projected Plain variable. E4-P2 supplies both from the owner slab lease and
+/// C3; the harness supplies them directly.
+///
+/// A Plain variable is never buffer-local or forwarded, so the admission mints
+/// only [`Channel::Default`]; the channel cannot be supplied by a caller.
 pub(crate) fn classify_plain_backing(
     sym: SymId,
     backing: Option<PlainSymbolBacking>,
     constant: bool,
-    projected: Option<(TlsIndex, Channel)>,
+    projected: Option<TlsIndex>,
 ) -> PlainAdmission {
     if constant {
         return PlainAdmission::refuse(PlainRefusal::Constant);
@@ -358,16 +390,10 @@ pub(crate) fn classify_plain_backing(
         None => PlainAdmission::refuse(PlainRefusal::NotPlain),
         // An untrapped Plain symbol with no projection still needs the owner
         // slot descriptor E4-P2 materializes at the structural boundary.
-        Some(PlainSymbolBacking::Unprojected) => match projected {
-            Some((slot, channel)) => PlainAdmission::mint(sym, slot, channel),
-            None => PlainAdmission::refuse(PlainRefusal::MissingProjection),
-        },
-        Some(PlainSymbolBacking::Projected) => match projected {
-            Some((slot, channel)) => PlainAdmission::mint(sym, slot, channel),
-            None => PlainAdmission::refuse(PlainRefusal::MissingProjection),
-        },
-        Some(PlainSymbolBacking::VoidProjection) => match projected {
-            Some((slot, channel)) => PlainAdmission::mint(sym, slot, channel),
+        Some(PlainSymbolBacking::Unprojected)
+        | Some(PlainSymbolBacking::Projected)
+        | Some(PlainSymbolBacking::VoidProjection) => match projected {
+            Some(slot) => PlainAdmission::mint(sym, slot, Channel::Default),
             None => PlainAdmission::refuse(PlainRefusal::MissingProjection),
         },
     }
@@ -412,29 +438,22 @@ pub(crate) trait PlainAccess: OwnerSlotsMut {
     fn canonical_bound(&self, sym: SymId) -> bool;
 }
 
-/// One composed read: owner slot first, canonical storage only on `NoBinding`.
+/// One composed read: delegates to the pure rule with the canonical closure.
 pub(crate) fn effective_plain_read<A: PlainAccess + ?Sized>(
     access: &A,
     key: &EffectivePlainKey<'_>,
 ) -> EffectiveRead {
-    match access.slot_state(key.slot(), key.channel()) {
-        SlotState::NoBinding => EffectiveRead::Canonical(access.canonical_read(key.symbol())),
-        SlotState::Bound(slot) => match slot.bound() {
-            Some(value) => EffectiveRead::OwnerBound(value),
-            None => EffectiveRead::OwnerVoid,
-        },
-    }
+    read_effective(access, key, || access.canonical_read(key.symbol()))
 }
 
-/// One composed write: a Bound owner slot is replaced; otherwise canonical.
+/// One composed write: the shared decision, then the slot or canonical write.
 pub(crate) fn effective_plain_write<A: PlainAccess + ?Sized>(
     access: &mut A,
     key: &EffectivePlainKey<'_>,
     value: Value,
 ) -> EffectiveWrite {
-    let state = access.slot_state(key.slot(), key.channel());
-    match state {
-        SlotState::Bound(_) => {
+    match write_effective_decision(access, key) {
+        EffectiveWrite::OwnerSlot => {
             access.set_slot_state(
                 key.slot(),
                 key.channel(),
@@ -442,22 +461,19 @@ pub(crate) fn effective_plain_write<A: PlainAccess + ?Sized>(
             );
             EffectiveWrite::OwnerSlot
         }
-        SlotState::NoBinding => {
+        EffectiveWrite::Canonical => {
             access.canonical_write(key.symbol(), value);
             EffectiveWrite::Canonical
         }
     }
 }
 
-/// `boundp` through the composed rule: an owner void binding is unbound.
+/// `boundp` through the composed rule, delegating to the pure rule.
 pub(crate) fn effective_plain_bound<A: PlainAccess + ?Sized>(
     access: &A,
     key: &EffectivePlainKey<'_>,
 ) -> bool {
-    match access.slot_state(key.slot(), key.channel()) {
-        SlotState::NoBinding => access.canonical_bound(key.symbol()),
-        SlotState::Bound(slot) => slot.bound().is_some(),
-    }
+    bound_effective(access, key, || access.canonical_bound(key.symbol()))
 }
 
 /// `default-value` through the same effective Default channel.
@@ -465,24 +481,17 @@ pub(crate) fn effective_plain_default_read<A: PlainAccess + ?Sized>(
     access: &A,
     key: &EffectivePlainKey<'_>,
 ) -> EffectiveRead {
-    match access.slot_state(key.slot(), Channel::Default) {
-        SlotState::NoBinding => EffectiveRead::Canonical(access.canonical_read(key.symbol())),
-        SlotState::Bound(slot) => match slot.bound() {
-            Some(value) => EffectiveRead::OwnerBound(value),
-            None => EffectiveRead::OwnerVoid,
-        },
-    }
+    read_default_effective(access, key, || access.canonical_read(key.symbol()))
 }
 
-/// `set-default` through the same effective Default channel.
+/// `set-default` through the shared Default decision.
 pub(crate) fn effective_plain_default_write<A: PlainAccess + ?Sized>(
     access: &mut A,
     key: &EffectivePlainKey<'_>,
     value: Value,
 ) -> EffectiveWrite {
-    let state = access.slot_state(key.slot(), Channel::Default);
-    match state {
-        SlotState::Bound(_) => {
+    match write_default_decision(access, key) {
+        EffectiveWrite::OwnerSlot => {
             access.set_slot_state(
                 key.slot(),
                 Channel::Default,
@@ -490,7 +499,7 @@ pub(crate) fn effective_plain_default_write<A: PlainAccess + ?Sized>(
             );
             EffectiveWrite::OwnerSlot
         }
-        SlotState::NoBinding => {
+        EffectiveWrite::Canonical => {
             access.canonical_write(key.symbol(), value);
             EffectiveWrite::Canonical
         }
@@ -502,8 +511,5 @@ pub(crate) fn effective_plain_default_bound<A: PlainAccess + ?Sized>(
     access: &A,
     key: &EffectivePlainKey<'_>,
 ) -> bool {
-    match access.slot_state(key.slot(), Channel::Default) {
-        SlotState::NoBinding => access.canonical_bound(key.symbol()),
-        SlotState::Bound(slot) => slot.bound().is_some(),
-    }
+    default_bound_effective(access, key, || access.canonical_bound(key.symbol()))
 }

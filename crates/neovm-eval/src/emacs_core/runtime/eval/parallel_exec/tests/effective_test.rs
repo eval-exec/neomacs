@@ -201,6 +201,9 @@ fn assignment_without_a_binding_writes_canonical_storage() {
 
 #[test]
 fn default_operations_use_the_default_channel_not_the_access_channel() {
+    // This is a buffer-local (non-Plain) access key: C1's admission mints only
+    // Channel::Default for a Plain backing, so this pins the pure rule's channel
+    // split for the serial buffer-local path, not a Plain admission.
     let buffer_key = key(Channel::BufferLocal(BufferId(7)));
     let slots = TestSlots::new(bound(30), SlotState::NoBinding);
 
@@ -283,7 +286,7 @@ fn admission_refuses_a_constant_even_when_plain() {
         NIL_SYM_ID,
         Some(PlainSymbolBacking::Unprojected),
         true,
-        Some((TlsIndex::VOID, Channel::Default)),
+        Some(TlsIndex::VOID),
     );
     assert_eq!(admission, PlainAdmission::Refuse(PlainRefusal::Constant));
 }
@@ -302,12 +305,7 @@ fn admission_is_exhaustive_over_plain_backing_kinds() {
         PlainSymbolBacking::VoidProjection,
     ] {
         assert_eq!(
-            classify_plain_backing(
-                NIL_SYM_ID,
-                Some(backing),
-                false,
-                Some((TlsIndex::VOID, Channel::Default)),
-            ),
+            classify_plain_backing(NIL_SYM_ID, Some(backing), false, Some(TlsIndex::VOID),),
             PlainAdmission::mint(NIL_SYM_ID, TlsIndex::VOID, Channel::Default)
         );
         assert_eq!(
@@ -419,33 +417,28 @@ fn composed_write_unbound_writes_canonical() {
 fn composed_default_ops_use_the_default_channel() {
     let sym = plain_sym("default");
     let mut slots = TestSlots::access(bound(30), Value::fixnum(9), mint(sym));
-    let buffer_key = EffectivePlainKey::test_key(
-        sym,
-        TlsIndex::VOID,
-        Channel::BufferLocal(BufferId(7)),
-        EraId::new(3),
-        ShapeGeneration::new(7),
-    );
+    let key = EffectivePlainKey::from_admission(&mint(sym), EraId::new(3), ShapeGeneration::new(7))
+        .expect("mint");
 
-    // The ordinary read meets the buffer-local channel and falls through...
+    // A Plain admission mints only Channel::Default (C1): the ordinary read
+    // and default-value are the same rule, so both see the owner's let (GNU
+    // `(1 t t 1)`), never the canonical 9.
+    assert_eq!(key.channel(), Channel::Default);
     assert_eq!(
-        effective_plain_read(&slots, &buffer_key),
-        EffectiveRead::Canonical(Value::fixnum(9))
-    );
-    // ...while default-value uses the owner's Default-channel binding.
-    assert_eq!(
-        effective_plain_default_read(&slots, &buffer_key),
+        effective_plain_read(&slots, &key),
         EffectiveRead::OwnerBound(Value::fixnum(30))
     );
     assert_eq!(
-        effective_plain_default_write(&mut slots, &buffer_key, Value::fixnum(31)),
+        effective_plain_default_read(&slots, &key),
+        EffectiveRead::OwnerBound(Value::fixnum(30))
+    );
+    assert_eq!(slots.canonical_reads(), 0);
+    assert_eq!(
+        effective_plain_default_write(&mut slots, &key, Value::fixnum(31)),
         EffectiveWrite::OwnerSlot
     );
+    assert_eq!(slots.canonical_writes(), 0);
     assert_slot(slots.slot_state(TlsIndex::VOID, Channel::Default), Some(31));
-    assert_slot(
-        slots.slot_state(TlsIndex::VOID, Channel::BufferLocal(BufferId(7))),
-        None,
-    );
 }
 
 #[test]
