@@ -1171,7 +1171,8 @@ fn font_xlfd_name_too_many_args() {
 #[test]
 fn close_font_requires_font_object() {
     crate::test_utils::init_test_tracing();
-    let wrong_nil = close_font(vec![Value::NIL]).unwrap_err();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
+    let wrong_nil = close_font(&mut eval, vec![Value::NIL]).unwrap_err();
     match wrong_nil.into_kind() {
         FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
@@ -1180,7 +1181,7 @@ fn close_font_requires_font_object() {
         other => panic!("expected wrong-type-argument, got {other:?}"),
     }
 
-    let wrong_spec = close_font(vec![font_spec(vec![]).unwrap()]).unwrap_err();
+    let wrong_spec = close_font(&mut eval, vec![font_spec(vec![]).unwrap()]).unwrap_err();
     match wrong_spec.into_kind() {
         FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
@@ -1193,13 +1194,17 @@ fn close_font_requires_font_object() {
 #[test]
 fn close_font_accepts_opaque_font_object_and_checks_arity() {
     crate::test_utils::init_test_tracing();
-    let _eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime()); // sets up heap
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime()); // sets up heap
     let font_obj = build_font_object(&RuntimeFace::new("default"));
-    assert!(close_font(vec![font_obj]).unwrap().is_nil());
-    assert!(close_font(vec![font_obj, Value::NIL]).unwrap().is_nil());
+    assert!(close_font(&mut eval, vec![font_obj]).unwrap().is_nil());
+    assert!(
+        close_font(&mut eval, vec![font_obj, Value::NIL])
+            .unwrap()
+            .is_nil()
+    );
 
-    assert!(close_font(vec![]).is_err());
-    assert!(close_font(vec![Value::NIL, Value::NIL, Value::NIL]).is_err());
+    assert!(close_font(&mut eval, vec![]).is_err());
+    assert!(close_font(&mut eval, vec![Value::NIL, Value::NIL, Value::NIL]).is_err());
 }
 
 #[test]
@@ -2142,14 +2147,17 @@ fn font_shape_gstring_fills_slots_through_the_installed_shaper() {
 
     let shaped = font_shape_gstring(&mut eval, vec![gstring.clone(), Value::NIL])
         .expect("shaping should not signal");
-    assert!(
-        shaped == gstring,
-        "GNU returns the gstring itself after shaping"
-    );
+    // GNU `Ffont_shape_gstring` ends in `composition_gstring_put_cache`
+    // (src/font.c:4685), which stores and returns a COPY of the header and
+    // shaped glyphs with its ID slot set (src/composite.c:663-669).  The
+    // input object keeps its nil ID, so it is not the returned gstring.
+    assert_ne!(shaped.bits(), gstring.bits(), "GNU returns the cached copy");
     let slots = shaped.as_vector_data().expect("gstring vector");
-    // The shape id (slot 1) is the composition cache's bookkeeping — that
-    // cache is not yet implemented in this port, so it stays nil here.
-    assert!(slots[3].is_nil(), "the glyph vector is truncated at n=1");
+    assert!(
+        slots[1].as_int().is_some(),
+        "the cached copy carries its shape id"
+    );
+    assert_eq!(slots.len(), 3, "the copy holds exactly the shaped glyphs");
     let glyph = slots[2].as_vector_data().expect("first glyph slot");
     assert_eq!(glyph[0], Value::fixnum(0), "from");
     assert_eq!(glyph[1], Value::fixnum(1), "to");
@@ -2362,6 +2370,173 @@ fn font_shape_gstring_caches_by_header_and_returns_the_cached_gstring() {
 }
 
 #[test]
+fn font_shape_gstring_cache_key_separates_same_family_and_pixel_weight() {
+    // GNU keys the shaped-gstring cache on the whole header
+    // `[FONT-OBJECT C1 ...]` under `equal`
+    // (`composition_gstring_put_cache`, src/composite.c).  Two font objects
+    // with the same family and pixel size but different weights must not
+    // share an entry: a cached bold width would otherwise be reused for the
+    // regular face (and vice versa).
+    crate::test_utils::init_test_tracing();
+    use neovm_text::emacs_core::text_host::TextHost;
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let regular = build_font_object(&RuntimeFace::new("default"));
+    let mut bold_face = RuntimeFace::new("default");
+    bold_face.weight = Some(neovm_value::display_vocab::FontWeight::Bold);
+    let bold = build_font_object(&bold_face);
+
+    let mut next_width = 7i64;
+    eval.font_shape_fn = Some(Box::new(move |_eval, gstring, _direction| {
+        let width = next_width;
+        next_width += 2;
+        gstring.set_vector_slot(
+            2,
+            Value::vector(vec![
+                Value::fixnum(0),
+                Value::fixnum(1),
+                Value::fixnum(0x66),
+                Value::fixnum(0x66),
+                Value::fixnum(width),
+                Value::NIL,
+                Value::NIL,
+                Value::NIL,
+                Value::NIL,
+                Value::NIL,
+            ]),
+        );
+        gstring.set_vector_slot(3, Value::NIL);
+        crate::emacs_core::font::GstringShapeOutcome::Shaped(1)
+    }));
+    let build = |eval: &mut Context, font: Value| {
+        neovm_text::emacs_core::composite::composition_get_gstring(
+            eval,
+            vec![
+                Value::fixnum(0),
+                Value::fixnum(2),
+                font,
+                Value::string("fi"),
+            ],
+        )
+        .expect("gstring")
+    };
+
+    let input = build(&mut eval, regular);
+    let regular_gstring =
+        font_shape_gstring(&mut eval, vec![input, Value::NIL]).expect("regular shaping");
+    let input = build(&mut eval, bold);
+    let bold_gstring =
+        font_shape_gstring(&mut eval, vec![input, Value::NIL]).expect("bold shaping");
+
+    assert_ne!(
+        regular_gstring.bits(),
+        bold_gstring.bits(),
+        "the two weights must not share a cached gstring"
+    );
+    assert_eq!(
+        eval.gstring_shape_cache_mut().len(),
+        2,
+        "the face weight is part of the cache key"
+    );
+    let width_of = |gstring: Value| {
+        gstring.as_vector_data().expect("gstring")[2]
+            .as_vector_data()
+            .expect("glyph")[4]
+            .as_int()
+    };
+    assert_eq!(width_of(regular_gstring), Some(7));
+    assert_eq!(width_of(bold_gstring), Some(9));
+    let header_of = |gstring: Value| gstring.as_vector_data().expect("gstring")[0];
+    let regular_hit = eval
+        .composition_gstring_cache_lookup(header_of(regular_gstring))
+        .expect("regular header must hit its own entry");
+    let bold_hit = eval
+        .composition_gstring_cache_lookup(header_of(bold_gstring))
+        .expect("bold header must hit its own entry");
+    assert_eq!(regular_hit.bits(), regular_gstring.bits());
+    assert_eq!(bold_hit.bits(), bold_gstring.bits());
+}
+
+#[test]
+fn gstring_cache_key_ignores_font_realization_identity() {
+    // Two separately opened font objects for the same face carry equal Lisp
+    // state but distinct heap payloads: the OTF capability list is rebuilt
+    // for every realization, so its identity bits differ.  GNU's key is
+    // `equal` over the header (src/composite.c:640-669), so a re-realization
+    // of the same font must still hit the first one's shaped gstring.
+    crate::test_utils::init_test_tracing();
+    let _eval = Context::new(crate::test_utils::unit_runtime());
+    let a = opened_font_with_capability(arab_capability());
+    let b = opened_font_with_capability(arab_capability());
+    assert_ne!(a.bits(), b.bits(), "distinct font objects");
+    let header = |font: Value| Value::vector(vec![font, Value::fixnum(0x66)]);
+    let key_a = neovm_value::display_vocab::gstring_cache_key_from_header(&header(a))
+        .expect("key for the first realization");
+    let key_b = neovm_value::display_vocab::gstring_cache_key_from_header(&header(b))
+        .expect("key for the second realization");
+    assert_eq!(
+        key_a, key_b,
+        "the same face realized twice must share one cache key"
+    );
+}
+
+#[test]
+fn clear_composition_cache_empties_the_shaped_gstring_table() {
+    // GNU `Fclear_composition_cache` replaces the whole gstring table and
+    // returns `(clear-face-cache t)` (src/composite.c:697-707), so the next
+    // automatic-composition search shapes again instead of reusing a gstring
+    // whose font may be gone.
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let font = build_font_object(&RuntimeFace::new("default"));
+    eval.font_shape_fn = Some(Box::new(|_eval, gstring, _direction| {
+        gstring.set_vector_slot(
+            2,
+            Value::vector(vec![
+                Value::fixnum(0),
+                Value::fixnum(1),
+                Value::fixnum(0x66),
+                Value::fixnum(0x66),
+                Value::fixnum(7),
+                Value::NIL,
+                Value::NIL,
+                Value::NIL,
+                Value::NIL,
+                Value::NIL,
+            ]),
+        );
+        gstring.set_vector_slot(3, Value::NIL);
+        crate::emacs_core::font::GstringShapeOutcome::Shaped(1)
+    }));
+    let gstring = neovm_text::emacs_core::composite::composition_get_gstring(
+        &mut eval,
+        vec![
+            Value::fixnum(0),
+            Value::fixnum(2),
+            font,
+            Value::string("fi"),
+        ],
+    )
+    .expect("gstring");
+    font_shape_gstring(&mut eval, vec![gstring, Value::NIL]).expect("shaping");
+    assert_eq!(eval.gstring_shape_cache_mut().len(), 1);
+    let face_change_before = eval.face_change_count();
+    let result = neovm_text::emacs_core::composite::clear_cache(&mut eval, vec![])
+        .expect("clear-composition-cache");
+    assert!(
+        eval.gstring_shape_cache_mut().is_empty(),
+        "clear-composition-cache must drop every shaped gstring"
+    );
+    assert!(
+        result.is_nil(),
+        "clear-face-cache returns nil (src/xfaces.c Fclear_face_cache)"
+    );
+    assert!(
+        eval.face_change_count() > face_change_before,
+        "GNU forces face re-realization after clearing the composition cache"
+    );
+}
+
+#[test]
 fn font_shape_gstring_cache_is_the_sole_edge_across_minor_and_full_gc() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new(crate::test_utils::unit_runtime());
@@ -2406,9 +2581,18 @@ fn font_shape_gstring_cache_is_the_sole_edge_across_minor_and_full_gc() {
         identity_bits: usize,
         slot_bits: Vec<usize>,
     }
-    let (cached_bits, snapshots) = eval.with_gc_inhibited(|eval| {
+    let (cached_bits, header_bits, snapshots) = eval.with_gc_inhibited(|eval| {
         let input = build(eval);
         let cached = font_shape_gstring(eval, vec![input, Value::NIL]).expect("first shaping");
+        let header_bits = cached
+            .as_vector_data()
+            .expect("cached gstring")
+            .first()
+            .and_then(|header| header.as_vector_data())
+            .expect("cached header")
+            .iter()
+            .map(|value| value.bits())
+            .collect::<Vec<_>>();
         let mut pending = vec![cached];
         let mut snapshots = Vec::new();
         while let Some(vector) = pending.pop() {
@@ -2419,7 +2603,7 @@ fn font_shape_gstring_cache_is_the_sole_edge_across_minor_and_full_gc() {
             });
             pending.extend(slots.iter().copied().filter(|slot| slot.is_vector()));
         }
-        (cached.bits(), snapshots)
+        (cached.bits(), header_bits, snapshots)
     });
     // Only native integer snapshots escape setup: no Lisp variable, scratch
     // root, callback capture, argument vector or other owner retains the graph.
@@ -2491,7 +2675,16 @@ fn font_shape_gstring_cache_is_the_sole_edge_across_minor_and_full_gc() {
     check_cached_graph(&eval);
 
     eval.with_gc_inhibited(|eval| {
-        let fresh = build(eval);
+        // `composition-get-gstring` now returns the cached gstring for this
+        // header (GNU `gstring_hash_table`), so a fresh input is built
+        // directly: the same header elements, a nil ID and no glyphs.
+        let header = Value::vector(
+            header_bits
+                .iter()
+                .map(|bits| unsafe { Value::from_bits(*bits) })
+                .collect(),
+        );
+        let fresh = Value::vector(vec![header, Value::NIL]);
         assert_ne!(fresh.bits(), cached_bits, "lookup must use a fresh input");
         let hit = font_shape_gstring(eval, vec![fresh, Value::NIL]).expect("same-key hit");
         assert_eq!(hit.bits(), cached_bits, "cache hit must preserve identity");

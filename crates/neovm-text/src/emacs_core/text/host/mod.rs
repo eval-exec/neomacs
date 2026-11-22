@@ -75,6 +75,27 @@ pub trait TextHost: EditHost {
     /// TEXT-HOST row.
     fn eval_sub(&mut self, form: Value) -> EvalResult;
 
+    /// GNU `composition_gstring_lookup_cache` (src/composite.c): the shaped
+    /// gstring cached for HEADER, when one exists.  A hit carries a fixnum
+    /// LGSTRING_ID, so the automatic-composition search can skip the rule
+    /// call and reuse the shaped result.  TEXT-HOST row.
+    fn composition_gstring_cache_lookup(&mut self, header: Value) -> Option<Value> {
+        let _ = header;
+        None
+    }
+
+    /// GNU `clear-composition-cache`: reset the gstring table, then clear the
+    /// face cache (GNU returns `(clear-face-cache t)`).  TEXT-HOST row.
+    fn composition_gstring_cache_clear(&mut self) -> EvalResult {
+        Ok(Value::NIL)
+    }
+
+    /// GNU `composition_gstring_cache_clear_font`: drop every cached gstring
+    /// whose header references FONT (`close-font`).  TEXT-HOST row.
+    fn composition_gstring_cache_clear_font(&mut self, font: Value) {
+        let _ = font;
+    }
+
     /// GNU `font->driver->text_extents` for character CH of FONT-OBJECT,
     /// with the driver's encoded font code.  `composition-get-gstring` fills
     /// every glyph with these before any automatic-composition rule runs

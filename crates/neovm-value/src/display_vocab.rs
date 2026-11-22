@@ -278,14 +278,127 @@ pub struct GlyphTextMetrics {
     pub descent: i64,
 }
 
-/// The cache key for shaped gstrings: the header's font family, pixel size
-/// (bit-exact), and the run's characters. Two gstrings with the same key
-/// shape identically, so one cache entry serves both.
+/// The cached shaped-gstring key, mirroring GNU's `gstring_hash_table` key:
+/// the full glyph-string header `[FONT-OBJECT C1 C2 ...]` under `equal`
+/// (src/composite.c:640-669).  Keying on family/pixel alone would collide a
+/// regular face with bold/italic of the same family and size, so the font
+/// part carries the durable backend identity (`stable_key`: file, collection
+/// face and variation coordinates), every Lisp-visible property pair in slot
+/// order, and the computed metrics.
+///
+/// The driver's OTF capability payload is deliberately NOT part of the key.
+/// It is a fresh Lisp object for every opened font object, so its identity
+/// bits would split two realizations of the same font, and its structure is
+/// derived entirely from the same file/face/variation that `stable_key`
+/// already names.  Two font objects with the same `stable_key` therefore
+/// shape identically, which is what GNU's cross-realization `equal` hit
+/// provides for the frame's cached font object.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct GstringFontIdentity {
+    pub stable_key: String,
+    pub fields: Vec<(String, String)>,
+    pub metrics: [i64; 7],
+}
+
+/// The cache key for shaped gstrings: the header's font identity plus the
+/// run's characters.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct GstringShapeCacheKey {
-    pub family: String,
-    pub pixel_size_bits: u64,
+    pub font: GstringFontIdentity,
     pub chars: Vec<i64>,
+}
+
+/// Build the shaped-gstring cache key from a gstring header.  `None` when the
+/// header does not name an opened font object, or contains a font field this
+/// session cannot fingerprint faithfully; the caller then must not use the
+/// cache rather than risk sharing a gstring across two different faces.
+pub fn gstring_cache_key_from_header(header: &Value) -> Option<GstringShapeCacheKey> {
+    gstring_cache_key_from_header_slots(header.as_vector_data()?)
+}
+
+/// [`gstring_cache_key_from_header`] over an already-borrowed glyph-string
+/// header slot slice, for callers that hold the header vector's elements.
+pub fn gstring_cache_key_from_header_slots(slots: &[Value]) -> Option<GstringShapeCacheKey> {
+    let font = *slots.first()?;
+    let data = font.as_font_data()?;
+    let fields = data.fields.as_slice();
+    if fields.is_empty() {
+        return None;
+    }
+    let mut normalized = Vec::with_capacity(fields.len() / 2);
+    let mut index = 1;
+    while index + 1 < fields.len() {
+        normalized.push((
+            font_value_fingerprint(fields[index], 0)?,
+            font_value_fingerprint(fields[index + 1], 0)?,
+        ));
+        index += 2;
+    }
+    let metrics = &data.metrics;
+    let chars = slots[1..]
+        .iter()
+        .map(|value| value.as_int())
+        .collect::<Option<Vec<_>>>()?;
+    Some(GstringShapeCacheKey {
+        font: GstringFontIdentity {
+            stable_key: data.identity.stable_key.clone(),
+            fields: normalized,
+            metrics: [
+                metrics.pixel_size,
+                metrics.height,
+                metrics.max_width,
+                metrics.ascent,
+                metrics.descent,
+                metrics.space_width,
+                metrics.average_width,
+            ],
+        },
+        chars,
+    })
+}
+
+/// A stable textual fingerprint of one font-object slot.  Handles the simple
+/// Lisp shapes a font object's property list carries, including nested lists
+/// and vectors; returns None for shapes it cannot fingerprint faithfully so
+/// the cache is skipped rather than mis-keyed.
+fn font_value_fingerprint(value: Value, depth: u8) -> Option<String> {
+    if depth > 6 {
+        return None;
+    }
+    Some(match value.kind() {
+        ValueKind::Nil => "nil".to_string(),
+        ValueKind::T => "t".to_string(),
+        ValueKind::Fixnum(number) => format!("i{number}"),
+        ValueKind::Float => format!("f{:016x}", value.as_number_f64()?.to_bits()),
+        ValueKind::Symbol(_) => format!("y{}", value.as_bare_symbol_name()?),
+        ValueKind::String => {
+            format!("s{:?}", value.as_lisp_string()?.as_bytes())
+        }
+        ValueKind::Cons => {
+            let car = font_value_fingerprint(value.cons_car(), depth + 1)?;
+            let cdr = font_value_fingerprint(value.cons_cdr(), depth + 1)?;
+            format!("({car}.{cdr})")
+        }
+        ValueKind::Veclike(VecLikeType::Vector) => {
+            let mut out = String::from("[");
+            for item in value.as_vector_data()? {
+                out.push_str(&font_value_fingerprint(*item, depth + 1)?);
+                out.push(',');
+            }
+            out.push(']');
+            out
+        }
+        ValueKind::Veclike(VecLikeType::Record) => {
+            let mut out = String::from("{");
+            for item in value.as_record_data()? {
+                out.push_str(&font_value_fingerprint(*item, depth + 1)?);
+                out.push(',');
+            }
+            out.push('}');
+            out
+        }
+        _ => return None,
+    })
 }
 
 // ---------------------------------------------------------------------------

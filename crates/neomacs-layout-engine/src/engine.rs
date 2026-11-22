@@ -1095,6 +1095,16 @@ enum LeafLayoutAttempt {
     /// attempt was answered from a subset and is discarded; the window loop
     /// retries once with the whole-buffer overlay view.
     OverlayViewExhausted,
+    /// The row walk painted an automatic composition whose shaped-gstring
+    /// width the visible-range resolution pass did not reach, so the row
+    /// would have measured the raw text instead of GNU's gstring width. The
+    /// attempt is discarded; the loop retries with the resolution range
+    /// widened to `resolve_from..resolve_through`, then (if that still
+    /// misses) to every span the snapshot captured.
+    AutomaticCompositionUnresolved {
+        resolve_from: usize,
+        resolve_through: usize,
+    },
     LogicalInputsChanged,
     MatrixCapacityUnavailable,
     /// A `when` clause the walk took by the structural rule evaluated nil
@@ -1384,6 +1394,42 @@ fn visible_char_bound(params: &WindowParams) -> (usize, usize) {
         first.saturating_sub(screenful),
         screenful.saturating_mul(4).max(8192),
     )
+}
+
+/// The span-start range of automatic compositions the row walk painted but
+/// the visible-range resolver did not cover, or `None` when the resolved
+/// range is sufficient.
+///
+/// `starts` are the snapshot's captured automatic-composition span starts in
+/// ascending order; the walk paints elements from `walk_start` up to (not
+/// including) `walk_end`, so a start in that half-open interval could have
+/// been painted and must lie in `resolve`.  Starts before `walk_start` are
+/// never painted by this walk (the snapshot's scan is deliberately wider than
+/// the window) and must not trigger a retry.  The returned range is the union
+/// of the missed starts, used to widen the resolver on the retry
+/// (`LeafLayoutAttempt::AutomaticCompositionUnresolved`).  This is the
+/// coverage proof behind "never measure the raw text as a fallback for a
+/// painted composition" (N-orphan A3).
+pub(crate) fn uncovered_automatic_composition_span_range(
+    starts: impl Iterator<Item = usize>,
+    walk_start: usize,
+    walk_end: usize,
+    resolve: &std::ops::Range<usize>,
+) -> Option<std::ops::Range<usize>> {
+    let mut missed: Option<std::ops::Range<usize>> = None;
+    for start in starts {
+        if start < walk_start
+            || start >= walk_end
+            || (start >= resolve.start && start < resolve.end)
+        {
+            continue;
+        }
+        missed = Some(match missed {
+            None => start..start.saturating_add(1),
+            Some(range) => range.start.min(start)..range.end.max(start.saturating_add(1)),
+        });
+    }
+    missed
 }
 
 fn admit_retained_frame_faces(
@@ -3162,6 +3208,11 @@ impl LayoutEngine {
                 };
                 let mut viewport_retry_phase = ViewportResolutionPhase::Resolve;
                 let mut overlay_view_full = false;
+                // Automatic-composition resolution range widened by the
+                // previous attempt's post-walk coverage check, if any
+                // (`None` = the normal visible-range pass). `(0, usize::MAX)`
+                // resolves every span the snapshot captured.
+                let mut automatic_composition_resolve: Option<(usize, usize)> = None;
                 let window_layout = loop {
                     // A leaf hook/visibility continuation can re-enter this
                     // loop without visiting the outer transaction restart.
@@ -3197,6 +3248,7 @@ impl LayoutEngine {
                         visibility_retry_budget,
                         viewport_retry_phase.clone(),
                         overlay_view_full,
+                        automatic_composition_resolve,
                         cursor_only_replay.take(),
                         scroll_replay.take(),
                         is_edit,
@@ -3269,6 +3321,23 @@ impl LayoutEngine {
                                 "whole-buffer overlay view reported exhaustion"
                             );
                             overlay_view_full = true;
+                            continue;
+                        }
+                        LeafLayoutAttempt::AutomaticCompositionUnresolved {
+                            resolve_from,
+                            resolve_through,
+                        } => {
+                            // The walk painted a composition the visible-range
+                            // pass did not resolve. Discard the attempt and
+                            // retry with the range widened to cover it; if that
+                            // second pass still misses (a rule may change the
+                            // walk's own extent), resolve every span the
+                            // snapshot captured, which cannot miss.
+                            automatic_composition_resolve =
+                                Some(match automatic_composition_resolve {
+                                    Some(_) => (0, usize::MAX),
+                                    None => (resolve_from, resolve_through),
+                                });
                             continue;
                         }
                         LeafLayoutAttempt::Effect(effect) => {
@@ -5883,6 +5952,11 @@ impl LayoutEngine {
         // A walk that consumed at or past a window-range overlay view must be
         // retried once with the whole-buffer view. `true` selects it.
         overlay_view_full: bool,
+        // A previous attempt's row walk painted an automatic composition
+        // outside the visible-range resolution pass (`None` = no widening).
+        // `Some(from, through)` resolves at least that range; `(0,
+        // usize::MAX)` resolves every span the snapshot captured.
+        automatic_composition_resolve: Option<(usize, usize)>,
         // Phase A (gather) classified this window's incremental fast path against
         // the *original* params (before any echo-buffer swap below), reading the
         // same retained key the predicate was snapshotted from. Phase B (here)
@@ -6235,11 +6309,43 @@ impl LayoutEngine {
         // display iterator reaches it; the snapshot is immutable across the
         // row walk (and may feed a worker), so resolve the visible spans'
         // gstring widths once, here, with the evaluator in scope.
+        //
+        // A cache miss can enter Lisp (the matched rule's FUNC). This call
+        // sits after `freshness_after_fontification` and before the buffer
+        // render's own capture, so a rule that moved any logical input fails
+        // the BufferBody revalidation below and retries instead of publishing
+        // rows built from pre-call inputs; because the shaped gstring is then
+        // cached, the retry does not enter Lisp again (GNU's `autocmp_chars`
+        // skips the rule for a gstring with a non-nil ID).
+        //
+        // The first pass bounds one screenful plus one line on either side so
+        // a rich buffer does not resolve every captured span on every layout.
+        // That character count is a heuristic (proportional fonts fit more
+        // characters per row than `text_width / char_width`), so the
+        // post-walk coverage check below verifies every painted automatic
+        // span was resolved and widens/retries instead of letting the row
+        // measure the raw text, which is exactly the pre-fix wrong advance.
+        let mut resolved_composition_range: Option<std::ops::Range<usize>> = None;
         if matches!(
             display_target,
             crate::display_property::DisplayPropertyTarget::Graphical
         ) {
-            layout_buffer.resolve_automatic_composition_advances(evaluator, buf_id);
+            let rows = params.source_interpretation_rows();
+            let cols = (params.text_bounds.width / params.char_width.max(1.0)).ceil() as usize;
+            let screenful = rows.saturating_mul(cols).max(1);
+            let visible_start = params.window_start.max(0) as usize;
+            let mut resolve_start = visible_start.saturating_sub(cols);
+            let mut resolve_end = visible_start.saturating_add(screenful).saturating_add(cols);
+            if let Some((from, through)) = automatic_composition_resolve {
+                resolve_start = resolve_start.min(from);
+                resolve_end = resolve_end.max(through);
+            }
+            layout_buffer.resolve_automatic_composition_advances(
+                evaluator,
+                buf_id,
+                resolve_start..resolve_end,
+            );
+            resolved_composition_range = Some(resolve_start..resolve_end);
         }
         let buffer = &layout_buffer;
 
@@ -6317,6 +6423,49 @@ impl LayoutEngine {
             cursor_only_replay,
             scroll_replay,
         );
+
+        // GNU's composition width comes from the shaped gstring, never from
+        // measuring the raw text. The visible-range resolution pass above is
+        // a character-count heuristic, so check the walk it produced: every
+        // automatic-composition span the walk could have painted must lie in
+        // the range the resolver covered. Otherwise discard the attempt and
+        // ask the loop for a wider pass (`usize::MAX` on the second miss
+        // covers every captured span, so this terminates).
+        if let (
+            BufferSourceRenderAttemptOutcome::Finished {
+                redisplay_positions,
+                cursor_only,
+                ..
+            },
+            Some(resolved),
+        ) = (&render_outcome, resolved_composition_range.clone())
+            && !*cursor_only
+        {
+            let walk_start = usize::try_from(resolved_window_start.get().max(0)).unwrap_or(0);
+            let walk_end =
+                neovm_core::buffer::CharPos0::from_lisp(redisplay_positions.window_end_lisp())
+                    .get();
+            if let Some(missed) = uncovered_automatic_composition_span_range(
+                layout_buffer.automatic_composition_span_starts(),
+                walk_start,
+                walk_end,
+                &resolved,
+            ) {
+                if let Some(attempt) = window_end_attempt.take() {
+                    evaluator.reject_redisplay_window_end_attempt(attempt);
+                }
+                let cols = (params.text_bounds.width / params.char_width.max(1.0)).ceil() as usize;
+                let resolve_from = resolved.start.min(missed.start);
+                let resolve_through = resolved
+                    .end
+                    .max(missed.end)
+                    .max(walk_end.saturating_add(cols));
+                return LeafLayoutAttempt::AutomaticCompositionUnresolved {
+                    resolve_from,
+                    resolve_through,
+                };
+            }
+        }
 
         // Body and chrome can evaluate arbitrary Lisp after fontification.
         // Rows are valid only if the complete typed source projection still

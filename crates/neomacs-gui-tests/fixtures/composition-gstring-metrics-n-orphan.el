@@ -73,6 +73,34 @@
           (n-orphan-dump-composition pos)
           (setq pos (1+ pos))))
 
+      ;; 5) The shaped-gstring cache contract (GNU
+      ;;    `composition_gstring_put_cache'): `font-shape-gstring' shapes a
+      ;;    fresh gstring and caches a COPY carrying a fixnum lgstring-id;
+      ;;    the input is not the cached object.  A second fresh gstring with
+      ;;    the same header returns that copy through the early header lookup
+      ;;    (src/font.c:4628-4634), and `composition-get-gstring' returns it
+      ;;    from its own header lookup (src/composite.c:1981-1988).  An ASCII
+      ;;    string gstring keeps the driver path deterministic.
+      (let* ((font (face-attribute 'default :font))
+             (proto (composition-get-gstring 0 1 font "x"))
+             (cold-a (copy-sequence proto))
+             (cold-b (copy-sequence proto))
+             (shaped-a (font-shape-gstring cold-a nil))
+             (shaped-b (font-shape-gstring cold-b nil))
+             (first (composition-get-gstring 0 1 font "x"))
+             (second (composition-get-gstring 0 1 font "x")))
+        (n-orphan-log
+         (format "cache-shape eq %s id-fixnum %s eq-source %s eq-get %s length %d"
+                 (eq shaped-a shaped-b)
+                 (and (fixnump (aref shaped-a 1)) t)
+                 (eq shaped-a cold-a)
+                 (eq first shaped-a)
+                 (length shaped-a)))
+        (n-orphan-log
+         (format "cache-get eq %s id-fixnum %s"
+                 (eq first second)
+                 (and (fixnump (aref first 1)) t))))
+
       ;; 3) The rule-adjusted advance reaches the display: the composition
       ;;    width of the lone mark, the pen after it, and the x of the
       ;;    following character must equal GNU's gstring width (WADJUST when
@@ -128,7 +156,34 @@
         (n-orphan-log (format "matchdata-after %S" (match-data t)))
         (n-orphan-log (format "matchdata-saved %S" saved))
         (n-orphan-log (format "matchdata-restored %s"
-                              (if (equal (match-data t) saved) "t" "nil")))))
+                              (if (equal (match-data t) saved) "t" "nil"))))
+
+      ;; 6) Once a shaped gstring is cached, a later composition search must
+      ;;    not call `auto-composition-function' again: GNU `autocmp_chars'
+      ;;    skips the rule for a gstring whose ID is non-nil
+      ;;    (src/composite.c:973).  A base + combining-mark sequence takes
+      ;;    `compose-gstring-for-graphic`'s default branch, which calls
+      ;;    `font-shape-gstring`, so the first search caches the shaped
+      ;;    gstring (src/font.c:4685 composition_gstring_put_cache); the lone
+      ;;    mark above only stores an adjustment and does not cache on this
+      ;;    path.  The second search must then report zero rule calls.
+      (erase-buffer)
+      (insert (decode-coding-string
+               (unibyte-string #x65 #xcc #x81 #x62) 'utf-8))
+      (goto-char (point-min))
+      (let ((calls 0))
+        (setq-local auto-composition-function
+                    (lambda (func from to font-object string direction)
+                      (setq calls (1+ calls))
+                      (auto-compose-chars
+                       func from to font-object string direction)))
+        (let ((comp (find-composition 1)))
+          (n-orphan-log
+           (format "cache-calls-cold %d span %S"
+                   (if (> calls 0) 1 0) (and comp t))))
+        (setq calls 0)
+        (find-composition 1)
+        (n-orphan-log (format "cache-calls-reshaped-search %d" calls))))
   (error (n-orphan-log (format "error %S" err))))
 
 (kill-emacs 0)

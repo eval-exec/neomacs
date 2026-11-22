@@ -3203,8 +3203,13 @@ pub(crate) fn font_xlfd_name(args: Vec<Value>) -> EvalResult {
 /// `(close-font FONT-OBJECT &optional FRAME)` -- close an open font object.
 ///
 /// NeoVM currently has no runtime font-object handles, so this validates the
-/// argument shape and returns nil for accepted objects.
-pub(crate) fn close_font(args: Vec<Value>) -> EvalResult {
+/// argument shape and returns nil for accepted objects.  GNU
+/// `composition_gstring_cache_clear_font` (src/composite.c:670-680) also drops
+/// every cached gstring whose header references this font object.
+pub(crate) fn close_font(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
     expect_min_args("close-font", &args, 1)?;
     expect_max_args("close-font", &args, 2)?;
     if !is_font_object(&args[0]) {
@@ -3213,6 +3218,8 @@ pub(crate) fn close_font(args: Vec<Value>) -> EvalResult {
             vec![Value::symbol("font-object"), args[0]],
         ));
     }
+    use neovm_text::emacs_core::text_host::TextHost;
+    eval.composition_gstring_cache_clear_font(args[0]);
     Ok(Value::NIL)
 }
 
@@ -5221,6 +5228,14 @@ pub(crate) fn font_shape_gstring(
         .as_vector_data()
         .expect("validated gstring header must be a vector")
         .clone();
+    // GNU `Ffont_shape_gstring` looks the header up in the shaped-gstring
+    // cache before checking that the header names a font object
+    // (src/font.c:4628-4634).
+    if let Some(key) = neovm_value::display_vocab::gstring_cache_key_from_header_slots(&header)
+        && let Some(cached) = eval.gstring_shape_cache_mut().get(&key).cloned()
+    {
+        return Ok(cached);
+    }
     if !is_font_object(&header[0]) {
         return Err(signal(
             LispCondition::WrongTypeArgument,
@@ -5301,18 +5316,14 @@ fn shape_gstring_with_driver(
     }
     composition_gstring_adjust_zero_width(&gstring);
 
-    // GNU: composition_gstring_put_cache — store the shaped gstring keyed by
-    // the header and stamp its ID slot; a later call with the same header
-    // returns the cached gstring instead of re-shaping.
-    let cache_key = gstring_shape_cache_key(&gstring);
-    let cache = eval.gstring_shape_cache_mut();
-    if let Some(cached) = cache.get(&cache_key) {
-        return Ok(cached.clone());
-    }
-    let id = cache.len() as i64;
-    gstring.set_vector_slot(1, Value::fixnum(id));
-    cache.insert(cache_key, gstring.clone());
-    Ok(gstring)
+    // GNU: composition_gstring_put_cache — store a COPY of the header and
+    // the shaped glyphs keyed by the header and stamp the copy's ID slot
+    // (src/composite.c:663-669); a later call with the same header returns
+    // that cached object instead of re-shaping.  The input is not the cached
+    // object, so `eq` distinguishes it from the returned gstring.  A header
+    // whose font fields cannot be fingerprinted is returned without an ID
+    // rather than mis-keyed.
+    Ok(eval.composition_gstring_put_cache(gstring))
 }
 
 /// GNU `composition_gstring_adjust_zero_width` (src/composite.c:798):
@@ -5378,24 +5389,6 @@ fn composition_gstring_adjust_zero_width(gstring: &Value) {
                 .unwrap_or(0)
         };
         index += 1;
-    }
-}
-
-/// The cache key for `gstring_shape_cache`: family + bit-exact pixel size +
-/// the run's characters.
-fn gstring_shape_cache_key(gstring: &Value) -> crate::emacs_core::font::GstringShapeCacheKey {
-    let slots = gstring.as_vector_data().expect("g");
-    let header = slots[0].as_vector_data().expect("header");
-    let (family, pixel_size) =
-        font_object_family_and_pixel_size(&header[0]).unwrap_or_else(|| (String::from("?"), 0.0));
-    let chars: Vec<i64> = header[1..]
-        .iter()
-        .map(|char_slot| char_slot.as_int().unwrap_or(0))
-        .collect();
-    crate::emacs_core::font::GstringShapeCacheKey {
-        family,
-        pixel_size_bits: pixel_size.to_bits(),
-        chars,
     }
 }
 

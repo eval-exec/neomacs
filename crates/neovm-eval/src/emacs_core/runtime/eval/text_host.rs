@@ -47,6 +47,33 @@ impl TextHost for Context {
         driver(font, ch)
     }
 
+    fn composition_gstring_cache_lookup(&mut self, header: Value) -> Option<Value> {
+        let key = neovm_value::display_vocab::gstring_cache_key_from_header(&header)?;
+        self.gstring_shape_cache.get(&key).copied()
+    }
+
+    fn composition_gstring_cache_clear(&mut self) -> EvalResult {
+        self.gstring_shape_cache.clear();
+        // GNU `Fclear_composition_cache` returns `(clear-face-cache t)`
+        // (src/composite.c:705).
+        self.eval_sub(Value::list(vec![
+            Value::symbol(neovm_value::intern::intern("clear-face-cache")),
+            Value::T,
+        ]))
+    }
+
+    fn composition_gstring_cache_clear_font(&mut self, font: Value) {
+        self.gstring_shape_cache.retain(|_, gstring| {
+            let font_of = gstring
+                .as_vector_data()
+                .and_then(|slots| slots.first())
+                .and_then(|header| header.as_vector_data())
+                .and_then(|header| header.first())
+                .copied();
+            !font_of.is_some_and(|cached| neovm_value::value::eq_value(&cached, &font))
+        });
+    }
+
     fn eval_sub(&mut self, form: Value) -> EvalResult {
         Context::eval_sub(self, form)
     }

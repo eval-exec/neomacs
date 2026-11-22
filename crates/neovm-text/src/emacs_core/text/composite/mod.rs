@@ -1498,13 +1498,14 @@ fn automatic_composition_enabled<H: TextHost>(ctx: &H, multibyte: bool) -> bool 
 /// evaluator against the displayed window's font.
 ///
 /// A font or shaping failure yields `None`, matching `autocmp_chars`'s nil
-/// return that keeps GNU's scan moving to the next candidate.  Two
-/// simplifications against `autocmp_chars` are deliberate: the font comes
-/// from `font-at` at the composition start rather than GNU's whole-range
-/// `font_range` walk (equivalent whenever one face covers the composition),
-/// and the rule function is invoked as `font-shape-gstring` rather than
-/// through `auto-composition-function` (identical for every default-table
-/// rule, all of which shape; user-installed wrapper functions are not run).
+/// return that keeps GNU's scan moving to the next candidate.  One
+/// simplification against `autocmp_chars` is deliberate: the font comes from
+/// `font-at` at the composition start rather than GNU's whole-range
+/// `font_range` walk (equivalent whenever one face covers the composition).
+/// Otherwise this mirrors `autocmp_chars`: an already-cached shaped gstring
+/// (non-nil LGSTRING_ID) is returned without running the rule, and otherwise
+/// the buffer-local `auto-composition-function` is called with the rule's
+/// FUNC (src/composite.c:941-975).
 fn shape_composition_gstring<H: TextHost>(
     ctx: &mut H,
     start: i64,
@@ -1527,6 +1528,16 @@ fn shape_composition_gstring<H: TextHost>(
         vec![Value::fixnum(start), Value::fixnum(end), font, string],
     )
     .ok()?;
+    // GNU `autocmp_chars` calls `auto-composition-function` only when the
+    // gstring has no ID (src/composite.c:973); a cached shaped gstring is
+    // reused as-is.
+    if gstring
+        .as_vector_data()
+        .and_then(|slots| slots.get(1))
+        .is_some_and(|id| !id.is_nil())
+    {
+        return Some(gstring);
+    }
     // GNU `autocmp_chars` runs the default `auto-composition-function`
     // (`auto-compose-chars`) with the matched rule's FUNC and the metric-
     // filled gstring; that default builds/looks up the gstring and calls
@@ -1536,6 +1547,14 @@ fn shape_composition_gstring<H: TextHost>(
     // buffer-local function and the rule's non-shaping branches.
     let auto_composition =
         ctx.visible_variable_value_or_nil(neovm_value::intern::intern("auto-composition-function"));
+    tracing::debug!(
+        target: "neovm_text::composition_search",
+        start,
+        font_object = font.is_font_object(),
+        auto_composition_nil = auto_composition.is_nil(),
+        auto_composition_kind = ?auto_composition.kind(),
+        "autocmp shape"
+    );
     if auto_composition.is_nil() {
         return None;
     }
@@ -2021,6 +2040,14 @@ pub fn composition_get_gstring<H: TextHost>(ctx: &mut H, args: Vec<Value>) -> Ev
     }];
     encoded.extend(segment.iter().map(|code| Value::fixnum(*code as i64)));
 
+    // GNU `Fcomposition_get_gstring` consults `gstring_hash_table` by the
+    // header before building the body (src/composite.c:1981-1988).  A hit is
+    // the previously SHAPED gstring with its ID set; returning it lets the
+    // automatic-composition search skip the rule call entirely on re-display.
+    let header_value = Value::vector(encoded.clone());
+    if let Some(cached) = ctx.composition_gstring_cache_lookup(header_value) {
+        return Ok(cached);
+    }
     let mut gstring = vec![Value::vector(encoded), Value::NIL];
     // GNU `fill_gstring_body` sets each glyph's FROM and TO to the
     // character's index in the gstring (src/composite.c:889-891).  With a
@@ -2178,10 +2205,11 @@ pub fn compose_string<H: crate::emacs_core::text_host::TextHost>(
 
 #[doc(hidden)]
 pub fn clear_cache<H: crate::emacs_core::text_host::TextHost>(
-    _ctx: &mut H,
+    ctx: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
-    clear_composition_cache(args)
+    expect_max_args("clear-composition-cache", &args, 0)?;
+    ctx.composition_gstring_cache_clear()
 }
 
 #[doc(hidden)]

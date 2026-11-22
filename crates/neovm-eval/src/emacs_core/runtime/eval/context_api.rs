@@ -1149,6 +1149,73 @@ impl Context {
         &mut self.gstring_shape_cache
     }
 
+    /// The next free ID for a cached shaped gstring: one past the largest ID
+    /// currently live.  GNU IDs are hash-table indices, so they are unique
+    /// among live entries and may be reused after `close-font` /
+    /// `clear-composition-cache` removes entries; `map.len()` would collide
+    /// with a live ID once the length falls below the highest assigned one.
+    #[doc(hidden)]
+    pub fn gstring_shape_cache_next_id(&self) -> i64 {
+        self.gstring_shape_cache
+            .values()
+            .filter_map(|gstring| {
+                gstring
+                    .as_vector_data()
+                    .and_then(|slots| slots.get(1))
+                    .and_then(|id| id.as_int())
+            })
+            .max()
+            .map_or(0, |id| id + 1)
+    }
+
+    /// GNU `composition_gstring_put_cache (gstring, -1)`
+    /// (src/composite.c:650-670): store a copy of GSTRING's header and of its
+    /// glyphs up to the first nil, keyed by the header, and return that copy
+    /// with its ID slot set.  The display path calls this after a rule
+    /// returns an unshaped gstring (`composition_reseat_it`,
+    /// src/composite.c:1410-1412), so the next search hits
+    /// `composition_get_gstring`'s cache and skips the rule entirely.
+    ///
+    /// A gstring that already carries an ID, or whose header cannot be
+    /// fingerprinted, is returned unchanged.  The input is not the cached
+    /// object: like GNU's copy, `eq` distinguishes them.
+    #[doc(hidden)]
+    pub fn composition_gstring_put_cache(&mut self, gstring: Value) -> Value {
+        let Some(slots) = gstring.as_vector_data() else {
+            return gstring;
+        };
+        if slots.len() < 2 || !slots[1].is_nil() {
+            return gstring;
+        }
+        let Some(header) = slots[0].as_vector_data() else {
+            return gstring;
+        };
+        let Some(key) = neovm_value::display_vocab::gstring_cache_key_from_header_slots(header)
+        else {
+            return gstring;
+        };
+        if let Some(cached) = self.gstring_shape_cache.get(&key) {
+            return cached.clone();
+        }
+        let glyph_count = slots[2..]
+            .iter()
+            .take_while(|glyph| !glyph.is_nil())
+            .count();
+        let id = self.gstring_shape_cache_next_id();
+        let mut copy_slots = Vec::with_capacity(2 + glyph_count);
+        copy_slots.push(Value::vector(header.to_vec()));
+        copy_slots.push(Value::fixnum(id));
+        for glyph in &slots[2..2 + glyph_count] {
+            let Some(glyph) = glyph.as_vector_data() else {
+                break;
+            };
+            copy_slots.push(Value::vector(glyph.to_vec()));
+        }
+        let copy = Value::vector(copy_slots);
+        self.gstring_shape_cache.insert(key, copy.clone());
+        copy
+    }
+
     /// Split borrow: the frame manager mutably and the two minibuffer
     /// selection slots mutably.
     #[doc(hidden)]

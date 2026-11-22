@@ -76,6 +76,10 @@ pub use types::*;
 #[path = "tests/test_composition.rs"]
 mod test_composition;
 
+#[cfg(test)]
+#[path = "tests/automatic_composition_coverage_test.rs"]
+mod automatic_composition_coverage_test;
+
 /// Carrier park (Green S-track): reset this crate's classified thread-local
 /// state. Registered with the neovm-core carrier pool by the editor binary.
 pub fn reset_carrier_tls() {

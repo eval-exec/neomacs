@@ -1000,8 +1000,20 @@ fn gstring_pixel_advance(gstring: Value) -> Option<f32> {
 }
 
 impl LayoutBufferSnapshot {
-    /// Resolve every visible automatic composition's gstring width on the
-    /// evaluator thread (GNU `autocmp_chars` + `composition_gstring_width`).
+    /// Start positions of every automatic-composition span this snapshot
+    /// captured, ascending. The leaf's post-walk coverage check uses them to
+    /// prove each painted composition had a resolved gstring width (and to
+    /// widen the resolution range otherwise), instead of letting the row
+    /// measure the raw text as a silent fallback.
+    pub(crate) fn automatic_composition_span_starts(&self) -> impl Iterator<Item = usize> + '_ {
+        self.automatic_composition_spans
+            .iter()
+            .map(|range| range.start().get())
+    }
+
+    /// Resolve every automatic composition in `resolve` to its gstring width
+    /// on the evaluator thread (GNU `autocmp_chars` +
+    /// `composition_gstring_width`).
     ///
     /// The snapshot owns the rule table and spans but cannot evaluate Lisp,
     /// and a prepared row job must not cross threads with live evaluator
@@ -1012,20 +1024,41 @@ impl LayoutBufferSnapshot {
     /// The search runs in the window's buffer so `font-at`, the buffer-local
     /// `auto-composition-function`, and the rule's spacing facts see the
     /// same context as a redisplay walk.
+    ///
+    /// `resolve` starts as the visible rows plus a line of margin; `usize::MAX`
+    /// (the widened retry) resolves everything the snapshot captured.  Each
+    /// resolved rule gstring is put in the evaluator's GNU-shaped-gstring
+    /// cache (`composition_gstring_put_cache`), so later layouts reuse it
+    /// without running the rule.
     pub(crate) fn resolve_automatic_composition_advances(
         &mut self,
         evaluator: &mut neovm_core::emacs_core::eval::Context,
         buffer_id: neovm_core::buffer::BufferId,
+        resolve: std::ops::Range<usize>,
     ) {
         if self.automatic_composition_spans.is_empty() {
             return;
         }
+        tracing::debug!(
+            target: "neomacs_layout_engine::composition_resolver",
+            spans = self.automatic_composition_spans.len(),
+            resolve_start = resolve.start,
+            resolve_end = resolve.end,
+            "resolve automatic composition advances"
+        );
         use neovm_core::emacs_core::edit_host::EditHost;
         let spans = self.automatic_composition_spans.clone();
         let mut advances = FxHashMap::default();
         let _ = evaluator.with_current_buffer_scope(buffer_id, |eval| {
             for span in &spans {
                 let start = span.start().get();
+                // Resolve only what this window's rows can reach.  The
+                // snapshot capture bound is several screenfuls; eagerly
+                // shaping every composition there costs Lisp per span per
+                // layout attempt and starved input on rich buffers.
+                if !resolve.contains(&start) {
+                    continue;
+                }
                 let pos = Value::fixnum(start as i64 + 1);
                 let Ok(result) = neovm_core::emacs_core::composite::find_composition_internal(
                     eval,
@@ -1036,11 +1069,23 @@ impl LayoutBufferSnapshot {
                 if !result.is_cons() {
                     continue;
                 }
+                tracing::debug!(
+                    target: "neomacs_layout_engine::composition_resolver",
+                    start,
+                    "automatic composition span found"
+                );
                 let rest = result.cons_cdr();
                 if !rest.is_cons() || result.cons_car().as_int() != Some(start as i64 + 1) {
                     continue;
                 }
                 let gstring = rest.cons_cdr().cons_car();
+                // GNU's display path caches the rule's gstring after
+                // `autocmp_chars` (`composition_reseat_it`,
+                // src/composite.c:1410-1412), even when the rule only stored
+                // an adjustment (`compose-gstring-for-graphic`'s lone-mark
+                // branch). The next layout's search then hits
+                // `composition_get_gstring`'s cache and skips the rule.
+                let gstring = eval.composition_gstring_put_cache(gstring);
                 if let Some(width) = gstring_pixel_advance(gstring) {
                     advances.insert(start, width);
                 }
