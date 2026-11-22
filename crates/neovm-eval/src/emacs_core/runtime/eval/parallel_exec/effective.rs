@@ -16,6 +16,7 @@
 use super::super::owner_bindings::{Channel, OwnerSlab, SlotState, SlotValue};
 use neovm_value::forward::TlsIndex;
 use neovm_value::intern::SymId;
+use neovm_value::symbol::parallel::PlainSymbolBacking;
 use neovm_value::value::Value;
 use std::marker::PhantomData;
 use std::rc::Rc;
@@ -289,6 +290,220 @@ pub(crate) fn default_bound_effective<S: OwnerSlots + ?Sized>(
 ) -> bool {
     match slots.slot_state(key.slot(), Channel::Default) {
         SlotState::NoBinding => canonical_bound(),
+        SlotState::Bound(slot) => slot.bound().is_some(),
+    }
+}
+
+/// Why a symbol cannot be admitted to the owner-local Plain fast path.
+///
+/// `NotPlain` is the value layer's `SymbolBacking::classify` returning `None`:
+/// a trapped write, a non-Plain value cell, a localized or forwarded variable,
+/// a host-projected variable, or a stale backing. E4-P2 may refine the reason
+/// once it owns the descriptor; the refusal stays typed either way.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PlainRefusal {
+    /// nil, t, a keyword or a `defconst` symbol: `setq` signals
+    /// `setting-constant`, so the operation stays on the serial path.
+    Constant,
+    /// Not an untrapped Plain or projected-Plain variable.
+    NotPlain,
+    /// A Plain variable without its owner-slot descriptor (E4-P2 materializes
+    /// unprojected descriptors at the structural boundary).
+    MissingProjection,
+    /// The backing was stale or absent.
+    StaleBacking,
+}
+
+/// One validated admission result. `Mint` is the only source of a production
+/// [`EffectivePlainKey`]; `Refuse` keeps the access on the serial path.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PlainAdmission {
+    Mint {
+        sym: SymId,
+        slot: TlsIndex,
+        channel: Channel,
+    },
+    Refuse(PlainRefusal),
+}
+
+impl PlainAdmission {
+    #[doc(hidden)]
+    pub(crate) const fn mint(sym: SymId, slot: TlsIndex, channel: Channel) -> Self {
+        Self::Mint { sym, slot, channel }
+    }
+
+    #[doc(hidden)]
+    pub(crate) const fn refuse(reason: PlainRefusal) -> Self {
+        Self::Refuse(reason)
+    }
+}
+
+/// Exhaustive admission over the value layer's [`PlainSymbolBacking`].
+///
+/// `backing` is `SymbolBacking::classify`'s result, so a new backing kind is a
+/// compile error here rather than a wildcard. `constant` is the symbol's
+/// constant flag (`nil`, `t`, keywords, `defconst`); `projected` is the owner
+/// slot descriptor published for a projected Plain variable. E4-P2 supplies
+/// both from the owner slab lease and C3; the harness supplies them directly.
+pub(crate) fn classify_plain_backing(
+    sym: SymId,
+    backing: Option<PlainSymbolBacking>,
+    constant: bool,
+    projected: Option<(TlsIndex, Channel)>,
+) -> PlainAdmission {
+    if constant {
+        return PlainAdmission::refuse(PlainRefusal::Constant);
+    }
+    match backing {
+        None => PlainAdmission::refuse(PlainRefusal::NotPlain),
+        // An untrapped Plain symbol with no projection still needs the owner
+        // slot descriptor E4-P2 materializes at the structural boundary.
+        Some(PlainSymbolBacking::Unprojected) => match projected {
+            Some((slot, channel)) => PlainAdmission::mint(sym, slot, channel),
+            None => PlainAdmission::refuse(PlainRefusal::MissingProjection),
+        },
+        Some(PlainSymbolBacking::Projected) => match projected {
+            Some((slot, channel)) => PlainAdmission::mint(sym, slot, channel),
+            None => PlainAdmission::refuse(PlainRefusal::MissingProjection),
+        },
+        Some(PlainSymbolBacking::VoidProjection) => match projected {
+            Some((slot, channel)) => PlainAdmission::mint(sym, slot, channel),
+            None => PlainAdmission::refuse(PlainRefusal::MissingProjection),
+        },
+    }
+}
+
+impl<'era> EffectivePlainKey<'era> {
+    /// Mint a key from a validated admission. Private fields stay private;
+    /// this is the only non-test constructor.
+    #[doc(hidden)]
+    pub(crate) fn from_admission(
+        admission: &PlainAdmission,
+        era: EraId,
+        shape: ShapeGeneration,
+    ) -> Result<Self, PlainRefusal> {
+        match *admission {
+            PlainAdmission::Mint { sym, slot, channel } => Ok(Self {
+                sym,
+                slot,
+                channel,
+                era,
+                shape,
+                _era: PhantomData,
+                _confined: PhantomData,
+            }),
+            PlainAdmission::Refuse(reason) => Err(reason),
+        }
+    }
+}
+
+/// The composed owner access shared by the E4 interpreter and the parallel VM:
+/// the owner slot view plus the canonical Plain storage. The production
+/// implementation is E4-P2 (owner slab lease + C3); the trait itself names no
+/// test type and the only E4-P1 implementation is the harness double.
+pub(crate) trait PlainAccess: OwnerSlotsMut {
+    /// Classify one symbol for this owner (admission only; no slot access).
+    fn admission(&self, sym: SymId) -> PlainAdmission;
+    /// Read canonical Plain storage (C3 in production).
+    fn canonical_read(&self, sym: SymId) -> Value;
+    /// Write canonical Plain storage (C3 in production).
+    fn canonical_write(&mut self, sym: SymId, value: Value);
+    /// Whether canonical Plain storage has a binding.
+    fn canonical_bound(&self, sym: SymId) -> bool;
+}
+
+/// One composed read: owner slot first, canonical storage only on `NoBinding`.
+pub(crate) fn effective_plain_read<A: PlainAccess + ?Sized>(
+    access: &A,
+    key: &EffectivePlainKey<'_>,
+) -> EffectiveRead {
+    match access.slot_state(key.slot(), key.channel()) {
+        SlotState::NoBinding => EffectiveRead::Canonical(access.canonical_read(key.symbol())),
+        SlotState::Bound(slot) => match slot.bound() {
+            Some(value) => EffectiveRead::OwnerBound(value),
+            None => EffectiveRead::OwnerVoid,
+        },
+    }
+}
+
+/// One composed write: a Bound owner slot is replaced; otherwise canonical.
+pub(crate) fn effective_plain_write<A: PlainAccess + ?Sized>(
+    access: &mut A,
+    key: &EffectivePlainKey<'_>,
+    value: Value,
+) -> EffectiveWrite {
+    let state = access.slot_state(key.slot(), key.channel());
+    match state {
+        SlotState::Bound(_) => {
+            access.set_slot_state(
+                key.slot(),
+                key.channel(),
+                SlotState::Bound(SlotValue::new(value)),
+            );
+            EffectiveWrite::OwnerSlot
+        }
+        SlotState::NoBinding => {
+            access.canonical_write(key.symbol(), value);
+            EffectiveWrite::Canonical
+        }
+    }
+}
+
+/// `boundp` through the composed rule: an owner void binding is unbound.
+pub(crate) fn effective_plain_bound<A: PlainAccess + ?Sized>(
+    access: &A,
+    key: &EffectivePlainKey<'_>,
+) -> bool {
+    match access.slot_state(key.slot(), key.channel()) {
+        SlotState::NoBinding => access.canonical_bound(key.symbol()),
+        SlotState::Bound(slot) => slot.bound().is_some(),
+    }
+}
+
+/// `default-value` through the same effective Default channel.
+pub(crate) fn effective_plain_default_read<A: PlainAccess + ?Sized>(
+    access: &A,
+    key: &EffectivePlainKey<'_>,
+) -> EffectiveRead {
+    match access.slot_state(key.slot(), Channel::Default) {
+        SlotState::NoBinding => EffectiveRead::Canonical(access.canonical_read(key.symbol())),
+        SlotState::Bound(slot) => match slot.bound() {
+            Some(value) => EffectiveRead::OwnerBound(value),
+            None => EffectiveRead::OwnerVoid,
+        },
+    }
+}
+
+/// `set-default` through the same effective Default channel.
+pub(crate) fn effective_plain_default_write<A: PlainAccess + ?Sized>(
+    access: &mut A,
+    key: &EffectivePlainKey<'_>,
+    value: Value,
+) -> EffectiveWrite {
+    let state = access.slot_state(key.slot(), Channel::Default);
+    match state {
+        SlotState::Bound(_) => {
+            access.set_slot_state(
+                key.slot(),
+                Channel::Default,
+                SlotState::Bound(SlotValue::new(value)),
+            );
+            EffectiveWrite::OwnerSlot
+        }
+        SlotState::NoBinding => {
+            access.canonical_write(key.symbol(), value);
+            EffectiveWrite::Canonical
+        }
+    }
+}
+
+/// `default-boundp` through the same effective Default channel.
+pub(crate) fn effective_plain_default_bound<A: PlainAccess + ?Sized>(
+    access: &A,
+    key: &EffectivePlainKey<'_>,
+) -> bool {
+    match access.slot_state(key.slot(), Channel::Default) {
+        SlotState::NoBinding => access.canonical_bound(key.symbol()),
         SlotState::Bound(slot) => slot.bound().is_some(),
     }
 }

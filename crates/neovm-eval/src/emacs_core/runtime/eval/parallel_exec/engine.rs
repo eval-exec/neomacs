@@ -21,8 +21,8 @@
 
 use super::dispatch::primitive_slot_by_name;
 use super::effective::{
-    EffectivePlainKey, EffectiveRead, EffectiveWrite, EraId, OwnerSlotsMut, ShapeGeneration,
-    bound_effective, read_effective, write_effective,
+    EffectivePlainKey, EffectiveRead, EffectiveWrite, EraId, PlainAccess, ShapeGeneration,
+    bound_effective, effective_plain_read, read_effective, write_effective,
 };
 use super::frames::{
     FrameArena, FrameId, FramePublishError, HandlerMark, InterpFrame, OwnerRecordMark, PollBudget,
@@ -42,7 +42,7 @@ use neovm_text::emacs_core::zlib::builtin_zlib_available_p;
 use neovm_value::error::{EvalResult, Flow, expect_args};
 use neovm_value::tagged::SymbolMode;
 use neovm_value::tagged::gc::RendezvousError;
-use neovm_value::value::Value;
+use neovm_value::value::{Value, symbol_id};
 use std::num::NonZeroU32;
 
 /// One serial-escape request. The real production trait arrives with READY-E2B.
@@ -240,7 +240,7 @@ pub(crate) struct Stage1<S, E, O, P> {
 
 impl<S, E, O, P> Stage1<S, E, O, P>
 where
-    S: OwnerSlotsMut,
+    S: PlainAccess,
     E: SerialEscape,
     O: SealedOps,
     P: OwnerPoll,
@@ -273,6 +273,10 @@ where
 
     pub(crate) fn poll_handler(&self) -> &P {
         &self.poll
+    }
+
+    pub(crate) fn slots(&self) -> &S {
+        &self.slots
     }
 
     /// Release the poll capability. An owner-backed impl returns its
@@ -577,9 +581,44 @@ where
             return self.eval_call(ctx, form);
         }
         if form.is_symbol(SymbolMode::Bare) && !form.is_nil() && form != Value::T {
-            return FormStep::Stop(self.record(EscapeClass::UnsupportedForm, form));
+            return self.eval_plain_symbol(form);
         }
         FormStep::Value(form)
+    }
+
+    /// A bare symbol is a Plain variable read through the composed rule. A
+    /// refused admission or a local void binding is one serial escape; a
+    /// missing symbol id cannot name an admitted variable.
+    fn eval_plain_symbol(&mut self, form: Value) -> FormStep {
+        let Some(sym) = symbol_id(&form, SymbolMode::Bare) else {
+            return FormStep::Stop(self.record(EscapeClass::UnsupportedForm, form));
+        };
+        let admission = self.slots.admission(sym);
+        let key = match EffectivePlainKey::from_admission(&admission, self.era, self.shape) {
+            Ok(key) => key,
+            Err(_) => return FormStep::Stop(self.record(EscapeClass::UnsupportedForm, form)),
+        };
+        match self.read_plain_access(&key) {
+            Ok(EffectiveRead::OwnerBound(value) | EffectiveRead::Canonical(value)) => {
+                FormStep::Value(value)
+            }
+            Ok(EffectiveRead::OwnerVoid) => {
+                FormStep::Stop(self.record(EscapeClass::UnsupportedForm, form))
+            }
+            Err(PlainStop::Escape(request)) => FormStep::Stop(StepOutcome::Escaped(request)),
+            Err(PlainStop::Poll(error)) => {
+                FormStep::Stop(StepOutcome::Fault(EngineFault::Poll(error)))
+            }
+        }
+    }
+
+    /// Read through the composed owner access; only a stale cached key polls.
+    fn read_plain_access(
+        &mut self,
+        key: &EffectivePlainKey<'_>,
+    ) -> Result<EffectiveRead, PlainStop> {
+        self.guard_key(key)?;
+        Ok(effective_plain_read(&self.slots, key))
     }
 
     fn eval_call(&mut self, ctx: &mut Context, form: Value) -> FormStep {

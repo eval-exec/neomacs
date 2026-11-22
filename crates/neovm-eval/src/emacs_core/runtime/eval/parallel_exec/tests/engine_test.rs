@@ -5,7 +5,7 @@ use super::super::owner_bindings::{Channel, SlotState, SlotValue};
 use super::dispatch::primitive_slot_by_name;
 use super::effective::{
     EffectivePlainKey, EffectiveRead, EffectiveWrite, EraId, OwnerSlots, OwnerSlotsMut,
-    ShapeGeneration,
+    PlainAccess, PlainAdmission, PlainRefusal, ShapeGeneration,
 };
 use super::engine::{
     CoreOutcome, EngineFault, EscapeClass, EscapeRequest, OwnerPoll, PlainStop, SealedOps,
@@ -46,9 +46,10 @@ use neovm_value::boolvec::builtin_bool_vector_p;
 use neovm_value::error::Flow;
 use neovm_value::forward::TlsIndex;
 use neovm_value::intern::NIL_SYM_ID;
+use neovm_value::tagged::SymbolMode;
 use neovm_value::tagged::gc::{Mutator, RendezvousError, TaggedHeap};
 use neovm_value::tagged::transport::SharedRoot;
-use neovm_value::value::{Value, eq_value};
+use neovm_value::value::{Value, eq_value, symbol_id};
 use std::cell::Cell;
 use std::num::NonZeroU32;
 use std::sync::mpsc;
@@ -369,19 +370,47 @@ impl SealedOps for HarnessSealed {
 
 struct TestSlots {
     state: SlotState,
+    admission: PlainAdmission,
+    canonical: Value,
+    canonical_reads: Cell<usize>,
+    canonical_writes: Cell<usize>,
 }
 
 impl TestSlots {
-    fn empty() -> Self {
+    fn with_state(state: SlotState, admission: PlainAdmission) -> Self {
         Self {
-            state: SlotState::NoBinding,
+            state,
+            admission,
+            canonical: Value::NIL,
+            canonical_reads: Cell::new(0),
+            canonical_writes: Cell::new(0),
         }
     }
 
+    fn empty() -> Self {
+        Self::with_state(
+            SlotState::NoBinding,
+            PlainAdmission::refuse(PlainRefusal::NotPlain),
+        )
+    }
+
     fn bound(value: Value) -> Self {
-        Self {
-            state: SlotState::Bound(SlotValue::new(value)),
-        }
+        Self::with_state(
+            SlotState::Bound(SlotValue::new(value)),
+            PlainAdmission::refuse(PlainRefusal::NotPlain),
+        )
+    }
+
+    fn bound_with_admission(value: Value, admission: PlainAdmission) -> Self {
+        Self::with_state(SlotState::Bound(SlotValue::new(value)), admission)
+    }
+
+    fn refused(admission: PlainAdmission) -> Self {
+        Self::with_state(SlotState::NoBinding, admission)
+    }
+
+    fn canonical_reads(&self) -> usize {
+        self.canonical_reads.get()
     }
 }
 
@@ -394,6 +423,30 @@ impl OwnerSlots for TestSlots {
 impl OwnerSlotsMut for TestSlots {
     fn set_slot_state(&mut self, _slot: TlsIndex, _channel: Channel, state: SlotState) {
         self.state = state;
+    }
+}
+
+impl PlainAccess for TestSlots {
+    fn admission(&self, sym: neovm_value::intern::SymId) -> PlainAdmission {
+        match self.admission {
+            PlainAdmission::Mint { sym: admitted, .. } if admitted == sym => self.admission,
+            refusal @ PlainAdmission::Refuse(_) => refusal,
+            _ => PlainAdmission::refuse(PlainRefusal::StaleBacking),
+        }
+    }
+
+    fn canonical_read(&self, _sym: neovm_value::intern::SymId) -> Value {
+        self.canonical_reads.set(self.canonical_reads.get() + 1);
+        self.canonical
+    }
+
+    fn canonical_write(&mut self, _sym: neovm_value::intern::SymId, value: Value) {
+        self.canonical_writes.set(self.canonical_writes.get() + 1);
+        self.canonical = value;
+    }
+
+    fn canonical_bound(&self, _sym: neovm_value::intern::SymId) -> bool {
+        true
     }
 }
 
@@ -1902,4 +1955,46 @@ fn poll_refusal_at_back_edge_unwinds_and_restarts() {
     assert_clear(&stepper);
     let again = stepper.start(&mut ctx, body(&[Value::fixnum(8)]), wide());
     assert_eq!(done_value(&mut stepper, again), Value::fixnum(8));
+}
+
+#[test]
+fn engine_reads_a_bound_plain_symbol() {
+    let mut ctx = context();
+    let sym = Value::symbol("pentry_plain_foo");
+    let id = symbol_id(&sym, SymbolMode::Bare).expect("interned test symbol");
+    let mut stepper = engine(TestSlots::bound_with_admission(
+        Value::fixnum(5),
+        PlainAdmission::mint(id, TlsIndex::VOID, Channel::Default),
+    ));
+    let outcome = stepper.start(&mut ctx, body(&[sym]), wide());
+    assert_eq!(done_value(&mut stepper, outcome), Value::fixnum(5));
+    assert!(stepper.escape_handler().requests.is_empty());
+    assert_eq!(
+        stepper.slots().canonical_reads(),
+        0,
+        "an owner-bound read never touches canonical storage"
+    );
+    assert_clear(&stepper);
+}
+
+#[test]
+fn engine_localized_symbol_escapes_once_and_touches_no_slot() {
+    let mut ctx = context();
+    let sym = Value::symbol("pentry_plain_localized");
+    let mut stepper = engine(TestSlots::refused(PlainAdmission::refuse(
+        PlainRefusal::NotPlain,
+    )));
+    let outcome = stepper.start(&mut ctx, body(&[sym]), wide());
+    match outcome {
+        StepOutcome::Escaped(request) => assert_eq!(request.class, EscapeClass::UnsupportedForm),
+        _other => panic!("expected one escape"),
+    }
+    assert_eq!(stepper.escape_handler().requests.len(), 1);
+    assert_eq!(
+        stepper.slots().canonical_reads(),
+        0,
+        "a refused admission does not read canonical storage"
+    );
+    // An escape keeps the top frame (settle's Escaped arm), so the arena is
+    // not empty here; assert_clear applies to Done/Fault outcomes only.
 }
