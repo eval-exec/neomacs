@@ -929,6 +929,31 @@ impl Context {
         )
     }
 
+    /// Drop the redisplay-scope revisions recorded for retired buffers.
+    ///
+    /// `body_redisplay_by_buffer` is keyed by `BufferId`, and a killed
+    /// buffer's id can be handed to a later buffer.  GNU keeps no such side
+    /// table: `clip_changed` and `prevent_redisplay_optimizations_p` live on
+    /// the buffer and die with it (src/buffer.c, `Fkill_buffer`).  A stale
+    /// entry would make a reused id inherit the dead buffer's body/prevent
+    /// revisions and refuse matrix reuse, so `kill-buffer` prunes every id it
+    /// retires, including the indirect buffers retired with their base.
+    #[doc(hidden)]
+    pub fn forget_buffer_redisplay_revisions(&mut self, buffers: &[BufferId]) {
+        for buffer in buffers {
+            self.body_redisplay_by_buffer.remove(buffer);
+        }
+    }
+
+    /// Whether redisplay-scope revisions are still recorded for BUFFER.
+    ///
+    /// The `kill-buffer` unit row uses this to tell a pruned entry from one
+    /// that was merely reset to zero.
+    #[doc(hidden)]
+    pub fn tracks_buffer_redisplay_revisions(&self, buffer: BufferId) -> bool {
+        self.body_redisplay_by_buffer.contains_key(&buffer)
+    }
+
     /// Cross GNU `update_menu_bar`'s rebuild boundary and schedule redisplay.
     #[doc(hidden)]
     pub fn request_menu_bar_rebuild(&mut self, reason: MenuBarRebuildReason) {

@@ -2338,6 +2338,7 @@ pub fn builtin_treesit_parser_delete(
     let _ = eval.treesit.mark_parser_deleted(parser_id);
     if need_to_gc_buffer {
         let _ = eval.edit.buffers.kill_buffer(buffer_id);
+        eval.forget_buffer_redisplay_revisions(&[buffer_id]);
     }
     Ok(Value::NIL)
 }
