@@ -474,16 +474,14 @@ pub fn builtin_fillarray(args: Vec<Value>) -> EvalResult {
                 ));
             }
 
-            let _ = args[0].with_lisp_string_mut(|lisp_str| {
-                lisp_str.mutate_bytes(|bytes| {
-                    if fill_len == 1 && len == size_byte {
-                        bytes.fill(fill_bytes[0]);
-                    } else {
-                        for (idx, byte) in bytes.iter_mut().enumerate() {
-                            *byte = fill_bytes[idx % fill_len];
-                        }
+            let _ = args[0].with_string_bytes_mut(|bytes| {
+                if fill_len == 1 && len == size_byte {
+                    bytes.fill(fill_bytes[0]);
+                } else {
+                    for (idx, byte) in bytes.iter_mut().enumerate() {
+                        *byte = fill_bytes[idx % fill_len];
                     }
-                });
+                }
             });
             Ok(args[0])
         }

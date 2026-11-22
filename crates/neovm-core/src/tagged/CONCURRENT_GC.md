@@ -498,6 +498,27 @@ The shared inactive mutation body remains uncharged: sealed owners already
 charge their own state around it. Ownership, promotion, and physical promotion
 telemetry remain unchanged by the image-byte exclusion.
 
+Typed serial insertion and fixed-length string edits report allocation only
+from the branch that materializes or grows storage. An existing-key overwrite
+or owned byte edit takes no backing snapshot or owner-heap lookup. Detached
+builders receive no serial reporter; sealed table edits retain their own sole
+billing. Unrestricted hash mutation retains a cold completion guard for
+whole-payload replacement and unwinding. The unrestricted string helper and
+its identity observer are gated behind test support; production string
+mutation is available only through the typed operations.
+
+Follow-up `N-gc-mutation-capability` is owned by gcpace, next after R4 lands.
+Extend the typed insert/grow/COW operations into a capability with explicit
+replacement and growth publication. Once every production mutation uses those
+operations, remove both generic completion guards and the initial/final
+backing ABA limitation. Until then, preserve the generic replacement contract.
+
+The internal design follows Rust's [slice views](https://doc.rust-lang.org/book/ch04-03-slices.html)
+and [disjoint borrowing](https://doc.rust-lang.org/nomicon/borrow-splitting.html):
+expose only the fixed byte extent when resizing is forbidden, and project the
+allocation counter independently of the live payload loan. The language-level
+budget remains defined by pinned GNU `alloc.c`, not by these internal choices.
+
 The image-hash census visits only a dedicated cold registry populated at
 owned image stamping and mapped hash registration, and removes owned entries
 before reclamation. Ordinary minor cycles never filter all owned or mapped

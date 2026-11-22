@@ -64,6 +64,9 @@ pub(crate) mod hook_publication;
 
 pub(crate) use bytecode_semantics::bytecode_semantics;
 pub mod flow_vocab;
+mod hash_mutation;
+#[doc(hidden)]
+pub use hash_mutation::HashTableWrite;
 #[doc(hidden)]
 pub mod jit_runtime;
 pub mod positions;
@@ -430,7 +433,7 @@ pub fn mutate_string_text_properties<R>(
 }
 
 pub fn clear_string_text_properties_for_value(value: Value) {
-    let _ = mutate::with_lisp_string_mut(value, |s| s.clear_intervals());
+    let _ = mutate::clear_string_intervals(value);
 }
 
 pub fn string_has_text_property_interval_tree(value: Value) -> bool {
@@ -1435,15 +1438,7 @@ impl HashTableStorage {
     }
 
     fn alloc_slot(&mut self, key: Value, value: Value) -> usize {
-        if let Some(slot) = self.free_slots.pop() {
-            debug_assert!(self.slots[slot].is_none());
-            self.slots[slot] = Some(HashTableEntry { key, value });
-            slot
-        } else {
-            let slot = self.slots.len();
-            self.slots.push(Some(HashTableEntry { key, value }));
-            slot
-        }
+        self.alloc_slot_with_growth(key, value, &mut |_| {})
     }
 
     pub fn insert(&mut self, hash_key: HashKey, key: Value, value: Value) -> Option<Value> {
@@ -2363,9 +2358,8 @@ impl LispHashTable {
     /// size, not a Rust capacity. Zero grows to 6; sizes through 64 grow by
     /// 4x; larger sizes grow by 2x. Backing maps grow with inserted entries.
     ///
-    /// `pub(crate)` so the restricted Lisp overlap can grow a table without
-    /// naming the evaluator. neovm-eval keeps its own copy of this policy.
-    #[cfg(any(test, feature = "test-support"))]
+    /// Shared by the typed serial writer and restricted Lisp without naming
+    /// the evaluator. The unrestricted evaluator path keeps the same policy.
     pub(crate) fn maybe_resize_for_insert(&mut self, inserting_new_key: bool) {
         if !inserting_new_key {
             return;
@@ -4038,6 +4032,31 @@ impl TaggedValue {
         unsafe { mutate::with_hash_table_mut_inactive(self, f) }
     }
 
+    /// Edit through operations that report only actual backing growth.
+    /// Unlike the unrestricted mutation closure, this capability cannot
+    /// replace the table or expose its storage, so overwrites need no census.
+    ///
+    /// # Safety
+    /// Tier-H must remain inactive until return. The closure must not invoke
+    /// Lisp or collect, and the mode decision must not span a GC safepoint.
+    /// The installed serialized owner must stay live and unchanged throughout
+    /// the closure: no heap installation change or owner retirement is allowed.
+    #[inline]
+    #[doc(hidden)]
+    pub unsafe fn with_hash_table_write_inactive<R>(
+        self,
+        f: impl FnOnce(&mut HashTableWrite<'_>) -> R,
+    ) -> Option<R> {
+        // The existing cold accessor charges lazy hydration before any
+        // mutable payload loan. Its shared reference ends at this statement.
+        self.as_hash_table()?;
+        // SAFETY: the caller retains the inactive serial mutation contract;
+        // the private body supplies the ordinary barriers and revision writes.
+        unsafe {
+            mutate::with_hash_table_mut_inactive(self, |table| f(&mut HashTableWrite::new(table)))
+        }
+    }
+
     /// Active mutation accessor for a caller that has already dispatched.
     #[inline]
     #[doc(hidden)]
@@ -4094,9 +4113,25 @@ impl TaggedValue {
         mutate::with_bytecode_data_mut_for_test(self, f)
     }
 
-    /// Mutate string data through the centralized tagged-runtime write path.
+    /// Fixture-only unrestricted string edits through the tagged write path.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn with_lisp_string_mut<R>(self, f: impl FnOnce(&mut LispString) -> R) -> Option<R> {
         mutate::with_lisp_string_mut(self, f)
+    }
+
+    /// Edit only the string's existing byte extent through its write barrier.
+    pub fn with_string_bytes_mut<R>(self, f: impl FnOnce(&mut [u8]) -> R) -> Option<R> {
+        mutate::with_string_bytes_mut(self, f)
+    }
+
+    /// Clear contents without permitting arbitrary backing replacement.
+    pub fn clear_string_contents(self) -> bool {
+        mutate::clear_string_contents(self)
+    }
+
+    /// Pin published bytecode storage without replacing an owned backing.
+    pub fn pin_string_immovable(self) -> bool {
+        mutate::pin_string_immovable(self)
     }
 
     /// See [`mutate::set_string_byte_same_char_count`].

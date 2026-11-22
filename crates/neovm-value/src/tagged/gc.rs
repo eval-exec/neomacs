@@ -2458,10 +2458,10 @@ mod memory_inventory;
 mod memory_registry;
 mod pacing_census;
 mod string_pacing;
-pub(crate) use pacing_census::SerialHashTableStorageCharge;
-pub(crate) use string_pacing::{
-    SerialStringStorageCharge, note_string_backing_allocation_in_store,
-};
+pub(crate) use pacing_census::{SerialHashTableStorageCharge, note_serial_backing_growth};
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use string_pacing::SerialStringStorageCharge;
+pub(crate) use string_pacing::note_string_backing_allocation_in_store;
 #[cfg(feature = "gc-memory-telemetry")]
 pub mod memory_telemetry;
 mod native_deferred;

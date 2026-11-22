@@ -155,6 +155,25 @@ impl HashIndex {
             .insert_unique(hash, IndexEntry { hash, key, slot }, |entry| entry.hash);
     }
 
+    /// Only an absent-key insertion can grow the index. Keep its capacity
+    /// observation out of overwrites, and let hashbrown decide whether a
+    /// tombstone can be reused instead of forcing an eager reserve.
+    #[inline]
+    pub(super) fn insert_new_with_growth(
+        &mut self,
+        hash: u64,
+        key: HashKey,
+        slot: usize,
+        report: &mut impl FnMut(usize),
+    ) {
+        let before = self.storage_bytes();
+        self.insert_new(hash, key, slot);
+        let grown = self.storage_bytes().saturating_sub(before);
+        if grown != 0 {
+            report(grown);
+        }
+    }
+
     /// The entry whose materialized key is `key`, when only the key is at
     /// hand. A key whose hash its materialized form decides is found by
     /// hash; any other (a structural `equal` key) by a scan, which is why

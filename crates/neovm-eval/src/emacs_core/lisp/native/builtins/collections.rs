@@ -1403,27 +1403,10 @@ fn builtin_puthash_values(
     match table.kind() {
         ValueKind::Veclike(VecLikeType::HashTable) => {
             check_mutable_hash_table(table)?;
-            let test = table.as_hash_table().unwrap().test;
             // SAFETY: the entry rejected Tier-H; this path calls no Lisp or GC.
             unsafe {
-                table.with_hash_table_mut_inactive(|ht| -> Result<(), Flow> {
-                    match ht
-                        .data
-                        .try_probe_for_insert(key_value, test, symbols_with_pos_enabled)?
-                    {
-                        HashProbe::Found(slot) => {
-                            if let Some(stored) = ht.data.slot_value_mut(slot) {
-                                *stored = value;
-                            }
-                        }
-                        HashProbe::Absent(hash) => {
-                            maybe_resize_hash_table_for_insert(ht, true);
-                            let key =
-                                key_value.to_hash_key_for_insert(test, symbols_with_pos_enabled);
-                            ht.data.insert_absent(hash, key, key_value, value);
-                        }
-                    }
-                    Ok(())
+                table.with_hash_table_write_inactive(|table| {
+                    table.put(key_value, value, symbols_with_pos_enabled)
                 })
             }
             .unwrap_or(Ok(()))?;

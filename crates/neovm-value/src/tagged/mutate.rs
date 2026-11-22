@@ -3,15 +3,19 @@
 //! These functions apply generational and concurrent write barriers in the
 //! tagged runtime.
 
-use crate::heap_types::{LispMarker, LispString, OverlayData};
+#[cfg(any(test, feature = "test-support"))]
+use crate::heap_types::LispString;
+use crate::heap_types::{LispMarker, OverlayData};
 #[cfg(any(test, feature = "test-support"))]
 use crate::tagged::bytecode::chunk::ByteCodeFunction;
 use crate::value::LispHashTable;
 use crate::value::text_props::TextPropertyTable;
 
 use super::collection_reads::{StoreState, WriteProjection, record_projected_write_in_store};
+#[cfg(any(test, feature = "test-support"))]
+use super::gc::SerialStringStorageCharge;
 use super::gc::{
-    HeapWriteKind, SerialStringStorageCharge, note_heap_slot_write_in_store, note_heap_write,
+    HeapWriteKind, note_heap_slot_write_in_store, note_heap_write,
     note_string_backing_allocation_in_store, with_store_state,
 };
 use super::header::{
@@ -546,6 +550,8 @@ pub(crate) fn with_string_text_props_mut<R>(
     Some(f(unsafe { (*ptr).data.intervals_mut() }))
 }
 
+/// Fixture-only unrestricted edits; production callers use typed string operations.
+#[cfg(any(test, feature = "test-support"))]
 #[inline]
 pub fn with_lisp_string_mut<R>(
     value: TaggedValue,
@@ -561,6 +567,86 @@ pub fn with_lisp_string_mut<R>(
     #[cfg(any(test, debug_assertions, feature = "test-support"))]
     let _guard = HeapMutClosureGuard::enter();
     Some(f(unsafe { &mut (*ptr).data }))
+}
+
+/// Edit a published string's existing byte extent. A slice cannot replace or
+/// grow its backing; only borrowed bytes need allocation accounting.
+#[inline]
+pub fn with_string_bytes_mut<R>(value: TaggedValue, f: impl FnOnce(&mut [u8]) -> R) -> Option<R> {
+    LispCollectionRevision::changed(value);
+    let ptr = value.as_string_ptr()? as *mut StringObj;
+    note_heap_write(value, HeapWriteKind::StringData);
+    #[cfg(any(test, debug_assertions, feature = "test-support"))]
+    let _guard = HeapMutClosureGuard::enter();
+    // SAFETY: the published string is exclusively borrowed until the closure
+    // ends. No callback, collector safepoint, or escaping payload loan is allowed.
+    let string = unsafe { &mut (*ptr).data };
+    if !string.has_owned_storage() {
+        let allocated = string.materialize_owned_storage();
+        // Bill before invoking f, including when its fixed-size edit unwinds.
+        with_store_state(|store| note_string_backing_allocation_in_store(store, allocated));
+    }
+    Some(string.mutate_fixed_bytes(f))
+}
+
+/// Clear bytes and properties through the published owner's mutation barrier.
+#[inline]
+pub fn clear_string_contents(value: TaggedValue) -> bool {
+    LispCollectionRevision::changed(value);
+    let Some(ptr) = value.as_string_ptr() else {
+        return false;
+    };
+    note_heap_write(value, HeapWriteKind::StringData);
+    #[cfg(any(test, debug_assertions, feature = "test-support"))]
+    let _guard = HeapMutClosureGuard::enter();
+    // SAFETY: this operation has serial access to the initialized string,
+    // with no callback or safepoint before the payload loan ends.
+    let allocated = unsafe {
+        (*ptr.cast_mut())
+            .data
+            .clear_contents_to_unibyte_allocation()
+    };
+    if allocated != 0 {
+        with_store_state(|store| note_string_backing_allocation_in_store(store, allocated));
+    }
+    true
+}
+
+/// Pin published bytecode storage; an owned payload remains in place.
+#[inline]
+pub fn pin_string_immovable(value: TaggedValue) -> bool {
+    LispCollectionRevision::changed(value);
+    let Some(ptr) = value.as_string_ptr() else {
+        return false;
+    };
+    note_heap_write(value, HeapWriteKind::StringData);
+    #[cfg(any(test, debug_assertions, feature = "test-support"))]
+    let _guard = HeapMutClosureGuard::enter();
+    // SAFETY: serial bytecode construction keeps the string live and uniquely
+    // mutated, with no callback, collection, or escaping payload loan.
+    let string = unsafe { &mut (*ptr.cast_mut()).data };
+    if !string.has_owned_storage() {
+        let allocated = string.materialize_owned_storage();
+        with_store_state(|store| note_string_backing_allocation_in_store(store, allocated));
+    }
+    string.pin_immovable();
+    true
+}
+
+/// Remove properties without changing the string's byte backing.
+#[inline]
+pub fn clear_string_intervals(value: TaggedValue) -> bool {
+    LispCollectionRevision::changed(value);
+    let Some(ptr) = value.as_string_ptr() else {
+        return false;
+    };
+    note_heap_write(value, HeapWriteKind::StringTextProps);
+    #[cfg(any(test, debug_assertions, feature = "test-support"))]
+    let _guard = HeapMutClosureGuard::enter();
+    // SAFETY: serial owner access outlives this metadata-only mutation, and
+    // clear_intervals enforces its interval-child SATB preimage barrier.
+    unsafe { (*ptr.cast_mut()).data.clear_intervals() };
+    true
 }
 
 /// Overwrite one byte of a string's text in place (see

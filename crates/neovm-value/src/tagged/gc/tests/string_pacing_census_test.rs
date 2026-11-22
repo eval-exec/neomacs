@@ -155,13 +155,13 @@ fn string_gc_allocation_charge_is_distinct_from_live_census() {
 }
 
 #[test]
-fn string_gc_published_backing_changes_charge_the_new_extent_once() {
+fn string_gc_typed_published_edits_charge_only_new_backing_extents() {
     let mut observed = Vec::new();
     for mode in [
-        "owned growth",
-        "owned replacement",
-        "owned replacement unwind",
-        "borrowed generic COW",
+        "owned fixed edit",
+        "owned fixed unwind",
+        "borrowed fixed edit",
+        "borrowed fixed unwind",
         "borrowed byte COW",
         "borrowed in-store COW",
     ] {
@@ -175,32 +175,18 @@ fn string_gc_published_backing_changes_charge_the_new_extent_once() {
         let value = heap.alloc_string(string);
         let before = heap.bytes_since_gc_exact();
         match mode {
-            "owned growth" => {
-                crate::tagged::mutate::with_lisp_string_mut(value, |string| {
-                    string.mutate_bytes(|bytes| bytes.reserve_exact(512));
-                })
-                .unwrap();
+            "owned fixed edit" | "borrowed fixed edit" => {
+                crate::tagged::mutate::with_string_bytes_mut(value, |bytes| bytes[0] = b'z')
+                    .unwrap();
             }
-            "owned replacement" => {
-                crate::tagged::mutate::with_lisp_string_mut(value, |string| {
-                    *string = LispString::from_utf8("abc");
-                })
-                .unwrap();
-            }
-            "owned replacement unwind" => {
+            "owned fixed unwind" | "borrowed fixed unwind" => {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    crate::tagged::mutate::with_lisp_string_mut(value, |string| {
-                        *string = LispString::from_utf8("abc");
-                        panic!("expected string backing unwind");
+                    crate::tagged::mutate::with_string_bytes_mut(value, |bytes| {
+                        bytes[0] = b'z';
+                        panic!("expected typed string edit unwind");
                     });
                 }));
                 assert!(result.is_err());
-            }
-            "borrowed generic COW" => {
-                crate::tagged::mutate::with_lisp_string_mut(value, |string| {
-                    string.mutate_bytes(|bytes| bytes[0] = b'z');
-                })
-                .unwrap();
             }
             "borrowed byte COW" => {
                 assert!(crate::tagged::mutate::set_string_byte_same_char_count(
@@ -227,7 +213,11 @@ fn string_gc_published_backing_changes_charge_the_new_extent_once() {
         observed.push((
             mode,
             heap.bytes_since_gc_exact() - before,
-            storage.payload_capacity_bytes,
+            if mode.starts_with("borrowed") {
+                storage.payload_capacity_bytes
+            } else {
+                0
+            },
         ));
         let charged = heap.bytes_since_gc_exact();
         assert!(crate::tagged::mutate::set_string_byte_same_char_count(
@@ -246,6 +236,99 @@ fn string_gc_published_backing_changes_charge_the_new_extent_once() {
         observed
             .iter()
             .all(|(_, charged, extent)| charged == extent),
-        "each newly published backing extent must be charged exactly once: {observed:?}"
+        "typed edits bill borrowed materialization once and owned edits zero: {observed:?}"
     );
+}
+
+#[test]
+fn string_gc_typed_byte_edits_charge_only_materialization_and_restore_shape() {
+    use crate::tagged::mutate::{
+        clear_string_contents, clear_string_intervals, pin_string_immovable, with_string_bytes_mut,
+    };
+
+    for borrowed in [false, true] {
+        for unwind in [false, true] {
+            let mut heap = TaggedHeap::new();
+            set_tagged_heap(&mut heap);
+            let string = if borrowed {
+                LispString::from_rodata_unibyte(b"abc\0")
+            } else {
+                LispString::from_unibyte(b"abc".to_vec())
+            };
+            let value = heap.alloc_string(string);
+            let before = heap.bytes_since_gc_exact();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                with_string_bytes_mut(value, |bytes| {
+                    bytes.copy_from_slice(b"xyz");
+                    if unwind {
+                        panic!("expected typed byte edit unwind");
+                    }
+                })
+                .unwrap();
+            }));
+            assert_eq!(result.is_err(), unwind);
+            let string = value.as_lisp_string().unwrap();
+            assert_eq!(string.as_bytes(), b"xyz");
+            assert_eq!(string.schars(), 3);
+            assert_eq!(string.sbytes(), 3);
+            // SAFETY: every live string includes its initialized trailing NUL.
+            assert_eq!(unsafe { *string.data().add(string.sbytes()) }, 0);
+            let allocated = if borrowed { string.owned_capacity() } else { 0 };
+            assert_eq!(heap.bytes_since_gc_exact() - before, allocated);
+            let charged = heap.bytes_since_gc_exact();
+            with_string_bytes_mut(value, |bytes| bytes.fill(b'a')).unwrap();
+            assert!(clear_string_intervals(value));
+            assert!(pin_string_immovable(value));
+            assert_eq!(heap.bytes_since_gc_exact(), charged);
+            assert!(value.as_lisp_string().unwrap().is_immovable());
+            full(&mut heap, &[value]);
+            assert_eq!(heap.live_bytes(), size_of::<StringObj>() + 3);
+        }
+    }
+
+    let mut heap = TaggedHeap::new();
+    set_tagged_heap(&mut heap);
+    let multibyte = heap.alloc_string(LispString::from_utf8("é"));
+    let before = heap.bytes_since_gc_exact();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        with_string_bytes_mut(multibyte, |bytes| {
+            bytes.copy_from_slice(b"aa");
+            panic!("expected multibyte shape unwind");
+        });
+    }));
+    assert!(result.is_err());
+    let string = multibyte.as_lisp_string().unwrap();
+    assert_eq!(string.schars(), 2, "fixed bytes may change character count");
+    assert_eq!(string.sbytes(), 2);
+    assert!(string.is_multibyte());
+    // SAFETY: the fixed-size mutation never exposes or removes this NUL.
+    assert_eq!(unsafe { *string.data().add(2) }, 0);
+    assert_eq!(heap.bytes_since_gc_exact(), before);
+
+    let borrowed = heap.alloc_string(LispString::from_rodata_unibyte(b"pin\0"));
+    let before = heap.bytes_since_gc_exact();
+    assert!(pin_string_immovable(borrowed));
+    assert_eq!(
+        heap.bytes_since_gc_exact() - before,
+        borrowed.as_lisp_string().unwrap().owned_capacity()
+    );
+    let before = heap.bytes_since_gc_exact();
+    assert!(clear_string_contents(borrowed));
+    assert_eq!(
+        heap.bytes_since_gc_exact(),
+        before,
+        "pinned clear is in place"
+    );
+    assert_eq!(borrowed.as_lisp_string().unwrap().as_bytes(), b"\0\0\0");
+
+    let large = heap.alloc_string(LispString::from_utf8(&"x".repeat(8192)));
+    let before = heap.bytes_since_gc_exact();
+    assert!(clear_string_contents(large));
+    let string = large.as_lisp_string().unwrap();
+    assert_eq!(
+        heap.bytes_since_gc_exact() - before,
+        string.owned_capacity()
+    );
+    assert!(string.as_bytes().iter().all(|byte| *byte == 0));
+    assert!(!string.is_multibyte());
 }

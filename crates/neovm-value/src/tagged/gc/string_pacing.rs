@@ -22,12 +22,14 @@ impl TaggedHeap {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum StringBacking {
     Borrowed,
     Owned { data: usize, capacity: usize },
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl StringBacking {
     fn snapshot(string: &crate::heap_types::LispString) -> Self {
         match string.owned_storage_identity() {
@@ -43,7 +45,7 @@ impl StringBacking {
 /// # Safety
 /// A non-null heap is the live, serialized mutator that owns this allocation.
 /// No callback, collection, or mutator retirement overlaps the scalar store.
-unsafe fn charge_backing(heap: *mut TaggedHeap, bytes: usize) {
+pub(super) unsafe fn charge_backing(heap: *mut TaggedHeap, bytes: usize) {
     if heap.is_null() || bytes == 0 {
         return;
     }
@@ -65,15 +67,16 @@ pub(crate) fn note_string_backing_allocation_in_store(store: &StoreState, bytes:
     unsafe { charge_backing(store.heap.get(), bytes) };
 }
 
-/// Observe published storage only; detached builders are billed when their
-/// final payload enters alloc_string. Generic edits may replace a backing
-/// without changing capacity, and their unwind path must also be charged.
+/// Fixture-only observer for unrestricted published edits. Production string
+/// operations bill their allocation branches without backing snapshots.
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) struct SerialStringStorageCharge {
     string: *const StringObj,
     before: StringBacking,
     heap: *mut TaggedHeap,
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl SerialStringStorageCharge {
     /// # Safety
     /// The initialized string and current owner outlive the guard. The
@@ -90,6 +93,7 @@ impl SerialStringStorageCharge {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl Drop for SerialStringStorageCharge {
     fn drop(&mut self) {
         // SAFETY: the caller's payload loan has ended, including on unwind,

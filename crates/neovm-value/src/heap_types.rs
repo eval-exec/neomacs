@@ -379,6 +379,17 @@ impl Drop for OwnedStringDataGuard<'_> {
     }
 }
 
+struct FixedStringBytesGuard<'a> {
+    string: &'a mut LispString,
+    byte_len: usize,
+}
+
+impl Drop for FixedStringBytesGuard<'_> {
+    fn drop(&mut self) {
+        self.string.recompute_size(self.byte_len);
+    }
+}
+
 // Read only by the JIT's inline string paths.
 #[cfg_attr(not(feature = "jit"), allow(dead_code))]
 impl LispString {
@@ -565,6 +576,16 @@ impl LispString {
         self.replace_owned_payload(payload);
     }
 
+    /// Materialize borrowed bytes for a published mutation. The caller owns
+    /// allocation accounting; detached builders continue to use ensure_owned.
+    pub(crate) fn materialize_owned_storage(&mut self) -> usize {
+        if self.storage_capacity != 0 {
+            return 0;
+        }
+        self.ensure_owned();
+        self.storage_capacity
+    }
+
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn owned_data_guard(&mut self) -> OwnedStringDataGuard<'_> {
         self.ensure_owned();
@@ -592,9 +613,8 @@ impl LispString {
     /// mutator anyway — harmless floating garbage at worst. No-op (one
     /// thread-local load) unless a concurrent mark is active.
     ///
-    /// The `mutate.rs` wrappers (`with_string_text_props_mut` /
-    /// `with_lisp_string_mut`) remain the required route for PUBLISHED strings:
-    /// they additionally maintain the dump remembered set and dirty-owner
+    /// The typed `mutate.rs` wrappers remain the required route for PUBLISHED
+    /// strings: they additionally maintain the dump remembered set and dirty-owner
     /// tracking for the owner value, which this value-only barrier cannot.
     fn note_interval_preimage_for_satb(&self) {
         if !crate::tagged::gc::concurrent_mark_active() {
@@ -1127,10 +1147,17 @@ impl LispString {
     /// Pinned bytecode storage stays in place for this mutation; GNU's unibyte
     /// conversion then demotes its marker. Borrowed dump or static bytes receive
     /// a separate zero payload.
-    /// Published owners must use the `with_lisp_string_mut` mutation wrapper.
+    /// Published owners must use the `clear_string_contents` mutation wrapper.
     #[doc(hidden)]
     pub fn clear_contents_to_unibyte(&mut self) {
+        self.clear_contents_to_unibyte_allocation();
+    }
+
+    /// Return newly allocated storage so a published owner can bill the
+    /// operation without observing backing identities around an in-place edit.
+    pub(crate) fn clear_contents_to_unibyte_allocation(&mut self) -> usize {
         let len = self.sbytes();
+        let mut allocated = 0;
         self.clear_intervals();
         if len != 0 || self.is_multibyte() {
             if self.storage_capacity != 0
@@ -1145,11 +1172,13 @@ impl LispString {
                 replacement.truncate(len);
                 self.erase_owned_payload();
                 self.replace_owned_payload(replacement);
+                allocated = self.storage_capacity;
             }
             self.size = len;
             self.size_byte = SIZE_BYTE_UNIBYTE_NORMAL;
         }
         note_string_bytes_changed();
+        allocated
     }
 
     /// Mutable text-property interval tree attached to this string.
@@ -1157,10 +1186,10 @@ impl LispString {
     /// SATB enforcement lives inside `ensure_intervals` (the pre-mutation
     /// child values are logged), so no caller can drop interval children
     /// unlogged. PUBLISHED strings must still be mutated via the `mutate.rs`
-    /// wrappers (`with_string_text_props_mut` / `with_lisp_string_mut`), which
-    /// also maintain the dump remembered set + dirty-owner tracking for the
-    /// OWNER value; direct calls are only appropriate on strings not yet
-    /// reachable from the Lisp graph (fresh locals under construction).
+    /// typed wrappers, which also maintain the dump remembered set and
+    /// dirty-owner tracking for the OWNER value. Direct calls are only
+    /// appropriate on strings not yet reachable from the Lisp graph (fresh
+    /// locals under construction).
     pub fn intervals_mut(&mut self) -> &mut TextPropertyTable {
         self.ensure_intervals()
     }
@@ -1233,6 +1262,7 @@ impl LispString {
     /// Capacity distinguishes in-place resizing; the address distinguishes
     /// same-capacity replacement, including empty buffers whose byte slice
     /// uses the shared empty-slice pointer. Borrowed bytes own no allocation.
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn owned_storage_identity(&self) -> Option<(usize, usize)> {
         (self.storage_capacity != 0).then_some((self.data as usize, self.storage_capacity))
     }
@@ -1273,6 +1303,25 @@ impl LispString {
         self.ensure_owned();
         // SAFETY: owned storage holds `sbytes() + 1` initialized bytes.
         unsafe { *(self.data as *mut u8).add(byte_pos) = byte };
+    }
+
+    /// Edit an existing byte extent without exposing capacity or its NUL.
+    /// Restore cached character counts even when the caller unwinds.
+    pub(crate) fn mutate_fixed_bytes<R>(&mut self, f: impl FnOnce(&mut [u8]) -> R) -> R {
+        if self.is_rodata() {
+            self.size_byte = SIZE_BYTE_UNIBYTE_NORMAL;
+        }
+        self.ensure_owned();
+        let byte_len = self.sbytes();
+        let guard = FixedStringBytesGuard {
+            string: self,
+            byte_len,
+        };
+        // SAFETY: owned storage has byte_len + 1 initialized bytes, and this
+        // exclusive loan excludes the trailing NUL and cannot grow the backing.
+        let bytes =
+            unsafe { std::slice::from_raw_parts_mut(guard.string.data as *mut u8, byte_len) };
+        f(bytes)
     }
 
     pub fn mutate_bytes<R>(&mut self, f: impl FnOnce(&mut Vec<u8>) -> R) -> R {

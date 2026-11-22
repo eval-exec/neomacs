@@ -6,6 +6,24 @@
 
 use super::*;
 
+/// Charge a completed serial backing allocation only on its allocating path.
+/// Shared storage receives this reporter from its published mutation capability;
+/// detached builders and sealed owners keep their own allocation accounting.
+#[cold]
+#[inline(never)]
+pub(crate) fn note_serial_backing_growth(bytes: usize) {
+    if bytes == 0 {
+        return;
+    }
+    with_store_state(|store| {
+        // SAFETY: this trusted reporter runs inside a serialized mutation with
+        // no callback or safepoint. The installed owner stays live; project
+        // only its allocation word, disjoint from the external table payload
+        // and the shared StoreState tail. Detached stores remain uncharged.
+        unsafe { super::string_pacing::charge_backing(store.heap.get(), bytes) };
+    });
+}
+
 #[derive(Default)]
 pub(super) struct ImageHashTableRegistry {
     tables: rustc_hash::FxHashSet<usize>,

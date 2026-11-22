@@ -2314,9 +2314,7 @@ pub fn builtin_clear_string(args: Vec<Value>) -> EvalResult {
     expect_args("clear-string", &args, 1)?;
     let _ = expect_lisp_string(&args[0])?;
     if args[0].is_string() {
-        let _ = args[0].with_lisp_string_mut(|lisp_str| {
-            lisp_str.clear_contents_to_unibyte();
-        });
+        let _ = args[0].clear_string_contents();
     }
     Ok(Value::NIL)
 }

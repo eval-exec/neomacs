@@ -6168,7 +6168,7 @@ fn build_byte_code_function(
     // rather than going through as_str() which requires valid UTF-8.
     let raw_bytes =
         neovm_value::tagged::header::LispByteVec::copy_from_slice(slots.code.as_bytes());
-    let _ = bytecode_str.with_lisp_string_mut(|string| string.pin_immovable());
+    let _ = bytecode_str.pin_string_immovable();
 
     // 3. Extract constants from vector
     let mut constants: Vec<Value> = slots.constants.as_slice().to_vec();
