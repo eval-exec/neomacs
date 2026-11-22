@@ -8,8 +8,10 @@
 
 use std::cell::{Cell, RefCell};
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BinaryHeap, HashMap};
+use std::collections::{BTreeMap, BinaryHeap};
 use std::rc::Rc;
+
+use rustc_hash::FxHashMap;
 
 use crate::buffer::BufferId;
 use neovm_value::error::Flow;
@@ -288,8 +290,8 @@ pub struct OverlayList {
     // the per-overlay revision each copy was made at. Writes bump only the
     // written overlay's revision; a deletion forgets its entry. The copies are
     // read only, so several range views can share one (see `GcTrace`).
-    snapshot_copy_revisions: RefCell<HashMap<u64, u64>>,
-    snapshot_copies: RefCell<HashMap<u64, SnapshotCopyEntry>>,
+    snapshot_copy_revisions: RefCell<FxHashMap<u64, u64>>,
+    snapshot_copies: RefCell<FxHashMap<u64, SnapshotCopyEntry>>,
 }
 #[cfg(any(test, feature = "test-support"))]
 pub struct OverlayList {
@@ -302,8 +304,8 @@ pub struct OverlayList {
     view_query_floor: Option<EmacsBytePos>,
     view_query_underflow: Cell<bool>,
     // See the production struct's comment.
-    snapshot_copy_revisions: RefCell<HashMap<u64, u64>>,
-    snapshot_copies: RefCell<HashMap<u64, SnapshotCopyEntry>>,
+    snapshot_copy_revisions: RefCell<FxHashMap<u64, u64>>,
+    snapshot_copies: RefCell<FxHashMap<u64, SnapshotCopyEntry>>,
 }
 
 /// An evaluator-owned immutable overlay index. Like overlay plist values,
@@ -660,6 +662,14 @@ impl OverlayList {
                         rear_advance: data.rear_advance,
                     });
                     push_scratch_gc_root(copy);
+                    // Several range views may share this one copy. Attaching
+                    // a view re-points the copy's Weak position handle at that
+                    // view's interval tree, but every observer answers range
+                    // queries from its OWN index, and the memo only reuses an
+                    // entry while its range, advance flags and buffer are
+                    // identical. Whichever tree the handle names therefore
+                    // reports the same range for this identity; a changed
+                    // live range makes a fresh copy instead.
                     if memoize {
                         self.snapshot_copies.borrow_mut().insert(
                             serial,
@@ -1214,8 +1224,8 @@ impl OverlayList {
             content_dirty: Cell::new(false),
             view_query_floor: None,
             view_query_underflow: Cell::new(false),
-            snapshot_copy_revisions: RefCell::new(HashMap::new()),
-            snapshot_copies: RefCell::new(HashMap::new()),
+            snapshot_copy_revisions: RefCell::new(FxHashMap::default()),
+            snapshot_copies: RefCell::new(FxHashMap::default()),
         }
     }
 
