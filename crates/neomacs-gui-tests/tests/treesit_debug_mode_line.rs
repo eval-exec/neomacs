@@ -20,6 +20,8 @@ fn go_grammar_and_multibyte_mode_line_render_with_debug_logging() {
     ));
     std::fs::create_dir_all(&artifacts).unwrap();
     let ready = artifacts.join("ready");
+    let receipt = artifacts.join("presentation.sexp");
+    let _ = std::fs::remove_file(&receipt);
     let session = neomacs_infra::display::start_sway(
         &artifacts,
         "output * resolution 1800x900\nxwayland disable\nseat seat0 fallback true\n",
@@ -45,7 +47,11 @@ fn go_grammar_and_multibyte_mode_line_render_with_debug_logging() {
         "NEOMACS_TEST_GRAMMAR_USER_DIR",
         grammar.parent().unwrap().to_string_lossy(),
     )
-    .with_env("NEOMACS_TEST_TREESIT_READY", ready.to_string_lossy());
+    .with_env("NEOMACS_TEST_TREESIT_READY", ready.to_string_lossy())
+    .with_env(
+        "NEOMACS_GUI_PRESENTATION_RECEIPT",
+        receipt.to_string_lossy(),
+    );
     for (key, value) in session.env() {
         plan = plan.with_env(key.clone(), value.clone());
     }
@@ -55,10 +61,25 @@ fn go_grammar_and_multibyte_mode_line_render_with_debug_logging() {
             GuiRunOptions::with_timeout(Duration::from_secs(30)),
         )
         .unwrap();
-    assert!(!result.timed_out, "{result:#?}");
-    assert_eq!(result.exit_code, Some(0), "{result:#?}");
-    assert_eq!(result.status, GuiRunStatus::Passed, "{result:#?}");
-    assert!(ready.exists(), "fixture did not complete");
+    let editor_state = neomacs_gui_tests::last_editor_state_line(&result.artifacts.stderr);
+    assert!(
+        !result.timed_out,
+        "{result:#?}\nlast editor state: {editor_state}"
+    );
+    assert_eq!(
+        result.exit_code,
+        Some(0),
+        "{result:#?}\nlast editor state: {editor_state}"
+    );
+    assert_eq!(
+        result.status,
+        GuiRunStatus::Passed,
+        "{result:#?}\nlast editor state: {editor_state}"
+    );
+    assert!(
+        ready.exists(),
+        "fixture did not complete; last editor state: {editor_state}"
+    );
     let snapshot: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(&result.artifacts.frame_snapshot_json).unwrap(),
     )
@@ -74,8 +95,14 @@ fn go_grammar_and_multibyte_mode_line_render_with_debug_logging() {
             text.push('\n');
         }
     }
-    assert!(text.contains("Parsed go: source_file"), "{text}");
-    assert!(text.contains(&format!("{}…END", "a".repeat(118))), "{text}");
+    assert!(
+        text.contains("Parsed go: source_file"),
+        "{text}\nlast editor state: {editor_state}"
+    );
+    assert!(
+        text.contains(&format!("{}…END", "a".repeat(118))),
+        "{text}\nlast editor state: {editor_state}"
+    );
     let image = image::open(format!(
         "{}.png",
         result.artifacts.frame_snapshot_json.display()
@@ -110,5 +137,8 @@ fn go_grammar_and_multibyte_mode_line_render_with_debug_logging() {
             }
         }
     }
-    assert!(painted_ellipsis, "mode-line ellipsis was not painted");
+    assert!(
+        painted_ellipsis,
+        "mode-line ellipsis was not painted; last editor state: {editor_state}"
+    );
 }

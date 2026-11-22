@@ -591,7 +591,11 @@ fn real_gui_image_size_oracle_matches_gnu_emacs() {
     let gnu_emacs = gnu_emacs_binary();
 
     let artifact_root = workspace_root.join("target/neomacs-gui-tests");
-    let dir = artifact_root.join(backend.slug());
+    // Per-run result directory: a loaded failure must not be overwritten by a
+    // later quiet rerun before its diff is inspected (B74A-1 evidence loss).
+    let dir = artifact_root
+        .join(backend.slug())
+        .join(format!("image-size-oracle-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let gnu_result_path = dir.join("image-size-oracle.gnu-result.el");
     let neomacs_result_path = dir.join("image-size-oracle.neomacs-result.el");
