@@ -669,6 +669,27 @@ pub(crate) fn sync_live_frame_font_state(
     frame_id: FrameId,
     resolution: &LiveFrameFontResolution,
 ) -> Result<(), Flow> {
+    // The old public name stops being reachable from the frame when the
+    // opened font is installed. Minimum callbacks can collect before a
+    // failed hook restores it, so Rust stack storage alone is insufficient.
+    let saved = neovm_eval::emacs_core::eval::save_scratch_gc_roots();
+    if let Some(value) = eval
+        .frame_manager()
+        .get(frame_id)
+        .and_then(|frame| frame.known_parameter(FrameParam::Font))
+    {
+        neovm_eval::emacs_core::eval::push_scratch_gc_root(value);
+    }
+    let result = sync_live_frame_font_state_rooted(eval, frame_id, resolution);
+    neovm_eval::emacs_core::eval::restore_scratch_gc_roots(saved);
+    result
+}
+
+fn sync_live_frame_font_state_rooted(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    frame_id: FrameId,
+    resolution: &LiveFrameFontResolution,
+) -> Result<(), Flow> {
     let Some(frame) = eval.frame_manager().get(frame_id) else {
         return Ok(());
     };

@@ -174,6 +174,8 @@ struct ChromeResizeFixture {
     eval: Context,
     frame_id: crate::window::FrameId,
     requests: std::rc::Rc<std::cell::RefCell<Vec<GuiFrameHostRequest>>>,
+    initial_height: u32,
+    menu_height: u32,
 }
 
 impl ChromeResizeFixture {
@@ -197,7 +199,13 @@ impl ChromeResizeFixture {
             ("left-fringe", Value::fixnum(0)),
             ("right-fringe", Value::fixnum(0)),
             ("internal-border-width", Value::fixnum(0)),
-            ("menu-bar-lines", Value::fixnum(1)),
+            // GNU NS projects its application menu globally, with no frame
+            // menu rows (nsfns.m:610). This host-only fixture models that
+            // allocation without loading frame.el or creating an AppKit menu.
+            (
+                "menu-bar-lines",
+                Value::fixnum(if cfg!(target_os = "macos") { 0 } else { 1 }),
+            ),
             ("tool-bar-lines", Value::fixnum(1)),
             ("tab-bar-lines", Value::fixnum(0)),
             ("min-width", Value::fixnum(10)),
@@ -206,8 +214,11 @@ impl ChromeResizeFixture {
             frame.set_parameter(Value::symbol(key), value);
         }
         frame.sync_bar_heights_from_parameters();
-        // 560 text pixels, a 16px menu and the established 34px toolbar model.
-        frame.resize_pixelwise(800, 610);
+        // Keep the text allocation fixed across frontend chrome models. GNU
+        // NS has a global menu; GTK reserves a menu band in this window.
+        let menu_height = frame.menu_bar_height;
+        let initial_height = 560 + frame.external_bar_height();
+        frame.resize_pixelwise(800, initial_height);
         let host = RecordingDisplayHost::with_resolved_frame_font(resolved_frame_font(
             "Chrome Mono",
             "ChromeMono-Regular",
@@ -230,6 +241,8 @@ impl ChromeResizeFixture {
             eval,
             frame_id,
             requests,
+            initial_height,
+            menu_height,
         }
     }
 
@@ -244,7 +257,8 @@ impl ChromeResizeFixture {
         let actual = self
             .eval
             .eval_str(
-                "(list (frame-width) (frame-height) (frame-native-height) (frame-char-height))",
+                "(list (frame-parameter nil 'width) (frame-parameter nil 'height)
+                       (frame-native-height) (frame-char-height))",
             )
             .unwrap();
         assert_eq!(
@@ -304,7 +318,7 @@ fn toolbar_implied_resize_honors_true_parameter_list_and_force_inhibition() {
                 .get(fixture.frame_id)
                 .unwrap()
                 .height,
-            610
+            fixture.initial_height
         );
         fixture.assert_geometry(100, 37, 594);
     }
@@ -359,7 +373,10 @@ fn toolbar_noop_is_silent_and_same_alist_explicit_size_wins_once() {
             .unwrap();
         assert_eq!(fixture.requests.borrow().len(), 1);
         let request = fixture.requests.borrow()[0].clone();
-        assert_eq!((request.width, request.height), (720, 656));
+        assert_eq!(
+            (request.width, request.height),
+            (720, 640 + fixture.menu_height)
+        );
         fixture.acknowledge(&request);
         fixture.assert_geometry(90, 40, 640);
     }
@@ -675,7 +692,10 @@ fn font_minima_skip_invalid_policy_only_when_both_axes_require_enlargement() {
             fixture.acknowledge(&request);
             let geometry = fixture
                 .eval
-                .eval_str("(list (frame-width) (frame-height) (frame-char-height))")
+                .eval_str(
+                    "(list (frame-parameter nil 'width) (frame-parameter nil 'height)
+                           (frame-char-height))",
+                )
                 .unwrap();
             let geometry = list_to_vec(&geometry).unwrap();
             assert!(geometry[0].as_int().unwrap() >= 120);
@@ -692,5 +712,100 @@ fn font_minima_skip_invalid_policy_only_when_both_axes_require_enlargement() {
             );
             assert!(fixture.requests.borrow().is_empty());
         }
+    }
+}
+
+#[test]
+fn font_minimum_gc_keeps_error_restore_name_alive_and_releases_scratch_roots() {
+    use neovm_eval::emacs_core::eval::save_scratch_gc_roots;
+
+    const OLD_NAME: &str = "old font name only reachable before the minimum hook";
+    for invalid_policy in [true, false] {
+        let mut fixture = ChromeResizeFixture::new();
+        let mut host = RecordingDisplayHost::with_resolved_frame_font(remapped_mono_font_metrics());
+        host.resized = fixture.requests.clone();
+        fixture.eval.set_display_host(Box::new(host));
+        let policy = if invalid_policy {
+            "'(unrelated . 7)"
+        } else {
+            "nil"
+        };
+        fixture
+            .eval
+            .eval_str(&format!(
+                "(modify-frame-parameters nil '((min-width . nil) (min-height . nil)))
+                 (setq neomacs--minimum-gc-count 0)
+                 (fset 'frame-windows-min-size
+                       (lambda (&rest ignored)
+                         (garbage-collect)
+                         (setq neomacs--minimum-gc-count (1+ neomacs--minimum-gc-count))
+                         (setq frame-inhibit-implied-resize {policy})
+                         1))"
+            ))
+            .unwrap();
+        // Allocate directly into the frame slot. No Lisp binding, parsed
+        // string constant, or retained Rust Value keeps this old name alive
+        // once the new font replaces it before the minimum callbacks.
+        fixture
+            .eval
+            .frame_manager_mut()
+            .get_mut(fixture.frame_id)
+            .unwrap()
+            .set_known_parameter(FrameParam::Font, Value::string(OLD_NAME));
+        let roots_before = save_scratch_gc_roots();
+        let result = fixture
+            .eval
+            .eval_str(
+                r#"(condition-case e
+                       (progn
+                         (internal-set-lisp-face-attribute
+                          'default :font "Remapped Mono-24" nil)
+                         'ok)
+                     (error (car e)))"#,
+            )
+            .unwrap();
+        assert_eq!(save_scratch_gc_roots(), roots_before);
+        assert_eq!(
+            result,
+            Value::symbol(if invalid_policy {
+                "wrong-type-argument"
+            } else {
+                "ok"
+            })
+        );
+        assert!(
+            fixture
+                .eval
+                .eval_str("neomacs--minimum-gc-count")
+                .unwrap()
+                .as_int()
+                .unwrap()
+                >= 2,
+            "both effectful minimum callbacks must collect before policy is checked"
+        );
+        let public_font = fixture
+            .eval
+            .frame_manager()
+            .get(fixture.frame_id)
+            .unwrap()
+            .known_parameter(FrameParam::Font)
+            .unwrap();
+        // Check allocated ownership before reading a possibly freed payload,
+        // so the counterfactual fails safely rather than dereferencing it.
+        assert!(
+            fixture
+                .eval
+                .tagged_heap()
+                .owns_heap_value_for_test(public_font)
+        );
+        let public_name = public_font.as_lisp_string().unwrap().as_utf8_str().unwrap();
+        if invalid_policy {
+            assert_eq!(public_name, OLD_NAME);
+            assert!(fixture.requests.borrow().is_empty());
+        } else {
+            assert_ne!(public_name, OLD_NAME);
+            assert_eq!(fixture.requests.borrow().len(), 1);
+        }
+        assert_eq!(save_scratch_gc_roots(), roots_before);
     }
 }
