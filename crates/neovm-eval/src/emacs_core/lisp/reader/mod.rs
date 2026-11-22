@@ -1043,7 +1043,6 @@ impl KeyboardInputRuntime for super::eval::Context {
 /// the symbol module, which must not name a byte-code item.
 pub(crate) trait ObarrayReadSymbolsExt {
     fn intern_member_symbols_in(&mut self, value: Value);
-    fn intern_member_symbols_in_1(&mut self, value: Value, seen: &mut rustc_hash::FxHashSet<usize>);
 }
 
 impl ObarrayReadSymbolsExt for Obarray {
@@ -1051,109 +1050,109 @@ impl ObarrayReadSymbolsExt for Obarray {
     /// obarray. Non-canonical `make-symbol` objects stay uninterned, as in
     /// GNU.
     fn intern_member_symbols_in(&mut self, value: Value) {
+        // The walk is a LIFO worklist, not Rust recursion: the graph size is
+        // the caller's data (a loaded file, a cache, a keymap), so recursion
+        // depth grew with it and could exhaust the evaluator stack (issue
+        // #590: an ETAF library cache reached thousands of frames before the
+        // mount even started). Children are pushed in reverse so the visit
+        // order stays the reader's left-to-right depth-first order.
+        //
         // Cycle detection must use object *identity*, not `Value`'s `==`
         // (which is structural `equal`).  A `Vec` + `contains` here was
         // O(n^2) deep-`equal` over every loaded form -- the dominant cost of
         // startup.  Track visited heap objects by their tagged-pointer bits.
         let mut seen = rustc_hash::FxHashSet::default();
-        self.intern_member_symbols_in_1(value, &mut seen);
-    }
-
-    fn intern_member_symbols_in_1(
-        &mut self,
-        value: Value,
-        seen: &mut rustc_hash::FxHashSet<usize>,
-    ) {
-        match value.kind() {
-            ValueKind::Symbol(id) => self.ensure_interned_global_id(id),
-            ValueKind::Cons => {
-                if !seen.insert(value.bits()) {
-                    return;
+        let mut stack = vec![value];
+        while let Some(value) = stack.pop() {
+            match value.kind() {
+                ValueKind::Symbol(id) => self.ensure_interned_global_id(id),
+                ValueKind::Cons => {
+                    if !seen.insert(value.bits()) {
+                        continue;
+                    }
+                    stack.push(value.cons_cdr());
+                    stack.push(value.cons_car());
                 }
-                self.intern_member_symbols_in_1(value.cons_car(), seen);
-                self.intern_member_symbols_in_1(value.cons_cdr(), seen);
+                ValueKind::Veclike(
+                    VecLikeType::Vector
+                    | VecLikeType::Record
+                    | VecLikeType::Lambda
+                    | VecLikeType::Macro,
+                ) => {
+                    if !seen.insert(value.bits()) {
+                        continue;
+                    }
+                    if let Some(slots) = value
+                        .as_vector_data()
+                        .or_else(|| value.as_record_data())
+                        .or_else(|| value.closure_slots())
+                    {
+                        stack.extend(slots.iter().rev().copied());
+                    }
+                }
+                ValueKind::Veclike(VecLikeType::CharTable) => {
+                    if !seen.insert(value.bits()) {
+                        continue;
+                    }
+                    if let Some(slots) = value.char_table_external_slots() {
+                        stack.extend(slots.into_iter().rev());
+                    }
+                }
+                ValueKind::Veclike(VecLikeType::SubCharTable) => {
+                    if !seen.insert(value.bits()) {
+                        continue;
+                    }
+                    if let Some(table) = value.as_sub_char_table_obj() {
+                        stack.extend(table.contents.iter().rev().copied());
+                    }
+                }
+                ValueKind::Veclike(VecLikeType::HashTable) => {
+                    if !seen.insert(value.bits()) {
+                        continue;
+                    }
+                    if let Some(table) = value.as_hash_table() {
+                        // Visit every key, then every value, in table order;
+                        // the snapshots are forward iterators, so reverse them
+                        // through a temporary buffer for the LIFO worklist.
+                        let keys: Vec<Value> = table.key_snapshots().copied().collect();
+                        let values: Vec<Value> = table.data.values().copied().collect();
+                        stack.extend(values.into_iter().rev());
+                        stack.extend(keys.into_iter().rev());
+                    }
+                }
+                ValueKind::Veclike(VecLikeType::ByteCode) => {
+                    if !seen.insert(value.bits()) {
+                        continue;
+                    }
+                    if let Some(bytecode) = value.get_bytecode_data() {
+                        for slot in bytecode.extra_slots.iter().rev() {
+                            stack.push(*slot);
+                        }
+                        if let Some(interactive) = bytecode.interactive {
+                            stack.push(interactive);
+                        }
+                        if let Some(doc_form) = bytecode.doc_form {
+                            stack.push(doc_form);
+                        }
+                        if let Some(env) = bytecode.env {
+                            stack.push(env);
+                        }
+                        for constant in bytecode.constants.iter().rev() {
+                            stack.push(*constant);
+                        }
+                        stack.push(bytecode.arglist);
+                    }
+                }
+                ValueKind::Veclike(VecLikeType::SymbolWithPos) => {
+                    if !seen.insert(value.bits()) {
+                        continue;
+                    }
+                    if let Some(symbol) = value.as_symbol_with_pos_sym() {
+                        stack.push(symbol);
+                    }
+                }
+                _ => {}
             }
-            ValueKind::Veclike(
-                VecLikeType::Vector
-                | VecLikeType::Record
-                | VecLikeType::Lambda
-                | VecLikeType::Macro,
-            ) => {
-                if !seen.insert(value.bits()) {
-                    return;
-                }
-                if let Some(slots) = value
-                    .as_vector_data()
-                    .or_else(|| value.as_record_data())
-                    .or_else(|| value.closure_slots())
-                {
-                    for slot in slots.iter().copied() {
-                        self.intern_member_symbols_in_1(slot, seen);
-                    }
-                }
-            }
-            ValueKind::Veclike(VecLikeType::CharTable) => {
-                if !seen.insert(value.bits()) {
-                    return;
-                }
-                if let Some(slots) = value.char_table_external_slots() {
-                    for slot in slots {
-                        self.intern_member_symbols_in_1(slot, seen);
-                    }
-                }
-            }
-            ValueKind::Veclike(VecLikeType::SubCharTable) => {
-                if !seen.insert(value.bits()) {
-                    return;
-                }
-                if let Some(table) = value.as_sub_char_table_obj() {
-                    for slot in table.contents.iter().copied() {
-                        self.intern_member_symbols_in_1(slot, seen);
-                    }
-                }
-            }
-            ValueKind::Veclike(VecLikeType::HashTable) => {
-                if !seen.insert(value.bits()) {
-                    return;
-                }
-                if let Some(table) = value.as_hash_table() {
-                    for key_value in table.key_snapshots().copied() {
-                        self.intern_member_symbols_in_1(key_value, seen);
-                    }
-                    for value in table.data.values().copied() {
-                        self.intern_member_symbols_in_1(value, seen);
-                    }
-                }
-            }
-            ValueKind::Veclike(VecLikeType::ByteCode) => {
-                if !seen.insert(value.bits()) {
-                    return;
-                }
-                if let Some(bytecode) = value.get_bytecode_data() {
-                    self.intern_member_symbols_in_1(bytecode.arglist, seen);
-                    for constant in bytecode.constants.iter().copied() {
-                        self.intern_member_symbols_in_1(constant, seen);
-                    }
-                    if let Some(env) = bytecode.env {
-                        self.intern_member_symbols_in_1(env, seen);
-                    }
-                    if let Some(doc_form) = bytecode.doc_form {
-                        self.intern_member_symbols_in_1(doc_form, seen);
-                    }
-                    if let Some(interactive) = bytecode.interactive {
-                        self.intern_member_symbols_in_1(interactive, seen);
-                    }
-                    for slot in bytecode.extra_slots.iter().copied() {
-                        self.intern_member_symbols_in_1(slot, seen);
-                    }
-                }
-            }
-            ValueKind::Veclike(VecLikeType::SymbolWithPos) => {
-                if let Some(symbol) = value.as_symbol_with_pos_sym() {
-                    self.intern_member_symbols_in_1(symbol, seen);
-                }
-            }
-            _ => {}
         }
     }
 }
@@ -1164,3 +1163,7 @@ impl ObarrayReadSymbolsExt for Obarray {
 #[cfg(test)]
 #[path = "tests/raw_bytes_test.rs"]
 mod raw_bytes_tests;
+
+#[cfg(test)]
+#[path = "tests/intern_walk_test.rs"]
+mod intern_walk_tests;

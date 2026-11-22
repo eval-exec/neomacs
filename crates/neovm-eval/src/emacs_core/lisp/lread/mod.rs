@@ -204,6 +204,12 @@ fn eval_forms_from_lisp_source_streaming(
             if let Some(cursor) = eval.load_read_cursors.last_mut() {
                 cursor.pos = next_pos;
             }
+            // GNU's readevalloop reads through `read`, which interns every
+            // symbol token into Vobarray as it reads (src/lread.c:4674-4709).
+            // This buffer loop reads the value directly, so publish the
+            // read form's canonical symbols before evaluating it, exactly as
+            // the file-loading streaming loops do.
+            eval.obarray_mut().intern_member_symbols_in(form);
 
             let eval_roots = eval.save_specpdl_roots();
             eval.push_specpdl_root(form);
