@@ -234,6 +234,9 @@ mod stalled_tls;
 #[path = "startup_failure.rs"]
 mod startup_failure;
 
+#[path = "startup_image_cache.rs"]
+mod startup_image_cache;
+
 #[path = "startup_user_settings.rs"]
 mod startup_user_settings;
 
