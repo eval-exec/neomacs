@@ -997,7 +997,150 @@ impl Glyph {
             }
         }
     }
+}
 
+/// GNU `CHARACTER_WIDTH`, injected by the layer that owns the char-width table.
+///
+/// The display protocol deliberately does not link the VM's width table, so
+/// both terminal consumers (the TTY rasterizer and [`TextRowGeometry`]) take
+/// the same function pointer. Keeping one value for both guarantees the
+/// right-aligned origin the cursor uses is the origin the rasterizer paints.
+#[derive(Clone, Copy)]
+pub struct TerminalCharWidths(fn(char) -> usize);
+
+impl TerminalCharWidths {
+    pub const fn new(char_width: fn(char) -> usize) -> Self {
+        Self(char_width)
+    }
+
+    /// GNU `CHARACTER_WIDTH` of `ch`, in terminal cells.
+    pub fn cells(self, ch: char) -> usize {
+        (self.0)(ch)
+    }
+}
+
+impl std::fmt::Debug for TerminalCharWidths {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("TerminalCharWidths")
+    }
+}
+
+/// Terminal cells written for one TEXT_AREA glyph, plus the run-member padding
+/// glyphs the rasterizer consumes as part of it.
+///
+/// This is the shared per-glyph rule behind both the TTY rasterizer's
+/// `text_area_terminal_cells` and the cursor geometry, so the right-aligned
+/// origin and the painted cells cannot disagree.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TerminalGlyphCells {
+    /// Cells the rasterizer writes for the glyph itself.
+    pub cells: u16,
+    /// Following glyphs consumed by this one (their cells are already counted).
+    pub consumed_paddings: usize,
+}
+
+/// Whether `glyph` is a padding cell that belongs to the preceding composite
+/// run rather than a standalone wide-character second cell.
+pub fn is_run_member_padding_cell(glyph: &Glyph) -> bool {
+    glyph.padding
+        && match &glyph.glyph_type {
+            GlyphType::Char { ch } => *ch != ' ',
+            GlyphType::Composite { .. } | GlyphType::AutomaticComposite { .. } => true,
+            _ => false,
+        }
+}
+
+/// Cell accounting for the TEXT_AREA glyph at `index`.
+///
+/// Mirrors the TTY rasterizer's consumption rules without touching a grid:
+/// run-member paddings after a Composite/AutomaticComposite are owned by it,
+/// a standalone padding is one blank cell, a zero-width character advances
+/// nothing, and a wide base without an explicit padding cell writes two.
+pub fn terminal_glyph_cells(
+    glyphs: &[Glyph],
+    index: usize,
+    widths: TerminalCharWidths,
+) -> Option<TerminalGlyphCells> {
+    let glyph = glyphs.get(index)?;
+    let following = &glyphs[index + 1..];
+    if glyph.padding {
+        return Some(TerminalGlyphCells {
+            cells: 1,
+            consumed_paddings: 0,
+        });
+    }
+    let cells = match &glyph.glyph_type {
+        GlyphType::AutomaticComposite { text, terminal } => {
+            let cells = terminal.cells.iter().fold(0u16, |cells, cell| {
+                cells.saturating_add(u16::from(cell.width_cols.max(1)))
+            });
+            let source_paddings = text.chars().count().saturating_sub(1);
+            let consumed = following
+                .iter()
+                .take(source_paddings)
+                .take_while(|next| is_run_member_padding_cell(next))
+                .count();
+            return Some(TerminalGlyphCells {
+                cells,
+                consumed_paddings: consumed,
+            });
+        }
+        GlyphType::Composite { .. } => {
+            let run_paddings = following
+                .iter()
+                .take_while(|next| is_run_member_padding_cell(next))
+                .count();
+            // The run members are painted as part of this glyph's cells, so
+            // the row walk must skip them; returning them here keeps the
+            // rasterizer's consumption identical to the painted span.
+            let cells = if run_paddings == 0 {
+                1
+            } else {
+                u16::try_from(run_paddings)
+                    .unwrap_or(u16::MAX)
+                    .saturating_add(1)
+            };
+            return Some(TerminalGlyphCells {
+                cells,
+                consumed_paddings: run_paddings,
+            });
+        }
+        GlyphType::Stretch { width_cols } => (*width_cols).max(1),
+        GlyphType::Surface { width_cols, .. } => (*width_cols).max(1),
+        GlyphType::Glyphless { .. } => 1,
+        GlyphType::Char { ch } if widths.cells(*ch) == 0 => 0,
+        _ => {
+            let next_is_explicit_padding =
+                glyph.wide && following.first().is_some_and(|next| next.padding);
+            if glyph.wide && !next_is_explicit_padding {
+                2
+            } else {
+                1
+            }
+        }
+    };
+    Some(TerminalGlyphCells {
+        cells,
+        consumed_paddings: 0,
+    })
+}
+
+/// Terminal cells the TTY rasterizer writes for a TEXT_AREA glyph vector.
+///
+/// The single authority for the terminal row width: right-aligned terminal
+/// rows and the TTY cursor geometry both call this, so a zero-width RLM/LRM or
+/// a composite's padding cells shift both by the same amount.
+pub fn terminal_text_area_cells(glyphs: &[Glyph], widths: TerminalCharWidths) -> u16 {
+    let mut cells = 0u16;
+    let mut index = 0usize;
+    while let Some(glyph_cells) = terminal_glyph_cells(glyphs, index, widths) {
+        cells = cells.saturating_add(glyph_cells.cells);
+        index += 1 + glyph_cells.consumed_paddings;
+    }
+    cells
+}
+
+impl Glyph {
     /// Pointer-paint primitive produced when this glyph is materialized.
     ///
     /// Keep this exhaustive beside [`GlyphType`]: a pointer run may only name

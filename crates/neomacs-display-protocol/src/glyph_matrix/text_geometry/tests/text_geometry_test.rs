@@ -3,6 +3,18 @@ use crate::frame_glyphs::GlyphRowRole;
 use crate::glyph_matrix::Glyph;
 use crate::types::FaceId;
 
+/// The test stand-in for GNU `CHARACTER_WIDTH`: RLM/LRM and the other bidi
+/// formatting controls are zero-width; everything used here is one cell.
+fn terminal_widths() -> TerminalCharWidths {
+    fn cells(ch: char) -> usize {
+        match ch as u32 {
+            0x200B..=0x200F | 0x202A..=0x202E | 0x2060..=0x206F => 0,
+            _ => 1,
+        }
+    }
+    TerminalCharWidths::new(cells)
+}
+
 #[test]
 fn visual_indices_and_materialized_columns_use_distinct_mappings() {
     let mut row = GlyphRow::new(GlyphRowRole::Text);
@@ -95,6 +107,7 @@ fn rtl_composite_slot_uses_the_mirrored_visual_cell() {
         Rect::new(0.0, 0.0, 80.0, 16.0),
         8.0,
         TextGeometryUnits::TerminalCells,
+        terminal_widths(),
     );
     // used = 8 (line-end blank) + 16 (two-cell run) -> origin 56.
     assert_eq!(geometry.origin_x(), 56.0);
@@ -168,6 +181,7 @@ fn glyph_index_converts_to_materialized_slot_across_a_stretch() {
         Rect::new(0.0, 0.0, 80.0, 16.0),
         8.0,
         TextGeometryUnits::TerminalCells,
+        terminal_widths(),
     );
     let cursor_glyph = VisualTextGlyphIndex::new(2);
     let x_at_glyph = geometry.x_at_glyph(cursor_glyph).expect("cursor glyph");
@@ -181,4 +195,96 @@ fn glyph_index_converts_to_materialized_slot_across_a_stretch() {
         Some(x_at_glyph),
         "the raw glyph index must not be used as a slot"
     );
+}
+
+/// A zero-width character consumes no terminal cell, so it must not shift a
+/// right-aligned row's origin.  Before the shared cell rule, the terminal
+/// geometry counted it as one cell (the rasterizer counted zero), and the
+/// cursor origin sat a column left of the painted text.
+#[test]
+fn terminal_origin_ignores_zero_width_characters_like_the_rasterizer() {
+    let mut row = GlyphRow::new(GlyphRowRole::Text);
+    row.reversed_p = true;
+    row.glyphs[GlyphArea::Text.index()] = vec![
+        Glyph::char('\u{200f}', FaceId::new(0), 0), // RLM
+        Glyph::char('a', FaceId::new(0), 1).with_pixel_width(8.0),
+    ];
+    let geometry = TextRowGeometry::new_with_units(
+        &row,
+        Rect::new(0.0, 0.0, 80.0, 16.0),
+        8.0,
+        TextGeometryUnits::TerminalCells,
+        terminal_widths(),
+    );
+    // One painted cell (the RLM writes nothing) in an 80px row: 72.
+    assert_eq!(geometry.origin_x(), 72.0);
+    assert_eq!(geometry.x_at_slot(TextSlotColumn::new(0)), Some(72.0));
+    assert_eq!(geometry.x_at_slot(TextSlotColumn::new(1)), Some(80.0));
+    // The RLM shares the 'a' cell, so the glyph-array mapping agrees.
+    assert_eq!(
+        geometry.x_at_glyph(VisualTextGlyphIndex::new(1)),
+        Some(72.0)
+    );
+    assert_eq!(
+        geometry.slot_of_glyph(VisualTextGlyphIndex::new(1)),
+        Some(TextSlotColumn::new(0))
+    );
+}
+
+/// A contextual-shaping run is a base Composite plus one run-member padding
+/// per following grapheme; the terminal paints one cell per grapheme, so the
+/// run's materialized span is its cell count, not one.  An RTL run paints its
+/// graphemes visually reversed, and each source character's cursor slot must
+/// land on the cell the rasterizer writes for it.
+#[test]
+fn terminal_composite_run_members_own_their_painted_cells() {
+    let padding = || {
+        let mut glyph = Glyph::char('\u{0628}', FaceId::new(0), 1);
+        glyph.padding = true;
+        glyph
+    };
+    let mut row = GlyphRow::new(GlyphRowRole::Text);
+    row.reversed_p = true;
+    row.glyphs[GlyphArea::Text.index()] = vec![
+        Glyph {
+            glyph_type: GlyphType::Composite {
+                text: "\u{0627}\u{0628}".into(),
+            },
+            face_id: FaceId::new(0),
+            box_vertical_edges: Default::default(),
+            provenance: crate::glyph_matrix::GlyphProvenance::buffer(0),
+            bidi_level: 1,
+            wide: false,
+            pixel_width: 0.0,
+            pixel_height: 0.0,
+            pixel_ascent: 0.0,
+            vertical_offset_px: 0.0,
+            padding: false,
+            pointer_appearance: None,
+        },
+        padding(),
+    ];
+    let geometry = TextRowGeometry::new_with_units(
+        &row,
+        Rect::new(0.0, 0.0, 80.0, 16.0),
+        8.0,
+        TextGeometryUnits::TerminalCells,
+        terminal_widths(),
+    );
+    // Two painted cells, so the right-aligned origin is 80 - 16 = 64.
+    assert_eq!(geometry.origin_x(), 64.0);
+    // The base Composite holds the first source character (alef); an RTL run
+    // paints it in the run's rightmost cell.
+    assert_eq!(
+        geometry.slot_of_glyph(VisualTextGlyphIndex::new(0)),
+        Some(TextSlotColumn::new(0))
+    );
+    assert_eq!(geometry.x_at_slot(TextSlotColumn::new(0)), Some(72.0));
+    // The run-member padding is the second source character (beh), painted in
+    // the run's left cell.
+    assert_eq!(
+        geometry.slot_of_glyph(VisualTextGlyphIndex::new(1)),
+        Some(TextSlotColumn::new(1))
+    );
+    assert_eq!(geometry.x_at_slot(TextSlotColumn::new(1)), Some(64.0));
 }

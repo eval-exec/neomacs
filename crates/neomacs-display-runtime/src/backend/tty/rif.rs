@@ -3818,90 +3818,18 @@ fn write_cell_contents(buf: &mut Vec<u8>, cell: &TtyCell) {
 }
 
 /// Convert a `Glyph` to its display character.
-/// Whether `glyph` is a complex-run member's padding cell carrying its own
-/// per-cell grapheme (a non-blank `Char` or a `Composite`), as opposed to a
-/// blank wide-character padding slot. These cells let the terminal decompose
-/// a contextual-shaping run that the GUI renders as one shaped Composite.
-fn is_run_member_padding_cell(glyph: &Glyph) -> bool {
-    glyph.padding
-        && match &glyph.glyph_type {
-            GlyphType::Char { ch } => *ch != ' ',
-            GlyphType::Composite { .. } | GlyphType::AutomaticComposite { .. } => true,
-            _ => false,
-        }
-}
-
 /// Terminal cells the TEXT_AREA loop will write for `glyphs`.
 ///
-/// Mirrors `rasterize_glyph_row`'s consumption rules without touching the
-/// grid: run-member paddings after a Composite/AutomaticComposite are owned by
-/// the base glyph's terminal plan, Stretch/Surface occupy their reserved
-/// columns, zero-width characters write nothing, and a wide base contributes
-/// its own continuation cell.  Used to right-align `reversed_p` rows (GNU
-/// prepends glyphs and therefore draws them against the right margin).
+/// The consumption rules live beside the glyph in the display protocol
+/// (`terminal_text_area_cells`), because the cursor geometry right-aligns a
+/// `reversed_p` row with the same number. The TTY only injects GNU's
+/// `CHARACTER_WIDTH` (neovm_core), which the protocol deliberately does not
+/// link.
 fn text_area_terminal_cells(glyphs: &[Glyph]) -> usize {
-    let mut cells = 0usize;
-    let mut glyph_idx = 0usize;
-    while glyph_idx < glyphs.len() {
-        let glyph = &glyphs[glyph_idx];
-        if glyph.padding {
-            cells += 1;
-            glyph_idx += 1;
-            continue;
-        }
-        match &glyph.glyph_type {
-            GlyphType::AutomaticComposite { text, terminal } => {
-                cells += terminal
-                    .cells
-                    .iter()
-                    .map(|cell| usize::from(cell.width_cols.max(1)))
-                    .sum::<usize>();
-                let source_paddings = text.chars().count().saturating_sub(1);
-                let present_paddings = glyphs[glyph_idx + 1..]
-                    .iter()
-                    .take(source_paddings)
-                    .take_while(|next| is_run_member_padding_cell(next))
-                    .count();
-                glyph_idx += present_paddings;
-            }
-            GlyphType::Composite { text: _ } => {
-                let run_paddings = glyphs[glyph_idx + 1..]
-                    .iter()
-                    .take_while(|g| is_run_member_padding_cell(g))
-                    .count();
-                if run_paddings == 0 {
-                    cells += 1;
-                } else {
-                    cells += run_paddings + 1;
-                    glyph_idx += run_paddings;
-                }
-            }
-            GlyphType::Stretch { width_cols } => {
-                cells += usize::from((*width_cols).max(1));
-            }
-            GlyphType::Surface { width_cols, .. } => {
-                cells += surface_tty_placeholder(usize::from((*width_cols).max(1)))
-                    .chars()
-                    .count();
-            }
-            GlyphType::Glyphless { .. } => {
-                cells += 1;
-            }
-            GlyphType::Char { ch } if neovm_core::encoding::char_width(*ch) == 0 => {}
-            _ => {
-                cells += 1;
-                let next_is_explicit_padding = glyph.wide
-                    && glyphs
-                        .get(glyph_idx + 1)
-                        .is_some_and(|next_glyph| next_glyph.padding);
-                if glyph.wide && !next_is_explicit_padding {
-                    cells += 1;
-                }
-            }
-        }
-        glyph_idx += 1;
-    }
-    cells
+    usize::from(terminal_text_area_cells(
+        glyphs,
+        TerminalCharWidths::new(neovm_core::encoding::char_width),
+    ))
 }
 
 /// The per-cell grapheme text carried by a run-member padding cell.

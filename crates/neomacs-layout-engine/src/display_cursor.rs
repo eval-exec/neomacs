@@ -795,6 +795,9 @@ impl CursorVisualColumnResolutionRequest {
             text_bounds,
             char_width,
             units,
+            neomacs_display_protocol::glyph_matrix::TerminalCharWidths::new(
+                neovm_core::encoding::char_width,
+            ),
         );
         let x = geometry.x_at_slot(neomacs_display_protocol::glyph_matrix::TextSlotColumn::new(
             target_col - left_margin_cols,

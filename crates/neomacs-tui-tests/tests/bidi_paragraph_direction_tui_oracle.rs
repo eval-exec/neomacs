@@ -11,8 +11,10 @@
 //!
 //! This test runs the reporter's exact bytes (`d8 ac d8 a7 0a d8 ac 0a`) under
 //! GNU 31.1 and Neomacs for all four settings (nil/auto, right-to-left,
-//! left-to-right, and a nil `bidi-display-reordering`) plus a TAB-inside-the-
-//! line case with point after the tab (five settings in total), and compares:
+//! left-to-right, and a nil `bidi-display-reordering`), a TAB-inside-the-line
+//! case with point after the tab, and two zero-width bidi-control cases (an
+//! RLM before the letters with point on it, and an LRM under an explicit
+//! right-to-left paragraph), seven settings in total, and compares:
 //!   - the body row cell for cell, including the exact rightmost column;
 //!   - the cursor cell with point on the R2L line;
 //!   - an overlay with `(face (:background "red" :extend t))` over the whole
@@ -42,6 +44,13 @@ const PROBE_EL: &str = r##";;; -*- lexical-binding: t -*-
       ((equal r2-text "arabic-tab")
        (decode-coding-string
         (unibyte-string #xd8 #xac #xd8 #xa7 #x09 #xd8 #xa8 #x0a) 'utf-8))
+      ((equal r2-text "arabic-controls")
+       ;; JA, RLM, ALEF, LRM, newline: zero-width bidi controls around the
+       ;; visible letters.  GNU paints no cell for a zero-width character, so
+       ;; the right-aligned origin must not count them either.
+       (decode-coding-string
+        (unibyte-string #xd8 #xac #xe2 #x80 #x8f #xd8 #xa7 #xe2 #x80 #x8e #x0a)
+        'utf-8))
       (t
        (decode-coding-string
         (unibyte-string #xd8 #xac #xd8 #xa7 #x0a #xd8 #xac #x0a) 'utf-8))))
@@ -69,15 +78,22 @@ enum Case {
     Off,
     /// The reporter's line with a TAB inside it and point after the tab.
     RightToLeftTab,
+    /// The reporter's letters separated by an RLM, with point on the RLM.
+    RlmControl,
+    /// The same text with an explicit right-to-left paragraph and point on
+    /// the trailing LRM.
+    LrmControl,
 }
 
 impl Case {
-    const ALL: [Case; 5] = [
+    const ALL: [Case; 7] = [
         Case::Auto,
         Case::RightToLeft,
         Case::LeftToRight,
         Case::Off,
         Case::RightToLeftTab,
+        Case::RlmControl,
+        Case::LrmControl,
     ];
 
     fn label(self) -> &'static str {
@@ -87,13 +103,15 @@ impl Case {
             Case::LeftToRight => "direction-left-to-right",
             Case::Off => "reordering-nil",
             Case::RightToLeftTab => "right-to-left-tab",
+            Case::RlmControl => "right-to-left-rlm",
+            Case::LrmControl => "right-to-left-lrm",
         }
     }
 
     fn direction_env(self) -> &'static str {
         match self {
-            Case::Auto | Case::Off | Case::RightToLeftTab => "nil",
-            Case::RightToLeft => "right-to-left",
+            Case::Auto | Case::Off | Case::RightToLeftTab | Case::RlmControl => "nil",
+            Case::RightToLeft | Case::LrmControl => "right-to-left",
             Case::LeftToRight => "left-to-right",
         }
     }
@@ -108,6 +126,7 @@ impl Case {
     fn text_env(self) -> &'static str {
         match self {
             Case::RightToLeftTab => "arabic-tab",
+            Case::RlmControl | Case::LrmControl => "arabic-controls",
             _ => "arabic",
         }
     }
@@ -115,13 +134,22 @@ impl Case {
     fn point_env(self) -> Option<&'static str> {
         match self {
             Case::RightToLeftTab => Some("4"),
+            Case::RlmControl => Some("2"),
+            Case::LrmControl => Some("4"),
             _ => None,
         }
     }
 
     /// Whether GNU right-aligns this row (R2L paragraph).
     fn right_aligned(self) -> bool {
-        matches!(self, Case::Auto | Case::RightToLeft | Case::RightToLeftTab)
+        matches!(
+            self,
+            Case::Auto
+                | Case::RightToLeft
+                | Case::RightToLeftTab
+                | Case::RlmControl
+                | Case::LrmControl
+        )
     }
 }
 

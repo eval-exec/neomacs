@@ -574,11 +574,15 @@ impl<'cursor> GlyphRowFinalizer<'cursor> {
                 self.context.window_pixel_bounds,
                 char_w,
                 units,
+                neomacs_display_protocol::glyph_matrix::TerminalCharWidths::new(
+                    neovm_core::encoding::char_width,
+                ),
             );
             // A terminal places the cursor by materialized cell, where an RTL
             // run's first source character owns its last visual cell.  A GUI
-            // run is one shaped glyph whose advance is not a char-width grid,
-            // so it keeps the glyph-index mapping (N-gui-rtl-cursor).
+            // row is positioned by shaped advances, not a char-width grid, so
+            // it keeps the glyph-index mapping; its painted cursor cell is
+            // paired with GNU's in bidi_gui_cursor_785_oracle.
             let x = match units {
                 // `col` is a GLYPH-ARRAY index; x_at_slot indexes materialized
                 // cells.  Convert explicitly: a tab, an image, a wide glyph or

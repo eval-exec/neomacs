@@ -3013,6 +3013,64 @@ fn rtl_composite_run_is_right_aligned_in_the_terminal() {
     }
 }
 
+/// The cursor geometry's terminal origin and the rasterizer's right-aligned
+/// start must be the same column.  Both read the shared cell rule
+/// (`terminal_text_area_cells`) with the TTY injecting GNU's
+/// `CHARACTER_WIDTH`; a zero-width bidi control and a composite's run-member
+/// paddings are the shapes where the two used to disagree.
+#[test]
+fn terminal_geometry_origin_matches_the_painted_reversed_start() {
+    use neomacs_display_protocol::glyph_matrix::{
+        MatrixRow, TerminalCharWidths, TextGeometryUnits, TextRowGeometry,
+    };
+
+    fn geometry(row: &GlyphRow) -> TextRowGeometry<'_> {
+        TextRowGeometry::new_with_units(
+            row,
+            Rect::new(0.0, 0.0, 80.0, 16.0),
+            8.0,
+            TextGeometryUnits::TerminalCells,
+            TerminalCharWidths::new(neovm_core::encoding::char_width),
+        )
+    }
+
+    // A zero-width RLM before the visible letter: the rasterizer writes one
+    // cell, at the right margin; the origin must not count the RLM.
+    let mut row = GlyphRow::new(GlyphRowRole::Text);
+    row.reversed_p = true;
+    row.glyphs[GlyphArea::Text.index()] = vec![
+        Glyph::char('\u{200f}', FaceId::new(0), 0),
+        Glyph::char('\u{0628}', FaceId::new(0), 1),
+    ];
+    assert_eq!(geometry(&row).origin_x(), 72.0);
+    let mut state = state_with_text_glyphs(10, row.glyphs[GlyphArea::Text.index()].clone());
+    MatrixRow::make_mut(&mut state.window_matrices[0].matrix.rows[0]).reversed_p = true;
+    add_text_row_fill(&mut state);
+    let mut rif = TtyRif::new(10, 5);
+    rif.rasterize(&state);
+    assert_eq!(desired_char(&rif, 0, 9), '\u{0628}');
+    assert_eq!(geometry(&row).origin_x() / 8.0, 9.0);
+
+    // A contextual-shaping run paints one cell per grapheme (base + one
+    // run-member padding), ending at the right margin.
+    let glyphs = vec![
+        run_composite("\u{0627}\u{0628}", 1),
+        run_member_padding('\u{0628}', 1),
+    ];
+    let mut row = GlyphRow::new(GlyphRowRole::Text);
+    row.reversed_p = true;
+    row.glyphs[GlyphArea::Text.index()] = glyphs.clone();
+    assert_eq!(geometry(&row).origin_x(), 64.0);
+    let mut state = state_with_text_glyphs(10, glyphs);
+    MatrixRow::make_mut(&mut state.window_matrices[0].matrix.rows[0]).reversed_p = true;
+    add_text_row_fill(&mut state);
+    let mut rif = TtyRif::new(10, 5);
+    rif.rasterize(&state);
+    assert_eq!(desired_char(&rif, 0, 8), '\u{0628}'); // beh
+    assert_eq!(desired_char(&rif, 0, 9), '\u{0627}'); // alef
+    assert_eq!(geometry(&row).origin_x() / 8.0, 8.0);
+}
+
 #[test]
 fn ltr_run_decomposes_in_logical_order() {
     // Same structure but left-to-right (e.g. an Indic run): not reversed.
