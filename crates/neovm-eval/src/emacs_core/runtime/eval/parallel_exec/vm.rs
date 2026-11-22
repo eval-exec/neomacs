@@ -4,8 +4,10 @@
 //! One frame runs on the owned [`FrameArena`], classified by the generated
 //! dispatch table (`opcode_slot`). Scalar opcodes step the frame's operand
 //! segment owner-locally; the eight sealed cons opcodes call [`VmSealed`];
-//! every World arm, including `Return`, is exactly ONE escape through
-//! [`VmEscape`], after the [`VmPoll`] edges r1 §6 names.
+//! the fifteen arithmetic opcodes call [`ArithOps`] (R6) and escape only
+//! when an operand is a marker; every other World arm, `Return` included,
+//! is exactly ONE escape through [`VmEscape`], after the [`VmPoll`] edges
+//! r1 §6 names.
 //!
 //! An escape completion is a typed contract, checked before anything is
 //! applied: the operand counts against [`static_stack_effect`] (R3), and the
@@ -29,10 +31,12 @@ use super::frames::{
     FrameArena, FrameId, HandlerMark, OperandCursor, OwnerRecordMark, Pc, PollBudget, RootGroup,
     RootHandle, RootRevokeError, SerialHandlerToken, SerialRecordToken, VmFrame,
 };
-use crate::emacs_core::bytecode::Op;
+use crate::emacs_core::bytecode::{ArithGenericKind, Op};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::eval::world::poll::PollOutcome;
-use crate::emacs_core::subr::effect_schema::{ParallelArm, SealedAuthority, WorldSplit};
+use crate::emacs_core::subr::effect_schema::{
+    ArithOperands, ParallelArm, SealedAuthority, WorldSplit,
+};
 use neovm_value::error::{Flow, signal};
 use neovm_value::tagged::gc::RendezvousError;
 use neovm_value::value::Value;
@@ -199,6 +203,32 @@ pub(crate) trait VmSealed {
     ) -> CoreOutcome;
 }
 
+/// Why the owner-local arithmetic port produced no value.
+#[derive(Debug)]
+pub(crate) enum ArithRefusal {
+    /// An operand is a marker: its number is a buffer position, so the
+    /// opcode takes the ONE escape as `Arith(MarkerInvolved)` (R6).
+    MarkerInvolved,
+    /// The builtin's `Flow`: a wrong-type operand, an integer zero divisor
+    /// (§2.4).
+    Flow(Flow),
+}
+
+/// The owner-local arithmetic port (E4-DESIGN R6; the approved `ArithOps`
+/// row). `operands` is the opcode's operand run in stack order, exactly its
+/// static `consumed` count. The port walks them once: a marker is
+/// [`ArithRefusal::MarkerInvolved`], a wrong-type operand or an integer zero
+/// divisor the builtin's [`ArithRefusal::Flow`]; GNU checks each operand
+/// where it stands (`check_number_coerce_marker`, data.c:2697-2703;
+/// `check_integer_coerce_marker`, :2688-2694). Otherwise the result is the
+/// builtin's, floats and bignums allocated through the owner's regions.
+/// There is no poll: the bytecode arithmetics are straight-line
+/// (bytecode.c:1244-1410), a fixnum fast path or a direct `Fplus`/`Fquo`/
+/// `Frem` call, no `maybe_quit`.
+pub(crate) trait ArithOps {
+    fn arith(&mut self, kind: ArithGenericKind, operands: &[Value]) -> Result<Value, ArithRefusal>;
+}
+
 /// Why an opcode escaped.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum EscapeWhy {
@@ -325,11 +355,13 @@ enum Step {
 }
 
 /// The harness VM stepper. `E` is the escape handler, `S` the sealed-ops
-/// port and `P` the poll capability; tests supply the doubles.
-pub(crate) struct VmExec<E, S, P> {
+/// port, `A` the arithmetic port and `P` the poll capability; tests supply
+/// the doubles.
+pub(crate) struct VmExec<E, S, A, P> {
     arena: FrameArena,
     escape: E,
     sealed: S,
+    arith: A,
     poll: P,
     frame: Option<FrameId>,
     state: RunState,
@@ -361,17 +393,19 @@ fn sealed_core_name(op: &Op) -> Option<&'static str> {
     }
 }
 
-impl<E, S, P> VmExec<E, S, P>
+impl<E, S, A, P> VmExec<E, S, A, P>
 where
     E: VmEscape,
     S: VmSealed,
+    A: ArithOps,
     P: VmPoll,
 {
-    pub(crate) fn new(escape: E, sealed: S, poll: P) -> Self {
+    pub(crate) fn new(escape: E, sealed: S, arith: A, poll: P) -> Self {
         Self {
             arena: FrameArena::new(FRAME_DEPTH_LIMIT),
             escape,
             sealed,
+            arith,
             poll,
             frame: None,
             state: RunState::Idle,
@@ -380,6 +414,10 @@ where
 
     pub(crate) fn escape_handler(&self) -> &E {
         &self.escape
+    }
+
+    pub(crate) fn arith_handler(&self) -> &A {
+        &self.arith
     }
 
     pub(crate) fn poll_handler(&self) -> &P {
@@ -526,6 +564,9 @@ where
             ParallelArm::Scalar => self.step_scalar(op, frame, operands, branch_pc, program),
             ParallelArm::Sealed(authority) => {
                 self.step_sealed(op, authority, ctx, frame, operands, branch_pc)
+            }
+            ParallelArm::World(WorldSplit::Arith(_)) => {
+                self.step_arith(op, frame, operands, branch_pc, program)
             }
             ParallelArm::World(split) => self.escape(
                 op,
@@ -786,6 +827,43 @@ where
             }
             CoreOutcome::Signal(flow) => Step::Stop(VmOutcome::Signaled(flow)),
             CoreOutcome::MissingCore => Step::Stop(VmOutcome::MissingCore { name }),
+        }
+    }
+
+    /// R6: the arithmetic opcodes dispatch once on their operand kinds.
+    /// Numeric operands run owner-locally through [`ArithOps`] with no poll
+    /// and no escape; a marker operand takes the ONE escape as
+    /// `Arith(MarkerInvolved)`, on the edges every escape takes; the
+    /// builtin's `Flow` ends the run (§2.4). The table's `Arith(Numeric)` is
+    /// the opcode's class; the operands decide.
+    fn step_arith(
+        &mut self,
+        op: Op,
+        frame: FrameId,
+        operands: OperandCursor,
+        branch_pc: usize,
+        program: VmProgram<'_>,
+    ) -> Step {
+        let Some(kind) = ArithGenericKind::from_op(&op) else {
+            return Step::Stop(VmOutcome::Fault(EngineFault::DispatchContract(op)));
+        };
+        let consumed = usize::from(static_stack_effect(&op).consumed);
+        let len = operands.len();
+        if consumed > len {
+            return invalid();
+        }
+        let args = &self.arena.operand_segment(operands)[len - consumed..];
+        match self.arith.arith(kind, args) {
+            Ok(value) => Self::stop(self.store(frame, branch_pc, len - consumed, &[value])),
+            Err(ArithRefusal::Flow(flow)) => Step::Stop(VmOutcome::Signaled(flow)),
+            Err(ArithRefusal::MarkerInvolved) => self.escape(
+                op,
+                EscapeWhy::World(WorldSplit::Arith(ArithOperands::MarkerInvolved)),
+                frame,
+                operands,
+                branch_pc,
+                program,
+            ),
         }
     }
 

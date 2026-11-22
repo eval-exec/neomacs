@@ -11,20 +11,24 @@ use super::frames::{
     RootGroup, SerialHandlerToken, SerialRecordToken, SlotGeneration, SlotRecord,
 };
 use super::vm::{
-    EscapeCompletion, EscapeStack, EscapeWhy, HandlerDelta, RecordDelta, VmEscape, VmEscapeRequest,
-    VmExec, VmOutcome, VmPoll, VmProgram, VmSealed, static_stack_effect,
+    ArithOps, ArithRefusal, EscapeCompletion, EscapeStack, EscapeWhy, HandlerDelta, RecordDelta,
+    VmEscape, VmEscapeRequest, VmExec, VmOutcome, VmPoll, VmProgram, VmSealed, static_stack_effect,
 };
 use crate::emacs_core::builtins::{
-    builtin_car_1, builtin_car_safe_1, builtin_cdr_1, builtin_cdr_safe_1, builtin_setcar_2,
-    builtin_setcdr_2,
+    builtin_car_1, builtin_car_safe_1, builtin_cdr_1, builtin_cdr_safe_1, builtin_div, builtin_mul,
+    builtin_percent, builtin_setcar_2, builtin_setcdr_2,
 };
-use crate::emacs_core::bytecode::Op;
 use crate::emacs_core::bytecode::decode::verify_stack_effects;
+use crate::emacs_core::bytecode::{ArithGenericKind, Op, Vm};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::eval::world::poll::PollOutcome;
-use crate::emacs_core::subr::effect_schema::{ParallelArm, SealedAuthority, WorldSplit};
+use crate::emacs_core::format_eval_result;
+use crate::emacs_core::subr::effect_schema::{
+    ArithOperands, ParallelArm, SealedAuthority, WorldSplit,
+};
 use crate::test_utils::unit_runtime;
-use neovm_value::error::{EvalResult, Flow, expect_args, signal};
+use neovm_edit::emacs_core::marker::make_marker_value;
+use neovm_value::error::{EvalResult, Flow, LispCondition, expect_args, signal};
 use neovm_value::forward::TlsIndex;
 use neovm_value::intern::NIL_SYM_ID;
 use neovm_value::tagged::gc::RendezvousError;
@@ -128,6 +132,10 @@ struct RecordingEscape {
     /// One completion per escape, in order; `None` is the opcode's
     /// fall-through.
     script: Vec<Option<EscapeCompletion>>,
+    /// An unscripted `Return` reports the operand it published, the frame's
+    /// value (`Breturn`: `val = TOP`, bytecode.c:897-921); the default
+    /// completion reports nil.
+    mirror_return: bool,
 }
 
 impl RecordingEscape {
@@ -137,6 +145,7 @@ impl RecordingEscape {
             segments: Vec::new(),
             lifos: Vec::new(),
             script: Vec::new(),
+            mirror_return: false,
         }
     }
 
@@ -146,19 +155,42 @@ impl RecordingEscape {
             ..Self::new()
         }
     }
+
+    /// The serial side's `Return`: the frame's value is its top operand.
+    fn mirroring_return() -> Self {
+        Self {
+            mirror_return: true,
+            ..Self::new()
+        }
+    }
+
+    fn mirroring_with_script(script: Vec<Option<EscapeCompletion>>) -> Self {
+        Self {
+            script,
+            ..Self::mirroring_return()
+        }
+    }
 }
 
 impl VmEscape for RecordingEscape {
     fn escape(&mut self, request: VmEscapeRequest, arena: &FrameArena) -> EscapeCompletion {
-        self.segments
-            .push(arena.vm_segment(request.frame).unwrap_or(&[]).to_vec());
+        let segment = arena.vm_segment(request.frame).unwrap_or(&[]).to_vec();
+        let top = segment.last().copied();
+        self.segments.push(segment);
         self.lifos.push(lifos(arena));
         let index = self.requests.len();
         self.requests.push(request.clone());
         self.script
             .get_mut(index)
             .and_then(Option::take)
-            .unwrap_or_else(|| EscapeCompletion::fall_through(&request.op))
+            .unwrap_or_else(|| {
+                if self.mirror_return && request.op == Op::Return {
+                    if let Some(top) = top {
+                        return completion(&Op::Return, vec![top]);
+                    }
+                }
+                EscapeCompletion::fall_through(&request.op)
+            })
     }
 }
 
@@ -259,20 +291,217 @@ impl VmSealed for MissingSealed {
     }
 }
 
+// ------------------------------------------------- the arithmetic double
+
+/// The owner-local arithmetic port's double (R6). Where the serial core has
+/// a Context-free builtin the double IS the serial answer (`builtin_mul`,
+/// `builtin_div`, `Vm::arith_integer_fast`); the rest is fixnum or IEEE
+/// arithmetic in the order GNU computes it.
+/// `vm_arithmetic_results_tie_the_serial_builtin` ties it over its domain;
+/// outside that domain it fails closed on a signal of its own instead of
+/// guessing. The production port allocates through the owner's regions;
+/// this one allocates on the tagged heap and counts every float it
+/// allocates as one owner float slot.
+struct HarnessArith {
+    /// Every call in order: the kind and the operands as published.
+    calls: Vec<(ArithGenericKind, Vec<Value>)>,
+    /// The floats allocated for results, in order.
+    float_slots: Vec<f64>,
+}
+
+impl HarnessArith {
+    fn new() -> Self {
+        Self {
+            calls: Vec::new(),
+            float_slots: Vec::new(),
+        }
+    }
+
+    /// A float result: one allocation through the owner's float slot.
+    fn float(&mut self, value: f64) -> Value {
+        self.float_slots.push(value);
+        Value::make_float(value)
+    }
+}
+
+/// Not in the double's domain: a signal of its own, never a guess.
+fn unsupported() -> ArithRefusal {
+    ArithRefusal::Flow(signal(
+        "error",
+        vec![Value::string(
+            "harness arithmetic double: unsupported shape",
+        )],
+    ))
+}
+
+/// The number of a fixnum or float operand.
+fn number(value: &Value) -> Result<f64, ArithRefusal> {
+    value.as_number_f64().ok_or_else(unsupported)
+}
+
+/// GNU `arithcompare` (data.c:2718-2846) over fixnums and floats, as
+/// `(lt, eq, gt)`: the doubles, and where a float meets a fixnum and they
+/// tie, the exact integers (the tie-break GNU spells out for both orders).
+/// A NaN is unordered under all three.
+fn compare(a: Value, b: Value) -> Result<(bool, bool, bool), ArithRefusal> {
+    if let (Some(x), Some(y)) = (a.as_fixnum(), b.as_fixnum()) {
+        return Ok((x < y, x == y, x > y));
+    }
+    let (f1, f2) = (number(&a)?, number(&b)?);
+    if f1 != f2 {
+        return Ok((f1 < f2, false, f1 > f2));
+    }
+    match (a.as_fixnum(), b.as_fixnum()) {
+        (Some(x), None) => {
+            let i2 = f1 as i64;
+            Ok((x < i2, x == i2, x > i2))
+        }
+        (None, Some(y)) => {
+            let i1 = f2 as i64;
+            Ok((i1 < y, i1 == y, i1 > y))
+        }
+        // Two floats.
+        _ => Ok((false, true, false)),
+    }
+}
+
+impl ArithOps for HarnessArith {
+    fn arith(&mut self, kind: ArithGenericKind, operands: &[Value]) -> Result<Value, ArithRefusal> {
+        self.calls.push((kind, operands.to_vec()));
+        // GNU checks each operand where it stands: a marker is coerced
+        // (`check_number_coerce_marker`, data.c:2697-2703; `%` takes
+        // integers only, `check_integer_coerce_marker`, :2688-2694) and a
+        // wrong type signals there. The first such operand decides.
+        let integer_only = kind == ArithGenericKind::Rem;
+        let predicate = if integer_only {
+            "integer-or-marker-p"
+        } else {
+            "number-or-marker-p"
+        };
+        for value in operands {
+            if value.is_marker() {
+                return Err(ArithRefusal::MarkerInvolved);
+            }
+            if !(value.is_fixnum() || value.is_bignum() || (value.is_float() && !integer_only)) {
+                return Err(ArithRefusal::Flow(signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol(predicate), *value],
+                )));
+            }
+        }
+        let integers = operands
+            .iter()
+            .all(|value| value.is_fixnum() || value.is_bignum());
+        match (kind, operands) {
+            // The serial Context-free builtins, integers and floats alike.
+            (ArithGenericKind::Mul, _) => {
+                let value = builtin_mul(operands).map_err(ArithRefusal::Flow)?;
+                if value.is_float() {
+                    self.float_slots.push(value.xfloat());
+                }
+                Ok(value)
+            }
+            (ArithGenericKind::Div, _) => {
+                let value = builtin_div(operands).map_err(ArithRefusal::Flow)?;
+                if value.is_float() {
+                    self.float_slots.push(value.xfloat());
+                }
+                Ok(value)
+            }
+            (ArithGenericKind::Rem, [a, b]) => {
+                let (Some(a), Some(b)) = (a.as_fixnum(), b.as_fixnum()) else {
+                    return Err(unsupported());
+                };
+                if b == 0 {
+                    return Err(ArithRefusal::Flow(signal(
+                        LispCondition::ArithError,
+                        vec![],
+                    )));
+                }
+                // `checked_rem` also refuses `i64::MIN % -1`, which C leaves
+                // undefined: a bignum here, so already refused above.
+                a.checked_rem(b).map(Value::fixnum).ok_or_else(unsupported)
+            }
+            // All-integer operands on the kinds with a direct integer answer.
+            _ if integers && kind.integer_op().is_some() => {
+                Vm::arith_integer_fast(kind, operands).ok_or_else(unsupported)
+            }
+            // Fixnums and floats from here: GNU's float arms.
+            (ArithGenericKind::Add, [a, b]) => Ok(self.float(number(a)? + number(b)?)),
+            (ArithGenericKind::Sub, [a, b]) => Ok(self.float(number(a)? - number(b)?)),
+            (ArithGenericKind::Add1, [a]) => Ok(self.float(1.0 + number(a)?)),
+            (ArithGenericKind::Sub1, [a]) => Ok(self.float(-1.0 + number(a)?)),
+            // GNU `Fminus` on one integer negates in the integers: a bignum
+            // at `most-negative-fixnum`, where `make_int` promotes.
+            (ArithGenericKind::Negate, [a]) => {
+                if let Some(x) = a.as_fixnum() {
+                    return x.checked_neg().map(Value::make_int).ok_or_else(unsupported);
+                }
+                Ok(self.float(-number(a)?))
+            }
+            // GNU `minmax_driver` (data.c:3462-3474): `accum = args[0]`, and
+            // the next operand `val` replaces it only when
+            // `arithcompare (val, accum) & cmpmask` holds: `val > accum` for
+            // `max`, `val < accum` for `min`. A NaN `val` never compares, and
+            // returns then.
+            (ArithGenericKind::Max, [a, b]) | (ArithGenericKind::Min, [a, b]) => {
+                let (lt, _, gt) = compare(*a, *b)?;
+                let wins = if kind == ArithGenericKind::Max {
+                    lt
+                } else {
+                    gt
+                };
+                if wins || (b.is_float() && b.xfloat().is_nan()) {
+                    Ok(*b)
+                } else {
+                    Ok(*a)
+                }
+            }
+            (ArithGenericKind::NumEq, [a, b])
+            | (ArithGenericKind::Lt, [a, b])
+            | (ArithGenericKind::Gt, [a, b])
+            | (ArithGenericKind::Le, [a, b])
+            | (ArithGenericKind::Ge, [a, b]) => {
+                let (lt, eq, gt) = compare(*a, *b)?;
+                let holds = match kind {
+                    ArithGenericKind::NumEq => eq,
+                    ArithGenericKind::Lt => lt,
+                    ArithGenericKind::Gt => gt,
+                    ArithGenericKind::Le => lt || eq,
+                    _ => gt || eq,
+                };
+                Ok(Value::bool_val(holds))
+            }
+            _ => Err(unsupported()),
+        }
+    }
+}
+
 // ---------------------------------------------------------------- helpers
 
-type Harness = VmExec<RecordingEscape, HarnessVmSealed, RecordingPoll>;
+type Harness = VmExec<RecordingEscape, HarnessVmSealed, HarnessArith, RecordingPoll>;
 
 fn context() -> Context {
     Context::new(unit_runtime())
 }
 
 fn harness() -> Harness {
+    harness_with(RecordingEscape::new())
+}
+
+fn harness_with(escape: RecordingEscape) -> Harness {
     VmExec::new(
-        RecordingEscape::new(),
+        escape,
         HarnessVmSealed,
+        HarnessArith::new(),
         RecordingPoll::new(),
     )
+}
+
+/// A harness whose `Return` hands back the frame's value: the rows that
+/// read what an arithmetic opcode left on the stack.
+fn arithmetic_harness() -> Harness {
+    harness_with(RecordingEscape::mirroring_return())
 }
 
 fn program(ops: &[Op]) -> VmProgram<'_> {
@@ -315,7 +544,7 @@ fn fault_of(outcome: VmOutcome) -> EngineFault {
     }
 }
 
-fn assert_clear<S: VmSealed>(engine: &VmExec<RecordingEscape, S, RecordingPoll>) {
+fn assert_clear<S: VmSealed>(engine: &VmExec<RecordingEscape, S, HarnessArith, RecordingPoll>) {
     assert_eq!(engine.arena_depth(), 0, "arena depth");
     assert_eq!(engine.live_root_count(), 0, "live roots");
     assert_eq!(engine.arena().handlers().len(), 0, "handlers");
@@ -652,7 +881,9 @@ fn is_call(op: &Op) -> bool {
 }
 
 #[test]
-fn vm_every_world_opcode_is_exactly_one_escape() {
+fn vm_every_non_arith_world_opcode_is_exactly_one_escape() {
+    // The arithmetic opcodes escape only for a marker operand
+    // (`vm_a_marker_operand_escapes_through_the_one_stub`).
     let mut escaped = 0;
     let mut ctx = context();
     for (name, op) in op_samples() {
@@ -660,6 +891,9 @@ fn vm_every_world_opcode_is_exactly_one_escape() {
         let ParallelArm::World(split) = opcode_slot(&op).arm else {
             continue;
         };
+        if matches!(split, WorldSplit::Arith(_)) {
+            continue;
+        }
         escaped += 1;
         let effect = static_stack_effect(&op);
         let is_return = op == Op::Return;
@@ -717,7 +951,7 @@ fn vm_every_world_opcode_is_exactly_one_escape() {
         }
         assert_clear(&engine);
     }
-    assert_eq!(escaped, 62, "escaped opcodes");
+    assert_eq!(escaped, 47, "escaped opcodes");
 }
 
 #[test]
@@ -727,6 +961,14 @@ fn vm_the_dispatch_table_and_the_inventory_agree_on_all_89_opcodes() {
     let mut authorities = Vec::new();
     for (name, op) in op_samples() {
         let slot = opcode_slot(&op);
+        // The Arith arm is exactly the fifteen kinds, and a kind's operand
+        // count is its opcode's static `consumed`: the stepper hands the
+        // port that many operands and no more.
+        assert_eq!(
+            ArithGenericKind::from_op(&op).is_some(),
+            matches!(slot.arm, ParallelArm::World(WorldSplit::Arith(_))),
+            "{name}: the Arith arm is exactly the kinds"
+        );
         match slot.arm {
             ParallelArm::Scalar => scalar += 1,
             ParallelArm::Sealed(authority) => {
@@ -736,10 +978,20 @@ fn vm_the_dispatch_table_and_the_inventory_agree_on_all_89_opcodes() {
             ParallelArm::World(WorldSplit::Escape) => escape += 1,
             ParallelArm::World(WorldSplit::PlainVar(_)) => plain_var += 1,
             ParallelArm::World(WorldSplit::Return(_)) => ret += 1,
-            ParallelArm::World(WorldSplit::Arith(_)) => arith += 1,
+            ParallelArm::World(WorldSplit::Arith(_)) => {
+                arith += 1;
+                let kind =
+                    ArithGenericKind::from_op(&op).unwrap_or_else(|| panic!("{name}: a kind"));
+                assert_eq!(
+                    usize::from(static_stack_effect(&op).consumed),
+                    kind.arity(),
+                    "{name}: the port sees the static operand count"
+                );
+            }
         }
         // The stage-1 accessor admits every typed World split and no bare
-        // escape; this executor escapes every World arm, typed or not.
+        // escape; this executor runs `Arith(Numeric)` through the port when
+        // no operand is a marker, and escapes every other World arm.
         assert_eq!(
             admits_owner_local(slot),
             !matches!(slot.arm, ParallelArm::World(WorldSplit::Escape)),
@@ -781,6 +1033,7 @@ fn vm_escape_result_is_in_the_published_segment_before_the_next_poll() {
     let mut engine = VmExec::new(
         RecordingEscape::with_script(script),
         HarnessVmSealed,
+        HarnessArith::new(),
         RecordingPoll::new(),
     );
     let outcome = engine.run(&mut ctx, program_with(&ops, &[cons]));
@@ -856,6 +1109,7 @@ fn vm_a_completion_that_jumps_for_an_opcode_other_than_switch_is_a_typed_fault()
         let mut engine = VmExec::new(
             RecordingEscape::with_script(script),
             HarnessVmSealed,
+            HarnessArith::new(),
             RecordingPoll::new(),
         );
         let outcome = engine.run(&mut ctx, program(&ops));
@@ -921,6 +1175,7 @@ fn vm_poll_refusal_is_engine_fault_poll_and_restarts() {
         let mut engine = VmExec::new(
             RecordingEscape::new(),
             HarnessVmSealed,
+            HarnessArith::new(),
             RecordingPoll::refusing_on(edge, RendezvousError::Publication),
         );
         let outcome = engine.run(&mut ctx, program(&ops));
@@ -975,6 +1230,7 @@ fn vm_a_signal_from_an_escape_settles_to_idle_and_never_resumes() {
     let mut engine = VmExec::new(
         RecordingEscape::with_script(script),
         HarnessVmSealed,
+        HarnessArith::new(),
         RecordingPoll::new(),
     );
     let outcome = engine.run(&mut ctx, program(&ops));
@@ -1043,6 +1299,7 @@ fn vm_an_escape_completion_with_the_wrong_arity_is_a_typed_fault_and_keeps_the_s
     let mut engine = VmExec::new(
         RecordingEscape::with_script(script),
         HarnessVmSealed,
+        HarnessArith::new(),
         RecordingPoll::new(),
     );
     let outcome = engine.run(&mut context(), program(&ops));
@@ -1158,6 +1415,7 @@ fn vm_escape_completions_mirror_serial_records_and_handlers_in_lifo_order() {
     let mut engine = VmExec::new(
         RecordingEscape::with_script(script),
         HarnessVmSealed,
+        HarnessArith::new(),
         RecordingPoll::new(),
     );
     let outcome = engine.run(&mut context(), program(&ops));
@@ -1233,6 +1491,7 @@ fn vm_a_completion_that_pops_a_non_top_serial_record_faults_and_applies_nothing(
         let mut engine = VmExec::new(
             RecordingEscape::with_script(script),
             HarnessVmSealed,
+            HarnessArith::new(),
             RecordingPoll::new(),
         );
         let outcome = engine.run(&mut context(), program(&ops));
@@ -1375,6 +1634,7 @@ fn vm_a_return_escape_ends_the_run_with_the_reported_value() {
     let mut engine = VmExec::new(
         RecordingEscape::with_script(script),
         HarnessVmSealed,
+        HarnessArith::new(),
         RecordingPoll::new(),
     );
     let outcome = engine.run(&mut context(), program_with(&ops, &constants));
@@ -1492,7 +1752,12 @@ fn vm_a_sealed_core_signal_settles_to_idle() {
 
 #[test]
 fn vm_a_sealed_port_without_a_core_is_missing_core() {
-    let mut engine = VmExec::new(RecordingEscape::new(), MissingSealed, RecordingPoll::new());
+    let mut engine = VmExec::new(
+        RecordingEscape::new(),
+        MissingSealed,
+        HarnessArith::new(),
+        RecordingPoll::new(),
+    );
     let outcome = engine.run(&mut context(), program(&[Op::Nil, Op::Car, Op::Return]));
     assert!(matches!(outcome, VmOutcome::MissingCore { name: "car" }));
     assert!(engine.escape_handler().requests.is_empty());
@@ -1673,4 +1938,422 @@ fn vm_static_stack_effect_agrees_with_the_serial_verifier() {
     assert_eq!(op_samples().len(), 89, "one sample per Op variant");
     assert_eq!(samples.len(), 89 + extra_payload_shapes().len());
     assert_eq!((tied, silent, refused), (samples.len() - 4, 3, 1));
+}
+
+// ---------------------------------------------------------------- V3: R6
+
+/// The operands as constants, `op`, `Return`.
+fn arith_program(op: Op, operands: &[Value]) -> Vec<Op> {
+    let mut ops: Vec<Op> = (0..operands.len())
+        .map(|index| Op::Constant(index as u16))
+        .collect();
+    ops.push(op);
+    ops.push(Op::Return);
+    ops
+}
+
+/// The opcode of each kind: `ArithGenericKind::from_op`'s inverse.
+fn opcode(kind: ArithGenericKind) -> Op {
+    match kind {
+        ArithGenericKind::Add => Op::Add,
+        ArithGenericKind::Sub => Op::Sub,
+        ArithGenericKind::Mul => Op::Mul,
+        ArithGenericKind::Div => Op::Div,
+        ArithGenericKind::Rem => Op::Rem,
+        ArithGenericKind::Max => Op::Max,
+        ArithGenericKind::Min => Op::Min,
+        ArithGenericKind::NumEq => Op::Eqlsign,
+        ArithGenericKind::Lt => Op::Lss,
+        ArithGenericKind::Gt => Op::Gtr,
+        ArithGenericKind::Le => Op::Leq,
+        ArithGenericKind::Ge => Op::Geq,
+        ArithGenericKind::Add1 => Op::Add1,
+        ArithGenericKind::Sub1 => Op::Sub1,
+        ArithGenericKind::Negate => Op::Negate,
+    }
+}
+
+#[test]
+fn vm_fixnum_add_runs_owner_locally() {
+    // GNU `Bplus` (bytecode.c:1331-1343) is straight-line code: the fixnum
+    // fast path or `Fplus (2, &TOP)`, no `maybe_quit`, no funcall. R6: two
+    // numeric operands run on the owner, with no poll and no escape.
+    let mut ctx = context();
+    let constants = [Value::fixnum(2), Value::fixnum(3)];
+    let mut engine = arithmetic_harness();
+    let ops = arith_program(Op::Add, &constants);
+    let outcome = engine.run(&mut ctx, program_with(&ops, &constants));
+    let done = done_value(&mut engine, outcome);
+    let escape = engine.escape_handler();
+    assert_eq!(escape.requests.len(), 1, "only Return escapes");
+    assert_eq!(escape.requests[0].op, Op::Return);
+    assert_eq!(
+        escape.segments[0],
+        vec![Value::fixnum(5)],
+        "the sum is published when Return escapes"
+    );
+    assert_eq!(done, Value::fixnum(5), "the frame returns the sum");
+    assert_eq!(
+        engine.poll_handler().edges,
+        vec![PollEdge::SerialRequest],
+        "Return's own request poll; the add took none"
+    );
+    assert_eq!(
+        engine.arith_handler().calls,
+        vec![(
+            ArithGenericKind::Add,
+            vec![Value::fixnum(2), Value::fixnum(3)]
+        )],
+        "the port ran once, on the operands in stack order"
+    );
+    assert!(
+        engine.arith_handler().float_slots.is_empty(),
+        "a fixnum result allocates no float slot"
+    );
+    assert_clear(&engine);
+}
+
+#[test]
+fn vm_float_result_takes_an_owner_float_slot() {
+    // R6: a float result is a fresh object allocated through the owner's
+    // float slot, a bignum result a fresh object too, never an operand's.
+    // The double counts its float slots.
+    let mut ctx = context();
+    let operands = [Value::make_float(1.5), Value::make_float(2.5)];
+    let mut engine = arithmetic_harness();
+    let ops = arith_program(Op::Add, &operands);
+    let outcome = engine.run(&mut ctx, program_with(&ops, &operands));
+    let sum = done_value(&mut engine, outcome);
+    assert_eq!(sum.xfloat(), 4.0);
+    assert_ne!(sum.bits(), operands[0].bits());
+    assert_ne!(sum.bits(), operands[1].bits());
+    assert_eq!(
+        engine.arith_handler().float_slots,
+        vec![4.0],
+        "one owner float slot"
+    );
+    assert_eq!(
+        engine.escape_handler().requests.len(),
+        1,
+        "only Return escapes"
+    );
+    assert_clear(&engine);
+
+    let operands = [Value::fixnum(Value::MOST_POSITIVE_FIXNUM), Value::fixnum(1)];
+    let mut engine = arithmetic_harness();
+    let ops = arith_program(Op::Add, &operands);
+    let outcome = engine.run(&mut ctx, program_with(&ops, &operands));
+    let sum = done_value(&mut engine, outcome);
+    assert!(sum.is_bignum(), "promoted, as GNU make_int does");
+    assert_ne!(sum.bits(), operands[0].bits());
+    assert!(engine.arith_handler().float_slots.is_empty());
+    assert_clear(&engine);
+}
+
+#[test]
+fn vm_a_marker_operand_escapes_through_the_one_stub() {
+    // A marker's number is its buffer position (E4-DESIGN R6): any marker
+    // operand is `MarkerInvolved` and takes the ONE escape, on either side
+    // of the opcode and under a unary one.
+    let mut ctx = context();
+    let marker = make_marker_value(None, None, false);
+    assert!(marker.is_marker(), "a marker operand");
+    let four = Value::fixnum(4);
+    let cases: Vec<(Op, Vec<Value>, usize)> = vec![
+        (Op::Add, vec![marker, four], 2),
+        (Op::Add, vec![four, marker], 2),
+        (Op::Add1, vec![marker], 1),
+    ];
+    for (op, constants, pc) in cases {
+        let script = vec![Some(completion(&op, vec![four]))];
+        let mut engine = harness_with(RecordingEscape::mirroring_with_script(script));
+        let ops = arith_program(op.clone(), &constants);
+        let outcome = engine.run(&mut ctx, program_with(&ops, &constants));
+        assert_eq!(done_value(&mut engine, outcome), four, "{op:?}");
+        let escape = engine.escape_handler();
+        assert_eq!(escape.requests.len(), 2, "{op:?}: the opcode, then Return");
+        let request = &escape.requests[0];
+        assert_eq!(request.op, op, "{op:?}");
+        assert_eq!(
+            request.why,
+            EscapeWhy::World(WorldSplit::Arith(ArithOperands::MarkerInvolved)),
+            "{op:?}: the escape says why"
+        );
+        assert_eq!(request.pc, Pc::new(pc), "{op:?}");
+        assert_eq!(
+            escape.segments[0], constants,
+            "{op:?}: the operands are published at the escape"
+        );
+        assert_eq!(
+            engine.poll_handler().edges,
+            vec![PollEdge::SerialRequest, PollEdge::SerialRequest],
+            "{op:?}: no call poll, no back edge"
+        );
+        assert_eq!(
+            engine.arith_handler().calls.len(),
+            1,
+            "{op:?}: the port saw the operands once and declined"
+        );
+        assert_clear(&engine);
+    }
+
+    // A wrong type before the marker is the builtin's signal, on the owner:
+    // GNU checks each operand where it stands (arith_driver, data.c:3251).
+    let constants = [Value::NIL, marker];
+    let mut engine = harness();
+    let ops = arith_program(Op::Add, &constants);
+    let outcome = engine.run(&mut ctx, program_with(&ops, &constants));
+    let VmOutcome::Signaled(flow) = outcome else {
+        panic!("expected a signal, got {outcome:?}")
+    };
+    assert_eq!(
+        signal_key(&flow).0,
+        "wrong-type-argument",
+        "no escape for a wrong type ahead of the marker"
+    );
+    assert!(engine.escape_handler().requests.is_empty());
+    assert!(engine.is_idle());
+    assert_clear(&engine);
+}
+
+#[test]
+fn vm_arith_division_by_zero_is_a_flow_not_a_panic() {
+    // GNU `Bquo`/`Brem` keep a zero divisor off their fixnum fast paths
+    // (bytecode.c:1392, 1405) and `Fquo`/`integer_remainder` signal
+    // `(arith-error)` (data.c:3365, 3371, 3394): the serial `/` and `%`
+    // flows, here through the owner-local port.
+    let mut ctx = context();
+    let (one, zero) = (Value::fixnum(1), Value::fixnum(0));
+    for (op, serial) in [
+        (Op::Div, builtin_div(&[one, zero])),
+        (Op::Rem, builtin_percent(&mut ctx, one, zero)),
+    ] {
+        let mut engine = harness();
+        let ops = arith_program(op.clone(), &[one, zero]);
+        let outcome = engine.run(&mut ctx, program_with(&ops, &[one, zero]));
+        let VmOutcome::Signaled(flow) = outcome else {
+            panic!("{op:?}: expected a signal, got {outcome:?}")
+        };
+        assert_eq!(signal_key(&flow).0, "arith-error", "{op:?}");
+        assert_eq!(
+            signal_key(&flow),
+            signal_key(&serial.expect_err("{op:?}: the serial builtin signals too")),
+            "{op:?}: the serial flow"
+        );
+        assert_eq!(
+            engine.escape_handler().requests.len(),
+            0,
+            "{op:?}: no escape"
+        );
+        assert_eq!(
+            engine.arith_handler().calls.len(),
+            1,
+            "{op:?}: the port produced the flow"
+        );
+        assert!(engine.is_idle(), "{op:?}: settled to Idle");
+        assert_clear(&engine);
+    }
+}
+
+#[test]
+fn vm_a_nan_compared_with_a_non_number_is_a_wrong_type_argument() {
+    // GNU's comparison opcodes go straight to `arithcompare` (bytecode.c:1256,
+    // 1267-1309), whose float arms validate the other operand whatever the
+    // float is (data.c:2718-2746): `(< +nan nil)` signals, on either side,
+    // NaN or not. The double answers that on the owner, with no escape.
+    // (The serial arm short-circuits a NaN first: `serial_nan_short_circuit`.)
+    let mut ctx = context();
+    let nan = Value::make_float(f64::NAN);
+    let predicate = Value::symbol("number-or-marker-p");
+    for kind in [
+        ArithGenericKind::NumEq,
+        ArithGenericKind::Lt,
+        ArithGenericKind::Gt,
+        ArithGenericKind::Le,
+        ArithGenericKind::Ge,
+    ] {
+        for operands in [[nan, Value::NIL], [Value::T, nan]] {
+            let op = opcode(kind);
+            let mut engine = harness();
+            let ops = arith_program(op, &operands);
+            let outcome = engine.run(&mut ctx, program_with(&ops, &operands));
+            let VmOutcome::Signaled(flow) = outcome else {
+                panic!("{kind:?} {operands:?}: expected a signal, got {outcome:?}")
+            };
+            assert_eq!(
+                signal_key(&flow),
+                (
+                    "wrong-type-argument".to_string(),
+                    vec![
+                        predicate,
+                        if operands[0].is_float() {
+                            Value::NIL
+                        } else {
+                            Value::T
+                        }
+                    ]
+                ),
+                "{kind:?} {operands:?}: the non-number, in operand order"
+            );
+            assert!(engine.escape_handler().requests.is_empty(), "{kind:?}");
+            assert_eq!(engine.arith_handler().calls.len(), 1, "{kind:?}");
+            assert!(engine.is_idle(), "{kind:?}");
+            assert_clear(&engine);
+        }
+    }
+}
+
+/// The serial opcode's answer for `operands`: the full arm, the integer
+/// fast path then the static subr, as `call_arith_builtin_from_stack_args`
+/// runs it (operands staged on `bc_buf`).
+fn serial_arith(ctx: &mut Context, kind: ArithGenericKind, operands: &[Value]) -> EvalResult {
+    let args_start = ctx.bc_buf.len();
+    ctx.bc_buf.extend_from_slice(operands);
+    let result = Vm::call_arith_builtin_on_context(ctx, kind, args_start, operands.len())
+        .expect("a static arithmetic subr");
+    ctx.bc_buf.truncate(args_start);
+    result
+}
+
+fn printed(result: &EvalResult) -> String {
+    match result {
+        Ok(value) => format_eval_result(&Ok(*value)),
+        Err(flow) => format!("signal {:?}", signal_key(flow)),
+    }
+}
+
+/// What the double may answer, stated once: a tie outside this is not run.
+fn in_domain(kind: ArithGenericKind, operands: &[Value]) -> bool {
+    let bignums = operands.iter().filter(|value| value.is_bignum()).count();
+    let floats = operands.iter().filter(|value| value.is_float()).count();
+    if bignums > 0 {
+        // No Context-free serial builtin over bignums for these kinds, and
+        // GNU compares a bignum with a float exactly (`mpz_cmp_d`,
+        // data.c:2766, 2825), beyond this double's doubles.
+        let bignum_kind = matches!(
+            kind,
+            ArithGenericKind::Rem
+                | ArithGenericKind::Max
+                | ArithGenericKind::Min
+                | ArithGenericKind::Negate
+        );
+        if bignum_kind || floats > 0 {
+            return false;
+        }
+    }
+    true
+}
+
+/// The one place the serial arm is not GNU today: `arithcompare`
+/// (lisp/native/builtins/arithmetic.rs:1952-1956, 1965-1969) answers
+/// "unordered" for a NaN operand before it validates the other one, so
+/// `(< +nan nil)` is nil there. GNU validates the other operand whatever the
+/// float is (`not_number_or_marker`, data.c:2712-2715, reached from every
+/// float arm of `arithcompare`, :2718-2746). The double answers GNU's signal
+/// (`vm_a_nan_compared_with_a_non_number_is_a_wrong_type_argument`); the tie
+/// is not run over these shapes until the serial arm is corrected.
+fn serial_nan_short_circuit(kind: ArithGenericKind, operands: &[Value]) -> bool {
+    let comparison = matches!(
+        kind,
+        ArithGenericKind::NumEq
+            | ArithGenericKind::Lt
+            | ArithGenericKind::Gt
+            | ArithGenericKind::Le
+            | ArithGenericKind::Ge
+    );
+    let non_number = |value: &Value| !(value.is_fixnum() || value.is_bignum() || value.is_float());
+    comparison
+        && operands
+            .iter()
+            .any(|value| value.is_float() && value.xfloat().is_nan())
+        && operands.iter().any(non_number)
+}
+
+/// One shape through the stepper and through the serial arm: both printed.
+fn tie(ctx: &mut Context, kind: ArithGenericKind, operands: &[Value]) -> (String, String) {
+    let op = opcode(kind);
+    let mut engine = arithmetic_harness();
+    let ops = arith_program(op, operands);
+    let outcome = engine.run(ctx, program_with(&ops, operands));
+    let got = match outcome {
+        VmOutcome::Done { .. } => Ok(done_value(&mut engine, outcome)),
+        VmOutcome::Signaled(flow) => Err(flow),
+        other => panic!("{kind:?} {operands:?}: {other:?}"),
+    };
+    assert_clear(&engine);
+    let want = serial_arith(ctx, kind, operands);
+    // Fresh results are unrooted once taken; keep them over the printing.
+    for value in [&got, &want]
+        .into_iter()
+        .filter_map(|result| result.as_ref().ok())
+    {
+        ctx.push_specpdl_root(*value);
+    }
+    (printed(&got), printed(&want))
+}
+
+#[test]
+fn vm_arithmetic_results_tie_the_serial_builtin() {
+    // R6's owner numeric path answers what the serial opcode answers. Every
+    // kind over fixnums at both edges, floats, bignums on the kinds that
+    // take one, and wrong-type operands.
+    let mut ctx = context();
+    let (max, min) = (Value::MOST_POSITIVE_FIXNUM, Value::MOST_NEGATIVE_FIXNUM);
+    let pool: Vec<Value> = vec![
+        Value::fixnum(min),
+        Value::fixnum(min + 1),
+        Value::fixnum(-3),
+        Value::fixnum(-1),
+        Value::fixnum(0),
+        Value::fixnum(1),
+        Value::fixnum(2),
+        Value::fixnum(3),
+        Value::fixnum(max - 1),
+        Value::fixnum(max),
+        Value::fixnum(max + 1),
+        Value::fixnum(min - 1),
+        Value::fixnum(i64::MAX),
+        Value::fixnum(i64::MIN),
+        // One past 2^53 beside its rounded double: GNU's exact tie-break
+        // when a float meets a fixnum (arithcompare, data.c:2731-2746).
+        Value::fixnum((1 << 53) + 1),
+        Value::fixnum(1 << 53),
+        Value::make_float((1_i64 << 53) as f64),
+        Value::make_float(-1.5),
+        Value::make_float(-0.0),
+        Value::make_float(0.0),
+        Value::make_float(0.5),
+        Value::make_float(2.0),
+        Value::make_float(1e300),
+        // IEEE: a NaN is unordered under every comparison and a `max`/`min`
+        // second operand propagates (data.c:3468-3471); `(/ 1 0.0)` is +inf.
+        Value::make_float(f64::INFINITY),
+        Value::make_float(f64::NAN),
+        Value::NIL,
+        Value::T,
+        Value::string("s"),
+    ];
+    for value in &pool {
+        ctx.push_specpdl_root(*value);
+    }
+    let mut tied = 0usize;
+    for kind in ArithGenericKind::iter() {
+        assert_eq!(ArithGenericKind::from_op(&opcode(kind)), Some(kind));
+        for a in &pool {
+            let shapes = if kind.arity() == 1 {
+                vec![vec![*a]]
+            } else {
+                pool.iter().map(|b| vec![*a, *b]).collect()
+            };
+            for operands in shapes {
+                if !in_domain(kind, &operands) || serial_nan_short_circuit(kind, &operands) {
+                    continue;
+                }
+                let (got, want) = tie(&mut ctx, kind, &operands);
+                assert_eq!(got, want, "{kind:?} {operands:?}");
+                tied += 1;
+            }
+        }
+    }
+    assert!(tied > 3000, "shapes tied: {tied}");
 }
