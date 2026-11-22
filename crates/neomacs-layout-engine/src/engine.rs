@@ -7101,6 +7101,34 @@ impl LayoutEngine {
 /// The same-start branch otherwise falls into
 /// `try_window (..., TRY_WINDOW_CHECK_MARGINS)` (`:21052`), so this is also
 /// the gate for `partial_line_height`'s probe row.
+///
+/// Known follow-ups (N1-F2..F5) — each is a GNU comparison this predicate's
+/// first implementation does not perform yet; none changes the six inputs
+/// above:
+///
+/// * N1-F2 — GNU's strict boundary in `window_outdated` (src/window.c:231-236)
+///   is `w->last_modified < BUF_MODIFF` and
+///   `w->last_overlay_modified < BUF_OVERLAY_MODIFF`.  Neo records both ticks
+///   at acceptance and compares with `!=`, so a tick that moves backwards
+///   refuses reuse where GNU would accept it.
+/// * N1-F3 — hscroll/vscroll buffer scope.  GNU raises the *buffer's*
+///   `prevent_redisplay_optimizations_p` when `set-window-hscroll` changes
+///   `w->hscroll` (src/window.c:1303), `set-window-vscroll` changes
+///   `w->vscroll` (src/window.c:8971), or redisplay auto-hscrolls
+///   (src/xdisp.c:16879), so every window showing that buffer refuses reuse.
+///   Neo records hscroll/vscroll in the changed window's retained key but
+///   does not raise the buffer's prevent revision, so a sibling window
+///   showing the same buffer can still reuse its matrix.
+/// * N1-F4 — jit-lock steady state.  GNU records `w->last_modified` /
+///   `w->last_overlay_modified` only when the matrix is marked accurate
+///   (`mark_window_display_accurate_1`, src/xdisp.c:18282-18290); Neo records
+///   them on every accepted retained matrix.  Verify that repeated
+///   property-only fontification settles to one rebuild and then reuses.
+/// * N1-F5 — recenter/scroll `TRY_WINDOW_CHECK_MARGINS`.  GNU passes the
+///   flag on the same-start (`src/xdisp.c:21052`) and recenter (`:21403`)
+///   walks, where `partial_line_height` can move the window start; Neo has no
+///   carried check-margins bit and refuses every non-presentation walk, so
+///   that arm is UNATTESTED.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum GnuMatrixReuse {
     /// The predicate held at entry: GNU may display this window from the
