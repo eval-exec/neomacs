@@ -259,6 +259,7 @@ impl ChromeResizeFixture {
     }
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn toolbar_implied_resize_preserves_text_geometry_with_canonical_policy() {
     let mut fixture = ChromeResizeFixture::new();
@@ -309,6 +310,7 @@ fn toolbar_implied_resize_honors_true_parameter_list_and_force_inhibition() {
     }
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn toolbar_creation_geometry_ignores_ordinary_inhibition_but_honors_force() {
     for (policy, expected_request) in [("t", true), ("'(tool-bar-lines)", true), ("'force", false)]
@@ -363,6 +365,7 @@ fn toolbar_noop_is_silent_and_same_alist_explicit_size_wins_once() {
     }
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn toolbar_change_preserves_requested_explicit_grid_across_stale_native_ack() {
     let mut fixture = ChromeResizeFixture::new();
@@ -381,6 +384,7 @@ fn toolbar_change_preserves_requested_explicit_grid_across_stale_native_ack() {
     fixture.assert_geometry(90, 40, 640);
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn toolbar_change_preserves_unsent_explicit_size_after_same_metric_font_change() {
     let mut fixture = ChromeResizeFixture::new();
@@ -406,6 +410,7 @@ fn toolbar_change_preserves_unsent_explicit_size_after_same_metric_font_change()
     fixture.assert_geometry(90, 40, 640);
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn menu_and_internal_border_changes_share_implied_resize_and_settled_geometry() {
     let mut fixture = ChromeResizeFixture::new();
@@ -423,6 +428,7 @@ fn menu_and_internal_border_changes_share_implied_resize_and_settled_geometry() 
     fixture.assert_geometry(100, 35, 566);
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn menu_and_border_parameter_lists_inhibit_only_the_changed_reason() {
     for (policy, parameters, expected_request, geometry) in [
@@ -472,6 +478,7 @@ fn menu_and_border_parameter_lists_inhibit_only_the_changed_reason() {
     }
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn chrome_resize_minima_override_inhibition_only_on_the_required_axis() {
     for policy in ["t", "'force"] {

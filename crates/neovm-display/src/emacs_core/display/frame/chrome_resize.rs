@@ -56,6 +56,13 @@ impl ChromeChange {
         value: Value,
         previous: Option<&ChromeResizeTarget>,
     ) -> Result<Option<Self>, Flow> {
+        // The canonical GTK profile compensates chrome changes in core. NS
+        // instead follows AppKit's external NSToolbar allocation callbacks;
+        // applying GTK preservation there would introduce another divergence.
+        // Its existing allocation behavior stays unchanged (N-607-ns-toolbar).
+        if !cfg!(target_os = "linux") {
+            return Ok(None);
+        }
         let reason = match name {
             "tool-bar-lines" => ImpliedResizeReason::ToolBarLines,
             "menu-bar-lines" => ImpliedResizeReason::MenuBarLines,

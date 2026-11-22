@@ -7809,7 +7809,7 @@ fn parsed_effective_internal_border_width(
     parsed
         .internal_border_width
         .map(|width| width.max(0) as u32)
-        .unwrap_or(0)
+        .unwrap_or(crate::window::GUI_DEFAULT_INTERNAL_BORDER_WIDTH)
 }
 
 fn current_gui_frame_metrics_in_state(frames: &FrameManager) -> GuiFrameMetrics {

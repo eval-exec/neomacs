@@ -14,6 +14,11 @@ use neovm_edit::buffer::{BufferId, BufferManager, LispCharPos1};
 use neovm_value::value::Value;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
+/// Canonical NS frames reserve two internal pixels on every edge
+/// (GNU nsfns.m:1348); the GTK3 profile defaults to zero.
+pub(crate) const GUI_DEFAULT_INTERNAL_BORDER_WIDTH: u32 =
+    if cfg!(target_os = "macos") { 2 } else { 0 };
+
 pub(crate) mod body;
 mod chrome;
 pub use chrome::WindowChromePresence;

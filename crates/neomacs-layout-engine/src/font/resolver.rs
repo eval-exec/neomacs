@@ -960,7 +960,7 @@ impl FontResolver {
         selected
     }
 
-    fn with_native_metrics(&self, mut matched: PlatformFontMatch) -> PlatformFontMatch {
+    pub(super) fn with_native_metrics(&self, mut matched: PlatformFontMatch) -> PlatformFontMatch {
         if matched.metadata.design_metrics.is_none() {
             matched.metadata.design_metrics = self.backend.design_metrics(&matched);
         }

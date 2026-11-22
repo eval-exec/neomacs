@@ -1483,7 +1483,11 @@ impl FontMetricsService {
         let family = matched.metadata.family.clone();
         let weight = matched.weight().unwrap_or(400);
         let italic = matched.slant().is_italic();
-        let platform = self.materialize_platform_match(matched.clone())?;
+        // Enumerated entities intentionally carry discovery metadata only.
+        // Attach the selected backend's metrics at opening, as open_entity
+        // does for font-info, before table fallbacks or first interning.
+        let platform = self.font_resolver.with_native_metrics(matched.clone());
+        let platform = self.materialize_platform_match(platform)?;
         let handle = self.materialize_platform_selection(
             Some(platform),
             &family,

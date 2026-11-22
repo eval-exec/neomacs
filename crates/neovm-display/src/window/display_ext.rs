@@ -486,10 +486,10 @@ impl DisplayFrameExt for Frame {
         // and friends report nil even though the layout already reserves and draws
         // the corresponding chrome — the frame parameter lies about what is on screen.
         //
-        // Each value equals the fallback the layout (window/display.rs) already
-        // applies for the missing parameter, so seeding them changes reporting only,
-        // never geometry: GTK builds default vertical scroll bars to the right,
-        // horizontal off, the standard 8px fringes, and a zero internal/outer border.
+        // GTK builds default vertical scroll bars to the right, horizontal off,
+        // standard 8px fringes, and zero internal/outer borders. NS instead
+        // reserves a two-pixel internal border (nsfns.m:1348); construction
+        // and parameter reporting must use that same default.
         // scroll-bar-width/height are intentionally left unset: their shared
         // fallback is GNU's toolkit default (16 px, xfns.c:2393-2438), which does
         // not follow the frame font either; `frame-parameter` reports that same
@@ -498,7 +498,10 @@ impl DisplayFrameExt for Frame {
         self.set_known_parameter(FrameParam::HorizontalScrollBars, Value::NIL);
         self.set_known_parameter(FrameParam::LeftFringe, Value::fixnum(8));
         self.set_known_parameter(FrameParam::RightFringe, Value::fixnum(8));
-        self.set_known_parameter(FrameParam::InternalBorderWidth, Value::fixnum(0));
+        self.set_known_parameter(
+            FrameParam::InternalBorderWidth,
+            Value::fixnum(i64::from(super::GUI_DEFAULT_INTERNAL_BORDER_WIDTH)),
+        );
         self.set_known_parameter(FrameParam::BorderWidth, Value::fixnum(0));
         // GNU's `allocate_frame` initializes `tool-bar-position` to `top`
         // (src/frame.c:1167 `fset_tool_bar_position (f, Qtop)`), and GTK frame

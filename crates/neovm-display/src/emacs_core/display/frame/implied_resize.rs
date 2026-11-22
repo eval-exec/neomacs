@@ -102,8 +102,8 @@ pub(crate) fn policy(
 
 #[cfg(test)]
 mod tests {
-    use crate::window::DisplayFrameExt;
     use super::*;
+    use crate::window::DisplayFrameExt;
     use crate::window::{DisplayFrameManagerExt, FrameId, FrameManager};
     use neovm_edit::buffer::BufferId;
 

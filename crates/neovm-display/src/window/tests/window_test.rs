@@ -1399,9 +1399,9 @@ fn gui_default_parameters_seed_scroll_bar_and_fringe_chrome() {
     // GNU's gui_default_parameter (xfns.c) seeds these on every GUI frame.
     // Without them, `(frame-parameter f 'vertical-scroll-bars)` reports nil even
     // though the layout already reserves and draws the scroll bar — the frame
-    // parameter lied about what is on screen. Each seeded value equals the layout
-    // fallback in window/display.rs, so this is a reporting fix, not a geometry
-    // change. scroll-bar-width stays unseeded on purpose: GNU reports the
+    // parameter lied about what is on screen. NS additionally reserves its
+    // canonical two-pixel internal border (nsfns.m:1348); GTK defaults to zero.
+    // scroll-bar-width stays unseeded on purpose: GNU reports the
     // configured thickness from `frame-parameter' even when the alist has no
     // entry (src/frame.c:5437-5456), and Neomacs answers it from
     // frame_config_scroll_bar_width's toolkit default (16) in the parameter
@@ -1424,7 +1424,7 @@ fn gui_default_parameters_seed_scroll_bar_and_fringe_chrome() {
     );
     assert_eq!(
         frame.known_parameter(FrameParam::InternalBorderWidth),
-        Some(Value::fixnum(0))
+        Some(Value::fixnum(if cfg!(target_os = "macos") { 2 } else { 0 }))
     );
     assert_eq!(
         frame.known_parameter(FrameParam::BorderWidth),

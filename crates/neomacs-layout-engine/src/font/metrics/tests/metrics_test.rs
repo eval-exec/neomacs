@@ -1847,7 +1847,6 @@ fn native_metrics_fixture_service(
     String,
     crate::font_backend::PlatformFontDesignMetrics,
 ) {
-    let fixture = test_font_path(neomacs_test_fonts::spleen_2_2_0().woff());
     let design_metrics = crate::font_backend::PlatformFontDesignMetrics {
         units_per_em: 1000,
         ascent: 1010,
@@ -1857,6 +1856,19 @@ fn native_metrics_fixture_service(
         space_advance: 600,
         average_advance: 600,
     };
+    native_metrics_fixture_service_with_metrics(variations, design_metrics)
+}
+
+fn native_metrics_fixture_service_with_metrics(
+    variations: Vec<neomacs_display_protocol::font::FontVariationCoord>,
+    design_metrics: crate::font_backend::PlatformFontDesignMetrics,
+) -> (
+    FontMetricsService,
+    fontdb::ID,
+    String,
+    crate::font_backend::PlatformFontDesignMetrics,
+) {
+    let fixture = test_font_path(neomacs_test_fonts::spleen_2_2_0().woff());
     let mut svc = make_svc();
     let ids = FontFileCache::open_file(svc.font_system.db_mut(), &fixture, 0)
         .expect("decode pinned font fixture");
@@ -1890,6 +1902,119 @@ fn native_metrics_fixture_service(
             metrics: design_metrics,
         }));
     (svc, fontdb_id, family, design_metrics)
+}
+
+fn fifteen_pixel_native_metrics() -> crate::font_backend::PlatformFontDesignMetrics {
+    crate::font_backend::PlatformFontDesignMetrics {
+        units_per_em: 13,
+        ascent: 12,
+        descent: 3,
+        line_gap: 0,
+        max_advance: 8,
+        space_advance: 8,
+        average_advance: 8,
+    }
+}
+
+#[test]
+fn opening_an_enumerated_font_enriches_native_metrics_before_first_interning() {
+    let (mut svc, _, family, native) =
+        native_metrics_fixture_service_with_metrics(Vec::new(), fifteen_pixel_native_metrics());
+    let query = crate::font::resolver::FontEntityQuery::new(
+        crate::font_backend::FontFamilyName::new(&family),
+    )
+    .with_selection(neovm_core::emacs_core::eval::FontSpecSelection::OpenBySpec)
+    .with_weight(400)
+    .with_slant(FontSlant::Normal)
+    .with_width(FontWidth::Normal);
+    let entity = svc.resolve_font_entity(&query).expect("enumerated entity");
+    assert!(entity.matched.metadata.design_metrics.is_none());
+    let opened = svc
+        .open_platform_match_font(&entity.matched, 13)
+        .expect("open enumerated entity");
+    let expected = native.at_pixel_size(13.0).unwrap();
+    assert_eq!(
+        (expected.height, expected.ascent, expected.descent),
+        (15, 12, 3)
+    );
+    assert_eq!(opened.metrics, expected);
+    assert_eq!(opened.resolved.ascent_px, 12.0);
+    assert_eq!(opened.resolved.descent_px, 3.0);
+    assert_eq!(opened.resolved.identity, entity.matched.identity);
+
+    let info = svc
+        .font_resolver
+        .open_entity(&query, 13)
+        .expect("font-info");
+    assert_eq!(info.metrics, expected);
+    let startup = svc
+        .select_font_for_char('M', &family, 400, false, 13.0)
+        .expect("startup selection");
+    assert_eq!(startup.metrics, expected);
+    assert_eq!(startup.resolved, opened.resolved);
+    let FrameCellGeometry::Graphic(geometry) = svc.frame_cell_geometry(
+        &family,
+        400,
+        false,
+        13.0,
+        FrameFontDomain::for_frame(true, 13.0),
+    ) else {
+        panic!("graphic frame geometry");
+    };
+    assert_eq!(geometry.metrics.line_height, 15.0);
+    assert_eq!(geometry.metrics.ascent, 12.0);
+    assert_eq!(geometry.metrics.descent, 3.0);
+}
+
+#[test]
+fn opening_an_entity_uses_native_metrics_even_when_an_interned_record_retains_old_metrics() {
+    let (mut svc, _, family, native) =
+        native_metrics_fixture_service_with_metrics(Vec::new(), fifteen_pixel_native_metrics());
+    let query = crate::font::resolver::FontEntityQuery::new(
+        crate::font_backend::FontFamilyName::new(&family),
+    )
+    .with_selection(neovm_core::emacs_core::eval::FontSpecSelection::OpenBySpec);
+    let entity = svc.resolve_font_entity(&query).expect("enumerated entity");
+    // Model a retained record observed before the native opening boundary.
+    // Its stable identity must not substitute stale 17px data for the newly
+    // opened font's independent 15px native metrics.
+    let stale = svc.font_instances.intern(
+        entity.matched.identity.clone(),
+        FontReplay::Swash {
+            asset: entity.matched.asset.clone(),
+        },
+        13.0,
+        || FontInstanceProperties {
+            family: family.clone(),
+            full_name: None,
+            postscript_name: entity.matched.identity.postscript_name.clone(),
+            weight: 400,
+            slant: FontSlantKind::Normal,
+            width: 5,
+            ascent_px: 13.0,
+            descent_px: 4.0,
+            space_advance_px: 8.0,
+            glyph_advance: ResolvedFontAdvance::monospace_cells(8.0),
+            spacing: Some(100),
+        },
+    );
+    let opened = svc
+        .open_platform_match_font(&entity.matched, 13)
+        .expect("native opening after retained record");
+    assert_eq!(opened.resolved.id, stale.id);
+    assert_eq!(opened.resolved.ascent_px + opened.resolved.descent_px, 17.0);
+    assert_eq!(opened.metrics, native.at_pixel_size(13.0).unwrap());
+    assert_eq!(opened.metrics.height, 15);
+    let FrameCellGeometry::Graphic(geometry) = svc.frame_cell_geometry(
+        &family,
+        400,
+        false,
+        13.0,
+        FrameFontDomain::for_frame(true, 13.0),
+    ) else {
+        panic!("graphic frame geometry");
+    };
+    assert_eq!(geometry.metrics.line_height, 15.0);
 }
 
 #[test]
