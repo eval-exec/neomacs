@@ -1912,6 +1912,244 @@ mod literal_search_linear_equivalence {
     }
 }
 
+fn literal_gap_test_buffer(text: &str) -> Buffer {
+    let mut buf = Buffer::new(
+        BufferId(1),
+        Value::string("literal-gap"),
+        neovm_edit::buffer::shared::SavedPointBeforeCommand::new_editor_global(),
+    );
+    buf.insert(text);
+    buf
+}
+
+/// Park the gap at byte POS the way an edit leaves it: insert a char there
+/// and delete it again.  Point is kept.
+fn park_gap_at_keeping_point(buf: &mut Buffer, pos: usize) {
+    use neovm_edit::buffer::EmacsBytePos;
+    let point = buf.point_emacs_byte_pos();
+    buf.goto_emacs_byte_pos(EmacsBytePos::new(pos));
+    buf.insert("x");
+    buf.delete_emacs_byte_range(EmacsByteRange::new(
+        EmacsBytePos::new(pos),
+        EmacsBytePos::new(pos + 1),
+    ));
+    buf.goto_emacs_byte_pos(point);
+}
+
+#[derive(Clone, Copy, Debug)]
+enum LiteralDirection {
+    Forward,
+    Backward,
+}
+
+/// One literal search from byte START: the point it returns and match group 0.
+fn literal_search_at(
+    buf: &mut Buffer,
+    direction: LiteralDirection,
+    pattern: &LispString,
+    start: usize,
+    bound: Option<usize>,
+    case_fold: bool,
+) -> Option<(usize, MatchGroup)> {
+    buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(start));
+    let mut regs = SearchRegisters::default();
+    let found = match direction {
+        LiteralDirection::Forward => {
+            super::search_forward_into(buf, pattern, bound, true, case_fold, &mut regs)
+        }
+        LiteralDirection::Backward => {
+            super::search_backward_into(buf, pattern, bound, true, case_fold, &mut regs)
+        }
+    }
+    .expect("noerror literal search does not fail")?;
+    let mut published = None;
+    regs.publish_buffer_into(buf, &mut published);
+    Some((found.get(), published?.group(0)?))
+}
+
+/// Every hit of a COUNT-style loop (repeated searches continuing from the
+/// last hit, as `search-forward' with COUNT > 1 or COUNT < 0 does), with the
+/// gap re-parked at GAP before each step when GAP is given.
+fn literal_search_hits(
+    buf: &mut Buffer,
+    direction: LiteralDirection,
+    pattern: &LispString,
+    bound: Option<usize>,
+    case_fold: bool,
+    gap: Option<usize>,
+) -> Vec<(usize, MatchGroup)> {
+    let mut point = match direction {
+        LiteralDirection::Forward => 0,
+        LiteralDirection::Backward => buf.accessible_emacs_byte_region().end().get(),
+    };
+    let mut hits = Vec::new();
+    loop {
+        if let Some(gap) = gap {
+            park_gap_at_keeping_point(buf, gap);
+        }
+        let Some(hit) = literal_search_at(buf, direction, pattern, point, bound, case_fold) else {
+            return hits;
+        };
+        if hit.0 == point {
+            // An empty match does not advance; one hit is enough.
+            hits.push(hit);
+            return hits;
+        }
+        point = hit.0;
+        hits.push(hit);
+    }
+}
+
+#[test]
+fn literal_search_results_do_not_depend_on_gap_position() {
+    crate::test_utils::init_test_tracing();
+    let text = "αβγ Éclair défun xyz défun ÉCLAIR tail défundéfun";
+    let char_boundaries: Vec<usize> = text
+        .char_indices()
+        .map(|(i, _)| i)
+        .chain([text.len()])
+        .collect();
+    // (pattern, case-fold): a hit straddling the gap at every offset, a hit
+    // ending exactly at the gap, a case-folded multibyte pattern, and a
+    // pattern longer than either gap half.
+    let cases = [
+        ("défun", false),
+        ("DÉFUN", true),
+        ("éclair", true),
+        ("Éclair", false),
+        ("fun", false),
+        ("missing", false),
+        (text, false),
+    ];
+    let bounds = [None, Some(9), Some(22), Some(40), Some(text.len())];
+    let mut reference = literal_gap_test_buffer(text);
+    let mut buf = literal_gap_test_buffer(text);
+    for (pattern, case_fold) in cases {
+        let pattern = LispString::from_utf8(pattern);
+        for direction in [LiteralDirection::Forward, LiteralDirection::Backward] {
+            for bound in bounds {
+                let expected = literal_search_hits(
+                    &mut reference,
+                    direction,
+                    &pattern,
+                    bound,
+                    case_fold,
+                    None,
+                );
+                for &gap in &char_boundaries {
+                    let got = literal_search_hits(
+                        &mut buf,
+                        direction,
+                        &pattern,
+                        bound,
+                        case_fold,
+                        Some(gap),
+                    );
+                    assert_eq!(
+                        got, expected,
+                        "{direction:?} {pattern:?} bound {bound:?} case-fold {case_fold} gap at {gap}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// The gap's byte position in an ASCII buffer.
+fn ascii_gap_byte(buf: &Buffer) -> usize {
+    usize::try_from(buf.gap_position_lisp() - 1).expect("gap position is at least 1")
+}
+
+#[test]
+fn literal_search_loop_with_gap_in_span_copies_nothing() {
+    use std::sync::atomic::Ordering;
+    crate::test_utils::init_test_tracing();
+    // About 1 MB, "defun" once per 505 bytes: 2,000 hits.
+    let unit = format!("{}(defun marker)\n", "x".repeat(490));
+    let text = unit.repeat(2_000);
+    let pattern = LispString::from_utf8("defun");
+    for (direction, parked) in [
+        (LiteralDirection::Forward, text.len() - 10),
+        (LiteralDirection::Backward, 10),
+    ] {
+        let mut buf = literal_gap_test_buffer(&text);
+        park_gap_at_keeping_point(&mut buf, parked);
+        let parked_gap = ascii_gap_byte(&buf);
+        assert_eq!(parked_gap, parked);
+        let copied_before = super::SEARCH_COPIED_BYTES.load(Ordering::Relaxed);
+        let mut point = match direction {
+            LiteralDirection::Forward => 0,
+            LiteralDirection::Backward => text.len(),
+        };
+        let mut hits = 0;
+        while let Some((found, _)) =
+            literal_search_at(&mut buf, direction, &pattern, point, None, false)
+        {
+            point = found;
+            hits += 1;
+        }
+        assert_eq!(hits, 2_000, "{direction:?}");
+        let copied = super::SEARCH_COPIED_BYTES.load(Ordering::Relaxed) - copied_before;
+        assert_eq!(copied, 0, "{direction:?}: bytes copied out of the buffer");
+        // GNU `search_buffer_non_re' reads both gap halves through
+        // BYTE_POS_ADDR (search.c:1298) and never calls move_gap: after the
+        // loop `gap-position' is exactly what the last edit left.
+        assert_eq!(
+            ascii_gap_byte(&buf),
+            parked_gap,
+            "{direction:?}: a literal search must leave the gap where the edit left it"
+        );
+    }
+}
+
+#[test]
+fn literal_search_after_edit_keeps_gap_at_the_edit() {
+    use std::sync::atomic::Ordering;
+    crate::test_utils::init_test_tracing();
+    // The shape of a command hook: insert at P, search forward from P,
+    // delete the char again, 200 times.
+    let unit = format!("{}(defun marker)\n", "x".repeat(490));
+    let text = unit.repeat(2_000);
+    let pattern = LispString::from_utf8("defun");
+    let mut buf = literal_gap_test_buffer(&text);
+    let p = text.len() / 10;
+    let copied_before = super::SEARCH_COPIED_BYTES.load(Ordering::Relaxed);
+    for _ in 0..200 {
+        buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(p));
+        buf.insert("x");
+        // The edit parks the gap after the inserted character. GNU's literal
+        // search leaves it there; the search must not move it (search.c:1298).
+        let gap_after_edit = ascii_gap_byte(&buf);
+        assert_eq!(
+            gap_after_edit,
+            p + 1,
+            "insert must park the gap at the edit"
+        );
+        assert!(
+            literal_search_at(
+                &mut buf,
+                LiteralDirection::Forward,
+                &pattern,
+                p,
+                None,
+                false
+            )
+            .is_some()
+        );
+        assert_eq!(
+            ascii_gap_byte(&buf),
+            gap_after_edit,
+            "search moved the gap from the edit"
+        );
+        buf.delete_emacs_byte_range(EmacsByteRange::new(
+            neovm_edit::buffer::EmacsBytePos::new(p),
+            neovm_edit::buffer::EmacsBytePos::new(p + 1),
+        ));
+    }
+    let copied = super::SEARCH_COPIED_BYTES.load(Ordering::Relaxed) - copied_before;
+    assert_eq!(copied, 0, "bytes copied out of the buffer");
+}
+
 fn backward_search_buffer(text: &str) -> Buffer {
     let mut buf = Buffer::new(
         BufferId(1),
