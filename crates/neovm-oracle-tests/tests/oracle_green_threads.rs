@@ -1099,3 +1099,21 @@ fn green_kill_and_remake_a_local_rebound_inside_backtrace_exchange() {
         expect_test::expect![[r#""OK ((bound (exchange-bound default remade) bound) local t)""#]],
     );
 }
+
+/// Cut-4b: a worker's selection calls keep GNU's batch-visible values. In
+/// `emacs -Q --batch` the default backend methods are no-ops, so this pins
+/// the Lisp contract (no thread-affine error; `gui-get-selection` nil,
+/// `gui-set-selection` returns DATA) rather than a host effect; the routed
+/// boundary itself is covered by the selection unit rows.
+#[test]
+fn green_worker_selection_calls_keep_gnu_batch_values() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    assert_green_oracle(
+        r##"
+(let* ((get (make-thread (lambda () (gui-get-selection 'PRIMARY))))
+       (set (make-thread (lambda () (gui-set-selection 'PRIMARY "x")))))
+  (list (thread-join get) (thread-join set)))
+"##,
+        expect_test::expect![[r#""OK (nil \"x\")""#]],
+    );
+}
