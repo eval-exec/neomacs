@@ -1,4 +1,4 @@
-Physical Command-Q uses one persistent app, bundle `org.neomacs.GuiDriver`. The lane has not built or launched this fixed-path app or requested permissions. Setup is deferred until the user can access the Mac mini's logged-in desktop. The test remains BLOCKED until then.
+Physical Command-Q uses one persistent app, bundle `org.neomacs.GuiDriver`. The fixed-path app has been built once with an ad-hoc signature and verified as `org.neomacs.GuiDriver`. It has not been launched, and no permissions have been requested. Permission setup awaits the user at the Mac mini's logged-in desktop; the test remains BLOCKED until then.
 
 At that desktop, select the ABC keyboard input source for the physical Q key. Use these fixed paths:
 
@@ -8,17 +8,13 @@ export NEOMACS_GUI_DRIVER_APP=/Users/eval-exec/Projects/github.com/eval-exec/neo
 export NEOMACS_GUI_DRIVER_SOCKET=/Users/eval-exec/Projects/github.com/eval-exec/neomacs/tmp/wt-lead-remote.noindex/gui.sock
 ```
 
-Optional, recommended: in Keychain Access, choose Certificate Assistant → Create a Certificate. Create a self-signed Code Signing certificate in the login keychain, named `Neomacs GUI Driver Testing`. The user performs this step; lanes never create keychain items. Then build once with that identity:
+Optional, recommended: in Keychain Access, choose Certificate Assistant → Create a Certificate. Create a self-signed Code Signing certificate in the login keychain, named `Neomacs GUI Driver Testing`. The user performs this step; lanes never create keychain items. If you choose this certificate before the first permission grant, replace the prepared ad-hoc build once with that signing identity:
 
 ```sh
 NEOMACS_GUI_DRIVER_SIGN_IDENTITY='Neomacs GUI Driver Testing' bash scripts/build-macos-gui-driver.sh
 ```
 
-If you skip the certificate, use this command instead. It uses an ad-hoc signature:
-
-```sh
-bash scripts/build-macos-gui-driver.sh
-```
+If you skip the certificate, use the already prepared app directly. Do not run the build script again.
 
 Keep this app at the fixed path. Do not rebuild it unless `Driver.swift` changes. An ad-hoc rebuild changes its signing identity and can invalidate the grant; the optional certificate keeps the signing identity stable across later builds.
 
