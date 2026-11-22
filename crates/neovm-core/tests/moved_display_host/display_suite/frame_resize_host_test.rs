@@ -258,7 +258,9 @@ impl ChromeResizeFixture {
             .eval
             .eval_str(
                 "(list (frame-parameter nil 'width) (frame-parameter nil 'height)
-                       (frame-native-height) (frame-char-height))",
+                       (frame-native-height) (frame-char-height)
+                       (cdr (assq 'width (frame-parameters)))
+                       (cdr (assq 'height (frame-parameters))))",
             )
             .unwrap();
         assert_eq!(
@@ -268,6 +270,8 @@ impl ChromeResizeFixture {
                 Value::fixnum(rows),
                 Value::fixnum(native_height),
                 Value::fixnum(16),
+                Value::fixnum(columns),
+                Value::fixnum(rows),
             ]
         );
     }

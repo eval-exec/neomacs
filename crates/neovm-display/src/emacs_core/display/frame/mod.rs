@@ -27,11 +27,12 @@ use super::window_cmds::{
     ensure_selected_frame_id_in_state, expect_int, flush_pending_live_gui_resize,
     frame_is_top_level_non_window, frame_name_parameter_value, frame_non_text_total_height_pixels,
     frame_non_text_total_width_pixels_in_state, frame_realized_lines, frame_size_param_to_cells,
-    frame_size_param_to_pixels, frame_text_height_pixels, frame_text_width_pixels_in_state,
-    frame_total_cols, frame_total_lines, make_frame_plain_on_terminal, other_frames_in_state,
-    parse_frame_size_param, remember_selected_window_point_in_state, request_live_gui_frame_resize,
-    resize_live_gui_frame, resolve_frame_id, resolve_frame_id_in_state, selected_frame_impl,
-    set_frame_text_size, stringish_value, sync_selected_window_buffer_in_state,
+    frame_size_param_to_pixels, frame_text_height_pixels, frame_text_width_pixels,
+    frame_text_width_pixels_in_state, frame_total_cols, frame_total_lines,
+    make_frame_plain_on_terminal, other_frames_in_state, parse_frame_size_param,
+    remember_selected_window_point_in_state, request_live_gui_frame_resize, resize_live_gui_frame,
+    resolve_frame_id, resolve_frame_id_in_state, selected_frame_impl, set_frame_text_size,
+    stringish_value, sync_selected_window_buffer_in_state,
 };
 use crate::window::FrameManager;
 use crate::window::{
@@ -3063,15 +3064,16 @@ pub(crate) fn frame_parameter_value(
 }
 
 fn gui_frame_width_parameter(frame: &crate::window::Frame) -> Value {
-    // As for height below, GNU reports the pending text-size request.
-    frame.pending_gui_resize.map_or_else(
+    // GNU frame.c:4145-4148 uses FRAME_COLS when no size is pending.
+    // Cached parameter entries cannot describe inhibited chrome reflow.
+    Value::fixnum(frame.pending_gui_resize.map_or_else(
         || {
-            frame
-                .fixed_parameter(crate::window::FrameQueryParam::Width)
-                .unwrap_or(Value::fixnum(frame.columns() as i64))
+            ((frame_text_width_pixels(frame) as f32) / frame.char_width.max(1.0))
+                .floor()
+                .max(1.0) as i64
         },
-        |pending| Value::fixnum(pending.width_cols),
-    )
+        |pending| pending.width_cols,
+    ))
 }
 
 fn gui_frame_height_parameter(frame: &crate::window::Frame) -> Value {

@@ -6139,13 +6139,6 @@ fn frame_non_text_height_pixels(frame: &crate::window::Frame) -> u32 {
         .saturating_add(frame.tab_bar_height)
 }
 
-fn frame_non_text_width_pixels_in_state(frames: &FrameManager, fid: FrameId) -> u32 {
-    frames
-        .get(fid)
-        .map(|frame| frame.horizontal_non_text_width().max(0) as u32)
-        .unwrap_or(0)
-}
-
 fn frame_internal_border_total_pixels(frame: &crate::window::Frame) -> u32 {
     u32::try_from(frame.internal_border_width().max(0))
         .unwrap_or(u32::MAX / 2)
@@ -6156,11 +6149,15 @@ pub(crate) fn frame_non_text_total_width_pixels_in_state(
     frames: &FrameManager,
     fid: FrameId,
 ) -> u32 {
-    let border = frames
+    frames
         .get(fid)
-        .map(frame_internal_border_total_pixels)
-        .unwrap_or(0);
-    frame_non_text_width_pixels_in_state(frames, fid).saturating_add(border)
+        .map(frame_non_text_total_width_pixels)
+        .unwrap_or(0)
+}
+
+fn frame_non_text_total_width_pixels(frame: &crate::window::Frame) -> u32 {
+    (frame.horizontal_non_text_width().max(0) as u32)
+        .saturating_add(frame_internal_border_total_pixels(frame))
 }
 
 pub(crate) fn frame_non_text_total_height_pixels(frame: &crate::window::Frame) -> u32 {
@@ -6168,12 +6165,13 @@ pub(crate) fn frame_non_text_total_height_pixels(frame: &crate::window::Frame) -
 }
 
 pub(crate) fn frame_text_width_pixels_in_state(frames: &FrameManager, fid: FrameId) -> u32 {
-    let Some(frame) = frames.get(fid) else {
-        return 0;
-    };
+    frames.get(fid).map(frame_text_width_pixels).unwrap_or(0)
+}
+
+pub(crate) fn frame_text_width_pixels(frame: &crate::window::Frame) -> u32 {
     frame
         .width
-        .saturating_sub(frame_non_text_total_width_pixels_in_state(frames, fid))
+        .saturating_sub(frame_non_text_total_width_pixels(frame))
         .max(1)
 }
 
