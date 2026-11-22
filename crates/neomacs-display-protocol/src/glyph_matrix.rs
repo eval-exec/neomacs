@@ -2090,7 +2090,7 @@ pub struct CursorItem {
 }
 
 /// A scroll bar.
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ScrollBarItem {
     pub window_id: DisplayWindowId,
     pub row_role: GlyphRowRole,
@@ -2116,10 +2116,6 @@ pub struct FrameDisplayState {
     /// Bounded body coverage, separate from authoritative query geometry.
     #[serde(default)]
     pub scroll_coverage: Vec<std::sync::Arc<crate::scroll_coverage::ScrollCoverage>>,
-    /// Reuse admission outcomes only for the same coverage identity and
-    /// still-matching frame inputs. Rejected inputs can recover after mutation.
-    #[serde(skip)]
-    prepared_scroll_admissions: Vec<crate::scroll_coverage::ScrollCoverageAdmission>,
     /// Epochs whose certified coverage this publish re-asserts without
     /// re-exporting a surface (see [`crate::scroll_coverage::ScrollCoverageRenewal`]).
     #[serde(default)]
@@ -2687,7 +2683,6 @@ impl FrameDisplayState {
         Self {
             scroll_input_policy: crate::ScrollInputPolicy::default(),
             scroll_coverage: Vec::new(),
-            prepared_scroll_admissions: Vec::new(),
             scroll_coverage_renewals: Vec::new(),
             input_checkpoint: Vec::new(),
             presentation_id: PresentationId::default(),
@@ -2932,38 +2927,6 @@ impl FrameDisplayState {
         state
     }
 
-    /// Admit coverage once for this publication's inputs, retaining one
-    /// outcome per window and retiring older publications. Mutating coverage
-    /// or frame resources causes admission to run again, including recovery
-    /// from a previously rejected surface.
-    pub fn prepare_scroll_coverage(
-        &mut self,
-        coverage: std::sync::Arc<crate::scroll_coverage::ScrollCoverage>,
-    ) -> Option<std::sync::Arc<crate::scroll_coverage::ScrollSurface>> {
-        let presentation = self.presentation_id;
-        self.prepared_scroll_admissions
-            .retain(|cached| cached.presentation() == presentation);
-        if let Some(cached) = self
-            .prepared_scroll_admissions
-            .iter()
-            .find(|cached| cached.matches(&coverage, self))
-        {
-            return cached.surface();
-        }
-        let window = coverage.content.window_id;
-        let admission = crate::scroll_coverage::ScrollCoverageAdmission::prepare(coverage, self);
-        let surface = admission.surface();
-        self.prepared_scroll_admissions
-            .retain(|cached| cached.window() != window);
-        self.prepared_scroll_admissions.push(admission);
-        surface
-    }
-
-    #[cfg(test)]
-    pub(crate) fn prepared_scroll_admission_count(&self) -> usize {
-        self.prepared_scroll_admissions.len()
-    }
-
     /// Convert this `FrameDisplayState` into a `FrameGlyphBuffer`.
     ///
     /// Materializes the `GlyphMatrix` grid into pixel-positioned
@@ -2979,16 +2942,7 @@ impl FrameDisplayState {
         buf.scroll_surfaces = self
             .scroll_coverage
             .iter()
-            .filter_map(|coverage| {
-                match self
-                    .prepared_scroll_admissions
-                    .iter()
-                    .find(|cached| cached.matches(coverage, self))
-                {
-                    Some(admission) => admission.surface(),
-                    None => coverage.materialize(self),
-                }
-            })
+            .filter_map(|coverage| coverage.materialize(self))
             .collect();
         buf.scroll_coverage_renewals = self.scroll_coverage_renewals.clone();
         buf.frame_placement = self.frame_placement;

@@ -18,7 +18,6 @@ import urllib.request
 parser = argparse.ArgumentParser()
 parser.add_argument("--source-sha", required=True)
 parser.add_argument("--modes", nargs="+", default=["timer", "synthetic-cn"])
-parser.add_argument("--coverage-reuse", choices=["off", "on"], default="on")
 args = parser.parse_args()
 root = Path.cwd()
 source = root / "scripts/macos-navigation-parity"
@@ -94,16 +93,11 @@ for mode in args.modes:
             "--output", str(profile), "--", str(editor), "-Q", "--font=Menlo-13",
             "--geometry=100x35", "--eval", token_form, "-l", str(source / "init.el")]
     env = dict(os.environ, RUST_LOG="error", NEOMACS_RUNTIME_ROOT=str(root),
-               NEOMACS_COVERAGE_EXPORT_REUSE=args.coverage_reuse,
                NAVIGATION_BENCH_DIR=str(case), NAVIGATION_BENCH_MODE=mode,
                NAVIGATION_BENCH_FILE=str(fixture), NAVIGATION_BENCH_EXIT="1")
     env.pop("DISPLAY", None)
     env.pop("WAYLAND_DISPLAY", None)
-    (case / "command.json").write_text(json.dumps({"source": args.source_sha,
-                                                  "coverage_export_reuse": args.coverage_reuse,
-                                                  "controller_host_policy": os.environ.get(
-                                                      "NEOMACS_BENCH_CONTROLLER_POLICY", "not recorded"),
-                                                  "argv": argv}))
+    (case / "command.json").write_text(json.dumps({"source": args.source_sha, "argv": argv}))
     editor_pid = None
     with (case / "profile.log").open("w") as log:
         child = subprocess.Popen(argv, env=env, stdout=log, stderr=log,

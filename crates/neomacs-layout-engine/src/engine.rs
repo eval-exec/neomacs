@@ -4146,7 +4146,7 @@ impl LayoutEngine {
         // on a resize-retry `continue`. Phase 0a always full-rebuilds: every
         // enabled row is `relaid`, every window is classified `Full`, and the
         // retained matrices are written but NOT read (no fast path exists yet).
-        let (mut next_layout_stats, next_retained_window_matrices, acked_buffer_ids) = {
+        let (next_layout_stats, next_retained_window_matrices, acked_buffer_ids) = {
             let key_map: rustc_hash::FxHashMap<DisplayWindowId, RetainedWindowKey> =
                 retained_keys.into_iter().collect();
             let frame_state = &mut frame_display_state;
@@ -4217,7 +4217,7 @@ impl LayoutEngine {
                     if self.prepared_window_ids.contains(&window_id) {
                         next_layout_stats.prepared_windows += 1;
                     }
-                    next_layout_stats.record_window_class(window_id, LayoutClass::CursorOnly);
+                    next_layout_stats.record_window_class(LayoutClass::CursorOnly);
                 } else if let Some((ref reused, _dvpos)) = scroll_reused {
                     // Overlapping rows reused shifted; the rest were newly exposed
                     // and walked.
@@ -4227,7 +4227,7 @@ impl LayoutEngine {
                     if self.prepared_window_ids.contains(&window_id) {
                         next_layout_stats.prepared_windows += 1;
                     }
-                    next_layout_stats.record_window_class(window_id, LayoutClass::Scroll);
+                    next_layout_stats.record_window_class(LayoutClass::Scroll);
                 } else if let Some(ref reused) = edit_reused {
                     // Rows outside the regenerated edit span reused verbatim;
                     // under the edit sync the rows below a span that changed
@@ -4237,10 +4237,10 @@ impl LayoutEngine {
                     next_layout_stats.reused_rows += reused.saturating_sub(shifted);
                     next_layout_stats.reused_shifted_rows += shifted.min(reused);
                     next_layout_stats.relaid_body_rows += enabled_body - reused;
-                    next_layout_stats.record_window_class(window_id, LayoutClass::Edit);
+                    next_layout_stats.record_window_class(LayoutClass::Edit);
                 } else {
                     next_layout_stats.relaid_body_rows += enabled_body;
-                    next_layout_stats.record_window_class(window_id, LayoutClass::Full);
+                    next_layout_stats.record_window_class(LayoutClass::Full);
                 }
 
                 // Phase 5 (#44) per-row provenance. The fast paths reuse the
@@ -4423,25 +4423,16 @@ impl LayoutEngine {
         self.prepared_viewports.export(
             frame_id,
             &next_retained_window_matrices,
-            &mut next_layout_stats,
-            evaluator
-                .frame_manager()
-                .get(frame_id)
-                .and_then(|frame| frame.active_presentation())
-                .map(|id| neomacs_display_protocol::PresentationId::new(id.get())),
             &mut frame_display_state,
             &sealed_face_arena,
             &mut self.font_metrics,
-            |window| {
-                let window = neovm_core::window::WindowId(window.get() as u64);
-                (
-                    evaluator.compositor_scrolling_enabled(window),
-                    evaluator.permits_compositor_pixel_scroll(window),
-                )
-            },
         );
-        for coverage in &frame_display_state.scroll_coverage {
+        for coverage in &mut frame_display_state.scroll_coverage {
             let window = neovm_core::window::WindowId(coverage.content.window_id.get() as u64);
+            std::sync::Arc::make_mut(coverage).compositor_enabled =
+                evaluator.compositor_scrolling_enabled(window);
+            std::sync::Arc::make_mut(coverage).predict_pixels =
+                evaluator.permits_compositor_pixel_scroll(window);
             tracing::debug!(target: "neomacs_layout_engine::scroll_coverage",
                 predict_pixels = coverage.predict_pixels, window = window.0,
                 epoch = coverage.epoch, anchor_row = coverage.anchor_row, origin = coverage.origin,
@@ -4449,6 +4440,11 @@ impl LayoutEngine {
                 source_last = ?coverage.content.matrix.rows.last().map(|row| row.end_charpos),
                 text_bounds = ?coverage.content.text_clip_bounds,
                 "exported compositor coverage");
+        }
+        for renewal in &mut frame_display_state.scroll_coverage_renewals {
+            let window = neovm_core::window::WindowId(renewal.window.get() as u64);
+            renewal.compositor_enabled = evaluator.compositor_scrolling_enabled(window);
+            renewal.predict_pixels = evaluator.permits_compositor_pixel_scroll(window);
         }
         let resolved = match crate::frame_presentation::ResolvedFrame::new(frame_display_state) {
             Ok(resolved) => resolved,
