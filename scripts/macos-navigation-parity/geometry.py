@@ -12,6 +12,10 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--gnu-prefix", type=Path, required=True)
 parser.add_argument("--product-sha", required=True)
 parser.add_argument("--warmup", type=float, default=20)
+parser.add_argument("--startup-phases", action="store_true",
+                    help="Use isolated early/init files instead of -Q and record startup phases")
+parser.add_argument("--rust-log", default="error",
+                    help="Existing targeted Rust logs; use separately from clean timing rows")
 args = parser.parse_args()
 root = Path.cwd()
 source = root / "scripts/macos-navigation-parity"
@@ -27,13 +31,17 @@ attest = subprocess.run(
 (artifacts / "oracle.txt").write_text(attest.stdout)
 print(attest.stdout, flush=True)
 attest.check_returncode()
+harness_files = [source / "geometry.el", source / "geometry.py"]
+if args.startup_phases:
+    harness_files.append(source / "startup-phases.el")
 editors = {"gnu": oracle, "neo": Path(os.environ["CARGO_TARGET_DIR"]) / "release/neomacs"}
 metadata = {
     "row": "N-607-frame-geometry", "product_source_sha": args.product_sha,
     "warmup_seconds": args.warmup,
+    "startup_phases": args.startup_phases, "rust_log": args.rust_log,
     "controller_host_policy": os.environ.get("NEOMACS_BENCH_CONTROLLER_POLICY", "not recorded"),
     "harness_sha256": {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
-                       for p in (source / "geometry.el", source / "geometry.py")},
+                       for p in harness_files},
     "editors": {name: {"path": str(binary),
                         "version": subprocess.check_output([str(binary), "--version"], text=True),
                         "sha256": hashlib.sha256(binary.read_bytes()).hexdigest()}
@@ -45,10 +53,19 @@ for name, binary in editors.items():
     case = artifacts / name
     case.mkdir()
     env = dict(os.environ, GEOMETRY_BENCH_DIR=str(case), NEOMACS_RUNTIME_ROOT=str(root),
-               RUST_LOG="error")
+               RUST_LOG=args.rust_log)
     env.pop("DISPLAY", None)
     env.pop("WAYLAND_DISPLAY", None)
-    argv = [str(binary), "-Q", "--font=Menlo-13", "--geometry=100x35",
+    startup = ["-Q"]
+    if args.startup_phases:
+        init = case / "init"
+        init.mkdir()
+        (init / "early-init.el").write_text(
+            "(load " + json.dumps(str(source / "startup-phases.el")) + " nil nil t)\n")
+        (init / "init.el").write_text("(setq inhibit-startup-screen t)\n")
+        startup = ["--no-site-file", "--no-site-lisp", "--init-directory", str(init)]
+        env["NEOMACS_TRACE_FRAME_GEOMETRY"] = "1"
+    argv = [str(binary), *startup, "--font=Menlo-13", "--geometry=100x35",
             "-l", str(source / "geometry.el")]
     (case / "command.json").write_text(json.dumps(argv))
     with (case / "editor.log").open("w") as log:
@@ -68,6 +85,15 @@ for name, binary in editors.items():
             assert results[name]["window_system"] in ("ns", "neo")
             print(name.upper(), json.dumps(results[name]), flush=True)
             assert child.wait(timeout=5) == 0
+            if args.startup_phases:
+                phases = {}
+                for phase in ("early-init", "after-init", "window-setup"):
+                    path = case / f"phase-{phase}.json"
+                    if path.exists():
+                        phases[phase] = json.loads(path.read_text())
+                assert "early-init" in phases and "after-init" in phases, (name, phases)
+                (case / "phases.json").write_text(json.dumps(phases, indent=2))
+                print("PHASES", name, json.dumps(phases), flush=True)
         finally:
             if child.poll() is None:
                 child.terminate()
