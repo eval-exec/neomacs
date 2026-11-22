@@ -54,17 +54,17 @@ is rejected rather than silently coerced by the scheduler.
 
 ### Cursor color cycling
 
-Cursor color cycling is disabled by default so an untouched configuration
-does not keep requesting ambient animation frames in an idle editor. To opt
-in through Custom:
+Cursor color cycling is enabled by default. A focused, visible cursor keeps a
+standing compositor-only animation demand at 24 Hz (capped to the display
+cadence). It pauses while the frame is unfocused, during the blink-off phase
+and for hollow cursors. On battery-sensitive machines, opt out through Custom:
 
 ```elisp
 (customize-set-variable 'neomacs-effect-cursor-color-cycle
-                        '(:enabled t :fps 24))
+                        '(:enabled nil))
 ```
 
-Use `:enabled nil` to disable it again. Existing explicit opt-in settings
-continue to work; the animation rate still defaults to 24 Hz when enabled.
+Use `:enabled t` to turn it back on, and `:fps` to change the animation rate.
 
 ### Default cursor motion
 

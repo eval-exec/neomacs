@@ -389,16 +389,18 @@ fn cursor_color_cycle_state_translates_to_an_exact_scheduler_demand() {
 }
 
 #[test]
-fn default_cursor_effects_do_not_create_standing_cycle_demand() {
+fn default_cursor_effects_cycle_a_focused_cursor_and_opt_out_sleeps() {
     use super::frame_sched::{FrameCoordinator, NativeWindowId, PacingAction};
 
-    let mut coordinator = FrameCoordinator::new();
-    let id = NativeWindowId(7);
     let now = neomacs_display_protocol::frame_time::observe_platform_now();
     let display_60_hz = std::num::NonZeroU16::new(60).unwrap();
-    let global = EffectsConfig::default();
     let frame = frame_with_cursor_effects(None, CursorStyle::FilledBox);
 
+    // Product default: a focused, visible filled cursor cycles at the
+    // capped 24 Hz rate.
+    let mut coordinator = FrameCoordinator::new();
+    let id = NativeWindowId(7);
+    let global = EffectsConfig::default();
     assert_eq!(
         RenderApp::reconcile_cursor_color_cycle_demand(
             &mut coordinator,
@@ -409,8 +411,30 @@ fn default_cursor_effects_do_not_create_standing_cycle_demand() {
             true,
             now,
         ),
+        PacingAction::RequestRedraw,
+        "untouched defaults animate a focused, visible cursor"
+    );
+    assert_eq!(
+        RenderApp::cursor_color_cycle_cadence(&frame, &global, display_60_hz, true),
+        std::num::NonZeroU16::new(24)
+    );
+
+    // Opting out leaves an idle cursor with no standing demand.
+    let mut coordinator = FrameCoordinator::new();
+    let mut opted_out = EffectsConfig::default();
+    opted_out.cursor_color_cycle.enabled = false;
+    assert_eq!(
+        RenderApp::reconcile_cursor_color_cycle_demand(
+            &mut coordinator,
+            id,
+            Some(&frame),
+            &opted_out,
+            display_60_hz,
+            true,
+            now,
+        ),
         PacingAction::Sleep,
-        "untouched defaults must not animate a focused, visible idle cursor"
+        "an opted-out configuration must not animate an idle cursor"
     );
     assert!(coordinator.active_reasons(id).is_empty());
     assert_eq!(coordinator.next_wake_deadline_unserviced(), None);
