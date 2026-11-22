@@ -11,7 +11,7 @@ use neovm_core::buffer::{
     overlay::{OverlayList, OverlaySnapshot},
 };
 use neovm_core::emacs_core::eval::VariableView;
-use neovm_core::emacs_core::owned_roots::{OwnedRootRetainer, OwnedRoots};
+use neovm_core::emacs_core::owned_roots::{OwnedRootRetainer, OwnedRoots, OwnedTextPropertyRoots};
 use neovm_core::emacs_core::plist::plist_get;
 use neovm_core::emacs_core::symbol::Obarray;
 use neovm_core::emacs_core::{SymId, Value};
@@ -21,6 +21,10 @@ use rustc_hash::FxHashMap;
 #[cfg(test)]
 #[path = "tests/snapshot_overlay_roots_test.rs"]
 mod snapshot_overlay_roots_test;
+
+#[cfg(test)]
+#[path = "tests/snapshot_vars_category_roots_test.rs"]
+mod snapshot_vars_category_roots_test;
 
 /// Immutable view for a walk on the evaluator thread.
 ///
@@ -34,6 +38,8 @@ pub(crate) struct LayoutBufferSnapshot {
     display_when: crate::display_when::DisplayWhenConditions,
     name: String,
     text_snapshot: BufferTextSnapshot,
+    // Registration is constant time; detached table operands are traced at GC.
+    _text_property_roots: Option<OwnedTextPropertyRoots>,
     accessible_start_emacs_byte: EmacsBytePos,
     accessible_end_emacs_byte: EmacsBytePos,
     accessible_end_char: CharPos0,
@@ -44,6 +50,12 @@ pub(crate) struct LayoutBufferSnapshot {
     // Clones retain this native lease independently of the buffer cache.
     // Test-only pure captures may omit it; the production constructor requires it.
     _overlay_roots: Option<OwnedRoots>,
+    // The exact variable values, category plists, and composition tables held
+    // by this view, registered before it can reach a Lisp callback.
+    _captured_roots: Option<OwnedRoots>,
+    // Answers attach after capture, so they need a separate registration point.
+    root_retainer: Option<OwnedRootRetainer>,
+    _display_when_roots: Option<OwnedRoots>,
     /// Character span of the window-range overlay view. `None` is a
     /// whole-buffer view. A walk that consumes at or past the end must be
     /// retried with the whole buffer, so a range view can never commit a
@@ -125,11 +137,18 @@ impl LayoutBufferSnapshot {
                 .retain(overlays.dump_overlays())
                 .expect("layout capture requires its live evaluator root registry")
         });
+        let text_snapshot = buffer.text_snapshot();
+        let text_property_roots = root_retainer.map(|retainer| {
+            retainer
+                .retain_text_properties(text_snapshot.text_property_roots())
+                .expect("layout capture requires its live evaluator root registry")
+        });
         Self {
             display_when: crate::display_when::DisplayWhenConditions::structural(),
             display_target: crate::display_property::DisplayPropertyTarget::Graphical,
             name: buffer.name_runtime_string_owned(),
-            text_snapshot: buffer.text_snapshot(),
+            text_snapshot,
+            _text_property_roots: text_property_roots,
             accessible_start_emacs_byte: buffer.point_min_emacs_byte_pos(),
             accessible_end_emacs_byte: buffer.point_max_emacs_byte_pos(),
             accessible_end_char: buffer.point_max_char_pos(),
@@ -138,6 +157,9 @@ impl LayoutBufferSnapshot {
             vars: resolve_layout_vars(buffer, variables),
             overlays,
             _overlay_roots: overlay_roots,
+            _captured_roots: None,
+            root_retainer: root_retainer.cloned(),
+            _display_when_roots: None,
             overlay_view_span,
             category_symbol_plists: FxHashMap::default(),
             automatic_composition_spans: Vec::new(),
@@ -226,6 +248,27 @@ impl LayoutBufferSnapshot {
             capture_automatic_composition_spans(buffer, vars, &snapshot.vars, visible, symbol_mode);
         snapshot.string_composition_rules =
             capture_string_composition_rules(buffer, vars, symbol_mode);
+        // Capture helpers above do not call Lisp or collect. Register the
+        // captured versions now, before fontification can replace the live
+        // sources. A cloned snapshot shares these roots until its final drop.
+        snapshot._captured_roots = root_retainer.map(|retainer| {
+            retainer
+                .retain(
+                    snapshot
+                        .vars
+                        .iter()
+                        .flatten()
+                        .copied()
+                        .chain(snapshot.category_symbol_plists.values().copied())
+                        .chain(
+                            snapshot
+                                .string_composition_rules
+                                .iter()
+                                .flat_map(|rules| rules.gc_roots()),
+                        ),
+                )
+                .expect("layout capture requires its live evaluator root registry")
+        });
         SNAPSHOTS_BUILT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         snapshot
     }
@@ -240,6 +283,13 @@ impl LayoutBufferSnapshot {
         mut self,
         display_when: crate::display_when::DisplayWhenConditions,
     ) -> Self {
+        // Initial false answers retain FORM/object identity just like true
+        // answers. Register before a later fontifier can detach their sources.
+        self._display_when_roots = self.root_retainer.as_ref().map(|retainer| {
+            retainer
+                .retain(display_when.gc_roots())
+                .expect("layout answers require their live evaluator root registry")
+        });
         self.display_when = display_when;
         self
     }

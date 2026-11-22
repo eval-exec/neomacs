@@ -8,7 +8,7 @@
 use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
 use neovm_value::value::Value;
 
@@ -2893,6 +2893,14 @@ impl BufferText {
     ) {
         Rc::make_mut(&mut self.storage.borrow_mut().text_props)
             .adjust_for_replace_at_char_pos(start, old_len, new_len);
+    }
+
+    pub(crate) fn weak_text_property_table(&self) -> Weak<TextPropertyTable> {
+        Rc::downgrade(&self.storage.borrow().text_props)
+    }
+
+    pub(crate) fn text_property_table_identity(&self) -> usize {
+        Rc::as_ptr(&self.storage.borrow().text_props) as usize
     }
 
     pub(crate) fn trace_text_prop_roots_with(&self, visit: &mut dyn FnMut(Value)) {

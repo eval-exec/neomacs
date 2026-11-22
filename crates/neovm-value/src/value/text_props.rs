@@ -44,6 +44,24 @@ pub(crate) fn interval_balance_calls_for_test() -> usize {
     INTERVAL_BALANCE_CALLS.with(std::cell::Cell::get)
 }
 
+// Actual nodes visited by GC operand enumeration, including nil plists.
+#[cfg(any(test, feature = "test-support"))]
+thread_local! {
+    static TEXT_PROPERTY_ROOT_NODE_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn reset_text_property_root_node_visits_for_test() {
+    TEXT_PROPERTY_ROOT_NODE_VISITS.with(|visits| visits.set(0));
+}
+
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn text_property_root_node_visits_for_test() -> usize {
+    TEXT_PROPERTY_ROOT_NODE_VISITS.with(std::cell::Cell::get)
+}
+
 // ---------------------------------------------------------------------------
 // PropertyInterval
 // ---------------------------------------------------------------------------
@@ -2220,6 +2238,8 @@ impl IntervalTree {
         let Some(id) = id else {
             return;
         };
+        #[cfg(any(test, feature = "test-support"))]
+        TEXT_PROPERTY_ROOT_NODE_VISITS.with(|visits| visits.set(visits.get() + 1));
         let node = &self.nodes[id.0];
         self.live_plists(node.left, f);
         f(node.plist);

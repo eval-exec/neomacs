@@ -2010,7 +2010,41 @@ pub struct BufferTextSnapshot {
     text: BufferText,
 }
 
+/// Weak identity of the immutable property table held by a text snapshot.
+/// This handle cannot read properties or keep the table alive on its own.
+#[derive(Clone, Debug)]
+pub struct TextPropertyRoots {
+    table: Weak<TextPropertyTable>,
+}
+static_assertions::assert_not_impl_any!(TextPropertyRoots: Send, Sync);
+
+impl TextPropertyRoots {
+    /// Opaque native identity, used only to avoid re-enumerating a held table
+    /// when several pending snapshots share its same immutable Rc.
+    #[doc(hidden)]
+    pub fn identity(&self) -> usize {
+        self.table.as_ptr() as usize
+    }
+
+    /// Visit the held immutable table's operands at a collection boundary.
+    /// The evaluator skips identities covered by the live-buffer root walk.
+    #[doc(hidden)]
+    pub fn trace_roots(&self, visit: &mut dyn FnMut(Value)) {
+        if let Some(table) = self.table.upgrade() {
+            table.for_each_root(visit);
+        }
+    }
+}
+
 impl BufferTextSnapshot {
+    /// O(1) weak registration input for the evaluator's native GC lease.
+    /// The snapshot itself remains the strong owner of its interval table.
+    pub fn text_property_roots(&self) -> TextPropertyRoots {
+        TextPropertyRoots {
+            table: self.text.weak_text_property_table(),
+        }
+    }
+
     pub fn is_multibyte(&self) -> bool {
         self.text.is_multibyte()
     }
@@ -6652,6 +6686,15 @@ impl Deref for BufferManager {
 }
 
 impl BufferStorage {
+    /// O(buffers) identities covered by the ordinary native root walk, with
+    /// no interval enumeration. Killed buffers never supply this proof.
+    #[doc(hidden)]
+    pub fn live_text_property_table_identities(&self) -> impl Iterator<Item = usize> + '_ {
+        self.buffers
+            .values()
+            .map(|buffer| buffer.text.text_property_table_identity())
+    }
+
     #[inline]
     fn observe_buffer_order(&mut self, change: BufferOrderChange) {
         if self.buffer_order_observer.is_some() {

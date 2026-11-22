@@ -906,6 +906,15 @@ impl AutomaticCompositionRules {
         })
     }
 
+    /// Enumerate the original Lisp tables this view can read after a callback.
+    /// The evaluator-side owner supplies the lifetime lease; enumeration does
+    /// not consult the buffer again, execute Lisp, or traverse table contents.
+    pub fn gc_roots(&self) -> impl Iterator<Item = Value> + '_ {
+        [Some(self.table), Some(self.syntax.chartable), self.category]
+            .into_iter()
+            .flatten()
+    }
+
     pub fn spans(self, text: &str) -> Vec<AutomaticCompositionSpan> {
         self.spans_in(text, 0)
     }

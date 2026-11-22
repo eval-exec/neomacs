@@ -197,7 +197,7 @@ impl Baton {
         let marker_heads = unsafe {
             let world = &self.world;
             let mut visit = |value| out.push(value);
-            (&*world.owned_roots.get()).trace_roots(&mut visit);
+            (&*world.owned_roots.get()).trace_roots_with_buffers(&*world.buffers.get(), &mut visit);
             for value in (&*world.treesit.get()).roots() {
                 visit(value);
             }

@@ -198,6 +198,20 @@ pub enum DisplayWhenVerdict {
 }
 
 impl DisplayWhenConditions {
+    /// The initial answers' captured FORM and object identities. The snapshot
+    /// registers these at attachment; recorded visits have their own frame
+    /// scratch roots and do not need a second registration here.
+    pub(crate) fn gc_roots(&self) -> impl Iterator<Item = Value> + '_ {
+        let answers = match self {
+            Self::Structural => None,
+            Self::Evaluated(answers) => Some(answers),
+        };
+        answers.into_iter().flat_map(|answers| {
+            std::iter::once(answers.buffer)
+                .chain(answers.exact.keys().flat_map(|key| [key.form, key.object]))
+        })
+    }
+
     pub fn structural() -> Self {
         Self::Structural
     }

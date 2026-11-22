@@ -212,7 +212,8 @@ impl Context {
         }
         if WORLD {
             group("owned_native");
-            self.owned_roots.trace_roots(visit);
+            self.owned_roots
+                .trace_roots_with_buffers(self.buffer_manager(), visit);
             group("owner_bindings");
             self.trace_owner_slabs(heap_id, visit);
         }

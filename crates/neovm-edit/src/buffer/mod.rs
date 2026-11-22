@@ -41,7 +41,7 @@ pub mod visited_file_modtime;
 
 pub use buffer::{
     Buffer, BufferId, BufferManager, BufferTextSnapshot, InsertionType, LineIndexBuild, MarkerRef,
-    SavedRestrictionState,
+    SavedRestrictionState, TextPropertyRoots,
 };
 #[cfg(feature = "test-support")]
 pub use buffer::{LabeledRestriction, SavedLabeledRestrictions};
