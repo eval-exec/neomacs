@@ -401,6 +401,10 @@ mod p15_completion_tests;
 #[path = "../tests/carrier_pool_test.rs"]
 mod carrier_pool_tests;
 
+#[cfg(all(test, feature = "perf-probes"))]
+#[path = "../tests/baton_cost_micro_test.rs"]
+mod baton_cost_micro_tests;
+
 // This child bounds its virtual address space through Linux /proc and
 // setrlimit; portable refusal injection lives in the GC unit-test family.
 #[cfg(all(test, target_os = "linux"))]
