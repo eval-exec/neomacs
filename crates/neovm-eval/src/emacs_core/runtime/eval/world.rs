@@ -40,6 +40,7 @@ mod era_world_loan;
 mod function_write_hooks;
 mod green_owner;
 mod heap_transfer_adapter;
+pub(crate) use heap_transfer_adapter::PreparedHeapTransferProductionEra;
 #[cfg(test)]
 pub(crate) use heap_transfer_adapter::recover_transferred_source;
 #[cfg(test)]

@@ -249,3 +249,61 @@ fn pentry_e2b_bootstrap_foreign_return_cannot_reactivate_either_source() {
     assert!(first_alive() && second_alive());
     assert!(!neovm_value::tagged::gc::tagged_heap_is_installed());
 }
+
+#[test]
+fn pentry_l61_keeper_service_admits_and_finishes_its_own_era() {
+    use super::super::keeper_service::keeper_start;
+    let Some(mut source) = ready() else {
+        return;
+    };
+    let private = Value::string("l61-keeper-service-private-root");
+    source.lexenv = private;
+    let (shell, start) = close(source).prepare_era().unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let service = std::thread::spawn(move || match keeper_start(start) {
+        Ok(end) => {
+            tx.send(Ok(end)).expect("send keeper end");
+        }
+        Err(failure) => {
+            tx.send(Err(failure.notice())).expect("send keeper notice");
+        }
+    });
+    let outcome = rx.recv().expect("keeper outcome");
+    service.join().expect("keeper service thread");
+    let end = outcome.unwrap_or_else(|notice| panic!("keeper start refused: {notice:?}"));
+    assert!(!neovm_value::tagged::gc::tagged_heap_is_installed());
+    let returned = shell.accept_return(end).unwrap();
+    finish_fixture(returned, private);
+}
+
+#[test]
+fn pentry_l61_keeper_service_refuses_a_poisoned_start_with_a_notice() {
+    use super::super::keeper_service::{KeeperStartNotice, keeper_start};
+    use neovm_value::tagged::gc::heap_transfer::ScopedEraError;
+    let Some(source) = ready() else {
+        return;
+    };
+    let alive = source.world_lifetime_probe_for_test();
+    let (shell, start) = close(source).prepare_era().unwrap();
+    drop(shell);
+    let (tx, rx) = std::sync::mpsc::channel();
+    let service = std::thread::spawn(move || {
+        let notice = match keeper_start(start) {
+            Ok(_) => None,
+            Err(failure) => Some(failure.notice()),
+        };
+        tx.send(notice).expect("send keeper notice");
+    });
+    let notice = rx
+        .recv()
+        .expect("notice")
+        .expect("a poisoned start is refused");
+    service.join().expect("keeper service thread");
+    assert_eq!(
+        notice,
+        KeeperStartNotice::Scoped(ScopedEraError::Transfer(TransferError::Phase)),
+        "only a send notice crosses; the confined failure stays on the thread"
+    );
+    assert!(alive(), "the poisoned start retains its backing");
+    assert!(!neovm_value::tagged::gc::tagged_heap_is_installed());
+}

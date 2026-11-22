@@ -99,13 +99,6 @@ pub(crate) unsafe fn recover_transferred_source(
 /// Value keeps the reference-free shell and does not name `Baton`. This is
 /// the same split as [`ParallelHeapEraWorldExt`]: the era type is value-layer
 /// data, and admitting it needs this World's keeper.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "E2 L4 dormant production era admission; no production caller enters it"
-    )
-)]
 pub(crate) trait PreparedHeapTransferProductionEra: Sized {
     fn with_production_era<R: HeapTransferCompletion>(
         self,

@@ -733,6 +733,7 @@ impl OwnedSourceBackendClosed {
 }
 
 mod bootstrap;
+mod keeper_service;
 
 #[cfg(test)]
 #[path = "tests/owned_source_jit_compiler_test.rs"]
