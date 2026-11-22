@@ -4840,17 +4840,20 @@ pub(crate) fn builtin_overlay_put_in_buffers(
         && changed
     {
         let _ = buffers.note_overlay_modification(buf_id);
-        let evaporate = args[1].is_bare_symbol_named("evaporate") && val.is_truthy();
-        let is_empty = buffers
-            .get(buf_id)
-            .and_then(|buf| {
-                let start = buf.overlays.overlay_start_emacs_byte_pos(overlay)?;
-                let end = buf.overlays.overlay_end_emacs_byte_pos(overlay)?;
-                Some(start == end)
-            })
-            .unwrap_or(false);
-        if evaporate && is_empty {
-            let _ = buffers.delete_buffer_overlay(buf_id, overlay);
+        // GNU checks the property before resolving endpoints. Most puts do
+        // not concern evaporation and need no extra position queries here.
+        if args[1].is_bare_symbol_named("evaporate") && val.is_truthy() {
+            let is_empty = buffers
+                .get(buf_id)
+                .and_then(|buf| {
+                    let start = buf.overlays.overlay_start_emacs_byte_pos(overlay)?;
+                    let end = buf.overlays.overlay_end_emacs_byte_pos(overlay)?;
+                    Some(start == end)
+                })
+                .unwrap_or(false);
+            if is_empty {
+                let _ = buffers.delete_buffer_overlay(buf_id, overlay);
+            }
         }
     }
     Ok(val)

@@ -269,6 +269,97 @@ impl OrderedFilteredRecord for EndpointRecord {
     }
 }
 
+/// Numeric pre-write keys, consumed by the same index after a plist write.
+/// No Lisp values or old plist roots escape the exclusive owner operation.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+#[derive(Debug)]
+pub(super) struct OverlayPropertyKeys {
+    overlay: OverlayIdentity,
+    // Clone only the already-minted weak handle. It keeps its Arc control
+    // identity from reuse without retaining the buffer or any Lisp owner.
+    handle: OverlayPositionHandle,
+    attachment_order: u64,
+    keys: SmallVec<[usize; 8]>,
+}
+
+// Count actual plist-loop work, including repeated walks of the same owners.
+// Distinct-owner capture counts cannot reveal these redundant traversals.
+#[cfg(test)]
+static DIRECT_PROPERTY_KEY_PLIST_STEPS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+#[cfg(test)]
+static PROPERTY_MASK_PLIST_STEPS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(test)]
+pub(super) fn reset_property_index_plist_steps() {
+    DIRECT_PROPERTY_KEY_PLIST_STEPS.store(0, std::sync::atomic::Ordering::Relaxed);
+    PROPERTY_MASK_PLIST_STEPS.store(0, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(test)]
+pub(super) fn property_index_plist_steps() -> (usize, usize) {
+    (
+        DIRECT_PROPERTY_KEY_PLIST_STEPS.load(std::sync::atomic::Ordering::Relaxed),
+        PROPERTY_MASK_PLIST_STEPS.load(std::sync::atomic::Ordering::Relaxed),
+    )
+}
+
+// Per-test-process, single-target probe for real owner queries. Snapshot
+// mirrors have distinct index addresses and must not consume the live budget.
+#[cfg(test)]
+static OWNER_QUERY_TARGET: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+#[cfg(test)]
+static OWNER_QUERY_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(test)]
+pub(super) fn start_owner_query_count_for_test(index: &OverlayIndex) {
+    use std::sync::atomic::Ordering;
+    OWNER_QUERY_COUNT.store(0, Ordering::Relaxed);
+    OWNER_QUERY_TARGET.store(index as *const OverlayIndex as usize, Ordering::Relaxed);
+}
+
+#[cfg(test)]
+pub(super) fn finish_owner_query_count_for_test(index: &OverlayIndex) -> usize {
+    use std::sync::atomic::Ordering;
+    assert_eq!(
+        OWNER_QUERY_TARGET.swap(0, Ordering::Relaxed),
+        index as *const OverlayIndex as usize,
+        "owner query probe must finish on its selected, unmoved index"
+    );
+    OWNER_QUERY_COUNT.load(Ordering::Relaxed)
+}
+
+#[cfg(test)]
+fn record_owner_query_for_test(index: &OverlayIndex) {
+    use std::sync::atomic::Ordering;
+    if OWNER_QUERY_TARGET.load(Ordering::Relaxed) == index as *const OverlayIndex as usize {
+        OWNER_QUERY_COUNT.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+fn overlay_direct_property_keys(overlay: Value) -> SmallVec<[usize; 8]> {
+    let mut keys = SmallVec::new();
+    let Some(data) = overlay.as_overlay_data() else {
+        return keys;
+    };
+    let mut tail = data.plist;
+    while tail.is_cons() {
+        #[cfg(test)]
+        DIRECT_PROPERTY_KEY_PLIST_STEPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let property = tail.cons_car();
+        let rest = tail.cons_cdr();
+        if !rest.is_cons() {
+            break;
+        }
+        // plist_get / overlay_plist_put use eq_value: exact tagged bits.
+        // Count duplicate pairs too, so attachment and removal balance.
+        keys.push(property.bits());
+        tail = rest.cons_cdr();
+    }
+    keys
+}
+
 fn overlay_indexed_property_mask(overlay: Value) -> OrderedFilterMask {
     let Some(data) = overlay.as_overlay_data() else {
         return OrderedFilterMask::EMPTY;
@@ -276,6 +367,8 @@ fn overlay_indexed_property_mask(overlay: Value) -> OrderedFilterMask {
     let mut mask = OrderedFilterMask::EMPTY;
     let mut tail = data.plist;
     while tail.is_cons() {
+        #[cfg(test)]
+        PROPERTY_MASK_PLIST_STEPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let property = tail.cons_car();
         let values = tail.cons_cdr();
         if !values.is_cons() {
@@ -445,6 +538,14 @@ impl EndpointBPlusTree {
         }
     }
 
+    fn add_overlay_property_key(&mut self, overlay: Value, property: Value) {
+        let added = OrderedFilterMask::EMPTY.with_bit(overlay_property_signature_bit(property));
+        for kind in [EndpointKind::Start, EndpointKind::End] {
+            self.records
+                .grow_filter_mask(EndpointIdentity::of(overlay, kind), added);
+        }
+    }
+
     fn next_after(&self, position: EmacsBytePos, limit: EmacsBytePos) -> Option<EmacsBytePos> {
         self.records.next_position_after(position, limit)
     }
@@ -497,11 +598,14 @@ pub(super) struct OverlayIndex {
     /// during front-advancing insertion.  Positions remain authoritative in
     /// `intervals`; this field stores only identity and tree shape.
     gnu_order: GnuOverlayOrder<OverlayIdentity>,
-    /// Published lazily on the first boundary query.  `OnceLock` makes the
+    /// Published lazily for semantic endpoint traversals. `OnceLock` makes the
     /// ready-state read path one atomic load; mutations already require
     /// `&mut OverlayIndex`, so they can update the tree through `get_mut`
     /// without a second runtime lock.
     endpoints: OnceLock<EndpointBPlusTree>,
+    // Exact direct-key pair counts, maintained only by this index's owner.
+    // Keys are eq identities, not rooted Lisp values or alias/category meaning.
+    direct_property_keys: FxHashMap<usize, usize>,
 }
 
 impl OverlayIndex {
@@ -510,7 +614,43 @@ impl OverlayIndex {
             intervals: Arc::new(RwLock::new(IntervalBPlusTree::new())),
             gnu_order: GnuOverlayOrder::new(),
             endpoints: OnceLock::new(),
+            direct_property_keys: FxHashMap::default(),
         }
+    }
+
+    fn add_property_keys(&mut self, keys: &[usize]) {
+        for key in keys {
+            *self.direct_property_keys.entry(*key).or_default() += 1;
+        }
+    }
+
+    fn remove_property_keys(&mut self, keys: &[usize]) {
+        for key in keys {
+            let count = self
+                .direct_property_keys
+                .get_mut(key)
+                .expect("attached overlay property key was not counted");
+            *count -= 1;
+            if *count == 0 {
+                self.direct_property_keys.remove(key);
+            }
+        }
+    }
+
+    /// Capture numeric old keys before any plist-head replacement or write.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(super) fn property_keys_before_write(&self, overlay: Value) -> Option<OverlayPropertyKeys> {
+        let data = overlay.as_overlay_data()?;
+        let handle = data.position_handle().as_ref()?;
+        if !handle.belongs_to(overlay, &self.intervals) {
+            return None;
+        }
+        Some(OverlayPropertyKeys {
+            overlay: OverlayIdentity::of(overlay),
+            handle: handle.clone(),
+            attachment_order: handle.attachment_order()?,
+            keys: overlay_direct_property_keys(overlay),
+        })
     }
 
     /// Attach a live overlay at `range`.
@@ -537,6 +677,7 @@ impl OverlayIndex {
             "new interval already existed in GNU order mirror"
         );
         drop(intervals);
+        self.add_property_keys(&overlay_direct_property_keys(overlay));
         if let Some(endpoints) = self.endpoints.get_mut() {
             assert!(endpoints.insert(range.start(), EndpointKind::Start, overlay));
             assert!(endpoints.insert(range.end(), EndpointKind::End, overlay));
@@ -594,7 +735,9 @@ impl OverlayIndex {
         self.intervals = Arc::new(RwLock::new(intervals));
         self.gnu_order = gnu_order;
         self.endpoints = OnceLock::new();
+        self.direct_property_keys.clear();
         for (overlay, _) in entries {
+            self.add_property_keys(&overlay_direct_property_keys(*overlay));
             set_overlay_position_handle(*overlay, &self.intervals);
         }
         true
@@ -610,13 +753,10 @@ impl OverlayIndex {
         })
     }
 
-    fn with_endpoint_index<T>(&self, use_index: impl FnOnce(&EndpointBPlusTree) -> T) -> T {
-        use_index(self.endpoint_index())
-    }
-
     /// Detach an overlay and return its indexed range.
     pub(super) fn detach(&mut self, overlay: Value) -> Option<EmacsByteRange> {
         let (range, _) = self.intervals.write().take(overlay)?;
+        self.remove_property_keys(&overlay_direct_property_keys(overlay));
         assert!(
             self.gnu_order.remove(OverlayIdentity::of(overlay)).is_ok(),
             "indexed overlay missing from GNU order mirror"
@@ -1160,6 +1300,7 @@ impl OverlayIndex {
 
     fn take_for_text_edit(&mut self, overlay: Value) -> Option<(EmacsByteRange, u64)> {
         let taken = self.intervals.write().take(overlay)?;
+        self.remove_property_keys(&overlay_direct_property_keys(overlay));
         let range = taken.0;
         if let Some(endpoints) = self.endpoints.get_mut() {
             assert_eq!(
@@ -1187,6 +1328,7 @@ impl OverlayIndex {
                 .insert_with_order(overlay, range, attachment_order),
             TextEditReattachment::Reinsert => self.intervals.write().insert(overlay, range),
         };
+        self.add_property_keys(&overlay_direct_property_keys(overlay));
         if let Some(endpoints) = self.endpoints.get_mut() {
             assert!(endpoints.insert(range.start(), EndpointKind::Start, overlay));
             assert!(endpoints.insert(range.end(), EndpointKind::End, overlay));
@@ -1219,15 +1361,20 @@ impl OverlayIndex {
         self.intervals = Arc::new(RwLock::new(IntervalBPlusTree::new()));
         self.gnu_order = GnuOverlayOrder::new();
         self.endpoints = OnceLock::new();
+        self.direct_property_keys.clear();
     }
 
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn contains(&self, overlay: Value) -> bool {
+        #[cfg(test)]
+        record_owner_query_for_test(self);
         self.intervals.read().contains(overlay)
     }
 
     #[doc(hidden)]
     pub fn range(&self, overlay: Value) -> Option<EmacsByteRange> {
+        #[cfg(test)]
+        record_owner_query_for_test(self);
         self.intervals
             .read()
             .range_by_identity(OverlayIdentity::of(overlay))
@@ -1352,8 +1499,7 @@ impl OverlayIndex {
 
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn may_contain_property(&self, property: Value) -> bool {
-        OverlayPropertyFilter::for_properties([property])
-            .subtree_may_match(self.endpoint_index().records.filter_mask())
+        self.direct_property_keys.contains_key(&property.bits())
     }
 
     pub(super) fn endpoint_records_strictly_within(
@@ -1375,9 +1521,51 @@ impl OverlayIndex {
     }
 
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    pub(super) fn overlay_properties_changed(&mut self, overlay: Value) {
+    pub(super) fn overlay_properties_changed(
+        &mut self,
+        overlay: Value,
+        previous: Option<OverlayPropertyKeys>,
+    ) {
+        debug_assert_eq!(self.contains(overlay), previous.is_some());
+        if let Some(previous) = previous {
+            debug_assert_eq!(previous.overlay, OverlayIdentity::of(overlay));
+            debug_assert!(
+                previous.handle.belongs_to(overlay, &self.intervals),
+                "property token crossed an index owner"
+            );
+            debug_assert!(
+                overlay.as_overlay_data().is_some_and(|data| {
+                    data.position_handle()
+                        .as_ref()
+                        .is_some_and(|handle| handle.belongs_to(overlay, &self.intervals))
+                }),
+                "property write replaced its live attachment handle"
+            );
+            debug_assert_eq!(
+                previous.handle.attachment_order(),
+                Some(previous.attachment_order),
+                "property token crossed an attachment change"
+            );
+            self.remove_property_keys(&previous.keys);
+            self.add_property_keys(&overlay_direct_property_keys(overlay));
+        }
         if let Some(endpoints) = self.endpoints.get_mut() {
             endpoints.refresh_overlay_property_mask(overlay);
+        }
+    }
+
+    /// Record the one pair prepended to an already-resolved member by
+    /// overlay-put. The caller holds this owner's exclusive loan, resolves
+    /// membership before writing, and runs no Lisp or attachment change
+    /// between that resolution and this update. Existing-key writes change
+    /// neither key counts nor endpoint classes.
+    pub(super) fn overlay_property_key_added_to_member(&mut self, overlay: Value, property: Value) {
+        *self
+            .direct_property_keys
+            .entry(property.bits())
+            .or_default() += 1;
+        if let Some(endpoints) = self.endpoints.get_mut() {
+            endpoints.add_overlay_property_key(overlay, property);
         }
     }
 
@@ -1386,11 +1574,7 @@ impl OverlayIndex {
         pos: EmacsBytePos,
         limit: EmacsBytePos,
     ) -> Option<EmacsBytePos> {
-        if pos >= limit {
-            return None;
-        }
-        self.with_endpoint_index(|endpoints| endpoints.next_after(pos, limit))
-            .filter(|boundary| *boundary <= limit)
+        self.next_boundary_after_no_alloc(pos, limit)
     }
 
     /// Borrow an existing index without publishing an allocating endpoint tree.
@@ -1434,8 +1618,26 @@ impl OverlayIndex {
         if pos <= limit {
             return None;
         }
-        self.with_endpoint_index(|endpoints| endpoints.previous_before(pos, limit))
-            .filter(|boundary| *boundary >= limit)
+        if let Some(endpoints) = self.endpoints.get() {
+            return endpoints.previous_before(pos, limit);
+        }
+        let intervals = self.intervals.read();
+        let start = intervals.previous_start_before(pos, limit);
+        let candidate = start.unwrap_or(limit);
+        // No start lies strictly between candidate and pos. Every end that
+        // can improve candidate therefore belongs to an interval touching it.
+        // ClosedPoint also preserves a real endpoint exactly at lower LIMIT
+        // when candidate is only a clamp, including an empty overlay there.
+        let mut previous = start;
+        intervals
+            .records()
+            .for_each_match(IntervalBPlusQuery::ClosedPoint(candidate), |record| {
+                let end = record.range().end();
+                if end >= candidate && end < pos && previous.is_none_or(|current| end > current) {
+                    previous = Some(end);
+                }
+            });
+        previous
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -1457,6 +1659,13 @@ impl OverlayIndex {
         }
         self.gnu_order.assert_invariants();
         assert_eq!(interval_len, self.gnu_order.len());
+        let mut expected_keys = FxHashMap::default();
+        for overlay in self.values() {
+            for key in overlay_direct_property_keys(overlay) {
+                *expected_keys.entry(key).or_insert(0usize) += 1;
+            }
+        }
+        assert_eq!(self.direct_property_keys, expected_keys);
     }
 }
 

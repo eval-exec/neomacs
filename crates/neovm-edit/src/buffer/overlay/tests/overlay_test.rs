@@ -391,6 +391,10 @@ fn next_boundary_uses_one_logarithmic_endpoint_search() {
         list.next_boundary_after_emacs_byte_pos(emacs_byte_pos(0)),
         Some(emacs_byte_pos(100))
     );
+    let _ = list.index.endpoint_records_strictly_within(
+        emacs_byte_range(0, 5_000),
+        OverlayPropertyFilter::unfiltered(),
+    );
     reset_endpoint_search_node_visit_count();
     reset_endpoint_search_summary_shift_count();
     assert_eq!(
@@ -675,8 +679,12 @@ fn no_alloc_boundary_keeps_endpoint_semantics_after_live_mutations() {
     assert!(list.delete_overlay(containing));
     check(&list, 100, 200, None);
 
-    // Once another caller publishes endpoints, the no-allocation route keeps
-    // using that index and performs no additional cold interval reductions.
+    // Once a semantic sweep publishes endpoints, the no-allocation route
+    // keeps using that index without additional cold interval reductions.
+    let _ = list.index.endpoint_records_strictly_within(
+        emacs_byte_range(0, 1_000),
+        OverlayPropertyFilter::unfiltered(),
+    );
     assert_eq!(
         list.next_boundary_after_emacs_byte_pos(emacs_byte_pos(100)),
         Some(emacs_byte_pos(300))
@@ -952,7 +960,7 @@ fn whole_overlay_property_summary_tracks_live_membership_and_nil_keys() {
 }
 
 #[test]
-fn absent_overlay_key_bloom_collision_is_scanned_only_once() {
+fn exact_direct_key_presence_ignores_endpoint_filter_collisions() {
     crate::test_utils::init_test_tracing();
     let mut list = OverlayList::new();
     let category = Value::symbol("category");
@@ -962,7 +970,9 @@ fn absent_overlay_key_bloom_collision_is_scanned_only_once() {
         .find_map(|index| {
             let key = Value::from_sym_id(intern(&format!("absent-category-collision-{index}")));
             list.overlay_put(first, key, Value::T).unwrap();
-            list.index.may_contain_property(category).then_some(key)
+            (OverlayPropertyFilter::for_properties([key])
+                == OverlayPropertyFilter::for_properties([category]))
+            .then_some(key)
         })
         .expect("find a signature collision");
     for index in 1..128 {
@@ -970,7 +980,7 @@ fn absent_overlay_key_bloom_collision_is_scanned_only_once() {
         list.insert_overlay(overlay);
         list.overlay_put(overlay, collision, Value::T).unwrap();
     }
-    // Mirror the snapshot category collector's fallback on a possible hit.
+    // A real endpoint-filter collision must not make the direct-key query scan.
     let scan = |list: &OverlayList| {
         if list.may_contain_property(category) {
             for overlay in list.overlays_in_gnu_lists_order() {
@@ -1902,3 +1912,7 @@ mod random_overlay_model_test;
 #[cfg(test)]
 #[path = "window_view.rs"]
 mod window_view;
+
+#[cfg(test)]
+#[path = "observed_query_budget.rs"]
+mod observed_query_budget;

@@ -1809,6 +1809,25 @@ impl<R: OrderedFilteredRecord> OrderedShiftTree<R> {
         identity: R::Identity,
         mask: OrderedFilterMask,
     ) -> Option<OrderedFilterMask> {
+        self.update_filter_mask(identity, |_| mask)
+    }
+
+    /// Add known record classes without resolving positions or reading the
+    /// record's source data. Existing classes and pending shifts stay intact.
+    #[doc(hidden)]
+    pub fn grow_filter_mask(
+        &mut self,
+        identity: R::Identity,
+        added: OrderedFilterMask,
+    ) -> Option<OrderedFilterMask> {
+        self.update_filter_mask(identity, |previous| previous | added)
+    }
+
+    fn update_filter_mask(
+        &mut self,
+        identity: R::Identity,
+        update: impl FnOnce(OrderedFilterMask) -> OrderedFilterMask,
+    ) -> Option<OrderedFilterMask> {
         let leaf = *self.by_identity.get(&identity)?;
         let records = self.leaf_records_mut(leaf);
         let slot = records
@@ -1816,6 +1835,7 @@ impl<R: OrderedFilteredRecord> OrderedShiftTree<R> {
             .find(|record| record.identity() == identity)
             .expect("overlay B+ identity map pointed to the wrong leaf");
         let previous = slot.filter_mask();
+        let mask = update(previous);
         if previous != mask {
             *slot = slot.with_filter_mask(mask);
             self.republish_filter_masks(leaf, FilterMaskChange::new(previous, mask));

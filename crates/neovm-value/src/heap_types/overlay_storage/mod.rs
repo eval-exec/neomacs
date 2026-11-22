@@ -79,6 +79,24 @@ impl OverlayPositionHandle {
         }
     }
 
+    /// Read-only owner proof; this never creates or changes an attachment.
+    #[doc(hidden)]
+    pub fn belongs_to(&self, overlay: Value, intervals: &Arc<RwLock<IntervalBPlusTree>>) -> bool {
+        self.identity == OverlayIdentity::of(overlay)
+            && self.intervals.ptr_eq(&Arc::downgrade(intervals))
+    }
+
+    /// The current interval attachment rank, independent of its coordinates.
+    #[doc(hidden)]
+    pub fn attachment_order(&self) -> Option<u64> {
+        let intervals = self.intervals.upgrade()?;
+        intervals
+            .read()
+            .records
+            .record(self.identity)
+            .map(|record| record.key.attachment_order)
+    }
+
     pub(crate) fn current_range(&self) -> Option<EmacsByteRange> {
         let intervals = self.intervals.upgrade()?;
         intervals.read().range_by_identity(self.identity)
@@ -477,6 +495,19 @@ impl IntervalBPlusTree {
         limit: EmacsBytePos,
     ) -> Option<EmacsBytePos> {
         self.records.next_key_position_after(position, limit)
+    }
+
+    /// Previous start strictly before position and at or after limit.
+    #[doc(hidden)]
+    pub fn previous_start_before(
+        &self,
+        position: EmacsBytePos,
+        limit: EmacsBytePos,
+    ) -> Option<EmacsBytePos> {
+        if position <= limit {
+            return None;
+        }
+        self.records.previous_position_before(position, limit)
     }
 
     #[doc(hidden)]

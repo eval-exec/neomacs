@@ -184,6 +184,8 @@ fn deferred_endpoint_index_publishes_once_then_tracks_mutations() {
     assert!(index.attach(first, range(10, 12)));
     assert!(index.attach(second, range(20, 23)));
     assert!(index.endpoints.get().is_none());
+    // Explicit semantic-index publication remains lazy and happens once.
+    let _ = index.endpoint_index();
 
     assert_eq!(
         index.next_boundary_after(EmacsBytePos::new(1), EmacsBytePos::new(100)),

@@ -76,3 +76,26 @@ fn restored_category_deleted_before_digest_matches_fresh_incremental_owner() {
 fn remapped_restored_category_deleted_before_digest_matches_fresh_incremental_owner() {
     check_restored_category_deletion(true);
 }
+
+#[test]
+fn restored_dirty_property_writes_rebuild_the_exact_content_digest() {
+    crate::test_utils::init_test_tracing();
+    let face = Value::symbol("face");
+    let bold = Value::symbol("bold");
+    for (property, value) in [
+        (face, bold),
+        (face, Value::symbol("error")),
+        (Value::symbol("before-string"), Value::string("prefix")),
+        (Value::symbol("category"), Value::NIL),
+    ] {
+        let overlay = accounting_overlay(10, 20, Value::list(vec![face, bold]));
+        let mut restored = OverlayList::from_dump(vec![overlay]);
+        assert!(restored.content_dirty.get());
+        restored.overlay_put(overlay, property, value).unwrap();
+        assert!(restored.content_dirty.get());
+        restored.assert_index_invariants_for_test();
+        let expected = restored.content_digest_from_scratch_for_test();
+        assert_eq!(restored.content_digest(), expected);
+        assert!(!restored.content_dirty.get());
+    }
+}

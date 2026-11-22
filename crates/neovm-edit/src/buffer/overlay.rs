@@ -253,10 +253,6 @@ pub(crate) fn overlay_mirror_candidate_count() -> usize {
 pub struct OverlayList {
     index: OverlayIndex,
     snapshot: RefCell<Option<OverlaySnapshot>>,
-    // Permanent symbol identities only: no additional Lisp roots. A small
-    // negative cache prevents Bloom collisions from causing full scans on
-    // every redisplay. Membership and property writes clear it with snapshots.
-    absent_properties: Cell<[Option<neovm_value::intern::SymId>; 8]>,
     // Commutative multiset hash of the rendered overlay content: positions and
     // rendered plist properties. A membership, position or plist write adds or
     // subtracts one overlay's component, so the whole-buffer digest redisplay
@@ -277,10 +273,6 @@ pub struct OverlayList {
 pub struct OverlayList {
     pub(crate) index: OverlayIndex,
     snapshot: RefCell<Option<OverlaySnapshot>>,
-    // Permanent symbol identities only: no additional Lisp roots. A small
-    // negative cache prevents Bloom collisions from causing full scans on
-    // every redisplay. Membership and property writes clear it with snapshots.
-    absent_properties: Cell<[Option<neovm_value::intern::SymId>; 8]>,
     // See the production struct's comment.
     content_component_sum: Cell<u64>,
     content_unhashable: Cell<usize>,
@@ -362,7 +354,6 @@ impl OverlayList {
     }
 
     fn invalidate_snapshot(&mut self) {
-        self.absent_properties.set([None; 8]);
         self.snapshot.get_mut().take();
     }
 
@@ -416,18 +407,18 @@ impl OverlayList {
         ) else {
             return false;
         };
+        let previous_keys = self.index.property_keys_before_write(copy);
         let _ = copy.with_overlay_data_mut(|data| {
             data.plist = plist;
         });
         self.content_dirty.set(true);
         self.invalidate_snapshot();
-        self.index.overlay_properties_changed(copy);
+        self.index.overlay_properties_changed(copy, previous_keys);
         true
     }
 
     /// Apply a text edit to this list's index and overlay objects.
     fn apply_text_edit(&mut self, edit: OverlayTextEdit) -> OverlayEditOrder {
-        self.absent_properties.set([None; 8]);
         // A text edit shifts or evaporates an unbounded number of overlays;
         // rebuild the commutative component sum once on the next digest.
         self.content_dirty.set(true);
@@ -1098,7 +1089,6 @@ impl OverlayList {
         Self {
             index: OverlayIndex::new(),
             snapshot: RefCell::new(None),
-            absent_properties: Cell::new([None; 8]),
             content_component_sum: Cell::new(0),
             content_unhashable: Cell::new(0),
             content_dirty: Cell::new(false),
@@ -1180,7 +1170,13 @@ impl OverlayList {
         value: Value,
     ) -> Result<bool, Flow> {
         neovm_value::symbol::SymbolPropertyRevision::observe_category_property(prop, value);
-        let previous_component = self.overlay_content_component(overlay);
+        // This inner plist step runs no Lisp and only changes the plist.
+        // builtin_overlay_put_in_buffers performs any evaporate deletion
+        // after we return, through the ordinary owner deletion path.
+        // Membership and positions stay fixed through hashing, key accounting
+        // and snapshot mirroring; resolve them once for the whole write.
+        let range = self.index.range(overlay);
+        let previous_component = Self::overlay_content_component_at_range(overlay, range);
         let (changed, plist_replaced) = overlay
             .with_overlay_data_mut(|data| {
                 let (plist, changed) = overlay_plist_put(data.plist, prop, value);
@@ -1192,15 +1188,31 @@ impl OverlayList {
         // Adding a previously absent nil property changes the plist even
         // though GNU's display-change flag remains false.
         if changed || plist_replaced {
-            self.absent_properties.set([None; 8]);
-            self.index.overlay_properties_changed(overlay);
-            self.replace_overlay_content_component(previous_component, overlay);
-            self.retain_snapshot_if(|live, snapshot| {
-                live.range(overlay)
-                    .is_some_and(|range| snapshot.mirror_plist_write(overlay, range.start()))
+            if plist_replaced && range.is_some() {
+                self.index
+                    .overlay_property_key_added_to_member(overlay, prop);
+            }
+            self.subtract_overlay_content_component(previous_component);
+            if !self.content_dirty.get() {
+                self.add_computed_overlay_content_component(
+                    Self::overlay_content_component_at_range(overlay, range),
+                );
+            }
+            self.retain_snapshot_if(|_live, snapshot| {
+                range.is_some_and(|range| snapshot.mirror_plist_write(overlay, range.start()))
             });
         }
         Ok(changed)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn start_owner_query_count_for_test(&self) {
+        super::overlay_index::start_owner_query_count_for_test(&self.index);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn finish_owner_query_count_for_test(&self) -> usize {
+        super::overlay_index::finish_owner_query_count_for_test(&self.index)
     }
 
     pub(crate) fn overlay_get(&self, overlay: Value, prop: &Value) -> Option<Value> {
@@ -1347,32 +1359,11 @@ impl OverlayList {
         self.index.all_ascending()
     }
 
-    /// Conservative test of direct plist keys across all live overlays.
-    /// False proves absence. A Bloom-signature collision for a symbol key is
-    /// checked once and its absence cached until the next overlay mutation.
-    /// Category inheritance is intentionally not followed here.
+    /// Exact direct-key presence, including nil-valued and duplicate keys.
+    /// Owner mutations maintain numeric refcounts; category inheritance and
+    /// alias selection remain the caller's separate property semantics.
     pub fn may_contain_property(&self, property: Value) -> bool {
-        if !self.index.may_contain_property(property) {
-            return false;
-        }
-        let Some(symbol) = property.as_bare_symbol_id() else {
-            return true;
-        };
-        let mut absent = self.absent_properties.get();
-        if absent.contains(&Some(symbol)) {
-            return false;
-        }
-        if self
-            .index
-            .values()
-            .any(|overlay| self.overlay_get_named(overlay, property).is_some())
-        {
-            return true;
-        }
-        absent.rotate_right(1);
-        absent[0] = Some(symbol);
-        self.absent_properties.set(absent);
-        false
+        self.index.may_contain_property(property)
     }
 
     /// A content digest of every live overlay: its span and its whole
@@ -1447,7 +1438,11 @@ impl OverlayList {
         if self.content_dirty.get() {
             return;
         }
-        match self.overlay_content_component(overlay) {
+        self.add_computed_overlay_content_component(self.overlay_content_component(overlay));
+    }
+
+    fn add_computed_overlay_content_component(&self, component: OverlayContentComponent) {
+        match component {
             OverlayContentComponent::Hashable(hash) => self
                 .content_component_sum
                 .set(self.content_component_sum.get().wrapping_add(hash)),
@@ -1486,14 +1481,27 @@ impl OverlayList {
     /// unhashable because the real properties live on a symbol plist nothing
     /// here can watch, matching [`Self::content_digest_of`]'s refusal.
     fn overlay_content_component(&self, overlay: Value) -> OverlayContentComponent {
+        Self::overlay_content_component_at_range(overlay, self.index.range(overlay))
+    }
+
+    /// `range` is the membership/position result for this owner. Ordinary
+    /// overlay-put reuses it while its exclusive, callback-free write keeps
+    /// attachment and geometry unchanged.
+    fn overlay_content_component_at_range(
+        overlay: Value,
+        range: Option<EmacsByteRange>,
+    ) -> OverlayContentComponent {
         use std::hash::Hasher;
 
         let properties = DisplayOverlayProperties::intern();
         let mut hasher = rustc_hash::FxHasher::default();
-        let range = self.index.range(overlay);
         hasher.write_u64(range.map_or(u64::MAX, |range| range.start().get() as u64));
         hasher.write_u64(range.map_or(u64::MAX, |range| range.end().get() as u64));
-        let Some(plist) = self.overlay_plist(overlay) else {
+        // Preserve overlay_plist's member-or-detached visibility rule without
+        // repeating a membership query already answered by `range`.
+        let plist = (range.is_some() || overlay_live_buffer(overlay).is_none())
+            .then(|| overlay.as_overlay_data().unwrap().plist);
+        let Some(plist) = plist else {
             hasher.write_u8(0xff);
             return OverlayContentComponent::Hashable(hasher.finish());
         };
