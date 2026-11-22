@@ -1,6 +1,14 @@
 import AppKit
 import ApplicationServices
 import Carbon
+if CommandLine.arguments.count == 1 {
+    let info: [String: Any] = ["post_events": CGPreflightPostEventAccess(),
+                               "accessibility": AXIsProcessTrusted(),
+                               "desktop": !NSScreen.screens.isEmpty]
+    let data = try JSONSerialization.data(withJSONObject: info, options: [.sortedKeys])
+    print(String(decoding: data, as: UTF8.self))
+    exit(0)
+}
 let pid = pid_t(CommandLine.arguments[1])!
 guard let app = NSRunningApplication(processIdentifier: pid) else { fatalError("no owned application") }
 if CommandLine.arguments[2] == "terminate" {
