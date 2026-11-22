@@ -949,7 +949,7 @@ impl AutomaticCompositionRules {
         pos: usize,
         limit: Option<i64>,
         head: usize,
-        shape: &mut dyn FnMut(usize, usize) -> Option<Value>,
+        shape: &mut dyn FnMut(usize, usize, Value) -> Option<Value>,
     ) -> Option<(usize, usize, Value)> {
         if text.is_empty() {
             return None;
@@ -1079,7 +1079,10 @@ impl AutomaticCompositionRules {
                         if start >= end || trigger >= end {
                             continue;
                         }
-                        let Some(gstring) = shape(start, end) else {
+                        // GNU passes the matched rule's FUNC to
+                        // `auto-composition-function` as its first
+                        // argument (`autocmp_chars`, src/composite.c).
+                        let Some(gstring) = shape(start, end, fields[2]) else {
                             continue;
                         };
                         last = Some((start, end, gstring));
@@ -1506,6 +1509,7 @@ fn shape_composition_gstring<H: TextHost>(
     ctx: &mut H,
     start: i64,
     end: i64,
+    func: Value,
     string: Value,
 ) -> Option<Value> {
     let font_at = Value::symbol(neovm_value::intern::intern("font-at"));
@@ -1523,16 +1527,57 @@ fn shape_composition_gstring<H: TextHost>(
         vec![Value::fixnum(start), Value::fixnum(end), font, string],
     )
     .ok()?;
-    // GNU 31.1's `Ffont_shape_gstring` takes (GSTRING DIRECTION); the
-    // automatic-composition search of `find_automatic_composition` passes
-    // Qnil (composite.c), leaving the actual bidi resolution to the shaper.
-    let shaped = ctx
-        .eval_sub(Value::list(vec![
-            Value::symbol(neovm_value::intern::intern("font-shape-gstring")),
-            gstring,
-            Value::NIL,
-        ]))
-        .ok()?;
+    // GNU `autocmp_chars` runs the default `auto-composition-function`
+    // (`auto-compose-chars`) with the matched rule's FUNC and the metric-
+    // filled gstring; that default builds/looks up the gstring and calls
+    // FUNC, which decides whether to shape (compose-gstring-for-graphic's
+    // lone-mark branch only sets an adjustment).  Calling
+    // `font-shape-gstring` directly here would skip both the user's
+    // buffer-local function and the rule's non-shaping branches.
+    let auto_composition =
+        ctx.visible_variable_value_or_nil(neovm_value::intern::intern("auto-composition-function"));
+    if auto_composition.is_nil() {
+        return None;
+    }
+    // GNU `autocmp_chars` uses `safe_calln`, not `eval`: the arguments are
+    // VALUES (the rule's FUNC symbol, the font object) and must not be
+    // evaluated as variables.  Its `record_unwind_save_match_data`
+    // (composite.c:941) and the point save around the call are mirrored by
+    // `save-match-data` + `save-excursion`, so a rule's `string-match` cannot
+    // leak out of the composition search.
+    //
+    // DIRECTION is Qnil on purpose.  The `find-composition-internal` subr
+    // matches GNU `Ffind_composition_internal`, which passes Qnil.  The
+    // layout snapshot resolver also reaches this builder (Neo's display
+    // path), and it passes Qnil too, whereas GNU's `composition_reseat_it`
+    // derives the direction from the run's bidi level (even -> L2R, odd ->
+    // R2L, below zero -> nil).  HarfBuzz normally guesses the same direction
+    // from the script, so Arabic and Hebrew agree; Common/Inherited-script
+    // clusters on odd levels diverge.  That pre-existing display-path gap is
+    // named N-autocmp-direction.
+    let quote = |value: Value| {
+        Value::list(vec![
+            Value::symbol(neovm_value::intern::intern("quote")),
+            value,
+        ])
+    };
+    let call = Value::list(vec![
+        Value::symbol(neovm_value::intern::intern("save-match-data")),
+        Value::list(vec![
+            Value::symbol(neovm_value::intern::intern("save-excursion")),
+            Value::list(vec![
+                Value::symbol(neovm_value::intern::intern("funcall")),
+                quote(auto_composition),
+                quote(func),
+                Value::fixnum(start),
+                Value::fixnum(end),
+                font,
+                string,
+                Value::NIL,
+            ]),
+        ]),
+    ]);
+    let shaped = ctx.eval_sub(call).ok()?;
     (!shaped.is_nil()).then_some(shaped)
 }
 
@@ -1561,8 +1606,9 @@ fn find_automatic_composition_in_string<H: TextHost>(
         AutomaticCompositionRules::new(&buf, table)?
     };
     let limit = (limit >= 0).then_some(limit);
-    let mut shape =
-        |start: usize, end: usize| shape_composition_gstring(ctx, start as i64, end as i64, string);
+    let mut shape = |start: usize, end: usize, func: Value| {
+        shape_composition_gstring(ctx, start as i64, end as i64, func, string)
+    };
     rules
         .find_automatic_composition(text, pos, limit, 0, &mut shape)
         .map(|(start, end, gstring)| (start as i64, end as i64, gstring))
@@ -1655,8 +1701,14 @@ fn find_automatic_composition_in_buffer<H: TextHost>(
     };
     let pos_index = usize::try_from(pos - head).ok()?;
     let limit = (to >= 0).then_some(to - head);
-    let mut shape = |start: usize, end: usize| {
-        shape_composition_gstring(ctx, head + start as i64, head + end as i64, Value::NIL)
+    let mut shape = |start: usize, end: usize, func: Value| {
+        shape_composition_gstring(
+            ctx,
+            head + start as i64,
+            head + end as i64,
+            func,
+            Value::NIL,
+        )
     };
     rules
         .find_automatic_composition(&text, pos_index, limit, 0, &mut shape)
@@ -1961,8 +2013,9 @@ pub fn composition_get_gstring<H: TextHost>(ctx: &mut H, args: Vec<Value>) -> Ev
     }
 
     let segment = &codes;
-    let mut encoded = vec![if args[2].is_font_object() {
-        args[2]
+    let font_object = args[2];
+    let mut encoded = vec![if font_object.is_font_object() {
+        font_object
     } else {
         Value::symbol("utf-8-unix")
     }];
@@ -1970,23 +2023,54 @@ pub fn composition_get_gstring<H: TextHost>(ctx: &mut H, args: Vec<Value>) -> Ev
 
     let mut gstring = vec![Value::vector(encoded), Value::NIL];
     // GNU `fill_gstring_body` sets each glyph's FROM and TO to the
-    // character's index in the gstring (src/composite.c:889-891).  The
-    // terminal path (no font object) then copies the character code into
-    // the glyph CODE slot and the char width table's width into WIDTH
-    // (src/composite.c:907-916).
+    // character's index in the gstring (src/composite.c:889-891).  With a
+    // font object it fills the driver's encoded code and text extents
+    // (`font_fill_lglyph_metrics`); a character the font cannot encode, and
+    // the terminal path, take the char-width-table fallback
+    // (src/composite.c:907-916).  Composition rules read those metrics
+    // (`compose-gstring-for-graphic` derives a lone mark's spacing
+    // adjustment from lbearing/rbearing/width), so a placeholder metric here
+    // changes the displayed advance.
+    let width_table = if font_object.is_font_object() {
+        None
+    } else {
+        crate::encoding::char_width_table_value(ctx)
+    };
     for (i, code) in segment.iter().enumerate() {
         let code = *code as i64;
         let index = Value::fixnum(i as i64);
+        let (code_slot, width, lbearing, rbearing, ascent, descent) =
+            match (font_object.is_font_object(), u32::try_from(code).ok()) {
+                (true, Some(ch)) => match ctx.font_glyph_text_metrics(font_object, ch) {
+                    Some(metrics) => (
+                        Value::fixnum(i64::from(metrics.code)),
+                        metrics.width,
+                        metrics.lbearing,
+                        metrics.rbearing,
+                        metrics.ascent,
+                        metrics.descent,
+                    ),
+                    None => {
+                        let width = crate::encoding::char_width_in_table(width_table, ch);
+                        (Value::fixnum(code), width as i64, 0, width as i64, 1, 0)
+                    }
+                },
+                (false, Some(ch)) => {
+                    let width = crate::encoding::char_width_in_table(width_table, ch);
+                    (Value::fixnum(code), width as i64, 0, width as i64, 1, 0)
+                }
+                _ => (Value::fixnum(code), 1, 0, 1, 1, 0),
+            };
         gstring.push(Value::vector(vec![
             index,
             index,
             Value::fixnum(code),
-            Value::fixnum(code),
-            Value::fixnum(1),
-            Value::fixnum(0),
-            Value::fixnum(1),
-            Value::fixnum(1),
-            Value::fixnum(0),
+            code_slot,
+            Value::fixnum(width),
+            Value::fixnum(lbearing),
+            Value::fixnum(rbearing),
+            Value::fixnum(ascent),
+            Value::fixnum(descent),
             Value::NIL,
         ]));
     }

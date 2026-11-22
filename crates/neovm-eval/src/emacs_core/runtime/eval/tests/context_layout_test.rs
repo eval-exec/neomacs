@@ -103,16 +103,22 @@ fn every_context_offset_is_mains() {
     // profiles. This is a deliberate, gate-verified layout change: the JIT
     // reads Context offsets through `offset_of!` and hashes them for AOT
     // invalidation, so no hard-coded ABI number outlives the deletion.
+    // The automatic-composition metrics seam appends
+    // `font_glyph_metrics_fn: Option<FontGlyphMetricsFn>` (16 bytes in both
+    // profiles) after the pinned layout: it is the LAST Context field, so
+    // every field offset above and every JIT-baked offset are unchanged and
+    // only the Context total moves.  The per-method driver boxes will be
+    // collapsed into one FontDriver slot by N-font-driver-vtable.
     #[cfg(debug_assertions)]
     assert_eq!(
         size_of::<Context>(),
-        44712 + TEST_EXTRA,
+        44728 + TEST_EXTRA,
         "Context size (debug with test instrumentation)"
     );
     #[cfg(not(debug_assertions))]
     assert_eq!(
         size_of::<Context>(),
-        44704 + TEST_EXTRA,
+        44720 + TEST_EXTRA,
         "Context size (release with test instrumentation)"
     );
     let table: &[(usize, usize, &str)] = &[

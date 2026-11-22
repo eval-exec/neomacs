@@ -265,6 +265,19 @@ impl FontEntityHandle {
     }
 }
 
+/// One character's encoded font code and GNU `font->driver->text_extents`
+/// metrics, as `font_fill_lglyph_metrics` stores them in a gstring glyph
+/// (`src/font.c`).  Integer pixels, matching the LGLYPH slots.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GlyphTextMetrics {
+    pub code: u32,
+    pub width: i64,
+    pub lbearing: i64,
+    pub rbearing: i64,
+    pub ascent: i64,
+    pub descent: i64,
+}
+
 /// The cache key for shaped gstrings: the header's font family, pixel size
 /// (bit-exact), and the run's characters. Two gstrings with the same key
 /// shape identically, so one cache entry serves both.

@@ -1017,8 +1017,9 @@ impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
                         DisplayItem::new(
                             self.span(start, end),
                             face,
-                            DisplayItemKind::TextRun(DisplayTextRun::automatic(
+                            DisplayItemKind::TextRun(DisplayTextRun::automatic_with_advance(
                                 self.text_slice(start, end),
+                                self.buffer.layout_automatic_composition_advance_px(start),
                             )),
                         )
                         .with_layout(layout),

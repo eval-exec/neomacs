@@ -2232,6 +2232,7 @@ impl<'layout, 'row, 'measurer> DisplayRowProgressWriter<'layout, 'row, 'measurer
                     face,
                     item_layout,
                     run.text.as_ref(),
+                    run.automatic_advance_px,
                     terminal,
                     pointer_appearance.as_ref(),
                     &mut metrics,
@@ -2678,6 +2679,7 @@ impl<'layout, 'row, 'measurer> DisplayRowProgressWriter<'layout, 'row, 'measurer
         face: RenderFaceRef,
         item_layout: DisplayItemLayout,
         text: &str,
+        automatic_advance_px: Option<f32>,
         terminal: TerminalComposition,
         pointer_appearance: Option<&crate::display_item::DisplayPointerAppearance>,
         metrics: &mut DisplayRowWriteMetrics,
@@ -2696,6 +2698,7 @@ impl<'layout, 'row, 'measurer> DisplayRowProgressWriter<'layout, 'row, 'measurer
             face_id,
             &terminal,
             self.text_run_measurement.clone(),
+            automatic_advance_px,
         );
         if advance > 0.0 && self.position.x_px() + advance > self.max_x_px {
             return DisplayRowAppendStatus::Clipped;
@@ -2880,29 +2883,39 @@ impl<'layout, 'row, 'measurer> DisplayRowWriter<'layout, 'row, 'measurer> {
         let box_vertical_edges = item.box_vertical_edges;
         let box_run_membership = item.box_run_membership;
         match item.kind {
-            DisplayItemKind::TextRun(run) => match run.composition {
-                DisplayTextComposition::UnicodeFallback => self.push_text_item(
-                    run.text.as_ref(),
-                    face_id,
-                    &item.span,
-                    DisplayTextClustering::UnicodeFallback,
-                    DisplayTextSourceMapping::NaturalText,
-                ),
-                DisplayTextComposition::Independent => self.push_text_item(
-                    run.text.as_ref(),
-                    face_id,
-                    &item.span,
-                    DisplayTextClustering::Independent,
-                    DisplayTextSourceMapping::NaturalText,
-                ),
-                DisplayTextComposition::Automatic(terminal) => {
-                    let mapping =
-                        DisplayTextSourceMapping::NaturalText.resolve(&item.span, self.row);
-                    let advance =
-                        self.automatic_composition_advance_px(&run.text, face_id, &terminal, None);
-                    self.push_automatic_composition(&run.text, terminal, face_id, mapping, advance);
+            DisplayItemKind::TextRun(run) => {
+                let automatic_advance_px = run.automatic_advance_px;
+                match run.composition {
+                    DisplayTextComposition::UnicodeFallback => self.push_text_item(
+                        run.text.as_ref(),
+                        face_id,
+                        &item.span,
+                        DisplayTextClustering::UnicodeFallback,
+                        DisplayTextSourceMapping::NaturalText,
+                    ),
+                    DisplayTextComposition::Independent => self.push_text_item(
+                        run.text.as_ref(),
+                        face_id,
+                        &item.span,
+                        DisplayTextClustering::Independent,
+                        DisplayTextSourceMapping::NaturalText,
+                    ),
+                    DisplayTextComposition::Automatic(terminal) => {
+                        let mapping =
+                            DisplayTextSourceMapping::NaturalText.resolve(&item.span, self.row);
+                        let advance = self.automatic_composition_advance_px(
+                            &run.text,
+                            face_id,
+                            &terminal,
+                            None,
+                            automatic_advance_px,
+                        );
+                        self.push_automatic_composition(
+                            &run.text, terminal, face_id, mapping, advance,
+                        );
+                    }
                 }
-            },
+            }
             DisplayItemKind::SourceMappedText(text) => {
                 self.push_text_item(
                     text.text.as_ref(),
@@ -2997,7 +3010,17 @@ impl<'layout, 'row, 'measurer> DisplayRowWriter<'layout, 'row, 'measurer> {
         face_id: FaceId,
         terminal: &TerminalComposition,
         measurement: Option<DisplayTextRunMeasurement>,
+        resolved_gstring_advance_px: Option<f32>,
     ) -> f32 {
+        // A snapshot resolved this composition's rule on the evaluator
+        // thread: GNU's composition width is the gstring's own glyph sum
+        // (WADJUST when present), not a fresh measurement of the text.
+        if let Some(advance) = resolved_gstring_advance_px
+            && advance.is_finite()
+            && advance >= 0.0
+        {
+            return advance;
+        }
         let backend = self
             .glyph_measurer
             .as_deref()

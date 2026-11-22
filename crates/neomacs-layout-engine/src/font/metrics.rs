@@ -892,6 +892,13 @@ pub struct FontMetricsService {
     /// font. Same generation contract as the other caches: cleared by
     /// `clear_caches`.
     resolved_char_font_cache: HashMap<(RealizedFaceFontCacheKey, char), Option<LayoutFontHandle>>,
+    /// Cache: (face attrs, char) → GNU `text_extents` (unshaped ink box,
+    /// advance, ascent, descent).  Automatic composition fills its gstring
+    /// with these before any rule runs; only combining marks and other rare
+    /// characters are ever queried, so the map stays small.  Same generation
+    /// contract as the other caches.
+    text_extents_cache:
+        HashMap<(char, MetricsCacheKey), Option<neomacs_font_materializer::GlyphTextMetrics>>,
     /// Cache: (face attrs, cluster text) → shaped glyphs with interned font
     /// identities. Same generation contract; clear-on-overflow like
     /// `shaped_run_cache`.
@@ -1115,6 +1122,7 @@ impl FontMetricsService {
             font_instances: FontInstanceInterner::default(),
             coverage_bitmap_fonts: HashMap::default(),
             resolved_char_font_cache: HashMap::default(),
+            text_extents_cache: HashMap::default(),
             resolved_cluster_cache: HashMap::default(),
             primary_pin_cache: HashMap::default(),
             primary_match_cache: HashMap::default(),
@@ -2880,6 +2888,66 @@ impl FontMetricsService {
         self.vertical_metrics_for_realized_face_char(ch, selection)
     }
 
+    /// GNU `font->driver->text_extents` for one character of a realized
+    /// face, held in the frame's logical pixels.
+    ///
+    /// `Fcomposition_get_gstring` fills every gstring glyph with these
+    /// unshaped metrics (`font_fill_lglyph_metrics`) before any composition
+    /// rule runs, and `compose-gstring-for-graphic` derives a lone mark's
+    /// spacing advance from the ink box.  The values therefore must come
+    /// from the glyph outline's bearing/advance, not from a shaped run.
+    pub(crate) fn glyph_text_extents_for_realized_face_char(
+        &mut self,
+        ch: char,
+        selection: RealizedFaceFontSelection<'_>,
+    ) -> Option<neomacs_font_materializer::GlyphTextExtents> {
+        self.gstring_glyph_metrics_for_realized_face_char(ch, selection)
+            .map(|metrics| metrics.extents)
+    }
+
+    /// GNU `font_fill_lglyph_metrics` for one character of a realized face:
+    /// the encoded font code and the unshaped driver extents that
+    /// `composition-get-gstring` stores in the glyph slot before any rule
+    /// runs.  The code is the font's glyph index, as LGLYPH_CODE in GNU.
+    ///
+    /// Family and pixel size are the seam's identity (the same pair the
+    /// shaping driver receives); the face's weight/slant are not part of
+    /// that identity, so a synthetic bold/italic realized face would still
+    /// measure its base face here.
+    pub fn gstring_glyph_metrics_for_realized_face_char(
+        &mut self,
+        ch: char,
+        selection: RealizedFaceFontSelection<'_>,
+    ) -> Option<neomacs_font_materializer::GlyphTextMetrics> {
+        let key = (ch, self.realized_face_font_cache_key(selection));
+        if let Some(cached) = self.text_extents_cache.get(&key) {
+            return *cached;
+        }
+        let value = self.compute_glyph_text_metrics(ch, selection);
+        self.text_extents_cache.insert(key, value);
+        value
+    }
+
+    fn compute_glyph_text_metrics(
+        &mut self,
+        ch: char,
+        selection: RealizedFaceFontSelection<'_>,
+    ) -> Option<neomacs_font_materializer::GlyphTextMetrics> {
+        let handle = self.materialized_font_for_realized_face_char(ch, selection)?;
+        let (asset, spacing) = match &handle.font.replay {
+            FontReplay::Swash { asset } => (
+                asset.file()?.clone(),
+                neomacs_display_protocol::font::FixedFontSpacing::ProportionalOrDual,
+            ),
+            FontReplay::FreeTypeBitmap { asset, spacing, .. } => (asset.clone(), *spacing),
+        };
+        let _ = spacing;
+        self.bitmap_materializer
+            .as_ref()?
+            .text_metrics_for_char(&asset, handle.font.pixel_size, self.device_scale.get(), ch)
+            .ok()
+    }
+
     fn materialized_font_for_realized_face_char(
         &mut self,
         ch: char,
@@ -3991,6 +4059,7 @@ impl FontMetricsService {
         self.shaped_run_cache.clear();
         self.resolved_face_font_cache.clear();
         self.resolved_char_font_cache.clear();
+        self.text_extents_cache.clear();
         self.resolved_cluster_cache.clear();
         self.font_resolver.clear_caches();
         self.primary_pin_cache.clear();
@@ -4298,3 +4367,7 @@ mod opened_font_display_tests;
 #[cfg(all(test, target_os = "linux"))]
 #[path = "metrics/tests/desktop_render_policy_test.rs"]
 mod desktop_render_policy_tests;
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "metrics/tests/text_extents_test.rs"]
+mod text_extents_tests;

@@ -42,6 +42,8 @@ use super::coding::{CodingSystemManager, EolConversion};
 use crate::code_conversion_workspace::{CodeConversionBufferLease, ConversionBufferEncoding};
 use crate::encoding::{CodingEncoderState, RuntimeCodingSystem};
 
+pub use neovm_value::display_vocab::GlyphTextMetrics;
+
 pub trait TextHost: EditHost {
     /// The text phase opener: the owner's variable-read view, from DISJOINT
     /// field borrows. It is [`EditHost::Vars`] — there is no second view type
@@ -72,6 +74,17 @@ pub trait TextHost: EditHost {
     /// pre-write/post-read hook bodies keep it exactly as today).
     /// TEXT-HOST row.
     fn eval_sub(&mut self, form: Value) -> EvalResult;
+
+    /// GNU `font->driver->text_extents` for character CH of FONT-OBJECT,
+    /// with the driver's encoded font code.  `composition-get-gstring` fills
+    /// every glyph with these before any automatic-composition rule runs
+    /// (`fill_gstring_body`, src/composite.c).  `None` when no font driver is
+    /// installed (batch mode) or the font cannot encode CH; the caller then
+    /// keeps GNU's char-width-table fallback.  TEXT-HOST row.
+    fn font_glyph_text_metrics(&mut self, font: Value, ch: u32) -> Option<GlyphTextMetrics> {
+        let _ = (font, ch);
+        None
+    }
 
     /// GNU's `inhibit-eol-conversion` read at the point of conversion
     /// (`src/coding.c`). TEXT-HOST row; pure read (T5.3).

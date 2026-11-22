@@ -38,6 +38,15 @@ impl TextHost for Context {
         &mut self.edit.buffers
     }
 
+    fn font_glyph_text_metrics(
+        &mut self,
+        font: Value,
+        ch: u32,
+    ) -> Option<neovm_value::display_vocab::GlyphTextMetrics> {
+        let driver = self.font_glyph_metrics_fn.as_mut()?;
+        driver(font, ch)
+    }
+
     fn eval_sub(&mut self, form: Value) -> EvalResult {
         Context::eval_sub(self, form)
     }

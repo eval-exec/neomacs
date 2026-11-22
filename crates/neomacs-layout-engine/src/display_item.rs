@@ -741,10 +741,17 @@ impl BufferDisplayPropertyReplacementAnchor {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct DisplayTextRun {
     pub(crate) text: Box<str>,
     pub(crate) composition: DisplayTextComposition,
+    /// GNU `composition_gstring_width` for an automatic composition, in
+    /// frame pixels: the sum of the shaped gstring's LGLYPH_WIDTH slots,
+    /// using LGLYPH_WADJUST when a glyph carries an adjustment vector
+    /// (src/composite.c).  `None` falls back to measuring the composed text
+    /// through the font service, which cannot see a rule's spacing
+    /// adjustment.
+    pub(crate) automatic_advance_px: Option<f32>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -766,6 +773,7 @@ impl DisplayTextRun {
         Self {
             text: text.into(),
             composition,
+            automatic_advance_px: None,
         }
     }
 
@@ -778,11 +786,22 @@ impl DisplayTextRun {
     }
 
     pub(crate) fn automatic(text: impl Into<Box<str>>) -> Self {
+        Self::automatic_with_advance(text, None)
+    }
+
+    /// An automatic composition with its evaluated gstring advance, when the
+    /// display snapshot resolved one (GNU `composition_gstring_width`).
+    pub(crate) fn automatic_with_advance(
+        text: impl Into<Box<str>>,
+        advance_px: Option<f32>,
+    ) -> Self {
         let text = text.into();
         let terminal = neovm_core::emacs_core::composite::automatic_composition_for_terminal(&text);
         Self {
             text,
             composition: DisplayTextComposition::Automatic(terminal),
+            automatic_advance_px: advance_px
+                .filter(|advance| advance.is_finite() && *advance >= 0.0),
         }
     }
 }

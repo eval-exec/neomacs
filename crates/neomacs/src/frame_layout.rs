@@ -258,6 +258,14 @@ pub fn install_font_shape_driver(evaluator: &mut Context) {
     }));
 }
 
+/// Install GNU `font->driver->text_extents` for the automatic-composition
+/// gstring constructor (`font_fill_lglyph_metrics`, src/font.c).
+pub fn install_font_glyph_metrics_driver(evaluator: &mut Context) {
+    evaluator.font_glyph_metrics_fn = Some(Box::new(|font, ch| {
+        REDISPLAY_RUNTIME.with(|runtime| runtime.glyph_text_metrics(font, ch))
+    }));
+}
+
 pub fn install_window_layout_query_fn(evaluator: &mut Context) {
     install_window_layout_query_with_policy(
         evaluator,
@@ -478,6 +486,7 @@ pub(crate) fn install_headless_tty_redisplay(
     install_frame_snapshot_fn(evaluator);
     install_window_layout_query_fn(evaluator);
     install_font_shape_driver(evaluator);
+    install_font_glyph_metrics_driver(evaluator);
 }
 
 pub fn install_tty_redisplay_callback_with_popup_redraw(
@@ -563,6 +572,7 @@ pub fn install_tty_redisplay_callback_with_popup_redraw(
         ),
     );
     install_font_shape_driver(evaluator);
+    install_font_glyph_metrics_driver(evaluator);
 }
 
 #[cfg(test)]

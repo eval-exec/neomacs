@@ -75,6 +75,11 @@ pub(crate) struct LayoutBufferSnapshot {
     /// Non-overlapping ranges compiled from Lisp's live
     /// `composition-function-table`, in ascending buffer-character order.
     automatic_composition_spans: Vec<CharRange>,
+    /// GNU `composition_gstring_width` for the automatic composition that
+    /// starts at each key (character position), resolved on the evaluator
+    /// thread before the walk.  Plain pixels, so a prepared row job can
+    /// carry them across threads.
+    automatic_composition_advances: FxHashMap<usize, f32>,
     string_composition_rules: Option<neovm_core::emacs_core::composite::AutomaticCompositionRules>,
 }
 
@@ -163,6 +168,7 @@ impl LayoutBufferSnapshot {
             overlay_view_span,
             category_symbol_plists: FxHashMap::default(),
             automatic_composition_spans: Vec::new(),
+            automatic_composition_advances: FxHashMap::default(),
             string_composition_rules: None,
         }
     }
@@ -955,5 +961,92 @@ impl LayoutBufferView for LayoutBufferSnapshot {
             .get(index)
             .map(|range| range.start())
             .filter(|start| *start < limit)
+    }
+
+    fn layout_automatic_composition_advance_px(&self, pos: CharPos0) -> Option<f32> {
+        self.automatic_composition_advances.get(&pos.get()).copied()
+    }
+}
+
+/// GNU `composition_gstring_width` over a whole gstring: the sum of the
+/// glyph WIDTH slots, using WADJUST when the glyph carries an adjustment
+/// vector (`compose-gstring-for-graphic`'s lone-mark branch stores one).
+///
+/// `None` for a terminal gstring (no font object): its slots are character
+/// cells, and the terminal walk keeps its own `terminal.width_cols`.
+fn gstring_pixel_advance(gstring: Value) -> Option<f32> {
+    let slots = gstring.as_vector_data()?;
+    let header = slots.first()?.as_vector_data()?;
+    if !header.first().is_some_and(|font| font.is_font_object()) {
+        return None;
+    }
+    let mut total: i64 = 0;
+    let mut glyphs = 0usize;
+    for slot in slots.iter().skip(2) {
+        let Some(glyph) = slot.as_vector_data() else {
+            break;
+        };
+        let adjustment = glyph
+            .get(9)
+            .and_then(|value| value.as_vector_data())
+            .and_then(|adjustment| adjustment.get(2))
+            .and_then(|value| value.as_int());
+        total += adjustment
+            .or_else(|| glyph.get(4).and_then(|value| value.as_int()))
+            .unwrap_or(0);
+        glyphs += 1;
+    }
+    (glyphs > 0).then(|| total.max(0) as f32)
+}
+
+impl LayoutBufferSnapshot {
+    /// Resolve every visible automatic composition's gstring width on the
+    /// evaluator thread (GNU `autocmp_chars` + `composition_gstring_width`).
+    ///
+    /// The snapshot owns the rule table and spans but cannot evaluate Lisp,
+    /// and a prepared row job must not cross threads with live evaluator
+    /// state, so the widths are resolved once, before any row walk.  A rule
+    /// may shape the gstring or (for `compose-gstring-for-graphic`'s
+    /// `nchars = 1` branch) only store a spacing adjustment; both contribute
+    /// `LGLYPH_WADJUST` when present, exactly as `composition_gstring_width`.
+    /// The search runs in the window's buffer so `font-at`, the buffer-local
+    /// `auto-composition-function`, and the rule's spacing facts see the
+    /// same context as a redisplay walk.
+    pub(crate) fn resolve_automatic_composition_advances(
+        &mut self,
+        evaluator: &mut neovm_core::emacs_core::eval::Context,
+        buffer_id: neovm_core::buffer::BufferId,
+    ) {
+        if self.automatic_composition_spans.is_empty() {
+            return;
+        }
+        use neovm_core::emacs_core::edit_host::EditHost;
+        let spans = self.automatic_composition_spans.clone();
+        let mut advances = FxHashMap::default();
+        let _ = evaluator.with_current_buffer_scope(buffer_id, |eval| {
+            for span in &spans {
+                let start = span.start().get();
+                let pos = Value::fixnum(start as i64 + 1);
+                let Ok(result) = neovm_core::emacs_core::composite::find_composition_internal(
+                    eval,
+                    vec![pos, Value::NIL, Value::NIL, Value::NIL],
+                ) else {
+                    continue;
+                };
+                if !result.is_cons() {
+                    continue;
+                }
+                let rest = result.cons_cdr();
+                if !rest.is_cons() || result.cons_car().as_int() != Some(start as i64 + 1) {
+                    continue;
+                }
+                let gstring = rest.cons_cdr().cons_car();
+                if let Some(width) = gstring_pixel_advance(gstring) {
+                    advances.insert(start, width);
+                }
+            }
+            Ok(Value::NIL)
+        });
+        self.automatic_composition_advances = advances;
     }
 }

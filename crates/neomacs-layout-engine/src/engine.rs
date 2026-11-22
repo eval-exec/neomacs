@@ -6182,7 +6182,7 @@ impl LayoutEngine {
             .unwrap_or(0.0);
         // `params` already names the semantic display source chosen before
         // fontification and incremental classification.
-        let layout_buffer = match evaluator.buffer_manager().get(buf_id) {
+        let mut layout_buffer = match evaluator.buffer_manager().get(buf_id) {
             Some(buffer) => {
                 let overlay_span = if overlay_view_full {
                     None
@@ -6231,6 +6231,16 @@ impl LayoutEngine {
                 };
             }
         };
+        // GNU resolves an automatic composition's rule lazily while the
+        // display iterator reaches it; the snapshot is immutable across the
+        // row walk (and may feed a worker), so resolve the visible spans'
+        // gstring widths once, here, with the evaluator in scope.
+        if matches!(
+            display_target,
+            crate::display_property::DisplayPropertyTarget::Graphical
+        ) {
+            layout_buffer.resolve_automatic_composition_advances(evaluator, buf_id);
+        }
         let buffer = &layout_buffer;
 
         // Point the face resolver at this window's parameters so a

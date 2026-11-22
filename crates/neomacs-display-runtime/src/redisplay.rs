@@ -257,6 +257,40 @@ impl RedisplayRuntime {
         )
     }
 
+    /// The installed `font->driver->text_extents` seam (GNU
+    /// `font_fill_lglyph_metrics`): encoded code and unshaped extents for
+    /// one character of an opened font object.  Uses the same disjoint
+    /// shaping-metrics instance the shaping driver uses, so a call from a
+    /// gstring constructor during a layout/redisplay borrow cannot conflict
+    /// with the engine.
+    pub fn glyph_text_metrics(
+        &self,
+        font: neovm_core::Value,
+        ch: u32,
+    ) -> Option<neovm_core::display_vocab::GlyphTextMetrics> {
+        let (family, pixel_size) =
+            neovm_core::emacs_core::font::font_object_family_and_pixel_size(&font)?;
+        let ch = char::from_u32(ch)?;
+        let selection = neomacs_layout_engine::font::metrics::RealizedFaceFontSelection::new(
+            &family,
+            400,
+            false,
+            pixel_size as f32,
+        );
+        let metrics = self
+            .shaping_metrics
+            .borrow_mut()
+            .gstring_glyph_metrics_for_realized_face_char(ch, selection)?;
+        Some(neovm_core::display_vocab::GlyphTextMetrics {
+            code: metrics.code,
+            width: metrics.extents.advance_px as i64,
+            lbearing: metrics.extents.lbearing_px as i64,
+            rbearing: metrics.extents.rbearing_px as i64,
+            ascent: metrics.extents.ascent_px as i64,
+            descent: metrics.extents.descent_px as i64,
+        })
+    }
+
     /// Produce one logical frame through the presentation engine.
     pub fn prepare_frame(
         &self,

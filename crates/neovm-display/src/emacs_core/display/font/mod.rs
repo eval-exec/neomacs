@@ -5337,33 +5337,28 @@ fn composition_gstring_adjust_zero_width(gstring: &Value) {
         if group_ends {
             if width == 0 && index > group_start {
                 // GNU: LGLYPH_SET_ADJUSTMENT(last, …) — the glyph's
-                // ADJUSTMENT slot (LGLYPH slot 5) is set, NOT the glyph
-                // itself; writing the vector as the glyph once replaced both
-                // cut glyphs with adjustment vectors.
+                // ADJUSTMENT slot is LGLYPH index 9 (`lglyph-adjustment`,
+                // composite.el); slots 5..8 are lbearing/rbearing/ascent/
+                // descent.  A 10-element vector must never be written into
+                // slot 5: compose-gstring-for-graphic reads it as an
+                // integer bearing.
                 let last = index - 1;
                 let glyph_vec = slots[last].as_vector_data().expect("glyph");
                 let own_width = glyph_vec[4].as_int().unwrap_or(0);
                 let glyph_value = slots[last].clone();
-                if glyph_vec[5].is_nil() {
+                if glyph_vec[9].is_nil() {
                     glyph_value.set_vector_slot(
-                        5,
+                        9,
                         Value::vector(vec![
                             Value::fixnum(0),
                             Value::fixnum(0),
                             Value::fixnum(own_width + 1),
-                            Value::NIL,
-                            Value::NIL,
-                            Value::NIL,
-                            Value::NIL,
-                            Value::NIL,
-                            Value::NIL,
-                            Value::NIL,
                         ]),
                     );
                 } else {
-                    let mut adjustment = glyph_vec[5].as_vector_data().expect("adj").to_vec();
+                    let mut adjustment = glyph_vec[9].as_vector_data().expect("adj").to_vec();
                     adjustment[2] = Value::fixnum(adjustment[2].as_int().unwrap_or(0) + 1);
-                    glyph_value.set_vector_slot(5, Value::vector(adjustment));
+                    glyph_value.set_vector_slot(9, Value::vector(adjustment));
                 }
             }
             if end_of_run {
@@ -5374,10 +5369,10 @@ fn composition_gstring_adjust_zero_width(gstring: &Value) {
             group_start = index;
         }
         let glyph_vec = glyph.as_ref().and_then(|g| g.as_ref()).expect("checked");
-        width += if glyph_vec[5].is_nil() {
+        width += if glyph_vec[9].is_nil() {
             glyph_vec[4].as_int().unwrap_or(0)
         } else {
-            glyph_vec[5]
+            glyph_vec[9]
                 .as_vector_data()
                 .and_then(|adj| adj[2].as_int())
                 .unwrap_or(0)

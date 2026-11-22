@@ -51,6 +51,8 @@ mod bidi_gui_zero_width_785_oracle;
 mod bidi_paragraph_direction_785_r2_gui_oracle;
 #[path = "composite_shaping_785_gui_oracle.rs"]
 mod composite_shaping_785_gui_oracle;
+#[path = "composition_gstring_metrics_n_orphan.rs"]
+mod composition_gstring_metrics_n_orphan;
 
 #[path = "config_env_boot.rs"]
 mod config_env_boot;

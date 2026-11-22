@@ -4033,6 +4033,14 @@ pub struct Context {
     /// those records are still out of the manager and armed as ephemerons.
     /// Appended after the pinned layout; only the Context size grows.
     automatic_retired_processes: Option<Vec<neovm_value::heap_types::ProcessId>>,
+    /// Frontend-installed `font->driver->text_extents` seam (GNU
+    /// `font_fill_lglyph_metrics`): `composition-get-gstring` fills glyph
+    /// metrics with it before automatic-composition rules run.  `None` means
+    /// no graphics font system is available (batch: char-width-table
+    /// fallback).  Appended after the pinned layout so every earlier offset,
+    /// including the JIT-baked ones, stays put.
+    #[allow(clippy::type_complexity)]
+    pub font_glyph_metrics_fn: Option<font_shape::FontGlyphMetricsFn>,
 }
 
 // A mutex does not make the host hooks, Rc leases or TLS views transferable.

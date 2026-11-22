@@ -2289,7 +2289,12 @@ fn font_shape_gstring_adjusts_zero_width_clusters() {
     let slots = shaped.as_vector_data().expect("gstring vector");
     for index in [2usize, 3usize] {
         let glyph = slots[index].as_vector_data().expect("glyph slot");
-        let adjustment = glyph[5].as_vector_data().expect("zero-width cluster must             get its last glyph's ADJUSTMENT set to [0 0 width+1]");
+        // GNU's LGLYPH layout (lisp/composite.el `lglyph-adjustment`) is
+        // index 9; slots 5..8 are lbearing/rbearing/ascent/descent.
+        assert!(glyph[5].is_nil(), "slot 5 is LBEARING, not the adjustment");
+        let adjustment = glyph[9]
+            .as_vector_data()
+            .expect("zero-width cluster must get its last glyph's ADJUSTMENT set to [0 0 width+1]");
         assert_eq!(adjustment[0], Value::fixnum(0));
         assert_eq!(adjustment[1], Value::fixnum(0));
         assert_eq!(adjustment[2], Value::fixnum(1), "width + 1");

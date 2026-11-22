@@ -71,6 +71,36 @@ pub enum RasterPixels {
     Bgra8(Vec<u8>),
 }
 
+/// GNU `font->driver->text_extents` metrics for one glyph at the frame's
+/// device size: `Fcomposition_get_gstring` fills every gstring glyph with
+/// these before any shaping (src/font.c `font_fill_lglyph_metrics`), and the
+/// automatic-composition rules adjust from them.
+///
+/// The integer fields follow `ftcrfont_glyph_extents` (src/ftcrfont.c):
+/// `lbearing = floor(x_bearing)`, `rbearing = ceil(x_bearing + width)`,
+/// `width = lround(x_advance)`, `ascent = ceil(-y_bearing - 1/256)`,
+/// `descent = ceil(height + y_bearing)`.  Values are logical frame pixels
+/// (device pixels divided by the frame device scale).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GlyphTextExtents {
+    pub lbearing_px: f32,
+    pub rbearing_px: f32,
+    pub advance_px: f32,
+    pub ascent_px: f32,
+    pub descent_px: f32,
+}
+
+/// One character's encoded font code plus its GNU `text_extents`.
+///
+/// `code` is what `font->driver->encode_char` returns and what
+/// `font_fill_lglyph_metrics` stores in LGLYPH_CODE; the extents are the
+/// same driver's `text_extents` metrics for that code.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GlyphTextMetrics {
+    pub code: u32,
+    pub extents: GlyphTextExtents,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct RasterizedGlyph {
     pub width_px: u32,
@@ -256,6 +286,48 @@ impl OpenedFont {
         }
     }
 
+    /// GNU `text_extents` for one glyph: the unshaped ink box, ascent and
+    /// descent the automatic-composition machinery fills a gstring with.
+    ///
+    /// The outline is loaded unhinted so the bearing arithmetic matches
+    /// GNU's cairo extents (`ftcrfont_glyph_extents`) rather than a
+    /// grid-fitted bitmap; bitmap-only faces fall back to their native
+    /// metrics.
+    pub fn text_extents(
+        &self,
+        glyph: ResolvedGlyphId,
+    ) -> Result<GlyphTextExtents, FontMaterializationError> {
+        #[cfg(any(windows, target_os = "linux"))]
+        {
+            let scalable = self._face.is_scalable();
+            let flags = if scalable {
+                LoadFlag::NO_HINTING | LoadFlag::NO_BITMAP
+            } else {
+                LoadFlag::DEFAULT
+            };
+            self._face.load_glyph(glyph.get(), flags).map_err(|error| {
+                FontMaterializationError::LoadGlyph {
+                    glyph_id: glyph.get(),
+                    reason: error.to_string(),
+                }
+            })?;
+            let metrics = self._face.glyph().metrics();
+            Ok(text_extents_from_metrics(
+                i64::from(metrics.horiBearingX),
+                i64::from(metrics.horiBearingY),
+                i64::from(metrics.width),
+                i64::from(metrics.height),
+                i64::from(metrics.horiAdvance),
+                self.device_scale,
+            ))
+        }
+        #[cfg(not(any(windows, target_os = "linux")))]
+        {
+            let _ = glyph;
+            Err(FontMaterializationError::BackendUnavailable)
+        }
+    }
+
     /// Return the glyph's logical horizontal advance without rendering it.
     /// Layout uses this path so measurement and rendering share one opened
     /// face while avoiding a bitmap allocation for every width probe.
@@ -292,6 +364,35 @@ impl std::fmt::Debug for FontMaterializer {
     }
 }
 
+/// GNU `ftcrfont_glyph_extents` rounding over FreeType 26.6 metrics.
+///
+/// `hori_bearing_y`/`height` point down in FreeType's coordinate system;
+/// cairo's `y_bearing` is the negated top, which is what the ascent and
+/// descent formulas use.
+fn text_extents_from_metrics(
+    hori_bearing_x: i64,
+    hori_bearing_y: i64,
+    width: i64,
+    height: i64,
+    hori_advance: i64,
+    device_scale: f32,
+) -> GlyphTextExtents {
+    let scale = device_scale.max(f32::EPSILON);
+    let fixed = |value: i64| value as f64 / 64.0;
+    let x_bearing = fixed(hori_bearing_x);
+    let y_bearing = -fixed(hori_bearing_y);
+    let width = fixed(width);
+    let height = fixed(height);
+    let x_advance = fixed(hori_advance);
+    GlyphTextExtents {
+        lbearing_px: (x_bearing.floor() as f32) / scale,
+        rbearing_px: ((x_bearing + width).ceil() as f32) / scale,
+        advance_px: (x_advance.round() as f32) / scale,
+        ascent_px: (((-y_bearing) - 1.0 / 256.0).ceil() as f32) / scale,
+        descent_px: ((height + y_bearing).ceil() as f32) / scale,
+    }
+}
+
 impl FontMaterializer {
     pub fn new() -> Result<Self, FontMaterializationError> {
         #[cfg(any(windows, target_os = "linux"))]
@@ -303,6 +404,84 @@ impl FontMaterializer {
         }
         #[cfg(not(any(windows, target_os = "linux")))]
         {
+            Err(FontMaterializationError::BackendUnavailable)
+        }
+    }
+
+    /// GNU `text_extents` for one character of an exact font file face.
+    ///
+    /// Unlike [`Self::open`] this accepts scalable faces: automatic
+    /// composition needs the unshaped ink box of ordinary outline glyphs,
+    /// not a bitmap strike.  The face is selected at the frame's device pixel
+    /// size and loaded unhinted so the rounding matches GNU's cairo extents.
+    pub fn text_extents_for_char(
+        &self,
+        asset: &FontFileAsset,
+        requested_layout_px: f32,
+        device_scale: f32,
+        ch: char,
+    ) -> Result<GlyphTextExtents, FontMaterializationError> {
+        self.text_metrics_for_char(asset, requested_layout_px, device_scale, ch)
+            .map(|metrics| metrics.extents)
+    }
+
+    /// GNU `font_fill_lglyph_metrics` for one character: the encoded font
+    /// code and the unshaped driver extents.  The automatic-composition
+    /// gstring stores both (`src/composite.c` `fill_gstring_body`), so a
+    /// Lisp-visible gstring must carry the same code the font driver would
+    /// return.
+    pub fn text_metrics_for_char(
+        &self,
+        asset: &FontFileAsset,
+        requested_layout_px: f32,
+        device_scale: f32,
+        ch: char,
+    ) -> Result<GlyphTextMetrics, FontMaterializationError> {
+        #[cfg(any(windows, target_os = "linux"))]
+        {
+            if !(requested_layout_px.is_finite() && requested_layout_px > 0.0) {
+                return Err(FontMaterializationError::InvalidRequestedSize);
+            }
+            let face = self
+                .library
+                .new_face(asset.path(), asset.face_index() as isize)
+                .map_err(|error| FontMaterializationError::OpenFace {
+                    path: asset.path().to_owned(),
+                    reason: error.to_string(),
+                })?;
+            let device_px = (requested_layout_px * device_scale.max(f32::EPSILON))
+                .round()
+                .max(1.0) as u32;
+            face.set_pixel_sizes(device_px, device_px)
+                .map_err(|error| FontMaterializationError::SelectSize {
+                    device_px,
+                    reason: error.to_string(),
+                })?;
+            let glyph = face
+                .get_char_index(ch as usize)
+                .ok_or(FontMaterializationError::MissingGlyph)?;
+            face.load_glyph(glyph, LoadFlag::DEFAULT).map_err(|error| {
+                FontMaterializationError::LoadGlyph {
+                    glyph_id: glyph as u32,
+                    reason: error.to_string(),
+                }
+            })?;
+            let metrics = face.glyph().metrics();
+            Ok(GlyphTextMetrics {
+                code: glyph as u32,
+                extents: text_extents_from_metrics(
+                    i64::from(metrics.horiBearingX),
+                    i64::from(metrics.horiBearingY),
+                    i64::from(metrics.width),
+                    i64::from(metrics.height),
+                    i64::from(metrics.horiAdvance),
+                    device_scale,
+                ),
+            })
+        }
+        #[cfg(not(any(windows, target_os = "linux")))]
+        {
+            let _ = (asset, requested_layout_px, device_scale, ch);
             Err(FontMaterializationError::BackendUnavailable)
         }
     }

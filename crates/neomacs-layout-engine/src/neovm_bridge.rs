@@ -319,6 +319,14 @@ pub(crate) trait LayoutBufferView {
     ) -> Option<CharPos0> {
         None
     }
+    /// GNU `composition_gstring_width` of the automatic composition whose
+    /// first character is `pos`, when the snapshot resolved it through the
+    /// evaluator's rule machinery.  A live-buffer adapter has no evaluator
+    /// environment, and a snapshot taken without one stores no advance, so
+    /// the row writer falls back to measuring the composed text.
+    fn layout_automatic_composition_advance_px(&self, _pos: CharPos0) -> Option<f32> {
+        None
+    }
 }
 
 /// The buffer-owned input needed while resolving named faces on display

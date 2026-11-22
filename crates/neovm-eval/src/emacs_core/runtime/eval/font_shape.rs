@@ -29,6 +29,12 @@ pub enum GstringShapeOutcome {
 /// installs the driver exactly the way it installs `redisplay_fn`.
 pub type FontShapeFn = Box<dyn FnMut(&mut Context, Value, Value) -> GstringShapeOutcome>;
 
+/// Installed GNU `font->driver->text_extents` seam.  Unlike the shaping
+/// driver it needs no evaluator access (the metrics engine is the display
+/// layer's font system), so it takes only the font object and the character.
+pub type FontGlyphMetricsFn =
+    Box<dyn FnMut(Value, u32) -> Option<neovm_value::display_vocab::GlyphTextMetrics>>;
+
 /// The shaped-gstring cache owns its values strongly, like GNU's staticpro'd
 /// gstring_hash_table (src/composite.c:2201-2202). Keys contain no Lisp edges.
 pub(crate) fn trace_gstring_shape_cache(
