@@ -8931,6 +8931,88 @@ fn pure_dispatch_process_placeholder_cluster_matches_compat_contracts() {
 }
 
 #[test]
+fn lread_substitute_object_in_subtree_replaces_the_placeholder_in_place() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::test_utils::new_context();
+
+    // GNU `substitute_object_recurse` (lread.c): every PLACEHOLDER reachable
+    // from OBJECT through conses, vectors, records, closures and string text
+    // properties becomes OBJECT, in place, and the subr returns nil. Hash
+    // tables and bool-vectors are left alone.
+    let rendered = format_eval_result(&eval.eval_str(
+        r#"(let* ((ph (cons nil nil))
+                  (s (propertize "ab" 'p ph 'q (list ph)))
+                  (f (make-byte-code 0 "\300\207" (vector ph) 1))
+                  (c (make-interpreted-closure nil '(x) (list (cons 'x ph))))
+                  (h (make-hash-table :test 'eq))
+                  (obj (list 1 ph (vector 2 ph) (cons ph 3) (record 'r ph) s f c h
+                             (make-bool-vector 2 t))))
+             (puthash 'k ph h)
+             (list (lread--substitute-object-in-subtree obj ph t)
+                   (eq (nth 1 obj) obj)
+                   (eq (aref (nth 2 obj) 1) obj)
+                   (eq (car (nth 3 obj)) obj)
+                   (eq (aref (nth 4 obj) 1) obj)
+                   (eq (get-text-property 1 'p s) obj)
+                   (eq (car (get-text-property 0 'q s)) obj)
+                   (eq (aref (aref f 2) 0) obj)
+                   (eq (funcall c) obj)
+                   (eq (gethash 'k h) ph)))"#,
+    ));
+    assert_eq!(rendered, "OK (nil t t t t t t t t t)");
+
+    // Any other pseudovector signals `sequencep`, after the slots walked
+    // before it were already substituted (GNU sets each car, then walks the
+    // cdr; each vector slot in turn).
+    let rendered = format_eval_result(&eval.eval_str(
+        r#"(let* ((ph (cons nil nil))
+                  (obj (list ph (current-buffer) ph))
+                  (v (vector ph (make-marker) ph))
+                  (e1 (condition-case e (lread--substitute-object-in-subtree obj ph t)
+                        (error e)))
+                  (e2 (condition-case e (lread--substitute-object-in-subtree v ph t)
+                        (error e))))
+             (list (car e1) (car (cdr e1)) (bufferp (nth 2 e1))
+                   (eq (car obj) obj) (eq (nth 2 obj) ph)
+                   (car e2) (car (cdr e2)) (markerp (nth 2 e2))
+                   (eq (aref v 0) v) (eq (aref v 2) ph)))"#,
+    ));
+    assert_eq!(
+        rendered,
+        "OK (wrong-type-argument sequencep t t t wrong-type-argument sequencep t t t)"
+    );
+}
+
+#[test]
+fn lread_substitute_object_in_subtree_walks_a_long_list_in_a_loop() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::test_utils::new_context();
+
+    // A list's cdr chain is walked in a loop, so a list this long does not
+    // overflow the native stack. GNU 31.1 recurses on the cdr and crashes
+    // with SIGSEGV on both forms below (attested on the pinned oracle,
+    // a360712c9d: the 1M-element form exits with signal 11).
+    let rendered = format_eval_result(&eval.eval_str(
+        r#"(let* ((ph (cons nil nil))
+                  (long (nconc (make-list 1000000 1) (list ph (vector ph)))))
+             (list (lread--substitute-object-in-subtree long ph t)
+                   (eq (car (nthcdr 1000000 long)) long)
+                   (eq (aref (car (nthcdr 1000001 long)) 0) long)))"#,
+    ));
+    assert_eq!(rendered, "OK (nil t t)");
+
+    // The reader's `#N=` takes the same walk.
+    let rendered = format_eval_result(&eval.eval_str(
+        r##"(let ((v (car (read-from-string
+                           (concat "#1=[(" (mapconcat #'number-to-string
+                                                      (make-list 1000000 7) " ")
+                                   ") #1#]")))))
+              (list (eq (aref v 1) v) (length (aref v 0))))"##,
+    ));
+    assert_eq!(rendered, "OK (t 1000000)");
+}
+
+#[test]
 fn kill_emacs_eval_requests_shutdown_and_stops_command_loop() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();

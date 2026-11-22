@@ -28,10 +28,12 @@ use smallvec::SmallVec;
 use std::cell::Cell;
 
 use super::builtins::collections::lookup_hash_table_test_alias;
+use super::builtins::{bytecode_closure_length, bytecode_closure_slot};
+use neovm_value::error::{Flow, LispCondition, signal};
 use neovm_value::value::{
-    HashTableLiteralKey, HashTableTest, HashTableWeakness, Value, build_hash_table_literal_value,
-    eq_value, get_string_text_properties_for_value, list_to_vec,
-    set_string_text_properties_for_value,
+    HashTableLiteralKey, HashTableTest, HashTableWeakness, StringTextPropertyRun, Value, ValueKind,
+    VecLikeType, build_hash_table_literal_value, eq_value, get_string_text_properties_for_value,
+    list_to_vec, set_string_text_properties_for_value,
 };
 
 const UNICODE_CHARACTER_NAME_LENGTH_BOUND: usize = 200;
@@ -1146,72 +1148,243 @@ impl ReaderToken {
 
 type ReaderTokenBytes = SmallVec<[u8; 64]>;
 
-fn substitute_read_placeholder(object: Value, placeholder: Value) {
-    let mut seen = Vec::new();
-    let result = substitute_read_placeholder_recurse(object, placeholder, object, &mut seen);
-    debug_assert!(eq_value(&result, &object));
-}
-
-fn substitute_read_placeholder_recurse(
+/// GNU `Flread__substitute_object_in_subtree` and `substitute_object_recurse`
+/// (lread.c): put OBJECT everywhere PLACEHOLDER occurs inside it, in place.
+/// The reader's `#N=` and the Lisp subr, which edebug's `#N=` reader calls,
+/// share this walk as they share GNU's.
+///
+/// GNU remembers only the nodes its COMPLETED argument names, which is enough
+/// to stop at the cycles `#N=` builds. This walk remembers every container it
+/// enters. That visits each node once and leaves the same objects behind on
+/// every input on which GNU's walk terminates, so COMPLETED is not needed.
+pub(crate) fn substitute_object_in_subtree(
     object: Value,
     placeholder: Value,
-    subtree: Value,
-    seen: &mut Vec<Value>,
-) -> Value {
-    if eq_value(&subtree, &placeholder) {
-        return object;
-    }
+    mode: SymbolMode,
+) -> Result<(), Flow> {
+    let mut walk = SubstituteWalk {
+        object,
+        placeholder,
+        mode,
+        seen: rustc_hash::FxHashSet::default(),
+    };
+    let result = walk.substitute(object)?;
+    debug_assert!(eq_value(&result, &object));
+    Ok(())
+}
 
-    if subtree.is_bare_symbol() || subtree.is_number() {
-        return subtree;
-    }
+/// GNU `struct subst`.
+struct SubstituteWalk {
+    object: Value,
+    placeholder: Value,
+    mode: SymbolMode,
+    /// The containers entered so far, by identity (`eq` compares bits).
+    seen: rustc_hash::FxHashSet<usize>,
+}
 
-    if seen.iter().any(|seen| eq_value(seen, &subtree)) {
-        return subtree;
-    }
-    seen.push(subtree);
-
-    if subtree.is_string() {
-        if let Some(runs) = get_string_text_properties_for_value(subtree) {
-            let remapped = runs
-                .into_iter()
-                .map(|mut run| {
-                    run.plist =
-                        substitute_read_placeholder_recurse(object, placeholder, run.plist, seen);
-                    run
-                })
-                .collect();
-            set_string_text_properties_for_value(subtree, remapped);
+impl SubstituteWalk {
+    /// What a slot holding SUBTREE holds after the walk: OBJECT for the
+    /// placeholder, otherwise SUBTREE with its contents substituted.
+    ///
+    /// A list's cdr chain is walked in a loop, so only nesting depth (cars,
+    /// slots) costs native stack, not list length.
+    fn substitute(&mut self, subtree: Value) -> Result<Value, Flow> {
+        if eq_value(&subtree, &self.placeholder) {
+            return Ok(self.object);
         }
-        return subtree;
-    }
-
-    if subtree.is_cons() {
-        let car =
-            substitute_read_placeholder_recurse(object, placeholder, subtree.cons_car(), seen);
-        let cdr =
-            substitute_read_placeholder_recurse(object, placeholder, subtree.cons_cdr(), seen);
-        subtree.set_car(car);
-        subtree.set_cdr(cdr);
-    } else if subtree.is_vector() {
-        if let Some(items) = subtree.as_vector_data() {
-            let mut items = items.clone();
-            for item in &mut items {
-                *item = substitute_read_placeholder_recurse(object, placeholder, *item, seen);
+        // GNU stops at symbols (`SYMBOLP`, which takes a symbol with position
+        // only under `symbols-with-pos-enabled`), numbers, and strings
+        // without text properties.
+        if subtree.is_symbol(self.mode) || subtree.is_number() {
+            return Ok(subtree);
+        }
+        let text_properties = if subtree.is_string() {
+            match get_string_text_properties_for_value(subtree) {
+                Some(runs) => Some(runs),
+                None => return Ok(subtree),
             }
-            let _ = subtree.replace_vector_data(items);
+        } else {
+            None
+        };
+        if !self.seen.insert(subtree.bits()) {
+            return Ok(subtree);
         }
-    } else if subtree.is_record()
-        && let Some(items) = subtree.as_record_data()
-    {
-        let mut items = items.clone();
-        for item in &mut items {
-            *item = substitute_read_placeholder_recurse(object, placeholder, *item, seen);
+
+        match subtree.kind() {
+            ValueKind::Cons => {
+                // GNU stores the car before it walks the cdr, so an error in
+                // the cdr leaves the car substituted.
+                let mut cell = subtree;
+                loop {
+                    let car = cell.cons_car();
+                    let new_car = self.substitute(car)?;
+                    if !eq_value(&new_car, &car) {
+                        cell.set_car(new_car);
+                    }
+                    let cdr = cell.cons_cdr();
+                    // A cons cdr that is neither the placeholder nor already
+                    // seen is one `substitute` would enter and return
+                    // unchanged: walk it in this loop instead.
+                    if cdr.is_cons()
+                        && !eq_value(&cdr, &self.placeholder)
+                        && self.seen.insert(cdr.bits())
+                    {
+                        cell = cdr;
+                        continue;
+                    }
+                    let new_cdr = self.substitute(cdr)?;
+                    if !eq_value(&new_cdr, &cdr) {
+                        cell.set_cdr(new_cdr);
+                    }
+                    break;
+                }
+            }
+            ValueKind::String => {
+                if let Some(runs) = text_properties {
+                    self.substitute_in_text_properties(subtree, runs)?;
+                }
+            }
+            ValueKind::Veclike(kind) => self.substitute_in_vectorlike(subtree, kind)?,
+            ValueKind::Subr(_) => return Err(not_a_sequence(subtree)),
+            // Symbols and numbers returned above; nothing else holds objects.
+            ValueKind::Nil
+            | ValueKind::T
+            | ValueKind::Fixnum(_)
+            | ValueKind::Symbol(_)
+            | ValueKind::Float
+            | ValueKind::Unbound
+            | ValueKind::Unknown => {}
         }
-        let _ = subtree.replace_record_data(items);
+        Ok(subtree)
     }
 
-    subtree
+    /// GNU's `Lisp_Vectorlike` arm, slot by slot in order.
+    fn substitute_in_vectorlike(&mut self, subtree: Value, kind: VecLikeType) -> Result<(), Flow> {
+        match kind {
+            VecLikeType::Vector | VecLikeType::Record => {
+                let mut index = 0;
+                while let Some(item) = subtree
+                    .as_vector_data()
+                    .or_else(|| subtree.as_record_data())
+                    .and_then(|items| items.get(index).copied())
+                {
+                    let new_item = self.substitute(item)?;
+                    if !eq_value(&new_item, &item) {
+                        let _ = match kind {
+                            VecLikeType::Vector => subtree.set_vector_slot(index, new_item),
+                            _ => subtree.set_record_slot(index, new_item),
+                        };
+                    }
+                    index += 1;
+                }
+            }
+            VecLikeType::Lambda | VecLikeType::Macro => {
+                let mut index = 0;
+                while let Some(slot) = subtree
+                    .closure_slots()
+                    .and_then(|slots| slots.get(index).copied())
+                {
+                    let new_slot = self.substitute(slot)?;
+                    if !eq_value(&new_slot, &slot)
+                        && let Some(slots) = subtree.closure_slots()
+                    {
+                        let mut slots = slots.to_vec();
+                        slots[index] = new_slot;
+                        let _ = subtree.replace_closure_slots(slots);
+                    }
+                    index += 1;
+                }
+            }
+            VecLikeType::ByteCode => {
+                // GNU stores every closure slot back. A byte-code function
+                // here has no slot writer, so a slot that is itself the
+                // placeholder keeps it; the objects the slots hold (argument
+                // list, the constants vector `aref` returns, doc and
+                // interactive forms) are substituted in place. As with `aset`
+                // into that vector, the function still runs from its own
+                // constant pool (P3.2 L4b, `ByteCodeSlotObjects`).
+                let count = bytecode_closure_length(&subtree).unwrap_or(0);
+                for index in 0..usize::try_from(count).unwrap_or(0) {
+                    if let Some(slot) = bytecode_closure_slot(&subtree, index) {
+                        self.substitute(slot)?;
+                    }
+                }
+            }
+            // A bool-vector holds bits, and GNU's hash-table pseudovector
+            // size counts no Lisp slot, so GNU walks neither. A bignum is a
+            // number and returned above.
+            VecLikeType::BoolVector | VecLikeType::HashTable | VecLikeType::Bignum => {}
+            // GNU walks char-tables, and sub-char-tables from vector slot 2,
+            // which skips each one's first entry on a 64-bit build. Their
+            // stores here also drive the char-table caches, so they are left
+            // alone for now, as the reader always left them.
+            VecLikeType::CharTable | VecLikeType::SubCharTable => {}
+            // GNU: an unknown pseudovector may hold non-Lisp fields, so it
+            // signals `sequencep`, as the `Flength` it once called did.
+            VecLikeType::Marker
+            | VecLikeType::Overlay
+            | VecLikeType::Finalizer
+            | VecLikeType::SymbolWithPos
+            | VecLikeType::UserPtr
+            | VecLikeType::Process
+            | VecLikeType::Frame
+            | VecLikeType::Window
+            | VecLikeType::Buffer
+            | VecLikeType::Obarray
+            | VecLikeType::Terminal
+            | VecLikeType::WindowConfiguration
+            | VecLikeType::Subr
+            | VecLikeType::Xwidget
+            | VecLikeType::XwidgetView
+            | VecLikeType::Thread
+            | VecLikeType::Mutex
+            | VecLikeType::CondVar
+            | VecLikeType::ModuleFunction
+            | VecLikeType::TsNode
+            | VecLikeType::Sqlite
+            | VecLikeType::Font
+            | VecLikeType::Timer
+            | VecLikeType::SurfaceHandle
+            | VecLikeType::VideoHandle => return Err(not_a_sequence(subtree)),
+        }
+        Ok(())
+    }
+
+    /// GNU walks each interval's plist and stores it back. Here each run's
+    /// plist is built afresh, so a property name or value that is the
+    /// placeholder itself is replaced only by writing the runs back; values
+    /// that contain it are substituted in place.
+    fn substitute_in_text_properties(
+        &mut self,
+        string: Value,
+        mut runs: Vec<StringTextPropertyRun>,
+    ) -> Result<(), Flow> {
+        let rewrite = runs.iter().any(|run| {
+            list_to_vec(&run.plist)
+                .is_some_and(|items| items.iter().any(|item| eq_value(item, &self.placeholder)))
+        });
+        let mut result = Ok(());
+        for run in &mut runs {
+            match self.substitute(run.plist) {
+                Ok(plist) => run.plist = plist,
+                Err(flow) => {
+                    result = Err(flow);
+                    break;
+                }
+            }
+        }
+        if rewrite {
+            set_string_text_properties_for_value(string, runs);
+        }
+        result
+    }
+}
+
+fn not_a_sequence(subtree: Value) -> Flow {
+    signal(
+        LispCondition::WrongTypeArgument,
+        vec![Value::symbol("sequencep"), subtree],
+    )
 }
 
 impl<'a> Reader<'a> {
@@ -2572,7 +2745,8 @@ impl<'a> Reader<'a> {
                             placeholder.set_cdr(expr.cons_cdr());
                             placeholder
                         } else {
-                            substitute_read_placeholder(expr, placeholder);
+                            substitute_object_in_subtree(expr, placeholder, self.symbol_mode())
+                                .map_err(|flow| self.flow_signal_error(flow, "sequencep"))?;
                             self.read_labels.insert(label, expr);
                             expr
                         };
