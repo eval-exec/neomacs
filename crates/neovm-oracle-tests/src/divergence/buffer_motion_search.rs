@@ -114,6 +114,42 @@ fn divergence_re_search_forward() {
 }
 
 #[test]
+fn oracle_prop_regex_search_leaves_the_gap_in_place() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // GNU `regex-emacs.c` `re_search_2` walks the two gap segments through
+    // BYTE_POS_ADDR and never calls move_gap, so `gap-position` after a regexp
+    // search is what the last edit left. A match may cross the gap.
+    let form = r#"(list
+  (with-temp-buffer
+    (insert (make-string 100 ?a))
+    (goto-char 50) (insert "x")
+    (goto-char 1)
+    (list (re-search-forward "zzz" nil t) (gap-position)))
+  (with-temp-buffer
+    (insert (make-string 100 ?a))
+    (goto-char 50) (insert "x")
+    (goto-char (point-max))
+    (list (re-search-backward "zzz" nil t) (gap-position)))
+  (with-temp-buffer
+    (insert (make-string 100 ?a))
+    (goto-char 50) (insert "x")
+    (goto-char 1)
+    (list (re-search-forward "aaa" nil t) (gap-position) (match-beginning 0)))
+  (with-temp-buffer
+    (insert (make-string 100 ?a))
+    (goto-char 50) (insert "x")
+    (goto-char (point-max))
+    (list (re-search-backward "aaa" nil t) (gap-position) (match-beginning 0)))
+  (with-temp-buffer
+    (insert "hello") (goto-char 3) (insert "Q") (delete-char -1)
+    (goto-char 1)
+    (list (re-search-forward "el" nil t) (gap-position) (match-beginning 0) (match-end 0))))"#;
+    let expect = expect_test::expect![[r#""OK ((nil 51) (nil 51) (4 51 1) (99 51 99) (4 3 2 4))""#]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+#[test]
 fn divergence_skip_chars() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
