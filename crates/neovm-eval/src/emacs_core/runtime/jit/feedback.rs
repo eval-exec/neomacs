@@ -593,7 +593,9 @@ impl CallSiteFeedbackExt for CallSiteFeedback {
         if next == state {
             return;
         }
-        self.state_word().store(next, Ordering::Relaxed);
+        // Release orders the slot writes above before the state that names
+        // them, so `target` never sees a state whose slots are still null.
+        self.state_word().store(next, Ordering::Release);
         if self.counter().load(Ordering::Relaxed) >= STABLE_WINDOW {
             let late = self.late_counter().load(Ordering::Relaxed);
             self.late_counter()
@@ -647,7 +649,9 @@ impl CallSiteFeedbackExt for CallSiteFeedback {
 
     /// The site's target as a compile reads it (see [`CallTarget`]).
     fn target(&self) -> CallTarget {
-        let state = self.state_word().load(Ordering::Relaxed);
+        // Acquire pairs with `transition`'s Release: every slot the state
+        // names is visible here.
+        let state = self.state_word().load(Ordering::Acquire);
         let n = match state & TAG_BITS {
             _ if state == STATE_UNINIT => return CallTarget::Uninit,
             // SAFETY: round-trip of an interned id stored in the feedback site (peer seal N8).
