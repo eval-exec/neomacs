@@ -664,6 +664,68 @@ fn assert_surface_hits_equal(
 }
 
 #[test]
+fn coverage_export_keeps_hit_geometry_deferred_through_admission_and_hits() {
+    let mut fixture = CoverageReuseFixture::new();
+    let window = fixture.window;
+    let owner = DisplayWindowId::new(window.0 as i64);
+    certified_coverage(
+        &mut fixture.eval,
+        fixture.frame,
+        &mut fixture.engine,
+        window,
+        owner,
+    );
+    assert_eq!(
+        fixture
+            .engine
+            .last_layout_stats()
+            .coverage_export_calls
+            .get(&owner),
+        Some(&1),
+        "the cost assertion must observe the actual coverage exporter"
+    );
+    let state = fixture.engine.last_frame_display_state.as_ref().unwrap();
+    let coverage = state
+        .scroll_coverage
+        .iter()
+        .find(|coverage| coverage.content.window_id == owner)
+        .expect("the real prepared-row producer must export coverage");
+    // This observes whether the full position vector was constructed, not an
+    // estimate of allocations from the number of rows or source characters.
+    assert!(
+        coverage.hit_index.text_deferred(),
+        "exporting row-backed coverage must not flatten all source positions"
+    );
+    let surface = fixture.surface(window);
+    assert!(
+        coverage.hit_index.text_deferred(),
+        "real transport admission must validate coverage without flattening its hit geometry"
+    );
+    assert!(surface.coverage().hit_index.text_deferred());
+
+    // Force the legacy flat index on an independent clone. Cloning preserves
+    // the immutable source but gives its full-vector cache a separate owner,
+    // so the reference cannot silently materialize the measured index.
+    let mut eager_coverage = (**coverage).clone();
+    eager_coverage.hit_index = PresentedHitIndex::from_parts(
+        eager_coverage.hit_index.presentation(),
+        eager_coverage.hit_index.regions().to_vec(),
+        eager_coverage.hit_index.text_positions().to_vec(),
+    )
+    .expect("the same coverage geometry must admit the legacy flat index");
+    assert!(!eager_coverage.hit_index.text_deferred());
+    assert!(coverage.hit_index.text_deferred());
+    let eager_surface = Arc::new(eager_coverage)
+        .materialize(state)
+        .expect("the legacy flat reference must pass real transport admission");
+    assert_surface_hits_equal(&surface, &eager_surface);
+    assert!(
+        surface.coverage().hit_index.text_deferred(),
+        "direct row hits must preserve the deferred full position vector"
+    );
+}
+
+#[test]
 fn cursor_motion_renews_export_with_eligible_prepared_rows_and_exact_hits() {
     let mut fixture = CoverageReuseFixture::new();
     let window = fixture.window;
