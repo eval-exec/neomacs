@@ -672,28 +672,7 @@ pub(crate) fn sync_live_frame_font_state(
     let Some(frame) = eval.frame_manager().get(frame_id) else {
         return Ok(());
     };
-    let inhibit = eval
-        .eval_symbol_by_id(intern("frame-inhibit-implied-resize"))
-        .ok()
-        .unwrap_or(Value::NIL);
-    let phase = super::frame::implied_resize_creation_phase(frame);
-    let symbols = eval.symbol_mode();
-    let mut horizontal = implied_resize::policy(
-        frame,
-        inhibit,
-        phase,
-        ImpliedResizeReason::Font,
-        ResizeAxis::Horizontal,
-        symbols,
-    )?;
-    let mut vertical = implied_resize::policy(
-        frame,
-        inhibit,
-        phase,
-        ImpliedResizeReason::Font,
-        ResizeAxis::Vertical,
-        symbols,
-    )?;
+    let old_public_font = frame.known_parameter(FrameParam::Font);
     let old_metrics = (frame.char_width, frame.char_height, frame.font_pixel_size);
     // A second font change can arrive before the first native resize completes.
     // Carry the requested grid forward instead of dividing the old allocation
@@ -722,14 +701,92 @@ pub(crate) fn sync_live_frame_font_state(
         },
     );
     let (frames, display_host) = eval.frame_manager_and_display_host_mut();
-    sync_live_frame_font_state_in_state(frames, display_host, frame_id, resolution, vertical);
+    // Install the opened metrics first, as GNU's native font hook does. Keep
+    // a grown minibuffer until the final vertical policy is known.
+    sync_live_frame_font_state_in_state(
+        frames,
+        display_host,
+        frame_id,
+        resolution,
+        ResizePolicy::PreserveAllocation,
+    );
 
+    let Some(frame) = eval.frame_manager().get(frame_id) else {
+        return Ok(());
+    };
+    if old_metrics == (frame.char_width, frame.char_height, frame.font_pixel_size)
+        || frame.effective_window_system().is_none()
+        || eval.display_host.is_none()
+    {
+        return Ok(());
+    }
+    let policies = (|| -> Result<(ResizePolicy, ResizePolicy, u32, u32), Flow> {
+        // GNU frame.c:860-863,895-900 computes minima before evaluating
+        // the variable and short-circuits the predicate per undersized axis.
+        let min_width = frame_minimum_inner_pixels(eval, frame_id, ResizeAxis::Horizontal)?;
+        let min_height = frame_minimum_inner_pixels(eval, frame_id, ResizeAxis::Vertical)?;
+        let symbols = eval.symbol_mode();
+        let inhibit = eval.eval_symbol_by_id(intern("frame-inhibit-implied-resize"))?;
+        let frame = eval
+            .frame_manager()
+            .get(frame_id)
+            .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+        let phase = super::frame::implied_resize_creation_phase(frame);
+        let border = (frame.internal_border_width().max(0) as u32).saturating_mul(2);
+        let horizontal = if frame.width.saturating_sub(border) < min_width {
+            ResizePolicy::PreserveTextGrid
+        } else {
+            implied_resize::policy(
+                frame,
+                inhibit,
+                phase,
+                ImpliedResizeReason::Font,
+                ResizeAxis::Horizontal,
+                symbols,
+            )?
+        };
+        let vertical = if super::window_cmds::frame_text_height_pixels(frame) < min_height {
+            ResizePolicy::PreserveTextGrid
+        } else {
+            implied_resize::policy(
+                frame,
+                inhibit,
+                phase,
+                ImpliedResizeReason::Font,
+                ResizeAxis::Vertical,
+                symbols,
+            )?
+        };
+        Ok((horizontal, vertical, min_width, min_height))
+    })();
+    let (horizontal, vertical, min_inner_width, min_inner_height) = match policies {
+        Ok(policies) => policies,
+        Err(error) => {
+            // GNU gui_set_font publishes the public name only after its
+            // native hook succeeds. The hook's opened metrics remain installed.
+            if let Some(frame) = eval.frame_manager_mut().get_mut(frame_id) {
+                frame.set_known_parameter(FrameParam::Font, old_public_font.unwrap_or(Value::NIL));
+            }
+            return Err(error);
+        }
+    };
+    if vertical == ResizePolicy::PreserveTextGrid
+        && old_metrics.1
+            != eval
+                .frame_manager()
+                .get(frame_id)
+                .map_or(old_metrics.1, |frame| frame.char_height)
+    {
+        if let Some(frame) = eval.frame_manager_mut().get_mut(frame_id) {
+            frame.shrink_mini_window();
+        }
+    }
     let Some(frame) = eval.frame_manager().get(frame_id) else {
         return Ok(());
     };
     tracing::debug!(
         frame_id = frame_id.0,
-        ?phase,
+        phase = ?frame.creation_phase,
         ?horizontal,
         ?vertical,
         ?old_metrics,
@@ -737,26 +794,6 @@ pub(crate) fn sync_live_frame_font_state(
         allocation = ?(frame.width, frame.height),
         "implied frame font geometry"
     );
-    if old_metrics == (frame.char_width, frame.char_height, frame.font_pixel_size)
-        || frame.effective_window_system().is_none()
-        || eval.display_host.is_none()
-    {
-        return Ok(());
-    }
-    let min_inner_width = frame_minimum_inner_pixels(eval, frame_id, ResizeAxis::Horizontal)?;
-    let min_inner_height = frame_minimum_inner_pixels(eval, frame_id, ResizeAxis::Vertical)?;
-    let Some(frame) = eval.frame_manager().get(frame_id) else {
-        return Ok(());
-    };
-    let border = (frame.internal_border_width().max(0) as u32).saturating_mul(2);
-    // GNU inhibit mode 3 permits inhibition only while existing allocation
-    // still satisfies the window minima, independently on each axis.
-    if frame.width.saturating_sub(border) < min_inner_width {
-        horizontal = ResizePolicy::PreserveTextGrid;
-    }
-    if super::window_cmds::frame_text_height_pixels(frame) < min_inner_height {
-        vertical = ResizePolicy::PreserveTextGrid;
-    }
     if horizontal == ResizePolicy::PreserveAllocation
         && vertical == ResizePolicy::PreserveAllocation
     {

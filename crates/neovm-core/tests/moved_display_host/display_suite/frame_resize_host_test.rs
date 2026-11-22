@@ -523,3 +523,174 @@ fn chrome_resize_minima_override_inhibition_only_on_the_required_axis() {
     fixture.acknowledge(&request);
     fixture.assert_geometry(110, 34, 560);
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn chrome_minima_skip_invalid_policy_when_both_axes_require_enlargement() {
+    let mut fixture = ChromeResizeFixture::new();
+    fixture
+        .eval
+        .eval_str("(modify-frame-parameters nil '((min-width . 110) (min-height . 40)))")
+        .unwrap();
+    fixture
+        .eval
+        .eval_str("(setq frame-inhibit-implied-resize '(unrelated . 7))")
+        .unwrap();
+    fixture
+        .eval
+        .eval_str("(modify-frame-parameters nil '((internal-border-width . 3)))")
+        .expect("both undersized axes bypass malformed inhibition membership");
+    assert_eq!(fixture.requests.borrow().len(), 1);
+    let request = fixture.requests.borrow()[0].clone();
+    assert_eq!((request.width, request.height), (886, 696));
+    fixture.acknowledge(&request);
+    fixture.assert_geometry(110, 40, 646);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn chrome_minima_still_check_invalid_policy_on_each_axis_that_can_preserve_allocation() {
+    for minima in [
+        "'((min-width . 110) (min-height . 5))",
+        "'((min-width . 10) (min-height . 40))",
+    ] {
+        let mut fixture = ChromeResizeFixture::new();
+        fixture
+            .eval
+            .eval_str(&format!("(modify-frame-parameters nil {minima})"))
+            .unwrap();
+        fixture
+            .eval
+            .eval_str("(setq frame-inhibit-implied-resize '(unrelated . 7))")
+            .unwrap();
+        let error = fixture
+            .eval
+            .eval_str(
+                "(condition-case e
+                     (modify-frame-parameters nil '((internal-border-width . 3)))
+                   (error e))",
+            )
+            .unwrap();
+        assert_eq!(
+            error,
+            Value::list(vec![
+                Value::symbol("wrong-type-argument"),
+                Value::symbol("listp"),
+                Value::cons(Value::symbol("unrelated"), Value::fixnum(7)),
+            ])
+        );
+        assert!(fixture.requests.borrow().is_empty());
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn chrome_minimum_short_circuit_uses_current_allocation_before_pending_target() {
+    let mut fixture = ChromeResizeFixture::new();
+    fixture
+        .eval
+        .eval_str("(set-frame-size nil 120 50)")
+        .unwrap();
+    assert_eq!(fixture.requests.borrow().len(), 1);
+    fixture
+        .eval
+        .eval_str("(modify-frame-parameters nil '((min-width . 110) (min-height . 40)))")
+        .unwrap();
+    fixture
+        .eval
+        .eval_str("(setq frame-inhibit-implied-resize '(unrelated . 7))")
+        .unwrap();
+    fixture
+        .eval
+        .eval_str("(modify-frame-parameters nil '((internal-border-width . 3)))")
+        .expect("a larger unacknowledged target does not make the old allocation eligible");
+    assert_eq!(fixture.requests.borrow().len(), 2);
+    let request = fixture.requests.borrow()[1].clone();
+    assert_eq!((request.width, request.height), (966, 856));
+    fixture.acknowledge(&request);
+    fixture.assert_geometry(120, 50, 806);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn chrome_minimum_callbacks_run_before_the_inhibition_value_is_read() {
+    let mut fixture = ChromeResizeFixture::new();
+    fixture
+        .eval
+        .eval_str(
+            "(modify-frame-parameters nil '((min-width . nil) (min-height . nil)))
+             (fset 'frame-windows-min-size
+                   (lambda (&rest ignored)
+                     (setq frame-inhibit-implied-resize nil)
+                     1))
+             (setq frame-inhibit-implied-resize '(unrelated . 7))",
+        )
+        .unwrap();
+    fixture
+        .eval
+        .eval_str("(modify-frame-parameters nil '((tool-bar-lines . 0)))")
+        .expect("minimum callbacks replace the invalid policy before it is read");
+    assert_eq!(fixture.requests.borrow().len(), 1);
+    let request = fixture.requests.borrow()[0].clone();
+    assert_eq!((request.width, request.height), (800, 576));
+    fixture.acknowledge(&request);
+    fixture.assert_geometry(100, 35, 560);
+}
+
+#[test]
+fn font_minima_skip_invalid_policy_only_when_both_axes_require_enlargement() {
+    for (minimum_rows, both_axes_undersized) in [(50, true), (5, false)] {
+        let mut fixture = ChromeResizeFixture::new();
+        let mut host = RecordingDisplayHost::with_resolved_frame_font(remapped_mono_font_metrics());
+        host.resized = fixture.requests.clone();
+        fixture.eval.set_display_host(Box::new(host));
+        fixture
+            .eval
+            .eval_str(&format!(
+                "(modify-frame-parameters nil '((min-width . 120) (min-height . {minimum_rows})))"
+            ))
+            .unwrap();
+        fixture
+            .eval
+            .eval_str("(setq frame-inhibit-implied-resize '(unrelated . 7))")
+            .unwrap();
+        let result = fixture
+            .eval
+            .eval_str(
+                r#"(condition-case e
+                       (progn
+                         (internal-set-lisp-face-attribute
+                          'default :font "Remapped Mono-24" nil)
+                         'ok)
+                     (error e))"#,
+            )
+            .unwrap();
+        if both_axes_undersized {
+            assert_eq!(result, Value::symbol("ok"));
+            assert_eq!(fixture.requests.borrow().len(), 1);
+            let request = fixture.requests.borrow()[0].clone();
+            // Minima are measured in the new opened font's 16x32 cells.
+            assert!(request.width >= 120 * 16);
+            assert!(request.height >= 50 * 32);
+            fixture.acknowledge(&request);
+            let geometry = fixture
+                .eval
+                .eval_str("(list (frame-width) (frame-height) (frame-char-height))")
+                .unwrap();
+            let geometry = list_to_vec(&geometry).unwrap();
+            assert!(geometry[0].as_int().unwrap() >= 120);
+            assert!(geometry[1].as_int().unwrap() >= 50);
+            assert_eq!(geometry[2], Value::fixnum(32));
+        } else {
+            assert_eq!(
+                result,
+                Value::list(vec![
+                    Value::symbol("wrong-type-argument"),
+                    Value::symbol("listp"),
+                    Value::cons(Value::symbol("unrelated"), Value::fixnum(7)),
+                ])
+            );
+            assert!(fixture.requests.borrow().is_empty());
+        }
+    }
+}

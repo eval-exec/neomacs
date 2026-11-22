@@ -3,6 +3,7 @@
 use super::super::window_cmds::{
     FrameResizeRequest, FrameSizeParam, frame_non_text_total_height_pixels,
     frame_non_text_total_width_pixels_in_state, frame_size_param_to_pixels,
+    frame_text_height_pixels,
 };
 use super::implied_resize::{self, ImpliedResizeReason, ResizeAxis, ResizePolicy};
 use crate::window::{DisplayFrameExt, FrameId, FrameManager, GuiResizeDelivery, PendingGuiResize};
@@ -122,6 +123,12 @@ impl ChromeChange {
         if let Some(frame) = eval.frame_manager_mut().get_mut(fid) {
             frame.sync_bar_heights_from_parameters();
         }
+        // GNU adjust_frame_size obtains both minima before evaluating the
+        // inhibition predicate. These calls can invoke Lisp and change policy.
+        let min_width =
+            super::super::font::frame_minimum_inner_pixels(eval, fid, ResizeAxis::Horizontal)?;
+        let min_height =
+            super::super::font::frame_minimum_inner_pixels(eval, fid, ResizeAxis::Vertical)?;
         let (non_text, horizontal, vertical) = {
             let symbols = eval.symbol_mode();
             let inhibit = eval
@@ -131,11 +138,12 @@ impl ChromeChange {
                 .get(fid)
                 .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
             let phase = super::implied_resize_creation_phase(frame);
-            (
-                (
-                    frame_non_text_total_width_pixels_in_state(&frames, fid),
-                    frame_non_text_total_height_pixels(frame),
-                ),
+            let border = (frame.internal_border_width().max(0) as u32).saturating_mul(2);
+            // A pending target is resize intent, not the current allocation
+            // used by GNU's short-circuit checks (frame.c:895-900). In
+            // particular, an invalid policy list must not be traversed for an
+            // axis whose existing inner size already requires enlargement.
+            let horizontal = if frame.width.saturating_sub(border) >= min_width {
                 implied_resize::policy(
                     frame,
                     inhibit,
@@ -143,7 +151,11 @@ impl ChromeChange {
                     self.reason,
                     ResizeAxis::Horizontal,
                     symbols,
-                )?,
+                )?
+            } else {
+                ResizePolicy::PreserveTextGrid
+            };
+            let vertical = if frame_text_height_pixels(frame) >= min_height {
                 implied_resize::policy(
                     frame,
                     inhibit,
@@ -151,14 +163,19 @@ impl ChromeChange {
                     self.reason,
                     ResizeAxis::Vertical,
                     symbols,
-                )?,
+                )?
+            } else {
+                ResizePolicy::PreserveTextGrid
+            };
+            (
+                (
+                    frame_non_text_total_width_pixels_in_state(&frames, fid),
+                    frame_non_text_total_height_pixels(frame),
+                ),
+                horizontal,
+                vertical,
             )
         };
-        // adjust_frame_size's minima override ordinary inhibition on each axis.
-        let min_width =
-            super::super::font::frame_minimum_inner_pixels(eval, fid, ResizeAxis::Horizontal)?;
-        let min_height =
-            super::super::font::frame_minimum_inner_pixels(eval, fid, ResizeAxis::Vertical)?;
         let frames = eval.frame_manager();
         let frame = frames
             .get(fid)
