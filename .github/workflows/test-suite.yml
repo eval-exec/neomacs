@@ -1430,20 +1430,20 @@ jobs:
       # from the same archive; native_display itself is already part of
       # package(neomacs-gui-tests).
       #
-      # Two passes over the same archive.  The native-menu scenarios drive
-      # real pointer and keyboard input through a compositor and the
-      # presentation-latency cases assert input-to-present budgets: both are
-      # measurements of a live compositor, and a sibling test sharing the
-      # runner's four cores invalidates them (input injected into a menu that
-      # has not finished its first frame is dropped; a software rasterizer
-      # competing with a dozen of its siblings misses the 120 Hz budget).
-      # The live desktop-font stages have the same shape: they wait for the
-      # GSettings change to reach the editor and fail the stage if it has not
-      # arrived when the 20-second budget expires (measured at 22 s under
-      # load ~40, d4d009ae90).  On 2026-10-29 four siblings on four cores
-      # pushed every desktop_font_startup/updates stage, including GNU's own
-      # `gnu_*` variants, to the deadline.  Run them, and the display
-      # scroll-input units, one at a time, ahead of the bulk pass.
+      # Two passes over the same archive.  The remaining serial pass holds
+      # only tests whose assertions are measurements of a live compositor:
+      # the input-to-presentation latency rows, the resize/presentation pixel
+      # rows, the calibrated Wayland font raster rows, and the display-runtime
+      # scroll-input units.  A sibling sharing the runner's cores invalidates
+      # those budgets.
+      #
+      # native_menus and the live desktop-font suites are receipt-gated and
+      # run in the bulk pass: menu input starts only after the primary
+      # surface's first presentation (no fixed settle), and the desktop-font
+      # stages wait for the observed GSettings change plus the native
+      # presentation receipt, capped only by the 60 s process timeout.  They
+      # no longer depend on a 20 s per-stage budget, so concurrency no longer
+      # turns load into a failure.
       #
       # The two `continuous_120hz_` scenarios are NOT in this pass. They are
       # calibrated performance gates: native_scrolling/budget.rs judges the
@@ -1465,7 +1465,7 @@ jobs:
           cargo nextest run \
             --archive-file neomacs-workspace-tests.tar.zst \
             --extract-to "$TMPDIR/nextest" \
-            -E '(package(neomacs-gui-tests) and (test(~native_menus::) or test(~presents_while_command_is_stalled) or test(~presents_resolved_destination_while_command_is_stalled) or test(~presents_pixels_while_evaluator_is_stalled) or test(~have_confirmed_input_latency) or test(~resize_presentation::) or test(~desktop_font_startup::) or test(~desktop_font_updates::) or test(~wayland_font_raster::))) or (package(neomacs-display-runtime) and test(scroll_input))' \
+            -E '(package(neomacs-gui-tests) and (test(~presents_while_command_is_stalled) or test(~presents_resolved_destination_while_command_is_stalled) or test(~presents_pixels_while_evaluator_is_stalled) or test(~have_confirmed_input_latency) or test(~resize_presentation::) or test(~wayland_font_raster::))) or (package(neomacs-display-runtime) and test(scroll_input))' \
             --workspace-remap "$GITHUB_WORKSPACE" \
             --test-threads 1 \
             --no-fail-fast
@@ -1477,7 +1477,7 @@ jobs:
             --archive-file neomacs-workspace-tests.tar.zst \
             --extract-to "$TMPDIR/nextest" \
             --extract-overwrite \
-            -E 'package(neomacs-gui-tests) and not (test(~native_menus::) or test(~continuous_120hz_) or test(~presents_while_command_is_stalled) or test(~presents_resolved_destination_while_command_is_stalled) or test(~presents_pixels_while_evaluator_is_stalled) or test(~have_confirmed_input_latency) or test(~resize_presentation::) or test(~desktop_font_startup::) or test(~desktop_font_updates::) or test(~wayland_font_raster::))' \
+            -E 'package(neomacs-gui-tests) and not (test(~continuous_120hz_) or test(~presents_while_command_is_stalled) or test(~presents_resolved_destination_while_command_is_stalled) or test(~presents_pixels_while_evaluator_is_stalled) or test(~have_confirmed_input_latency) or test(~resize_presentation::) or test(~wayland_font_raster::))' \
             --workspace-remap "$GITHUB_WORKSPACE" \
             --test-threads 4 \
             --no-fail-fast

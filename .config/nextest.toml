@@ -236,6 +236,15 @@ filter = 'package(neomacs-gui-tests) and test(~macos_native_menus::)'
 platform = { host = 'cfg(target_os = "macos")' }
 threads-required = "num-test-threads"
 
+# Input-to-presentation budgets and calibrated raster outputs are measurements
+# of a live compositor.  The CI job runs them in its serial pass; reserve the
+# whole nextest pool here as well so a developer run at the default thread
+# count cannot let a sibling test steal the cores the budget is measured on.
+# The continuous_120hz_ rows are calibrated-host gates and are not included.
+[[profile.default.overrides]]
+filter = 'package(neomacs-gui-tests) and (test(~presents_while_command_is_stalled) or test(~presents_resolved_destination_while_command_is_stalled) or test(~presents_pixels_while_evaluator_is_stalled) or test(~have_confirmed_input_latency) or test(~resize_presentation::) or test(~wayland_font_raster::))'
+threads-required = "num-test-threads"
+
 # A signature-exact GNU ime miss is non-fatal, so its ::warning:: line has to
 # reach the step log on success. GitHub Actions only annotates lines it sees.
 [[profile.default.overrides]]
