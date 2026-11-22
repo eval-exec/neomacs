@@ -21,6 +21,9 @@ pub(crate) mod frame_stats;
 pub(crate) mod frame_windows;
 mod gpu_startup;
 mod input;
+#[cfg(test)]
+#[path = "tests/input_backpressure_test.rs"]
+mod input_backpressure_test;
 mod lifecycle;
 #[cfg(target_os = "macos")]
 mod macos_quit_redirect;

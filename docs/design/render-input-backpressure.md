@@ -1,7 +1,7 @@
 # Renderer/input backpressure: wait graph and progress contract
 
-Status: revised after lead review #10889; implementation belongs to gapsurvey.
-No implementation or test executed by this lane for this item yet.
+Status: revised design approved by lead #10905. Row 1 progress controls added;
+product fix and the exit regression remain owned by gapsurvey.
 Date: 2026-11-22.
 Task: N-render-input-backpressure-cycle (lead mail #10804; peer #10807/#10813).
 Source baseline: main `7081390b09baeb46530e5b674a366e7c309d1b5a`.
@@ -105,12 +105,12 @@ clear/size is a concrete reproduction candidate; it is not an observed red.
 
 ### Communication inventory
 
-Locations are at 7081390b09 unless explicitly marked2641/203ef.
+Locations are at 7081390b09 unless explicitly marked 2641/203ef.
 
 | Owner / operation | Source | Wait, saturation and terminal behavior |
 |---|---|---|
 | Evaluator ordinary command publication | `main.rs:1824-1834`; `thread_comm/command_projection.rs:24-26,43-45` | Command capacity 64 (`thread_comm.rs:830-831`). Full admission waits for native drain; receiver disconnect wakes admission with error. Successful admission is not proof of future execution. |
-| Clipboard/video replies | `main.rs:1840-1847,3146-3179` | Fresh one-reply capacity 1,5s reply deadlines; the preceding blocking command admission has no corresponding deadline. Queued/deferred replies share the executor-lifetime problem even where their caller has a timeout. |
+| Clipboard/video replies | `main.rs:1840-1847,3146-3179` | Fresh one-reply capacity 1, 5s reply deadlines; the preceding blocking command admission has no corresponding deadline. Queued/deferred replies share the executor-lifetime problem even where their caller has a timeout. |
 | Existing-main ordered cache waits | `image_catalog.rs:400-465` | Separate 100ms admission/ack limits can return a stale total. Reinstating stale-on-timeout behavior is not a freshness fix. |
 |2641 ordered image invalidation and usage | `image_catalog.rs:396-446,519-561,880-893` at 203ef | Blocking flush/clear/usage admission followed by unbounded std ack receive. Exact buffered-ack exit hang above. |
 | Durable native input | `thread_comm.rs:1284-1359` | Input capacity 4096 (`:830,1069`); send waits for the independent bridge. A stalled callback/command-generated send prevents native command pumping. |
@@ -134,7 +134,7 @@ Locations are at 7081390b09 unless explicitly marked2641/203ef.
 | Surface acquisition | `render_pass/surface.rs:89` calls get_current_texture without an application deadline. | A native presentation/driver stall can delay every command behind it; no evaluator-side input drain can release that foreign operation. |
 | Debug surface readback | `surface_readback.rs:133-141`: GPU poll up to 2s, then recv_timeout up to 2s. | These are sequential bounds, not a 2s bound on the complete request. Mark diagnostics separate from ordinary rendering, but include them in the query's liveness story when enabled. |
 | Initial GPU attempt | Worker-backed completion and native try_recv (`gpu_startup.rs:203-245`). | Native can remain responsive, but deferred reply work still needs service/cancellation before readiness. |
-| Device-loss reinitialization | `bootstrap.rs:21-61,321-410`: pollster::block_on adapter enumeration/device request at40/50 on native owner. | Unlike initial startup, recovery may block native command service independently of evaluator state. A caller deadline cannot rely on that blocked loop to emit its cancellation. |
+| Device-loss reinitialization | `bootstrap.rs:21-61,321-410`: pollster::block_on adapter enumeration/device request at 40/50 on native owner. | Unlike initial startup, recovery may block native command service independently of evaluator state. A caller deadline cannot rely on that blocked loop to emit its cancellation. |
 | Recovery returns failure | `bootstrap.rs:379-387` relatches device loss, then the active-primary path can reach `lifecycle.rs:364` in the same pass. `media.rs:121-127` publishes default usage when renderer=None. | GPU absence alone does not imply startup deferral: its gate also requires an inactive primary. Distinguish returning failure from still being blocked in driver code. Actual owner publication of empty renderer usage is evidence; guessed 0 on timeout is not. |
 | Terminal destruction | `terminal/view.rs:173-203`: kill owned child, child.wait, reader join inside command execution. | Native progress may wait for OS child/reader teardown independently of evaluator queues. |
 | Renderer/GPU resource destruction | `lifecycle.rs:1184`; `submission_retirement.rs:75-91`: retirement worker GPU Wait timeoutNone, Drop joins worker. | Publish terminal query cancellation **before** entering these teardown waits. Late cancellation after destructor completion does not solve the exit hang. |
@@ -186,7 +186,7 @@ frame routing, early quit, publication order and native notification together.
 Read-only reference: GNU 31.1 at
 `a360712c9d272d950d8d8255ef74570f7e90b7d9`.
 
-- `src/keyboard.h:380-383` gives a4096-slot keyboard ring.
+- `src/keyboard.h:380-383` gives a 4096-slot keyboard ring.
 - `src/keyboard.c:3756-3774` defines ordinary FIFO insertion and held-quit
   handling; `:3787-3835` processes parsed C-g before ordinary capacity admission.
 - `:3845-3863` explicitly discards an event that would consume the final ring
@@ -204,8 +204,9 @@ Read-only reference: GNU 31.1 at
   command/reply edge. A quiescent completed clear followed by the size query
   must not return the pre-clear ownership snapshot.
 
-No GNU runtime or proposed progress row has been executed for this item yet:
-observed liveness/accounting evidence is **UNATTESTED**. The canonical oracle
+No GNU runtime has been executed for this item yet: observed GNU
+startup/liveness/accounting evidence is **UNATTESTED**. The CPU-only native
+protocol progress controls are not an oracle or GUI startup run. The canonical oracle
 must pass `scripts/ci/check-gnu-oracle.sh` before the paired GUI row. Paste its
 profile/features, the fixture form, and both actual outputs in the final receipt.
 
@@ -263,10 +264,12 @@ policy as GNU parity.
 
 ## Revised rows and detector contract
 
-No row below has been executed by this lane. Gapsurvey owns the first exit
-red and fix implementation; coordinate rather than duplicate those changes.
+Only the internal CPU-only Row 1 progress/control pair has been executed by
+this lane. It passed on the unmodified product; this is not a manufactured
+production red. Other rows below remain proposals/unexecuted here. Gapsurvey
+owns the first exit red and product fix; do not duplicate those changes.
 
-### Row1: genuine single-native-owner progress, plus detector control
+### Row 1: genuine single-native-owner progress, plus detector control
 
 - Use normal 4096/64 transport capacities and the genuine independent bridge
   into installed HostInputPublisher. The evaluator owns Context and does not
@@ -280,7 +283,7 @@ red and fix implementation; coordinate rather than duplicate those changes.
 - Flood at least 4097 admitted durable sequenced events while the evaluator's
   ordered operations are outstanding. Use a finite injector independent of
   completion; preserve posted-versus-admitted counts. Assert completion,
-  ordered post-clear accounting and admitted FIFO/no-loss/no-dup after reads
+  headless usage publication and admitted FIFO/no-loss/no-dup after reads
   resume. Include full command admission and a pending font update if the
   production seam supports them without a second copied select-loop model.
 - Do not use make_test_app() unchanged for this row: that helper drops its
@@ -288,6 +291,17 @@ red and fix implementation; coordinate rather than duplicate those changes.
   the channels being tested. Construct RenderApp while retaining the actual
   evaluator endpoints (the existing `:729-750` pattern), and create/drop the
   non-Send native app on its sole owner thread.
+- The internal CPU-only runtime row uses real HostInputPublisher and the
+  same public ordinary-key converter called by upper InputPublisher. This
+  avoids an upward dependency or new test-only visibility for RenderApp.
+  It covers native transport, ordinary key conversion, queue/wake publication
+  and real command handlers. It does not exercise the upper quit/resize/font
+  routing wrapper, real OS injection, GPU startup, or the upper ImageCatalog
+  caller; direct ClearImageCache/PublishImageCacheUsage commands are the
+  protocol seam. With renderer=None both handlers publish 0, so this row's
+  zero bytes certify handler/ack progress, not actual cache freshness or
+  omitted/reordered-clear detection. Those are separate existing/future rows,
+  not implied passes.
 - A separate detector owns only the deadline and process/thread cleanup; it
   may not consume input, drain commands, send usage acks, release a resource
   needed by the evaluator, or otherwise make the product progress before
@@ -301,7 +315,7 @@ red and fix implementation; coordinate rather than duplicate those changes.
   cleanup cannot hang a scoped-thread join. A test rescue occurs only after
   recording timeout, and cannot be mistaken for product completion.
 
-### Row2: admitted buffered ack survives receiver exit (expected red on2641)
+### Row 2: admitted buffered ack survives receiver exit (expected red on2641)
 
 Admit PublishImageCacheUsage into the real bounded command channel, prove
 successful admission, retain evaluator command-Sender clones, and retire the
@@ -319,7 +333,7 @@ allows the queued ack to destruct before joining the waiter. If the real
 catalog waiter necessarily retains its own Sender, isolate it in an owned
 child instead of leaking a hung thread or making the cleanup rescue pass.
 
-### Row3: startup parking, pre-readiness and failure
+### Row 3: startup parking, pre-readiness and failure
 
 Cover both PreparingCommands before initial-window readiness and RenderApp's
 GPU-pending startup_commands. Query/clear before readiness must not wait for
@@ -346,7 +360,7 @@ Do not assume the initial terminal already has a GUI/GPU cache. A no-argument
 size before any clear is a separate control, since no invalidation may mean
 no native usage request is pending.
 
-### Row4: retirement races and device recovery
+### Row 4: retirement races and device recovery
 
 Race successful admission against terminal transition; include dequeue into
 each startup owner, completion versus cancellation, redundant terminal calls,
@@ -361,7 +375,7 @@ request; the former requires the independent caller liveness policy. Exercise
 terminal cancellation before the existing injected submission-retirement
 waiter is released, proving teardown completion is not needed to wake callers.
 
-### Row5: paired accounting/progress evidence
+### Row 5: paired accounting/progress evidence
 
 Private X11, pinned attested GNU versus Neo. An owned finite native input burst
 runs during ordinary image work; require completion and a subsequent marker
