@@ -13,6 +13,8 @@ import subprocess
 import sys
 import time
 
+from driver_socket import DriverBlocked, PhysicalDriver, preflight as driver_preflight
+
 
 class BlockedPrerequisite(Exception):
     pass
@@ -70,9 +72,8 @@ def run(args):
     subprocess.run(["codesign", "--force", "--sign", "-", str(driver)], check=True)
     request = artifacts / "native-request"
     subprocess.run(["xcrun", "swiftc", str(fixture / "request.swift"), "-o", str(request)], check=True)
-    preflight_run = subprocess.run([str(request)], check=True, text=True, stdout=subprocess.PIPE)
-    preflight = json.loads(preflight_run.stdout)
-    print("PREFLIGHT", json.dumps(preflight), flush=True)
+    preflight = driver_preflight(args.driver_socket)
+    print("PERSISTENT_DRIVER_PREFLIGHT", json.dumps(preflight), flush=True)
     editors = [("gnu", oracle), ("neo", args.neo_binary)]
     cases = [("menu", "nil", "super"), ("menu", "t", "meta"),
              ("terminate", "nil", "super"), ("apple-event", "nil", "super"),
@@ -131,10 +132,16 @@ def run(args):
                     command = action
                     if action == "lisp-key":
                         command = "snapshot"
-                    if action == "physical-key" and not preflight["post_events"]:
-                        raise BlockedPrerequisite("physical Cmd-Q: CGPreflightPostEventAccess=false; no TCC changes requested")
-                    if action in ("apple-event", "physical-key"):
-                        request_action = "apple-event" if action == "apple-event" else "menu"
+                    if action == "physical-key":
+                        try:
+                            with PhysicalDriver(args.driver_socket) as physical:
+                                row["driver_preflight"] = physical.command_q(child.pid, binary)
+                        except DriverBlocked as error:
+                            raise BlockedPrerequisite(str(error)) from error
+                        row["input_source"] = "persistent org.neomacs.GuiDriver socket"
+                        command = "snapshot"
+                    if action == "apple-event":
+                        request_action = "apple-event"
                         external = subprocess.run([str(request), str(child.pid), request_action],
                                                   text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=8)
                         row["external"] = {"rc": external.returncode, "output": external.stdout}
@@ -233,5 +240,6 @@ if __name__ == "__main__":
     parser.add_argument("--gnu-prefix", type=Path, required=True)
     parser.add_argument("--neo-binary", type=Path,
                         default=Path(os.environ.get("CARGO_TARGET_DIR", "target")) / "release/neomacs")
+    parser.add_argument("--driver-socket", default=os.environ.get("NEOMACS_GUI_DRIVER_SOCKET"))
     parser.add_argument("--physical", action="store_true", help="also require permitted physical Cmd-Q injection")
     sys.exit(run(parser.parse_args()))

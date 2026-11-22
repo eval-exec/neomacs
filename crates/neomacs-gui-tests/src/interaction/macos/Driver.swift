@@ -13,16 +13,50 @@ func rect(_ r: CGRect) -> [String: Double] {
 @MainActor
 final class Desktop {
     var pid: pid_t?
+    var inputOnly = false
+    var shutdownRequested = false
     var heldKeys = Set<CGKeyCode>()
     var heldButtons = Set<Int>()
     var generations: [CGWindowID: UInt64] = [:]
     var generation: UInt64 = 0
     let source = CGEventSource(stateID: .hidSystemState)
     let keyCodes: [String: CGKeyCode] = ["escape":53, "enter":36, "down":125,
-        "up":126, "left":123, "right":124, "home":115, "end":119, "x":7]
+        "up":126, "left":123, "right":124, "home":115, "end":119, "x":7,
+        "command":55, "option":58, "q":12]
+
+    func modifierFlag(_ code: CGKeyCode) -> CGEventFlags {
+        switch code {
+        case 55: return .maskCommand
+        case 58: return .maskAlternate
+        default: return []
+        }
+    }
+    var heldModifiers: CGEventFlags {
+        var flags = CGEventFlags()
+        for key in heldKeys { flags.formUnion(modifierFlag(key)) }
+        return flags
+    }
+    func postKey(_ code: CGKeyCode, down: Bool) throws -> Bool {
+        guard let event = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: down) else { return false }
+        if down { heldKeys.insert(code) } else { heldKeys.remove(code) }
+        // Flags describe the held state after this edge: Command remains set
+        // on q-up and clears only on Command-up.
+        event.flags = heldModifiers
+        if !modifierFlag(code).isEmpty { event.type = .flagsChanged }
+        // HID delivery is global: check the exact owner immediately before
+        // every down edge. Up edges remain available for cleanup after focus loss.
+        if down { try requireFrontmost() }
+        event.post(tap: .cghidEventTap)
+        return true
+    }
 
     func release() {
-        for key in heldKeys { CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: false)?.post(tap: .cghidEventTap) }
+        let keys = heldKeys.sorted {
+            let a = !modifierFlag($0).isEmpty, b = !modifierFlag($1).isEmpty
+            return a == b ? $0 < $1 : !a
+        }
+        // Release ordinary keys before their modifiers on disconnect too.
+        for key in keys { _ = try? postKey(key, down: false) }
         heldKeys.removeAll()
         let point = CGEvent(source: nil)?.location ?? .zero
         for button in heldButtons {
@@ -31,6 +65,7 @@ final class Desktop {
         }
         heldButtons.removeAll()
         pid = nil
+        inputOnly = false
         generations.removeAll()
     }
     func preflight() -> [String: Bool] {
@@ -41,7 +76,15 @@ final class Desktop {
         guard let pid, let app = NSRunningApplication(processIdentifier: pid), !app.isTerminated else { throw fail("target process exited or is not attached") }
         return app
     }
+    func requireFrontmost() throws {
+        guard let app = try? target(),
+              NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier else {
+            release()
+            throw fail("target not frontmost")
+        }
+    }
     func content() async throws -> (SCShareableContent, [SCWindow], SCDisplay) {
+        guard !inputOnly else { throw fail("input_only session cannot observe or capture the desktop") }
         _ = try target()
         let content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
         let windows = content.windows.filter { $0.owningApplication?.processID == pid && $0.isOnScreen }
@@ -70,28 +113,28 @@ final class Desktop {
         }]
     }
     func input(_ action: [String: Any]) throws {
-        let app = try target()
-        guard app.isActive else { throw fail("target lost desktop focus") }
         guard let kind = action["kind"] as? String else { throw fail("missing input kind") }
         switch kind {
         case "move":
+            try requireFrontmost()
             guard let p = action["point"] as? [String: Double], let x=p["x"], let y=p["y"], x.isFinite, y.isFinite else { throw fail("invalid point") }
             let type: CGEventType = heldButtons.contains(0) ? .leftMouseDragged : heldButtons.contains(1) ? .rightMouseDragged : .mouseMoved
             CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: CGPoint(x:x,y:y), mouseButton: .left)?.post(tap: .cghidEventTap)
         case "button":
             guard let button = action["button"] as? String, ["left","right"].contains(button), let down = action["down"] as? Bool else { throw fail("invalid button") }
             let right = button == "right", index = right ? 1 : 0
-            if down { heldButtons.insert(index) } else { heldButtons.remove(index) }
             let type: CGEventType = right ? (down ? .rightMouseDown : .rightMouseUp) : (down ? .leftMouseDown : .leftMouseUp)
             let event = CGEvent(mouseEventSource: source, mouseType: type,
                 mouseCursorPosition: CGEvent(source:nil)?.location ?? .zero, mouseButton: right ? .right : .left)
             event?.setIntegerValueField(.mouseEventClickState, value: 1)
+            if down { try requireFrontmost() }
+            if down { heldButtons.insert(index) } else { heldButtons.remove(index) }
             event?.post(tap: .cghidEventTap)
         case "key":
             guard let name = action["key"] as? String, let code=keyCodes[name], let down=action["down"] as? Bool else { throw fail("invalid key") }
-            if down { heldKeys.insert(code) } else { heldKeys.remove(code) }
-            CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: down)?.post(tap: .cghidEventTap)
+            guard try postKey(code, down: down) else { throw fail("could not create keyboard event") }
         case "scroll":
+            try requireFrontmost()
             guard let lines = action["lines"] as? Int32, abs(Int64(lines)) <= 100 else { throw fail("invalid scroll count") }
             CGEvent(scrollWheelEvent2Source: source, units: .line, wheelCount: 1, wheel1: lines, wheel2: 0, wheel3: 0)?.post(tap: .cghidEventTap)
         default: throw fail("unknown input action")
@@ -100,11 +143,33 @@ final class Desktop {
     func handle(_ request: [String: Any]) async throws -> Any {
         switch request["op"] as? String {
         case "preflight": return preflight()
+        case "shutdown":
+            shutdownRequested = true
+            return true
         case "attach":
-            guard preflight().values.allSatisfy({ $0 }), let requested = request["pid"] as? Int32 else { throw fail("desktop permissions or pid missing") }
+            let permissions = preflight()
+            let inputOnly = request["input_only"] as? Bool ?? false
+            let required = inputOnly ? ["accessibility", "post_events", "desktop"] : Array(permissions.keys)
+            let missing = required.filter { permissions[$0] != true }.sorted()
+            guard missing.isEmpty else { throw fail("desktop permissions missing: \(missing.joined(separator: ","))") }
+            guard let requested = request["pid"] as? Int32,
+                  let app = NSRunningApplication(processIdentifier: requested), !app.isTerminated,
+                  let executable = app.executableURL else { throw fail("target process exited or pid/executable missing") }
+            let actual = executable.standardizedFileURL.resolvingSymlinksInPath()
+            if let supplied = request["expected_executable"] {
+                guard let expected = supplied as? String, expected.hasPrefix("/") else { throw fail("expected_executable must be a canonical absolute path") }
+                let canonical = URL(fileURLWithPath: expected).standardizedFileURL.resolvingSymlinksInPath()
+                guard canonical.path == expected else { throw fail("expected_executable is not canonical") }
+                guard actual.path == expected else { throw fail("target executable does not match expected_executable") }
+                let name = actual.lastPathComponent
+                let versionedGNU = name.range(of: #"^emacs-[0-9][0-9A-Za-z.+-]*$"#, options: .regularExpression) != nil
+                guard ["neomacs", "emacs", "Emacs"].contains(name) || versionedGNU else { throw fail("target is not an approved editor executable") }
+            } else {
+                guard executable.lastPathComponent == "neomacs" else { throw fail("GNU Emacs attach requires expected_executable") }
+            }
+            release()
             pid = requested
-            let app = try target()
-            guard app.executableURL?.lastPathComponent == "neomacs" else { throw fail("target is not Neomacs") }
+            self.inputOnly = inputOnly
             app.activate(options: [])
             for _ in 0..<50 {
                 if app.isActive { return true }
@@ -232,6 +297,7 @@ struct Main {
         while true {
             let fd = await Task.detached { accept(listener, nil, nil) }.value
             if fd < 0 { continue }
+            defer { desktop.release(); close(fd) }
             do {
                 while let data = try await Task.detached(operation: { try readRequest(fd) }).value {
                     do {
@@ -239,10 +305,10 @@ struct Main {
                         let result = try await desktop.handle(request)
                         try writeResponse(fd, ["result":result])
                     } catch { try writeResponse(fd, ["error":String(describing:error)]) }
+                    if desktop.shutdownRequested { return }
                 }
             } catch { fputs("driver session: \(error)\n", stderr) }
-            desktop.release()
-            close(fd)
+            if desktop.shutdownRequested { return }
         }
     }
 }
