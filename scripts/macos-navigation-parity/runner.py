@@ -26,9 +26,13 @@ parser.add_argument("--neo-binary", type=Path,
                     help="Explicit OLD or NEW binary; recorded with version and SHA256")
 parser.add_argument("--count-exports", action="store_true",
                     help="Separate instrumented cost row; never use its CPU/RSS as the clean timing row")
+parser.add_argument("--require-deferred-coverage", action="store_true",
+                    help="Cost guard: real admitted coverage must keep its full hit index unbuilt")
 parser.add_argument("--coverage-reuse", choices=["off", "on"], default="on",
                     help="Same-binary old-exporter control versus certified renewal")
 args = parser.parse_args()
+if args.require_deferred_coverage and (not args.count_exports or args.coverage_reuse != "on"):
+    parser.error("--require-deferred-coverage needs --count-exports --coverage-reuse on")
 root = Path.cwd()
 source = root / "scripts/macos-navigation-parity"
 artifacts = root / "tmp" / f"macos-navigation-{os.getpid()}"
@@ -61,6 +65,7 @@ assert len(fixture.read_bytes()) < 10_000
 metadata = {"schema": "macos-navigation-v1", "warmup_seconds": args.warmup,
             "cost_row": "p607-navigation-export-calls" if args.count_exports else "p607-navigation-cpu-rss",
             "coverage_export_reuse": args.coverage_reuse,
+            "require_deferred_coverage": args.require_deferred_coverage,
             "production_source_sha": args.source_sha,
             "controller_host_policy": os.environ.get("NEOMACS_BENCH_CONTROLLER_POLICY", "not recorded"),
             "moves": 260, "interval_seconds": .1, "desktop": desktop,
@@ -206,7 +211,25 @@ for mode in args.modes:
                             stream.seek(trace_start)
                             trace = stream.read(trace_end - trace_start).decode(errors="replace")
                         counts = {}
+                        geometry = {}
                         for line in trace.splitlines():
+                            if "prepared scroll coverage hit geometry" in line:
+                                fields = dict(re.findall(
+                                    r"\b(window|rows|admitted|text_deferred)=(true|false|\d+)", line))
+                                if len(fields) != 4:
+                                    raise RuntimeError(f"unparsed coverage geometry event: {line}")
+                                window = int(fields["window"])
+                                entry = geometry.setdefault(window, {
+                                    "window": window, "exports": 0, "exported_rows": 0,
+                                    "admitted": 0, "admitted_deferred": 0,
+                                    "exports_with_flat_hits": 0})
+                                admitted = fields["admitted"] == "true"
+                                deferred = fields["text_deferred"] == "true"
+                                entry["exports"] += 1
+                                entry["exported_rows"] += int(fields["rows"])
+                                entry["admitted"] += int(admitted)
+                                entry["admitted_deferred"] += int(admitted and deferred)
+                                entry["exports_with_flat_hits"] += int(not deferred)
                             if "building scroll coverage" not in line:
                                 continue
                             fields = dict(re.findall(r"\b(window|start|hscroll|vscroll)=(-?\d+)", line))
@@ -218,6 +241,11 @@ for mode in args.modes:
                         row["coverage_export_calls_by_key"] = [
                             dict(zip(("window", "start", "hscroll", "vscroll"), key), calls=count)
                             for key, count in sorted(counts.items())]
+                        row["coverage_hit_geometry_by_window"] = [geometry[key] for key in sorted(geometry)]
+                        if args.require_deferred_coverage and editor == "neo":
+                            admitted = sum(entry["admitted"] for entry in geometry.values())
+                            deferred = sum(entry["admitted_deferred"] for entry in geometry.values())
+                            assert admitted > 0 and admitted == deferred, geometry
                         row["timing_grade"] = "INSTRUMENTED; use the clean p607-navigation-cpu-rss row"
                     (case / "usage.json").write_text(json.dumps(samples, indent=2))
                     rows.append(row)

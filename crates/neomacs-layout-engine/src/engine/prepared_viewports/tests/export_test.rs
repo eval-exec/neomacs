@@ -1,4 +1,5 @@
 use super::*;
+use neomacs_display_protocol::PresentedHitIndex;
 use neovm_core::emacs_core::{Context, Value};
 use std::rc::Rc;
 

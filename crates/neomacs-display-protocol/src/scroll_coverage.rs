@@ -199,15 +199,9 @@ impl ScrollCoverage {
         if region.window() != Some(window)
             || region.kind() != PresentedRegionKind::TextBody
             || region.bounds().raw() != bounds
-            || self.hit_index.text_positions().len() > 65_536
-            || self.hit_index.text_positions().iter().any(|position| {
-                let rect = position.bounds().raw();
-                position.window() != window
-                    || rect.x < bounds.x
-                    || rect.right() > bounds.right()
-                    || rect.y < bounds.y
-                    || rect.bottom() > bounds.bottom()
-            })
+            || !self
+                .hit_index
+                .text_positions_fit_region(window, region.bounds(), 65_536)
         {
             return None;
         }
@@ -544,6 +538,8 @@ impl PartialEq for ScrollSurface {
 #[cfg(test)]
 mod prepared_surface_tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use crate::frame_glyphs::FringeBitmapData;
     use crate::glyph_matrix::{FringeBitmapInfo, ScrollBarItem};
     use crate::{Color, DisplayWindowId, Face, FaceId, Glyph, GlyphMatrix, GlyphRow, MatrixRow};
@@ -643,6 +639,129 @@ mod prepared_surface_tests {
         state
             .prepare_scroll_coverage(Arc::clone(&state.scroll_coverage[0]))
             .unwrap()
+    }
+
+    #[derive(Debug)]
+    struct AdmissionTextSource {
+        positions: Vec<crate::PresentedTextPosition>,
+        prove_region: bool,
+        flattened: AtomicUsize,
+    }
+
+    impl crate::PresentedTextPositionSource for AdmissionTextSource {
+        fn text_positions(&self) -> Result<Vec<crate::PresentedTextPosition>, PresentedHitError> {
+            self.flattened.fetch_add(1, Ordering::Relaxed);
+            Ok(self.positions.clone())
+        }
+
+        fn validate_region(
+            &self,
+            window: DisplayWindowId,
+            bounds: FrameRect,
+            max_positions: usize,
+        ) -> crate::PresentedTextRegionValidation {
+            let bounds = bounds.raw();
+            if self.prove_region
+                && self.positions.len() <= max_positions
+                && self.positions.iter().all(|position| {
+                    let rect = position.bounds().raw();
+                    position.window() == window
+                        && FrameRect::new(rect.x, rect.y, rect.width, rect.height).is_ok()
+                        && rect.x >= bounds.x
+                        && rect.right() <= bounds.right()
+                        && rect.y >= bounds.y
+                        && rect.bottom() <= bounds.bottom()
+                })
+            {
+                crate::PresentedTextRegionValidation::Validated
+            } else {
+                crate::PresentedTextRegionValidation::Unsupported
+            }
+        }
+    }
+
+    fn text_position(window: i64, x: f32) -> crate::PresentedTextPosition {
+        crate::PresentedTextPosition::new(
+            DisplayWindowId::new(window),
+            FrameRect::new(x, 0.0, 10.0, 10.0).unwrap(),
+            1,
+            0,
+            0,
+        )
+    }
+
+    fn deferred_coverage(
+        state: &FrameDisplayState,
+        positions: Vec<crate::PresentedTextPosition>,
+        prove_region: bool,
+    ) -> (Arc<ScrollCoverage>, Arc<AdmissionTextSource>) {
+        let source = Arc::new(AdmissionTextSource {
+            positions,
+            prove_region,
+            flattened: AtomicUsize::new(0),
+        });
+        let mut coverage = state.scroll_coverage[0].as_ref().clone();
+        coverage.hit_index = coverage.hit_index.with_deferred_text(source.clone());
+        (Arc::new(coverage), source)
+    }
+
+    #[test]
+    fn deferred_scroll_hit_source_stays_cold_through_real_admission() {
+        let state = frame();
+        let (coverage, source) = deferred_coverage(&state, vec![text_position(1, 0.0)], true);
+        assert!(coverage.hit_index.text_deferred());
+        let surface = coverage.materialize(&state).unwrap();
+        assert!(surface.coverage().hit_index.text_deferred());
+        assert_eq!(source.flattened.load(Ordering::Relaxed), 0);
+
+        // Structural equality and transport still observe the exact flat data.
+        let mut eager = state.scroll_coverage[0].as_ref().clone();
+        eager.hit_index = PresentedHitIndex::from_parts(
+            coverage.hit_index.presentation(),
+            coverage.hit_index.regions().to_vec(),
+            source.positions.clone(),
+        )
+        .unwrap();
+        assert_eq!(coverage.hit_index, eager.hit_index);
+        assert_eq!(source.flattened.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn unsupported_scroll_hit_source_keeps_exact_owner_bounds_and_budget_checks() {
+        let state = frame();
+        for (name, positions, accepted) in [
+            ("at budget", vec![text_position(1, 0.0); 65_536], true),
+            ("over budget", vec![text_position(1, 0.0); 65_537], false),
+            ("foreign owner", vec![text_position(2, 0.0)], false),
+            ("outside body", vec![text_position(1, 95.0)], false),
+        ] {
+            let (coverage, source) = deferred_coverage(&state, positions, false);
+            assert_eq!(coverage.materialize(&state).is_some(), accepted, "{name}");
+            assert!(!coverage.hit_index.text_deferred(), "{name}");
+            assert_eq!(source.flattened.load(Ordering::Relaxed), 1, "{name}");
+        }
+    }
+
+    #[test]
+    fn serialized_scroll_hit_source_loses_validation_proof() {
+        let state = frame();
+        for (name, positions, accepted) in [
+            ("valid", vec![text_position(1, 0.0)], true),
+            ("foreign owner", vec![text_position(2, 0.0)], false),
+            ("outside body", vec![text_position(1, 95.0)], false),
+            ("over budget", vec![text_position(1, 0.0); 65_537], false),
+        ] {
+            let (coverage, source) = deferred_coverage(&state, positions, true);
+            let encoded = serde_json::to_vec(coverage.as_ref()).unwrap();
+            let decoded: ScrollCoverage = serde_json::from_slice(&encoded).unwrap();
+            assert!(!decoded.hit_index.text_deferred(), "{name}");
+            assert_eq!(source.flattened.load(Ordering::Relaxed), 1, "{name}");
+            assert_eq!(
+                Arc::new(decoded).materialize(&state).is_some(),
+                accepted,
+                "{name}"
+            );
+        }
     }
 
     #[test]

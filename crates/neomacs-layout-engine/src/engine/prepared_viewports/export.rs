@@ -3,10 +3,7 @@
 use super::*;
 use neomacs_display_protocol::glyph_matrix::{GlyphMatrix, MatrixRow};
 use neomacs_display_protocol::scroll_coverage::{ScrollCoverage, ScrollCoverageRenewal};
-use neomacs_display_protocol::{
-    FrameDisplayState, FrameRect, GlyphRowRole, PresentedHitIndex, PresentedHitRegion,
-    PresentedRegionKind, Rect,
-};
+use neomacs_display_protocol::{FrameDisplayState, GlyphRowRole, Rect};
 use neovm_core::window::{PresentedBodyRowSnapshot, WindowDisplaySnapshot};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -256,6 +253,18 @@ impl PreparedViewports {
                     } else {
                         None
                     };
+                    // The isolated cost probe distinguishes entry attempts
+                    // from real exports and observes admission's actual full
+                    // position-vector construction state. Clean timings keep
+                    // this trace target disabled.
+                    tracing::trace!(
+                        target: "neomacs_layout_engine::coverage_cost",
+                        window = window.get(),
+                        rows = coverage.content.matrix.rows.len(),
+                        admitted = surface.is_some(),
+                        text_deferred = coverage.hit_index.text_deferred(),
+                        "prepared scroll coverage hit geometry"
+                    );
                     self.exports[index].last_export = surface.as_ref().and_then(|surface| {
                         CoverageExportInputs::new(
                             *window,
@@ -582,17 +591,11 @@ impl PreparedViewports {
         }
         let bounds = Rect::new(bounds.x, 0.0, bounds.width, bounds.height);
         snapshot.regions.text_body = bounds;
-        let positions =
-            crate::presentation::spatial::body_text_positions(window, &snapshot, bounds).ok()?;
-        let hit_index = PresentedHitIndex::from_parts(
+        let hit_index = crate::presentation::spatial::coverage_hit_index(
             state.presentation_id,
-            vec![PresentedHitRegion::new(
-                Some(window),
-                PresentedRegionKind::TextBody,
-                FrameRect::new(bounds.x, bounds.y, bounds.width, bounds.height).ok()?,
-                0,
-            )],
-            positions,
+            window,
+            Arc::new(snapshot),
+            bounds,
         )
         .ok()?;
         let mut content = original.clone();
