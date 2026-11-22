@@ -1722,7 +1722,9 @@ pub fn builtin_frame_parameters(
             frame.explicit_name_value(),
         ));
     }
-    let width = if frame_is_top_level_non_window(frame) {
+    let width = if frame_uses_window_system_pixels(frame) {
+        gui_frame_width_parameter(frame)
+    } else if frame_is_top_level_non_window(frame) {
         Value::fixnum(frame.columns() as i64)
     } else {
         frame
@@ -3028,6 +3030,7 @@ pub(crate) fn frame_parameter_value(
         "height" if frame_is_top_level_non_window(frame) => {
             Value::fixnum(frame_realized_lines(frame))
         }
+        "width" if frame_uses_window_system_pixels(frame) => gui_frame_width_parameter(frame),
         "width" => frame
             .fixed_parameter(crate::window::FrameQueryParam::Width)
             .unwrap_or(Value::fixnum(frame.columns() as i64)),
@@ -3057,6 +3060,18 @@ pub(crate) fn frame_parameter_value(
         }
         _ => frame.parameter_key(param_key).unwrap_or(Value::NIL),
     }
+}
+
+fn gui_frame_width_parameter(frame: &crate::window::Frame) -> Value {
+    // As for height below, GNU reports the pending text-size request.
+    frame.pending_gui_resize.map_or_else(
+        || {
+            frame
+                .fixed_parameter(crate::window::FrameQueryParam::Width)
+                .unwrap_or(Value::fixnum(frame.columns() as i64))
+        },
+        |pending| Value::fixnum(pending.width_cols),
+    )
 }
 
 fn gui_frame_height_parameter(frame: &crate::window::Frame) -> Value {

@@ -3,15 +3,30 @@
 import argparse
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
+import re
 import subprocess
 import time
+
+
+def positive_dimensions(value):
+    match = re.fullmatch(r"([0-9]+)x([0-9]+)", value)
+    if match is None:
+        raise argparse.ArgumentTypeError("expected positive integer COLSxROWS")
+    columns, rows = map(int, match.groups())
+    if columns < 1 or rows < 1:
+        raise argparse.ArgumentTypeError("columns and rows must both be positive")
+    return columns, rows
+
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--gnu-prefix", type=Path, required=True)
 parser.add_argument("--product-sha", required=True)
 parser.add_argument("--warmup", type=float, default=20)
+parser.add_argument("--resize-to", type=positive_dimensions, metavar="COLSxROWS",
+                    help="Pair an explicit set-frame-size at 10 seconds; requires warmup >=12")
 parser.add_argument("--startup-phases", action="store_true",
                     help="Use isolated early/init files instead of -Q and record startup phases")
 parser.add_argument("--rust-log", default="error",
@@ -21,6 +36,21 @@ parser.add_argument("--resize-policy", choices=("gtk-ns", "own-bars"),
 args = parser.parse_args()
 if args.resize_policy and not args.startup_phases:
     parser.error("--resize-policy requires --startup-phases")
+if args.resize_to and (not math.isfinite(args.warmup) or args.warmup < 12):
+    parser.error("--resize-to requires a finite --warmup >=12 for native resize settling")
+resize_form = None
+if args.resize_to:
+    columns, rows = args.resize_to
+    # Capture the parameter values before file I/O or any geometry query can
+    # consume a native resize acknowledgement from the event loop.
+    resize_form = (
+        f"(run-at-time 10 nil (lambda () (set-frame-size nil {columns} {rows}) "
+        "(let* ((size (vector (frame-parameter nil 'width) (frame-parameter nil 'height))) "
+        '(pending (expand-file-name "immediate.pending" geometry-dir)) '
+        '(result (expand-file-name "immediate.json" geometry-dir))) '
+        "(with-temp-file pending (insert (json-encode size))) "
+        "(rename-file pending result t))))"
+    )
 root = Path.cwd()
 source = root / "scripts/macos-navigation-parity"
 artifacts = root / "tmp" / f"macos-frame-geometry-{os.getpid()}"
@@ -40,8 +70,12 @@ if args.startup_phases:
     harness_files.append(source / "startup-phases.el")
 editors = {"gnu": oracle, "neo": Path(os.environ["CARGO_TARGET_DIR"]) / "release/neomacs"}
 metadata = {
-    "row": "N-607-frame-geometry", "product_source_sha": args.product_sha,
+    "row": "N-607-explicit-frame-resize" if args.resize_to else "N-607-frame-geometry",
+    "product_source_sha": args.product_sha,
     "warmup_seconds": args.warmup,
+    "requested_resize": ({"columns": args.resize_to[0], "rows": args.resize_to[1]}
+                         if args.resize_to else None),
+    "resize_form": resize_form,
     "startup_phases": args.startup_phases, "rust_log": args.rust_log,
     "resize_policy_override": args.resize_policy,
     "controller_host_policy": os.environ.get("NEOMACS_BENCH_CONTROLLER_POLICY", "not recorded"),
@@ -76,6 +110,8 @@ for name, binary in editors.items():
         env["NEOMACS_TRACE_FRAME_GEOMETRY"] = "1"
     argv = [str(binary), *startup, "--font=Menlo-13", "--geometry=100x35",
             "-l", str(source / "geometry.el")]
+    if resize_form:
+        argv.extend(["--eval", resize_form])
     (case / "command.json").write_text(json.dumps(argv))
     with (case / "editor.log").open("w") as log:
         child = subprocess.Popen(argv, env=env, stdout=log, stderr=log)
@@ -92,6 +128,10 @@ for name, binary in editors.items():
             results[name] = json.loads(result.read_text())
             assert results[name]["pid"] == child.pid
             assert results[name]["window_system"] in ("ns", "neo")
+            if args.resize_to:
+                immediate = json.loads((case / "immediate.json").read_text())
+                results[name]["immediate_resize"] = immediate
+                print("IMMEDIATE_RESIZE", name.upper(), json.dumps(immediate), flush=True)
             print(name.upper(), json.dumps(results[name]), flush=True)
             assert child.wait(timeout=5) == 0
             if args.startup_phases:
@@ -115,6 +155,9 @@ for name, binary in editors.items():
 fields = ("frame_pixel_height", "frame_char_height", "line_pixel_height", "frame_rows")
 differences = {field: {editor: results[editor][field] for editor in editors}
                for field in fields if results["gnu"][field] != results["neo"][field]}
+if args.resize_to and results["gnu"]["immediate_resize"] != results["neo"]["immediate_resize"]:
+    differences["immediate_resize"] = {
+        editor: results[editor]["immediate_resize"] for editor in editors}
 (artifacts / "differences.json").write_text(json.dumps(differences, indent=2))
 print("DIFFERENCES", json.dumps(differences), flush=True)
 assert not differences, "N-607 frame/font geometry differs from attested GNU"

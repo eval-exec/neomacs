@@ -6044,6 +6044,7 @@ pub(crate) enum FrameResizeRequest {
     },
     Cells {
         cols: i64,
+        /// GUI text rows, including the minibuffer, excluding frame chrome.
         total_lines: i64,
     },
 }
@@ -6271,21 +6272,21 @@ fn live_gui_resize_pixels_from_logical_size(
     frames: &FrameManager,
     fid: FrameId,
     desired_cols: i64,
-    desired_total_lines: i64,
+    desired_text_lines: i64,
 ) -> Result<(u32, u32), Flow> {
     let frame = frames
         .get(fid)
         .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
     let char_width = frame.char_width.max(1.0).round();
     let char_height = frame.char_height.max(1.0).round();
-    let non_text_height = frame_non_text_height_pixels(frame);
-    let total_height_px = ((desired_total_lines.max(1) as f32) * char_height)
+    // GNU set-frame-size/height pass the requested TEXT size to
+    // adjust_frame_size (frame.c:4563-4587,4621-4640). The host-request
+    // boundary adds frame chrome and borders once; these are not allocation
+    // rows from which a menu, toolbar, or tab band should be subtracted.
+    let text_height_px = ((desired_text_lines.max(1) as f32) * char_height)
         .round()
         .max(1.0) as u32;
     let text_width_px = ((desired_cols.max(1) as f32) * char_width).round().max(1.0) as u32;
-    let text_height_px = total_height_px
-        .saturating_sub(non_text_height)
-        .max(char_height.round().max(1.0) as u32);
     Ok((text_width_px, text_height_px))
 }
 

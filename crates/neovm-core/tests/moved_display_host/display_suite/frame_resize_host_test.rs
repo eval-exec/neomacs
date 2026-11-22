@@ -809,3 +809,66 @@ fn font_minimum_gc_keeps_error_restore_name_alive_and_releases_scratch_roots() {
         assert_eq!(save_scratch_gc_roots(), roots_before);
     }
 }
+
+#[test]
+fn set_frame_size_text_cells_add_chrome_once() {
+    for (tab_lines, border) in [(0, 0), (2, 3)] {
+        let mut fixture = ChromeResizeFixture::new();
+        {
+            let frame = fixture
+                .eval
+                .frame_manager_mut()
+                .get_mut(fixture.frame_id)
+                .unwrap();
+            frame.set_known_parameter(FrameParam::TabBarLines, Value::fixnum(tab_lines));
+            frame.set_known_parameter(FrameParam::InternalBorderWidth, Value::fixnum(border));
+            frame.sync_tab_bar_height_from_parameters();
+            frame.resize_pixelwise(
+                800 + 2 * border as u32,
+                fixture.initial_height + tab_lines as u32 * 16 + 2 * border as u32,
+            );
+        }
+        fixture.eval.eval_str("(set-frame-size nil 90 40)").unwrap();
+        assert_eq!(fixture.requests.borrow().len(), 1);
+        let request = fixture.requests.borrow()[0].clone();
+        // 90x40 text cells are 720x640px. The independent fixture's 34px
+        // toolbar, frontend menu band, two tab rows and borders are additional
+        // allocation; the minibuffer already belongs to the 40 text rows.
+        let tab_height = tab_lines as u32 * 16;
+        let border_height = 2 * border as u32;
+        assert_eq!(request.width, 720 + border_height);
+        assert_eq!(
+            request.height,
+            640 + 34 + fixture.menu_height + tab_height + border_height
+        );
+        assert_eq!(
+            fixture
+                .eval
+                .frame_manager()
+                .get(fixture.frame_id)
+                .unwrap()
+                .pending_gui_resize
+                .unwrap()
+                .total_lines,
+            40,
+            "pending GUI intent must retain text rows rather than allocation rows"
+        );
+        fixture.acknowledge(&request);
+        let geometry = fixture
+            .eval
+            .eval_str(
+                "(list (frame-parameter nil 'height) (frame-native-height)
+                       (frame-text-lines) (frame-char-height))",
+            )
+            .unwrap();
+        assert_eq!(
+            list_to_vec(&geometry).unwrap(),
+            vec![
+                Value::fixnum(40),
+                Value::fixnum(i64::from(640 + tab_height + border_height)),
+                Value::fixnum(40),
+                Value::fixnum(16),
+            ]
+        );
+    }
+}
