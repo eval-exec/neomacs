@@ -11,11 +11,16 @@ use neovm_core::buffer::{
     overlay::{OverlayList, OverlaySnapshot},
 };
 use neovm_core::emacs_core::eval::VariableView;
+use neovm_core::emacs_core::owned_roots::{OwnedRootRetainer, OwnedRoots};
 use neovm_core::emacs_core::plist::plist_get;
 use neovm_core::emacs_core::symbol::Obarray;
 use neovm_core::emacs_core::{SymId, Value};
 use neovm_core::tagged::SymbolMode;
 use rustc_hash::FxHashMap;
+
+#[cfg(test)]
+#[path = "tests/snapshot_overlay_roots_test.rs"]
+mod snapshot_overlay_roots_test;
 
 /// Immutable view for a walk on the evaluator thread.
 ///
@@ -36,6 +41,9 @@ pub(crate) struct LayoutBufferSnapshot {
     /// GNU `long_line_optimizations_p` at capture (`src/xdisp.c:20646`).
     long_line_optimizations: bool,
     overlays: OverlaySnapshot,
+    // Clones retain this native lease independently of the buffer cache.
+    // Test-only pure captures may omit it; the production constructor requires it.
+    _overlay_roots: Option<OwnedRoots>,
     /// Character span of the window-range overlay view. `None` is a
     /// whole-buffer view. A walk that consumes at or past the end must be
     /// retried with the whole buffer, so a range view can never commit a
@@ -61,7 +69,7 @@ pub(crate) struct LayoutBufferSnapshot {
 impl LayoutBufferSnapshot {
     #[cfg(test)]
     pub fn from_buffer(buffer: &Buffer) -> Self {
-        Self::capture_buffer(buffer, None, None, None)
+        Self::capture_buffer(buffer, None, None, None, None)
     }
 
     /// Project a query's source boundary without narrowing the live buffer.
@@ -90,6 +98,7 @@ impl LayoutBufferSnapshot {
         variables: Option<VariableView<'_>>,
         visible: Option<(usize, usize)>,
         overlay_span: Option<(usize, usize)>,
+        root_retainer: Option<&OwnedRootRetainer>,
     ) -> Self {
         // `overlay_span` is the character span the walk consumed last time
         // (plus margin), so the view covers what this walk can consume. A
@@ -108,6 +117,14 @@ impl LayoutBufferSnapshot {
             }
             None => (buffer.overlays().snapshot(), None),
         };
+        // Capture runs on this buffer's evaluator with no callback or GC
+        // between copying the overlays and registering their native lease.
+        // Tracing an overlay header also traces its copied plist spine.
+        let overlay_roots = root_retainer.map(|retainer| {
+            retainer
+                .retain(overlays.dump_overlays())
+                .expect("layout capture requires its live evaluator root registry")
+        });
         Self {
             display_when: crate::display_when::DisplayWhenConditions::structural(),
             display_target: crate::display_property::DisplayPropertyTarget::Graphical,
@@ -120,6 +137,7 @@ impl LayoutBufferSnapshot {
             long_line_optimizations: buffer.long_line_optimizations_p(),
             vars: resolve_layout_vars(buffer, variables),
             overlays,
+            _overlay_roots: overlay_roots,
             overlay_view_span,
             category_symbol_plists: FxHashMap::default(),
             automatic_composition_spans: Vec::new(),
@@ -150,13 +168,14 @@ impl LayoutBufferSnapshot {
         visible: Option<(usize, usize)>,
         target: crate::display_property::DisplayPropertyTarget,
     ) -> Self {
-        Self::from_buffer_for_window_with_symbols(
+        Self::capture_window_with_symbols(
             buffer,
             vars,
             visible,
             visible,
             target,
             SymbolMode::Bare,
+            None,
         )
     }
 
@@ -171,9 +190,31 @@ impl LayoutBufferSnapshot {
         overlay_span: Option<(usize, usize)>,
         target: crate::display_property::DisplayPropertyTarget,
         symbol_mode: SymbolMode,
+        root_retainer: &OwnedRootRetainer,
+    ) -> Self {
+        Self::capture_window_with_symbols(
+            buffer,
+            vars,
+            visible,
+            overlay_span,
+            target,
+            symbol_mode,
+            Some(root_retainer),
+        )
+    }
+
+    fn capture_window_with_symbols(
+        buffer: &Buffer,
+        vars: VariableView<'_>,
+        visible: Option<(usize, usize)>,
+        overlay_span: Option<(usize, usize)>,
+        target: crate::display_property::DisplayPropertyTarget,
+        symbol_mode: SymbolMode,
+        root_retainer: Option<&OwnedRootRetainer>,
     ) -> Self {
         let obarray = vars.obarray();
-        let mut snapshot = Self::capture_buffer(buffer, Some(vars), visible, overlay_span);
+        let mut snapshot =
+            Self::capture_buffer(buffer, Some(vars), visible, overlay_span, root_retainer);
         snapshot.display_target = target;
         snapshot.category_symbol_plists = capture_layout_category_symbol_plists_from_overlays(
             buffer,
@@ -471,6 +512,7 @@ mod category_capture_tests {
             Some((100, 200)),
             crate::display_property::DisplayPropertyTarget::Graphical,
             SymbolMode::Bare,
+            &eval.owned_root_retainer(),
         );
         let _ = snapshot
             .layout_overlays()

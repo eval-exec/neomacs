@@ -6191,6 +6191,7 @@ impl LayoutEngine {
                     overlay_span,
                     display_target,
                     evaluator.symbol_mode(),
+                    &evaluator.owned_root_retainer(),
                 )
                 .with_accessible_end(neovm_core::buffer::CharPos0::new(
                     params.accessible_end_charpos().get().max(0) as usize,
