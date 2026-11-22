@@ -161,10 +161,14 @@ fn frame_window_terminal_defvars_are_special_with_gnu_defaults() {
         ("default-frame-scroll-bars", "(eq v 'right)"),
         // terminal.c:700 DEFVAR_LISP, init nil.
         ("delete-terminal-functions", "(null v)"),
-        // frame.c:7636 DEFVAR_LISP; own-drawn tool bar branch.
+        // frame.c:7684-7692: the NS/GTK3 build default also applies in batch.
         (
             "frame-inhibit-implied-resize",
-            "(equal v '(tab-bar-lines tool-bar-lines))",
+            if cfg!(any(target_os = "linux", target_os = "macos")) {
+                "(equal v '(tab-bar-lines))"
+            } else {
+                "(equal v '(tab-bar-lines tool-bar-lines))"
+            },
         ),
         // xdisp.c:38621/38629 DEFVAR_LISP; structure pinned, branding aside.
         ("frame-title-format", "(eq (car v) 'multiple-frames)"),
