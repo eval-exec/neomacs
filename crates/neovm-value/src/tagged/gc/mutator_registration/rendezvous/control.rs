@@ -170,6 +170,9 @@ impl State {
         self.activate(membership).map(Request::Active)
     }
 
+    /// Start a stop epoch. A granted serial turn does not block activation:
+    /// that owner is a frozen stop participant and must ACK/park at its next
+    /// poll; once the phase leaves Idle no new serial grant is issued.
     pub(in crate::tagged::gc) fn activate(
         &mut self,
         membership: Membership<'_>,
@@ -210,6 +213,14 @@ impl State {
         generation: NonZeroU64,
     ) -> Result<RequestId, RendezvousError> {
         self.live()?;
+        // One entry per client: the Baton group is one ring client (L6 c), and
+        // a leftover entry would let one owner hold two serial positions.
+        if self.serial_ring.iter().any(|entry| entry.owner() == owner) {
+            return Err(RendezvousError::Identity);
+        }
+        self.serial_ring
+            .try_reserve(1)
+            .map_err(|_| RendezvousError::Capacity)?;
         let next = self
             .next_request
             .checked_add(1)
@@ -235,6 +246,11 @@ impl State {
         ready: impl FnOnce(&RingEntry) -> bool,
     ) -> Result<Option<RequestId>, RendezvousError> {
         self.live()?;
+        // A pending stop wins: `request()` sets `queued` while a stop waits for
+        // resume debt to drain, and no serial grant may be issued ahead of it.
+        if self.queued {
+            return Ok(None);
+        }
         if self.ring_head_granted.is_some() {
             return Ok(None);
         }

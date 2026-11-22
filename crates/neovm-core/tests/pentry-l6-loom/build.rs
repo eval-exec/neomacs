@@ -9,8 +9,9 @@
 //! `MutatorKey` and `RendezvousError` at its crate root.
 //!
 //! Seam contract: the copied control/ring must not name `std::sync`, `crate::`
-//! or `super::super`. Synchronization belongs to the rendezvous `sync` seam;
-//! the model drives the product state under Loom's Mutex/Condvar.
+//! or `super::super`. The ring control uses no synchronization; the model
+//! drives the product state under the test's own Loom Mutex/Condvar. The
+//! product park/wake (`gate.rs`/`mod.rs`) is copied in L6.7, not here.
 use std::env;
 use std::fs;
 use std::path::Path;

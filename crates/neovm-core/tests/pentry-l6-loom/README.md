@@ -10,8 +10,11 @@ workspace). It checks the L6 serial-request ring on the **product**
   the model parent. The model supplies `MutatorKey` and `RendezvousError` at
   its crate root.
 * The copied control/ring names no `std::sync`, `crate::` or `super::super`.
-  Synchronization belongs to the rendezvous `sync` seam; the model drives the
-  product `State` under Loom's own `Mutex`/`Condvar`.
+  The L6.0 ring control itself uses no synchronization; the model drives the
+  product `State` under the test's own Loom `Mutex`/`Condvar`. The product
+  park/wake (`gate.rs`/`mod.rs` and the ring-predicate condvar) is **not**
+  copied here; L6.7 carries that copy so L1/L3/L7 become product evidence
+  under 6052/6091.
 * `ring` — Loom rows:
   (a) N requesters + keeper: grants follow commit order and no committed
   requester is lost;
@@ -30,8 +33,8 @@ From the repo root (any cwd works; on this box, inside `nix develop`):
 cargo nextest run --manifest-path crates/neovm-core/tests/pentry-l6-loom/Cargo.toml
 ```
 
-Loom bounds: run once with the default and once with
-`LOOM_MAX_PREEMPTIONS=3`. Extra arguments pass through (`run.sh --test ring`,
-`run.sh --no-capture`). A build.rs assertion fails the model if the product
-file grows a direct `std::sync`/`crate::`/`super::super` or loses the ring API,
-so re-anchoring is explicit rather than silent.
+Loom bounds: run at `LOOM_MAX_PREEMPTIONS=2` and `LOOM_MAX_PREEMPTIONS=3`;
+both are witnessed for this model. Extra arguments pass through
+(`run.sh --test ring`, `run.sh --no-capture`). A build.rs assertion fails the
+model if the product file grows a direct `std::sync`/`crate::`/`super::super`
+or loses the ring API, so re-anchoring is explicit rather than silent.

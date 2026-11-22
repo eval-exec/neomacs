@@ -344,3 +344,71 @@ fn ring_holds_the_head_when_the_owner_is_not_ready() {
     state.retire_serial(a).unwrap();
     assert_eq!(state.try_grant_head(&members, |_| true).unwrap(), Some(b));
 }
+
+#[test]
+fn ring_defers_grant_while_a_stop_is_queued() {
+    let mut state = State::new();
+    let keys = ring_keys();
+    let a = state.enqueue_serial(keys[0], ring_generation()).unwrap();
+    let members = running(&keys);
+
+    // A draining-resume epoch queues the pending stop; the serial grant must
+    // not jump ahead of it (lead #11190 C1).
+    state.phase = Phase::DrainingResumes;
+    assert_eq!(state.request(&members), Ok(Request::Queued));
+    assert!(state.queued);
+    assert_eq!(
+        state.try_grant_head(&members, |_| true).unwrap(),
+        None,
+        "a pending stop defers the serial grant"
+    );
+    assert_eq!(state.ring_head(), Some(a));
+
+    // The stop resumes once debt is drained; the queued marker clears and the
+    // first commit grants.
+    state.queued = false;
+    state.phase = Phase::Idle;
+    assert_eq!(state.try_grant_head(&members, |_| true).unwrap(), Some(a));
+}
+
+#[test]
+fn ring_stop_activation_leaves_a_granted_turn_as_a_participant() {
+    let mut state = State::new();
+    let keys = ring_keys();
+    let a = state.enqueue_serial(keys[0], ring_generation()).unwrap();
+    let members = running(&keys);
+    assert_eq!(state.try_grant_head(&members, |_| true).unwrap(), Some(a));
+
+    // A stop may activate while the serial turn is out: that owner is a frozen
+    // stop participant and must ACK/park at its next poll.
+    let epoch = requested(&mut state, &members);
+    assert_eq!(state.epoch, epoch.get());
+    assert_eq!(state.ring_head_granted, Some(a));
+    assert_eq!(
+        state.try_grant_head(&members, |_| true).unwrap(),
+        None,
+        "no second serial grant once the stop is active"
+    );
+    // The granted ticket is still retirable (unit shortcut; the keeper would
+    // do this on the turn's return).
+    state.retire_serial(a).unwrap();
+    assert_eq!(state.ring_head_granted, None);
+}
+
+#[test]
+fn ring_refuses_a_duplicate_owner() {
+    let mut state = State::new();
+    let keys = ring_keys();
+    let a = state.enqueue_serial(keys[0], ring_generation()).unwrap();
+    assert_eq!(
+        state.enqueue_serial(keys[0], ring_generation()),
+        Err(RendezvousError::Identity),
+        "one ring entry per client (Baton group = one ring client)"
+    );
+    assert_eq!(state.ring_len(), 1);
+    assert_eq!(state.ring_head(), Some(a));
+    // Retirement frees the owner to enqueue again.
+    state.retire_serial(a).unwrap();
+    let again = state.enqueue_serial(keys[0], ring_generation()).unwrap();
+    assert_eq!(state.ring_head(), Some(again));
+}
