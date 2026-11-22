@@ -35,6 +35,7 @@
          (moves . ,navigation-bench-moves) (queued . ,navigation-bench-queued)
          (final_line . ,(line-number-at-pos)) (point . ,(point))
          (window_start . ,(window-start)) (major_mode . ,(symbol-name major-mode))
+         (window_start_line . ,(line-number-at-pos (window-start)))
          (elapsed_seconds . ,elapsed) (cpu_seconds . ,cpu-seconds)
          (cpu_percent . ,(* 100.0 (/ cpu-seconds elapsed)))
          (gc_count . ,(- gcs-done navigation-bench-start-gcs))
@@ -45,7 +46,14 @@
 (defun navigation-bench-post-command ()
   (when (and navigation-bench-start-wall
              (not navigation-bench-finished)
-             (eq this-command 'next-line))
+             (or (and (member navigation-bench-mode '("synthetic-cn" "native-cn"))
+                      (eq this-command 'next-line))
+                 (and (equal navigation-bench-mode "synthetic-cv")
+                      (eq this-command 'scroll-up-command)
+                      ;; Prefix commands preserve this-command (GNU simple.el
+                      ;; prefix-command-preserve-state). Count the final C-v
+                      ;; event once, never its C-u and digit hooks.
+                      (eq last-command-event 22))))
     (setq navigation-bench-moves (1+ navigation-bench-moves))
     (when (= navigation-bench-moves 260) (navigation-bench-finish))))
 
@@ -70,12 +78,17 @@
                   (set-window-point window (point))
                   (with-selected-window window (redisplay t)))))
           (navigation-bench-finish)))
-       ((equal navigation-bench-mode "synthetic-cn")
+       ((member navigation-bench-mode '("synthetic-cn" "synthetic-cv"))
         ;; A paced C-n through the ordinary command reader. This preserves
         ;; command history and normal redisplay; it is not native autorepeat.
         (when (< navigation-bench-queued 260)
           (setq unread-command-events
-                (append unread-command-events (list 14)))
+                (append unread-command-events
+                        (if (equal navigation-bench-mode "synthetic-cv")
+                            ;; C-u 1 C-v scrolls the viewport every command.
+                            ;; 520 fixture lines keep all 260 moves away from EOB.
+                            (list 21 ?1 22)
+                          (list 14))))
           (setq navigation-bench-queued (1+ navigation-bench-queued))))))))
 
 (find-file (getenv "NAVIGATION_BENCH_FILE"))

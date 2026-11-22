@@ -2,6 +2,8 @@
 
 Timer reproduces issue607. Synthetic-cn feeds event14 to the normal command
 reader; it deliberately makes no claim about native keyboard repeat costs.
+Synthetic-cv feeds C-u 1 C-v through that reader and scrolls the viewport on
+every command, covering the full-export cost alongside cursor-only motion.
 """
 
 import argparse
@@ -9,6 +11,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import statistics
 import subprocess
 import time
@@ -19,6 +22,12 @@ parser.add_argument("--source-sha", required=True)
 parser.add_argument("--samples", type=int, default=3)
 parser.add_argument("--warmup", type=float, default=20)
 parser.add_argument("--modes", nargs="+", default=["timer", "synthetic-cn", "native-cn"])
+parser.add_argument("--neo-binary", type=Path,
+                    help="Explicit OLD or NEW binary; recorded with version and SHA256")
+parser.add_argument("--count-exports", action="store_true",
+                    help="Separate instrumented cost row; never use its CPU/RSS as the clean timing row")
+parser.add_argument("--coverage-reuse", choices=["off", "on"], default="on",
+                    help="Same-binary old-exporter control versus certified renewal")
 args = parser.parse_args()
 root = Path.cwd()
 source = root / "scripts/macos-navigation-parity"
@@ -50,7 +59,10 @@ fixture = artifacts / "navigation.md"
 fixture.write_text("".join(f"Line {i:03d}: cursor navigation test.\n" for i in range(260)))
 assert len(fixture.read_bytes()) < 10_000
 metadata = {"schema": "macos-navigation-v1", "warmup_seconds": args.warmup,
+            "cost_row": "p607-navigation-export-calls" if args.count_exports else "p607-navigation-cpu-rss",
+            "coverage_export_reuse": args.coverage_reuse,
             "production_source_sha": args.source_sha,
+            "controller_host_policy": os.environ.get("NEOMACS_BENCH_CONTROLLER_POLICY", "not recorded"),
             "moves": 260, "interval_seconds": .1, "desktop": desktop,
             "fixture_sha256": hashlib.sha256(fixture.read_bytes()).hexdigest(),
             "fixture_bytes": fixture.stat().st_size,
@@ -86,7 +98,7 @@ def wait_file(path, child, timeout):
 
 
 editors = {"gnu": args.gnu_prefix / "bin/emacs",
-           "neo": Path(os.environ["CARGO_TARGET_DIR"]) / "release/neomacs"}
+           "neo": args.neo_binary or Path(os.environ["CARGO_TARGET_DIR"]) / "release/neomacs"}
 
 
 def file_sha256(path):
@@ -101,13 +113,19 @@ metadata["editors"] = {name: {"path": str(binary),
                               "version": run([str(binary), "--version"], check=True).stdout,
                               "sha256": file_sha256(binary)}
                        for name, binary in editors.items()}
+if args.source_sha[:12] not in metadata["editors"]["neo"]["version"]:
+    raise RuntimeError("Neo --version does not match --source-sha")
 metadata["harness_sha256"] = {path.name: hashlib.sha256(path.read_bytes()).hexdigest()
                               for path in source.iterdir() if path.is_file()}
 (artifacts / "metadata.json").write_text(json.dumps(metadata, indent=2))
 rows = []
 for mode in args.modes:
-    if mode not in ["timer", "synthetic-cn", "native-cn"]:
+    if mode not in ["timer", "synthetic-cn", "synthetic-cv", "native-cn"]:
         raise ValueError(mode)
+    case_fixture = fixture
+    if mode == "synthetic-cv":
+        case_fixture = artifacts / "navigation-scroll.md"
+        case_fixture.write_text("".join(f"Line {i:03d}: cursor navigation test.\n" for i in range(520)))
     if mode == "native-cn" and not desktop["post_events"]:
         print("UNATTESTED native-cn: post_events permission blocked", flush=True)
         continue
@@ -117,8 +135,11 @@ for mode in args.modes:
             case = artifacts / f"{mode}-{sample_index}-{editor}"
             case.mkdir()
             env = dict(os.environ, NEOMACS_RUNTIME_ROOT=str(root), RUST_LOG="error",
+                       NEOMACS_COVERAGE_EXPORT_REUSE=args.coverage_reuse,
                        NAVIGATION_BENCH_DIR=str(case), NAVIGATION_BENCH_MODE=mode,
-                       NAVIGATION_BENCH_FILE=str(fixture))
+                       NAVIGATION_BENCH_FILE=str(case_fixture))
+            if args.count_exports:
+                env["RUST_LOG"] = "error,neomacs_layout_engine::coverage_cost=trace"
             env.pop("DISPLAY", None)
             env.pop("WAYLAND_DISPLAY", None)
             argv = [str(editors[editor]), "-Q", "--font=Menlo-13", "--geometry=100x35",
@@ -130,10 +151,11 @@ for mode in args.modes:
                 try:
                     ready = wait_file(case / "ready.json", child, 40)
                     assert ready["pid"] == child.pid and ready["first_line"] == 1
-                    assert ready["last_line"] == 261
+                    assert ready["last_line"] == (521 if mode == "synthetic-cv" else 261)
                     run([str(artifacts / "desktop"), str(child.pid)], check=True)
                     time.sleep(args.warmup)
                     first = usage(child.pid)
+                    trace_start = (case / "editor.log").stat().st_size
                     (case / "go").write_text("go\n")
                     wait_file(case / "running.json", child, 10)
                     if mode == "native-cn":
@@ -147,9 +169,15 @@ for mode in args.modes:
                         time.sleep(.25)
                         samples.append(usage(child.pid))
                     done = json.loads((case / "done.json").read_text())
+                    trace_end = (case / "editor.log").stat().st_size
                     if stimulus is not None:
                         assert stimulus.wait(timeout=5) == 0
-                    assert done["moves"] == 260 and done["final_line"] == 261, done
+                    assert done["moves"] == 260, done
+                    if mode == "synthetic-cv":
+                        assert done["queued"] == 260, done
+                        assert done["window_start_line"] == 261, done
+                    else:
+                        assert done["final_line"] == 261, done
                     last = samples[-1]
                     assert first["proc_start_mach_ticks"] == last["proc_start_mach_ticks"]
                     cpu_ticks = sum(last[key] - first[key] for key in
@@ -160,6 +188,8 @@ for mode in args.modes:
                     # catches a mistaken Mach timebase conversion immediately.
                     assert .7 < cpu / done["cpu_seconds"] < 1.3, (cpu, done)
                     row = {"editor": editor, "mode": mode, "sample": sample_index,
+                           "fixture_sha256": hashlib.sha256(case_fixture.read_bytes()).hexdigest(),
+                           "fixture_bytes": case_fixture.stat().st_size,
                            "ready": ready, "witness": done, "cpu_percent": cpu / wall * 100,
                            "wall_seconds": wall, "cpu_seconds": cpu,
                            "instructions": last["instructions"] - first["instructions"],
@@ -168,6 +198,27 @@ for mode in args.modes:
                            "rss_peak_mib": max(s["resident_bytes"] for s in samples) / 2**20,
                            "footprint_mean_mib": statistics.mean(s["phys_footprint_bytes"] for s in samples) / 2**20,
                            "footprint_peak_mib": max(s["phys_footprint_bytes"] for s in samples) / 2**20}
+                    if args.count_exports:
+                        # Count only the witnessed navigation interval, excluding
+                        # startup/warmup. The event is at the real export_window
+                        # entry, before its eligibility scans or geometry work.
+                        with (case / "editor.log").open("rb") as stream:
+                            stream.seek(trace_start)
+                            trace = stream.read(trace_end - trace_start).decode(errors="replace")
+                        counts = {}
+                        for line in trace.splitlines():
+                            if "building scroll coverage" not in line:
+                                continue
+                            fields = dict(re.findall(r"\b(window|start|hscroll|vscroll)=(-?\d+)", line))
+                            if len(fields) != 4:
+                                raise RuntimeError(f"unparsed export cost event: {line}")
+                            key = tuple(int(fields[field]) for field in ("window", "start", "hscroll", "vscroll"))
+                            counts[key] = counts.get(key, 0) + 1
+                        row["coverage_export_calls"] = (sum(counts.values()) if editor == "neo" else None)
+                        row["coverage_export_calls_by_key"] = [
+                            dict(zip(("window", "start", "hscroll", "vscroll"), key), calls=count)
+                            for key, count in sorted(counts.items())]
+                        row["timing_grade"] = "INSTRUMENTED; use the clean p607-navigation-cpu-rss row"
                     (case / "usage.json").write_text(json.dumps(samples, indent=2))
                     rows.append(row)
                     (artifacts / "results.json").write_text(json.dumps(rows, indent=2))

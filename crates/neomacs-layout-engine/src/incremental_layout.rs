@@ -2536,6 +2536,15 @@ impl RetainedWindowMatrix {
 /// bench cases prove the win on relaid-row-count, not wall-time alone (spec §7).
 #[derive(Clone, Debug, Default)]
 pub struct LayoutStats {
+    /// The accepted reuse decision for each content window in this frame.
+    /// A sibling's reused rows (including a still minibuffer) grant no reuse
+    /// authority to this window's derived presentation products.
+    pub window_classes:
+        rustc_hash::FxHashMap<neomacs_display_protocol::DisplayWindowId, LayoutClass>,
+    /// Calls entering the actual coverage exporter, including declined
+    /// attempts. A renewed surface incurs no export work for this window.
+    pub coverage_export_calls:
+        rustc_hash::FxHashMap<neomacs_display_protocol::DisplayWindowId, usize>,
     /// Buffer-text ("body") rows laid out from scratch this frame. THE
     /// rank-1 gate metric: Phase 1 cursor-only must drive this to 0.
     pub relaid_body_rows: usize,
@@ -2637,7 +2646,12 @@ impl LayoutStats {
     }
 
     /// Bump the per-class window counter for one laid-out window.
-    pub fn record_window_class(&mut self, class: LayoutClass) {
+    pub fn record_window_class(
+        &mut self,
+        window: neomacs_display_protocol::DisplayWindowId,
+        class: LayoutClass,
+    ) {
+        self.window_classes.insert(window, class);
         match class {
             LayoutClass::Full => self.full_windows += 1,
             LayoutClass::CursorOnly => self.cursor_only_windows += 1,
