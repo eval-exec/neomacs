@@ -222,7 +222,9 @@ impl SurfaceFontOptions {
 
     /// Restore the owned connection snapshot without interpreting DEFAULT as
     /// an explicit disabled option. PGTK does not configure the LCD filter.
-    pub fn from_pgtk_options(options: neomacs_display_protocol::DesktopFontRenderOptions) -> Self {
+    pub fn from_desktop_options(
+        options: neomacs_display_protocol::DesktopFontRenderOptions,
+    ) -> Self {
         use neomacs_display_protocol::{
             DesktopFontAntialias as Aa, DesktopFontHinting as Hint,
             DesktopFontSubpixelOrder as Order,
@@ -254,7 +256,7 @@ impl SurfaceFontOptions {
 
     /// Publish PGTK's three independent options, retaining inactive/default
     /// values for subsequent edits. Xlib-only LCD filtering is not transported.
-    pub fn pgtk_options(self) -> neomacs_display_protocol::DesktopFontRenderOptions {
+    pub fn desktop_options(self) -> neomacs_display_protocol::DesktopFontRenderOptions {
         use neomacs_display_protocol::{
             DesktopFontAntialias as Aa, DesktopFontHinting as Hint, DesktopFontRenderOptions,
             DesktopFontSubpixelOrder as Order,

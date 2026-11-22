@@ -675,13 +675,13 @@ fn frame_binding_restores_captured_pgtk_policy_across_cache_and_catalog_clears()
         hinting: DesktopFontHinting::Slight,
         subpixel_order: DesktopFontSubpixelOrder::Bgr,
     };
-    let expected = SurfaceFontOptions::from_pgtk_options(captured);
-    let newer = SurfaceFontOptions::from_pgtk_options(DesktopFontRenderOptions {
+    let expected = SurfaceFontOptions::from_desktop_options(captured);
+    let newer = SurfaceFontOptions::from_desktop_options(DesktopFontRenderOptions {
         hinting: DesktopFontHinting::Full,
         ..captured
     });
     let mut frame = neomacs_display_protocol::FrameGlyphBuffer::default();
-    frame.pgtk_font_options = Some(captured);
+    frame.desktop_font_render_options = Some(captured);
     atlas.set_font_surface_options(newer);
     atlas.set_current_frame_fonts(frame.font_bindings());
     assert_eq!(
@@ -702,7 +702,7 @@ fn frame_binding_restores_captured_pgtk_policy_across_cache_and_catalog_clears()
         expected,
         "a catalog rebuild must install the frame's options before its fonts"
     );
-    frame.pgtk_font_options = Some(DesktopFontRenderOptions::default());
+    frame.desktop_font_render_options = Some(DesktopFontRenderOptions::default());
     let before_default = atlas.eviction_generation();
     atlas.set_current_frame_fonts(frame.font_bindings());
     assert_eq!(
@@ -714,7 +714,7 @@ fn frame_binding_restores_captured_pgtk_policy_across_cache_and_catalog_clears()
 
 #[cfg(target_os = "linux")]
 #[test]
-fn frame_without_pgtk_options_preserves_xlib_surface_policy() {
+fn frame_without_desktop_options_preserves_xlib_surface_policy() {
     use neomacs_font_materializer::fontconfig::{
         SurfaceFontOptions, SurfaceSubpixelOrder, XftResources,
     };

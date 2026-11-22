@@ -96,7 +96,7 @@ impl Tooltips {
                 .ready
                 .owner
                 .fonts
-                .pgtk_font_options
+                .desktop_font_render_options
                 .map_or(options, |captured| options.with_desktop_options(captured));
             options.apply(&mut mapped.atlas);
         }

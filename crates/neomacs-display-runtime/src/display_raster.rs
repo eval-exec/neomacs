@@ -41,7 +41,7 @@ impl DisplayRasterOptions {
     ) -> Self {
         #[cfg(target_os = "linux")]
         if matches!(self, Self::Wayland(_)) {
-            return Self::Wayland(SurfaceFontOptions::from_pgtk_options(options));
+            return Self::Wayland(SurfaceFontOptions::from_desktop_options(options));
         }
         let _ = options;
         self

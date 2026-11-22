@@ -2012,11 +2012,11 @@ impl WgpuGlyphAtlas {
     pub fn set_current_frame_fonts(&mut self, bindings: FrameFontBindings<'_>) {
         self.synchronize_font_catalog_generation(bindings.catalog_generation);
         #[cfg(target_os = "linux")]
-        if let Some(options) = bindings.pgtk_font_options {
+        if let Some(options) = bindings.desktop_font_render_options {
             // An older presentation must keep the raster policy that opened
             // its metric-bearing fonts, even after a newer settings event.
             self.set_font_surface_options(
-                neomacs_font_materializer::fontconfig::SurfaceFontOptions::from_pgtk_options(
+                neomacs_font_materializer::fontconfig::SurfaceFontOptions::from_desktop_options(
                     options,
                 ),
             );

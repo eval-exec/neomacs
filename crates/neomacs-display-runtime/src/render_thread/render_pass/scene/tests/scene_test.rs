@@ -10,19 +10,19 @@ mod pinned_lifecycle;
 mod retained_owner;
 
 #[test]
-fn live_child_font_environment_requires_matching_pgtk_options_and_catalog() {
+fn live_child_font_environment_requires_matching_desktop_options_and_catalog() {
     use neomacs_display_protocol::{DesktopFontHinting, DesktopFontRenderOptions};
     let mut root = FrameGlyphBuffer::default();
     let mut child = root.clone();
     assert!(child_font_environment_matches(&child, &root));
-    root.pgtk_font_options = Some(DesktopFontRenderOptions::default());
+    root.desktop_font_render_options = Some(DesktopFontRenderOptions::default());
     assert!(
         !child_font_environment_matches(&child, &root),
         "None and explicit PGTK DEFAULT snapshots are distinct"
     );
-    child.pgtk_font_options = root.pgtk_font_options;
+    child.desktop_font_render_options = root.desktop_font_render_options;
     assert!(child_font_environment_matches(&child, &root));
-    child.pgtk_font_options = Some(DesktopFontRenderOptions {
+    child.desktop_font_render_options = Some(DesktopFontRenderOptions {
         hinting: DesktopFontHinting::Slight,
         ..Default::default()
     });
@@ -31,7 +31,7 @@ fn live_child_font_environment_requires_matching_pgtk_options_and_catalog() {
         !child_font_environment_matches(&child, &root),
         "settings-only changes do not advance the native catalog"
     );
-    root.pgtk_font_options = child.pgtk_font_options;
+    root.desktop_font_render_options = child.desktop_font_render_options;
     assert!(child_font_environment_matches(&child, &root));
     child.font_catalog_generation = child.font_catalog_generation.next();
     assert!(!child_font_environment_matches(&child, &root));

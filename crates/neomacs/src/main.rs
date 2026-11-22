@@ -432,7 +432,7 @@ fn finish_gui_connection(
         neomacs_display_runtime::font_defaults::observe_font_defaults(identity.backend())
             .map_err(|error| format!("failed to observe desktop fonts: {error}"))?;
     #[cfg(target_os = "linux")]
-    identity.observe_font_render_options(font_observer.initial_raster_options().pgtk_options());
+    identity.observe_font_render_options(font_observer.initial_raster_options().desktop_options());
     // Native Wayland consumes logical text DPI from the same settings owner
     // that discovered the desktop fonts. Backing scale remains frame-local.
     let observation = match (host.observation(), font_observer.initial_text_dpi()) {
@@ -4301,7 +4301,7 @@ fn run_gui_main_thread(
             emacs_comms
                 .cmd_tx
                 .send(RenderCommand::Config(ConfigCommand::SetFontRenderOptions(
-                    font_observer.initial_raster_options().pgtk_options(),
+                    font_observer.initial_raster_options().desktop_options(),
                 )))
         {
             tracing::error!(%error, "failed to queue initial font rendering preferences");
@@ -4778,7 +4778,7 @@ fn run_gui_evaluator_worker(
                             continue;
                         };
                         #[cfg(target_os = "linux")]
-                        let options = options.pgtk_options();
+                        let options = options.desktop_options();
                         if font_display.backend() != neomacs_display_protocol::GraphicalBackend::Wayland {
                             continue;
                         }

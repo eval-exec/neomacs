@@ -105,7 +105,7 @@ fn wayland_preferences_reach_current_future_and_recreated_frame_atlases() {
         render.populate_glyph_atlas(&device, 1.0);
         let atlas = render.compositor.glyph_atlas.as_mut().unwrap();
         let generation = atlas.eviction_generation();
-        atlas.set_font_surface_options(SurfaceFontOptions::from_pgtk_options(expected));
+        atlas.set_font_surface_options(SurfaceFontOptions::from_desktop_options(expected));
         assert_eq!(
             atlas.eviction_generation(),
             generation,

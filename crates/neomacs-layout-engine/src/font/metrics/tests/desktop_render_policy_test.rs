@@ -230,12 +230,12 @@ fn frame_font_publication_captures_the_applied_policy_at_the_metric_safe_point()
     let mut service = Some(metrics);
     let mut initial_frame = FrameDisplayState::new(80, 24, 8.0, 16.0);
     realize_frame_fonts(&mut initial_frame, &mut service);
-    assert_eq!(initial_frame.pgtk_font_options, Some(full));
+    assert_eq!(initial_frame.desktop_font_render_options, Some(full));
     assert!(display.observe_font_render_options(slight));
     let mut before_safe_point = FrameDisplayState::new(80, 24, 8.0, 16.0);
     realize_frame_fonts(&mut before_safe_point, &mut service);
     assert_eq!(
-        before_safe_point.pgtk_font_options,
+        before_safe_point.desktop_font_render_options,
         Some(full),
         "a frame must retain the policy used for its metrics"
     );
@@ -248,10 +248,10 @@ fn frame_font_publication_captures_the_applied_policy_at_the_metric_safe_point()
     );
     let mut refreshed_frame = FrameDisplayState::new(80, 24, 8.0, 16.0);
     realize_frame_fonts(&mut refreshed_frame, &mut service);
-    assert_eq!(refreshed_frame.pgtk_font_options, Some(slight));
+    assert_eq!(refreshed_frame.desktop_font_render_options, Some(slight));
     assert_eq!(refreshed_frame.font_catalog_generation, generation);
     assert_eq!(
-        initial_frame.pgtk_font_options,
+        initial_frame.desktop_font_render_options,
         Some(full),
         "old snapshots stay immutable"
     );

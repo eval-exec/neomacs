@@ -535,15 +535,15 @@ fn pgtk_protocol_round_trip_preserves_defaults_and_independent_fields() {
                     hinting,
                     subpixel_order,
                 };
-                let surface = SurfaceFontOptions::from_pgtk_options(snapshot);
-                assert_eq!(surface.pgtk_options(), snapshot);
+                let surface = SurfaceFontOptions::from_desktop_options(snapshot);
+                assert_eq!(surface.desktop_options(), snapshot);
                 assert_eq!(surface.lcd_filter, None, "PGTK has no LCD-filter setting");
             }
         }
     }
     let defaults = DesktopFontRenderOptions::default();
     assert_eq!(
-        SurfaceFontOptions::from_pgtk_options(defaults),
+        SurfaceFontOptions::from_desktop_options(defaults),
         SurfaceFontOptions::default()
     );
 }

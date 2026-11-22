@@ -120,7 +120,7 @@ fn fixture_with(change: impl FnOnce(&mut scroll_coverage::ScrollCoverage)) -> Fr
 }
 
 #[test]
-fn retained_scroll_paint_key_distinguishes_pgtk_options_without_catalog_changes() {
+fn retained_scroll_paint_key_distinguishes_desktop_options_without_catalog_changes() {
     let frame = fixture();
     let surface = frame.scroll_surfaces[0].clone();
     let paint = |options| RasterPaint {
@@ -128,7 +128,7 @@ fn retained_scroll_paint_key_distinguishes_pgtk_options_without_catalog_changes(
         background: frame.background,
         defaults: [frame.char_width, frame.char_height, frame.font_pixel_size],
         font_catalog: frame.font_catalog_generation,
-        pgtk_font_options: options,
+        desktop_font_render_options: options,
         scale: DeviceScale::new(1.0).unwrap(),
         size: SnapshotSize::new(60, 60).unwrap(),
         origin: (10.0, 10.0),
@@ -155,13 +155,13 @@ fn retained_scroll_paint_key_distinguishes_pgtk_options_without_catalog_changes(
 }
 
 #[test]
-fn retained_scroll_raster_uses_the_frames_captured_pgtk_options() {
+fn retained_scroll_raster_uses_the_frames_captured_desktop_options() {
     let mut frame = fixture();
     let options = DesktopFontRenderOptions {
         hinting: DesktopFontHinting::Slight,
         ..Default::default()
     };
-    frame.pgtk_font_options = Some(options);
+    frame.desktop_font_render_options = Some(options);
     let raster = raster_frame(
         &frame.scroll_surfaces[0],
         &frame,
@@ -174,10 +174,13 @@ fn retained_scroll_raster_uses_the_frames_captured_pgtk_options() {
         raster.font_catalog_generation,
         frame.font_catalog_generation
     );
-    assert_eq!(raster.font_bindings().pgtk_font_options, Some(options));
-    frame.pgtk_font_options = Some(DesktopFontRenderOptions::default());
     assert_eq!(
-        raster.pgtk_font_options,
+        raster.font_bindings().desktop_font_render_options,
+        Some(options)
+    );
+    frame.desktop_font_render_options = Some(DesktopFontRenderOptions::default());
+    assert_eq!(
+        raster.desktop_font_render_options,
         Some(options),
         "a later settings edit cannot mutate a retained paint snapshot"
     );
@@ -579,7 +582,7 @@ fn changed_coverage_pixels_and_font_catalog_rebuild_the_raster() {
         if change == 4 {
             // This step changes only PGTK policy: the native catalog and
             // all coverage glyph/font metadata remain identical to step 3.
-            frame.pgtk_font_options = Some(DesktopFontRenderOptions {
+            frame.desktop_font_render_options = Some(DesktopFontRenderOptions {
                 hinting: DesktopFontHinting::Slight,
                 ..Default::default()
             });

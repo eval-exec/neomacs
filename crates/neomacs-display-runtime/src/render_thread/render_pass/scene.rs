@@ -30,7 +30,7 @@ fn child_font_environment_matches(
     root: &crate::core::frame_glyphs::FrameGlyphBuffer,
 ) -> bool {
     child.font_catalog_generation == root.font_catalog_generation
-        && child.pgtk_font_options == root.pgtk_font_options
+        && child.desktop_font_render_options == root.desktop_font_render_options
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -201,8 +201,8 @@ pub(super) fn render_frame_content_overlays(
                         frame_id = child_id,
                         child_generation = child_entry.frame.font_catalog_generation.get(),
                         root_generation = frame.font_catalog_generation.get(),
-                        child_pgtk_options = ?child_entry.frame.pgtk_font_options,
-                        root_pgtk_options = ?frame.pgtk_font_options,
+                        child_desktop_options = ?child_entry.frame.desktop_font_render_options,
+                        root_desktop_options = ?frame.desktop_font_render_options,
                         "skipping retained child frame from a stale font environment"
                     );
                     continue;

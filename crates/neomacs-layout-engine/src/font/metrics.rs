@@ -1779,7 +1779,7 @@ impl FontMetricsService {
     ) -> neomacs_font_materializer::fontconfig::FontRenderOptions {
         match self.desktop_font_render_options {
             Some(preferences) => options.for_pgtk(
-                neomacs_font_materializer::fontconfig::SurfaceFontOptions::from_pgtk_options(
+                neomacs_font_materializer::fontconfig::SurfaceFontOptions::from_desktop_options(
                     preferences,
                 ),
             ),
@@ -4031,7 +4031,7 @@ pub fn realize_frame_fonts(
         return;
     };
     state.font_catalog_generation = svc.font_catalog_generation();
-    state.pgtk_font_options = svc.desktop_font_render_options;
+    state.desktop_font_render_options = svc.desktop_font_render_options;
     // Deterministic interner allocation order across identical frames.
     let mut face_ids: Vec<FaceId> = state.faces.keys().copied().collect();
     face_ids.sort_unstable();

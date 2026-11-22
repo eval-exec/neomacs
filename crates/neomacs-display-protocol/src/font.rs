@@ -608,7 +608,7 @@ pub struct FrameFontBindings<'a> {
     pub catalog_generation: FontCatalogGeneration,
     /// PGTK options used to open the fonts and measure this exact frame.
     /// None retains the renderer's independently captured Xlib policy.
-    pub pgtk_font_options: Option<crate::DesktopFontRenderOptions>,
+    pub desktop_font_render_options: Option<crate::DesktopFontRenderOptions>,
     pub faces: &'a FrameFaceMap,
     pub fonts: &'a ResolvedFontTable,
     pub char_fonts: &'a CharFontTable,

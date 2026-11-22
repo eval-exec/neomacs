@@ -2163,8 +2163,8 @@ pub struct FrameDisplayState {
     #[serde(default)]
     pub font_catalog_generation: crate::font::FontCatalogGeneration,
     /// PGTK options used to open the exact fonts carrying this frame's metrics.
-    #[serde(default)]
-    pub pgtk_font_options: Option<crate::DesktopFontRenderOptions>,
+    #[serde(default, rename = "pgtk_font_options")]
+    pub desktop_font_render_options: Option<crate::DesktopFontRenderOptions>,
     /// Resolved font table for this frame. `Face::default_resolved_font_id`
     /// and (eventually) shaped glyph runs reference entries here; the render
     /// thread rasterizes these exact fonts instead of re-selecting by
@@ -2712,7 +2712,7 @@ impl FrameDisplayState {
             },
             faces: HashMap::default(),
             font_catalog_generation: crate::font::FontCatalogGeneration::default(),
-            pgtk_font_options: None,
+            desktop_font_render_options: None,
             fonts: crate::font::ResolvedFontTable::default(),
             char_fonts: crate::font::CharFontTable::default(),
             shaped_clusters: crate::font::ShapedClusterTable::default(),
@@ -2810,7 +2810,7 @@ impl FrameDisplayState {
         state.no_accept_focus = buf.no_accept_focus;
         state.faces = buf.faces.clone();
         state.font_catalog_generation = buf.font_catalog_generation;
-        state.pgtk_font_options = buf.pgtk_font_options;
+        state.desktop_font_render_options = buf.desktop_font_render_options;
         state.fonts = buf.fonts.clone();
         state.char_fonts = buf.char_fonts.clone();
         state.shaped_clusters = buf.shaped_clusters.clone();
@@ -3012,7 +3012,7 @@ impl FrameDisplayState {
         }
 
         buf.font_catalog_generation = self.font_catalog_generation;
-        buf.pgtk_font_options = self.pgtk_font_options;
+        buf.desktop_font_render_options = self.desktop_font_render_options;
         // Copy resolved fonts
         for (id, font) in &self.fonts {
             buf.fonts.insert(*id, font.clone());
