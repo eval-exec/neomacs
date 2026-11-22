@@ -927,6 +927,54 @@ impl<R: OrderedShiftRecord> OrderedShiftTree<R> {
         }
     }
 
+    /// Find a successor by KEY position. Interval end maxima cannot choose
+    /// this path: a long earlier interval may end after many later starts.
+    /// Keep this separate from the endpoint-specialized contiguous search.
+    pub(super) fn next_key_position_after(
+        &self,
+        position: EmacsBytePos,
+        limit: EmacsBytePos,
+    ) -> Option<EmacsBytePos> {
+        if position >= limit {
+            return None;
+        }
+        let mut id = self.root?;
+        let mut inherited = EmacsByteDelta::ZERO;
+        loop {
+            // With a cold endpoint index this existing counter isolates the
+            // key-successor descent; Point visits have their separate counter.
+            #[cfg(any(test, feature = "test-support"))]
+            super::instrumentation::record_endpoint_search_node_visit();
+            let node = self.node(id);
+            let record_delta = inherited.combine(node.pending_shift);
+            match &node.kind {
+                OrderedNodeKind::Leaf(records) => {
+                    let candidate_index = records.partition_point(|record| {
+                        record_delta.apply_to_pos(record.key_position()) <= position
+                    });
+                    return records.get(candidate_index).and_then(|record| {
+                        let candidate = record_delta.apply_to_pos(record.key_position());
+                        (candidate <= limit).then_some(candidate)
+                    });
+                }
+                OrderedNodeKind::Branch(children) => {
+                    // Child maximum key positions are ordered. Child summaries
+                    // already include their own shifts, while record_delta
+                    // supplies this node's and all ancestors' pending shifts.
+                    let first_candidate = children.partition_point(|child| {
+                        record_delta.apply_to_pos(self.summary(*child).max_position) <= position
+                    });
+                    let child = *children.get(first_candidate)?;
+                    if record_delta.apply_to_pos(self.summary(child).min_position) > limit {
+                        return None;
+                    }
+                    id = child;
+                    inherited = record_delta;
+                }
+            }
+        }
+    }
+
     #[doc(hidden)]
     pub fn next_position_after(
         &self,

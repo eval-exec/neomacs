@@ -1468,18 +1468,40 @@ fn image_embedded_metadata_to_lisp(
     metadata: &crate::emacs_core::image_catalog::ImageEmbeddedMetadata,
 ) -> Value {
     let mut plist = Vec::with_capacity(4);
-    if let Some(count) = metadata.frame_count() {
-        plist.push(Value::symbol("count"));
-        plist.push(Value::fixnum(i64::from(count)));
+    let count = metadata
+        .frame_count()
+        .map(|count| Value::fixnum(i64::from(count)));
+    let delay = metadata.frame_delay().map(|delay| match delay {
+        crate::emacs_core::image_catalog::ImageFrameDelay::UseDefault => Value::T,
+        crate::emacs_core::image_catalog::ImageFrameDelay::Milliseconds { .. } => {
+            Value::make_float(delay.seconds().expect("numeric delay has seconds"))
+        }
+    });
+    use neomacs_display_protocol::image::ImageMetadataOrder;
+    let properties = match metadata.property_order() {
+        ImageMetadataOrder::CountThenDelay => [("count", count), ("delay", delay)],
+        ImageMetadataOrder::DelayThenCount => [("delay", delay), ("count", count)],
+    };
+    for (name, value) in properties {
+        if let Some(value) = value {
+            plist.push(Value::symbol(name));
+            plist.push(value);
+        }
     }
-    if let Some(delay) = metadata.frame_delay() {
-        plist.push(Value::symbol("delay"));
-        plist.push(match delay {
-            crate::emacs_core::image_catalog::ImageFrameDelay::UseDefault => Value::T,
-            crate::emacs_core::image_catalog::ImageFrameDelay::Milliseconds { .. } => {
-                Value::make_float(delay.seconds().expect("numeric delay has seconds"))
-            }
-        });
+    if let Some(extensions) = metadata
+        .gif_extensions()
+        .filter(|blocks| !blocks.is_empty())
+    {
+        plist.push(Value::symbol("extension-data"));
+        // giflib records file order; GNU prepends each FUNCTION/BYTES pair.
+        let mut blocks = Vec::with_capacity(extensions.len() * 2);
+        for block in extensions.iter().rev() {
+            blocks.push(Value::fixnum(i64::from(block.function)));
+            blocks.push(Value::heap_string(
+                neovm_value::heap_types::LispString::from_unibyte_slice(&block.bytes),
+            ));
+        }
+        plist.push(Value::list(blocks));
     }
     if let Some(start) = metadata.loop_start() {
         plist.push(Value::symbol("loop-start"));

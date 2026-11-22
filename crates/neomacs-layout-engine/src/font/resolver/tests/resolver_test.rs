@@ -1405,3 +1405,101 @@ mod accepted_listing_review_test;
 #[cfg(target_os = "linux")]
 #[path = "named_listing_weight_review_test.rs"]
 mod named_listing_weight_review_test;
+
+#[test]
+fn face_family_preferences_try_foundry_before_relaxing_style() {
+    let mut foreign = candidate("Foreign Sans", 400, FontSlant::Normal, 0);
+    foreign.matched.metadata.foundry = Some("Other".into());
+    let mut preferred = candidate("Preferred Sans", 700, FontSlant::Normal, 0);
+    preferred.matched.metadata.foundry = Some("PfEd".into());
+    let resolver = FontResolver::new(Box::new(ScopedListingBackend {
+        candidates: vec![foreign, preferred],
+    }));
+    let selected = resolver
+        .resolve_face_font(
+            "Unavailable Family",
+            Some("pfed"),
+            400,
+            FontSlant::Normal,
+            FontWidth::Normal,
+            selection_size(),
+        )
+        .expect("unconstrained family pass with the face's foundry preference");
+    assert_eq!(selected.family(), "Preferred Sans");
+    assert_eq!(selected.weight(), Some(700));
+}
+
+#[test]
+fn face_family_preferences_relax_foundry_without_a_monospace_bias() {
+    let resolver = FontResolver::new(Box::new(ScopedListingBackend {
+        candidates: vec![
+            candidate("First Sans", 400, FontSlant::Normal, 0),
+            candidate("Second Mono", 400, FontSlant::Normal, 100),
+        ],
+    }));
+    for foundry in [None, Some("Unavailable Foundry")] {
+        let selected = resolver
+            .resolve_face_font(
+                "Unavailable Family",
+                foundry,
+                400,
+                FontSlant::Normal,
+                FontWidth::Normal,
+                selection_size(),
+            )
+            .expect("all native candidates after relaxing an unavailable foundry");
+        assert_eq!(
+            selected.family(),
+            "First Sans",
+            "native order breaks equal style scores"
+        );
+    }
+}
+
+#[test]
+fn face_family_alternatives_precede_the_unconstrained_pass() {
+    let mut preferred = candidate("Alternative", 700, FontSlant::Normal, 0);
+    preferred.matched.metadata.foundry = Some("Other".into());
+    let mut unrelated = candidate("Native First", 400, FontSlant::Normal, 100);
+    unrelated.matched.metadata.foundry = Some("PfEd".into());
+    let resolver = FontResolver::new(Box::new(ScopedListingBackend {
+        candidates: vec![unrelated, preferred],
+    }));
+    let families = CapturedFontFamilyPolicy::Inherited(
+        ["Unavailable Family".into(), "Alternative".into()]
+            .into_iter()
+            .collect(),
+    );
+    let selected = resolver
+        .resolve_face_policy(
+            &families,
+            Some("PfEd"),
+            400,
+            FontSlant::Normal,
+            FontWidth::Normal,
+            selection_size(),
+        )
+        .expect("the named alternative wins after its own foundry relaxation");
+    assert_eq!(selected.family(), "Alternative");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn native_open_by_spec_rejects_an_unavailable_family() {
+    use crate::font::metrics::test_catalog::TestFontCatalog;
+    let service = TestFontCatalog::from_files(&[neomacs_test_fonts::dejavu_2_37().mono_regular()])
+        .expect("pinned DejaVu face")
+        .to_native_fontconfig()
+        .metrics_service();
+    for family in ["Unavailable Family Alpha", "Unavailable Family Beta"] {
+        let query = FontEntityQuery::new(FontFamilyName::new(family))
+            .with_selection(FontSpecSelection::OpenBySpec);
+        assert!(
+            service.resolve_font_entity(&query).is_none(),
+            "FcFontMatch's unrelated fallback is not a mandatory family match"
+        );
+    }
+    let known = FontEntityQuery::new(FontFamilyName::new("DejaVu Sans Mono"))
+        .with_selection(FontSpecSelection::OpenBySpec);
+    assert!(service.resolve_font_entity(&known).is_some());
+}

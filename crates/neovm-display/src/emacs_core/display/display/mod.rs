@@ -1375,20 +1375,20 @@ pub fn builtin_x_frame_edges(args: Vec<Value>) -> EvalResult {
     Ok(Value::NIL)
 }
 
-/// (x-frame-geometry &optional FRAME) -> nil in batch/no-X context.
+/// (x-frame-geometry &optional FRAME) -> GNU's `frame-geometry` alist.
+///
+/// GNU's `frame-geometry` dispatches to this function on an X frame
+/// (lisp/frame.el:2164-2214) and `Fx_frame_geometry` returns the same
+/// `frame_geometry` value (src/xfns.c:7006-7008).  Neomacs reports the
+/// geometry for a window-system frame and nil when the frame has none, the
+/// same answer `neomacs-frame-geometry` gives through `frame-geometry`.
+/// GNU's `frame_geometry` starts with `decode_live_frame (frame)`
+/// (src/xfns.c:6783), so a frame value that is not live signals
+/// `wrong-type-argument frame-live-p` through the shared validation.
 #[doc(hidden)]
-pub fn builtin_x_frame_geometry(args: Vec<Value>) -> EvalResult {
+pub fn builtin_x_frame_geometry(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_max_args("x-frame-geometry", &args, 1)?;
-    if let Some(frame) = args.first()
-        && !frame.is_nil()
-        && !frame.is_frame()
-    {
-        return Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("frame-live-p"), *frame],
-        ));
-    }
-    Ok(Value::NIL)
+    neovm_eval::emacs_core::builtins::neomacs_frame_geometry_value(ctx, args.first())
 }
 
 /// (x-frame-list-z-order &optional DISPLAY) -> error in batch/no-X context.
@@ -1495,12 +1495,17 @@ fn popup_menu_string(value: Value) -> Option<String> {
 struct PopupMenuPosition {
     request_id: Option<neomacs_display_protocol::menu::MenuBarRequestId>,
     placement: neomacs_display_protocol::PopupPlacement,
+    /// POSITION came from a menu-bar posn: the dropdown hangs from its
+    /// heading, so the heading already names the menu and a synthesized
+    /// keymap-pane title row would not match the toolkit dropdown.
+    menu_bar_anchor: bool,
 }
 
 impl PopupMenuPosition {
     fn at(x: f32, y: f32) -> Self {
         Self {
             request_id: None,
+            menu_bar_anchor: false,
             // Lisp normalizes mouse events to ((X Y) WINDOW), so both event
             // and coordinate forms need native menu constraints. The point
             // is a preferred origin, not permission to extend offscreen.
@@ -1561,6 +1566,24 @@ fn popup_menu_xy(value: Value) -> Option<(f32, f32)> {
 
 fn popup_menu_position(ctx: &mut Context, position: Value) -> PopupMenuPosition {
     let symbol_mode = ctx.symbol_mode();
+    // POSITION t is GNU's `get_current_pos_p`: use the mouse's current
+    // position (src/menu.c:1145-1148, 1182-1235).  The keyboard records
+    // that position from mouse-move input; with no recorded position GNU
+    // starts the coordinates at (0, 0) on the selected frame.
+    if position == Value::T {
+        let (x, y) = ctx
+            .command_loop()
+            .keyboard
+            .mouse_pixel_position()
+            .map(|state| (state.x as f32, state.y as f32))
+            .unwrap_or((0.0, 0.0));
+        tracing::debug!(
+            x,
+            y,
+            "x-popup-menu position: t uses the current mouse position"
+        );
+        return PopupMenuPosition::at(x, y);
+    }
     let Some(items) = list_to_vec(&position) else {
         tracing::debug!("x-popup-menu position: non-list position, fallback=(0, 0)");
         return PopupMenuPosition::at(0.0, 0.0);
@@ -1655,6 +1678,7 @@ fn popup_menu_position(ctx: &mut Context, position: Value) -> PopupMenuPosition 
         return PopupMenuPosition {
             placement,
             request_id,
+            menu_bar_anchor: menu_bar,
         };
     }
     tracing::debug!(
@@ -2000,7 +2024,17 @@ fn x_popup_menu_interactive(ctx: &mut Context, position: Value, menu: Value) -> 
     // None). On TTY each submenu collapses to one `" >"` line instead of being
     // inlined; on a window-system frame the toolkit owns nested panes.
     let is_tty = selected_frame_window_system_symbol(ctx).is_none();
-    let resolved = super::menu::resolve(ctx, menu, is_tty)?;
+    let popup_position = popup_menu_position(ctx, position);
+    // GNU gives a keymap pane a name from `Fkeymap_prompt` (src/menu.c:
+    // 1301-1320).  A true GUI popup renders it as a title row; a TTY menu
+    // and a menu-bar dropdown do not (GNU's TTY Help menu starts with its
+    // first item and marks the active heading in the menu-bar row; the
+    // toolkit menu-bar dropdown has no in-menu title).
+    let keymap_pane_title = !is_tty && !popup_position.menu_bar_anchor;
+    // GNU `x_popup_menu_1` decodes all three MENU shapes -- a keymap, a
+    // list of keymaps, or an old-fashioned `(TITLE PANE...)` list -- for
+    // both window-system and TTY frames (src/menu.c:1294-1364).
+    let resolved = super::menu::resolve_popup(ctx, menu, is_tty, keymap_pane_title)?;
     let entries = resolved.entries();
     let events = resolved.events();
     if entries.is_empty() {
@@ -2016,7 +2050,6 @@ fn x_popup_menu_interactive(ctx: &mut Context, position: Value, menu: Value) -> 
         return Ok(Value::NIL);
     }
 
-    let popup_position = popup_menu_position(ctx, position);
     let placement = popup_position.placement;
     let estimated_origin = popup_position.estimated_origin();
     let (x, y) = (estimated_origin.x, estimated_origin.y);
@@ -2049,6 +2082,15 @@ fn x_popup_menu_interactive(ctx: &mut Context, position: Value, menu: Value) -> 
         .map(|frame| frame.id)
         .unwrap_or(FrameId(0));
 
+    // GNU draws a TTY menu's keymap-pane title above the first item, on the
+    // menu-bar row for a drop-down (`tty_menu_activate`, src/term.c:
+    // 3595-3599); the GUI popup path renders it as a title entry instead.
+    // The pane has a submenu, so the title carries the " >" submenu marker.
+    let tty_title = if is_tty {
+        resolved.keymap_title().map(|title| format!("{title} >"))
+    } else {
+        None
+    };
     NativePopupSession {
         request_id: popup_position.request_id,
         position,
@@ -2057,7 +2099,7 @@ fn x_popup_menu_interactive(ctx: &mut Context, position: Value, menu: Value) -> 
         visible_rows,
         placement,
         frame_id,
-        title: None,
+        title: tty_title,
         selected,
     }
     .run(ctx)
@@ -2608,12 +2650,11 @@ pub fn builtin_x_popup_menu(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
     let menu = args[1];
 
     if ctx.display_host.is_some() && ctx.input_rx().as_ref().is_some() && !position.is_nil() {
-        let map = neovm_eval::emacs_core::eval::keymap_lookup::get_keymap_in_runtime(
-            ctx, &menu, false, true,
-        )?;
-        if !map.is_nil() {
-            return x_popup_menu_interactive(ctx, position, map);
-        }
+        // Every MENU shape GNU accepts is decoded (and validated) by the
+        // interactive path now; the batch entry below remains the
+        // no-display/no-input validator, where GNU still builds the menu
+        // data but has no frame to show it on.
+        return x_popup_menu_interactive(ctx, position, menu);
     }
 
     builtin_x_popup_menu_batch(ctx, args)

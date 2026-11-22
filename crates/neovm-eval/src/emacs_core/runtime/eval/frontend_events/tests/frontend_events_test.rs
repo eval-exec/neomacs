@@ -1,4 +1,5 @@
 use super::*;
+use crate::emacs_core::eval::keyboard::NativeNonKeyKind;
 
 // Behavior expectations, independent of the production scheduling enum.
 #[derive(Debug, PartialEq, Eq)]
@@ -127,6 +128,20 @@ fn assert_policy(
 }
 
 #[test]
+fn native_nonkey_keeps_its_frame_alive_without_requesting_control_g() {
+    for frame in [0, 42, 0x1_0000_0000] {
+        let event = InputEvent::NativeNonKey {
+            kind: NativeNonKeyKind::PowerOff,
+            emacs_frame_id: frame,
+        };
+        let mut retained = Vec::new();
+        event.retained_frame_ids(&mut retained);
+        assert_eq!(retained, if frame == 0 { vec![] } else { vec![frame] });
+        assert!(!event.requests_default_quit());
+    }
+}
+
+#[test]
 fn every_transport_variant_has_locked_down_semantics() {
     use crate::emacs_core::eval::keyboard::{KeyEvent, Modifiers, MouseButton};
 
@@ -141,6 +156,10 @@ fn every_transport_variant_has_locked_down_semantics() {
             target: crate::emacs_core::eval::keyboard::TtyInputTarget::SelectedFrame,
         },
         InputEvent::key_press(KeyEvent::char('k')),
+        InputEvent::NativeNonKey {
+            kind: NativeNonKeyKind::PowerOff,
+            emacs_frame_id: 0,
+        },
         InputEvent::MousePress {
             button: MouseButton::Left,
             x: 0.0,

@@ -2791,6 +2791,23 @@ fn full_round_trip_simple_text() {
 // ---------------------------------------------------------------------------
 
 /// Build a one-row state whose text area is `glyphs`.
+/// A non-default window-background FaceFillItem covering the text row, so the
+/// reversed row's lead blanks can be asserted by their attrs, not merely as
+/// spaces (a cleared cell is also a space).
+fn add_text_row_fill(state: &mut FrameDisplayState) {
+    let mut fill_face = Face::new(FaceId::new(7));
+    fill_face.background = Color::from_pixel(0x112233);
+    fill_face.terminal_background = Some(TerminalColor::Indexed(235));
+    state.faces.insert(FaceId::new(7), fill_face);
+    state.face_fills.push(FaceFillItem {
+        window_id: DisplayWindowId::new(1),
+        row_role: GlyphRowRole::Text,
+        clip_rect: None,
+        bounds: Rect::new(0.0, 0.0, 80.0, 16.0),
+        face_id: FaceId::new(7),
+    });
+}
+
 fn state_with_text_glyphs(cols: usize, glyphs: Vec<Glyph>) -> FrameDisplayState {
     let mut state = FrameDisplayState::new(cols, 5, 8.0, 16.0);
     state.background = Color::rgb(0.0, 0.0, 0.0);
@@ -2915,6 +2932,85 @@ fn rtl_run_decomposes_into_reversed_per_letter_cells() {
     // Visual order is reversed: beh then alef.
     assert_eq!(desired_char(&rif, 0, 0), '\u{0628}'); // beh
     assert_eq!(desired_char(&rif, 0, 1), '\u{0627}'); // alef
+}
+
+#[test]
+fn rtl_short_rows_are_right_aligned_in_the_terminal() {
+    // GNU prepends the glyphs of reversed rows (src/term.c:1563-1585), so a
+    // short RTL row is drawn against the right margin, not the left.
+    let glyphs = vec![
+        Glyph::char('\u{0628}', FaceId::new(0), 1), // beh, visual left cell
+        Glyph::char('\u{0627}', FaceId::new(0), 0), // alef
+    ];
+    let mut state = state_with_text_glyphs(10, glyphs);
+    neomacs_display_protocol::glyph_matrix::MatrixRow::make_mut(
+        &mut state.window_matrices[0].matrix.rows[0],
+    )
+    .reversed_p = true;
+    add_text_row_fill(&mut state);
+    let mut rif = TtyRif::new(10, 5);
+    rif.rasterize(&state);
+    assert_eq!(desired_char(&rif, 0, 8), '\u{0628}');
+    assert_eq!(desired_char(&rif, 0, 9), '\u{0627}');
+    for col in 0..8 {
+        assert_eq!(desired_char(&rif, 0, col), ' ', "lead cell {col} is blank");
+        assert_eq!(
+            rif.desired.cells[col].attrs().bg,
+            Some(TerminalColor::Indexed(235)),
+            "lead cell {col} carries the window-background fill"
+        );
+        // The FaceFillItem alone writes these cells as plain default-face
+        // blanks.  Only the reversed-row lead fill rewrites them with the
+        // end-of-line glyph's erase identity (ends_at_zv is false, and the
+        // end glyph's face is not the canonical default slot), so this is the
+        // assertion that fails if the fill_text_area_blanks lead call is
+        // removed.
+        assert_eq!(
+            rif.desired.cells[col].blank_erase(),
+            BlankErase::Explicit,
+            "lead cell {col} was written by the reversed-row lead fill"
+        );
+    }
+}
+
+#[test]
+fn rtl_composite_run_is_right_aligned_in_the_terminal() {
+    // The same row as `rtl_run_decomposes_into_reversed_per_letter_cells`, but
+    // with the paragraph base direction R2L: two terminal cells end at the
+    // right margin.
+    let glyphs = vec![
+        run_composite("\u{0627}\u{0628}", 1),
+        run_member_padding('\u{0628}', 1),
+    ];
+    let mut state = state_with_text_glyphs(10, glyphs);
+    neomacs_display_protocol::glyph_matrix::MatrixRow::make_mut(
+        &mut state.window_matrices[0].matrix.rows[0],
+    )
+    .reversed_p = true;
+    add_text_row_fill(&mut state);
+    let mut rif = TtyRif::new(10, 5);
+    rif.rasterize(&state);
+    assert_eq!(desired_char(&rif, 0, 8), '\u{0628}'); // beh
+    assert_eq!(desired_char(&rif, 0, 9), '\u{0627}'); // alef
+    for col in 0..8 {
+        assert_eq!(desired_char(&rif, 0, col), ' ', "lead cell {col} is blank");
+        assert_eq!(
+            rif.desired.cells[col].attrs().bg,
+            Some(TerminalColor::Indexed(235)),
+            "lead cell {col} carries the window-background fill"
+        );
+        // The FaceFillItem alone writes these cells as plain default-face
+        // blanks.  Only the reversed-row lead fill rewrites them with the
+        // end-of-line glyph's erase identity (ends_at_zv is false, and the
+        // end glyph's face is not the canonical default slot), so this is the
+        // assertion that fails if the fill_text_area_blanks lead call is
+        // removed.
+        assert_eq!(
+            rif.desired.cells[col].blank_erase(),
+            BlankErase::Explicit,
+            "lead cell {col} was written by the reversed-row lead fill"
+        );
+    }
 }
 
 #[test]

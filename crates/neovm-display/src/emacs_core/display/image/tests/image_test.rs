@@ -2349,3 +2349,53 @@ fn image_spec_animation_policy_parses_the_neomacs_extension() {
             .expect(":animation 0 resolves");
     assert_eq!(rejected.animation, ImageAnimationPolicy::disabled());
 }
+
+#[test]
+fn gif_metadata_keeps_reverse_block_order_and_unibyte_payloads() {
+    crate::test_utils::init_test_tracing();
+    use neomacs_display_protocol::image::ImageExtensionBlock;
+    let metadata = ImageEmbeddedMetadata::gif(
+        1,
+        vec![
+            ImageExtensionBlock {
+                function: 254,
+                bytes: vec![255, 128],
+            },
+            ImageExtensionBlock {
+                function: 249,
+                bytes: vec![1, 10, 0, 0],
+            },
+        ],
+    );
+    let value = image_embedded_metadata_to_lisp(&metadata);
+    let plist = list_to_vec(&value).unwrap();
+    assert_eq!(plist[0], Value::symbol("delay"));
+    assert_eq!(plist[1].as_float(), Some(0.1));
+    assert_eq!(plist[2], Value::symbol("extension-data"));
+    let blocks = list_to_vec(&plist[3]).unwrap();
+    assert_eq!(blocks[0], Value::fixnum(249));
+    assert_eq!(blocks[2], Value::fixnum(254));
+    for (index, bytes) in [(1, &[1, 10, 0, 0][..]), (3, &[255, 128][..])] {
+        let string = blocks[index].as_lisp_string().unwrap();
+        assert!(!string.is_multibyte());
+        assert_eq!(string.as_bytes(), bytes);
+    }
+}
+
+#[test]
+fn webp_metadata_publishes_delay_before_count_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let value = image_embedded_metadata_to_lisp(&ImageEmbeddedMetadata::webp(
+        2,
+        ImageFrameDelay::milliseconds(20, 1).unwrap(),
+    ));
+    assert_eq!(
+        list_to_vec(&value).unwrap(),
+        vec![
+            Value::symbol("delay"),
+            Value::make_float(0.02),
+            Value::symbol("count"),
+            Value::fixnum(2),
+        ]
+    );
+}

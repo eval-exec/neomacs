@@ -661,7 +661,7 @@ fn mapcar_activation_retier_and_cache_retirement_use_the_existing_entry() {
             "retier admission control matched after current-epoch reacquisition"
         );
     }
-    cache::clear();
+    cache::clear_with_serial_receipt().expect("serial jit grace");
     assert_eq!(
         print_value(&builtin_mapcar_2(&mut ctx, function, input).unwrap()),
         "(11 22)"

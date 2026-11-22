@@ -231,6 +231,8 @@ fn ccl_symbol_plist(symbol: SymId) -> Option<Value> {
 
 mod registry_detach;
 #[doc(hidden)]
+pub use registry_detach::detach_ccl_registry;
+#[doc(hidden)]
 pub mod source_scope;
 
 thread_local! {

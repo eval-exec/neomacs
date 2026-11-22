@@ -67,6 +67,14 @@ pub use keeper::EraKeeper;
 #[doc(hidden)]
 pub use keeper::{FrozenFunctionRoots, FrozenLegacyRoots};
 mod world_loan;
+// `cfg(test)` alone leaves these types `pub(crate)`. A `pub use` in that
+// build is rejected. Eval tests see them through `test-support`, which also
+// makes the types and this module public.
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub use world_loan::retained::{
+    OwnerRecoveryError, RetainedEraOwner, RetainedOwnerRecoveryFailure,
+};
 #[doc(hidden)]
 pub use world_loan::{EraWorldLoan, SymbolRootDesignators, WorldIdentity, WorldLoan};
 mod gate;
@@ -88,6 +96,7 @@ pub use run_slice::SliceRoot;
     not(feature = "gc-memory-telemetry")
 ))]
 pub(crate) mod c5_intern_testkit;
+pub(crate) mod custody_brand;
 mod rendezvous;
 mod summaries;
 #[cfg(not(feature = "test-support"))]
@@ -123,7 +132,7 @@ pub use native_extent::NativeReturn;
 pub use native_extent::NativeRoots;
 pub use rendezvous::Rendezvous;
 pub use rendezvous::ResumeGcImage;
-pub use rendezvous::{AllStopped, Mode, Phase, RendezvousError, Request, Snapshot};
+pub use rendezvous::{AllStopped, Mode, Phase, PollOutcome, RendezvousError, Request, Snapshot};
 pub use rendezvous::{AllStoppedFailure, ResumeGcImageFailure, RootedRetireFailure};
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) use rendezvous::{OwnerRootAdmission, StoppedRootAdmission};
@@ -1058,6 +1067,15 @@ pub(crate) use cons_allocation_tests::{
     ConsAllocationCase, CreditsFixture, CreditsResult, RootsFixture, run_cons_allocation_test,
 };
 
+#[cfg(all(
+    any(test, feature = "test-support"),
+    not(feature = "gc-memory-telemetry")
+))]
+pub use collection::{
+    StoppedAdapterEphemeronFixture, StoppedAdapterResourceFixture,
+    assert_stopped_adapter_ephemerons, assert_stopped_adapter_resources,
+    prepare_stopped_adapter_ephemerons, prepare_stopped_adapter_resources,
+};
 #[cfg(all(
     any(test, feature = "test-support"),
     not(feature = "gc-memory-telemetry")

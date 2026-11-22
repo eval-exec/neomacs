@@ -189,6 +189,8 @@ pub(crate) mod vframe;
 /// calls ([`cache::try_run_compiled`]). Only built with the `jit` feature.
 #[cfg(feature = "jit")]
 pub mod cache;
+#[cfg(feature = "jit")]
+pub(crate) mod source_suspension;
 
 /// Bytecode-level inlining (see the module docs).
 #[cfg(feature = "jit")]
@@ -1841,6 +1843,14 @@ mod green_release_tests;
 #[cfg(all(test, feature = "jit", not(feature = "gc-memory-telemetry")))]
 #[path = "tests/p3sym_functions_test.rs"]
 mod p3sym_functions_tests;
+
+#[cfg(all(test, feature = "jit"))]
+#[path = "tests/n5_clear_inside_entry_test.rs"]
+mod n5_clear_inside_entry_tests;
+
+#[cfg(all(test, feature = "jit", feature = "release-native-depth"))]
+#[path = "tests/n5_release_extent_test.rs"]
+mod n5_release_extent_tests;
 
 /// Debug-only carrier TLS fingerprint for the JIT subsystem.
 #[cfg(debug_assertions)]

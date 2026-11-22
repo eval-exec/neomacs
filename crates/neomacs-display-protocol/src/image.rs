@@ -808,9 +808,30 @@ impl ImageFrameDelay {
 pub struct ImageEmbeddedMetadata {
     frame_count: Option<std::num::NonZeroU32>,
     frame_delay: Option<ImageFrameDelay>,
+    #[serde(default)]
+    property_order: ImageMetadataOrder,
+    #[serde(default)]
+    gif_extensions: Option<Vec<ImageExtensionBlock>>,
     /// Neomacs computed sources can have a prefix played only once.
     #[serde(default)]
     introduction: Option<ImageSequenceIntroduction>,
+}
+
+/// Decoder-specific order of the observable Lisp metadata plist.
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Hash, PartialEq, serde::Serialize, serde::Deserialize,
+)]
+pub enum ImageMetadataOrder {
+    #[default]
+    CountThenDelay,
+    DelayThenCount,
+}
+
+/// One GIF extension sub-block, before conversion to an unibyte Lisp string.
+#[derive(Clone, Debug, Eq, Hash, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ImageExtensionBlock {
+    pub function: u8,
+    pub bytes: Vec<u8>,
 }
 
 /// A prefix and its repeating tail have independently quantized delays.
@@ -826,6 +847,8 @@ impl ImageEmbeddedMetadata {
     pub const EMPTY: Self = Self {
         frame_count: None,
         frame_delay: None,
+        property_order: ImageMetadataOrder::CountThenDelay,
+        gif_extensions: None,
         introduction: None,
     };
 
@@ -834,8 +857,69 @@ impl ImageEmbeddedMetadata {
         Self {
             frame_count: std::num::NonZeroU32::new(frame_count).filter(|count| count.get() > 1),
             frame_delay: Some(frame_delay),
+            property_order: ImageMetadataOrder::CountThenDelay,
+            gif_extensions: None,
             introduction: None,
         }
+    }
+
+    /// TIFF directory count is navigation metadata, without an animation delay.
+    #[must_use]
+    pub fn pages(frame_count: u32) -> Self {
+        Self {
+            frame_count: std::num::NonZeroU32::new(frame_count).filter(|count| count.get() > 1),
+            ..Self::EMPTY
+        }
+    }
+
+    /// WebP prepends delay after count (GNU image.c:10817-10829).
+    #[must_use]
+    pub fn webp(frame_count: u32, frame_delay: ImageFrameDelay) -> Self {
+        Self {
+            frame_count: std::num::NonZeroU32::new(frame_count),
+            property_order: ImageMetadataOrder::DelayThenCount,
+            ..Self::animation(frame_count, frame_delay)
+        }
+    }
+
+    #[must_use]
+    pub const fn property_order(&self) -> ImageMetadataOrder {
+        self.property_order
+    }
+
+    /// GNU image.c keeps selected-frame GIF extensions even for one frame.
+    /// A frame without extensions has no delay property; an extension without
+    /// a nonzero graphics-control delay uses the Lisp default-delay marker.
+    #[must_use]
+    pub fn gif(frame_count: u32, extensions: Vec<ImageExtensionBlock>) -> Self {
+        let delay = extensions.iter().fold(0, |delay, block| {
+            if block.function == 0xf9 && block.bytes.len() == 4 {
+                u16::from_le_bytes([block.bytes[1], block.bytes[2]])
+            } else {
+                delay
+            }
+        });
+        Self {
+            frame_count: std::num::NonZeroU32::new(frame_count).filter(|count| count.get() > 1),
+            frame_delay: (!extensions.is_empty()).then(|| {
+                if delay == 0 {
+                    ImageFrameDelay::UseDefault
+                } else {
+                    ImageFrameDelay::Milliseconds {
+                        numerator: u32::from(delay) * 10,
+                        denominator: std::num::NonZeroU32::MIN,
+                    }
+                }
+            }),
+            property_order: ImageMetadataOrder::CountThenDelay,
+            gif_extensions: Some(extensions),
+            introduction: None,
+        }
+    }
+
+    #[must_use]
+    pub fn gif_extensions(&self) -> Option<&[ImageExtensionBlock]> {
+        self.gif_extensions.as_deref()
     }
 
     /// Set the first repeatable frame, validating it against this sequence.

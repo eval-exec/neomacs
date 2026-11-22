@@ -222,6 +222,20 @@ pub(crate) fn overlay_snapshot_copy_count() -> usize {
 }
 
 #[cfg(test)]
+static OVERLAY_CONTENT_COMPONENT_SCANS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(test)]
+pub(crate) fn reset_overlay_content_component_scan_count() {
+    OVERLAY_CONTENT_COMPONENT_SCANS.store(0, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(test)]
+pub(crate) fn overlay_content_component_scan_count() -> usize {
+    OVERLAY_CONTENT_COMPONENT_SCANS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[cfg(test)]
 static OVERLAY_MIRROR_CANDIDATES: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 
@@ -243,6 +257,21 @@ pub struct OverlayList {
     // negative cache prevents Bloom collisions from causing full scans on
     // every redisplay. Membership and property writes clear it with snapshots.
     absent_properties: Cell<[Option<neovm_value::intern::SymId>; 8]>,
+    // Commutative multiset hash of the rendered overlay content: positions and
+    // rendered plist properties. A membership, position or plist write adds or
+    // subtracts one overlay's component, so the whole-buffer digest redisplay
+    // compares every frame is O(1). Bulk changes (a text edit shifting many
+    // overlays, a remap) mark it dirty and rebuild once on demand.
+    content_component_sum: Cell<u64>,
+    content_unhashable: Cell<usize>,
+    content_dirty: Cell<bool>,
+    // A window-range view captured by `snapshot_in_range` answers completely
+    // only for positions at or after the capture floor. A layout query below
+    // that floor sees a subset of the overlays, so redisplay must discard the
+    // attempt and retry with the whole-buffer view. None on a whole-buffer
+    // list, which makes the start-side check a no-op there.
+    view_query_floor: Option<EmacsBytePos>,
+    view_query_underflow: Cell<bool>,
 }
 #[cfg(any(test, feature = "test-support"))]
 pub struct OverlayList {
@@ -252,6 +281,12 @@ pub struct OverlayList {
     // negative cache prevents Bloom collisions from causing full scans on
     // every redisplay. Membership and property writes clear it with snapshots.
     absent_properties: Cell<[Option<neovm_value::intern::SymId>; 8]>,
+    // See the production struct's comment.
+    content_component_sum: Cell<u64>,
+    content_unhashable: Cell<usize>,
+    content_dirty: Cell<bool>,
+    view_query_floor: Option<EmacsBytePos>,
+    view_query_underflow: Cell<bool>,
 }
 
 /// An evaluator-owned immutable overlay index. Like overlay plist values,
@@ -265,6 +300,14 @@ impl std::ops::Deref for OverlaySnapshot {
     fn deref(&self) -> &Self::Target {
         &self.0
     }
+}
+
+/// One overlay's contribution to the commutative content hash. A category
+/// indirection cannot be hashed from the overlay alone.
+#[derive(Clone, Copy)]
+enum OverlayContentComponent {
+    Hashable(u64),
+    CategoryIndirection,
 }
 
 #[derive(Clone, Copy)]
@@ -304,6 +347,18 @@ impl OverlayList {
         let snapshot = OverlaySnapshot(Rc::new(self.snapshot_clone()));
         *self.snapshot.borrow_mut() = Some(snapshot.clone());
         snapshot
+    }
+
+    /// Immutable view of the overlays a layout walk can observe inside
+    /// `range`. Unlike [`Self::snapshot`] it copies only the in-range entries,
+    /// so its cost follows the window, not the buffer's overlay count.
+    pub(crate) fn snapshot_in_range(&self, range: EmacsByteRange) -> OverlaySnapshot {
+        let mut view = self.snapshot_clone_in_range(range);
+        // The captured view is complete from this floor up: the index query
+        // above starts one position before the span so that an overlay ending
+        // exactly at `range.start` is still present for its after-string.
+        view.view_query_floor = Some(Self::view_query_range(range).start());
+        OverlaySnapshot(Rc::new(view))
     }
 
     fn invalidate_snapshot(&mut self) {
@@ -364,6 +419,7 @@ impl OverlayList {
         let _ = copy.with_overlay_data_mut(|data| {
             data.plist = plist;
         });
+        self.content_dirty.set(true);
         self.invalidate_snapshot();
         self.index.overlay_properties_changed(copy);
         true
@@ -372,6 +428,9 @@ impl OverlayList {
     /// Apply a text edit to this list's index and overlay objects.
     fn apply_text_edit(&mut self, edit: OverlayTextEdit) -> OverlayEditOrder {
         self.absent_properties.set([None; 8]);
+        // A text edit shifts or evaporates an unbounded number of overlays;
+        // rebuild the commutative component sum once on the next digest.
+        self.content_dirty.set(true);
         let outcome = self.index.adjust_for_text_edit(edit);
         self.apply_edit_effects(outcome.effects);
         outcome.order
@@ -428,14 +487,49 @@ impl OverlayList {
     /// `compare_overlays` tiebreak merely because redisplay took a snapshot.
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn snapshot_clone(&self) -> Self {
-        self.clone_with_identity(OverlayCloneIdentity::PreservePrecedence)
+        self.clone_selected_with_identity(
+            self.index.all_ascending(),
+            OverlayCloneIdentity::PreservePrecedence,
+        )
+    }
+
+    /// Copy only the overlays an observer can read inside `range`.
+    ///
+    /// A layout walk reads overlays through a window-bounded view, so copying
+    /// the whole buffer's overlay set makes redisplay O(total overlays). The
+    /// query includes overlays that start before the range and overlap it and
+    /// empty overlays inside it, exactly the set a query at an in-range
+    /// position can observe.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn snapshot_clone_in_range(&self, range: EmacsByteRange) -> Self {
+        self.clone_selected_with_identity(
+            self.index
+                .overlays_in_region(Self::view_query_range(range), range.end()),
+            OverlayCloneIdentity::PreservePrecedence,
+        )
+    }
+
+    /// Include overlays that end exactly at `range.start`: a query at that
+    /// position can still read their after-string. The end is kept exclusive
+    /// through `accessible_end = range.end()` in the index query.
+    fn view_query_range(range: EmacsByteRange) -> EmacsByteRange {
+        EmacsByteRange::new(
+            EmacsBytePos::new(range.start().get().saturating_sub(1)),
+            range.end(),
+        )
     }
 
     fn clone_with_identity(&self, identity: OverlayCloneIdentity) -> Self {
+        self.clone_selected_with_identity(self.index.all_ascending(), identity)
+    }
+
+    fn clone_selected_with_identity(
+        &self,
+        selected: Vec<Value>,
+        identity: OverlayCloneIdentity,
+    ) -> Self {
         let saved_roots = save_scratch_gc_roots();
-        let entries: Vec<_> = self
-            .index
-            .all_ascending()
+        let entries: Vec<_> = selected
             .into_iter()
             .map(|overlay| {
                 let data = overlay
@@ -489,6 +583,7 @@ impl OverlayList {
         };
         let attached = cloned.index.attach_batch(&entries, batch_order);
         debug_assert!(attached, "fresh overlay clone index rejected its batch");
+        cloned.content_dirty.set(true);
         restore_scratch_gc_roots(saved_roots);
         cloned
     }
@@ -1004,6 +1099,11 @@ impl OverlayList {
             index: OverlayIndex::new(),
             snapshot: RefCell::new(None),
             absent_properties: Cell::new([None; 8]),
+            content_component_sum: Cell::new(0),
+            content_unhashable: Cell::new(0),
+            content_dirty: Cell::new(false),
+            view_query_floor: None,
+            view_query_underflow: Cell::new(false),
         }
     }
 
@@ -1020,12 +1120,20 @@ impl OverlayList {
         // overlay already owned by this index is rejected, while cross-buffer
         // moves materialize and rewrite the coordinates before reattaching.
         let range = EmacsByteRange::from_usize(data.start, data.end);
-        self.index_mut().attach(overlay, range);
+        if self.index_mut().attach(overlay, range) {
+            self.add_overlay_content_component(overlay);
+        }
     }
 
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn detach_overlay(&mut self, overlay: Value) -> bool {
-        self.index_mut().detach(overlay).is_some()
+        let component = self.overlay_content_component(overlay);
+        if self.index_mut().detach(overlay).is_some() {
+            self.subtract_overlay_content_component(component);
+            true
+        } else {
+            false
+        }
     }
 
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -1048,6 +1156,9 @@ impl OverlayList {
             });
         }
         self.index.clear();
+        self.content_component_sum.set(0);
+        self.content_unhashable.set(0);
+        self.content_dirty.set(false);
     }
 
     pub(crate) fn retarget_buffer(&mut self, from: BufferId, to: BufferId) {
@@ -1069,6 +1180,7 @@ impl OverlayList {
         value: Value,
     ) -> Result<bool, Flow> {
         neovm_value::symbol::SymbolPropertyRevision::observe_category_property(prop, value);
+        let previous_component = self.overlay_content_component(overlay);
         let (changed, plist_replaced) = overlay
             .with_overlay_data_mut(|data| {
                 let (plist, changed) = overlay_plist_put(data.plist, prop, value);
@@ -1082,6 +1194,7 @@ impl OverlayList {
         if changed || plist_replaced {
             self.absent_properties.set([None; 8]);
             self.index.overlay_properties_changed(overlay);
+            self.replace_overlay_content_component(previous_component, overlay);
             self.retain_snapshot_if(|live, snapshot| {
                 live.range(overlay)
                     .is_some_and(|range| snapshot.mirror_plist_write(overlay, range.start()))
@@ -1140,6 +1253,7 @@ impl OverlayList {
         overlay: Value,
         range: EmacsByteRange,
     ) {
+        let previous_component = self.overlay_content_component(overlay);
         if self.index_mut().move_to(overlay, range).is_none() {
             return;
         }
@@ -1147,6 +1261,7 @@ impl OverlayList {
             data.start = range.start().get();
             data.end = range.end().get();
         });
+        self.replace_overlay_content_component(previous_component, overlay);
         // GNU Emacs drops empty overlays created by move-overlay when
         // `evaporate' is non-nil. Minibuffer shadow overlays depend on this
         // to avoid leaking stale before/after-strings into later prompts.
@@ -1182,9 +1297,25 @@ impl OverlayList {
                 data.end = remap.range.end().get();
             });
         }
+        self.content_dirty.set(true);
+    }
+
+    /// Note that a layout query starts at `pos`. A window-range view is
+    /// complete only at or above its capture floor.
+    fn note_overlay_view_query(&self, pos: EmacsBytePos) {
+        if self.view_query_floor.is_some_and(|floor| pos < floor) {
+            self.view_query_underflow.set(true);
+        }
+    }
+
+    /// Whether a window-range view was queried below its capture floor.
+    /// Always false for a whole-buffer list.
+    pub fn overlay_view_query_underflowed(&self) -> bool {
+        self.view_query_underflow.get()
     }
 
     pub fn overlays_at_emacs_byte_pos(&self, pos: EmacsBytePos) -> Vec<Value> {
+        self.note_overlay_view_query(pos);
         self.index.overlays_at(pos)
     }
 
@@ -1193,6 +1324,7 @@ impl OverlayList {
         &self,
         pos: EmacsBytePos,
     ) -> impl Iterator<Item = Value> + '_ {
+        self.note_overlay_view_query(pos);
         self.index.overlays_at_iter(pos)
     }
 
@@ -1204,6 +1336,7 @@ impl OverlayList {
     /// of narrowing (buffer.c:4012; itree.c:1200-1205). Empty intervals at Z
     /// are therefore omitted when BEG differs from Z.
     pub(crate) fn overlays_in_gnu_full_region(&self, range: EmacsByteRange) -> Vec<Value> {
+        self.note_overlay_view_query(range.start());
         self.index.overlays_intersecting(range)
     }
 
@@ -1265,42 +1398,115 @@ impl OverlayList {
     /// often -- over-invalidating costs a redisplay, under-invalidating
     /// leaves a stale frame on screen.
     pub fn content_digest(&self) -> Option<u64> {
+        self.ensure_content_components();
+        if self.content_unhashable.get() > 0 {
+            None
+        } else {
+            Some(self.content_component_sum.get())
+        }
+    }
+
+    /// Recompute the commutative component sum without the incremental
+    /// update paths. Test-only: it is the oracle those paths are checked
+    /// against.
+    #[cfg(test)]
+    pub(crate) fn content_digest_from_scratch_for_test(&self) -> Option<u64> {
+        let mut sum = 0u64;
+        let mut unhashable = 0usize;
+        for overlay in self.index.all_ascending() {
+            match self.overlay_content_component(overlay) {
+                OverlayContentComponent::Hashable(hash) => sum = sum.wrapping_add(hash),
+                OverlayContentComponent::CategoryIndirection => unhashable += 1,
+            }
+        }
+        (unhashable == 0).then_some(sum)
+    }
+
+    fn ensure_content_components(&self) {
+        if !self.content_dirty.get() {
+            return;
+        }
+        let mut sum = 0u64;
+        let mut unhashable = 0usize;
+        for overlay in self.index.all_ascending() {
+            #[cfg(test)]
+            OVERLAY_CONTENT_COMPONENT_SCANS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            match self.overlay_content_component(overlay) {
+                OverlayContentComponent::Hashable(hash) => sum = sum.wrapping_add(hash),
+                OverlayContentComponent::CategoryIndirection => unhashable += 1,
+            }
+        }
+        self.content_component_sum.set(sum);
+        self.content_unhashable.set(unhashable);
+        self.content_dirty.set(false);
+    }
+
+    fn add_overlay_content_component(&self, overlay: Value) {
+        match self.overlay_content_component(overlay) {
+            OverlayContentComponent::Hashable(hash) => self
+                .content_component_sum
+                .set(self.content_component_sum.get().wrapping_add(hash)),
+            OverlayContentComponent::CategoryIndirection => {
+                self.content_unhashable
+                    .set(self.content_unhashable.get() + 1);
+            }
+        }
+    }
+
+    fn subtract_overlay_content_component(&self, component: OverlayContentComponent) {
+        match component {
+            OverlayContentComponent::Hashable(hash) => self
+                .content_component_sum
+                .set(self.content_component_sum.get().wrapping_sub(hash)),
+            OverlayContentComponent::CategoryIndirection => {
+                let count = self.content_unhashable.get();
+                debug_assert!(count > 0, "category component removed without an owner");
+                self.content_unhashable.set(count.saturating_sub(1));
+            }
+        }
+    }
+
+    fn replace_overlay_content_component(&self, previous: OverlayContentComponent, overlay: Value) {
+        self.subtract_overlay_content_component(previous);
+        self.add_overlay_content_component(overlay);
+    }
+
+    /// One overlay's contribution to the commutative content hash: its
+    /// positions plus every rendered plist property. A category indirection is
+    /// unhashable because the real properties live on a symbol plist nothing
+    /// here can watch, matching [`Self::content_digest_of`]'s refusal.
+    fn overlay_content_component(&self, overlay: Value) -> OverlayContentComponent {
         use std::hash::Hasher;
 
         let properties = DisplayOverlayProperties::intern();
         let mut hasher = rustc_hash::FxHasher::default();
-        for overlay in self.index.all_ascending() {
-            hasher.write_u64(
-                self.overlay_start_emacs_byte_pos(overlay)
-                    .map_or(u64::MAX, |p| p.get() as u64),
-            );
-            hasher.write_u64(
-                self.overlay_end_emacs_byte_pos(overlay)
-                    .map_or(u64::MAX, |p| p.get() as u64),
-            );
-            let Some(plist) = self.overlay_plist(overlay) else {
-                hasher.write_u8(0xff);
-                continue;
-            };
-            let mut cursor = plist;
-            while cursor.is_cons() {
-                let key = cursor.cons_car();
-                let rest = cursor.cons_cdr();
-                if !rest.is_cons() {
-                    break;
-                }
-                match properties.classify(key) {
-                    OverlayPropertyRelevance::CategoryIndirection => return None,
-                    OverlayPropertyRelevance::Rendered => {
-                        hash_value_content(key, 0, &mut hasher);
-                        hash_value_content(rest.cons_car(), 0, &mut hasher);
-                    }
-                    OverlayPropertyRelevance::Unrendered => {}
-                }
-                cursor = rest.cons_cdr();
+        let range = self.index.range(overlay);
+        hasher.write_u64(range.map_or(u64::MAX, |range| range.start().get() as u64));
+        hasher.write_u64(range.map_or(u64::MAX, |range| range.end().get() as u64));
+        let Some(plist) = self.overlay_plist(overlay) else {
+            hasher.write_u8(0xff);
+            return OverlayContentComponent::Hashable(hasher.finish());
+        };
+        let mut cursor = plist;
+        while cursor.is_cons() {
+            let key = cursor.cons_car();
+            let rest = cursor.cons_cdr();
+            if !rest.is_cons() {
+                break;
             }
+            match properties.classify(key) {
+                OverlayPropertyRelevance::CategoryIndirection => {
+                    return OverlayContentComponent::CategoryIndirection;
+                }
+                OverlayPropertyRelevance::Rendered => {
+                    hash_value_content(key, 0, &mut hasher);
+                    hash_value_content(rest.cons_car(), 0, &mut hasher);
+                }
+                OverlayPropertyRelevance::Unrendered => {}
+            }
+            cursor = rest.cons_cdr();
         }
-        Some(hasher.finish())
+        OverlayContentComponent::Hashable(hasher.finish())
     }
 
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -1309,6 +1515,7 @@ impl OverlayList {
         range: EmacsByteRange,
         accessible_end: EmacsBytePos,
     ) -> Vec<Value> {
+        self.note_overlay_view_query(range.start());
         self.index.overlays_in_region(range, accessible_end)
     }
 
@@ -1318,6 +1525,7 @@ impl OverlayList {
         range: EmacsByteRange,
         accessible_end: EmacsBytePos,
     ) -> impl Iterator<Item = Value> + '_ {
+        self.note_overlay_view_query(range.start());
         self.index.overlays_in_region_iter(range, accessible_end)
     }
 
@@ -1844,18 +2052,20 @@ impl OverlayList {
         pos: EmacsBytePos,
         limit: EmacsBytePos,
     ) -> Option<EmacsBytePos> {
+        self.note_overlay_view_query(pos);
         self.index.next_boundary_after(pos, limit)
     }
 
     /// Return the next endpoint without allocating or publishing a lazy index.
-    /// Until the endpoint index exists, this borrows and scans interval records
-    /// in O(overlays); subsequent queries reuse the existing endpoint tree.
+    /// Until the endpoint index exists, this combines the next interval start
+    /// with ends of intervals containing `pos`; later queries reuse the tree.
     #[doc(hidden)]
     pub fn next_boundary_after_until_emacs_byte_pos_no_alloc(
         &self,
         pos: EmacsBytePos,
         limit: EmacsBytePos,
     ) -> Option<EmacsBytePos> {
+        self.note_overlay_view_query(pos);
         self.index.next_boundary_after_no_alloc(pos, limit)
     }
 
@@ -1872,6 +2082,7 @@ impl OverlayList {
         pos: EmacsBytePos,
         limit: EmacsBytePos,
     ) -> Option<EmacsBytePos> {
+        self.note_overlay_view_query(pos);
         self.index.previous_boundary_before(pos, limit)
     }
 

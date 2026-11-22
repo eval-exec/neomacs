@@ -170,6 +170,7 @@ fn unseen_row_worker_glyphs_match_canonical_window_body() {
             window.0,
             window_bounds,
             ncols,
+            crate::bidi::ParagraphDirection::Auto,
             mode,
         )
     })

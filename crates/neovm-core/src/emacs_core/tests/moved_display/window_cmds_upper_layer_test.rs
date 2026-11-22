@@ -2088,3 +2088,224 @@ fn scroll_down_skips_invisible_logical_lines_when_measuring_a_page() {
     );
     assert_eq!(results[0], "OK (35 2 1 70 nil)");
 }
+
+/// A truncated long line followed by 200 short lines, with the buffer's
+/// long-line flag set as redisplay would set it.
+fn long_line_scroll_context(long_len: usize) -> Context {
+    long_line_scroll_context_with_threshold(long_len, 50_000)
+}
+
+/// The same fixture with an explicit long-line threshold, so a short first
+/// line can take the same long-lines scroll path.
+fn long_line_scroll_context_with_threshold(long_len: usize, threshold: i64) -> Context {
+    let mut ev = crate::test_utils::new_context();
+    // `eval_with_frame` creates and selects its own empty `*scratch*` buffer
+    // after this context is built, so the text lives in a namespaced buffer
+    // and each form switches the selected window to it explicitly.
+    let buffer = ev.edit.buffers.create_buffer("*p640-scroll*");
+    ev.edit.buffers.set_current(buffer);
+    {
+        let buf = ev.edit.buffers.get_mut(buffer).expect("buffer");
+        buf.insert("a".repeat(long_len).as_str());
+        buf.insert("\n");
+        let mut filler = String::new();
+        // The unit frame can be tall: a whole GNU scroll moves
+        // max(1, ht - next-screen-context-lines) lines, so keep more than
+        // 3 * any plausible ht.  Starting from the window start (GNU's
+        // window_scroll_for_long_lines) must still land before ZV.
+        for index in 0..2000 {
+            filler.push_str(&format!("L{index:03} line\n"));
+        }
+        buf.insert(&filler);
+        buf.set_buffer_local("truncate-lines", Value::T);
+    }
+    assert!(
+        ev.edit
+            .buffers
+            .get_mut(buffer)
+            .expect("buffer")
+            .refresh_long_line_optimizations(threshold),
+        "the first line must exceed the requested long-line threshold"
+    );
+    ev.eval_str("(goto-char 1)").expect("point");
+    ev.store_variable_by_name("p640-scroll-buffer", Value::make_buffer(buffer));
+    ev
+}
+
+/// GNU `window_scroll_for_long_lines` (`src/window.c:6242-6315`): a whole
+/// `scroll-up` on a long truncated line moves `max(1, ht - nscls)` lines and
+/// leaves point at `ht/2` lines below the new window start.  The parent path
+/// (screen-line plan) is not this algorithm.
+#[test]
+fn scroll_up_long_truncated_uses_gnu_line_motion() {
+    crate::test_utils::init_test_tracing();
+    let results = eval_with_frame(
+        || long_line_scroll_context(200_000),
+        "(progn
+           (set-buffer p640-scroll-buffer)
+           (set-window-buffer (selected-window) (current-buffer))
+           (let* ((ht (window-body-height))
+                  (ns (if (boundp 'next-screen-context-lines)
+                          next-screen-context-lines
+                        2))
+                  (n (max 1 (- ht ns))))
+             (set-window-start (selected-window) 1)
+             (set-window-point (selected-window) 1)
+             (goto-char 1)
+             (redisplay t)
+             (scroll-up)
+             (let ((start (window-start))
+                   (pt (window-point)))
+               (save-excursion
+                 (goto-char 1)
+                 (forward-line n)
+                 (let ((expected-start (point)))
+                   (forward-line (/ ht 2))
+                   (list (= start expected-start)
+                         (= pt (point))
+                         (= pt (point-max))))))))
+           (window-body-height)",
+    );
+    assert_eq!(
+        results[0], "OK (t t nil)",
+        "whole scroll-up must take GNU's long-lines motion: {results:?}"
+    );
+}
+
+/// The long-lines scroll must not scan the long line: the work is bounded by
+/// the number of window lines moved, so first lines of 200, 200k and 400k
+/// characters cost exactly the same.  GNU's own vmotion runs one
+/// compute_motion pass per line moved.
+///
+/// Every fixture takes GNU's long-lines scroll path: each first line exceeds
+/// the threshold that sets the flag (for the 200-character baseline the
+/// threshold is lowered with `refresh_long_line_optimizations`).  The counter
+/// it measures advances once per CHARACTER inside one screen-line scan, so a
+/// truncated long line costs only up to the window width; a per-character
+/// walk of the line itself would make the 2000x longer lines diverge.
+#[test]
+fn scroll_up_long_line_work_does_not_grow_with_the_line() {
+    crate::test_utils::init_test_tracing();
+    let fixtures = [(200usize, 100i64), (200_000, 50_000), (400_000, 50_000)];
+    let mut work = Vec::new();
+    let mut heights = Vec::new();
+    for (long_len, threshold) in fixtures {
+        let mut ev = long_line_scroll_context_with_threshold(long_len, threshold);
+        // Setup and the flag-setting redisplay are NOT part of the measured
+        // scroll: only the scroll path's own line motion is counted.
+        ev.eval_str(
+            "(progn (set-buffer p640-scroll-buffer)
+                    (set-window-buffer (selected-window) (current-buffer))
+                    (set-window-start (selected-window) 1)
+                    (set-window-point (selected-window) 1)
+                    (goto-char 1)
+                    (redisplay t)
+                    nil)",
+        )
+        .expect("scroll setup");
+        heights.push(
+            ev.eval_str("(window-body-height)")
+                .expect("body height")
+                .as_int()
+                .expect("fixnum"),
+        );
+        neovm_edit::test_support::authority::reset_screen_line_scan_steps_for_test();
+        ev.eval_str("(scroll-up)")
+            .expect("scroll-up on the long-line buffer");
+        work.push(neovm_edit::test_support::authority::screen_line_scan_steps());
+    }
+    assert!(
+        work[0] > 0,
+        "the scroll must do the line motion it is supposed to do: work={work:?} ht={heights:?}"
+    );
+    assert_eq!(
+        work[0], work[1],
+        "scroll work must not grow with the long line: work={work:?} ht={heights:?}"
+    );
+    assert_eq!(
+        work[0], work[2],
+        "scroll work must not grow with the long line: work={work:?} ht={heights:?}"
+    );
+}
+
+/// A long truncated first line, 400 short lines, and point on line 300.
+fn long_line_recenter_context(long_len: usize) -> Context {
+    let mut ev = crate::test_utils::new_context();
+    let buffer = ev.edit.buffers.current_buffer_id().expect("current buffer");
+    {
+        let buf = ev.edit.buffers.get_mut(buffer).expect("buffer");
+        buf.insert("a".repeat(long_len).as_str());
+        buf.insert("\n");
+        let mut filler = String::new();
+        for index in 0..400 {
+            filler.push_str(&format!("L{index:03} line\n"));
+        }
+        buf.insert(&filler);
+        buf.set_buffer_local("truncate-lines", Value::T);
+    }
+    assert!(
+        ev.edit
+            .buffers
+            .get_mut(buffer)
+            .expect("buffer")
+            .refresh_long_line_optimizations(50_000),
+        "the long first line must set the flag"
+    );
+    ev.eval_str("(goto-char 1) (forward-line 299)")
+        .expect("point");
+    ev
+}
+
+/// GNU `Frecenter`'s long-line fallback (`src/window.c:7293-7296`,
+/// :7400-7434): center puts the start `ht/2` lines above point, a negative
+/// ARG counts up from the bottom, and point does not move.  The parent path
+/// runs the display iterator instead.
+#[test]
+fn recenter_long_line_uses_gnu_line_motion() {
+    crate::test_utils::init_test_tracing();
+    let results = eval_with_frame(
+        || long_line_recenter_context(200_000),
+        "(let* ((ht (window-body-height))
+                (pt (point)))
+           (recenter)
+           (let ((center-ok
+                  (list (= (point) pt)
+                        (save-excursion
+                          (goto-char pt)
+                          (forward-line (- (/ ht 2)))
+                          (= (window-start) (point))))))
+             (recenter -5)
+             (list center-ok
+                   (= (point) pt)
+                   (save-excursion
+                     (goto-char pt)
+                     (forward-line (- 5 ht))
+                     (= (window-start) (point))))))",
+    );
+    assert_eq!(
+        results[0], "OK ((t t) t t)",
+        "recenter must take GNU's line-based fallback on a flag buffer: {results:?}"
+    );
+}
+
+/// The fallback is one vmotion pass; its work does not grow with the long
+/// line.
+#[test]
+fn recenter_long_line_work_does_not_grow_with_the_line() {
+    crate::test_utils::init_test_tracing();
+    let mut work = Vec::new();
+    for long_len in [200_000usize, 400_000] {
+        let mut ev = long_line_recenter_context(long_len);
+        neovm_edit::test_support::authority::reset_screen_line_scan_steps_for_test();
+        ev.eval_str("(recenter)").expect("recenter");
+        work.push(neovm_edit::test_support::authority::screen_line_scan_steps());
+    }
+    assert_eq!(
+        work[0], work[1],
+        "recenter work must not grow with the long line: {work:?}"
+    );
+    assert!(
+        work[0] > 0 && work[0] <= 1024,
+        "recenter must bound its work by window lines: {work:?}"
+    );
+}

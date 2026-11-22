@@ -228,6 +228,7 @@ fn semantics(event: &InputEvent) -> FrontendEventSemantics {
         | InputEvent::TtyByte { .. }
         | InputEvent::TtyCharacter { .. }
         | InputEvent::KeyPress { .. }
+        | InputEvent::NativeNonKey { .. }
         | InputEvent::MousePress { .. }
         | InputEvent::MouseRelease { .. }
         | InputEvent::MouseScroll { .. }

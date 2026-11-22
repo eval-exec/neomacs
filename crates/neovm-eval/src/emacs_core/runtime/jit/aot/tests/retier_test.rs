@@ -106,7 +106,7 @@ impl Fixture {
         class: aot::PreloadClass,
         build: impl FnOnce(&mut Context) -> (ByteCodeFunction, Value),
     ) -> Self {
-        cache::clear();
+        cache::clear_with_serial_receipt().expect("serial jit grace");
         compile::force_aot_retier_for_test(Some(enabled));
         force_heat_for_test(Some(at));
         compile::force_tier2_for_test(Some(Tier2Knob {
@@ -243,7 +243,7 @@ impl Drop for Fixture {
     fn drop(&mut self) {
         bg::hold_publish_for_test(false);
         let _ = bg::publish_held_for_test();
-        cache::clear();
+        cache::clear_with_serial_receipt().expect("serial jit grace");
         aot::test_support::reset();
         compile::force_aot_retier_for_test(None);
         force_heat_for_test(None);
@@ -435,7 +435,7 @@ fn aot_retier_exclusion_survives_cache_eviction() {
         !may_load(f.data().jit_runtime()),
         "atomic source exclusion is independent of heat"
     );
-    cache::clear();
+    cache::clear_with_serial_receipt().expect("serial jit grace");
     f.run();
     assert!(!f.current().is_aot_backed());
     assert_eq!(
@@ -551,7 +551,7 @@ fn aot_retier_call_glue_preserves_native_admission_with_the_profit_gate_on() {
         // Cached spec calls can earn native service while source heat stays
         // low. Losing the per-mutator cache must retain that admission.
         f.data().jit_runtime().set_heat_for_test(0);
-        cache::clear();
+        cache::clear_with_serial_receipt().expect("serial jit grace");
         f.run();
         assert!(
             !f.current().is_aot_backed(),

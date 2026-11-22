@@ -23,6 +23,9 @@ pub use crate::emacs_core::host_input;
 #[cfg(test)]
 pub(crate) use neovm_display::image_identity;
 pub use neovm_eval::host_effect;
+#[cfg(feature = "contract-fixtures")]
+#[doc(hidden)]
+pub use neovm_eval::pentry_e2_custody;
 pub use neovm_value::logging;
 #[cfg(test)]
 #[path = "../core_test_facades/symbol.rs"]

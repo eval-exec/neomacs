@@ -210,6 +210,13 @@ pub struct FontResolver {
     /// one parsed capability per (file, face) so a fontset lookup pays it once.
     /// The cache validates file identity, so a replaced font file is re-probed.
     otf_capability_cache: Mutex<crate::font::probe::OtfCapabilityCache>,
+    #[cfg(target_os = "linux")]
+    render_options_cache: Mutex<
+        HashMap<
+            (String, u32, u32, Option<u32>),
+            Option<neomacs_font_materializer::fontconfig::FontRenderOptions>,
+        >,
+    >,
     primary_cache: Mutex<HashMap<PrimaryCacheKey, Option<PlatformFontMatch>>>,
     char_cache: Mutex<HashMap<CharCacheKey, Option<PlatformFontMatch>>>,
     exact_cache: Mutex<HashMap<ResolvedFontIdentity, Option<PlatformFontMatch>>>,
@@ -223,10 +230,39 @@ impl FontResolver {
             materializer: neomacs_font_materializer::FontMaterializer::new().ok(),
             capability_cache: Mutex::new(HashMap::default()),
             otf_capability_cache: Mutex::new(crate::font::probe::OtfCapabilityCache::default()),
+            #[cfg(target_os = "linux")]
+            render_options_cache: Mutex::new(HashMap::default()),
             primary_cache: Mutex::new(HashMap::default()),
             char_cache: Mutex::new(HashMap::default()),
             exact_cache: Mutex::new(HashMap::default()),
         }
+    }
+
+    /// Cache policy under this resolver's catalog owner and exact physical size.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn render_options(
+        &self,
+        file: &str,
+        selector: u32,
+        size: f32,
+        weight: Option<f32>,
+    ) -> Option<neomacs_font_materializer::fontconfig::FontRenderOptions> {
+        let key = (
+            file.to_owned(),
+            selector,
+            size.to_bits(),
+            weight.map(f32::to_bits),
+        );
+        if let Ok(cache) = self.render_options_cache.lock()
+            && let Some(options) = cache.get(&key)
+        {
+            return *options;
+        }
+        let options = self.backend.render_options(file, selector, size, weight);
+        if let Ok(mut cache) = self.render_options_cache.lock() {
+            cache.insert(key, options);
+        }
+        options
     }
 
     pub fn platform_default() -> Self {
@@ -627,9 +663,19 @@ impl FontResolver {
                     .find(|coord| coord.tag() == u32::from_be_bytes(*b"wght"))
                     .map(|coord| coord.value())
                     .or_else(|| query.weight.map(f32::from));
+                let selector = identity.freetype_selector()?;
+                #[cfg(target_os = "linux")]
+                return crate::font::probe::probe_font_px_metrics_with_policy(
+                    file,
+                    selector,
+                    pixel_size,
+                    explicit_weight,
+                    |size| self.render_options(file, selector, size as f32, explicit_weight),
+                );
+                #[cfg(not(target_os = "linux"))]
                 crate::font::probe::probe_font_px_metrics(
                     file,
-                    identity.freetype_selector()?,
+                    selector,
                     pixel_size,
                     explicit_weight,
                 )
@@ -688,6 +734,85 @@ impl FontResolver {
             cache.insert(key, selected.clone());
         }
         selected
+    }
+
+    /// GNU font_find_for_lface treats the face family and foundry as
+    /// preferences, independently relaxing each before scoring native entities.
+    pub fn resolve_face_font(
+        &self,
+        family: &str,
+        foundry: Option<&str>,
+        weight: u16,
+        slant: FontSlant,
+        width: FontWidth,
+        size: FontSelectionSize,
+    ) -> Option<PlatformFontMatch> {
+        let families = FontFamilySource::Face(family).capture();
+        self.resolve_face_policy(&families, foundry, weight, slant, width, size)
+    }
+
+    fn resolve_face_policy(
+        &self,
+        families: &CapturedFontFamilyPolicy,
+        foundry: Option<&str>,
+        weight: u16,
+        slant: FontSlant,
+        width: FontWidth,
+        size: FontSelectionSize,
+    ) -> Option<PlatformFontMatch> {
+        for family in families.search_order(|family| self.backend.resolve_family(family)) {
+            let scope = match family {
+                FontFamilyCandidate::Family(family) => {
+                    FontCandidateScope::Family(FontFamilyName::new(family.as_ref())?)
+                }
+                // This is GNU's family=nil enumeration, not a character's
+                // native fallback cascade or a generic monospace request.
+                FontFamilyCandidate::NativeFallback => FontCandidateScope::All,
+            };
+            let query = FontCandidateQuery {
+                scope,
+                required: RequiredFontCoverage::Any,
+                charset_ranges: Vec::new(),
+                languages: Vec::new(),
+                requested_weight: weight,
+                requested_slant: slant,
+                requested_width: width,
+                direction: TextDirection::LeftToRight,
+            };
+            let candidates = self.backend.list_candidates(&query);
+            for foundry in foundry.into_iter().map(Some).chain(std::iter::once(None)) {
+                let matching = candidates
+                    .iter()
+                    .filter(|candidate| {
+                        foundry.is_none_or(|foundry| {
+                            candidate
+                                .matched
+                                .metadata
+                                .foundry
+                                .as_ref()
+                                .is_some_and(|actual| actual.eq_ignore_ascii_case(foundry))
+                        })
+                    })
+                    .cloned()
+                    .collect();
+                let request = SelectionRequest {
+                    weight,
+                    slant,
+                    width: Some(width),
+                    spacing: None,
+                    prefer_monospace: false,
+                    queried_family: None,
+                    size,
+                };
+                if let Some(matched) =
+                    select_best_candidate(self.classify_unknown_candidate_sizes(matching), &request)
+                        .and_then(|selected| self.backend.finalize_match(selected))
+                {
+                    return Some(self.with_native_metrics(matched));
+                }
+            }
+        }
+        None
     }
 
     /// Observe an already selected face without running style selection again.
@@ -921,6 +1046,11 @@ impl FontResolver {
             policy.admitted_queries.clear();
         }
         self.backend.advance_catalog_generation();
+        #[cfg(target_os = "linux")]
+        self.render_options_cache
+            .get_mut()
+            .unwrap_or_else(|p| p.into_inner())
+            .clear();
         self.primary_cache
             .get_mut()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -1095,6 +1225,11 @@ impl FontResolver {
     #[cfg(test)]
     pub(crate) fn replace_backend(&mut self, backend: Box<dyn FontBackend>) {
         self.backend = backend;
+        #[cfg(target_os = "linux")]
+        self.render_options_cache
+            .get_mut()
+            .unwrap_or_else(|p| p.into_inner())
+            .clear();
         self.primary_cache
             .get_mut()
             .unwrap_or_else(|poisoned| poisoned.into_inner())

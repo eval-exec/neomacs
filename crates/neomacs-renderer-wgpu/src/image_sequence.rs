@@ -22,6 +22,7 @@ struct DecodedSequenceFrame {
     height: u32,
     rgba: Arc<[u8]>,
     delay: ImageFrameDelay,
+    embedded: Option<ImageEmbeddedMetadata>,
 }
 
 impl DecodedImageSequence {
@@ -44,6 +45,7 @@ impl DecodedImageSequence {
                     height,
                     rgba,
                     delay,
+                    embedded: None,
                 }
             })
             .collect();
@@ -86,6 +88,7 @@ impl DecodedImageSequence {
                     height,
                     rgba: rgba.into(),
                     delay,
+                    embedded: None,
                 })
             })
             .collect::<Option<Vec<_>>>()?;
@@ -99,7 +102,9 @@ impl DecodedImageSequence {
     fn frame(&self, index: ImageFrameIndex) -> Option<ImageSequenceFrame> {
         let index = usize::try_from(index.get()).ok()?;
         let frame = self.frames.get(index)?;
-        let mut embedded = if self.frames.len() > 1 {
+        let mut embedded = if let Some(embedded) = &frame.embedded {
+            embedded.clone()
+        } else if self.frames.len() > 1 {
             ImageEmbeddedMetadata::animation(u32::try_from(self.frames.len()).ok()?, frame.delay)
         } else {
             ImageEmbeddedMetadata::EMPTY
@@ -329,6 +334,12 @@ impl ImageSequenceCache {
         data: &[u8],
         frame: ImageFrameIndex,
     ) -> ImageSequenceResolution {
+        if crate::image_probe::has_tiff_signature(data) {
+            return match tiff_pages::decode(data, frame) {
+                Some(frame) => ImageSequenceResolution::Frame(frame),
+                None => ImageSequenceResolution::MissingFrame,
+            };
+        }
         self.resolve_with(
             sequence,
             frame,
@@ -545,7 +556,13 @@ struct ImageSequenceCacheStats {
 }
 
 pub(crate) fn decode_sequence(data: &[u8]) -> Option<Arc<DecodedImageSequence>> {
-    let frames = match image::guess_format(data).ok()? {
+    let format = image::guess_format(data).ok()?;
+    let extensions = if format == image::ImageFormat::Gif {
+        Some(gif_metadata::frame_extensions(data)?)
+    } else {
+        None
+    };
+    let frames = match format {
         image::ImageFormat::Gif => {
             let decoder = image::codecs::gif::GifDecoder::new(Cursor::new(data)).ok()?;
             decoder.into_frames()
@@ -569,19 +586,50 @@ pub(crate) fn decode_sequence(data: &[u8]) -> Option<Arc<DecodedImageSequence>> 
 
     let mut decoded = Vec::new();
     let mut memory_size = 0_usize;
-    for frame in frames {
+    for (index, frame) in frames.enumerate() {
         let frame = frame.ok()?;
         let (numerator, denominator) = frame.delay().numer_denom_ms();
         let rgba = frame.into_buffer();
         let (width, height) = rgba.dimensions();
         let bytes: Arc<[u8]> = rgba.into_raw().into();
         memory_size = memory_size.checked_add(bytes.len())?;
+        let embedded = match &extensions {
+            Some(frames) => Some(ImageEmbeddedMetadata::gif(
+                u32::try_from(frames.len()).ok()?,
+                frames
+                    .get(index)?
+                    .iter()
+                    .map(
+                        |(function, bytes)| neomacs_display_protocol::image::ImageExtensionBlock {
+                            function: *function,
+                            bytes: bytes.clone(),
+                        },
+                    )
+                    .collect(),
+            )),
+            None => None,
+        };
+        if let Some(blocks) = embedded
+            .as_ref()
+            .and_then(|metadata| metadata.gif_extensions())
+        {
+            for block in blocks {
+                memory_size = memory_size.checked_add(block.bytes.len())?;
+            }
+        }
         decoded.push(DecodedSequenceFrame {
             width,
             height,
             rgba: bytes,
             delay: ImageFrameDelay::milliseconds(numerator, denominator)?,
+            embedded,
         });
+    }
+    if format == image::ImageFormat::WebP {
+        let count = u32::try_from(decoded.len()).ok()?;
+        for frame in &mut decoded {
+            frame.embedded = Some(ImageEmbeddedMetadata::webp(count, frame.delay));
+        }
     }
     (!decoded.is_empty()).then(|| {
         Arc::new(DecodedImageSequence {
@@ -595,3 +643,14 @@ pub(crate) fn decode_sequence(data: &[u8]) -> Option<Arc<DecodedImageSequence>> 
 #[cfg(test)]
 #[path = "image_sequence/tests/image_sequence_test.rs"]
 mod tests;
+
+mod gif_metadata;
+
+mod tiff_pages;
+
+pub(crate) fn probe_tiff_frame(
+    data: &[u8],
+    frame: ImageFrameIndex,
+) -> Option<neomacs_display_protocol::ImageNativeExtent> {
+    tiff_pages::probe(data, frame)
+}

@@ -121,6 +121,7 @@ fn window_params() -> WindowParams {
         horizontal_scroll_bar: true,
         scroll_bar_pixel_width: 12.0,
         scroll_bar_pixel_height: 8.0,
+        bidi_paragraph_directions: Default::default(),
     }
 }
 

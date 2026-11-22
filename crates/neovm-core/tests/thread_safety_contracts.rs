@@ -99,6 +99,9 @@ mod host_effect_contracts;
 #[path = "intern_shared_contracts.rs"]
 mod intern_shared_contracts;
 
+#[path = "jit_grace_contracts.rs"]
+mod jit_grace_contracts;
+
 #[test]
 #[cfg(feature = "contract-fixtures")]
 fn p15_threading_compile_contracts() {

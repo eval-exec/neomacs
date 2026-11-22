@@ -11,6 +11,7 @@ use super::super::cons_allocator::ConsBlockBase;
 use super::super::jit_state::JitHeapState;
 use super::super::mark_word::MarkWord;
 use super::super::mutator_gc::{MutatorGcState, SatbMutatorState};
+use super::super::owner_alloc_region::OwnerAllocRegion;
 use super::super::pacing::GenerationPacingCounters;
 use super::super::young_registry::{
     YoungBlockLog, YoungLogSlot, YoungRegistrationId, YoungRegistryError,
@@ -195,8 +196,10 @@ fn validate_closed(
     cold: &SatbMutatorState,
     jit: &JitHeapState,
     regions: &RegionBook,
+    owner: &OwnerAllocRegion,
 ) -> Result<(), ImageError> {
-    if regions.cons != ConsRegionSource::Closed
+    if !owner.is_closed()
+        || regions.cons != ConsRegionSource::Closed
         || regions.float != FloatRegionSource::Closed
         || jit.cons_cur.get() != 0
         || jit.cons_lim.get() != 0
@@ -318,10 +321,21 @@ impl OwnerGcState {
     }
 
     pub(in crate::tagged::gc) fn validate_publication(&self) -> Result<(), ImageError> {
+        // The serial image has no frame arena. An owner publication passes
+        // that arena's book to [`Self::validate_publication_with_owner`].
+        self.validate_publication_with_owner(&OwnerAllocRegion::new())
+    }
+
+    /// Same checks as [`Self::validate_publication`], plus this owner's book.
+    /// An open book is `ImageError::RegionsOpen` and moves nothing.
+    pub(in crate::tagged::gc) fn validate_publication_with_owner(
+        &self,
+        owner: &OwnerAllocRegion,
+    ) -> Result<(), ImageError> {
         if self.catalog_region.is_some() || !self.cons_tails.is_empty() {
             return Err(ImageError::RegionsOpen);
         }
-        validate_closed(&self.hot, &self.cold, &self.jit, &self.regions)
+        validate_closed(&self.hot, &self.cold, &self.jit, &self.regions, owner)
     }
 
     pub(in crate::tagged::gc) fn publish(&mut self) -> Result<PublishedGcImage, ImageError> {
@@ -339,14 +353,20 @@ impl OwnerGcState {
         &mut self,
         image: PublishedGcImage,
     ) -> Result<(), RestoreImageFailure> {
-        let result =
-            validate_closed(&self.hot, &self.cold, &self.jit, &self.regions).and_then(|()| {
-                if empty_destination(&self.hot, &self.cold, &self.root_scratch) {
-                    Ok(())
-                } else {
-                    Err(ImageError::DestinationOccupied)
-                }
-            });
+        let result = validate_closed(
+            &self.hot,
+            &self.cold,
+            &self.jit,
+            &self.regions,
+            &OwnerAllocRegion::new(),
+        )
+        .and_then(|()| {
+            if empty_destination(&self.hot, &self.cold, &self.root_scratch) {
+                Ok(())
+            } else {
+                Err(ImageError::DestinationOccupied)
+            }
+        });
         if let Err(error) = result {
             return Err(RestoreImageFailure { error, image });
         }
@@ -581,6 +601,7 @@ impl PublishedGcImage {
             heap.current_mutator_satb(),
             &heap.jit,
             &heap.region_book,
+            &OwnerAllocRegion::new(),
         )?;
         let young = heap.current_mutator_satb_mut().young.take_owner_payload()?;
         let stats = std::mem::take(&mut heap.region_stats);
@@ -600,6 +621,7 @@ impl PublishedGcImage {
             heap.current_mutator_satb(),
             &heap.jit,
             &heap.region_book,
+            &OwnerAllocRegion::new(),
         )
         .and_then(|()| {
             if !self.facts.roots.is_empty() {

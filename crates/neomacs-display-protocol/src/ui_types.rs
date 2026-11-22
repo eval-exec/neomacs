@@ -19,19 +19,29 @@ pub struct MenuBarItem {
 /// source, instead of replacing it with a frontend-private icon name.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum ToolBarImageSource {
-    File { path: String },
+    /// An ordinary GNU image source: the parsed `:image` file, or the GNU theme
+    /// asset when the GNU icon theme is selected.  GNU `compute_image_size`
+    /// semantics apply — the slot is a clamp, and the realized raster is never
+    /// enlarged past its scaled native extent.
+    GnuRaster { path: String },
+    /// A Neomacs chrome-owned vector (themed or custom icon directory).  A
+    /// vector has no meaningful native resolution, so it is realized at the
+    /// slot's exact physical size instead of being stretched from its authored
+    /// size.
+    ThemedVector { path: String },
 }
 
 impl ToolBarImageSource {
     pub fn cache_key(&self) -> String {
         match self {
-            Self::File { path } => format!("file:{path}"),
+            Self::GnuRaster { path } => format!("gnu-raster:{path}"),
+            Self::ThemedVector { path } => format!("themed-vector:{path}"),
         }
     }
 
     pub fn file_path(&self) -> Option<&str> {
         match self {
-            Self::File { path } => Some(path),
+            Self::GnuRaster { path } | Self::ThemedVector { path } => Some(path),
         }
     }
 }

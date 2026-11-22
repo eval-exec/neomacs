@@ -77,12 +77,12 @@ const TLS_CLASSIFICATION: &[(&str, &str, TlsClass)] = &[
     // carrier_loop accepts the next job only after run_carrier_job returns).
     // switch.rs retires/parks the old job before the NEXT job's deferred reset.
     // Deferred reuse asserts zero before clearing; PARK must preserve depth.
-    // MustReset: cache::reset_carrier_tls asserts zero before its zero store
-    // at deferred reuse. Static and store share the same gate
-    // (any(test, debug_assertions, feature = "test-support")) so a release
-    // workspace test build records the F5 native-depth witness and still
-    // clears it between jobs; ordinary Green waits retain the live native
-    // frame on the same carrier.
+    // MustReset: the counter is compiled for test, debug, and test-support.
+    // A production release image has no `NATIVE_DEPTH` symbol; that mint
+    // reads `CURRENT_LEAF_BASES` instead. reset_carrier_tls mints a serial
+    // receipt before its zero store, under the same cfg as the counter.
+    // A leaked guard refuses that mint and keeps the depth. Ordinary Green
+    // waits retain the live native frame on the same carrier.
     (
         "neovm-eval/src/emacs_core/runtime/jit/cache.rs",
         "NATIVE_DEPTH",
@@ -972,9 +972,9 @@ const TLS_CLASSIFICATION: &[(&str, &str, TlsClass)] = &[
         TlsClass::CarrierIntrinsic,
     ),
     (BINARY_CENSUS, "PROFILER", TlsClass::CarrierIntrinsic),
-    // macOS-only menu redirect target (display-runtime
-    // macos_quit_redirect.rs): absent from the shipped Linux census and holds
-    // a retained AppKit object, not Lisp Values.
+    // Retained AppKit redirect target plus the weak frame->NSView registry:
+    // main-thread only, macOS only, absent from the shipped Linux census,
+    // no Lisp Values (display-runtime macos_quit_redirect.rs).
     (
         "neomacs-display-runtime/src/render_thread/macos_quit_redirect.rs",
         "QUIT_REDIRECT",

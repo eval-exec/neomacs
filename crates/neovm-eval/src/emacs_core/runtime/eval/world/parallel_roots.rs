@@ -248,9 +248,9 @@ impl Baton {
 }
 
 /// The full World root surface with one explicit synthetic-fixture setting.
-/// GNU's default weak window table is outside A5; no Lisp/window API executes
-/// in the fixture. Reclaim it serially before caller setup, leaving the strict
-/// production supported-type fence unchanged.
+/// GNU's default weak window table is reclaimed serially before caller setup,
+/// so each fixture's admission is attributable to the injected object alone;
+/// no Lisp/window API executes in the fixture.
 #[cfg(test)]
 fn collection_fixture_context() -> Context {
     let mut context = Context::new(crate::test_utils::unit_runtime());

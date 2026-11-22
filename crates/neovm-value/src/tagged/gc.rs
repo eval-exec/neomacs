@@ -55,7 +55,11 @@ pub use function_write_hooks::{
 pub mod symbol_table;
 
 mod cache_root_scan;
+pub mod condition_snapshots;
 mod publication;
+#[cfg(test)]
+mod publication_owner_seam;
+mod publication_roots;
 #[doc(hidden)]
 pub use cache_root_scan::CacheRootScan;
 
@@ -770,7 +774,8 @@ pub struct TaggedHeap {
 
     /// GC threshold in approximate Lisp heap bytes.
     gc_threshold: usize,
-    /// Approximate bytes retained by the live heap after the last sweep.
+    /// Collectible live heap bytes after the last sweep, for Lisp GC pacing.
+    /// Immortal mapped and loader-proven image residents are excluded.
     live_bytes: usize,
 
     /// Mark-start pacing state — INSTRUMENTATION ONLY. The reactive
@@ -1083,6 +1088,10 @@ pub struct TaggedHeap {
     overlay_serial: crate::heap_types::OverlaySerialCounter,
     /// Retired-process and killed-buffer ephemeron records (memory_registry).
     ephemeron_records: memory_registry::EphemeronRecords,
+    /// Per-cycle collector-time bank. Trailing, so no pinned offset moves.
+    cycle_time_bank: cycle_time_bank::GcCycleTimeBank,
+    /// Heads published by payload owners, keyed by a minted id.
+    published_payload_roots: publication_roots::PublishedPayloadRoots,
 }
 
 impl Default for TaggedHeap {
@@ -1091,10 +1100,7 @@ impl Default for TaggedHeap {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Post-mark ownership verification gate (DIVERGENCES.md 162)
-// ---------------------------------------------------------------------------
-//
+// Post-mark ownership verification gate (DIVERGENCES.md 162).
 // `verify_marked_objects_owned` was written for the missing-root class and
 // then never called ("dead code written for exactly this failure", 161's own
 // residual list). It is O(live objects) per collection, so it stays off by
@@ -1218,6 +1224,8 @@ impl TaggedHeap {
             mapped_veclike_traces: 0,
             overlay_serial: crate::heap_types::OverlaySerialCounter::new(),
             ephemeron_records: memory_registry::EphemeronRecords::default(),
+            cycle_time_bank: cycle_time_bank::GcCycleTimeBank::default(),
+            published_payload_roots: publication_roots::PublishedPayloadRoots::default(),
             dirty_owner_bits: FxHashSet::default(),
             dirty_writes: Vec::new(),
             gc_collections: 0,
@@ -1863,23 +1871,6 @@ impl TaggedHeap {
         self.current_mutator_gc_mut().bytes_since_gc += bytes;
     }
 
-    /// Every byte this heap has ever allocated.
-    ///
-    /// Derived rather than counted: `bytes_banked_at_resets` is advanced by
-    /// [`Self::reset_bytes_since_gc`], the one place `bytes_since_gc` returns
-    /// to zero, so the sum is exact by construction.
-    #[doc(hidden)]
-    pub fn total_allocated_bytes(&self) -> u64 {
-        let delta = self.allocation_region_deltas();
-        self.mutators()
-            .map(|state| {
-                state
-                    .bytes_banked_at_resets
-                    .saturating_add(state.exact_bytes_since_gc(delta) as u64)
-            })
-            .fold(0, u64::saturating_add)
-    }
-
     fn vector_storage_bytes<T>(values: &Vec<T>) -> usize {
         values.capacity().saturating_mul(size_of::<T>())
     }
@@ -2232,159 +2223,6 @@ impl TaggedHeap {
         }
     }
 
-    /// Snapshot allocator-backed GC page occupancy and the directly-owned
-    /// payload capacities of live objects. This does not attempt to reproduce
-    /// process RSS: symbol registries, evaluator stacks, display caches,
-    /// allocator metadata, and nested hash-key allocations live outside this
-    /// accounting and are intentionally exposed as the RSS remainder.
-    #[doc(hidden)]
-    pub fn layout_stats(&self) -> HeapLayoutStats {
-        // The free-list walk below would miss an open region's cells and
-        // `cons_live_count` would count them: callers close first.
-        debug_assert!(
-            !self.alloc_regions_open(),
-            "layout_stats with an open allocation region"
-        );
-        let mut free_cells_by_block = vec![0usize; self.cons_blocks.len()];
-        let bumped_cons_slots: usize = self
-            .cons_blocks
-            .iter()
-            .map(|block| block.next_index as usize)
-            .sum();
-        let mut free_count = 0usize;
-        for (base, count) in self.cons_allocator.free_counts() {
-            if let Some(&block_index) = self.cons_block_index_by_base.get(&base.addr()) {
-                free_cells_by_block[block_index] = count;
-            }
-            free_count += count;
-        }
-        debug_assert!(free_count <= bumped_cons_slots);
-
-        let mut cons = ConsLayoutStats {
-            pages: self.cons_blocks.len(),
-            page_bytes: CONS_BLOCK_BYTES,
-            capacity_slots: self.cons_blocks.len().saturating_mul(CONS_BLOCK_SIZE),
-            bumped_slots: bumped_cons_slots,
-            live_slots: bumped_cons_slots.saturating_sub(free_count),
-            reclaimed_slots: free_count,
-            never_used_slots: self
-                .cons_blocks
-                .len()
-                .saturating_mul(CONS_BLOCK_SIZE)
-                .saturating_sub(bumped_cons_slots),
-            ..ConsLayoutStats::default()
-        };
-        for (block, reclaimed) in self.cons_blocks.iter().zip(free_cells_by_block) {
-            let live = (block.next_index as usize).saturating_sub(reclaimed);
-            if live == 0 {
-                cons.empty_pages += 1;
-            } else if live == CONS_BLOCK_SIZE {
-                cons.full_pages += 1;
-            } else {
-                cons.partial_pages += 1;
-            }
-        }
-        cons.occupied_bytes = cons.live_slots.saturating_mul(size_of::<ConsCell>());
-        debug_assert_eq!(cons.live_slots, self.cons_live_count);
-
-        let arenas = vec![
-            self.float_arena.layout_stats(|_| PayloadLayout::default()),
-            self.string_arena
-                .layout_stats(|object| Self::string_payload_layout(&object.data)),
-            self.vector_arena
-                .layout_stats(|object| Self::value_vec_payload_layout(&object.data)),
-            self.bytecode_arena
-                .layout_stats(Self::bytecode_payload_layout),
-            self.lambda_arena.layout_stats(|object| {
-                Self::closure_payload_layout(&object.data, object.parsed_params.get())
-            }),
-            self.macro_arena.layout_stats(|object| {
-                Self::closure_payload_layout(&object.data, object.parsed_params.get())
-            }),
-            self.record_arena
-                .layout_stats(|object| Self::value_vec_payload_layout(&object.data)),
-            self.symbol_with_pos_arena
-                .layout_stats(|_| PayloadLayout::default()),
-            self.marker_arena.layout_stats(|_| PayloadLayout::default()),
-            self.bignum_arena
-                .layout_stats(|object| Self::bignum_payload_layout(&object.value)),
-        ];
-
-        let mapped_conses = self.mapped_cons_ranges.iter().map(|range| range.len).sum();
-        let mapped_floats = self.mapped_float_ranges.iter().map(|range| range.len).sum();
-        let mut mapped = MappedLayoutStats {
-            conses: mapped_conses,
-            floats: mapped_floats,
-            strings: self.mapped_string_objects.len(),
-            veclikes: self.mapped_veclike_objects.len(),
-            object_image_bytes: mapped_conses
-                .saturating_mul(size_of::<ConsCell>())
-                .saturating_add(mapped_floats.saturating_mul(size_of::<FloatObj>()))
-                .saturating_add(
-                    self.mapped_string_objects
-                        .iter()
-                        .map(|object| object.byte_len)
-                        .sum::<usize>(),
-                )
-                .saturating_add(
-                    self.mapped_veclike_objects
-                        .iter()
-                        .map(|object| object.byte_len)
-                        .sum::<usize>(),
-                ),
-            ..MappedLayoutStats::default()
-        };
-        for object in &self.mapped_string_objects {
-            let payload = unsafe { Self::string_payload_layout(&(*object.ptr).data) };
-            if payload.owned {
-                mapped.copied_string_payloads += 1;
-                mapped.copied_string_capacity_bytes = mapped
-                    .copied_string_capacity_bytes
-                    .saturating_add(payload.capacity_bytes);
-            }
-        }
-        for object in &self.mapped_veclike_objects {
-            let payload = Self::veclike_payload_layout(object.header);
-            if payload.owned {
-                mapped.copied_veclike_payloads += 1;
-                mapped.copied_veclike_capacity_bytes = mapped
-                    .copied_veclike_capacity_bytes
-                    .saturating_add(payload.capacity_bytes);
-            }
-        }
-
-        let mut boxed = Vec::new();
-        self.note_boxed_list_layout(self.all_objects, &mut boxed);
-        self.note_boxed_list_layout(self.tenured_objects, &mut boxed);
-        self.note_boxed_list_layout(self.generational.old_objects, &mut boxed);
-        self.note_boxed_list_layout(self.generational.old_sweep_pending, &mut boxed);
-        boxed.sort_by_key(|layout| std::cmp::Reverse(layout.known_bytes));
-
-        let page_backing_bytes = cons
-            .pages
-            .saturating_mul(cons.page_bytes)
-            .saturating_add(arenas.iter().map(|arena| arena.page_bytes).sum::<usize>());
-        let known_payload_capacity_bytes = arenas
-            .iter()
-            .map(|arena| arena.payload_capacity_bytes)
-            .sum::<usize>()
-            .saturating_add(mapped.copied_string_capacity_bytes)
-            .saturating_add(mapped.copied_veclike_capacity_bytes);
-
-        HeapLayoutStats {
-            allocated_objects: self.mutators().map(|state| state.allocated_count).sum(),
-            // `live_bytes` is what the last sweep counted, so add what has been
-            // allocated since to keep reporting the current managed size.
-            managed_live_bytes: self.live_bytes.saturating_add(self.bytes_since_gc()),
-            page_backing_bytes,
-            known_payload_capacity_bytes,
-            cons,
-            arenas,
-            mapped,
-            boxed,
-        }
-    }
-
     // -----------------------------------------------------------------------
     // Marker operations
     // -----------------------------------------------------------------------
@@ -2507,6 +2345,10 @@ mod slot_store_tests;
 #[path = "gc/tests/pacer_test.rs"]
 mod pacer_tests;
 
+#[cfg(test)]
+#[path = "gc/tests/string_pacing_census_test.rs"]
+mod string_pacing_census_tests;
+
 #[cfg(any(test, feature = "test-support"))]
 #[path = "gc/tests/ownership_test.rs"]
 mod ownership_tests;
@@ -2605,6 +2447,8 @@ mod mark_sweep;
 #[cfg(feature = "test-support")]
 pub mod mark_sweep;
 
+mod alloc_bytes;
+mod cycle_time_bank;
 #[cfg(feature = "gc-memory-telemetry")]
 mod memory_inventory;
 mod memory_registry;
@@ -2806,8 +2650,8 @@ pub(crate) use mutator_registration::symbol_functions::boundary as function_boun
 pub use mutator_registration::{
     AllStopped, CollectionError, CollectionReport, FunctionActivation, FunctionError,
     FunctionSelection, KeeperSymbols, MinorCollectionError, Mode, Mutator, OwnerRootSlot,
-    ParallelExecutionAdmission, ParallelHeapEra, Phase, PlainSymbolBacking, RegistrationError,
-    RendezvousError, Request, RunAccess, RunSlice, Snapshot, SymbolHandle,
+    ParallelExecutionAdmission, ParallelHeapEra, Phase, PlainSymbolBacking, PollOutcome,
+    RegistrationError, RendezvousError, Request, RunAccess, RunSlice, Snapshot, SymbolHandle,
 };
 pub use mutator_registration::{
     AllStoppedFailure, MutatorEntry, MutatorFinishFailure, MutatorStartFailure, NativeReturn,
@@ -2845,11 +2689,14 @@ pub(crate) use mutator_registration::{
 };
 
 mod alloc_region;
+mod owner_alloc_region;
 use alloc_region::RegionBook;
 #[cfg(not(feature = "test-support"))]
 use alloc_region::RegionStats;
 #[cfg(feature = "test-support")]
 pub use alloc_region::RegionStats;
+#[doc(hidden)]
+pub use alloc_region::owner_era_reserve::*;
 #[cfg(any(test, feature = "test-support"))]
 use alloc_region::{CONS_REGION_MAX_CELLS, ConsRegionSource, FLOAT_REGION_MAX_SLOTS};
 #[cfg(any(test, feature = "test-support"))]
@@ -2859,6 +2706,10 @@ pub(crate) use barrier_window::published_barrier_window;
 pub use jit_state::{
     FLOAT_SLOT_BYTES, HEAP_JIT_BARRIER_LEN, HEAP_JIT_BARRIER_LO, HEAP_JIT_CONS_CUR,
     HEAP_JIT_CONS_LIM, HEAP_JIT_FLOAT_CUR, HEAP_JIT_FLOAT_LIM, JitHeapState,
+};
+#[doc(hidden)]
+pub use owner_alloc_region::{
+    ConsTailRefund, FloatTailRefund, OwnerAllocRegion, OwnerRegionRefund,
 };
 /// Allocation regions: sources, give-back, exact counters, black across
 /// the phase flags, and the close at every collector entry.

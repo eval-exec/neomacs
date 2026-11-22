@@ -648,7 +648,14 @@ fn the_remaining_gnu_defvar_int_variables_are_declared_with_gnus_values() {
         ),
         "OK t"
     );
-    assert_eq!(format_eval_result(&eval.eval_str("strings-consed")), "OK 0");
+    // A live allocation counter, not a constant: assert the shape (GNU
+    // `strings-consed` is `DEFVAR_INT` and advances with every string).
+    assert_eq!(
+        format_eval_result(&eval.eval_str(
+            "(progn (make-string 1 ?x) (and (integerp strings-consed) (> strings-consed 0)))"
+        )),
+        "OK t"
+    );
     // Each one is a real forwarder, not a plain cell that happens to hold an
     // integer: `(setq X "x")` is GNU's `wrong-type-argument`.
     let mut forwarders = vec![

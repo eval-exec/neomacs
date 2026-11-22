@@ -200,12 +200,12 @@ use neovm_core::emacs_core::display_host::{
 #[cfg(feature = "video")]
 use neovm_core::emacs_core::eval::VideoResolveSource;
 use neovm_core::emacs_core::eval::{
-    FontEntityMetricsRequest, FontOtfCapability, FontSpecResolveRequest, GuiFrameHostSize,
-    ResolvedFontEntityMetrics, ResolvedFontMatch, ResolvedFontSpecMatch, ResolvedFrameFont,
-    ResolvedOpenedFont, ResolvedSurface, ResolvedVideo, ResolvedWebKit, ShaderSurfaceContent,
-    ShaderSurfaceCreateRequest, ShaderSurfaceLanguage, ShaderSurfaceUniformInit,
-    SurfaceChannelKind, SurfaceResolveRequest, VideoResolveRequest, WebKitResolveRequest,
-    WebKitResolveSource,
+    FontEntityMetricsRequest, FontOtfCapability, FontSpecResolveRequest, FrameFontSelection,
+    GuiFrameHostSize, ResolvedFontEntityMetrics, ResolvedFontMatch, ResolvedFontSpecMatch,
+    ResolvedFrameFont, ResolvedOpenedFont, ResolvedSurface, ResolvedVideo, ResolvedWebKit,
+    ShaderSurfaceContent, ShaderSurfaceCreateRequest, ShaderSurfaceLanguage,
+    ShaderSurfaceUniformInit, SurfaceChannelKind, SurfaceResolveRequest, VideoResolveRequest,
+    WebKitResolveRequest, WebKitResolveSource,
 };
 use neovm_core::emacs_core::image_catalog::{
     ImageCatalog, ImageResolveRequest, ImageSizeLimit, ReadyImage,
@@ -431,9 +431,17 @@ fn finish_gui_connection(
     let font_observer =
         neomacs_display_runtime::font_defaults::observe_font_defaults(identity.backend())
             .map_err(|error| format!("failed to observe desktop fonts: {error}"))?;
+    // Native Wayland consumes logical text DPI from the same settings owner
+    // that discovered the desktop fonts. Backing scale remains frame-local.
+    let observation = match (host.observation(), font_observer.initial_text_dpi()) {
+        (neomacs_display_protocol::DisplayObservation::Wayland, Some(dpi)) => {
+            neomacs_display_protocol::DisplayObservation::WaylandWithTextDpi(dpi)
+        }
+        (observation, _) => observation,
+    };
     let mut display = bootstrap_gui_display_config(
         interactivity,
-        gui_frame_font_scale_from_observation(host.observation()),
+        gui_frame_font_scale_from_observation(observation),
         identity,
     );
     display.font_defaults = font_observer.initial().clone();
@@ -2605,6 +2613,13 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         )
     }
 
+    fn set_ns_confirm_quit(&mut self, enabled: bool) {
+        #[cfg(target_os = "macos")]
+        neomacs_display_runtime::render_thread::set_ns_confirm_quit(enabled);
+        #[cfg(not(target_os = "macos"))]
+        let _ = enabled;
+    }
+
     fn set_modifier_policy(
         &mut self,
         policy: neomacs_display_protocol::ModifierPolicy,
@@ -2697,17 +2712,41 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         let requested_family_storage = face.family_runtime_string_owned();
         let requested_family = requested_family_storage.as_deref().unwrap_or("Monospace");
         let requested_weight = face.weight.unwrap_or(FontWeight::NORMAL).css_weight();
-        let requested_italic = face.slant.map(|slant| slant.is_italic()).unwrap_or(false);
+        let requested_slant = face.slant.unwrap_or(neovm_core::face::FontSlant::Normal);
+        let requested_width = face.width.unwrap_or(neovm_core::face::FontWidth::Normal);
+        let foundry = face
+            .foundry
+            .as_ref()
+            .and_then(|value| value.as_lisp_string())
+            .map(|value| neovm_core::emacs_core::emacs_char::to_utf8_lossy(value.as_bytes()));
         let Some(font_size) = font_sizing.font_size_px_for_request(request.size()) else {
             return Ok(None);
         };
-        let selected = self.synchronized_font_metrics().select_font_for_char(
-            'M',
-            requested_family,
-            requested_weight,
-            requested_italic,
-            font_size.get(),
-        );
+        let pixel_size = (font_size.get().round() as u32).max(1);
+        let metrics = self.synchronized_font_metrics();
+        let selected = if request.selection() == FrameFontSelection::FontSpecification {
+            // An absent family retains this host's existing Monospace default;
+            // the request does not yet carry the old lface's inherited context.
+            let query = neomacs_layout_engine::font::resolver::FontEntityQuery::new(
+                neomacs_layout_engine::font_backend::FontFamilyName::new(requested_family),
+            )
+            .with_selection(neovm_core::emacs_core::eval::FontSpecSelection::OpenBySpec)
+            .with_weight(requested_weight)
+            .with_slant(requested_slant)
+            .with_width(requested_width);
+            metrics
+                .resolve_font_entity(&query)
+                .and_then(|entity| metrics.open_platform_match_font(&entity.matched, pixel_size))
+        } else {
+            metrics.open_face_font(
+                requested_family,
+                foundry.as_deref(),
+                requested_weight,
+                requested_slant,
+                requested_width,
+                pixel_size,
+            )
+        };
         let Some(font) = selected else {
             return Ok(None);
         };
@@ -3903,6 +3942,19 @@ fn throw_on_input_active(eval: &Context) -> bool {
 }
 
 fn sync_selected_gui_chrome_state(eval: &mut Context) {
+    #[cfg(target_os = "macos")]
+    {
+        // This runs even when the visible-frame forest is empty. AppKit's
+        // key/main window may be nil after iconifying every frame, while
+        // Lisp still has a selected frame (possibly a presented child).
+        let frames = eval.frame_manager();
+        let selected_root = frames
+            .selected_frame()
+            .filter(|frame| frame.effective_window_system().is_some())
+            .and_then(|frame| frames.root_frame_id(frame.id))
+            .map(|frame| frame.0);
+        neomacs_display_runtime::render_thread::set_selected_gui_frame(selected_root);
+    }
     // GUI chrome collection evaluates dynamic menu/tool-bar forms and this
     // host callback cannot propagate their non-local control flow. Preserve
     // the last snapshot until GNU's `while-no-input` scope has finished.

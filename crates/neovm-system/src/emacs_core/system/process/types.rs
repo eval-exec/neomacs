@@ -1413,6 +1413,37 @@ pub(super) fn process_read_buffer_len(proc: &Process) -> usize {
     proc.readmax.clamp(1, READ_PROCESS_OUTPUT_MAX_CEILING)
 }
 
+/// GNU `create_process` enlarges the child's stdout pipe to the process's
+/// `readmax` (`src/process.c:2223-2227`) so that a single `read_process_output`
+/// read can fill the whole `read-process-output-max` buffer.
+///
+/// Linux caps a pipe at 64 KiB by default.  Without this, a consumer that
+/// raises `read-process-output-max` (consult sets it to 1 MiB for its async
+/// pipeline) still gets one process-filter call per 64 KiB instead of one per
+/// buffer: for the same `rg` output, consult's filter, refresh and vertico
+/// re-filtering run 16 times as often, which is the difference between a
+/// bounded search and an unusably slow, memory-hungry one (#625).
+///
+/// GNU ignores both `fcntl` results: the pipe is usable at its old size, and
+/// requests above `/proc/sys/fs/pipe-max-size` are allowed to fail.  Platforms
+/// without `F_SETPIPE_SZ` keep the default capacity in GNU too.
+#[cfg(all(unix, any(target_os = "linux", target_os = "android")))]
+fn enlarge_child_output_pipe<F: std::os::unix::io::AsRawFd>(pipe: &F, readmax: usize) {
+    let fd = pipe.as_raw_fd();
+    // SAFETY: `fd` is an open pipe descriptor owned by `pipe`, and both
+    // commands only inspect/resize that pipe's capacity; neither retains the
+    // descriptor.  Both results are ignored, exactly as GNU ignores them.
+    let current = unsafe { libc::fcntl(fd, libc::F_GETPIPE_SZ) };
+    // GNU's condition is `readmax > fcntl (fd, F_GETPIPE_SZ)` with no success
+    // test, so a failed query (-1) still attempts the resize; keep that shape.
+    if readmax as i64 > current as i64 {
+        unsafe { libc::fcntl(fd, libc::F_SETPIPE_SZ, readmax as libc::c_int) };
+    }
+}
+
+#[cfg(not(all(unix, any(target_os = "linux", target_os = "android"))))]
+fn enlarge_child_output_pipe<F>(_pipe: &F, _readmax: usize) {}
+
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) fn update_process_adaptive_read_buffering(
     proc: &mut Process,
@@ -4297,6 +4328,14 @@ pub trait SystemProcessExt {
     /// retired -- the analogue of `get_process` having answered `nil` before
     /// any of these sites was reached.
     fn observe(&mut self, site: UpdateStatusSite, id: ProcessId) -> Option<ObservedProcess<'_>>;
+    /// GNU's `handle_child_signal` body for ONE child, run at an observation
+    /// because this port has no SIGCHLD handler: the per-pid
+    /// `child_status_changed` probe and the record, never the notification.
+    fn reap_observed_child(&mut self, id: ProcessId);
+    /// The ProcessId whose live child has OS pid PID, if this World owns it.
+    /// `process-attributes` and a numeric `signal-process` start from an OS
+    /// pid; GNU's handler reached the process by `p->pid`.
+    fn process_with_os_pid(&self, pid: i64) -> Option<ProcessId>;
     /// Read a Lisp-visible status at one of the enumerated holes, WITHOUT
     /// GNU's recording having been made here.
     ///
@@ -4916,6 +4955,7 @@ impl SystemProcessExt for ProcessManager {
         // die from SIGPIPE.
         let requested_stderr_pipe_id = process_value_to_id(&proc.stderrproc);
         let default_directory = proc.default_directory.clone();
+        let readmax = proc.readmax;
         let _ = proc;
         let mut stderr_transfer = self.take_stderr_pipe_writer(id, requested_stderr_pipe_id);
 
@@ -4937,6 +4977,8 @@ impl SystemProcessExt for ProcessManager {
         } else {
             let (reader, writer) = os_pipe::pipe()
                 .map_err(|error| format!("Failed to create child output pipe: {error}"))?;
+            // GNU enlarges the child's stdout pipe before forking it.
+            enlarge_child_output_pipe(&reader, readmax);
             let stderr_writer = writer
                 .try_clone()
                 .map_err(|error| format!("Failed to duplicate child output pipe: {error}"))?;
@@ -4983,7 +5025,12 @@ impl SystemProcessExt for ProcessManager {
 
         let stdout = match shared_output_reader {
             Some(reader) => Some(ChildOutputReader::Shared(reader)),
-            None => child.stdout.take().map(ChildOutputReader::Stdout),
+            // A separate `:stderr` leaves stdout on the pipe `Command::spawn`
+            // created; enlarge it here, where its read end first exists.
+            None => child.stdout.take().map(|stdout| {
+                enlarge_child_output_pipe(&stdout, readmax);
+                ChildOutputReader::Stdout(stdout)
+            }),
         };
 
         // Register stdout with the poller where the platform exposes child
@@ -5299,6 +5346,31 @@ impl SystemProcessExt for ProcessManager {
         }
 
         Ok(outcome)
+    }
+
+    fn reap_observed_child(&mut self, id: ProcessId) {
+        // GNU's handler runs at SIGCHLD delivery; a port without a walk-capable
+        // handler can only latch the delivery, so reap only after one. An
+        // observation before the delivery sees the stale status, exactly as
+        // GNU's observation does, which is what keeps a caller's await loop
+        // entering its wait (ledger 180's sentinel-in-the-let shape).
+        if !crate::emacs_core::os_signal::child_signal_seen() {
+            return;
+        }
+        if self
+            .processes
+            .get(&id)
+            .is_some_and(|proc| SweepableChild::of(id, proc).is_some())
+        {
+            self.check_child_status_change(id);
+        }
+    }
+
+    fn process_with_os_pid(&self, pid: i64) -> Option<ProcessId> {
+        let pid = u32::try_from(pid).ok()?;
+        self.processes.iter().find_map(|(id, proc)| {
+            (proc.live_io.child.pid_if_unreaped() == Some(pid)).then_some(*id)
+        })
     }
 
     /// Poll one child-status transition and stage it for sentinel delivery.
@@ -7310,6 +7382,10 @@ impl SystemProcessExt for ProcessManager {
         site: crate::emacs_core::wait::WaitStatusNotifySite,
     ) -> usize {
         let _ = site;
+        // The full walk covers every live child, so it is the point that
+        // consumes the SIGCHLD latch. Clear before polling: a delivery during
+        // the walk sets it again and stays visible to the next observation.
+        crate::emacs_core::os_signal::clear_child_signal_seen();
         super::reap::collect_deferred_child_status_changes();
         STATUS_NOTIFY_WALKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut population: Vec<SweepableChild> = self
@@ -7338,15 +7414,15 @@ impl SystemProcessExt for ProcessManager {
     /// any of these sites was reached.
     fn observe(&mut self, site: UpdateStatusSite, id: ProcessId) -> Option<ObservedProcess<'_>> {
         match site.recording() {
-            // NO ARM SWEEPS, and both variants say why rather than leaving it
-            // to be inferred.  `AlreadyRecorded` needs nothing because the
-            // machinery around the site has just made the record;
-            // `AsynchronouslyRecorded` needs nothing because the SIGCHLD
-            // trigger made it at a safe point -- and must not sweep here,
-            // because a sweep AT the observation is what ledger 180 measured
-            // and withdrew.  This `match` exists to make that a decision the
-            // type forces rather than an omission.
-            Recording::AlreadyRecorded { .. } | Recording::AsynchronouslyRecorded { .. } => {}
+            // The synchronous sites have just made the record themselves.
+            Recording::AlreadyRecorded { .. } => {}
+            // GNU reaches these sites with the record already made because
+            // `handle_child_signal` ran asynchronously. This port has no
+            // handler, so the observation performs GNU's per-child probe and
+            // record here (one child, WNOHANG, exactly the handler's body).
+            // It records only: the sentinel still runs from `status_notify`
+            // inside a wait, so an observation cannot steal the notification.
+            Recording::AsynchronouslyRecorded { .. } => self.reap_observed_child(id),
         }
         self.get_any(id).map(ObservedProcess::new)
     }

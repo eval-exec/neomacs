@@ -360,6 +360,15 @@ pub struct CharsetRegistrySnapshot {
     /// remove that membership. None on older snapshots: every charset that
     /// still has an ISO final is treated as a member.
     pub iso2022_members: Option<Vec<SymId>>,
+    /// `set-charset-priority` generation. Not stored in the dump: a reload
+    /// starts at 0 and the first use rebinds to the dumped safe vector.
+    pub iso2022_epoch: u64,
+    /// `(coding-system, epoch bound at define or at the last refresh)`,
+    /// sorted by name. Not stored in the dump.
+    pub iso2022_coding_epochs: Vec<(SymId, u64)>,
+    /// `(coding-system, members copied when the epoch matched or was
+    /// rebound)`, sorted by name. Not stored in the dump.
+    pub iso2022_coding_members: Vec<(SymId, Vec<SymId>)>,
     pub next_id: i64,
     /// Index into `priority` of the first non-preferred charset, mirroring GNU's
     /// `Vcharset_non_preferred_head` (charset.c:85). `char_charset` returns the
@@ -536,6 +545,13 @@ pub struct CharsetRegistry {
     /// first defined with an ISO final (`charset.c:1167-1168`). Redefinition
     /// does not add or remove an identity.
     iso2022_members: rustc_hash::FxHashSet<SymId>,
+    /// Bumped only by `set_priority`. This is the in-process stand-in for
+    /// GNU replacing `Viso_2022_charset_list` (`charset.c:2173-2223`).
+    iso2022_epoch: u64,
+    /// Coding-system name to the epoch bound at define or at the last refresh.
+    coding_iso2022_epochs: rustc_hash::FxHashMap<SymId, u64>,
+    /// Coding-system name to the member list copied at that bind.
+    coding_iso2022_members: rustc_hash::FxHashMap<SymId, Vec<SymId>>,
     /// Next auto-assigned charset ID.
     next_id: i64,
 }
@@ -589,6 +605,13 @@ pub struct CharsetRegistry {
     published_names: rustc_hash::FxHashMap<SymId, SymId>,
     /// See the production-struct comment.
     iso2022_members: rustc_hash::FxHashSet<SymId>,
+    /// Bumped only by `set_priority`. This is the in-process stand-in for
+    /// GNU replacing `Viso_2022_charset_list` (`charset.c:2173-2223`).
+    iso2022_epoch: u64,
+    /// Coding-system name to the epoch bound at define or at the last refresh.
+    coding_iso2022_epochs: rustc_hash::FxHashMap<SymId, u64>,
+    /// Coding-system name to the member list copied at that bind.
+    coding_iso2022_members: rustc_hash::FxHashMap<SymId, Vec<SymId>>,
     /// Next auto-assigned charset ID.
     next_id: i64,
 }
@@ -618,6 +641,9 @@ impl CharsetRegistry {
             iso_charset_table: rustc_hash::FxHashMap::default(),
             published_names: rustc_hash::FxHashMap::default(),
             iso2022_members: rustc_hash::FxHashSet::default(),
+            iso2022_epoch: 0,
+            coding_iso2022_epochs: rustc_hash::FxHashMap::default(),
+            coding_iso2022_members: rustc_hash::FxHashMap::default(),
             next_id: 256, // start above the Emacs built-in range
         };
         reg.init_standard_charsets(materialize_plists);
@@ -650,6 +676,9 @@ impl CharsetRegistry {
             iso_charset_table: rustc_hash::FxHashMap::default(),
             published_names: rustc_hash::FxHashMap::default(),
             iso2022_members: rustc_hash::FxHashSet::default(),
+            iso2022_epoch: 0,
+            coding_iso2022_epochs: rustc_hash::FxHashMap::default(),
+            coding_iso2022_members: rustc_hash::FxHashMap::default(),
             next_id: 256,
         }
     }
@@ -1260,6 +1289,10 @@ impl CharsetRegistry {
             .copied()
             .filter(|identity| mule_members.contains(identity))
             .collect();
+        // GNU assigns a new `Viso_2022_charset_list` object here
+        // (`charset.c:2213-2222`). A later `nconc2` keeps that object, so
+        // only this call moves the epoch.
+        self.iso2022_epoch = self.iso2022_epoch.saturating_add(1);
     }
 
     /// Return the plist for a charset, or None if not found.
@@ -1528,6 +1561,18 @@ impl CharsetRegistry {
             .collect();
         let mut iso2022_members: Vec<_> = self.iso2022_members.iter().copied().collect();
         iso2022_members.sort_by_key(|name| resolve_sym(*name));
+        let mut iso2022_coding_epochs: Vec<_> = self
+            .coding_iso2022_epochs
+            .iter()
+            .map(|(&name, &epoch)| (name, epoch))
+            .collect();
+        iso2022_coding_epochs.sort_by(|left, right| resolve_sym(left.0).cmp(resolve_sym(right.0)));
+        let mut iso2022_coding_members: Vec<_> = self
+            .coding_iso2022_members
+            .iter()
+            .map(|(&name, members)| (name, members.clone()))
+            .collect();
+        iso2022_coding_members.sort_by(|left, right| resolve_sym(left.0).cmp(resolve_sym(right.0)));
 
         CharsetRegistrySnapshot {
             charsets,
@@ -1541,6 +1586,9 @@ impl CharsetRegistry {
             plist_slots: Some(plist_slots),
             plist_lisp: Some(plist_lisp),
             iso2022_members: Some(iso2022_members),
+            iso2022_epoch: self.iso2022_epoch,
+            iso2022_coding_epochs,
+            iso2022_coding_members,
             next_id: self.next_id,
             non_preferred_head: self.non_preferred_head,
         }
@@ -1727,6 +1775,9 @@ impl CharsetRegistry {
             iso_charset_table: rustc_hash::FxHashMap::default(),
             published_names: published_names.into_iter().collect(),
             iso2022_members,
+            iso2022_epoch: snapshot.iso2022_epoch,
+            coding_iso2022_epochs: snapshot.iso2022_coding_epochs.into_iter().collect(),
+            coding_iso2022_members: snapshot.iso2022_coding_members.into_iter().collect(),
             next_id: snapshot.next_id,
         };
         match iso_designations {
@@ -1954,6 +2005,8 @@ impl CharsetRegistry {
 use neovm_value::heap_registry::{HeapRegistryHandle, HeapRegistrySlot};
 
 mod registry_detach;
+#[doc(hidden)]
+pub use registry_detach::detach_charset_registry;
 
 thread_local! {
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -2618,7 +2671,7 @@ pub(crate) fn iso2022_full_charset_candidates() -> Vec<SymId> {
             .filter(|(name, info)| info.iso_final_char.is_some() && Some(**name) != jisx0208_1978)
             .map(|(name, info)| (info.id, *name))
             .collect();
-        out.sort_by_key(|(id, _)| *id);
+        out.sort_by_key(|(id, name)| (*id, resolve_sym(*name)));
         out.into_iter().map(|(_, name)| name).collect()
     })
 }
@@ -2709,8 +2762,84 @@ pub(crate) fn iso2022_encode_candidates_among(allowed: &[SymId]) -> Vec<SymId> {
             })
             .map(|(name, info)| (info.id, *name))
             .collect();
-        out.sort_by_key(|(id, _)| *id);
+        out.sort_by_key(|(id, name)| (*id, resolve_sym(*name)));
         out.into_iter().map(|(_, name)| name).collect()
+    })
+}
+
+/// ISO final stored on the physical definition, if any.
+pub(crate) fn charset_iso_final_of(identity: SymId) -> Option<i64> {
+    CHARSET_REGISTRY.with(|slot| {
+        slot.borrow()
+            .charsets
+            .get(&identity)
+            .and_then(|info| info.iso_final_char)
+    })
+}
+
+/// Emacs-mule id stored on the physical definition, if any.
+pub(crate) fn charset_emacs_mule_id_of(identity: SymId) -> Option<i64> {
+    CHARSET_REGISTRY.with(|slot| {
+        slot.borrow()
+            .charsets
+            .get(&identity)
+            .and_then(|info| info.emacs_mule_id)
+    })
+}
+
+/// Bind a full-support coding system to the members safe at define time and
+/// to the current `set-charset-priority` epoch.
+pub(crate) fn iso2022_note_full_support(name: SymId, members: &[SymId]) {
+    CHARSET_REGISTRY.with(|slot| {
+        let mut reg = slot.borrow_mut();
+        let epoch = reg.iso2022_epoch;
+        reg.coding_iso2022_epochs.insert(name, epoch);
+        reg.coding_iso2022_members.insert(name, members.to_vec());
+    });
+}
+
+/// Drop the session bind. The loadup release hook calls this so a preloaded
+/// full-support system stays on the live list.
+pub(crate) fn iso2022_forget_full_support(name: SymId) {
+    CHARSET_REGISTRY.with(|slot| {
+        let mut reg = slot.borrow_mut();
+        reg.coding_iso2022_epochs.remove(&name);
+        reg.coding_iso2022_members.remove(&name);
+    });
+}
+
+/// Members a full-support coding system should use now.
+///
+/// A matching epoch returns the bound copy. A `set-charset-priority` since
+/// the bind copies the live `Viso` list and rebinds, so a later append stays
+/// out (`coding.c:2868-2874`, `charset.c:2213-2222`). A missing bind (a dump
+/// reload, whose epoch restarts at 0) keeps `stored` and binds the current
+/// epoch.
+pub(crate) fn iso2022_refresh_full_support(name: SymId, stored: &[SymId]) -> Vec<SymId> {
+    CHARSET_REGISTRY.with(|slot| {
+        let mut reg = slot.borrow_mut();
+        let current = reg.iso2022_epoch;
+        let bound = reg.coding_iso2022_epochs.get(&name).copied();
+        match bound {
+            Some(epoch) if epoch == current => reg
+                .coding_iso2022_members
+                .get(&name)
+                .cloned()
+                .unwrap_or_else(|| stored.to_vec()),
+            Some(_) => {
+                let mut live: Vec<SymId> = reg.iso2022_members.iter().copied().collect();
+                live.sort_by_key(|member| resolve_sym(*member));
+                reg.coding_iso2022_epochs.insert(name, current);
+                reg.coding_iso2022_members.insert(name, live.clone());
+                live
+            }
+            None => {
+                let kept = stored.to_vec();
+                reg.coding_iso2022_epochs.insert(name, current);
+                reg.coding_iso2022_members.insert(name, kept.clone());
+                kept
+            }
+        }
     })
 }
 

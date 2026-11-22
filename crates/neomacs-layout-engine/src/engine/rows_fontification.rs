@@ -9,7 +9,10 @@ use neovm_core::{
     buffer::{BufferId, CharLen, CharPos0, CharRange},
     emacs_core::{
         Context,
-        xdisp::{self, RedisplayFontificationDemand, RedisplayFontificationOutcome},
+        xdisp::{
+            self, ProbeRow, RedisplayFontificationDemand, RedisplayFontificationOutcome,
+            RedisplayFontificationRequest,
+        },
     },
     window::{FrameId, WindowDisplaySnapshot, WindowId, WindowLayoutQueryScope},
 };
@@ -81,11 +84,31 @@ impl RowsFontificationDemand {
         source: BufferId,
         from: i64,
         to: i64,
+        window_point: i64,
+        request: RedisplayFontificationRequest,
+        probe: ProbeRow,
     ) -> RedisplayFontificationOutcome {
         let Self::Observing { demand, .. } = self else {
-            return LayoutEngine::ensure_fontified_rust(ctx, source, from, to);
+            return LayoutEngine::ensure_fontified_rust(
+                ctx,
+                source,
+                from,
+                to,
+                request,
+                probe,
+                window_point,
+            );
         };
-        match xdisp::ensure_fontified_for_redisplay_with_demand(ctx, source, from, to, demand) {
+        match xdisp::ensure_fontified_for_redisplay_with_demand_for_window_request(
+            ctx,
+            source,
+            from,
+            to,
+            demand,
+            request,
+            probe,
+            window_point,
+        ) {
             Ok(outcome) => outcome,
             Err(error) => {
                 // Identical error policy to the legacy layout bridge. The

@@ -1237,6 +1237,7 @@ mod unit_runtime {
             crate::emacs_core::terminal::pure::current_terminal_registry_handle,
             crate::emacs_core::terminal::pure::install_terminal_registry_handle,
             crate::emacs_core::terminal::pure::install_owner_terminal_registry_handle,
+            Some(crate::emacs_core::terminal::pure::detach_terminal_registry),
         ),
         FontsetHooks::new(
             crate::emacs_core::fontset::fontset_alias_alist_startup_value,
@@ -1273,6 +1274,7 @@ mod unit_runtime {
             Some(crate::emacs_core::xfaces::carrier_tls_fingerprint),
             crate::emacs_core::xfaces::current_font_registry_handle,
             crate::emacs_core::xfaces::install_font_registry_handle,
+            Some(crate::emacs_core::xfaces::detach_font_registry),
         ),
         s::timefns_reset,
         s::sqlite_reset,

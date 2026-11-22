@@ -4,6 +4,9 @@
 //! selects it with --test. Each former per-file binary linked the display
 //! stack again; nextest runs every test in its own process.
 
+#[path = "braille_blank.rs"]
+mod braille_blank;
+
 #[path = "buffer_local_completion.rs"]
 mod buffer_local_completion;
 
@@ -28,6 +31,9 @@ mod coding_detection;
 #[path = "coding_save.rs"]
 mod coding_save;
 
+#[path = "ctxmenu_popup_gui_oracle.rs"]
+mod ctxmenu_popup_gui_oracle;
+
 #[path = "colrv1_emoji.rs"]
 mod colrv1_emoji;
 
@@ -36,6 +42,11 @@ mod commit_editing;
 
 #[path = "compact_frame_geometry.rs"]
 mod compact_frame_geometry;
+
+#[path = "bidi_paragraph_direction_785_r2_gui_oracle.rs"]
+mod bidi_paragraph_direction_785_r2_gui_oracle;
+#[path = "composite_shaping_785_gui_oracle.rs"]
+mod composite_shaping_785_gui_oracle;
 
 #[path = "config_env_boot.rs"]
 mod config_env_boot;
@@ -84,6 +95,9 @@ mod font_coverage;
 
 #[path = "font_fallback_composite_ink.rs"]
 mod font_fallback_composite_ink;
+
+#[path = "font_family_fallback.rs"]
+mod font_family_fallback;
 
 #[path = "font_name_pattern_resize.rs"]
 mod font_name_pattern_resize;
@@ -248,3 +262,18 @@ mod category_word_wrap;
 
 #[path = "printer_quit.rs"]
 mod printer_quit;
+
+#[path = "line_number_scaled_cursor.rs"]
+mod line_number_scaled_cursor;
+
+#[path = "desktop_text_scaling.rs"]
+mod desktop_text_scaling;
+
+#[path = "font_hinting_weight.rs"]
+mod font_hinting_weight;
+
+#[path = "image_api_parity.rs"]
+mod image_api_parity;
+
+#[path = "font_hinting_advances.rs"]
+mod font_hinting_advances;

@@ -255,12 +255,10 @@ fn run_native_scroll_scenario(
         .map(|path| root.join(PathBuf::from(path)))
         .unwrap_or_else(|| root.join("target"))
         .join("neomacs-gui-tests");
-    fs::create_dir_all(&artifact_root).unwrap();
-    let artifacts = artifact_root.join(format!(
+    let artifacts = neomacs_gui_tests::fresh_artifact_dir(artifact_root.join(format!(
         "native-scrolling-{kind:?}-{target:?}-{lines}-{profile}-{}",
         std::process::id()
-    ));
-    fs::create_dir(&artifacts).unwrap();
+    )));
     let session = neomacs_infra::display::start_sway(
         &artifacts,
         r#"

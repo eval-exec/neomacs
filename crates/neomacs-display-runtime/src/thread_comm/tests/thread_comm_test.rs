@@ -611,6 +611,28 @@ fn input_event_window_resize_construction() {
 }
 
 #[test]
+fn application_quit_transport_preserves_frame_and_non_lossy_identity() {
+    let (emacs, render) = ThreadComms::new().split();
+    for frame in [0, 42, 0x1_0000_0000] {
+        let event = InputEvent::ApplicationQuit {
+            emacs_frame_id: frame,
+        };
+        assert!(!RenderComms::is_lossy_input_event(&event));
+        assert!(RenderComms::should_log_delivery(&event));
+        assert_eq!(RenderComms::event_name(&event), "application-quit");
+        render.send_input(event);
+        match emacs
+            .input_rx
+            .try_recv()
+            .expect("application Quit delivery")
+        {
+            InputEvent::ApplicationQuit { emacs_frame_id } => assert_eq!(emacs_frame_id, frame),
+            other => panic!("application Quit changed transport identity: {other:?}"),
+        }
+    }
+}
+
+#[test]
 fn input_event_window_close_construction() {
     let event = InputEvent::WindowClose {
         emacs_frame_id: 123,

@@ -194,9 +194,11 @@ fn invalidating_dependency_retires_old_identity_and_next_lookup_reloads() {
     ));
 
     catalog.invalidate(ImageInvalidation::Dependency(request.source.clone()));
+    // The flushed identity is freed immediately (GNU `uncache_image`), not
+    // merely marked for presentation-safe retirement.
     assert!(matches!(
         cmd_rx.try_recv().expect("old image identity retired"),
-        RenderCommand::Asset(AssetCommand::ImageRetire { image }) if image == first
+        RenderCommand::Asset(AssetCommand::ImageFlush { image }) if image == first
     ));
 
     let second = lookup(&catalog, request).placement().image_id();
@@ -235,9 +237,13 @@ fn invalidating_spec_preserves_other_spec_that_uses_same_dependency() {
     catalog.invalidate(ImageInvalidation::Spec {
         spec: first.spec.clone(),
     });
+    // GNU `image-flush` -> `uncache_image` frees the matching images at once,
+    // so the retired identity is materialized by the immediate-flush command
+    // rather than a presentation-safe retirement; every identity assertion
+    // below is unchanged.
     assert!(matches!(
         cmd_rx.try_recv().expect("only exact spec identity freed"),
-        RenderCommand::Asset(AssetCommand::ImageRetire { image }) if image == first_id
+        RenderCommand::Asset(AssetCommand::ImageFlush { image }) if image == first_id
     ));
     assert!(cmd_rx.try_recv().is_err());
 
@@ -454,13 +460,25 @@ fn pending_geometry_resolves_from_the_header_before_any_pixel_exists() {
     let ImageLookup::Pending(placeholder) = lookup(&catalog, request.clone()) else {
         panic!("a new image lookup begins pending");
     };
+    // The header probe runs off-thread, so it can publish 50x100 between the
+    // catalog reserving this slot and this lookup returning it: lookup_inner
+    // adopts header geometry that landed since the reservation.  Both
+    // observations are the same reservation, so pin the request's placeholder
+    // value directly and accept either slot here.  What this test exists for
+    // is the refinement below, while no pixel exists.
     assert_eq!(
-        (
-            placeholder.placement().width(),
-            placeholder.placement().height()
-        ),
+        placeholder_image_extent(&request).dimensions(),
         (50, 50),
-        "the slot starts on the request's pinned placeholder"
+        "the request pins the clamp-square placeholder"
+    );
+    let initial = (
+        placeholder.placement().width(),
+        placeholder.placement().height(),
+    );
+    assert!(
+        matches!(initial, (50, 50) | (50, 100)),
+        "a new slot holds the pinned placeholder or the header geometry the \
+         off-thread probe already published, got {initial:?}"
     );
     let RenderCommand::Asset(AssetCommand::ImageLoadFile { load, .. }) =
         cmd_rx.try_recv().expect("image load command")
@@ -671,7 +689,7 @@ fn each_lookup_carries_the_bound_it_was_made_under() {
     });
     catalog.lookup(request, ImageSizeLimit::from_axis_pixels(4096));
 
-    // The first load, the retirement of its identity, then the reload.
+    // The first load, the immediate flush of its identity, then the reload.
     assert!(matches!(
         cmd_rx.try_recv().expect("first load"),
         RenderCommand::Asset(AssetCommand::ImageLoadFile { limit, .. })
@@ -679,7 +697,7 @@ fn each_lookup_carries_the_bound_it_was_made_under() {
     ));
     assert!(matches!(
         cmd_rx.try_recv().expect("retirement"),
-        RenderCommand::Asset(AssetCommand::ImageRetire { .. })
+        RenderCommand::Asset(AssetCommand::ImageFlush { .. })
     ));
     assert!(matches!(
         cmd_rx.try_recv().expect("reload"),
@@ -802,5 +820,29 @@ fn public_catalog_invalidation_retires_cpu_metadata_before_gpu_admission() {
         replacement.load().image(),
         old.load().image(),
         "a retired source identity cannot be reused by the next lookup"
+    );
+}
+
+#[test]
+fn tiff_pages_keep_independent_known_geometry() {
+    use neomacs_display_protocol::image_diagnostic::{ImageFormatName, ImageLoadIdentity};
+    let (tx, _rx) = neomacs_display_runtime::thread_comm::RenderCommandSender::unbounded();
+    let metadata = Arc::new(ImageRenderState::default());
+    let catalog = test_catalog(tx, None, metadata, None);
+    let mut first = file_request("pages.tiff");
+    first.identity =
+        ImageLoadIdentity::new(ImageFormatName::Tiff, first.identity.subject().clone());
+    let mut second = first.clone();
+    second.frame = ImageFrameIndex::new(1);
+    catalog.remember_geometry(&first, ImageLayoutExtent::new(2, 1));
+    assert_eq!(catalog.known_geometry(&second), None);
+    catalog.remember_geometry(&second, ImageLayoutExtent::new(3, 2));
+    assert_eq!(
+        catalog.known_geometry(&first),
+        Some(ImageLayoutExtent::new(2, 1))
+    );
+    assert_eq!(
+        catalog.known_geometry(&second),
+        Some(ImageLayoutExtent::new(3, 2))
     );
 }

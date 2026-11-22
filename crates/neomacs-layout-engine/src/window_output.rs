@@ -230,6 +230,12 @@ pub(crate) struct TextWindowBegin {
     pub(crate) selected: bool,
     pub(crate) first_row: DisplayTextRowBegin,
     pub(crate) row_capacity: crate::output::window_request::OutputWindowRowCapacity,
+    /// The displayed buffer's paragraph direction (GNU
+    /// `it->paragraph_embedding`, `src/xdisp.c:3600-3611`).
+    pub(crate) bidi_paragraph_directions: crate::bidi::ParagraphDirections,
+    /// Whether this window's advances are terminal cells or graphical pixels
+    /// (cursor geometry inside an RTL run differs between them).
+    pub(crate) text_geometry_units: neomacs_display_protocol::glyph_matrix::TextGeometryUnits,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -242,6 +248,11 @@ pub(crate) struct TextWindowOutputBegin {
     pub(crate) text_clip_bounds: Rect,
     pub(crate) selected: bool,
     pub(crate) row_capacity: crate::output::window_request::OutputWindowRowCapacity,
+    /// The displayed buffer's paragraph direction (GNU
+    /// `it->paragraph_embedding`, `src/xdisp.c:3600-3611`).
+    pub(crate) bidi_paragraph_directions: crate::bidi::ParagraphDirections,
+    /// Whether this window's advances are terminal cells or graphical pixels.
+    pub(crate) text_geometry_units: neomacs_display_protocol::glyph_matrix::TextGeometryUnits,
 }
 
 impl From<TextWindowBegin> for TextWindowOutputBegin {
@@ -255,6 +266,8 @@ impl From<TextWindowBegin> for TextWindowOutputBegin {
             text_clip_bounds: request.text_clip_bounds,
             selected: request.selected,
             row_capacity: request.row_capacity,
+            bidi_paragraph_directions: request.bidi_paragraph_directions,
+            text_geometry_units: request.text_geometry_units,
         }
     }
 }
@@ -271,6 +284,8 @@ impl TextWindowOutputBegin {
             self.selected,
         )
         .with_row_capacity(self.row_capacity)
+        .with_bidi_paragraph_directions(self.bidi_paragraph_directions)
+        .with_text_geometry_units(self.text_geometry_units)
     }
 }
 
@@ -1908,7 +1923,14 @@ impl WindowOutputEmitter {
         end_col: usize,
     ) {
         self.push_text_display_point(buffer_pos, glyph_x, glyph_y, width, height, row, start_col);
-        self.move_text_output_to(evaluator, row, end_col, row_y, glyph_x + width.max(0.0));
+        // A zero-advance span keeps its display point but must not move the
+        // output cursor.  Composition members are published at the composite
+        // glyph's start so their buffer positions stay addressable; moving the
+        // pen back there would shrink the finished row's end_x below the
+        // composite's own advance (issue #785: string-pixel-width "جا" = 0).
+        if width > 0.0 || end_col > start_col {
+            self.move_text_output_to(evaluator, row, end_col, row_y, glyph_x + width.max(0.0));
+        }
     }
 
     fn emit_text_output_span(&mut self, evaluator: &mut Context, span: TextOutputSpan) {

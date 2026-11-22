@@ -1575,6 +1575,201 @@ fn test_builtin_condition_wait_noop() {
     assert!(unlock.is_ok());
 }
 
+/// A worker `condition-wait` inside `with-mutex` must park. Returning at
+/// once reads the flag before main sets it (GNU `Fcondition_wait` parks,
+/// src/thread.c:446-501). The `unwind-protect` cleanup stays parked and
+/// unlocks once, after the resume relocks.
+#[test]
+fn test_worker_condition_wait_inside_with_mutex_parks() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let value = eval
+        .eval_str(
+            r#"(eval
+                 '(progn
+                    (defvar e8s-park-flag nil)
+                    (setq e8s-park-flag nil)
+                    (let* ((m (make-mutex))
+                           (c (make-condition-variable m))
+                           (ready nil)
+                           (th (make-thread
+                                (lambda ()
+                                  ;; `with-mutex` is a Lisp macro. This is its
+                                  ;; expansion: the cleanup is an unwind-protect.
+                                  (let ((sym m))
+                                    (mutex-lock sym)
+                                    (unwind-protect
+                                        (progn
+                                          (setq ready t)
+                                          (condition-notify c t)
+                                          (condition-wait c)
+                                          e8s-park-flag)
+                                      (mutex-unlock sym))))
+                                "park-waiter")))
+                      (let ((sym m))
+                        (mutex-lock sym)
+                        (unwind-protect
+                            (while (eq ready nil) (condition-wait c))
+                          (mutex-unlock sym)))
+                      (setq e8s-park-flag t)
+                      (let ((sym m))
+                        (mutex-lock sym)
+                        (unwind-protect
+                            (condition-notify c t)
+                          (mutex-unlock sym)))
+                      (thread-join th)))
+                 t)"#,
+        )
+        .expect("worker parks inside with-mutex until notify");
+    assert!(
+        value.is_truthy(),
+        "waiter saw the flag main set while it was parked, got {value:?}"
+    );
+}
+
+/// A `while` that blocks in `condition-wait` must run the rest of that
+/// iteration and enter the `while` again. The `let` of `rounds` is a
+/// lexical frame GNU keeps live across the wait (eval.c:1151). One
+/// notify, then a broadcast once `go` is set, returns from the wait twice.
+#[test]
+fn test_worker_while_reenters_after_condition_wait() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let value = eval
+        .eval_str(
+            r#"(eval
+                 '(progn
+                    (let* ((m (make-mutex))
+                           (c (make-condition-variable m))
+                           (gate (make-condition-variable m))
+                           (ready nil)
+                           (go nil)
+                           (returns 0)
+                           (th (make-thread
+                                (lambda ()
+                                  (let ((sym m))
+                                    (mutex-lock sym)
+                                    (unwind-protect
+                                        (progn
+                                          (setq ready t)
+                                          (condition-notify gate t)
+                                          (let ((rounds 0))
+                                            (while (and (eq go nil) (< rounds 20))
+                                              (condition-wait c)
+                                              (setq returns (1+ returns))
+                                              (setq rounds (1+ rounds)))
+                                            (list 'ok rounds)))
+                                      (mutex-unlock sym))))
+                                "rewait")))
+                      (let ((sym m))
+                        (mutex-lock sym)
+                        (unwind-protect
+                            (while (eq ready nil) (condition-wait gate))
+                          (mutex-unlock sym)))
+                      (let ((sym m))
+                        (mutex-lock sym)
+                        (unwind-protect
+                            (condition-notify c)
+                          (mutex-unlock sym)))
+                      (let ((spins 0))
+                        (while (eq returns 0)
+                          (setq spins (1+ spins))
+                          (thread-yield)
+                          (if (> spins 100000) (setq returns -1))))
+                      (let ((after returns))
+                        (setq go t)
+                        (let ((sym m))
+                          (mutex-lock sym)
+                          (unwind-protect
+                              (condition-notify c t)
+                            (mutex-unlock sym)))
+                        (list after (thread-join th) returns))))
+                 t)"#,
+        )
+        .expect("while re-enters after condition-wait");
+    let printed = crate::emacs_core::print::print_value(&value);
+    assert_eq!(printed, "(1 (ok 2) 2)", "got {printed}");
+}
+
+/// Many simulated workers parked in `condition-wait` must not add their
+/// `lisp-eval-depth` together. GNU stores the counter in the thread state
+/// (`src/thread.h` `m_lisp_eval_depth`), so a switch of `current_thread`
+/// switches the counter and a new worker starts at 0. Nesting every parked
+/// waiter on one counter trips `max-lisp-eval-depth` (the cache floor is
+/// 100) before the readiness notify, and main then reports the readiness
+/// condvar. This is `soak_many_gated.el` at N=300 with the default limit
+/// of 1600.
+#[test]
+fn test_sim_gated_workers_keep_separate_lisp_eval_depth() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let value = eval
+        .eval_str(
+            r#"(eval
+                 '(progn
+                    (setq max-lisp-eval-depth 100)
+                    (let* ((n 24)
+                           (m (make-mutex))
+                           (c (make-condition-variable m))
+                           (rm (make-mutex))
+                           (rc (make-condition-variable rm))
+                           (ready 0)
+                           (go nil)
+                           (ths nil)
+                           (i 0))
+                      (while (< i n)
+                        (let ((id i))
+                          (setq ths
+                                (cons
+                                 (make-thread
+                                  (lambda ()
+                                    (let ((sym m))
+                                      (mutex-lock sym)
+                                      (unwind-protect
+                                          (progn
+                                            (let ((rs rm))
+                                              (mutex-lock rs)
+                                              (unwind-protect
+                                                  (progn
+                                                    (setq ready (1+ ready))
+                                                    (condition-notify rc t))
+                                                (mutex-unlock rs)))
+                                            (let ((rounds 0))
+                                              (while (and (eq go nil) (< rounds 5))
+                                                (setq rounds (1+ rounds))
+                                                (condition-wait c))))
+                                        (mutex-unlock sym)))
+                                    (+ id 1))
+                                  "mg")
+                                 ths)))
+                        (setq i (1+ i)))
+                      (let ((sym rm))
+                        (mutex-lock sym)
+                        (unwind-protect
+                            (let ((rounds 0))
+                              (while (and (< ready n) (< rounds 50))
+                                (setq rounds (1+ rounds))
+                                (condition-wait rc)))
+                          (mutex-unlock sym)))
+                      (let ((sym m))
+                        (mutex-lock sym)
+                        (unwind-protect
+                            (progn
+                              (setq go t)
+                              (condition-notify c t))
+                          (mutex-unlock sym)))
+                      (let ((sum 0))
+                        (while ths
+                          (setq sum (+ sum (thread-join (car ths))))
+                          (setq ths (cdr ths)))
+                        (list ready sum))))
+                 t)"#,
+        )
+        .expect("gated workers park without sharing lisp-eval-depth");
+    let printed = crate::emacs_core::print::print_value(&value);
+    assert_eq!(printed, "(24 300)", "got {printed}");
+}
+
 #[test]
 fn test_builtin_condition_notify_noop() {
     crate::test_utils::init_test_tracing();

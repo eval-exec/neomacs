@@ -584,16 +584,18 @@ fn the_pending_counters_are_lock_free() {
 /// `maybe_quit`, where GNU's `process_pending_signals` notifies nothing at all
 /// (`pending_signals = false; handle_async_input (); do_pending_atimers ();`,
 /// src/keyboard.c:8367-8372, `grep -c status_notify` = 0).  Ledger 208 removed
-/// the disposition entirely, so this pin is now the STRONGER form of the same
-/// wire being cut: a real delivery reaches nothing here at all, and in
-/// particular does not set `pending_signals` and does not make `maybe_quit`'s
-/// drain do anything.
+/// the disposition entirely.  456ab01b28 re-added GNU's disposition as a
+/// flag-only equivalent of `catch_child_signal` (src/process.c:8645-8662);
+/// `os_signal::install` therefore claims SIGCHLD again.  The wire this pin
+/// keeps cut is the `pending_signals` one: a real delivery may reach the
+/// process latch, but it does not set `pending_signals` and does not make
+/// `maybe_quit`'s drain do anything.
 ///
 /// The delivery is a `kill` to the PROCESS, not `raise`, so the kernel may
 /// pick any thread -- the property this module is built around.
 #[cfg(unix)]
 #[test]
-fn a_delivered_sigchld_reaches_nothing_here_and_never_touches_pending_signals() {
+fn a_delivered_sigchld_never_touches_pending_signals() {
     let report = os_signal::install();
     assert_eq!(
         report.installed_count(),
@@ -611,8 +613,9 @@ fn a_delivered_sigchld_reaches_nothing_here_and_never_touches_pending_signals() 
     let _ = os_signal::take_pending();
 
     // The control that the signal was really delivered, without a counter to
-    // read: SIGCHLD's disposition is SIG_DFL, whose action for this signal is
-    // to ignore it, so `kill` succeeding is the whole of what can be observed.
+    // read: `install()` claims SIGCHLD with the flag-only equivalent of GNU's
+    // `deliver_child_signal` (src/process.c:8645-8662), so a known, non-default
+    // disposition is what `kill` below reaches.
     // SAFETY: `old` is written by `sigaction` before it is read; a null `act`
     // means "query only".
     let disposition = unsafe {
@@ -624,11 +627,18 @@ fn a_delivered_sigchld_reaches_nothing_here_and_never_touches_pending_signals() 
         );
         old.sa_sigaction
     };
-    assert_eq!(
+    assert_ne!(
         disposition,
         libc::SIG_DFL,
-        "this port installed a SIGCHLD disposition; ledger 208 deleted it, and \
-         re-adding one needs its own citation and its own entry"
+        "SIGCHLD must keep GNU's `catch_child_signal` disposition \
+         (src/process.c:8645-8662), the entry 456ab01b28 re-added after \
+         ledger 208 removed it"
+    );
+    assert_ne!(
+        disposition,
+        libc::SIG_IGN,
+        "GNU replaces SIG_IGN with a real child handler too \
+         (src/process.c:8655-8659)"
     );
     kill_self(libc::SIGCHLD);
 
@@ -689,25 +699,44 @@ fn os_signal_bit_raised_by_handler_and_cleared_by_drain() {
     );
 }
 
-/// The `lib_child_handler` question, and why ledger 208 made it stop arising.
+/// The `lib_child_handler` question, exercised now that SIGCHLD is claimed.
 ///
-/// `catch_child_signal` (src/process.c:8645-8660) keeps whatever handler was
-/// already installed and calls it as the last line of its own
+/// `catch_child_signal` (src/process.c:8645-8662) keeps whatever handler was
+/// already installed and calls it as the last line of `handle_child_signal`
 /// (`lib_child_handler (sig)`, :7769), *"On POSIXish systems lacking
 /// pidfd_open+waitid or using Glib 2.73.1-, Glib needs this to keep track of
 /// its own children"*.  On a kernel with `pidfd_open` and a Glib newer than
 /// 2.73.2 the hack is not needed and GNU's own `glib_installs_sigchld_handler`
 /// stays false (:8705-8731).
 ///
-/// Ledger 187 §8.1 named the chaining as an open question and ledger 184 built
-/// the chain for it.  **Installing nothing answers the question outright**:
-/// this port cannot break a library's SIGCHLD handler if it never replaces
-/// one, and a library that claims the signal keeps it.  This pin is that,
-/// asserted after `install()` so a future re-install has to come here and say
-/// what it does about `lib_child_handler`.
+/// Ledger 208 removed the disposition, which answered the question by never
+/// replacing a handler.  456ab01b28 re-added GNU's disposition; this pin
+/// installs a handler first and requires `install()` to preserve and call it,
+/// rather than merely leaving the signal alone.  The chained delivery also
+/// still must not touch `pending_signals`.
 #[cfg(unix)]
 #[test]
-fn this_port_leaves_sigchld_to_whoever_else_wants_it() {
+fn this_port_claims_sigchld_and_chains_the_previous_handler() {
+    static CHAINED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    extern "C" fn previous_child_handler(_signal: libc::c_int) {
+        CHAINED.store(true, std::sync::atomic::Ordering::Release);
+    }
+
+    // Install the previous handler BEFORE `install()` claims the signal, so it
+    // is the one `catch_child_signal`'s equivalent must preserve.
+    // SAFETY: `action` is fully initialised; the handler only stores an atomic.
+    unsafe {
+        let mut action: libc::sigaction = std::mem::zeroed();
+        libc::sigemptyset(&mut action.sa_mask);
+        action.sa_sigaction = previous_child_handler as usize;
+        action.sa_flags = libc::SA_RESTART;
+        assert_eq!(
+            libc::sigaction(libc::SIGCHLD, &action, std::ptr::null_mut()),
+            0,
+            "could not install the previous child handler"
+        );
+    }
+
     let _report = os_signal::install();
     // SAFETY: `old` is written by `sigaction` before it is read; a null `act`
     // means "query only".
@@ -720,13 +749,262 @@ fn this_port_leaves_sigchld_to_whoever_else_wants_it() {
         );
         old.sa_sigaction
     };
-    assert_eq!(
+    assert_ne!(
         disposition,
         libc::SIG_DFL,
-        "install() claimed SIGCHLD.  Ledger 208 deleted this port's \
-         disposition; re-adding one revives GNU's lib_child_handler question \
-         (src/process.c:7657, 8656-8659), which must then be exercised rather \
-         than merely present"
+        "install() must claim SIGCHLD as GNU's `catch_child_signal` does \
+         (src/process.c:8645-8662), the entry 456ab01b28 re-added after \
+         ledger 208 removed it"
+    );
+    assert_ne!(
+        disposition,
+        libc::SIG_IGN,
+        "GNU replaces SIG_IGN with a real child handler too \
+         (src/process.c:8655-8659)"
+    );
+    assert_ne!(
+        disposition, previous_child_handler as usize,
+        "install() must replace the previous handler, not leave it in place"
+    );
+
+    kill_self(libc::SIGCHLD);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while !CHAINED.load(std::sync::atomic::Ordering::Acquire)
+        && std::time::Instant::now() < deadline
+    {
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert!(
+        CHAINED.load(std::sync::atomic::Ordering::Acquire),
+        "the flag-only handler must call GNU's `lib_child_handler (sig)` \
+         (src/process.c:7657, :7769); the previous disposition was merely \
+         replaced"
+    );
+    assert!(
+        !os_signal::pending(),
+        "the chained SIGCHLD delivery still never assigns `pending_signals'"
+    );
+}
+
+/// A `SA_SIGINFO` predecessor is refused, not called with the wrong ABI.
+///
+/// GNU's `catch_child_signal` asserts the replaced handler has no
+/// `SA_SIGINFO` (src/process.c:8652-8653), but only in a debug build, and its
+/// expected predecessors (Glib, GNUstep) are one-argument handlers. A Rust
+/// library may install a three-argument SIGCHLD handler; calling it through
+/// the one-argument chain is undefined behaviour inside signal context. This
+/// port therefore records the flag at install and refuses to chain, with the
+/// diagnostic made there rather than in the handler.
+#[cfg(unix)]
+#[test]
+fn this_port_refuses_to_chain_a_siginfo_child_handler() {
+    static CALLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    /// # Safety
+    /// Installed only as an `SA_SIGINFO` SIGCHLD handler, so the kernel
+    /// supplies a valid signal number and the `siginfo_t`/`ucontext_t`
+    /// pointers its disposition guarantees. The body only stores an atomic.
+    unsafe extern "C" fn previous_siginfo_handler(
+        _signal: libc::c_int,
+        _info: *mut libc::siginfo_t,
+        _context: *mut libc::c_void,
+    ) {
+        CALLED.store(true, std::sync::atomic::Ordering::Release);
+    }
+
+    // SAFETY: `action` is fully initialised with the three-argument ABI and
+    // SA_SIGINFO set; the handler only stores an atomic.
+    unsafe {
+        let mut action: libc::sigaction = std::mem::zeroed();
+        libc::sigemptyset(&mut action.sa_mask);
+        action.sa_sigaction = previous_siginfo_handler as usize;
+        action.sa_flags = libc::SA_SIGINFO | libc::SA_RESTART;
+        assert_eq!(
+            libc::sigaction(libc::SIGCHLD, &action, std::ptr::null_mut()),
+            0,
+            "could not install the SA_SIGINFO predecessor"
+        );
+    }
+
+    let _report = os_signal::install();
+    // SAFETY: query only.
+    let disposition = unsafe {
+        let mut old: libc::sigaction = std::mem::zeroed();
+        assert_eq!(
+            libc::sigaction(libc::SIGCHLD, std::ptr::null(), &mut old),
+            0,
+            "could not read SIGCHLD's disposition"
+        );
+        old.sa_sigaction
+    };
+    assert_ne!(
+        disposition,
+        libc::SIG_DFL,
+        "install() must still claim SIGCHLD over an SA_SIGINFO predecessor"
+    );
+    assert_ne!(
+        disposition, previous_siginfo_handler as usize,
+        "install() must replace the predecessor"
+    );
+
+    kill_self(libc::SIGCHLD);
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    assert!(
+        !CALLED.load(std::sync::atomic::Ordering::Acquire),
+        "the SA_SIGINFO predecessor must not be called through the \
+         one-argument chain; that ABI mismatch is undefined behaviour"
+    );
+    assert!(
+        !os_signal::pending(),
+        "SIGCHLD still never assigns `pending_signals'"
+    );
+}
+
+/// A library that claims SIGCHLD after `install()` does not silence Neo.
+///
+/// GNU calls `catch_child_signal` again after Glib, GNUstep or WebKit touch
+/// the disposition (src/xgselect.c:268; src/xwidget.c:382, :3128, :4281,
+/// :4303). `reclaim_child_signal` is that re-claim: it restores the latch
+/// handler, keeps the foreign one, and chains it on the next delivery.
+#[cfg(unix)]
+#[test]
+fn reclaiming_after_a_foreign_handler_keeps_the_latch_and_chains_it() {
+    static FOREIGN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    extern "C" fn foreign_child_handler(_signal: libc::c_int) {
+        FOREIGN.store(true, std::sync::atomic::Ordering::Release);
+    }
+
+    let _ = os_signal::install();
+
+    // A library claims SIGCHLD after the port's install.
+    // SAFETY: `action` is fully initialised; the handler only stores an atomic.
+    unsafe {
+        let mut action: libc::sigaction = std::mem::zeroed();
+        libc::sigemptyset(&mut action.sa_mask);
+        action.sa_sigaction = foreign_child_handler as usize;
+        action.sa_flags = libc::SA_RESTART;
+        assert_eq!(
+            libc::sigaction(libc::SIGCHLD, &action, std::ptr::null_mut()),
+            0,
+            "could not install the foreign child handler"
+        );
+    }
+
+    assert!(
+        os_signal::reclaim_child_signal(),
+        "the re-claim must install the flag handler again"
+    );
+
+    // SAFETY: query only.
+    let disposition = unsafe {
+        let mut old: libc::sigaction = std::mem::zeroed();
+        assert_eq!(
+            libc::sigaction(libc::SIGCHLD, std::ptr::null(), &mut old),
+            0,
+            "could not read SIGCHLD's disposition"
+        );
+        old.sa_sigaction
+    };
+    assert_ne!(disposition, libc::SIG_DFL, "the re-claim was lost");
+    assert_ne!(
+        disposition, foreign_child_handler as usize,
+        "the re-claim must replace the foreign disposition"
+    );
+
+    kill_self(libc::SIGCHLD);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while !FOREIGN.load(std::sync::atomic::Ordering::Acquire)
+        && std::time::Instant::now() < deadline
+    {
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    // `note_child_signal` stores the latch before it chains, and the chain is
+    // the only thing that can set FOREIGN: the chained call proves both that
+    // the re-claimed handler ran and that its latch store executed.
+    assert!(
+        FOREIGN.load(std::sync::atomic::Ordering::Acquire),
+        "the re-claimed handler must fire and still chain the foreign handler"
+    );
+}
+
+#[cfg(unix)]
+fn installed_sigchld_action() -> libc::sigaction {
+    // SAFETY: query only; `old` is written before it is read.
+    unsafe {
+        let mut old: libc::sigaction = std::mem::zeroed();
+        assert_eq!(
+            libc::sigaction(libc::SIGCHLD, std::ptr::null(), &mut old),
+            0,
+            "could not read SIGCHLD's disposition"
+        );
+        old
+    }
+}
+
+/// SIGCHLD carries GNU's `emacs_sigaction_init` action in batch mode.
+///
+/// Mask always: SIGALRM, SIGCHLD, SIGWINCH (SIGDANGER where the platform
+/// defines it, SIGPROF only with GNU's PROFILER_CPU_SUPPORT); interactive
+/// adds SIGINT, SIGQUIT and SIGIO. Flags: this port keeps SA_RESTART in both
+/// modes, a recorded deviation from `emacs_sigaction_flags`
+/// (src/sysdep.c:1655-1673): the wake is the self-pipe/pidfd, and
+/// `epoll_wait` is never restarted whatever the flag says.
+#[cfg(unix)]
+#[test]
+fn sigchld_mask_and_flags_match_gnu_in_batch_mode() {
+    os_signal::install_termination(true);
+    let action = installed_sigchld_action();
+    for sig in [libc::SIGALRM, libc::SIGCHLD, libc::SIGWINCH] {
+        assert_eq!(
+            // SAFETY: `action.sa_mask` is an initialised signal set.
+            unsafe { libc::sigismember(&action.sa_mask, sig) },
+            1,
+            "batch SIGCHLD mask must contain signal {sig}"
+        );
+    }
+    for sig in [libc::SIGINT, libc::SIGQUIT, libc::SIGIO] {
+        assert_eq!(
+            // SAFETY: `action.sa_mask` is an initialised signal set.
+            unsafe { libc::sigismember(&action.sa_mask, sig) },
+            0,
+            "batch SIGCHLD mask must not contain interactive signal {sig}"
+        );
+    }
+    assert_ne!(
+        action.sa_flags & libc::SA_RESTART,
+        0,
+        "noninteractive emacs_sigaction_flags sets SA_RESTART"
+    );
+}
+
+/// The interactive half of the same pin: SIGINT/SIGQUIT/SIGIO are blocked
+/// while SIGCHLD runs, and SA_RESTART stays set — the same recorded deviation
+/// from GNU's interactive flags, so no blocking call takes a spurious EINTR
+/// on every child signal.
+#[cfg(unix)]
+#[test]
+fn sigchld_mask_and_flags_match_gnu_in_interactive_mode() {
+    os_signal::install_termination(false);
+    let action = installed_sigchld_action();
+    for sig in [
+        libc::SIGALRM,
+        libc::SIGCHLD,
+        libc::SIGWINCH,
+        libc::SIGINT,
+        libc::SIGQUIT,
+        libc::SIGIO,
+    ] {
+        assert_eq!(
+            // SAFETY: `action.sa_mask` is an initialised signal set.
+            unsafe { libc::sigismember(&action.sa_mask, sig) },
+            1,
+            "interactive SIGCHLD mask must contain signal {sig}"
+        );
+    }
+    assert_ne!(
+        action.sa_flags & libc::SA_RESTART,
+        0,
+        "this port keeps SA_RESTART interactively (recorded deviation: the \
+         self-pipe/pidfd wake, and epoll_wait never restarts)"
     );
 }
 

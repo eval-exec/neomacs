@@ -1,0 +1,7 @@
+# Run-only config for the E2 product TSan lane. No prlimit wrapper.
+# Pass it with --config-file. Do not edit .config/nextest.toml.
+nextest-version = "0.9.137"
+
+[profile.default]
+test-threads = 1
+slow-timeout = { period = "180s", terminate-after = 1 }

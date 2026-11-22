@@ -493,7 +493,8 @@ fn try_decorate_window_cursor(
     params: &WindowParams,
     text_area_left: f32,
     window_top: f32,
-    char_w: f32,
+    frame_char_width: f32,
+    default_face_char_width: f32,
     default_height: f32,
     default_ascent: f32,
     measurement: DisplayRowMeasurementPolicy,
@@ -503,7 +504,9 @@ fn try_decorate_window_cursor(
         .current_window_row(cursor_row)
     {
         Some(row) => {
-            let mut width = char_w;
+            // Preserve buffer-default remapping in the glyphless insertion
+            // fallback; the frame width describes grid geometry.
+            let mut width = default_face_char_width;
             if let Some(glyph) =
                 crate::display_cursor::CursorVisualColumnResolutionRequest::point_glyph(row, point)
             {
@@ -512,7 +515,7 @@ fn try_decorate_window_cursor(
                     glyph.pixel_width,
                     matches!(glyph.glyph_type, GlyphType::Stretch { .. }),
                     params.x_stretch_cursor,
-                    char_w,
+                    frame_char_width,
                 );
             }
             let Some((face_height, face_ascent)) =
@@ -531,7 +534,7 @@ fn try_decorate_window_cursor(
             );
             (y, height, ascent, width)
         }
-        None => (0.0, default_height, default_ascent, char_w),
+        None => (0.0, default_height, default_ascent, default_face_char_width),
     };
     let window_id_i64 = window_id as i64;
     let paint = replay_cursor_paint(output, cursor_row, point, params);
@@ -559,7 +562,7 @@ fn try_decorate_window_cursor(
         output_emitter,
         FastPathCursorPlacement::Reconstructed {
             output_cursor: cursor,
-            char_width: char_w,
+            char_width: frame_char_width,
         },
         params.cursor_role,
         text_area_left,
@@ -596,7 +599,15 @@ impl BufferSourceOutputSetup {
             max_rows,
             walk_setup,
         );
-        setup.begin_request = setup.begin_request.with_source_extent(params.source_extent);
+        setup.begin_request = setup
+            .begin_request
+            .with_source_extent(params.source_extent)
+            .with_bidi_paragraph_directions(params.bidi_paragraph_directions)
+            .with_text_geometry_units(if params.window_system {
+                neomacs_display_protocol::glyph_matrix::TextGeometryUnits::Pixels
+            } else {
+                neomacs_display_protocol::glyph_matrix::TextGeometryUnits::TerminalCells
+            });
         setup.row_visibility_limit.allow_partial = params.window_system
             && !params.kind.is_minibuffer()
             && params.measurement_rows.is_none();
@@ -1015,7 +1026,10 @@ impl BufferSourceOutputSetup {
             // Combine row ascent with the point face's descent through the
             // canonical cursor geometry rule. Width comes from the point glyph.
             // Fall back to row metrics at EOL or hidden text without a glyph.
-            let mut cursor_width = geometry.char_width;
+            // A newline has no semantic point glyph. Preserve the remapped
+            // default width for that insertion fallback, independently of the
+            // frame grid (the ordinary newline inherits this default font).
+            let mut cursor_width = default_face.char_width();
             let mut cursor_stretch_like = false;
             let mut cursor_height = geometry.char_height;
             let mut cursor_ascent = window_metrics.ascent();
@@ -1248,6 +1262,26 @@ impl BufferSourceOutputSetup {
                     Ok(metrics) => metrics,
                     Err(changed) => return changed.into(),
                 };
+            // The walk may have read before the window-range overlay view's
+            // start, or consumed at/past its end. Either answer comes from a
+            // subset. Nothing is installed yet; restore the checkpoint and
+            // retry the leaf once with the whole-buffer view.
+            if buffer.layout_overlay_view_start_underflow()
+                || buffer.layout_overlay_view_end_char().is_some_and(|end| {
+                    redisplay_positions
+                        .window_end_position()
+                        .anchor()
+                        .char_pos()
+                        .get()
+                        >= end.get()
+                })
+            {
+                crate::window_output::restore_text_window_retry_checkpoint(
+                    output.reborrow(),
+                    retry_checkpoint,
+                );
+                return BufferSourceRenderAttemptOutcome::OverlayViewExhausted;
+            }
             tail_context.finish_and_install(
                 TextWindowFinishState::new(output, output_emitter, evaluator),
                 measured_chrome_heights,
@@ -1758,6 +1792,7 @@ impl BufferSourceOutputSetup {
                     walk_setup.text_area_left,
                     walk_setup.window_top,
                     geometry.char_width,
+                    default_face.char_width(),
                     geometry.char_height,
                     window_metrics.ascent(),
                     default_face.measurement_policy(),
@@ -1861,6 +1896,26 @@ impl BufferSourceOutputSetup {
                     Err(changed) => return changed.into(),
                 };
 
+            // The walk may have read before the window-range overlay view's
+            // start, or consumed at/past its end. Either answer comes from a
+            // subset. Nothing is installed yet; restore the checkpoint and
+            // retry the leaf once with the whole-buffer view.
+            if buffer.layout_overlay_view_start_underflow()
+                || buffer.layout_overlay_view_end_char().is_some_and(|end| {
+                    redisplay_positions
+                        .window_end_position()
+                        .anchor()
+                        .char_pos()
+                        .get()
+                        >= end.get()
+                })
+            {
+                crate::window_output::restore_text_window_retry_checkpoint(
+                    output.reborrow(),
+                    retry_checkpoint,
+                );
+                return BufferSourceRenderAttemptOutcome::OverlayViewExhausted;
+            }
             tail_context.finish_and_install(
                 TextWindowFinishState::new(output, output_emitter, evaluator),
                 measured_chrome_heights,
@@ -2142,6 +2197,26 @@ impl BufferSourceOutputSetup {
         } else {
             crate::buffer_source::render_attempt::QueryRowCoverage::Complete
         };
+        // The walk may have read before the window-range overlay view's
+        // start, or consumed at/past its end. Either answer comes from a
+        // subset. Nothing is installed yet; restore the checkpoint and retry
+        // the leaf once with the whole-buffer view.
+        if buffer.layout_overlay_view_start_underflow()
+            || buffer.layout_overlay_view_end_char().is_some_and(|end| {
+                redisplay_positions
+                    .window_end_position()
+                    .anchor()
+                    .char_pos()
+                    .get()
+                    >= end.get()
+            })
+        {
+            crate::window_output::restore_text_window_retry_checkpoint(
+                output.reborrow(),
+                retry_checkpoint,
+            );
+            return BufferSourceRenderAttemptOutcome::OverlayViewExhausted;
+        }
         tail_context.finish_and_install(
             TextWindowFinishState::new(output, output_emitter, evaluator),
             measured_chrome_heights,

@@ -4,6 +4,7 @@ use super::super::alloc_region::{ConsRegionSource, FloatRegionSource, RegionStat
 use super::super::arena_pages::ArenaRunSource;
 use super::super::cons_allocator::ConsBlockBase;
 use super::super::mark_word::MarkWord;
+use super::super::owner_alloc_region::{ConsTailRefund, OwnerAllocRegion};
 use super::super::pacing::GenerationPacingCounters;
 use super::super::satb::SatbHandoff;
 use super::super::young_registry::{
@@ -325,6 +326,29 @@ fn every_open_region_fact_refuses_publication_before_moving_owner_facts() {
         state.restore(image).unwrap();
         assert_scalar_facts(&state);
     }
+}
+
+#[test]
+fn an_open_owner_region_refuses_publication_without_moving_facts() {
+    let mut state = owner(HeapIdentity::issue());
+    seed_scalar_facts(&mut state);
+    let mut region = OwnerAllocRegion::new();
+    region.install_cons_free_list(0x1000, 2);
+    assert!(matches!(
+        state.validate_publication_with_owner(&region),
+        Err(ImageError::RegionsOpen)
+    ));
+    assert_scalar_facts(&state);
+    let refund = region.close_for_stop();
+    assert_eq!(
+        refund.cons,
+        ConsTailRefund::FreeList {
+            first: 0x1000,
+            cells: 2,
+        }
+    );
+    state.validate_publication_with_owner(&region).unwrap();
+    assert_scalar_facts(&state);
 }
 
 #[test]

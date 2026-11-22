@@ -1978,6 +1978,7 @@ fn opened_font_retains_exact_backend_identity_and_variations() {
                 descent_px: 6.0,
                 space_advance_px: 9.0,
                 glyph_advance: Default::default(),
+                spacing: None,
             },
             foundry: Some(LispString::from_utf8("TEST")),
             slant: FontSlant::Normal,
@@ -2154,6 +2155,79 @@ fn font_shape_gstring_fills_slots_through_the_installed_shaper() {
     assert_eq!(glyph[1], Value::fixnum(1), "to");
     assert_eq!(glyph[3], Value::fixnum(0xF1), "the shaper's glyph code");
     assert_eq!(glyph[4], Value::fixnum(13), "the shaper's advance");
+}
+
+#[test]
+fn font_shape_gstring_accepts_several_glyphs_in_one_cluster() {
+    // GNU's coverage rule (src/font.c Ffont_shape_gstring) compares a glyph's
+    // FROM with the PREVIOUS GLYPH's FROM: glyphs of one grapheme cluster all
+    // share a single from/to pair, and that `to` may span more than one
+    // character.  Comparing against the previous TO instead rejected a
+    // shaped base+mark cluster such as Devanagari "ते" (two glyphs, from=0
+    // to=1), so find-composition returned nil for a composition the display
+    // matrix had drawn (issue #785).
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+
+    let font = build_font_object(&RuntimeFace::new("default"));
+    let gstring = neovm_text::emacs_core::composite::composition_get_gstring(
+        &mut eval,
+        vec![
+            Value::fixnum(0),
+            Value::fixnum(3),
+            font,
+            Value::string("abc"),
+        ],
+    )
+    .expect("composition-get-gstring should build a GNU-shaped gstring");
+
+    // "ab" is one cluster with two glyphs (from=0 to=1); "c" is its own
+    // cluster (from=2 to=2).
+    eval.font_shape_fn = Some(Box::new(|_eval, gstring, _direction| {
+        let Some(slots) = gstring.as_vector_data() else {
+            return crate::emacs_core::font::GstringShapeOutcome::NotShapable;
+        };
+        if slots.len() < 5 {
+            return crate::emacs_core::font::GstringShapeOutcome::NeedLargerGlyphs;
+        }
+        let glyph = |from: i64, to: i64, code: i64, width: i64| {
+            Value::vector(vec![
+                Value::fixnum(from),
+                Value::fixnum(to),
+                Value::NIL,
+                Value::fixnum(code),
+                Value::fixnum(width),
+                Value::NIL,
+                Value::NIL,
+                Value::NIL,
+                Value::NIL,
+                Value::NIL,
+            ])
+        };
+        gstring.set_vector_slot(2, glyph(0, 1, 0xE1, 7));
+        gstring.set_vector_slot(3, glyph(0, 1, 0xE2, 0));
+        gstring.set_vector_slot(4, glyph(2, 2, 0xE3, 9));
+        gstring.set_vector_slot(5, Value::NIL);
+        crate::emacs_core::font::GstringShapeOutcome::Shaped(3)
+    }));
+
+    let shaped = font_shape_gstring(&mut eval, vec![gstring.clone(), Value::NIL])
+        .expect("a shared-cluster gstring must not signal");
+    assert!(
+        !shaped.is_nil(),
+        "a multi-glyph cluster whose to spans its characters must shape"
+    );
+    let slots = shaped.as_vector_data().expect("gstring vector");
+    let first = slots[2].as_vector_data().expect("first glyph");
+    let second = slots[3].as_vector_data().expect("second glyph");
+    let third = slots[4].as_vector_data().expect("third glyph");
+    assert_eq!((first[0].as_int(), first[1].as_int()), (Some(0), Some(1)));
+    assert_eq!(
+        (second[0].as_int(), second[1].as_int()),
+        (Some(0), Some(1)),
+        "same cluster keeps the same from/to"
+    );
+    assert_eq!((third[0].as_int(), third[1].as_int()), (Some(2), Some(2)));
 }
 
 #[test]

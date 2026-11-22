@@ -25,6 +25,55 @@ fn default_geometry_hints() -> GuiFrameGeometryHints {
     }
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn display_raster_policy_survives_device_teardown_and_primary_readoption() {
+    use crate::display_raster::DisplayRasterOptions;
+    use neomacs_font_materializer::fontconfig::{
+        SurfaceFontOptions, SurfaceSubpixelOrder, XftResources,
+    };
+    let options = DisplayRasterOptions::X11(SurfaceFontOptions::from_xlib_resources(
+        XftResources::default(),
+        SurfaceSubpixelOrder::Unknown,
+    ));
+    let mut manager = GuiFrameWindowManager::new();
+    manager.set_font_raster_options(options);
+    manager.set_primary_pending(GuiFrameWindowState {
+        visibility: WindowVisibility::Visible,
+        pending_scale_factor: None,
+        lifecycle: FrameLifecycle::Pending {
+            width: 800,
+            height: 600,
+            scale_factor: 1.0,
+            mouse_hidden_for_typing: false,
+            ime_enabled: false,
+            last_ime_cursor_area: None,
+            chrome: Default::default(),
+            geometry_hints: None,
+            pending_position: None,
+        },
+        render: GuiFrameRenderState::new_without_device(
+            42,
+            false,
+            neomacs_display_protocol::frame_time::observe_platform_now(),
+        ),
+    });
+    manager.adopt_primary_frame_id(42);
+    assert_eq!(manager.get(42).unwrap().render.font_raster_options, options);
+    manager.clear_gpu_resident_state();
+    assert_eq!(manager.get(42).unwrap().render.font_raster_options, options);
+
+    let detached = manager.take_primary_window().unwrap();
+    manager.clear_primary_mapping();
+    manager.set_font_raster_options(DisplayRasterOptions::Wayland);
+    manager.set_primary_pending(detached);
+    manager.adopt_primary_frame_id(42);
+    assert_eq!(
+        manager.get(42).unwrap().render.font_raster_options,
+        DisplayRasterOptions::Wayland
+    );
+}
+
 #[test]
 fn gui_text_input_policy_enables_native_ime_on_window_creation() {
     let policy = NativeTextInputPolicy::for_gui_frame();
@@ -750,6 +799,323 @@ fn dirty_render_state_with_current_frame_is_presentable() {
     render.mark_dirty();
 
     assert!(render.has_presentable_dirty_content());
+}
+
+/// A native size report for an extent the retained presentation already has
+/// is not a change: GNU skips an unchanged native size (gtkutil.c:1146-1150)
+/// and the evaluator publishes a frame only when the root bounds move, so
+/// withholding here would have no presentation able to release it.
+#[test]
+fn unchanged_native_resize_does_not_withhold_the_retained_presentation() {
+    let mut render = GuiFrameRenderState::new_without_device(
+        0x42,
+        false,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
+    let frame = make_frame(0x42, 0); // 800x600
+    render.set_current_frame(Some(frame), None, Default::default(), Default::default());
+    render.mark_dirty();
+    assert!(render.has_presentable_dirty_content());
+
+    render.note_native_resize(800, 600);
+
+    assert!(!render.native_resize_withheld());
+    assert!(
+        render.has_presentable_dirty_content(),
+        "an unchanged native size must not withhold the retained presentation"
+    );
+
+    // A later report of the retained extent also cancels an outstanding wait
+    // for a different one.
+    render.note_native_resize(900, 650);
+    assert!(render.native_resize_withheld());
+    render.note_native_resize(800, 600);
+    assert!(!render.native_resize_withheld());
+}
+
+/// A native resize runs before the evaluator can return a presentation laid
+/// out for it. GNU queues the native size in the GTK resize handler
+/// (gtkutil.c:1159, delay=true), and `change_frame_size_1` applies it at the
+/// next redisplay before drawing (dispnew.c:6694-6742), so Emacs never draws
+/// the pre-resize layout on the resized surface.
+#[test]
+fn native_resize_withholds_until_a_presentation_of_the_requested_extent() {
+    let mut render = GuiFrameRenderState::new_without_device(
+        0x42,
+        false,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
+    render.set_current_frame(
+        Some(make_frame(0x42, 0)), // 800x600
+        None,
+        Default::default(),
+        Default::default(),
+    );
+    render.mark_dirty();
+    render.compositor.cursor_dirty = true;
+    assert!(render.has_presentable_dirty_content());
+    assert!(render.has_presentable_cursor_change());
+
+    render.note_native_resize(900, 650);
+
+    assert!(render.native_resize_withheld());
+    assert!(
+        !render.has_presentable_dirty_content(),
+        "the retained scene is still laid out for the old extent; it must \
+         not reach the resized surface"
+    );
+    assert!(
+        !render.has_presentable_cursor_change(),
+        "a cursor-only composite also paints the retained (old-extent) scene"
+    );
+
+    // A frame already in flight when the resize was sent still carries the
+    // old extent, however recently it is installed.
+    render.set_current_frame(
+        Some(make_frame(0x42, 0)),
+        None,
+        Default::default(),
+        Default::default(),
+    );
+    assert!(render.native_resize_withheld());
+    assert!(!render.has_presentable_dirty_content());
+
+    // Nor does any other mismatched extent answer the report (the busy
+    // evaluator can deliver a layout for an intermediate size).
+    let mut intermediate = make_frame(0x42, 0);
+    intermediate.width = 850.0;
+    intermediate.height = 620.0;
+    render.set_current_frame(
+        Some(intermediate),
+        None,
+        Default::default(),
+        Default::default(),
+    );
+    assert!(render.native_resize_withheld());
+    assert!(!render.has_presentable_dirty_content());
+
+    let mut relaid = make_frame(0x42, 0);
+    relaid.width = 900.0;
+    relaid.height = 650.0;
+    render.set_current_frame(Some(relaid), None, Default::default(), Default::default());
+
+    assert!(!render.native_resize_withheld());
+    assert!(render.has_presentable_dirty_content());
+    assert!(render.has_presentable_cursor_change());
+}
+
+/// A size the evaluator cannot reproduce (a minimum-size clamp, or a
+/// rounding policy) must not leave the window blank forever; the wait is
+/// bounded and the retained presentation is drawn after it.
+#[test]
+fn native_resize_withholding_is_bounded() {
+    let mut render = GuiFrameRenderState::new_without_device(
+        0x42,
+        false,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
+    render.set_current_frame(
+        Some(make_frame(0x42, 0)),
+        None,
+        Default::default(),
+        Default::default(),
+    );
+    render.mark_dirty();
+    render.note_native_resize(1200, 900);
+
+    assert!(render.native_resize_withheld());
+    assert!(!render.has_presentable_dirty_content());
+    let later = neomacs_display_protocol::frame_time::observe_platform_now()
+        .plus(NATIVE_RESIZE_WITHHOLD_LIMIT + Duration::from_secs(1));
+    assert!(
+        !render.native_resize_withheld_at(later),
+        "a native extent the evaluator never reproduces must not freeze the window"
+    );
+}
+
+/// The wait is anchored to the first unanswered report. Later reports of a
+/// changed extent update the target but must not push the deadline forward:
+/// a continuous drag, or a stream of state-only reports while the evaluator
+/// lags, would otherwise withhold indefinitely.
+#[test]
+fn repeated_native_resize_reports_do_not_extend_the_withhold_deadline() {
+    let mut render = GuiFrameRenderState::new_without_device(
+        0x42,
+        false,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
+    render.set_current_frame(
+        Some(make_frame(0x42, 0)), // 800x600
+        None,
+        Default::default(),
+        Default::default(),
+    );
+    render.mark_dirty();
+
+    let first = neomacs_display_protocol::frame_time::observe_platform_now();
+    render.note_native_resize_at(900, 650, first);
+    let deadline = render
+        .native_resize_awaiting
+        .expect("outstanding native-resize wait")
+        .deadline;
+
+    render.note_native_resize_at(950, 700, first.plus(Duration::from_millis(600)));
+
+    let awaiting = render
+        .native_resize_awaiting
+        .expect("the wait is still outstanding");
+    assert_eq!(
+        awaiting.deadline, deadline,
+        "a later report must keep the first deadline instead of sliding it"
+    );
+    assert_eq!(
+        (awaiting.width, awaiting.height),
+        (950, 700),
+        "a later report still retargets the requested extent"
+    );
+    assert!(
+        render.native_resize_withheld_at(
+            first.plus(NATIVE_RESIZE_WITHHOLD_LIMIT - Duration::from_millis(1))
+        ),
+        "the retargeted wait is still withheld before the first deadline"
+    );
+    assert!(
+        !render.native_resize_withheld_at(first.plus(NATIVE_RESIZE_WITHHOLD_LIMIT)),
+        "two reports 0.6 s apart must not be withheld at the first report + 1 s"
+    );
+}
+
+/// An expired wait is the clamped-extent failsafe, not a reusable wait: the
+/// evaluator never reproduced the requested extent, so `set_current_frame`
+/// never cleared it. Reusing that expired record would keep its past deadline
+/// and leave every later resize unwithheld, reinstating the #178 staleness.
+#[test]
+fn an_expired_native_resize_wait_does_not_disable_later_resizes() {
+    let mut render = GuiFrameRenderState::new_without_device(
+        0x42,
+        false,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
+    render.set_current_frame(
+        Some(make_frame(0x42, 0)), // 800x600
+        None,
+        Default::default(),
+        Default::default(),
+    );
+    render.mark_dirty();
+
+    let first = neomacs_display_protocol::frame_time::observe_platform_now();
+    render.note_native_resize_at(1200, 900, first);
+    let expired = first.plus(NATIVE_RESIZE_WITHHOLD_LIMIT + Duration::from_millis(1));
+
+    // The evaluator never produced 1200x900; after the bound the wait is inert.
+    assert!(!render.native_resize_withheld_at(expired));
+    assert_eq!(render.native_resize_withhold_deadline_at(expired), None);
+
+    // A genuinely new extent must be withheld again, anchored at its own
+    // report rather than at the expired record's past deadline.
+    render.note_native_resize_at(1000, 700, expired);
+    assert!(
+        render.native_resize_withheld_at(expired),
+        "a later resize must be withheld again after an expired wait"
+    );
+    assert!(render.native_resize_withheld_at(
+        expired.plus(NATIVE_RESIZE_WITHHOLD_LIMIT - Duration::from_millis(1))
+    ));
+    assert_eq!(
+        render
+            .native_resize_awaiting
+            .expect("the later report starts a fresh wait")
+            .deadline,
+        expired.plus(NATIVE_RESIZE_WITHHOLD_LIMIT),
+        "the later report gets its own deadline, not the expired one"
+    );
+    assert!(!render.native_resize_withheld_at(expired.plus(NATIVE_RESIZE_WITHHOLD_LIMIT)));
+}
+
+/// The failsafe deadline is visible exactly while the wait is live and
+/// vanishes as soon as a presentation of the requested extent is installed.
+#[test]
+fn native_resize_withhold_deadline_tracks_the_wait_and_a_match() {
+    let mut render = GuiFrameRenderState::new_without_device(
+        0x42,
+        false,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
+    render.set_current_frame(
+        Some(make_frame(0x42, 0)), // 800x600
+        None,
+        Default::default(),
+        Default::default(),
+    );
+    render.mark_dirty();
+
+    let now = neomacs_display_protocol::frame_time::observe_platform_now();
+    render.note_native_resize_at(900, 650, now);
+    let probe = now.plus(Duration::from_millis(1));
+    let deadline = render
+        .native_resize_withhold_deadline_at(probe)
+        .expect("the wait is live");
+    assert_eq!(
+        deadline,
+        render
+            .native_resize_awaiting
+            .expect("outstanding wait")
+            .deadline
+    );
+
+    let mut relaid = make_frame(0x42, 0);
+    relaid.width = 900.0;
+    relaid.height = 650.0;
+    render.set_current_frame(Some(relaid), None, Default::default(), Default::default());
+
+    assert_eq!(render.native_resize_withhold_deadline_at(probe), None);
+    assert!(!render.native_resize_withheld_at(probe));
+}
+
+/// The coordinator decides from one pass instant: while the wait is live the
+/// ordinary Redisplay reason is retracted and the failsafe deadline must be
+/// re-armed with the *same* `now`; at the deadline both flip together. Two
+/// independent clock reads straddling the deadline would remove the scheduled
+/// wake and leave the window stalled.
+#[test]
+fn withheld_demand_and_failsafe_deadline_agree_at_the_pass_instant() {
+    let mut render = GuiFrameRenderState::new_without_device(
+        0x42,
+        false,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
+    render.set_current_frame(
+        Some(make_frame(0x42, 0)), // 800x600
+        None,
+        Default::default(),
+        Default::default(),
+    );
+    render.mark_dirty();
+
+    let pass = neomacs_display_protocol::frame_time::observe_platform_now();
+    render.note_native_resize_at(900, 650, pass);
+
+    let before = pass.plus(NATIVE_RESIZE_WITHHOLD_LIMIT - Duration::from_millis(1));
+    assert!(
+        !render.has_presentable_dirty_content_at(before),
+        "before the deadline the retained extent is withheld and Redisplay retracted"
+    );
+    let deadline = render
+        .native_resize_withhold_deadline_at(before)
+        .expect("the same pass instant must re-arm the failsafe");
+
+    let at = pass.plus(NATIVE_RESIZE_WITHHOLD_LIMIT);
+    assert!(
+        render.has_presentable_dirty_content_at(at),
+        "at the deadline the ordinary Redisplay demand fires"
+    );
+    assert_eq!(
+        render.native_resize_withhold_deadline_at(at),
+        None,
+        "and the failsafe submits nothing for the same instant"
+    );
+    assert_eq!(deadline, pass.plus(NATIVE_RESIZE_WITHHOLD_LIMIT));
 }
 
 #[test]

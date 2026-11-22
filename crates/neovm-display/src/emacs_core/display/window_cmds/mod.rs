@@ -1832,18 +1832,21 @@ pub(crate) fn window_line_wrap(
 
     // Re-read through the buffer: `eval.buffers` was borrowed mutably above.
     let current_buffer = eval.edit.buffers.get(current_buffer_id);
-    let partial_width_truncates =
-        match neovm_edit::emacs_core::indent::dynamic_buffer_or_global_symbol_value_fixed(
+    let truncate_partial_width =
+        neovm_edit::emacs_core::indent::dynamic_buffer_or_global_symbol_value_fixed(
             eval.variables(),
             &[],
             current_buffer,
             &neovm_value::intern::WellKnown::TruncatePartialWidthWindows,
-        ) {
-            Some(value) if value.is_nil() => false,
-            Some(value) if value.is_fixnum() => window_cols < value.as_fixnum().unwrap(),
-            Some(_) => true,
-            None => false,
-        };
+        );
+    // One shared predicate with the edit host's scan_for_column gate
+    // (neovm-value::display_vocab): the display and indent layers must not
+    // decide partial width differently.
+    let partial_width_truncates = neovm_value::display_vocab::partial_width_truncates(
+        window_cols,
+        root_cols,
+        truncate_partial_width,
+    );
     if partial_width_truncates {
         LineWrap::Truncate
     } else {
@@ -2218,10 +2221,10 @@ pub fn builtin_tty_frame_edges(
 /// `(neomacs-frame-edges &optional FRAME TYPE)` -> GUI frame edges.
 ///
 /// GNU's toolkit-specific `*-frame-edges` functions return a four-number
-/// edge list for `outer-edges`, `native-edges` (or nil), and `inner-edges`.
-/// Neomacs renders frames into one GPU-composited display surface, so native
-/// and outer edges currently coincide; inner edges exclude the frame's
-/// internal border just like GNU's `frame_geometry`.
+/// edge list for `outer-edges`, `native-edges` (or nil), and `inner-edges`
+/// (src/xfns.c:7008).  The native edges exclude the external menu/tool bar
+/// band, which Neomacs draws inside its own window; the inner edges also
+/// exclude the internal border and the tab bar (src/xfns.c:6778-6958).
 #[doc(hidden)]
 pub fn builtin_neomacs_frame_edges(
     eval: &mut neovm_eval::emacs_core::eval::Context,
@@ -2251,25 +2254,45 @@ pub fn builtin_neomacs_frame_edges(
                 vec![Value::string("Frame origin unavailable for frame edges")],
             )
         })?;
-    let mut left = left.round() as i64;
-    let mut top = top.round() as i64;
-    let mut right = left.saturating_add(i64::from(frame.width));
-    let mut bottom = top.saturating_add(i64::from(frame.height));
+    let left = left.round() as i64;
+    let top = top.round() as i64;
+    let right = left.saturating_add(i64::from(frame.width));
+    let bottom = top.saturating_add(i64::from(frame.height));
+    let external_bar_height = i64::from(
+        frame
+            .menu_bar_height
+            .saturating_add(frame.tool_bar_height)
+            .saturating_add(frame.compact_bar_height),
+    );
+    let border = frame.internal_border_width().max(0);
+    let native_top = top.saturating_add(external_bar_height);
+    let requested = args.get(1);
 
-    if args
-        .get(1)
-        .is_some_and(|value| value.is_symbol_named("inner-edges", symbol_mode))
-    {
-        let border = frame.internal_border_width().max(0);
-        left = left.saturating_add(border);
-        top = top.saturating_add(border);
-        right = right.saturating_sub(border);
-        bottom = bottom.saturating_sub(border);
+    if requested.is_some_and(|value| value.is_symbol_named("outer-edges", symbol_mode)) {
+        return Ok(Value::list(vec![
+            Value::fixnum(left),
+            Value::fixnum(top),
+            Value::fixnum(right),
+            Value::fixnum(bottom),
+        ]));
+    }
+    if requested.is_some_and(|value| value.is_symbol_named("inner-edges", symbol_mode)) {
+        return Ok(Value::list(vec![
+            Value::fixnum(left.saturating_add(border)),
+            Value::fixnum(
+                native_top
+                    .saturating_add(border)
+                    .saturating_add(i64::from(frame.tab_bar_height)),
+            ),
+            Value::fixnum(right.saturating_sub(border)),
+            Value::fixnum(bottom.saturating_sub(border)),
+        ]));
     }
 
+    // `native-edges`, nil, and any other TYPE all mean native edges.
     Ok(Value::list(vec![
         Value::fixnum(left),
-        Value::fixnum(top),
+        Value::fixnum(native_top),
         Value::fixnum(right),
         Value::fixnum(bottom),
     ]))
@@ -3663,13 +3686,44 @@ pub fn builtin_window_pixel_left(
     let graphical = frame.is_some_and(|frame| frame.effective_window_system().is_some());
     let cw = frame.map(|frame| frame.char_width).unwrap_or(8.0);
     let left = if graphical {
-        // GNU `Fwindow_pixel_left` returns `w->pixel_left` directly.
-        w.bounds().x as i64
+        // GNU `Fwindow_pixel_left` returns `w->pixel_left` directly, measured
+        // from the frame's window area; the internal border is not part of
+        // any window's pixel origin (lisp/window.el:3839 `window-edges` adds
+        // it separately when it reports body edges).
+        let border = frame.map(window_area_border_offset).unwrap_or(0);
+        (w.bounds().x as i64 - border).max(0)
     } else {
         tty_batch_pixel_left(w, cw)
     };
     Ok(Value::fixnum(left))
 }
+
+/// Pixel offset between Neomacs' window-tree origin and GNU's window-area
+/// origin for the top-left corner, as `(left, top)`.
+///
+/// GNU's `w->pixel_top` starts at `FRAME_TOP_MARGIN_HEIGHT` (src/window.c:
+/// 5077-5105) and its window tree carries no internal-border offset: the root
+/// window's pixel origin is the window area's origin.  Neomacs stores the menu
+/// and tool bar band and the internal border inside the window tree so the
+/// renderer can paint them, so both are subtracted here.
+///
+/// Only the menu and tool bar band moves: GNU's Gtk+ and NS builds keep those
+/// bars outside the native frame, while the tab bar is part of the window
+/// area (and therefore part of `FRAME_TOP_MARGIN_HEIGHT`).
+fn window_area_origin_offset(frame: &crate::window::Frame) -> (i64, i64) {
+    let external_bar = if frame.displays_chrome {
+        i64::from(frame.external_bar_height())
+    } else {
+        0
+    };
+    let border = window_area_border_offset(frame);
+    (border, external_bar + border)
+}
+
+fn window_area_border_offset(frame: &crate::window::Frame) -> i64 {
+    frame.internal_border_width().max(0)
+}
+
 /// `(window-pixel-top &optional WINDOW)` -> integer.
 ///
 /// Graphical frames report the stored frame-relative pixel coordinate.  In
@@ -3687,8 +3741,14 @@ pub fn builtin_window_pixel_top(
     let graphical = frame.is_some_and(|frame| frame.effective_window_system().is_some());
     let ch = frame.map(|frame| frame.char_height).unwrap_or(16.0);
     let top = if graphical {
-        // GNU `Fwindow_pixel_top` returns `w->pixel_top` directly.
-        w.bounds().y as i64
+        // GNU `Fwindow_pixel_top` returns `w->pixel_top`, relative to the
+        // frame's window area: the root starts at `FRAME_TOP_MARGIN_HEIGHT`
+        // and every child inherits that origin (src/window.c:5077-5105).  A
+        // GTK3 oracle frame reports 0 here with its menu and tool bars on,
+        // and a `(cells 1 1)` posframe anchor at top 17 for exactly this
+        // reason.
+        let (_, top_offset) = frame.map(window_area_origin_offset).unwrap_or((0, 0));
+        (w.bounds().y as i64 - top_offset).max(0)
     } else {
         tty_batch_pixel_top(w, ch)
     };
@@ -6511,6 +6571,162 @@ fn scroll_lines_in_state(
         .unwrap_or(2);
     (wh - ctx).max(1) * direction
 }
+/// GNU `window_scroll_for_long_lines` (`src/window.c:6242-6315`), reached
+/// from `window_scroll` when `whole && long_lines_truncated`
+/// (`src/window.c:6157-6182`).  Whole-window scrolls only: nil ARG and `-`
+/// are whole, a numeric ARG is not (`src/window.c:7008-7014`).
+///
+/// The path is deliberately simplified exactly as GNU's: `n` is multiplied by
+/// `max (1, ht - next-screen-context-lines)`, motion goes through `vmotion`
+/// (`MotionEngine::ComputeMotion`), and scroll-margin /
+/// scroll-preserve-screen-position are not honored.  No Lisp runs on this
+/// path, so GNU's `specbind (Qfontification_functions, Qnil)`
+/// (`src/window.c:6178-6179`) has no observable counterpart here; the TUI row
+/// pins that a whole scroll runs no fontification function.
+fn try_scroll_long_lines(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    arg: Option<&Value>,
+    direction: i64,
+) -> Result<bool, Flow> {
+    use neovm_edit::emacs_core::edit_host::EditHost;
+    let minus = arg.is_some_and(|value| value.as_bare_symbol_name() == Some("-"));
+    let whole = match arg {
+        None => true,
+        Some(value) if value.is_nil() => true,
+        Some(_) => minus,
+    };
+    if !whole {
+        return Ok(false);
+    }
+    let frame = ensure_selected_frame_id(eval);
+    let Some(wid) = eval
+        .frame_manager()
+        .get(frame)
+        .map(|frame| frame.selected_window)
+    else {
+        return Ok(false);
+    };
+    let Some(buffer_id) = eval
+        .frame_manager()
+        .get(frame)
+        .and_then(|frame| frame.find_window(wid))
+        .and_then(|window| window.buffer_id())
+    else {
+        return Ok(false);
+    };
+    let truncated = {
+        let Some(buffer) = eval.edit.buffers.get(buffer_id) else {
+            return Ok(false);
+        };
+        if !buffer.long_line_optimizations_p() {
+            return Ok(false);
+        }
+        buffer.truncate_lines_p() || EditHost::long_line_partial_width_truncation(eval, buffer_id)
+    };
+    if !truncated {
+        return Ok(false);
+    }
+
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let body_height = window_body_height_impl(frames, buffers, vec![])
+        .ok()
+        .and_then(|value| value.as_fixnum())
+        .unwrap_or(1)
+        .max(1);
+    let next_screen_context_lines = eval
+        .builtin_var_value_by_name("next-screen-context-lines")
+        .and_then(|value| value.as_fixnum())
+        .unwrap_or(2)
+        .clamp(0, 1_000_000);
+    // GNU `window_scroll_for_long_lines`: n *= max (1, ht - nscls).
+    let sign = if minus { -direction } else { direction };
+    let lines = sign * (body_height - next_screen_context_lines).max(1);
+
+    let (point, point_lisp, begv, zv) = {
+        let Some(buffer) = eval.edit.buffers.get(buffer_id) else {
+            return Ok(false);
+        };
+        let accessible = buffer.accessible_emacs_byte_region();
+        (
+            accessible.clamp(buffer.point_emacs_byte_pos()),
+            buffer.point_lisp_char_pos(),
+            accessible.start(),
+            accessible.end(),
+        )
+    };
+    // GNU `window_scroll_for_long_lines` starts the motion from the WINDOW
+    // START when point is fully visible; otherwise it first brings point
+    // inside with `vmotion (PT, -(ht/2))` and starts there
+    // (src/window.c:6248-6266).  It never starts from point unconditionally.
+    let point_visible = super::xdisp::builtin_pos_visible_in_window_p_ctx(
+        eval,
+        vec![
+            Value::fixnum(point_lisp.as_i64()),
+            Value::make_window(wid.0),
+        ],
+    )
+    .map(|value| value.is_truthy())
+    .unwrap_or(false);
+    let base = if point_visible {
+        eval.frame_manager()
+            .get(frame)
+            .and_then(|frame| frame.find_window(wid))
+            .and_then(|window| window.window_start())
+            .and_then(|start| {
+                eval.edit
+                    .buffers
+                    .get(buffer_id)
+                    .map(|buffer| buffer.lisp_pos_to_emacs_byte_pos(start))
+            })
+            .unwrap_or(point)
+    } else {
+        neovm_edit::emacs_core::indent::vmotion_target(
+            eval,
+            buffer_id,
+            point,
+            None,
+            -(body_height / 2),
+        )?
+        .0
+    };
+    let lose = lines < 0 && base == begv;
+    let (start, _moved) =
+        neovm_edit::emacs_core::indent::vmotion_target(eval, buffer_id, base, None, lines)?;
+    if lose {
+        return Err(scroll_down_batch_error());
+    }
+    if start >= zv {
+        return Err(scroll_up_batch_error());
+    }
+    // GNU points point at ht/2 from the new start, forward for n > 0.
+    let center_lines = if lines > 0 {
+        body_height / 2
+    } else {
+        -(body_height / 2)
+    };
+    let (center, _) =
+        neovm_edit::emacs_core::indent::vmotion_target(eval, buffer_id, start, None, center_lines)?;
+    let (start_lisp, point_lisp) = {
+        let Some(buffer) = eval.edit.buffers.get(buffer_id) else {
+            return Ok(false);
+        };
+        (
+            buffer.emacs_byte_pos_to_lisp_char_pos(start),
+            buffer.emacs_byte_pos_to_lisp_char_pos(center),
+        )
+    };
+    crate::window::WindowScrollUpdate {
+        frame,
+        window: wid,
+        buffer: buffer_id,
+        start: start_lisp,
+        point: point_lisp,
+        hidden_top_pixels: 0,
+    }
+    .commit(eval)?;
+    Ok(true)
+}
+
 /// `(scroll-up &optional ARG)` — scroll text upward (forward in buffer).
 ///
 /// Mirror GNU Emacs Fscroll_up (window.c): move point forward by ARG lines
@@ -6532,6 +6748,10 @@ pub fn builtin_scroll_up(
             // GNU window.c:6163, before Lisp-bearing motion queries.
             eval.gnu_mark_window_redisplay(window);
         }
+    }
+    if try_scroll_long_lines(eval, arg.as_ref(), 1)? {
+        eval.invalidate_redisplay();
+        return Ok(Value::NIL);
     }
     if crate::emacs_core::xdisp::motion::paging::try_scroll(eval, arg, 1)? {
         eval.invalidate_redisplay();
@@ -6570,6 +6790,10 @@ pub fn builtin_scroll_down(
             // GNU window.c:6163, before Lisp-bearing motion queries.
             eval.gnu_mark_window_redisplay(window);
         }
+    }
+    if try_scroll_long_lines(eval, arg.as_ref(), -1)? {
+        eval.invalidate_redisplay();
+        return Ok(Value::NIL);
     }
     if crate::emacs_core::xdisp::motion::paging::try_scroll(eval, arg, -1)? {
         eval.invalidate_redisplay();
@@ -6884,6 +7108,70 @@ pub fn builtin_recenter(
         // GNU redraws before display motion; a callback/error must already
         // observe the frame/window marks (window.c:7265-7272).
         crate::emacs_core::dispnew::pure::publish_gnu_frame_redraw(eval, fid);
+    }
+
+    // GNU Frecenter (src/window.c:7293-7296) uses the display-code path only
+    // when the buffer's long-line flag is nil; the fallback at :7400-7434 is
+    // line-based: center -> ht/2, negative -> += ht, clip to the scroll
+    // margins, then vmotion (PT, -iarg).  Point itself is not moved.
+    if eval
+        .edit
+        .buffers
+        .get(buffer_id)
+        .is_some_and(|buffer| buffer.long_line_optimizations_p())
+    {
+        let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+        let body_height = window_body_height_impl(frames, buffers, vec![])
+            .ok()
+            .and_then(|value| value.as_fixnum())
+            .unwrap_or(1)
+            .max(1);
+        let margin = crate::window::ScrollMargin::from_lisp_values(
+            eval.visible_variable_value_or_nil("scroll-margin")
+                .as_fixnum()
+                .unwrap_or(0),
+            eval.visible_variable_value_or_nil("maximum-scroll-margin")
+                .as_float(),
+        )
+        .lines(body_height);
+        let iarg = placement
+            .canonical_rows(body_height)
+            .clamp(margin, (body_height - margin - 1).max(margin));
+        let (pos, _) =
+            neovm_edit::emacs_core::indent::vmotion_target(eval, buffer_id, pt, None, -iarg)?;
+        {
+            let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+            let Some(buf) = buffers.get(buffer_id) else {
+                return Ok(Value::NIL);
+            };
+            let pos_lisp = buf.emacs_byte_pos_to_lisp_char_pos(pos).as_i64();
+            if let Some(clamped) =
+                clamped_window_position_in_state(frames, buffers, fid, wid, pos_lisp)
+                && let Some(window) = frames
+                    .get_mut(fid)
+                    .and_then(|frame| frame.find_window_mut(wid))
+            {
+                crate::window::window_markers::set_window_start_with_marker(
+                    buffers, window, clamped,
+                );
+                window.invalidate_window_end();
+                if let Window::Leaf {
+                    vscroll,
+                    preserve_vscroll_p,
+                    ..
+                } = window
+                {
+                    *vscroll = 0;
+                    *preserve_vscroll_p = false;
+                }
+            }
+        }
+        eval.gnu_mark_window_redisplay(wid);
+        match redraw {
+            RecenterRedraw::Window => eval.invalidate_redisplay(),
+            RecenterRedraw::FullFrame => {}
+        }
+        return Ok(Value::NIL);
     }
 
     // Move back `target_line` SCREEN lines, through the same display-motion
@@ -7671,6 +7959,18 @@ pub fn builtin_x_create_frame(
             // merge still applies the user's early-init new-frame overrides.
             super::font::seed_live_frame_default_face_from_font_parameter(eval, frame_id);
             eval.initialize_display_faces_for_frame(frame_id);
+        }
+        // GNU init_frame_faces realizes the default face while x-create-frame
+        // builds any graphical frame (xfaces.c:6008-6105): an unspecified
+        // foreground/background comes from the frame's foreground-color and
+        // background-color parameters. Lisp's x-create-frame-with-faces then
+        // recalculates frame-local definitions on top.
+        if eval
+            .frame_manager()
+            .get(frame_id)
+            .is_some_and(|frame| frame.effective_window_system().is_some())
+        {
+            super::xfaces::realize_default_lisp_face_for_frame(eval, frame_id);
         }
         // The frame is already live and realized. Like GNU x_set_frame_alpha,
         // which ignores X errors, a host opacity failure must not turn into a
@@ -8804,3 +9104,7 @@ mod selection_chrome_tests;
 #[cfg(test)]
 #[path = "tests/terminal_frame_deletion.rs"]
 mod terminal_frame_deletion_tests;
+
+#[cfg(test)]
+#[path = "tests/neomacs_frame_geometry_test.rs"]
+mod neomacs_frame_geometry_tests;

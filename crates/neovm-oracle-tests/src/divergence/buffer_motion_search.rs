@@ -178,3 +178,44 @@ fn divergence_forward_word_backward_word() {
         expect,
     );
 }
+
+#[test]
+fn oracle_prop_literal_search_leaves_the_gap_in_place() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // search.c:1298 `search_buffer_non_re`, 1556 `simple_search`, 1762
+    // `boyer_moore`. Both read through BYTE_POS_ADDR and stop a fast scan
+    // at BUFFER_CEILING_OF (search.c:1942/1956). Neither calls move_gap.
+    // `simple_search` compares one character at a time, so a match that
+    // crosses the gap takes at most N-1 characters from each side.
+    let form = r#"(list
+  (with-temp-buffer
+    (insert (make-string 100 ?a))
+    (goto-char 50) (insert "x")
+    (goto-char 1)
+    (list (search-forward "zzz" nil t) (gap-position)))
+  (with-temp-buffer
+    (insert (make-string 100 ?a))
+    (goto-char 50) (insert "x")
+    (goto-char (point-max))
+    (list (search-backward "zzz" nil t) (gap-position)))
+  (with-temp-buffer
+    (insert "hello")
+    (goto-char 3) (insert "Q") (delete-char -1)
+    (goto-char 1)
+    (list (search-forward "el" nil t) (gap-position) (point) (buffer-string)))
+  (with-temp-buffer
+    (insert "aééx")
+    (goto-char 3) (insert "Q") (delete-char -1)
+    (goto-char 1)
+    (list (search-forward "éé" nil t) (gap-position) (point) (buffer-string)))
+  (with-temp-buffer
+    (insert "aééx")
+    (goto-char 3) (insert "Q") (delete-char -1)
+    (goto-char (point-max))
+    (list (search-backward "éé" nil t) (gap-position) (point) (buffer-string))))"#;
+    let expect = expect_test::expect![[
+        r#""OK ((nil 51) (nil 51) (4 3 4 \"hello\") (4 3 4 \"aééx\") (2 3 2 \"aééx\"))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}

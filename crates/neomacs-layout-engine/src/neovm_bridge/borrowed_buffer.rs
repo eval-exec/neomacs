@@ -88,6 +88,10 @@ impl LayoutBufferView for BorrowedLayoutBuffer<'_> {
         self.buffer.point_max_char_pos()
     }
 
+    fn layout_long_line_optimizations_p(&self) -> bool {
+        self.buffer.long_line_optimizations_p()
+    }
+
     fn layout_total_emacs_byte_len(&self) -> EmacsByteLen {
         self.buffer.total_emacs_byte_len()
     }

@@ -6,14 +6,18 @@
 //! selection, and pixel-format normalization remain implementation details.
 
 pub mod color_glyph;
+#[cfg(target_os = "linux")]
+pub mod fontconfig;
 mod fontdb;
 pub mod raster_sources;
 
 pub use color_glyph::{
     ColorGlyphError, ColorGlyphRaster, ColorGlyphRasterizer, ColorGlyphRequest, Tag,
+    layered_color_glyph_claim,
 };
 pub use fontdb::{
     FontDbLoadOutcome, FontDbSourceError, FontFileCache, LegacyBitmapFormat, PinnedFontFace,
+    reset_system_font_database, reset_system_font_system,
 };
 pub use raster_sources::{
     ColorGlyphSource, SfntFaceRasterSources, classify_sfnt_face, classify_table_directory,

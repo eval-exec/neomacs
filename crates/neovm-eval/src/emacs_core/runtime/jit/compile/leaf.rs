@@ -827,6 +827,16 @@ pub struct CompiledLeaf {
 
 static_assertions::assert_not_impl_any!(CompiledLeaf: Send, Sync);
 
+/// Owner observer for the live-frame pin. Records a last-owner drop while
+/// native code is still on this thread. The counter is the assertion; this
+/// destructor does not catch or raise a panic.
+#[cfg(test)]
+impl Drop for CompiledLeaf {
+    fn drop(&mut self) {
+        super::super::cache::note_compiled_leaf_drop_for_test();
+    }
+}
+
 /// How a native-to-native caller that owns the frame bookkeeping (the spec
 /// shim, `cache::run_resolved_leaf_native`) enters a leaf: one byte decided
 /// when the leaf is built, so the hot memory-ABI entry is one compare, and
@@ -1291,7 +1301,9 @@ impl CompiledLeaf {
     /// ([`EntryShape::RawMemory`]): no bases snapshot, no
     /// `CURRENT_LEAF_BASES` publish, no bind/handler frame bookkeeping — the
     /// caller owns all of that (its own `invoke_native` published its bases;
-    /// this callee runs inside that extent). The caller must route non-OK
+    /// this callee runs inside that extent). An outermost call through
+    /// `run_armed_leaf` publishes the live tag around this entry when the
+    /// cell is outside; this entry still does not. The caller must route non-OK
     /// statuses through the same machinery `invoke_native` would (see
     /// `run_resolved_leaf_native`). `consts` is the executing callee's
     /// constant base (see [`call_consts`](Self::call_consts)).
@@ -1576,14 +1588,16 @@ impl CompiledLeaf {
             None
         };
         // Leaf-entry bases for contained-shim-panic healing: recorded once
-        // per native call (length/scalar reads) and published for the
-        // duration of the call, so the healing points — the match shim and
-        // the exit path below — restore against THIS leaf's entry. Nested
-        // dispatch (a callee leaf run from inside one of our shims) replaces
-        // and restores the slot, and a callee's contained panic never
-        // reaches us as a panic (its dispatcher materializes it into an
-        // ordinary `Err(Flow)`), so the innermost-leaf value is always the
-        // right one. Null vmctx (shim-free test bodies) records nothing.
+        // per native call (length/scalar reads) and published until this
+        // function returns, including the cold tail and unwind. The healing
+        // points — the match shim and the exit path below — restore against
+        // THIS leaf's entry. Nested dispatch replaces the word through its
+        // own `invoke_native_frame` and that guard restores this frame. A
+        // Lisp unwind form that calls another leaf takes that path. A
+        // callee's contained panic never reaches us as a panic (its
+        // dispatcher materializes it into an ordinary `Err(Flow)`).
+        // A null vmctx has no snapshot; the publish below records the live
+        // tag, not outside.
         let bases = if vmctx.is_null() {
             None
         } else {
@@ -1592,11 +1606,27 @@ impl CompiledLeaf {
                 snap: unsafe { (*(vmctx as *const Context)).module_boundary_snapshot() },
             })
         };
-        // Publish a POINTER to the frame-resident bases (see the thread_local
-        // doc): `bases` stays alive in this frame across the whole native
-        // call, and the Cell is restored below before it dies.
+        // `bases` is declared first so this guard drops while the
+        // frame-resident snapshot is still alive. Only this site maps a
+        // missing pointer to the live tag. `NativeExtent::bases` still
+        // returns `None` for that tag.
+        struct PublishedExtent {
+            outer: NativeExtent,
+        }
+        impl Drop for PublishedExtent {
+            fn drop(&mut self) {
+                CURRENT_LEAF_BASES.with(|b| b.set(self.outer));
+            }
+        }
         let bases_ptr = bases.as_ref().map(std::ptr::NonNull::from);
-        let outer_bases = CURRENT_LEAF_BASES.with(|b| b.replace(bases_ptr));
+        let _published = PublishedExtent {
+            outer: CURRENT_LEAF_BASES.with(|b| {
+                b.replace(match bases_ptr {
+                    Some(ptr) => NativeExtent::framed(ptr),
+                    None => NativeExtent::LIVE_NO_BASES,
+                })
+            }),
+        };
         // R1c-sidecar: the unified 4-param entry ABI. AOT code reads its
         // per-thread bases from `sidecar`; JIT code declares the param but never
         // reads it (its bases are baked `iconst`s), so `null` is safe for JIT.
@@ -1612,9 +1642,9 @@ impl CompiledLeaf {
             }
             None => consts as *const LeafSidecar,
         };
-        // Debug-only: mark this thread as inside native code for the whole
-        // execution (including the cold exit tail below, which can run Lisp
-        // unwind forms), so a `cache::clear()` under a live leaf asserts.
+        // Test/debug counter. A production release reads the cell in
+        // `native_depth` and does not emit this symbol.
+        #[cfg(any(test, debug_assertions, feature = "test-support"))]
         let _native_depth = super::super::cache::NativeDepthGuard::enter();
         let mut status = if REGISTER {
             // SAFETY: a JIT leaf (no sidecar), so `sidecar` is the callee
@@ -1630,7 +1660,6 @@ impl CompiledLeaf {
                 f(vmctx, args_ptr, &mut out as *mut i64, sidecar)
             }
         };
-        CURRENT_LEAF_BASES.with(|b| b.set(outer_bases));
         // Sentinel discipline: a contained panic always routes the generated
         // code to its signal path, so the marker can only be live here on a
         // STATUS_SIGNAL exit (on the match path the take already consumed it).
@@ -1642,13 +1671,19 @@ impl CompiledLeaf {
         // whose extent held it exits (any exit — a leaf-locally caught panic
         // leaves via STATUS_OK much later). A floor below our entry is an
         // outer leaf's residue: leave it set for that leaf's own exit.
-        if let Some(b) = &bases
-            && let Some(floor) = PENDING_ROOT_SWEEP_FLOOR.with(|f| f.get())
-            && floor >= b.roots()
-        {
-            restore_scratch_gc_roots(b.roots());
-            PENDING_ROOT_SWEEP_FLOOR.with(|f| f.set(None));
+        // The early sweep stays. The cold tail and `deopt_at_outcome` can
+        // raise a new floor, so the same condition runs again before those
+        // returns.
+        fn sweep_pending_root_floor(bases: &Option<JitLeafBases>) {
+            if let Some(b) = bases
+                && let Some(floor) = PENDING_ROOT_SWEEP_FLOOR.with(|f| f.get())
+                && floor >= b.roots()
+            {
+                restore_scratch_gc_roots(b.roots());
+                PENDING_ROOT_SWEEP_FLOOR.with(|f| f.set(None));
+            }
         }
+        sweep_pending_root_floor(&bases);
         if status == STATUS_DEOPT_AT {
             let outcome = self.deopt_at_outcome(vmctx, bind_frame, cond_base);
             if matches!(outcome, NativeRun::Signal)
@@ -1662,6 +1697,7 @@ impl CompiledLeaf {
                         .restore_jit_shim_boundary(&bases.snap, bases.snap.condition_len());
                 }
             }
+            sweep_pending_root_floor(&bases);
             return outcome;
         }
         // A body that made dynamic bindings has normally unbound every one
@@ -1700,6 +1736,7 @@ impl CompiledLeaf {
             status =
                 self.cold_frame_exit(vmctx, status, out, bind_frame, cond_base, bases.as_ref());
         }
+        sweep_pending_root_floor(&bases);
         match status {
             STATUS_OK => NativeRun::Ok(out as usize),
             STATUS_SIGNAL => NativeRun::Signal,

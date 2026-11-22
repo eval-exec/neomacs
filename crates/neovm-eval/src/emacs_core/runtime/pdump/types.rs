@@ -756,6 +756,9 @@ pub struct DumpBuffer {
     /// the epoch, or 0 when unset. Copied into the image (`pdumper.c:2855`).
     #[serde(default)]
     pub auto_save_failure_time: i64,
+    /// GNU `struct buffer.long_line_optimizations_p` (`pdumper.c:2866`).
+    #[serde(default)]
+    pub long_line_optimizations_p: bool,
     #[serde(default)]
     pub modtime_sec: Option<i64>,
     #[serde(default)]

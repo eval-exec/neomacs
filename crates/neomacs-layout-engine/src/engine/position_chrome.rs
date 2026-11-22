@@ -80,6 +80,12 @@ impl MeasuredPositionChrome {
                 text_clip_bounds: layout_box.body(),
                 selected: params.selected,
                 row_capacity: OutputWindowRowCapacity::Growing,
+                bidi_paragraph_directions: params.bidi_paragraph_directions,
+                text_geometry_units: if params.window_system {
+                    neomacs_display_protocol::glyph_matrix::TextGeometryUnits::Pixels
+                } else {
+                    neomacs_display_protocol::glyph_matrix::TextGeometryUnits::TerminalCells
+                },
             },
         );
         let mut emitter = WindowOutputEmitter::new_speculative(

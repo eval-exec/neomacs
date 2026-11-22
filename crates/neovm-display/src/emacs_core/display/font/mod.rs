@@ -363,6 +363,11 @@ pub(crate) struct LiveFrameFontResolution {
     pub(crate) font_value: Value,
 }
 
+/// The last attempted selector, including GNU's whole-name retry, is error data.
+pub(crate) struct UnavailableFrameFont {
+    pub(crate) spec: Value,
+}
+
 pub(crate) fn frame_font_request_from_named_font_string(name: &str) -> Option<FrameFontRequest> {
     // Internal frame selection has an Option boundary, so it cannot deliver
     // Lisp conditions; malformed candidates remain an ordinary selection miss.
@@ -407,10 +412,13 @@ fn frame_font_request_from_value(value: &Value) -> Option<FrameFontRequest> {
         None
     };
 
-    Some(match size {
-        Some(size) => FrameFontRequest::with_size(face, size),
-        None => FrameFontRequest::from_face(face),
-    })
+    Some(
+        match size {
+            Some(size) => FrameFontRequest::with_size(face, size),
+            None => FrameFontRequest::from_face(face),
+        }
+        .for_font_specification(),
+    )
 }
 
 fn face_height_from_value(value: Value) -> Option<FaceHeight> {
@@ -435,8 +443,16 @@ fn build_frame_font_object_from_resolution(
     selected.width = Some(opened.width());
     selected.height = Some(FaceHeight::Absolute(resolved.height_tenths));
 
+    // GNU's opened font object inherits the matched entity's spacing code
+    // (FONT_SPACING_INDEX) and exposes it through `font-get`/`font-xlfd-name`.
+    let mut fields =
+        font_object_property_fields(&selected, Some(i64::from(opened.metrics.pixel_size)));
+    if let Some(spacing) = opened.resolved.spacing {
+        fields.push(Value::keyword("spacing"));
+        fields.push(Value::fixnum(i64::from(spacing)));
+    }
     finish_opened_font(
-        font_object_property_fields(&selected, Some(i64::from(opened.metrics.pixel_size))),
+        fields,
         canonical
             .identity
             .file_path
@@ -467,56 +483,144 @@ pub(crate) fn resolve_live_frame_font_request(
     resolve_live_frame_font_request_in_state(frames, display_host, frame_id, requested)
 }
 
+/// Open an explicit face font before mutating its authoritative attributes.
+/// A native miss is distinct from a deferred request without a GUI host.
+pub(crate) fn try_resolve_live_frame_font_request(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    frame_id: FrameId,
+    requested: &Value,
+) -> Result<LiveFrameFontResolution, UnavailableFrameFont> {
+    let (frames, display_host) = eval.frame_manager_read_and_display_host_mut();
+    try_resolve_live_frame_font_request_in_state(frames, display_host, frame_id, requested)
+}
+
 fn resolve_live_frame_font_request_in_state(
     frames: &FrameManager,
     display_host: &mut Option<Box<dyn neovm_eval::emacs_core::eval::DisplayHost>>,
     frame_id: FrameId,
     requested: &Value,
 ) -> LiveFrameFontResolution {
-    // GNU only opens a font when the target (or, for new-frame defaults, the
-    // selected reference frame) is graphical. A TTY frame retains the Lisp
-    // selector without manufacturing native metrics.
+    try_resolve_live_frame_font_request_in_state(frames, display_host, frame_id, requested)
+        .unwrap_or(LiveFrameFontResolution {
+            font_value: *requested,
+        })
+}
+
+fn try_resolve_live_frame_font_request_in_state(
+    frames: &FrameManager,
+    display_host: &mut Option<Box<dyn neovm_eval::emacs_core::eval::DisplayHost>>,
+    frame_id: FrameId,
+    requested: &Value,
+) -> Result<LiveFrameFontResolution, UnavailableFrameFont> {
+    let retained = || LiveFrameFontResolution {
+        font_value: *requested,
+    };
     if frames
         .get(frame_id)
         .is_none_or(|frame| frame.effective_window_system().is_none())
+        || is_font_object(requested)
     {
-        return LiveFrameFontResolution {
-            font_value: *requested,
-        };
+        return Ok(retained());
     }
-
-    if is_font_object(requested) {
-        return LiveFrameFontResolution {
-            font_value: *requested,
-        };
-    }
-
     if let Some(frame) = frames.get(frame_id)
         && font_value_matches_frame_font_parameter(frame, requested)
         && let Some(font_value) =
             frame.fixed_parameter(crate::window::FrameQueryParam::FontParameter)
         && is_font(&font_value)
     {
-        return LiveFrameFontResolution { font_value };
+        return Ok(LiveFrameFontResolution { font_value });
     }
-
-    let Some(request) = frame_font_request_from_value(requested) else {
-        return LiveFrameFontResolution {
-            font_value: *requested,
-        };
+    let Some(host) = display_host.as_mut() else {
+        return Ok(retained());
     };
-    let requested_face = request.face().clone();
-
-    let realized = display_host
-        .as_mut()
-        .and_then(|host| host.resolve_frame_font(frame_id, request).ok())
-        .flatten();
-    let font_value = realized
-        .as_ref()
-        .map(|resolved| build_frame_font_object_from_resolution(&requested_face, resolved))
+    let mut spec = font_string_text(requested)
+        .and_then(|name| font_spec_from_name(&name).ok().flatten())
         .unwrap_or(*requested);
+    if requested.is_string() {
+        // font_spec_from_name retains the original user selector in GNU;
+        // unlike public (font-spec :name ...), this is an opening request.
+        let _ = spec.with_vector_data_mut(|fields| font_parse_set(fields, "user-spec", *requested));
+    }
+    let mut retry_size = None;
+    loop {
+        let Some(mut request) = frame_font_request_from_value(&spec) else {
+            return Ok(retained());
+        };
+        if let Some(size) = retry_size.take() {
+            request =
+                FrameFontRequest::with_size(request.face().clone(), size).for_font_specification();
+        }
+        let requested_face = request.face().clone();
+        if let Some(resolved) = host.resolve_frame_font(frame_id, request).ok().flatten() {
+            return Ok(LiveFrameFontResolution {
+                font_value: build_frame_font_object_from_resolution(&requested_face, &resolved),
+            });
+        }
+        let Some(retry) = named_font_family_retry(requested, spec) else {
+            return Err(UnavailableFrameFont { spec });
+        };
+        spec = retry;
+        // GNU's whole-name retry clears the selector size and uses the lface's
+        // existing size. A frame request has its current opened size available.
+        retry_size = frames
+            .get(frame_id)
+            .and_then(|frame| FrameFontSize::pixels(frame.font_pixel_size.round() as i64));
+    }
+}
 
-    LiveFrameFontResolution { font_value }
+/// GNU font_load_for_lface (font.c:3444-3481) retries a missing "Family-17"
+/// as the literal family "Family-17", and exposes that failed spec on error.
+fn named_font_family_retry(requested: &Value, spec: Value) -> Option<Value> {
+    let name = font_string_text(requested)?;
+    let dash = name.rfind('-')?;
+    let tail = &name[dash + 1..];
+    let bytes = tail.as_bytes();
+    if !bytes.first().is_some_and(u8::is_ascii_digit) {
+        return None;
+    }
+    let mut end = bytes
+        .iter()
+        .take_while(|byte| byte.is_ascii_digit())
+        .count();
+    if bytes.get(end) == Some(&b'.') {
+        end += 1;
+        end += bytes[end..]
+            .iter()
+            .take_while(|byte| byte.is_ascii_digit())
+            .count();
+    }
+    if matches!(bytes.get(end), Some(b'e' | b'E')) {
+        let mut exponent = end + 1;
+        if matches!(bytes.get(exponent), Some(b'+' | b'-')) {
+            exponent += 1;
+        }
+        let digits = bytes[exponent..]
+            .iter()
+            .take_while(|byte| byte.is_ascii_digit())
+            .count();
+        if digits > 0 {
+            end = exponent + digits;
+        }
+    }
+    let size = tail[..end].parse::<f64>().ok().filter(|size| *size > 0.0)?;
+    let fields = font_value_fields(&spec)?;
+    let parsed_size = font_vector_get_flexible(fields, "size")?;
+    let parsed_size = match parsed_size.kind() {
+        ValueKind::Fixnum(size) => size as f64,
+        ValueKind::Float => parsed_size.xfloat(),
+        _ => return None,
+    };
+    if parsed_size != size {
+        return None;
+    }
+    let mut fields = fields.to_vec();
+    font_parse_set(
+        &mut fields,
+        "family",
+        Value::from_sym_id(intern(&name[..dash + 1 + end])),
+    );
+    font_parse_set(&mut fields, "size", Value::NIL);
+    Some(Value::vector(fields))
 }
 
 /// GNU separates a font's realized metrics from permission to change the
@@ -1036,18 +1140,29 @@ pub fn seed_live_frame_default_face_from_font_parameter(
     else {
         return;
     };
+    // GNU `set_lface_from_font` receives `f->default_face_done_p` as FORCE_P
+    // (src/xfaces.c:6029).  On the first realization an explicitly set face
+    // slot survives a font change; once the frame's default face has been
+    // realized, the opened font's derived values replace it.
+    let force_p = eval
+        .frame_manager()
+        .get(frame_id)
+        .is_some_and(|frame| frame.default_face_done);
     // GNU set_lface_from_font retains the opened object in LFACE_FONT.
     // faces.el clears font-parameter when there was no explicit user request;
     // that request marker cannot own the realized face font.
     set_lisp_face_vector_attr(vector, LFaceAttr::Font, font_value);
     for (attr_name, attr_value) in derived_face_attrs_from_font_value(&font_value) {
-        // GNU `set_lface_from_font` sets a derived attribute only when the
-        // face slot is unspecified. An explicit `set-face-attribute` on the
-        // frame-local default face must survive a font change.
-        if super::xfaces::frame_has_explicit_default_font_attr(eval, frame_id, attr_name) {
+        if !force_p
+            && super::xfaces::frame_has_explicit_default_font_attr(eval, frame_id, attr_name)
+        {
             continue;
         }
         set_lisp_face_vector_attr(vector, attr_name, attr_value);
+    }
+    if let Some(frame) = eval.frame_manager_mut().get_mut(frame_id) {
+        // `realize_default_face` completes the first realization here.
+        frame.default_face_done = true;
     }
     super::xfaces::realization::record_face_change_for(
         eval,
@@ -3542,7 +3657,11 @@ pub fn opened_font_from_resolved_match(
     face: &RuntimeFace,
     matched: &neovm_eval::emacs_core::eval::ResolvedFontMatch,
 ) -> Value {
-    opened_font_from_resolved_match_with_size(face, matched, None, None)
+    // GNU copies the entity's FONT_SPACING_INDEX into the opened font object
+    // (`font_make_object`, src/font.c:226); `font-get :spacing` and
+    // `font-xlfd-name` read it from there.  Fontconfig omits FC_SPACING for
+    // proportional faces, so nil and "*" stay the common case.
+    opened_font_from_resolved_match_with_size(face, matched, None, matched.font.resolved.spacing)
 }
 
 /// As [`opened_font_from_resolved_match`], but lets `open-font` keep GNU's
@@ -5108,8 +5227,13 @@ fn shape_gstring_with_driver(
         }
         // Cluster coverage validation: glyph[0].from == 0; every glyph's
         // from <= to; same from shares the same to; otherwise from ==
-        // previous to + 1 (src/font.c Ffont_shape_gstring).
-        let mut covered_to: Option<i64> = None;
+        // previous to + 1 (src/font.c Ffont_shape_gstring).  The comparison
+        // is against the PREVIOUS GLYPH's from, not its to: several glyphs
+        // of one grapheme cluster (e.g. a base and its vowel sign) all share
+        // a single from/to pair whose to spans the cluster, so `from` only
+        // equals the previous `to` by accident when every cluster is one
+        // character long.
+        let mut covered: Option<(i64, i64)> = None;
         for index in 0..glyph_slots {
             let glyph_slot = gstring.as_vector_data().expect("g")[2 + index].clone();
             let Some(glyph) = glyph_slot.as_vector_data() else {
@@ -5119,17 +5243,16 @@ fn shape_gstring_with_driver(
                 (Some(f), Some(t)) => (f, t),
                 _ => return Ok(Value::NIL),
             };
-            let valid = match covered_to {
+            let valid = match covered {
                 None => from == 0 && to >= from,
-                Some(prev_to) => {
-                    (from == covered_to.unwrap_or(i64::MIN) && to == prev_to)
-                        || (from == prev_to + 1 && to >= from)
+                Some((prev_from, prev_to)) => {
+                    (from == prev_from && to == prev_to) || (from == prev_to + 1 && to >= from)
                 }
             };
             if !valid {
                 return Ok(Value::NIL);
             }
-            covered_to = Some(to);
+            covered = Some((from, to));
         }
     }
     composition_gstring_adjust_zero_width(&gstring);

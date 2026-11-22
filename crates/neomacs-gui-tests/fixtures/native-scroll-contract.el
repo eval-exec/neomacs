@@ -40,9 +40,12 @@
       (funcall step)
     ;; Reading dimensions and Lisp positions must not run a frame snapshot:
     ;; that observer can itself replace the viewport geometry under test.
+    ;; The readback is the whole native window, so measure the outer frame:
+    ;; GNU's native height excludes the external menu/tool band
+    ;; (src/frame.c:4401-4418) and would under-report the image.
     (let ((position (neomacs-native-scroll-position))
-          (width (frame-pixel-width))
-          (height (frame-pixel-height)))
+          (width (frame-outer-width))
+          (height (frame-outer-height)))
       (with-temp-file (expand-file-name (concat stage ".ready")
                                        neomacs-native-scroll-control)
         (insert (json-encode `((stage . ,stage) (position . ,position)

@@ -2468,8 +2468,9 @@ impl Context {
             in_flight_registry: seed.registries.in_flight,
             cached_standard_case_table: None,
             frame_and_buffer_state: None,
-            gc_cycle_elapsed: std::time::Duration::ZERO,
             retained_frame_pins: Vec::new(),
+            condition_snapshots: super::ConditionSnapshotAdmission::Dormant,
+            automatic_retired_processes: None,
         }
     }
 
@@ -2840,6 +2841,15 @@ impl Drop for Context {
         // Context is !Send, pinned by thread contracts, so Drop stays on its
         // owner thread. Retain upstream policy retirement as defence in depth.
         self.integer_width_context.retire();
+        // Take the admission before the heap slot is cleared. Dormant
+        // unregisters nothing and does not mint. Active removes its id
+        // while the heap is still installed, so the publisher Drop does not
+        // leak that id.
+        let admission = std::mem::replace(
+            &mut self.condition_snapshots,
+            super::ConditionSnapshotAdmission::Dormant,
+        );
+        admission.unregister(&mut self.tagged_heap);
         neovm_value::tagged::gc::clear_tagged_heap_if_installed(&self.tagged_heap);
     }
 }

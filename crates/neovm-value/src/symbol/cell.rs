@@ -611,9 +611,8 @@ pub enum DumpedCell {
 /// `before` is read.
 static PLIST_EPOCH: AtomicU64 = AtomicU64::new(0);
 
-/// The current plist-head epoch.  One Acquire load is the per-signal freshness
-/// check of the P10 snapshot store; in P10-a1 only the tests read it.
-#[cfg(any(test, feature = "test-support"))]
+/// The current plist-head epoch. One Acquire load. The condition-snapshot
+/// mint reads it once before the plist-head reads. It is not TLS.
 #[inline(always)]
 pub(crate) fn plist_epoch() -> u64 {
     PLIST_EPOCH.load(Ordering::Acquire)

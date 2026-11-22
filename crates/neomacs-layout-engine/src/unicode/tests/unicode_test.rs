@@ -364,6 +364,26 @@ fn cluster_extender_zero_width_joiner() {
 }
 
 #[test]
+fn cluster_extender_controls_are_boundaries() {
+    // Cc chars are zero-width in GNU's char-width-table but never extend a
+    // grapheme cluster (UAX#29 GB4/GB5; GNU composite.c's composition walk
+    // assumes "a newline can never be composed").  A span that swallowed a
+    // newline merged the lines around it into one shaping run (issue #785).
+    assert!(!is_cluster_extender('\n'));
+    assert!(!is_cluster_extender('\r'));
+    assert!(!is_cluster_extender('\t'));
+    assert!(!is_cluster_extender('\u{0}'));
+    assert!(!is_cluster_extender('\u{7F}')); // DEL
+    assert!(!is_cluster_extender('\u{9F}')); // last C1 control
+    // Zero-width Cf chars are NOT Cc and keep extending.
+    assert!(is_cluster_extender('\u{200B}')); // ZWSP
+    // SOFT HYPHEN is Cf but GNU's char-width-table gives it width 1
+    // (verified against the pinned 31.1 oracle), so it is not a
+    // zero-width extender and takes a cell of its own.
+    assert!(!is_cluster_extender('\u{00AD}')); // soft hyphen
+}
+
+#[test]
 fn cluster_extender_zero_width_chars() {
     assert!(is_cluster_extender('\u{200B}')); // ZWSP
     assert!(is_cluster_extender('\u{200C}')); // ZWNJ

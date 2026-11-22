@@ -7747,12 +7747,22 @@ pub(crate) fn line_number_gutter_cols(
 
 /// (long-line-optimizations-p) -> boolean
 ///
-/// Check if long-line optimizations are enabled. Returns nil.
+/// GNU `Flong_line_optimizations_p` (`src/xdisp.c:20387-20394`): non-nil when
+/// redisplay found a line longer than `long-line-threshold` in the current
+/// buffer, so the long-line display shortcuts and the
+/// `fontification-functions` narrowing are in effect.
 #[doc(hidden)]
-pub fn builtin_long_line_optimizations_p(args: Vec<Value>) -> EvalResult {
+pub fn builtin_long_line_optimizations_p(
+    ctx: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
     expect_args("long-line-optimizations-p", &args, 0)?;
-    // Return nil (optimizations not enabled)
-    Ok(Value::NIL)
+    let present = ctx
+        .edit
+        .buffers
+        .current_buffer()
+        .is_some_and(|buffer| buffer.long_line_optimizations_p());
+    Ok(if present { Value::T } else { Value::NIL })
 }
 
 fn validate_optional_window_designator(
@@ -9487,10 +9497,127 @@ fn next_unfontified_position(
     Ok(end)
 }
 
+/// GNU `compute_stop_pos` (`src/xdisp.c:4371-4461`) after a fontification
+/// callback declined to mark POS fontified: where the display iterator goes
+/// next before it re-examines the property handlers.
+///
+/// The stop is the earlier of:
+/// - the automatic-composition delimiter clamp: the first space, TAB,
+///   newline, or formfeed in `[POS + TEXT_PROP_DISTANCE_LIMIT,
+///   POS + 10 * TEXT_PROP_DISTANCE_LIMIT]` (`src/xdisp.c:4380-4398`);
+/// - a change of one of the properties `it_props` tracks (`fontified`,
+///   `face`, `display`, `invisible`, `composition`; `src/xdisp.c:1012-1023`)
+///   within that limit;
+/// - the next overlay boundary.
+///
+/// Without an interval tree GNU's `validate_interval_range` returns no
+/// interval, `compute_stop_pos` leaves `stop_charpos` untouched, and no
+/// further fontification stop is reached: the request ends.
+///
+/// The returned position is always greater than POS, so one request never
+/// enters the hook twice at the same position.
+fn next_declining_fontification_stop(
+    ctx: &neovm_eval::emacs_core::eval::Context,
+    buf_id: BufferId,
+    pos: i64,
+) -> Option<i64> {
+    let buffer = ctx.edit.buffers.get(buf_id)?;
+    if !buffer.text_props_tree_present() {
+        return None;
+    }
+    // TEXT_PROP_DISTANCE_LIMIT (src/xdisp.c:831).
+    const PROP_DISTANCE_LIMIT: i64 = 100;
+    let auto_composition = buffer.get_multibyte()
+        && ctx
+            .visible_variable_value_or_nil("auto-composition-mode")
+            .is_truthy()
+        && ctx
+            .visible_variable_value_or_nil("composition-break-at-point")
+            .is_nil();
+    let point_max = buffer.point_max_lisp_char_pos().as_i64();
+    let mut stop = point_max;
+    let arbitrary_limit = pos.saturating_add(PROP_DISTANCE_LIMIT).min(point_max);
+    if arbitrary_limit > pos {
+        stop = stop.min(arbitrary_limit);
+    }
+    if auto_composition {
+        let scan_from_lisp = pos.saturating_add(PROP_DISTANCE_LIMIT).min(point_max);
+        let horizon_lisp = pos.saturating_add(10 * PROP_DISTANCE_LIMIT).min(point_max);
+        let scan_from = buffer.char_pos_to_emacs_byte_pos_clamped_no_alloc(
+            LispCharPos1::new(scan_from_lisp).to_char_pos(),
+        );
+        let horizon = buffer.char_pos_to_emacs_byte_pos_clamped_no_alloc(
+            LispCharPos1::new(horizon_lisp).to_char_pos(),
+        );
+        if scan_from < horizon
+            && let Some(delimiter) =
+                buffer.first_composition_delimiter_emacs_byte(scan_from, horizon)
+        {
+            let delimiter_lisp = buffer
+                .emacs_byte_pos_to_char_pos_clamped_no_alloc(delimiter)
+                .to_lisp()
+                .as_i64();
+            // GNU's `pos--` lands on the delimiter after the advancing fetch;
+            // the iterator's next property stop is that character itself.
+            if delimiter_lisp > pos {
+                stop = stop.max(delimiter_lisp);
+            }
+        }
+    }
+    // DIVERGENCE (recorded, no fix in this slice): GNU's no-delimiter branch
+    // can reuse a previously computed it->stop_charpos instead of
+    // POS + TEXT_PROP_DISTANCE_LIMIT (src/xdisp.c:4407-4409).  This
+    // non-iterator path has no retained stop_charpos and keeps the limit.
+    // The declining-hook rows that compare stop positions all contain
+    // delimiters; the no-delimiter case (a single long line) exposes no
+    // position assertion, and this path still never repeats a position.
+    if stop <= pos {
+        return None;
+    }
+    let pos_byte =
+        buffer.char_pos_to_emacs_byte_pos_clamped_no_alloc(LispCharPos1::new(pos).to_char_pos());
+    let stop_byte =
+        buffer.char_pos_to_emacs_byte_pos_clamped_no_alloc(LispCharPos1::new(stop).to_char_pos());
+    let tracked = [
+        Value::symbol("fontified"),
+        Value::symbol("face"),
+        Value::symbol("display"),
+        invisible_prop_symbol(),
+        Value::symbol("composition"),
+    ];
+    for name in tracked {
+        if let Some(next) = buffer
+            .text_props_next_single_change_after_emacs_byte_pos_bounded(pos_byte, name, stop_byte)
+        {
+            let next_lisp = buffer
+                .emacs_byte_pos_to_char_pos_clamped_no_alloc(next)
+                .to_lisp()
+                .as_i64();
+            if next_lisp > pos && next_lisp < stop {
+                stop = next_lisp;
+            }
+        }
+    }
+    if let Some(next) = buffer
+        .overlays()
+        .next_boundary_after_until_emacs_byte_pos_no_alloc(pos_byte, stop_byte)
+    {
+        let next_lisp = buffer
+            .emacs_byte_pos_to_char_pos_clamped_no_alloc(next)
+            .to_lisp()
+            .as_i64();
+        if next_lisp > pos && next_lisp < stop {
+            stop = next_lisp;
+        }
+    }
+    Some(stop.max(pos.saturating_add(1)))
+}
+
 fn call_fontification_functions_at<O: FontificationDemandObserver>(
     ctx: &mut neovm_eval::emacs_core::eval::Context,
     hook_value: Value,
     pos: i64,
+    window_bounds: Option<neovm_eval::emacs_core::eval::long_line::LongLineNarrowingBounds>,
     observer: &mut O,
 ) {
     let hook_sym = FONTIFICATION_FUNCTIONS.id();
@@ -9518,6 +9645,15 @@ fn call_fontification_functions_at<O: FontificationDemandObserver>(
         ctx.restore_specpdl_roots(roots);
         return;
     }
+
+    // GNU runs the fontification functions on a labeled narrowing centred on
+    // the redisplayed window's point, falling back to POS only when POS is
+    // outside that cached region (`src/xdisp.c:4702-4715`, 8008-8011).
+    let narrowed = ctx.enter_long_line_narrowing_for_fontification(
+        window_bounds,
+        pos,
+        "long-line-optimizations-in-fontification-functions",
+    );
 
     // GNU `handle_fontified_prop` calls each function with `dsafe_call1`,
     // which binds `inhibit-redisplay` and logs ordinary errors without
@@ -9551,6 +9687,10 @@ fn call_fontification_functions_at<O: FontificationDemandObserver>(
         }
     }
 
+    if let Some(narrowing) = narrowed {
+        ctx.exit_long_line_narrowing(narrowing);
+    }
+
     if let Err(flow) = ctx.unbind_to_with_result(binding_count, Ok(Value::NIL)) {
         let rendered = neovm_eval::emacs_core::print::format_flow_with_eval(ctx, &flow);
         tracing::warn!(
@@ -9566,9 +9706,13 @@ fn call_fontification_functions_at<O: FontificationDemandObserver>(
 /// into a fontified one.
 ///
 /// GNU's `handle_fontified_prop` recomputes iterator properties only for the
-/// successful transition. Keeping callback entry separate lets the immutable layout
-/// engine retry after a successful callback without looping forever when a
-/// fontification function declines to mark the requested position.
+/// successful transition. Keeping callback entry separate lets the immutable
+/// layout engine retry after a successful callback. A callback that declines
+/// to mark the requested position leaves the iterator on GNU's
+/// `compute_stop_pos` schedule (`src/xdisp.c:4782-4786`): the hook is entered
+/// once at each display stop and never twice at the same position, so a
+/// non-fontifying hook cannot turn one redisplay into a per-character Lisp
+/// walk.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum RedisplayFontificationOutcome {
     /// No fontification callback was entered. Native property inspection alone
@@ -9601,6 +9745,37 @@ impl RedisplayFontificationOutcome {
     }
 }
 
+/// Which request drives one [`ensure_fontified_for_redisplay_inner`] walk.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RedisplayFontificationRequest {
+    /// The pre-walk pass over a speculative span.  A hook that declines ends
+    /// the request at that first declined stop: the post-walk coverage pass
+    /// owns the visible stops, and the prepass exists only to give a
+    /// fontifying hook (jit-lock style) a chance to mark text the walk sees.
+    Prepass,
+    /// The post-walk visible pass.  Follow GNU's `compute_stop_pos` schedule
+    /// across the request; its end is the first screen row after the window
+    /// end when the caller passes [`ProbeRow::Through`] (GNU
+    /// `partial_line_height`, src/xdisp.c:11630-11661), so the stops inside
+    /// that probe row are entered and nothing beyond it is.
+    VisibleWalk,
+}
+
+/// The first screen row after a window's last visible row.
+///
+/// GNU `partial_line_height` (src/xdisp.c:11630-11661) re-walks to the window
+/// bottom and then `move_it_by_lines (&it, 1)` scans this row, so
+/// `handle_stop` enters the hook at each of its unfontified stops.  The
+/// layout engine supplies the row's exclusive Lisp end on the last visible
+/// span only; every other request carries [`ProbeRow::None`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ProbeRow {
+    #[default]
+    None,
+    /// Exclusive Lisp end of the first screen row after the window end.
+    Through(i64),
+}
+
 /// Fontify a visible buffer region the same way GNU redisplay does from
 /// `handle_fontified_prop`.
 ///
@@ -9620,6 +9795,30 @@ pub fn ensure_fontified_for_redisplay(
         from_char,
         to_char,
         fontification_boundary::mode(),
+    )
+}
+
+/// [`ensure_fontified_for_redisplay`] for a specific window, whose point
+/// centres GNU's large narrowing (src/xdisp.c:8008-8011, 4702-4715).
+///
+/// `window_point` is a 1-based Lisp position.
+pub fn ensure_fontified_for_redisplay_for_window(
+    ctx: &mut neovm_eval::emacs_core::eval::Context,
+    buf_id: BufferId,
+    from_char: i64,
+    to_char: i64,
+    window_point: i64,
+) -> Result<RedisplayFontificationOutcome, Flow> {
+    ensure_fontified_for_redisplay_inner(
+        ctx,
+        buf_id,
+        from_char,
+        to_char,
+        fontification_boundary::mode(),
+        &mut NoFontificationDemand,
+        RedisplayFontificationRequest::VisibleWalk,
+        ProbeRow::None,
+        Some(window_point),
     )
 }
 
@@ -9651,6 +9850,9 @@ fn ensure_fontified_for_redisplay_with_mode(
         to_char,
         mode,
         &mut NoFontificationDemand,
+        RedisplayFontificationRequest::VisibleWalk,
+        ProbeRow::None,
+        None,
     )
 }
 
@@ -9670,11 +9872,96 @@ pub fn ensure_fontified_for_redisplay_with_demand(
         to_char,
         fontification_boundary::mode(),
         demand,
+        RedisplayFontificationRequest::VisibleWalk,
+        ProbeRow::None,
+        None,
     );
     if result.is_err() {
         demand.abort();
     }
     result
+}
+
+/// [`ensure_fontified_for_redisplay_with_demand`] for a specific window;
+/// `window_point` is a 1-based Lisp position.
+pub fn ensure_fontified_for_redisplay_with_demand_for_window(
+    ctx: &mut neovm_eval::emacs_core::eval::Context,
+    buf_id: BufferId,
+    from_char: i64,
+    to_char: i64,
+    demand: &mut RedisplayFontificationDemand,
+    window_point: i64,
+) -> Result<RedisplayFontificationOutcome, Flow> {
+    let result = ensure_fontified_for_redisplay_inner(
+        ctx,
+        buf_id,
+        from_char,
+        to_char,
+        fontification_boundary::mode(),
+        demand,
+        RedisplayFontificationRequest::VisibleWalk,
+        ProbeRow::None,
+        Some(window_point),
+    );
+    if result.is_err() {
+        demand.abort();
+    }
+    result
+}
+
+/// [`ensure_fontified_for_redisplay_with_demand_for_window`] with an explicit
+/// request kind: [`RedisplayFontificationRequest::Prepass`] for the speculative
+/// pre-walk pass, [`RedisplayFontificationRequest::VisibleWalk`] for the
+/// post-walk coverage pass.
+pub fn ensure_fontified_for_redisplay_with_demand_for_window_request(
+    ctx: &mut neovm_eval::emacs_core::eval::Context,
+    buf_id: BufferId,
+    from_char: i64,
+    to_char: i64,
+    demand: &mut RedisplayFontificationDemand,
+    request: RedisplayFontificationRequest,
+    probe: ProbeRow,
+    window_point: i64,
+) -> Result<RedisplayFontificationOutcome, Flow> {
+    let result = ensure_fontified_for_redisplay_inner(
+        ctx,
+        buf_id,
+        from_char,
+        to_char,
+        fontification_boundary::mode(),
+        demand,
+        request,
+        probe,
+        Some(window_point),
+    );
+    if result.is_err() {
+        demand.abort();
+    }
+    result
+}
+
+/// [`ensure_fontified_for_redisplay_for_window`] with an explicit request
+/// kind (the no-observer path used when Rows demand is inactive).
+pub fn ensure_fontified_for_redisplay_for_window_request(
+    ctx: &mut neovm_eval::emacs_core::eval::Context,
+    buf_id: BufferId,
+    from_char: i64,
+    to_char: i64,
+    request: RedisplayFontificationRequest,
+    probe: ProbeRow,
+    window_point: i64,
+) -> Result<RedisplayFontificationOutcome, Flow> {
+    ensure_fontified_for_redisplay_inner(
+        ctx,
+        buf_id,
+        from_char,
+        to_char,
+        fontification_boundary::mode(),
+        &mut NoFontificationDemand,
+        request,
+        probe,
+        Some(window_point),
+    )
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -9686,7 +9973,17 @@ pub(crate) fn ensure_fontified_for_redisplay_inner_for_test(
     mode: neovm_edit::emacs_core::textprop::FontificationBoundaryMode,
     observer: &mut fontification_demand::RedisplayFontificationDemand,
 ) -> Result<RedisplayFontificationOutcome, neovm_value::error::Flow> {
-    ensure_fontified_for_redisplay_inner(ctx, buf_id, from_char, to_char, mode, observer)
+    ensure_fontified_for_redisplay_inner(
+        ctx,
+        buf_id,
+        from_char,
+        to_char,
+        mode,
+        observer,
+        RedisplayFontificationRequest::VisibleWalk,
+        ProbeRow::None,
+        None,
+    )
 }
 
 fn ensure_fontified_for_redisplay_inner<O: FontificationDemandObserver>(
@@ -9696,7 +9993,20 @@ fn ensure_fontified_for_redisplay_inner<O: FontificationDemandObserver>(
     to_char: i64,
     mode: FontificationBoundaryMode,
     observer: &mut O,
+    request: RedisplayFontificationRequest,
+    probe: ProbeRow,
+    window_point: Option<i64>,
 ) -> Result<RedisplayFontificationOutcome, Flow> {
+    // GNU `redisplay_window` (`src/xdisp.c:20646-20663`) refreshes the
+    // buffer's long-line flag while displaying it. The fontification narrowing
+    // below and `long-line-optimizations-p` read it. The buffer method owns
+    // GNU's eight-modification-tick hysteresis.
+    ctx.refresh_long_line_optimizations(buf_id);
+
+    // GNU seeds the iterator's large-narrowing cache from `window_point`
+    // (`reseat`, src/xdisp.c:8008-8011). The cache is per display walk.
+    let window_bounds = window_point.and_then(|point| ctx.long_line_narrowing_bounds(point));
+
     let Some((point_min, point_max)) = ctx.edit.buffers.get(buf_id).map(|buffer| {
         (
             buffer.point_min_lisp_char_pos().as_i64(),
@@ -9708,7 +10018,14 @@ fn ensure_fontified_for_redisplay_inner<O: FontificationDemandObserver>(
     };
 
     let start = from_char.saturating_add(1).clamp(point_min, point_max);
-    let end = to_char.saturating_add(1).clamp(start, point_max);
+    // GNU's probe row extends the visible walk through the first screen row
+    // after the window end; the schedule below then visits its stops.
+    let requested_end = to_char.saturating_add(1);
+    let end = match probe {
+        ProbeRow::None => requested_end,
+        ProbeRow::Through(probe_end) => requested_end.max(probe_end),
+    }
+    .clamp(start, point_max);
     observer.begin(buf_id, LispCharPos1::new(start), LispCharPos1::new(end));
     // The buffer interval proof does not certify effective overlay precedence.
     if O::ENABLED
@@ -9776,7 +10093,7 @@ fn ensure_fontified_for_redisplay_inner<O: FontificationDemandObserver>(
             // Mark before entering Lisp, including callbacks which fail,
             // decline to fontify, or remove the current buffer.
             outcome = outcome.merge(RedisplayFontificationOutcome::CallbacksUnchanged);
-            call_fontification_functions_at(ctx, hook_value, pos, observer);
+            call_fontification_functions_at(ctx, hook_value, pos, window_bounds, observer);
             if ctx.edit.buffers.current_buffer_id() != Some(buf_id) {
                 ctx.restore_current_buffer_if_live(buf_id);
             }
@@ -9784,14 +10101,32 @@ fn ensure_fontified_for_redisplay_inner<O: FontificationDemandObserver>(
                 break;
             }
 
-            // GNU recomputes properties only if the hook actually
-            // marked the current character fontified.  If it did not,
-            // advance one character to avoid looping forever on the
-            // same unfontified position.
+            // GNU recomputes properties only if the hook actually marked the
+            // current character fontified; otherwise `handle_fontified_prop`
+            // returns HANDLED_NORMALLY and the iterator moves on to its next
+            // property stop, where the hook is entered again
+            // (src/xdisp.c:4782-4786).  Advance by GNU's `compute_stop_pos`
+            // instead of one character, so the call count follows the stops
+            // the display actually visits and never repeats a position.
             let after = get_fontified_property(ctx, pos)?;
             if after.is_nil() {
                 observer.advance(LispCharPos1::new(pos), LispCharPos1::new(pos + 1), false);
-                pos += 1;
+                // The speculative pre-walk pass exists for hooks that MARK
+                // text.  A declining hook ends it at the first declined stop;
+                // the post-walk visible pass owns GNU's stop schedule.
+                if request == RedisplayFontificationRequest::Prepass {
+                    break;
+                }
+                let Some(next) = next_declining_fontification_stop(ctx, buf_id, pos) else {
+                    break;
+                };
+                if next <= pos {
+                    break;
+                }
+                if next <= pos || next >= end {
+                    break;
+                }
+                pos = next;
                 continue;
             }
             outcome = RedisplayFontificationOutcome::Fontified;

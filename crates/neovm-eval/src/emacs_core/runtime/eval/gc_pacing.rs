@@ -6,6 +6,42 @@
 use super::*;
 use neovm_value::tagged::gc::MarkPhase;
 
+/// GNU alloc.c consing_threshold + bump_consing_until_gc: the Lisp byte
+/// budget and the floating percentage of last-sweep live bytes plus half the
+/// subsequent allocation. There is no additional internal live-growth floor.
+/// Shared with GC-inhibited hash callbacks so both countdown views agree.
+pub(super) fn consing_threshold(
+    threshold: usize,
+    percentage: Option<f64>,
+    live_bytes: usize,
+    allocated_since_gc: usize,
+) -> usize {
+    let threshold = threshold.max(GC_THRESHOLD_FLOOR_BYTES);
+    if let Some(percentage) = percentage {
+        let live_estimate = live_bytes.saturating_add(allocated_since_gc / 2);
+        let proportional = percentage * live_estimate as f64;
+        // Match GNU's comparison before conversion: NaN and negative values
+        // leave the byte budget in force. Rust's saturating float cast also
+        // handles +infinity; clamp the integer to GNU's HI_THRESHOLD after
+        // truncation, avoiding a rounded-up floating representation of HI.
+        if (threshold as f64) < proportional {
+            return (proportional as usize).min(GC_HI_THRESHOLD_BYTES);
+        }
+    }
+    threshold.min(GC_HI_THRESHOLD_BYTES)
+}
+
+#[cfg(test)]
+thread_local! {
+    static GC_ELAPSED_PUBLISHES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has published `gc-elapsed`.
+#[cfg(test)]
+pub(super) fn gc_elapsed_publish_count_for_test() -> u64 {
+    GC_ELAPSED_PUBLISHES.with(std::cell::Cell::get)
+}
+
 impl Context {
     /// Enumerate every live `Value` reference in the evaluator and all
     /// sub-managers without materializing a single temporary root vector.
@@ -728,17 +764,12 @@ impl Context {
                     neovm_value::hashtab::gc_threshold_integer_fallback(value)
                 })
             })
-            .and_then(|n| usize::try_from(n).ok())
+            .map(|n| n.clamp(0, GC_HI_THRESHOLD_BYTES as i64) as usize)
             .unwrap_or(GC_DEFAULT_THRESHOLD_BYTES);
-        self.gc_runtime_settings_cache.gc_cons_percentage_scaled = self
-            .variable_value_or_nil(syms.percentage)
-            .as_number_f64()
-            .filter(|float| float.is_finite() && *float > 0.0)
-            .and_then(|float| {
-                std::num::NonZeroU64::new(
-                    ((float * GC_PERCENT_SCALE as f64).ceil() as u64).clamp(1, u64::MAX),
-                )
-            });
+        // GNU's consing_threshold only interprets FLOATP values. Preserve
+        // the double itself: scaling rounds tiny fractions and drops infinity.
+        self.gc_runtime_settings_cache.gc_cons_percentage =
+            self.variable_value_or_nil(syms.percentage).as_float();
         self.gc_runtime_settings_cache.memory_full =
             GcMemoryPressure::from_full(!self.variable_value_or_nil(syms.memory_full).is_nil());
     }
@@ -749,39 +780,12 @@ impl Context {
             return self.tagged_heap.gc_threshold();
         }
 
-        let mut threshold = self
-            .gc_runtime_settings_cache
-            .gc_cons_threshold_bytes
-            .max(GC_THRESHOLD_FLOOR_BYTES);
-        if let Some(percentage_scaled) = self.gc_runtime_settings_cache.gc_cons_percentage_scaled {
-            let live_estimate = self
-                .tagged_heap
-                .live_bytes()
-                .saturating_add(self.tagged_heap.bytes_since_gc() / 2);
-            let pct_threshold = ((live_estimate as u128)
-                .saturating_mul(percentage_scaled.get() as u128)
-                .saturating_add((GC_PERCENT_SCALE - 1) as u128)
-                / GC_PERCENT_SCALE as u128)
-                .min(GC_HI_THRESHOLD_BYTES as u128) as usize;
-            threshold = threshold.max(pct_threshold);
-        }
-        // Internal live-proportional growth term: trigger only once at least
-        // GC_LIVE_GROWTH_NUM/GC_LIVE_GROWTH_DEN of the live heap has been
-        // allocated since the last cycle, so the full-mark cost (O(live))
-        // amortizes as the heap grows. Invariants: strict max — the
-        // elisp-derived value above stays a floor this term never lowers (user
-        // settings and the defaults keep their meaning as minimum budgets);
-        // overridden thresholds (`set_gc_threshold`) are unaffected because
-        // this value only flows through `set_gc_threshold_from_runtime`; the
-        // GC_HI clamp below still bounds the result. `live_bytes` is what the
-        // last sweep counted and does not move between sweeps, so this term
-        // is stable across a burst of allocation rather than growing with it.
-        let live_growth = ((self.tagged_heap.live_bytes() as u128)
-            .saturating_mul(super::gc_live_growth_percent())
-            / 100)
-            .min(GC_HI_THRESHOLD_BYTES as u128) as usize;
-        threshold = threshold.max(live_growth);
-        let mut threshold = threshold.clamp(1, GC_HI_THRESHOLD_BYTES);
+        let mut threshold = consing_threshold(
+            self.gc_runtime_settings_cache.gc_cons_threshold_bytes,
+            self.gc_runtime_settings_cache.gc_cons_percentage,
+            self.tagged_heap.live_bytes(),
+            self.tagged_heap.bytes_since_gc(),
+        );
         if self
             .gc_runtime_settings_cache
             .syms
@@ -810,6 +814,8 @@ impl Context {
 
     #[doc(hidden)]
     pub fn update_gc_runtime_stats(&mut self, elapsed: std::time::Duration) {
+        #[cfg(test)]
+        GC_ELAPSED_PUBLISHES.with(|count| count.set(count.get() + 1));
         self.store_variable(gcs_done_symbol(), Value::fixnum(self.gc_count as i64));
 
         let old_elapsed = self
@@ -1088,7 +1094,24 @@ impl Context {
 
     pub fn set_display_host(&mut self, mut host: Box<dyn DisplayHost>) {
         let _ = host.set_visual_config(self.visual_config.clone());
+        // A dump or an earlier init form can set the variable before the
+        // native host exists. Reattachment must inherit its current value.
+        host.set_ns_confirm_quit(
+            self.builtin_var_value_by_name("ns-confirm-quit")
+                .unwrap_or(Value::NIL)
+                .is_truthy(),
+        );
         self.display_host = Some(host);
+        // Cut-4 flip. Only a Green World activates, so the default GUI/TTY
+        // path stays on the serial installer until S3. A re-attach keeps the
+        // installed arm and uses the current host; a worker is refused.
+        match self.activate_host_session() {
+            Ok(()) => {}
+            Err(super::activation_owner::HostSessionActivationError::NotGreen) => {}
+            Err(error) => {
+                tracing::warn!(?error, "host session activation refused");
+            }
+        }
     }
 
     pub fn set_tty_frame_host_factory(&mut self, factory: Box<dyn TtyFrameHostFactory>) {

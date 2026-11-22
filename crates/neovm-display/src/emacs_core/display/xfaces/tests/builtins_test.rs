@@ -1423,9 +1423,21 @@ fn unresolved_live_default_font_request_preserves_opened_font_and_geometry() {
         frame.char_width = 8.0;
         frame.char_height = 19.0;
     }
+    let vector = ensure_frame_lisp_face_vector_by_symbol(
+        &mut eval,
+        frame_id,
+        Value::symbol("default"),
+        "default",
+        FrameFaceInitial::SelectedBase,
+    )
+    .expect("default face vector");
+    let before = vector.as_vector_data().unwrap().as_slice().to_vec();
     eval.set_display_host(Box::new(LiveFrameFontDisplayHost { realized: None }));
 
-    builtin_internal_set_lisp_face_attribute(
+    // Attested GNU31.1 linux-gtk3: font_load_for_lface retries this string as
+    // family "Missing Font-17", size nil, then signals without changing the
+    // face or frame. See tmp/dispgh/b60-f1 and font.c:3444-3481/xfaces.c:3691.
+    let error = builtin_internal_set_lisp_face_attribute(
         &mut eval,
         vec![
             Value::symbol("default"),
@@ -1434,10 +1446,44 @@ fn unresolved_live_default_font_request_preserves_opened_font_and_geometry() {
             Value::make_frame(frame_id.0),
         ],
     )
-    .expect("an unresolved public selector remains representable");
+    .expect_err("an unavailable explicit GUI font must signal");
+    let FlowKind::Signal(signal) = error.into_kind() else {
+        panic!("expected Font not available signal");
+    };
+    assert_eq!(signal.symbol_name(), "error");
+    assert_eq!(signal.data[0].as_utf8_str(), Some("Font not available"));
+    assert!(is_font_spec(&signal.data[1]));
+    assert_eq!(
+        font_get(vec![signal.data[1], Value::keyword("family")])
+            .unwrap()
+            .as_bare_symbol_name(),
+        Some("Missing Font-17")
+    );
+    assert!(
+        font_get(vec![signal.data[1], Value::keyword("size")])
+            .unwrap()
+            .is_nil()
+    );
+    assert_eq!(
+        font_get(vec![signal.data[1], Value::keyword("user-spec")])
+            .unwrap()
+            .as_utf8_str(),
+        Some("Missing Font-17")
+    );
+    assert_eq!(
+        vector.as_vector_data().unwrap().as_slice(),
+        before.as_slice()
+    );
 
     let frame = eval.frame_manager().get(frame_id).expect("selected frame");
     assert_eq!(frame.parameter("font-parameter"), Some(old_font));
+    assert_eq!(
+        frame
+            .known_parameter(FrameParam::Font)
+            .unwrap()
+            .as_utf8_str(),
+        Some("Old Mono-11")
+    );
     assert_eq!(frame.font_pixel_size, 15.0);
     assert_eq!(frame.char_width, 8.0);
     assert_eq!(frame.char_height, 19.0);

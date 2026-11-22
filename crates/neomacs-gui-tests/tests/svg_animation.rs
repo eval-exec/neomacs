@@ -40,12 +40,10 @@ fn run_svg_scenario(scenario: &str, fixture: &str, introduction: bool) {
         .duration_since(std::time::UNIX_EPOCH)
         .expect("system clock")
         .as_nanos();
-    let artifacts = root.join(format!(
+    let artifacts = neomacs_gui_tests::fresh_artifact_dir(root.join(format!(
         "tmp/svg-animation-gui-{}-{run_id}",
         std::process::id()
-    ));
-    fs::create_dir_all(root.join("tmp")).expect("GUI artifact parent");
-    fs::create_dir(&artifacts).expect("fresh SVG GUI artifacts");
+    )));
     let session = DisplayHarness::for_backend(backend)
         .start_session(&artifacts)
         .expect("start GUI display");

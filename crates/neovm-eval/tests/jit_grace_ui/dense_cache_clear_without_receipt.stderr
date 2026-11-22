@@ -1,0 +1,15 @@
+error[E0061]: this method takes 1 argument but 0 arguments were supplied
+ --> $WORKSPACE/crates/neovm-eval/tests/jit_grace_ui/dense_cache_clear_without_receipt.rs
+  |
+  |     cache.clear();
+  |           ^^^^^-- argument #1 of type `&JitGracePeriod` is missing
+  |
+note: method defined here
+ --> $WORKSPACE/crates/neovm-eval/src/emacs_core/runtime/jit/cache.rs
+  |
+  |     pub fn clear(&mut self, receipt: &JitGracePeriod) {
+  |            ^^^^^
+help: provide the argument
+  |
+4 |     cache.clear(/* &JitGracePeriod */);
+  |                 +++++++++++++++++++++

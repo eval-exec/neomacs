@@ -289,7 +289,13 @@ impl RenderApp {
                 }
             } else {
                 match neomacs_webview::WebViewSystem::new(config, self.webview_wake.clone()) {
-                    Ok(system) => self.webview_system = Some(system),
+                    Ok(system) => {
+                        self.webview_system = Some(system);
+                        // GNU re-claims SIGCHLD after WebKit/Glib touch it
+                        // (src/xwidget.c:382, :3128, :4281, :4303); the WPE
+                        // stack is Neo's corresponding claim point.
+                        neovm_core::emacs_core::reclaim_child_signal();
+                    }
                     Err(error) => {
                         tracing::warn!(?error, "failed to initialize the WebView system");
                     }
@@ -555,6 +561,7 @@ fn run_render_loop_with_startup(
     };
 
     tracing::info!("Render thread entering winit event loop");
+    let font_raster_options = crate::display_scale::observe_font_raster_options(&event_loop);
     let preparation_proxy = event_loop.create_proxy();
     let exit_input = comms.input_tx.clone();
     let command_rx = comms.cmd_rx.clone();
@@ -576,6 +583,10 @@ fn run_render_loop_with_startup(
                 shared_terminals,
             );
             let mut app = app;
+            app.font_raster_options = font_raster_options;
+            app.frame_windows
+                .set_font_raster_options(font_raster_options);
+            app.tooltips.set_font_raster_options(font_raster_options);
             match super::frame_preparation::FramePreparation::spawn(
                 app.comms.frame_rx.clone(),
                 move || preparation_proxy.wake_up(),

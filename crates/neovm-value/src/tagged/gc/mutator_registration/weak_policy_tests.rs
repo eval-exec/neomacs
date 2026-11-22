@@ -64,11 +64,16 @@ fn explicit_complete_inventory_body<K: EraKeeper>(
     keeper: &K,
     table: TaggedValue,
 ) {
+    // E3 slice 1 opened production admission: the stopped major now runs the
+    // weak sweep, so an eligible owned weak table needs no test permit. The
+    // permit remains a test-only membership fence over the tables a fixture
+    // names, never a production admission gate.
+    supported(heap).unwrap();
+    let address = table.bits() & !crate::tagged::value::TAG_MASK;
     let none = WeakSweepPermit::mint(heap, keeper, &[]).unwrap();
-    assert!(supported(heap).is_err());
-    assert!(supported_with_weak(heap, Some(&none)).is_err());
+    assert!(!none.covers(heap, address));
     let permit = WeakSweepPermit::mint(heap, keeper, &[table]).unwrap();
-    supported_with_weak(heap, Some(&permit)).unwrap();
+    assert!(permit.covers(heap, address));
     assert!(!permit.covers(heap, TaggedValue::NIL.bits()));
 }
 
@@ -145,7 +150,6 @@ fn permanent_mapped_and_callback_payloads_body<K: EraKeeper>(
         header.generation = generation;
         header.tenured = tenured;
     }
-    let permit = WeakSweepPermit::mint(heap, keeper, &[table]).unwrap();
     // A decoded image owns its shell, not this heap's owned-object catalog.
     let mapped = Box::new(HashTableObj {
         header: VecLikeHeader::new(VecLikeType::HashTable),
@@ -165,10 +169,10 @@ fn permanent_mapped_and_callback_payloads_body<K: EraKeeper>(
             mapped_ptr.cast(),
             std::mem::size_of::<HashTableObj>(),
         ));
-    assert!(supported_with_weak(heap, Some(&permit)).is_err());
+    assert!(supported(heap).is_err());
     heap.mapped_veclike_objects.pop();
     heap.alloc_user_ptr(std::ptr::null_mut(), None);
-    assert!(supported_with_weak(heap, Some(&permit)).is_err());
+    assert!(supported(heap).is_err());
 }
 
 fn stopped_fence_refuses_before_mutation_and_recovers_body<K: EraKeeper>(

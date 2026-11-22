@@ -6,6 +6,14 @@ use super::super::{Baton, FrozenLegacyRoots};
 use super::factory::AdmissionPlan;
 use super::{AdmissionScope, Context, OwnedParallelError, map_rendezvous, map_start};
 use neovm_value::tagged::gc::{QuiescentCollector, clear_tagged_heap_root_if_installed};
+use std::borrow::Borrow;
+
+#[path = "preparation/policy.rs"]
+mod policy;
+use policy::{ClosedSource, PreparationPolicy, PreparationResources};
+#[path = "preparation/finish_source.rs"]
+mod finish_source;
+use finish_source::{CensusOnly, FinishSource, WithdrawObservations};
 
 /// Resource recovery work, not a permission to reactivate a Context. The
 /// consuming source adapter must separately validate its actual return right.
@@ -18,16 +26,16 @@ pub(crate) enum SerialRecovery {
 /// Borrows the actual source Context exclusively for the collector lifetime.
 /// No ordinary source access is possible while this local preparation lives.
 #[must_use]
-pub(super) struct PreparedAdmission<'heap> {
+pub(super) struct PreparedAdmission<'heap, K = Baton> {
     collector: QuiescentCollector<'heap>,
-    keeper: Baton,
+    keeper: K,
     frozen: FrozenLegacyRoots,
     recovery: SerialRecovery,
 }
 
 static_assertions::assert_not_impl_any!(PreparedAdmission<'static>: Send, Sync, Clone, Copy);
 
-impl PreparedAdmission<'_> {
+impl PreparedAdmission<'_, Baton> {
     /// End the complete local factory/callback frame before returning the
     /// resource recovery plan. No failure temporary can retain a source loan
     /// while the caller reinstalls ordinary Context access.
@@ -66,20 +74,110 @@ impl Context {
     pub(super) fn prepare_owned_admission(
         &mut self,
     ) -> Result<PreparedAdmission<'_>, OwnedParallelError> {
-        let recovery = self.retire_empty_dead_windows_table();
+        self.prepare_admission_with::<policy::RecoverSerial>()
+    }
+
+    /// Closed, nonrecovering prerequisite for the consuming source adapter.
+    /// This borrowed transaction does not own or suspend the source Context.
+    /// The adapter must arm its owned fail-closed shell before invoking it.
+    /// Dropping a failure is not permission to resume. No product caller
+    /// enters this path.
+    #[allow(dead_code)]
+    fn prepare_closed_source(
+        &mut self,
+    ) -> Result<PreparedAdmission<'_>, policy::ClosedPreparationFailure<'_>> {
+        self.prepare_admission_with::<ClosedSource>()
+    }
+
+    /// Local census and TLS withdrawal for a shell that already holds the keeper.
+    /// The shell calls this only after its own frames have returned. The
+    /// borrowed keeper is the one the shell retained: this does not issue a
+    /// second baton, run Lisp preclean, or recover the source. No production
+    /// caller enters it.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn close_owned_source_heap_tls(
+        &mut self,
+        keeper: &Baton,
+    ) -> Result<FrozenLegacyRoots, OwnedParallelError> {
+        self.finish_owned_source_heap::<CensusOnly>(keeper)
+    }
+
+    /// Consume the same local collector frame through observation withdrawal.
+    /// The collector and the original observation `Rc` do not leave this frame.
+    /// No production caller enters it.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn withdraw_owned_source_observations(
+        &mut self,
+        keeper: &Baton,
+    ) -> Result<
+        (
+            FrozenLegacyRoots,
+            neovm_value::tagged::collection_reads::SourceObservationsDetached,
+        ),
+        finish_source::ObservationFailure,
+    > {
+        self.finish_owned_source_heap::<WithdrawObservations>(keeper)
+    }
+
+    // Only this child module defines finish policies. No caller callback or
+    // runtime switch can run inside the source collector frame.
+    fn finish_owned_source_heap<F: FinishSource>(
+        &mut self,
+        keeper: &Baton,
+    ) -> Result<F::Output, F::Failure> {
+        let prepared = match self
+            .prepare_admission_using::<ClosedSource, _>(SerialRecovery::Unchanged, keeper)
+        {
+            Ok(prepared) => prepared,
+            Err(failure) => return Err(F::preparation_failure(failure.retain_resources())),
+        };
+        let PreparedAdmission {
+            collector,
+            keeper: _,
+            frozen,
+            recovery: _,
+        } = prepared;
+        F::finish(collector, frozen)
+    }
+
+    /// The one census/drain definition. Only sealed static policies choose
+    /// preclean and failure behavior. No runtime mode flag is introduced.
+    fn prepare_admission_with<P: PreparationPolicy>(
+        &mut self,
+    ) -> Result<PreparedAdmission<'_, Baton>, P::Failure<'_, Baton>> {
+        let recovery = P::begin(self);
         let keeper = match self.issue_green_baton() {
             Ok(keeper) => keeper,
             Err(error) => {
-                self.recover_serial_context(recovery);
-                return Err(map_start(error));
+                return Err(P::fail(
+                    self,
+                    recovery,
+                    PreparationResources::BeforeKeeper,
+                    map_start(error),
+                ));
             }
         };
-        let frozen = match self.capture_parallel_legacy_roots(&keeper) {
+        self.prepare_admission_using::<P, _>(recovery, keeper)
+    }
+
+    /// Owned serial preparation passes its baton. The source shell borrows the
+    /// baton it already retained. Neither route issues a second keeper.
+    fn prepare_admission_using<P: PreparationPolicy, K: Borrow<Baton>>(
+        &mut self,
+        recovery: SerialRecovery,
+        keeper: K,
+    ) -> Result<PreparedAdmission<'_, K>, P::Failure<'_, K>> {
+        let frozen = match self.capture_parallel_legacy_roots(keeper.borrow()) {
             Ok(frozen) => frozen,
             Err(error) => {
-                drop(keeper);
-                self.recover_serial_context(recovery);
-                return Err(map_rendezvous(error));
+                return Err(P::fail(
+                    self,
+                    recovery,
+                    PreparationResources::Keeper(keeper),
+                    map_rendezvous(error),
+                ));
             }
         };
         let heap = self.tagged_heap.heap_root().as_ptr();
@@ -87,7 +185,8 @@ impl Context {
         // concurrent mark and private roots were captured above. The legacy
         // TLS facade stays installed for this drain so its reseed still sees
         // the thread-local census; it is uninstalled before the body runs.
-        // The body cannot reach the Context or the heap.
+        // The body cannot reach the Context or the heap. Static failure policy
+        // does not change this existing local collector loan boundary.
         let drained = unsafe {
             (*heap).drain_to_quiescent(|heap| {
                 self.seed_registered_mutator_roots_world_stopped(heap);
@@ -96,10 +195,12 @@ impl Context {
         let collector = match drained {
             Ok(collector) => collector,
             Err(_) => {
-                drop(frozen);
-                drop(keeper);
-                self.recover_serial_context(recovery);
-                return Err(OwnedParallelError::Start);
+                return Err(P::fail(
+                    self,
+                    recovery,
+                    PreparationResources::Census { frozen, keeper },
+                    OwnedParallelError::Start,
+                ));
             }
         };
         clear_tagged_heap_root_if_installed(self.tagged_heap.heap_root());

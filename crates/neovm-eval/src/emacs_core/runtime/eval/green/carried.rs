@@ -15,7 +15,30 @@ type Placeholder = fn() -> Box<dyn Any>;
 /// Exchange a piece with this OS thread's thread-locals.
 type Swap = fn(&mut dyn Any);
 
+#[path = "carried/source.rs"]
+mod source;
+pub(crate) use source::SourceWorldCarriers;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum CarrierId {
+    Composition,
+    Processes,
+    Sqlite,
+    Dbus,
+    Selection,
+    Lossage,
+    Undo,
+    Terminal,
+    AllocationCounts,
+    Observations,
+    PropertyRevision,
+    DisplayEpochs,
+    TimeZone,
+}
+
 /// Every carried piece of World state, with its GNU anchor.
+/// This table is the green park list. The source sidecar below names the
+/// same callbacks in the same order and does not replace it.
 const CARRIERS: &[(Placeholder, Swap)] = &[
     // composite.c `composition_table`.
     (
@@ -84,6 +107,42 @@ const CARRIERS: &[(Placeholder, Swap)] = &[
     ),
 ];
 
+const CARRIER_IDS: [CarrierId; 13] = [
+    CarrierId::Composition,
+    CarrierId::Processes,
+    CarrierId::Sqlite,
+    CarrierId::Dbus,
+    CarrierId::Selection,
+    CarrierId::Lossage,
+    CarrierId::Undo,
+    CarrierId::Terminal,
+    CarrierId::AllocationCounts,
+    CarrierId::Observations,
+    CarrierId::PropertyRevision,
+    CarrierId::DisplayEpochs,
+    CarrierId::TimeZone,
+];
+
+const fn source_declarations() -> [source::CarrierDeclaration; 13] {
+    let mut index = 0;
+    let mut declarations = [source::CarrierDeclaration {
+        id: CARRIER_IDS[0],
+        placeholder: CARRIERS[0].0,
+        swap: CARRIERS[0].1,
+    }; 13];
+    while index < CARRIER_IDS.len() {
+        declarations[index] = source::CarrierDeclaration {
+            id: CARRIER_IDS[index],
+            placeholder: CARRIERS[index].0,
+            swap: CARRIERS[index].1,
+        };
+        index += 1;
+    }
+    declarations
+}
+
+const SOURCE_DECLARATIONS: &[source::CarrierDeclaration] = &source_declarations();
+
 /// The World's thread-local state while its holder is parked, and the
 /// placeholders the running holder's thread-locals gave up for it otherwise.
 pub(crate) struct CarriedState {
@@ -142,6 +201,12 @@ impl CarriedState {
         }
     }
 }
+
+#[cfg(target_pointer_width = "64")]
+const _: () = {
+    assert!(std::mem::size_of::<(Placeholder, Swap)>() == 16);
+    assert!(std::mem::size_of::<CarriedState>() == 32);
+};
 
 #[cfg(test)]
 mod carriers_round_trip {

@@ -915,6 +915,17 @@ impl<T: PagedObject> ObjectArena<T> {
         self.reserve_run_in_new_page(want)
     }
 
+    /// A whole page at its start.
+    ///
+    /// [`Self::reserve_run`] would take the newest page's bump tail when
+    /// that tail is shorter than a page, or a free-list run. An owner grant
+    /// is a whole page and does not share either of those with the serial
+    /// region.
+    #[cold]
+    pub(super) fn reserve_fresh_page(&mut self) -> ArenaRun {
+        self.reserve_run_in_new_page(ObjectPage::<T>::SLOTS)
+    }
+
     /// [`Self::reserve_run`]'s third source, out of line: a new page (over a
     /// released page's storage when one is spare), the run at its start.
     #[cold]
@@ -1100,7 +1111,10 @@ impl<T: PagedObject> ObjectArena<T> {
                             // Joined marker, stopped mutators: restore GEN-3
                             // only after every mark reader has finished.
                             header.marked.store(UNMARKED_AT_REST, Ordering::Relaxed);
-                        } else {
+                        } else if !header.flags.image_resident() {
+                            // The first sweep precedes image promotion. Loader
+                            // provenance already proves these survivors immortal;
+                            // they must not enlarge gc-cons-percentage's census.
                             live_bytes = live_bytes.saturating_add(
                                 TaggedHeap::object_bytes_from_header(slot as *const GcHeader),
                             );
@@ -1746,6 +1760,30 @@ pub struct MappedLayoutStats {
     pub copied_string_capacity_bytes: usize,
     pub copied_veclike_payloads: usize,
     pub copied_veclike_capacity_bytes: usize,
+}
+
+/// Per-kind live/free counts for the `(garbage-collect)` rows.
+///
+/// The shape follows GNU's `gcstat` (`src/alloc.c:310-317`): USED is the live
+/// object/cell count and FREE the capacity that currently holds none. Neo's
+/// arenas have no per-kind free list, so FREE is page capacity minus live
+/// occupancy (vector slots: unused payload capacity).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[doc(hidden)]
+pub struct GcObjectCounts {
+    pub conses_used: usize,
+    pub conses_free: usize,
+    pub symbols_used: usize,
+    pub strings_used: usize,
+    pub strings_free: usize,
+    pub string_bytes: usize,
+    pub vectors_used: usize,
+    pub vector_slots_used: usize,
+    pub vector_slots_free: usize,
+    pub floats_used: usize,
+    pub floats_free: usize,
+    pub intervals_used: usize,
+    pub buffers_used: usize,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

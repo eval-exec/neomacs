@@ -597,11 +597,8 @@ Both engines run the same code here, so the number is comparable."
         ;; What the harness spent on its own snapshot/restore inside the
         ;; timed window, so a reader can tell the workload from the scaffold.
         (harness_bookkeeping_us . ,(alist-get 'bookkeeping phases))
-        ;; Collection parity. Comparing two engines without these is comparing
-        ;; different amounts of work: neomacs performs no automatic collections
-        ;; in --batch (its adaptive pacer's live-growth term is a strict max
-        ;; over gc-cons-threshold), so a batch row silently charges GNU for
-        ;; collection the other engine skipped.
+        ;; Collection parity. Record the collection work each engine performs
+        ;; inside the timed window so differing GC work remains visible.
         ;; These boundaries enclose the gate handshake as well as the loop.
         ;; The cumulative totals below include preparation and cannot explain
         ;; collection-sized variation in the edit-loop instruction count.

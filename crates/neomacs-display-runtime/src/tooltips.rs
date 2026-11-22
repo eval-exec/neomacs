@@ -77,11 +77,22 @@ enum Presentation {
 
 #[derive(Default)]
 pub(crate) struct Tooltips {
+    font_raster_options: crate::display_raster::DisplayRasterOptions,
     state: Presentation,
     retired: crate::presentation::Retirements<Box<MappedTooltip>>,
 }
 
 impl Tooltips {
+    pub(crate) fn set_font_raster_options(
+        &mut self,
+        options: crate::display_raster::DisplayRasterOptions,
+    ) {
+        self.font_raster_options = options;
+        if let Presentation::Mapped(mapped) = &mut self.state {
+            options.apply(&mut mapped.atlas);
+        }
+    }
+
     pub fn show(
         &mut self,
         owner: TooltipOwner,
@@ -190,7 +201,14 @@ impl Tooltips {
         self.commit_retirements(commit);
         self.state = match std::mem::take(&mut self.state) {
             Presentation::Ready(ready) => Presentation::Mapped(Box::new(MappedTooltip::create(
-                *ready, commit, instance, adapter, device, queue, format,
+                *ready,
+                commit,
+                instance,
+                adapter,
+                device,
+                queue,
+                format,
+                self.font_raster_options,
             )?)),
             state @ (Presentation::Hidden | Presentation::Mapped(_)) => state,
         };
@@ -280,10 +298,11 @@ impl MappedTooltip {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         format: wgpu::TextureFormat,
+        font_raster_options: crate::display_raster::DisplayRasterOptions,
     ) -> Result<Self, String> {
         let request = &ready.request;
         let owner = &ready.owner;
-        let mut atlas = WgpuGlyphAtlas::new_with_scale(device, owner.parent.scale_factor() as f32);
+        let mut atlas = font_raster_options.glyph_atlas(device, owner.parent.scale_factor() as f32);
         atlas.set_metrics(owner.metrics.0, owner.metrics.1);
         let mut bindings =
             neomacs_display_protocol::frame_glyphs::FrameGlyphBuffer::with_size(0.0, 0.0);

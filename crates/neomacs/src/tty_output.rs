@@ -513,10 +513,12 @@ impl<W: Write> TtyPainter for TerminfoPainter<'_, W> {
     }
 }
 
-pub(crate) fn popup_line(row: usize, col: usize, text: &str) -> io::Result<()> {
+/// Write one TTY popup row.  `inverse` selects GNU's selected-menu face;
+/// ordinary items are drawn with the normal face.
+pub(crate) fn popup_line(row: usize, col: usize, text: &str, inverse: bool) -> io::Result<()> {
     #[cfg(windows)]
     {
-        windows::popup_line(row, col, text)
+        windows::popup_line(row, col, text, inverse)
     }
     #[cfg(not(windows))]
     {
@@ -530,7 +532,7 @@ pub(crate) fn popup_line(row: usize, col: usize, text: &str) -> io::Result<()> {
                 let mut cell = TtyCell::default();
                 cell.set_ch(ch);
                 cell.set_attrs(neomacs_display_runtime::backend::tty::rif::CellAttrs {
-                    inverse: true,
+                    inverse,
                     ..Default::default()
                 });
                 cell

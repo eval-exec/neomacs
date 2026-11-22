@@ -2225,7 +2225,7 @@ fn plain_put(
                 }
                 HashProbe::Absent(hash) => {
                     ht.maybe_resize_for_insert(true);
-                    let key = key_tv.to_hash_key_swp(&test, false);
+                    let key = key_tv.to_hash_key_for_insert(test, false);
                     ht.data.insert_absent(hash, key, key_tv, value_tv);
                 }
             }

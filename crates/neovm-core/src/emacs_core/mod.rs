@@ -305,6 +305,9 @@ pub use neovm_system::emacs_core::host_input;
 #[path = "load_boot.rs"]
 pub mod load_boot;
 pub(crate) use neovm_system::emacs_core::os_signal;
+// The frontend's one seam into os_signal: GNU's xwidget re-claim of SIGCHLD
+// after WebKit/WPE init. The rest of the module stays crate-private.
+pub use neovm_system::emacs_core::os_signal::reclaim_child_signal;
 pub use neovm_system::emacs_core::path_exec;
 pub use neovm_system::emacs_core::perf_trace;
 pub(crate) use neovm_system::emacs_core::platform_facts;
@@ -554,6 +557,14 @@ mod architecture_mac_x11_subrs_ratchet_test;
 #[cfg(test)]
 #[path = "tests/architecture/plist_head_seam_guard_test.rs"]
 mod architecture_plist_head_seam_guard_test;
+
+#[cfg(test)]
+#[path = "tests/architecture/stopped_mark_adapter_guard_test.rs"]
+mod architecture_stopped_mark_adapter_guard_test;
+
+#[cfg(test)]
+#[path = "tests/architecture/condition_snapshot_admission_guard_test.rs"]
+mod architecture_condition_snapshot_admission_guard_test;
 
 #[cfg(test)]
 #[path = "tests/heap_registry_cross_heap_test.rs"]

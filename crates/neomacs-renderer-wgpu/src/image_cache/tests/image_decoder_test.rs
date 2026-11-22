@@ -48,7 +48,8 @@ fn metadata_before_gpu_adopts_the_same_decoded_pixels_once() {
         .unwrap()
         .unwrap();
     assert_eq!(metadata.layout, ImageLayoutExtent::new(2, 1));
-    assert_eq!(metadata.mask, ImageMaskKind::Clipping);
+    // Native RGBA alpha is not a GNU PNG mask (image.c:8407-8423).
+    assert_eq!(metadata.mask, ImageMaskKind::AlphaChannel);
     // A later renderer command must adopt this job, even after it completed.
     submit(
         &client,

@@ -53,7 +53,7 @@ fn rejected_body_is_remembered_on_its_runtime() {
         matches!(rt.dispatch_sized(len), Plan::Interpret),
         "the verdict is remembered: no more seam trips"
     );
-    clear();
+    clear_with_serial_receipt().expect("serial jit grace");
     assert!(
         matches!(rt.dispatch_sized(len), Plan::Compiled),
         "the cache forgot its verdicts, so the dispatcher probes again"
@@ -653,7 +653,7 @@ fn jit_obs_clear_folds_counts_into_dropped_totals() {
     let id = f.jit_runtime().compiled_id().expect("compiled");
     let (rows, dropped0) = leaf_report_rows();
     assert!(rows.iter().any(|r| r.id == id));
-    clear();
+    clear_with_serial_receipt().expect("serial jit grace");
     let (rows, dropped) = leaf_report_rows();
     assert!(!rows.iter().any(|r| r.id == id), "cleared");
     assert_eq!(dropped.leaves, dropped0.leaves + 1);
@@ -667,7 +667,7 @@ fn jit_obs_clear_folds_counts_into_dropped_totals() {
 /// only a later whole-cache clear folds those counters into dropped totals.
 #[test]
 fn jit_obs_evict_compiled_retires_osr_counts_until_clear() {
-    clear();
+    clear_with_serial_receipt().expect("serial jit grace");
     let mut leaf = super::super::compile::lower_nullary_leaf(
         &[Op::Constant(0), Op::Nil, Op::Add, Op::Return],
         &[Value::make_int(5)],
@@ -719,14 +719,14 @@ fn jit_obs_evict_compiled_retires_osr_counts_until_clear() {
 
     let mut expected = dropped0;
     expected.add(&observations);
-    clear();
+    clear_with_serial_receipt().expect("serial jit grace");
     let (rows, dropped) = leaf_report_rows();
     assert!(!rows.iter().any(|r| r.id == id));
     assert_eq!(
         dropped, expected,
         "clear folds the retained leaf exactly once"
     );
-    clear();
+    clear_with_serial_receipt().expect("serial jit grace");
     assert_eq!(
         leaf_report_rows().1,
         expected,
@@ -805,18 +805,18 @@ fn a_different_obarray_generation_clears_the_cache() {
     let c = Value::make_int(7);
     let f = nullary_fn(vec![Op::Constant(0), Op::Return], vec![c]);
     let id = compile_and_cache_jit_leaf(&f, Some(&obarray)).expect("compiles");
-    sync_cache_to_obarray(obarray.generation());
+    sync_cache_to_obarray(obarray.generation()).expect("serial jit grace");
     assert!(is_compiled_for_test(id), "same obarray: the leaf stays");
     let other = Obarray::new();
     assert_ne!(other.generation(), obarray.generation());
-    sync_cache_to_obarray(other.generation());
+    sync_cache_to_obarray(other.generation()).expect("serial jit grace");
     assert!(
         !is_compiled_for_test(id),
         "another obarray: the cache is dropped"
     );
     // The next compile pins the new obarray.
     let id = compile_and_cache_jit_leaf(&f, Some(&other)).expect("compiles");
-    sync_cache_to_obarray(other.generation());
+    sync_cache_to_obarray(other.generation()).expect("serial jit grace");
     assert!(is_compiled_for_test(id));
 }
 

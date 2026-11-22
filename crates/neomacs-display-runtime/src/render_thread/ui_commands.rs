@@ -69,10 +69,9 @@ impl RenderApp {
                                 });
                             return;
                         };
-                        let mut atlas = neomacs_renderer_wgpu::WgpuGlyphAtlas::new_with_scale(
-                            &gpu.device,
-                            parent.scale_factor() as f32,
-                        );
+                        let mut atlas = self
+                            .font_raster_options
+                            .glyph_atlas(&gpu.device, parent.scale_factor() as f32);
                         atlas.set_metrics(fs, lh);
                         atlas.set_current_frame_fonts(fonts.font_bindings());
                         let menu = atlas.measure_menu(

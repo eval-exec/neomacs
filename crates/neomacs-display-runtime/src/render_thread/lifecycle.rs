@@ -265,7 +265,7 @@ impl RenderApp {
     }
 
     pub(super) fn handle_about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
-        // A Cmd-Q that arrived while the input queue was full is retried here
+        // An application Quit that found a full input queue is retried here
         // rather than dropped or blocked on the AppKit main thread.
         #[cfg(target_os = "macos")]
         super::macos_quit_redirect::deliver_pending_quit(&self.comms.input_tx);
@@ -575,8 +575,8 @@ impl RenderApp {
         if let Some(tooltip_deadline) = self.menus.tooltip_deadline() {
             deadline = Some(deadline.map_or(tooltip_deadline, |d| d.min(tooltip_deadline)));
         }
-        // A deferred Cmd-Q must not wait for an unrelated event to wake the
-        // loop: keep a bounded retry deadline until the queue has room.
+        // A deferred application Quit must not wait for an unrelated event:
+        // keep a bounded retry deadline until the queue has room.
         #[cfg(target_os = "macos")]
         if super::macos_quit_redirect::quit_is_pending() {
             const QUIT_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
@@ -662,7 +662,7 @@ impl RenderApp {
             let fx = &window_state.render.compositor.renderer_effects;
             let effect_demands = [
                 (
-                    window_state.has_presentable_dirty_content(),
+                    window_state.has_presentable_dirty_content_at(now),
                     DemandReason::Redisplay,
                     max_rate,
                 ),
@@ -759,6 +759,24 @@ impl RenderApp {
                 } else {
                     self.frame_coordinator.retract(id, reason);
                 }
+            }
+
+            // A withheld native resize is normally answered by the relaid
+            // presentation, whose ingestion submits a Redisplay demand. If
+            // the evaluator cannot reproduce the requested extent (a
+            // minimum-size clamp, for example), the bounded wait is the only
+            // thing that can release the retained scene; schedule that wake
+            // so the loop cannot sleep past it.
+            if let Some(deadline) = window_state.render.native_resize_withhold_deadline_at(now) {
+                let _ = self.frame_coordinator.submit_demand(
+                    id,
+                    FrameDemand {
+                        invalidation: legacy_repaint,
+                        cadence: Cadence::At(deadline),
+                        reason: DemandReason::Redisplay,
+                    },
+                    now,
+                );
             }
 
             // Cursor geometry is compositor state, not editor content. Keep
@@ -873,7 +891,7 @@ impl RenderApp {
             // retained scene; a content repaint owed on the same pass has
             // already submitted the stronger Redisplay demand above and wins
             // the strongest-invalidation merge.
-            if window_state.has_presentable_cursor_change() {
+            if window_state.has_presentable_cursor_change_at(now) {
                 let cursor_action = self.frame_coordinator.submit_demand(
                     id,
                     FrameDemand {

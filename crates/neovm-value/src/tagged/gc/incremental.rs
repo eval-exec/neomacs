@@ -5,6 +5,57 @@
 
 use super::*;
 
+/// Incremental `NEOVM_GC` line. Existing fields stay in place; `seed_us` is appended.
+pub(super) fn format_incremental_gc_trace_line(
+    collections: usize,
+    mark_us: u64,
+    sweep_total_us: u64,
+    slices: usize,
+    blocks: usize,
+    noncons_freed: usize,
+    cons_live: usize,
+    heap_noncons: usize,
+    mapped_marked: usize,
+    mapped_total: usize,
+    live_bytes: usize,
+    seed_us: u64,
+) -> String {
+    format!(
+        "NEOVM_GC gc#{collections} [incremental mark={mark_us}us sweep_total={sweep_total_us}us \
+         slices={slices} blocks={blocks} noncons_freed={noncons_freed}] cons_live={cons_live} \
+         heap_noncons={heap_noncons} dump_marked={mapped_marked}/{mapped_total} \
+         live={live_bytes}B seed_us={seed_us}"
+    )
+}
+
+/// Eager stop-the-world `NEOVM_GC` line. Existing fields stay in place; `seed_us` is appended.
+pub(super) fn format_eager_gc_trace_line(
+    collections: usize,
+    elapsed_ms: f64,
+    clear_us: u64,
+    mark_us: u64,
+    sweep_us: u64,
+    cons_live: usize,
+    heap_noncons: usize,
+    mapped_marked: usize,
+    mapped_total: usize,
+    dump_cons: usize,
+    dump_vec: usize,
+    dump_str: usize,
+    dump_float: usize,
+    dirty_owners: usize,
+    live_bytes: usize,
+    seed_us: u64,
+) -> String {
+    format!(
+        "NEOVM_GC gc#{collections} {elapsed_ms:.2}ms [clear={clear_us}us mark={mark_us}us \
+         sweep={sweep_us}us] cons_live={cons_live} heap_noncons={heap_noncons} \
+         dump_marked={mapped_marked}/{mapped_total} dump[cons={dump_cons} vec={dump_vec} \
+         str={dump_str} float={dump_float}] dirty_owners={dirty_owners} live={live_bytes}B \
+         seed_us={seed_us}"
+    )
+}
+
 impl TaggedHeap {
     /// True while a mark is underway (between the start handshake and sweep).
     pub fn mark_in_progress(&self) -> bool {
@@ -69,22 +120,14 @@ impl TaggedHeap {
         if self.generational.major_in_progress {
             self.incremental_drain_all();
         }
-        // Queue doomed finalizers first (mirrors `complete_collection`; a miss
-        // here would mean finalizers silently never run under the concurrent
-        // collector). The main mark has drained — the termination handshake
-        // already traced the deferred veclikes — so marks are final.
-        let finalizer_t0 = std::time::Instant::now();
-        self.mark_and_queue_doomed_finalizers();
-        self.handshake.last_term_finalizer_us = finalizer_t0.elapsed().as_micros() as u64;
-        // Resolve weak hash tables (GNU mark_and_sweep_weak_table_contents): mark
-        // entries that survive per their table's weakness, then drop the rest. This
-        // mirrors `complete_collection` and MUST run on the concurrent/incremental
-        // termination too — otherwise a weak table's only-weakly-reachable entries
-        // are neither marked nor removed, so they are swept while still referenced
-        // by the table (UAF). The main mark has already drained at this point.
-        let weak_t0 = std::time::Instant::now();
-        self.mark_and_sweep_weak_tables();
-        self.handshake.last_term_weak_us = weak_t0.elapsed().as_micros() as u64;
+        // Same post-mark adapters as `complete_collection`: doomed finalizers,
+        // the weak sweep, and the three explicit reclaims. The main mark has
+        // drained — the termination handshake already traced the deferred
+        // veclikes — so marks are final. Empty explicit maps reclaim nothing.
+        // Queued Lisp finalizers are not run in this stop.
+        let (finalizer_us, weak_us) = self.finish_stopped_mark_adapters();
+        self.handshake.last_term_finalizer_us = finalizer_us;
+        self.handshake.last_term_weak_us = weak_us;
 
         // Dump-partition safety gate (marks still intact). Same as
         // `finalize_collection`'s, run before any object is freed.
@@ -175,6 +218,7 @@ impl TaggedHeap {
         self.sweep_bignum_page_end = self.bignum_arena.pages.len();
         self.sweep_noncons_live_bytes = 0;
         self.sweep_mark_us = self.incremental_mark_us;
+        self.snapshot_context_seed_for_sweep();
         self.sweep_bytes_before = bytes_before;
         self.sweep_slice_us_total = 0;
         self.sweep_slice_count = 0;
@@ -397,9 +441,11 @@ impl TaggedHeap {
                     // Survivor: relink onto the (fresh) young list.
                     (*current).next = self.all_objects;
                     self.all_objects = current;
-                    self.sweep_noncons_live_bytes = self
-                        .sweep_noncons_live_bytes
-                        .saturating_add(self.collector_object_bytes(current));
+                    if !(*current).flags.image_resident() {
+                        self.sweep_noncons_live_bytes = self
+                            .sweep_noncons_live_bytes
+                            .saturating_add(self.collector_object_bytes(current));
+                    }
                 } else {
                     self.non_cons_object_addrs.remove(&(current as usize));
                     self.unregister_vector_object(current);
@@ -512,11 +558,6 @@ impl TaggedHeap {
             self.recompute_old_bytes_world_stopped();
         }
 
-        let mapped_cons_live: usize = self
-            .mapped_cons_ranges
-            .iter()
-            .map(MappedConsRange::live_count)
-            .sum();
         // The live count the next threshold derives from comes from what the
         // sweep visited: the blocks and pages that existed at termination.
         // What they hold that was allocated during the mark window was born
@@ -530,15 +571,11 @@ impl TaggedHeap {
         // only paces the next cycle sooner.
         let cons_live_bytes = self
             .sweep_cons_live_cells
-            .saturating_add(mapped_cons_live)
             .saturating_mul(size_of::<ConsCell>());
-        let mapped_object_live_bytes = self.mapped_non_cons_live_bytes();
         self.live_bytes = cons_live_bytes
             .saturating_add(self.sweep_noncons_live_bytes)
-            .saturating_add(mapped_object_live_bytes)
             .saturating_add(self.old_noncons_bytes())
-            .saturating_sub(self.sweep_mark_window_alloc_bytes)
-            .max(mapped_object_live_bytes);
+            .saturating_sub(self.sweep_mark_window_alloc_bytes);
 
         self.gc_collections += 1;
         self.sweep_lifetime_us += self.sweep_slice_us_total;
@@ -548,19 +585,21 @@ impl TaggedHeap {
         if std::env::var("NEOVM_GC_TRACE").as_deref() == Ok("1") {
             let (mapped_total, mapped_marked) = self.mapped_object_stats();
             eprintln!(
-                "NEOVM_GC gc#{} [incremental mark={}us sweep_total={}us slices={} blocks={} \
-                 noncons_freed={}] cons_live={} heap_noncons={} dump_marked={}/{} live={}B",
-                self.gc_collections,
-                self.sweep_mark_us,
-                self.sweep_slice_us_total,
-                self.sweep_slice_count,
-                self.sweep_cons_blocks_swept,
-                self.sweep_noncons_freed,
-                self.cons_live_count,
-                self.non_cons_object_addrs.len(),
-                mapped_marked,
-                mapped_total,
-                self.live_bytes,
+                "{}",
+                format_incremental_gc_trace_line(
+                    self.gc_collections,
+                    self.sweep_mark_us,
+                    self.sweep_slice_us_total,
+                    self.sweep_slice_count,
+                    self.sweep_cons_blocks_swept,
+                    self.sweep_noncons_freed,
+                    self.cons_live_count,
+                    self.non_cons_object_addrs.len(),
+                    mapped_marked,
+                    mapped_total,
+                    self.live_bytes,
+                    self.sweep_context_seed_us(),
+                )
             );
         }
         // Owner-tracking remembered-set precursor: NOT cleared at sweep
@@ -1226,14 +1265,7 @@ impl TaggedHeap {
             .saturating_add(new_live);
         let candidates = self.cons_allocator.take_empty_candidates();
         let _ = self.release_empty_cons_candidates(candidates);
-        let mapped_live: usize = self
-            .mapped_cons_ranges
-            .iter()
-            .map(MappedConsRange::live_count)
-            .sum();
-        new_live
-            .saturating_add(mapped_live)
-            .saturating_mul(size_of::<ConsCell>())
+        new_live.saturating_mul(size_of::<ConsCell>())
     }
 
     // Select once for the whole sweep, rather than checking the generation
@@ -1376,14 +1408,7 @@ impl TaggedHeap {
             .allocated_count
             .saturating_sub(old_live)
             .saturating_add(new_live);
-        let mapped_live = self
-            .mapped_cons_ranges
-            .iter()
-            .map(MappedConsRange::live_count)
-            .sum::<usize>();
-        new_live
-            .saturating_add(mapped_live)
-            .saturating_mul(size_of::<ConsCell>())
+        new_live.saturating_mul(size_of::<ConsCell>())
     }
 
     /// Complete GEN1 inventory from sweep deltas after every region closes.
@@ -1642,7 +1667,10 @@ impl TaggedHeap {
                 debug_assert!(!(*current).tenured, "tenured object on the young list");
                 if (*current).is_marked_at(parity) {
                     // Keep it — advance prev
-                    live_bytes = live_bytes.saturating_add(self.collector_object_bytes(current));
+                    if !(*current).flags.image_resident() {
+                        live_bytes =
+                            live_bytes.saturating_add(self.collector_object_bytes(current));
+                    }
                     prev = std::ptr::addr_of_mut!((*current).next);
                     current = next;
                 } else {
@@ -1844,25 +1872,6 @@ impl TaggedHeap {
             veclike_total + string_total + cons_total + float_total,
             veclike_marked + string_marked + cons_marked + float_marked,
         )
-    }
-
-    pub(super) fn mapped_non_cons_live_bytes(&self) -> usize {
-        self.mapped_float_ranges
-            .iter()
-            .map(|range| range.live_count().saturating_mul(size_of::<FloatObj>()))
-            .chain(
-                self.mapped_veclike_objects
-                    .iter()
-                    .filter(|object| object.marked)
-                    .map(|object| object.byte_len),
-            )
-            .chain(
-                self.mapped_string_objects
-                    .iter()
-                    .filter(|object| object.marked)
-                    .map(|object| object.byte_len),
-            )
-            .sum()
     }
 
     /// Reclaim one detached residual Box according to its caller's lifecycle.
@@ -2760,5 +2769,69 @@ impl TaggedHeap {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod gc_trace_seed_format_tests {
+    use super::{format_eager_gc_trace_line, format_incremental_gc_trace_line};
+
+    /// A minor's printed account: the context-root seed, the mark drain, and the sweep.
+    fn minor_trace_accounted_us(seed_us: u64, mark_us: u64, sweep_us: u64) -> u64 {
+        seed_us.saturating_add(mark_us).saturating_add(sweep_us)
+    }
+
+    fn field_u64(line: &str, key: &str) -> u64 {
+        let token = format!("{key}=");
+        let start = line
+            .find(&token)
+            .unwrap_or_else(|| panic!("{key} missing in {line}"))
+            + token.len();
+        let rest = &line[start..];
+        let end = rest
+            .find(|c: char| !c.is_ascii_digit())
+            .unwrap_or(rest.len());
+        rest[..end]
+            .parse()
+            .unwrap_or_else(|_| panic!("{key} not an integer in {line}"))
+    }
+
+    #[test]
+    fn minor_line_keeps_old_fields_and_seed_accounts_with_mark_and_sweep() {
+        let seed_us = 528;
+        let mark_us = 37;
+        let sweep_us = 34;
+        let line = format_incremental_gc_trace_line(
+            7, mark_us, sweep_us, 2, 3, 4, 11, 12, 13, 14, 15, seed_us,
+        );
+        assert!(
+            line.starts_with(
+                "NEOVM_GC gc#7 [incremental mark=37us sweep_total=34us slices=2 blocks=3 \
+                 noncons_freed=4] cons_live=11 heap_noncons=12 dump_marked=13/14 live=15B "
+            ),
+            "{line}"
+        );
+        assert!(line.ends_with(" seed_us=528"), "{line}");
+        let parsed_seed = field_u64(&line, "seed_us");
+        let parsed_mark = field_u64(&line, "mark");
+        let parsed_sweep = field_u64(&line, "sweep_total");
+        let accounted = minor_trace_accounted_us(parsed_seed, parsed_mark, parsed_sweep);
+        assert_eq!(accounted, seed_us + mark_us + sweep_us);
+        assert!(accounted > parsed_mark + parsed_sweep);
+        assert_eq!(
+            (parsed_seed, parsed_mark, parsed_sweep),
+            (seed_us, mark_us, sweep_us)
+        );
+    }
+
+    #[test]
+    fn eager_line_appends_seed_us_without_moving_the_phase_bracket() {
+        let line =
+            format_eager_gc_trace_line(3, 1.5, 9, 8, 7, 6, 5, 4, 10, 2, 1, 0, 11, 12, 13, 500);
+        assert!(line.contains("[clear=9us mark=8us sweep=7us]"), "{line}");
+        assert!(line.ends_with(" live=13B seed_us=500"), "{line}");
+        assert_eq!(field_u64(&line, "seed_us"), 500);
+        assert_eq!(field_u64(&line, "mark"), 8);
+        assert_eq!(field_u64(&line, "sweep"), 7);
     }
 }

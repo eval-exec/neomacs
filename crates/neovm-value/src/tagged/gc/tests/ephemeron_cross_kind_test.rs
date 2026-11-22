@@ -168,3 +168,107 @@ fn reclaimed_frame_id_refuses_make_frame_and_does_not_mint() {
     assert!(missing.expect("release make_frame returns").is_nil());
     assert!(heap.frame_value(never).is_none());
 }
+
+/// One incremental termination: concurrent mark, reseed, drain, finish, sweep.
+/// `roots` are seeded at the start and again at termination. Explicit maps are
+/// not seeded as roots while they are armed (`seed_internal_runtime_roots`).
+fn incremental_cycle(heap: &mut TaggedHeap, roots: &[TaggedValue]) {
+    heap.concurrent_begin();
+    for &root in roots {
+        heap.seed_root(root);
+    }
+    heap.launch_concurrent_mark();
+    while !heap.concurrent_mark_done() {
+        std::thread::yield_now();
+    }
+    heap.join_concurrent_mark();
+    heap.reseed_runtime_and_remembered_roots();
+    for &root in roots {
+        heap.seed_root(root);
+    }
+    let bytes_before = heap.live_bytes();
+    heap.incremental_drain_all();
+    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now();
+}
+
+fn bootstrapped_heap() -> Box<TaggedHeap> {
+    let mut heap = Box::new(TaggedHeap::new());
+    set_tagged_heap(&mut heap);
+    let root = heap.alloc_cons(TaggedValue::fixnum(1), TaggedValue::NIL);
+    heap.collect_exact(std::iter::once(root));
+    assert!(
+        heap.should_run_concurrent(),
+        "the dump-less bootstrap enables the incremental path"
+    );
+    heap
+}
+
+/// Empty explicit maps are the production incremental case: nothing armed
+/// those maps, so termination reclaims nothing and the three registries stay.
+#[test]
+fn incremental_finish_with_empty_explicit_maps_reclaims_nothing() {
+    let mut heap = bootstrapped_heap();
+    let buffer_id = BufferId(7);
+    let process_id = 11;
+    let frame_id = 13_u64;
+    let buffer = heap.alloc_buffer(buffer_id);
+    let process = heap.alloc_process(process_id);
+    let frame = heap.alloc_frame(frame_id);
+    heap.register_buffer_value(buffer_id, buffer);
+    heap.register_process_value(process_id, process);
+    heap.register_frame_value(frame_id, frame);
+    let _unrooted = heap.alloc_cons(TaggedValue::fixnum(99), TaggedValue::NIL);
+    assert!(heap.explicit_ephemeron_arm_is_clear());
+    assert_eq!(heap.live_finalizer_count(), 0);
+    assert!(!heap.has_pending_doomed_finalizers());
+
+    incremental_cycle(&mut heap, &[buffer, process, frame]);
+
+    assert!(heap.explicit_ephemeron_arm_is_clear());
+    assert_eq!(heap.take_reclaimed_buffer_ids(), Vec::<BufferId>::new());
+    assert_eq!(heap.take_reclaimed_process_ids(), Vec::<ProcessId>::new());
+    assert_eq!(heap.take_reclaimed_frame_ids(), Vec::<u64>::new());
+    assert_eq!(heap.buffer_value(buffer_id), Some(buffer));
+    assert_eq!(heap.process_value(process_id), Some(process));
+    assert_eq!(heap.frame_value(frame_id), Some(frame));
+    assert_eq!(heap.live_finalizer_count(), 0);
+    assert!(!heap.has_pending_doomed_finalizers());
+    assert_eq!(
+        heap.cons_live_count_exact(),
+        0,
+        "the cycle ran: the unrooted cons was swept"
+    );
+}
+
+/// The termination that `complete_collection` already reclaims must reclaim
+/// on the incremental path too. An armed chain with no outside root dies.
+#[test]
+fn incremental_finish_reclaims_an_unreached_armed_chain() {
+    let mut heap = bootstrapped_heap();
+    let (_root, buffers, processes, frames) = alternating_chain(&mut heap);
+    assert!(!heap.explicit_ephemeron_arm_is_clear());
+
+    incremental_cycle(&mut heap, &[]);
+
+    let mut reclaimed_buffers = heap.take_reclaimed_buffer_ids();
+    reclaimed_buffers.sort_by_key(|id| id.0);
+    let mut reclaimed_processes = heap.take_reclaimed_process_ids();
+    reclaimed_processes.sort_unstable();
+    let mut reclaimed_frames = heap.take_reclaimed_frame_ids();
+    reclaimed_frames.sort_unstable();
+    assert_eq!(reclaimed_buffers, buffers);
+    assert_eq!(reclaimed_processes, processes);
+    assert_eq!(reclaimed_frames, frames);
+    assert!(heap.explicit_ephemeron_arm_is_clear());
+    for &id in &buffers {
+        assert!(heap.buffer_value(id).is_none());
+    }
+    for &id in &processes {
+        assert!(heap.process_value(id).is_none());
+    }
+    for &id in &frames {
+        assert!(heap.frame_value(id).is_none());
+    }
+    assert_eq!(heap.cons_live_count_exact(), 0);
+}

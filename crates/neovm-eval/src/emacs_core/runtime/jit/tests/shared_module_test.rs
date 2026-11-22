@@ -370,7 +370,7 @@ fn jit_shared_cache_clear_then_recompile() {
     let ctx = &mut ev as *mut Context;
     let f = add_k(7);
     assert_eq!(call1(compile_cached(ctx, &f), 1), Some(8));
-    cache::clear();
+    cache::clear_with_serial_receipt().expect("serial jit grace");
     let g = add_k(8);
     let leaf = compile_cached(ctx, &g);
     assert_eq!(call1(leaf, 1), Some(9));

@@ -1,6 +1,9 @@
 use super::*;
 use tracing::debug;
 
+#[path = "empty_catalog_test.rs"]
+mod empty_catalog_tests;
+
 #[cfg(all(test, target_os = "linux"))]
 #[path = "gnu_cjk_metrics.rs"]
 mod gnu_cjk_metrics;
@@ -418,6 +421,109 @@ fn frame_cell_metrics_for_monospace_use_ascii_max_not_space() {
 }
 
 #[test]
+fn native_frame_columns_use_average_even_for_monospace_families() {
+    // Attested GNU 31.1 ftcrfont, pinned Noto Sans Mono with full hinting:
+    // 14px average/max/space = 8/10/8; 13px = 7/9/8. x_new_font
+    // publishes average_width, independently of the family's spacing policy.
+    // The final control is deliberately below the old monospace threshold:
+    // a positive native average is authoritative even for a narrow font.
+    for (size, average, maximum, space) in [(14, 8, 10, 8), (13, 7, 9, 8), (20, 3, 4, 1)] {
+        let probe = crate::font::probe::FontPxMetrics {
+            pixel_size: size,
+            height: 20,
+            ascent: 15,
+            descent: 5,
+            average_width: average,
+            max_width: maximum,
+            space_width: space,
+        };
+        let advances = FontAdvanceMetrics::from_font_probe(probe);
+        let cell = FrameCellMetrics::derive(
+            true,
+            size as f32,
+            FontVerticalMetrics {
+                ascent: probe.ascent as f32,
+                descent: probe.descent as f32,
+                line_height: probe.height as f32,
+            },
+            advances,
+        );
+
+        assert_eq!(cell.column_width, average as f32, "{size}px native average");
+        assert_ne!(cell.column_width, maximum as f32);
+        assert_eq!(cell.confidence, MetricConfidence::Validated);
+        assert_eq!(advances.max_width, maximum as f32);
+        assert_eq!(advances.space_width, space as f32);
+    }
+}
+
+#[test]
+fn materialized_frame_columns_preserve_native_and_table_provenance() {
+    // The standard catalog's "monospace" alias is Noto Sans Mono, whose
+    // spacing metadata is proportional. This test needs an actual spacing-100
+    // family so the fallback max policy differs from the native average policy.
+    let catalog = crate::font::metrics::test_catalog::TestFontCatalog::from_files(&[
+        neomacs_test_fonts::dejavu_2_37().mono_regular(),
+    ])
+    .expect("pinned fixed-pitch fixture catalog");
+    for (size, average, maximum) in [(14, 8, 10), (13, 7, 9)] {
+        let probe = crate::font::probe::FontPxMetrics {
+            pixel_size: size,
+            height: 20,
+            ascent: 15,
+            descent: 5,
+            average_width: average,
+            max_width: maximum,
+            space_width: 8,
+        };
+        for (observed, source, expected) in [
+            (
+                ObservedFontPxMetrics::Native(probe),
+                FontMetricSource::OpenedFontProbe,
+                average,
+            ),
+            (
+                ObservedFontPxMetrics::Tables(probe),
+                FontMetricSource::OpenedFontTables,
+                maximum,
+            ),
+        ] {
+            let mut service = catalog.metrics_service();
+            let family = "monospace";
+            assert!(
+                service.font_resolver.family_prefers_monospace(family),
+                "the fixture must exercise the fallback monospace policy"
+            );
+            let size = size as f32;
+            let key = service.cache_key(family, 400, false, size);
+            let mut handle = service
+                .materialized_font_for_face(family, 400, false, size)
+                .expect("materialized fixture font");
+            // Replay identical aggregate values from each origin through the
+            // real materialized cache and frame publication entry point.
+            handle.px_metrics = Some(observed);
+            service
+                .resolved_face_font_cache
+                .insert(key.clone(), Some(handle));
+
+            let FrameCellGeometry::Graphic(geometry) = service.frame_cell_geometry(
+                family,
+                400,
+                false,
+                size,
+                FrameFontDomain::for_frame(true, size),
+            ) else {
+                panic!("graphic frame geometry");
+            };
+            assert_eq!(service.metrics_cache[&key].source, source);
+            assert_eq!(geometry.font_size.get(), size);
+            assert_eq!(geometry.metrics.char_width, expected as f32);
+            assert_eq!(geometry.metrics.space_width, 8.0);
+        }
+    }
+}
+
+#[test]
 fn frame_cell_metrics_for_proportional_use_ascii_average_not_space() {
     let mut widths = [5.0f32; 128];
     widths[b' ' as usize] = 3.0;
@@ -561,7 +667,7 @@ fn frame_cell_geometry_reuses_the_effective_size_from_its_metric_observation() {
     let effective_size = service
         .materialized_font_for_face("monospace", 400, false, requested_size)
         .and_then(|font| font.px_metrics)
-        .map(|metrics| metrics.pixel_size as f32)
+        .map(|metrics| metrics.metrics().pixel_size as f32)
         .expect("test font must expose probed pixel metrics");
 
     let _ = service.font_metrics("monospace", 400, false, requested_size);
@@ -616,13 +722,17 @@ fn selected_font_probe_observes_vertical_and_advance_metrics_at_one_size() {
         .db()
         .face(font_id.expect("selected font"))
         .expect("selected face");
-    let probe = crate::font::probe::probe_font_px_metrics(
-        &fontdb_face_file(face).expect("file-backed selected face"),
-        face.index,
-        geometry.font_size.get() as u32,
-        None,
-    )
-    .expect("selected face metrics");
+    // Attested GNU 31.1 gives this Noto Sans Mono file average widths 7 with
+    // full hinting and 8 with slight hinting at 13 px. Compare observations
+    // from the fixture's own authority, rather than the host's system policy.
+    let probe = service
+        .probe_font_px_metrics(
+            &fontdb_face_file(face).expect("file-backed selected face"),
+            face.index,
+            geometry.font_size.get() as u32,
+            None,
+        )
+        .expect("selected face metrics");
     let expected = FrameCellMetrics::derive(
         service.font_resolver.family_prefers_monospace(family),
         geometry.font_size.get(),
@@ -1522,6 +1632,7 @@ fn scalable_color_bitmap_keeps_exact_platform_identity_at_requested_size() {
 
 fn fixture_properties(pixel_size: f32, family: &str) -> FontInstanceProperties {
     FontInstanceProperties {
+        spacing: None,
         family: family.to_owned(),
         full_name: None,
         postscript_name: None,
@@ -1766,7 +1877,10 @@ fn shaping_first_realization_publishes_the_native_face_metrics() {
             via_face.font, expected.font,
             "shaping-first must preserve native metrics at {size}px"
         );
-        let handle_metrics = via_face.px_metrics.expect("native handle metrics");
+        let handle_metrics = via_face
+            .px_metrics
+            .expect("native handle metrics")
+            .metrics();
         assert_eq!(via_face.font.ascent_px, handle_metrics.ascent as f32);
         assert_eq!(via_face.font.descent_px, handle_metrics.descent as f32);
         assert_eq!(
@@ -1888,7 +2002,8 @@ fn shaping_metrics_do_not_come_from_another_variation_of_the_same_file() {
         Some(selected.post_script_name.clone()),
         &family,
     );
-    let expected = FontMetricsService::probe_resolved_font_metrics(&identity, None, size)
+    let expected = svc
+        .probe_resolved_font_metrics(&identity, None, size)
         .or_else(|| svc.font_px_metrics_from_selected_face(fontdb_id, size, &[]))
         .expect("selected file metrics");
     let shaping = svc
@@ -3195,6 +3310,50 @@ fn portable_metric_fallback_stays_on_the_selected_face() {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn resolve_family_preserves_approved_collection_members() {
+    let file = neomacs_test_fonts::noto_sans_cjk_variable();
+    let catalog = crate::font::metrics::test_catalog::TestFontCatalog::from_files(&[file])
+        .expect("pinned collection catalog");
+    let mut svc = catalog.metrics_service();
+    let rejected: Vec<_> = svc
+        .font_system
+        .db()
+        .faces()
+        .filter(|face| face.index != 0)
+        .map(|face| face.id)
+        .collect();
+    assert!(
+        !rejected.is_empty(),
+        "fixture must contain sibling collection faces"
+    );
+    // Model the admitted-index-only DB produced by the private Fontconfig
+    // collection-filter test in the materializer, then exercise the ordinary
+    // layout realization entry point without a process-global configuration.
+    for id in rejected {
+        svc.font_system.db_mut().remove_face(id);
+    }
+    let approved = svc.font_system.db().faces().next().unwrap();
+    let family = approved.families[0].0.clone();
+    let identity = (approved.id, approved.index, approved.families.clone());
+    assert_eq!(svc.font_system.db().len(), 1);
+    for _ in 0..2 {
+        assert_eq!(svc.resolve_family(&family, file.to_str()), family);
+        let faces: Vec<_> = svc
+            .font_system
+            .db()
+            .faces()
+            .map(|face| (face.id, face.index, face.families.clone()))
+            .collect();
+        assert_eq!(
+            faces,
+            vec![identity.clone()],
+            "resolving an approved file must not publish rejected TTC siblings"
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 #[tracing_test::traced_test]
 fn resolved_font_for_face_preserves_platform_named_instance() {
     use neovm_core::face::{FontSlant, FontWeight};
@@ -3229,9 +3388,9 @@ fn resolved_font_for_face_preserves_platform_named_instance() {
         "the fixed fixture must exercise a named instance"
     );
     let mut svc = catalog.metrics_service();
-    // Frame face realization currently primes the platform file before the
-    // finished-frame font table is materialized.  The exact realization
-    // contract must survive that ordinary pipeline ordering.
+    // Frame face realization resolves the family before the finished-frame
+    // font table is materialized. The exact realization contract must survive
+    // that ordinary pipeline ordering.
     svc.resolve_family("Noto Sans", Some(platform_file));
     let regular = svc
         .resolved_font_for_face("Noto Sans", 400, false, 12.0)

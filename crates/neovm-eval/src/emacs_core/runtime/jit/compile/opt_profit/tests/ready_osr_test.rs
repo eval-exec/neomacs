@@ -30,13 +30,13 @@ const _: () = assert!(std::mem::size_of::<CacheScope>() == 0);
 impl CacheScope {
     #[doc(hidden)]
     pub fn enter() -> Self {
-        cache::clear();
+        cache::clear_with_serial_receipt().expect("serial jit grace");
         Self(std::marker::PhantomData)
     }
 }
 impl Drop for CacheScope {
     fn drop(&mut self) {
-        cache::clear();
+        cache::clear_with_serial_receipt().expect("serial jit grace");
     }
 }
 
@@ -159,7 +159,7 @@ fn opt_require_osr_ready_list_osr_then_normal_cache_selects_opt_and_runs_mutatio
     let entry = cache::resolve_compiled_leaf_ptr(&mut ctx, &source).unwrap();
     assert_eq!(unsafe { &*entry }.selected_tier(), SelectedTier::Opt);
     assert_eq!(ctx.jit_root_stack_top, 0);
-    cache::clear();
+    cache::clear_with_serial_receipt().expect("serial jit grace");
 }
 
 fn numeric_then_list() -> ByteCodeFunction {
@@ -255,7 +255,7 @@ fn opt_require_osr_numeric_header_cannot_qualify_separate_list_backedge() {
         NativeRun::Ok(Value::make_int(6).bits())
     );
     assert_eq!(pair.cons_car(), Value::make_int(5));
-    cache::clear();
+    cache::clear_with_serial_receipt().expect("serial jit grace");
 }
 
 #[test]

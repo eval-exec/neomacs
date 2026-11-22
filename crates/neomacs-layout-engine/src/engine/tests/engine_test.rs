@@ -7,6 +7,9 @@ mod category_word_wrap_test;
 #[path = "sparse_fontify_query_test.rs"]
 mod sparse_fontify_query_test;
 
+#[path = "probe_row_engine_test.rs"]
+mod probe_row_engine_test;
+
 /// A surface point in a presentation composed with nothing in motion.
 ///
 /// The production path builds the same value by mapping through the projection
@@ -1940,6 +1943,7 @@ fn test_window_params() -> WindowParams {
         horizontal_scroll_bar: false,
         scroll_bar_pixel_width: 0.0,
         scroll_bar_pixel_height: 0.0,
+        bidi_paragraph_directions: Default::default(),
     }
 }
 
@@ -38695,3 +38699,82 @@ mod overlay_string_word_wrap_progress_test;
 
 #[path = "divider_corner_review_test.rs"]
 mod divider_corner_review_test;
+
+/// R1 (#702): a window-range overlay view must follow the span the walk
+/// consumes. Invisible overlays (magit-section/hideshow collapse) can make a
+/// window show text far past any fixed visible-char budget; the attempt that
+/// reads past the view must be retried with the whole-buffer view so a
+/// trailing before-string/face still renders.
+#[test]
+fn invisible_growth_past_the_overlay_view_retries_with_the_whole_buffer() {
+    let text: String = (0..4_000)
+        .map(|line| format!("line {line:04} abcdefghij\n"))
+        .collect();
+    let (mut eval, frame, _buf_id, _window) = incr_editing_frame(&text, 800, 600);
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    engine.layout_frame_rust(&mut eval, frame);
+    eval.eval_str("(overlay-put (make-overlay 30 31) 'before-string \"CTRL\")")
+        .unwrap();
+    engine.layout_frame_rust(&mut eval, frame);
+    let ctrl_trace = selected_window_layout_trace(&eval, &engine, frame);
+    let ctrl_body = backend_trace_text_area_text(&ctrl_trace);
+    assert!(
+        ctrl_body.contains("CTRL"),
+        "control before-string missing: {ctrl_body:?}"
+    );
+
+    // Hide about 60 KB of text; the window's visible text now starts around
+    // byte 60000, far past window_start + 4 screenfuls. The trailing overlay
+    // carries both a face and a before-string.
+    eval.eval_str(
+        "(progn
+           (let ((hidden (make-overlay 10 60000)))
+             (overlay-put hidden 'invisible t))
+           (setq i702-trailing (make-overlay 60400 60401))
+           (overlay-put i702-trailing 'face 'bold)
+           (overlay-put i702-trailing 'before-string \"TRAILING\"))",
+    )
+    .unwrap();
+    engine.layout_frame_rust(&mut eval, frame);
+    let trace = selected_window_layout_trace(&eval, &engine, frame);
+    let body = backend_trace_text_area_text(&trace);
+    assert!(
+        body.contains("TRAILING"),
+        "a trailing overlay past the range view was dropped; body={body:?}"
+    );
+
+    // Modifying the trailing overlay must invalidate the retained window, not
+    // leave a stale matrix (the whole-buffer digest covers it).
+    eval.eval_str("(overlay-put i702-trailing 'before-string \"UPDATED\")")
+        .unwrap();
+    engine.layout_frame_rust(&mut eval, frame);
+    let trace = selected_window_layout_trace(&eval, &engine, frame);
+    let body = backend_trace_text_area_text(&trace);
+    assert!(
+        body.contains("UPDATED"),
+        "the changed trailing overlay did not reach the display; body={body:?}"
+    );
+}
+
+/// R1 (#702): a truncated line's overlay past the window edge is outside the
+/// consumed span and must neither render nor force a stale full-buffer answer.
+#[test]
+fn truncated_line_overlay_past_the_window_edge_stays_out_of_the_consumed_span() {
+    let text = format!("{}\n", "x".repeat(5_000));
+    let (mut eval, frame, _buf_id, _window) = incr_editing_frame(&text, 800, 600);
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    eval.eval_str("(setq truncate-lines t)").unwrap();
+    eval.eval_str(
+        "(let ((o (make-overlay 2000 2001)))
+           (overlay-put o 'face 'bold)
+           (overlay-put o 'before-string \"PAST-EDGE\"))",
+    )
+    .unwrap();
+    engine.layout_frame_rust(&mut eval, frame);
+    let trace = selected_window_layout_trace(&eval, &engine, frame);
+    let body = backend_trace_text_area_text(&trace);
+    assert!(
+        !body.contains("PAST-EDGE"),
+        "a truncated line's off-screen overlay rendered; body={body:?}"
+    );
+}

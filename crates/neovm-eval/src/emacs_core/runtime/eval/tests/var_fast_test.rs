@@ -308,7 +308,7 @@ fn fixture() -> Context {
     // letting a GC root walk inside a JIT program find the heap changed.
     #[cfg(feature = "jit")]
     {
-        crate::emacs_core::jit::cache::clear();
+        crate::emacs_core::jit::cache::clear_with_serial_receipt().expect("serial jit grace");
         let _ = crate::emacs_core::jit::cache::prepopulate_aot_leaves(Vec::new());
     }
     for name in ["vft-obj", "vft-kbd", "vft-lobj"] {

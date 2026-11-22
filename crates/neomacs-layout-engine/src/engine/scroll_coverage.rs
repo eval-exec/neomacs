@@ -325,6 +325,7 @@ impl ScrollCoverage {
             admission.window.get() as u64,
             regions.outer,
             admission.retained.matrix.ncols,
+            admission.retained.key.bidi_paragraph_directions.text,
             #[cfg(any(test, feature = "redisplay-test-policy"))]
             admission
                 .retained
@@ -922,6 +923,9 @@ impl LayoutEngine {
         let mut retained = RetainedWindowMatrix {
             matrix,
             key: key.clone(),
+            redisplay_optimizations: Default::default(),
+            // Synthetic fixture: no GNU prevent raise and MODIFF 0.
+            buffer_modiff: 0,
             validity: retained.validity,
             display_snapshot: std::sync::Arc::new(neovm_core::window::WindowDisplaySnapshot {
                 window_id: window,

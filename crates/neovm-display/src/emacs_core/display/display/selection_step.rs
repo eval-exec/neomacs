@@ -6,8 +6,9 @@
 //! here is a one-arm call of that body. Both still return today's batch
 //! result. There is no thread test, TLS read, env read, clipboard read, or
 //! second algorithm. `builtin_handle_switch_frame` (R37) stays direct.
-//! The clipboard stubs call their own inline step, whose only arm is their
-//! direct body.
+//! The clipboard stubs read the owner's installed phase: `Uninstalled` is
+//! this inline serial arm, `Local` lowers to the same direct body, and the
+//! routed arm refuses until the C4b worker boundary exists.
 
 use neovm_value::error::EvalResult;
 use neovm_value::value::Value;
@@ -141,10 +142,25 @@ mod tests {
         let clipboard_driver = clipboard_step.split("#[cfg(test)]").next().expect("driver");
         assert!(
             stubs.contains("mod selection_step;")
-                && clipboard_driver.contains("SelectionInstaller::InlineSerialMain")
-                && !clipboard_driver.contains("OwnedRouted")
+                && stubs.matches("selection_step::installed(ctx)").count() >= 5,
+            "clipboard stubs must ask the installed phase, not hard-code an arm"
+        );
+        assert!(
+            clipboard_driver
+                .contains("SelectionPhase::Uninstalled => SelectionInstaller::InlineSerialMain")
+                && clipboard_driver
+                    .contains("SelectionPhase::Local => SelectionInstaller::OwnedLocalMain")
+                && clipboard_driver
+                    .contains("SelectionPhase::Routed | SelectionPhase::AwaitingRollback")
+                && clipboard_driver.contains("SelectionInstaller::OwnedRoutedWorker")
+                && clipboard_driver
+                    .matches("OwnedRoutedWorker => routed_worker_boundary_not_installed()")
+                    .count()
+                    == 5
                 && !clipboard_driver.contains("std::env"),
-            "clipboard stubs stay on the inline serial arm"
+            "clipboard stubs stay on the direct body for the inline serial and \
+             local arms; every routed phase maps to OwnedRoutedWorker, whose \
+             five match arms refuse until C4b"
         );
     }
 

@@ -771,6 +771,7 @@ impl CursorVisualColumnResolutionRequest {
         context: CursorVisualColumnResolutionContext<'_>,
         text_bounds: Rect,
         char_width: f32,
+        units: neomacs_display_protocol::glyph_matrix::TextGeometryUnits,
     ) -> Option<ResolvedDecoratedCursorPlacement> {
         let slot = self.resolve_slot(context)?;
         let coordinates = self.coordinates_for_slot(context, slot)?;
@@ -789,10 +790,11 @@ impl CursorVisualColumnResolutionRequest {
             return None;
         }
 
-        let geometry = neomacs_display_protocol::glyph_matrix::TextRowGeometry::new(
+        let geometry = neomacs_display_protocol::glyph_matrix::TextRowGeometry::new_with_units(
             row,
             text_bounds,
             char_width,
+            units,
         );
         let x = geometry.x_at_slot(neomacs_display_protocol::glyph_matrix::TextSlotColumn::new(
             target_col - left_margin_cols,

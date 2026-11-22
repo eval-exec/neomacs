@@ -962,6 +962,7 @@ pub enum WindowLayoutVariable {
     ImageScalingFactor,
     IndicateEmptyLines,
     IndicateBufferBoundaries,
+    LargeHscrollThreshold,
     LeftFringeWidth,
     LeftMargin,
     LeftMarginWidth,
@@ -1431,4 +1432,33 @@ pub fn font_style_table(entries: &[(i64, &'static [&'static str])]) -> Value {
             })
             .collect(),
     )
+}
+
+/// GNU's `truncate-partial-width-windows` decision for a window that is not
+/// the full frame width.
+///
+/// Inputs are the window's and the frame root window's total widths in
+/// columns, plus the buffer-local-or-global variable value. GNU spells the
+/// full-width test `WINDOW_FULL_WIDTH_P` (`src/window.h:701-704`: pixel width
+/// equals the root window's) and applies it in the display iterator
+/// (`src/xdisp.c:3413-3426`) and in `scan_for_column`
+/// (`src/indent.c:629-643`). Keeping it here lets the display layer and the
+/// edit host share one rule instead of two spellings.
+///
+/// An integer value truncates a window narrower than that many columns; any
+/// other non-nil value truncates every partial-width window; nil or an
+/// unbound value truncates none.
+pub fn partial_width_truncates(
+    window_cols: i64,
+    root_cols: i64,
+    truncate_partial_width: Option<crate::value::Value>,
+) -> bool {
+    if window_cols >= root_cols {
+        return false;
+    }
+    match truncate_partial_width {
+        Some(value) if value.is_fixnum() => window_cols < value.as_fixnum().unwrap_or(0),
+        Some(value) => !value.is_nil(),
+        None => false,
+    }
 }

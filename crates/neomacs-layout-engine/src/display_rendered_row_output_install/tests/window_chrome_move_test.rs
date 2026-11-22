@@ -511,7 +511,10 @@ fn rtl_window_complete_lifecycle_still_reorders_once_against_borrowed_reference(
     install_measured_window_display_row(&mut actual, actual_input);
     let installed = actual.current_window_row(1).expect("RTL row installed");
     assert_eq!(Some(installed), expected.current_window_row(1));
-    assert!(installed.reversed_p);
+    // GNU pins header-line chrome to L2R (display_mode_line, src/xdisp.c:
+    // 28165): the Hebrew run stays reversed inside the line, but the chrome
+    // row itself is not a reversed_p paragraph.
+    assert!(!installed.reversed_p);
     assert!(matches!(
         installed.glyphs[GlyphArea::Text.index()][0].glyph_type,
         GlyphType::Char { ch: 'ב' }

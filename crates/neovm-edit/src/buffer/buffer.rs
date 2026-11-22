@@ -40,7 +40,7 @@ pub use super::text::{BufferTextBackendKind, ImplementedBufferTextBackendKind};
 // `SharedUndoState` (for the two always-present slots that don't
 // match either pattern). Mirrors GNU's struct buffer layout in
 // buffer.h:330-462.
-use super::overlay::OverlayList;
+use super::overlay::{OverlayList, OverlaySnapshot};
 use super::shared::{SavedPointBeforeCommand, SharedUndoState};
 use super::text_props::{ObjectIntervalRun, TextPropertyTable};
 use super::undo;
@@ -2082,6 +2082,13 @@ impl BufferTextSnapshot {
         self.text.text_props_is_empty()
     }
 
+    /// GNU `buffer_intervals (buffer) != NULL`: the interval tree exists,
+    /// even if every property has been removed. `current_column` dispatches
+    /// on this state (`src/indent.c:365-370`).
+    pub fn text_props_tree_present(&self) -> bool {
+        self.text.text_props_tree_present()
+    }
+
     pub fn text_prop_at_emacs_byte_pos(&self, pos: EmacsBytePos, name: Value) -> Option<Value> {
         self.text
             .text_props_get_property_at_emacs_byte_pos(pos, name)
@@ -2357,6 +2364,8 @@ pub struct BufferDumpParts {
     /// GNU `struct buffer.auto_save_failure_time`. Seconds since the epoch,
     /// or 0 when unset. The pdump image copies it (`pdumper.c:2855`).
     pub auto_save_failure_time: i64,
+    /// GNU `struct buffer.long_line_optimizations_p` (`pdumper.c:2866`).
+    pub long_line_optimizations_p: bool,
     pub last_window_start: LispCharPos1,
     pub last_selected_window: Option<WindowId>,
     pub inhibit_buffer_hooks: bool,
@@ -2516,6 +2525,15 @@ pub struct Buffer {
     /// buffer supersedes the point saved for every other one -- see
     /// [`SavedPointBeforeCommand`].
     pub(crate) saved_point_before_command: SavedPointBeforeCommand,
+    /// GNU `struct buffer.long_line_optimizations_p` (`buffer.h`): redisplay
+    /// found a line longer than `long-line-threshold`. Redisplay shortcuts and
+    /// the fontification narrowing are in effect while this is set. Only
+    /// [`Self::refresh_long_line_optimizations`] writes it.
+    pub(crate) long_line_optimizations_p: bool,
+    /// `modified_tick` when the long-line scan last ran. A buffer with no long
+    /// line is rescanned only after GNU's >8 modification-tick hysteresis
+    /// (`xdisp.c:20646-20663`).
+    pub(crate) long_line_scan_tick: i64,
 }
 #[cfg(any(test, feature = "test-support"))]
 /// A single text buffer with point, mark, narrowing, markers, and local vars.
@@ -2653,6 +2671,15 @@ pub struct Buffer {
     /// buffer supersedes the point saved for every other one -- see
     /// [`SavedPointBeforeCommand`].
     pub(crate) saved_point_before_command: SavedPointBeforeCommand,
+    /// GNU `struct buffer.long_line_optimizations_p` (`buffer.h`): redisplay
+    /// found a line longer than `long-line-threshold`. Redisplay shortcuts and
+    /// the fontification narrowing are in effect while this is set. Only
+    /// [`Self::refresh_long_line_optimizations`] writes it.
+    pub(crate) long_line_optimizations_p: bool,
+    /// `modified_tick` when the long-line scan last ran. A buffer with no long
+    /// line is rescanned only after GNU's >8 modification-tick hysteresis
+    /// (`xdisp.c:20646-20663`).
+    pub(crate) long_line_scan_tick: i64,
 }
 
 /// Stand-in digest for an overlay set that cannot be content-addressed. Mixed
@@ -2759,6 +2786,16 @@ impl Buffer {
         mem::swap(&mut self.state_markers, &mut other.state_markers);
         mem::swap(&mut self.undo_state, &mut other.undo_state);
         mem::swap(&mut self.overlays, &mut other.overlays);
+        // GNU `buffer-swap-text` swaps the long-line flag with the text
+        // (`src/buffer.c:2630`).
+        mem::swap(
+            &mut self.long_line_optimizations_p,
+            &mut other.long_line_optimizations_p,
+        );
+        mem::swap(
+            &mut self.long_line_scan_tick,
+            &mut other.long_line_scan_tick,
+        );
         self.swap_slot_with(other, BUFFER_SLOT_MARK_ACTIVE);
         self.swap_slot_with(other, BUFFER_SLOT_ENABLE_MULTIBYTE_CHARACTERS);
         self.swap_slot_with(other, BUFFER_SLOT_BIDI_DISPLAY_REORDERING);
@@ -2892,6 +2929,8 @@ impl Buffer {
         assert!(name.is_string(), "buffer name must be a Lisp string");
         Self {
             line_number_anchor: std::cell::Cell::new(None),
+            long_line_optimizations_p: false,
+            long_line_scan_tick: 0,
             id,
             name,
             last_name: Value::NIL,
@@ -2947,6 +2986,8 @@ impl Buffer {
             accessible_end: parts.accessible_end,
             autosave_modified_tick: parts.autosave_modified_tick,
             auto_save_failure_time: parts.auto_save_failure_time,
+            long_line_optimizations_p: parts.long_line_optimizations_p,
+            long_line_scan_tick: 0,
             last_window_start: parts.last_window_start,
             last_selected_window: parts.last_selected_window,
             inhibit_buffer_hooks: parts.inhibit_buffer_hooks,
@@ -3407,6 +3448,65 @@ impl Buffer {
     /// End of the accessible portion as a 1-based Lisp character position.
     pub fn point_max_lisp_char_pos(&self) -> LispCharPos1 {
         self.point_max_char_pos().to_lisp()
+    }
+
+    /// GNU `struct buffer.long_line_optimizations_p` (`buffer.h`): redisplay
+    /// found a line longer than `long-line-threshold`, so the long-line
+    /// display shortcuts and the `fontification-functions` narrowing are in
+    /// effect.
+    pub fn long_line_optimizations_p(&self) -> bool {
+        self.long_line_optimizations_p
+    }
+
+    /// GNU `BVAR (buffer, truncate_lines)`: lines too wide for the window are
+    /// truncated rather than continued. Read by the long-line redisplay
+    /// shortcuts (`src/indent.c:635`, `src/window.c:6157`).
+    pub fn truncate_lines_p(&self) -> bool {
+        !self.slots[BUFFER_SLOT_TRUNCATE_LINES.index()].is_nil()
+    }
+
+    /// Rescan the accessible region for a line longer than `threshold`
+    /// characters, following GNU `redisplay_window` (`src/xdisp.c:20646-20663`):
+    /// stop at the first line over the threshold, and rescan a buffer that has
+    /// no long line only after eight modification ticks.
+    ///
+    /// Returns whether a long line is present. The line search is the buffer's
+    /// own newline search (GNU `find_newline`, `src/search.c`), so a line only
+    /// costs a character conversion when its byte length already exceeds the
+    /// threshold.
+    #[doc(hidden)]
+    pub fn refresh_long_line_optimizations(&mut self, threshold: i64) -> bool {
+        if self.long_line_optimizations_p {
+            return true;
+        }
+        if threshold <= 0 {
+            return false;
+        }
+        let tick = self.modified_tick();
+        if self.long_line_scan_tick != 0 && tick.saturating_sub(self.long_line_scan_tick) <= 8 {
+            return false;
+        }
+        self.long_line_scan_tick = tick;
+        let limit = self.point_max_emacs_byte_pos();
+        let mut byte = self.point_min_emacs_byte_pos();
+        let mut chars = self.emacs_byte_pos_to_lisp_char_pos(byte).as_i64();
+        let mut found = false;
+        while byte < limit {
+            let (past, crossed) = self.nth_newline_emacs_byte(byte, limit, 1);
+            let next = if crossed == 0 { limit } else { past };
+            let next_chars = self.emacs_byte_pos_to_lisp_char_pos(next).as_i64();
+            if next_chars.saturating_sub(chars) as i64 > threshold {
+                found = true;
+                break;
+            }
+            if crossed == 0 {
+                break;
+            }
+            byte = next;
+            chars = next_chars;
+        }
+        self.long_line_optimizations_p = found;
+        found
     }
 
     /// Total number of characters in the buffer text.
@@ -4104,6 +4204,41 @@ impl Buffer {
             )
     }
 
+    /// GNU `compute_stop_pos`'s automatic-composition delimiter scan
+    /// (`src/xdisp.c:4380-4398`): the first space, TAB, newline, or formfeed
+    /// at or after FROM and before TO.  Those ASCII bytes never occur inside
+    /// a multibyte sequence, so a byte scan is exact.
+    pub fn first_composition_delimiter_emacs_byte(
+        &self,
+        from: EmacsBytePos,
+        to: EmacsBytePos,
+    ) -> Option<EmacsBytePos> {
+        let range = self.clamped_emacs_byte_range(EmacsByteRange::new(from, to));
+        if range.is_empty() {
+            return None;
+        }
+        let mut found = None;
+        // A range straddling the gap buffer's hole is delivered as two
+        // chunks: [start..gap_start) then [gap_end..end).  `index` is local to
+        // the current chunk, so track the logical offset across chunks instead
+        // of using range.start() for both.
+        let mut offset = range.start().get();
+        let _ = self
+            .text
+            .for_each_emacs_byte_range_chunk(range, |chunk| -> Result<(), ()> {
+                if let Some(index) = chunk
+                    .iter()
+                    .position(|byte| matches!(byte, b' ' | b'\t' | b'\n' | b'\x0c'))
+                {
+                    found = Some(EmacsBytePos::new(offset + index));
+                    return Err(());
+                }
+                offset += chunk.len();
+                Ok(())
+            });
+        found
+    }
+
     pub fn text_props_previous_change_before_emacs_byte_pos(
         &self,
         pos: EmacsBytePos,
@@ -4155,6 +4290,13 @@ impl Buffer {
 
     pub fn text_props_is_empty(&self) -> bool {
         self.text.text_props_is_empty()
+    }
+
+    /// GNU `buffer_intervals (buffer) != NULL`: the interval tree exists,
+    /// even if every property has been removed. `current_column` dispatches
+    /// on this state (`src/indent.c:365-370`).
+    pub fn text_props_tree_present(&self) -> bool {
+        self.text.text_props_tree_present()
     }
 
     pub fn text_props_snapshot(&self) -> TextPropertyTable {
@@ -4741,6 +4883,15 @@ impl Buffer {
         self.text.mode_line_clipped(self.id)
     }
 
+    /// Acknowledge the restriction-change witness, as an accepted redisplay
+    /// does. A redisplay-internal restriction that is restored before the pass
+    /// ends was never a user restriction change, so it must not leave the
+    /// frame marked for a mode-line/whole-frame redisplay.
+    #[doc(hidden)]
+    pub fn acknowledge_mode_line_clip(&self) {
+        self.text.acknowledge_mode_line_clip(self.id);
+    }
+
     pub(in crate::buffer) fn set_accessible_region_anchors_unchecked(
         &mut self,
         start: TextPositionAnchor,
@@ -5066,6 +5217,16 @@ impl Buffer {
             .unwrap_or(NO_OVERLAY_CONTENT_DIGEST ^ tick as u64);
         self.overlay_digest_cache.set(Some((tick, digest)));
         digest
+    }
+
+    /// Immutable overlay view containing only the overlays a layout walk can
+    /// observe inside the character span `[first, end)`.
+    pub fn overlay_snapshot_in_char_span(&self, first: usize, end: usize) -> OverlaySnapshot {
+        let end = end.min(self.total_char_end_pos().get());
+        let start = self.char_pos_to_emacs_byte_pos_clamped_no_alloc(CharPos0::new(first));
+        let end_byte = self.char_pos_to_emacs_byte_pos_clamped_no_alloc(CharPos0::new(end));
+        self.overlays
+            .snapshot_in_range(EmacsByteRange::new(start, end_byte))
     }
 
     /// The buffer's automatic-composition spans, recomputed only when

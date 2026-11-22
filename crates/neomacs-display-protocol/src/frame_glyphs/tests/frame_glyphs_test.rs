@@ -51,6 +51,7 @@ fn frame_default_resolved_font_is_one_coherent_binding_lookup() {
             descent_px: 4.0,
             space_advance_px: 10.0,
             glyph_advance: ResolvedFontAdvance::fixed_cell(10.0),
+            spacing: None,
         },
     );
 

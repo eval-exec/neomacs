@@ -1,6 +1,7 @@
 //! GNU xsettings.c's GSettings preferences, owned by one native context.
 
 use gio::{Settings, SettingsBackend, SettingsSchema, SettingsSchemaSource, prelude::*};
+use neomacs_display_protocol::Dpi;
 use neovm_core::emacs_core::display_host::{SystemFontName, SystemFontRole, SystemFonts};
 use std::{
     cell::RefCell,
@@ -58,6 +59,21 @@ fn read_fonts(schema: &SettingsSchema, settings: &Settings) -> SystemFonts {
     )
 }
 
+fn text_dpi_from_factor(value: Option<&gio::glib::Variant>) -> Option<Dpi> {
+    let factor = value?.get::<f64>()?;
+    // GNOME's text baseline is 96 DPI. Its compositor/window scale is a
+    // separate setting and must not enter Wayland's logical font size.
+    Dpi::new((96.0 * factor) as f32).ok()
+}
+
+fn read_text_dpi(schema: &SettingsSchema, settings: &Settings) -> Option<Dpi> {
+    let key = "text-scaling-factor";
+    if !schema.has_key(key) {
+        return None;
+    }
+    text_dpi_from_factor(Some(&settings.value(key)))
+}
+
 pub(super) fn observe() -> io::Result<super::FontDefaultsObserver> {
     let context = gio::glib::MainContext::new();
     let stop = Arc::new(AtomicBool::new(false));
@@ -96,7 +112,10 @@ pub(super) fn observe() -> io::Result<super::FontDefaultsObserver> {
                     // GSettings only emits changed for keys read after connecting.
                     let initial = read_fonts(&schema, &settings);
                     *current.borrow_mut() = initial.clone();
-                    if initial_tx.send(Some(initial)).is_ok() {
+                    // Keep the first GSettings backend construction and this
+                    // startup read on the subscription's owning context.
+                    let text_dpi = read_text_dpi(&schema, &settings);
+                    if initial_tx.send(Some((initial, text_dpi))).is_ok() {
                         while !worker_stop.load(Ordering::Acquire) {
                             worker_context.iteration(true);
                         }
@@ -113,8 +132,9 @@ pub(super) fn observe() -> io::Result<super::FontDefaultsObserver> {
         worker: Some(worker),
     };
     match initial_rx.recv().map_err(io::Error::other)? {
-        Some(initial) => Ok(super::FontDefaultsObserver {
+        Some((initial, initial_text_dpi)) => Ok(super::FontDefaultsObserver {
             initial: super::GuiFontDefaults::Desktop(initial),
+            initial_text_dpi,
             changes,
             _subscription: super::NativeSubscription::Linux {
                 _guard: subscription,
@@ -125,6 +145,35 @@ pub(super) fn observe() -> io::Result<super::FontDefaultsObserver> {
             Ok(super::FontDefaultsObserver::unsupported(
                 super::GuiFontDefaults::Desktop(SystemFonts::default()),
             ))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::text_dpi_from_factor;
+    use gio::glib::variant::ToVariant;
+
+    #[test]
+    fn desktop_text_factor_requires_a_positive_finite_double() {
+        assert_eq!(text_dpi_from_factor(None), None);
+        assert_eq!(text_dpi_from_factor(Some(&"2.0".to_variant())), None);
+        assert_eq!(text_dpi_from_factor(Some(&2_i32.to_variant())), None);
+        for invalid in [
+            0.0,
+            -1.0,
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::MAX,
+        ] {
+            assert_eq!(text_dpi_from_factor(Some(&invalid.to_variant())), None);
+        }
+        for (factor, expected) in [(0.5_f64, 48.0), (1.0, 96.0), (1.5, 144.0), (2.0, 192.0)] {
+            assert_eq!(
+                text_dpi_from_factor(Some(&factor.to_variant())).map(|dpi| dpi.get()),
+                Some(expected)
+            );
         }
     }
 }

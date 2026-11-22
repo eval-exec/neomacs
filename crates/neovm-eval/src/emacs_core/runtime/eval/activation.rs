@@ -38,17 +38,17 @@ pub struct ActivationAuthority {
 static_assertions::assert_not_impl_any!(ActivationAuthority: Send, Sync, Clone, Copy);
 
 impl ActivationAuthority {
+    /// Mint the session's one authority for the World allocation.
+    ///
+    /// This is the production mint. `WorldStorageBuilder::build` is its only
+    /// caller, and it keeps the value in the private World slot in the same
+    /// expression. Visibility is `eval`-only, so a builtin cannot name it;
+    /// the architecture guard keeps the intent explicit across source moves.
+    ///
     /// # Safety
-    /// The caller is this module and keeps the value off every builtin path.
-    /// Production has no caller until the runtime activation path is reviewed.
-    #[cfg_attr(
-        not(test),
-        allow(
-            dead_code,
-            reason = "startup or hosted admission will mint this once; builtins cannot call it"
-        )
-    )]
-    unsafe fn mint() -> Self {
+    /// The caller stores the value in the World's private activation slot and
+    /// never hands it to a builtin or to another World. A session mints once.
+    pub(super) unsafe fn mint() -> Self {
         Self {
             _confined: PhantomData,
         }

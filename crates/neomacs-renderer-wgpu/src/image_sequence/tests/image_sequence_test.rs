@@ -214,17 +214,70 @@ fn retirement_prevents_a_late_decode_from_repopulating_stale_identity() {
     assert!(cache.contains(future));
 }
 
+fn gif_fixture_payload_sizes(bytes: &[u8]) -> (usize, usize) {
+    // Independently measure the fixture's decoded RGBA buffers and retained
+    // extension payloads, rather than trusting DecodedImageSequence.memory_size.
+    // Two 2x1 RGBA frames occupy 16 bytes; each owns a four-byte GIF GCE.
+    let frames = image::codecs::gif::GifDecoder::new(Cursor::new(bytes))
+        .unwrap()
+        .into_frames()
+        .collect_frames()
+        .unwrap();
+    let pixel_bytes: usize = frames
+        .iter()
+        .map(|frame| frame.buffer().as_raw().len())
+        .sum();
+    let extensions = super::gif_metadata::frame_extensions(bytes).unwrap();
+    let extension_bytes: usize = extensions
+        .iter()
+        .flatten()
+        .map(|(_, payload)| payload.len())
+        .sum();
+    (pixel_bytes, extension_bytes)
+}
+
+#[test]
+fn sequence_cache_pixel_only_budget_refuses_resident_gif_extension_payloads() {
+    let bytes = animated_gif_bytes();
+    let (pixel_bytes, extension_bytes) = gif_fixture_payload_sizes(&bytes);
+    assert_eq!((pixel_bytes, extension_bytes), (16, 8));
+    let cache = ImageSequenceCache::with_max_bytes(pixel_bytes);
+    let frame = cache
+        .resolve(sequence(1), &bytes, ImageFrameIndex::new(0))
+        .expect_frame("the caller still receives a frame when metadata exceeds the budget");
+    assert_eq!(frame.dimensions(), (2, 1));
+    assert!(!cache.contains(sequence(1)));
+    assert_eq!(cache.resident_bytes(), 0);
+}
+
 #[test]
 fn sequence_cache_has_an_exact_decoded_byte_budget_and_does_not_keep_stills() {
-    let cache = ImageSequenceCache::with_max_bytes(16);
     let bytes = animated_gif_bytes();
-    cache.resolve(sequence(1), &bytes, ImageFrameIndex::new(0));
-    assert_eq!(cache.resident_bytes(), 16);
+    let (pixel_bytes, extension_bytes) = gif_fixture_payload_sizes(&bytes);
+    assert_eq!(pixel_bytes, 2 * 2 * 1 * 4);
+    assert_eq!(extension_bytes, 4 + 4);
+    let exact_budget = pixel_bytes + extension_bytes;
 
-    cache.resolve(sequence(2), &bytes, ImageFrameIndex::new(0));
+    let cache = ImageSequenceCache::with_max_bytes(exact_budget);
+    cache
+        .resolve(sequence(1), &bytes, ImageFrameIndex::new(0))
+        .expect_frame("an exactly budgeted sequence decodes");
+    assert!(cache.contains(sequence(1)));
+    assert_eq!(cache.resident_bytes(), exact_budget);
+
+    cache
+        .resolve(sequence(2), &bytes, ImageFrameIndex::new(0))
+        .expect_frame("replacement sequence decodes");
     assert!(!cache.contains(sequence(1)));
     assert!(cache.contains(sequence(2)));
-    assert_eq!(cache.resident_bytes(), 16);
+    assert_eq!(cache.resident_bytes(), exact_budget);
+
+    let too_small = ImageSequenceCache::with_max_bytes(exact_budget - 1);
+    too_small
+        .resolve(sequence(4), &bytes, ImageFrameIndex::new(0))
+        .expect_frame("an over-budget sequence still returns pixels to its caller");
+    assert!(!too_small.contains(sequence(4)));
+    assert_eq!(too_small.resident_bytes(), 0);
 
     let still = image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
         1,
@@ -240,4 +293,23 @@ fn sequence_cache_has_an_exact_decoded_byte_budget_and_does_not_keep_stills() {
         ImageSequenceResolution::NotAnimated
     ));
     assert!(!cache.contains(sequence(3)));
+    assert!(cache.contains(sequence(2)));
+    assert_eq!(cache.resident_bytes(), exact_budget);
+}
+
+#[test]
+fn single_gif_keeps_graphics_control_delay_metadata() {
+    // GNU image.c:10276-10314 publishes GCE data even for a single frame.
+    let bytes = b"GIF89a\x01\0\x01\0\x80\0\0\0\0\0\xff\xff\xff\x21\xf9\x04\x01\x0a\0\0\0\x2c\0\0\0\0\x01\0\x01\0\0\x02\x02\x44\x01\0\x3b";
+    let sequence = decode_sequence(bytes).expect("one-frame GIF");
+    let (_, metadata) = sequence
+        .frame(ImageFrameIndex::new(0))
+        .unwrap()
+        .into_parts();
+    assert_eq!(metadata.frame_count(), None);
+    assert_eq!(
+        metadata.frame_delay(),
+        ImageFrameDelay::milliseconds(100, 1),
+        "a single-frame GIF still owns its GCE delay"
+    );
 }

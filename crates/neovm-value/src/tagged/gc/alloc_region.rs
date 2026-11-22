@@ -42,6 +42,12 @@ use super::*;
 const CONS_RECORDING_INACTIVE: usize = 2;
 const CONS_RECORDING_MIXED: usize = 4;
 
+#[path = "owner_era_reserve.rs"]
+pub(super) mod owner_era_reserve;
+pub(super) use owner_era_reserve::{
+    GrantOutcome, MeasuredInterval, OwnerEraReserve, RefillDisclosure, ReserveError,
+};
+
 /// The most cells one cons region takes (2 KiB).
 pub(super) const CONS_REGION_MAX_CELLS: usize = 128;
 /// The most slots one float region takes (2 KiB of slots, 1.5 KiB charged:

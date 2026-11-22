@@ -1062,8 +1062,11 @@ fn inline_hof_runtime_native_cache_call_preserves_mid_map_deopt_floor_and_prefix
     let bases = compile::JitLeafBases {
         snap: ctx.module_boundary_snapshot(),
     };
-    let outer_bases = compile::CURRENT_LEAF_BASES
-        .with(|slot| slot.replace(Some(std::ptr::NonNull::from(&bases))));
+    let outer_bases = compile::CURRENT_LEAF_BASES.with(|slot| {
+        slot.replace(compile::NativeExtent::framed(std::ptr::NonNull::from(
+            &bases,
+        )))
+    });
     let before = Value::memory_use_counts_snapshot();
     let arguments = [sequence.bits() as i64];
     let outcome = ctx.with_gc_inhibited(|ctx| {

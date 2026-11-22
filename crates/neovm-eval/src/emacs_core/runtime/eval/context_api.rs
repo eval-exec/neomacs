@@ -1688,7 +1688,6 @@ impl Context {
         }
 
         let had_current_message = self.current_message.is_some();
-        let mut called_clear_function = false;
         let mut clear_result = EchoMessageClearResult::ClearEchoArea;
 
         let clear_message_function =
@@ -1697,7 +1696,6 @@ impl Context {
             && self.gc_inhibit_depth == 0
             && self.function_value_is_callable(&clear_message_function)
         {
-            called_clear_function = true;
             let specpdl_count = self.specpdl.len();
             if let Err(err) = self.try_specbind_or_unwind_to(
                 specpdl_count,
@@ -1727,10 +1725,12 @@ impl Context {
             }
         }
 
+        // GNU clear_message (xdisp.c:13635-13661) calls the clear function
+        // without invalidating body geometry. The default callback is a no-op
+        // for ordinary input with no minibuffer message; invalidating merely
+        // because it ran would discard retained motion rows on every key.
+        // Callback mutations publish their own display invalidations.
         if clear_result == EchoMessageClearResult::PreserveEchoArea {
-            if called_clear_function {
-                self.invalidate_redisplay();
-            }
             return clear_result;
         }
 
@@ -1742,11 +1742,8 @@ impl Context {
             let _ = crate::emacs_core::hook_runtime::safe_run_named_hook(self, hook, &[]);
         }
 
-        let changed = self.current_message.take().is_some();
-        if changed {
+        if self.current_message.take().is_some() {
             let _ = self.mirror_message_to_echo_area_buffer(None);
-        }
-        if changed || called_clear_function {
             self.invalidate_redisplay();
         }
         clear_result

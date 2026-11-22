@@ -978,3 +978,5 @@ pub(super) use cons_suspend::SuspendedConsCollector;
 
 #[doc(hidden)]
 pub mod heap_transfer;
+
+mod source_observations;

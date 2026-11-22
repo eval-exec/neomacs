@@ -2734,7 +2734,7 @@ pub fn testkit_baseline_aot_selftest(
         );
     }
 
-    super::cache::clear();
+    super::cache::clear_with_serial_receipt().expect("serial jit grace");
     Ok(())
 }
 
@@ -2872,7 +2872,7 @@ pub fn testkit_baseline_deep_rawslot_deopt_selftest(
         );
     }
 
-    super::cache::clear();
+    super::cache::clear_with_serial_receipt().expect("serial jit grace");
     Ok(())
 }
 
@@ -3043,7 +3043,7 @@ pub fn testkit_callbuiltinsym_aot_selftest(
         ));
     }
 
-    super::cache::clear();
+    super::cache::clear_with_serial_receipt().expect("serial jit grace");
     Ok(())
 }
 
@@ -3238,7 +3238,7 @@ pub fn testkit_cbsym_aot_fast_shim_selftest(
         "Tier-B (length) [cbsym_spec]",
     )?;
 
-    super::cache::clear();
+    super::cache::clear_with_serial_receipt().expect("serial jit grace");
     Ok(())
 }
 
@@ -3511,7 +3511,7 @@ pub fn testkit_baseline_op_symbol_reloc_selftest(
                 .map_err(|e| format!("relocated variable restoration: {e:?}"))?;
             assert_eq!(crate::emacs_core::print::print_value(&restored), "(41 17)");
         }
-        super::cache::clear();
+        super::cache::clear_with_serial_receipt().expect("serial jit grace");
     }
 
     Ok(())
@@ -3798,7 +3798,7 @@ pub fn testkit_spec_aot_selftest(
                 interp
             ));
         }
-        super::cache::clear();
+        super::cache::clear_with_serial_receipt().expect("serial jit grace");
     }
 
     // ---- PASS 2b (b/c/d) THE CRUX: load the recordp-baked body against an obarray
@@ -3900,7 +3900,7 @@ pub fn testkit_spec_aot_selftest(
                 "crux: GENERIC did not move on every repeated disarmed call ({gen1}->{gen2})"
             ));
         }
-        super::cache::clear();
+        super::cache::clear_with_serial_receipt().expect("serial jit grace");
     }
 
     Ok(())
@@ -4049,7 +4049,7 @@ pub fn testkit_pgo_roundtrip_selftest(
             interp
         ));
     }
-    super::cache::clear();
+    super::cache::clear_with_serial_receipt().expect("serial jit grace");
     Ok(())
 }
 
@@ -4151,7 +4151,7 @@ pub fn testkit_pgo_drain_selftest(
     }
 
     // ---- PASS 2 — a FRESH session serves the drained `.so` AOT + FAST-from-call-1. ----
-    super::cache::clear();
+    super::cache::clear_with_serial_receipt().expect("serial jit grace");
     let mut c2 = Context::new(hooks);
     alias(&mut c2, "pgo-drain-callee", "recordp")?;
     let g = mk_fn("pgo-drain-callee");
@@ -4197,7 +4197,7 @@ pub fn testkit_pgo_drain_selftest(
             interp
         ));
     }
-    super::cache::clear();
+    super::cache::clear_with_serial_receipt().expect("serial jit grace");
     Ok(())
 }
 
@@ -4240,7 +4240,7 @@ pub fn testkit_pgo_default_off_selftest(
             "default-off left {so_files} .so file(s) in the dir"
         ));
     }
-    super::cache::clear();
+    super::cache::clear_with_serial_receipt().expect("serial jit grace");
     Ok(())
 }
 

@@ -813,6 +813,419 @@ fn define_coding_system_internal_nil_conversion_slots_match_gnu() {
     );
 }
 
+/// GNU computes `:ascii-compatible-p` for a `charset`-type coding system at
+/// define time from its `:charset-list` (src/coding.c:11070, 11119-11129)
+/// and stores it in the coding's attributes; `coding-system-plist` reports
+/// the stored value.  Redefining the charset later must not change it.
+/// F2 hand-off: attested GNU answers (t t), Neomacs used to answer (t nil).
+#[test]
+fn charset_coding_ascii_compat_is_fixed_at_define_time() {
+    crate::test_utils::init_test_tracing();
+    let mode = neovm_value::tagged::value::SymbolMode::Bare;
+    let define_charset = |ascii_compatible| {
+        let code_space = Value::vector(vec![
+            Value::fixnum(33),
+            Value::fixnum(126),
+            Value::fixnum(0),
+            Value::fixnum(0),
+            Value::fixnum(0),
+            Value::fixnum(0),
+            Value::fixnum(0),
+            Value::fixnum(0),
+        ]);
+        crate::emacs_core::charset::builtin_define_charset_internal(vec![
+            Value::symbol("f2-unit-ch"),
+            Value::fixnum(1),
+            code_space,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            if ascii_compatible {
+                Value::T
+            } else {
+                Value::NIL
+            },
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+        ])
+        .expect("define charset");
+    };
+    let define_coding = |m: &mut CodingSystemManager| {
+        builtin_define_coding_system_internal(
+            m,
+            vec![
+                Value::symbol("f2-unit-cs"),
+                Value::char('x'),
+                Value::symbol("charset"),
+                Value::list(vec![Value::symbol("f2-unit-ch")]),
+                Value::NIL,
+                Value::NIL,
+                Value::NIL,
+                Value::NIL,
+                Value::NIL,
+                Value::fixnum('?' as i64),
+                Value::NIL,
+                Value::list(vec![
+                    Value::keyword(":name"),
+                    Value::symbol("f2-unit-cs"),
+                    Value::keyword(":docstring"),
+                    Value::string(""),
+                ]),
+                Value::NIL,
+            ],
+            mode,
+        )
+        .expect("define coding system");
+    };
+
+    define_charset(true);
+    let mut m = mgr();
+    define_coding(&mut m);
+    assert!(m.is_ascii_compatible("f2-unit-cs", mode));
+    define_charset(false);
+    assert!(
+        m.is_ascii_compatible("f2-unit-cs", mode),
+        "GNU keeps the value stored at define time"
+    );
+
+    // `coding-system-put` moves the stored attribute as well
+    // (src/coding.c:11570-11572), so it also survives a later charset edit.
+    builtin_coding_system_put(
+        &mut m,
+        vec![
+            Value::symbol("f2-unit-cs"),
+            Value::keyword(":ascii-compatible-p"),
+            Value::NIL,
+        ],
+        mode,
+    )
+    .expect("coding-system-put");
+    assert!(!m.is_ascii_compatible("f2-unit-cs", mode));
+    define_charset(true);
+    assert!(
+        !m.is_ascii_compatible("f2-unit-cs", mode),
+        "a coding-system-put override is not re-read from the charset"
+    );
+
+    let mut m = mgr();
+    define_charset(false);
+    define_coding(&mut m);
+    assert!(!m.is_ascii_compatible("f2-unit-cs", mode));
+    define_charset(true);
+    assert!(
+        !m.is_ascii_compatible("f2-unit-cs", mode),
+        "GNU does not re-read the charset for an existing coding system"
+    );
+}
+
+/// F2 r2 (peer 6173): big5 and shift-jis snapshot the FIRST charset's
+/// ASCII compatibility at define time (src/coding.c:11380-11387 and
+/// :11344-11349), and iso-2022 snapshots the G0 initial charset unless the
+/// category forces the attribute to nil (src/coding.c:11271-11272,
+/// :11325-11329).  A later charset redefinition must not change any of them.
+#[test]
+fn big5_shift_jis_and_iso2022_ascii_compat_are_fixed_at_define_time() {
+    crate::test_utils::init_test_tracing();
+    let mode = neovm_value::tagged::value::SymbolMode::Bare;
+    let define_charset = |name: &'static str, dimension: i64, code_space: [i64; 8], ascii: bool| {
+        let code_space = Value::vector(
+            code_space
+                .iter()
+                .map(|&value| Value::fixnum(value))
+                .collect(),
+        );
+        crate::emacs_core::charset::builtin_define_charset_internal(vec![
+            Value::symbol(name),
+            Value::fixnum(dimension),
+            code_space,
+            Value::NIL,
+            Value::NIL,
+            // An iso-2022 coding needs a final char on every listed charset
+            // (`explicit_charset_entries`; GNU coding.c:11049-11053).
+            Value::fixnum('A' as i64),
+            Value::NIL,
+            Value::NIL,
+            if ascii { Value::T } else { Value::NIL },
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+        ])
+        .expect("define charset");
+    };
+    let define_coding = |m: &mut CodingSystemManager,
+                         name: &'static str,
+                         coding_type: &'static str,
+                         charsets: Vec<Value>,
+                         iso_initial: Option<Value>,
+                         flags: i64| {
+        let mut args = vec![
+            Value::symbol(name),
+            Value::char('x'),
+            Value::symbol(coding_type),
+            Value::list(charsets),
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::fixnum('?' as i64),
+            Value::NIL,
+            Value::list(vec![
+                Value::keyword(":name"),
+                Value::symbol(name),
+                Value::keyword(":docstring"),
+                Value::string(""),
+            ]),
+            Value::NIL,
+        ];
+        if let Some(initial) = iso_initial {
+            args.push(initial);
+            args.push(Value::cons(Value::fixnum(0), Value::fixnum(0)));
+            args.push(Value::NIL);
+            args.push(Value::fixnum(flags));
+        }
+        builtin_define_coding_system_internal(m, args, mode).expect("define coding system");
+    };
+
+    define_charset("f2r2-ch1", 1, [33, 126, 0, 0, 0, 0, 0, 0], true);
+    define_charset("f2r2-k1", 1, [161, 223, 0, 0, 0, 0, 0, 0], false);
+    define_charset("f2r2-ch2", 2, [161, 254, 64, 254, 0, 0, 0, 0], false);
+
+    let mut m = mgr();
+    define_coding(
+        &mut m,
+        "f2r2-big5",
+        "big5",
+        vec![Value::symbol("f2r2-ch1"), Value::symbol("f2r2-ch2")],
+        None,
+        0,
+    );
+    define_coding(
+        &mut m,
+        "f2r2-sjis",
+        "shift-jis",
+        vec![
+            Value::symbol("f2r2-ch1"),
+            Value::symbol("f2r2-k1"),
+            Value::symbol("f2r2-ch2"),
+        ],
+        None,
+        0,
+    );
+    define_coding(
+        &mut m,
+        "f2r2-iso8",
+        "iso-2022",
+        vec![Value::symbol("f2r2-ch1"), Value::symbol("f2r2-k1")],
+        Some(Value::vector(vec![
+            Value::symbol("f2r2-ch1"),
+            Value::symbol("f2r2-k1"),
+            Value::NIL,
+            Value::NIL,
+        ])),
+        0,
+    );
+    define_coding(
+        &mut m,
+        "f2r2-iso7",
+        "iso-2022",
+        vec![Value::symbol("f2r2-ch1"), Value::symbol("f2r2-k1")],
+        Some(Value::vector(vec![
+            Value::symbol("f2r2-ch1"),
+            Value::symbol("f2r2-k1"),
+            Value::NIL,
+            Value::NIL,
+        ])),
+        0x0008, // IsoFlag::SevenBits: GNU forces the attribute to nil
+    );
+    for name in ["f2r2-big5", "f2r2-sjis", "f2r2-iso8"] {
+        assert!(m.is_ascii_compatible(name, mode), "{name} should start t");
+    }
+    assert!(!m.is_ascii_compatible("f2r2-iso7", mode));
+
+    // Redefining the tested charset must not move any stored answer.
+    define_charset("f2r2-ch1", 1, [33, 126, 0, 0, 0, 0, 0, 0], false);
+    for name in ["f2r2-big5", "f2r2-sjis", "f2r2-iso8"] {
+        assert!(
+            m.is_ascii_compatible(name, mode),
+            "{name} must keep its define-time value"
+        );
+    }
+    assert!(!m.is_ascii_compatible("f2r2-iso7", mode));
+}
+
+/// F3: GNU validates a shift-jis/big5 charset list's size and dimensions at
+/// define time (src/coding.c:11341-11392).  The attested error data is
+/// pinned here; the oracle row covers the same forms end to end.
+#[test]
+fn shift_jis_and_big5_charset_list_shape_errors_match_gnu() {
+    crate::test_utils::init_test_tracing();
+    let mode = neovm_value::tagged::value::SymbolMode::Bare;
+    let define_charset = |name: &'static str, dimension: i64, code_space: [i64; 8]| {
+        let code_space = Value::vector(
+            code_space
+                .iter()
+                .map(|&value| Value::fixnum(value))
+                .collect(),
+        );
+        crate::emacs_core::charset::builtin_define_charset_internal(vec![
+            Value::symbol(name),
+            Value::fixnum(dimension),
+            code_space,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::T,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+        ])
+        .expect("define charset");
+    };
+    define_charset("f3-ch1", 1, [33, 126, 0, 0, 0, 0, 0, 0]);
+    define_charset("f3-ch2", 2, [161, 254, 64, 254, 0, 0, 0, 0]);
+
+    let mut m = mgr();
+    let define_error = |m: &mut CodingSystemManager,
+                        name: &'static str,
+                        coding_type: &'static str,
+                        charsets: Vec<Value>|
+     -> (String, Vec<Value>) {
+        let args = vec![
+            Value::symbol(name),
+            Value::char('x'),
+            Value::symbol(coding_type),
+            Value::list(charsets),
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::fixnum('?' as i64),
+            Value::NIL,
+            Value::list(vec![
+                Value::keyword(":name"),
+                Value::symbol(name),
+                Value::keyword(":docstring"),
+                Value::string(""),
+            ]),
+            Value::NIL,
+        ];
+        match builtin_define_coding_system_internal(m, args, mode).kinded() {
+            Err(FlowKind::Signal(signal)) => (signal.symbol_name().to_string(), signal.data),
+            Ok(_) => panic!("{coding_type} {name} should have been rejected"),
+            Err(other) => panic!("unexpected flow: {other:?}"),
+        }
+    };
+    let ch1 = || Value::symbol("f3-ch1");
+    let ch2 = || Value::symbol("f3-ch2");
+    let error_message = |message: &str| {
+        (
+            "error".to_string(),
+            vec![Value::string(message.to_string())],
+        )
+    };
+
+    assert_eq!(
+        define_error(&mut m, "f3-sj2", "shift-jis", vec![ch1(), ch2()]),
+        error_message("There should be three or four charsets")
+    );
+    assert_eq!(
+        define_error(&mut m, "f3-sj-dim1", "shift-jis", vec![ch1(), ch2(), ch1()]),
+        error_message("Dimension of charset f3-ch2 is not one")
+    );
+    assert_eq!(
+        define_error(&mut m, "f3-sj-dim2", "shift-jis", vec![ch1(), ch1(), ch1()]),
+        error_message("Dimension of charset f3-ch1 is not two")
+    );
+    assert_eq!(
+        define_error(
+            &mut m,
+            "f3-sj4",
+            "shift-jis",
+            vec![ch1(), ch1(), ch2(), ch1()]
+        ),
+        error_message("Dimension of charset f3-ch1 is not two")
+    );
+    assert_eq!(
+        define_error(&mut m, "f3-big5-3", "big5", vec![ch1(), ch2(), ch1()]),
+        error_message("There should be just two charsets")
+    );
+    assert_eq!(
+        define_error(&mut m, "f3-big5-dim1", "big5", vec![ch2(), ch2()]),
+        error_message("Dimension of charset f3-ch2 is not one")
+    );
+    assert_eq!(
+        define_error(&mut m, "f3-big5-dim2", "big5", vec![ch1(), ch1()]),
+        error_message("Dimension of charset f3-ch1 is not two")
+    );
+    assert_eq!(
+        define_error(
+            &mut m,
+            "f3-undefined",
+            "charset",
+            vec![Value::symbol("f3-no-such-charset")]
+        ),
+        (
+            "wrong-type-argument".to_string(),
+            vec![
+                Value::symbol("charsetp"),
+                Value::symbol("f3-no-such-charset")
+            ],
+        )
+    );
+
+    // The valid shapes still register.
+    let define = |m: &mut CodingSystemManager,
+                  name: &'static str,
+                  coding_type: &'static str,
+                  charsets: Vec<Value>| {
+        let args = vec![
+            Value::symbol(name),
+            Value::char('x'),
+            Value::symbol(coding_type),
+            Value::list(charsets),
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::fixnum('?' as i64),
+            Value::NIL,
+            Value::list(vec![
+                Value::keyword(":name"),
+                Value::symbol(name),
+                Value::keyword(":docstring"),
+                Value::string(""),
+            ]),
+            Value::NIL,
+        ];
+        builtin_define_coding_system_internal(m, args, mode).expect("valid charset list");
+    };
+    define(&mut m, "f3-sj-ok", "shift-jis", vec![ch1(), ch1(), ch2()]);
+    define(&mut m, "f3-big5-ok", "big5", vec![ch1(), ch2()]);
+}
+
 #[test]
 fn coding_system_base_with_suffix() {
     crate::test_utils::init_test_tracing();

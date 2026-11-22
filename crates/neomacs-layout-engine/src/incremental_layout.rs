@@ -202,6 +202,10 @@ pub struct RetainedWindowKey {
     pub wrap_mode: LineWrapMode,
     pub word_wrap: bool,
     pub word_wrap_policy: neovm_core::window::WordWrapPolicy,
+    /// The buffer's paragraph direction at layout time (GNU
+    /// `it->paragraph_embedding`). Changing it changes every row's visual
+    /// order and alignment, so retained rows must not be reused across it.
+    pub bidi_paragraph_directions: crate::bidi::ParagraphDirections,
     pub tab_width: i32,
     pub char_width: f32,
     pub char_height: f32,
@@ -324,6 +328,11 @@ impl RetainedWindowKey {
                     buffer.overlay_modified_tick(),
                     buffer.get_multibyte(),
                     buffer.point_max_char_pos().get() as i64,
+                    // The retained-window key compares across a moving
+                    // window_start, so it needs a range-independent digest.
+                    // The window-range digest is for the layout view itself;
+                    // making this key range-scoped would disable scroll and
+                    // prepared-viewport replay (offscreen_row_test).
                     buffer.overlay_content_digest(),
                 )
             })
@@ -359,6 +368,7 @@ impl RetainedWindowKey {
             wrap_mode: p.wrap_mode,
             word_wrap: p.word_wrap,
             word_wrap_policy: p.word_wrap_policy.clone(),
+            bidi_paragraph_directions: p.bidi_paragraph_directions,
             tab_width: p.tab_width,
             char_width: p.char_width,
             char_height: p.char_height,
@@ -556,6 +566,23 @@ pub struct RetainedWindowMatrix {
     pub matrix: GlyphMatrix,
     /// Snapshot of every layout input for the reuse predicate.
     pub key: RetainedWindowKey,
+    /// GNU `prevent_redisplay_optimizations_p` revision this matrix was
+    /// produced under (src/xdisp.c:20557-20565).
+    ///
+    /// Deliberately OUTSIDE `key`: raising the flag must refuse GNU's matrix
+    /// reuse without changing Neo's own row-reuse decision, whose inputs are
+    /// the key.  The gate compares this value with the buffer's current
+    /// revision, so an accepted display consumes the raise exactly like
+    /// `mark_window_display_accurate_1` clears the flag (src/xdisp.c:
+    /// 18295-18297).
+    pub redisplay_optimizations: neovm_core::window::RedisplayOptimizationsRevision,
+    /// GNU `BUF_MODIFF` this matrix was displayed under -- the `last_modified`
+    /// half of `window_outdated (w)` (src/window.c:231-236).  Read at
+    /// acceptance, so changes made by redisplay itself (fontification
+    /// properties) are consumed, exactly like `mark_window_display_accurate_1`
+    /// recording `BUF_MODIFF` after the display (src/xdisp.c:18286-18288).
+    /// Output-only data for the reuse gate; not part of `key`.
+    pub buffer_modiff: i64,
     /// Reuse gate; only `Valid` matrices may be reused (Phases 1+).
     pub validity: MatrixValidity,
     /// The clean pass's window display snapshot (point-independent body row

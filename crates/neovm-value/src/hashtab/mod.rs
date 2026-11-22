@@ -31,7 +31,7 @@ pub struct HashTestGcInhibitAccounting {
     /// Resolved only when GC-maybe first needs the saved entry operands.
     pub(crate) threshold_at_start: Option<std::num::NonZeroUsize>,
     pub(crate) entry_threshold_bytes: usize,
-    pub(crate) entry_percentage_scaled: Option<std::num::NonZeroU64>,
+    pub(crate) entry_percentage: Option<f64>,
     pub(crate) threshold_overridden: bool,
     pub(crate) memory_full: bool,
     pub(crate) startup_ceiling: bool,
@@ -1010,8 +1010,8 @@ impl HashTestGcInhibitAccounting {
     }
     #[inline]
     #[doc(hidden)]
-    pub fn entry_percentage_scaled(&self) -> &Option<std::num::NonZeroU64> {
-        &self.entry_percentage_scaled
+    pub fn entry_percentage(&self) -> Option<f64> {
+        self.entry_percentage
     }
     #[inline]
     #[doc(hidden)]
@@ -1043,7 +1043,7 @@ impl HashTestGcInhibitAccounting {
         collector_threshold_at_start: usize,
         threshold_at_start: Option<std::num::NonZeroUsize>,
         entry_threshold_bytes: usize,
-        entry_percentage_scaled: Option<std::num::NonZeroU64>,
+        entry_percentage: Option<f64>,
         threshold_overridden: bool,
         memory_full: bool,
         startup_ceiling: bool,
@@ -1054,7 +1054,7 @@ impl HashTestGcInhibitAccounting {
             collector_threshold_at_start,
             threshold_at_start,
             entry_threshold_bytes,
-            entry_percentage_scaled,
+            entry_percentage,
             threshold_overridden,
             memory_full,
             startup_ceiling,

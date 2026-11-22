@@ -456,24 +456,34 @@ the newest block or page's bump tail, else a fresh one).
 
 ## The adaptive pacer
 
-After each sweep the heap recomputes `live_bytes` EXACTLY (cons + object +
-arena-page + mapped live bytes) and resets `bytes_since_gc`. `should_collect()`
+After each sweep the heap recomputes `live_bytes` from collectible runtime
+conses, objects and arena survivors, then resets `bytes_since_gc`. Immortal
+mapped and loader-proven image residents are excluded, including before
+first-cycle promotion. Ordinary-old runtime survivors remain included.
+`should_collect()`
 is simply `bytes_since_gc >= gc_threshold`. The evaluator's
-`effective_gc_threshold_bytes` sets the threshold to the MAX of three terms,
-clamped to `[1, GC_HI_THRESHOLD_BYTES]`:
+`effective_gc_threshold_bytes` uses GNU's `consing_threshold` formula, shared
+with GC-inhibited hash callbacks, and caps it at `GC_HI_THRESHOLD_BYTES`:
 
 1. `gc-cons-threshold` (elisp), floored at `GC_THRESHOLD_FLOOR_BYTES` — the
    GNU floor.
-2. the `gc-cons-percentage` term: `(live_bytes + bytes_since_gc/2) *
-   percentage`, clamped to `GC_HI` — the GNU proportional model.
-3. an internal live-proportional growth term: `live_bytes *
-   GC_LIVE_GROWTH_NUM/GC_LIVE_GROWTH_DEN`, clamped to `GC_HI`, so the O(live)
-   full-mark cost amortizes as the heap grows.
+2. If `gc-cons-percentage` is a Lisp float, raise the budget to
+   `(live_bytes + bytes_since_gc/2) * percentage` when larger. The multiplication
+   uses the original double and truncates toward zero. NaN and negative values
+   leave the byte budget in force; positive infinity selects `GC_HI`.
 
-The elisp-derived value (1–2) is a FLOOR term 3 never lowers (user settings
-and defaults keep their meaning as minimum budgets); an explicit
+There is no internal live-proportional growth floor: that would change
+`gcs-done` and `post-gc-hook` frequency independently of Lisp's settings. The
+host's startup ceiling and opt-in profiling cap can lower the budget; an explicit
 `set_gc_threshold` override bypasses all of this (only the pacer value flows
 through `set_gc_threshold_from_runtime`).
+
+`live_bytes` in GC traces, collection reports and published GC statistics is
+this pacing census. Full heap memory inventory and Lisp diagnostic rows retain
+mapped/image-resident objects. The layout diagnostic `managed_live_bytes` adds
+mapped object storage and subsequent allocation to the collectible census;
+page backing and payload capacities are reported separately. These quantities
+describe managed storage, not allocator-resident memory or process RSS.
 
 ## Insertion coverage & the precise-rooting precondition (task 01 / #17)
 

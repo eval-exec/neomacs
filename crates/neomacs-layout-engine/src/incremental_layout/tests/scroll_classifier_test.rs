@@ -31,6 +31,7 @@ fn synthetic_key(window_start: i64, point: i64) -> RetainedWindowKey {
         wrap_mode: LineWrapMode::Truncate,
         word_wrap: false,
         word_wrap_policy: Default::default(),
+        bidi_paragraph_directions: Default::default(),
         tab_width: 8,
         char_width: 8.0,
         char_height: 16.0,
@@ -87,6 +88,9 @@ fn synthetic_matrix(base: i64, n_body: usize) -> RetainedWindowMatrix {
     RetainedWindowMatrix {
         matrix,
         key: synthetic_key(base, 0),
+        redisplay_optimizations: Default::default(),
+        // Synthetic fixture: no GNU prevent raise and MODIFF 0.
+        buffer_modiff: 0,
         validity: MatrixValidity::Valid,
         display_snapshot: std::sync::Arc::new(WindowDisplaySnapshot {
             point_rows: None,

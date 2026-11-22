@@ -2684,6 +2684,13 @@ impl<'layout, 'row, 'measurer> DisplayRowProgressWriter<'layout, 'row, 'measurer
         slots: &mut Vec<DisplayRowGlyphSlot>,
     ) -> DisplayRowAppendStatus {
         let face_id = self.writer.face_id(face);
+        // The caller's whole-item measurement is authoritative when it exists:
+        // a prepared worker row can only replay the advances it captured, and
+        // its measurer deliberately refuses to shape new run text.  A source
+        // walk installing a uniform per-character plan would stamp every
+        // member with the head cluster's advance, so the render policy passes
+        // no measurement for an automatic composition and the writer measures
+        // the composite text fresh through its own font service.
         let advance = self.writer.automatic_composition_advance_px(
             text,
             face_id,
@@ -3000,10 +3007,19 @@ impl<'layout, 'row, 'measurer> DisplayRowWriter<'layout, 'row, 'measurer> {
             return f32::from(terminal.width_cols) * self.layout.char_width_px.max(1.0);
         }
 
-        measurement
-            .unwrap_or_else(|| self.text_run_measurement(text, face_id))
-            .measured_advances()
-            .map(|advances| advances.iter().map(|advance| advance.advance_px).sum())
+        let plan = measurement.unwrap_or_else(|| self.text_run_measurement(text, face_id));
+        // GNU's composition width is the sum of the gstring's integer
+        // LGLYPH_WIDTH slots (src/composite.c:764-770), and the gstring driver
+        // rounds each glyph's advance.  Round each measured advance before
+        // summing: summing fractional advances first and rounding once can be
+        // one pixel wider than the gstring the Lisp side sees.
+        plan.measured_advances()
+            .map(|advances| {
+                advances
+                    .iter()
+                    .map(|advance| advance.advance_px.round())
+                    .sum()
+            })
             .filter(|width: &f32| width.is_finite() && *width > 0.0)
             .unwrap_or_else(|| f32::from(terminal.width_cols) * self.layout.char_width_px.max(1.0))
     }
@@ -3572,7 +3588,12 @@ impl<'layout, 'row, 'measurer> DisplayRowWriter<'layout, 'row, 'measurer> {
         match glyphless.method {
             GlyphlessMethod::ZeroWidth => None,
             GlyphlessMethod::ThinSpace => {
-                Some((GlyphlessPresentation::ThinSpace, char_width_px * 0.25))
+                // GNU's docstring for `glyphless-char-display-control`:
+                // thin-space is a "thin (1-pixel width) space" on a graphical
+                // frame, and one character cell on a terminal.  A quarter of
+                // the frame cell made every `Cf` character (ZWSP in the ETAF
+                // corpus) two pixels wide where GNU measures one.
+                Some((GlyphlessPresentation::ThinSpace, 1.0))
             }
             GlyphlessMethod::EmptyBox => Some((GlyphlessPresentation::EmptyBox, {
                 let width_cols = base_width_cols(glyphless.ch).clamp(1, 4);

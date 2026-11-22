@@ -78,3 +78,14 @@ gnu_emacs_version!(31, 1);
 #[cfg(feature = "contract-fixtures")]
 #[doc(hidden)]
 pub use neovm_value::tagged::gc::{EraWorldLoan, SymbolRootDesignators, WorldIdentity, WorldLoan};
+
+/// Contract-fixture names for the dormant keeper typestates. Production
+/// builds keep the module crate-private. The items stay `#[doc(hidden)]`.
+#[cfg(feature = "contract-fixtures")]
+#[doc(hidden)]
+pub mod pentry_e2_custody {
+    pub use crate::emacs_core::eval::parallel_entry::keeper_custody::{
+        CustodyFailureNotice, ExportReservation, KeeperCustodyFailure, KeeperReadyRequest,
+        RestoredKeeper, ReturnedSerialTicket, StoppedKeeper, SuspendedKeeper,
+    };
+}

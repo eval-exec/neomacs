@@ -233,6 +233,19 @@ impl TestFontCatalog {
         })))
     }
 
+    #[cfg(target_os = "linux")]
+    pub(crate) fn render_options(
+        &self,
+        file: &str,
+        selector: u32,
+        size: f32,
+        weight: Option<f32>,
+    ) -> Option<neomacs_font_materializer::fontconfig::FontRenderOptions> {
+        self.0
+            .native_config
+            .render_options(file, selector, size, weight)
+    }
+
     fn backend(&self) -> Box<dyn FontBackend> {
         #[cfg(target_os = "linux")]
         return match self.0.backend {
@@ -297,7 +310,7 @@ impl FontMetricsService {
 impl TestFontCatalogSource {
     pub(crate) fn font_system(&self) -> FontSystem {
         match self {
-            Self::System => FontSystem::new(),
+            Self::System => super::configured_font_system(),
             Self::Fixture(catalog) => catalog.font_system(),
         }
     }

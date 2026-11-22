@@ -1394,9 +1394,9 @@ impl OverlayIndex {
     }
 
     /// Borrow an existing index without publishing an allocating endpoint tree.
-    /// A cold index scans all interval records in O(overlays), using only the
-    /// recursive visitor's stack; an already published index keeps its normal
-    /// tree search. Both endpoints count, including zero-length overlays.
+    /// A cold index combines the next start with ends of intervals containing
+    /// pos. Future empty overlays contribute their starts. The read guard and
+    /// visitor stack allocate no endpoint index; the warm tree stays unchanged.
     pub(super) fn next_boundary_after_no_alloc(
         &self,
         pos: EmacsBytePos,
@@ -1409,17 +1409,18 @@ impl OverlayIndex {
             return endpoints.next_after(pos, limit);
         }
         let intervals = self.intervals.read();
-        let mut next = None;
+        let mut next = intervals.next_start_after(pos, limit);
+        // The nearest later endpoint is either the next start, found above,
+        // or an end of an interval containing pos. Keep the strict-after guard
+        // below independent of the point query's endpoint convention.
         intervals
             .records()
-            .for_each_match(IntervalBPlusQuery::All, |record| {
-                for endpoint in [record.range().start(), record.range().end()] {
-                    if pos < endpoint
-                        && endpoint <= limit
-                        && next.is_none_or(|current| endpoint < current)
-                    {
-                        next = Some(endpoint);
-                    }
+            .for_each_match(IntervalBPlusQuery::Point(pos), |record| {
+                #[cfg(test)]
+                cold_boundary_instrumentation::record_visit();
+                let end = record.range().end();
+                if end > pos && end <= limit && next.is_none_or(|current| end < current) {
+                    next = Some(end);
                 }
             });
         next
@@ -1472,6 +1473,10 @@ fn sort_and_dedup_overlay_identities(overlays: &mut Vec<Value>) {
 /// so an ascending traversal observes the newest attachment first.  Encoding
 /// that tie-break explicitly prevents rotations from changing Lisp-visible
 /// traversal order.
+
+#[cfg(test)]
+#[path = "overlay_index/tests/cold_boundary_instrumentation.rs"]
+mod cold_boundary_instrumentation;
 
 #[cfg(test)]
 #[path = "overlay_index/tests/overlay_index_test.rs"]

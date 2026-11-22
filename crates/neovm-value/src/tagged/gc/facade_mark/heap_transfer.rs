@@ -13,6 +13,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::thread::ThreadId;
 
+use crate::tagged::collection_reads::{SourceObservationError, SourceObservationsDetached};
 use crate::tagged::transport::{PreparedRootBatch, RootBatchLease, SharedRoot};
 use crate::tagged::value::TaggedValue;
 
@@ -157,6 +158,7 @@ pub enum TransferError {
     WrongThread,
     WrongReturn,
     InstalledTls,
+    Observations(SourceObservationError),
     GenerationalRequired,
     Exhausted,
     Capacity,
@@ -183,6 +185,7 @@ struct Backing {
 #[doc(hidden)]
 pub struct PendingHeapReturn {
     control: Arc<ReturnControl>,
+    observations: Option<SourceObservationsDetached>,
     local: PhantomData<Rc<()>>,
 }
 
@@ -203,10 +206,15 @@ impl PendingHeapReturn {
         self.control.phase.load() == TransferPhase::Poisoned
     }
 
+    #[doc(hidden)]
+    pub fn retains_observations(&self) -> bool {
+        self.observations.is_some()
+    }
+
     /// Pair this receipt with the returned right on the source thread.
     #[doc(hidden)]
     pub fn restore(
-        self,
+        mut self,
         mut returned: ReturnedHeapTransfer,
     ) -> Result<RestoredHeapBacking, RestoreFailure> {
         let reason = if self.control.source != std::thread::current().id() {
@@ -236,6 +244,7 @@ impl PendingHeapReturn {
             .expect("affine returned backing");
         let restored = RestoredHeapBacking {
             backing: Some(backing),
+            observations: self.observations.take(),
             heap: self.control.identity.heap,
             control: Arc::clone(&self.control),
             local: PhantomData,
@@ -270,7 +279,9 @@ pub struct PreparedHeapTransfer {
 // unique `Send` `WorldLoan` retain the exact allocation. Scoped receive never
 // returns a borrowed collector; the actual collector must return before this
 // affine right can move again. `RootBatchLease` and opaque words contain no
-// local references. No existing `!Send` collector, era, or slab gains `Send`.
+// local references. Canonical observation ownership is checked at preparation and
+// after every local callback. The source Rc was replaced, and the source-local
+// receipt contains only a placeholder. No existing `!Send` loan gains `Send`.
 unsafe impl Send for PreparedHeapTransfer {}
 
 static_assertions::assert_not_impl_any!(PreparedHeapTransfer: Sync, Clone, Copy);
@@ -294,6 +305,7 @@ pub struct PrepareFailure<'heap> {
     admission: Gen1Admission<'heap>,
     owner: WorldLoan,
     roots: FrozenLegacyRoots,
+    observations: Option<SourceObservationsDetached>,
 }
 
 impl<'heap> PrepareFailure<'heap> {
@@ -311,8 +323,32 @@ impl<'heap> PrepareFailure<'heap> {
         Gen1Admission<'heap>,
         WorldLoan,
         FrozenLegacyRoots,
+        Option<SourceObservationsDetached>,
     ) {
-        (self.reason, self.admission, self.owner, self.roots)
+        (
+            self.reason,
+            self.admission,
+            self.owner,
+            self.roots,
+            self.observations,
+        )
+    }
+
+    /// Detach refused before a receipt existed. The caller still owns every input.
+    #[doc(hidden)]
+    pub fn from_observation_detach(
+        reason: SourceObservationError,
+        admission: Gen1Admission<'heap>,
+        owner: WorldLoan,
+        roots: FrozenLegacyRoots,
+    ) -> Self {
+        Self {
+            reason: TransferError::Observations(reason),
+            admission,
+            owner,
+            roots,
+            observations: None,
+        }
     }
 }
 
@@ -403,35 +439,137 @@ struct LocalHeapScope {
 static_assertions::assert_not_impl_any!(LocalHeapScope: Send, Sync, Clone, Copy);
 
 impl LocalHeapScope {
-    fn retire_tls(&self) {
+    fn retire_tls(&self) -> Result<(), TransferError> {
         let transfer = self.transfer.as_ref().expect("local retained transfer");
-        let root = transfer.root.as_non_null();
-        let installed = super::super::TAGGED_HEAP.with(|slot| slot.get() == root.as_ptr());
-        if installed {
-            // SAFETY: this scope owns the actual retained transfer. Its inner
-            // callback frame and actual collector have ended before cleanup.
-            // The original allocation root supplies this fresh short loan;
-            // collector Drop may have restored the store, so detach it first.
-            let heap = unsafe { root.as_ref() };
-            clear_tagged_heap_if_installed(heap);
-        }
+        retire_transfer_tls(transfer.root.as_non_null())
     }
 
-    fn into_transfer(mut self) -> PreparedHeapTransfer {
-        self.retire_tls();
-        self.transfer.take().expect("local retained transfer")
+    fn into_transfer(mut self) -> (PreparedHeapTransfer, Result<(), TransferError>) {
+        let retired = self.retire_tls();
+        (
+            self.transfer.take().expect("local retained transfer"),
+            retired,
+        )
     }
 }
 
 impl Drop for LocalHeapScope {
     fn drop(&mut self) {
         if self.transfer.is_some() {
-            self.retire_tls();
+            // An unwind can never release a Send right. A failed cleanup leaves
+            // the retained backing poisoned by the transfer field's Drop.
+            let _ = self.retire_tls();
         }
         // The actual transfer still owns backing throughout cleanup, including
         // unwinding. Its field Drop then poisons and retains unfinished backing.
     }
 }
+
+/// Only after the complete collector or era frame has returned and every
+/// participant has retired. A refusal that can still hold a heap loan clears
+/// TLS by address and does not call this.
+fn retire_transfer_tls(root: NonNull<super::super::TaggedHeap>) -> Result<(), TransferError> {
+    let installed = super::super::TAGGED_HEAP.with(|slot| slot.get() == root.as_ptr());
+    // SAFETY: the caller's complete callback, collector, or era frame has
+    // returned, or unwound. The scope retains the sole original backing and
+    // no heap reference. The fresh loan ends before a Send right can escape.
+    let heap = unsafe { root.as_ref() };
+    if installed {
+        heap.preflight_source_store_retirement()
+            .map_err(TransferError::Observations)?;
+        clear_tagged_heap_if_installed(heap);
+    }
+    heap.retire_source_observation_membership()
+        .map_err(TransferError::Observations)
+}
+
+/// Rebuild the exclusive loan from the retained provenance root.
+///
+/// # Safety
+/// `root` is that transfer's original root. No collector loan, installed TLS
+/// slot, or sibling heap borrow is outstanding. `body` drops the collector
+/// before it returns; the higher-ranked bound stops the loan from escaping.
+unsafe fn with_retained_collector<R>(
+    root: NonNull<super::super::TaggedHeap>,
+    body: impl for<'heap> FnOnce(QuiescentCollector<'heap>) -> R,
+) -> R {
+    // SAFETY: the caller holds the sole retained root. This frame ends when
+    // `body` returns, so the raw loan does not escape it.
+    let collector = unsafe { QuiescentCollector::from_retained_root(&mut *root.as_ptr()) };
+    body(collector)
+}
+
+/// Armed before preparation may call a retention or publication hook.
+/// An unwind retains every owning input. Drop does not recover them.
+struct RetainedBootstrapParts {
+    owner: std::mem::ManuallyDrop<WorldLoan>,
+    roots: std::mem::ManuallyDrop<FrozenLegacyRoots>,
+    observations: std::mem::ManuallyDrop<SourceObservationsDetached>,
+}
+
+impl RetainedBootstrapParts {
+    fn new(
+        owner: WorldLoan,
+        roots: FrozenLegacyRoots,
+        observations: SourceObservationsDetached,
+    ) -> Self {
+        Self {
+            owner: std::mem::ManuallyDrop::new(owner),
+            roots: std::mem::ManuallyDrop::new(roots),
+            observations: std::mem::ManuallyDrop::new(observations),
+        }
+    }
+
+    fn into_parts(self) -> (WorldLoan, FrozenLegacyRoots, SourceObservationsDetached) {
+        let Self {
+            owner,
+            roots,
+            observations,
+        } = self;
+        (
+            std::mem::ManuallyDrop::into_inner(owner),
+            std::mem::ManuallyDrop::into_inner(roots),
+            std::mem::ManuallyDrop::into_inner(observations),
+        )
+    }
+}
+
+struct RetainedPreparation<'heap> {
+    admission: std::mem::ManuallyDrop<Gen1Admission<'heap>>,
+    parts: RetainedBootstrapParts,
+}
+
+impl<'heap> RetainedPreparation<'heap> {
+    fn into_parts(
+        self,
+    ) -> (
+        Gen1Admission<'heap>,
+        WorldLoan,
+        FrozenLegacyRoots,
+        SourceObservationsDetached,
+    ) {
+        let Self { admission, parts } = self;
+        let (owner, roots, observations) = parts.into_parts();
+        (
+            std::mem::ManuallyDrop::into_inner(admission),
+            owner,
+            roots,
+            observations,
+        )
+    }
+}
+
+pub(crate) mod production_era;
+pub(crate) mod source_preparation;
+
+#[doc(hidden)]
+pub use crate::tagged::gc::mutator_registration::custody_brand::{
+    PublishedOwner, StopScope, StoppedInterval, UnenteredReservation, with_stop_scope,
+};
+#[doc(hidden)]
+pub use production_era::{ScopedEraError, ScopedEraFailure};
+#[doc(hidden)]
+pub use source_preparation::ClosedSourcePrepareFailure;
 
 impl PreparedHeapTransfer {
     /// # Safety
@@ -451,29 +589,45 @@ impl PreparedHeapTransfer {
     /// argument must return before the resulting transfer is used or sent:
     /// dropping that argument does not end its protected call-frame borrow.
     /// Return the prepared right out of the source loan scope first.
+    ///
+    /// Borrowed and raw store frames are excluded by that same contract. `Rc`
+    /// counts cannot discover them. Observation ownership is checked here from
+    /// the receipt the caller detached after its own frames returned. That
+    /// receipt stays in [`PendingHeapReturn`], never in the `Send` transfer.
+    ///
+    /// The admission, loan, census, and receipt are armed before any retention
+    /// or publication hook. A panic in that hook retains them. A typed refusal
+    /// returns them to the caller.
     #[doc(hidden)]
     pub unsafe fn prepare_detached<'heap>(
-        mut admission: Gen1Admission<'heap>,
+        admission: Gen1Admission<'heap>,
         owner: WorldLoan,
         roots: FrozenLegacyRoots,
+        observations: SourceObservationsDetached,
     ) -> Result<(PendingHeapReturn, Self), PrepareFailure<'heap>> {
+        let mut armed = RetainedPreparation {
+            admission: std::mem::ManuallyDrop::new(admission),
+            parts: RetainedBootstrapParts::new(owner, roots, observations),
+        };
         let validation = (|| {
-            let heap = admission.collector_mut().registration_heap_mut();
-            if heap.heap_identity() != owner.parallel_heap_identity()
-                || roots.heap_identity() != heap.heap_identity()
+            let heap = armed.admission.collector_mut().registration_heap_mut();
+            if heap.heap_identity() != armed.parts.owner.parallel_heap_identity()
+                || armed.parts.roots.heap_identity() != heap.heap_identity()
             {
                 return Err(TransferError::WrongHeap);
             }
-            if !owner.held_here() {
+            if !armed.parts.owner.held_here() {
                 return Err(TransferError::WrongThread);
             }
             if tagged_heap_is_installed() {
                 return Err(TransferError::InstalledTls);
             }
-            let root = owner.heap_root_designator();
+            let root = armed.parts.owner.heap_root_designator();
             if root.as_non_null().as_ptr() != std::ptr::from_mut(heap) {
                 return Err(TransferError::WrongRoot);
             }
+            heap.validate_source_observation_receipt(&armed.parts.observations)
+                .map_err(TransferError::Observations)?;
             let generation = NEXT_TRANSFER
                 .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
                     value.checked_add(1)
@@ -482,15 +636,19 @@ impl PreparedHeapTransfer {
             let generation = NonZeroU64::new(generation).ok_or(TransferError::Exhausted)?;
             let mut words = Vec::new();
             words
-                .try_reserve_exact(roots.words().len())
+                .try_reserve_exact(armed.parts.roots.words().len())
                 .map_err(|_| TransferError::Capacity)?;
             words.extend(
-                roots
+                armed
+                    .parts
+                    .roots
                     .words()
                     .iter()
                     .map(|value| OpaqueRootWord(value.bits())),
             );
-            let epoch = owner
+            let epoch = armed
+                .parts
+                .owner
                 .parallel_epoch_retention()
                 .map_err(|_| TransferError::Roots)?;
             let prepared = PreparedRootBatch::reserve_retained(heap, epoch, words.len())
@@ -498,8 +656,8 @@ impl PreparedHeapTransfer {
             // SAFETY: the consumed sole owner and the actual GEN1 admission
             // retain every original input. No collection or callback occurs
             // during publication.
-            let finalized =
-                unsafe { prepared.finalize(roots.words()) }.map_err(|_| TransferError::Roots)?;
+            let finalized = unsafe { prepared.finalize(armed.parts.roots.words()) }
+                .map_err(|_| TransferError::Roots)?;
             let publication = finalized
                 .publish_finalized_root_batch()
                 .map_err(|_| TransferError::Roots)?;
@@ -513,14 +671,17 @@ impl PreparedHeapTransfer {
         let (root, generation, publication, words) = match validation {
             Ok(value) => value,
             Err(reason) => {
+                let (admission, owner, roots, observations) = armed.into_parts();
                 return Err(PrepareFailure {
                     reason,
                     admission,
                     owner,
                     roots,
+                    observations: Some(observations),
                 });
             }
         };
+        let (admission, owner, roots, observations) = armed.into_parts();
         let identity = TransferIdentity {
             heap: admission.heap_identity(),
             generation,
@@ -537,6 +698,7 @@ impl PreparedHeapTransfer {
         drop(roots);
         let pending = PendingHeapReturn {
             control: Arc::clone(&control),
+            observations: Some(observations),
             local: PhantomData,
         };
         Ok((
@@ -563,6 +725,18 @@ impl PreparedHeapTransfer {
         }
     }
 
+    /// Test-only traversal of the real local collector boundary. No heap word
+    /// or collector capability is exposed to the boxed-source fixture.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn source_roundtrip_for_test(self) -> Result<Self, RetainedTransferFailure> {
+        self.with_collector(|admission| {
+            let identity = admission.heap_identity();
+            (admission.into_collector(), identity)
+        })
+        .map(|(transfer, _identity)| transfer)
+    }
+
     /// The actual local collector, not merely an arbitrary result, must come
     /// back. The higher-ranked bound excludes borrowed views. The completion
     /// bound excludes unrooted Lisp words, which have no borrow lifetime.
@@ -584,10 +758,18 @@ impl PreparedHeapTransfer {
             .expect("local retained transfer")
             .run_local(body);
         // `run_local`'s entire reference-bearing frame ended before cleanup.
-        let transfer = scope.into_transfer();
-        match result {
-            Ok(result) => Ok((transfer, result)),
-            Err(reason) => Err(transfer.refuse(reason)),
+        let (transfer, retired) = scope.into_transfer();
+        match (result, retired) {
+            (Ok(result), Ok(())) => {
+                match transfer
+                    .control
+                    .transition(TransferPhase::Local, TransferPhase::Prepared)
+                {
+                    Ok(()) => Ok((transfer, result)),
+                    Err(reason) => Err(transfer.refuse(reason)),
+                }
+            }
+            (Err(reason), _) | (Ok(_), Err(reason)) => Err(transfer.refuse(reason)),
         }
     }
 
@@ -628,8 +810,8 @@ impl PreparedHeapTransfer {
         if !tls_absent {
             return Err(TransferError::InstalledTls);
         }
-        self.control
-            .transition(TransferPhase::Local, TransferPhase::Prepared)?;
+        // The Local phase stays armed until the outer scope retires TLS and
+        // revalidates the observation owner after this frame returns.
         Ok(result)
     }
 
@@ -642,6 +824,11 @@ impl PreparedHeapTransfer {
             return Err(self.refuse(reason));
         }
         Ok(ReturnedHeapTransfer { transfer: self })
+    }
+
+    #[doc(hidden)]
+    pub fn is_prepared(&self) -> bool {
+        self.control.phase.load() == TransferPhase::Prepared
     }
 
     #[doc(hidden)]
@@ -736,6 +923,7 @@ static_assertions::assert_not_impl_any!(RestoreFailure: Send, Sync, Clone, Copy)
 #[doc(hidden)]
 pub struct RestoredHeapBacking {
     backing: Option<Backing>,
+    observations: Option<SourceObservationsDetached>,
     heap: HeapIdentity,
     control: Arc<ReturnControl>,
     local: PhantomData<Rc<()>>,
@@ -751,6 +939,32 @@ impl Drop for RestoredHeapBacking {
 }
 
 impl RestoredHeapBacking {
+    fn restore_observations(&mut self) -> Result<(), TransferError> {
+        let root = self
+            .backing
+            .as_ref()
+            .expect("retained source backing")
+            .owner
+            .heap_root_designator();
+        let receipt = self
+            .observations
+            .take()
+            .expect("affine source observation effect");
+        // SAFETY: `PendingHeapReturn` validated the original thread, the unique
+        // returned control, and the heap generation. Destination frames have
+        // ended. This object retains the original backing and there is no
+        // other loan.
+        let mut collector =
+            unsafe { QuiescentCollector::from_retained_root(&mut *root.as_non_null().as_ptr()) };
+        match collector.restore_source_observations(receipt) {
+            Ok(()) => Ok(()),
+            Err(failure) => {
+                self.observations = Some(failure.receipt);
+                Err(TransferError::Observations(failure.reason))
+            }
+        }
+    }
+
     /// # Safety
     /// Only the original consuming source-shell adapter may recover these
     /// parts. Restore its actual rooted frame before retiring publication.
@@ -783,6 +997,14 @@ impl RestoredHeapBacking {
             // preparation, and the publication lease has pinned them since.
             unsafe { TaggedValue::from_bits(word.0) }
         }));
+        // Finish allocation and decoding before restoring the source effect.
+        // The publication stays live across this whole transaction.
+        if let Err(reason) = self.restore_observations() {
+            return Err(SourceRecoveryFailure {
+                reason,
+                restored: self,
+            });
+        }
         let Backing {
             owner,
             publication,
@@ -802,11 +1024,7 @@ static_assertions::assert_not_impl_any!(RestoredHeapBacking: Send, Sync, Clone, 
 pub struct SourceRecoveryFailure {
     reason: TransferError,
     /// Owned so dropping the error still runs the backing's poison drop.
-    /// Callers observe [`Self::reason`] only.
-    #[expect(
-        dead_code,
-        reason = "ownership keeps the restored backing's poison drop; callers observe reason()"
-    )]
+    /// [`Self::into_restored`] is the only way to take it back.
     restored: RestoredHeapBacking,
 }
 
@@ -814,6 +1032,23 @@ impl SourceRecoveryFailure {
     #[doc(hidden)]
     pub fn reason(&self) -> TransferError {
         self.reason
+    }
+
+    #[doc(hidden)]
+    pub fn retains_backing(&self) -> bool {
+        self.restored.backing.is_some()
+    }
+
+    #[doc(hidden)]
+    pub fn retains_observations(&self) -> bool {
+        self.restored.observations.is_some()
+    }
+
+    /// Return the restored backing so the source can retry after the refusal
+    /// that still owns this effect. No public constructor mints a new one.
+    #[doc(hidden)]
+    pub fn into_restored(self) -> (TransferError, RestoredHeapBacking) {
+        (self.reason, self.restored)
     }
 }
 

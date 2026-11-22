@@ -1581,6 +1581,121 @@ fn literal_register_reuse_preserves_raw_unibyte_coordinates() {
 }
 
 #[test]
+fn literal_search_reads_both_gap_halves_without_moving_the_gap() {
+    crate::test_utils::init_test_tracing();
+    let saved = neovm_edit::buffer::shared::SavedPointBeforeCommand::new_editor_global();
+    let mut buf = Buffer::new(BufferId(1), Value::string("gap-search"), saved);
+    buf.insert_lisp_string(&LispString::from_utf8(&"a".repeat(100)));
+    buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(49));
+    buf.insert_lisp_string(&LispString::from_utf8("x"));
+    let gap = buf.gap_position_lisp();
+    assert_eq!(gap, 51);
+    buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::ZERO);
+    let mut regs = SearchRegisters::default();
+    let missing = super::search_forward_into(
+        &mut buf,
+        &LispString::from_utf8("zzz"),
+        None,
+        true,
+        false,
+        &mut regs,
+    )
+    .unwrap();
+    assert!(missing.is_none());
+    assert_eq!(buf.gap_position_lisp(), gap);
+    buf.goto_emacs_byte_pos(buf.total_emacs_byte_end_pos());
+    let missing_back = super::search_backward_into(
+        &mut buf,
+        &LispString::from_utf8("zzz"),
+        None,
+        true,
+        false,
+        &mut regs,
+    )
+    .unwrap();
+    assert!(missing_back.is_none());
+    assert_eq!(buf.gap_position_lisp(), gap);
+
+    let saved = neovm_edit::buffer::shared::SavedPointBeforeCommand::new_editor_global();
+    let mut buf = Buffer::new(BufferId(2), Value::string("gap-straddle"), saved);
+    buf.insert_lisp_string(&LispString::from_utf8("hello"));
+    buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(2));
+    buf.insert_lisp_string(&LispString::from_utf8("Q"));
+    buf.delete_emacs_byte_range(EmacsByteRange::new(
+        neovm_edit::buffer::EmacsBytePos::new(2),
+        neovm_edit::buffer::EmacsBytePos::new(3),
+    ));
+    let gap = buf.gap_position_lisp();
+    buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::ZERO);
+    let hit = super::search_forward_into(
+        &mut buf,
+        &LispString::from_utf8("el"),
+        None,
+        true,
+        false,
+        &mut regs,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(hit.get(), 3);
+    assert_eq!(buf.gap_position_lisp(), gap);
+    buf.goto_emacs_byte_pos(buf.total_emacs_byte_end_pos());
+    let back = super::search_backward_into(
+        &mut buf,
+        &LispString::from_utf8("el"),
+        None,
+        true,
+        false,
+        &mut regs,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(back.get(), 1);
+    assert_eq!(buf.gap_position_lisp(), gap);
+
+    // The crossing window is counted in characters, not bytes: one character
+    // of an "éé" pattern is two Emacs bytes, so a byte-counted window would
+    // slice the continuation byte and miss the match.
+    let saved = neovm_edit::buffer::shared::SavedPointBeforeCommand::new_editor_global();
+    let mut buf = Buffer::new(BufferId(3), Value::string("gap-straddle-multibyte"), saved);
+    buf.insert_lisp_string(&LispString::from_utf8("aééx"));
+    buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(3));
+    buf.insert_lisp_string(&LispString::from_utf8("Q"));
+    buf.delete_emacs_byte_range(EmacsByteRange::new(
+        neovm_edit::buffer::EmacsBytePos::new(3),
+        neovm_edit::buffer::EmacsBytePos::new(4),
+    ));
+    let gap = buf.gap_position_lisp();
+    assert_eq!(gap, 3);
+    buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::ZERO);
+    let hit = super::search_forward_into(
+        &mut buf,
+        &LispString::from_utf8("éé"),
+        None,
+        true,
+        false,
+        &mut regs,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(hit.get(), 5);
+    assert_eq!(buf.gap_position_lisp(), gap);
+    buf.goto_emacs_byte_pos(buf.total_emacs_byte_end_pos());
+    let back = super::search_backward_into(
+        &mut buf,
+        &LispString::from_utf8("éé"),
+        None,
+        true,
+        false,
+        &mut regs,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(back.get(), 1);
+    assert_eq!(buf.gap_position_lisp(), gap);
+}
+
+#[test]
 fn composition_match_length_preserves_native_regexp_extent() {
     crate::test_utils::init_test_tracing();
     let tail = " untouched界".repeat(8192);

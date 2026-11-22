@@ -103,13 +103,13 @@ static_assertions::assert_not_impl_any!(CacheScope: Send, Sync);
 impl CacheScope {
     #[doc(hidden)]
     pub fn enter() -> Self {
-        cache::clear();
+        cache::clear_with_serial_receipt().expect("serial jit grace");
         Self(std::marker::PhantomData)
     }
 }
 impl Drop for CacheScope {
     fn drop(&mut self) {
-        cache::clear();
+        cache::clear_with_serial_receipt().expect("serial jit grace");
     }
 }
 
@@ -259,7 +259,7 @@ fn opt_report_counts_normal_osr_refusal_and_transient_native_construction() {
     );
     let osr = cache::osr_leaf_ptr_for_test(&source, 1).unwrap();
     assert_eq!(unsafe { &*osr }.selected_tier(), SelectedTier::Opt);
-    cache::clear(); // Also count an OSR leaf no longer retained at exit.
+    cache::clear_with_serial_receipt().expect("serial jit grace"); // Also count an OSR leaf no longer retained at exit.
     let refused = lower_leaf_full_osr_with_opt(
         oversized.executable_ops(),
         &oversized.constants,

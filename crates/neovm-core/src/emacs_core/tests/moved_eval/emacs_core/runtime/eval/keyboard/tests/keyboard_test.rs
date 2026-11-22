@@ -1315,6 +1315,110 @@ fn prefix_arg_values() {
 }
 
 #[test]
+fn native_nonkey_quit_preserves_last_nonmenu_event_but_physical_input_updates_it() {
+    let named_quit = KeyEvent {
+        key: Key::Function("ns-power-off".into()),
+        modifiers: Modifiers::none(),
+    };
+    let chord = KeyEvent::char_with_mods(
+        'q',
+        Modifiers {
+            super_: true,
+            ..Modifiers::none()
+        },
+    );
+    for (name, input, expected_last, expected_command) in [
+        (
+            "native Quit",
+            InputEvent::NativeNonKey {
+                kind: NativeNonKeyKind::PowerOff,
+                emacs_frame_id: 0,
+            },
+            KeyEvent::named(NamedKey::F(6)),
+            named_quit.clone(),
+        ),
+        (
+            "same symbol from keyboard",
+            InputEvent::KeyPress {
+                key: named_quit.clone(),
+                emacs_frame_id: 0,
+            },
+            named_quit.clone(),
+            named_quit,
+        ),
+        (
+            "physical Super-Q",
+            InputEvent::KeyPress {
+                key: chord.clone(),
+                emacs_frame_id: 0,
+            },
+            chord.clone(),
+            chord,
+        ),
+    ] {
+        let mut eval = crate::test_utils::runtime_startup_context();
+        let buffer = eval
+            .buffer_manager_mut()
+            .create_buffer("native-quit-provenance");
+        let frame =
+            eval.frame_manager_mut()
+                .create_frame("native-quit-provenance", 800, 600, buffer);
+        assert!(eval.frame_manager_mut().select_frame(frame));
+        eval.set_variable("noninteractive", Value::NIL);
+        eval.command_loop_mut().recursive_depth = 1;
+        eval.command_loop_mut().running = true;
+        eval.eval_str(
+            r#"(progn
+              (make-non-key-event 'ns-power-off)
+              (defvar native-quit-observed nil)
+              (defun native-quit-probe ()
+                (interactive)
+                (setq native-quit-observed
+                      (list last-nonmenu-event last-command-event last-input-event))
+                (exit-recursive-edit))
+              (let ((map (make-sparse-keymap)))
+                (define-key map [ns-power-off] #'native-quit-probe)
+                (define-key map [?\s-q] #'native-quit-probe)
+                (global-set-key [f6] map)))"#,
+        )
+        .expect("install native/physical Quit probe");
+        let tx = HostInputPublisher::install(&mut eval);
+        tx.send(InputEvent::KeyPress {
+            key: KeyEvent::named(NamedKey::F(6)),
+            emacs_frame_id: 0,
+        })
+        .expect("queue live prefix sequence");
+        tx.send(input).expect("queue Quit event");
+        drop(tx);
+        eval.recursive_edit_inner().expect(name);
+        let observed = eval.eval_symbol("native-quit-observed").expect(name);
+        let values = neovm_value::value::list_to_vec(&observed).expect("command observation");
+        // F6 supplies a preexisting last-nonmenu-event during the SAME live
+        // read. GNU resets it at the start of a new sequence. Only actual
+        // NS_NONKEY_EVENT provenance suppresses the subsequent assignment
+        // (keyboard.c:4501-4505,11668-11673), not a symbol property or name.
+        assert_eq!(values[0], expected_last.to_emacs_event_value(), "{name}");
+        assert_eq!(values[1], expected_command.to_emacs_event_value(), "{name}");
+        assert_eq!(values[2], expected_command.to_emacs_event_value(), "{name}");
+    }
+}
+
+#[test]
+fn native_nonkey_read_event_returns_the_plain_symbol() {
+    let mut eval = crate::test_utils::runtime_startup_context();
+    let tx = HostInputPublisher::install(&mut eval);
+    tx.send(InputEvent::NativeNonKey {
+        kind: NativeNonKeyKind::PowerOff,
+        emacs_frame_id: 0,
+    })
+    .expect("queue native non-key event");
+    let event = eval
+        .eval_str("(read-event)")
+        .expect("read native non-key event");
+    assert_eq!(event.as_bare_symbol_name(), Some("ns-power-off"));
+}
+
+#[test]
 fn command_loop_enqueue_read() {
     crate::test_utils::init_test_tracing();
     let _ctx = crate::test_utils::new_context();

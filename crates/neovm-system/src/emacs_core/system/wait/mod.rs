@@ -1473,6 +1473,15 @@ impl WaitContextExt for neovm_eval::emacs_core::eval::Context {
         &mut self,
         request: &WaitRequest,
     ) -> Result<WaitServiceOutcome, Flow> {
+        // GNU's MINIMUM pass is a loop-top status_notify (:5554) and a
+        // non-running wait_proc drain (:5561-5600), then a zero-timeout
+        // select whose `nfds == 0` arm notifies again (:5854) before the
+        // `wait < TIMEOUT` break (:5866). The two record+notify calls below
+        // are that pair: a child that exits after writing its last bytes is
+        // notified inside the same wait instead of at the caller's next
+        // observation.
+        let notified = self
+            .record_and_notify_status_changes(request, WaitStatusNotifySite::after_the_block())?;
         let activity = if self.processes().has_wait_notification_backend() {
             let events = self
                 .processes()
@@ -1482,7 +1491,12 @@ impl WaitContextExt for neovm_eval::emacs_core::eval::Context {
         } else {
             WaitBlockActivity::poll()
         };
-        self.service_wait_request_block_activity(request, activity, true)
+        let mut serviced = self.service_wait_request_block_activity(request, activity, true)?;
+        serviced.absorb_process_activity(notified);
+        let late = self
+            .record_and_notify_status_changes(request, WaitStatusNotifySite::after_the_block())?;
+        serviced.absorb_process_activity(late);
+        Ok(serviced)
     }
 
     fn complete_wait_after_required_minimum_drain(
@@ -1592,11 +1606,25 @@ impl WaitContextExt for neovm_eval::emacs_core::eval::Context {
         // invariant -- deleting it from both of GNU's wait sites leaves GNU
         // correct, because `status_notify`'s body is guarded per process at
         // :7892.
-        let _stamped = self.processes_mut().record_child_status_changes(site);
         // GNU `status_notify (NULL, wait_proc)` (:5554, :5854), over the
         // processes whose own tick moved -- from ANY of GNU's eight sites, not
         // just the walk above.
-        self.notify_processes_with_unnotified_status_change(target)
+        //
+        // A delivery that races the walk sets the latch again after its poll.
+        // GNU's wait does not return in that state: its handler records the
+        // child before the wait's `status_notify` reads, and the read loop
+        // rechecks child status before returning. Re-walk and notify while the
+        // latch is set (bounded) so the sentinel runs inside the same wait,
+        // which is ledger 180's sentinel-in-the-let contract.
+        let mut outcome = ProcessOutputServiceOutcome::default();
+        for _ in 0..4 {
+            let _stamped = self.processes_mut().record_child_status_changes(site);
+            outcome.absorb(self.notify_processes_with_unnotified_status_change(target)?);
+            if !crate::emacs_core::os_signal::child_signal_seen() {
+                break;
+            }
+        }
+        Ok(outcome)
     }
 
     fn wait_for_tls_handshake(&mut self, id: ProcessId) -> Result<(), Flow> {
@@ -1736,9 +1764,25 @@ impl WaitContextExt for neovm_eval::emacs_core::eval::Context {
             if let Some(completion) =
                 self.complete_wait_after_required_minimum_drain(&request, outcome)?
             {
+                // GNU's wait rechecks child status before it returns (the
+                // loop-top status_notify at :5554 and the break's at :5854),
+                // so the sentinel runs inside the wait that saw the exit.
+                // Do it unconditionally: a status change recorded by the
+                // walk just above must not be left to the caller's next
+                // observation.
+                let late = self.record_and_notify_status_changes(
+                    &request,
+                    WaitStatusNotifySite::after_the_block(),
+                )?;
+                outcome.absorb_process_activity(late);
                 return Ok(completion);
             }
             if self.wait_request_target_terminated(&request) {
+                let late = self.record_and_notify_status_changes(
+                    &request,
+                    WaitStatusNotifySite::after_the_block(),
+                )?;
+                outcome.absorb_process_activity(late);
                 return Ok(WaitCompletion::TargetProcessTerminated);
             }
         }

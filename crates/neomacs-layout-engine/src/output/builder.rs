@@ -319,6 +319,7 @@ impl DisplayOutputBuilder {
             self.cursor_visual_column_context(),
             self.window_state.current_window_text_pixel_bounds(),
             char_width,
+            self.window_state.current_text_geometry_units(),
         )
     }
 
@@ -337,6 +338,7 @@ impl DisplayOutputBuilder {
             self.cursor_visual_column_context(),
             self.window_state.current_window_text_pixel_bounds(),
             char_width,
+            self.window_state.current_text_geometry_units(),
         )
     }
 

@@ -2581,6 +2581,13 @@ pub fn builtin_set_buffer_redisplay(
     // even when it is undisplayed. This is SOME, not global ALL.
     if let Some(buffer) = eval.edit.buffers.current_buffer_id() {
         eval.gnu_mark_buffer_mode_line(buffer);
+        // GNU xdisp.c:929 also sets
+        // `current_buffer->prevent_redisplay_optimizations_p`, which makes
+        // `current_matrix_up_to_date_p` false for every window showing the
+        // buffer (src/xdisp.c:20557-20586).  Raise it as the buffer's own
+        // witness: the body-redisplay revision is reserved for an explicit
+        // body invalidation and must not relayout text here.
+        eval.gnu_mark_buffer_prevent_redisplay_optimizations(buffer);
     }
     eval.invalidate_redisplay();
     Ok(Value::NIL)
@@ -6513,6 +6520,15 @@ pub(crate) fn world_state_placeholder() -> Box<dyn std::any::Any> {
 pub(crate) fn swap_world_state(slot: &mut dyn std::any::Any) {
     let slot = slot.downcast_mut::<i64>().expect("carried World state");
     LOSSAGE_SIZE.with(|size| std::mem::swap(&mut *size.borrow_mut(), slot));
+}
+
+/// Hold the lossage slot borrowed so a source-carrier swap refuses.
+#[cfg(test)]
+pub(crate) fn with_source_lossage_reader_for_test<R>(body: impl FnOnce() -> R) -> R {
+    LOSSAGE_SIZE.with(|slot| {
+        let _reader = slot.borrow();
+        body()
+    })
 }
 
 // ---------------------------------------------------------------------------

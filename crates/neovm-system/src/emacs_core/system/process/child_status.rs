@@ -137,24 +137,38 @@
 //! scheduled")` -- which is exactly what ledger 180 measured when it declined
 //! the synchronous sweep, and for the same reason.
 //!
-//! # What that costs, stated rather than buried
+//! # The observation reaps, the wait notifies
 //!
-//! GNU's handler *reaps* the child (`child_status_changed` -> `waitpid`), so
-//! GNU answers these with nobody having waited at all, and this port does not:
+//! GNU's handler reaps the child (`child_status_changed` -> `waitpid`) and
+//! records `raw_status` with `raw_status_new`; the sentinel still runs from
+//! `status_notify` inside a wait, so the record can be visible before the
+//! notification. This port has no SIGCHLD handler, so the same per-child probe
+//! runs at an observation: `ProcessManager::observe` calls
+//! `reap_observed_child` for the four asynchronously-recorded sites, and
+//! `process-attributes` and `signal-process` do the same after their OS-pid
+//! lookup. The probe is exactly `handle_child_signal`'s body for one child
+//! (`poll_child_status_change` -> `waitpid (WNOHANG | WUNTRACED |
+//! WCONTINUED)`), and it records only: `status_notify` remains the only
+//! notifier, inside a wait.
+//!
+//! That closes ledger 180 §9.1-9.2 and ledger 184's rows 2 and 3, which used
+//! to be pinned divergences:
 //!
 //! ```text
-//!                                          GNU 31.0.90   here
-//!   (process-status p) after a pure spin       exit       run
-//!   (process-attributes pid) 'state            nil        "Z"
-//!   (signal-process p 0)                       -1         0
+//!                                          GNU 31.1   here
+//!   (process-status p) after a pure spin       exit      exit
+//!   (process-attributes pid) 'state            nil       nil
+//!   (signal-process p 0)                       -1        -1
 //! ```
 //!
-//! Those are ledger 180 §9.1-9.2 and ledger 184's rows 2 and 3, and they are
-//! PINNED divergences again.  The only safe point that closes them is GNU's
-//! own -- the handler -- and a Rust port cannot walk this table there.  Ledger
-//! 187 §8.1(b) asked for "a safe point that is not a Lisp observation"; the
-//! answer is that GNU has none either.  GNU's safe point for child status IS a
-//! Lisp observation: the wait.
+//! The `maybe_quit` failure above is why the notification stays in the wait:
+//! the observation may make a status visible earlier than a wait would, which
+//! is what GNU's handler does, but it must not also run the sentinel, or
+//! `magit-run-post-commit-hook` loses its `let`. The deterministic gate is
+//! `a_status_change_recorded_during_a_wait_is_notified_before_it_returns`: a
+//! child that exits inside one long wait must be notified before the wait
+//! returns. A count-based await-loop probe was withdrawn because GNU itself
+//! ran the sentinel after the `let` 20/20 with a forced post-wait busy-wait.
 //!
 //! # The pipe is not a child, and cannot be swept
 //!
@@ -286,31 +300,20 @@ pub(crate) enum Recording {
         by: &'static str,
     },
     /// GNU reaches this site with the record already made because
-    /// `handle_child_signal` ran ASYNCHRONOUSLY.  This port makes it
-    /// asynchronously too -- from the SIGCHLD trigger -- but only inside
-    /// `wait_reading_process_output`, so a program that never waits reads the
-    /// stale status here, which is the pinned divergence the module docs give
-    /// the three rows for.
+    /// `handle_child_signal` ran ASYNCHRONOUSLY. This port has no handler, so
+    /// the observation performs GNU's per-child probe
+    /// (`reap_observed_child`) before the read: one child,
+    /// `waitpid (WNOHANG | WUNTRACED | WCONTINUED)`, the record and no
+    /// notification.
     ///
-    /// **Nothing sweeps HERE, and that is the whole point.**  Sweeping at the
-    /// observation -- running GNU's `handle_child_signal` body on demand --
-    /// gives the right answer to the question and the wrong answer to the
-    /// program: GNU's record is late by the time a SIGCHLD takes to be
-    /// delivered and handled, and a `waitpid (WNOHANG)` at the observation is
-    /// ground truth.  Ledger 180 measured what that costs -- `(while
-    /// (process-live-p p) (accept-process-output p 1))` losing its sentinel
-    /// 4/60, and `treemacs-magit`'s
-    /// `extending_a_real_commit_schedules_the_same_project_refresh` failing
-    /// DETERMINISTICALLY, because magit's post-commit hook is keyed on
-    /// `last-command` and the sentinel then runs after the `let` that bound
-    /// it has unwound -- and withdrew the wiring for it.
-    ///
-    /// Ledger 193's trigger was declared to avoid that by being LATE rather
-    /// than synchronous, and the reasoning was wrong: lateness is not the
-    /// property that matters.  What matters is whether the record is published
-    /// with its sentinel in the same call.  A record made at `maybe_quit` is
-    /// late AND unnotified, so it reproduced 180's failure exactly -- see the
-    /// module docs for the 294/294 against 261/300.
+    /// The notification is deliberately NOT here. Ledger 180 measured what
+    /// happens when an early record also notifies from a non-wait site:
+    /// `(while (process-live-p p) (accept-process-output p 1))` lost its
+    /// sentinel 4/60, and `treemacs-magit`'s
+    /// `extending_a_real_commit_schedules_the_same_project_refresh` failed
+    /// DETERMINISTICALLY because magit's post-commit hook is keyed on
+    /// `last-command` and the sentinel ran after the `let` that bound it had
+    /// unwound. `status_notify` inside a wait remains the only notifier.
     AsynchronouslyRecorded {
         /// GNU's line that makes the record for this site.
         #[allow(dead_code)] // a citation: read only by the table test in process/tests
@@ -361,17 +364,17 @@ impl UpdateStatusSite {
     pub(crate) fn recording(self) -> Recording {
         match self {
             // The four Lisp entry points a program can reach with no wait
-            // having run at all.  These were the divergence until ledger 193.
+            // having run at all.  The observation reaps for these.
             Self::ProcessStatus
             | Self::ProcessExitStatus
             | Self::SendProcess
             | Self::ProcessSendEof => Recording::AsynchronouslyRecorded {
                 by: "handle_child_signal, src/process.c:7734-7763",
-                here: "os_signal::HandledSignal::Sigchld -> drain_and_notify_child_statuses \
-                       -> record_child_status_changes, inside \
-                       wait_reading_process_output (GNU src/process.c:5554, :5854)",
+                here: "ProcessManager::observe -> reap_observed_child -> \
+                       check_child_status_change: the handler's one-child probe \
+                       and record, with no notification",
             },
-            // The four sites that must not, or need not, sweep here.
+            // The four sites that do not sweep here.
             Self::DeleteProcess => Recording::AlreadyRecorded {
                 by: "src/process.c:1123 discards the record before this line reads it",
             },
@@ -397,7 +400,7 @@ impl UpdateStatusSite {
 /// parent module and to this child of it, so no `builtins` entry point can
 /// call either.  The two methods below are their only public spelling, and
 /// an `ObservedProcess` has private fields and exactly two constructors:
-/// [`ProcessManager::observe`], which sweeps for every site whose
+/// [`ProcessManager::observe`], which reaps and records for every site whose
 /// [`Recording`] says so, and
 /// [`ProcessManager::read_status_without_recording`], which takes an
 /// enumerated [`UnrecordedStatusRead`].

@@ -1335,6 +1335,10 @@ impl SymbolRegistry {
 
     fn alloc_symbol(&mut self, name: NameId, canonical: bool, name_value: NewSymbolName) -> SymId {
         let id = SymId(self.symbols.len() as u32);
+        // GNU `syms_of_alloc` `symbols-consed` (`src/alloc.c:7429`) counts
+        // every symbol object, interned or uninterned; this is the one place
+        // a symbol id is handed out.
+        crate::value::add_wrapping(crate::tagged::gc::MemoryUseCountSlot::Symbols, 1);
         self.symbols.push(SymbolSlot {
             name,
             canonical,
@@ -1897,6 +1901,13 @@ pub fn restore_runtime_interner(
     // restore, including one which made partial progress before an error.
     symbol_registry_epoch().fetch_add(1, Ordering::AcqRel);
     restored
+}
+
+/// Number of symbol ids allocated so far. Neomacs never frees a symbol id, so
+/// this is also the live symbol count reported by `(garbage-collect)`.
+#[doc(hidden)]
+pub fn symbol_span_total() -> usize {
+    global_symbol_registry().read().symbol_span()
 }
 
 /// Intern a string using the global runtime symbol registry.

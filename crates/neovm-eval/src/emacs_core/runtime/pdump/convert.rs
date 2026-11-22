@@ -3957,6 +3957,7 @@ fn dump_buffer(encoder: &mut DumpEncoder, buf: &Buffer) -> DumpBuffer {
         save_modified_tick: Some(buf.save_modified_tick()),
         autosave_modified_tick: Some(buf.autosave_modified_tick()),
         auto_save_failure_time: buf.auto_save_failure_time(),
+        long_line_optimizations_p: buf.long_line_optimizations_p(),
         modtime_sec,
         modtime_nsec,
         modtime_size: buf.modtime_size(),
@@ -6196,6 +6197,7 @@ fn load_buffer(
         accessible_end: dump_text_position_anchor(zv_char, db.zv),
         autosave_modified_tick,
         auto_save_failure_time: db.auto_save_failure_time,
+        long_line_optimizations_p: db.long_line_optimizations_p,
         modtime: neovm_edit::buffer::VisitedFileModtime::from_dump_halves(
             db.modtime_sec,
             db.modtime_nsec,
@@ -7025,6 +7027,12 @@ pub(crate) fn load_charset_registry(decoder: &mut LoadDecoder, dcr: &DumpCharset
             .iso2022_members
             .as_ref()
             .map(|names| names.iter().map(load_sym_id).collect()),
+        // The dump does not carry the in-session Viso epoch. A reload starts
+        // at 0 with an empty bind map, so the first use keeps the dumped
+        // safe vector.
+        iso2022_epoch: 0,
+        iso2022_coding_epochs: Vec::new(),
+        iso2022_coding_members: Vec::new(),
         next_id: dcr.next_id,
         // The binary dump does not carry GNU's `Vcharset_non_preferred_head`
         // boundary; a freshly loaded session reproduces GNU's dumped default

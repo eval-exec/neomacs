@@ -1,10 +1,11 @@
-//! Dormant InlineSerialMain driver for the five clipboard and primary stubs.
+//! Lowering driver for the five clipboard and primary stubs.
 //!
-//! Hosted activation remains refused. Each public stub calls one of these
-//! functions with [`SelectionInstaller::InlineSerialMain`] and unwraps
-//! [`SelectionStep::Done`]. The arm calls the existing direct body. There is
-//! no second installer, route branch, TLS read, or env test in this module.
-//! The direct bodies keep the cache they already had.
+//! The owner's installed [`SelectionPhase`](crate::emacs_core::eval::activation::SelectionPhase)
+//! selects the arm. `Uninstalled` is the serial direct call; `Local` is the
+//! synchronous local owner turn, which is the same direct body; `Routed` is
+//! the C4b worker boundary and is not installed by this slice. Each public
+//! stub unwraps [`SelectionStep::Done`]. There is no TLS read or env test in
+//! this module. The direct bodies keep the cache they already had.
 
 use neovm_value::error::EvalResult;
 use neovm_value::value::Value;
@@ -15,11 +16,10 @@ use super::{
     direct_neomacs_primary_selection_set,
 };
 
-/// Serial installer. Owned drivers are not constructible in this slice.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum SelectionInstaller {
-    InlineSerialMain,
-}
+#[path = "selection_installer.rs"]
+mod selection_installer;
+
+pub(super) use selection_installer::SelectionInstaller;
 
 /// Serial step. Suspension is uninhabited: the only arm is the direct result.
 #[derive(Debug)]
@@ -35,6 +35,36 @@ impl<T> SelectionStep<T> {
     }
 }
 
+/// Which lowering the owner installed. The installed phase is the single
+/// source of truth, so the phase and the lowering cannot disagree.
+#[inline]
+pub(super) fn installed(ctx: &crate::emacs_core::eval::Context) -> SelectionInstaller {
+    use crate::emacs_core::eval::activation::SelectionPhase;
+    match ctx.selection_phase() {
+        SelectionPhase::Uninstalled => SelectionInstaller::InlineSerialMain,
+        SelectionPhase::Local => SelectionInstaller::OwnedLocalMain,
+        // Only a routed owner reaches these. The routed arm is the C4b worker
+        // boundary; until it lands, the driver refuses cold rather than
+        // running a host call on the wrong thread.
+        SelectionPhase::Routed | SelectionPhase::AwaitingRollback => {
+            SelectionInstaller::OwnedRoutedWorker
+        }
+    }
+}
+
+/// The routed arm is installed by the C4b worker boundary, not by cut-4a.
+/// Reaching it means a routed owner ran the direct path; that is a service
+/// bug, and the existing service code aborts on the same class of state.
+#[cold]
+#[inline(never)]
+fn routed_worker_boundary_not_installed() -> ! {
+    tracing::error!(
+        target: "neovm::eval::selection",
+        "routed selection arm reached before the C4b worker boundary was installed"
+    );
+    std::process::abort()
+}
+
 #[inline(always)]
 pub(super) fn clipboard_set(
     installer: SelectionInstaller,
@@ -42,9 +72,12 @@ pub(super) fn clipboard_set(
     args: Vec<Value>,
 ) -> SelectionStep<EvalResult> {
     match installer {
-        SelectionInstaller::InlineSerialMain => {
+        // The serial and local lowerings both call the direct body: the local
+        // owner turn is synchronous, so suspension is Infallible (Lead1).
+        SelectionInstaller::InlineSerialMain | SelectionInstaller::OwnedLocalMain => {
             SelectionStep::Done(direct_neomacs_clipboard_set(ctx, args))
         }
+        SelectionInstaller::OwnedRoutedWorker => routed_worker_boundary_not_installed(),
     }
 }
 
@@ -55,9 +88,12 @@ pub(super) fn clipboard_get(
     args: Vec<Value>,
 ) -> SelectionStep<EvalResult> {
     match installer {
-        SelectionInstaller::InlineSerialMain => {
+        // The serial and local lowerings both call the direct body: the local
+        // owner turn is synchronous, so suspension is Infallible (Lead1).
+        SelectionInstaller::InlineSerialMain | SelectionInstaller::OwnedLocalMain => {
             SelectionStep::Done(direct_neomacs_clipboard_get(ctx, args))
         }
+        SelectionInstaller::OwnedRoutedWorker => routed_worker_boundary_not_installed(),
     }
 }
 
@@ -68,9 +104,12 @@ pub(super) fn primary_selection_set(
     args: Vec<Value>,
 ) -> SelectionStep<EvalResult> {
     match installer {
-        SelectionInstaller::InlineSerialMain => {
+        // The serial and local lowerings both call the direct body: the local
+        // owner turn is synchronous, so suspension is Infallible (Lead1).
+        SelectionInstaller::InlineSerialMain | SelectionInstaller::OwnedLocalMain => {
             SelectionStep::Done(direct_neomacs_primary_selection_set(ctx, args))
         }
+        SelectionInstaller::OwnedRoutedWorker => routed_worker_boundary_not_installed(),
     }
 }
 
@@ -81,9 +120,12 @@ pub(super) fn primary_selection_get(
     args: Vec<Value>,
 ) -> SelectionStep<EvalResult> {
     match installer {
-        SelectionInstaller::InlineSerialMain => {
+        // The serial and local lowerings both call the direct body: the local
+        // owner turn is synchronous, so suspension is Infallible (Lead1).
+        SelectionInstaller::InlineSerialMain | SelectionInstaller::OwnedLocalMain => {
             SelectionStep::Done(direct_neomacs_primary_selection_get(ctx, args))
         }
+        SelectionInstaller::OwnedRoutedWorker => routed_worker_boundary_not_installed(),
     }
 }
 
@@ -94,9 +136,12 @@ pub(super) fn primary_selection_owner(
     args: Vec<Value>,
 ) -> SelectionStep<EvalResult> {
     match installer {
-        SelectionInstaller::InlineSerialMain => {
+        // The serial and local lowerings both call the direct body: the local
+        // owner turn is synchronous, so suspension is Infallible (Lead1).
+        SelectionInstaller::InlineSerialMain | SelectionInstaller::OwnedLocalMain => {
             SelectionStep::Done(direct_neomacs_primary_selection_owner(ctx, args))
         }
+        SelectionInstaller::OwnedRoutedWorker => routed_worker_boundary_not_installed(),
     }
 }
 
@@ -116,7 +161,7 @@ pub(super) const SERIAL_CLIPBOARD_ENTRIES: &[&str] = &[
 #[cfg(test)]
 mod tests {
     use super::{
-        SERIAL_CLIPBOARD_ENTRIES, SelectionInstaller, clipboard_get, clipboard_set,
+        SERIAL_CLIPBOARD_ENTRIES, SelectionInstaller, clipboard_get, clipboard_set, installed,
         primary_selection_get, primary_selection_owner, primary_selection_set,
     };
     use crate::emacs_core::eval::Context;
@@ -138,7 +183,27 @@ mod tests {
     }
 
     #[test]
-    fn serial_stubs_call_only_the_inline_arm() {
+    fn installer_selector_is_derived_from_the_owner_phase() {
+        use crate::emacs_core::eval::activation::ActivationAuthority;
+
+        let fresh = Context::new(crate::test_utils::unit_runtime());
+        assert_eq!(installed(&fresh), SelectionInstaller::InlineSerialMain);
+
+        let mut local = Context::new(crate::test_utils::unit_runtime());
+        local
+            .activate_selection_local(&ActivationAuthority::mint_for_test())
+            .unwrap();
+        assert_eq!(installed(&local), SelectionInstaller::OwnedLocalMain);
+
+        let mut routed = Context::new(crate::test_utils::unit_runtime());
+        routed
+            .activate_selection_routed(&ActivationAuthority::mint_for_test())
+            .unwrap();
+        assert_eq!(installed(&routed), SelectionInstaller::OwnedRoutedWorker);
+    }
+
+    #[test]
+    fn stubs_lower_through_the_installed_selector() {
         let stubs = include_str!("stubs.rs");
         let step = include_str!("selection_step.rs");
         let driver = step.split("#[cfg(test)]").next().expect("driver");
@@ -146,15 +211,9 @@ mod tests {
             !driver.contains("std::env")
                 && !driver.contains("NEOVM_THREADS")
                 && !driver.contains("thread_local")
-                && !driver.contains(".with(")
-                && !driver.contains("OwnedRouted")
-                && !driver.contains("OwnedLocal"),
-            "the step driver adds no route, TLS read, or env test"
+                && !driver.contains(".with("),
+            "the step driver adds no TLS read or env test"
         );
-        let arms = driver
-            .matches("SelectionInstaller::InlineSerialMain =>")
-            .count();
-        assert_eq!(arms, SERIAL_CLIPBOARD_ENTRIES.len());
         for name in SERIAL_CLIPBOARD_ENTRIES {
             let marker = format!("pub fn {name}(");
             let start = stubs.find(&marker).expect(name);
@@ -164,11 +223,12 @@ mod tests {
                 .expect("direct body follows the stub");
             let stub = &rest[..marker.len() + end];
             assert!(
-                stub.contains("SelectionInstaller::InlineSerialMain")
+                stub.contains("selection_step::installed(ctx)")
                     && stub.contains(".into_direct()")
                     && !stub.contains(".with(")
-                    && !stub.contains("display_host"),
-                "{name} must be the inline step, not a second body"
+                    && !stub.contains("display_host")
+                    && !stub.contains("SelectionInstaller::"),
+                "{name} must read the installed lowering, not a constant or a second body"
             );
         }
     }
@@ -264,9 +324,14 @@ mod tests {
             let rest = &driver[start..];
             let close = rest.find("\n}").expect("function end");
             let function = &rest[..=close + 1];
-            assert_eq!(function.matches("=>").count(), 1, "{signature}");
+            // Two arms: serial|local lowers to the direct call, routed aborts
+            // cold until the C4b worker boundary installs it.
+            assert_eq!(function.matches("=>").count(), 2, "{signature}");
             assert!(
-                function.contains(call) && !function.contains("if "),
+                function.contains(call)
+                    && function
+                        .contains("OwnedRoutedWorker => routed_worker_boundary_not_installed()")
+                    && !function.contains("if "),
                 "{signature} must lower to {call}"
             );
         }
@@ -282,9 +347,10 @@ mod tests {
             let direct = &direct_rest[..=direct_close + 1];
             assert!(
                 stub.contains(".into_direct()")
-                    && stub.contains("SelectionInstaller::InlineSerialMain")
+                    && stub.contains("selection_step::installed(ctx)")
+                    && !stub.contains("SelectionInstaller::")
                     && !stub.contains("expect_args"),
-                "{name} lowers through the inline step"
+                "{name} lowers through the installed step"
             );
             assert!(
                 direct.contains("expect_args") && !direct.contains("SelectionInstaller"),
@@ -395,6 +461,262 @@ mod tests {
         assert_same_batch(direct_clear, via_clear);
         assert_same_batch(direct_owner, via_owner);
 
+        neovm_value::tagged::gc::clear_tagged_heap_root_if_installed(clear_heap);
+    }
+
+    /// One selection program. The installed serial arm stays the direct call.
+    /// This lowering is the other one, and only the harness below constructs it.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum SelectionOp {
+        ClipboardSet,
+        ClipboardGet,
+        PrimarySet,
+        PrimaryGet,
+        PrimaryOwner,
+    }
+
+    enum OwnedLowering {
+        NeedOwner {
+            op: SelectionOp,
+            args: Vec<Value>,
+        },
+        NativeWait {
+            op: SelectionOp,
+            pending: EvalResult,
+        },
+        Done(EvalResult),
+    }
+
+    fn owned_begin(op: SelectionOp, args: Vec<Value>) -> OwnedLowering {
+        OwnedLowering::NeedOwner { op, args }
+    }
+
+    /// NeedOwner handoff. `pending` is the harness owner's result.
+    /// Replacing `result` here is the red mutation for this lowering.
+    fn owned_accept_owner_result(op: SelectionOp, result: EvalResult) -> OwnedLowering {
+        OwnedLowering::NativeWait {
+            op,
+            pending: result,
+        }
+    }
+
+    fn owned_resume(step: OwnedLowering) -> OwnedLowering {
+        match step {
+            OwnedLowering::NativeWait { pending, .. } => OwnedLowering::Done(pending),
+            other => other,
+        }
+    }
+
+    fn perform_on_host(op: SelectionOp, ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+        match op {
+            SelectionOp::ClipboardSet => super::super::direct_neomacs_clipboard_set(ctx, args),
+            SelectionOp::ClipboardGet => super::super::direct_neomacs_clipboard_get(ctx, args),
+            SelectionOp::PrimarySet => {
+                super::super::direct_neomacs_primary_selection_set(ctx, args)
+            }
+            SelectionOp::PrimaryGet => {
+                super::super::direct_neomacs_primary_selection_get(ctx, args)
+            }
+            SelectionOp::PrimaryOwner => {
+                super::super::direct_neomacs_primary_selection_owner(ctx, args)
+            }
+        }
+    }
+
+    fn serial_lower(op: SelectionOp, ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+        match op {
+            SelectionOp::ClipboardSet => {
+                clipboard_set(SelectionInstaller::InlineSerialMain, ctx, args).into_direct()
+            }
+            SelectionOp::ClipboardGet => {
+                clipboard_get(SelectionInstaller::InlineSerialMain, ctx, args).into_direct()
+            }
+            SelectionOp::PrimarySet => {
+                primary_selection_set(SelectionInstaller::InlineSerialMain, ctx, args).into_direct()
+            }
+            SelectionOp::PrimaryGet => {
+                primary_selection_get(SelectionInstaller::InlineSerialMain, ctx, args).into_direct()
+            }
+            SelectionOp::PrimaryOwner => {
+                primary_selection_owner(SelectionInstaller::InlineSerialMain, ctx, args)
+                    .into_direct()
+            }
+        }
+    }
+
+    fn drive_owned(op: SelectionOp, ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+        let (op, args) = match owned_begin(op, args) {
+            OwnedLowering::NeedOwner { op, args } => (op, args),
+            OwnedLowering::NativeWait { .. } | OwnedLowering::Done(_) => {
+                panic!("owned program begins at NeedOwner");
+            }
+        };
+        let result = perform_on_host(op, ctx, args);
+        let pending = match owned_accept_owner_result(op, result) {
+            OwnedLowering::NativeWait {
+                op: waited,
+                pending,
+            } => {
+                assert_eq!(waited, op);
+                pending
+            }
+            OwnedLowering::NeedOwner { .. } | OwnedLowering::Done(_) => {
+                panic!("NeedOwner handoff suspends in NativeWait");
+            }
+        };
+        match owned_resume(OwnedLowering::NativeWait { op, pending }) {
+            OwnedLowering::Done(done) => done,
+            OwnedLowering::NeedOwner { .. } | OwnedLowering::NativeWait { .. } => {
+                panic!("NativeWait resumes to Done");
+            }
+        }
+    }
+
+    fn prime_clipboard(ctx: &mut Context) {
+        match super::super::direct_neomacs_clipboard_set(ctx, vec![Value::symbol("clip")]) {
+            Ok(_) => {}
+            Err(_) => panic!("prime clipboard"),
+        }
+    }
+
+    fn prime_primary(ctx: &mut Context) {
+        match super::super::direct_neomacs_primary_selection_set(ctx, vec![Value::symbol("prim")]) {
+            Ok(_) => {}
+            Err(_) => panic!("prime primary"),
+        }
+    }
+
+    fn run_owned_against_serial(op: SelectionOp, args: Vec<Value>, prime: fn(&mut Context)) {
+        let mut serial_ctx = Context::new(crate::test_utils::unit_runtime());
+        let mut owned_ctx = Context::new(crate::test_utils::unit_runtime());
+        super::super::reset_stubs_thread_locals();
+        prime(&mut serial_ctx);
+        let serial = serial_lower(op, &mut serial_ctx, args.clone());
+        super::super::reset_stubs_thread_locals();
+        prime(&mut owned_ctx);
+        let owned = drive_owned(op, &mut owned_ctx, args);
+        match &serial {
+            Ok(value) => assert_ne!(value, &Value::T, "{op:?} serial result must not be t"),
+            Err(_) => panic!("{op:?} serial lowering returns a value"),
+        }
+        assert_same_batch(serial, owned);
+    }
+
+    fn prime_nothing(_ctx: &mut Context) {}
+
+    #[derive(Default)]
+    struct RecordingClipboardHost {
+        clipboard: Option<String>,
+        primary: Option<String>,
+    }
+
+    impl crate::emacs_core::eval::protocol::DisplayHost for RecordingClipboardHost {
+        fn realize_gui_frame(
+            &mut self,
+            _request: crate::emacs_core::eval::GuiFrameHostRequest,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn resize_gui_frame(
+            &mut self,
+            _request: crate::emacs_core::eval::GuiFrameHostRequest,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn set_clipboard_text(&mut self, text: Option<&str>) -> Result<(), String> {
+            self.clipboard = text.map(str::to_owned);
+            Ok(())
+        }
+
+        fn clipboard_text(&mut self) -> Result<Option<String>, String> {
+            Ok(self.clipboard.clone())
+        }
+
+        fn set_primary_selection_text(&mut self, text: Option<&str>) -> Result<(), String> {
+            self.primary = text.map(str::to_owned);
+            Ok(())
+        }
+
+        fn primary_selection_text(&mut self) -> Result<Option<String>, String> {
+            Ok(self.primary.clone())
+        }
+
+        fn primary_selection_owner(
+            &mut self,
+        ) -> Result<neomacs_display_protocol::SelectionOwner, String> {
+            Ok(if self.primary.is_some() {
+                neomacs_display_protocol::SelectionOwner::ThisProcess
+            } else {
+                neomacs_display_protocol::SelectionOwner::None
+            })
+        }
+    }
+
+    /// The flip's production wiring: a Green hosted Context activates Local
+    /// from `set_display_host`, and the stubs then reach the attached host.
+    /// Removing the `activate_host_session` call from `set_display_host` is
+    /// the mutation that makes this test red.
+    #[test]
+    fn set_display_host_activates_the_local_arm_and_reaches_the_host() {
+        use crate::emacs_core::eval::activation::SelectionPhase;
+        use crate::emacs_core::eval::protocol::DisplayHost;
+
+        // Green hosted Context: set_display_host is the flip's production
+        // entry point. Removing its activate_host_session call makes this red.
+        let mut ctx = Context::new(crate::test_utils::unit_runtime());
+        ctx.set_green_threading_mode_at_construction_for_test();
+        assert_eq!(ctx.selection_phase(), SelectionPhase::Uninstalled);
+        ctx.set_display_host(Box::new(RecordingClipboardHost::default()));
+        assert_eq!(ctx.selection_phase(), SelectionPhase::Local);
+        assert_eq!(installed(&ctx), SelectionInstaller::OwnedLocalMain);
+
+        let set =
+            super::super::builtin_neomacs_clipboard_set(&mut ctx, vec![Value::string("wire")]);
+        let got = super::super::builtin_neomacs_clipboard_get(&mut ctx, vec![]);
+        assert!(set.is_ok(), "the installed arm performs the clipboard set");
+        match &got {
+            Ok(value) => assert_eq!(value, &Value::string("wire"), "the host holds the text"),
+            Err(_) => panic!("the installed arm reads the attached host"),
+        }
+
+        // The same calls on a serial Context with an identical host return the
+        // same values; the direct bodies are the serial lowering.
+        let mut serial = Context::new(crate::test_utils::unit_runtime());
+        serial.set_display_host(Box::new(RecordingClipboardHost::default()));
+        let serial_set =
+            super::super::builtin_neomacs_clipboard_set(&mut serial, vec![Value::string("wire")]);
+        let serial_get = super::super::builtin_neomacs_clipboard_get(&mut serial, vec![]);
+        assert_same_batch(set, serial_set);
+        assert_same_batch(got, serial_get);
+
+        // Default mode must not activate. The one-authority-stays-untaken
+        // assertion lives in activation_owner::tests::
+        // default_mode_hosted_stays_uninstalled, where the eval-scoped take
+        // accessor is nameable.
+        let mut default_mode = Context::new(crate::test_utils::unit_runtime());
+        default_mode.set_display_host(Box::new(RecordingClipboardHost::default()));
+        assert_eq!(default_mode.selection_phase(), SelectionPhase::Uninstalled);
+    }
+
+    #[test]
+    fn owned_lowering_matches_the_serial_lowering() {
+        let heap = neovm_value::tagged::gc::TestHeap::new();
+        let clear_heap = heap.root();
+        run_owned_against_serial(
+            SelectionOp::ClipboardSet,
+            vec![Value::symbol("clip")],
+            prime_nothing,
+        );
+        run_owned_against_serial(SelectionOp::ClipboardGet, vec![], prime_clipboard);
+        run_owned_against_serial(
+            SelectionOp::PrimarySet,
+            vec![Value::symbol("prim")],
+            prime_nothing,
+        );
+        run_owned_against_serial(SelectionOp::PrimaryGet, vec![], prime_primary);
+        run_owned_against_serial(SelectionOp::PrimaryOwner, vec![], prime_primary);
         neovm_value::tagged::gc::clear_tagged_heap_root_if_installed(clear_heap);
     }
 }

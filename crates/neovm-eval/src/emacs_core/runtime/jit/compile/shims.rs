@@ -402,6 +402,51 @@ pub(crate) fn stash_pending_flow(flow: Flow) {
 // (abort at the `extern "C"` boundary).
 // ---------------------------------------------------------------------------
 
+/// One word of native-extent state in [`CURRENT_LEAF_BASES`].
+///
+/// `0` is outside native code. `1` ([`Self::LIVE_NO_BASES`]) means native
+/// code is on the stack and no framed snapshot is published. Any other value
+/// is an aligned pointer to a live [`JitLeafBases`]. The tag uses the
+/// alignment niche, so the cell stays one `usize`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(transparent)]
+pub(crate) struct NativeExtent(usize);
+
+impl NativeExtent {
+    pub(crate) const OUTSIDE: Self = Self(0);
+    /// Native code is live and no framed bases are published.
+    pub(crate) const LIVE_NO_BASES: Self = Self(1);
+
+    /// A framed snapshot. The pointer is non-null and aligned, so it is
+    /// distinct from [`Self::OUTSIDE`] and [`Self::LIVE_NO_BASES`].
+    pub(crate) fn framed(ptr: std::ptr::NonNull<JitLeafBases>) -> Self {
+        let addr = ptr.as_ptr() as usize;
+        debug_assert_ne!(addr, 0);
+        debug_assert_eq!(addr & 1, 0);
+        Self(addr)
+    }
+
+    pub(crate) fn is_outside(self) -> bool {
+        self.0 == 0
+    }
+
+    pub(crate) fn is_inside(self) -> bool {
+        self.0 != 0
+    }
+
+    /// The framed snapshot, or `None` for outside and for the live tag.
+    /// Those two states are not pointers and must not be dereferenced.
+    pub(crate) fn bases(self) -> Option<std::ptr::NonNull<JitLeafBases>> {
+        if self.0 & 1 == 0 && self.0 != 0 {
+            // SAFETY: `framed` stores only a non-null aligned `JitLeafBases`
+            // address. `0` and `1` are excluded above.
+            Some(unsafe { std::ptr::NonNull::new_unchecked(self.0 as *mut JitLeafBases) })
+        } else {
+            None
+        }
+    }
+}
+
 std::thread_local! {
     /// Message of a panic contained at a shim boundary, pending
     /// materialization into a `Flow` by [`take_pending_flow`]. A Rust
@@ -429,21 +474,24 @@ std::thread_local! {
     /// names the innermost leaf). Read only by the contained-panic healing
     /// points; `None` outside any native extent.
     ///
-    /// A POINTER into `invoke_native`'s stack frame, not the value: the
-    /// snapshot is ~100 bytes, and value-swapping it through the Cell twice
-    /// per native call was 42% of a recursion benchmark's CPU once the spec
-    /// fast path made per-call costs the bottleneck. SAFETY (pointee
-    /// liveness): the pointer is published immediately before the native
-    /// entry call and restored to the outer value immediately after, so it
-    /// only ever names a frame that is live for that whole window; the only
-    /// readers (contain_jit_shim_panic, heal_shim_panic_residue_before_match)
-    /// run inside shims during that window, on the same single Lisp thread.
-    /// Shim panics are contained INSIDE the shim (the leaf exits via its
-    /// STATUS_SIGNAL path and `invoke_native` continues), and a re-raised
-    /// panic aborts at the extern "C" boundary — no path unwinds through
-    /// `invoke_native` leaving a stale pointer published.
-    pub(crate) static CURRENT_LEAF_BASES: std::cell::Cell<Option<std::ptr::NonNull<JitLeafBases>>> =
-        const { std::cell::Cell::new(None) };
+    /// One word. Null is outside native code. `1` (`LIVE_NO_BASES`) means
+    /// native code is live and no framed snapshot is published (the
+    /// outermost `run_armed_leaf` mark, and a null-vmctx framed call). Any
+    /// other value is an aligned pointer to a `JitLeafBases` in
+    /// `invoke_native_frame`'s stack. The cell stays one `usize`: the
+    /// framed pointer uses the alignment niche, so the tag does not grow it.
+    ///
+    /// SAFETY (pointee liveness): a framed pointer is published before the
+    /// native entry call and restored by a Drop guard when
+    /// `invoke_native_frame` returns, including on unwind, so it only names
+    /// a frame that is still live. The cold tail is inside that window.
+    /// Readers that need a snapshot match [`NativeExtent::bases`] and do
+    /// not dereference the tag. A nested framed call replaces this word
+    /// and its own guard restores it. `run_armed_leaf` publishes the tag
+    /// only when the word is outside, so a raw callee does not hide the
+    /// enclosing framed pointer.
+    pub(crate) static CURRENT_LEAF_BASES: std::cell::Cell<NativeExtent> =
+        const { std::cell::Cell::new(NativeExtent::OUTSIDE) };
 
     /// Scratch-GC-root depth a contained panic left dead pushes above (the
     /// panicked extent's skipped pops — including the shim body's own).
@@ -478,6 +526,11 @@ impl JitLeafBases {
         self.snap.scratch_gc_roots_len()
     }
 }
+
+const _: () = {
+    assert!(std::mem::size_of::<NativeExtent>() == std::mem::size_of::<usize>());
+    assert!(std::mem::align_of::<JitLeafBases>() >= 2);
+};
 
 /// Whether a shim panic was contained and its residue not yet healed/taken.
 pub(crate) fn shim_panic_pending() -> bool {
@@ -523,11 +576,14 @@ pub(crate) fn contain_jit_shim_panic(
         return Err(payload);
     }
     // Arm the root sweep for the leaf exit: the panicked extent's skipped
-    // pops all sit at or above the innermost leaf's entry depth. (No bases
-    // means no native extent — direct-call tests; nothing to sweep.)
-    if let Some(bases_ptr) = CURRENT_LEAF_BASES.with(|b| b.get()) {
-        // SAFETY: published for the dynamic extent of the innermost native
-        // call, whose `invoke_native` frame owns the pointee (thread_local doc).
+    // pops all sit at or above the innermost leaf's entry depth. Outside
+    // and the live tag have no framed pointer, so there is no entry floor
+    // to sweep against. That is the same skip an outermost raw call had
+    // when the cell was empty.
+    if let Some(bases_ptr) = CURRENT_LEAF_BASES.with(|b| b.get().bases()) {
+        // SAFETY: `bases()` is `None` for outside and for the live tag. A
+        // `Some` pointer is published for the dynamic extent of the innermost
+        // `invoke_native_frame`, whose frame owns the pointee.
         let bases = unsafe { *bases_ptr.as_ptr() };
         PENDING_ROOT_SWEEP_FLOOR.with(|f| {
             let floor = f.get().map_or(bases.roots(), |cur| cur.min(bases.roots()));
@@ -554,12 +610,12 @@ pub(crate) fn contain_jit_shim_panic(
 /// dispatch block's live roots are on top (see the floor doc).
 #[cold]
 pub(crate) fn heal_shim_panic_residue_before_match(ctx: &mut Context, ours: usize) {
-    let Some(bases_ptr) = CURRENT_LEAF_BASES.with(|b| b.get()) else {
+    let Some(bases_ptr) = CURRENT_LEAF_BASES.with(|b| b.get().bases()) else {
         return;
     };
-    // SAFETY: published for the dynamic extent of the innermost native call,
-    // whose `invoke_native` frame owns the pointee (thread_local doc); the
-    // match shim runs inside that extent.
+    // SAFETY: as `contain_jit_shim_panic` — only a framed pointer, still owned
+    // by the innermost `invoke_native_frame`. The live tag is not a pointer.
+    // The match shim runs inside that extent.
     let bases = unsafe { *bases_ptr.as_ptr() };
     ctx.restore_jit_shim_boundary(&bases.snap, bases.snap.condition_len() + ours);
 }
@@ -1753,7 +1809,7 @@ pub(crate) use super::sqrt_binding::neovm_jit_sqrt_binding_valid;
 pub(crate) fn reset_carrier_tls() {
     PENDING_FLOW.with(|slot| *slot.borrow_mut() = None);
     PENDING_SHIM_PANIC.with(|slot| *slot.borrow_mut() = None);
-    CURRENT_LEAF_BASES.with(|slot| slot.set(None));
+    CURRENT_LEAF_BASES.with(|slot| slot.set(NativeExtent::OUTSIDE));
     PENDING_ROOT_SWEEP_FLOOR.with(|slot| slot.set(None));
 }
 
@@ -1762,7 +1818,7 @@ pub(crate) fn reset_carrier_tls() {
 pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
     neovm_value::tls_fingerprint::mix(
         h,
-        CURRENT_LEAF_BASES.with(|slot| slot.get().is_some() as u64),
+        CURRENT_LEAF_BASES.with(|slot| u64::from(slot.get().is_inside())),
     );
     neovm_value::tls_fingerprint::mix(h, PENDING_FLOW.with(|slot| slot.borrow().is_some() as u64));
     neovm_value::tls_fingerprint::mix(

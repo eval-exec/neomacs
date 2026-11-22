@@ -6290,6 +6290,150 @@ fn clear_current_message_runs_echo_area_clear_hook_once_when_message_present() {
 }
 
 #[test]
+fn noop_echo_clear_callback_keeps_redisplay_generation() {
+    crate::test_utils::init_test_tracing();
+    for callback_result in ["nil", "'dont-clear-message"] {
+        let mut ev = crate::test_utils::new_context();
+        ev.eval_str(&format!(
+            "(setq inhibit-message nil
+                   echo-clear-callback-calls 0
+                   clear-message-function
+                   (lambda ()
+                     (setq echo-clear-callback-calls (1+ echo-clear-callback-calls))
+                     {callback_result}))"
+        ))
+        .expect("install a no-op clear callback");
+        assert_eq!(ev.current_message_text(), None);
+        let before = ev.redisplay_generation();
+
+        // GNU clear_message (xdisp.c:13635-13661) still calls the callback
+        // without an echo message. A no-op callback is not a body mutation.
+        for _ in 0..5 {
+            ev.clear_current_message_for_keyboard_input();
+        }
+
+        assert_eq!(
+            ev.eval_str("echo-clear-callback-calls")
+                .expect("clear callback count"),
+            Value::fixnum(5),
+            "the {callback_result} callback must still run for every input"
+        );
+        assert_eq!(ev.current_message_text(), None);
+        assert_eq!(
+            ev.redisplay_generation(),
+            before,
+            "the {callback_result} callback must not invalidate unchanged body rows"
+        );
+    }
+}
+
+#[test]
+fn preserving_echo_clear_callback_keeps_message() {
+    let mut ev = crate::test_utils::new_context();
+    ev.eval_str("(setq clear-message-function (lambda () 'dont-clear-message))")
+        .expect("install a preserving callback");
+    ev.set_current_message(Some(neovm_value::heap_types::LispString::from_utf8(
+        "keep this message",
+    )));
+    let before = ev.redisplay_generation();
+    ev.clear_current_message_for_keyboard_input();
+    assert_eq!(
+        ev.current_message_text().as_deref(),
+        Some("keep this message")
+    );
+    assert_eq!(ev.redisplay_generation(), before);
+}
+
+#[test]
+fn echo_clear_keeps_message_and_callback_mutations_invalidating() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = crate::test_utils::new_context();
+    ev.eval_str(
+        "(setq inhibit-message nil
+               echo-clear-callback-calls 0
+               clear-message-function
+               (lambda ()
+                 (setq echo-clear-callback-calls (1+ echo-clear-callback-calls))
+                 nil))",
+    )
+    .expect("install a clear callback");
+    ev.set_current_message(Some(neovm_value::heap_types::LispString::from_utf8(
+        "message to clear",
+    )));
+    let before = ev.redisplay_generation();
+    ev.clear_current_message_for_keyboard_input();
+    assert_eq!(ev.current_message_text(), None);
+    assert!(
+        ev.redisplay_generation() > before,
+        "removing a real echo message must still request redisplay"
+    );
+    assert_eq!(
+        ev.eval_str("echo-clear-callback-calls")
+            .expect("real-message callback count"),
+        Value::fixnum(1)
+    );
+
+    // Returning dont-clear-message must not hide a callback's display-slot
+    // mutation. Its setter owns the invalidation independently of echo state.
+    ev.eval_str(
+        "(setq tab-width 8
+               clear-message-function
+               (lambda ()
+                 (setq echo-clear-callback-calls (1+ echo-clear-callback-calls))
+                 (setq tab-width 4)
+                 'dont-clear-message))",
+    )
+    .expect("install a display-variable-mutating callback");
+    let before = ev.redisplay_generation();
+    ev.clear_current_message_for_keyboard_input();
+    assert!(
+        ev.redisplay_generation() > before,
+        "the callback's tab-width mutation must still invalidate geometry"
+    );
+    assert_eq!(
+        ev.eval_str("tab-width")
+            .expect("callback changed tab-width"),
+        Value::fixnum(4)
+    );
+    assert_eq!(
+        ev.eval_str("echo-clear-callback-calls")
+            .expect("display-variable callback count"),
+        Value::fixnum(2)
+    );
+
+    ev.eval_str(
+        r#"(progn
+             (insert "x")
+             (setq echo-clear-callback-overlay (make-overlay 1 2)
+                   clear-message-function
+                   (lambda ()
+                     (setq echo-clear-callback-calls (1+ echo-clear-callback-calls))
+                     (overlay-put echo-clear-callback-overlay 'after-string "suffix")
+                     nil)))"#,
+    )
+    .expect("install an overlay-mutating callback");
+    let buffer = ev.edit.buffers.current_buffer_id().expect("current buffer");
+    let before = ev
+        .redisplay_buffer_signature(buffer)
+        .expect("buffer redisplay signature");
+    ev.clear_current_message_for_keyboard_input();
+    let after = ev
+        .redisplay_buffer_signature(buffer)
+        .expect("buffer redisplay signature after callback");
+    assert_ne!(
+        before.layout_overlay_modified_tick_for_test(),
+        after.layout_overlay_modified_tick_for_test(),
+        "the callback's overlay mutation must still invalidate body rows"
+    );
+    assert_eq!(
+        ev.eval_str("echo-clear-callback-calls")
+            .expect("overlay callback count"),
+        Value::fixnum(3)
+    );
+    assert_eq!(ev.current_message_text(), None);
+}
+
+#[test]
 fn update_active_region_selection_after_command_calls_gnu_owned_selection_surface() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
@@ -22851,13 +22995,16 @@ fn gc_threshold_adapts_after_collection() {
 }
 
 #[test]
-fn gc_threshold_grows_with_live_heap() {
+fn gcpace_zero_percentage_keeps_byte_budget_on_large_live_heap() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
     // Retain ~200k conses (~3.2 MB of cons cells alone) so the live heap far
     // exceeds the default 800 KB byte budget, then collect so `live_bytes` is
     // recomputed exactly at the sweep and the threshold re-synced from it.
-    ev.eval_str_each("(setq gc-live-growth-anchor (make-list 200000 0))");
+    ev.eval_str_each(
+        "(progn (setq gc-cons-threshold 800000 gc-cons-percentage 0.0)
+                (setq gc-live-growth-anchor (make-list 200000 0)))",
+    );
     ev.gc_collect();
     let retained_bytes = 200_000 * 2 * std::mem::size_of::<usize>();
     assert!(
@@ -22865,13 +23012,9 @@ fn gc_threshold_grows_with_live_heap() {
         "live heap should include the retained structure, got {}",
         ev.tagged_heap().live_bytes()
     );
-    // The live-proportional trigger requires allocating at least half the live
-    // heap before the next cycle (the elisp defaults stay floors below it).
-    assert!(
-        ev.tagged_heap().gc_threshold() >= retained_bytes / 2,
-        "threshold should grow with the live heap, got {}",
-        ev.tagged_heap().gc_threshold()
-    );
+    // GNU alloc.c consing_threshold: a zero percentage leaves only the Lisp
+    // byte budget. The old assertion encoded Neo's non-GNU live*50% floor.
+    assert_eq!(ev.tagged_heap().gc_threshold(), 800_000);
 }
 
 #[test]
@@ -29964,5 +30107,184 @@ fn kill_emacs_nested_published_request_survives_outer_unwind() {
     assert_eq!(
         eval.obarray().symbol_value_copied("shutdown-nested-count"),
         Some(Value::fixnum(2))
+    );
+}
+
+struct QuitConfirmationRecordingHost {
+    values: Rc<RefCell<Vec<bool>>>,
+}
+
+impl DisplayHost for QuitConfirmationRecordingHost {
+    fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn resize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn set_ns_confirm_quit(&mut self, enabled: bool) {
+        self.values.borrow_mut().push(enabled);
+    }
+}
+
+fn attach_quit_confirmation_host(eval: &mut Context) -> Rc<RefCell<Vec<bool>>> {
+    let values = Rc::new(RefCell::new(Vec::new()));
+    eval.set_display_host(Box::new(QuitConfirmationRecordingHost {
+        values: Rc::clone(&values),
+    }));
+    values
+}
+
+#[test]
+fn ns_confirm_quit_host_attachment_publishes_current_value() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::test_utils::new_context();
+    eval.eval_str("(setq ns-confirm-quit 'confirm)")
+        .expect("configure before a native host exists");
+    let first_host = attach_quit_confirmation_host(&mut eval);
+    assert_eq!(&*first_host.borrow(), &[true]);
+    eval.eval_str("(setq ns-confirm-quit nil)")
+        .expect("disable confirmation");
+    let second_host = attach_quit_confirmation_host(&mut eval);
+    assert_eq!(&*second_host.borrow(), &[false]);
+}
+
+#[test]
+fn ns_confirm_quit_completed_setq_publishes_lisp_truthiness() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::test_utils::new_context();
+    eval.eval_str("(setq ns-confirm-quit nil)").unwrap();
+    let values = attach_quit_confirmation_host(&mut eval);
+    assert_eq!(&*values.borrow(), &[false]);
+    values.borrow_mut().clear();
+    eval.eval_str("(setq ns-confirm-quit 0)")
+        .expect("every non-nil Lisp value enables GNU's confirmation");
+    assert_eq!(&*values.borrow(), &[true]);
+    eval.eval_str("(setq ns-confirm-quit nil)").unwrap();
+    assert_eq!(&*values.borrow(), &[true, false]);
+}
+
+#[test]
+fn ns_confirm_quit_nested_let_restores_host_projection() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::test_utils::new_context();
+    eval.eval_str("(defvar ns-confirm-quit nil)").unwrap();
+    let values = attach_quit_confirmation_host(&mut eval);
+    assert_eq!(&*values.borrow(), &[false]);
+    values.borrow_mut().clear();
+    let symbol = intern("ns-confirm-quit");
+    assert!(eval.runtime_binding_has_projection(symbol));
+    assert!(
+        eval.obarray()
+            .get_by_id(symbol)
+            .expect("seeded NS variable")
+            .flags()
+            .runtime_projected(),
+        "the plain bind/unbind tiers must not bypass native publication"
+    );
+    let result = eval
+        .eval_str(
+            "(progn
+               (let ((ns-confirm-quit 'confirm))
+                 (let ((ns-confirm-quit nil)) ns-confirm-quit)
+                 ns-confirm-quit)
+               ns-confirm-quit)",
+        )
+        .expect("nested dynamic bindings");
+    assert!(result.is_nil());
+    assert_eq!(&*values.borrow(), &[true, false, true, false]);
+    values.borrow_mut().clear();
+    let result = eval
+        .eval_str(
+            "(condition-case nil
+                 (let ((ns-confirm-quit t)) (signal 'error '(\"unwind confirmation\")))
+               (error ns-confirm-quit))",
+        )
+        .expect("signaled unwind restores the native setting");
+    assert!(result.is_nil());
+    assert_eq!(&*values.borrow(), &[true, false]);
+}
+
+#[test]
+fn ns_confirm_quit_forwarded_restoration_publishes_once_per_store() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::test_utils::new_context();
+    eval.eval_str("(defvar ns-confirm-quit nil)").unwrap();
+    let symbol = intern("ns-confirm-quit");
+    // GNU's NS DEFVAR_LISP is object-forwarded. Exercise its restore path
+    // even on Linux, where the test-created variable would otherwise be plain.
+    eval.obarray_view_mut()
+        .install_objfwd(symbol, neovm_value::forward::alloc_objfwd(Value::NIL));
+    let values = attach_quit_confirmation_host(&mut eval);
+    let cases: &[(&str, &[bool])] = &[
+        (
+            "(progn (let ((ns-confirm-quit t))
+                      (let ((ns-confirm-quit nil)) ns-confirm-quit))
+                    ns-confirm-quit)",
+            &[true, false, true, false],
+        ),
+        (
+            r#"(condition-case nil
+                   (let ((ns-confirm-quit t)) (signal 'error '("unwind confirmation")))
+                 (error ns-confirm-quit))"#,
+            &[true, false],
+        ),
+        (
+            "(progn (let ((ns-confirm-quit t))
+                      (setq ns-confirm-quit t) (setq ns-confirm-quit t))
+                    ns-confirm-quit)",
+            // Equal-valued completed stores still publish: remove the extra
+            // restore boundary rather than deduplicating boolean values.
+            &[true, true, true, false],
+        ),
+        (
+            "(let ((watcher (lambda (&rest _args) nil)))
+               (add-variable-watcher 'ns-confirm-quit watcher)
+               (let ((ns-confirm-quit t)) ns-confirm-quit)
+               (remove-variable-watcher 'ns-confirm-quit watcher)
+               ns-confirm-quit)",
+            &[true, false],
+        ),
+    ];
+    for (form, expected) in cases {
+        values.borrow_mut().clear();
+        assert!(
+            eval.eval_str(form)
+                .expect("restore the forwarded variable")
+                .is_nil()
+        );
+        assert_eq!(values.borrow().as_slice(), *expected, "{form}");
+    }
+}
+
+#[test]
+fn ns_confirm_quit_rejected_watcher_write_keeps_host_projection() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::test_utils::new_context();
+    // This bare Context has primitives, not GNU's defun macro or error helper.
+    eval.eval_str(
+        "(progn
+           (setq ns-confirm-quit nil)
+           (fset 'ns-confirm-quit-reject-write
+                 (lambda (_symbol _new operation _where)
+                   (if (eq operation 'set) (signal 'error '(\"reject native setting\")))))
+           (add-variable-watcher 'ns-confirm-quit #'ns-confirm-quit-reject-write))",
+    )
+    .expect("install a watcher that rejects the write");
+    let values = attach_quit_confirmation_host(&mut eval);
+    assert_eq!(&*values.borrow(), &[false]);
+    values.borrow_mut().clear();
+    let result = eval
+        .eval_str(
+            "(condition-case nil (setq ns-confirm-quit t)
+               (error 'rejected))",
+        )
+        .expect("the rejected write is handled");
+    assert_eq!(result, Value::symbol("rejected"));
+    assert!(eval.eval_str("ns-confirm-quit").unwrap().is_nil());
+    assert!(
+        values.borrow().is_empty(),
+        "a rejected pre-store watcher must not publish the proposed value"
     );
 }

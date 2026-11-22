@@ -274,6 +274,44 @@ impl EditHost for Context {
         hook_runtime::hook_value_by_id(self, sym).is_some_and(|v| v.is_truthy())
     }
 
+    fn long_line_partial_width_truncation(&self, buffer_id: BufferId) -> bool {
+        // GNU `Fget_buffer_window (current_buffer, nil)` with nil ALL-FRAMES
+        // (src/window.c:3314-3326): the selected frame and no others, the
+        // selected window preferred, then that frame's leaves in order.
+        let Some(frame) = self.frame_manager().selected_frame() else {
+            return false;
+        };
+        let selected = frame
+            .find_window(frame.selected_window)
+            .filter(|window| window.buffer_id() == Some(buffer_id));
+        let window = selected.or_else(|| {
+            frame.window_list().into_iter().find_map(|id| {
+                frame
+                    .find_window(id)
+                    .filter(|window| window.buffer_id() == Some(buffer_id))
+            })
+        });
+        let Some(window) = window else {
+            return false;
+        };
+        let char_width = frame.char_width.max(1.0);
+        let window_cols = window.total_columns(char_width);
+        let root_cols = frame.root_window().total_columns(char_width);
+        let current_buffer = self.edit.buffers.get(buffer_id);
+        let truncate_partial_width =
+            neovm_edit::emacs_core::indent::dynamic_buffer_or_global_symbol_value_fixed(
+                self.variables(),
+                &[],
+                current_buffer,
+                &neovm_value::intern::WellKnown::TruncatePartialWidthWindows,
+            );
+        neovm_value::display_vocab::partial_width_truncates(
+            window_cols,
+            root_cols,
+            truncate_partial_width,
+        )
+    }
+
     fn lisp_string<'a>(&'a self, value: Value) -> Option<&'a LispString> {
         Context::lisp_string(self, value)
     }

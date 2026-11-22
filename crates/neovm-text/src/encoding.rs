@@ -4394,9 +4394,10 @@ fn encode_via_iso2022(
     let reset_cntl = spec.flags.contains(IsoFlag::AsciiAtCntl);
     let use_roman = spec.flags.contains(IsoFlag::UseRoman);
     let ascii = intern("ascii");
-    // FULL_SUPPORT coding systems store `:charset-list` as the symbol
-    // `iso-2022`; substitute the full ISO-2022 charset candidate set.
-    let full_support = charset_list.len() == 1 && resolve_sym(charset_list[0]) == "iso-2022";
+    let designate_at_bol = spec.flags.contains(IsoFlag::DesignateAtBol);
+    // The symbol `iso-2022` and a charset of that name share one symbol id.
+    // `full_support` is the original argument (`coding.c:11298-11299`).
+    let full_support = spec.full_support;
     // A define-time snapshot keeps the members that were safe then. A cleared
     // final drops out of the encode set and stays decodable. No snapshot
     // (preloaded 7bit, a hand-built spec) still walks the live candidate set.
@@ -4434,24 +4435,8 @@ fn encode_via_iso2022(
         }
     };
 
-    for c in coding_source_codepoints(s) {
-        if c < 0x20 || c == 0x7F {
-            if c == 0x0A {
-                if reset_eol {
-                    reset(&mut out, &mut desig, &mut gl);
-                }
-            } else if reset_cntl {
-                reset(&mut out, &mut desig, &mut gl);
-            }
-            out.push(c as u8);
-            continue;
-        }
-        if neovm_value::emacs_char::char_byte8_p(c) {
-            out.push(neovm_value::emacs_char::char_to_byte8(c));
-            continue;
-        }
-        // Select the charset (and its position code, dimension, set size).
-        let (charset, code, dim, chars_96) = if c < 0x80 {
+    let classify = |c: u32| -> (SymId, i64, i64, bool) {
+        if c < 0x80 {
             // The use-roman flag (japanese-iso-7bit-1978-irv / old-jis) maps
             // ASCII through latin-jisx0201 — the G0 initial designation — so the
             // byte is emitted with no re-designation. GNU keeps the position
@@ -4490,7 +4475,65 @@ fn encode_via_iso2022(
                 }
             }
             found.unwrap_or((ascii, 0x20, 1, false)) // unencodable -> space
-        };
+        }
+    };
+
+    let chars: Vec<u32> = coding_source_codepoints(s).collect();
+    let mut at_bol = true;
+    let mut index = 0;
+    while index < chars.len() {
+        let c = chars[index];
+        index += 1;
+        if at_bol && designate_at_bol {
+            // coding.c:4312-4360 writes designations before the line. The
+            // define-time safe byte is 0, so only register 0 is filled, and
+            // only the first graphic on the line is designated there. GNU's
+            // on-path crashes when charset annotations are present, so a
+            // multi-register lookahead split is not attested.
+            if let Some(graphic) = chars[index - 1..]
+                .iter()
+                .copied()
+                .take_while(|ch| *ch != 0x0A)
+                .find(|ch| {
+                    !(*ch < 0x20 || *ch == 0x7F || neovm_value::emacs_char::char_byte8_p(*ch))
+                })
+            {
+                let (charset, _, _, chars_96) = classify(graphic);
+                let reg = desig
+                    .iter()
+                    .position(|&d| d == Some(charset))
+                    .unwrap_or_else(|| spec.encode_register(chars_96));
+                if reg == 0 && desig[0] != Some(charset) {
+                    let escape_desig = if full_support {
+                        charset_iso2022_designation_physical(charset)
+                    } else {
+                        charset_iso2022_designation(charset)
+                    };
+                    if let Some((fc, d, c96)) = escape_desig {
+                        out.extend(iso2022_designation_escape(0, fc, d, c96, long_form));
+                    }
+                    desig[0] = Some(charset);
+                }
+            }
+            at_bol = false;
+        }
+        if c < 0x20 || c == 0x7F {
+            if c == 0x0A {
+                if reset_eol {
+                    reset(&mut out, &mut desig, &mut gl);
+                }
+                at_bol = true;
+            } else if reset_cntl {
+                reset(&mut out, &mut desig, &mut gl);
+            }
+            out.push(c as u8);
+            continue;
+        }
+        if neovm_value::emacs_char::char_byte8_p(c) {
+            out.push(neovm_value::emacs_char::char_to_byte8(c));
+            continue;
+        }
+        let (charset, code, dim, chars_96) = classify(c);
         // Register the charset is designated to: an existing designation, else
         // the reg-usage rule for its set size (GNU `setup_iso_safe_charsets`).
         let reg = desig
@@ -4597,9 +4640,9 @@ fn decode_via_iso2022(
         }
         // Full support is membership of `Viso_2022_charset_list`, which a
         // later redefinition does not revoke. The current ISO final is not
-        // that membership.
-        let full = charset_list.len() == 1 && resolve_sym(charset_list[0]) == "iso-2022";
-        if full {
+        // that membership. The flag, not the symbol name, decides it: a
+        // charset can be named `iso-2022`.
+        if spec.full_support {
             if !charset_iso2022_member(cs) {
                 return false;
             }
@@ -4649,13 +4692,16 @@ fn decode_via_iso2022(
             }
         }
     }
-    // coding.c:3721-3725. Level 4 is not represented. Without it, an 8-bit
-    // coding system accepts only a GR lead; a 7-bit system also accepts GL.
-    fn iso2022_shift_lead_ok(lead: u8, seven: bool) -> bool {
+    // coding.c:3721-3725. Seven-bit accepts GL and GR. 8-bit level 4 accepts
+    // only GL. The default 8-bit level (4A) accepts only GR.
+    fn iso2022_shift_lead_ok(lead: u8, seven: bool, level4: bool) -> bool {
         if lead < 0x20 || (lead >= 0x80 && lead < 0xA0) {
             return false;
         }
-        seven || lead >= 0x80
+        if seven {
+            return true;
+        }
+        if level4 { lead < 0x80 } else { lead >= 0x80 }
     }
     fn iso2022_shift_charset(
         unit: &mut UnitReader<'_>,
@@ -4665,6 +4711,7 @@ fn decode_via_iso2022(
         reg: usize,
         enabled: bool,
         seven: bool,
+        level4: bool,
     ) -> Result<(), NoMoreSource> {
         let Some(cs) = state.designation[reg] else {
             return iso2022_reject(unit, sink, state, ascii);
@@ -4687,7 +4734,7 @@ fn decode_via_iso2022(
             3
         };
         let c1 = unit.byte()?;
-        if !iso2022_shift_lead_ok(c1, seven) {
+        if !iso2022_shift_lead_ok(c1, seven, level4) {
             return iso2022_reject(unit, sink, state, ascii);
         }
         let code = if positions == 1 {
@@ -4752,6 +4799,7 @@ fn decode_via_iso2022(
         invalid_code(unit, sink)
     }
     let seven = spec.flags.contains(IsoFlag::SevenBits);
+    let level4 = spec.flags.contains(IsoFlag::Level4);
     // GNU honours the shifts only when the coding system asks for them
     // (src/coding.c:3604-3625); otherwise the byte is `invalid_code' and comes
     // out as an ordinary control character. We honoured all four
@@ -4782,6 +4830,7 @@ fn decode_via_iso2022(
                         reg,
                         single_shift,
                         seven,
+                        level4,
                     );
                 }
                 0x6E => {
@@ -4876,10 +4925,15 @@ fn decode_via_iso2022(
             return Ok(());
         }
         if !seven && b == 0x8E {
-            return iso2022_shift_charset(unit, sink, state, ascii, 2, single_shift, seven);
+            return iso2022_shift_charset(unit, sink, state, ascii, 2, single_shift, seven, level4);
         }
         if !seven && b == 0x8F {
-            return iso2022_shift_charset(unit, sink, state, ascii, 3, single_shift, seven);
+            return iso2022_shift_charset(unit, sink, state, ascii, 3, single_shift, seven, level4);
+        }
+        // coding.c:3601-3602. C1 other than SS2/SS3 is `invalid_code` before
+        // graphic lookup, including CSI (`0x9B`), and G0 returns to ASCII.
+        if (0x80..0xA0).contains(&b) {
+            return iso2022_reject(unit, sink, state, ascii);
         }
         if b < 0x20 || b == 0x7F {
             sink.push(u32::from(b), None);

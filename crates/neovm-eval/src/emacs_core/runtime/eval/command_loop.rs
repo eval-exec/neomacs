@@ -6,48 +6,115 @@
 use super::*;
 use neovm_value::tagged::gc::MarkPhase;
 
-/// Restores deleted-frame window records if the explicit collection unwinds
-/// before the success path commits them.
+/// Restores killed-buffer, retired-process, and deleted-frame records if the
+/// explicit collection unwinds before the success path commits them.
 ///
-/// Buffer and process restores are not wrapped. This guard is the frames-only
-/// follow-up: a panic puts every taken record back and disarms the heap map
-/// so the next cycle does not treat those frames as ephemerons.
-struct DeletedFrameGcGuard {
+/// One guard covers all three kinds, so the three restores cannot drift. On
+/// unwind it puts every taken record back and disarms the heap's armed maps
+/// and reclaimed-id lists. The next cycle does not treat those objects as
+/// ephemerons and does not apply a partial reclaim.
+struct ExplicitEphemeronGcGuard {
+    /// Stored frame provenance root, not a pointer from `&mut *self.frames`.
     frames: *mut super::data::window_state::FrameManager,
+    /// Stored `WorldSlot` cell, not a pointer from a `DerefMut` reborrow.
+    processes: *mut super::data::process_state::ProcessManager,
+    /// Inline `Context.edit.buffers`. There is no stored provenance root;
+    /// `addr_of_mut!` names the field without borrowing it.
+    buffers: *mut neovm_edit::buffer::BufferManager,
     heap: *mut neovm_value::tagged::gc::TaggedHeap,
-    taken: Vec<super::data::window_state::DeletedFrameGcRecord>,
+    taken_frames: Vec<super::data::window_state::DeletedFrameGcRecord>,
+    taken_processes: Vec<(
+        neovm_value::heap_types::ProcessId,
+        super::data::process_state::Process,
+    )>,
+    taken_buffers: Vec<(neovm_edit::buffer::BufferId, neovm_edit::buffer::Buffer)>,
     committed: bool,
 }
 
-impl Drop for DeletedFrameGcGuard {
+impl Drop for ExplicitEphemeronGcGuard {
     fn drop(&mut self) {
         if self.committed {
             return;
         }
-        // SAFETY: both pointers address this collection's Context, and Drop
-        // runs before that `&mut self` ends, including on unwind. The
-        // pointers are not used while a conflicting reference is live.
+        // SAFETY: all four pointers address this collection's Context.
+        // `frames` is the view's provenance root, `processes` is the
+        // WorldSlot cell, `buffers` is the inline field address, and `heap`
+        // is the heap provenance root. Drop runs before that `&mut self`
+        // ends, including on unwind. The pointers are not used while a
+        // conflicting reference is live. Frame windows go back through
+        // `restore_deleted_frame_records`, not the commit path, which
+        // forgets tombstones. Buffer and process restores get an empty
+        // reclaimed list, so every taken record returns. Abandon clears
+        // every armed map and every reclaimed-id list.
         unsafe {
-            (*self.heap).abandon_deleted_frame_ephemerons();
-            (*self.frames).restore_deleted_frame_records(std::mem::take(&mut self.taken));
+            (*self.heap).abandon_explicit_ephemerons();
+            (*self.frames).restore_deleted_frame_records(std::mem::take(&mut self.taken_frames));
+            (*self.processes).restore_reached_retired_processes(
+                std::mem::take(&mut self.taken_processes),
+                Vec::new(),
+            );
+            (*self.buffers)
+                .restore_reached_killed_buffers(std::mem::take(&mut self.taken_buffers), &[]);
         }
     }
 }
 
-impl DeletedFrameGcGuard {
+impl ExplicitEphemeronGcGuard {
     /// Record reclaimed ids, put reached records back, and defuse the guard.
     ///
     /// `commit` does not panic: it only moves maps. It is marked committed
     /// first so a later unwind cannot restore records the collection already
     /// decided.
-    fn commit(&mut self, reclaimed: Vec<u64>, window_materialized: impl Fn(u64) -> bool) {
+    fn commit(
+        &mut self,
+        reclaimed_frames: Vec<u64>,
+        reclaimed_processes: Vec<neovm_value::heap_types::ProcessId>,
+        reclaimed_buffers: Vec<neovm_edit::buffer::BufferId>,
+        window_materialized: impl Fn(u64) -> bool,
+    ) {
         self.committed = true;
-        let taken = std::mem::take(&mut self.taken);
-        // SAFETY: `frames` addresses the Context that owns this guard, and
-        // the collection borrow has finished.
+        let taken_frames = std::mem::take(&mut self.taken_frames);
+        let taken_processes = std::mem::take(&mut self.taken_processes);
+        let taken_buffers = std::mem::take(&mut self.taken_buffers);
+        // SAFETY: the four pointers address the Context that owns this
+        // guard, and the collection borrow has finished. The window
+        // predicate reads the heap only; the manager pointers are not
+        // aliases of that heap.
         unsafe {
-            (*self.frames).commit_reclaimed_deleted_frames(taken, &reclaimed, window_materialized);
+            (*self.frames).commit_reclaimed_deleted_frames(
+                taken_frames,
+                &reclaimed_frames,
+                window_materialized,
+            );
+            (*self.processes)
+                .restore_reached_retired_processes(taken_processes, reclaimed_processes);
+            (*self.buffers).restore_reached_killed_buffers(taken_buffers, &reclaimed_buffers);
         }
+    }
+}
+
+/// The armed-window panic is a `#[cfg(test)]` writer in this crate. A
+/// workspace test of another crate compiles this crate without `cfg(test)`,
+/// so the flag is not a test-support static and the 3-way rule allows it.
+#[cfg(test)]
+thread_local! {
+    static PANIC_IN_ARMED_EPHEMERON_WINDOW: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+}
+
+/// Request a panic after explicit ephemerons are armed and before the
+/// collection runs. The flag clears when the hook fires, so a later
+/// collection in the same test is a normal cycle.
+#[cfg(test)]
+pub(crate) fn arm_ephemeron_window_panic_for_test() {
+    PANIC_IN_ARMED_EPHEMERON_WINDOW.with(|flag| flag.set(true));
+}
+
+#[cfg(test)]
+fn panic_if_armed_window_test_requested() {
+    let requested = PANIC_IN_ARMED_EPHEMERON_WINDOW.with(|flag| flag.replace(false));
+    if requested {
+        panic!("explicit collection armed-window test panic");
     }
 }
 
@@ -531,6 +598,32 @@ impl Context {
         self.unbind_to_with_result(specpdl_count, result)
     }
 
+    /// GNU `safe_run_hooks_maybe_narrowed` (`src/keyboard.c:1983-2001`):
+    /// `safe_run_hooks` for `pre-command-hook` and `post-command-hook`, with
+    /// the long-line restriction around point applied while the hook runs.
+    #[doc(hidden)]
+    pub fn safe_run_hook_maybe_narrowed(&mut self, hook_sym: SymId) -> EvalResult {
+        let specpdl_count = self.specpdl.len();
+        self.try_specbind_or_unwind_to(
+            specpdl_count,
+            CommandLoopSymbol::InhibitQuit.id(),
+            Value::T,
+        )?;
+        let point = self
+            .edit
+            .buffers
+            .current_buffer()
+            .map(|buffer| buffer.point_lisp_char_pos().as_i64());
+        let narrowing = point.and_then(|pos| {
+            self.enter_long_line_narrowing(pos, "long-line-optimizations-in-command-hooks")
+        });
+        let result = super::super::hook_runtime::safe_run_named_hook(self, hook_sym, &[]);
+        if let Some(narrowing) = narrowing {
+            self.exit_long_line_narrowing(narrowing);
+        }
+        self.unbind_to_with_result(specpdl_count, result)
+    }
+
     #[doc(hidden)]
     pub fn with_executing_kbd_macro_runtime<F>(
         &mut self,
@@ -782,8 +875,38 @@ impl Context {
 
     #[doc(hidden)]
     pub fn mark_buffer_body_redisplay(&mut self, buffer: BufferId) {
-        let counter = self.body_redisplay_by_buffer.entry(buffer).or_insert(0);
-        *counter = counter.wrapping_add(1);
+        let entry = self.body_redisplay_by_buffer.entry(buffer).or_default();
+        entry.body = entry.body.wrapping_add(1);
+    }
+
+    /// Raise GNU `prevent_redisplay_optimizations_p` on BUFFER.
+    ///
+    /// GNU sets the flag in `set-buffer-redisplay` (src/xdisp.c:929) and in
+    /// both `force-mode-line-update` branches (src/buffer.c:1538-1545); the
+    /// matrix-reuse predicate reads it for every window showing the buffer
+    /// (src/xdisp.c:20557-20565).  It is a redisplay-scope counter beside the
+    /// body revision, never a text or body invalidation: chrome-only work must
+    /// not relayout body text.
+    #[doc(hidden)]
+    pub fn gnu_mark_buffer_prevent_redisplay_optimizations(&mut self, buffer: BufferId) {
+        let entry = self.body_redisplay_by_buffer.entry(buffer).or_default();
+        entry.prevent = entry.prevent.wrapping_add(1);
+    }
+
+    /// The GNU prevent-optimizations revision for BUFFER.
+    ///
+    /// A retained matrix records the value it was produced under; the reuse
+    /// gate refuses while the buffer's current revision is newer.
+    pub fn prevent_redisplay_optimizations_revision(
+        &self,
+        buffer: BufferId,
+    ) -> RedisplayOptimizationsRevision {
+        RedisplayOptimizationsRevision::new(
+            self.body_redisplay_by_buffer
+                .get(&buffer)
+                .map(|entry| entry.prevent)
+                .unwrap_or(0),
+        )
     }
 
     /// The body-redisplay revision that any retained layout of BUFFER inside
@@ -801,7 +924,7 @@ impl Context {
                 .unwrap_or(0),
             self.body_redisplay_by_buffer
                 .get(&buffer)
-                .copied()
+                .map(|entry| entry.body)
                 .unwrap_or(0),
         )
     }
@@ -1325,11 +1448,25 @@ impl Context {
     /// Perform a full mark-and-sweep garbage collection using only explicit
     /// roots. Always runs to completion synchronously (force-completes any
     /// in-flight incremental mark), matching GNU `garbage-collect` semantics.
+    ///
+    /// A finalizer can `throw` to a live Lisp catch; that flow must reach the
+    /// catch. Callers that can propagate use [`Self::gc_collect_exact_flow`].
+    /// This infallible form is the test/staging seam: it has no live catch to
+    /// route to, so it refuses to lose a flow silently in debug builds.
     #[tracing::instrument(level = "debug", skip(self))]
     pub fn gc_collect_exact(&mut self) {
+        if let Err(flow) = self.gc_collect_exact_flow() {
+            debug_assert!(false, "gc_collect_exact lost a finalizer flow: {flow:?}");
+        }
+    }
+
+    /// [`Self::gc_collect_exact`] with the finalizer flow propagated.
+    #[doc(hidden)]
+    pub fn gc_collect_exact_flow(&mut self) -> Result<(), Flow> {
         self.profiler_gc_start();
-        self.gc_collect_from_current_roots_impl(true);
+        let result = self.gc_collect_from_current_roots_impl_flow(true);
         self.profiler_gc_finish();
+        result
     }
 
     /// Safe-point GC entry. Uses concurrent marking after the heap's
@@ -1340,12 +1477,29 @@ impl Context {
     /// purpose is a deterministic missing-root shakeout at every
     /// allocation-bearing safe point, which an asynchronous concurrent cycle
     /// would both defer and de-randomize.
+    ///
+    /// The test seam counterpart of [`Self::gc_collect_from_current_roots_flow`].
     #[doc(hidden)]
     pub fn gc_collect_from_current_roots(&mut self) {
+        if let Err(flow) = self.gc_collect_from_current_roots_flow() {
+            debug_assert!(
+                false,
+                "gc_collect_from_current_roots lost a finalizer flow: {flow:?}"
+            );
+        }
+    }
+
+    /// Safe-point GC entry with the finalizer flow propagated. A finalizer's
+    /// `throw` to a live catch unwinds through the safe point (GNU
+    /// `internal_condition_case_1` catches signals only), so every evaluator
+    /// caller that can carry an `Err(Flow)` must use this form.
+    #[doc(hidden)]
+    pub fn gc_collect_from_current_roots_flow(&mut self) -> Result<(), Flow> {
         self.profiler_gc_start();
         let force_complete = self.gc_stress && !self.tagged_heap.tagged_heap_generational_enabled();
-        self.gc_collect_from_current_roots_impl(force_complete);
+        let result = self.gc_collect_from_current_roots_impl_flow(force_complete);
         self.profiler_gc_finish();
+        result
     }
 
     /// Drive a collection from the current roots.
@@ -1358,6 +1512,21 @@ impl Context {
     /// stop-the-world path.
     #[doc(hidden)]
     pub fn gc_collect_from_current_roots_impl(&mut self, force_complete: bool) {
+        if let Err(flow) = self.gc_collect_from_current_roots_impl_flow(force_complete) {
+            debug_assert!(
+                false,
+                "gc_collect_from_current_roots_impl lost a finalizer flow: {flow:?}"
+            );
+        }
+    }
+
+    /// [`Self::gc_collect_from_current_roots_impl`] with the finalizer flow
+    /// propagated.
+    #[doc(hidden)]
+    pub fn gc_collect_from_current_roots_impl_flow(
+        &mut self,
+        force_complete: bool,
+    ) -> Result<(), Flow> {
         #[cfg(debug_assertions)]
         neovm_value::tagged::mutate::debug_assert_no_heap_mut_closure();
         // Collection also compacts undo state, materializes thread buffer
@@ -1381,13 +1550,14 @@ impl Context {
         // cannot clear the OUTER driver extent's flag on its way out.
         let prev = self.gc_driver_active;
         self.gc_driver_active = true;
-        self.gc_collect_from_current_roots_body(force_complete);
+        let result = self.gc_collect_from_current_roots_body(force_complete);
         self.gc_driver_active = prev;
+        result
     }
 
     #[inline(never)]
     #[doc(hidden)]
-    pub fn gc_collect_from_current_roots_body(&mut self, force_complete: bool) {
+    pub fn gc_collect_from_current_roots_body(&mut self, force_complete: bool) -> Result<(), Flow> {
         // GNU `garbage_collect' shortens every live buffer's undo list before
         // it marks anything: "Don't keep undo information around forever. Do
         // this early on, so it is no problem if the user quits."
@@ -1455,9 +1625,13 @@ impl Context {
                             false,
                             "a collection driver cannot reenter sweep publication"
                         );
-                        return;
+                        return Ok(());
                     }
                 }
+                // #776: the drain above finalized any in-flight automatic
+                // cycle, so apply its retired-process batch before this
+                // explicit collection takes a fresh one.
+                self.finish_automatic_retired_process_cycle(heap_ptr);
                 // Pin frame objects named by bare ids (queued input, the last
                 // event frame, mouse position) before this collection can
                 // reclaim a deleted frame. The pins are ordinary roots.
@@ -1475,37 +1649,53 @@ impl Context {
                 // seeds the frame registry as an internal root. A frame that
                 // owns a materialized window is not armed: the window
                 // registry root keeps that frame alive.
-                // The stored provenance root, not `&mut *self.frames`: the
-                // guard's pointer has to stay valid across the later
-                // reborrows of this view inside seeding and the sweep.
+                // Provenance roots, not pointers from a reborrow: a
+                // reference-derived pointer is invalidated by the next
+                // borrow of that view inside seeding. `frames` is the view's
+                // stored root. `processes` is the WorldSlot cell. `buffers`
+                // is the inline field (`addr_of_mut!` does not borrow it);
+                // BufferManager is not behind a WorldView, and moving it
+                // would shift Context. Drop and commit dereference these
+                // only after this function's borrows of the managers end.
                 let frames_ptr = self.frames.provenance_root().as_ptr();
+                let processes_ptr = self.processes.cell().as_ptr();
+                let buffers_ptr = std::ptr::addr_of_mut!(self.edit.buffers);
                 let (frame_ephemerons, taken_frames) = self
                     .frames
                     .take_deleted_frames_for_gc(|id| (*heap_ptr).window_object_registered(id));
                 (*heap_ptr).arm_deleted_frame_ephemerons(frame_ephemerons);
-                let mut frame_guard = DeletedFrameGcGuard {
+                let mut ephemeron_guard = ExplicitEphemeronGcGuard {
                     frames: frames_ptr,
+                    processes: processes_ptr,
+                    buffers: buffers_ptr,
                     heap: heap_ptr,
-                    taken: taken_frames,
+                    taken_frames,
+                    taken_processes: retired_processes,
+                    taken_buffers: killed_buffers,
                     committed: false,
                 };
+                // Inside the armed window: the maps are armed and the taken
+                // records live in the guard. A panic here, or in the
+                // collection below, runs the guard's Drop.
+                #[cfg(test)]
+                panic_if_armed_window_test_requested();
                 // Disarms a concurrent first cycle drained above, so this
                 // cycle traces the whole image before it promotes (see
                 // `begin_stw_collection`).
                 (*heap_ptr).begin_stw_collection();
                 self.seed_registered_mutator_roots_world_stopped(heap_ptr);
                 (*heap_ptr).complete_collection();
+                // Take every reclaimed-id list before commit. Commit uses
+                // the manager pointers; this heap use does not overlap that.
                 let reclaimed_frames = (*heap_ptr).take_reclaimed_frame_ids();
-                frame_guard.commit(reclaimed_frames, |id| {
-                    (*heap_ptr).window_object_registered(id)
-                });
                 let reclaimed_processes = (*heap_ptr).take_reclaimed_process_ids();
-                self.processes
-                    .restore_reached_retired_processes(retired_processes, reclaimed_processes);
                 let reclaimed_buffers = (*heap_ptr).take_reclaimed_buffer_ids();
-                self.edit
-                    .buffers
-                    .restore_reached_killed_buffers(killed_buffers, &reclaimed_buffers);
+                ephemeron_guard.commit(
+                    reclaimed_frames,
+                    reclaimed_processes,
+                    reclaimed_buffers,
+                    |id| (*heap_ptr).window_object_registered(id),
+                );
                 cycle_completed = true;
             } else {
                 match (*heap_ptr).mark_phase() {
@@ -1532,7 +1722,7 @@ impl Context {
                         } else if (*heap_ptr).incremental_sweep_slice(INCREMENTAL_SWEEP_BUDGET) {
                             cycle_completed = true; // sweep drained -> cycle done
                         } else {
-                            return self.bank_gc_cycle_time(start); // more sweep to do; defer bookkeeping
+                            return Ok(self.bank_gc_cycle_time(start)); // more sweep to do; defer bookkeeping
                         }
                     }
                     MarkPhase::ConcurrentRunning => {
@@ -1556,9 +1746,9 @@ impl Context {
                                 (*heap_ptr).note_must_finish();
                             }
                             self.terminate_concurrent_mark(heap_ptr);
-                            return self.bank_gc_cycle_time(start); // sweep deferred; cycle not done yet
+                            return Ok(self.bank_gc_cycle_time(start)); // sweep deferred; cycle not done yet
                         }
-                        return self.bank_gc_cycle_time(start); // GC thread still marking; mutator continues
+                        return Ok(self.bank_gc_cycle_time(start)); // GC thread still marking; mutator continues
                     }
                     MarkPhase::StoppedMarking => {
                         // A joined worker or dropped unpublished capture can leave a
@@ -1571,7 +1761,7 @@ impl Context {
                             Err(error) => {
                                 // Preserve the unfinished cycle on failed recovery.
                                 tracing::warn!(target: "neovm::gc", %error, "residual major recovery pending");
-                                return self.bank_gc_cycle_time(start);
+                                return Ok(self.bank_gc_cycle_time(start));
                             }
                         }
                         cycle_completed = true;
@@ -1581,9 +1771,13 @@ impl Context {
                             false,
                             "a collection driver cannot reenter sweep publication"
                         );
-                        return;
+                        return Ok(());
                     }
                     MarkPhase::Idle => {
+                        // #776: this call starts a new automatic cycle (minor,
+                        // concurrent, or synchronous STW below). Arm the
+                        // retired-process records before it seeds any root.
+                        self.begin_automatic_retired_process_cycle(heap_ptr);
                         if self.gc_stress && (*heap_ptr).tagged_heap_generational_enabled() {
                             // A fresh automatic stress cycle is synchronous. Choose its
                             // generation before advancing the next-cycle stride; an
@@ -1619,7 +1813,10 @@ impl Context {
                 );
                             self.seed_registered_mutator_roots_world_stopped(heap_ptr);
                             (*heap_ptr).complete_minor_collection();
-                            return self.bank_gc_cycle_time(start);
+                            // The minor's termination ran the reclaim; this
+                            // branch returns without the completion block.
+                            self.finish_automatic_retired_process_cycle(heap_ptr);
+                            return Ok(self.bank_gc_cycle_time(start));
                         } else {
                             let concurrent_kind = if (*heap_ptr).should_run_concurrent() {
                                 Some(ConcurrentCycleKind::Threshold)
@@ -1630,7 +1827,7 @@ impl Context {
                             };
                             if let Some(kind) = concurrent_kind {
                                 match self.start_concurrent_mark(heap_ptr, kind) {
-                        Ok(()) => return self.bank_gc_cycle_time(start),
+                        Ok(()) => return Ok(self.bank_gc_cycle_time(start)),
                         Err(neovm_value::tagged::gc::ConcurrentMarkAdmissionError::Excluded(_)) => {
                             // Held facade roots choose exact synchronous GC.
                         }
@@ -1640,7 +1837,9 @@ impl Context {
                             // An exchanged heap cannot use this owner's old
                             // census. Keep the incomplete cycle for explicit
                             // owner recovery rather than tracing foreign roots.
-                            return self.bank_gc_cycle_time(start);
+                            // No cycle started, so restore the batch we took.
+                            self.finish_automatic_retired_process_cycle(heap_ptr);
+                            return Ok(self.bank_gc_cycle_time(start));
                         }
                         Err(
                             neovm_value::tagged::gc::ConcurrentMarkAdmissionError::CollectorBusy
@@ -1674,7 +1873,7 @@ impl Context {
                                                 error = %error,
                                                 "NEOVM_GC synchronous recovery pending: {error}"
                                             );
-                                            return self.bank_gc_cycle_time(start);
+                                            return Ok(self.bank_gc_cycle_time(start));
                                         }
                                     }
                                 }
@@ -1691,7 +1890,7 @@ impl Context {
                                         false,
                                         "failed mark admission must leave idle or stopped marking"
                                     );
-                                    return;
+                                    return Ok(());
                                 }
                             }
                             cycle_completed = true;
@@ -1700,8 +1899,14 @@ impl Context {
                 }
             }
         }
+        if cycle_completed {
+            // #776: this call finished the automatic cycle (synchronous STW,
+            // stress cycle, or the last deferred-sweep slice of a concurrent
+            // cycle), so apply the retired-process batch it owned.
+            self.finish_automatic_retired_process_cycle(heap_ptr);
+        }
         if !cycle_completed {
-            return self.bank_gc_cycle_time(start);
+            return Ok(self.bank_gc_cycle_time(start));
         }
         // First partition cycle (concurrent bootstrap): with the sweep now
         // drained, promote survivors + blacken the image + build the initial
@@ -1712,10 +1917,10 @@ impl Context {
         }
         self.gc_pending = false;
         self.gc_count += 1;
-        // The whole collection, not only this last call: earlier calls of the
-        // cycle banked their time in `gc_cycle_elapsed`.
-        let elapsed = std::mem::take(&mut self.gc_cycle_elapsed) + start.elapsed();
-        self.update_gc_runtime_stats(elapsed);
+        // The whole collection, not only this last call. Earlier calls, from
+        // this Context or another that shares the heap, banked their time on
+        // the heap. This take publishes that sum once.
+        self.publish_completed_cycle(start.elapsed());
         self.sync_gc_threshold_from_runtime_settings();
         // Destroy the GPU objects of shader-surface handles this cycle swept.
         // Every completed collection funnels through this block (explicit
@@ -1727,7 +1932,10 @@ impl Context {
         // `post-gc-hook`.  A collection that completes while the cconv memo
         // observes a Lisp run leaves both to the end of that run.
         if !self.cconv_memo_defers_gc_hooks() {
-            self.run_doomed_finalizers();
+            // A finalizer `throw` to a live catch unwinds out of the whole
+            // collection here, so `post-gc-hook` does not run (GNU
+            // alloc.c:5960-5989).
+            self.run_doomed_finalizers()?;
             self.run_post_gc_hook();
         }
         if self.gc_stress {
@@ -1737,12 +1945,71 @@ impl Context {
             // allocation-bearing safe point.
             self.tagged_heap.reset_bytes_since_gc();
         }
+        Ok(())
     }
 
-    /// Bank the time of a collector call that leaves its cycle unfinished;
-    /// the call that completes the cycle publishes the sum to `gc-elapsed`.
+    /// Bank the time of a collector call that leaves its cycle unfinished.
+    ///
+    /// The bank is the heap's, so every Context of this heap adds to one
+    /// sum. The call that completes the cycle publishes that sum once.
     fn bank_gc_cycle_time(&mut self, start: std::time::Instant) {
-        self.gc_cycle_elapsed += start.elapsed();
+        self.tagged_heap.bank_cycle_elapsed(start.elapsed());
+    }
+
+    /// #776: take the manager's retired-process records and arm them as
+    /// ephemerons for the automatic cycle that is about to seed its roots.
+    ///
+    /// The explicit `garbage-collect` path does the same inside its stack
+    /// guard. An automatic cycle may span several safe-point driver calls
+    /// (concurrent mark, deferred sweep), so the taken batch lives on the
+    /// Context until [`Self::finish_automatic_retired_process_cycle`] applies
+    /// the completed cycle's result. A stale batch from an abandoned cycle is
+    /// restored first, so records are never lost or armed twice.
+    fn begin_automatic_retired_process_cycle(
+        &mut self,
+        heap: *mut neovm_value::tagged::gc::TaggedHeap,
+    ) {
+        self.finish_automatic_retired_process_cycle(heap);
+        let (ephemerons, taken) = self.processes.take_retired_processes_for_gc();
+        if taken.is_empty() {
+            return;
+        }
+        // SAFETY: HEAP is this Context's tagged heap root and the caller holds
+        // the exclusive GC-driver extent; the taken batch keeps every record
+        // alive outside the manager.
+        unsafe { (*heap).arm_retired_process_ephemerons(ephemerons) };
+        self.automatic_retired_processes = Some(taken);
+    }
+
+    /// Apply the completed automatic cycle: reclaimed ids leave the manager,
+    /// every reached record returns, and the armed maps are cleared.
+    ///
+    /// Also called before a new automatic cycle takes a batch, which restores
+    /// an abandoned cycle's records and disarms its maps.
+    fn finish_automatic_retired_process_cycle(
+        &mut self,
+        heap: *mut neovm_value::tagged::gc::TaggedHeap,
+    ) {
+        let Some(taken) = self.automatic_retired_processes.take() else {
+            return;
+        };
+        // SAFETY: same exclusive extent as the begin helper. The collection
+        // borrow has finished in every call site: each runs at a safe-point
+        // boundary, and the explicit driver's force-complete drain has joined
+        // its worker before taking a fresh batch.
+        let reclaimed = unsafe { (*heap).take_reclaimed_process_ids() };
+        self.processes
+            .restore_reached_retired_processes(taken, reclaimed);
+        // An abandoned cycle can leave the armed map behind even though it
+        // reclaimed nothing; clear all three explicit maps (this path arms
+        // only retired processes).
+        unsafe { (*heap).abandon_explicit_ephemerons() };
+    }
+
+    /// Publish the heap's bank plus this call, then leave the bank at zero.
+    pub(crate) fn publish_completed_cycle(&mut self, this_call: std::time::Duration) {
+        let elapsed = self.tagged_heap.take_cycle_elapsed() + this_call;
+        self.update_gc_runtime_stats(elapsed);
     }
 
     /// Seed every evaluator/context root into the collector's gray queue and
@@ -1832,7 +2099,14 @@ impl Context {
         // against; drop the cache before its roots are walked if this
         // Context's obarray is not that one (P1.4 §3.6).
         #[cfg(feature = "jit")]
-        crate::emacs_core::jit::cache::sync_cache_to_obarray(self.obarray.generation());
+        if let Err(refused) =
+            crate::emacs_core::jit::cache::sync_cache_to_obarray(self.obarray.generation())
+        {
+            tracing::debug!(
+                depth = refused.depth,
+                "obarray sync refused a jit grace receipt"
+            );
+        }
         // Exact GC can finish an older sweep after activation. Read the epoch
         // here, before any TLS cache reconstructs Values from address keys.
         let collection_epoch = unsafe { (*heap_ptr).gc_collections() };
@@ -2218,17 +2492,25 @@ impl Context {
     }
 
     /// Run the functions queued for finalizer objects the just-finished cycle
-    /// found unreachable — GNU `run_finalizers` (alloc.c). The whole batch is
-    /// taken up front, so a finalizer created (and doomed) during one of these
-    /// calls lands in a later batch after a later cycle. Each function is
-    /// called with zero args; errors are ignored so one failing finalizer
-    /// cannot block the rest (GNU wraps each call in a catch-all
-    /// `internal_condition_case`).
+    /// found unreachable — GNU `run_finalizers` (alloc.c:3934-3951). The whole
+    /// batch is taken up front, so a finalizer created (and doomed) during one
+    /// of these calls lands in a later batch after a later cycle. Each function
+    /// is called with zero args under `inhibit-quit` bound to t, and a
+    /// signalled error is logged as `finalizer failed: %S`, matching GNU
+    /// `run_finalizer_function` (alloc.c:3921-3932) and
+    /// `run_finalizer_handler` (alloc.c:3914-3919).
+    ///
+    /// GNU's protected call catches SIGNALS only: a `throw` to a live catch
+    /// unwinds through `internal_condition_case_1` and out of
+    /// `garbage_collect`. Because `run_finalizers` unchains one finalizer at a
+    /// time, the functions the throw did not reach stay queued for a later
+    /// collection. This method returns that Throw after putting the not-yet-run
+    /// tail back at the front of the heap queue.
     #[doc(hidden)]
-    pub fn run_doomed_finalizers(&mut self) {
+    pub fn run_doomed_finalizers(&mut self) -> Result<(), Flow> {
         let functions = self.tagged_heap.take_doomed_finalizer_functions();
         if functions.is_empty() {
-            return;
+            return Ok(());
         }
         // The taken batch left the heap-side queue root; keep it rooted for
         // the duration — `with_gc_inhibited` blocks safe-point GCs, but an
@@ -2237,12 +2519,70 @@ impl Context {
         for function in functions.iter().copied() {
             push_scratch_gc_root(function);
         }
-        self.with_gc_inhibited(|eval| {
-            for function in functions {
-                let _ = eval.funcall_general(function, Vec::<Value>::new());
+        let result = self.with_gc_inhibited(|eval| {
+            for (index, function) in functions.iter().copied().enumerate() {
+                // GNU `run_finalizer_function` specbinds `inhibit-quit' to t
+                // before the protected call and unwinds it per call
+                // (alloc.c:3927-3931). A binding failure is outside GNU's
+                // condition-case, so the function cannot be run.
+                let specpdl_count = eval.specpdl.len();
+                if eval
+                    .try_specbind_or_unwind_to(
+                        specpdl_count,
+                        neovm_value::intern::intern("inhibit-quit"),
+                        Value::T,
+                    )
+                    .is_err()
+                {
+                    continue;
+                }
+                let result = eval.funcall_general(function, Vec::<Value>::new());
+                // The unbind runs on every exit, including the throw below.
+                let result = eval.unbind_to_with_result(specpdl_count, result);
+                if let Err(flow) = result {
+                    if flow.as_throw().is_some() {
+                        // GNU drops the finalizers the throw did not reach
+                        // back onto `doomed_finalizers`; they run after a
+                        // later collection. Requeue them in front of anything
+                        // a nested collection queued during this run.
+                        eval.tagged_heap.requeue_doomed_finalizer_functions(
+                            functions[index + 1..].iter().copied(),
+                        );
+                        return Err(flow);
+                    }
+                    // GNU `internal_condition_case_1` hands a signalled error
+                    // to `run_finalizer_handler`, which logs it. Other
+                    // non-signal exits keep their previous handling.
+                    if let neovm_value::error::FlowKind::Signal(signal) = flow.into_kind() {
+                        let data = eval.signal_error_data_value(&signal);
+                        eval.log_finalizer_failure(data);
+                    }
+                }
             }
+            Ok(())
         });
         restore_scratch_gc_roots(saved_roots);
+        result
+    }
+
+    /// GNU `run_finalizer_handler` (alloc.c:3914-3919): `add_to_log
+    /// ("finalizer failed: %S", args)`. `vadd_to_log` (xdisp.c:12266-12285)
+    /// formats through `format-message` and appends the line with
+    /// `message_dolog`, so the diagnostic lands in the messages buffer without
+    /// reaching the echo area and obeys `message-log-max` (nil suppresses it).
+    fn log_finalizer_failure(&mut self, error_data: Value) {
+        let Ok(formatted) = crate::emacs_core::builtins::strings::builtin_format_message_slice(
+            self,
+            &[Value::string("finalizer failed: %S"), error_data],
+        ) else {
+            return;
+        };
+        // `message_dolog` takes the Lisp string itself. Converting to `&str`
+        // first would drop a datum whose printed form carries raw bytes.
+        let Some(text) = self.lisp_string(formatted).cloned() else {
+            return;
+        };
+        self.add_to_log_lisp_string(&text);
     }
 
     /// Destroy the GPU objects of every shader-surface handle the
@@ -2851,7 +3191,7 @@ impl Context {
     pub fn maybe_gc_and_quit(&mut self) -> Result<(), Flow> {
         self.maybe_quit_before_gc()?;
         if self.gc_safe_point_exact_should_collect() {
-            self.gc_collect_from_current_roots();
+            self.gc_collect_from_current_roots_flow()?;
         }
         Ok(())
     }
@@ -2864,7 +3204,7 @@ impl Context {
         #[cfg(test)]
         BYTECODE_BRANCH_POLL_COUNT.with(|count| count.set(count.get() + 1));
         if self.gc_safe_point_exact_should_collect() {
-            self.gc_collect_from_current_roots();
+            self.gc_collect_from_current_roots_flow()?;
         }
         // Concurrent root feeding: young data reachable only from the
         // operand stacks (a loop building a list) is otherwise invisible to

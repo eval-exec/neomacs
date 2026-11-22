@@ -581,4 +581,8 @@ well_known_table! {
     // GNU Vauto_save_list_file_name retains its original DEFVAR identity.
     // Append only: unintern/reintern must not retarget this native role.
     AutoSaveListFileName = "auto-save-list-file-name",
+
+    // Native NS power-off events retain the symbol registered by ns-win.el's
+    // system-key-alist (ns-win.el:177), even after unintern/reintern.
+    NsPowerOff = "ns-power-off",
 }

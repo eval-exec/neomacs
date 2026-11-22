@@ -183,6 +183,13 @@ pub(crate) trait LayoutBufferView {
     fn layout_point_min_emacs_byte_pos(&self) -> EmacsBytePos;
     fn layout_point_max_emacs_byte_pos(&self) -> EmacsBytePos;
     fn layout_point_max_char_pos(&self) -> CharPos0;
+    /// GNU `long_line_optimizations_p` for the displayed buffer
+    /// (`src/xdisp.c:20646`): redisplay found a line above
+    /// `long-line-threshold`, enabling its long-line shortcuts. A view that
+    /// cannot prove the flag keeps the exact (unoptimized) walk.
+    fn layout_long_line_optimizations_p(&self) -> bool {
+        false
+    }
     /// Readable context for complete display elements. A measurement stop can
     /// fall inside a composition; actual buffer narrowing still bounds it.
     fn layout_measurement_context_end(&self) -> Option<CharPos0> {
@@ -285,6 +292,18 @@ pub(crate) trait LayoutBufferView {
     /// are constant in presence and value (backward companion).
     fn layout_previous_syntax_prop_state_run_start_char_pos(&self, pos: CharPos0) -> CharPos0;
     fn layout_overlays(&self) -> &OverlayList;
+    /// Exclusive character end of a window-range overlay view, or `None` for
+    /// a whole-buffer view. A walk that consumes at or past it was answered
+    /// from a subset and must be retried with the whole buffer.
+    fn layout_overlay_view_end_char(&self) -> Option<neovm_core::buffer::CharPos0> {
+        None
+    }
+    /// True when this attempt queried the overlay view below its captured
+    /// start. Such an answer may be missing overlays from before the view, so
+    /// the walk must be retried with the whole-buffer view.
+    fn layout_overlay_view_start_underflow(&self) -> bool {
+        false
+    }
     /// Automatic-composition span whose first character is `pos`.
     ///
     /// These spans are compiled from the live Lisp rule table when the
@@ -421,6 +440,7 @@ fn layout_var_info(var: LayoutVar) -> &'static LayoutVarInfo {
                             | LayoutVar::DisplayLineNumbersWidth
                             | LayoutVar::FaceRemappingAlist
                             | LayoutVar::GlyphlessCharDisplay
+                            | LayoutVar::LargeHscrollThreshold
                             | LayoutVar::LinePrefix
                             | LayoutVar::NeomacsCursorEffect
                             | LayoutVar::NeomacsVisualCursors
@@ -455,6 +475,10 @@ impl LayoutBufferView for Buffer {
 
     fn layout_point_max_char_pos(&self) -> CharPos0 {
         self.point_max_char_pos()
+    }
+
+    fn layout_long_line_optimizations_p(&self) -> bool {
+        Buffer::long_line_optimizations_p(self)
     }
 
     fn layout_total_emacs_byte_len(&self) -> EmacsByteLen {
@@ -611,6 +635,48 @@ pub(crate) fn visible_value(
     id: neovm_core::emacs_core::SymId,
 ) -> Option<Value> {
     evaluator.builtin_var_value(id)
+}
+
+/// GNU's paragraph directions for one window.
+///
+/// Buffer text follows the displayed buffer's BVARs (`src/xdisp.c:3600-3611`):
+/// a nil `bidi-display-reordering` turns bidi off entirely, a
+/// `bidi-paragraph-direction` of `left-to-right`/`right-to-left` pins the base
+/// level, and every other value (including nil) selects UAX#9 P2/P3.  The read
+/// goes through `effective_buffer_value`, GNU's `find_symbol_value` with this
+/// buffer current, so a live `let` of the variable is visible just like the
+/// buffer slot.
+///
+/// Chrome rows are display strings: `display_mode_line` (mode, header and tab
+/// lines, `src/xdisp.c:28165`) and `display_tab_bar` (`src/xdisp.c:14727`) set
+/// `it->paragraph_embedding = L2R` unconditionally, and `reseat_to_string`
+/// gates string reordering on the DEFAULT `bidi-display-reordering`
+/// (`buffer_defaults`), not the buffer's.
+fn layout_paragraph_directions(
+    buffer: &Buffer,
+    vars: VariableView<'_>,
+) -> crate::bidi::ParagraphDirections {
+    use crate::bidi::{ParagraphDirection, ParagraphDirections};
+    let text = if effective_buffer_value(buffer, vars, LayoutVar::BidiDisplayReordering)
+        .is_none_or(|value| value.is_nil())
+    {
+        ParagraphDirection::Off
+    } else {
+        match effective_buffer_value(buffer, vars, LayoutVar::BidiParagraphDirection) {
+            Some(value) if value == Value::symbol("left-to-right") => {
+                ParagraphDirection::LeftToRight
+            }
+            Some(value) if value == Value::symbol("right-to-left") => {
+                ParagraphDirection::RightToLeft
+            }
+            _ => ParagraphDirection::Auto,
+        }
+    };
+    let chrome = match vars.default_value(LayoutVar::BidiDisplayReordering.sym_id()) {
+        Some(value) if !value.is_nil() => ParagraphDirection::LeftToRight,
+        _ => ParagraphDirection::Off,
+    };
+    ParagraphDirections { text, chrome }
 }
 
 pub(crate) fn buffer_local_value<B: LayoutBufferView + ?Sized>(
@@ -1942,6 +2008,7 @@ pub fn window_params_from_neovm_with_font_sizing(
     // (issue #556).
     let frame_foreground = face_resolver.default_face().fg;
 
+    let bidi_paragraph_directions = layout_paragraph_directions(buffer, vars);
     let glyph_matrix_input = window.display()?.glyph_matrix_row_scale.snapshot();
     Some(WindowParams {
         // Filled in by `resolve_window_display_source_params`, the one place
@@ -2011,6 +2078,7 @@ pub fn window_params_from_neovm_with_font_sizing(
         wrap_mode,
         word_wrap,
         word_wrap_policy,
+        bidi_paragraph_directions,
         tab_width,
         scroll_conservatively,
         scroll_step,

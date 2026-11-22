@@ -660,14 +660,29 @@ impl DisplaySourceTextPosition {
         // GNU skips to the next line with `find_newline` (src/search.c). Up to
         // the first newline or non-ASCII byte each byte is one character, so
         // the walk below would stop where this run ends: advance over it in
-        // one step. A plain scan, not `memchr`: the run is usually one short
-        // line, where `BufferText::next_newline_emacs_byte` measured `memchr`
-        // as the slower choice.
+        // one step.
+        //
+        // A short run is usually one line, where the plain scan below is
+        // cheaper than `memchr` (measured for
+        // `BufferText::next_newline_emacs_byte`). A long truncated-line
+        // remainder is the opposite case: `memchr` finds the newline and
+        // `is_ascii` proves the prefix at bulk speed before the same one-step
+        // advance applies.
         let rest = text.get(self.byte_idx..).unwrap_or_default();
-        let run = rest
-            .iter()
-            .position(|&byte| byte == b'\n' || !byte.is_ascii())
-            .unwrap_or(rest.len());
+        const BULK_SCAN_MIN: usize = 4096;
+        let run = if rest.len() >= BULK_SCAN_MIN {
+            match memchr::memchr(b'\n', rest) {
+                Some(newline) if rest[..newline].is_ascii() => newline,
+                _ => rest
+                    .iter()
+                    .position(|&byte| byte == b'\n' || !byte.is_ascii())
+                    .unwrap_or(rest.len()),
+            }
+        } else {
+            rest.iter()
+                .position(|&byte| byte == b'\n' || !byte.is_ascii())
+                .unwrap_or(rest.len())
+        };
         let found_newline = rest.get(run) == Some(&b'\n');
         let advance = run + usize::from(found_newline);
         self.byte_idx += advance;
@@ -2052,7 +2067,12 @@ impl DisplaySpaceWidthPolicy {
     }
 
     fn zero_width_allowed(self) -> bool {
-        matches!(self, Self::AlignTo(_))
+        // GNU `produce_stretch_glyph` sets `zero_width_ok_p` for a valid
+        // explicit `:width` as well as for `:align-to` (xdisp.c:32832 and
+        // :32911); only the no-operand default is forced to one column
+        // (xdisp.c:32917).  ebox's row strut is exactly a valid `:width 0`
+        // with a `:height`, and GNU gives it zero advance.
+        matches!(self, Self::Explicit(_) | Self::AlignTo(_))
     }
 
     fn resolve(

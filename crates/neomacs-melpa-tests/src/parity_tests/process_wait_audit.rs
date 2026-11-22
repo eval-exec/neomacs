@@ -198,12 +198,6 @@ const PROCESS_WAIT_AUDIT: &[(&str, usize, ProcessWaitVerdict, &str)] = &[
         "confirms a forcibly disposed process died",
     ),
     (
-        "treemacs_magit",
-        1,
-        CausalWitness,
-        "asserts the post-commit hook produced exactly one new idle timer",
-    ),
-    (
         "zeal_at_point",
         1,
         OutputNotPinned,

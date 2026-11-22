@@ -1,0 +1,27 @@
+error[E0521]: borrowed data escapes outside of closure
+ --> tests/pentry_e2_loan_ui/custody_two_scope.rs:7:33
+  |
+6 |     with_stop_scope(|outer| {
+  |                      ----- `outer` declared here, outside of the closure body
+7 |         with_stop_scope(|inner| unify(&outer, &inner));
+  |                          -----  ^^^^^^^^^^^^^^^^^^^^^ `inner` escapes the closure body here
+  |                          |
+  |                          `inner` is a reference that is only valid in the closure body
+  |
+  = note: requirement occurs because of the type `neovm_value::tagged::gc::heap_transfer::StopScope<'_>`, which makes the generic argument `'_` invariant
+  = note: the struct `neovm_value::tagged::gc::heap_transfer::StopScope<'s>` is invariant over the parameter `'s`
+  = help: see <https://doc.rust-lang.org/nomicon/subtyping.html> for more information about variance
+
+error[E0521]: borrowed data escapes outside of closure
+ --> tests/pentry_e2_loan_ui/custody_two_scope.rs:7:33
+  |
+6 |     with_stop_scope(|outer| {
+  |                      -----
+  |                      |
+  |                      `outer` is a reference that is only valid in the closure body
+  |                      has type `neovm_value::tagged::gc::heap_transfer::StopScope<'1>`
+7 |         with_stop_scope(|inner| unify(&outer, &inner));
+  |                                 ^^^^^^^^^^^^^^^^^^^^^
+  |                                 |
+  |                                 `outer` escapes the closure body here
+  |                                 argument requires that `'1` must outlive `'static`

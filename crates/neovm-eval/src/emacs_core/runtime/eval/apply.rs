@@ -1735,7 +1735,17 @@ impl Context {
         if self.specpdl.len() == count + 1
             && let Some(SpecBinding::LexicalEnv { old_lexenv }) = self.specpdl.last()
         {
-            self.lexenv = *old_lexenv;
+            let old_lexenv = *old_lexenv;
+            // GNU stays inside `Flet` for the whole wait (eval.c:1151). The
+            // Ok return only tests `is_err`. The thread-id check and the
+            // closure capture are in the cold helper, so this fast path does
+            // not call them.
+            let result = if result.is_err() {
+                self.capture_blocked_lexenv_continuation(result)
+            } else {
+                result
+            };
+            self.lexenv = old_lexenv;
             // SAFETY: a `LexicalEnv` entry owns nothing (see
             // `pop_simple_specpdl_suffix`'s LexicalEnv arm, which retires it
             // the same way).
@@ -1743,6 +1753,52 @@ impl Context {
             return result;
         }
         self.unbind_to_with_result(count, result)
+    }
+
+    /// Close a simulated worker's blocked forms over the lexenv this frame
+    /// is about to pop. A bare closure or a condition-case marker already
+    /// names its own environment; a plain form list does not. Main and green
+    /// threads return the error unchanged.
+    #[cold]
+    #[inline(never)]
+    fn capture_blocked_lexenv_continuation(&mut self, result: EvalResult) -> EvalResult {
+        if self.threads.current_thread_id() == 0 || self.green_threads_running() {
+            return result;
+        }
+        match result.kinded() {
+            Err(FlowKind::ThreadBlocked(blocked))
+                if !blocked.remaining_forms.is_nil()
+                    && crate::emacs_core::threads::thread_condition_case_continuation_parts(
+                        blocked.remaining_forms,
+                    )
+                    .is_none()
+                    && blocked
+                        .remaining_forms
+                        .closure_slot(neovm_value::tagged::header::CLOSURE_ARGLIST)
+                        .is_none() =>
+            {
+                match builtins::symbols::make_interpreted_closure_from_parts(
+                    &Value::NIL,
+                    &blocked.remaining_forms,
+                    &self.lexenv,
+                    None,
+                    None,
+                ) {
+                    Ok(resume_function) => {
+                        let call = Value::cons(
+                            Value::symbol("funcall"),
+                            Value::cons(resume_function, Value::NIL),
+                        );
+                        Err(Flow::thread_blocked(
+                            blocked.blocker,
+                            Value::cons(call, Value::NIL),
+                        ))
+                    }
+                    Err(flow) => Err(flow),
+                }
+            }
+            other => other.map_err(Flow::from_kind),
+        }
     }
 
     /// GNU's post-call order for a frame [`Self::push_backtrace_frame`]
@@ -2408,8 +2464,11 @@ impl Context {
             CallableRoot::Specpdl
         };
         let result = {
-            if self.gc_safe_point_exact_should_collect() {
-                self.gc_collect_from_current_roots();
+            if self.gc_safe_point_exact_should_collect()
+                && let Err(flow) = self.gc_collect_from_current_roots_flow()
+            {
+                self.depth -= 1;
+                return self.finish_traced_call(bt_count, Err(flow));
             }
             // GNU Ffuncall eval.c:3185-3190 in order: record_in_backtrace,
             // maybe_gc, then `if (debug_on_next_call) do_debug_on_call
@@ -2874,8 +2933,11 @@ impl Context {
         let bt_count = self.specpdl.len();
         self.push_backtrace_frame(designator, &args);
         let result = {
-            if self.gc_safe_point_exact_should_collect() {
-                self.gc_collect_from_current_roots();
+            if self.gc_safe_point_exact_should_collect()
+                && let Err(flow) = self.gc_collect_from_current_roots_flow()
+            {
+                self.depth -= 1;
+                return self.finish_traced_call(bt_count, Err(flow));
             }
             let entered = match self.take_debug_on_call_arm(DebugOnCallCode::Funcall) {
                 Some(arm) => self.do_debug_on_call(arm),
@@ -2946,8 +3008,11 @@ impl Context {
         let bt_count = self.specpdl.len();
         self.push_backtrace_frame(designator, std::slice::from_ref(&arg0));
         let result = {
-            if self.gc_safe_point_exact_should_collect() {
-                self.gc_collect_from_current_roots();
+            if self.gc_safe_point_exact_should_collect()
+                && let Err(flow) = self.gc_collect_from_current_roots_flow()
+            {
+                self.depth -= 1;
+                return self.finish_traced_call(bt_count, Err(flow));
             }
             let entered = match self.take_debug_on_call_arm(DebugOnCallCode::Funcall) {
                 Some(arm) => self.do_debug_on_call(arm),
@@ -2992,8 +3057,11 @@ impl Context {
         let bt_count = self.specpdl.len();
         self.push_backtrace_frame(designator, &[arg0, arg1]);
         let result = {
-            if self.gc_safe_point_exact_should_collect() {
-                self.gc_collect_from_current_roots();
+            if self.gc_safe_point_exact_should_collect()
+                && let Err(flow) = self.gc_collect_from_current_roots_flow()
+            {
+                self.depth -= 1;
+                return self.finish_traced_call(bt_count, Err(flow));
             }
             let entered = match self.take_debug_on_call_arm(DebugOnCallCode::Funcall) {
                 Some(arm) => self.do_debug_on_call(arm),
@@ -3050,8 +3118,11 @@ impl Context {
         let bt_count = self.specpdl.len();
         self.push_backtrace_frame(function, std::slice::from_ref(&arg0));
         let result = {
-            if self.gc_safe_point_exact_should_collect() {
-                self.gc_collect_from_current_roots();
+            if self.gc_safe_point_exact_should_collect()
+                && let Err(flow) = self.gc_collect_from_current_roots_flow()
+            {
+                self.depth -= 1;
+                return self.finish_traced_call(bt_count, Err(flow));
             }
             let entered = match self.take_debug_on_call_arm(DebugOnCallCode::Funcall) {
                 Some(arm) => self.do_debug_on_call(arm),
@@ -3236,8 +3307,11 @@ impl Context {
         let args = [arg0, arg1];
         self.push_backtrace_frame(function, &args);
         let result = {
-            if self.gc_safe_point_exact_should_collect() {
-                self.gc_collect_from_current_roots();
+            if self.gc_safe_point_exact_should_collect()
+                && let Err(flow) = self.gc_collect_from_current_roots_flow()
+            {
+                self.depth -= 1;
+                return self.finish_traced_call(bt_count, Err(flow));
             }
             let entered = match self.take_debug_on_call_arm(DebugOnCallCode::Funcall) {
                 Some(arm) => self.do_debug_on_call(arm),
@@ -4524,10 +4598,10 @@ impl Context {
     /// (ROOT_COUNT), so the skip is a no-op.
     ///
     /// The skip's premise is checked here, at the decision point, in debug
-    /// builds: a body runner (or the bind-error path) that ever stopped
-    /// restoring the specpdl fails this assert before the skip could leave
-    /// bindings behind. `debug_assert_eq!` compiles out, so release code is
-    /// unchanged.
+    /// builds. Every result that is not a blocked simulated worker leaves
+    /// the specpdl at `count`. That worker is the only exemption: its frames
+    /// stay so they can be parked after `apply` returns. The assert compiles
+    /// out of release code.
     #[inline(always)]
     #[doc(hidden)]
     pub fn unwind_call_root(
@@ -4539,9 +4613,15 @@ impl Context {
         match root {
             CallableRoot::Specpdl => self.unbind_to_with_result(count, result),
             CallableRoot::Witnessed(_) => {
-                debug_assert_eq!(
-                    self.specpdl.len(),
-                    count,
+                // A simulated worker's `ThreadBlocked` keeps the Lisp stack
+                // (`unbind_to_with_result_slow`). `preserve_blocked_sim_worker`
+                // parks those frames after `apply` returns. Popping them here
+                // would run a `with-mutex` cleanup before the wait relocks.
+                let blocked = matches!(result.as_ref(), Err(flow) if flow.is_thread_blocked())
+                    && self.threads.current_thread_id() != 0
+                    && !self.green_threads_running();
+                debug_assert!(
+                    blocked || self.specpdl.len() == count,
                     "witnessed lexical call left specpdl entries above ROOT_COUNT"
                 );
                 result
@@ -4700,7 +4780,10 @@ impl Context {
     }
 
     /// A lambda body that blocked a thread mid-way resumes as a closure over
-    /// the forms it had left, in the current lexical environment.
+    /// the forms it had left, in the current lexical environment. A remaining
+    /// value that is already a closure keeps the env captured when its `let`
+    /// frame popped; wrapping that closure as a body is `wrong-type-argument
+    /// consp`.
     #[inline]
     #[doc(hidden)]
     pub fn rewrap_thread_blocked_in_lexenv(&mut self, result: EvalResult) -> EvalResult {
@@ -4710,7 +4793,11 @@ impl Context {
                     && crate::emacs_core::threads::thread_condition_case_continuation_parts(
                         blocked.remaining_forms,
                     )
-                    .is_none() =>
+                    .is_none()
+                    && blocked
+                        .remaining_forms
+                        .closure_slot(neovm_value::tagged::header::CLOSURE_ARGLIST)
+                        .is_none() =>
             {
                 match builtins::symbols::make_interpreted_closure_from_parts(
                     &Value::NIL,

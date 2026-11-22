@@ -122,6 +122,9 @@ impl TaggedHeap {
             !self.sweep_in_progress,
             "begin_collection while a deferred sweep is in progress"
         );
+        // The context-root seed runs after this entry and overwrites the zero.
+        // A collection that never seeds must not reprint the previous cycle.
+        self.note_context_seed_us(0);
         // YOUNG NON-CONS PARITY FLIP (task #7 stage 2b): this single store
         // un-marks the entire young non-cons generation — everything the last
         // cycle marked has bit == old parity, which the new parity reads as
@@ -1702,6 +1705,14 @@ impl TaggedHeap {
                     .iter()
                     .map(|value| (*value, "doomed-finalizer-function")),
             )
+            .chain(
+                self.published_payload_roots
+                    .values()
+                    .flatten()
+                    .flatten()
+                    .copied()
+                    .map(|value| (value, "published-payload-root")),
+            )
             .collect();
 
         // Handshake instrumentation: enumeration volume + wall cost, routed to
@@ -1732,21 +1743,10 @@ impl TaggedHeap {
         //    so heap access is exclusive (no concurrency hazard here). --
         let mark_t0 = std::time::Instant::now();
         self.mark_all_on_gc_thread();
-        self.mark_reached_ephemeron_records_to_fixpoint();
-        // Queue doomed finalizers before the weak sweep (GNU
-        // `queue_doomed_finalizers` runs before
-        // `mark_and_sweep_weak_table_contents` in `garbage_collect`): their
-        // functions are re-marked so both the weak sweep and the object sweep
-        // see them as live.
-        self.mark_and_queue_doomed_finalizers();
-        self.mark_reached_ephemeron_records_to_fixpoint();
-        // Resolve weak hash tables now that the main mark has drained. Both the
-        // sync and concurrent paths converge here with the mutator stopped, so
-        // this is single-threaded and path-agnostic.
-        self.mark_and_sweep_weak_tables();
-        self.reclaim_unreached_retired_processes();
-        self.reclaim_unreached_killed_buffers();
-        self.reclaim_unreached_deleted_frames();
+        // Ephemeron fixpoint, doomed finalizers, weak sweep, and the three
+        // explicit reclaims. The order lives in one method so the incremental
+        // termination cannot drop the reclaims.
+        let _ = self.finish_stopped_mark_adapters();
         let mark_us = mark_t0.elapsed().as_micros() as u64;
 
         // The mark has drained and the sweep has not started: the one moment
@@ -1764,15 +1764,53 @@ impl TaggedHeap {
         self.finalize_collection(mark_us, bytes_before, t0);
     }
 
+    /// Post-mark adapters shared by `complete_collection` and
+    /// `incremental_finish`.
+    ///
+    /// The order is fixed: ephemeron fixpoint, doomed finalizers, fixpoint,
+    /// weak sweep, then the three explicit reclaims. This method is the only
+    /// caller of those steps, except the era path's test permit, which still
+    /// calls `mark_and_sweep_weak_tables` by itself.
+    ///
+    /// Does not run `mark_all_on_gc_thread` or `finalize_collection`. Does
+    /// not run queued Lisp finalizers or host destroy. Empty explicit maps
+    /// reclaim nothing.
+    ///
+    /// Returns the microseconds spent in the finalizer scan and the weak
+    /// sweep, so incremental termination can keep its handshake split. The
+    /// ephemeron fixpoints and the reclaims sit outside those two timers.
+    pub(super) fn finish_stopped_mark_adapters(&mut self) -> (u64, u64) {
+        self.mark_reached_ephemeron_records_to_fixpoint();
+        // Queue doomed finalizers before the weak sweep (GNU
+        // `queue_doomed_finalizers` runs before
+        // `mark_and_sweep_weak_table_contents` in `garbage_collect`): their
+        // functions are re-marked so both the weak sweep and the object sweep
+        // see them as live.
+        let finalizer_t0 = std::time::Instant::now();
+        self.mark_and_queue_doomed_finalizers();
+        let finalizer_us = finalizer_t0.elapsed().as_micros() as u64;
+        self.mark_reached_ephemeron_records_to_fixpoint();
+        // Resolve weak hash tables now that the main mark has drained. Both
+        // the sync and incremental paths converge here with the mutator
+        // stopped, so this is single-threaded.
+        let weak_t0 = std::time::Instant::now();
+        self.mark_and_sweep_weak_tables();
+        let weak_us = weak_t0.elapsed().as_micros() as u64;
+        self.reclaim_unreached_retired_processes();
+        self.reclaim_unreached_killed_buffers();
+        self.reclaim_unreached_deleted_frames();
+        (finalizer_us, weak_us)
+    }
+
     /// Queue the functions of finalizer objects this cycle found unreachable —
-    /// GNU `queue_doomed_finalizers` + `mark_finalizers` (alloc.c). Must run
-    /// at BOTH mark terminations (`complete_collection` and
-    /// `incremental_finish`), after the main mark drains and before the weak
-    /// sweep. A doomed finalizer leaves the registry and is swept normally;
-    /// only its `function` is queued, re-marked transitively (same marking
-    /// helpers as the weak-table fixpoint) so the imminent sweep keeps
-    /// everything it needs. Still-marked finalizers stay registered.
-    pub(super) fn mark_and_queue_doomed_finalizers(&mut self) {
+    /// GNU `queue_doomed_finalizers` + `mark_finalizers` (alloc.c). Runs only
+    /// from `finish_stopped_mark_adapters`, after the main mark drains and
+    /// before the weak sweep. A doomed finalizer leaves the registry and is
+    /// swept normally; only its `function` is queued, re-marked transitively
+    /// (same marking helpers as the weak-table fixpoint) so the imminent sweep
+    /// keeps everything it needs. Still-marked finalizers stay registered.
+    /// The queued functions are not called here.
+    fn mark_and_queue_doomed_finalizers(&mut self) {
         if self.finalizer_registry.is_empty() {
             return;
         }
@@ -1819,6 +1857,22 @@ impl TaggedHeap {
         std::mem::take(&mut self.doomed_finalizer_functions)
     }
 
+    /// Put functions taken by [`Self::take_doomed_finalizer_functions`] back
+    /// at the FRONT of the queue after a non-local exit stopped the batch.
+    /// GNU `run_finalizers` unchains one finalizer at a time, so the ones a
+    /// throw did not reach stay on `doomed_finalizers` for a later
+    /// collection; functions a nested collection queued during the run follow
+    /// them. The queue is an internal runtime root, so requeueing here roots
+    /// every returned function for the next cycle.
+    pub fn requeue_doomed_finalizer_functions(
+        &mut self,
+        functions: impl IntoIterator<Item = TaggedValue>,
+    ) {
+        let mut requeued: Vec<TaggedValue> = functions.into_iter().collect();
+        requeued.append(&mut self.doomed_finalizer_functions);
+        self.doomed_finalizer_functions = requeued;
+    }
+
     /// Number of live finalizer objects still registered. `dump-emacs-portable`
     /// consults this after its pre-dump collection: the portable dump cannot
     /// represent finalizer objects (the writer arms refuse them), so a
@@ -1848,7 +1902,7 @@ impl TaggedHeap {
     /// survives per its table's weakness — iterate to stability because a value
     /// in one weak table may be a key in another — then non-surviving entries
     /// are removed.
-    pub(super) fn mark_and_sweep_weak_tables(&mut self) {
+    fn mark_and_sweep_weak_tables(&mut self) {
         // Seed the always-swept weak-table registry into this cycle's worklist.
         // It covers image-permanent and collectible runtime-tenured tables. The
         // main mark can skip these owners, but their entries still need weak
@@ -2173,11 +2227,9 @@ impl TaggedHeap {
         if self.generational.major_in_progress {
             self.recompute_old_bytes_world_stopped();
         }
-        let mapped_object_live_bytes = self.mapped_non_cons_live_bytes();
         self.live_bytes = cons_live_bytes
             .saturating_add(object_live_bytes)
             .saturating_add(page_live_bytes)
-            .saturating_add(mapped_object_live_bytes)
             .saturating_add(self.old_noncons_bytes());
         self.reset_bytes_since_gc();
         self.trace_region_stats();
@@ -2227,24 +2279,25 @@ impl TaggedHeap {
             let dump_cons: usize = self.mapped_cons_ranges.iter().map(|range| range.len).sum();
             let dump_float: usize = self.mapped_float_ranges.iter().map(|range| range.len).sum();
             eprintln!(
-                "NEOVM_GC gc#{} {:.2}ms [clear={}us mark={}us sweep={}us] \
-                 cons_live={} heap_noncons={} dump_marked={}/{} \
-                 dump[cons={} vec={} str={} float={}] dirty_owners={} live={}B",
-                self.gc_collections,
-                elapsed.as_micros() as f64 / 1000.0,
-                self.last_clear_us,
-                mark_us,
-                sweep_us,
-                self.cons_live_count,
-                self.non_cons_object_addrs.len(),
-                mapped_marked,
-                mapped_total,
-                dump_cons,
-                self.mapped_veclike_objects.len(),
-                self.mapped_string_objects.len(),
-                dump_float,
-                self.dirty_owners.len(),
-                self.live_bytes,
+                "{}",
+                super::incremental::format_eager_gc_trace_line(
+                    self.gc_collections,
+                    elapsed.as_micros() as f64 / 1000.0,
+                    self.last_clear_us,
+                    mark_us,
+                    sweep_us,
+                    self.cons_live_count,
+                    self.non_cons_object_addrs.len(),
+                    mapped_marked,
+                    mapped_total,
+                    dump_cons,
+                    self.mapped_veclike_objects.len(),
+                    self.mapped_string_objects.len(),
+                    dump_float,
+                    self.dirty_owners.len(),
+                    self.live_bytes,
+                    self.context_seed_us(),
+                )
             );
         }
         tracing::debug!(
@@ -2394,3 +2447,15 @@ mod generation_tests;
 #[cfg(test)]
 #[path = "tests/permanent_box_chain_test.rs"]
 mod permanent_box_chain_tests;
+
+/// The serial stop and the stopped major yield one queued doomed finalizer
+/// function through the same runtime-root seed.
+#[cfg(test)]
+#[path = "tests/doomed_finalizer_seed_test.rs"]
+mod doomed_finalizer_seed_tests;
+
+/// The serial stop keeps each weak-table weakness, including the cross-table
+/// fixpoint, through the collection it already runs.
+#[cfg(test)]
+#[path = "tests/weak_sweep_pin_test.rs"]
+mod weak_sweep_pin_tests;

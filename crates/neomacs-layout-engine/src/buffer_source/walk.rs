@@ -11,7 +11,7 @@ use crate::buffer_source::row_lifecycle::{
     BufferSourceHscrollSkipAction, BufferSourceInvisibleTextScanAction,
     BufferSourceInvisibleTextScanContext, BufferSourceSelectiveDisplayContext,
     BufferSourceSelectiveDisplayHiddenLines, BufferSourceSelectiveDisplayLineTailAction,
-    consume_hscroll_skip_from_position,
+    consume_hscroll_skip_from_position, long_line_hscroll_jump,
 };
 use crate::display_row::append_context::{
     DisplayRowActiveFaceAppendContext, DisplayRowAppendSurface,
@@ -283,6 +283,23 @@ impl<'request, B: LayoutBufferView> BufferSourceWalk<'request, B> {
             append_surface,
             active_face_state,
             face_ids,
+        )
+    }
+
+    pub(crate) fn try_long_line_hscroll_jump(
+        &self,
+        text: &[u8],
+        source_position: DisplaySourceTextPosition,
+        hscroll_skip: &mut HorizontalScrollSkipState,
+        query_target: Option<i64>,
+    ) -> Option<DisplaySourceTextPosition> {
+        long_line_hscroll_jump(
+            text,
+            source_position,
+            hscroll_skip,
+            self.producer.layout_buffer(),
+            self.producer.text_start_byte(),
+            query_target,
         )
     }
 

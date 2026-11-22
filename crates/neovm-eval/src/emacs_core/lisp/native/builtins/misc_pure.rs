@@ -358,6 +358,17 @@ impl super::eval::Context {
         );
     }
 
+    /// Append an already-formatted Lisp string as one diagnostic line to the
+    /// configured messages buffer without changing the echo area.
+    ///
+    /// GNU `add_to_log` hands its `Fformat_message` result straight to
+    /// `message_dolog`, which takes multibyte text; this entry preserves that
+    /// for callers that already hold the Lisp string (a printed error datum
+    /// can carry raw bytes a `&str` conversion would drop).
+    pub fn add_to_log_lisp_string(&mut self, message: &neovm_value::heap_types::LispString) {
+        message_dolog(self, message, MessageLogTermination::Line);
+    }
+
     /// Append printer output to `*Messages*` without terminating its line.
     /// GNU's `printchar`/`strout` use exactly this form when `standard-output`
     /// is the interactive echo area.
@@ -665,12 +676,23 @@ pub fn builtin_force_mode_line_update(
 ) -> EvalResult {
     expect_max_args("force-mode-line-update", &args, 1)?;
     let target = if args.first().is_some_and(|value| value.is_truthy()) {
+        // GNU buffer.c:1538-1541 sets `prevent_redisplay_optimizations_p` on
+        // current_buffer in this branch too, so the matrix-reuse predicate
+        // refuses even though only the mode lines were named.  The body
+        // revision stays untouched: this is chrome-only work.
+        if let Some(buffer) = ctx.buffer_manager().current_buffer_id() {
+            ctx.gnu_mark_buffer_prevent_redisplay_optimizations(buffer);
+        }
         super::eval::ModeLineUpdateTarget::AllBuffers
     } else {
         let current_buffer = ctx
             .buffer_manager()
             .current_buffer_id()
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        // GNU buffer.c:1542-1545 marks the displayed buffer when it has a
+        // window; an undisplayed buffer has no retained matrix to refuse, so
+        // recording the witness unconditionally is equivalent.
+        ctx.gnu_mark_buffer_prevent_redisplay_optimizations(current_buffer);
         // GNU gates this on `buffer_window_count (current_buffer)', and its
         // initial frame always exists: in `--batch' the current `*scratch*'
         // is displayed in `#<window 1 on *scratch*>' (GNU 31.0.90). Neomacs

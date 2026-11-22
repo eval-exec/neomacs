@@ -33,7 +33,14 @@ pub(crate) struct LayoutBufferSnapshot {
     accessible_end_emacs_byte: EmacsBytePos,
     accessible_end_char: CharPos0,
     source_context_end: CharPos0,
+    /// GNU `long_line_optimizations_p` at capture (`src/xdisp.c:20646`).
+    long_line_optimizations: bool,
     overlays: OverlaySnapshot,
+    /// Character span of the window-range overlay view. `None` is a
+    /// whole-buffer view. A walk that consumes at or past the end must be
+    /// retried with the whole buffer, so a range view can never commit a
+    /// subset answer. The category text scan is bounded by the same span.
+    overlay_view_span: Option<(CharPos0, CharPos0)>,
     /// Symbol plists for the category symbols actually referenced by this
     /// buffer's text and overlays. Capturing this sparse set keeps layout
     /// immutable without cloning the evaluator's complete obarray.
@@ -54,7 +61,7 @@ pub(crate) struct LayoutBufferSnapshot {
 impl LayoutBufferSnapshot {
     #[cfg(test)]
     pub fn from_buffer(buffer: &Buffer) -> Self {
-        Self::capture_buffer(buffer, None)
+        Self::capture_buffer(buffer, None, None, None)
     }
 
     /// Project a query's source boundary without narrowing the live buffer.
@@ -68,10 +75,39 @@ impl LayoutBufferSnapshot {
         self
     }
 
+    /// Exclusive character end of the window-range overlay view, or `None` for
+    /// a whole-buffer view. A walk that consumes at or past it is answered
+    /// from a subset and must be retried with the whole buffer.
+    pub(crate) fn overlay_view_end_char(&self) -> Option<CharPos0> {
+        self.overlay_view_span.map(|(_, end)| end)
+    }
+
     // Resolve layout variables once, with the caller's global defaults already
     // available. Window snapshots must not build and then replace a complete
     // buffer-local-only variable table on every layout attempt.
-    fn capture_buffer(buffer: &Buffer, variables: Option<VariableView<'_>>) -> Self {
+    fn capture_buffer(
+        buffer: &Buffer,
+        variables: Option<VariableView<'_>>,
+        visible: Option<(usize, usize)>,
+        overlay_span: Option<(usize, usize)>,
+    ) -> Self {
+        // `overlay_span` is the character span the walk consumed last time
+        // (plus margin), so the view covers what this walk can consume. A
+        // caller with no previous end keeps the whole-buffer view; the walk
+        // retries with that view if it consumes past a range view.
+        let (overlays, overlay_view_span) = match overlay_span {
+            Some((first, end)) => {
+                let total = buffer.total_char_end_pos().get();
+                let end = end.min(total);
+                let view = buffer.overlay_snapshot_in_char_span(first, end);
+                // A span that reaches the buffer end has nothing beyond it:
+                // do not arm the exhaustion retry for it.
+                let span =
+                    (end < total).then_some((CharPos0::new(first.min(end)), CharPos0::new(end)));
+                (view, span)
+            }
+            None => (buffer.overlays().snapshot(), None),
+        };
         Self {
             display_when: crate::display_when::DisplayWhenConditions::structural(),
             display_target: crate::display_property::DisplayPropertyTarget::Graphical,
@@ -81,8 +117,10 @@ impl LayoutBufferSnapshot {
             accessible_end_emacs_byte: buffer.point_max_emacs_byte_pos(),
             accessible_end_char: buffer.point_max_char_pos(),
             source_context_end: buffer.point_max_char_pos(),
+            long_line_optimizations: buffer.long_line_optimizations_p(),
             vars: resolve_layout_vars(buffer, variables),
-            overlays: buffer.overlays().snapshot(),
+            overlays,
+            overlay_view_span,
             category_symbol_plists: FxHashMap::default(),
             automatic_composition_spans: Vec::new(),
             string_composition_rules: None,
@@ -112,21 +150,37 @@ impl LayoutBufferSnapshot {
         visible: Option<(usize, usize)>,
         target: crate::display_property::DisplayPropertyTarget,
     ) -> Self {
-        Self::from_buffer_for_window_with_symbols(buffer, vars, visible, target, SymbolMode::Bare)
+        Self::from_buffer_for_window_with_symbols(
+            buffer,
+            vars,
+            visible,
+            visible,
+            target,
+            SymbolMode::Bare,
+        )
     }
 
     /// Capture the evaluator's symbol policy before the buffer walk starts.
+    ///
+    /// `overlay_span` is the character span `(first, end)` the previous walk
+    /// of this window consumed, or `None` for a whole-buffer overlay view.
     pub fn from_buffer_for_window_with_symbols(
         buffer: &Buffer,
         vars: VariableView<'_>,
         visible: Option<(usize, usize)>,
+        overlay_span: Option<(usize, usize)>,
         target: crate::display_property::DisplayPropertyTarget,
         symbol_mode: SymbolMode,
     ) -> Self {
         let obarray = vars.obarray();
-        let mut snapshot = Self::capture_buffer(buffer, Some(vars));
+        let mut snapshot = Self::capture_buffer(buffer, Some(vars), visible, overlay_span);
         snapshot.display_target = target;
-        snapshot.category_symbol_plists = capture_layout_category_symbol_plists(buffer, obarray);
+        snapshot.category_symbol_plists = capture_layout_category_symbol_plists_from_overlays(
+            buffer,
+            &snapshot.overlays,
+            obarray,
+            snapshot.overlay_view_span,
+        );
         snapshot.automatic_composition_spans =
             capture_automatic_composition_spans(buffer, vars, &snapshot.vars, visible, symbol_mode);
         snapshot.string_composition_rules =
@@ -241,6 +295,18 @@ fn capture_layout_category_symbol_plists(
     buffer: &Buffer,
     obarray: &Obarray,
 ) -> FxHashMap<SymId, Value> {
+    capture_layout_category_symbol_plists_from_overlays(buffer, buffer.overlays(), obarray, None)
+}
+
+/// Capture the category plists a layout walk can read. `overlays` is the
+/// walk's own view, so a window snapshot only visits the overlays it copied
+/// rather than every overlay in the buffer.
+fn capture_layout_category_symbol_plists_from_overlays(
+    buffer: &Buffer,
+    overlays: &OverlayList,
+    obarray: &Obarray,
+    span: Option<(CharPos0, CharPos0)>,
+) -> FxHashMap<SymId, Value> {
     fn remember(category: Value, obarray: &Obarray, plists: &mut FxHashMap<SymId, Value>) {
         if let Some(category_id) = category.as_bare_symbol_id() {
             neovm_core::emacs_core::symbol::SymbolPropertyRevision::observe(category_id);
@@ -252,8 +318,15 @@ fn capture_layout_category_symbol_plists(
 
     let category_property = Value::symbol(&crate::fixed_symbols::CATEGORY);
     let mut plists = FxHashMap::default();
-    let end = buffer.total_char_end_pos();
-    let mut pos = CharPos0::ZERO;
+    // Only the span the walk can consume can contribute a category to the
+    // layout. Bounding the text scan turns a whole-buffer walk into a
+    // window-sized one; an unbounded view keeps the old behavior.
+    let end = span
+        .map(|(_, end)| end.min(buffer.total_char_end_pos()))
+        .unwrap_or_else(|| buffer.total_char_end_pos());
+    let mut pos = span
+        .map(|(start, _)| start.min(end))
+        .unwrap_or(CharPos0::ZERO);
     while pos < end {
         if let Some(category) = buffer.text_props_get_property_at_char_pos(pos, category_property) {
             remember(category, obarray, &mut plists);
@@ -269,14 +342,11 @@ fn capture_layout_category_symbol_plists(
         pos = next.min(end);
     }
 
-    if !buffer.overlays().may_contain_property(category_property) {
+    if !overlays.may_contain_property(category_property) {
         return plists;
     }
-    for overlay in buffer.overlays().overlays_in_gnu_lists_order() {
-        if let Some(category) = buffer
-            .overlays()
-            .overlay_get_named(overlay, category_property)
-        {
+    for overlay in overlays.overlays_in_gnu_lists_order() {
+        if let Some(category) = overlays.overlay_get_named(overlay, category_property) {
             remember(category, obarray, &mut plists);
         }
     }
@@ -350,6 +420,71 @@ mod category_capture_tests {
         assert!(
             reads.is_some(),
             "unrelated history must not exhaust a visible layout's dependency budget"
+        );
+    }
+
+    #[test]
+    fn window_snapshot_copies_only_the_visible_overlay_range() {
+        let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+        eval.eval_str(
+            "(progn (insert (make-string 2048 ?x))
+                    (overlay-put (make-overlay 6 7) 'face 'bold)
+                    (overlay-put (make-overlay 2000 2001) 'face 'italic))",
+        )
+        .unwrap();
+        let id = eval.buffer_manager().current_buffer().unwrap().id();
+        let buffer = eval.buffer_manager().get(id).unwrap();
+        let snapshot = LayoutBufferSnapshot::from_buffer_for_window(
+            buffer,
+            eval.variables(),
+            Some((0, 64)),
+            crate::display_property::DisplayPropertyTarget::Graphical,
+        );
+        let view = snapshot.layout_overlays();
+        assert_eq!(
+            view.overlays_at_emacs_byte_pos(EmacsBytePos::new(5)).len(),
+            1,
+            "the in-window overlay is missing from the view"
+        );
+        assert!(
+            view.overlays_at_emacs_byte_pos(EmacsBytePos::new(1999))
+                .is_empty(),
+            "an overlay outside the window was copied"
+        );
+    }
+
+    #[test]
+    fn window_snapshot_reports_an_overlay_query_below_the_span_start() {
+        let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+        eval.eval_str(
+            "(progn (insert (make-string 2048 ?x))
+                    (overlay-put (make-overlay 6 7) 'face 'bold)
+                    (overlay-put (make-overlay 200 201) 'face 'italic))",
+        )
+        .unwrap();
+        let id = eval.buffer_manager().current_buffer().unwrap().id();
+        let buffer = eval.buffer_manager().get(id).unwrap();
+        let snapshot = LayoutBufferSnapshot::from_buffer_for_window_with_symbols(
+            buffer,
+            eval.variables(),
+            Some((0, 64)),
+            Some((100, 200)),
+            crate::display_property::DisplayPropertyTarget::Graphical,
+            SymbolMode::Bare,
+        );
+        let _ = snapshot
+            .layout_overlays()
+            .overlays_at_emacs_byte_pos(EmacsBytePos::new(150));
+        assert!(
+            !snapshot.layout_overlay_view_start_underflow(),
+            "an in-span query is complete"
+        );
+        let _ = snapshot
+            .layout_overlays()
+            .overlays_at_emacs_byte_pos(EmacsBytePos::new(50));
+        assert!(
+            snapshot.layout_overlay_view_start_underflow(),
+            "a layout query below the span start must request the whole-buffer retry"
         );
     }
 
@@ -446,6 +581,34 @@ mod category_capture_tests {
             assert_eq!(captured, expected);
         }
     }
+
+    #[test]
+    fn window_span_skips_text_categories_outside_the_consumed_span() {
+        let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+        eval.eval_str(
+            "(progn (insert (make-string 4000 ?x))
+                    (put-text-property 10 11 'category 'near-category)
+                    (put-text-property 3500 3501 'category 'far-category))",
+        )
+        .unwrap();
+        let id = eval.buffer_manager().current_buffer().unwrap().id();
+        let buffer = eval.buffer_manager().get(id).unwrap();
+        let full = capture_layout_category_symbol_plists(buffer, eval.obarray());
+        assert_eq!(
+            full.len(),
+            2,
+            "the whole-buffer capture sees both categories"
+        );
+        let view = buffer.overlay_snapshot_in_char_span(0, 100);
+        let bounded = capture_layout_category_symbol_plists_from_overlays(
+            buffer,
+            &view,
+            eval.obarray(),
+            Some((CharPos0::ZERO, CharPos0::new(100))),
+        );
+        assert_eq!(bounded.len(), 1, "only the in-span category is captured");
+        assert!(bounded.contains_key(&Value::symbol("near-category").as_bare_symbol_id().unwrap()));
+    }
 }
 
 /// Resolve every [`LayoutVar`] with the same precedence the per-query path
@@ -517,6 +680,10 @@ impl LayoutBufferView for LayoutBufferSnapshot {
 
     fn layout_point_max_char_pos(&self) -> CharPos0 {
         self.accessible_end_char
+    }
+
+    fn layout_long_line_optimizations_p(&self) -> bool {
+        self.long_line_optimizations
     }
 
     fn layout_measurement_context_end(&self) -> Option<CharPos0> {
@@ -664,6 +831,14 @@ impl LayoutBufferView for LayoutBufferSnapshot {
 
     fn layout_overlays(&self) -> &OverlayList {
         &self.overlays
+    }
+
+    fn layout_overlay_view_end_char(&self) -> Option<CharPos0> {
+        self.overlay_view_span.map(|(_, end)| end)
+    }
+
+    fn layout_overlay_view_start_underflow(&self) -> bool {
+        self.overlays.overlay_view_query_underflowed()
     }
 
     fn layout_automatic_composition_starting_at(&self, pos: CharPos0) -> Option<CharRange> {

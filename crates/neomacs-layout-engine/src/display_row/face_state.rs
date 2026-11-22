@@ -866,11 +866,18 @@ impl DisplayRowMeasurementPolicy {
             measurement_face.advance_for_char(font_metrics, ' ', fallback_width_policy.fallback());
         let (char_width, row_height, ascent) = metrics
             .map(|metrics| {
-                (
-                    fallback_width_policy.width(metrics.char_width),
-                    metrics.line_height,
-                    metrics.ascent,
-                )
+                // A concrete font can be narrower than the frame grid after
+                // face remapping. The grid width is only its missing-metrics
+                // fallback; flooring it here widens captured text/newline
+                // cursors even though shaping uses the smaller font advances.
+                let char_width = if self.uses_concrete_font_geometry()
+                    && fallback_width_policy.has_width(metrics.char_width)
+                {
+                    metrics.char_width
+                } else {
+                    fallback_width_policy.width(metrics.char_width)
+                };
+                (char_width, metrics.line_height, metrics.ascent)
             })
             .unwrap_or((
                 fallback_width_policy.fallback(),

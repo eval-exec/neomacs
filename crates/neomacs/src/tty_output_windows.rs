@@ -280,16 +280,18 @@ fn legacy_attributes(attrs: &CellAttrs, default: u16) -> u16 {
     foreground | (background << 4)
 }
 
-pub(crate) fn popup_line(row: usize, col: usize, text: &str) -> io::Result<()> {
+pub(crate) fn popup_line(row: usize, col: usize, text: &str, inverse: bool) -> io::Result<()> {
     with_session(|session| {
         if session.vt {
+            let highlight = if inverse { "\x1b[7m" } else { "" };
+            let reset = if inverse { "\x1b[0m" } else { "" };
             session.console().write_char_buffer(
-                format!("\x1b[{};{}H\x1b[7m{text}\x1b[0m", row + 1, col + 1).as_bytes(),
+                format!("\x1b[{};{}H{highlight}{text}{reset}", row + 1, col + 1).as_bytes(),
             )?;
         } else {
             session.move_to(row, col)?;
             let attrs = CellAttrs {
-                inverse: true,
+                inverse,
                 ..CellAttrs::default()
             };
             session

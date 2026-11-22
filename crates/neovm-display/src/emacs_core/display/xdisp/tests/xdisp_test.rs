@@ -6875,8 +6875,151 @@ fn line_number_display_width_uses_byte_newline_count_not_char_pos_scan() {
 #[test]
 fn test_long_line_optimizations_p() {
     crate::test_utils::init_test_tracing();
-    let result = builtin_long_line_optimizations_p(vec![]).unwrap();
-    assert!(result.is_nil());
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    eval.eval_str("(setq long-line-threshold 50000)")
+        .expect("set the long-line threshold");
+    // No redisplay has scanned this short buffer yet: GNU's flag starts nil.
+    assert!(
+        builtin_long_line_optimizations_p(&mut eval, vec![])
+            .unwrap()
+            .is_nil()
+    );
+    let buffer = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    eval.edit
+        .buffers
+        .get_mut(buffer)
+        .expect("buffer")
+        .insert(&"a".repeat(1_200_000));
+    // The redisplay fontification entry runs GNU's long-line scan.
+    ensure_fontified_for_redisplay(&mut eval, buffer, 0, 10).expect("fontify");
+    assert_eq!(
+        builtin_long_line_optimizations_p(&mut eval, vec![]).unwrap(),
+        Value::T
+    );
+}
+
+/// GNU `handle_fontified_prop` (`src/xdisp.c:4702-4786`) calls
+/// `fontification-functions` at the iterator's stop and moves on when the
+/// text is still unfontified afterwards: "This avoids an endless loop if they
+/// failed to fontify the text."  A hook that never sets `fontified` must
+/// therefore bound the Lisp calls by the requested stop, not by the region's
+/// character count.
+#[test]
+fn declining_fontification_function_is_not_retried_over_the_run() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let buffer = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    eval.edit
+        .buffers
+        .get_mut(buffer)
+        .expect("buffer")
+        .insert(&"a".repeat(10_000));
+    install_declining_fontification_hook(&mut eval, "p640-declining-calls");
+    ensure_fontified_for_redisplay(&mut eval, buffer, 0, 10_000)
+        .expect("a declining hook must terminate");
+    assert_eq!(
+        recorded_fontification_positions(&mut eval, "p640-declining-calls"),
+        vec![1],
+        "one request must enter the declining hook once, not once per character"
+    );
+}
+
+/// Install a fontification function that declines (`fontified` stays nil)
+/// and records every position it is entered at.
+///
+/// The display unit runtime has neither subr.el nor the upper-layer subrs
+/// (`propertize`, `insert`, `reverse`, ...), so the hook value is built from
+/// evaluator special forms and core subrs (`list`, `lambda`, `cons`) and the
+/// variable is stored from Rust.  No `make-local-variable`/`set` needed.
+fn install_declining_fontification_hook(eval: &mut Context, variable: &str) {
+    eval.eval_str(&format!("(defvar {variable} nil)"))
+        .expect("defvar the call log");
+    eval.eval_str(&format!("(setq {variable} nil)"))
+        .expect("reset the call log");
+    let hook = eval
+        .eval_str(&format!(
+            "(list (lambda (pos) (setq {variable} (cons pos {variable})) nil))"
+        ))
+        .expect("build the declining hook");
+    eval.store_variable_by_name("fontification-functions", hook);
+}
+
+/// The hook's recorded positions in entry order (the hook conses, so the
+/// list reads newest-first; reverse it in Rust rather than with the
+/// upper-layer `reverse` subr).
+fn recorded_fontification_positions(eval: &mut Context, variable: &str) -> Vec<i64> {
+    let value = eval.eval_str(variable).expect("read the call log");
+    let mut positions: Vec<i64> = neovm_value::value::list_to_vec(&value)
+        .expect("the call log is a list")
+        .into_iter()
+        .map(|entry| entry.as_int().expect("fixnum position"))
+        .collect();
+    positions.reverse();
+    positions
+}
+
+/// With an interval tree present GNU's `compute_stop_pos`
+/// (`src/xdisp.c:4371-4461`) advances the iterator to the automatic-composition
+/// delimiter clamp: the first space, TAB, newline, or formfeed in
+/// `[POS + 100, POS + 1000]`.  A declining hook is entered at each of those
+/// stops, never twice at one position.  The properties are irrelevant to
+/// `it_props`, so the newlines (not the property edges) are the stops.
+#[test]
+fn declining_fontification_hook_advances_by_gnu_property_stops() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let buffer = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    // `insert`/`propertize` are upper-layer subrs the display unit runtime
+    // does not install, so build the text and its interval tree from Rust.
+    let line = format!("{}\n", "a".repeat(150));
+    eval.edit
+        .buffers
+        .get_mut(buffer)
+        .expect("buffer")
+        .insert(&line.repeat(8));
+    for index in 0..8i64 {
+        let start = index * 151 + 1;
+        let end = start + 150;
+        neovm_edit::emacs_core::textprop::builtin_put_text_property(
+            &mut eval,
+            vec![
+                Value::fixnum(start),
+                Value::fixnum(end),
+                Value::symbol("p640"),
+                Value::fixnum(index),
+            ],
+        )
+        .expect("put the p640 text property");
+    }
+    install_declining_fontification_hook(&mut eval, "p640-stop-calls");
+    let total = eval
+        .edit
+        .buffers
+        .get(buffer)
+        .expect("buffer")
+        .total_char_len()
+        .get() as i64;
+    ensure_fontified_for_redisplay(&mut eval, buffer, 0, total).expect("fontify");
+    assert_eq!(
+        recorded_fontification_positions(&mut eval, "p640-stop-calls"),
+        vec![1, 151, 302, 453, 604, 755, 906, 1057, 1208],
+        "the declining hook must follow GNU's newline stops, not every character"
+    );
 }
 
 // Test wrong arity errors

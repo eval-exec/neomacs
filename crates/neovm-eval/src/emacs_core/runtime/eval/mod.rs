@@ -18,7 +18,7 @@ use self::data::xwidget;
 use self::interactive_registry::InteractiveRegistry;
 use self::keymap_lookup::{list_keymap_define, list_keymap_set_parent, make_sparse_list_keymap};
 use self::protocol::tty_host::TtyFrameHostFactory;
-pub use self::protocol::{DisplayHost, FrameFontRequest};
+pub use self::protocol::{DisplayHost, FrameFontRequest, FrameFontSelection};
 pub use self::protocol::{
     FontOpeningSize, FrameFontSize, TerminalCreateRequest, TerminalDisplayTarget,
     TerminalFloatPlacement, TerminalGridSize, TerminalId,
@@ -39,7 +39,8 @@ use crate::emacs_core::eval::data::window_layout_query::{
     take_layout_query_adapter,
 };
 use crate::emacs_core::eval::data::window_state::{
-    BodyRedisplayRevision, ForcedBodyRedisplay, FrameManager,
+    BodyRedisplayRevision, BufferRedisplayRevisions, ForcedBodyRedisplay, FrameManager,
+    RedisplayOptimizationsRevision,
 };
 pub use neomacs_display_protocol::GraphicalFaceAttribute;
 use neovm_edit::buffer::{BufferId, BufferManager, CharPos0, EmacsBytePos, LispCharPos1};
@@ -59,6 +60,9 @@ use neovm_value::intern::{
 };
 use neovm_value::kmacro::KmacroManager;
 use neovm_value::symbol::{CanonicalAccess, ConstantWrite, Obarray};
+pub(crate) use neovm_value::tagged::gc::condition_snapshots::{
+    ConditionSnapshotAdmission, ConditionSnapshotAdmitError,
+};
 use neovm_value::tagged::header::{CLOSURE_ARGLIST, SubrDispatchKind, SubrInteractivity};
 use neovm_value::value::*;
 
@@ -108,9 +112,11 @@ use subr_abi::{SubrFn, SubrObj};
 mod callback;
 mod command_error;
 mod context_api;
+pub(crate) mod derived_counters;
 mod edit_host;
 mod lexenv_cache;
 mod lexical_symbols;
+pub mod long_line;
 mod text_host;
 pub(crate) use self::lexenv_cache::LexenvAssqCache;
 pub(crate) use callback::{CheckedNativeCallback, native_callback_cache_enabled};
@@ -180,36 +186,6 @@ const GC_THRESHOLD_FLOOR_BYTES: usize = GC_DEFAULT_THRESHOLD_BYTES / 10;
 #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) const GC_STARTUP_THRESHOLD_CEILING_BYTES: usize = 4 * 1024 * 1024;
 const GC_HI_THRESHOLD_BYTES: usize = (i64::MAX as usize) / 2;
-const GC_PERCENT_SCALE: u64 = 1_000_000;
-/// Live-proportional adaptive trigger (`effective_gc_threshold_bytes`): do not
-/// start the next cycle until at least `live_bytes × NUM/DEN` fresh bytes have
-/// been allocated, so the O(live) full-mark cost amortizes as the live heap
-/// grows (total mark work stays O(bytes allocated)) instead of re-marking the
-/// whole heap every fixed `gc-cons-threshold` bytes. The elisp-derived value
-/// (`gc-cons-threshold`/`gc-cons-percentage`) is a FLOOR this term can only
-/// raise, never lower, and `GC_HI_THRESHOLD_BYTES` still caps the result.
-const GC_LIVE_GROWTH_NUM: u128 = 1;
-const GC_LIVE_GROWTH_DEN: u128 = 2;
-
-/// The live-growth term as a percentage of the live heap, overridable for
-/// measurement with `NEOVM_GC_LIVE_GROWTH_PERCENT`.
-///
-/// The default is 50, i.e. the `NUM/DEN` above.  GNU's nearest equivalent is
-/// `gc-cons-percentage`, whose default is 10, so this term is five times GNU's
-/// and dominates whatever the user asked for: because it combines as a strict
-/// max, a `gc-cons-threshold` below it has no effect at all.  That is worth
-/// being able to measure rather than argue about, and `0` disables the term
-/// entirely, leaving GNU's contract exactly.
-fn gc_live_growth_percent() -> u128 {
-    static PERCENT: OnceLock<u128> = OnceLock::new();
-    *PERCENT.get_or_init(|| {
-        std::env::var("NEOVM_GC_LIVE_GROWTH_PERCENT")
-            .ok()
-            .and_then(|value| value.parse::<u128>().ok())
-            .filter(|percent| *percent <= 10_000)
-            .unwrap_or(GC_LIVE_GROWTH_NUM * 100 / GC_LIVE_GROWTH_DEN)
-    })
-}
 pub(crate) const INTERNAL_COMPILER_FUNCTION_OVERRIDES: &str =
     "internal--compiler-function-overrides";
 
@@ -1922,6 +1898,13 @@ struct ThreadDynamicBindingState {
     lexenv: Value,
     specpdl: Vec<SpecBinding>,
     condition_stack: Vec<ConditionFrame>,
+    /// GNU `lisp_eval_depth` lives in the thread state
+    /// (`src/thread.h` `m_lisp_eval_depth`), so switching `current_thread`
+    /// switches the counter. A new worker's state is zeroed and starts at 0.
+    /// The simulation runs the next worker on this same `Context`, nested
+    /// under the waiter, so the counter has to travel with the suspended
+    /// stack or every parked waiter adds to the caller's depth.
+    lisp_eval_depth: usize,
     /// `Some` is a simulated worker parked across a wait. `None` is the
     /// caller `enter_thread_runtime` suspended. Parked frames share this vec
     /// so a wait does not add a `Context` field.
@@ -2232,6 +2215,7 @@ cached_symbol_id!(max_lisp_eval_depth_symbol, "max-lisp-eval-depth");
 // Symbol identity is global and immutable; values remain owned by each Context.
 cached_symbol_id!(lisp_eval_depth_reserve_symbol, "lisp-eval-depth-reserve");
 cached_symbol_id!(frame_alpha_lower_limit_symbol, "frame-alpha-lower-limit");
+cached_symbol_id!(ns_confirm_quit_symbol, "ns-confirm-quit");
 cached_symbol_id!(byte_code_literal_symbol, "byte-code-literal");
 cached_symbol_id!(input_decode_map_symbol, "input-decode-map");
 cached_symbol_id!(local_function_key_map_symbol, "local-function-key-map");
@@ -2331,6 +2315,7 @@ fn install_core_eval_symbols(obarray: &mut Obarray, reset_runtime_values: bool) 
         max_lisp_eval_depth_symbol(),
         buffer_undo_list_symbol(),
         frame_alpha_lower_limit_symbol(),
+        ns_confirm_quit_symbol(),
     ] {
         obarray.mark_runtime_projected_id(projected);
     }
@@ -2806,6 +2791,7 @@ pub(crate) fn test_resolved_opened_font(
             descent_px: metrics.descent as f32,
             space_advance_px: metrics.space_width as f32,
             glyph_advance: Default::default(),
+            spacing: None,
         },
         foundry: foundry.map(neovm_value::heap_types::LispString::from_utf8),
         slant,
@@ -3608,7 +3594,7 @@ pub struct Context {
     pub(crate) face_table: WorldSlot<FaceTable>,
     pub input_progress: neomacs_display_protocol::input_progress::InputProgress,
     body_redisplay_by_window: FxHashMap<WindowId, u64>,
-    body_redisplay_by_buffer: FxHashMap<BufferId, u64>,
+    body_redisplay_by_buffer: FxHashMap<BufferId, BufferRedisplayRevisions>,
     /// Which windows' chrome (mode/header/tab line) must be re-generated on
     /// the next redisplay. See [`ChromeDirty`].
     chrome_dirty: crate::emacs_core::eval::data::window_state::ChromeDirty,
@@ -4024,16 +4010,6 @@ pub struct Context {
     /// Appended after the pinned layout; only the Context size grows.
     #[doc(hidden)]
     pub frame_and_buffer_state: Option<Value>,
-    /// Collector time banked by `gc_collect_from_current_roots_body`: every
-    /// call of that body that starts, polls, terminates, minor-marks or
-    /// sweeps a cycle without completing it adds its duration here, and the
-    /// body call that completes a cycle publishes the sum into `gc-elapsed`
-    /// (GNU adds the whole `garbage_collect` duration, alloc.c). A cycle
-    /// drained by another `drain_to_quiescent` caller (thread admission,
-    /// green-thread switch or retirement, root registration) leaves its
-    /// banked time here until the next completed collection publishes it.
-    /// Appended after the pinned layout; only the Context size grows.
-    gc_cycle_elapsed: std::time::Duration,
     /// Frame objects named by bare ids the keyboard still holds: queued
     /// input, the last event frame, the mouse position, and a presented
     /// pointer observation. Refreshed before an explicit collection arms
@@ -4042,6 +4018,24 @@ pub struct Context {
     /// alive because `recent_keys` stores the frame object
     /// (`frame.c:2898-2901`).
     retained_frame_pins: Vec<Value>,
+    /// Serial admission of published condition snapshots. `Dormant` until
+    /// [`Self::admit_condition_snapshots`]. One niche-optimized pointer,
+    /// appended as the trailing field so every earlier offset stays put.
+    /// Startup does not admit. The hot signal pair and `run_loop` do not
+    /// load this field.
+    condition_snapshots: ConditionSnapshotAdmission,
+    /// #776: retired-process records taken from the manager for the in-flight
+    /// AUTOMATIC collection. A concurrent cycle spans several safe-point
+    /// driver calls, so the batch must outlive one call; the explicit
+    /// `garbage-collect` path uses its own stack guard instead. `Some` means
+    /// those records are still out of the manager and armed as ephemerons.
+    /// Appended after the pinned layout; only the Context size grows.
+    automatic_retired_processes: Option<
+        Vec<(
+            neovm_value::heap_types::ProcessId,
+            data::process_state::Process,
+        )>,
+    >,
 }
 
 // A mutex does not make the host hooks, Rc leases or TLS views transferable.
@@ -4098,7 +4092,7 @@ pub(crate) enum LispExecution {
 #[derive(Clone, Copy, Debug)]
 struct GcRuntimeSettingsCache {
     gc_cons_threshold_bytes: usize,
-    gc_cons_percentage_scaled: Option<std::num::NonZeroU64>,
+    gc_cons_percentage: Option<f64>,
     memory_full: GcMemoryPressure,
     /// The four Lisp variables the threshold formula reads, resolved against
     /// the LIVE interner on every settings refresh (rare) instead of through
@@ -4264,7 +4258,7 @@ impl GcSettingSyms {
 const _: () = {
     assert!(std::mem::size_of::<Option<GcSettingSyms>>() == 16);
     assert!(std::mem::size_of::<GcMemoryPressure>() == 8);
-    assert!(std::mem::size_of::<GcRuntimeSettingsCache>() == 48);
+    assert!(std::mem::size_of::<GcRuntimeSettingsCache>() == 56);
     assert!(std::mem::align_of::<GcRuntimeSettingsCache>() == 8);
 };
 
@@ -4272,7 +4266,7 @@ impl Default for GcRuntimeSettingsCache {
     fn default() -> Self {
         Self {
             gc_cons_threshold_bytes: GC_DEFAULT_THRESHOLD_BYTES,
-            gc_cons_percentage_scaled: std::num::NonZeroU64::new(100_000),
+            gc_cons_percentage: Some(0.1),
             memory_full: GcMemoryPressure::Normal,
             syms: None,
             hash_test_accounting: HashTestGcAccountingSlot::default(),
@@ -5085,6 +5079,13 @@ impl Context {
             let limit = self::data::frame_alpha::lower_limit(value);
             if let Some(host) = self.display_host.as_mut() {
                 host.set_gui_frame_alpha_lower_limit(limit);
+            }
+        } else if sym_id == ns_confirm_quit_symbol() {
+            // AppKit cannot read evaluator-owned Lisp. Publish only the
+            // completed store's scalar truth value, including let/unlet;
+            // pre-store watcher failures never reach this boundary.
+            if let Some(host) = self.display_host.as_mut() {
+                host.set_ns_confirm_quit(value.is_truthy());
             }
         } else if sym_id == max_lisp_eval_depth_symbol()
             && let Some(depth) = value.as_fixnum()
@@ -5924,6 +5925,11 @@ impl Context {
                     }
                 }
                 neovm_value::symbol::ValueCell::Forwarded(_) => {
+                    // GNU's `*-consed` DEFVAR_INTs live in the allocation
+                    // accounting; derive them before the generic cell load.
+                    if let Some(value) = self.derived_memory_use_read(sym_id) {
+                        return Ok(SymbolValueLookup::Bound(value));
+                    }
                     if let Some(lookup) = self.forwarded_buffer_obj_value(sym_id, sym) {
                         return Ok(lookup);
                     }
@@ -7287,6 +7293,9 @@ impl Context {
                     }
                 }
                 SymbolRedirect::Forwarded => {
+                    if let Some(value) = self.derived_memory_use_read(resolved) {
+                        return Some(value);
+                    }
                     if let Some(lookup) = self.forwarded_buffer_obj_value(resolved, sym) {
                         return match lookup {
                             SymbolValueLookup::Bound(value) => Some(value),
@@ -7664,6 +7673,14 @@ pub mod command_loop;
 #[path = "tests/absent_fontset_generation_test.rs"]
 mod absent_fontset_generation_tests;
 
+#[cfg(test)]
+#[path = "tests/derived_counters_test.rs"]
+mod derived_counters_tests;
+
+#[cfg(test)]
+#[path = "tests/gc_rows_test.rs"]
+mod gc_rows_tests;
+
 #[doc(hidden)]
 pub mod redisplay_hooks;
 #[cfg(any(test, feature = "redisplay-test-policy", feature = "test-support"))]
@@ -7686,6 +7703,7 @@ mod allocation_flow;
 pub(crate) use allocation_flow::AllocationFailureContextExt;
 #[cfg(feature = "test-support")]
 pub use allocation_flow::AllocationFailureContextExt;
+mod condition_admission;
 mod construct;
 mod dispatch_class;
 mod form_head_cache;
@@ -7703,6 +7721,13 @@ mod saved_state_scope_test;
 #[cfg(all(test, not(feature = "gc-memory-telemetry")))]
 #[path = "tests/weak_table_b8.rs"]
 mod weak_table_b8;
+
+/// The stopped major's weak sweep (E3 slice 1) and the serial stop keep the
+/// same weak-table entries. Omitted in telemetry builds: `supported` refuses
+/// the whole heap there, the refusal 0c0469595d pins.
+#[cfg(all(test, not(feature = "gc-memory-telemetry")))]
+#[path = "tests/weak_sweep_pin_test.rs"]
+mod weak_sweep_pin_tests;
 
 #[cfg(test)]
 #[path = "tests/admission_header_test.rs"]
@@ -7764,6 +7789,9 @@ mod var_fast_tests;
 #[path = "tests/watcher_redispatch_test.rs"]
 mod watcher_redispatch_tests;
 
+#[cfg(test)]
+#[path = "tests/ephemeron_unwind_guard_test.rs"]
+mod ephemeron_unwind_guard_tests;
 #[cfg(test)]
 #[path = "tests/gc_elapsed_whole_cycle_test.rs"]
 mod gc_elapsed_whole_cycle_tests;

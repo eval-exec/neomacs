@@ -264,6 +264,20 @@ pub type WeakPolicyCase = crate::tagged::gc::mutator_registration::WeakPolicyCas
 pub type WeakPolicyHost<'a, 'heap, K> =
     crate::tagged::gc::mutator_registration::WeakPolicyHost<'a, 'heap, K>;
 
+/// E3 slice 1 stopped-major fixtures: resource handles, explicit-ephemeron
+/// registries, and their post-job drains. The Context, admission, and the
+/// real `AllStopped` job stay in the core shell; these items only prepare the
+/// value-private fixture and assert the stopped major's observable effects.
+#[cfg(all(
+    any(test, feature = "test-support"),
+    not(feature = "gc-memory-telemetry")
+))]
+pub use crate::tagged::gc::mutator_registration::{
+    StoppedAdapterEphemeronFixture, StoppedAdapterResourceFixture,
+    assert_stopped_adapter_ephemerons, assert_stopped_adapter_resources,
+    prepare_stopped_adapter_ephemerons, prepare_stopped_adapter_resources,
+};
+
 /// C5 intern-growth AUTHORITY fence (LEAD 05:3xZ; peer B2 host ruling).
 ///
 /// The real two-actor intern-growth transaction is value's test-support
@@ -509,8 +523,8 @@ pub fn function(error: &crate::tagged::gc::mutator_registration::FunctionError) 
 /// only public path.
 pub use crate::tagged::gc::mutator_registration::test_fences::{
     AdmissionProbeGuard, AdmissionProbeState, AuthorityProbeGuard, AuthorityProbeState,
-    KeeperTableScope, begin_restore_retry_for_test, poison_registry_for_test,
-    reset_catalog_waits_for_test,
+    KeeperTableScope, begin_restore_retry_for_test, install_restore_gate_hook_for_test,
+    poison_registry_for_test, reset_catalog_waits_for_test,
 };
 
 /// Peer-signed MEMQ-TAIL-SHAPES (b): closure-scoped stopped-tables install.

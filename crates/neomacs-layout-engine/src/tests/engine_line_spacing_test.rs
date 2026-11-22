@@ -364,6 +364,101 @@ fn newline_cursor_replay_preserves_font_and_spacing_metrics() {
     }
 }
 
+/// A newline inheriting the buffer default keeps that font's remapped width;
+/// the frame column width still owns grid geometry and non-stretching tabs.
+#[test]
+fn remapped_default_newline_cursor_replay_preserves_width() {
+    for height in ["0.5", "2.0"] {
+        for line_numbers in ["nil", "t"] {
+            let (mut eval, frame, _buffer, window) =
+                incr_editing_frame("mmmmmmmm\nnext\n", 800, 240);
+            realize_test_gui_frame(&mut eval, frame);
+            install_test_gnu_line_number_face_inheritance(&mut eval);
+            eval.eval_str(&format!(
+                "(progn
+                   (internal-set-lisp-face-attribute
+                     'default :family \"DejaVu Sans Mono\" (selected-frame))
+                   (set (make-local-variable 'face-remapping-alist)
+                     '((default (:height {height}) default)))
+                   (set (make-local-variable 'display-line-numbers) {line_numbers})
+                   (set-window-point (selected-window) 1))"
+            ))
+            .unwrap();
+            let mut engine = crate::font::metrics::test_catalog::layout_engine();
+            crate::font::metrics::test_catalog::enable_metrics(&mut engine);
+            let FrameLayoutAttempt::Prepared(initial) =
+                engine.redisplay_frame_attempt(&mut eval, frame)
+            else {
+                panic!("initial remapped frame should prepare");
+            };
+            let first_text_glyph = initial
+                .window_matrices
+                .iter()
+                .find(|entry| entry.window_id.get() == window.0 as i64)
+                .into_iter()
+                .flat_map(|entry| &entry.matrix.rows)
+                .flat_map(|row| &row.glyphs[GlyphArea::Text.index()])
+                .find(|glyph| matches!(glyph.provenance, GlyphProvenance::Buffer { charpos: 0 }))
+                .cloned();
+            let initial = initial.materialize();
+            let text_width = initial.active_cursor().expect("initial text cursor").width;
+            // A hand-built frame starts with the TTY family "default". GNU
+            // initializes a GUI default from its opened frame font instead
+            // (xfaces.c:6008-6043). Seed a real fixed-pitch family above: a
+            // proportional fallback's m advance need not equal its average
+            // column width, even after its size has changed correctly.
+            let glyph = first_text_glyph.expect("first buffer character");
+            let face = initial.faces.get(&glyph.face_id).unwrap();
+            let frame_face = initial.faces.get(&FaceId::new(0)).unwrap();
+            assert_eq!(&*face.font_family, "DejaVu Sans Mono");
+            assert_eq!(&*frame_face.font_family, "DejaVu Sans Mono");
+            assert!(
+                (face.font_size - frame_face.font_size * height.parse::<f32>().unwrap()).abs()
+                    < 0.001,
+                "the published text font must carry the remapped size"
+            );
+            assert_ne!(
+                text_width,
+                eval.frame_manager().get(frame).unwrap().char_width,
+                "the remapped text must differ from the frame grid"
+            );
+
+            // Both positions stay on the same numbered row, so the gutter's
+            // current-line face does not invalidate cursor-only replay.
+            for point in [9, 1, 9] {
+                eval.eval_str(&format!("(set-window-point (selected-window) {point})"))
+                    .unwrap();
+                let FrameLayoutAttempt::Prepared(replayed) =
+                    engine.redisplay_frame_attempt(&mut eval, frame)
+                else {
+                    panic!("remapped cursor replay should prepare");
+                };
+                assert_eq!(engine.last_layout_stats().cursor_only_windows, 1);
+                assert!(engine.last_layout_stats().reused_rows > 0);
+                let mut fresh = crate::font::metrics::test_catalog::layout_engine();
+                crate::font::metrics::test_catalog::enable_metrics(&mut fresh);
+                let FrameLayoutAttempt::Prepared(rebuilt) =
+                    fresh.redisplay_frame_attempt(&mut eval, frame)
+                else {
+                    panic!("fresh remapped frame should prepare");
+                };
+                let replayed = replayed.materialize();
+                let rebuilt = rebuilt.materialize();
+                let actual = replayed.active_cursor().expect("replayed cursor").width;
+                let expected = rebuilt.active_cursor().expect("fresh cursor").width;
+                assert_eq!(
+                    actual, expected,
+                    "height={height}, line-numbers={line_numbers}, point={point}"
+                );
+                assert_eq!(
+                    actual, text_width,
+                    "newline and text cursors share the remapped monospace width: height={height}, line-numbers={line_numbers}, point={point}"
+                );
+            }
+        }
+    }
+}
+
 /// Mixed-height rows must not change cursor geometry when only point moves.
 #[test]
 fn mixed_height_newline_cursor_replay_matches_fresh_capture() {

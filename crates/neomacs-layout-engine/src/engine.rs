@@ -1091,6 +1091,10 @@ enum LeafLayoutAttempt {
     /// still overflows a profiling evaluator's stack well before the
     /// numeric budget is spent.
     Retry(Box<WindowLayoutRetry>),
+    /// The walk consumed at or past the window-range overlay view's end. The
+    /// attempt was answered from a subset and is discarded; the window loop
+    /// retries once with the whole-buffer overlay view.
+    OverlayViewExhausted,
     LogicalInputsChanged,
     MatrixCapacityUnavailable,
     /// A `when` clause the walk took by the structural rule evaluated nil
@@ -3154,6 +3158,7 @@ impl LayoutEngine {
                     MAX_WINDOW_VISIBILITY_RETRIES
                 };
                 let mut viewport_retry_phase = ViewportResolutionPhase::Resolve;
+                let mut overlay_view_full = false;
                 let window_layout = loop {
                     // A leaf hook/visibility continuation can re-enter this
                     // loop without visiting the outer transaction restart.
@@ -3188,6 +3193,7 @@ impl LayoutEngine {
                         window_geometry.reserve_terminal_right_border_col,
                         visibility_retry_budget,
                         viewport_retry_phase.clone(),
+                        overlay_view_full,
                         cursor_only_replay.take(),
                         scroll_replay.take(),
                         is_edit,
@@ -3249,6 +3255,18 @@ impl LayoutEngine {
                             visibility_retry_budget = retry.remaining_visibility_retries;
                             viewport_retry_phase = retry.viewport_resolution;
                             is_edit = false;
+                        }
+                        LeafLayoutAttempt::OverlayViewExhausted => {
+                            // The attempt read a subset of the buffer's
+                            // overlays past the range view's end. It is
+                            // discarded; one more attempt uses the
+                            // whole-buffer view, which cannot exhaust.
+                            debug_assert!(
+                                !overlay_view_full,
+                                "whole-buffer overlay view reported exhaustion"
+                            );
+                            overlay_view_full = true;
+                            continue;
                         }
                         LeafLayoutAttempt::Effect(effect) => {
                             lisp_ledger.acknowledge_scroll_hook(&effect);
@@ -4316,6 +4334,20 @@ impl LayoutEngine {
                         RetainedWindowMatrix {
                             matrix: entry.matrix.clone(),
                             key: displayed_key,
+                            // The buffer's prevent-optimizations revision at
+                            // this accepted display: its current value now
+                            // consumes every raise up to here, exactly as
+                            // mark_window_display_accurate_1 clears GNU's flag
+                            // (src/xdisp.c:18295-18297).
+                            redisplay_optimizations: evaluator
+                                .prevent_redisplay_optimizations_revision(
+                                    neovm_core::buffer::BufferId(key.buffer_id),
+                                ),
+                            buffer_modiff: evaluator
+                                .buffer_manager()
+                                .get(neovm_core::buffer::BufferId(key.buffer_id))
+                                .map(neovm_core::buffer::Buffer::modified_tick)
+                                .unwrap_or(0),
                             // Every enabled body row now carries real
                             // MATRIX_ROW_START/END_CHARPOS values (empty lines
                             // hold their line's position; the EOB placeholder
@@ -5786,6 +5818,48 @@ impl LayoutEngine {
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// The overlay-view character span for one window attempt.
+    ///
+    /// The view must cover what the walk consumes. The accepted previous
+    /// window end is the measured consumed span; a full visible budget of
+    /// margin covers ordinary growth. `None` (whole-buffer view) on the first
+    /// frame or when no previous span is recorded. Invisible overlays can make
+    /// the walk consume far past this span; that attempt is rejected and
+    /// retried with the whole-buffer view, so a range view never commits a
+    /// subset answer.
+    fn overlay_view_char_span_for(
+        &self,
+        params: &WindowParams,
+        buffer: &neovm_core::buffer::Buffer,
+    ) -> Option<(usize, usize)> {
+        // `visible_char_bound` returns an unbounded budget when the source
+        // extent is AccessibleEnd; the overlay view must stay window-sized in
+        // that mode too, so derive the viewport rows from the text-area
+        // geometry instead of the source-interpretation row count.
+        let cols = (params.text_bounds.width / params.char_width.max(1.0)).ceil() as usize;
+        let rows = (params.text_bounds.height / params.char_height.max(1.0))
+            .ceil()
+            .max(1.0) as usize;
+        let screenful = rows.saturating_mul(cols).max(1);
+        let budget = screenful.saturating_mul(4).max(8192);
+        let first = (params.window_start.max(0) as usize).saturating_sub(screenful);
+        let minimum_end = first.saturating_add(budget);
+        let previous_end = self
+            .retained_window_matrices
+            .get(&DisplayWindowId::new(params.window_id))
+            .and_then(|matrix| matrix.display_snapshot.visible_buffer_span())
+            .map(|span| {
+                neovm_core::buffer::CharPos0::from_lisp(span.end())
+                    .get()
+                    .saturating_add(1)
+            })?;
+        let end = previous_end
+            .max(minimum_end)
+            .saturating_add(budget)
+            .min(buffer.total_char_end_pos().get());
+        Some((first.min(end), end))
+    }
+
     fn layout_window_rust<FS: crate::neovm_bridge::FaceServices>(
         &mut self,
         evaluator: &mut neovm_core::emacs_core::Context,
@@ -5797,6 +5871,9 @@ impl LayoutEngine {
         reserve_right_border_col: bool,
         remaining_visibility_retries: usize,
         viewport_resolution: ViewportResolutionPhase,
+        // A walk that consumed at or past a window-range overlay view must be
+        // retried once with the whole-buffer view. `true` selects it.
+        overlay_view_full: bool,
         // Phase A (gather) classified this window's incremental fast path against
         // the *original* params (before any echo-buffer swap below), reading the
         // same retained key the predicate was snapshotted from. Phase B (here)
@@ -5910,6 +5987,22 @@ impl LayoutEngine {
         let accessible_end = params.accessible_end_charpos().get();
         let window_start = params.window_start_charpos().get().max(accessible_start);
         let max_rows = i64::try_from(params.source_interpretation_rows()).unwrap_or(i64::MAX);
+        // GNU reads `w->window_end_valid` once, at the start of
+        // `redisplay_window`, and it is one input of
+        // `current_matrix_up_to_date_p` (src/xdisp.c:20557-20586). The walk
+        // below REPUBLISHES it, so the probe gate must read this entry value,
+        // not the one the completed walk leaves behind.
+        let window_end_valid_at_entry = evaluator
+            .frame_manager()
+            .get(frame_id)
+            .and_then(|frame| frame.find_window(window_id))
+            .and_then(neovm_core::window::Window::window_end_valid)
+            == Some(true);
+        // Speculative pre-walk span.  It lets a fontifying hook (jit-lock
+        // style) mark text before the walk, and it also bounds the
+        // display-condition (`when`) scan.  A hook that DECLINES ends the
+        // pre-walk request at its first declined stop; the coverage pass below
+        // then owns GNU's visible-stop schedule.
         let fontify_end = window_start
             .saturating_add(max_rows.saturating_mul(200))
             .min(accessible_end);
@@ -5919,10 +6012,15 @@ impl LayoutEngine {
             return LeafLayoutAttempt::LogicalInputsChanged;
         };
         lisp_ledger.rows_fontification.begin_leaf(window_id, buf_id);
-        let fontification_outcome =
-            lisp_ledger
-                .rows_fontification
-                .ensure(evaluator, buf_id, window_start, fontify_end);
+        let fontification_outcome = lisp_ledger.rows_fontification.ensure(
+            evaluator,
+            buf_id,
+            window_start,
+            fontify_end,
+            params.point_charpos().get() as i64 + 1,
+            neovm_core::emacs_core::xdisp::RedisplayFontificationRequest::Prepass,
+            neovm_core::emacs_core::xdisp::ProbeRow::None,
+        );
         // `(when FORM . SPEC)` display specs need Lisp, which the walk cannot
         // run while it holds the buffer: evaluate the forms of the span the
         // walk can reach (the same one fontification just covered) here, so
@@ -6077,10 +6175,16 @@ impl LayoutEngine {
         // fontification and incremental classification.
         let layout_buffer = match evaluator.buffer_manager().get(buf_id) {
             Some(buffer) => {
+                let overlay_span = if overlay_view_full {
+                    None
+                } else {
+                    self.overlay_view_char_span_for(params, buffer)
+                };
                 super::neovm_bridge::LayoutBufferSnapshot::from_buffer_for_window_with_symbols(
                     buffer,
                     evaluator.variables(),
                     Some(visible_char_bound(params)),
+                    overlay_span,
                     display_target,
                     evaluator.symbol_mode(),
                 )
@@ -6217,6 +6321,7 @@ impl LayoutEngine {
             ),
             BufferSourceRenderAttemptOutcome::Skipped
             | BufferSourceRenderAttemptOutcome::LogicalInputsChanged
+            | BufferSourceRenderAttemptOutcome::OverlayViewExhausted
             | BufferSourceRenderAttemptOutcome::GlyphMatrixCapacityExhausted
             | BufferSourceRenderAttemptOutcome::GnuMiniEobCursorUnavailable { .. }
             | BufferSourceRenderAttemptOutcome::Retry { .. }
@@ -6267,17 +6372,106 @@ impl LayoutEngine {
             return LeafLayoutAttempt::LogicalInputsChanged;
         }
 
-        // The contiguous pre-pass above is an optimization, not a semantic
-        // visibility boundary.  A provisional row walk can jump over an
-        // arbitrarily large invisible/folded span and reach visible positions
-        // beyond that estimate.  GNU handles `fontified` at exactly those
-        // iterator stops.  Our immutable walk records the equivalent visible
-        // positions; fontify any uncovered sparse spans and retry from a fresh
-        // snapshot before accepting their provisional glyphs.
-        if matches!(
-            &render_outcome,
-            BufferSourceRenderAttemptOutcome::Finished { .. }
-        ) {
+        // Two fontification requests precede this comment's pass.  The
+        // speculative PREPASS above covers the budget span for hooks that MARK
+        // text; a hook that declines ends that request at its first declined
+        // stop.  The VISIBLE pass below starts from the completed row walk's
+        // own positions, so it follows the stops GNU's iterator actually
+        // displays (handle_fontified_prop, src/xdisp.c:4702-4786), including
+        // GNU's one-row probe past the window end when the walk qualifies.
+        // Sparse spans are fontified before retrying from a fresh snapshot.
+        //
+        // Convergence with a mixed hook (marks one stop, declines a later
+        // one): the prepass reports Fontified, which forces a retry; that
+        // retry's prepass starts on the now-fontified text and its first
+        // remaining unfontified stop is declined, yielding
+        // CallbacksUnchanged; the visible pass then restarts from the window
+        // start and covers the declined stops.
+        //
+        // GNU's reuse decision, not Neo's: `partial_line_height` is skipped
+        // only when `current_matrix_up_to_date_p` held at entry AND the walk
+        // actually took a reuse path.  Neo's own reuse of rows under a stale
+        // window end is an optimization and must not hide the probe-row hook
+        // calls GNU makes.  The three per-buffer/per-window inputs of the
+        // predicate are read from the retained matrix of the last accepted
+        // display, the state GNU keeps in `w->current_matrix` plus
+        // `w->last_modified`/`last_overlay_modified`.
+        let retained_matrix = self
+            .retained_window_matrices
+            .get(&DisplayWindowId::new(params.window_id));
+        let buffer_state = evaluator.buffer_manager().get(buf_id);
+        // GNU `window_outdated` compares `w->last_modified` with `BUF_MODIFF`
+        // and `w->last_overlay_modified` with `BUF_OVERLAY_MODIFF`
+        // (src/window.c:231-236).  `modified_tick` is MODIFF, which also moves
+        // for `restore-buffer-modified-p` (src/buffer.c:1630-1631) and for
+        // text-property changes, so it is the faithful half; the retained
+        // matrix records it at acceptance, after redisplay's own fontification.
+        let window_outdated = match (retained_matrix, buffer_state) {
+            (Some(retained), Some(buffer)) => {
+                buffer.modified_tick() != retained.buffer_modiff
+                    || buffer.overlay_modified_tick() != retained.key.overlay_modified_tick
+            }
+            _ => false,
+        };
+        // GNU `prevent_redisplay_optimizations_p` has its own per-buffer
+        // witness (raised by set-buffer-redisplay and force-mode-line-update).
+        // A moved body revision -- GNU `force-window-update` -- refuses too.
+        let prevent_redisplay_optimizations = retained_matrix.is_some_and(|retained| {
+            retained.key.body_redisplay != evaluator.body_redisplay_revision(window_id, buf_id)
+                || retained.redisplay_optimizations
+                    != evaluator.prevent_redisplay_optimizations_revision(buf_id)
+        });
+        // GNU reads `clip_changed` only after `reconsider_clip_changes (w)`
+        // (src/xdisp.c:20486), which clears it when the window's current
+        // matrix already matches the buffer and its restriction
+        // (src/xdisp.c:17271-17277).  The retained key carries exactly those
+        // matrix facts: buffer identity, BEGV and ZV.
+        let clip_changed = match (retained_matrix, buffer_state) {
+            (Some(retained), Some(buffer)) => {
+                // The key stores BEGV and ZV as `CharPos0` counts
+                // (neovm_bridge.rs:2029-2031), so compare the same form.
+                let matrix_matches = window_end_valid_at_entry
+                    && retained.key.buffer_id == buf_id.0
+                    && retained.key.buffer_begv == buffer.point_min_char_pos().get() as i64
+                    && retained.key.buffer_size == buffer.point_max_char_pos().get() as i64;
+                buffer.mode_line_clip_changed() && !matrix_matches
+            }
+            (Some(_), None) => false,
+            (None, Some(buffer)) => buffer.mode_line_clip_changed(),
+            (None, None) => false,
+        };
+        let gnu_matrix_reuse = GnuMatrixReuse::at_entry(
+            window_end_valid_at_entry,
+            evaluator.gnu_redisplay_refuses_cursor_movement(),
+            self.frame_other_windows_changed,
+            clip_changed,
+            prevent_redisplay_optimizations,
+            window_outdated,
+        );
+        let finished_walk = match &render_outcome {
+            BufferSourceRenderAttemptOutcome::Finished {
+                redisplay_positions,
+                cursor_only,
+                reused_matrix_rows,
+                ..
+            } => Some((
+                redisplay_positions.window_end_lisp(),
+                gnu_matrix_reuse.skips_probe(*cursor_only || reused_matrix_rows.is_some()),
+            )),
+            _ => None,
+        };
+        if let Some((window_end, skip_probe)) = finished_walk {
+            // GNU `partial_line_height` (`src/xdisp.c:11630-11661`): when
+            // `try_window` ran with TRY_WINDOW_CHECK_MARGINS, it re-walks to
+            // the window bottom and then scans the FIRST screen row after the
+            // window end, entering fontification hooks at that row's stops
+            // (the sole call site is `try_window`, src/xdisp.c:21718).  That
+            // row starts at the walk's published window end.
+            let probe = if skip_probe {
+                neovm_core::emacs_core::xdisp::ProbeRow::None
+            } else {
+                fontification_probe_row(evaluator, params, frame_id, window_id, buf_id, window_end)
+            };
             let coverage = self
                 .window_snapshots
                 .iter()
@@ -6285,8 +6479,18 @@ impl LayoutEngine {
                 .map(WindowPresentationSnapshot::display_snapshot)
                 .find(|snapshot| snapshot.window_id == window_id)
                 .map(|snapshot| {
-                    let prepass_end =
-                        neovm_core::buffer::CharPos0::new(fontify_end.max(0) as usize);
+                    // A declining pre-walk hook did not fontify the budget
+                    // span, so the walk's visible positions must be
+                    // reconsidered by the coverage pass.  A marking or
+                    // no-callback prepass keeps the old boundary.
+                    let prepass_end = if matches!(
+                        fontification_outcome,
+                        neovm_core::emacs_core::xdisp::RedisplayFontificationOutcome::CallbacksUnchanged
+                    ) {
+                        neovm_core::buffer::CharPos0::new(window_start.max(0) as usize)
+                    } else {
+                        neovm_core::buffer::CharPos0::new(fontify_end.max(0) as usize)
+                    };
                     if admitted_edit_sync_fontify_attempt {
                         VisibleFontificationCoverage::inspect_for_edit_sync(
                             buffer,
@@ -6316,12 +6520,22 @@ impl LayoutEngine {
                 // buffer yields dozens of sparse visible runs -- more than the
                 // retry budget -- so that shape could never converge.
                 let mut requires_replay = false;
-                for span in plan.spans() {
+                let spans: Vec<_> = plan.spans().collect();
+                let last_span = spans.len().checked_sub(1);
+                for (index, span) in spans.iter().enumerate() {
+                    let span_probe = if Some(index) == last_span {
+                        probe
+                    } else {
+                        neovm_core::emacs_core::xdisp::ProbeRow::None
+                    };
                     let outcome = lisp_ledger.rows_fontification.ensure(
                         evaluator,
                         buf_id,
                         span.start(),
                         span.end(),
+                        params.point_charpos().get() as i64 + 1,
+                        neovm_core::emacs_core::xdisp::RedisplayFontificationRequest::VisibleWalk,
+                        span_probe,
                     );
                     requires_replay |= outcome.requires_layout_retry();
                     if evaluator.frame_manager().window_topology_generation() != topology_generation
@@ -6449,6 +6663,12 @@ impl LayoutEngine {
                     evaluator.reject_redisplay_window_end_attempt(attempt);
                 }
                 return LeafLayoutAttempt::LogicalInputsChanged;
+            }
+            BufferSourceRenderAttemptOutcome::OverlayViewExhausted => {
+                if let Some(attempt) = window_end_attempt.take() {
+                    evaluator.reject_redisplay_window_end_attempt(attempt);
+                }
+                return LeafLayoutAttempt::OverlayViewExhausted;
             }
             BufferSourceRenderAttemptOutcome::GnuMiniEobCursorUnavailable { boundary } => {
                 if let Some(attempt) = window_end_attempt.take() {
@@ -6845,9 +7065,18 @@ impl LayoutEngine {
         buf_id: neovm_core::buffer::BufferId,
         from: i64,
         to: i64,
+        request: neovm_core::emacs_core::xdisp::RedisplayFontificationRequest,
+        probe: neovm_core::emacs_core::xdisp::ProbeRow,
+        window_point: i64,
     ) -> neovm_core::emacs_core::xdisp::RedisplayFontificationOutcome {
-        match neovm_core::emacs_core::xdisp::ensure_fontified_for_redisplay(
-            evaluator, buf_id, from, to,
+        match neovm_core::emacs_core::xdisp::ensure_fontified_for_redisplay_for_window_request(
+            evaluator,
+            buf_id,
+            from,
+            to,
+            request,
+            probe,
+            window_point,
         ) {
             Ok(outcome) => outcome,
             Err(e) => {
@@ -6855,6 +7084,211 @@ impl LayoutEngine {
                 neovm_core::emacs_core::xdisp::RedisplayFontificationOutcome::CallbacksUnchanged
             }
         }
+    }
+}
+
+/// GNU's matrix-reuse eligibility for one window redisplay
+/// (`current_matrix_up_to_date_p`, src/xdisp.c:20557-20586).
+///
+/// `redisplay_window` reads `w->window_end_valid` at ENTRY and only consults
+/// `try_cursor_movement` (`:20923`) and
+/// `try_window_reusing_current_matrix` (`:21041`) when the predicate holds.
+/// The same-start branch otherwise falls into
+/// `try_window (..., TRY_WINDOW_CHECK_MARGINS)` (`:21052`), so this is also
+/// the gate for `partial_line_height`'s probe row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GnuMatrixReuse {
+    /// The predicate held at entry: GNU may display this window from the
+    /// current matrix and `partial_line_height` does not run.
+    Eligible,
+    /// GNU re-walks with `try_window (..., TRY_WINDOW_CHECK_MARGINS)`.
+    NotEligible,
+}
+
+impl GnuMatrixReuse {
+    /// `window_end_valid` must be the value from the START of this window's
+    /// redisplay: the walk republishes it.
+    ///
+    /// `windows_or_buffers_changed` clears `w->window_end_valid` and forces
+    /// the predicate false (src/xdisp.c:20576-20586); Neo represents that
+    /// pending scope with `gnu_redisplay_refuses_cursor_movement`, and the
+    /// sibling-window change flag is its frame-local companion.
+    ///
+    /// The predicate has three more per-buffer/per-window inputs
+    /// (src/xdisp.c:20557-20565):
+    ///
+    /// * `current_buffer->clip_changed` is not read raw: `redisplay_window`
+    ///   calls `reconsider_clip_changes (w)` first (src/xdisp.c:20486,
+    ///   :17271-17277), which clears it when the window's current matrix still
+    ///   matches the buffer and its BEGV/ZV.  Neo's caller performs the same
+    ///   reconsideration against the retained matrix's buffer/BEGV/ZV before
+    ///   passing `clip_changed`; the durable witness itself is never cleared
+    ///   here (the mode-line path owns that).
+    /// * `current_buffer->prevent_redisplay_optimizations_p` has its own
+    ///   per-buffer revision, raised by `set-buffer-redisplay`
+    ///   (src/xdisp.c:929) and both `force-mode-line-update` branches
+    ///   (src/buffer.c:1538-1545) and recorded on the accepted matrix outside
+    ///   its reuse key.  `force-window-update` additionally moves the body
+    ///   revision; either move is a refusal.  Chrome-only raises never move
+    ///   the body revision.
+    /// * `window_outdated (w)` -- `w->last_modified < BUF_MODIFF` or
+    ///   `w->last_overlay_modified < BUF_OVERLAY_MODIFF` (src/window.c:231-236).
+    ///   Neo records both at acceptance (`modified_tick`, the overlay tick).
+    ///   Its own reuse keys the overlay SET on a digest, so the raw overlay
+    ///   tick must be compared here: a touch that leaves the set identical is
+    ///   still "outdated" to GNU and still disables its optimizations.
+    ///
+    /// A window that is stale for any of these is `NotEligible` even if the
+    /// walk later reuses rows internally.
+    fn at_entry(
+        window_end_valid: bool,
+        refuses_cursor_movement: bool,
+        other_windows_changed: bool,
+        clip_changed: bool,
+        prevent_redisplay_optimizations: bool,
+        window_outdated: bool,
+    ) -> Self {
+        if window_end_valid
+            && !refuses_cursor_movement
+            && !other_windows_changed
+            && !clip_changed
+            && !prevent_redisplay_optimizations
+            && !window_outdated
+        {
+            Self::Eligible
+        } else {
+            Self::NotEligible
+        }
+    }
+
+    /// GNU runs `partial_line_height` unless the predicate held AND the walk
+    /// reused the current matrix.  When the predicate held but Neo rebuilt
+    /// the rows, GNU's own fallback would have called `try_window` with the
+    /// check-margins flag, so the probe still runs.
+    fn skips_probe(self, walk_reused_rows: bool) -> bool {
+        self == Self::Eligible && walk_reused_rows
+    }
+}
+
+/// GNU `partial_line_height`'s probe row (`src/xdisp.c:11630-11661`).
+///
+/// `try_window` runs it only under `TRY_WINDOW_CHECK_MARGINS` with
+/// `w->vscroll == 0` in a non-minibuffer window (`src/xdisp.c:21696-21722`);
+/// the flag is passed on the same-window-start path (`:21052`) and recenter
+/// (`:21402`) but not on a forced start (`:20767`, `:20901`) or a plain
+/// `try_window (..., 0)`.  Neo has no carried check-margins bit: this helper
+/// represents that gate by refusing every non-presentation walk (query
+/// target, measurement rows/pixels, accessible-end extent) and every
+/// `force_start` walk; the matrix-reuse half of the gate is
+/// [`GnuMatrixReuse`], applied by the caller.  `partial_line_height` walks to
+/// the window bottom
+/// and, unless that walk hits EOB, scans the FIRST screen row after the
+/// window end with `move_it_by_lines (&it, 1)`.  The returned typed probe is
+/// that row's exclusive Lisp end.  A long-line truncated buffer returns early
+/// (`:11636-11638`).
+///
+/// The row starts at the completed walk's PUBLISHED window end -- the
+/// exclusive first position after the last displayed row, the same value the
+/// engine records as `window-end` -- and its boundary is measured by the
+/// display line-motion engine (`MotionEngine::ComputeMotion`), not from a
+/// character count, so wrapping and truncation decide it.
+fn fontification_probe_row(
+    evaluator: &mut neovm_core::emacs_core::Context,
+    params: &crate::types::WindowParams,
+    frame_id: neovm_core::window::FrameId,
+    window_id: neovm_core::window::WindowId,
+    buf_id: neovm_core::buffer::BufferId,
+    window_end: neovm_core::buffer::LispCharPos1,
+) -> neovm_core::emacs_core::xdisp::ProbeRow {
+    use neovm_core::emacs_core::xdisp::ProbeRow;
+    // `force_start` bypasses TRY_WINDOW_CHECK_MARGINS (src/xdisp.c:20767,
+    // :20901): one pass, no probe row.
+    if params.force_start {
+        return ProbeRow::None;
+    }
+    // Neo does not carry GNU's TRY_WINDOW_CHECK_MARGINS bit; these params
+    // identify the walks that are not a margin-checked presentation walk
+    // (`try_window (..., 0)` and synchronous measurement/query walks), and
+    // they get no probe.
+    if params.query_target.is_some()
+        || params.measurement_rows.is_some()
+        || params.measurement_pixels.is_some()
+        || params.source_extent == crate::types::WindowSourceExtent::AccessibleEnd
+    {
+        return ProbeRow::None;
+    }
+    // `try_window`'s own gates (src/xdisp.c:21696-21722).
+    if params.is_minibuffer() {
+        return ProbeRow::None;
+    }
+    let Some(window) = evaluator
+        .frame_manager()
+        .get(frame_id)
+        .and_then(|frame| frame.find_window(window_id))
+    else {
+        return ProbeRow::None;
+    };
+    if let neovm_core::window::Window::Leaf { vscroll, .. } = window
+        && *vscroll != 0
+    {
+        return ProbeRow::None;
+    }
+    let Some(buffer) = evaluator.edit.buffers.get(buf_id) else {
+        return ProbeRow::None;
+    };
+    // `partial_line_height` returns early for a long-line truncated buffer
+    // (src/xdisp.c:11636-11638).
+    if buffer.long_line_optimizations_p()
+        && params.wrap_mode == crate::types::LineWrapMode::Truncate
+    {
+        return ProbeRow::None;
+    }
+    // GNU's `move_it_to (..., it.last_visible_y, ...)` re-walks the window to
+    // its bottom and `move_it_by_lines (&it, 1)` then scans the FIRST screen
+    // row after the window end (`src/xdisp.c:11630-11661`). That row starts at
+    // the position Neo publishes as `window-end`: the exclusive first
+    // position after the last displayed row, passed in from the same
+    // `TextWindowRedisplayPositions` record the engine turns into the
+    // `WindowEndRecord` it publishes (and that `window-end` returns).
+    //
+    // Do not derive it from `visible_buffer_span().end()`: that is the last
+    // drawn glyph (an inclusive position), and a right-truncated row reports
+    // its skipped line terminator there, so a probe started there begins
+    // inside a row the window already displayed and its one-line advance
+    // does not reach the following row. The published end also sits after a
+    // closing glyph that covers a source range (`display` property or
+    // composition), where last-glyph arithmetic has no exact successor in the
+    // buffer.
+    let probe_start = window_end;
+    // The re-walk reached EOB: GNU takes the `IT_EOB` branch and never scans
+    // a following row (`src/xdisp.c:11644-11649`).
+    if probe_start.as_i64() >= buffer.point_max_lisp_char_pos().as_i64() {
+        return ProbeRow::None;
+    }
+    let start_byte = buffer.lisp_pos_to_emacs_byte_pos(probe_start);
+    // Pass the laid-out window, not the selected one: GNU's
+    // `move_it_by_lines` uses THIS window's width and wrap decision.
+    let window_value = Value::make_window(window_id.0);
+    let Ok((end_byte, moved)) = neovm_core::emacs_core::indent::vmotion_target(
+        evaluator,
+        buf_id,
+        start_byte,
+        Some(window_value),
+        1,
+    ) else {
+        return ProbeRow::None;
+    };
+    if moved == 0 || end_byte <= start_byte {
+        return ProbeRow::None;
+    }
+    let Some(buffer) = evaluator.edit.buffers.get(buf_id) else {
+        return ProbeRow::None;
+    };
+    let end_lisp = buffer.emacs_byte_pos_to_lisp_char_pos(end_byte).as_i64();
+    if end_lisp <= probe_start.as_i64() {
+        ProbeRow::None
+    } else {
+        ProbeRow::Through(end_lisp)
     }
 }
 

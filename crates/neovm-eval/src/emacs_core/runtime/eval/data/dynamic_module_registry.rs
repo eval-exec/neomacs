@@ -125,6 +125,7 @@ thread_local! {
 
 #[path = "dynamic_module_registry_detach.rs"]
 mod registry_detach;
+pub(crate) use registry_detach::detach_dynamic_module_registry;
 
 pub(crate) fn current_dynamic_module_registry_handle() -> DynamicModuleRegistryHandle {
     GLOBAL_REFS.with(HeapRegistrySlot::current)
