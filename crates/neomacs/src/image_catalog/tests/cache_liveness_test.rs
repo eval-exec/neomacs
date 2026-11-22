@@ -173,6 +173,16 @@ fn retained_clear_preserves_relative_lookup_resolution_before_usage_publish() {
     run_owned("retry-clear-relative-load");
 }
 
+#[test]
+fn usage_read_waits_for_a_delayed_ordered_submission_within_its_deadline() {
+    run_owned("retry-clear-relative-load-delayed");
+}
+
+#[test]
+fn ordered_submission_wait_cancels_on_exit_with_completion_sender_alive() {
+    run_owned("ordered-submission-exit");
+}
+
 fn take_ack(command: RenderCommand) -> std::sync::mpsc::SyncSender<()> {
     match command {
         RenderCommand::Asset(AssetCommand::PublishImageCacheUsage { ack }) => ack,
@@ -538,7 +548,8 @@ fn owned_cache_policy_fixture() {
                 "ordinary lookup waited for native queue space: {lookup_elapsed:?}"
             );
         }
-        "retry-clear-relative-load" => {
+        "retry-clear-relative-load" | "retry-clear-relative-load-delayed" => {
+            let delayed = case == "retry-clear-relative-load-delayed";
             let context = neovm_core::emacs_core::eval_hook_installers::new_context();
             let owned_decoder = ImageDecoder::new();
             let mut catalog = AsyncImageCatalog::new(
@@ -605,6 +616,42 @@ fn owned_cache_policy_fixture() {
             }
             assert!(receiver.is_empty());
 
+            // Hold the real, process-wide submission worker behind another
+            // full target, then release it after a finite 200 ms. The catalog's
+            // actual relative-file job must wait there; do not inject its gate.
+            let worker_released = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let mut worker_release = None;
+            let mut worker_controller = None;
+            if delayed {
+                let (blocked_target, blocked_receiver) =
+                    RenderCommandSender::bounded(NonZeroUsize::new(1).unwrap());
+                blocked_target
+                    .send(RenderCommand::Window(WindowCommand::RefreshFrameOpacity))
+                    .unwrap();
+                let (sent, committed) = std::sync::mpsc::sync_channel(1);
+                defer_render_command_with_completion(
+                    &blocked_target,
+                    None,
+                    RenderCommand::Window(WindowCommand::RefreshFrameOpacity),
+                    None,
+                    &owned_decoder.client(),
+                    Some(sent),
+                )
+                .unwrap();
+                let (release, released) = std::sync::mpsc::sync_channel(1);
+                let marker = Arc::clone(&worker_released);
+                worker_controller = Some(thread::spawn(move || {
+                    released.recv_timeout(Duration::from_secs(2)).unwrap();
+                    thread::sleep(Duration::from_millis(200));
+                    marker.store(true, Ordering::Release);
+                    blocked_receiver
+                        .recv_timeout(Duration::from_secs(2))
+                        .unwrap();
+                    committed.recv_timeout(Duration::from_secs(2)).unwrap();
+                }));
+                worker_release = Some(release);
+            }
+
             // Deliberately pass only the basename: production must preserve and apply
             // its captured Search recipe while ordering the load after retained clear.
             let lookup = catalog.lookup(request, ImageSizeLimit::UNLIMITED);
@@ -614,6 +661,8 @@ fn owned_cache_policy_fixture() {
             let receipt_path = directory.join("native-order.json");
             let actor_expected_path = expected_path.clone();
             let actor_basename = basename.clone();
+            let actor_case = case.clone();
+            let (clear_seen, cleared) = std::sync::mpsc::sync_channel(1);
             let native = thread::spawn(move || {
                 let mut order = Vec::<String>::new();
                 let mut load_paths = Vec::<String>::new();
@@ -636,6 +685,8 @@ fn owned_cache_policy_fixture() {
                         RenderCommand::Asset(AssetCommand::ClearImageCache) => {
                             order.push("clear".to_owned());
                             bytes = 0;
+                            next_state.publish_cache_usage(ImageCacheUsage::new(0, 0));
+                            let _ = clear_seen.try_send(());
                         }
                         RenderCommand::Asset(AssetCommand::ImageLoadFile { path, .. }) => {
                             order.push("load".to_owned());
@@ -655,7 +706,7 @@ fn owned_cache_policy_fixture() {
                     }
                 }
                 let receipt = json!({
-                    "case":"retry-clear-relative-load",
+                    "case":actor_case,
                     "scope":"synthetic-backend-order-path-and-charge-no-gpu-or-gnu-run",
                     "requested_relative_name":actor_basename,
                     "expected_canonical_file":actor_expected_path,
@@ -669,10 +720,26 @@ fn owned_cache_policy_fixture() {
                 receipt
             });
 
+            if let Some(release) = worker_release {
+                cleared.recv_timeout(Duration::from_secs(2)).unwrap();
+                release.send(()).unwrap();
+            }
+            let read_started = Instant::now();
             let observed_bytes = catalog.cached_size_bytes();
+            if delayed {
+                fs::write(directory.join("query-progress.json"), serde_json::to_vec_pretty(&json!({
+                    "read_elapsed_ms":read_started.elapsed().as_millis(),
+                    "observed_bytes":observed_bytes,
+                    "worker_release_started_before_read_return":worker_released.load(Ordering::Acquire),
+                    "production_deadline_ms":CACHE_USAGE_SYNC_DEADLINE.as_millis(),
+                })).unwrap()).unwrap();
+            }
             let receipt = native
                 .join()
                 .expect("synthetic actor saved native-order.json");
+            if let Some(controller) = worker_controller {
+                controller.join().unwrap();
+            }
             assert_eq!(receipt["publish_seen"], true);
             assert_eq!(receipt["ack_delivered"], true);
             assert_eq!(receipt["receive_error"], serde_json::Value::Null);
@@ -687,6 +754,29 @@ fn owned_cache_policy_fixture() {
             drop(catalog);
             drop(owned_decoder);
             drop(context);
+        }
+        "ordered-submission-exit" => {
+            state.mark_renderer_ready();
+            let (completion, wait) = std::sync::mpsc::sync_channel(1);
+            *catalog.ordered_in_flight.borrow_mut() = Some(wait);
+            let exit_state = Arc::clone(&state);
+            let exit = thread::spawn(move || {
+                thread::sleep(Duration::from_millis(50));
+                exit_state.mark_renderer_exited();
+                completion
+            });
+            let began = Instant::now();
+            let outcome = catalog.wait_for_ordered_in_flight(began + Duration::from_secs(3));
+            let held_completion = exit.join().unwrap();
+            assert!(
+                matches!(outcome, Err(InvalidationDelivery::Unavailable)),
+                "exit must cancel the in-flight wait, not mistake one poll for its deadline"
+            );
+            assert!(began.elapsed() < Duration::from_secs(2));
+            assert!(
+                held_completion.send(()).is_err(),
+                "cancellation must retire the gate while its completion sender remains alive"
+            );
         }
         _ => panic!("unknown fixture case {case}"),
     }
