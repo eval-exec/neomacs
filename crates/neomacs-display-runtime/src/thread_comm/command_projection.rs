@@ -6,7 +6,7 @@
 //! is introduced and the ordinary publication operations remain identical.
 
 use super::RenderCommand;
-use crossbeam_channel::{Receiver, SendError, SendTimeoutError, Sender, TrySendError};
+use crossbeam_channel::{Receiver, SendError, Sender, TrySendError};
 use std::num::NonZeroUsize;
 
 /// Opaque publication endpoint for the owned native command protocol.
@@ -37,7 +37,8 @@ impl RenderCommandSender {
         (Self { sender }, receiver)
     }
 
-    /// Publish once; a disconnected channel returns the uncommitted command.
+    /// Publish once, waiting for room when the bounded channel is full; a
+    /// disconnected channel returns the uncommitted command.
     #[inline(always)]
     pub fn send(&self, command: RenderCommand) -> Result<(), SendError<RenderCommand>> {
         self.sender.send(command)
@@ -47,20 +48,6 @@ impl RenderCommandSender {
     #[inline(always)]
     pub fn try_send(&self, command: RenderCommand) -> Result<(), TrySendError<RenderCommand>> {
         self.sender.try_send(command)
-    }
-
-    /// Publish, waiting up to `timeout` for room.
-    ///
-    /// Cache-invalidation commands use this path so they stay FIFO with the
-    /// usage-publication request that observes them; the decoder deferral path
-    /// used by ordinary `try_send` backpressure may reorder them.
-    #[inline]
-    pub fn send_timeout(
-        &self,
-        command: RenderCommand,
-        timeout: std::time::Duration,
-    ) -> Result<(), SendTimeoutError<RenderCommand>> {
-        self.sender.send_timeout(command, timeout)
     }
 }
 

@@ -111,8 +111,11 @@ impl Drop for ImageTerminalPublication<'_> {
 /// Cross-thread image facts published by the renderer and read by Elisp.
 ///
 /// Terminal decode results need a condition variable for bounded synchronous
-/// measurement. Cache usage is an independent lock-free snapshot: querying
-/// `image-cache-size` never waits for a decode or the render thread.
+/// measurement. Cache usage is an independent snapshot: an ordinary
+/// `image-cache-size` does not wait for a decode or the render thread, but a
+/// read after an invalidation waits for the render thread to execute the
+/// ordered invalidation and publish the post-invalidation total (GNU frees
+/// the cache synchronously on the caller's thread).
 pub struct ImageRenderState {
     terminals: Mutex<HashMap<ImageLoadToken, ImageDecodeTerminal>>,
     terminal_changed: Condvar,

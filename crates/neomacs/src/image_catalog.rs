@@ -15,7 +15,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, TryLockError};
 use std::time::Duration;
 
@@ -124,13 +124,6 @@ impl RedisplayWaker {
     }
 }
 
-/// Bound on each ordered cache command and on the usage acknowledgement.
-///
-/// GNU frees its cache on the caller's thread; this is the most a single
-/// `image-cache-size` may wait to observe the equivalent state.  A timeout
-/// keeps the previous snapshot and retries on the next read.
-const USAGE_SYNC_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(100);
-
 /// Deep host-side module that owns image request identity, state transitions,
 /// renderer scheduling, and completion observation.
 pub(super) struct AsyncImageCatalog {
@@ -161,18 +154,10 @@ pub(super) struct AsyncImageCatalog {
     sequence_ids: RefCell<HashMap<ImageResolveSource, ImageSequenceId>>,
     /// An invalidation or animation prune has been queued, so the published
     /// usage snapshot is known stale.  The first `image-cache-size` after it
-    /// pays one render-thread round-trip; ordinary reads stay snapshot-only.
+    /// waits for the render thread to execute the ordered invalidation
+    /// commands and publish the post-invalidation total; ordinary reads stay
+    /// snapshot-only.
     usage_sync_pending: Cell<bool>,
-    /// Whether every command that produced `usage_sync_pending` was delivered
-    /// on the ordered (never deferred) path.  An unordered invalidation means
-    /// an acknowledgement cannot prove the snapshot is post-invalidation, so
-    /// the pending flag stays set and the next read retries.
-    usage_sync_ordered: Cell<bool>,
-    /// Invalidations handed to the deferral worker but not yet enqueued on the
-    /// render command channel.  A publish sent while this is zero is FIFO
-    /// after every such invalidation, so its acknowledgement proves the
-    /// snapshot is post-invalidation even when the ordered send timed out.
-    deferred_invalidations: Arc<AtomicUsize>,
     next_load_attempt: Cell<u64>,
     next_sequence_id: Cell<u64>,
     /// The `max-image-size` bound the most recent lookup resolved.
@@ -229,8 +214,6 @@ impl AsyncImageCatalog {
             slot_moves: Cell::new(0),
             sequence_ids: RefCell::new(HashMap::new()),
             usage_sync_pending: Cell::new(false),
-            usage_sync_ordered: Cell::new(true),
-            deferred_invalidations: Arc::new(AtomicUsize::new(0)),
             next_load_attempt: Cell::new(0),
             next_sequence_id: Cell::new(0),
             size_limit: Cell::new(ImageSizeLimit::default()),
@@ -402,32 +385,28 @@ impl AsyncImageCatalog {
 
 impl AsyncImageCatalog {
     /// Ask the render thread to publish its retained-image usage now and wait
-    /// briefly for the acknowledgement.
+    /// for the acknowledgement.
     ///
-    /// Returns whether the publication happened.  A full command channel or a
-    /// render thread that does not answer within the bound leaves the caller
-    /// with the previous snapshot instead of blocking redisplay; the pending
-    /// flag stays set so the next read retries.
+    /// The send blocks while the command channel is full and the wait lasts
+    /// until the render thread has executed every command already ahead of the
+    /// publish, so a successful return proves the published total is the
+    /// post-invalidation state.  GNU frees the cache synchronously on the
+    /// caller's thread; a render thread that is slow must delay the read, not
+    /// let it observe the pre-invalidation total.
     fn synchronize_cache_usage(&self) -> bool {
         let (ack, wait) = std::sync::mpsc::sync_channel(1);
         let command = RenderCommand::Asset(AssetCommand::PublishImageCacheUsage { ack });
-        match self.cmd_tx.send_timeout(command, USAGE_SYNC_TIMEOUT) {
-            Ok(()) => {
-                if let Some(waker) = self.render_waker.as_ref() {
-                    waker.wake();
-                }
-                match wait.recv_timeout(USAGE_SYNC_TIMEOUT) {
-                    Ok(()) => true,
-                    Err(error) => {
-                        // Bounded-wait limitation: keep the last snapshot; the
-                        // pending flag makes the next read retry.
-                        tracing::debug!(%error, "image cache usage acknowledgement timed out");
-                        false
-                    }
-                }
-            }
+        if let Err(error) = self.cmd_tx.send(command) {
+            tracing::debug!(%error, "image cache usage publish command not delivered");
+            return false;
+        }
+        if let Some(waker) = self.render_waker.as_ref() {
+            waker.wake();
+        }
+        match wait.recv() {
+            Ok(()) => true,
             Err(error) => {
-                tracing::debug!(%error, "image cache usage publish command not delivered");
+                tracing::debug!(%error, "image cache usage acknowledgement channel closed");
                 false
             }
         }
@@ -436,38 +415,20 @@ impl AsyncImageCatalog {
     /// Send a cache-invalidation command on the ordered path.
     ///
     /// The decoder deferral path can reorder a command behind the publish that
-    /// is supposed to observe it, so invalidation commands and the publish
-    /// come through here: direct, bounded, FIFO with each other.
-    fn send_ordered_cache_command(&self, command: RenderCommand) -> bool {
-        match self.cmd_tx.send_timeout(command, USAGE_SYNC_TIMEOUT) {
+    /// is supposed to observe it, so invalidation commands and the publish come
+    /// through here: direct FIFO with each other.  The send blocks while the
+    /// channel is full instead of deferring: an invalidation dropped onto the
+    /// worker could land behind the publish and leave the read observing a
+    /// pre-invalidation total.
+    fn send_ordered_cache_command(&self, command: RenderCommand) {
+        match self.cmd_tx.send(command) {
             Ok(()) => {
                 if let Some(waker) = self.render_waker.as_ref() {
                     waker.wake();
                 }
-                true
             }
-            Err(crossbeam_channel::SendTimeoutError::Timeout(command)) => {
-                // Never drop an invalidation: hand it to the deferral worker
-                // and remember that it is outstanding.  The count is what lets
-                // a later publish trust its acknowledgement again.
-                tracing::debug!("image cache invalidation stalled; deferring it without ordering");
-                self.deferred_invalidations.fetch_add(1, Ordering::AcqRel);
-                let deferred = defer_render_command(
-                    &self.cmd_tx,
-                    self.render_waker.as_ref(),
-                    command,
-                    None,
-                    &self.image_decode_client,
-                    Some(Arc::clone(&self.deferred_invalidations)),
-                );
-                if deferred.is_err() {
-                    self.deferred_invalidations.fetch_sub(1, Ordering::AcqRel);
-                }
-                false
-            }
-            Err(crossbeam_channel::SendTimeoutError::Disconnected(_)) => {
-                tracing::debug!("image cache invalidation channel disconnected");
-                false
+            Err(error) => {
+                tracing::debug!(%error, "image cache invalidation channel disconnected");
             }
         }
     }
@@ -546,7 +507,7 @@ impl ImageCatalog for AsyncImageCatalog {
         } else {
             ImageInvalidationResult::Changed
         };
-        let mut ordered = self.flush_image_ids_ordered(removed);
+        self.flush_image_ids_ordered(removed);
         // GNU `clear-image-cache` frees every window frame's image cache, and
         // the frame cache holds chrome icons as well as editor images.  The
         // wholesale command therefore runs even when the catalog itself had no
@@ -554,13 +515,9 @@ impl ImageCatalog for AsyncImageCatalog {
         let clears_everything = matches!(&target, ImageInvalidation::All);
         if clears_everything {
             let command = RenderCommand::Asset(AssetCommand::ClearImageCache);
-            ordered &= self.send_ordered_cache_command(command);
+            self.send_ordered_cache_command(command);
         }
         if clears_everything || matches!(result, ImageInvalidationResult::Changed) {
-            // A previous unordered invalidation still has not been proven
-            // applied, so a new ordered one does not restore trust by itself.
-            self.usage_sync_ordered
-                .set(self.usage_sync_ordered.get() && ordered);
             self.usage_sync_pending.set(true);
         }
         result
@@ -569,25 +526,13 @@ impl ImageCatalog for AsyncImageCatalog {
     fn cached_size_bytes(&self) -> i64 {
         // GNU's cache is freed on the caller's thread, so the next
         // `image-cache-size` sees the post-invalidation state.  This catalog's
-        // cache lives on the render thread; refresh the published snapshot
-        // only when an invalidation made it known stale, then read it.
-        if self.usage_sync_pending.get() {
-            // Capture the deferred-invalidation count BEFORE sending: a zero
-            // here means every invalidation command that exists at send time
-            // is already in the channel ahead of this publish (or was sent
-            // ordered), so its acknowledgement is post-invalidation.
-            let no_outstanding = self.deferred_invalidations.load(Ordering::Acquire) == 0;
-            if self.synchronize_cache_usage() && (self.usage_sync_ordered.get() || no_outstanding) {
-                self.usage_sync_pending.set(false);
-                self.usage_sync_ordered.set(true);
-            } else if self.usage_sync_pending.get() {
-                // An invalidation is not yet enqueued in order; the
-                // acknowledgement cannot prove this snapshot is
-                // post-invalidation.  Keep the flag set and retry next read.
-                tracing::debug!(
-                    "image cache usage acknowledgement is not ordered yet; keeping retry pending"
-                );
-            }
+        // cache lives on the render thread; when an invalidation made the
+        // published snapshot stale, wait for the ordered invalidation to be
+        // executed and the post-invalidation total published, then read it.
+        // A failed sync means the render thread is gone (the command channel
+        // is disconnected), so the last snapshot is the only state left.
+        if self.usage_sync_pending.get() && self.synchronize_cache_usage() {
+            self.usage_sync_pending.set(false);
         }
         i64::try_from(self.image_metadata.cached_size_bytes()).unwrap_or(i64::MAX)
     }
@@ -613,10 +558,8 @@ impl ImageCatalog for AsyncImageCatalog {
             }
         };
         let command = RenderCommand::Asset(AssetCommand::ImageSequenceRetire { retirement });
-        let ordered = self.send_ordered_cache_command(command);
+        self.send_ordered_cache_command(command);
         // Decoded-sequence bytes are part of `image-cache-size`.
-        self.usage_sync_ordered
-            .set(self.usage_sync_ordered.get() && ordered);
         self.usage_sync_pending.set(true);
         ImageInvalidationResult::Changed
     }
@@ -932,27 +875,22 @@ impl AsyncImageCatalog {
     }
 
     /// Flush images on the ordered path: free each immediately, sending the
-    /// command directly with a bounded wait (never through the decoder
-    /// deferral path), so a later `PublishImageCacheUsage` on the same channel
-    /// lands after it.  GNU `uncache_image` frees the pixmaps synchronously.
-    ///
-    /// Returns false when any command could not be delivered; the caller must
-    /// then treat an acknowledgement as insufficient proof that the published
-    /// snapshot is post-invalidation.
-    fn flush_image_ids_ordered(&self, removed: Vec<ImageId>) -> bool {
+    /// command directly and blocking for channel space (never through the
+    /// decoder deferral path), so a later `PublishImageCacheUsage` on the same
+    /// channel lands after it.  GNU `uncache_image` frees the pixmaps
+    /// synchronously.
+    fn flush_image_ids_ordered(&self, removed: Vec<ImageId>) {
         {
             let mut reported = self.reported_failures.borrow_mut();
             for image in &removed {
                 reported.remove(image);
             }
         }
-        let mut ordered = true;
         for image in removed {
             self.image_decode_client.retire_image(image);
             let command = RenderCommand::Asset(AssetCommand::ImageFlush { image });
-            ordered &= self.send_ordered_cache_command(command);
+            self.send_ordered_cache_command(command);
         }
-        ordered
     }
 }
 
@@ -1086,9 +1024,6 @@ struct DeferredRenderCommand {
     /// or `None` for `:data` loads and inline-resolved absolute paths.
     resolution: Option<ImageFileRequest>,
     decoder: ImageDecodeClient,
-    /// Present for a deferred cache invalidation: decremented once the command
-    /// has been enqueued on the render command channel (delivered or not).
-    deferred_invalidations: Option<Arc<AtomicUsize>>,
 }
 
 fn deferred_render_command_sender() -> &'static crossbeam_channel::Sender<DeferredRenderCommand> {
@@ -1103,9 +1038,6 @@ fn deferred_render_command_sender() -> &'static crossbeam_channel::Sender<Deferr
                         resolve_deferred_image_path(deferred.command, deferred.resolution.as_ref());
                     submit_image_decode(&deferred.decoder, &command);
                     let sent = deferred.target.send(command).is_ok();
-                    if let Some(outstanding) = deferred.deferred_invalidations {
-                        outstanding.fetch_sub(1, Ordering::AcqRel);
-                    }
                     if sent && let Some(waker) = deferred.waker {
                         waker.wake();
                     }
@@ -1126,7 +1058,7 @@ fn schedule_image_command(
     decoder: &ImageDecodeClient,
 ) -> Result<(), String> {
     if resolution.is_some_and(ImageFileRequest::needs_off_thread) {
-        return defer_render_command(target, waker, command, resolution.cloned(), decoder, None);
+        return defer_render_command(target, waker, command, resolution.cloned(), decoder);
     }
     submit_image_decode(decoder, &command);
     match target.try_send(command) {
@@ -1137,7 +1069,7 @@ fn schedule_image_command(
             Ok(())
         }
         Err(crossbeam_channel::TrySendError::Full(command)) => {
-            defer_render_command(target, waker, command, resolution.cloned(), decoder, None)
+            defer_render_command(target, waker, command, resolution.cloned(), decoder)
         }
         Err(crossbeam_channel::TrySendError::Disconnected(_)) => {
             Err("failed to queue image load: channel disconnected".to_owned())
@@ -1151,7 +1083,6 @@ fn defer_render_command(
     command: RenderCommand,
     resolution: Option<ImageFileRequest>,
     decoder: &ImageDecodeClient,
-    deferred_invalidations: Option<Arc<AtomicUsize>>,
 ) -> Result<(), String> {
     deferred_render_command_sender()
         .send(DeferredRenderCommand {
@@ -1160,7 +1091,6 @@ fn defer_render_command(
             command,
             resolution,
             decoder: decoder.clone(),
-            deferred_invalidations,
         })
         .map_err(|error| format!("failed to defer image load command: {error}"))
 }

@@ -216,8 +216,10 @@ impl RenderApp {
             }
             AssetCommand::PublishImageCacheUsage { ack } => {
                 self.publish_image_cache_usage();
-                // The waiter is bounded and may have given up; the publish is
-                // the contract, the acknowledgement only says it happened.
+                // The publish is the contract; the acknowledgement only tells
+                // the waiting reader that the post-invalidation total is now
+                // visible.  The waiter may have disconnected; that is not an
+                // error for the render thread.
                 let _ = ack.try_send(());
             }
             AssetCommand::ImageSequenceRetire { retirement } => {

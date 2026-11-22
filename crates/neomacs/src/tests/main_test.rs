@@ -1867,11 +1867,13 @@ fn clear_image_cache_usage_read_stays_post_clear_with_a_full_command_channel() {
     );
 }
 
-/// When the ordered send times out, the invalidation must still be delivered
-/// (never dropped), the stalled read must keep the previous snapshot, and the
-/// next read after the deferral worker delivers must be post-clear.
+/// A render thread that stalls past the old bounded ordering wait must not
+/// leak a pre-clear cache size.  GNU frees the cache on the caller's thread,
+/// so `clear-image-cache` followed by `image-cache-size` is 0 even when the
+/// renderer is slow; the read has to wait for the clear it issued to be
+/// executed and answer from that committed state.
 #[test]
-fn clear_image_cache_invalidation_survives_an_ordering_timeout() {
+fn clear_image_cache_read_waits_out_a_stalled_render_thread() {
     use neomacs_display_protocol::{ImageCacheUsage, ImageId};
     use neomacs_display_runtime::thread_comm::RenderCommandSender;
     use neovm_core::emacs_core::image_catalog::ImageInvalidation;
@@ -1887,30 +1889,18 @@ fn clear_image_cache_invalidation_survives_an_ordering_timeout() {
         }))
         .expect("pre-fill the command channel");
 
-    // Stalls for the ordering bound, then hands the clearance to the
-    // submission worker, which blocks on the still-full channel.
-    let _ = catalog.invalidate(ImageInvalidation::All);
-    assert_eq!(
-        catalog.cached_size_bytes(),
-        4_096,
-        "a stalled invalidation must not be trusted as applied"
-    );
-
-    let (clear_seen_tx, clear_seen_rx) = std::sync::mpsc::channel();
     let order = Arc::new(std::sync::Mutex::new(Vec::new()));
     let order_for_thread = Arc::clone(&order);
     let state_for_thread = Arc::clone(&image_state);
     let drainer = std::thread::spawn(move || {
-        let mut signalled = false;
+        // Stall well past the old bounded ordering wait; a read that answers
+        // from the stale snapshot instead of waiting shows up as 4096.
+        std::thread::sleep(std::time::Duration::from_millis(250));
         while let Ok(command) = cmd_rx.recv_timeout(std::time::Duration::from_secs(2)) {
             match command {
                 RenderCommand::Asset(AssetCommand::ClearImageCache) => {
                     order_for_thread.lock().expect("order lock").push("clear");
                     state_for_thread.publish_cache_usage(ImageCacheUsage::default());
-                    if !signalled {
-                        signalled = true;
-                        let _ = clear_seen_tx.send(());
-                    }
                 }
                 RenderCommand::Asset(AssetCommand::PublishImageCacheUsage { ack }) => {
                     order_for_thread.lock().expect("order lock").push("publish");
@@ -1922,22 +1912,17 @@ fn clear_image_cache_invalidation_survives_an_ordering_timeout() {
         }
     });
 
-    clear_seen_rx
-        .recv_timeout(std::time::Duration::from_secs(2))
-        .expect("the deferred clearance must still be delivered");
-    // The submission worker decrements its outstanding count after the send
-    // returns; give that transition a beat before trusting the next read.
-    std::thread::sleep(std::time::Duration::from_millis(20));
+    let _ = catalog.invalidate(ImageInvalidation::All);
     assert_eq!(
         catalog.cached_size_bytes(),
         0,
-        "once the deferred clear is delivered the read is post-clear"
+        "a read after clear-all must be post-clear even when the render thread stalls past the old bound"
     );
     drainer.join().expect("fake render thread");
     assert_eq!(
         *order.lock().expect("order lock"),
         vec!["clear", "publish"],
-        "the publish must be processed after the deferred clearance"
+        "the publish must be processed after the wholesale clear"
     );
 }
 
