@@ -30,6 +30,11 @@ pub enum RendezvousError {
     Capacity,
     Root,
     Registration(RegistrationError),
+    /// E3.3: this build carries `gc-memory-telemetry`, for which the stopped
+    /// collector takes the documented serial-only route (DESIGN §4: a complete
+    /// stopped aggregation or an explicit serial-only route, never partial
+    /// data). The heap stays on the typed Baton-serial fallback.
+    TelemetryStoppedGcUnavailable,
 }
 impl std::fmt::Display for RendezvousError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

@@ -247,7 +247,8 @@ fn map_rendezvous(error: RendezvousError) -> OwnedParallelError {
         | RendezvousError::Generation
         | RendezvousError::Readers
         | RendezvousError::Capacity
-        | RendezvousError::Root => OwnedParallelError::Publication,
+        | RendezvousError::Root
+        | RendezvousError::TelemetryStoppedGcUnavailable => OwnedParallelError::Publication,
     }
 }
 

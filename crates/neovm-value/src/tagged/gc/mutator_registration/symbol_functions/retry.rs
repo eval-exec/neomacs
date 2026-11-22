@@ -63,6 +63,7 @@ pub fn rendezvous(error: &RendezvousError) -> Retry {
         | RendezvousError::Readers
         | RendezvousError::Capacity
         | RendezvousError::Root
-        | RendezvousError::Registration(_) => Retry::Refuse,
+        | RendezvousError::Registration(_)
+        | RendezvousError::TelemetryStoppedGcUnavailable => Retry::Refuse,
     }
 }

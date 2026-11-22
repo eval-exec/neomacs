@@ -2498,6 +2498,9 @@ use mapped_veclike_scan::MappedVeclikeScanSnapshot;
 #[cfg(test)]
 #[path = "gc/tests/shutdown_tests.rs"]
 mod shutdown_tests;
+#[cfg(test)]
+#[path = "gc/tests/telemetry_default_feature_test.rs"]
+mod telemetry_default_feature_test;
 #[doc(hidden)]
 pub use concurrent::concurrent_hash_snapshot;
 pub(crate) use concurrent::prepare_concurrent_hash_write;

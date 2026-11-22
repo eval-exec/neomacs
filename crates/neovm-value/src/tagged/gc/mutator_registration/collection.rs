@@ -130,10 +130,13 @@ impl CollectionReport {
 }
 
 fn supported(heap: &TaggedHeap) -> Result<(), CollectionError> {
-    // This optional inventory includes private buffer capacities, for which
-    // A5 has no all-owner adapter. Refuse admission rather than emit partial data.
+    // E3.3 policy: this optional measurement build takes the DESIGN-allowed
+    // explicit serial-only telemetry route. A complete stopped aggregation is
+    // the named follow-up; returning partial data is never an option. The
+    // typed reason routes the heap to the Baton-serial fallback, and a static
+    // test proves gc-memory-telemetry is in no default product feature set.
     if cfg!(feature = "gc-memory-telemetry") {
-        return Err(RendezvousError::Publication);
+        return Err(RendezvousError::TelemetryStoppedGcUnavailable);
     }
     // The stopped major runs `finish_stopped_mark_adapters` before the sweep
     // (E3 slice 1), so a nonempty finalizer registry, doomed batch, weak-table
