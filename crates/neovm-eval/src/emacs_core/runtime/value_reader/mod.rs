@@ -1314,11 +1314,23 @@ impl SubstituteWalk {
             // size counts no Lisp slot, so GNU walks neither. A bignum is a
             // number and returned above.
             VecLikeType::BoolVector | VecLikeType::HashTable | VecLikeType::Bignum => {}
-            // GNU walks char-tables, and sub-char-tables from vector slot 2,
-            // which skips each one's first entry on a 64-bit build. Their
-            // stores here also drive the char-table caches, so they are left
-            // alone for now, as the reader always left them.
-            VecLikeType::CharTable | VecLikeType::SubCharTable => {}
+            VecLikeType::CharTable | VecLikeType::SubCharTable => {
+                // GNU lread.c uses raw AREF/ASET, including the independent
+                // ASCII slot. Sub-char tables start at raw slot 2, skipping
+                // their first content entry on the pinned 64-bit profile.
+                let mut index = if kind == VecLikeType::SubCharTable {
+                    2
+                } else {
+                    0
+                };
+                while let Some(slot) = neovm_value::chartab::char_table_lisp_slot(subtree, index) {
+                    let replacement = self.substitute(slot)?;
+                    if neovm_value::chartab::set_char_table_lisp_slot(subtree, index, replacement) {
+                        neovm_text::emacs_core::substrate_hooks::note_char_table_layout_mutation();
+                    }
+                    index += 1;
+                }
+            }
             // GNU: an unknown pseudovector may hold non-Lisp fields, so it
             // signals `sequencep`, as the `Flength` it once called did.
             VecLikeType::Marker

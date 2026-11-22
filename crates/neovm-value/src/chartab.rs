@@ -1661,6 +1661,63 @@ pub fn char_table_external_slots(table: &Value) -> Option<Vec<Value>> {
 
     table.char_table_external_slots()
 }
+
+/// Read one Lisp field using GNU's pseudovector word indexing. The two
+/// sub-char-table C ints occupy one word on the pinned 64-bit profile;
+/// that metadata word is not itself a Lisp field.
+#[doc(hidden)]
+pub fn char_table_lisp_slot(table: Value, index: usize) -> Option<Value> {
+    if let Some(object) = table.as_char_table_obj() {
+        return match index {
+            0 => Some(object.defalt.get()),
+            1 => Some(object.parent.get()),
+            2 => Some(object.purpose.get()),
+            3 => Some(object.ascii.get()),
+            4..GNU_CHAR_TABLE_STANDARD_SLOTS => {
+                Some(object.contents[index - GNU_CHAR_TABLE_CONTENT_START].get())
+            }
+            _ => object
+                .extras
+                .get(index - GNU_CHAR_TABLE_STANDARD_SLOTS)
+                .copied(),
+        };
+    }
+    let object = table.as_sub_char_table_obj()?;
+    let metadata_words = (2 * size_of::<i32>()).div_ceil(size_of::<Value>());
+    object
+        .contents
+        .get(index.checked_sub(metadata_words)?)
+        .copied()
+}
+
+/// Store a Lisp field without semantic parent validation or ASCII
+/// recomputation, like GNU ASET. Use the fixed-shape barrier capability and
+/// invalidate lookup caches even when an aliased child kept its identity.
+#[doc(hidden)]
+pub fn set_char_table_lisp_slot(table: Value, index: usize, value: Value) -> bool {
+    if char_table_lisp_slot(table, index).is_none() {
+        return false;
+    }
+    bump_char_table_write_tick();
+    if table.is_char_table() {
+        return table
+            .with_char_table_mut(|writer| match index {
+                0 => writer.set_default(value),
+                1 => writer.set_parent(value),
+                2 => writer.set_purpose(value),
+                3 => writer.set_ascii(value),
+                4..GNU_CHAR_TABLE_STANDARD_SLOTS => {
+                    writer.set_contents(index - GNU_CHAR_TABLE_CONTENT_START, value)
+                }
+                _ => writer.set_extra(index - GNU_CHAR_TABLE_STANDARD_SLOTS, value),
+            })
+            .is_some();
+    }
+    let metadata_words = (2 * size_of::<i32>()).div_ceil(size_of::<Value>());
+    table
+        .with_sub_char_table_mut(|writer| writer.set_contents(index - metadata_words, value))
+        .is_some()
+}
 /// `(char-table-subtype TABLE)` -- return the sub-type symbol.
 /// `char-table-p` + subtype check against a symbol name, without the
 /// builtin arg plumbing (two Vec allocs) or the purpose symbol's

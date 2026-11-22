@@ -8,6 +8,20 @@
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
 #[test]
+fn oracle_prop_lread_substitute_object_in_subtree_char_table_skips() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    // GNU lread.c starts sub-char-table traversal at raw vector slot 2,
+    // skipping contents[0] at each depth on the pinned 64-bit oracle.
+    let form = r#"(list
+  (let* ((ph (cons nil nil)) (ct (make-char-table 'test)))
+    (aset ct ?a ph)
+    (set-char-table-range ct '(#x3000 . #x30ff) ph)
+    (lread--substitute-object-in-subtree ct ph t)
+    (list (eq (aref ct ?a) ct) (eq (aref ct #x3042) ct))))"#;
+    crate::common::assert_oracle_parity_expect(form, expect_test::expect![[r#""OK ((t nil))""#]]);
+}
+
+#[test]
 fn oracle_prop_lread_substitute_object_in_subtree_walks_containers() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -149,4 +163,87 @@ fn oracle_prop_lread_substitute_object_in_subtree_terminates_on_cycles() {
     (list (eq (nth 1 x) x) (eq (nthcdr 3 x) x))))"##;
     let expect = expect_test::expect![[r#""OK (t (t t) (t t))""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+#[test]
+fn oracle_prop_lread_substitute_object_in_subtree_char_table_raw_ascii() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    // fillarray leaves the independent ASCII slot intact in GNU.
+    let form = r#"(let* ((ph (cons nil nil)) (ct (make-char-table 'test)))
+  (aset ct ?a 'ascii-value)
+  (fillarray ct ph)
+  (lread--substitute-object-in-subtree ct ph t)
+  (list (aref ct ?a) (char-table-range ct ?a)
+        (eq (char-table-range ct nil) ct) (eq (aref ct #x10000) ct)))"#;
+    crate::common::assert_oracle_parity_expect(
+        form,
+        expect_test::expect![[r#""OK (ascii-value ascii-value t t)""#]],
+    );
+}
+
+#[test]
+fn oracle_prop_lread_substitute_object_in_subtree_char_table_extras() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let form = r#"(let* ((ph (cons nil nil)) (purpose (make-symbol "extra-test")))
+  (put purpose 'char-table-extra-slots 2)
+  (let ((ct (make-char-table purpose)))
+    (set-char-table-extra-slot ct 0 ph)
+    (set-char-table-extra-slot ct 1 (vector ph))
+    (lread--substitute-object-in-subtree ct ph t)
+    (list (eq (char-table-extra-slot ct 0) ct)
+          (eq (aref (char-table-extra-slot ct 1) 0) ct))))"#;
+    crate::common::assert_oracle_parity_expect(form, expect_test::expect![[r#""OK (t t)""#]]);
+}
+
+#[test]
+fn oracle_prop_lread_substitute_object_in_subtree_char_table_purpose_parent() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    // Raw slot stores permit a non-symbol purpose and a self-parent.
+    let form = r#"(list
+  (let* ((ph (make-symbol "purpose")) (ct (make-char-table ph)))
+    (lread--substitute-object-in-subtree ct ph t)
+    (eq (char-table-subtype ct) ct))
+  (let* ((ph (make-char-table 'test)) (ct (make-char-table 'test)))
+    (set-char-table-parent ct ph)
+    (lread--substitute-object-in-subtree ct ph t)
+    (eq (char-table-parent ct) ct)))"#;
+    crate::common::assert_oracle_parity_expect(form, expect_test::expect![[r#""OK (t t)""#]]);
+}
+
+#[test]
+fn oracle_prop_lread_substitute_object_in_subtree_char_table_depth_skips() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let form = r#"(let* ((ph (cons nil nil)) (ct (make-char-table 'test)))
+  (set-char-table-range ct '(#x10000 . #x10fff) ph)
+  (set-char-table-range ct '(#x11000 . #x1107f) ph)
+  (aset ct #x11080 ph)
+  (aset ct #x11081 ph)
+  (lread--substitute-object-in-subtree ct ph t)
+  (mapcar (lambda (c) (eq (aref ct c) ct))
+          '(#x10001 #x11001 #x11080 #x11081)))"#;
+    crate::common::assert_oracle_parity_expect(
+        form,
+        expect_test::expect![[r#""OK (nil nil nil t)""#]],
+    );
+}
+
+#[test]
+fn oracle_prop_lread_substitute_object_in_subtree_char_table_partial_failure() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let form = r#"(let* ((ph (cons nil nil)) (purpose (make-symbol "failure-test")))
+  (put purpose 'char-table-extra-slots 3)
+  (let ((ct (make-char-table purpose ph)))
+    (set-char-table-extra-slot ct 0 ph)
+    (set-char-table-extra-slot ct 1 (current-buffer))
+    (set-char-table-extra-slot ct 2 ph)
+    (list (condition-case err
+              (lread--substitute-object-in-subtree ct ph t)
+            (error (list (car err) (cadr err))))
+          (eq (char-table-range ct nil) ct)
+          (eq (char-table-extra-slot ct 0) ct)
+          (eq (char-table-extra-slot ct 2) ph))))"#;
+    crate::common::assert_oracle_parity_expect(
+        form,
+        expect_test::expect![[r#""OK ((wrong-type-argument sequencep) t t t)""#]],
+    );
 }
