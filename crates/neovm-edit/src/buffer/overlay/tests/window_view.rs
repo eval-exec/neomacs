@@ -199,3 +199,564 @@ fn overlay_move_does_not_rescan_the_content_components() {
         "a text edit must rebuild the component sum once"
     );
 }
+
+/// A range view reuses unchanged overlay copies across captures. Scrolling
+/// with no overlay or plist edits must not copy any plist per redisplay, as
+/// GNU's redisplay reads the live overlay plists in place.
+#[test]
+fn window_view_reuses_unchanged_copies_across_identical_captures() {
+    crate::test_utils::init_test_tracing();
+    let mut list = OverlayList::new();
+    for index in 0..2_000 {
+        let overlay = alloc_overlay(index * 3, index * 3 + 1);
+        list.insert_overlay(overlay);
+    }
+    let range = emacs_byte_range(0, 6_000);
+    let first = list.snapshot_in_range(range);
+    reset_overlay_snapshot_copy_count();
+    let second = list.snapshot_in_range(range);
+    assert_eq!(
+        overlay_snapshot_copy_count(),
+        0,
+        "an unchanged range view copied every overlay again"
+    );
+    assert_eq!(serials_in(&first, 0, 6_000), serials_in(&second, 0, 6_000));
+    // The reused copies are the same immutable objects.
+    assert_eq!(
+        overlays_at(&first, 0)[0].bits(),
+        overlays_at(&second, 0)[0].bits()
+    );
+}
+
+/// A plist write invalidates only that overlay's copy: the next view sees the
+/// new plist for it, reuses every other copy, and a view captured before the
+/// mutation keeps its state.
+#[test]
+fn window_view_copy_reuse_stops_at_a_plist_mutation() {
+    crate::test_utils::init_test_tracing();
+    let mut list = OverlayList::new();
+    let face = Value::symbol("face");
+    let help = Value::symbol("help-echo");
+    for index in 0..50 {
+        let overlay = alloc_overlay(index * 3, index * 3 + 1);
+        list.insert_overlay(overlay);
+        list.overlay_put(overlay, face, Value::symbol("error"))
+            .unwrap();
+    }
+    let range = emacs_byte_range(0, 200);
+    let before = list.snapshot_in_range(range);
+    let target = overlays_at(&list, 0)[0];
+    let copy_before = overlays_at(&before, 0)[0];
+    assert_eq!(
+        before.overlay_get_named(copy_before, help),
+        None,
+        "the captured view starts without the later property"
+    );
+
+    reset_overlay_snapshot_copy_count();
+    list.overlay_put(target, help, Value::symbol("h")).unwrap();
+    let after = list.snapshot_in_range(range);
+    assert_eq!(
+        overlay_snapshot_copy_count(),
+        1,
+        "a plist write must refresh only the written overlay's copy"
+    );
+    let copy_after = overlays_at(&after, 0)[0];
+    assert_eq!(
+        before.overlay_get_named(copy_before, help),
+        None,
+        "the older view must keep the state it captured"
+    );
+    assert_eq!(
+        after.overlay_get_named(copy_after, help),
+        Some(Value::symbol("h"))
+    );
+
+    // The revisions are stable again after the write.
+    reset_overlay_snapshot_copy_count();
+    let _third = list.snapshot_in_range(range);
+    assert_eq!(overlay_snapshot_copy_count(), 0);
+}
+
+/// A text edit moves overlays; the copies must follow without a redisplay
+/// having to rebuild them once per frame, and each captured view keeps the
+/// ranges it observed.
+#[test]
+fn window_view_copy_reuse_stops_at_a_text_edit() {
+    crate::test_utils::init_test_tracing();
+    let mut list = OverlayList::new();
+    for index in 0..50 {
+        let overlay = alloc_overlay(index * 3, index * 3 + 1);
+        list.insert_overlay(overlay);
+    }
+    let range = emacs_byte_range(0, 200);
+    let before = list.snapshot_in_range(range);
+    let first = overlays_at(&list, 0)[0];
+    let first_before = overlays_at(&before, 0)[0];
+    let observed_before = list.index_range_for_test(first).unwrap();
+
+    reset_overlay_snapshot_copy_count();
+    list.adjust_for_insert_at_emacs_byte_pos(emacs_byte_pos(0), emacs_byte_len(1), false);
+    let after = list.snapshot_in_range(range);
+    assert!(
+        overlay_snapshot_copy_count() > 0,
+        "a text edit must refresh the range-view copies"
+    );
+    assert_eq!(
+        before.index_range_for_test(first_before),
+        Some(observed_before),
+        "the older view keeps the ranges it captured"
+    );
+    let first_after = overlays_at(&after, 1)[0];
+    assert_eq!(
+        after.index_range_for_test(first_after),
+        list.index_range_for_test(first),
+        "the new view follows the edited range"
+    );
+
+    reset_overlay_snapshot_copy_count();
+    let _third = list.snapshot_in_range(range);
+    assert_eq!(overlay_snapshot_copy_count(), 0);
+}
+
+/// The real redisplay workload: hl-line moves one highlight overlay on every
+/// C-n while the buffer's other overlays stay put. Only the highlight may be
+/// re-copied per capture; a list-wide invalidation would re-copy every
+/// visible overlay on every key.
+#[test]
+fn window_view_copies_only_the_highlight_that_moves() {
+    crate::test_utils::init_test_tracing();
+    let face = Value::symbol("face");
+    let mut list = OverlayList::new();
+    for index in 0..500 {
+        let overlay = alloc_overlay(index * 4, index * 4 + 1);
+        list.overlay_put(overlay, face, Value::symbol("bold"))
+            .unwrap();
+        list.insert_overlay(overlay);
+    }
+    let highlight = alloc_overlay(0, 2);
+    list.insert_overlay(highlight);
+    list.overlay_put(highlight, face, Value::symbol("hl-line"))
+        .unwrap();
+    let highlight_serial = overlay_identity_key(highlight).get();
+    let fixed_serial = overlay_identity_key(overlays_at(&list, 4)[0]).get();
+    let range = emacs_byte_range(0, 2_000);
+    let first = list.snapshot_in_range(range);
+    let first_fixed = overlays_at(&first, 4)
+        .into_iter()
+        .find(|overlay| overlay_identity_key(*overlay).get() == fixed_serial)
+        .expect("a fixed overlay is in the first view");
+    let first_fixed_bits = first_fixed.bits();
+
+    for step in 0..200 {
+        let start = 4 * (step + 1);
+        list.move_overlay_to_emacs_byte_range(highlight, emacs_byte_range(start, start + 2));
+        reset_overlay_snapshot_copy_count();
+        let view = list.snapshot_in_range(range);
+        assert_eq!(
+            overlay_snapshot_copy_count(),
+            1,
+            "step {step}: moving the highlight re-copied more than the highlight"
+        );
+        // An unchanged overlay keeps the exact object captured earlier.
+        let fixed = overlays_at(&view, 4)
+            .into_iter()
+            .find(|overlay| overlay_identity_key(*overlay).get() == fixed_serial)
+            .expect("a fixed overlay is in the view");
+        assert_eq!(fixed.bits(), first_fixed_bits);
+    }
+    // The highlight itself does refresh, and its copy carries the new range.
+    let last = list.snapshot_in_range(range);
+    let moved = overlays_at(&last, 800)
+        .into_iter()
+        .find(|overlay| overlay_identity_key(*overlay).get() == highlight_serial)
+        .expect("the highlight copy is at its new position");
+    assert_eq!(
+        last.index_range_for_test(moved),
+        Some(emacs_byte_range(800, 802))
+    );
+}
+
+/// One unrelated plist write must not refresh any other visible overlay.
+#[test]
+fn window_view_copies_only_the_overlay_whose_plist_changed() {
+    crate::test_utils::init_test_tracing();
+    let face = Value::symbol("face");
+    let help = Value::symbol("help-echo");
+    let mut list = OverlayList::new();
+    let mut overlays = Vec::new();
+    for index in 0..500 {
+        let overlay = alloc_overlay(index * 4, index * 4 + 1);
+        list.overlay_put(overlay, face, Value::symbol("bold"))
+            .unwrap();
+        list.insert_overlay(overlay);
+        overlays.push(overlay);
+    }
+    let fixed_serial = overlay_identity_key(overlays_at(&list, 4)[0]).get();
+    let range = emacs_byte_range(0, 2_000);
+    let first = list.snapshot_in_range(range);
+    let witness = overlays_at(&first, 4)
+        .into_iter()
+        .find(|overlay| overlay_identity_key(*overlay).get() == fixed_serial)
+        .expect("a fixed overlay is in the first view");
+    let witness_bits = witness.bits();
+
+    reset_overlay_snapshot_copy_count();
+    list.overlay_put(overlays[400], help, Value::symbol("h"))
+        .unwrap();
+    let second = list.snapshot_in_range(range);
+    assert_eq!(
+        overlay_snapshot_copy_count(),
+        1,
+        "one unrelated overlay-put refreshed more than its own copy"
+    );
+    let witness_after = overlays_at(&second, 4)
+        .into_iter()
+        .find(|overlay| overlay_identity_key(*overlay).get() == fixed_serial)
+        .expect("a fixed overlay is in the second view");
+    assert_eq!(witness_after.bits(), witness_bits);
+}
+
+/// Every mutation class must make the next range view equal to a fresh copy
+/// of the live state. A delete forgets that overlay's copy; re-inserting the
+/// same object must not resurrect its pre-delete plist.
+#[test]
+fn window_view_follows_a_deletion_and_reinsertion() {
+    crate::test_utils::init_test_tracing();
+    let face = Value::symbol("face");
+    let help = Value::symbol("help-echo");
+    let mut list = OverlayList::new();
+    let mut overlays = Vec::new();
+    for index in 0..50 {
+        let overlay = alloc_overlay(index * 3, index * 3 + 1);
+        list.overlay_put(overlay, face, Value::symbol("error"))
+            .unwrap();
+        list.insert_overlay(overlay);
+        overlays.push(overlay);
+    }
+    let range = emacs_byte_range(0, 200);
+    let first = list.snapshot_in_range(range);
+    reset_overlay_snapshot_copy_count();
+    let _second = list.snapshot_in_range(range);
+    assert_eq!(overlay_snapshot_copy_count(), 0);
+
+    let gone = overlays[10];
+    let gone_serial = overlay_identity_key(gone).get();
+    list.delete_overlay(gone);
+    reset_overlay_snapshot_copy_count();
+    let after_delete = list.snapshot_in_range(range);
+    assert_eq!(
+        overlay_snapshot_copy_count(),
+        0,
+        "an unrelated deletion re-copied the surviving overlays"
+    );
+    assert_eq!(serials_in(&after_delete, 0, 200), serials_in(&list, 0, 200));
+    assert!(
+        !serials_in(&after_delete, 0, 200).contains(&gone_serial),
+        "the deleted overlay is gone from the view"
+    );
+
+    // A plist write while detached is only observable after the reattach.
+    list.overlay_put(gone, help, Value::symbol("h")).unwrap();
+    list.insert_overlay(gone);
+    reset_overlay_snapshot_copy_count();
+    let reinserted = list.snapshot_in_range(range);
+    assert_eq!(
+        overlay_snapshot_copy_count(),
+        1,
+        "only the reinserted overlay needs a fresh copy"
+    );
+    let copy = overlays_at(&reinserted, 30)
+        .into_iter()
+        .find(|overlay| overlay_identity_key(*overlay).get() == gone_serial)
+        .expect("the reinserted overlay is in the view");
+    assert_eq!(
+        reinserted.overlay_get_named(copy, help),
+        Some(Value::symbol("h")),
+        "the reinsertion reused the detached overlay's stale copy"
+    );
+    assert_eq!(
+        overlays_at(&first, 30).len(),
+        1,
+        "the first view keeps what it captured"
+    );
+}
+
+/// A delete text edit resizes or evaporates overlapping overlays; the next
+/// view must equal the live state and reuse the untouched overlays.
+#[test]
+fn window_view_follows_a_delete_text_edit() {
+    crate::test_utils::init_test_tracing();
+    let face = Value::symbol("face");
+    let mut list = OverlayList::new();
+    for index in 0..50 {
+        let overlay = alloc_overlay(index * 3, index * 3 + 1);
+        list.overlay_put(overlay, face, Value::symbol("bold"))
+            .unwrap();
+        list.insert_overlay(overlay);
+    }
+    let _before = list.snapshot_in_range(emacs_byte_range(0, 200));
+
+    reset_overlay_snapshot_copy_count();
+    list.adjust_for_delete_emacs_byte_range(emacs_byte_range(0, 30));
+    let after = list.snapshot_in_range(emacs_byte_range(0, 200));
+    let copied = overlay_snapshot_copy_count();
+    assert_eq!(
+        copied, 50,
+        "every overlay after the deleted span shifted; all copied ranges changed"
+    );
+    assert_eq!(serials_in(&after, 0, 200), serials_in(&list, 0, 200));
+    for pos in 0..200 {
+        assert_eq!(serials_at(&after, pos), serials_at(&list, pos), "pos {pos}");
+    }
+    reset_overlay_snapshot_copy_count();
+    let _third = list.snapshot_in_range(emacs_byte_range(0, 200));
+    assert_eq!(overlay_snapshot_copy_count(), 0);
+}
+
+/// An edit that moves no visible overlay's range leaves every copy reusable —
+/// the case that made a per-edit generation clear unacceptable.
+#[test]
+fn window_view_copies_nothing_for_an_edit_outside_the_visible_ranges() {
+    crate::test_utils::init_test_tracing();
+    let mut list = OverlayList::new();
+    for index in 0..50 {
+        list.insert_overlay(alloc_overlay(index * 3, index * 3 + 1));
+    }
+    let range = emacs_byte_range(0, 200);
+    let _before = list.snapshot_in_range(range);
+
+    reset_overlay_snapshot_copy_count();
+    // Overlays live in 0..150; an insertion after them shifts none.
+    list.adjust_for_insert_at_emacs_byte_pos(emacs_byte_pos(500), emacs_byte_len(7), false);
+    let after = list.snapshot_in_range(range);
+    assert_eq!(
+        overlay_snapshot_copy_count(),
+        0,
+        "an edit after every visible overlay re-copied the view"
+    );
+    assert_eq!(serials_in(&after, 0, 200), serials_in(&list, 0, 200));
+    reset_overlay_snapshot_copy_count();
+    let _third = list.snapshot_in_range(range);
+    assert_eq!(overlay_snapshot_copy_count(), 0);
+}
+
+/// A replace edit shifts the overlays after the replaced span and resizes
+/// those overlapping it; the next view must equal the live state.
+#[test]
+fn window_view_follows_a_replace_text_edit() {
+    crate::test_utils::init_test_tracing();
+    let mut list = OverlayList::new();
+    for index in 0..50 {
+        list.insert_overlay(alloc_overlay(index * 3, index * 3 + 1));
+    }
+    let _before = list.snapshot_in_range(emacs_byte_range(0, 200));
+
+    list.adjust_for_replace_at_emacs_byte_pos(
+        emacs_byte_pos(15),
+        emacs_byte_len(10),
+        emacs_byte_len(4),
+    );
+    let after = list.snapshot_in_range(emacs_byte_range(0, 200));
+    assert_eq!(serials_in(&after, 0, 200), serials_in(&list, 0, 200));
+    for pos in 0..200 {
+        assert_eq!(serials_at(&after, pos), serials_at(&list, pos), "pos {pos}");
+    }
+    reset_overlay_snapshot_copy_count();
+    let _third = list.snapshot_in_range(emacs_byte_range(0, 200));
+    assert_eq!(overlay_snapshot_copy_count(), 0);
+}
+
+/// Advance flags are part of the copied state: changing one refreshes that
+/// overlay's copy only.
+#[test]
+fn window_view_follows_advance_flag_changes() {
+    crate::test_utils::init_test_tracing();
+    let mut list = OverlayList::new();
+    let mut overlays = Vec::new();
+    for index in 0..50 {
+        let overlay = alloc_overlay(index * 3, index * 3 + 1);
+        list.insert_overlay(overlay);
+        overlays.push(overlay);
+    }
+    let range = emacs_byte_range(0, 200);
+    let _before = list.snapshot_in_range(range);
+
+    reset_overlay_snapshot_copy_count();
+    list.set_front_advance(overlays[5], true);
+    list.set_rear_advance(overlays[6], true);
+    let after = list.snapshot_in_range(range);
+    assert_eq!(
+        overlay_snapshot_copy_count(),
+        2,
+        "two advance-flag changes refreshed more than their own copies"
+    );
+    for (index, front, rear) in [(5usize, true, false), (6, false, true)] {
+        let serial = overlay_identity_key(overlays[index]).get();
+        let copy = overlays_at(&after, index * 3)
+            .into_iter()
+            .find(|overlay| overlay_identity_key(*overlay).get() == serial)
+            .expect("the overlay is in the view");
+        let copy = copy.as_overlay_data().unwrap();
+        assert_eq!(copy.front_advance, front, "overlay {index}");
+        assert_eq!(copy.rear_advance, rear, "overlay {index}");
+    }
+    reset_overlay_snapshot_copy_count();
+    let _third = list.snapshot_in_range(range);
+    assert_eq!(overlay_snapshot_copy_count(), 0);
+}
+
+/// Retargeting the buffer rewrites the copied `buffer` field of every overlay.
+#[test]
+fn window_view_follows_a_buffer_retarget() {
+    crate::test_utils::init_test_tracing();
+    let mut list = OverlayList::new();
+    for index in 0..50 {
+        list.insert_overlay(alloc_overlay(index * 3, index * 3 + 1));
+    }
+    let range = emacs_byte_range(0, 200);
+    let before = list.snapshot_in_range(range);
+    assert_eq!(
+        overlays_at(&before, 0)[0].as_overlay_data().unwrap().buffer,
+        Some(BufferId(1))
+    );
+
+    reset_overlay_snapshot_copy_count();
+    list.retarget_buffer(BufferId(1), BufferId(2));
+    let after = list.snapshot_in_range(range);
+    assert_eq!(
+        overlay_snapshot_copy_count(),
+        50,
+        "a retarget rewrites every copied buffer field"
+    );
+    for pos in (0..150).step_by(3) {
+        assert_eq!(
+            overlays_at(&after, pos)[0]
+                .as_overlay_data()
+                .unwrap()
+                .buffer,
+            Some(BufferId(2)),
+            "pos {pos}"
+        );
+    }
+    assert_eq!(
+        overlays_at(&before, 0)[0].as_overlay_data().unwrap().buffer,
+        Some(BufferId(1)),
+        "the older view keeps the buffer it captured"
+    );
+    reset_overlay_snapshot_copy_count();
+    let _third = list.snapshot_in_range(range);
+    assert_eq!(overlay_snapshot_copy_count(), 0);
+}
+
+/// Whole-list replacement drops every memo entry, and a later insert is
+/// visible with a fresh copy.
+#[test]
+fn window_view_follows_a_whole_list_replacement() {
+    crate::test_utils::init_test_tracing();
+    let mut list = OverlayList::new();
+    for index in 0..50 {
+        list.insert_overlay(alloc_overlay(index * 3, index * 3 + 1));
+    }
+    let range = emacs_byte_range(0, 200);
+    let _before = list.snapshot_in_range(range);
+
+    reset_overlay_snapshot_copy_count();
+    list.delete_all_overlays();
+    let empty = list.snapshot_in_range(range);
+    assert_eq!(
+        overlay_snapshot_copy_count(),
+        0,
+        "an empty list must not re-copy retained overlays"
+    );
+    assert!(serials_in(&empty, 0, 200).is_empty());
+
+    for index in 0..5 {
+        list.insert_overlay(alloc_overlay(index * 3, index * 3 + 1));
+    }
+    reset_overlay_snapshot_copy_count();
+    let replaced = list.snapshot_in_range(range);
+    assert_eq!(overlay_snapshot_copy_count(), 5);
+    assert_eq!(serials_in(&replaced, 0, 200), serials_in(&list, 0, 200));
+}
+
+/// The range-view memo must never hand a snapshot copy to the Lisp-visible
+/// list: a live overlay keeps its own object and plist across captures.
+#[test]
+fn window_view_never_replaces_a_live_overlay_object() {
+    crate::test_utils::init_test_tracing();
+    let face = Value::symbol("face");
+    let mut list = OverlayList::new();
+    let live = alloc_overlay(0, 2);
+    list.overlay_put(live, face, Value::symbol("bold")).unwrap();
+    list.insert_overlay(live);
+    let live_bits = overlays_at(&list, 0)[0].bits();
+
+    let view = list.snapshot_in_range(emacs_byte_range(0, 10));
+    assert_eq!(
+        overlays_at(&list, 0)[0].bits(),
+        live_bits,
+        "capturing a view replaced the live overlay object"
+    );
+    let copy = overlays_at(&view, 0)[0];
+    assert_ne!(copy.bits(), live_bits, "the view owns a distinct object");
+    assert_eq!(
+        view.overlay_get_named(copy, face),
+        Some(Value::symbol("bold"))
+    );
+
+    // A Lisp-visible `copy_overlays` must also own distinct objects, never a
+    // memo copy (which several views share read-only).
+    let lisp_copy = list.clone();
+    let lisp_copy_overlay = overlays_at(&lisp_copy, 0)[0];
+    assert_ne!(lisp_copy_overlay.bits(), live_bits);
+    assert_ne!(lisp_copy_overlay.bits(), copy.bits());
+    assert_eq!(
+        lisp_copy.overlay_get_named(lisp_copy_overlay, face),
+        Some(Value::symbol("bold"))
+    );
+}
+
+/// The memo's copies are GC roots while reachable from it, and a write
+/// releases the superseded copy. A view that already holds the old copy keeps
+/// it alive through its own roots.
+#[test]
+fn window_view_copy_memo_values_are_rooted_and_replaced() {
+    crate::test_utils::init_test_tracing();
+    let face = Value::symbol("face");
+    let mut list = OverlayList::new();
+    let live = alloc_overlay(0, 2);
+    list.overlay_put(live, face, Value::symbol("bold")).unwrap();
+    list.insert_overlay(live);
+    let view = list.snapshot_in_range(emacs_byte_range(0, 10));
+    let memo_copy = overlays_at(&view, 0)[0];
+
+    let mut roots = Vec::new();
+    list.trace_roots(&mut roots);
+    assert!(
+        roots.iter().any(|value| eq_value(value, &memo_copy)),
+        "the memo copy is not a root of the live list"
+    );
+
+    list.overlay_put(live, face, Value::symbol("italic"))
+        .unwrap();
+    roots.clear();
+    list.trace_roots(&mut roots);
+    assert!(
+        !roots.iter().any(|value| eq_value(value, &memo_copy)),
+        "a write left the superseded memo copy rooted"
+    );
+    let mut view_roots = Vec::new();
+    view.trace_roots(&mut view_roots);
+    assert!(
+        view_roots.iter().any(|value| eq_value(value, &memo_copy)),
+        "the observer view stopped rooting its captured copy"
+    );
+
+    let next = list.snapshot_in_range(emacs_byte_range(0, 10));
+    let next_copy = overlays_at(&next, 0)[0];
+    roots.clear();
+    list.trace_roots(&mut roots);
+    assert!(roots.iter().any(|value| eq_value(value, &next_copy)));
+    assert_ne!(next_copy.bits(), memo_copy.bits());
+}
