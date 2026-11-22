@@ -124,3 +124,29 @@ fn oracle_prop_edebug_eval_top_level_form_keeps_circular_literals() {
     let expect = expect_test::expect![[r##""#1=(a . #1#)neo-fOK (t a t t t)""##]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
+
+#[test]
+fn oracle_prop_lread_substitute_object_in_subtree_terminates_on_cycles() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // The walk must stop at nodes it has already entered (GNU's `seen` list
+    // in `substitute_object_recurse`, src/lread.c). These shapes revisit a
+    // node: GNU's own ERT case (test/src/lread-tests.el), a nested `#N=`
+    // reader label, and a circular list whose placeholder sits inside the
+    // cycle. A walk without cycle termination never returns on them.
+    let form = r##"(list
+  (let ((x (cons 0 1)))
+    (setcar x x)
+    (lread--substitute-object-in-subtree x 1 t)
+    (eq x (cdr x)))
+  (let ((v (read "#1=[#2=[#1# #2#]]")))
+    (list (eq (aref (aref v 0) 0) v)
+          (eq (aref (aref v 0) 1) (aref v 0))))
+  (let* ((x (list 1 2 3)) (ph (cons nil nil)))
+    (setcdr (nthcdr 2 x) x)
+    (setcar (cdr x) ph)
+    (lread--substitute-object-in-subtree x ph t)
+    (list (eq (nth 1 x) x) (eq (nthcdr 3 x) x))))"##;
+    let expect = expect_test::expect![[r#""OK (t (t t) (t t))""#]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}

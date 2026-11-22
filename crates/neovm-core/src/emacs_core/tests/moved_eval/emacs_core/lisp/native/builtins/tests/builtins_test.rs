@@ -8989,8 +8989,9 @@ fn lread_substitute_object_in_subtree_walks_a_long_list_in_a_loop() {
     let mut eval = crate::test_utils::new_context();
 
     // A list's cdr chain is walked in a loop, so a list this long does not
-    // overflow the native stack (GNU 31.1 recurses on the cdr and crashes
-    // with SIGSEGV on both forms below).
+    // overflow the native stack. GNU 31.1 recurses on the cdr and crashes
+    // with SIGSEGV on both forms below (attested on the pinned oracle,
+    // a360712c9d: the 1M-element form exits with signal 11).
     let rendered = format_eval_result(&eval.eval_str(
         r#"(let* ((ph (cons nil nil))
                   (long (nconc (make-list 1000000 1) (list ph (vector ph)))))
