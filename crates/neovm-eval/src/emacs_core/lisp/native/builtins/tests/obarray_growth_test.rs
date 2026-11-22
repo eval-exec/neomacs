@@ -67,7 +67,7 @@ fn a_custom_obarray_grows_on_its_maintained_count() {
 
     // Every name still resolves, i.e. each rehash re-bucketed correctly.
     for i in [0usize, 1, 16, 17, 1234, 4999] {
-        let found = intern_soft_impl(&eval, &[Value::string(format!("sym-{i}")), obarray])
+        let found = intern_soft_impl(&mut eval, &[Value::string(format!("sym-{i}")), obarray])
             .expect("intern-soft");
         assert!(
             !found.is_nil(),

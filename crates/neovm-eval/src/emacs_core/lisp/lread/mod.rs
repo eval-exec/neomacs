@@ -197,7 +197,10 @@ fn eval_forms_from_lisp_source_streaming(
             let shorthands = super::reader::current_read_symbol_shorthands(eval);
             let read_result = read_source
                 .read_one_with_shorthands(pos, eval.variables(), shorthands.as_ref())
-                .map_err(|error| signal_reader_error_for_eval_source(error, eof_source))?;
+                .map_err(|error| {
+                    super::reader::reset_obarray_after_reader_error(eval, &error);
+                    signal_reader_error_for_eval_source(error, eof_source)
+                })?;
             let Some((form, next_pos)) = read_result else {
                 break;
             };

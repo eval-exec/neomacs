@@ -1904,7 +1904,17 @@ pub fn builtin_intern_fn(eval: &mut super::eval::Context, args: Vec<Value>) -> E
 
     // Custom obarray path
     if !is_global_obarray_proxy(eval, &effective_obarray) {
-        let obarray_val = check_obarray_value(effective_obarray)?;
+        let obarray_val = match check_obarray_reader(effective_obarray) {
+            Ok(value) => value,
+            Err(rejected) => {
+                // `Fintern` routes through the same check_obarray_slow.
+                reset_rejected_obarray(eval, rejected);
+                return Err(signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("obarrayp"), rejected],
+                ));
+            }
+        };
         let vec_len = obarray_len(obarray_val).unwrap_or(0);
         if vec_len == 0 {
             return Err(signal(
@@ -2218,7 +2228,7 @@ fn shorthand_character_count_error(
     signal(LispCondition::Error, vec![Value::string(error.to_string())])
 }
 
-pub(crate) fn intern_soft_impl(eval: &super::eval::Context, args: &[Value]) -> EvalResult {
+pub(crate) fn intern_soft_impl(eval: &mut super::eval::Context, args: &[Value]) -> EvalResult {
     expect_min_args("intern-soft", args, 1)?;
     expect_max_args("intern-soft", args, 2)?;
     let effective_obarray = effective_obarray_arg(eval, args);
@@ -2227,7 +2237,14 @@ pub(crate) fn intern_soft_impl(eval: &super::eval::Context, args: &[Value]) -> E
     let selected = if is_global_obarray_proxy(eval, &effective_obarray) {
         SelectedInternSoftObarray::Global
     } else {
-        SelectedInternSoftObarray::Custom(CheckedInternSoftObarray::try_from(effective_obarray)?)
+        match CheckedInternSoftObarray::try_from(effective_obarray) {
+            Ok(checked) => SelectedInternSoftObarray::Custom(checked),
+            Err(flow) => {
+                // Fintern_soft shares check_obarray_slow's reset.
+                reset_obarray_after_rejected_flow(eval, &flow);
+                return Err(flow);
+            }
+        }
     };
     let query = if let Some(id) = symbol_id(&args[0], eval.symbol_mode()) {
         InternSoftQuery::Exact {
@@ -2357,6 +2374,39 @@ pub fn check_obarray_value(value: Value) -> Result<Value, Flow> {
             vec![Value::symbol("obarrayp"), value],
         )
     })
+}
+
+/// GNU `check_obarray_slow` resets `Vobarray` to the initial obarray before
+/// signalling when the rejected value is the current obarray
+/// (`lread.c:4662-4665`). Neomacs's dynamic binding is the `obarray` value
+/// cell, so writing the global proxy reproduces that reset inside the
+/// current `let`; the specpdl unwind restores the outer value as usual.
+pub(crate) fn reset_rejected_obarray(eval: &mut super::eval::Context, rejected: Value) {
+    if current_lisp_obarray_value(eval) != rejected {
+        return;
+    }
+    static OBARRAY: WellKnown = WellKnown::Obarray;
+    static NEOVM_OBARRAY_OBJECT: WellKnown = WellKnown::NeovmObarrayObject;
+    if let Some(global) = eval.builtin_var_value(NEOVM_OBARRAY_OBJECT.id()) {
+        // The ordinary `setq` store, including projected bindings, so the
+        // handler sees the reset exactly as GNU's `SET_SYMBOL_VAL` does.
+        let _ = eval.assign_setq_dynamic_by_id(OBARRAY.id(), global);
+    }
+}
+
+/// [`reset_rejected_obarray`] for boundaries that only see the built `Flow`.
+pub(crate) fn reset_obarray_after_rejected_flow(eval: &mut super::eval::Context, flow: &Flow) {
+    let Some(signal) = flow.as_signal() else {
+        return;
+    };
+    if signal.symbol_name() != "wrong-type-argument"
+        || signal.data.first() != Some(&Value::symbol("obarrayp"))
+    {
+        return;
+    }
+    if let Some(&rejected) = signal.data.get(1) {
+        reset_rejected_obarray(eval, rejected);
+    }
 }
 
 /// GNU's reader interns every symbol token into the current obarray while

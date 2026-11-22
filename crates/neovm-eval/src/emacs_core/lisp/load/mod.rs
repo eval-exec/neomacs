@@ -1970,7 +1970,10 @@ fn streaming_readevalloop(
             eval.variables(),
             shorthands,
         )
-        .map_err(|e| read_error_for_load(path, source, e))?;
+        .map_err(|e| {
+            super::reader::reset_obarray_after_reader_error(eval, &e);
+            read_error_for_load(path, source, e)
+        })?;
 
         let Some((form, next_pos)) = read_result else {
             break; // EOF
@@ -2124,7 +2127,10 @@ fn streaming_readevalloop_lisp_source(
             // chosen below.
             let probe = read_source
                 .read_one_with_shorthands(pos, eval.variables(), shorthands)
-                .map_err(|e| read_error_for_load(path, source, e))?;
+                .map_err(|e| {
+                    super::reader::reset_obarray_after_reader_error(eval, &e);
+                    read_error_for_load(path, source, e)
+                })?;
             let Some((probed_form, probed_next)) = probe else {
                 break;
             };

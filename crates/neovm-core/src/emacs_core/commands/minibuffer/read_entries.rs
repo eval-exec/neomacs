@@ -274,7 +274,11 @@ pub fn builtin_read_impl(
                 symbol_position_mode,
                 shorthands.as_ref(),
                 ctx.symbol_mode(),
-            )?;
+            )
+            .map_err(|flow| {
+                crate::emacs_core::reader::reset_obarray_after_rejected_flow(ctx, &flow);
+                flow
+            })?;
             // Return just the car (the parsed object)
             match result.kind() {
                 ValueKind::Cons => {
@@ -329,7 +333,10 @@ pub fn builtin_read_impl(
                         // A marker identifies its cursor but GNU does not add
                         // buffer line/column context to reader signals for it.
                         // Keep marker errors source-less, like string streams.
-                        (Err(signal_reader_error_from_string(error)), new_position)
+                        (Err({
+                            crate::emacs_core::reader::reset_obarray_after_reader_error(ctx, &error);
+                            signal_reader_error_from_string(error)
+                        }), new_position)
                     }
                 }
             };
@@ -401,6 +408,7 @@ pub fn builtin_read_impl(
                         .edit
                         .buffers
                         .goto_buffer_emacs_byte_pos(buf_id, stopped_at);
+                    crate::emacs_core::reader::reset_obarray_after_reader_error(ctx, &error);
                     return Err(signal_reader_error_from_buffer(ctx, buf_id, error));
                 }
             };
@@ -434,7 +442,11 @@ pub fn builtin_read_impl(
                 symbol_position_mode,
                 shorthands.as_ref(),
                 ctx.symbol_mode(),
-            )?;
+            )
+            .map_err(|flow| {
+                crate::emacs_core::reader::reset_obarray_after_rejected_flow(ctx, &flow);
+                flow
+            })?;
             match result.kind() {
                 ValueKind::Cons => {
                     let pair_car = result.cons_car();

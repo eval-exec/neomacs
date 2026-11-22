@@ -653,7 +653,10 @@ pub fn read_from_active_load_cursor(
             shorthands.as_ref(),
             ctx.symbol_mode(),
         )
-        .map_err(signal_reader_error_from_string)?;
+        .map_err(|error| {
+            reset_obarray_after_reader_error(ctx, &error);
+            signal_reader_error_from_string(error)
+        })?;
     let Some((value, next_pos)) = read_result else {
         return Err(end_of_file_error_for_source(eof_source));
     };
@@ -663,6 +666,31 @@ pub fn read_from_active_load_cursor(
     }
     publish_read_symbols(ctx, value);
     Ok(value)
+}
+
+/// GNU `check_obarray_slow` resets `Vobarray` to the initial obarray before
+/// signalling when the rejected value is the current obarray
+/// (`lread.c:4662-4665`). The value reader reports the obarrayp signal but
+/// holds only a `VariableView`, so the reset happens at this boundary, where
+/// the Context can write the current `obarray` binding.
+#[doc(hidden)]
+pub fn reset_obarray_after_reader_error(
+    ctx: &mut super::eval::Context,
+    error: &super::value_reader::ReadError,
+) {
+    if error.signal_symbol != Some(intern("wrong-type-argument"))
+        || error.signal_data.first() != Some(&Value::symbol("obarrayp"))
+    {
+        return;
+    }
+    if let Some(&rejected) = error.signal_data.get(1) {
+        super::builtins::symbols::reset_rejected_obarray(ctx, rejected);
+    }
+}
+
+#[doc(hidden)]
+pub fn reset_obarray_after_rejected_flow(ctx: &mut super::eval::Context, flow: &Flow) {
+    super::builtins::symbols::reset_obarray_after_rejected_flow(ctx, flow);
 }
 
 #[doc(hidden)]
@@ -763,7 +791,11 @@ pub fn builtin_read_from_string(ctx: &mut super::eval::Context, args: Vec<Value>
         SymbolPositionMode::Bare,
         shorthands.as_ref(),
         ctx.symbol_mode(),
-    )?;
+    )
+    .map_err(|flow| {
+        super::builtins::symbols::reset_obarray_after_rejected_flow(ctx, &flow);
+        flow
+    })?;
     if result.is_cons() {
         publish_read_symbols(ctx, result.cons_car());
     }
@@ -896,7 +928,12 @@ pub fn read_from_callable(
     func: Value,
     symbol_position_mode: SymbolPositionMode,
 ) -> EvalResult {
-    let value = super::value_reader::read_from_callable(ctx, func, symbol_position_mode)?;
+    let value = super::value_reader::read_from_callable(ctx, func, symbol_position_mode).map_err(
+        |flow| {
+            super::builtins::symbols::reset_obarray_after_rejected_flow(ctx, &flow);
+            flow
+        },
+    )?;
     publish_read_symbols(ctx, value);
     Ok(value)
 }
