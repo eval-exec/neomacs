@@ -178,6 +178,145 @@ struct ChromeResizeFixture {
     menu_height: u32,
 }
 
+#[test]
+fn rejected_resize_completion_retires_intent_before_later_font_change() {
+    let mut fixture = ChromeResizeFixture::new();
+    fixture.eval.eval_str("(set-frame-width nil 101)").unwrap();
+    let request = fixture.requests.borrow().last().unwrap().clone();
+    let request_id = request.resize_request_id.expect("pending request serial");
+    let tx = crate::host_input::HostInputPublisher::install(&mut fixture.eval);
+    for _ in 0..2 {
+        tx.send(neovm_eval::emacs_core::eval::keyboard::InputEvent::Resize {
+            width: 800,
+            height: fixture.initial_height,
+            scale_factor: 2.0,
+            emacs_frame_id: fixture.frame_id.0,
+        })
+        .unwrap();
+        tx.send(
+            neovm_eval::emacs_core::eval::keyboard::InputEvent::ResizeRequestCompleted {
+                request_id,
+                emacs_frame_id: fixture.frame_id.0,
+            },
+        )
+        .unwrap();
+    }
+    fixture.eval.eval_str("(frame-native-width)").unwrap();
+    fixture.assert_geometry(100, 35, 560);
+    assert!(
+        fixture
+            .eval
+            .frame_manager()
+            .get(fixture.frame_id)
+            .unwrap()
+            .pending_gui_resize
+            .is_none()
+    );
+
+    // Rejected intent must not reappear when a later font change rescales
+    // the settled grid, even though the native allocation never hit 101.
+    let host = RecordingDisplayHost::with_resolved_frame_font(remapped_mono_font_metrics());
+    let font_requests = host.resized.clone();
+    fixture.eval.set_display_host(Box::new(host));
+    fixture
+        .eval
+        .eval_str(r#"(internal-set-lisp-face-attribute 'default :font "Remapped Mono-24" nil)"#)
+        .unwrap();
+    assert_eq!(font_requests.borrow().last().unwrap().width, 100 * 16);
+}
+
+#[test]
+fn failed_resize_dispatch_restores_intent_without_reusing_the_serial() {
+    let mut fixture = ChromeResizeFixture::new();
+    fixture.eval.eval_str("(set-frame-width nil 101)").unwrap();
+    let previous = fixture
+        .eval
+        .frame_manager()
+        .get(fixture.frame_id)
+        .unwrap()
+        .pending_gui_resize
+        .unwrap();
+    let host = RecordingDisplayHost::new();
+    let fail_resize = host.fail_resize().clone();
+    fail_resize.set(true);
+    fixture.eval.set_display_host(Box::new(host));
+    assert!(fixture.eval.eval_str("(set-frame-width nil 102)").is_err());
+    assert_eq!(
+        fixture
+            .eval
+            .frame_manager()
+            .get(fixture.frame_id)
+            .unwrap()
+            .pending_gui_resize,
+        Some(previous)
+    );
+    fail_resize.set(false);
+    fixture.eval.eval_str("(set-frame-width nil 103)").unwrap();
+    let latest = fixture
+        .eval
+        .frame_manager()
+        .get(fixture.frame_id)
+        .unwrap()
+        .pending_gui_resize
+        .unwrap();
+    assert!(latest.request_id.get() > previous.request_id.get() + 1);
+}
+
+#[test]
+fn older_completion_does_not_retire_a_newer_identical_resize_target() {
+    let mut fixture = ChromeResizeFixture::new();
+    fixture.eval.eval_str("(set-frame-width nil 101)").unwrap();
+    let first = fixture.requests.borrow().last().unwrap().clone();
+    fixture.eval.eval_str("(set-frame-width nil 101)").unwrap();
+    let second = fixture.requests.borrow().last().unwrap().clone();
+    assert_eq!((first.width, first.height), (second.width, second.height));
+    assert_ne!(first.resize_request_id, second.resize_request_id);
+    let tx = crate::host_input::HostInputPublisher::install(&mut fixture.eval);
+    tx.send(neovm_eval::emacs_core::eval::keyboard::InputEvent::Resize {
+        width: 800,
+        height: fixture.initial_height,
+        scale_factor: 2.0,
+        emacs_frame_id: fixture.frame_id.0,
+    })
+    .unwrap();
+    tx.send(
+        neovm_eval::emacs_core::eval::keyboard::InputEvent::ResizeRequestCompleted {
+            request_id: first.resize_request_id.unwrap(),
+            emacs_frame_id: fixture.frame_id.0,
+        },
+    )
+    .unwrap();
+    fixture.eval.eval_str("(frame-native-width)").unwrap();
+    assert_eq!(
+        fixture
+            .eval
+            .frame_manager()
+            .get(fixture.frame_id)
+            .unwrap()
+            .pending_gui_resize
+            .unwrap()
+            .request_id,
+        second.resize_request_id.unwrap()
+    );
+    assert_eq!(
+        fixture
+            .eval
+            .eval_str("(frame-parameter nil 'width)")
+            .unwrap()
+            .as_int(),
+        Some(101)
+    );
+    tx.send(
+        neovm_eval::emacs_core::eval::keyboard::InputEvent::ResizeRequestCompleted {
+            request_id: second.resize_request_id.unwrap(),
+            emacs_frame_id: fixture.frame_id.0,
+        },
+    )
+    .unwrap();
+    fixture.eval.eval_str("(frame-native-width)").unwrap();
+    fixture.assert_geometry(100, 35, 560);
+}
+
 impl ChromeResizeFixture {
     fn new() -> Self {
         crate::test_utils::init_test_tracing();

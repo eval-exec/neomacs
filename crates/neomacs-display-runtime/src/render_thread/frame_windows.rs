@@ -1864,6 +1864,7 @@ impl GuiFrameWindowState {
         &mut self,
         width: u32,
         height: u32,
+        resize_request_id: Option<neovm_core::window::GuiResizeRequestId>,
     ) -> super::surface_resize::ResizeRequestOutcome {
         use super::surface_resize::ResizeRequestOutcome;
         match &mut self.lifecycle {
@@ -1877,6 +1878,7 @@ impl GuiFrameWindowState {
                     Some(size) => ResizeRequestOutcome::Applied {
                         window: native.window.id(),
                         size,
+                        resize_request_id,
                     },
                     None => ResizeRequestOutcome::AwaitingConfigure,
                 }

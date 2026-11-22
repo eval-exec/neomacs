@@ -6376,6 +6376,7 @@ pub(crate) fn resize_live_gui_frame(
             title
         );
         host.resize_gui_frame(neovm_eval::emacs_core::eval::GuiFrameHostRequest {
+            resize_request_id: None,
             frame_id: fid,
             width: total_width_px,
             height: total_height_px,
@@ -6464,6 +6465,7 @@ pub(crate) fn request_live_gui_frame_resize(
             })
             .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
         host.resize_gui_frame(neovm_eval::emacs_core::eval::GuiFrameHostRequest {
+            resize_request_id: None,
             frame_id: fid,
             width: total_width_px,
             height: total_height_px,
@@ -8418,6 +8420,7 @@ pub(crate) fn x_create_frame_impl(
             })
             .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
         host.realize_gui_frame(neovm_eval::emacs_core::eval::GuiFrameHostRequest {
+            resize_request_id: None,
             frame_id: fid,
             width,
             height,

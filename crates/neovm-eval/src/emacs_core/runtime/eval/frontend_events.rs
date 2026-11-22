@@ -281,6 +281,7 @@ fn semantics(event: &InputEvent) -> FrontendEventSemantics {
         }
         // Native geometry and host notifications progress without a keystroke.
         InputEvent::Resize { .. }
+        | InputEvent::ResizeRequestCompleted { .. }
         | InputEvent::DisplayReset
         | InputEvent::WebView(..)
         | InputEvent::SurfaceCreateFailed { .. }

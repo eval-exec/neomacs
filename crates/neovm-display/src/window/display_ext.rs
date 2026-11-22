@@ -22,6 +22,7 @@ use neovm_eval::emacs_core::eval::data::window_state::{
 use neovm_eval::emacs_core::eval::data::window_state::{
     horizontal_scroll_bar_area_height, horizontal_scroll_bar_lines, vertical_scroll_bar_area_width,
 };
+use neovm_value::display_vocab::GuiResizeRequestId;
 use neovm_value::intern::intern;
 use neovm_value::value::Value;
 use neovm_value::value::eq_value;
@@ -167,7 +168,7 @@ pub trait DisplayFrameExt {
         width_cols: i64,
         total_lines: i64,
         host_target: Option<(u32, u32)>,
-    );
+    ) -> GuiResizeRequestId;
 
     fn clear_pending_gui_resize(&mut self);
 
@@ -571,9 +572,11 @@ impl DisplayFrameExt for Frame {
         width_cols: i64,
         total_lines: i64,
         host_target: Option<(u32, u32)>,
-    ) {
+    ) -> GuiResizeRequestId {
+        let request_id = self.allocate_gui_resize_request_id();
         self.defer_next_gui_parameter_resize = false;
         self.pending_gui_resize = Some(PendingGuiResize {
+            request_id,
             width_cols,
             total_lines,
             delivery: host_target.map_or(GuiResizeDelivery::Queued, |(width, height)| {
@@ -584,6 +587,7 @@ impl DisplayFrameExt for Frame {
                 }
             }),
         });
+        request_id
     }
 
     fn clear_pending_gui_resize(&mut self) {

@@ -51,7 +51,8 @@ impl InputRoute {
         match self {
             Self::Tty => {}
             Self::Gui { primary_frame } => {
-                if let KbInputEvent::Resize { emacs_frame_id, .. } = &mut event
+                if let KbInputEvent::Resize { emacs_frame_id, .. }
+                | KbInputEvent::ResizeRequestCompleted { emacs_frame_id, .. } = &mut event
                     && *emacs_frame_id == 0
                 {
                     let primary = *primary_frame

@@ -229,11 +229,12 @@ impl ChromeChange {
         let frame = frames
             .get_mut(fid)
             .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
-        frame.queue_pending_gui_resize(cols, lines, None);
+        let request_id = frame.queue_pending_gui_resize(cols, lines, None);
         Ok(Some(ChromeResizeTarget {
             text_width: width.saturating_sub(non_text.0).max(1),
             text_height: height.saturating_sub(non_text.1).max(1),
             queued: PendingGuiResize {
+                request_id,
                 width_cols: cols,
                 total_lines: lines,
                 delivery: GuiResizeDelivery::Queued,

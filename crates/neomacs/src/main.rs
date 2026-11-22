@@ -2366,6 +2366,7 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         self.send_render_command(
             RenderCommand::Window(WindowCommand::ResizeWindow {
                 frame,
+                resize_request_id: request.resize_request_id,
                 width: request.width,
                 height: request.height,
                 geometry_hints: request.geometry_hints,
@@ -3812,6 +3813,7 @@ fn adopt_existing_primary_gui_frame(eval: &mut Context) -> Result<(), String> {
     };
     host.set_gui_frame_alpha(frame_id, alpha, limit)?;
     host.realize_gui_frame(GuiFrameHostRequest {
+        resize_request_id: None,
         frame_id,
         width,
         height,

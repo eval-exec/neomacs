@@ -513,6 +513,13 @@ fn convert_single_display_event(event: &DisplayEvent) -> Option<KbInputEvent> {
                 emacs_frame_id: *emacs_frame_id,
             })
         }
+        DisplayEvent::WindowResizeRequestCompleted {
+            request_id,
+            emacs_frame_id,
+        } => Some(KbInputEvent::ResizeRequestCompleted {
+            request_id: *request_id,
+            emacs_frame_id: *emacs_frame_id,
+        }),
         DisplayEvent::WindowClose { emacs_frame_id } => Some(KbInputEvent::WindowClose {
             emacs_frame_id: *emacs_frame_id,
         }),

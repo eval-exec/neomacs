@@ -26,6 +26,7 @@ pub use neomacs_display_protocol::{
 };
 use neomacs_video_model::{PlaybackAction, VideoDiagnostics, VideoOpenRequest};
 use neovm_core::window::GuiFrameGeometryHints;
+use neovm_core::window::GuiResizeRequestId;
 
 /// Selection addressed by a clipboard request.
 ///
@@ -156,6 +157,12 @@ pub enum InputEvent {
         /// Physical device pixels per logical Emacs pixel.
         scale_factor: f64,
         /// Emacs frame_id of the window that resized
+        emacs_frame_id: u64,
+    },
+    /// A synchronous native request returned its final allocation, which may
+    /// differ from its requested size. Published after the actual resize.
+    WindowResizeRequestCompleted {
+        request_id: GuiResizeRequestId,
         emacs_frame_id: u64,
     },
     WindowClose {
@@ -410,6 +417,7 @@ pub enum WindowCommand {
         width: u32,
         height: u32,
         geometry_hints: GuiFrameGeometryHints,
+        resize_request_id: Option<GuiResizeRequestId>,
     },
     /// Update geometry hints for a specific GUI frame window.
     /// `frame.raw_id() == 0` also targets the adopted primary window.
@@ -1202,6 +1210,7 @@ impl RenderComms {
         matches!(
             event,
             InputEvent::WindowResize { .. }
+                | InputEvent::WindowResizeRequestCompleted { .. }
                 | InputEvent::WindowClose { .. }
                 | InputEvent::ApplicationQuit { .. }
                 | InputEvent::WindowFocus { .. }
@@ -1224,6 +1233,7 @@ impl RenderComms {
                 PointerAction::Scroll { .. } => "positioned-pointer-scroll",
             },
             InputEvent::WindowResize { .. } => "window-resize",
+            InputEvent::WindowResizeRequestCompleted { .. } => "window-resize-request-completed",
             InputEvent::WindowClose { .. } => "window-close",
             InputEvent::WindowFocus { .. } => "window-focus",
             InputEvent::MonitorsChanged { .. } => "monitors-changed",

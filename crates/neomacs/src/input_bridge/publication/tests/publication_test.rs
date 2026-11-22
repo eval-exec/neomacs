@@ -386,6 +386,26 @@ fn gui_primary_alias_observes_assignment_replacement_and_clear() {
 }
 
 #[test]
+fn gui_resize_completion_serial_follows_the_primary_frame_owner() {
+    let owner = Arc::new(Mutex::new(Some(FrameId(42))));
+    let mut fixture = Fixture::new(InputRoute::gui(Arc::clone(&owner)));
+    let request_id = neovm_core::window::GuiResizeRequestId::FIRST;
+    let completion = DisplayEvent::WindowResizeRequestCompleted {
+        request_id,
+        emacs_frame_id: 0,
+    };
+    delivered(fixture.publisher.publish_display(&completion));
+    assert!(matches!(fixture.take().as_slice(),
+        [KbInputEvent::ResizeRequestCompleted { request_id: actual, emacs_frame_id: 42 }]
+            if *actual == request_id));
+    *owner.lock().unwrap() = Some(FrameId(99));
+    delivered(fixture.publisher.publish_display(&completion));
+    assert!(matches!(fixture.take().as_slice(),
+        [KbInputEvent::ResizeRequestCompleted { request_id: actual, emacs_frame_id: 99 }]
+            if *actual == request_id));
+}
+
+#[test]
 fn gui_explicit_resize_delivers_while_primary_is_unassigned() {
     let mut fixture = Fixture::new(InputRoute::gui(Arc::new(Mutex::new(None))));
     delivered(fixture.publisher.publish_display(&resize(

@@ -17,8 +17,8 @@ use neovm_edit::emacs_core::display_metrics::{Rect, WindowId, WindowMargins};
 use neovm_edit::emacs_core::textprop::WindowBufferLookup;
 use neovm_value::display_vocab::{
     ChangeStamp, FRAME_ID_BASE, FrameId, FrameParam, FrameQueryParam, FrameVisibility,
-    RenderFrameVisibility, SourcePreloadWindowRetirementRefusal, SplitDirection,
-    WindowHistoryState, WindowLayoutVariable, WindowSystemKind,
+    GuiResizeRequestId, RenderFrameVisibility, SourcePreloadWindowRetirementRefusal,
+    SplitDirection, WindowHistoryState, WindowLayoutVariable, WindowSystemKind,
 };
 use neovm_value::gc_trace::GcTrace;
 use neovm_value::intern::SymId;
@@ -1262,6 +1262,7 @@ pub enum GuiBarPresentation {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PendingGuiResize {
+    pub request_id: GuiResizeRequestId,
     pub width_cols: i64,
     pub total_lines: i64,
     pub delivery: GuiResizeDelivery,
@@ -3478,6 +3479,8 @@ pub struct Frame {
     /// Logical GUI resize requested via frame parameters but not yet committed
     /// to the live host window.
     pub pending_gui_resize: Option<PendingGuiResize>,
+    /// Monotonic owner-local serial; clearing or rejecting intent never resets it.
+    last_gui_resize_request_id: Option<GuiResizeRequestId>,
     /// Authoritative last-redisplay geometry keyed by live leaf window.
     ///
     /// Window audit Medium 10 / Medium 11 in
@@ -4471,6 +4474,18 @@ impl Default for WindowDisplaySnapshot {
 }
 
 impl PendingGuiResize {
+    /// A completion terminates only the dispatched request that produced it.
+    /// Queued intent has not been sent and cannot have a native completion.
+    pub(crate) fn after_request_completion(self, request_id: GuiResizeRequestId) -> Option<Self> {
+        if self.request_id == request_id
+            && matches!(self.delivery, GuiResizeDelivery::Requested { .. })
+        {
+            None
+        } else {
+            Some(self)
+        }
+    }
+
     pub fn is_queued(&self) -> bool {
         matches!(self.delivery, GuiResizeDelivery::Queued)
     }
@@ -4499,6 +4514,95 @@ impl PendingGuiResize {
         // Actual allocation is always installed independently. Until the latest
         // target is attained, a later font change retains the requested grid.
         Some(self)
+    }
+}
+
+#[cfg(test)]
+mod gui_resize_request_tests {
+    use super::*;
+
+    fn dispatched(request_id: GuiResizeRequestId) -> PendingGuiResize {
+        PendingGuiResize {
+            request_id,
+            width_cols: 101,
+            total_lines: 40,
+            delivery: GuiResizeDelivery::Requested {
+                width: 1042,
+                height: 690,
+                wait: true,
+            },
+        }
+    }
+
+    #[test]
+    fn completion_retires_only_the_current_dispatched_request() {
+        let first = GuiResizeRequestId::FIRST;
+        let latest = dispatched(first.next());
+        assert_eq!(latest.after_request_completion(first), Some(latest));
+        assert_eq!(latest.after_request_completion(latest.request_id), None);
+    }
+
+    #[test]
+    fn duplicate_targets_remain_distinct_requests() {
+        let first = dispatched(GuiResizeRequestId::FIRST);
+        let duplicate = dispatched(first.request_id.next());
+        assert_eq!(first.delivery, duplicate.delivery);
+        assert_eq!(
+            duplicate.after_request_completion(first.request_id),
+            Some(duplicate)
+        );
+        assert_eq!(
+            duplicate.after_request_completion(duplicate.request_id),
+            None
+        );
+    }
+
+    #[test]
+    fn completion_does_not_retire_queued_intent_even_with_the_same_id() {
+        let queued = PendingGuiResize {
+            delivery: GuiResizeDelivery::Queued,
+            ..dispatched(GuiResizeRequestId::FIRST)
+        };
+        assert_eq!(
+            queued.after_request_completion(queued.request_id),
+            Some(queued)
+        );
+    }
+
+    #[test]
+    fn native_observations_preserve_the_existing_stale_acknowledgement_rule() {
+        let pending = dispatched(GuiResizeRequestId::FIRST);
+        let retained = pending.after_native_observation(942, 690).unwrap();
+        assert_eq!(retained.request_id, pending.request_id);
+        assert_eq!(retained.width_cols, 101);
+        assert_eq!(retained.total_lines, 40);
+        assert_eq!(retained.after_native_observation(1042, 690), None);
+    }
+
+    #[test]
+    fn request_serials_are_monotonic_and_local_to_each_frame() {
+        crate::test_utils::init_test_tracing();
+        let frame = |id| {
+            Frame::new(
+                FrameId(id),
+                Value::NIL,
+                1,
+                800,
+                600,
+                Window::new_leaf(WindowId(id), BufferId(1), Rect::new(0.0, 0.0, 800.0, 584.0)),
+                WindowId(id + 1),
+            )
+        };
+        let mut first = frame(10);
+        let mut other = frame(20);
+        let a = first.allocate_gui_resize_request_id();
+        let b = first.allocate_gui_resize_request_id();
+        assert_eq!(a, GuiResizeRequestId::FIRST);
+        assert_eq!(b, a.next());
+        assert_eq!(other.allocate_gui_resize_request_id(), a);
+        first.pending_gui_resize = None;
+        assert_eq!(first.allocate_gui_resize_request_id(), b.next());
+        assert!(GuiResizeRequestId::new(0).is_none());
     }
 }
 
@@ -6708,6 +6812,15 @@ pub const GUI_SCROLL_BAR_DEFAULT_WIDTH_PX: u32 = 16;
 // --- E5-K2 data accessors (stage-4 W2/E5) ---
 
 impl Frame {
+    /// Allocate within this frame, independently of other frames or processes.
+    pub fn allocate_gui_resize_request_id(&mut self) -> GuiResizeRequestId {
+        let request_id = self
+            .last_gui_resize_request_id
+            .map_or(GuiResizeRequestId::FIRST, GuiResizeRequestId::next);
+        self.last_gui_resize_request_id = Some(request_id);
+        request_id
+    }
+
     pub fn new(
         id: FrameId,
         name: Value,
@@ -6824,6 +6937,7 @@ impl Frame {
             device_scale_factor: 1.0,
             defer_next_gui_parameter_resize: false,
             pending_gui_resize: None,
+            last_gui_resize_request_id: None,
             presentation_state: FramePresentationState::default(),
             redisplay_cache: HashMap::default(),
             tty_posn_pool: None,

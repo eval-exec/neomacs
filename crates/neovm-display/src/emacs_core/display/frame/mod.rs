@@ -2810,7 +2810,22 @@ pub(crate) fn request_live_gui_frame_resize_and_keep_pending(
         );
     };
 
-    host.resize_gui_frame(neovm_eval::emacs_core::eval::GuiFrameHostRequest {
+    let (desired_cols, desired_total_lines) = request.logical_size(frames, fid)?;
+    let (request_id, previous_pending, previous_defer) = {
+        let frame = frames
+            .get_mut(fid)
+            .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+        let previous_pending = frame.pending_gui_resize;
+        let previous_defer = frame.defer_next_gui_parameter_resize;
+        let request_id = frame.queue_pending_gui_resize(
+            desired_cols,
+            desired_total_lines,
+            Some((total_width_px, total_height_px)),
+        );
+        (request_id, previous_pending, previous_defer)
+    };
+    if let Err(message) = host.resize_gui_frame(neovm_eval::emacs_core::eval::GuiFrameHostRequest {
+        resize_request_id: Some(request_id),
         frame_id: fid,
         width: total_width_px,
         height: total_height_px,
@@ -2819,18 +2834,13 @@ pub(crate) fn request_live_gui_frame_resize_and_keep_pending(
         visibility,
         decorated,
         fullscreen: None,
-    })
-    .map_err(|message| signal("error", vec![Value::string(message)]))?;
-
-    let (desired_cols, desired_total_lines) = request.logical_size(frames, fid)?;
-    let frame = frames
-        .get_mut(fid)
-        .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
-    frame.queue_pending_gui_resize(
-        desired_cols,
-        desired_total_lines,
-        Some((total_width_px, total_height_px)),
-    );
+    }) {
+        if let Some(frame) = frames.get_mut(fid) {
+            frame.pending_gui_resize = previous_pending;
+            frame.defer_next_gui_parameter_resize = previous_defer;
+        }
+        return Err(signal("error", vec![Value::string(message)]));
+    }
     Ok(())
 }
 

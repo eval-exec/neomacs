@@ -12,6 +12,37 @@ pub struct FrameId(pub u64);
 /// as Lisp integers.
 pub const FRAME_ID_BASE: u64 = 1 << 32;
 
+/// One evaluator-owned GUI resize request, unique within its frame's lifetime.
+/// Native completions carry the frame identity separately; equal dimensions
+/// do not make two resize requests interchangeable.
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct GuiResizeRequestId(std::num::NonZeroU64);
+
+impl GuiResizeRequestId {
+    pub const FIRST: Self = Self(std::num::NonZeroU64::MIN);
+
+    pub const fn new(raw: u64) -> Option<Self> {
+        match std::num::NonZeroU64::new(raw) {
+            Some(raw) => Some(Self(raw)),
+            None => None,
+        }
+    }
+
+    pub const fn get(self) -> u64 {
+        self.0.get()
+    }
+
+    /// Never wrap a frame's serial and reuse the identity of an older request.
+    pub fn next(self) -> Self {
+        Self(
+            self.0
+                .checked_add(1)
+                .expect("GUI resize request IDs exhausted"),
+        )
+    }
+}
+
 /// Evaluator-owned correlation ID for one asynchronous xwidget script call.
 ///
 /// The display host cannot allocate this ID: only the evaluator knows which

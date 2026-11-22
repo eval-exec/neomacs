@@ -1480,6 +1480,11 @@ pub enum InputEvent {
         scale_factor: f64,
         emacs_frame_id: u64,
     },
+    /// A terminal reply to one resize request, after its actual allocation.
+    ResizeRequestCompleted {
+        request_id: neovm_value::display_vocab::GuiResizeRequestId,
+        emacs_frame_id: u64,
+    },
     /// Window focus change.
     Focus { focused: bool, emacs_frame_id: u64 },
     /// Monitor configuration changed.
@@ -1575,6 +1580,7 @@ impl InputEvent {
             | Self::PresentationRetired { .. }
             | Self::MenuBarClick { .. }
             | Self::Resize { .. }
+            | Self::ResizeRequestCompleted { .. }
             | Self::Focus { .. }
             | Self::MonitorsChanged { .. }
             | Self::SystemFontsChanged { .. }
@@ -1649,6 +1655,7 @@ impl InputEvent {
             | Self::PresentationDiscarded { emacs_frame_id, .. }
             | Self::MenuBarClick { emacs_frame_id, .. }
             | Self::Resize { emacs_frame_id, .. }
+            | Self::ResizeRequestCompleted { emacs_frame_id, .. }
             | Self::Focus { emacs_frame_id, .. }
             | Self::WindowClose { emacs_frame_id, .. } => {
                 if *emacs_frame_id != 0 {
@@ -1725,6 +1732,7 @@ impl InputEvent {
             | Self::PresentationRetired { .. }
             | Self::MenuBarClick { .. }
             | Self::Resize { .. }
+            | Self::ResizeRequestCompleted { .. }
             | Self::Focus { .. }
             | Self::MonitorsChanged { .. }
             | Self::SystemFontsChanged { .. }
@@ -1797,6 +1805,23 @@ fn apply_resize_input_event_in_keyboard_runtime(
     }
 }
 
+fn apply_gui_resize_request_completion(
+    frames: &mut crate::emacs_core::eval::data::window_state::FrameManager,
+    request_id: neovm_value::display_vocab::GuiResizeRequestId,
+    emacs_frame_id: u64,
+) {
+    let fid = if emacs_frame_id == 0 {
+        frames.selected_frame().map(|frame| frame.id)
+    } else {
+        Some(neovm_value::display_vocab::FrameId(emacs_frame_id))
+    };
+    if let Some(frame) = fid.and_then(|fid| frames.get_mut(fid)) {
+        frame.pending_gui_resize = frame
+            .pending_gui_resize
+            .and_then(|pending| pending.after_request_completion(request_id));
+    }
+}
+
 fn pending_live_gui_resize_target(
     frames: &crate::emacs_core::eval::data::window_state::FrameManager,
     emacs_frame_id: u64,
@@ -1828,6 +1853,15 @@ fn sync_pending_resize_events_in_keyboard_runtime(
 
     loop {
         match pending_input_events.front() {
+            Some(InputEvent::ResizeRequestCompleted {
+                request_id,
+                emacs_frame_id,
+            }) => {
+                let (request_id, emacs_frame_id) = (*request_id, *emacs_frame_id);
+                pending_input_events.pop_visible_front();
+                apply_gui_resize_request_completion(frames, request_id, emacs_frame_id);
+                applied_resize = true;
+            }
             Some(InputEvent::Focus { .. }) => {
                 if let Some(event) = pending_input_events.pop_visible_front() {
                     deferred.push_back(event);
@@ -1878,6 +1912,13 @@ fn sync_pending_resize_events_in_keyboard_runtime(
 
     loop {
         match rx.try_recv() {
+            Ok(InputEvent::ResizeRequestCompleted {
+                request_id,
+                emacs_frame_id,
+            }) => {
+                apply_gui_resize_request_completion(frames, request_id, emacs_frame_id);
+                applied_resize = true;
+            }
             Ok(InputEvent::Resize {
                 width,
                 height,
@@ -3396,6 +3437,17 @@ impl crate::emacs_core::eval::Context {
             }
 
             match event {
+                InputEvent::ResizeRequestCompleted {
+                    request_id,
+                    emacs_frame_id,
+                } => {
+                    apply_gui_resize_request_completion(
+                        &mut self.frames,
+                        request_id,
+                        emacs_frame_id,
+                    );
+                    outcome = outcome.merge(SpecialInputServiceOutcome::resize_with_redisplay());
+                }
                 InputEvent::Resize {
                     width,
                     height,
@@ -4864,6 +4916,14 @@ impl crate::emacs_core::eval::Context {
                 if !crate::emacs_core::eval::gnu_redisplay_hooks_enabled() {
                     self.redisplay()?;
                 }
+                idle_policy.resume_idle(self);
+                Ok(None)
+            }
+            InputEvent::ResizeRequestCompleted {
+                request_id,
+                emacs_frame_id,
+            } => {
+                apply_gui_resize_request_completion(&mut self.frames, request_id, emacs_frame_id);
                 idle_policy.resume_idle(self);
                 Ok(None)
             }

@@ -867,6 +867,7 @@ fn pre_bootstrap_primary_resize_updates_pending_size() {
         width: 1024,
         height: 768,
         geometry_hints,
+        resize_request_id: None,
     });
 
     assert_eq!(

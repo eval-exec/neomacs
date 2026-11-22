@@ -2729,6 +2729,7 @@ fn opening_gui_frame_adoption_does_not_push_stale_window_size() {
     neovm_core::emacs_core::DisplayHost::realize_gui_frame(
         &mut host,
         GuiFrameHostRequest {
+            resize_request_id: None,
             frame_id: FrameId(0x100000001),
             width: 960,
             height: 640,
@@ -2812,6 +2813,7 @@ fn opening_gui_frame_adoption_applies_fullscreen_mode() {
     neovm_core::emacs_core::DisplayHost::realize_gui_frame(
         &mut host,
         GuiFrameHostRequest {
+            resize_request_id: None,
             frame_id: FrameId(0x100000001),
             width: 960,
             height: 640,
@@ -4076,6 +4078,7 @@ fn primary_window_resize_does_not_wait_for_host_acknowledgement() {
     neovm_core::emacs_core::DisplayHost::resize_gui_frame(
         &mut host,
         GuiFrameHostRequest {
+            resize_request_id: None,
             frame_id: FrameId(0x100000001),
             width: 1068,
             height: 1386,

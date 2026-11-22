@@ -2564,6 +2564,7 @@ pub fn restore_scratch_gc_roots(saved_len: usize) {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GuiFrameHostRequest {
     pub frame_id: neovm_value::display_vocab::FrameId,
+    pub resize_request_id: Option<neovm_value::display_vocab::GuiResizeRequestId>,
     pub width: u32,
     pub height: u32,
     pub title: neovm_value::heap_types::LispString,
@@ -2579,6 +2580,7 @@ impl GuiFrameHostRequest {
     pub fn for_frame(frame: &crate::emacs_core::eval::data::window_state::Frame) -> Self {
         Self {
             frame_id: frame.id,
+            resize_request_id: None,
             width: frame.width,
             height: frame.height,
             title: frame.host_title_lisp_string(),
