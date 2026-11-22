@@ -661,6 +661,52 @@ impl<'a> From<Option<&'a ReadSymbolShorthands>> for ReadSymbolShorthandBinding<'
     }
 }
 
+/// The obarray symbol tokens intern into while reading, matching GNU's
+/// `Vobarray` consultation at each symbol atom (`lread.c:4217`). A plain
+/// string/buffer/file read cannot run Lisp, so its binding is a snapshot; a
+/// callable source may rebind `obarray` between characters and is consulted
+/// live at every symbol token.
+#[derive(Clone, Copy, Debug)]
+enum ReaderObarrayBinding<'a> {
+    /// The global obarray: reading keeps canonical symbol identity.
+    Global,
+    /// A Lisp obarray value: each token interns into it at read time.
+    Custom(Value),
+    LiveCallable(&'a callable::CallableSource<'a>),
+}
+
+impl<'a> ReaderObarrayBinding<'a> {
+    fn resolve_variables(vars: crate::emacs_core::eval::VariableView<'a>) -> Self {
+        // Neomacs names the global obarray `neovm--obarray-object`; without
+        // that name a custom value cannot be distinguished from the global
+        // one, so keep the canonical path rather than interning into the
+        // wrong structure during bootstrap.
+        let Some(proxy) = vars.value_by_name("neovm--obarray-object") else {
+            return Self::Global;
+        };
+        match vars.value_by_name("obarray") {
+            None => Self::Global,
+            Some(value) if value == proxy => Self::Global,
+            Some(value) => Self::Custom(value),
+        }
+    }
+
+    /// The custom obarray that needs token-time interning, or None when the
+    /// current obarray is the global one. GNU's `Vobarray` is never void, so
+    /// an unbound visible value falls back to the global path.
+    fn custom_obarray(self) -> Option<Value> {
+        match self {
+            Self::Global => None,
+            Self::Custom(value) => Some(value),
+            Self::LiveCallable(source) => {
+                let proxy = source.variable("neovm--obarray-object")?;
+                let value = source.variable("obarray")?;
+                (value != proxy).then_some(value)
+            }
+        }
+    }
+}
+
 /// Shorthand binding lifetime: byte-backed input snapshots its binding; a
 /// callable may change it at every get/unget boundary in the current mutator.
 #[derive(Clone, Copy, Debug)]
@@ -1046,6 +1092,9 @@ struct Reader<'a> {
     /// Active `read-symbol-shorthands`, if any.  GNU's reader rewrites symbol
     /// names before interning when this dynamic variable is non-nil.
     shorthands: ReaderShorthands<'a>,
+    /// The obarray symbol tokens intern into (GNU `Vobarray`), consulted per
+    /// symbol atom. A byte-backed source snapshots it; a callable is live.
+    obarray: ReaderObarrayBinding<'a>,
     /// One-entry decode cache: `(pos, code, next_pos)` for the most recently
     /// decoded position.  neomacs's reader peeks the current char
     /// (`source_code_at`) then advances (`next_pos`) as separate steps, which
@@ -1472,6 +1521,7 @@ impl<'a> Reader<'a> {
             symbol_mode: SymbolMode::Bare,
             readchar_offset_origin: ReadcharOffsetOrigin::RelativeToSourceByte(0),
             environment: ReaderEnvironment::Variables(vars),
+            obarray: ReaderObarrayBinding::resolve_variables(vars),
             lazy_doc_policy: Cell::new(LazyDocPolicy::Unknown),
             file_origin: None,
             saved_doc_blocks: None,
@@ -1506,6 +1556,7 @@ impl<'a> Reader<'a> {
             symbol_mode: SymbolMode::Bare,
             readchar_offset_origin: ReadcharOffsetOrigin::RelativeToSourceByte(0),
             environment: ReaderEnvironment::Variables(vars),
+            obarray: ReaderObarrayBinding::resolve_variables(vars),
             lazy_doc_policy: Cell::new(LazyDocPolicy::Unknown),
             file_origin: Some(origin),
             saved_doc_blocks: Some(saved_doc_blocks),
@@ -1560,6 +1611,7 @@ impl<'a> Reader<'a> {
             symbol_mode: SymbolMode::Bare,
             readchar_offset_origin: ReadcharOffsetOrigin::RelativeToSourceByte(start),
             environment: ReaderEnvironment::Variables(vars),
+            obarray: ReaderObarrayBinding::resolve_variables(vars),
             lazy_doc_policy: Cell::new(LazyDocPolicy::Unknown),
             file_origin: None,
             saved_doc_blocks: None,
@@ -1605,6 +1657,7 @@ impl<'a> Reader<'a> {
                 }
             },
             environment: ReaderEnvironment::Variables(vars),
+            obarray: ReaderObarrayBinding::resolve_variables(vars),
             lazy_doc_policy: Cell::new(LazyDocPolicy::Unknown),
             file_origin: None,
             saved_doc_blocks: None,
@@ -2537,6 +2590,11 @@ impl<'a> Reader<'a> {
                     return self.intern_empty_symbol();
                 }
                 let name = token.to_lisp_string();
+                // `#_` only skips shorthand rewriting; GNU still interns the
+                // token through the current obarray (lread.c:3999-4005).
+                if let Some(obarray) = self.obarray.custom_obarray() {
+                    return self.intern_name_in_custom_obarray(obarray, name);
+                }
                 Ok(Value::from_sym_id(neovm_value::intern::intern_reader_name(
                     name,
                 )))
@@ -3255,6 +3313,8 @@ impl<'a> Reader<'a> {
         // expansion (lread.c:4222-4255); core symbols can be uninterned
         // (lread.c:4887-4922). Only bypass spelling lookup when this binding
         // cannot rewrite and the original core identity remains canonical.
+        // A custom obarray must create its own nil/t, as GNU does, so the
+        // obarray is consulted only for these two spellings.
         if matches!(self.shorthands, ReaderShorthands::Unbound)
             && let Some(id) = match token.bytes.as_slice() {
                 b"nil" => Some(neovm_value::intern::NIL_SYM_ID),
@@ -3262,6 +3322,7 @@ impl<'a> Reader<'a> {
                 _ => None,
             }
             && neovm_value::intern::is_canonical_id(id)
+            && self.obarray.custom_obarray().is_none()
         {
             return Ok(Value::from_sym_id(id));
         }
@@ -3312,6 +3373,15 @@ impl<'a> Reader<'a> {
             return self.intern_empty_symbol();
         }
 
+        // A custom obarray interns every symbol token as it reads (GNU
+        // `Vobarray`, lread.c:4217-4249): the spelling's symbol there is
+        // returned, or a fresh one is created and prepended to its bucket.
+        // Number tokens returned above, so this is only the symbol path.
+        if let Some(obarray) = self.obarray.custom_obarray() {
+            let name = self.to_lisp_string_for_token(&token)?;
+            return self.intern_name_in_custom_obarray(obarray, name);
+        }
+
         // A computed ASCII spelling has encoding-independent canonical hit
         // identity. Retain this token's exact source encoding only if the
         // shared hit path must create its first canonical symbol.
@@ -3335,9 +3405,32 @@ impl<'a> Reader<'a> {
         Ok(Value::from_sym_id(id))
     }
 
+    /// Intern NAME into the custom OBARRAY exactly as GNU's reader does
+    /// (`lread.c:4217-4249`), validating it first so a non-obarray value
+    /// signals `(wrong-type-argument obarrayp V)` at the token, as GNU does.
+    fn intern_name_in_custom_obarray(
+        &self,
+        obarray_value: Value,
+        name: neovm_value::heap_types::LispString,
+    ) -> Result<Value, ReadError> {
+        let wrong_type = |value| {
+            self.signal_error(
+                neovm_value::error::LispCondition::WrongTypeArgument,
+                vec![Value::symbol("obarrayp"), value],
+                "Invalid obarray",
+            )
+        };
+        let effective = crate::emacs_core::builtins::symbols::check_obarray_reader(obarray_value)
+            .map_err(wrong_type)?;
+        crate::emacs_core::builtins::symbols::obarray_intern_reader_name(effective, name)
+            .map_err(wrong_type)
+    }
+
     /// Empty #_ and ## use Fintern, including empty-prefix shorthands
     /// (GNU lread.c:3851, 3999). Rewritten builtin names are multibyte
     /// (lread.c:4793-4796), independently of the reader source encoding.
+    /// Fintern uses the current `Vobarray`, so a custom obarray interns the
+    /// empty spelling there instead of returning the global empty symbol.
     #[cold]
     #[doc(hidden)]
     pub fn intern_empty_symbol(&self) -> Result<Value, ReadError> {
@@ -3346,6 +3439,10 @@ impl<'a> Reader<'a> {
             .shorthands
             .rewrite(&empty)
             .map_err(|error| self.ordinary_error(&error.to_string()))?;
+        if let Some(obarray) = self.obarray.custom_obarray() {
+            let name = rewritten.unwrap_or(empty);
+            return self.intern_name_in_custom_obarray(obarray, name);
+        }
         Ok(match rewritten {
             Some(name) => Value::from_sym_id(neovm_value::intern::intern_reader_name(name)),
             None => Value::from_sym_id(intern("")),

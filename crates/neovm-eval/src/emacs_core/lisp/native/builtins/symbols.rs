@@ -2321,8 +2321,11 @@ fn make_compat_obarray() -> Value {
     Value::obarray(1)
 }
 
-#[doc(hidden)]
-pub fn check_obarray_value(value: Value) -> Result<Value, Flow> {
+/// GNU `check_obarray` for callers that cannot build a Lisp `Flow` (the value
+/// reader's symbol-token path). Returns the effective obarray object, or the
+/// rejected value so the caller can signal `(wrong-type-argument obarrayp V)`
+/// with GNU's payload (`lread.c:4644-4666`).
+pub(crate) fn check_obarray_reader(value: Value) -> Result<Value, Value> {
     if is_obarray_value(value) {
         return Ok(value);
     }
@@ -2334,6 +2337,8 @@ pub fn check_obarray_value(value: Value) -> Result<Value, Flow> {
                 return Ok(slot0);
             }
             if slot0 == Value::fixnum(0) {
+                // GNU's legacy vector: store a real obarray object in slot 0
+                // and use it for the rest of the read.
                 let obarray = make_compat_obarray();
                 let _ = value.set_vector_slot(0, obarray);
                 return Ok(obarray);
@@ -2341,10 +2346,54 @@ pub fn check_obarray_value(value: Value) -> Result<Value, Flow> {
         }
     }
 
-    Err(signal(
-        LispCondition::WrongTypeArgument,
-        vec![Value::symbol("obarrayp"), value],
-    ))
+    Err(value)
+}
+
+#[doc(hidden)]
+pub fn check_obarray_value(value: Value) -> Result<Value, Flow> {
+    check_obarray_reader(value).map_err(|value| {
+        signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("obarrayp"), value],
+        )
+    })
+}
+
+/// GNU's reader interns every symbol token into the current obarray while
+/// reading: `oblookup` finds an existing symbol or `intern_driver` creates a
+/// new one and prepends it to the bucket (`lread.c:4217-4249`). Interning a
+/// spelling into a custom obarray therefore yields a fresh, non-canonical
+/// symbol, not the global one, and a spelling already present yields the
+/// object that obarray holds.
+///
+/// OBARRAY must have passed [`check_obarray_reader`]. Returns the rejected
+/// value when the obarray has no buckets (GNU signals `wrong-type-argument
+/// obarrayp` for that too, as `intern` does).
+pub(crate) fn obarray_intern_reader_name(
+    obarray: Value,
+    name: neovm_value::heap_types::LispString,
+) -> Result<Value, Value> {
+    let len = obarray_len(obarray).unwrap_or(0);
+    if len == 0 {
+        return Err(obarray);
+    }
+    let query = neovm_value::intern::SymbolNameQuery::from(&name);
+    let idx = obarray_hash_name_query(query, len);
+    let bucket = obarray_bucket(obarray, idx).unwrap_or(Value::NIL);
+    if let Some(sym) = obarray_bucket_find_name_query(bucket, query) {
+        return Ok(sym);
+    }
+    // GNU's single creation path shares `Fmake_symbol` for both obarrays
+    // (`intern_driver`, lread.c:4705-4708); the reader's token string becomes
+    // the new symbol's name object.
+    let sym = Value::from_sym_id(neovm_value::intern::make_uninterned_symbol_with_name_value(
+        Value::heap_string(name),
+    ));
+    let new_bucket = Value::cons(sym, bucket);
+    let _ = set_obarray_bucket(obarray, idx, new_bucket);
+    note_obarray_symbol_added(obarray);
+    grow_obarray_vector_if_needed(obarray);
+    Ok(sym)
 }
 
 pub(crate) fn expect_obarray_vector_id(value: &Value) -> Result<Value, Flow> {

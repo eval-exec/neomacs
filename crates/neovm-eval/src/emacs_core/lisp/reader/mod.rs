@@ -1161,13 +1161,31 @@ pub(crate) fn walk_member_symbols(value: Value, mut on_symbol: impl FnMut(Value)
     }
 }
 
-/// Publish the canonical symbols a read value hands to Lisp into the obarray
-/// GNU's reader would use: the current value of `obarray` when that is a
-/// custom obarray, otherwise the global obarray. GNU interns every token into
-/// the current obarray (lread.c:4673-4706), so a read under a let-bound
-/// `obarray` must not leak its names into the global one, and the object it
-/// read must be the one that obarray holds.
+/// Publish the canonical symbols a read value hands to Lisp into the global
+/// obarray. GNU's reader interns every symbol token into the current
+/// `Vobarray` while reading (lread.c:4217-4249); Neomacs's value reader now
+/// does the same for a custom obarray, so nothing is owed after the read.
+/// The global obarray keeps this extra pass because the value reader
+/// allocates canonical symbol ids without adding obarray membership.
+///
+/// Reader-inserted constants (`quote`, `function`) and `#:` uninterned
+/// symbols are deliberately absent from a custom obarray, exactly as in GNU.
 pub fn publish_read_symbols(eval: &mut super::eval::Context, value: Value) {
+    use crate::emacs_core::builtins::symbols::{
+        current_lisp_obarray_value, is_global_obarray_proxy,
+    };
+    let current = current_lisp_obarray_value(eval);
+    if current.is_nil() || is_global_obarray_proxy(eval, &current) {
+        eval.obarray_mut().intern_member_symbols_in(value);
+    }
+}
+
+/// Publish symbols a Lisp-facing producer created the way GNU's `Fintern`
+/// would: into the current `obarray` (a custom obarray gets the canonical
+/// symbol prepended when its spelling is absent, otherwise the global
+/// obarray gains membership). Producers such as `event-convert-list` and
+/// keyboard-macro normalization use this; the reader does not need it.
+pub fn publish_derived_symbols(eval: &mut super::eval::Context, value: Value) {
     use crate::emacs_core::builtins::symbols::{
         current_lisp_obarray_value, intern_symbol_value_into_obarray, is_global_obarray_proxy,
     };

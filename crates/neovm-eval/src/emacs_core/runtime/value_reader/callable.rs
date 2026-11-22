@@ -258,6 +258,7 @@ pub(crate) fn read_from_callable(
         symbol_mode: neovm_value::tagged::SymbolMode::Bare,
         readchar_offset_origin: super::ReadcharOffsetOrigin::RelativeToSourceByte(0),
         environment: ReaderEnvironment::Callable(&source),
+        obarray: super::ReaderObarrayBinding::LiveCallable(&source),
         lazy_doc_policy: Cell::new(super::lazy_doc::LazyDocPolicy::Unknown),
         file_origin: None,
         saved_doc_blocks: None,
