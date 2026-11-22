@@ -96,18 +96,21 @@ const _: () = assert!(
      its own larger stride instead of silently overlapping the link word",
 );
 // ByteCode (task 03/3a): `ByteCodeObj` is VecLikeHeader 24 + ByteCodeFunction
-// (~320B of vecs/options/params + the jit Runtime) + the two `aref`
-// slot-object words (16B), 360B in all → 384B slots with the
-// free-list link in bytes 376..384. 384 is NOT a power of two: a page holds
-// floor(64KB / 384) = 170 slots and the trailing 256 bytes are a permanently
-// unused tail (never bump-reached, no alloc bit — `ObjectArena::owns` bounds
-// the slot index explicitly so a stride-aligned tail address answers
-// NOT-owned). If this assert fails the ByteCodeFunction grew — BUMP THE
-// STRIDE (and say so in the commit); never squeeze the link into live bytes.
+// (~320B of vecs/options/params + the jit Runtime) + the `aref` slot-object
+// words (24B: code, constants, and the GNU slot vector the reader's
+// substitution walk can materialize) → 448B slots. The free-list link lives
+// in the slot bytes after the live object; the assert below bounds the live
+// size at 440, so bytes 440..448 are always free for it. 448 is NOT a power of
+// two: a page holds floor(64KB / 448) = 146 slots and the trailing 192 bytes
+// are a permanently unused tail (never bump-reached, no alloc bit —
+// `ObjectArena::owns` bounds the slot index explicitly so a stride-aligned
+// tail address answers NOT-owned). If this assert fails the ByteCodeFunction
+// grew — BUMP THE STRIDE (and say so in the commit); never squeeze the link
+// into live bytes.
 const _: () = assert!(
-    size_of::<ByteCodeObj>() <= 376,
-    "ByteCodeObj must fit a 384-byte slot with its trailing free-list link \
-     (bytes 376..384); bump the bytecode stride if the struct grew",
+    size_of::<ByteCodeObj>() <= 440,
+    "ByteCodeObj must fit a 448-byte slot, leaving bytes 440..448 for its \
+     trailing free-list link; bump the bytecode stride if the struct grew",
 );
 // Lambda/Macro (task 03/3b): each is VecLikeHeader 24 + LispValueVec 24 +
 // OnceLock<LambdaParams> (~64) = 112B → a 128B power-of-two class (512
@@ -271,9 +274,9 @@ impl PagedObject for VectorObj {
 }
 
 impl PagedObject for ByteCodeObj {
-    // First non-power-of-two stride: 170 slots/page + a 256B unused tail
+    // First non-power-of-two stride: 146 slots/page + a 192B unused tail
     // (see the ByteCodeObj const assert above).
-    const SLOT_BYTES: usize = 384;
+    const SLOT_BYTES: usize = 448;
     const KIND: HeapObjectKind = HeapObjectKind::VecLike;
     const CLASS: &'static str = "bytecode";
     const CHUNK_CLASS: ChunkClass = ChunkClass::ByteCode;
@@ -336,8 +339,8 @@ impl PagedObject for SymbolWithPosObj {
 #[cfg(any(test, feature = "test-support"))]
 pub(super) const FLOAT_PAGE_SLOTS: usize =
     OBJECT_PAGE_BYTES / <FloatObj as PagedObject>::SLOT_BYTES;
-/// Slot count of a bytecode page (170: the 384B stride does not divide 64KB;
-/// the 256B page tail is never allocated).
+/// Slot count of a bytecode page (146: the 448B stride does not divide 64KB;
+/// the 192B page tail is never allocated).
 #[cfg(any(test, feature = "test-support"))]
 pub(super) const BYTECODE_PAGE_SLOTS: usize =
     OBJECT_PAGE_BYTES / <ByteCodeObj as PagedObject>::SLOT_BYTES;

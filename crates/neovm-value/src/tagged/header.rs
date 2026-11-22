@@ -1833,6 +1833,22 @@ pub enum ByteCodeSlotObject {
     Constants,
 }
 
+/// Where a byte-code function's observable closure slots come from.
+///
+/// `Native` derives every slot from the immutable `ByteCodeFunction` fields.
+/// `Materialized` is the GNU slot vector the reader's substitution walk
+/// installed once it had to store a slot back; every Lisp-visible reader
+/// (`aref`, documentation, interactive-form, the printer) must use it, or
+/// `aref` and those readers would disagree about the same slot.
+///
+/// Keeping the choice typed lets a later execution-pool unification
+/// (N-822-EXEC-POOL, the deferred P3.2 L4b) collapse both sources into one.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ClosureSlotSource {
+    Native,
+    Materialized(TaggedValue),
+}
+
 /// The objects `aref` returns for a byte-code closure's code string and
 /// constants vector (GNU `(eq (aref f 2) (aref f 2))` is t).
 ///
@@ -1852,6 +1868,13 @@ pub enum ByteCodeSlotObject {
 pub struct ByteCodeSlotObjects {
     code: AtomicUsize,
     constants: AtomicUsize,
+    /// A full GNU closure-slot vector, installed lazily by the reader's
+    /// `lread--substitute-object-in-subtree` walk the first time it stores a
+    /// slot back.  `nil` means "derive every slot from `data`".  Once
+    /// installed it is the observable slot source for EVERY index, so the
+    /// walk can write slots GNU stores with `ASET` without mutating the
+    /// immutable execution data.  See `mutate::install_bytecode_slots_vector`.
+    slots: AtomicUsize,
 }
 
 impl ByteCodeSlotObjects {
@@ -1859,6 +1882,7 @@ impl ByteCodeSlotObjects {
     pub const EMPTY: Self = Self {
         code: AtomicUsize::new(0),
         constants: AtomicUsize::new(0),
+        slots: AtomicUsize::new(0),
     };
 
     /// A constructor's value: `code` already known (a `make-closure`
@@ -1867,6 +1891,7 @@ impl ByteCodeSlotObjects {
         Self {
             code: AtomicUsize::new(code.0),
             constants: AtomicUsize::new(0),
+            slots: AtomicUsize::new(0),
         }
     }
 
@@ -1898,12 +1923,42 @@ impl ByteCodeSlotObjects {
         }
     }
 
-    /// Both words, for the GC's child walks.
+    /// The installed GNU closure-slot vector, or `nil`.
+    #[inline(always)]
+    pub fn slots_vector(&self) -> TaggedValue {
+        unsafe {
+            /* SAFETY: value-internal construction from a real Value */
+            TaggedValue::from_bits(self.slots.load(Ordering::Acquire))
+        }
+    }
+
+    /// Which source Lisp-visible readers must use for this closure.
+    #[inline(always)]
+    pub fn slot_source(&self) -> ClosureSlotSource {
+        let slots = self.slots_vector();
+        if slots.is_nil() {
+            ClosureSlotSource::Native
+        } else {
+            ClosureSlotSource::Materialized(slots)
+        }
+    }
+
+    /// Install the GNU closure-slot vector (one-time, from `nil`).  Only
+    /// `mutate::install_bytecode_slots_vector` (after the write barrier) and
+    /// the pdump loader (before publication) call this.
     #[inline]
-    pub(crate) fn children(&self) -> [TaggedValue; 2] {
+    #[doc(hidden)]
+    pub fn set_slots_vector(&self, object: TaggedValue) {
+        self.slots.store(object.0, Ordering::Release);
+    }
+
+    /// Every Lisp word this array owns, for the GC's child walks.
+    #[inline]
+    pub(crate) fn children(&self) -> [TaggedValue; 3] {
         [
             self.get(ByteCodeSlotObject::Code),
             self.get(ByteCodeSlotObject::Constants),
+            self.slots_vector(),
         ]
     }
 

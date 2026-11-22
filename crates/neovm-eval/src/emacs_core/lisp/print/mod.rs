@@ -2437,6 +2437,17 @@ fn with_bytecode_literal_slots<R>(value: &Value, f: impl FnOnce(&[Value]) -> R) 
     let bc = value.get_bytecode_data()?.clone();
     let _roots = PrintScratchRootsGuard::new();
 
+    // A reader substitution stores slots into the function's GNU slot
+    // vector; GNU prints the closure's own slot array, so print that vector
+    // once it exists instead of the pre-substitution fields.
+    if let Some(neovm_value::tagged::header::ClosureSlotSource::Materialized(slots)) =
+        value.bytecode_slot_source()
+        && let Some(items) = slots.as_vector_data()
+    {
+        crate::emacs_core::eval::push_scratch_gc_root(slots);
+        return Some(f(items));
+    }
+
     let arglist = bc.arglist;
     crate::emacs_core::eval::push_scratch_gc_root(arglist);
 

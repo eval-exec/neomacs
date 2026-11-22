@@ -86,6 +86,16 @@ pub(crate) fn closure_vector_length(value: &Value) -> Option<i64> {
 #[inline(never)]
 pub(crate) fn bytecode_closure_slot(value: &Value, idx: usize) -> Option<Value> {
     use neovm_value::tagged::header::{ByteCodeSlotObject, CLOSURE_CODE, CLOSURE_CONSTANTS};
+    // Once the reader's substitution walk has stored a slot back, the
+    // installed GNU slot vector is the observable source for every index:
+    // GNU's closure slots are one array, and the walk rewrites them with
+    // `ASET`.  Until then every slot derives from `data` as before.
+    if let Some(neovm_value::tagged::header::ClosureSlotSource::Materialized(slots)) =
+        value.bytecode_slot_source()
+        && let Some(item) = slots.as_vector_data().and_then(|items| items.get(idx))
+    {
+        return Some(*item);
+    }
     // Every byte-code object has at least the four mandatory slots, so
     // slots 1 and 2 need no bounds check.
     match idx {

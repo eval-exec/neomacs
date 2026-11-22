@@ -63,10 +63,10 @@ fn bc_constant(v: TaggedValue, i: usize) -> TaggedValue {
     obj.data.constants[i]
 }
 
-/// (a) PAGE-SPAN ORACLE EXACTNESS for the 384B stride: owned for a live
+/// (a) PAGE-SPAN ORACLE EXACTNESS for the 448B stride: owned for a live
 /// slot base ONLY — false for freed slots, interior/unaligned addresses,
 /// never-bumped slots, and (unique to the non-power-of-two stride) the
-/// stride-aligned first byte of the 256B page TAIL. Cross-class
+/// stride-aligned first byte of the 192B page TAIL. Cross-class
 /// registries never collide.
 #[test]
 fn bytecode_page_span_oracle_freed_slot_exactness() {
@@ -103,10 +103,10 @@ fn bytecode_page_span_oracle_freed_slot_exactness() {
     let page_base = ObjectPage::<ByteCodeObj>::page_base_for_ptr(b_addr as *const ByteCodeObj);
     let beyond_bump = page_base + 100 * <ByteCodeObj as PagedObject>::SLOT_BYTES;
     assert!(!heap.bytecode_arena.owns(beyond_bump as *const u8));
-    // THE PAGE TAIL: slot index SLOTS (byte 65280) is stride-aligned but
+    // THE PAGE TAIL: slot index SLOTS (byte 65408) is stride-aligned but
     // past the last real slot — the explicit `< SLOTS` bound in `owns`
     // must answer NOT-owned (a power-of-two-stride oracle never sees
-    // this case; the 384B class does).
+    // this case; the 448B class does).
     assert_eq!(ObjectPage::<ByteCodeObj>::SLOTS, BYTECODE_PAGE_SLOTS);
     let tail = page_base + BYTECODE_PAGE_SLOTS * <ByteCodeObj as PagedObject>::SLOT_BYTES;
     assert!(
@@ -690,7 +690,7 @@ fn concurrent_mid_cycle_bytecode_in_reused_slot_keeps_child_alive() {
 /// Drop-dispatch garbage `Vec` pointers if any reader trusted it) is
 /// never read by the sweep, verifiers, or teardown; reallocation
 /// FULL-HEADER-WRITEs every stale byte away. The trailing link word
-/// (bytes 376..384) is arena metadata the adversary leaves alone.
+/// (bytes 440..448) is arena metadata the adversary leaves alone.
 fn bytecode_freed_slot_garbage_never_read_body(verify: bool) {
     crate::test_utils::init_test_tracing();
     let mut heap = TaggedHeap::new();
@@ -914,7 +914,7 @@ fn bytecode_sweep_live_bytes_track_variable_payload_sizes() {
         .sum::<usize>();
     let expected = expected_objects + cons_count * size_of::<ConsCell>();
     // The payload really is variable-size (ops + constants + raw bytes
-    // dominate the 384B slot).
+    // dominate the 448B slot).
     assert!(expected_objects > 2 * size_of::<ByteCodeObj>() + 1_000 * size_of::<Op>() + 10_000);
 
     // Eager (finalize_collection) recompute site.

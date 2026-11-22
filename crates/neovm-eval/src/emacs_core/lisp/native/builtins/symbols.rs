@@ -4290,12 +4290,28 @@ fn interactive_form_from_quoted_lambda(
 }
 
 fn interactive_form_from_bytecode_value(function: Value) -> Option<Value> {
+    // GNU reads CLOSURE_INTERACTIVE from the closure's slot array.  When the
+    // reader stored slots back, that array is the installed GNU slot vector;
+    // read it through the same source `aref` uses.
+    static INTERACTIVE_FORM_SYMBOL: WellKnown = WellKnown::Interactive;
+    if let Some(neovm_value::tagged::header::ClosureSlotSource::Materialized(slots)) =
+        function.bytecode_slot_source()
+        && let Some(items) = slots.as_vector_data()
+    {
+        if items.len() <= 5 {
+            return None;
+        }
+        let spec_val = stored_interactive_spec_value(items[5]);
+        return Some(Value::list(vec![
+            Value::symbol(&INTERACTIVE_FORM_SYMBOL),
+            spec_val,
+        ]));
+    }
     let probe = function.bytecode_interactive_probe()?;
     if probe.slot_count() <= 5 {
         return None;
     }
     // GNU's `Qinteractive`; this form is reconstructed per command lookup.
-    static INTERACTIVE_FORM_SYMBOL: WellKnown = WellKnown::Interactive;
     let spec_val = stored_interactive_spec_value(probe.interactive().unwrap_or(Value::NIL));
     Some(Value::list(vec![
         Value::symbol(&INTERACTIVE_FORM_SYMBOL),

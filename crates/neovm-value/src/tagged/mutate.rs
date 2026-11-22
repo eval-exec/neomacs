@@ -750,6 +750,34 @@ pub fn install_bytecode_slot_object(
     true
 }
 
+/// Install the GNU closure-slot vector `aref` will report for every slot of
+/// a byte-code function, on first use by the reader's substitutions.
+///
+/// The walk stores GNU's `ASET (closure, i, value)` results without mutating
+/// the immutable `ByteCodeFunction`: the vector starts as a snapshot of the
+/// observable slots and later stores go through `set_vector_slot`, which
+/// already runs the write barrier and keeps the GC's view of the vector
+/// sound.  `slot_objects.children()` includes it, so it is traced with the
+/// function.
+///
+/// Returns `false` for a non-bytecode `value` or an already-installed slot
+/// vector.
+pub fn install_bytecode_slots_vector(value: TaggedValue, slots: TaggedValue) -> bool {
+    if value.veclike_type() != Some(VecLikeType::ByteCode) {
+        return false;
+    }
+    let ptr = value.as_veclike_ptr().unwrap() as *const ByteCodeObj;
+    // SAFETY: a live byte-code object (the type test above); the word is an
+    // atomic written through a shared reference.
+    let objects = unsafe { &(*ptr).slot_objects };
+    if !objects.slots_vector().is_nil() {
+        return false;
+    }
+    note_heap_write(value, HeapWriteKind::ByteCodeData);
+    objects.set_slots_vector(slots);
+    true
+}
+
 /// TEST-ONLY mutation seam for a live bytecode object's `ByteCodeFunction`.
 ///
 /// CONSTANTS-IMMUTABILITY IS A HARD INVARIANT (task 03/3a, load-bearing for

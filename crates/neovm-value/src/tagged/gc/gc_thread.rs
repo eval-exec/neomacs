@@ -992,8 +992,9 @@ fn concurrent_try_mark_owned_with_symbols<
         // the termination drain — `mark_value` early-returns on the mark
         // bit — drops no children):
         //  (a) fresh claim: THIS arm gray-pushes exactly the fields
-        //      `trace_veclike`'s ByteCode arm traces (the two `aref` slot
-        //      objects, arglist, constants, env, doc_form, interactive,
+        //      `trace_veclike`'s ByteCode arm traces (the `aref` slot
+        //      objects — code, constants and the reader-installed GNU slot
+        //      vector — plus arglist, constants, env, doc_form, interactive,
         //      extra_slots and the Dynamic parameter child; Stack/Named
         //      parameters carry no heap children), and the drain traces them
         //      to the fixpoint (a mid-drain stop hands residual gray to the

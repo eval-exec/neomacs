@@ -301,6 +301,11 @@ pub(crate) trait TaggedValueBytecodePolicyExt {
     fn bytecode_slot_object(self, slot: ByteCodeSlotObject) -> Option<Value>;
 
     fn bytecode_slot_object_if_created(self, slot: ByteCodeSlotObject) -> Option<Value>;
+
+    /// The typed slot source every Lisp-visible reader must consult: `None`
+    /// when `self` is not byte code, otherwise `Native` or the materialized
+    /// GNU slot vector.
+    fn bytecode_slot_source(self) -> Option<neovm_value::tagged::header::ClosureSlotSource>;
 }
 
 impl TaggedValueBytecodePolicyExt for TaggedValue {
@@ -370,6 +375,15 @@ impl TaggedValueBytecodePolicyExt for TaggedValue {
         // SAFETY: a live byte-code object (the type test above).
         let cached = unsafe { (*ptr).slot_objects.get(slot) };
         (!cached.is_nil()).then_some(cached)
+    }
+
+    fn bytecode_slot_source(self) -> Option<neovm_value::tagged::header::ClosureSlotSource> {
+        if self.veclike_type()? != VecLikeType::ByteCode {
+            return None;
+        }
+        let ptr = self.as_veclike_ptr().unwrap() as *const ByteCodeObj;
+        // SAFETY: a live byte-code object (the type test above).
+        Some(unsafe { (*ptr).slot_objects.slot_source() })
     }
 }
 

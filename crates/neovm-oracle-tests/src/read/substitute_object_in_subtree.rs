@@ -247,3 +247,52 @@ fn oracle_prop_lread_substitute_object_in_subtree_char_table_partial_failure() {
         expect_test::expect![[r#""OK ((wrong-type-argument sequencep) t t t)""#]],
     );
 }
+
+#[test]
+fn oracle_prop_lread_substitute_writes_back_every_bytecode_slot() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // GNU's CLOSURE branch of `substitute_object_recurse` takes `PVSIZE` and
+    // `ASET`s every closure slot back (src/lread.c), so the substitution is
+    // observable through `aref` at slots outside the constants vector -- the
+    // arglist (0) and docstring (4) here -- and the printer shows the closure
+    // referring to itself. `aset` on a closure itself still signals
+    // `(wrong-type-argument arrayp F)`: GNU's `ARRAYP` excludes closures.
+    let form = r#"(let* ((ph (cons nil nil))
+       (f (make-byte-code ph "\300\207" (vector ph) 1 ph)))
+  (lread--substitute-object-in-subtree f ph t)
+  (list (eq (aref f 0) f)
+        (eq (aref (aref f 2) 0) f)
+        (eq (aref f 4) f)
+        (prin1-to-string f)
+        (condition-case e (aset f 0 1) (error (car e)))
+        (condition-case e (aset f 0 1) (error (car (cdr e))))))"#;
+    let expect = expect_test::expect![[
+        r##""OK (t t t \"#[#0 \\\"\\\\300\\\\207\\\" [#0] 1 #0]\" wrong-type-argument arrayp)""##
+    ]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+#[test]
+fn oracle_prop_lread_substitute_bytecode_readers_share_the_slot_store() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // Every non-execution reader of a substituted byte-code closure sees the same
+    // stored slot: `aref`, `documentation` (slot 4, nil because the slot holds
+    // the closure, not a string), `interactive-form` (slot 5, `(interactive
+    // F)`), and the printer. Reading any of them from the immutable function
+    // fields instead would disagree with `aref` after the walk.
+    let form = r#"(let* ((ph (cons nil nil))
+       (f (make-byte-code 0 "\300\207" (vector ph) 1 ph ph)))
+  (lread--substitute-object-in-subtree f ph t)
+  (list (eq (aref f 4) f)
+        (eq (aref f 5) f)
+        (documentation f t)
+        (eq (car (interactive-form f)) 'interactive)
+        (eq (car (cdr (interactive-form f))) f)
+        (prin1-to-string f)))"#;
+    let expect = expect_test::expect![[
+        r##""OK (t t nil t t \"#[0 \\\"\\\\300\\\\207\\\" [#0] 1 #0 #0]\")""##
+    ]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}

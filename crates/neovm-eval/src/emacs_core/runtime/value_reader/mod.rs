@@ -1296,19 +1296,60 @@ impl SubstituteWalk {
                 }
             }
             VecLikeType::ByteCode => {
-                // GNU stores every closure slot back. A byte-code function
-                // here has no slot writer, so a slot that is itself the
-                // placeholder keeps it; the objects the slots hold (argument
-                // list, the constants vector `aref` returns, doc and
-                // interactive forms) are substituted in place. As with `aset`
-                // into that vector, the function still runs from its own
-                // constant pool (P3.2 L4b, `ByteCodeSlotObjects`).
+                // GNU's CLOSURE branch takes `PVSIZE` and `ASET`s every
+                // closure slot back (src/lread.c substitute_object_recurse).
+                // A store cannot touch the immutable `ByteCodeFunction`, so
+                // the first changed slot installs the function's GNU slot
+                // vector (a snapshot of the observable slots) and every
+                // later store goes through the ordinary vector store path.
+                // Slots 1/2 keep their identity objects (`aref` hands out the
+                // code string and constants vector), and inner containers
+                // such as the constants vector are still walked in place.
                 let count = bytecode_closure_length(&subtree).unwrap_or(0);
-                for index in 0..usize::try_from(count).unwrap_or(0) {
-                    if let Some(slot) = bytecode_closure_slot(&subtree, index) {
-                        self.substitute(slot)?;
+                let count = usize::try_from(count).unwrap_or(0);
+                let saved_roots = crate::emacs_core::eval::save_scratch_gc_roots();
+                // Restore the scratch roots even when a nested walk signals
+                // (for example a `sequencep` from a marker inside a slot).
+                let outcome = (|| -> Result<(), Flow> {
+                    let mut slot_vector: Option<Value> = None;
+                    for index in 0..count {
+                        let Some(slot) = bytecode_closure_slot(&subtree, index) else {
+                            break;
+                        };
+                        let new_slot = self.substitute(slot)?;
+                        if eq_value(&new_slot, &slot) {
+                            continue;
+                        }
+                        let vector = match slot_vector {
+                            Some(vector) => vector,
+                            None => {
+                                let snapshot: Vec<Value> = (0..count)
+                                    .map(|index| {
+                                        bytecode_closure_slot(&subtree, index).unwrap_or(Value::NIL)
+                                    })
+                                    .collect();
+                                let vector = Value::vector(snapshot);
+                                // The walk is single-threaded and this object
+                                // was just entered, so the installer cannot
+                                // lose a race; a `false` here would mean
+                                // another writer already installed the
+                                // vector, which has no second writer in the
+                                // reader.
+                                let _ = neovm_value::tagged::mutate::install_bytecode_slots_vector(
+                                    subtree, vector,
+                                );
+                                crate::emacs_core::eval::push_scratch_gc_root(vector);
+                                slot_vector = Some(vector);
+                                vector
+                            }
+                        };
+                        crate::emacs_core::eval::push_scratch_gc_root(new_slot);
+                        vector.set_vector_slot(index, new_slot);
                     }
-                }
+                    Ok(())
+                })();
+                crate::emacs_core::eval::restore_scratch_gc_roots(saved_roots);
+                outcome?;
             }
             // A bool-vector holds bits, and GNU's hash-table pseudovector
             // size counts no Lisp slot, so GNU walks neither. A bignum is a
