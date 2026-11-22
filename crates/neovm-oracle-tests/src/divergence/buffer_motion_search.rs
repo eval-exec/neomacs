@@ -144,8 +144,24 @@ fn oracle_prop_regex_search_leaves_the_gap_in_place() {
   (with-temp-buffer
     (insert "hello") (goto-char 3) (insert "Q") (delete-char -1)
     (goto-char 1)
-    (list (re-search-forward "el" nil t) (gap-position) (match-beginning 0) (match-end 0))))"#;
-    let expect = expect_test::expect![[r#""OK ((nil 51) (nil 51) (4 51 1) (99 51 99) (4 3 2 4))""#]];
+    (list (re-search-forward "el" nil t) (gap-position) (match-beginning 0) (match-end 0)))
+  (with-temp-buffer
+    (insert (make-string 100 ?a))
+    (goto-char 50) (insert "x")
+    (goto-char 1)
+    (list (re-search-forward "a\\{2\\}" nil t) (gap-position) (match-beginning 0)))
+  (with-temp-buffer
+    (insert (make-string 100 ?a))
+    (goto-char 50) (insert "x")
+    (goto-char 1)
+    (list (re-search-forward "z\\{2\\}" nil t) (gap-position)))
+  (with-temp-buffer
+    (insert "hello") (goto-char 3) (insert "Q") (delete-char -1)
+    (goto-char 1)
+    (list (re-search-forward "l+" nil t) (gap-position) (match-beginning 0) (match-end 0))))"#;
+    let expect = expect_test::expect![[
+        r#""OK ((nil 51) (nil 51) (4 51 1) (99 51 99) (4 3 2 4) (3 51 1) (nil 51) (5 3 3 5))""#
+    ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 

@@ -168,3 +168,167 @@ struct PfFuzzCounts {
     /// gate — every one asserts optimized scan == skip-off.
     pf_forward_cmp: usize,
 }
+
+/// The two-segment search must find exactly what the single-slice search
+/// finds over the same logical text. The accelerated candidate scan runs
+/// memchr (or a folded accept table) over each gap half; a seam that hid a
+/// candidate, or read a first byte from the wrong half, would diverge here.
+#[test]
+fn gap_segments_search_matches_single_slice_over_random_texts() {
+    use crate::emacs_core::regex_emacs::DefaultSyntaxLookup;
+
+    let mut state = 0x9E37_79B9_7F4A_7C15u64;
+    let mut next = move || {
+        state = state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        (state >> 33) as usize
+    };
+    let pieces = [
+        "a", "b", "c", "d", "e", "f", "l", "n", "u", "x", "z", " ", "\n", "0", "(", ")", "é",
+        "defun", "aa", "bb",
+    ];
+    let patterns = [
+        ("d[e]fun", false),
+        ("defun", false),
+        ("a\\{2\\}", false),
+        ("l+", false),
+        ("z[z]z", false),
+        ("[a-c]+x", false),
+        ("\\bdefun\\b", false),
+        ("^a", false),
+        ("a$", false),
+        (".", false),
+        ("a*", false),
+        ("\\(?:ab\\|cd\\)x", false),
+        ("d[e]fun", true),
+        ("[A-Z]+", true),
+        ("\\`a", false),
+        ("a\\'", false),
+        ("ab", false),
+        ("a.b", false),
+        ("[a-c]b", false),
+    ];
+    let syntax = DefaultSyntaxLookup;
+
+    for _case in 0..480 {
+        let mut text = String::new();
+        let target = next() % 400;
+        while text.len() < target {
+            text.push_str(pieces[next() % pieces.len()]);
+        }
+        let bytes = text.as_bytes();
+        let len = bytes.len();
+        let mut gap = if len == 0 { 0 } else { next() % (len + 1) };
+        while !text.is_char_boundary(gap) {
+            gap -= 1;
+        }
+        let start = next() % (len + 1);
+        let forward = next() % 2 == 0;
+        let range = if forward {
+            (next() % (len + 1 - start)) as isize
+        } else {
+            -((next() % (start + 1)) as isize)
+        };
+
+        for (pattern, case_fold) in patterns {
+            let compiled = regex_compile(pattern, false, case_fold).expect("compile");
+            let whole = re_search(&compiled, bytes, start, range, &syntax, start);
+            let halves = re_search_segments(
+                &compiled,
+                &bytes[..gap],
+                &bytes[gap..],
+                start,
+                range,
+                &syntax,
+                start,
+            );
+            assert_eq!(
+                whole
+                    .as_ref()
+                    .map(|(pos, regs)| (*pos, &regs.start, &regs.end)),
+                halves
+                    .as_ref()
+                    .map(|(pos, regs)| (*pos, &regs.start, &regs.end)),
+                "pattern {pattern:?} case_fold={case_fold} text {text:?} gap={gap} start={start} range={range}"
+            );
+        }
+    }
+}
+
+/// The window dispatch must agree with the single-slice searcher at its three
+/// kinds of boundary: a window wholly left or right of the gap, a required
+/// literal that crosses the seam, and end-sensitive assertions on the byte
+/// just beside it.
+#[test]
+fn gap_window_dispatch_handles_one_sided_and_seam_windows() {
+    use crate::emacs_core::regex_emacs::DefaultSyntaxLookup;
+
+    let syntax = DefaultSyntaxLookup;
+    let forward = [
+        ("aaaabbbbcccc", 8, 0, 6, "ab"),     // whole left half
+        ("aaaabbbbcccc", 8, 9, 12, "cc"),    // whole right half
+        ("aaaabbbbcccc", 8, 0, 12, "bbbb"),  // literal crossing the seam
+        ("aaaabbbbcccc", 8, 0, 12, "[bc]+"), // seam plus both sides
+        ("aaa\nbbb", 3, 0, 7, "a$"),         // end-of-line just left of the gap
+        ("aaa\nbbb", 4, 0, 7, "^b"),         // line start just right of the gap
+        ("aaa\nbbb", 4, 0, 7, "\\`a"),       // buffer-start anchor
+        ("xyz", 1, 0, 3, "xy"),              // one-byte seam
+        ("xyz", 1, 1, 3, "yz"),              // candidate at the gap itself
+    ];
+    let backward = [
+        ("aaaabbbbcccc", 8, 12, 0, "bb"),    // right region then seam
+        ("aaaabbbbcccc", 6, 12, 0, "bbbb"),  // literal crossing the seam
+        ("aaaabbbbcccc", 8, 12, 0, "a\\|c"), // empty-ish alternatives
+        ("aaa\nbbb", 4, 7, 0, "^b"),         // line start just right of the gap
+        ("aaa\nbbb", 3, 7, 0, "a$"),         // end-of-line just left of the gap
+        ("xyz", 1, 3, 0, "xy"),              // one-byte seam
+    ];
+
+    for (text, gap, start, end, pattern) in forward {
+        let compiled = regex_compile(pattern, false, false).expect("compile");
+        let range = (end - start) as isize;
+        let whole = re_search(&compiled, text.as_bytes(), start, range, &syntax, start);
+        let halves = re_search_segments(
+            &compiled,
+            &text.as_bytes()[..gap],
+            &text.as_bytes()[gap..],
+            start,
+            range,
+            &syntax,
+            start,
+        );
+        assert_eq!(
+            whole
+                .as_ref()
+                .map(|(pos, regs)| (*pos, &regs.start, &regs.end)),
+            halves
+                .as_ref()
+                .map(|(pos, regs)| (*pos, &regs.start, &regs.end)),
+            "forward text {text:?} gap={gap} start={start} end={end} pattern {pattern:?}"
+        );
+    }
+    for (text, gap, start, end, pattern) in backward {
+        let compiled = regex_compile(pattern, false, false).expect("compile");
+        let range = -((start - end) as isize);
+        let whole = re_search(&compiled, text.as_bytes(), start, range, &syntax, start);
+        let halves = re_search_segments(
+            &compiled,
+            &text.as_bytes()[..gap],
+            &text.as_bytes()[gap..],
+            start,
+            range,
+            &syntax,
+            start,
+        );
+        assert_eq!(
+            whole
+                .as_ref()
+                .map(|(pos, regs)| (*pos, &regs.start, &regs.end)),
+            halves
+                .as_ref()
+                .map(|(pos, regs)| (*pos, &regs.start, &regs.end)),
+            "backward text {text:?} gap={gap} start={start} end={end} pattern {pattern:?}"
+        );
+    }
+}

@@ -1580,6 +1580,151 @@ fn literal_register_reuse_preserves_raw_unibyte_coordinates() {
     }
 }
 
+/// RegExp search must read both gap halves in place, exactly as GNU's
+/// `re_search_2` does: literal and engine patterns alike leave `gap-position`
+/// where the last edit put it, and a match may cross the gap.
+#[test]
+fn regexp_search_reads_both_gap_halves_without_moving_the_gap() {
+    crate::test_utils::init_test_tracing();
+    let saved = neovm_edit::buffer::shared::SavedPointBeforeCommand::new_editor_global();
+    let mut buf = Buffer::new(BufferId(1), Value::string("regexp-gap"), saved);
+    buf.insert_lisp_string(&LispString::from_utf8(&"a".repeat(100)));
+    // The GNU oracle's edit: 100 a's, then an x inserted at char 50 leaves
+    // the gap after it (gap-position 51).
+    buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(49));
+    buf.insert_lisp_string(&LispString::from_utf8("x"));
+    let gap = buf.gap_position_lisp();
+    assert_eq!(gap, 51);
+
+    let forward = |buf: &mut Buffer, pattern: &str| {
+        buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::ZERO);
+        super::re_search_forward_with_posix(
+            buf,
+            &LispString::from_utf8(pattern),
+            None,
+            true,
+            false,
+            false,
+        )
+        .expect("noerror forward search does not fail")
+        .map(|found| found.into_parts().1.get())
+    };
+    let backward = |buf: &mut Buffer, pattern: &str| {
+        buf.goto_emacs_byte_pos(buf.total_emacs_byte_end_pos());
+        super::re_search_backward_with_posix(
+            buf,
+            &LispString::from_utf8(pattern),
+            None,
+            true,
+            false,
+            false,
+        )
+        .expect("noerror backward search does not fail")
+        .map(|found| found.into_parts().1.get())
+    };
+
+    // Literal patterns (the literal fast path) and engine patterns alike.
+    for pattern in ["zzz", "z\\{2\\}"] {
+        assert_eq!(forward(&mut buf, pattern), None, "{pattern}");
+        assert_eq!(buf.gap_position_lisp(), gap, "forward {pattern}");
+        assert_eq!(backward(&mut buf, pattern), None, "{pattern}");
+        assert_eq!(buf.gap_position_lisp(), gap, "backward {pattern}");
+    }
+    for (pattern, forward_hit, backward_hit) in [("aaa", 3, 98), ("a\\{2\\}", 2, 99)] {
+        assert_eq!(
+            forward(&mut buf, pattern),
+            Some(forward_hit),
+            "forward {pattern}"
+        );
+        assert_eq!(buf.gap_position_lisp(), gap, "forward {pattern}");
+        assert_eq!(
+            backward(&mut buf, pattern),
+            Some(backward_hit),
+            "backward {pattern}"
+        );
+        assert_eq!(buf.gap_position_lisp(), gap, "backward {pattern}");
+    }
+
+    // A match that crosses the gap: "hello" with the gap after "he".
+    let saved = neovm_edit::buffer::shared::SavedPointBeforeCommand::new_editor_global();
+    let mut buf = Buffer::new(BufferId(2), Value::string("regexp-gap-straddle"), saved);
+    buf.insert_lisp_string(&LispString::from_utf8("hello"));
+    buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(2));
+    buf.insert_lisp_string(&LispString::from_utf8("Q"));
+    buf.delete_emacs_byte_range(EmacsByteRange::new(
+        neovm_edit::buffer::EmacsBytePos::new(2),
+        neovm_edit::buffer::EmacsBytePos::new(3),
+    ));
+    let gap = buf.gap_position_lisp();
+    assert_eq!(forward(&mut buf, "l+"), Some(4));
+    assert_eq!(buf.gap_position_lisp(), gap);
+    assert_eq!(backward(&mut buf, "l+"), Some(3));
+    assert_eq!(buf.gap_position_lisp(), gap);
+
+    // Multibyte match crossing the gap: "aééx" with the gap between the two
+    // é characters. The characters themselves never cross the boundary; the
+    // engine's match does, so its char decoding must read both halves.
+    let saved = neovm_edit::buffer::shared::SavedPointBeforeCommand::new_editor_global();
+    let mut buf = Buffer::new(BufferId(4), Value::string("regexp-gap-multibyte"), saved);
+    buf.insert_lisp_string(&LispString::from_utf8("aééx"));
+    buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(3));
+    buf.insert_lisp_string(&LispString::from_utf8("Q"));
+    buf.delete_emacs_byte_range(EmacsByteRange::new(
+        neovm_edit::buffer::EmacsBytePos::new(3),
+        neovm_edit::buffer::EmacsBytePos::new(4),
+    ));
+    let gap = buf.gap_position_lisp();
+    assert_eq!(forward(&mut buf, "é\\{2\\}"), Some(5));
+    assert_eq!(buf.gap_position_lisp(), gap);
+    assert_eq!(backward(&mut buf, "é\\{2\\}"), Some(1));
+    assert_eq!(buf.gap_position_lisp(), gap);
+}
+
+/// Font-lock shape: edit, search from before the edit so the gap lies inside
+/// the span, repeat. The literal and engine paths must both read the two gap
+/// halves in place: no bytes copied and the gap stays at the edit.
+#[test]
+fn regexp_search_loop_after_edit_copies_nothing_and_keeps_the_gap() {
+    use std::sync::atomic::Ordering;
+    crate::test_utils::init_test_tracing();
+    let unit = format!("{}(defun marker)\n", "x".repeat(490));
+    let text = unit.repeat(1_000);
+    let saved = neovm_edit::buffer::shared::SavedPointBeforeCommand::new_editor_global();
+    let mut buf = Buffer::new(BufferId(3), Value::string("regexp-gap-loop"), saved);
+    buf.insert_lisp_string(&LispString::from_utf8(&text));
+    let p = text.len() / 10;
+    let copied_before = super::SEARCH_COPIED_BYTES.load(Ordering::Relaxed);
+    for _ in 0..50 {
+        buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(p));
+        buf.insert_lisp_string(&LispString::from_utf8("Q"));
+        let gap_after_edit = buf.gap_position_lisp();
+        for pattern in ["zzz", "z[z]z"] {
+            buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::ZERO);
+            let found = super::re_search_forward_with_posix(
+                &mut buf,
+                &LispString::from_utf8(pattern),
+                None,
+                true,
+                false,
+                false,
+            )
+            .expect("noerror regexp search does not fail");
+            assert!(found.is_none(), "{pattern} unexpectedly matched");
+            assert_eq!(
+                buf.gap_position_lisp(),
+                gap_after_edit,
+                "{pattern} moved the gap from the edit"
+            );
+        }
+        buf.delete_emacs_byte_range(EmacsByteRange::new(
+            neovm_edit::buffer::EmacsBytePos::new(p),
+            neovm_edit::buffer::EmacsBytePos::new(p + 1),
+        ));
+    }
+    let copied = super::SEARCH_COPIED_BYTES.load(Ordering::Relaxed) - copied_before;
+    assert_eq!(copied, 0, "bytes copied out of the buffer");
+}
+
 #[test]
 fn literal_search_reads_both_gap_halves_without_moving_the_gap() {
     crate::test_utils::init_test_tracing();
