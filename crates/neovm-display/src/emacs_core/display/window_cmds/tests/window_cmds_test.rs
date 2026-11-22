@@ -4975,10 +4975,16 @@ fn neomacs_frame_edges_return_numeric_gui_edges_like_gnu_toolkits() {
                (neomacs-frame-edges nil 'inner-edges))",
     );
     assert_eq!(results[0], "OK nil");
-    assert_eq!(
-        results[1],
+    // GNU GTK preserves the 800x600 text allocation when the uninhibited
+    // internal border grows from 0 to 4 (xfns.c:1998-2015, frame.c:889-925).
+    // The attested 31.1 GUI row gives native/outer 808x608 and inner 800x600.
+    // Chrome implied-resize policy is currently consumed only on Linux.
+    let expected = if cfg!(target_os = "linux") {
+        "OK ((0 0 808 608) (0 0 808 608) (0 0 808 608) (4 4 804 604))"
+    } else {
         "OK ((0 0 800 600) (0 0 800 600) (0 0 800 600) (4 4 796 596))"
-    );
+    };
+    assert_eq!(results[1], expected);
 }
 
 #[test]
