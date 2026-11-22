@@ -1502,7 +1502,9 @@ impl HashTableStorage {
         Some(entry.value)
     }
 
-    #[inline]
+    // Keep the complete clear's field effects visible to the completion
+    // guard. The index can recover usable capacity while the Vecs retain it.
+    #[inline(always)]
     pub fn clear(&mut self) {
         self.switch_plan.invalidate();
         self.index.clear();

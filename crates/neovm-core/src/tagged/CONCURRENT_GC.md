@@ -514,7 +514,9 @@ mutation is available only through the typed operations.
 The typed constructor adapter and the index clear adapter keep their forwarding
 bodies available for inlining. An opaque constructor closure adds an environment
 and result ABI to every typed write; an opaque index clear hides its field effects
-from the generic capacity comparison. Rust's [inlining attributes](https://doc.rust-lang.org/reference/attributes/codegen.html#the-inline-attribute)
+from the generic capacity comparison. Keep the terminal native callbacks and the
+complete clear in that same operation extent: inlining only an intermediate
+adapter can move the opaque boundary to its caller or callback. Rust's [inlining attributes](https://doc.rust-lang.org/reference/attributes/codegen.html#the-inline-attribute)
 remain compiler hints, so release verification must inspect every executed callee
 and measure the complete operation. The generic guard still compares all three
 capacities and charges the original positive total net delta, including usable

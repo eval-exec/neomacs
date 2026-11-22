@@ -1405,9 +1405,12 @@ fn builtin_puthash_values(
             check_mutable_hash_table(table)?;
             // SAFETY: the entry rejected Tier-H; this path calls no Lisp or GC.
             unsafe {
-                table.with_hash_table_write_inactive(|table| {
-                    table.put(key_value, value, symbols_with_pos_enabled)
-                })
+                table.with_hash_table_write_inactive(
+                    // Keep the terminal operation in the payload loan too:
+                    // outlining it recreates the callback environment ABI.
+                    #[inline(always)]
+                    |table| table.put(key_value, value, symbols_with_pos_enabled),
+                )
             }
             .unwrap_or(Ok(()))?;
             Ok(value)
@@ -1585,9 +1588,10 @@ pub fn builtin_remhash_values(
             check_mutable_hash_table(table)?;
             // SAFETY: the entry rejected Tier-H; this path calls no Lisp or GC.
             unsafe {
-                table.with_hash_table_write_inactive(|table| {
-                    table.remove(key_value, symbols_with_pos_enabled)
-                })
+                table.with_hash_table_write_inactive(
+                    #[inline(always)]
+                    |table| table.remove(key_value, symbols_with_pos_enabled),
+                )
             }
             .unwrap_or(Ok(()))?;
             Ok(Value::NIL)
@@ -1637,9 +1641,12 @@ pub fn builtin_clrhash(args: Vec<Value>) -> EvalResult {
             check_mutable_hash_table(args[0])?;
             // SAFETY: the entry rejected Tier-H; this path calls no Lisp or GC.
             let _ = unsafe {
-                args[0].with_hash_table_mut_inactive(|ht| {
-                    ht.data.clear();
-                })
+                args[0].with_hash_table_mut_inactive(
+                    #[inline(always)]
+                    |ht| {
+                        ht.data.clear();
+                    },
+                )
             };
             // Be compatible with GNU Emacs (and XEmacs): return the table.
             Ok(args[0])
