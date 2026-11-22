@@ -4085,7 +4085,14 @@ impl TaggedValue {
         // SAFETY: the caller retains the inactive serial mutation contract;
         // the private body supplies the ordinary barriers and revision writes.
         unsafe {
-            mutate::with_hash_table_mut_inactive(self, |table| f(&mut HashTableWrite::new(table)))
+            mutate::with_hash_table_mut_inactive(
+                self,
+                // Keep the constructor forwarding in the payload loan. An
+                // opaque closure ABI spills its environment and result even
+                // when the inner mutation body has already been inlined.
+                #[inline(always)]
+                |table| f(&mut HashTableWrite::new(table)),
+            )
         }
     }
 

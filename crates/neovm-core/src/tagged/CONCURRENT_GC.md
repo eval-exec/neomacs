@@ -511,6 +511,15 @@ guard outlives the debug mutation-closure guard. The unrestricted string helper
 and its identity observer are gated behind test support; production string
 mutation is available only through the typed operations.
 
+The typed constructor adapter and the index clear adapter keep their forwarding
+bodies available for inlining. An opaque constructor closure adds an environment
+and result ABI to every typed write; an opaque index clear hides its field effects
+from the generic capacity comparison. Rust's [inlining attributes](https://doc.rust-lang.org/reference/attributes/codegen.html#the-inline-attribute)
+remain compiler hints, so release verification must inspect every executed callee
+and measure the complete operation. The generic guard still compares all three
+capacities and charges the original positive total net delta, including usable
+index capacity changes after tombstones clear.
+
 Follow-up `N-gc-mutation-capability` remains owned by gcpace, queued behind the
 E4 GC prerequisite work assigned after R4.
 Extend the typed insert/grow/COW operations into a capability with explicit

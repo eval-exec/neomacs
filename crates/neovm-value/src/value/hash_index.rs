@@ -108,6 +108,9 @@ impl HashIndex {
         self.table.capacity()
     }
 
+    // Expose the index-only loan to the caller's capacity comparison, while
+    // retaining hashbrown's usable-capacity changes when tombstones clear.
+    #[inline]
     pub(super) fn clear(&mut self) {
         self.table.clear();
     }
