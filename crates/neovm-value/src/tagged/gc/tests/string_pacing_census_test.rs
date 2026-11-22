@@ -110,3 +110,142 @@ fn string_gc_pacing_counts_collectible_survivors_not_image_residents() {
         }
     }
 }
+
+#[test]
+fn string_gc_allocation_charge_is_distinct_from_live_census() {
+    // GNU alloc.c:1701/1741/1818 charges allocation storage, whereas
+    // sweep_strings:1862-1863 publishes logical bytes for the live census.
+    let mut reserved = Vec::with_capacity(512);
+    reserved.extend_from_slice(b"abc");
+    for (label, string) in [
+        ("owned spare capacity", LispString::from_unibyte(reserved)),
+        (
+            "borrowed payload",
+            LispString::from_rodata_unibyte(b"abc\0"),
+        ),
+    ] {
+        let mut heap = TaggedHeap::new();
+        set_tagged_heap(&mut heap);
+        let before = heap.bytes_since_gc_exact();
+        let value = heap.alloc_string(string);
+        let charged = heap.bytes_since_gc_exact() - before;
+        heap.close_alloc_regions();
+        let layout = heap.layout_stats();
+        let storage = layout
+            .arenas
+            .iter()
+            .find(|arena| arena.class == "string")
+            .unwrap();
+        assert_eq!(storage.allocated_slots, 1);
+        assert_eq!(
+            charged,
+            storage.occupied_slot_bytes + storage.payload_capacity_bytes,
+            "allocation charge must include the allocated extent: {label}"
+        );
+        let counts = heap.memory_use_counts_snapshot();
+        full(&mut heap, &[value]);
+        assert_eq!(
+            heap.live_bytes(),
+            size_of::<StringObj>() + 3,
+            "allocation capacity must not inflate the logical live census: {label}"
+        );
+        assert_eq!(heap.gc_object_counts().string_bytes, 3);
+        assert_eq!(heap.memory_use_counts_snapshot(), counts);
+    }
+}
+
+#[test]
+fn string_gc_published_backing_changes_charge_the_new_extent_once() {
+    let mut observed = Vec::new();
+    for mode in [
+        "owned growth",
+        "owned replacement",
+        "owned replacement unwind",
+        "borrowed generic COW",
+        "borrowed byte COW",
+        "borrowed in-store COW",
+    ] {
+        let mut heap = TaggedHeap::new();
+        set_tagged_heap(&mut heap);
+        let string = if mode.starts_with("borrowed") {
+            LispString::from_rodata_unibyte(b"abc\0")
+        } else {
+            LispString::from_utf8("abc")
+        };
+        let value = heap.alloc_string(string);
+        let before = heap.bytes_since_gc_exact();
+        match mode {
+            "owned growth" => {
+                crate::tagged::mutate::with_lisp_string_mut(value, |string| {
+                    string.mutate_bytes(|bytes| bytes.reserve_exact(512));
+                })
+                .unwrap();
+            }
+            "owned replacement" => {
+                crate::tagged::mutate::with_lisp_string_mut(value, |string| {
+                    *string = LispString::from_utf8("abc");
+                })
+                .unwrap();
+            }
+            "owned replacement unwind" => {
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    crate::tagged::mutate::with_lisp_string_mut(value, |string| {
+                        *string = LispString::from_utf8("abc");
+                        panic!("expected string backing unwind");
+                    });
+                }));
+                assert!(result.is_err());
+            }
+            "borrowed generic COW" => {
+                crate::tagged::mutate::with_lisp_string_mut(value, |string| {
+                    string.mutate_bytes(|bytes| bytes[0] = b'z');
+                })
+                .unwrap();
+            }
+            "borrowed byte COW" => {
+                assert!(crate::tagged::mutate::set_string_byte_same_char_count(
+                    value, 0, b'z',
+                ));
+            }
+            "borrowed in-store COW" => {
+                assert!(with_store_state(|store| {
+                    crate::tagged::mutate::set_string_byte_same_char_count_in_store(
+                        store, value, 0, b'z',
+                    )
+                }));
+            }
+            _ => unreachable!(),
+        }
+        heap.close_alloc_regions();
+        let layout = heap.layout_stats();
+        let storage = layout
+            .arenas
+            .iter()
+            .find(|arena| arena.class == "string")
+            .unwrap();
+        assert!(storage.payload_capacity_bytes > 0);
+        observed.push((
+            mode,
+            heap.bytes_since_gc_exact() - before,
+            storage.payload_capacity_bytes,
+        ));
+        let charged = heap.bytes_since_gc_exact();
+        assert!(crate::tagged::mutate::set_string_byte_same_char_count(
+            value, 0, b'x',
+        ));
+        assert_eq!(
+            heap.bytes_since_gc_exact(),
+            charged,
+            "owned byte store: {mode}"
+        );
+        full(&mut heap, &[value]);
+        assert_eq!(heap.live_bytes(), size_of::<StringObj>() + 3, "{mode}");
+        assert_eq!(heap.gc_object_counts().string_bytes, 3, "{mode}");
+    }
+    assert!(
+        observed
+            .iter()
+            .all(|(_, charged, extent)| charged == extent),
+        "each newly published backing extent must be charged exactly once: {observed:?}"
+    );
+}

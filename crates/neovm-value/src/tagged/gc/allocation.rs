@@ -110,7 +110,7 @@ impl TaggedHeap {
         #[cfg(any(test, feature = "test-support"))]
         alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
         self.current_mutator_gc_mut().allocated_count += 1;
-        self.note_allocation_bytes(unsafe { Self::string_object_bytes(&*ptr) });
+        self.note_allocation_bytes(unsafe { Self::string_allocation_bytes(&*ptr) });
         let value = unsafe { TaggedValue::from_string_ptr(ptr) };
         if let Some(kind) = empty_kind {
             self.canonical_empty_strings.install_owned(kind, value)

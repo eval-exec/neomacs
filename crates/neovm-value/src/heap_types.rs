@@ -1229,6 +1229,14 @@ impl LispString {
         self.storage_capacity
     }
 
+    /// Copy the identity of a published owned allocation for GC charging.
+    /// Capacity distinguishes in-place resizing; the address distinguishes
+    /// same-capacity replacement, including empty buffers whose byte slice
+    /// uses the shared empty-slice pointer. Borrowed bytes own no allocation.
+    pub(crate) fn owned_storage_identity(&self) -> Option<(usize, usize)> {
+        (self.storage_capacity != 0).then_some((self.data as usize, self.storage_capacity))
+    }
+
     pub(crate) fn has_owned_storage(&self) -> bool {
         self.storage_capacity != 0
     }

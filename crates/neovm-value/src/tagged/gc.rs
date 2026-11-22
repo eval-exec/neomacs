@@ -1888,10 +1888,6 @@ impl TaggedHeap {
             .saturating_mul(size_of::<TaggedValue>())
     }
 
-    fn string_object_bytes(obj: &StringObj) -> usize {
-        size_of::<StringObj>().saturating_add(obj.data.byte_len())
-    }
-
     fn hash_table_object_bytes(obj: &HashTableObj) -> usize {
         size_of::<HashTableObj>().saturating_add(obj.table.data.known_storage_bytes())
     }
@@ -2461,7 +2457,11 @@ mod gc_statistics;
 mod memory_inventory;
 mod memory_registry;
 mod pacing_census;
+mod string_pacing;
 pub(crate) use pacing_census::SerialHashTableStorageCharge;
+pub(crate) use string_pacing::{
+    SerialStringStorageCharge, note_string_backing_allocation_in_store,
+};
 #[cfg(feature = "gc-memory-telemetry")]
 pub mod memory_telemetry;
 mod native_deferred;

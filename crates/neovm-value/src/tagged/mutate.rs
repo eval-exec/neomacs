@@ -10,7 +10,10 @@ use crate::value::LispHashTable;
 use crate::value::text_props::TextPropertyTable;
 
 use super::collection_reads::{StoreState, WriteProjection, record_projected_write_in_store};
-use super::gc::{HeapWriteKind, note_heap_slot_write_in_store, note_heap_write, with_store_state};
+use super::gc::{
+    HeapWriteKind, SerialStringStorageCharge, note_heap_slot_write_in_store, note_heap_write,
+    note_string_backing_allocation_in_store, with_store_state,
+};
 use super::header::{
     BoolVectorObj, ByteCodeObj, ByteCodeSlotObject, ConsCell, HashTableObj, LambdaObj, MacroObj,
     MarkerObj, OverlayObj, RecordObj, StringObj, VecLikeHeader, VecLikeType, VectorObj, XwidgetObj,
@@ -551,6 +554,10 @@ pub fn with_lisp_string_mut<R>(
     LispCollectionRevision::changed(value);
     let ptr = value.as_string_ptr()? as *mut StringObj;
     note_heap_write(value, HeapWriteKind::StringData);
+    // SAFETY: this published string and its serial owner outlive the payload
+    // edit, with no callback or safepoint. Declaring this before the mutation
+    // guard ends the payload loan first, including while unwinding.
+    let _storage_charge = unsafe { SerialStringStorageCharge::new(ptr) };
     #[cfg(any(test, debug_assertions, feature = "test-support"))]
     let _guard = HeapMutClosureGuard::enter();
     Some(f(unsafe { &mut (*ptr).data }))
@@ -609,7 +616,12 @@ pub(crate) fn set_string_byte_same_char_count_in_store(
     {
         return false;
     }
-    string.set_byte_same_char_count(byte_pos, byte);
+    if string.has_owned_storage() {
+        string.set_byte_same_char_count(byte_pos, byte);
+    } else {
+        string.set_byte_same_char_count(byte_pos, byte);
+        note_string_backing_allocation_in_store(store, string.owned_capacity());
+    }
     true
 }
 
