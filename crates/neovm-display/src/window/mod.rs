@@ -130,7 +130,9 @@ static_assertions::assert_eq_size!(WindowSequenceOrigin, WindowId);
 pub use neovm_value::display_vocab::FrameId;
 
 pub(crate) use neovm_eval::emacs_core::eval::data::window_state::GuiResizeDelivery;
-pub use neovm_eval::emacs_core::eval::data::window_state::{GuiBarPresentation, PendingGuiResize};
+pub use neovm_eval::emacs_core::eval::data::window_state::{
+    FrameCreationPhase, GuiBarPresentation, PendingGuiResize,
+};
 
 pub mod frame_alpha;
 

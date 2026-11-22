@@ -8220,6 +8220,7 @@ pub(crate) fn x_create_frame_impl(
         let frame = frames
             .get_mut(fid)
             .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+        frame.creation_phase = crate::window::FrameCreationPhase::BeforeMakeFrame;
         frame.set_name_value(name);
         if let Some(title) = explicit_title {
             frame.set_title_value(title);

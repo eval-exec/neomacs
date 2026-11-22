@@ -5,7 +5,9 @@
 //! GNU implements in frame.c. The Frame/FrameManager data structures
 //! live in crate::window; window.c builtins stay in super::window_cmds.
 
+mod chrome_resize;
 mod cycling;
+pub(crate) mod implied_resize;
 pub(crate) mod position;
 mod selection;
 use crate::window::DisplayFrameExt;
@@ -41,6 +43,20 @@ use neovm_value::error::{EvalResult, LispCondition, signal, signal_error_with_ar
 use neovm_value::error::{expect_args, expect_max_args, expect_min_args};
 use neovm_value::intern::{intern, resolve_sym};
 use neovm_value::value::{Value, ValueKind, VecLikeType};
+
+pub(crate) fn implied_resize_creation_phase(
+    frame: &crate::window::Frame,
+) -> implied_resize::CreationPhase {
+    match frame.creation_phase {
+        crate::window::FrameCreationPhase::BeforeMakeFrame => {
+            implied_resize::CreationPhase::BeforeMakeFrame
+        }
+        // Neomacs projects its own toolbar allocation synchronously during
+        // construction, before Lisp marks the frame made. GTK's additional
+        // first-toolkit-allocation gate is therefore already satisfied here.
+        crate::window::FrameCreationPhase::Made => implied_resize::CreationPhase::Made,
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum IconifyFrameAction {
@@ -1713,7 +1729,9 @@ pub fn builtin_frame_parameters(
             .fixed_parameter(crate::window::FrameQueryParam::Width)
             .unwrap_or(Value::fixnum(frame.columns() as i64))
     };
-    let height = if frame_is_top_level_non_window(frame) {
+    let height = if frame_uses_window_system_pixels(frame) {
+        gui_frame_height_parameter(frame)
+    } else if frame_is_top_level_non_window(frame) {
         Value::fixnum(frame_realized_lines(frame))
     } else {
         frame
@@ -1954,6 +1972,7 @@ pub fn builtin_modify_frame_parameters(
     let mut requested_left = None;
     let mut requested_top = None;
     let mut matrix_geometry_changed = false;
+    let mut chrome_resize = None;
 
     for item in items.into_iter().rev() {
         if item.is_cons() {
@@ -1961,6 +1980,13 @@ pub fn builtin_modify_frame_parameters(
             let pair_cdr = item.cons_cdr();
             if let Some(key) = pair_car.as_symbol_id(symbol_mode) {
                 let key_name = resolve_sym(key);
+                let chrome_change = chrome_resize::ChromeChange::capture(
+                    eval,
+                    fid,
+                    key_name,
+                    pair_cdr,
+                    chrome_resize.as_ref(),
+                )?;
                 if matches!(
                     key_name,
                     "internal-border-width"
@@ -2298,6 +2324,9 @@ pub fn builtin_modify_frame_parameters(
                         }
                     },
                 }
+                if let Some(change) = chrome_change {
+                    chrome_resize = change.apply(eval, fid, chrome_resize)?;
+                }
             }
         }
     }
@@ -2306,10 +2335,28 @@ pub fn builtin_modify_frame_parameters(
         frame.sync_bar_heights_from_parameters();
     }
 
-    let requested_width =
+    let mut requested_width =
         resolve_frame_size_parameter(&eval.frame_manager(), fid, requested_width, true);
-    let requested_height =
+    let mut requested_height =
         resolve_frame_size_parameter(&eval.frame_manager(), fid, requested_height, false);
+
+    // Coalesce chrome changes into the explicit dimensions in this same alist.
+    // A font change may already have superseded this queued intent; in that
+    // case it owns the latest request and must not be replayed here.
+    if let Some(target) =
+        chrome_resize.filter(|target| target.is_current(&eval.frame_manager(), fid))
+    {
+        let request = target.request_with_explicit_dimensions(
+            &eval.frame_manager(),
+            fid,
+            requested_width,
+            requested_height,
+        )?;
+        let (frames, buffers, host) = eval.frame_manager_buffers_and_display_host_mut();
+        request_live_gui_frame_resize_and_keep_pending(frames, buffers, host, fid, request)?;
+        requested_width = None;
+        requested_height = None;
+    }
 
     // Position changes do not supersede outstanding size intent. Position is
     // applied below independently of whether a new size was requested.
@@ -2984,6 +3031,7 @@ pub(crate) fn frame_parameter_value(
         "width" => frame
             .fixed_parameter(crate::window::FrameQueryParam::Width)
             .unwrap_or(Value::fixnum(frame.columns() as i64)),
+        "height" if frame_uses_window_system_pixels(frame) => gui_frame_height_parameter(frame),
         "height" => frame
             .fixed_parameter(crate::window::FrameQueryParam::Height)
             .unwrap_or(Value::fixnum(frame.lines() as i64)),
@@ -3009,4 +3057,17 @@ pub(crate) fn frame_parameter_value(
         }
         _ => frame.parameter_key(param_key).unwrap_or(Value::NIL),
     }
+}
+
+fn gui_frame_height_parameter(frame: &crate::window::Frame) -> Value {
+    // GNU frame.c:4135-4144 reports a pending explicit size, otherwise
+    // FRAME_LINES. Cached parameter entries cannot describe chrome reflow.
+    Value::fixnum(frame.pending_gui_resize.map_or_else(
+        || {
+            ((frame_text_height_pixels(frame) as f32) / frame.char_height.max(1.0))
+                .floor()
+                .max(1.0) as i64
+        },
+        |pending| pending.total_lines,
+    ))
 }

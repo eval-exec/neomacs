@@ -3,7 +3,11 @@
 (require 'json)
 (require 'tool-bar)
 ;; Isolate the toolbar consumer from the separately tested build default.
-(setq frame-inhibit-implied-resize '(tab-bar-lines))
+(defvar toolbar-resize-policy (or (getenv "TOOLBAR_RESIZE_POLICY") "canonical"))
+(setq frame-inhibit-implied-resize
+      (cond ((equal toolbar-resize-policy "canonical") '(tab-bar-lines))
+            ((equal toolbar-resize-policy "inhibited") t)
+            (t (error "Unknown toolbar resize policy: %s" toolbar-resize-policy))))
 (setq inhibit-startup-screen t)
 (switch-to-buffer (get-buffer-create "*N-607-toolbar-implied-resize*"))
 (fundamental-mode)
@@ -22,14 +26,21 @@
     (window_system . ,(format "%s" window-system))
     (frame_height . ,(frame-height))
     (frame_text_lines . ,(frame-text-lines))
+    (frame_native_height . ,(frame-native-height))
     (frame_pixel_height . ,(frame-pixel-height))
     (frame_text_height . ,(frame-text-height))
     (frame_char_height . ,(frame-char-height))
     (tool_bar_lines . ,(frame-parameter nil 'tool-bar-lines))
+    (arm . ,toolbar-resize-policy)
     (inhibit_policy . ,(format "%S" frame-inhibit-implied-resize))
     (font . ,(format "%S" (frame-parameter nil 'font)))))
 
 (defun toolbar-resize-poll ()
+  ;; Native observations must finish before the owned editor exits.
+  (let ((exit (expand-file-name "go-exit" toolbar-resize-dir)))
+    (when (file-exists-p exit)
+      (delete-file exit)
+      (kill-emacs 0)))
   (unless toolbar-resize-stage
     (dolist (stage '(baseline off on))
       (let ((request (expand-file-name (format "go-%s" stage) toolbar-resize-dir)))
@@ -54,8 +65,6 @@
                (pending (expand-file-name "result.pending" toolbar-resize-dir)))
           (with-temp-file pending (insert (json-encode data)))
           (rename-file pending (expand-file-name name toolbar-resize-dir) t))
-        (when (eq toolbar-resize-stage 'on)
-          (run-at-time 0.5 nil (lambda () (kill-emacs 0))))
         (setq toolbar-resize-stage nil)))))
 
 (run-at-time 0.2 0.2 #'toolbar-resize-poll)

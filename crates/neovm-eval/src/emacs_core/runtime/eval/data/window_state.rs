@@ -3315,6 +3315,14 @@ impl std::fmt::Display for WindowSequenceNumber {
 
 // --- E5-FM-3b Frame + FrameManager (stage-4 W2/E5) ---
 
+/// GNU's `after_make_frame` lifecycle is independent of native visibility.
+/// Creation-time font and chrome changes must keep the requested text grid.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FrameCreationPhase {
+    BeforeMakeFrame,
+    Made,
+}
+
 /// A frame (top-level window/screen).
 pub struct Frame {
     /// GNU `f->change_stamp`: the epoch bumped each time the window change
@@ -3356,6 +3364,7 @@ pub struct Frame {
     /// GNU `FRAME_INITIAL_P`: bootstrap placeholder frame that exists before
     /// a real terminal or window-system frame is installed.
     pub initial: bool,
+    pub creation_phase: FrameCreationPhase,
     /// This frame's window tree.
     ///
     /// Private: reach the root through [`Frame::root_window`] and windows
@@ -6752,6 +6761,9 @@ impl Frame {
             parent_frame: Value::NIL,
             terminal_id,
             initial: false,
+            // Logical/TTY creation is complete here (GNU frame.c:1472).
+            // The GUI constructor explicitly re-enters its configuration phase.
+            creation_phase: FrameCreationPhase::Made,
             tree: WindowTree::new(root_window),
             selected_window: selected,
             // GNU `make_frame_without_minibuffer` leaves

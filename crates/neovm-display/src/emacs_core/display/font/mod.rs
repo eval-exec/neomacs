@@ -623,57 +623,21 @@ fn named_font_family_retry(requested: &Value, spec: Value) -> Option<Value> {
     Some(Value::vector(fields))
 }
 
-/// GNU separates a font's realized metrics from permission to change the
-/// existing pixel allocation (`frame_inhibit_resize`, frame.c:200-218).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum FontChangeGeometryPolicy {
-    PreserveAllocatedPixels,
-    PreserveCharacterGrid,
-}
-
-#[derive(Clone, Copy)]
-enum FontResizeAxis {
-    Horizontal,
-    Vertical,
-}
-
-impl FontChangeGeometryPolicy {
-    fn for_live_frame(frame: &crate::window::Frame, inhibit: Value, axis: FontResizeAxis) -> Self {
-        let fullscreen = frame
-            .known_parameter(crate::window::FrameParam::Fullscreen)
-            .unwrap_or(Value::NIL);
-        let fills_axis = !fullscreen.is_nil()
-            && fullscreen
-                != Value::symbol(match axis {
-                    FontResizeAxis::Horizontal => "fullheight",
-                    FontResizeAxis::Vertical => "fullwidth",
-                });
-        if inhibit == Value::T
-            || inhibit == Value::symbol("force")
-            || list_iter(inhibit).any(|parameter| parameter == Value::symbol("font"))
-            || fills_axis
-            || frame.effective_window_system().is_none()
-        {
-            Self::PreserveAllocatedPixels
-        } else {
-            Self::PreserveCharacterGrid
-        }
-    }
-}
+use super::frame::implied_resize::{self, ImpliedResizeReason, ResizeAxis, ResizePolicy};
 
 /// GNU frame_windows_min_size first honors a frame parameter, then asks the
 /// loaded window.el implementation. Keep window-tree recursion owned by Lisp.
-fn frame_minimum_inner_pixels(
+pub(crate) fn frame_minimum_inner_pixels(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     frame_id: FrameId,
-    axis: FontResizeAxis,
+    axis: ResizeAxis,
 ) -> Result<u32, Flow> {
     let Some(frame) = eval.frame_manager().get(frame_id) else {
         return Ok(1);
     };
     let (parameter, unit) = match axis {
-        FontResizeAxis::Horizontal => (crate::window::FrameQueryParam::MinWidth, frame.char_width),
-        FontResizeAxis::Vertical => (crate::window::FrameQueryParam::MinHeight, frame.char_height),
+        ResizeAxis::Horizontal => (crate::window::FrameQueryParam::MinWidth, frame.char_width),
+        ResizeAxis::Vertical => (crate::window::FrameQueryParam::MinHeight, frame.char_height),
     };
     if let Some(cells) = frame
         .fixed_parameter(parameter)
@@ -686,7 +650,7 @@ fn frame_minimum_inner_pixels(
         Value::symbol("frame-windows-min-size"),
         vec![
             Value::make_frame(frame_id.0),
-            Value::bool_val(matches!(axis, FontResizeAxis::Horizontal)),
+            Value::bool_val(matches!(axis, ResizeAxis::Horizontal)),
             Value::NIL,
             Value::T,
         ],
@@ -712,10 +676,24 @@ pub(crate) fn sync_live_frame_font_state(
         .eval_symbol_by_id(intern("frame-inhibit-implied-resize"))
         .ok()
         .unwrap_or(Value::NIL);
-    let mut horizontal =
-        FontChangeGeometryPolicy::for_live_frame(frame, inhibit, FontResizeAxis::Horizontal);
-    let mut vertical =
-        FontChangeGeometryPolicy::for_live_frame(frame, inhibit, FontResizeAxis::Vertical);
+    let phase = super::frame::implied_resize_creation_phase(frame);
+    let symbols = eval.symbol_mode();
+    let mut horizontal = implied_resize::policy(
+        frame,
+        inhibit,
+        phase,
+        ImpliedResizeReason::Font,
+        ResizeAxis::Horizontal,
+        symbols,
+    )?;
+    let mut vertical = implied_resize::policy(
+        frame,
+        inhibit,
+        phase,
+        ImpliedResizeReason::Font,
+        ResizeAxis::Vertical,
+        symbols,
+    )?;
     let old_metrics = (frame.char_width, frame.char_height, frame.font_pixel_size);
     // A second font change can arrive before the first native resize completes.
     // Carry the requested grid forward instead of dividing the old allocation
@@ -749,14 +727,24 @@ pub(crate) fn sync_live_frame_font_state(
     let Some(frame) = eval.frame_manager().get(frame_id) else {
         return Ok(());
     };
+    tracing::debug!(
+        frame_id = frame_id.0,
+        ?phase,
+        ?horizontal,
+        ?vertical,
+        ?old_metrics,
+        new_metrics = ?(frame.char_width, frame.char_height, frame.font_pixel_size),
+        allocation = ?(frame.width, frame.height),
+        "implied frame font geometry"
+    );
     if old_metrics == (frame.char_width, frame.char_height, frame.font_pixel_size)
         || frame.effective_window_system().is_none()
         || eval.display_host.is_none()
     {
         return Ok(());
     }
-    let min_inner_width = frame_minimum_inner_pixels(eval, frame_id, FontResizeAxis::Horizontal)?;
-    let min_inner_height = frame_minimum_inner_pixels(eval, frame_id, FontResizeAxis::Vertical)?;
+    let min_inner_width = frame_minimum_inner_pixels(eval, frame_id, ResizeAxis::Horizontal)?;
+    let min_inner_height = frame_minimum_inner_pixels(eval, frame_id, ResizeAxis::Vertical)?;
     let Some(frame) = eval.frame_manager().get(frame_id) else {
         return Ok(());
     };
@@ -764,13 +752,13 @@ pub(crate) fn sync_live_frame_font_state(
     // GNU inhibit mode 3 permits inhibition only while existing allocation
     // still satisfies the window minima, independently on each axis.
     if frame.width.saturating_sub(border) < min_inner_width {
-        horizontal = FontChangeGeometryPolicy::PreserveCharacterGrid;
+        horizontal = ResizePolicy::PreserveTextGrid;
     }
     if super::window_cmds::frame_text_height_pixels(frame) < min_inner_height {
-        vertical = FontChangeGeometryPolicy::PreserveCharacterGrid;
+        vertical = ResizePolicy::PreserveTextGrid;
     }
-    if horizontal == FontChangeGeometryPolicy::PreserveAllocatedPixels
-        && vertical == FontChangeGeometryPolicy::PreserveAllocatedPixels
+    if horizontal == ResizePolicy::PreserveAllocation
+        && vertical == ResizePolicy::PreserveAllocation
     {
         // GNU adjust_frame_size still derives new character dimensions and
         // resizes the window tree when an implied native resize is inhibited
@@ -786,20 +774,18 @@ pub(crate) fn sync_live_frame_font_state(
     // no metrics: both dimensions come from the opened font just installed.
     // Inhibited axes retain their allocation, including partial character rows.
     let width = match horizontal {
-        FontChangeGeometryPolicy::PreserveCharacterGrid => cols
+        ResizePolicy::PreserveTextGrid => cols
             .saturating_mul(frame.char_width.max(1.0).round() as u32)
             .max(min_inner_width.saturating_sub(frame.horizontal_non_text_width().max(0) as u32)),
-        FontChangeGeometryPolicy::PreserveAllocatedPixels => {
+        ResizePolicy::PreserveAllocation => {
             super::window_cmds::frame_text_width_pixels_in_state(&eval.frame_manager(), frame_id)
         }
     };
     let height = match vertical {
-        FontChangeGeometryPolicy::PreserveCharacterGrid => lines
+        ResizePolicy::PreserveTextGrid => lines
             .saturating_mul(frame.char_height.max(1.0).round() as u32)
             .max(min_inner_height),
-        FontChangeGeometryPolicy::PreserveAllocatedPixels => {
-            super::window_cmds::frame_text_height_pixels(frame)
-        }
+        ResizePolicy::PreserveAllocation => super::window_cmds::frame_text_height_pixels(frame),
     };
     let (frames, buffers, display_host) = eval.frame_manager_buffers_and_display_host_mut();
     if let Err(err) = super::frame::request_live_gui_frame_resize_and_keep_pending(
@@ -829,7 +815,7 @@ fn sync_live_frame_font_state_in_state(
     display_host: &mut Option<Box<dyn neovm_eval::emacs_core::eval::DisplayHost>>,
     frame_id: FrameId,
     resolution: &LiveFrameFontResolution,
-    geometry_policy: FontChangeGeometryPolicy,
+    geometry_policy: ResizePolicy,
 ) {
     // A selector is public face/frame state, but it is not an opened font.
     // If the host could not realize the request, retain the last coherent
@@ -902,7 +888,7 @@ fn sync_live_frame_font_state_in_state(
     // The live evaluator entry point requests the implied native resize and
     // retains the pending grid until acknowledgement. New-frame construction
     // only installs metrics here; it has no prior native allocation to resize.
-    if line_height_changed && geometry_policy == FontChangeGeometryPolicy::PreserveCharacterGrid {
+    if line_height_changed && geometry_policy == ResizePolicy::PreserveTextGrid {
         frame.shrink_mini_window();
     }
     if geometry_changed {
@@ -947,7 +933,7 @@ pub(crate) fn sync_live_frame_font_parameter_in_state(
         display_host,
         frame_id,
         &resolution,
-        FontChangeGeometryPolicy::PreserveCharacterGrid,
+        ResizePolicy::PreserveTextGrid,
     );
 }
 
