@@ -7,12 +7,13 @@
 //! Neomacs draws the bars inside its own window, so these primitives derive
 //! the same rectangles from the stored physical size and realized bar heights.
 
+use neovm_value::error::{FlowKind, FlowResultExt as _};
 use neovm_value::value::Value;
 
 use neovm_eval::emacs_core::eval::Context;
 use neovm_eval::emacs_core::print::print_value;
 
-use crate::emacs_core::display::builtin_x_frame_geometry;
+use crate::emacs_core::display::{builtin_x_frame_edges, builtin_x_frame_geometry};
 use crate::window::{DisplayFrameExt, DisplayFrameManagerExt};
 use neovm_eval::emacs_core::builtins::builtin_neomacs_frame_geometry;
 
@@ -173,6 +174,58 @@ fn x_frame_geometry_is_nil_without_a_window_system() {
             .expect("neomacs-frame-geometry")
             .is_nil()
     );
+}
+
+/// GNU's `Fx_frame_edges` and `Fx_frame_geometry` share `frame_geometry`,
+/// with the edges type as the attribute (src/xfns.c:7008-7027).  The X name
+/// must answer exactly what `neomacs-frame-edges` answers on the same GUI
+/// frame, including the native default for nil and unknown TYPE values.
+#[test]
+fn x_frame_edges_share_the_gui_edges_builder() {
+    let (mut ctx, _frame_id) = gui_frame_context();
+    let edges = |ctx: &mut Context, args: Vec<Value>| {
+        print_value(&builtin_x_frame_edges(ctx, args).expect("x-frame-edges"))
+    };
+    assert_eq!(
+        edges(&mut ctx, vec![]),
+        "(0 51 832 692)",
+        "nil FRAME selects the live GUI frame; nil TYPE means native edges"
+    );
+    assert_eq!(
+        edges(&mut ctx, vec![Value::NIL, Value::symbol("outer-edges")]),
+        "(0 0 832 692)"
+    );
+    assert_eq!(
+        edges(&mut ctx, vec![Value::NIL, Value::symbol("native-edges")]),
+        "(0 51 832 692)"
+    );
+    assert_eq!(
+        edges(&mut ctx, vec![Value::NIL, Value::symbol("inner-edges")]),
+        "(2 73 830 690)"
+    );
+    assert_eq!(
+        edges(
+            &mut ctx,
+            vec![Value::NIL, Value::symbol("not-an-edge-type")]
+        ),
+        "(0 51 832 692)",
+        "GNU maps every TYPE other than outer-edges/inner-edges to native"
+    );
+}
+
+/// `frame_geometry` starts with `decode_live_frame (frame)` (src/xfns.c:6783),
+/// so the X edges name signals for a dead frame instead of answering nil.
+#[test]
+fn x_frame_edges_signal_on_a_dead_frame() {
+    let (mut ctx, _frame_id) = gui_frame_context();
+    let dead = Value::mint_frame(999_999);
+    match builtin_x_frame_edges(&mut ctx, vec![dead]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
+            assert_eq!(sig.symbol_name(), "wrong-type-argument");
+            assert_eq!(sig.data, vec![Value::symbol("frame-live-p"), dead]);
+        }
+        other => panic!("expected wrong-type-argument signal, got {other:?}"),
+    }
 }
 
 #[test]

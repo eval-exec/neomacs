@@ -1602,7 +1602,9 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     #[cfg(not(any(windows, target_os = "macos")))]
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "x-frame-edges",
-        NativeFn::ContextVec(|_ctx, args| crate::emacs_core::display::builtin_x_frame_edges(args)),
+        NativeFn::ContextVec(|ctx, args| {
+            crate::emacs_core::display::builtin_x_frame_edges(ctx, args)
+        }),
         SubrArity::new(0, Some(2)),
     )));
     #[cfg(not(any(windows, target_os = "macos")))]

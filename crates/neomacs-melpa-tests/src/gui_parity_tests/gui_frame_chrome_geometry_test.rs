@@ -17,6 +17,12 @@
 //! contract (outer height = inner + tab + menu + tool + 2 * border, bar sizes
 //! present with the frame's width, bars external, tool bar at the top).
 //!
+//! The same probe also checks the two names GNU builds from one
+//! `frame_geometry` call (src/xfns.c:7008-7027): `x-frame-edges` must answer
+//! what `frame-edges` answers for native, outer and inner edges, and a
+//! deleted frame must signal `frame-live-p` (`decode_live_frame`,
+//! src/xfns.c:6783).
+//!
 //! Known toolkit divergence, in this row's pinned numbers: the GTK3 oracle
 //! realizes a 66 px external band (menu-bar-size 25 + tool-bar-size 41) and
 //! `frame-outer-height` 661 (678 with `tool-bar-style' `both').  A separate
@@ -94,7 +100,32 @@ const GUI_PROBE: &str = r####"
                       ;; GNU `frame-geometry' dispatches to `x-frame-geometry'
                       ;; on an X frame (lisp/frame.el:2164-2214), so both
                       ;; names must answer one alist on both engines.
-                      :x-frame-eq (equal (x-frame-geometry) (frame-geometry))))
+                      :x-frame-eq (equal (x-frame-geometry) (frame-geometry))
+                      ;; GNU `Fx_frame_edges' is `frame_geometry' with the
+                      ;; edges type (src/xfns.c:7008-7027), so the X name and
+                      ;; the dispatcher must answer one list, and a dead
+                      ;; frame must signal `frame-live-p' (decode_live_frame,
+                      ;; src/xfns.c:6783).  PARITY compares these between the
+                      ;; engines; the absolute edges stay engine-relative.
+                      :x-frame-edges-eq (equal (x-frame-edges) (frame-edges))
+                      :x-frame-edges-outer-eq
+                      (equal (x-frame-edges nil 'outer-edges)
+                             (frame-edges nil 'outer-edges))
+                      :x-frame-edges-inner-eq
+                      (equal (x-frame-edges nil 'inner-edges)
+                             (frame-edges nil 'inner-edges))
+                      :dead-frame-edge
+                      (let ((selected (selected-frame))
+                            (dead (make-frame '((visibility . nil)))))
+                        (unwind-protect
+                            (progn
+                              (delete-frame dead)
+                              (condition-case nil
+                                  (progn (x-frame-edges dead) 'answered)
+                                (wrong-type-argument 'frame-live-p)
+                                (error 'other-error)))
+                          (when (frame-live-p selected) (select-frame selected))
+                          (when (frame-live-p dead) (delete-frame dead))))))
          (image (chrome-snap)))
     ;; A second toolbar style changes the external bar's pixel height in GNU;
     ;; the window origin and the inner height must not move, and the bar sizes
@@ -153,7 +184,7 @@ fn gui_frame_with_bars_on_has_gnu_window_geometry() {
     // style `both` (tool-bar-size 41 -> 58), menu-bar-size (832 . 25), and the
     // window area and inner height unchanged at 0 / 595.
     let expected_gnu = expect![[
-        r#"OK ((:chrome (:menu-bar-lines 1 :tool-bar-lines 1 :window-pixel-top 0 :window-pixel-left 0 :window-inside-pixel-edges (8 0 808 561) :frame-inner-height 595 :frame-inner-width 832 :frame-height 35 :frame-char-height 17 :body-height 33 :body-width 100 :x-frame-eq t) :contract-image t :contract-both t :anchor (:top 17 :left 16 :child-window-pixel-top 0 :child-window-pixel-left 0 :child-frame-inner-height 22)) (:geometry ((:outer-size (832 . 661) :menu-bar-size (832 . 25) :tool-bar-size (832 . 41) :tab-bar-size (0 . 0) :outer-height 661 :outer-width 832 :contract t) (:outer-size (832 . 678) :menu-bar-size (832 . 25) :tool-bar-size (832 . 58) :tab-bar-size (0 . 0) :outer-height 678 :outer-width 832 :contract t))))"#
+        r#"OK ((:chrome (:menu-bar-lines 1 :tool-bar-lines 1 :window-pixel-top 0 :window-pixel-left 0 :window-inside-pixel-edges (8 0 808 561) :frame-inner-height 595 :frame-inner-width 832 :frame-height 35 :frame-char-height 17 :body-height 33 :body-width 100 :x-frame-eq t :x-frame-edges-eq t :x-frame-edges-outer-eq t :x-frame-edges-inner-eq t :dead-frame-edge frame-live-p) :contract-image t :contract-both t :anchor (:top 17 :left 16 :child-window-pixel-top 0 :child-window-pixel-left 0 :child-frame-inner-height 22)) (:geometry ((:outer-size (832 . 661) :menu-bar-size (832 . 25) :tool-bar-size (832 . 41) :tab-bar-size (0 . 0) :outer-height 661 :outer-width 832 :contract t) (:outer-size (832 . 678) :menu-bar-size (832 . 25) :tool-bar-size (832 . 58) :tab-bar-size (0 . 0) :outer-height 678 :outer-width 832 :contract t))))"#
     ]];
     expected_gnu.assert_eq(&pair.gnu_behavior.to_string());
 

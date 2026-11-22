@@ -1359,20 +1359,20 @@ pub fn builtin_x_display_list(args: Vec<Value>) -> EvalResult {
     ))
 }
 
-/// (x-frame-edges &optional FRAME TYPE) -> nil in batch/no-X context.
+/// (x-frame-edges &optional FRAME TYPE) -> GNU's edge list for a live frame.
+///
+/// GNU's `Fx_frame_edges` is `frame_geometry (frame, TYPE)` with the edges
+/// attribute (src/xfns.c:7008-7027), the same builder `x-frame-geometry`
+/// uses; `frame_geometry` starts with `decode_live_frame (frame)`
+/// (src/xfns.c:6783), so a dead frame signals `wrong-type-argument
+/// frame-live-p` instead of answering nil.  Neomacs answers from the shared
+/// GUI edges builder it also exposes as `neomacs-frame-edges`, and a frame
+/// without a window system (or an initial frame) has no rectangle to report
+/// and keeps GNU's nil answer.
 #[doc(hidden)]
-pub fn builtin_x_frame_edges(args: Vec<Value>) -> EvalResult {
+pub fn builtin_x_frame_edges(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_max_args("x-frame-edges", &args, 2)?;
-    if let Some(frame) = args.first()
-        && !frame.is_nil()
-        && !frame.is_frame()
-    {
-        return Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("frame-live-p"), *frame],
-        ));
-    }
-    Ok(Value::NIL)
+    crate::emacs_core::window_cmds::gui_frame_edges_value(ctx, args.first(), args.get(1))
 }
 
 /// (x-frame-geometry &optional FRAME) -> GNU's `frame-geometry` alist.

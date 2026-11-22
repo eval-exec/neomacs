@@ -2218,23 +2218,27 @@ pub fn builtin_tty_frame_edges(
     Ok(tty_frame_edges_value(frame))
 }
 
-/// `(neomacs-frame-edges &optional FRAME TYPE)` -> GUI frame edges.
+/// The `frame_geometry` edges arm for a GUI frame.
 ///
-/// GNU's toolkit-specific `*-frame-edges` functions return a four-number
-/// edge list for `outer-edges`, `native-edges` (or nil), and `inner-edges`
-/// (src/xfns.c:7008).  The native edges exclude the external menu/tool bar
-/// band, which Neomacs draws inside its own window; the inner edges also
-/// exclude the internal border and the tab bar (src/xfns.c:6778-6958).
-#[doc(hidden)]
-pub fn builtin_neomacs_frame_edges(
+/// GNU's toolkit-specific `*-frame-edges` functions and toolkit
+/// `*-frame-geometry` functions enter the same `frame_geometry`
+/// (src/xfns.c:6781-6960); `Fx_frame_edges` passes `Qouter_edges`,
+/// `Qnative_edges` or `Qinner_edges` as the attribute (src/xfns.c:7008-7027).
+/// Neomacs shares this builder between its toolkit names
+/// `neomacs-frame-edges` and `x-frame-edges`, so both report one value.
+/// The entry point owns its own arity check; the builder only resolves the
+/// live frame and answers the edge list.  The native edges exclude the
+/// external menu/tool bar band, which Neomacs draws inside its own window;
+/// the inner edges also exclude the internal border and the tab bar.
+pub(crate) fn gui_frame_edges_value(
     eval: &mut neovm_eval::emacs_core::eval::Context,
-    args: Vec<Value>,
+    frame: Option<&Value>,
+    requested: Option<&Value>,
 ) -> EvalResult {
     let symbol_mode = eval.symbol_mode();
-    expect_max_args("neomacs-frame-edges", &args, 2)?;
     let fid = resolve_frame_id(
         eval,
-        args.first(),
+        frame,
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
     let frame = eval
@@ -2266,7 +2270,6 @@ pub fn builtin_neomacs_frame_edges(
     );
     let border = frame.internal_border_width().max(0);
     let native_top = top.saturating_add(external_bar_height);
-    let requested = args.get(1);
 
     if requested.is_some_and(|value| value.is_symbol_named("outer-edges", symbol_mode)) {
         return Ok(Value::list(vec![
@@ -2296,6 +2299,21 @@ pub fn builtin_neomacs_frame_edges(
         Value::fixnum(right),
         Value::fixnum(bottom),
     ]))
+}
+
+/// `(neomacs-frame-edges &optional FRAME TYPE)` -> GUI frame edges.
+///
+/// GNU's Neomacs toolkit arm (`framep-on-display` is `neo`) and the
+/// `frame-edges` dispatcher both reach this name (lisp/frame.el:2334-2365).
+/// It answers through the shared [`gui_frame_edges_value`] builder, exactly
+/// as `x-frame-edges` does.
+#[doc(hidden)]
+pub fn builtin_neomacs_frame_edges(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_max_args("neomacs-frame-edges", &args, 2)?;
+    gui_frame_edges_value(eval, args.first(), args.get(1))
 }
 
 /// `(tty-frame-geometry &optional FRAME)` -> terminal frame geometry alist.
