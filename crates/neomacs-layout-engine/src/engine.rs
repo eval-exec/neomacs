@@ -5994,6 +5994,35 @@ impl LayoutEngine {
             None
         };
         let scroll_replay = if sources_current { scroll_replay } else { None };
+        // How much of the window this layout will actually (re)produce.  A
+        // scroll replay regenerates only the newly exposed rows; the rest
+        // are reused with their advances already baked in.  Record the first
+        // regenerated position and the newly exposed row count so the
+        // composition resolver can cover just that band.  A cursor-only
+        // replay leaves `scroll_replay` None and keeps the full range.
+        let replay_composition_walk = scroll_replay.as_ref().map(|replay| {
+            (
+                usize::try_from(replay.walk_start.get().max(0)).unwrap_or(0),
+                replay.exposed_row_count,
+            )
+        });
+        // When a reused row starts BELOW the regenerated start (an upward
+        // scroll or an edit above the viewport), the regenerated band ends at
+        // that row's source position; the rows below it are reused and need
+        // no resolution.  `None` means the walk regenerates to the window end
+        // (a downward scroll).
+        let replay_first_reused_below_start =
+            replay_composition_walk.and_then(|(walk_start, _)| {
+                scroll_replay.as_ref().and_then(|replay| {
+                    replay
+                        .reused_row_snapshots
+                        .iter()
+                        .filter_map(|row| row.start_buffer_pos)
+                        .map(|pos| neovm_core::buffer::CharPos0::from_lisp(pos).get())
+                        .filter(|start| *start > walk_start)
+                        .min()
+                })
+            });
         let face_resolver = face_services.resolver();
         #[cfg(test)]
         let _viewport_retry_depth = viewport_retry_depth_probe::Guard::enter();
@@ -6318,13 +6347,14 @@ impl LayoutEngine {
         // cached, the retry does not enter Lisp again (GNU's `autocmp_chars`
         // skips the rule for a gstring with a non-nil ID).
         //
-        // The first pass bounds one screenful plus one line on either side so
-        // a rich buffer does not resolve every captured span on every layout.
-        // That character count is a heuristic (proportional fonts fit more
-        // characters per row than `text_width / char_width`), so the
-        // post-walk coverage check below verifies every painted automatic
-        // span was resolved and widens/retries instead of letting the row
-        // measure the raw text, which is exactly the pre-fix wrong advance.
+        // The first pass bounds the rows this layout will actually produce:
+        // one screenful plus one line on a first display, or just the
+        // replay's regenerated band on a scroll.  That character count is a
+        // heuristic (proportional fonts fit more characters per row than
+        // `text_width / char_width`), so the post-walk coverage check below
+        // verifies every painted automatic span was resolved and
+        // widens/retries instead of letting the row measure the raw text,
+        // which is exactly the pre-fix wrong advance.
         let mut resolved_composition_range: Option<std::ops::Range<usize>> = None;
         if matches!(
             display_target,
@@ -6336,6 +6366,24 @@ impl LayoutEngine {
             let visible_start = params.window_start.max(0) as usize;
             let mut resolve_start = visible_start.saturating_sub(cols);
             let mut resolve_end = visible_start.saturating_add(screenful).saturating_add(cols);
+            // A scroll replay regenerates only the newly exposed rows; the
+            // reused rows are not re-measured and keep their advances.  Bound
+            // both ends to that regenerated band so a 4 px scroll resolves at
+            // most the newly exposed line's compositions, exactly like GNU
+            // shaping a composition when its iterator first reaches it.  A
+            // frame that exposes no whole new row resolves only the two-line
+            // band around the edge row.
+            if let Some((replay_walk_start, exposed_rows)) = replay_composition_walk {
+                // Keep one line of margin on each side: the iterator may
+                // reseat onto a composition beginning just above the
+                // regenerated start, and a wrapped/narrow line can hold more
+                // characters per row than `cols`.  Zero newly exposed rows
+                // still keeps two lines: the replay can re-lay the partially
+                // visible edge row even when no whole row entered.
+                resolve_start = resolve_start.max(replay_walk_start.saturating_sub(cols));
+                let band = exposed_rows.saturating_add(2).saturating_mul(cols);
+                resolve_end = resolve_end.min(replay_walk_start.saturating_add(band));
+            }
             if let Some((from, through)) = automatic_composition_resolve {
                 resolve_start = resolve_start.min(from);
                 resolve_end = resolve_end.max(through);
@@ -6435,20 +6483,55 @@ impl LayoutEngine {
             BufferSourceRenderAttemptOutcome::Finished {
                 redisplay_positions,
                 cursor_only,
+                reused_matrix_rows,
                 ..
             },
             Some(resolved),
         ) = (&render_outcome, resolved_composition_range.clone())
             && !*cursor_only
         {
-            let walk_start = usize::try_from(resolved_window_start.get().max(0)).unwrap_or(0);
+            let semantic_walk_start =
+                usize::try_from(resolved_window_start.get().max(0)).unwrap_or(0);
+            // Only an attempt that really reused matrix rows walked from the
+            // replay's `walk_start`; a refused replay is re-laid without it
+            // and then covers the semantic range, where this check exposes any
+            // span the narrow range missed.
+            let walk_start = if reused_matrix_rows.is_some() {
+                replay_composition_walk
+                    .map(|(walk_start, _)| walk_start)
+                    .unwrap_or(semantic_walk_start)
+            } else {
+                semantic_walk_start
+            };
             let walk_end =
                 neovm_core::buffer::CharPos0::from_lisp(redisplay_positions.window_end_lisp())
                     .get();
+            // With reused rows the walk paints only the regenerated band:
+            // it starts at `walk_start` and either runs to the window end
+            // (downward scroll) or stops where the reused rows resume
+            // (upward scroll / edit).  Spans in the reused part already carry
+            // their advances.  A frame that exposes no whole new row keeps
+            // the two-line band the resolver used: the replay may re-lay the
+            // partially visible edge row.
+            let coverage_end = if reused_matrix_rows.is_some() {
+                match (replay_first_reused_below_start, replay_composition_walk) {
+                    (Some(sync), _) => sync.min(walk_end),
+                    (None, Some((walk_start, 0))) => {
+                        let cols =
+                            (params.text_bounds.width / params.char_width.max(1.0)).ceil() as usize;
+                        walk_start
+                            .saturating_add(cols.saturating_mul(2))
+                            .min(walk_end)
+                    }
+                    (None, _) => walk_end,
+                }
+            } else {
+                walk_end
+            };
             if let Some(missed) = uncovered_automatic_composition_span_range(
                 layout_buffer.automatic_composition_span_starts(),
                 walk_start,
-                walk_end,
+                coverage_end,
                 &resolved,
             ) {
                 if let Some(attempt) = window_end_attempt.take() {
