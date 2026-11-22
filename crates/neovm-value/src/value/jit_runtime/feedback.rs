@@ -132,11 +132,13 @@ impl CallSites {
 
 impl CallSiteFeedback {
     /// # Safety
-    /// No concurrent swap/release of a source slot may overlap a borrowed
-    /// load of that slot. Background compile reads vs mutator recording have
-    /// a known pre-existing gap: see post-split item FEEDBACK-UAF. The caller
-    /// must uphold this exclusion; this extraction preserves existing bodies
-    /// and orderings and does not claim to repair the gap.
+    /// No concurrent swap or release of a published (non-null) source slot
+    /// may overlap a borrowed load of that slot. The caller upholds this
+    /// exclusion. Today the serial lattice writes each slot once while a site
+    /// lives, so only `Drop` releases a published slot. Concurrent recorders
+    /// need the compare-and-swap install from FEEDBACK-UAF before they exist.
+    /// Publication itself is ordered: `install_source` swaps with AcqRel and
+    /// `upgrade_source` loads with Acquire.
     #[doc(hidden)]
     #[inline]
     pub unsafe fn new_storage(pc: u32, shape: SiteShape, initial_state: u64) -> Self {
@@ -151,11 +153,13 @@ impl CallSiteFeedback {
     }
 
     /// # Safety
-    /// No concurrent swap/release of a source slot may overlap a borrowed
-    /// load of that slot. Background compile reads vs mutator recording have
-    /// a known pre-existing gap: see post-split item FEEDBACK-UAF. The caller
-    /// must uphold this exclusion; this extraction preserves existing bodies
-    /// and orderings and does not claim to repair the gap.
+    /// No concurrent swap or release of a published (non-null) source slot
+    /// may overlap a borrowed load of that slot. The caller upholds this
+    /// exclusion. Today the serial lattice writes each slot once while a site
+    /// lives, so only `Drop` releases a published slot. Concurrent recorders
+    /// need the compare-and-swap install from FEEDBACK-UAF before they exist.
+    /// Publication itself is ordered: `install_source` swaps with AcqRel and
+    /// `upgrade_source` loads with Acquire.
     #[doc(hidden)]
     #[inline]
     pub unsafe fn install_source(&self, i: usize, source: Weak<RuntimeState>) {
@@ -171,11 +175,13 @@ impl CallSiteFeedback {
     }
 
     /// # Safety
-    /// No concurrent swap/release of a source slot may overlap a borrowed
-    /// load of that slot. Background compile reads vs mutator recording have
-    /// a known pre-existing gap: see post-split item FEEDBACK-UAF. The caller
-    /// must uphold this exclusion; this extraction preserves existing bodies
-    /// and orderings and does not claim to repair the gap.
+    /// No concurrent swap or release of a published (non-null) source slot
+    /// may overlap a borrowed load of that slot. The caller upholds this
+    /// exclusion. Today the serial lattice writes each slot once while a site
+    /// lives, so only `Drop` releases a published slot. Concurrent recorders
+    /// need the compare-and-swap install from FEEDBACK-UAF before they exist.
+    /// Publication itself is ordered: `install_source` swaps with AcqRel and
+    /// `upgrade_source` loads with Acquire.
     #[doc(hidden)]
     #[inline]
     pub unsafe fn source_matches(&self, n: usize, source: &Arc<RuntimeState>) -> bool {
@@ -186,11 +192,13 @@ impl CallSiteFeedback {
     }
 
     /// # Safety
-    /// No concurrent swap/release of a source slot may overlap a borrowed
-    /// load of that slot. Background compile reads vs mutator recording have
-    /// a known pre-existing gap: see post-split item FEEDBACK-UAF. The caller
-    /// must uphold this exclusion; this extraction preserves existing bodies
-    /// and orderings and does not claim to repair the gap.
+    /// No concurrent swap or release of a published (non-null) source slot
+    /// may overlap a borrowed load of that slot. The caller upholds this
+    /// exclusion. Today the serial lattice writes each slot once while a site
+    /// lives, so only `Drop` releases a published slot. Concurrent recorders
+    /// need the compare-and-swap install from FEEDBACK-UAF before they exist.
+    /// Publication itself is ordered: `install_source` swaps with AcqRel and
+    /// `upgrade_source` loads with Acquire.
     #[doc(hidden)]
     #[inline]
     pub unsafe fn upgrade_source(&self, i: usize) -> Option<Arc<RuntimeState>> {
