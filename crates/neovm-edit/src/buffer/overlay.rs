@@ -8,7 +8,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BinaryHeap};
+use std::collections::{BTreeMap, BinaryHeap, HashMap};
 use std::rc::Rc;
 
 use crate::buffer::BufferId;
@@ -249,6 +249,22 @@ pub(crate) fn overlay_mirror_candidate_count() -> usize {
     OVERLAY_MIRROR_CANDIDATES.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// One read-only overlay copy handed to a layout range view.
+///
+/// Valid only while its `generation` matches the list's current snapshot-copy
+/// revision: every write that can change what a copy would contain bumps that
+/// ONE overlay's revision, so an unrelated write (hl-line moving between
+/// lines, one overlay-put) does not invalidate the other copies. Observers
+/// keep an old copy alive after a bump; range views never mutate it.
+struct SnapshotCopyEntry {
+    revision: u64,
+    range: EmacsByteRange,
+    front_advance: bool,
+    rear_advance: bool,
+    buffer: Option<BufferId>,
+    copy: Value,
+}
+
 #[cfg(not(any(test, feature = "test-support")))]
 pub struct OverlayList {
     index: OverlayIndex,
@@ -268,6 +284,12 @@ pub struct OverlayList {
     // list, which makes the start-side check a no-op there.
     view_query_floor: Option<EmacsBytePos>,
     view_query_underflow: Cell<bool>,
+    // Range-view copies keyed by the source overlay's creation serial, with
+    // the per-overlay revision each copy was made at. Writes bump only the
+    // written overlay's revision; a deletion forgets its entry. The copies are
+    // read only, so several range views can share one (see `GcTrace`).
+    snapshot_copy_revisions: RefCell<HashMap<u64, u64>>,
+    snapshot_copies: RefCell<HashMap<u64, SnapshotCopyEntry>>,
 }
 #[cfg(any(test, feature = "test-support"))]
 pub struct OverlayList {
@@ -279,6 +301,9 @@ pub struct OverlayList {
     content_dirty: Cell<bool>,
     view_query_floor: Option<EmacsBytePos>,
     view_query_underflow: Cell<bool>,
+    // See the production struct's comment.
+    snapshot_copy_revisions: RefCell<HashMap<u64, u64>>,
+    snapshot_copies: RefCell<HashMap<u64, SnapshotCopyEntry>>,
 }
 
 /// An evaluator-owned immutable overlay index. Like overlay plist values,
@@ -355,6 +380,57 @@ impl OverlayList {
 
     fn invalidate_snapshot(&mut self) {
         self.snapshot.get_mut().take();
+    }
+
+    /// The copy revision of one live overlay. A range-view copy made at a
+    /// different revision is stale. Writes bump only the written overlay, so
+    /// an unrelated write (hl-line moving between lines) still reuses the
+    /// other overlays' copies.
+    fn snapshot_copy_revision(&self, serial: u64) -> u64 {
+        self.snapshot_copy_revisions
+            .borrow()
+            .get(&serial)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Invalidate one overlay's range-view copy. Called by every write that
+    /// can change what a copy of it would contain: plist writes, position and
+    /// advance-flag changes, retargets, and text-edit effects.
+    ///
+    /// With no memo copy there is nothing reusable to invalidate, so a write
+    /// to an overlay this list never captured records no revision. That keeps
+    /// the map bounded by captured live overlays: `overlay-put` on an overlay
+    /// before it is inserted, or on a detached one, allocates no state here.
+    /// A later capture always makes a fresh copy and records the revision it
+    /// was made at, so skipping the bump cannot let a stale entry survive.
+    fn bump_snapshot_copy_revision(&mut self, overlay: Value) {
+        let Some(serial) = overlay.as_overlay_data().map(|data| data.serial.get()) else {
+            return;
+        };
+        // The superseded copy stays alive for any observer that already holds
+        // it; dropping the entry lets a later capture replace it.
+        if self.snapshot_copies.get_mut().remove(&serial).is_none() {
+            return;
+        }
+        let mut revisions = self.snapshot_copy_revisions.get_mut();
+        let revision = revisions.entry(serial).or_insert(0);
+        *revision = revision.wrapping_add(1);
+    }
+
+    /// An overlay left this list: it can never be captured here again, so its
+    /// revision and copy would only retain storage.
+    fn forget_snapshot_copy(&mut self, overlay: Value) {
+        let Some(serial) = overlay.as_overlay_data().map(|data| data.serial.get()) else {
+            return;
+        };
+        self.snapshot_copy_revisions.get_mut().remove(&serial);
+        self.snapshot_copies.get_mut().remove(&serial);
+    }
+
+    fn clear_snapshot_copies(&mut self) {
+        self.snapshot_copy_revisions.get_mut().clear();
+        self.snapshot_copies.get_mut().clear();
     }
 
     /// Keep the cached snapshot only if no observer shares it and `update`
@@ -481,6 +557,7 @@ impl OverlayList {
         self.clone_selected_with_identity(
             self.index.all_ascending(),
             OverlayCloneIdentity::PreservePrecedence,
+            false,
         )
     }
 
@@ -497,6 +574,7 @@ impl OverlayList {
             self.index
                 .overlays_in_region(Self::view_query_range(range), range.end()),
             OverlayCloneIdentity::PreservePrecedence,
+            true,
         )
     }
 
@@ -511,14 +589,16 @@ impl OverlayList {
     }
 
     fn clone_with_identity(&self, identity: OverlayCloneIdentity) -> Self {
-        self.clone_selected_with_identity(self.index.all_ascending(), identity)
+        self.clone_selected_with_identity(self.index.all_ascending(), identity, false)
     }
 
     fn clone_selected_with_identity(
         &self,
         selected: Vec<Value>,
         identity: OverlayCloneIdentity,
+        memoize: bool,
     ) -> Self {
+        let memoize = memoize && matches!(identity, OverlayCloneIdentity::PreservePrecedence);
         let saved_roots = save_scratch_gc_roots();
         let entries: Vec<_> = selected
             .into_iter()
@@ -527,38 +607,78 @@ impl OverlayList {
                     .as_overlay_data()
                     .expect("overlay index contains a non-overlay value");
                 let range = overlay_data_range(data);
-                // `copy-sequence`'s body with its arity check proven by the
-                // single argument: the value-core copy in bare-symbol mode.
-                let plist = neovm_value::sequence_copy::copy_sequence_with_symbols(
-                    data.plist,
-                    neovm_value::tagged::SymbolMode::Bare,
-                )
-                .expect("a live overlay must carry a copyable plist");
-                push_scratch_gc_root(plist);
-                // GNU `copy_overlays` publishes distinct objects; redisplay
-                // observer copies must preserve the source's precedence
-                // identity or taking a snapshot could change a tie's winner.
-                let copy = Value::make_overlay(neovm_value::heap_types::OverlayDataInit {
-                    serial: match identity {
-                        OverlayCloneIdentity::Fresh => {
-                            neovm_value::heap_types::OverlaySerialSource::Mint
-                        }
-                        OverlayCloneIdentity::PreservePrecedence => {
-                            neovm_value::heap_types::OverlaySerialSource::Preserved(data.serial)
-                        }
-                    },
-                    plist,
-                    buffer: data.buffer,
-                    start: range.start().get(),
-                    end: range.end().get(),
-                    front_advance: data.front_advance,
-                    rear_advance: data.rear_advance,
-                });
-                push_scratch_gc_root(copy);
-                #[cfg(test)]
-                if matches!(identity, OverlayCloneIdentity::PreservePrecedence) {
-                    OVERLAY_SNAPSHOT_COPIES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                }
+                let serial = data.serial.get();
+                // An unchanged overlay reuses its read-only range-view copy:
+                // same revision, position, advance flags and buffer. Only a
+                // write to this overlay bumps its revision, so an unrelated
+                // write does not force a re-copy here.
+                let revision = self.snapshot_copy_revision(serial);
+                let reusable = if memoize {
+                    self.snapshot_copies
+                        .borrow()
+                        .get(&serial)
+                        .filter(|entry| {
+                            entry.revision == revision
+                                && entry.range == range
+                                && entry.front_advance == data.front_advance
+                                && entry.rear_advance == data.rear_advance
+                                && entry.buffer == data.buffer
+                        })
+                        .map(|entry| entry.copy)
+                } else {
+                    None
+                };
+                let copy = if let Some(copy) = reusable {
+                    push_scratch_gc_root(copy);
+                    copy
+                } else {
+                    // `copy-sequence`'s body with its arity check proven by the
+                    // single argument: the value-core copy in bare-symbol mode.
+                    let plist = neovm_value::sequence_copy::copy_sequence_with_symbols(
+                        data.plist,
+                        neovm_value::tagged::SymbolMode::Bare,
+                    )
+                    .expect("a live overlay must carry a copyable plist");
+                    push_scratch_gc_root(plist);
+                    // GNU `copy_overlays` publishes distinct objects; redisplay
+                    // observer copies must preserve the source's precedence
+                    // identity or taking a snapshot could change a tie's winner.
+                    let copy = Value::make_overlay(neovm_value::heap_types::OverlayDataInit {
+                        serial: match identity {
+                            OverlayCloneIdentity::Fresh => {
+                                neovm_value::heap_types::OverlaySerialSource::Mint
+                            }
+                            OverlayCloneIdentity::PreservePrecedence => {
+                                neovm_value::heap_types::OverlaySerialSource::Preserved(data.serial)
+                            }
+                        },
+                        plist,
+                        buffer: data.buffer,
+                        start: range.start().get(),
+                        end: range.end().get(),
+                        front_advance: data.front_advance,
+                        rear_advance: data.rear_advance,
+                    });
+                    push_scratch_gc_root(copy);
+                    if memoize {
+                        self.snapshot_copies.borrow_mut().insert(
+                            serial,
+                            SnapshotCopyEntry {
+                                revision,
+                                range,
+                                front_advance: data.front_advance,
+                                rear_advance: data.rear_advance,
+                                buffer: data.buffer,
+                                copy,
+                            },
+                        );
+                    }
+                    #[cfg(test)]
+                    if matches!(identity, OverlayCloneIdentity::PreservePrecedence) {
+                        OVERLAY_SNAPSHOT_COPIES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    copy
+                };
                 (copy, range)
             })
             .collect();
@@ -1094,6 +1214,8 @@ impl OverlayList {
             content_dirty: Cell::new(false),
             view_query_floor: None,
             view_query_underflow: Cell::new(false),
+            snapshot_copy_revisions: RefCell::new(HashMap::new()),
+            snapshot_copies: RefCell::new(HashMap::new()),
         }
     }
 
@@ -1111,6 +1233,10 @@ impl OverlayList {
         // moves materialize and rewrite the coordinates before reattaching.
         let range = EmacsByteRange::from_usize(data.start, data.end);
         if self.index_mut().attach(overlay, range) {
+            // A cross-buffer move or reattach rewrote the object's coordinates
+            // and buffer before this call; make any copy made in a previous
+            // list unreusable here.
+            self.bump_snapshot_copy_revision(overlay);
             self.add_overlay_content_component(overlay);
         }
     }
@@ -1119,6 +1245,7 @@ impl OverlayList {
     pub(crate) fn detach_overlay(&mut self, overlay: Value) -> bool {
         let component = self.overlay_content_component(overlay);
         if self.index_mut().detach(overlay).is_some() {
+            self.forget_snapshot_copy(overlay);
             self.subtract_overlay_content_component(component);
             true
         } else {
@@ -1139,6 +1266,7 @@ impl OverlayList {
 
     pub fn delete_all_overlays(&mut self) {
         self.invalidate_snapshot();
+        self.clear_snapshot_copies();
         let live: Vec<Value> = self.index.values().collect();
         for overlay in live {
             let _ = overlay.with_overlay_data_mut(|data| {
@@ -1153,6 +1281,9 @@ impl OverlayList {
 
     pub(crate) fn retarget_buffer(&mut self, from: BufferId, to: BufferId) {
         self.invalidate_snapshot();
+        // A whole-list retarget is rare and can affect any subset; dropping
+        // the copies costs one re-copy per overlay on the next capture.
+        self.clear_snapshot_copies();
         for overlay in self.index.values() {
             let _ = overlay.with_overlay_data_mut(|data| {
                 if data.buffer == Some(from) {
@@ -1188,6 +1319,7 @@ impl OverlayList {
         // Adding a previously absent nil property changes the plist even
         // though GNU's display-change flag remains false.
         if changed || plist_replaced {
+            self.bump_snapshot_copy_revision(overlay);
             if plist_replaced && range.is_some() {
                 self.index
                     .overlay_property_key_added_to_member(overlay, prop);
@@ -1273,6 +1405,7 @@ impl OverlayList {
             data.start = range.start().get();
             data.end = range.end().get();
         });
+        self.bump_snapshot_copy_revision(overlay);
         self.replace_overlay_content_component(previous_component, overlay);
         // GNU Emacs drops empty overlays created by move-overlay when
         // `evaporate' is non-nil. Minibuffer shadow overlays depend on this
@@ -1308,6 +1441,7 @@ impl OverlayList {
                 data.start = remap.range.start().get();
                 data.end = remap.range.end().get();
             });
+            self.bump_snapshot_copy_revision(remap.overlay);
         }
         self.content_dirty.set(true);
     }
@@ -1987,6 +2121,7 @@ impl OverlayList {
                         object.start = range.start().get();
                         object.end = range.end().get();
                     });
+                    self.bump_snapshot_copy_revision(overlay);
                 }
                 OverlayEditEffect::Evaporated {
                     overlay,
@@ -1997,6 +2132,9 @@ impl OverlayList {
                         object.end = collapsed_at.get();
                         object.buffer = None;
                     });
+                    // The edit removed it from this list; no later capture can
+                    // see it here.
+                    self.forget_snapshot_copy(overlay);
                 }
             }
         }
@@ -2036,6 +2174,7 @@ impl OverlayList {
         let _ = overlay.with_overlay_data_mut(|data| {
             data.front_advance = advance;
         });
+        self.bump_snapshot_copy_revision(overlay);
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -2045,6 +2184,7 @@ impl OverlayList {
         let _ = overlay.with_overlay_data_mut(|data| {
             data.rear_advance = advance;
         });
+        self.bump_snapshot_copy_revision(overlay);
     }
 
     pub fn get(&self, overlay: Value) -> Option<Overlay> {
@@ -2518,6 +2658,9 @@ impl GcTrace for OverlayList {
     fn trace_roots_with(&self, visit: &mut dyn FnMut(Value)) {
         for overlay in self.index.values() {
             visit(overlay);
+        }
+        for entry in self.snapshot_copies.borrow().values() {
+            visit(entry.copy);
         }
         if let Some(snapshot) = self.snapshot.borrow().as_ref() {
             snapshot.trace_roots_with(visit);
