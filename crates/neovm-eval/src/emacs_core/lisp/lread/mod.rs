@@ -209,7 +209,7 @@ fn eval_forms_from_lisp_source_streaming(
             // This buffer loop reads the value directly, so publish the
             // read form's canonical symbols before evaluating it, exactly as
             // the file-loading streaming loops do.
-            eval.obarray_mut().intern_member_symbols_in(form);
+            super::reader::publish_read_symbols(eval, form);
 
             let eval_roots = eval.save_specpdl_roots();
             eval.push_specpdl_root(form);

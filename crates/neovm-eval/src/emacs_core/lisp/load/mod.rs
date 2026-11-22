@@ -1975,7 +1975,7 @@ fn streaming_readevalloop(
         let Some((form, next_pos)) = read_result else {
             break; // EOF
         };
-        eval.obarray_mut().intern_member_symbols_in(form);
+        super::reader::publish_read_symbols(eval, form);
 
         // Log a preview of the form source text.
         let form_start = pos;
@@ -2156,7 +2156,7 @@ fn streaming_readevalloop_lisp_source(
                 }
                 None => (probed_form, probed_next),
             };
-            eval.obarray_mut().intern_member_symbols_in(form);
+            super::reader::publish_read_symbols(eval, form);
 
             let form_start = pos;
             if let Some(cursor) = eval.load_read_cursors.last_mut() {
@@ -4942,7 +4942,7 @@ fn republish_terminal_translation_map_symbols(eval: &mut super::eval::Context) {
         else {
             continue;
         };
-        eval.obarray_mut().intern_member_symbols_in(value);
+        super::reader::publish_read_symbols(eval, value);
     }
 }
 

@@ -185,7 +185,7 @@ fn normalize_keyboard_macro_definition(
                     // apply_modifiers interns the derived name (keyboard.c:
                     // 7800-7830). Publish at this producer; define-key no
                     // longer walks the stored definition.
-                    eval.obarray.intern_member_symbols_in(event);
+                    crate::emacs_core::reader::publish_read_symbols(eval, event);
                     event
                 }
                 None => *item,
@@ -355,7 +355,7 @@ fn define_key_in_rooted_keymap(
     // makes the events Lisp-visible (PEER 5786 census: the C-/M-/S- function
     // key families in `function-key-map`).
     for event in &events {
-        eval.obarray.intern_member_symbols_in(*event);
+        crate::emacs_core::reader::publish_read_symbols(eval, *event);
     }
     cache_key_event_symbol_properties(eval, &events)?;
     let def = normalize_keyboard_macro_definition(eval, args[2], symbol_mode);
@@ -924,7 +924,7 @@ pub fn builtin_event_convert_list(eval: &mut super::eval::Context, args: Vec<Val
     // interns it (keyboard.c:7800-7830). Publish at the producer so a caller
     // that stores the result without going through define-key still sees a
     // member, exactly as GNU does.
-    eval.obarray.intern_member_symbols_in(converted);
+    crate::emacs_core::reader::publish_read_symbols(eval, converted);
     Ok(converted)
 }
 

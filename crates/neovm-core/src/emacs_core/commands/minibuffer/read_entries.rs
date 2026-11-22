@@ -279,7 +279,7 @@ pub fn builtin_read_impl(
             match result.kind() {
                 ValueKind::Cons => {
                     let pair_car = result.cons_car();
-                    ctx.obarray_mut().intern_member_symbols_in(pair_car);
+                    crate::emacs_core::reader::publish_read_symbols(ctx, pair_car);
                     Ok(pair_car)
                 }
                 _ => Ok(result),
@@ -344,7 +344,7 @@ pub fn builtin_read_impl(
             )?;
             let value =
                 read_result?.ok_or_else(|| ReadSourceObject::Anonymous.end_of_file_error())?;
-            ctx.obarray_mut().intern_member_symbols_in(value);
+            crate::emacs_core::reader::publish_read_symbols(ctx, value);
             Ok(value)
         }
         ResolvedReadStream::Buffer(buf_id) => {
@@ -409,7 +409,7 @@ pub fn builtin_read_impl(
             let value = maybe_value.ok_or_else(|| {
                 ReadSourceObject::Buffer(Value::make_buffer(buf_id)).end_of_file_error()
             })?;
-            ctx.obarray_mut().intern_member_symbols_in(value);
+            crate::emacs_core::reader::publish_read_symbols(ctx, value);
             Ok(value)
         }
         ResolvedReadStream::ActiveLoadCursor => {
@@ -438,7 +438,7 @@ pub fn builtin_read_impl(
             match result.kind() {
                 ValueKind::Cons => {
                     let pair_car = result.cons_car();
-                    ctx.obarray_mut().intern_member_symbols_in(pair_car);
+                    crate::emacs_core::reader::publish_read_symbols(ctx, pair_car);
                     Ok(pair_car)
                 }
                 _ => Ok(result),

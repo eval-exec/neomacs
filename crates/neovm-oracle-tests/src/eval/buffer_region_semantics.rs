@@ -83,6 +83,31 @@ fn oracle_load_interns_a_million_element_read_form_with_bounded_stack() {
 }
 
 #[test]
+fn oracle_read_and_eval_buffer_intern_into_the_current_obarray() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // GNU's reader interns into the CURRENT value of `obarray`
+    // (lread.c:4673-4706), so a read/eval-buffer under a let-bound custom
+    // obarray must not leak names into the global one, and the symbol the
+    // reader returns must be the object that custom obarray holds.
+    let form = r#"(list
+ (progn (let ((obarray (obarray-make)))
+          (read "peer-fresh-sym-1"))
+        (and (intern-soft "peer-fresh-sym-1") t))
+ (progn (with-temp-buffer
+          (insert "peer-fresh-sym-2")
+          (let ((obarray (obarray-make)))
+            (condition-case nil (eval-buffer) (error nil))))
+        (and (intern-soft "peer-fresh-sym-2") t))
+ (let* ((custom (obarray-make))
+        (sym (let ((obarray custom)) (read "peer-fresh-sym-3"))))
+   (list (and (intern-soft "peer-fresh-sym-3") t)
+         (eq sym (intern-soft "peer-fresh-sym-3" custom)))))"#;
+    let expect = expect_test::expect![[r#""OK (nil nil (nil t))""#]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+#[test]
 fn oracle_eval_region_returns_nil() {
     return_if_neovm_enable_oracle_proptest_not_set!();
     let expect = expect_test::expect![[r#""OK nil""#]];

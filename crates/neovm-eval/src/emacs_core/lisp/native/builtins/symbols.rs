@@ -1840,7 +1840,7 @@ pub(crate) fn is_global_obarray_proxy(eval: &super::eval::Context, value: &Value
         .is_some_and(|proxy| proxy == *value)
 }
 
-fn current_lisp_obarray_value(eval: &super::eval::Context) -> Value {
+pub(crate) fn current_lisp_obarray_value(eval: &super::eval::Context) -> Value {
     // GNU's `Vobarray`; a Lisp `intern` call without an explicit obarray read
     // it by name. The internal fallback name belongs to this port.
     static OBARRAY: WellKnown = WellKnown::Obarray;
@@ -1962,6 +1962,43 @@ pub fn builtin_intern_fn(eval: &mut super::eval::Context, args: Vec<Value>) -> E
 
 /// `intern-soft` as registered: fixed arity 2, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a2` case (absent optionals arrive as nil).
+/// Publish SYMBOL, a canonical symbol object, into the custom OBARRAY the
+/// GNU reader would have interned it in (lread.c:4673-4706 interns into the
+/// current value of the `obarray` variable). If the spelling is already
+/// present, return that symbol and add nothing; otherwise prepend SYMBOL
+/// itself, so a caller that reads under a custom obarray sees the object it
+/// read, as GNU does.
+pub(crate) fn intern_symbol_value_into_obarray(symbol: Value, obarray_value: Value) -> EvalResult {
+    let name = symbol.as_bare_symbol_name().ok_or_else(|| {
+        signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("symbolp"), symbol],
+        )
+    })?;
+    let vec_len = obarray_len(obarray_value).unwrap_or(0);
+    if vec_len == 0 {
+        return Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("obarrayp"), obarray_value],
+        ));
+    }
+    let idx = obarray_hash(name, vec_len);
+    let bucket = obarray_bucket(obarray_value, idx).unwrap_or(Value::NIL);
+    let mut cursor = bucket;
+    while cursor.is_cons() {
+        let entry = cursor.cons_car();
+        if entry.as_bare_symbol_name() == Some(name) {
+            return Ok(entry);
+        }
+        cursor = cursor.cons_cdr();
+    }
+    let new_bucket = Value::cons(symbol, bucket);
+    let _ = set_obarray_bucket(obarray_value, idx, new_bucket);
+    note_obarray_symbol_added(obarray_value);
+    grow_obarray_vector_if_needed(obarray_value);
+    Ok(symbol)
+}
+
 #[doc(hidden)]
 pub fn builtin_intern_soft_2(
     eval: &mut super::eval::Context,

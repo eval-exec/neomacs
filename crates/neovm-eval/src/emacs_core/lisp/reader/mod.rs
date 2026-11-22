@@ -272,7 +272,7 @@ pub fn finish_minibuffer_result_after_unwind(
             vec![Value::string("Trailing garbage following expression")],
         ));
     }
-    eval.obarray_mut().intern_member_symbols_in(value);
+    publish_read_symbols(eval, value);
     Ok(value)
 }
 
@@ -661,7 +661,7 @@ pub fn read_from_active_load_cursor(
     if let Some(cursor) = ctx.load_read_cursors.last_mut() {
         cursor.pos = next_pos;
     }
-    ctx.obarray_mut().intern_member_symbols_in(value);
+    publish_read_symbols(ctx, value);
     Ok(value)
 }
 
@@ -765,8 +765,7 @@ pub fn builtin_read_from_string(ctx: &mut super::eval::Context, args: Vec<Value>
         ctx.symbol_mode(),
     )?;
     if result.is_cons() {
-        ctx.obarray_mut()
-            .intern_member_symbols_in(result.cons_car());
+        publish_read_symbols(ctx, result.cons_car());
     }
     Ok(result)
 }
@@ -898,7 +897,7 @@ pub fn read_from_callable(
     symbol_position_mode: SymbolPositionMode,
 ) -> EvalResult {
     let value = super::value_reader::read_from_callable(ctx, func, symbol_position_mode)?;
-    ctx.obarray_mut().intern_member_symbols_in(value);
+    publish_read_symbols(ctx, value);
     Ok(value)
 }
 
@@ -1050,111 +1049,136 @@ impl ObarrayReadSymbolsExt for Obarray {
     /// obarray. Non-canonical `make-symbol` objects stay uninterned, as in
     /// GNU.
     fn intern_member_symbols_in(&mut self, value: Value) {
-        // The walk is a LIFO worklist, not Rust recursion: the graph size is
-        // the caller's data (a loaded file, a cache, a keymap), so recursion
-        // depth grew with it and could exhaust the evaluator stack (issue
-        // #590: an ETAF library cache reached thousands of frames before the
-        // mount even started). Children are pushed in reverse so the visit
-        // order stays the reader's left-to-right depth-first order.
-        //
-        // Cycle detection must use object *identity*, not `Value`'s `==`
-        // (which is structural `equal`).  A `Vec` + `contains` here was
-        // O(n^2) deep-`equal` over every loaded form -- the dominant cost of
-        // startup.  Track visited heap objects by their tagged-pointer bits.
-        let mut seen = rustc_hash::FxHashSet::default();
-        let mut stack = vec![value];
-        while let Some(value) = stack.pop() {
-            match value.kind() {
-                ValueKind::Symbol(id) => self.ensure_interned_global_id(id),
-                ValueKind::Cons => {
-                    if !seen.insert(value.bits()) {
-                        continue;
-                    }
-                    stack.push(value.cons_cdr());
-                    stack.push(value.cons_car());
-                }
-                ValueKind::Veclike(
-                    VecLikeType::Vector
-                    | VecLikeType::Record
-                    | VecLikeType::Lambda
-                    | VecLikeType::Macro,
-                ) => {
-                    if !seen.insert(value.bits()) {
-                        continue;
-                    }
-                    if let Some(slots) = value
-                        .as_vector_data()
-                        .or_else(|| value.as_record_data())
-                        .or_else(|| value.closure_slots())
-                    {
-                        stack.extend(slots.iter().rev().copied());
-                    }
-                }
-                ValueKind::Veclike(VecLikeType::CharTable) => {
-                    if !seen.insert(value.bits()) {
-                        continue;
-                    }
-                    if let Some(slots) = value.char_table_external_slots() {
-                        stack.extend(slots.into_iter().rev());
-                    }
-                }
-                ValueKind::Veclike(VecLikeType::SubCharTable) => {
-                    if !seen.insert(value.bits()) {
-                        continue;
-                    }
-                    if let Some(table) = value.as_sub_char_table_obj() {
-                        stack.extend(table.contents.iter().rev().copied());
-                    }
-                }
-                ValueKind::Veclike(VecLikeType::HashTable) => {
-                    if !seen.insert(value.bits()) {
-                        continue;
-                    }
-                    if let Some(table) = value.as_hash_table() {
-                        // Visit every key, then every value, in table order;
-                        // the snapshots are forward iterators, so reverse them
-                        // through a temporary buffer for the LIFO worklist.
-                        let keys: Vec<Value> = table.key_snapshots().copied().collect();
-                        let values: Vec<Value> = table.data.values().copied().collect();
-                        stack.extend(values.into_iter().rev());
-                        stack.extend(keys.into_iter().rev());
-                    }
-                }
-                ValueKind::Veclike(VecLikeType::ByteCode) => {
-                    if !seen.insert(value.bits()) {
-                        continue;
-                    }
-                    if let Some(bytecode) = value.get_bytecode_data() {
-                        for slot in bytecode.extra_slots.iter().rev() {
-                            stack.push(*slot);
-                        }
-                        if let Some(interactive) = bytecode.interactive {
-                            stack.push(interactive);
-                        }
-                        if let Some(doc_form) = bytecode.doc_form {
-                            stack.push(doc_form);
-                        }
-                        if let Some(env) = bytecode.env {
-                            stack.push(env);
-                        }
-                        for constant in bytecode.constants.iter().rev() {
-                            stack.push(*constant);
-                        }
-                        stack.push(bytecode.arglist);
-                    }
-                }
-                ValueKind::Veclike(VecLikeType::SymbolWithPos) => {
-                    if !seen.insert(value.bits()) {
-                        continue;
-                    }
-                    if let Some(symbol) = value.as_symbol_with_pos_sym() {
-                        stack.push(symbol);
-                    }
-                }
-                _ => {}
+        walk_member_symbols(value, |symbol| {
+            if let Some(id) = symbol.as_symbol_id(SymbolMode::Bare) {
+                self.ensure_interned_global_id(id);
             }
+        });
+    }
+}
+
+/// Visit every canonical symbol reachable from VALUE.
+///
+/// The walk is a LIFO worklist, not Rust recursion: the graph size is the
+/// caller's data (a loaded file, a cache, a keymap), so recursion depth grew
+/// with it and could exhaust the evaluator stack (issue #590). Children are
+/// pushed in reverse so the visit order stays the reader's left-to-right
+/// depth-first order. Cycle detection uses object identity, never `Value`'s
+/// structural `==`.
+pub(crate) fn walk_member_symbols(value: Value, mut on_symbol: impl FnMut(Value)) {
+    let mut seen = rustc_hash::FxHashSet::default();
+    let mut stack = vec![value];
+    while let Some(value) = stack.pop() {
+        match value.kind() {
+            ValueKind::Symbol(_) => on_symbol(value),
+            ValueKind::Cons => {
+                if !seen.insert(value.bits()) {
+                    continue;
+                }
+                stack.push(value.cons_cdr());
+                stack.push(value.cons_car());
+            }
+            ValueKind::Veclike(
+                VecLikeType::Vector
+                | VecLikeType::Record
+                | VecLikeType::Lambda
+                | VecLikeType::Macro,
+            ) => {
+                if !seen.insert(value.bits()) {
+                    continue;
+                }
+                if let Some(slots) = value
+                    .as_vector_data()
+                    .or_else(|| value.as_record_data())
+                    .or_else(|| value.closure_slots())
+                {
+                    stack.extend(slots.iter().rev().copied());
+                }
+            }
+            ValueKind::Veclike(VecLikeType::CharTable) => {
+                if !seen.insert(value.bits()) {
+                    continue;
+                }
+                if let Some(slots) = value.char_table_external_slots() {
+                    stack.extend(slots.into_iter().rev());
+                }
+            }
+            ValueKind::Veclike(VecLikeType::SubCharTable) => {
+                if !seen.insert(value.bits()) {
+                    continue;
+                }
+                if let Some(table) = value.as_sub_char_table_obj() {
+                    stack.extend(table.contents.iter().rev().copied());
+                }
+            }
+            ValueKind::Veclike(VecLikeType::HashTable) => {
+                if !seen.insert(value.bits()) {
+                    continue;
+                }
+                if let Some(table) = value.as_hash_table() {
+                    // Visit every key, then every value, in table order; the
+                    // snapshots are forward iterators, so reverse them
+                    // through a temporary buffer for the LIFO worklist.
+                    let keys: Vec<Value> = table.key_snapshots().copied().collect();
+                    let values: Vec<Value> = table.data.values().copied().collect();
+                    stack.extend(values.into_iter().rev());
+                    stack.extend(keys.into_iter().rev());
+                }
+            }
+            ValueKind::Veclike(VecLikeType::ByteCode) => {
+                if !seen.insert(value.bits()) {
+                    continue;
+                }
+                if let Some(bytecode) = value.get_bytecode_data() {
+                    for slot in bytecode.extra_slots.iter().rev() {
+                        stack.push(*slot);
+                    }
+                    if let Some(interactive) = bytecode.interactive {
+                        stack.push(interactive);
+                    }
+                    if let Some(doc_form) = bytecode.doc_form {
+                        stack.push(doc_form);
+                    }
+                    if let Some(env) = bytecode.env {
+                        stack.push(env);
+                    }
+                    for constant in bytecode.constants.iter().rev() {
+                        stack.push(*constant);
+                    }
+                    stack.push(bytecode.arglist);
+                }
+            }
+            ValueKind::Veclike(VecLikeType::SymbolWithPos) => {
+                if !seen.insert(value.bits()) {
+                    continue;
+                }
+                if let Some(symbol) = value.as_symbol_with_pos_sym() {
+                    stack.push(symbol);
+                }
+            }
+            _ => {}
         }
     }
+}
+
+/// Publish the canonical symbols a read value hands to Lisp into the obarray
+/// GNU's reader would use: the current value of `obarray` when that is a
+/// custom obarray, otherwise the global obarray. GNU interns every token into
+/// the current obarray (lread.c:4673-4706), so a read under a let-bound
+/// `obarray` must not leak its names into the global one, and the object it
+/// read must be the one that obarray holds.
+pub fn publish_read_symbols(eval: &mut super::eval::Context, value: Value) {
+    use crate::emacs_core::builtins::symbols::{
+        current_lisp_obarray_value, intern_symbol_value_into_obarray, is_global_obarray_proxy,
+    };
+    let current = current_lisp_obarray_value(eval);
+    if current.is_nil() || is_global_obarray_proxy(eval, &current) {
+        eval.obarray_mut().intern_member_symbols_in(value);
+        return;
+    }
+    walk_member_symbols(value, |symbol| {
+        let _ = intern_symbol_value_into_obarray(symbol, current);
+    });
 }
 
 // ---------------------------------------------------------------------------
