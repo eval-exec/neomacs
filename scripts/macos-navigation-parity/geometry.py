@@ -16,7 +16,11 @@ parser.add_argument("--startup-phases", action="store_true",
                     help="Use isolated early/init files instead of -Q and record startup phases")
 parser.add_argument("--rust-log", default="error",
                     help="Existing targeted Rust logs; use separately from clean timing rows")
+parser.add_argument("--resize-policy", choices=("gtk-ns", "own-bars"),
+                    help="Controlled early-init policy; requires --startup-phases")
 args = parser.parse_args()
+if args.resize_policy and not args.startup_phases:
+    parser.error("--resize-policy requires --startup-phases")
 root = Path.cwd()
 source = root / "scripts/macos-navigation-parity"
 artifacts = root / "tmp" / f"macos-frame-geometry-{os.getpid()}"
@@ -39,6 +43,7 @@ metadata = {
     "row": "N-607-frame-geometry", "product_source_sha": args.product_sha,
     "warmup_seconds": args.warmup,
     "startup_phases": args.startup_phases, "rust_log": args.rust_log,
+    "resize_policy_override": args.resize_policy,
     "controller_host_policy": os.environ.get("NEOMACS_BENCH_CONTROLLER_POLICY", "not recorded"),
     "harness_sha256": {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
                        for p in harness_files},
@@ -60,8 +65,12 @@ for name, binary in editors.items():
     if args.startup_phases:
         init = case / "init"
         init.mkdir()
+        policy = ""
+        if args.resize_policy:
+            tail = " tool-bar-lines" if args.resize_policy == "own-bars" else ""
+            policy = "(setq frame-inhibit-implied-resize '(tab-bar-lines" + tail + "))\n"
         (init / "early-init.el").write_text(
-            "(load " + json.dumps(str(source / "startup-phases.el")) + " nil nil t)\n")
+            policy + "(load " + json.dumps(str(source / "startup-phases.el")) + " nil nil t)\n")
         (init / "init.el").write_text("(setq inhibit-startup-screen t)\n")
         startup = ["--no-site-file", "--no-site-lisp", "--init-directory", str(init)]
         env["NEOMACS_TRACE_FRAME_GEOMETRY"] = "1"
