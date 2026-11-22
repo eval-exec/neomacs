@@ -11,9 +11,9 @@
 //! reports continued animation the only way this pass may: by marking the
 //! frame dirty, so the scheduler asks for another one.
 //!
-//! A child frame from a stale font-catalog generation is skipped rather than
-//! drawn: its glyph indices name fonts the current atlas no longer has, and
-//! drawing it would resolve them against the wrong table.
+//! A child frame from a stale font catalog or PGTK opening policy is skipped
+//! rather than drawn: its glyphs and geometry belong to a different font
+//! environment than the current root presentation.
 
 use crate::core::types::DisplayFrameId;
 use crate::render_thread::frame_stats;
@@ -24,6 +24,14 @@ use crate::render_thread::frame_windows::GuiFrameRenderState;
 mod tests;
 use crate::render_thread::state::ChildFrameStyle;
 use neomacs_renderer_wgpu::{WgpuGlyphAtlas, WgpuRenderer};
+
+fn child_font_environment_matches(
+    child: &crate::core::frame_glyphs::FrameGlyphBuffer,
+    root: &crate::core::frame_glyphs::FrameGlyphBuffer,
+) -> bool {
+    child.font_catalog_generation == root.font_catalog_generation
+        && child.pgtk_font_options == root.pgtk_font_options
+}
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn render_frame_root_glyphs(
@@ -188,12 +196,14 @@ pub(super) fn render_frame_content_overlays(
                 let Some(child_entry) = render.compositor.child_frames.frames.get(&child_id) else {
                     continue;
                 };
-                if child_entry.frame.font_catalog_generation != frame.font_catalog_generation {
+                if !child_font_environment_matches(&child_entry.frame, frame) {
                     tracing::debug!(
                         frame_id = child_id,
                         child_generation = child_entry.frame.font_catalog_generation.get(),
                         root_generation = frame.font_catalog_generation.get(),
-                        "skipping retained child frame from a stale font catalog generation"
+                        child_pgtk_options = ?child_entry.frame.pgtk_font_options,
+                        root_pgtk_options = ?frame.pgtk_font_options,
+                        "skipping retained child frame from a stale font environment"
                     );
                     continue;
                 }

@@ -791,6 +791,27 @@ impl SymbolFontPolicyUpdate {
 /// overflow keeps memory bounded without per-entry LRU bookkeeping.
 const SHAPED_RUN_CACHE_CAP: usize = 8192;
 
+/// Native catalog replacement and font-opening preferences invalidate layout
+/// together, but only catalog replacement changes font-file ownership/IDs.
+#[must_use]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FontSelectionUpdate {
+    pub catalog: crate::font::catalog::FontCatalogUpdate,
+    pub rendering_changed: bool,
+}
+
+impl FontSelectionUpdate {
+    #[must_use]
+    pub const fn changed(self) -> bool {
+        self.catalog.changed() || self.rendering_changed
+    }
+
+    #[must_use]
+    pub const fn generation(self) -> neomacs_display_protocol::font::FontCatalogGeneration {
+        self.catalog.generation()
+    }
+}
+
 /// Cosmic-text based font metrics service.
 ///
 /// Runs on the Emacs/layout thread. Shared selection is owned by
@@ -801,6 +822,9 @@ pub struct FontMetricsService {
     /// Connection-wide opened-font metrics. Unbound workers and isolated
     /// services measure fonts without changing any graphical display.
     display_identity: Option<GraphicalDisplayIdentity>,
+    /// Applied PGTK font-opening policy. Live connection observations take
+    /// effect together with metric-cache invalidation at the next safe point.
+    desktop_font_render_options: Option<neomacs_display_protocol::DesktopFontRenderOptions>,
     /// Typed native-catalog generation published with every realized frame.
     /// Only [`Self::synchronize_font_catalog`] advances it.
     font_catalog: crate::font::catalog::FontCatalog,
@@ -1072,6 +1096,7 @@ impl FontMetricsService {
         }
         Self {
             display_identity: None,
+            desktop_font_render_options: None,
             font_catalog: crate::font::catalog::FontCatalog::default(),
             font_system,
             bitmap_materializer: neomacs_font_materializer::FontMaterializer::new().ok(),
@@ -1170,6 +1195,12 @@ impl FontMetricsService {
     /// service. Display labels can compare equal for independent connections,
     /// so every call replaces the binding.
     pub fn set_display_identity(&mut self, identity: GraphicalDisplayIdentity) {
+        let options = identity.font_render_options();
+        if self.desktop_font_render_options != options {
+            self.desktop_font_render_options = options;
+            self.clear_caches();
+            self.font_instances.invalidate_catalog_records();
+        }
         self.display_identity = Some(identity);
     }
 
@@ -1213,32 +1244,47 @@ impl FontMetricsService {
     }
 
     /// Apply one coalesced native catalog edge at an evaluator-thread safe
-    /// point. Rebuilding `FontSystem` is intentional: fontdb only appends when
-    /// asked to load system fonts, which would keep removed/replaced files and
-    /// stale generation-local ids alive indefinitely.
-    pub fn synchronize_font_catalog(&mut self) -> crate::font::catalog::FontCatalogUpdate {
-        let change = self.font_resolver.poll_catalog_change();
-        let update = self.font_catalog.observe(change);
-        if let crate::font::catalog::FontCatalogUpdate::Advanced { previous, current } = update {
+    /// point. Native file changes rebuild `FontSystem`: fontdb only appends
+    /// when loading system fonts, retaining removed files otherwise. A PGTK
+    /// preference change reopens metric observations without rescanning files.
+    pub fn synchronize_font_catalog(&mut self) -> FontSelectionUpdate {
+        use crate::font::catalog::FontCatalogChange;
+        let native_change = self.font_resolver.poll_catalog_change();
+        let options = self
+            .display_identity
+            .as_ref()
+            .and_then(|identity| identity.font_render_options());
+        let policy_changed = options != self.desktop_font_render_options;
+        self.desktop_font_render_options = options;
+        let previous = self.font_catalog.generation();
+        let update = FontSelectionUpdate {
+            catalog: self.font_catalog.observe(native_change),
+            rendering_changed: policy_changed,
+        };
+        if update.changed() {
             tracing::info!(
                 target: "font_catalog",
                 previous = previous.get(),
-                current = current.get(),
-                "rebuilding layout font state for native catalog change"
+                current = update.generation().get(),
+                native_change = matches!(native_change, FontCatalogChange::Changed),
+                policy_changed,
+                "refreshing layout font observations"
             );
-            #[cfg(not(test))]
-            {
-                neomacs_font_materializer::reset_system_font_system(&mut self.font_system);
+            if matches!(native_change, FontCatalogChange::Changed) {
+                #[cfg(not(test))]
+                {
+                    neomacs_font_materializer::reset_system_font_system(&mut self.font_system);
+                }
+                #[cfg(test)]
+                {
+                    self.font_system = self.test_catalog().font_system();
+                }
+                self.font_file_cache = FontFileCache::new();
             }
-            #[cfg(test)]
-            {
-                self.font_system = self.test_catalog().font_system();
-            }
-            self.font_file_cache = FontFileCache::new();
             self.clear_caches();
-            // Records carry metrics read from the files; a replaced file must
-            // republish under its stable id, as the renderer rebuilds its
-            // tables for this generation.
+            // GNU ftcrfont_cached_font_ok rejects the old opened font when
+            // GSettings options differ. Reobserve under its durable ID for a
+            // settings edge as well as a replaced file/catalog edge.
             self.font_instances.invalidate_catalog_records();
         }
         update
@@ -1719,10 +1765,26 @@ impl FontMetricsService {
             |size| {
                 self.font_resolver
                     .render_options(file, selector, size as f32, weight)
+                    .map(|options| self.apply_desktop_font_render_options(options))
             },
         );
         #[cfg(not(target_os = "linux"))]
         crate::font::probe::probe_font_px_metrics(file, selector, size, weight)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn apply_desktop_font_render_options(
+        &self,
+        options: neomacs_font_materializer::fontconfig::FontRenderOptions,
+    ) -> neomacs_font_materializer::fontconfig::FontRenderOptions {
+        match self.desktop_font_render_options {
+            Some(preferences) => options.for_pgtk(
+                neomacs_font_materializer::fontconfig::SurfaceFontOptions::from_pgtk_options(
+                    preferences,
+                ),
+            ),
+            None => options,
+        }
     }
 
     #[cfg(target_os = "linux")]
@@ -1731,16 +1793,18 @@ impl FontMetricsService {
         identity: &ResolvedFontIdentity,
         font_size: f32,
     ) -> Option<neomacs_font_materializer::fontconfig::FontRenderOptions> {
-        self.font_resolver.render_options(
-            identity.file_path.as_deref()?,
-            identity.freetype_selector()?,
-            self.selection_size(font_size).rounded_device_px() as f32,
-            identity
-                .variation_coords
-                .iter()
-                .find(|coord| coord.tag() == u32::from_be_bytes(*b"wght"))
-                .map(|coord| coord.value()),
-        )
+        self.font_resolver
+            .render_options(
+                identity.file_path.as_deref()?,
+                identity.freetype_selector()?,
+                self.selection_size(font_size).rounded_device_px() as f32,
+                identity
+                    .variation_coords
+                    .iter()
+                    .find(|coord| coord.tag() == u32::from_be_bytes(*b"wght"))
+                    .map(|coord| coord.value()),
+            )
+            .map(|options| self.apply_desktop_font_render_options(options))
     }
 
     fn probe_resolved_font_device_ascii_advances(
@@ -3967,6 +4031,7 @@ pub fn realize_frame_fonts(
         return;
     };
     state.font_catalog_generation = svc.font_catalog_generation();
+    state.pgtk_font_options = svc.desktop_font_render_options;
     // Deterministic interner allocation order across identical frames.
     let mut face_ids: Vec<FaceId> = state.faces.keys().copied().collect();
     face_ids.sort_unstable();
@@ -4225,3 +4290,7 @@ mod device_glyph_advance_tests;
 #[cfg(test)]
 #[path = "metrics/tests/opened_font_display_test.rs"]
 mod opened_font_display_tests;
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "metrics/tests/desktop_render_policy_test.rs"]
+mod desktop_render_policy_tests;

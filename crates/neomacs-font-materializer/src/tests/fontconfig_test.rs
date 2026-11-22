@@ -111,7 +111,7 @@ fn options(hinting: Hinting) -> FontRenderOptions {
         antialias: true,
         autohint: false,
         horizontal_lcd: true,
-        metrics_mode: FontRenderMode::Alpha,
+        metrics_mode: MetricPolicy::Pattern(FontMetricMode::Alpha),
         lcd_filter: Filter::Default,
     }
 }
@@ -147,7 +147,7 @@ fn light_and_full_hinting_select_distinct_freetype_targets() {
         );
     }
     let lcd_metrics = FontRenderOptions {
-        metrics_mode: FontRenderMode::Subpixel,
+        metrics_mode: MetricPolicy::Pattern(FontMetricMode::HorizontalSubpixel),
         ..options(Hinting::Full)
     };
     assert_eq!(

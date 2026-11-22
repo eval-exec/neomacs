@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.desktop.interface" path="/org/gnome/desktop/interface/">
+    <key name="monospace-font-name" type="s"><default>'IBM Plex Sans 12'</default></key>
+    <key name="font-name" type="s"><default>'IBM Plex Sans 12'</default></key>
+    <key name="toolbar-style" type="s"><default>'both-horiz'</default></key>
+    <key name="font-antialiasing" type="s"><default>'grayscale'</default></key>
+    <key name="font-hinting" type="s"><default>'slight'</default></key>
+    <key name="font-rgba-order" type="s"><default>'rgb'</default></key>
+  </schema>
+</schemalist>

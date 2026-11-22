@@ -1261,6 +1261,10 @@ pub struct FrameGlyphBuffer {
     /// Native catalog generation paired with `faces` and `fonts`.
     pub font_catalog_generation: crate::font::FontCatalogGeneration,
 
+    /// PGTK opening/raster options paired with this frame's font metrics.
+    /// None leaves the backend's Xlib surface policy in charge.
+    pub pgtk_font_options: Option<crate::DesktopFontRenderOptions>,
+
     /// Resolved font table referenced by `Face::default_resolved_font_id`
     /// (and eventually shaped glyph runs). Carried alongside `faces` so the
     /// renderer rasterizes the exact fonts layout resolved.
@@ -1363,6 +1367,7 @@ impl FrameGlyphBuffer {
     pub fn font_bindings(&self) -> crate::font::FrameFontBindings<'_> {
         crate::font::FrameFontBindings {
             catalog_generation: self.font_catalog_generation,
+            pgtk_font_options: self.pgtk_font_options,
             faces: &self.faces,
             fonts: &self.fonts,
             char_fonts: &self.char_fonts,
@@ -1376,6 +1381,7 @@ impl FrameGlyphBuffer {
     /// subset of these mutually-dependent fields.
     pub fn clone_font_bindings_from(&mut self, source: &Self) {
         self.font_catalog_generation = source.font_catalog_generation;
+        self.pgtk_font_options = source.pgtk_font_options;
         self.faces.clone_from(&source.faces);
         self.fonts.clone_from(&source.fonts);
         self.char_fonts.clone_from(&source.char_fonts);
@@ -1600,6 +1606,7 @@ impl FrameGlyphBuffer {
             current_clip_rect: None,
             faces: HashMap::default(),
             font_catalog_generation: crate::font::FontCatalogGeneration::default(),
+            pgtk_font_options: None,
             fonts: crate::font::ResolvedFontTable::default(),
             char_fonts: crate::font::CharFontTable::default(),
             shaped_clusters: crate::font::ShapedClusterTable::default(),

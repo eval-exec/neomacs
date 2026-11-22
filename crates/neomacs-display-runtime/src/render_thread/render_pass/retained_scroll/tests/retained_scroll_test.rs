@@ -119,6 +119,70 @@ fn fixture_with(change: impl FnOnce(&mut scroll_coverage::ScrollCoverage)) -> Fr
     frame
 }
 
+#[test]
+fn retained_scroll_paint_key_distinguishes_pgtk_options_without_catalog_changes() {
+    let frame = fixture();
+    let surface = frame.scroll_surfaces[0].clone();
+    let paint = |options| RasterPaint {
+        surface: surface.clone(),
+        background: frame.background,
+        defaults: [frame.char_width, frame.char_height, frame.font_pixel_size],
+        font_catalog: frame.font_catalog_generation,
+        pgtk_font_options: options,
+        scale: DeviceScale::new(1.0).unwrap(),
+        size: SnapshotSize::new(60, 60).unwrap(),
+        origin: (10.0, 10.0),
+    };
+    let default = DesktopFontRenderOptions::default();
+    let slight = DesktopFontRenderOptions {
+        hinting: DesktopFontHinting::Slight,
+        ..default
+    };
+    let full = DesktopFontRenderOptions {
+        hinting: DesktopFontHinting::Full,
+        ..default
+    };
+    for options in [None, Some(default), Some(slight), Some(full)] {
+        assert!(paint(options).matches(&paint(options)));
+        for changed in [None, Some(default), Some(slight), Some(full)] {
+            assert_eq!(
+                paint(options).matches(&paint(changed)),
+                options == changed,
+                "a settings-only change must retire the retained raster"
+            );
+        }
+    }
+}
+
+#[test]
+fn retained_scroll_raster_uses_the_frames_captured_pgtk_options() {
+    let mut frame = fixture();
+    let options = DesktopFontRenderOptions {
+        hinting: DesktopFontHinting::Slight,
+        ..Default::default()
+    };
+    frame.pgtk_font_options = Some(options);
+    let raster = raster_frame(
+        &frame.scroll_surfaces[0],
+        &frame,
+        SnapshotSize::new(60, 60).unwrap(),
+        (10.0, 10.0),
+        DeviceScale::new(1.0).unwrap(),
+        frame.background,
+    );
+    assert_eq!(
+        raster.font_catalog_generation,
+        frame.font_catalog_generation
+    );
+    assert_eq!(raster.font_bindings().pgtk_font_options, Some(options));
+    frame.pgtk_font_options = Some(DesktopFontRenderOptions::default());
+    assert_eq!(
+        raster.pgtk_font_options,
+        Some(options),
+        "a later settings edit cannot mutate a retained paint snapshot"
+    );
+}
+
 fn mapping(frame: &FrameGlyphBuffer, scale: f32) -> PresentMapping {
     let SurfaceState::Drawable(surface) = SurfaceState::from_device_size(
         (frame.width * scale) as u32,
@@ -498,7 +562,7 @@ fn changed_coverage_pixels_and_font_catalog_rebuild_the_raster() {
     let stream = InputStream::default();
     let mut deliveries = Vec::new();
     let mut previous = None;
-    for change in 0..4 {
+    for change in 0..5 {
         let mut frame = fixture_with(|coverage| {
             if change >= 1 {
                 coverage.faces.get_mut(&FaceId::new(1)).unwrap().foreground = Color::BLACK;
@@ -509,8 +573,16 @@ fn changed_coverage_pixels_and_font_catalog_rebuild_the_raster() {
                 coverage.content.matrix.rows[0] = MatrixRow::new(row);
             }
         });
-        if change == 3 {
+        if change >= 3 {
             frame.font_catalog_generation = frame.font_catalog_generation.next();
+        }
+        if change == 4 {
+            // This step changes only PGTK policy: the native catalog and
+            // all coverage glyph/font metadata remain identical to step 3.
+            frame.pgtk_font_options = Some(DesktopFontRenderOptions {
+                hinting: DesktopFontHinting::Slight,
+                ..Default::default()
+            });
         }
         render.compositor.input_scroll = Default::default();
         render.compositor.coverage_retention.refresh(&frame);

@@ -24,6 +24,7 @@ struct RasterPaint {
     background: Color,
     defaults: [f32; 3],
     font_catalog: neomacs_display_protocol::font::FontCatalogGeneration,
+    pgtk_font_options: Option<neomacs_display_protocol::DesktopFontRenderOptions>,
     scale: DeviceScale,
     size: SnapshotSize,
     origin: (f32, f32),
@@ -39,6 +40,7 @@ impl RasterPaint {
             && self.background == next.background
             && self.defaults == next.defaults
             && self.font_catalog == next.font_catalog
+            && self.pgtk_font_options == next.pgtk_font_options
             && previous.epoch == coverage.epoch
             && previous.content.window_id == coverage.content.window_id
             && previous.content.text_clip_bounds == coverage.content.text_clip_bounds
@@ -139,6 +141,7 @@ fn raster_frame(
     // Coverage owns every binding used by its picture. Do not retain hidden
     // dependencies on unrelated font tables from the current frame.
     raster.font_catalog_generation = frame.font_catalog_generation;
+    raster.pgtk_font_options = frame.pgtk_font_options;
     raster.faces = coverage.faces.clone();
     raster.fonts = coverage.fonts.clone();
     raster.char_fonts = coverage.char_fonts.clone();
@@ -298,6 +301,7 @@ pub(super) fn prepare(
         background,
         defaults,
         font_catalog: frame.font_catalog_generation,
+        pgtk_font_options: frame.pgtk_font_options,
         scale,
         size,
         origin,

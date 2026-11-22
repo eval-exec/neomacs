@@ -596,8 +596,9 @@ pub type CharFontTable = HashMap<FaceId, HashMap<char, ResolvedCharGlyph>>;
 /// One coherent, borrowed projection of every font binding needed to draw a
 /// frame.
 ///
-/// Keeping the catalog generation and all four lookup tables behind one type
-/// makes the render boundary compile-time visible: callers cannot accidentally
+/// Keeping the catalog generation, PGTK opening options and all four lookup
+/// tables behind one type makes the render boundary compile-time visible:
+/// callers cannot accidentally
 /// install a new face table while retaining an old generation or fallback
 /// table. The wire representation remains the individual fields on
 /// `FrameGlyphBuffer`; this is the typed view used once that snapshot is in
@@ -605,6 +606,9 @@ pub type CharFontTable = HashMap<FaceId, HashMap<char, ResolvedCharGlyph>>;
 #[derive(Clone, Copy, Debug)]
 pub struct FrameFontBindings<'a> {
     pub catalog_generation: FontCatalogGeneration,
+    /// PGTK options used to open the fonts and measure this exact frame.
+    /// None retains the renderer's independently captured Xlib policy.
+    pub pgtk_font_options: Option<crate::DesktopFontRenderOptions>,
     pub faces: &'a FrameFaceMap,
     pub fonts: &'a ResolvedFontTable,
     pub char_fonts: &'a CharFontTable,

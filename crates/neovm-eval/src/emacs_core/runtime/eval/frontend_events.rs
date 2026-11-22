@@ -288,7 +288,8 @@ fn semantics(event: &InputEvent) -> FrontendEventSemantics {
         | InputEvent::TerminalCreateFailed { .. }
         | InputEvent::TerminalExited { .. }
         | InputEvent::TerminalTitleChanged { .. }
-        | InputEvent::SystemFontsChanged { .. } => ServiceDuringWait,
+        | InputEvent::SystemFontsChanged { .. }
+        | InputEvent::SystemFontRenderingChanged { .. } => ServiceDuringWait,
         InputEvent::TtyHangup { .. } => {
             // A lost device is not command input. Wait servicing routes
             // this typed event to handle_tty_hangup_input_event, which

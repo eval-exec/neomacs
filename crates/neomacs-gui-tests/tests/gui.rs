@@ -57,6 +57,9 @@ mod desktop_font_startup;
 #[path = "desktop_font_updates.rs"]
 mod desktop_font_updates;
 
+#[path = "wayland_font_raster.rs"]
+mod wayland_font_raster;
+
 // Only the Linux desktop-font suites (which pin a Linux font package) use
 // this helper; compiling it on other hosts is dead code.
 #[cfg(target_os = "linux")]

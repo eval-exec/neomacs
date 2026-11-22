@@ -64,6 +64,25 @@ pub struct XftResources<'a> {
     pub lcdfilter: Option<&'a str>,
 }
 
+/// One borrowed GSettings result. A missing key or a value of the wrong type
+/// leaves GNU PGTK's current option untouched.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum GSettingsValue<'a> {
+    #[default]
+    Missing,
+    Invalid,
+    String(&'a str),
+}
+
+/// Font rendering keys read by GNU PGTK's xsettings.c. This value performs no
+/// settings access and borrows strings only for the duration of conversion.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PgtkFontSettings<'a> {
+    pub antialias: GSettingsValue<'a>,
+    pub hinting: GSettingsValue<'a>,
+    pub rgba: GSettingsValue<'a>,
+}
+
 /// Physical color-component order reported by XRender or Xft.rgba.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SurfaceSubpixelOrder {
@@ -100,14 +119,17 @@ enum SurfaceAntialias {
     Default,
     None,
     Gray,
-    Subpixel(SurfaceSubpixelOrder),
+    Subpixel,
 }
 
-/// Cairo surface font options, distinct from the font pattern's metric policy.
-/// Default leaves the font pattern in charge (including the Wayland path).
+/// Cairo font options supplied by a display backend. Xlib merges these only
+/// for masks; PGTK also supplies them when opening its metric-bearing font.
+/// Default leaves the font pattern in charge.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SurfaceFontOptions {
     antialias: SurfaceAntialias,
+    // GNU retains the order independently while AA is gray or disabled.
+    subpixel_order: SurfaceSubpixelOrder,
     hinting: Option<Hinting>,
     // None is Cairo DEFAULT/inherit, distinct from explicit FC_LCD_DEFAULT.
     lcd_filter: Option<Filter>,
@@ -142,7 +164,7 @@ impl SurfaceFontOptions {
                 SurfaceSubpixelOrder::Unknown | SurfaceSubpixelOrder::None => {
                     SurfaceAntialias::Gray
                 }
-                _ => SurfaceAntialias::Subpixel(order),
+                _ => SurfaceAntialias::Subpixel,
             }
         };
         let lcd_filter = match resources.lcdfilter.and_then(xft_integer) {
@@ -154,8 +176,110 @@ impl SurfaceFontOptions {
         };
         Self {
             antialias,
+            subpixel_order: order,
             hinting,
             lcd_filter,
+        }
+    }
+
+    /// Start with Cairo DEFAULT values, then apply the exact PGTK strings.
+    pub fn from_pgtk_settings(settings: PgtkFontSettings<'_>) -> Self {
+        Self::default().with_pgtk_settings(settings)
+    }
+
+    /// Mirror GNU xsettings.c's independent setters. Unknown strings, missing
+    /// keys and non-string values retain the last valid option, including its
+    /// initial Cairo DEFAULT. GSettings has no LCD-filter key here.
+    pub fn with_pgtk_settings(mut self, settings: PgtkFontSettings<'_>) -> Self {
+        if let GSettingsValue::String(value) = settings.antialias {
+            self.antialias = match value {
+                "none" => SurfaceAntialias::None,
+                "grayscale" => SurfaceAntialias::Gray,
+                "rgba" => SurfaceAntialias::Subpixel,
+                _ => self.antialias,
+            };
+        }
+        if let GSettingsValue::String(value) = settings.hinting {
+            self.hinting = match value {
+                "none" => Some(Hinting::None),
+                "slight" => Some(Hinting::Slight),
+                "medium" => Some(Hinting::Medium),
+                "full" => Some(Hinting::Full),
+                _ => self.hinting,
+            };
+        }
+        if let GSettingsValue::String(value) = settings.rgba {
+            self.subpixel_order = match value {
+                "rgb" => SurfaceSubpixelOrder::Rgb,
+                "bgr" => SurfaceSubpixelOrder::Bgr,
+                "vrgb" => SurfaceSubpixelOrder::VRgb,
+                "vbgr" => SurfaceSubpixelOrder::VBgr,
+                _ => self.subpixel_order,
+            };
+        }
+        self
+    }
+
+    /// Restore the owned connection snapshot without interpreting DEFAULT as
+    /// an explicit disabled option. PGTK does not configure the LCD filter.
+    pub fn from_pgtk_options(options: neomacs_display_protocol::DesktopFontRenderOptions) -> Self {
+        use neomacs_display_protocol::{
+            DesktopFontAntialias as Aa, DesktopFontHinting as Hint,
+            DesktopFontSubpixelOrder as Order,
+        };
+        Self {
+            antialias: match options.antialias {
+                Aa::Default => SurfaceAntialias::Default,
+                Aa::None => SurfaceAntialias::None,
+                Aa::Grayscale => SurfaceAntialias::Gray,
+                Aa::Subpixel => SurfaceAntialias::Subpixel,
+            },
+            hinting: match options.hinting {
+                Hint::Default => None,
+                Hint::None => Some(Hinting::None),
+                Hint::Slight => Some(Hinting::Slight),
+                Hint::Medium => Some(Hinting::Medium),
+                Hint::Full => Some(Hinting::Full),
+            },
+            subpixel_order: match options.subpixel_order {
+                Order::Default => SurfaceSubpixelOrder::Unknown,
+                Order::Rgb => SurfaceSubpixelOrder::Rgb,
+                Order::Bgr => SurfaceSubpixelOrder::Bgr,
+                Order::VRgb => SurfaceSubpixelOrder::VRgb,
+                Order::VBgr => SurfaceSubpixelOrder::VBgr,
+            },
+            lcd_filter: None,
+        }
+    }
+
+    /// Publish PGTK's three independent options, retaining inactive/default
+    /// values for subsequent edits. Xlib-only LCD filtering is not transported.
+    pub fn pgtk_options(self) -> neomacs_display_protocol::DesktopFontRenderOptions {
+        use neomacs_display_protocol::{
+            DesktopFontAntialias as Aa, DesktopFontHinting as Hint, DesktopFontRenderOptions,
+            DesktopFontSubpixelOrder as Order,
+        };
+        DesktopFontRenderOptions {
+            antialias: match self.antialias {
+                SurfaceAntialias::Default => Aa::Default,
+                SurfaceAntialias::None => Aa::None,
+                SurfaceAntialias::Gray => Aa::Grayscale,
+                SurfaceAntialias::Subpixel => Aa::Subpixel,
+            },
+            hinting: match self.hinting {
+                None => Hint::Default,
+                Some(Hinting::None) => Hint::None,
+                Some(Hinting::Slight) => Hint::Slight,
+                Some(Hinting::Medium) => Hint::Medium,
+                Some(Hinting::Full) => Hint::Full,
+            },
+            subpixel_order: match self.subpixel_order {
+                SurfaceSubpixelOrder::Unknown | SurfaceSubpixelOrder::None => Order::Default,
+                SurfaceSubpixelOrder::Rgb => Order::Rgb,
+                SurfaceSubpixelOrder::Bgr => Order::Bgr,
+                SurfaceSubpixelOrder::VRgb => Order::VRgb,
+                SurfaceSubpixelOrder::VBgr => Order::VBgr,
+            },
         }
     }
 
@@ -165,7 +289,12 @@ impl SurfaceFontOptions {
         match self.antialias {
             SurfaceAntialias::Default => None,
             SurfaceAntialias::None | SurfaceAntialias::Gray => Some(SurfaceSubpixelOrder::None),
-            SurfaceAntialias::Subpixel(order) => Some(order),
+            // Cairo's explicit SUBPIXEL + DEFAULT order selects horizontal RGB;
+            // it does not inherit the pattern's BGR/vertical order.
+            SurfaceAntialias::Subpixel => Some(match self.subpixel_order {
+                SurfaceSubpixelOrder::Unknown => SurfaceSubpixelOrder::Rgb,
+                order => order,
+            }),
         }
     }
 }
@@ -212,8 +341,21 @@ pub struct FontRenderOptions {
     antialias: bool,
     autohint: bool,
     horizontal_lcd: bool,
-    metrics_mode: FontRenderMode,
+    metrics_mode: MetricPolicy,
     lcd_filter: Filter,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum FontMetricMode {
+    Alpha,
+    HorizontalSubpixel,
+    VerticalSubpixel,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum MetricPolicy {
+    Pattern(FontMetricMode),
+    Pgtk(LoadFlag),
 }
 
 /// Merged raster-only policy. It deliberately exposes no metric probe API.
@@ -534,11 +676,11 @@ impl<'a> FontconfigContext<'a> {
                 3..=5 => false,
                 _ => return None,
             },
-            metrics_mode: if matches!(rgba, 1 | 2) {
-                FontRenderMode::Subpixel
-            } else {
-                FontRenderMode::Alpha
-            },
+            metrics_mode: MetricPolicy::Pattern(match rgba {
+                1 | 2 => FontMetricMode::HorizontalSubpixel,
+                3 | 4 => FontMetricMode::VerticalSubpixel,
+                _ => FontMetricMode::Alpha,
+            }),
             lcd_filter: match integer(c"lcdfilter").unwrap_or(1) {
                 0 => Filter::None,
                 1 => Filter::Default,
@@ -616,9 +758,12 @@ impl FontRenderOptions {
         raster.antialias = self.antialias && surface.antialias != SurfaceAntialias::None;
         raster.horizontal_lcd = match surface.antialias {
             SurfaceAntialias::Default => self.horizontal_lcd,
-            SurfaceAntialias::Subpixel(SurfaceSubpixelOrder::Rgb | SurfaceSubpixelOrder::Bgr) => {
-                true
-            }
+            SurfaceAntialias::Subpixel => matches!(
+                surface.subpixel_order,
+                SurfaceSubpixelOrder::Unknown
+                    | SurfaceSubpixelOrder::Rgb
+                    | SurfaceSubpixelOrder::Bgr
+            ),
             _ => false,
         };
         raster.lcd_filter = if self.antialias && self.lcd_filter == Filter::None {
@@ -629,9 +774,69 @@ impl FontRenderOptions {
         RasterFontOptions(raster)
     }
 
+    /// PGTK supplies GSettings options at scaled-font creation, so its merged
+    /// hinting/AA also affects glyph advances and opened-font metrics. Xlib's
+    /// raster-only `for_surface` deliberately does not take this path.
+    pub fn for_pgtk(self, surface: SurfaceFontOptions) -> Self {
+        let pattern_mode = match self.metrics_mode {
+            MetricPolicy::Pattern(mode) => mode,
+            MetricPolicy::Pgtk(flags) => match flags.bits() & 0xf0000 {
+                value if value == LoadFlag::TARGET_LCD.bits() => FontMetricMode::HorizontalSubpixel,
+                value if value == LoadFlag::TARGET_LCD_V.bits() => FontMetricMode::VerticalSubpixel,
+                _ => FontMetricMode::Alpha,
+            },
+        };
+        // Cairo copies both AA and order from a SUBPIXEL pattern when surface
+        // AA is DEFAULT. A retained order-only GSettings edit does not override
+        // that branch until AA is explicitly set to "rgba".
+        let mode = match surface.antialias {
+            SurfaceAntialias::Default => pattern_mode,
+            SurfaceAntialias::None | SurfaceAntialias::Gray => FontMetricMode::Alpha,
+            SurfaceAntialias::Subpixel => match surface.subpixel_order {
+                SurfaceSubpixelOrder::VRgb | SurfaceSubpixelOrder::VBgr => {
+                    FontMetricMode::VerticalSubpixel
+                }
+                SurfaceSubpixelOrder::Unknown
+                | SurfaceSubpixelOrder::Rgb
+                | SurfaceSubpixelOrder::Bgr => FontMetricMode::HorizontalSubpixel,
+                SurfaceSubpixelOrder::None => FontMetricMode::Alpha,
+            },
+        };
+        let mut merged = self.for_surface(surface).0;
+        let requested = match mode {
+            FontMetricMode::HorizontalSubpixel => FontRenderMode::Subpixel,
+            FontMetricMode::Alpha | FontMetricMode::VerticalSubpixel => FontRenderMode::Alpha,
+        };
+        let mut flags = merged.load_flags(false, requested) & !LoadFlag::NO_BITMAP;
+        if !merged.antialias {
+            flags |= LoadFlag::MONOCHROME;
+        } else if merged.hinting == Hinting::Full
+            && matches!(mode, FontMetricMode::VerticalSubpixel)
+        {
+            // Alpha above chose NORMAL (zero target bits), leaving the
+            // vertical LCD target distinct from the horizontal renderer mode.
+            flags |= LoadFlag::TARGET_LCD_V;
+        }
+        merged.metrics_mode = MetricPolicy::Pgtk(flags);
+        merged
+    }
+
     /// Preserve the configured native hinting target for device advances.
     pub fn metrics_load_flags(self) -> LoadFlag {
-        self.load_flags(false, self.metrics_mode) & !LoadFlag::NO_BITMAP
+        match self.metrics_mode {
+            MetricPolicy::Pattern(mode) => {
+                // Preserve the pre-PGTK X11 metric policy: only horizontal
+                // Fontconfig LCD used the LCD target here.
+                let requested = match mode {
+                    FontMetricMode::HorizontalSubpixel => FontRenderMode::Subpixel,
+                    FontMetricMode::Alpha | FontMetricMode::VerticalSubpixel => {
+                        FontRenderMode::Alpha
+                    }
+                };
+                self.load_flags(false, requested) & !LoadFlag::NO_BITMAP
+            }
+            MetricPolicy::Pgtk(flags) => flags,
+        }
     }
 
     pub fn lcd_filter(self) -> LcdFilter {

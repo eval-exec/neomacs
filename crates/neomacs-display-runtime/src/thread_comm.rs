@@ -723,6 +723,8 @@ pub enum UiCommand {
 // constructors and destructuring code.
 #[allow(clippy::large_enum_variant)]
 pub enum ConfigCommand {
+    /// Desktop font-opening/raster preferences, applied only by Wayland.
+    SetFontRenderOptions(neomacs_display_protocol::DesktopFontRenderOptions),
     /// Replace the complete, already validated visual configuration snapshot.
     SetVisualConfig(VisualConfig),
     /// Replace the compiled NS modifier policy (issue #442).

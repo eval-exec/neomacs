@@ -660,6 +660,82 @@ fn frame_font_installation_invalidates_atlas_on_catalog_generation_change() {
     assert!(atlas.eviction_generation() > established);
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn frame_binding_restores_captured_pgtk_policy_across_cache_and_catalog_clears() {
+    use neomacs_display_protocol::{
+        DesktopFontAntialias, DesktopFontHinting, DesktopFontRenderOptions,
+        DesktopFontSubpixelOrder,
+    };
+    use neomacs_font_materializer::fontconfig::SurfaceFontOptions;
+    let (_, _, mut atlas) = try_test_device_and_atlas()
+        .expect("PGTK frame-policy regression requires a real GPU adapter");
+    let captured = DesktopFontRenderOptions {
+        antialias: DesktopFontAntialias::Grayscale,
+        hinting: DesktopFontHinting::Slight,
+        subpixel_order: DesktopFontSubpixelOrder::Bgr,
+    };
+    let expected = SurfaceFontOptions::from_pgtk_options(captured);
+    let newer = SurfaceFontOptions::from_pgtk_options(DesktopFontRenderOptions {
+        hinting: DesktopFontHinting::Full,
+        ..captured
+    });
+    let mut frame = neomacs_display_protocol::FrameGlyphBuffer::default();
+    frame.pgtk_font_options = Some(captured);
+    atlas.set_font_surface_options(newer);
+    atlas.set_current_frame_fonts(frame.font_bindings());
+    assert_eq!(
+        atlas.native_rasterizer.surface_options(),
+        expected,
+        "draw the captured metric policy even if newer settings have arrived"
+    );
+    let established = atlas.eviction_generation();
+    atlas.set_current_frame_fonts(frame.font_bindings());
+    assert_eq!(atlas.eviction_generation(), established);
+    atlas.clear();
+    assert_eq!(atlas.native_rasterizer.surface_options(), expected);
+    atlas.set_font_surface_options(newer);
+    frame.font_catalog_generation = frame.font_catalog_generation.next();
+    atlas.set_current_frame_fonts(frame.font_bindings());
+    assert_eq!(
+        atlas.native_rasterizer.surface_options(),
+        expected,
+        "a catalog rebuild must install the frame's options before its fonts"
+    );
+    frame.pgtk_font_options = Some(DesktopFontRenderOptions::default());
+    let before_default = atlas.eviction_generation();
+    atlas.set_current_frame_fonts(frame.font_bindings());
+    assert_eq!(
+        atlas.native_rasterizer.surface_options(),
+        SurfaceFontOptions::default()
+    );
+    assert!(atlas.eviction_generation() > before_default);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn frame_without_pgtk_options_preserves_xlib_surface_policy() {
+    use neomacs_font_materializer::fontconfig::{
+        SurfaceFontOptions, SurfaceSubpixelOrder, XftResources,
+    };
+    let (_, _, mut atlas) = try_test_device_and_atlas()
+        .expect("Xlib frame-policy regression requires a real GPU adapter");
+    let xlib = SurfaceFontOptions::from_xlib_resources(
+        XftResources {
+            hintstyle: Some("hintfull"),
+            ..Default::default()
+        },
+        SurfaceSubpixelOrder::Bgr,
+    );
+    atlas.set_font_surface_options(xlib);
+    let frame = neomacs_display_protocol::FrameGlyphBuffer::default();
+    atlas.set_current_frame_fonts(frame.font_bindings());
+    assert_eq!(atlas.native_rasterizer.surface_options(), xlib);
+    atlas.clear();
+    atlas.set_current_frame_fonts(frame.font_bindings());
+    assert_eq!(atlas.native_rasterizer.surface_options(), xlib);
+}
+
 #[test]
 fn atlas_sampling_policy_selects_distinct_wgpu_bind_groups() {
     use neomacs_display_protocol::font::GlyphSampling;

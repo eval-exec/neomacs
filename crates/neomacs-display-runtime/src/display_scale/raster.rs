@@ -43,7 +43,9 @@ fn select(
 ) -> DisplayRasterOptions {
     match backend {
         SelectedLinuxBackend::X11 => DisplayRasterOptions::X11(query()),
-        SelectedLinuxBackend::Wayland => DisplayRasterOptions::Wayland,
+        SelectedLinuxBackend::Wayland => {
+            DisplayRasterOptions::Wayland(SurfaceFontOptions::default())
+        }
     }
 }
 
@@ -80,7 +82,7 @@ mod tests {
     fn selected_wayland_never_reads_x11_resources() {
         assert_eq!(
             select(SelectedLinuxBackend::Wayland, || panic!("X11 query")),
-            DisplayRasterOptions::Wayland
+            DisplayRasterOptions::Wayland(SurfaceFontOptions::default())
         );
     }
 

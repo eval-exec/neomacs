@@ -1491,6 +1491,10 @@ pub enum InputEvent {
         fonts: crate::emacs_core::eval::protocol::SystemFonts,
         display: neomacs_display_protocol::GraphicalDisplayIdentity,
     },
+    /// A Wayland connection has published new font-opening/rendering options.
+    SystemFontRenderingChanged {
+        display: neomacs_display_protocol::GraphicalDisplayIdentity,
+    },
     /// Window-selection change.
     SelectWindow {
         window_id: neovm_edit::emacs_core::display_metrics::WindowId,
@@ -1574,6 +1578,7 @@ impl InputEvent {
             | Self::Focus { .. }
             | Self::MonitorsChanged { .. }
             | Self::SystemFontsChanged { .. }
+            | Self::SystemFontRenderingChanged { .. }
             | Self::SelectWindow { .. }
             | Self::WindowClose { .. }
             | Self::TtyHangup { .. }
@@ -1678,6 +1683,7 @@ impl InputEvent {
             | Self::PresentationRetired { .. }
             | Self::MonitorsChanged { .. }
             | Self::SystemFontsChanged { .. }
+            | Self::SystemFontRenderingChanged { .. }
             | Self::SelectWindow { .. }
             | Self::TtyHangup { .. }
             | Self::ThreadEvent { .. }
@@ -1722,6 +1728,7 @@ impl InputEvent {
             | Self::Focus { .. }
             | Self::MonitorsChanged { .. }
             | Self::SystemFontsChanged { .. }
+            | Self::SystemFontRenderingChanged { .. }
             | Self::SelectWindow { .. }
             | Self::WindowClose { .. }
             | Self::TtyHangup { .. }
@@ -3424,6 +3431,12 @@ impl crate::emacs_core::eval::Context {
                             outcome.merge(SpecialInputServiceOutcome::resize_with_redisplay());
                     }
                 }
+                InputEvent::SystemFontRenderingChanged { display } => {
+                    if self.handle_system_font_rendering_input_event(display)? {
+                        outcome =
+                            outcome.merge(SpecialInputServiceOutcome::resize_with_redisplay());
+                    }
+                }
                 InputEvent::MouseMove {
                     x,
                     y,
@@ -3527,6 +3540,31 @@ impl crate::emacs_core::eval::Context {
             font_event |= handled && role == SystemFontRole::Monospace;
         }
         Ok(font_event)
+    }
+
+    /// GNU PGTK's xsettings.c `store_font_options_changed` emits
+    /// `(config-changed-event font-render DISPLAY)`. The existing Lisp handler
+    /// reconsiders frame fonts, including their policy-dependent metrics.
+    #[doc(hidden)]
+    pub fn handle_system_font_rendering_input_event(
+        &mut self,
+        display: neomacs_display_protocol::GraphicalDisplayIdentity,
+    ) -> Result<bool, neovm_value::error::Flow> {
+        if display.backend() != neomacs_display_protocol::GraphicalBackend::Wayland {
+            return Ok(false);
+        }
+        let event = Value::list(vec![
+            Value::symbol("config-changed-event"),
+            Value::symbol("font-render"),
+            Value::string(display.terminal_name()),
+        ]);
+        let result = self.execute_special_event_if_bound(event);
+        // A -Q/bootstrap context can have no Lisp binding yet. The already
+        // published connection options still require a fresh frame then, and
+        // also when a user handler exits nonlocally.
+        self.invalidate_redisplay();
+        result?;
+        Ok(true)
     }
 
     /// The display lost its GPU device and rebuilt from scratch
@@ -4914,6 +4952,12 @@ impl crate::emacs_core::eval::Context {
             }
             InputEvent::SystemFontsChanged { fonts, display } => {
                 if self.handle_system_fonts_input_event(fonts, display)? {
+                    self.redisplay()?;
+                }
+                Ok(None)
+            }
+            InputEvent::SystemFontRenderingChanged { display } => {
+                if self.handle_system_font_rendering_input_event(display)? {
                     self.redisplay()?;
                 }
                 Ok(None)

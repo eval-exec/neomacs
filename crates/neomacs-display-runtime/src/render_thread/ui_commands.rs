@@ -205,6 +205,15 @@ impl RenderApp {
 
     pub(super) fn handle_config(&mut self, cmd: ConfigCommand) {
         match cmd {
+            ConfigCommand::SetFontRenderOptions(options) => {
+                let next = self.font_raster_options.with_desktop_options(options);
+                if next != self.font_raster_options {
+                    self.font_raster_options = next;
+                    self.frame_windows.set_font_raster_options(next);
+                    self.tooltips.set_font_raster_options(next);
+                    self.frame_windows.mark_top_level_dirty();
+                }
+            }
             ConfigCommand::SetVisualConfig(config) => {
                 self.requested_visual_config = config;
                 self.apply_requested_visual_config();

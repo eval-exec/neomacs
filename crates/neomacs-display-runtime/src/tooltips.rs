@@ -89,6 +89,15 @@ impl Tooltips {
     ) {
         self.font_raster_options = options;
         if let Presentation::Mapped(mapped) = &mut self.state {
+            // This tooltip's layout was measured with its owner's captured
+            // font options. Retain that policy until it is replaced; future
+            // tooltips consume the latest connection observation above.
+            let options = mapped
+                .ready
+                .owner
+                .fonts
+                .pgtk_font_options
+                .map_or(options, |captured| options.with_desktop_options(captured));
             options.apply(&mut mapped.atlas);
         }
     }

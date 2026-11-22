@@ -55,3 +55,40 @@ fn mini_frame_clones_the_complete_font_binding_snapshot() {
     assert_eq!(mini.char_fonts, source.char_fonts);
     assert_eq!(mini.shaped_clusters, source.shaped_clusters);
 }
+
+#[test]
+fn frame_font_metadata_preserves_the_captured_pgtk_options() {
+    use crate::{
+        DesktopFontAntialias, DesktopFontHinting, DesktopFontRenderOptions,
+        DesktopFontSubpixelOrder,
+    };
+    let explicit = DesktopFontRenderOptions {
+        antialias: DesktopFontAntialias::Subpixel,
+        hinting: DesktopFontHinting::Slight,
+        subpixel_order: DesktopFontSubpixelOrder::Bgr,
+    };
+    assert_eq!(crate::FrameGlyphBuffer::new().pgtk_font_options, None);
+    let mut state = crate::FrameDisplayState::new(80, 24, 8.0, 16.0);
+    assert_eq!(state.pgtk_font_options, None);
+    for options in [
+        None,
+        Some(DesktopFontRenderOptions::default()),
+        Some(explicit),
+    ] {
+        state.pgtk_font_options = options;
+        let materialized = state.materialize();
+        assert_eq!(materialized.pgtk_font_options, options);
+        assert_eq!(materialized.font_bindings().pgtk_font_options, options);
+        let restored = crate::FrameDisplayState::from_frame_glyph_buffer(&materialized);
+        assert_eq!(restored.pgtk_font_options, options);
+        let mut mini = crate::FrameGlyphBuffer::default();
+        mini.pgtk_font_options = Some(explicit);
+        mini.clone_font_bindings_from(&materialized);
+        assert_eq!(mini.pgtk_font_options, options);
+        state.pgtk_font_options = None;
+        assert_eq!(
+            materialized.pgtk_font_options, options,
+            "later settings cannot mutate an already captured presentation"
+        );
+    }
+}

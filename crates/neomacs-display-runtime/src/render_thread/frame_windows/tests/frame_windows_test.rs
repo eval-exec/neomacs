@@ -26,19 +26,8 @@ fn default_geometry_hints() -> GuiFrameGeometryHints {
 }
 
 #[cfg(target_os = "linux")]
-#[test]
-fn display_raster_policy_survives_device_teardown_and_primary_readoption() {
-    use crate::display_raster::DisplayRasterOptions;
-    use neomacs_font_materializer::fontconfig::{
-        SurfaceFontOptions, SurfaceSubpixelOrder, XftResources,
-    };
-    let options = DisplayRasterOptions::X11(SurfaceFontOptions::from_xlib_resources(
-        XftResources::default(),
-        SurfaceSubpixelOrder::Unknown,
-    ));
-    let mut manager = GuiFrameWindowManager::new();
-    manager.set_font_raster_options(options);
-    manager.set_primary_pending(GuiFrameWindowState {
+fn pending_raster_window(frame_id: u64) -> GuiFrameWindowState {
+    GuiFrameWindowState {
         visibility: WindowVisibility::Visible,
         pending_scale_factor: None,
         lifecycle: FrameLifecycle::Pending {
@@ -53,11 +42,27 @@ fn display_raster_policy_survives_device_teardown_and_primary_readoption() {
             pending_position: None,
         },
         render: GuiFrameRenderState::new_without_device(
-            42,
+            frame_id,
             false,
             neomacs_display_protocol::frame_time::observe_platform_now(),
         ),
-    });
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn display_raster_policy_survives_device_teardown_and_primary_readoption() {
+    use crate::display_raster::DisplayRasterOptions;
+    use neomacs_font_materializer::fontconfig::{
+        SurfaceFontOptions, SurfaceSubpixelOrder, XftResources,
+    };
+    let options = DisplayRasterOptions::X11(SurfaceFontOptions::from_xlib_resources(
+        XftResources::default(),
+        SurfaceSubpixelOrder::Unknown,
+    ));
+    let mut manager = GuiFrameWindowManager::new();
+    manager.set_font_raster_options(options);
+    manager.set_primary_pending(pending_raster_window(42));
     manager.adopt_primary_frame_id(42);
     assert_eq!(manager.get(42).unwrap().render.font_raster_options, options);
     manager.clear_gpu_resident_state();
@@ -65,12 +70,77 @@ fn display_raster_policy_survives_device_teardown_and_primary_readoption() {
 
     let detached = manager.take_primary_window().unwrap();
     manager.clear_primary_mapping();
-    manager.set_font_raster_options(DisplayRasterOptions::Wayland);
+    manager.set_font_raster_options(DisplayRasterOptions::Wayland(SurfaceFontOptions::default()));
     manager.set_primary_pending(detached);
     manager.adopt_primary_frame_id(42);
     assert_eq!(
         manager.get(42).unwrap().render.font_raster_options,
-        DisplayRasterOptions::Wayland
+        DisplayRasterOptions::Wayland(SurfaceFontOptions::default())
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn wayland_preferences_reach_current_future_and_recreated_frame_atlases() {
+    use crate::display_raster::DisplayRasterOptions;
+    use neomacs_display_protocol::{
+        DesktopFontAntialias, DesktopFontHinting, DesktopFontRenderOptions,
+    };
+    use neomacs_font_materializer::fontconfig::SurfaceFontOptions;
+    let device =
+        make_test_device().expect("Wayland font-policy regression requires a real GPU adapter");
+    let preferences = |hinting| DesktopFontRenderOptions {
+        antialias: DesktopFontAntialias::Grayscale,
+        hinting,
+        ..Default::default()
+    };
+    let full = preferences(DesktopFontHinting::Full);
+    let slight = preferences(DesktopFontHinting::Slight);
+    let wayland = DisplayRasterOptions::Wayland(SurfaceFontOptions::default());
+    let mut manager = GuiFrameWindowManager::new();
+    manager.set_primary_pending(pending_raster_window(42));
+    manager.adopt_primary_frame_id(42);
+    manager.set_font_raster_options(wayland.with_desktop_options(full));
+    let assert_applied = |render: &mut GuiFrameRenderState, expected| {
+        render.populate_glyph_atlas(&device, 1.0);
+        let atlas = render.compositor.glyph_atlas.as_mut().unwrap();
+        let generation = atlas.eviction_generation();
+        atlas.set_font_surface_options(SurfaceFontOptions::from_pgtk_options(expected));
+        assert_eq!(
+            atlas.eviction_generation(),
+            generation,
+            "installing the expected policy again must preserve existing atlas entries"
+        );
+        generation
+    };
+    let before = assert_applied(&mut manager.get_mut(42).unwrap().render, full);
+    let live = wayland.with_desktop_options(slight);
+    manager.set_font_raster_options(live);
+    let after = assert_applied(&mut manager.get_mut(42).unwrap().render, slight);
+    assert!(
+        after > before,
+        "a changed live policy invalidates old glyph masks"
+    );
+    manager.set_font_raster_options(live);
+    assert_eq!(
+        assert_applied(&mut manager.get_mut(42).unwrap().render, slight),
+        after
+    );
+
+    manager.clear_gpu_resident_state();
+    assert_applied(&mut manager.get_mut(42).unwrap().render, slight);
+    let _old_window = manager.take_primary_window().unwrap();
+    manager.clear_primary_mapping();
+    manager.set_primary_pending(pending_raster_window(43));
+    manager.adopt_primary_frame_id(43);
+    assert_eq!(manager.get(43).unwrap().render.font_raster_options, live);
+    assert_applied(&mut manager.get_mut(43).unwrap().render, slight);
+
+    let x11 = DisplayRasterOptions::X11(SurfaceFontOptions::default());
+    assert_eq!(
+        x11.with_desktop_options(full),
+        x11,
+        "desktop PGTK preferences must not change an X11 surface"
     );
 }
 

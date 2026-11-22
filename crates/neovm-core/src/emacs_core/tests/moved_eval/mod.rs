@@ -703,6 +703,10 @@ mod emacs_core_runtime_eval_tests_green_thread_buffer_test_rs;
 mod emacs_core_runtime_eval_keyboard_tests_display_service_class_b_test_rs;
 
 #[cfg(test)]
+#[path = "emacs_core/runtime/eval/keyboard/tests/font_rendering_event_test.rs"]
+mod emacs_core_runtime_eval_keyboard_tests_font_rendering_event_test_rs;
+
+#[cfg(test)]
 #[cfg(feature = "jit")]
 #[path = "emacs_core/runtime/jit/compile/tests/load_containment_class_b_test.rs"]
 mod emacs_core_runtime_jit_compile_tests_load_containment_class_b_test_rs;

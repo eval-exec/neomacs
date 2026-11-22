@@ -431,6 +431,8 @@ fn finish_gui_connection(
     let font_observer =
         neomacs_display_runtime::font_defaults::observe_font_defaults(identity.backend())
             .map_err(|error| format!("failed to observe desktop fonts: {error}"))?;
+    #[cfg(target_os = "linux")]
+    identity.observe_font_render_options(font_observer.initial_raster_options().pgtk_options());
     // Native Wayland consumes logical text DPI from the same settings owner
     // that discovered the desktop fonts. Backing scale remains frame-local.
     let observation = match (host.observation(), font_observer.initial_text_dpi()) {
@@ -4289,6 +4291,23 @@ fn run_gui_main_thread(
 
     let comms = ThreadComms::new().with_image_decoder(image_decoder);
     let (emacs_comms, render_comms) = comms.split();
+    #[cfg(target_os = "linux")]
+    if matches!(&bootstrap_display.kind, BootstrapDisplayKind::Gui { identity, .. }
+        if identity.backend() == neomacs_display_protocol::GraphicalBackend::Wayland)
+    {
+        // Queue the startup snapshot before the native loop can paint. Font
+        // openings already see this same connection-owned preference value.
+        if let Err(error) =
+            emacs_comms
+                .cmd_tx
+                .send(RenderCommand::Config(ConfigCommand::SetFontRenderOptions(
+                    font_observer.initial_raster_options().pgtk_options(),
+                )))
+        {
+            tracing::error!(%error, "failed to queue initial font rendering preferences");
+            return;
+        }
+    }
     let (startup_reply, startup_ready) =
         neomacs_display_runtime::render_thread::InitialWindowReply::channel(
             event_loop.create_proxy(),
@@ -4697,13 +4716,42 @@ fn run_gui_evaluator_worker(
     let secondary_ttys = secondary_tty::SecondaryTtyRegistry::default();
     let display_input_rx = emacs_comms.input_rx;
     let mut font_changes = font_observer.take_changes();
+    #[cfg(target_os = "linux")]
+    let mut font_render_changes = font_observer.take_raster_changes();
+    #[cfg(not(target_os = "linux"))]
+    let mut font_render_changes: crossbeam_channel::Receiver<
+        neomacs_display_protocol::DesktopFontRenderOptions,
+    > = crossbeam_channel::never();
+    let font_render_tx = emacs_comms.cmd_tx.clone();
+    let font_render_waker = render_waker.clone();
     let secondary_input_tx = input;
     let secondary_quit_requested = evaluator.quit_requested.clone();
     std::thread::Builder::new()
         .name("input-bridge".to_string())
         .spawn(move || {
+            let mut pending_font_render_options = None;
             loop {
+                // Both transport queues are bounded. Keep draining native
+                // input if the renderer is temporarily unable to accept a
+                // preference update; only the latest snapshot is needed.
+                if let Some(options) = pending_font_render_options.take() {
+                    match font_render_tx.try_send(RenderCommand::Config(
+                        ConfigCommand::SetFontRenderOptions(options),
+                    )) {
+                        Ok(()) => font_render_waker.wake(),
+                        Err(crossbeam_channel::TrySendError::Full(_)) => {
+                            pending_font_render_options = Some(options);
+                        }
+                        Err(crossbeam_channel::TrySendError::Disconnected(_)) => break,
+                    }
+                }
+                let font_render_retry = if pending_font_render_options.is_some() {
+                    crossbeam_channel::after(std::time::Duration::from_millis(10))
+                } else {
+                    crossbeam_channel::never()
+                };
                 let event = crossbeam_channel::select! {
+                    recv(font_render_retry) -> _ => continue,
                     recv(display_input_rx) -> event => match event {
                         Ok(event) => event,
                         Err(_) => break,
@@ -4716,6 +4764,31 @@ fn run_gui_evaluator_worker(
                         match input_publisher.publish_core(
                             neovm_core::keyboard::InputEvent::SystemFontsChanged {
                                 fonts,
+                                display: font_display.clone(),
+                            },
+                        ) {
+                            Publication::Delivered => {}
+                            Publication::ReceiverClosed => break,
+                        }
+                        continue;
+                    }
+                    recv(font_render_changes) -> options => {
+                        let Ok(options) = options else {
+                            font_render_changes = crossbeam_channel::never();
+                            continue;
+                        };
+                        #[cfg(target_os = "linux")]
+                        let options = options.pgtk_options();
+                        if font_display.backend() != neomacs_display_protocol::GraphicalBackend::Wayland {
+                            continue;
+                        }
+                        if font_display.observe_font_render_options(options) {
+                            pending_font_render_options = Some(options);
+                        }
+                        // GNU emits font-render for every relevant settings
+                        // signal, even when its effective options are unchanged.
+                        match input_publisher.publish_core(
+                            neovm_core::keyboard::InputEvent::SystemFontRenderingChanged {
                                 display: font_display.clone(),
                             },
                         ) {

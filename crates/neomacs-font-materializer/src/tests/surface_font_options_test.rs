@@ -6,7 +6,7 @@ fn pattern(hinting: Hinting) -> FontRenderOptions {
         antialias: true,
         autohint: false,
         horizontal_lcd: true,
-        metrics_mode: FontRenderMode::Alpha,
+        metrics_mode: MetricPolicy::Pattern(FontMetricMode::Alpha),
         lcd_filter: Filter::Light,
     }
 }
@@ -232,5 +232,318 @@ fn monochrome_patterns_leave_hintstyle_default_until_surface_merge() {
         disabled
             .load_flags(false, FontRenderMode::Alpha)
             .contains(LoadFlag::NO_HINTING)
+    );
+}
+
+#[test]
+fn pgtk_missing_invalid_and_unknown_values_retain_cairo_defaults() {
+    for value in [
+        GSettingsValue::Missing,
+        GSettingsValue::Invalid,
+        GSettingsValue::String(""),
+        GSettingsValue::String("unknown"),
+        GSettingsValue::String("NONE"),
+    ] {
+        assert_eq!(
+            SurfaceFontOptions::from_pgtk_settings(PgtkFontSettings {
+                antialias: value,
+                hinting: value,
+                rgba: value,
+            }),
+            SurfaceFontOptions::default(),
+            "{value:?}"
+        );
+    }
+}
+
+#[test]
+fn pgtk_hinting_strings_select_exact_targets_without_xft_parsing() {
+    for (value, expected) in [
+        ("none", Hinting::None),
+        ("slight", Hinting::Slight),
+        ("medium", Hinting::Medium),
+        ("full", Hinting::Full),
+    ] {
+        let options = SurfaceFontOptions::from_pgtk_settings(PgtkFontSettings {
+            hinting: GSettingsValue::String(value),
+            ..Default::default()
+        });
+        assert_eq!(options.hinting, Some(expected), "{value}");
+        assert_eq!(options.raster_subpixel_order(), None);
+    }
+    for value in ["hintslight", "1", " slight", "Full"] {
+        assert_eq!(
+            SurfaceFontOptions::from_pgtk_settings(PgtkFontSettings {
+                hinting: GSettingsValue::String(value),
+                ..Default::default()
+            }),
+            SurfaceFontOptions::default(),
+            "{value}"
+        );
+    }
+}
+
+#[test]
+fn pgtk_antialias_and_order_settings_are_independent() {
+    for (value, order) in [
+        ("rgb", SurfaceSubpixelOrder::Rgb),
+        ("bgr", SurfaceSubpixelOrder::Bgr),
+        ("vrgb", SurfaceSubpixelOrder::VRgb),
+        ("vbgr", SurfaceSubpixelOrder::VBgr),
+    ] {
+        let gray = SurfaceFontOptions::from_pgtk_settings(PgtkFontSettings {
+            antialias: GSettingsValue::String("grayscale"),
+            rgba: GSettingsValue::String(value),
+            ..Default::default()
+        });
+        assert_eq!(
+            gray.raster_subpixel_order(),
+            Some(SurfaceSubpixelOrder::None)
+        );
+        let lcd = gray.with_pgtk_settings(PgtkFontSettings {
+            antialias: GSettingsValue::String("rgba"),
+            ..Default::default()
+        });
+        assert_eq!(lcd.raster_subpixel_order(), Some(order));
+        let mono = lcd.with_pgtk_settings(PgtkFontSettings {
+            antialias: GSettingsValue::String("none"),
+            ..Default::default()
+        });
+        assert!(matches!(
+            pattern(Hinting::Full)
+                .for_surface(mono)
+                .render_mode(FontRenderMode::Subpixel),
+            RenderMode::Mono
+        ));
+        assert_eq!(
+            mono.with_pgtk_settings(PgtkFontSettings {
+                antialias: GSettingsValue::String("rgba"),
+                ..Default::default()
+            }),
+            lcd
+        );
+    }
+}
+
+#[test]
+fn pgtk_unrecognized_updates_retain_the_last_valid_options() {
+    let previous = SurfaceFontOptions::from_pgtk_settings(PgtkFontSettings {
+        antialias: GSettingsValue::String("rgba"),
+        hinting: GSettingsValue::String("slight"),
+        rgba: GSettingsValue::String("bgr"),
+    });
+    for value in [
+        GSettingsValue::Missing,
+        GSettingsValue::Invalid,
+        GSettingsValue::String("unknown"),
+        GSettingsValue::String("None"),
+    ] {
+        assert_eq!(
+            previous.with_pgtk_settings(PgtkFontSettings {
+                antialias: value,
+                hinting: value,
+                rgba: value,
+            }),
+            previous
+        );
+    }
+    let changed = previous.with_pgtk_settings(PgtkFontSettings {
+        hinting: GSettingsValue::String("full"),
+        ..Default::default()
+    });
+    assert_eq!(changed.hinting, Some(Hinting::Full));
+    assert_eq!(
+        changed.raster_subpixel_order(),
+        Some(SurfaceSubpixelOrder::Bgr)
+    );
+    assert_eq!(
+        previous.with_pgtk_settings(PgtkFontSettings {
+            rgba: GSettingsValue::String("none"),
+            ..Default::default()
+        }),
+        previous,
+        "PGTK's order key does not accept Xft's none constant"
+    );
+}
+
+#[test]
+fn pgtk_surface_options_preserve_pattern_none_precedence() {
+    let options = SurfaceFontOptions::from_pgtk_settings(PgtkFontSettings {
+        antialias: GSettingsValue::String("rgba"),
+        hinting: GSettingsValue::String("full"),
+        rgba: GSettingsValue::String("rgb"),
+    });
+    assert!(
+        pattern(Hinting::None)
+            .for_surface(options)
+            .load_flags(false, FontRenderMode::Subpixel)
+            .contains(LoadFlag::NO_HINTING)
+    );
+    assert!(
+        pattern(Hinting::None)
+            .for_pgtk(options)
+            .metrics_load_flags()
+            .contains(LoadFlag::NO_HINTING)
+    );
+    let mono = FontRenderOptions {
+        antialias: false,
+        ..pattern(Hinting::Full)
+    };
+    assert!(matches!(
+        mono.for_surface(options)
+            .render_mode(FontRenderMode::Subpixel),
+        RenderMode::Mono
+    ));
+    assert!(
+        mono.for_pgtk(options)
+            .metrics_load_flags()
+            .contains(LoadFlag::MONOCHROME)
+    );
+    let no_filter = FontRenderOptions {
+        lcd_filter: Filter::None,
+        ..pattern(Hinting::Full)
+    };
+    assert!(matches!(
+        no_filter.for_surface(options).lcd_filter(),
+        LcdFilter::LcdFilterNone
+    ));
+}
+
+#[test]
+fn pgtk_rgba_without_an_order_uses_cairo_rgb_default() {
+    let options = SurfaceFontOptions::from_pgtk_settings(PgtkFontSettings {
+        antialias: GSettingsValue::String("rgba"),
+        ..Default::default()
+    });
+    assert_eq!(
+        options.raster_subpixel_order(),
+        Some(SurfaceSubpixelOrder::Rgb)
+    );
+    assert!(matches!(
+        pattern(Hinting::Full)
+            .for_surface(options)
+            .render_mode(FontRenderMode::Subpixel),
+        RenderMode::Lcd
+    ));
+    let vertical = FontRenderOptions {
+        horizontal_lcd: false,
+        metrics_mode: MetricPolicy::Pattern(FontMetricMode::VerticalSubpixel),
+        ..pattern(Hinting::Full)
+    };
+    assert_eq!(
+        vertical.for_pgtk(options).metrics_load_flags().bits() & 0xf0000,
+        LoadFlag::TARGET_LCD.bits()
+    );
+}
+
+#[test]
+fn pgtk_opened_font_metrics_use_the_merged_settings_targets() {
+    let font = pattern(Hinting::Slight);
+    let original = font.metrics_load_flags();
+    for (antialias, hinting, order, target) in [
+        ("grayscale", "slight", "rgb", LoadFlag::TARGET_LIGHT),
+        ("grayscale", "full", "rgb", LoadFlag::TARGET_NORMAL),
+        ("rgba", "full", "rgb", LoadFlag::TARGET_LCD),
+        ("rgba", "full", "bgr", LoadFlag::TARGET_LCD),
+        ("rgba", "full", "vrgb", LoadFlag::TARGET_LCD_V),
+        ("rgba", "full", "vbgr", LoadFlag::TARGET_LCD_V),
+        ("rgba", "medium", "rgb", LoadFlag::TARGET_NORMAL),
+        ("none", "full", "rgb", LoadFlag::TARGET_MONO),
+    ] {
+        let settings = SurfaceFontOptions::from_pgtk_settings(PgtkFontSettings {
+            antialias: GSettingsValue::String(antialias),
+            hinting: GSettingsValue::String(hinting),
+            rgba: GSettingsValue::String(order),
+        });
+        let flags = font.for_pgtk(settings).metrics_load_flags();
+        assert_eq!(
+            flags.bits() & 0xf0000,
+            target.bits(),
+            "{antialias}/{hinting}/{order}"
+        );
+        assert_eq!(flags.contains(LoadFlag::MONOCHROME), antialias == "none");
+        assert!(!flags.contains(LoadFlag::NO_BITMAP));
+    }
+    assert_eq!(
+        font.metrics_load_flags().bits(),
+        original.bits(),
+        "X11 pattern metrics stay unchanged"
+    );
+    let disabled = SurfaceFontOptions::from_pgtk_settings(PgtkFontSettings {
+        antialias: GSettingsValue::String("none"),
+        hinting: GSettingsValue::String("none"),
+        ..Default::default()
+    });
+    let flags = font.for_pgtk(disabled).metrics_load_flags();
+    assert!(flags.contains(LoadFlag::NO_HINTING | LoadFlag::MONOCHROME));
+    assert_eq!(flags.bits() & 0xf0000, LoadFlag::TARGET_NORMAL.bits());
+}
+
+#[test]
+fn pgtk_default_antialias_uses_pattern_order_until_rgba_is_explicit() {
+    let vertical = FontRenderOptions {
+        horizontal_lcd: false,
+        metrics_mode: MetricPolicy::Pattern(FontMetricMode::VerticalSubpixel),
+        ..pattern(Hinting::Full)
+    };
+    let order_only = SurfaceFontOptions::from_pgtk_settings(PgtkFontSettings {
+        rgba: GSettingsValue::String("bgr"),
+        ..Default::default()
+    });
+    assert_eq!(order_only.raster_subpixel_order(), None);
+    assert_eq!(
+        vertical.for_pgtk(order_only).metrics_load_flags().bits() & 0xf0000,
+        LoadFlag::TARGET_LCD_V.bits()
+    );
+    let explicit = order_only.with_pgtk_settings(PgtkFontSettings {
+        antialias: GSettingsValue::String("rgba"),
+        ..Default::default()
+    });
+    assert_eq!(
+        explicit.raster_subpixel_order(),
+        Some(SurfaceSubpixelOrder::Bgr)
+    );
+    assert_eq!(
+        vertical.for_pgtk(explicit).metrics_load_flags().bits() & 0xf0000,
+        LoadFlag::TARGET_LCD.bits()
+    );
+}
+
+#[test]
+fn pgtk_protocol_round_trip_preserves_defaults_and_independent_fields() {
+    use neomacs_display_protocol::{
+        DesktopFontAntialias as Aa, DesktopFontHinting as Hint, DesktopFontRenderOptions,
+        DesktopFontSubpixelOrder as Order,
+    };
+    for antialias in [Aa::Default, Aa::None, Aa::Grayscale, Aa::Subpixel] {
+        for hinting in [
+            Hint::Default,
+            Hint::None,
+            Hint::Slight,
+            Hint::Medium,
+            Hint::Full,
+        ] {
+            for subpixel_order in [
+                Order::Default,
+                Order::Rgb,
+                Order::Bgr,
+                Order::VRgb,
+                Order::VBgr,
+            ] {
+                let snapshot = DesktopFontRenderOptions {
+                    antialias,
+                    hinting,
+                    subpixel_order,
+                };
+                let surface = SurfaceFontOptions::from_pgtk_options(snapshot);
+                assert_eq!(surface.pgtk_options(), snapshot);
+                assert_eq!(surface.lcd_filter, None, "PGTK has no LCD-filter setting");
+            }
+        }
+    }
+    let defaults = DesktopFontRenderOptions::default();
+    assert_eq!(
+        SurfaceFontOptions::from_pgtk_options(defaults),
+        SurfaceFontOptions::default()
     );
 }

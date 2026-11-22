@@ -1204,6 +1204,46 @@ fn font_metrics_consumes_native_catalog_changes_once_at_a_safe_point() {
     assert_eq!(advances.load(std::sync::atomic::Ordering::Relaxed), 1);
 }
 
+#[test]
+fn native_catalog_and_wayland_preferences_coalesce_into_one_font_generation() {
+    use neomacs_display_protocol::{
+        DesktopFontHinting, DesktopFontRenderOptions, GraphicalBackend,
+    };
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    };
+    let pending = Arc::new(AtomicBool::new(false));
+    let advances = Arc::new(AtomicUsize::new(0));
+    let mut service = make_svc();
+    service
+        .font_resolver
+        .replace_backend(Box::new(ChangingCatalogBackend {
+            catalog: crate::font::metrics::test_catalog::standard_catalog().clone(),
+            pending: Arc::clone(&pending),
+            advances: Arc::clone(&advances),
+        }));
+    let display = GraphicalDisplayIdentity::anonymous_connection(GraphicalBackend::Wayland);
+    service.set_display_identity(display.clone());
+    let before = service.font_catalog_generation();
+    let before_advances = advances.load(Ordering::Relaxed);
+    pending.store(true, Ordering::Release);
+    assert!(
+        display.observe_font_render_options(DesktopFontRenderOptions {
+            hinting: DesktopFontHinting::Full,
+            ..Default::default()
+        })
+    );
+    let update = service.synchronize_font_catalog();
+    assert!(update.changed());
+    assert!(update.catalog.changed());
+    assert!(update.rendering_changed);
+    assert_eq!(update.generation(), before.next());
+    assert_eq!(advances.load(Ordering::Relaxed), before_advances + 1);
+    assert!(!service.synchronize_font_catalog().changed());
+    assert_eq!(advances.load(Ordering::Relaxed), before_advances + 1);
+}
+
 #[cfg(unix)]
 impl crate::font_backend::FontBackend for FixedCharFontBackend {
     fn test_foundry_for_file(&self, _file: &str) -> Option<String> {
