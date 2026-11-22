@@ -803,11 +803,12 @@ fn render_overlay_string<B: LayoutBufferView, FS: crate::neovm_bridge::FaceServi
     state.source_completion = OverlaySourceCompletion::Incomplete;
     let anchor_charpos = source_request.anchor_i64();
     let text_value = source_request.value();
+    let string_roots = state.source_render.string_source_root_scope();
+    let text_props = get_string_text_properties_table_for_value(text_value, &string_roots);
     if text_value.as_lisp_string().is_none() {
         state.source_completion = OverlaySourceCompletion::Complete;
         return DisplayRowTransitionContinuation::Continue;
     }
-    let text_props = get_string_text_properties_table_for_value(text_value);
     let cursor_context = source_request.cursor_context(point);
     let base_face = state.source_render.default_display_string_base_face(
         buffer,
@@ -822,6 +823,7 @@ fn render_overlay_string<B: LayoutBufferView, FS: crate::neovm_bridge::FaceServi
         append_request,
         base_face.face_id(),
         base_face.face(),
+        string_roots,
     );
     let row_session_request = LispStringSourceRowAppendSessionRequest::new(
         session_request,
@@ -983,7 +985,7 @@ fn root_lisp_position_char(source: &crate::display_item::DisplaySourcePosition) 
 /// Resolve cursor-property eligibility at the string's source slot and attach
 /// its measured extent before later bidi reordering changes visual placement.
 fn capture_overlay_string_cursor_at_slot(
-    text_props: Option<&neovm_core::buffer::text_props::TextPropertyTable>,
+    text_props: Option<&neovm_core::buffer::text_props::TextPropertyReadView>,
     slot: &DisplayRowGlyphSlot,
     cursor_info: &mut CursorCaptureState,
     y: f32,
@@ -1013,7 +1015,7 @@ fn capture_overlay_string_cursor_at_slot(
 /// row defaults are not evidence of the selected slot's glyph height.
 #[allow(clippy::too_many_arguments)]
 fn capture_overlay_string_cursor_with_dimensions(
-    text_props: Option<&neovm_core::buffer::text_props::TextPropertyTable>,
+    text_props: Option<&neovm_core::buffer::text_props::TextPropertyReadView>,
     char_idx: usize,
     cursor_info: &mut CursorCaptureState,
     x: f32,

@@ -16,6 +16,7 @@ use crate::row_layout::program::{
     RowMeasurements, RowProgram, RowProgramError, RowProgramGeometry, RowProgramLimits,
 };
 use crate::row_layout::worker::{RowJobTicket, RowWorker};
+use crate::string_property_snapshot::StringSourceRootScope;
 use crate::window_output::prepared_body::position_buffer_rows;
 use neovm_core::buffer::CharPos0;
 use neovm_core::tagged::collection_reads::{self, CollectionReads};
@@ -1286,6 +1287,7 @@ impl LayoutEngine {
             context,
             &mut capture.attempt,
             || false,
+            StringSourceRootScope::Rooted(evaluator.owned_root_retainer()),
         )?;
         if !captured.roots.is_empty() {
             capture

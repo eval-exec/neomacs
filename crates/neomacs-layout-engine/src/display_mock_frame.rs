@@ -271,6 +271,7 @@ fn render_mock_display_area(request: MockDisplayAreaRenderRequest<'_>) {
         face_resolver,
         None,
         face_ids,
+        crate::string_property_snapshot::StringSourceRootScope::CallbackFree,
     );
     executor.render_item_source_fragment_into_row(row_request, row, &mut source, &mut source_state);
 }

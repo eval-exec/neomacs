@@ -1777,7 +1777,14 @@ impl LayoutEngine {
                 divider_paint,
                 effective_default_face,
             ),
-            ChromeRowRenderServices::new(font_metrics, face_resolver, &mut decoration_face_ids),
+            // Decorations emit native border/marker items. Their services
+            // carry neither a display host nor a Lisp face realizer.
+            ChromeRowRenderServices::new(
+                font_metrics,
+                face_resolver,
+                &mut decoration_face_ids,
+                crate::string_property_snapshot::StringSourceRootScope::CallbackFree,
+            ),
         );
     }
 
@@ -7852,6 +7859,9 @@ impl LayoutEngine {
         let mut face_ids = face_attempt.clone();
         let automatic_composition =
             crate::neovm_bridge::current_string_composition_rules(evaluator);
+        let root_scope = crate::string_property_snapshot::StringSourceRootScope::Rooted(
+            evaluator.owned_root_retainer(),
+        );
         let rendered_tab_bar = {
             let (display_host, evaluator) = if face_resolver.has_tty_realization() {
                 (None, Some(&mut *evaluator))
@@ -7878,9 +7888,14 @@ impl LayoutEngine {
                     text: tab_bar.text,
                     image_scale_environment: frame_params.image_scale_environment,
                 },
-                ChromeRowRenderServices::new(&mut self.font_metrics, face_resolver, &mut face_ids)
-                    .with_face_realizer(realizer)
-                    .with_automatic_composition(automatic_composition),
+                ChromeRowRenderServices::new(
+                    &mut self.font_metrics,
+                    face_resolver,
+                    &mut face_ids,
+                    root_scope,
+                )
+                .with_face_realizer(realizer)
+                .with_automatic_composition(automatic_composition),
                 display_host,
             )
         }?;

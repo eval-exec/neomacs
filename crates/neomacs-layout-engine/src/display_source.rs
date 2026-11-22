@@ -2,7 +2,7 @@
 //! scalar materializer; unset or `bulk` copies validated ordinary UTF-8 runs.
 //! The selector is native immutable process configuration, read once.
 
-use crate::cursor_source_dependencies::string_properties as get_string_text_properties_table_for_value;
+use crate::cursor_source_dependencies::string_properties;
 use crate::display_item::{
     BufferDisplayReplacementSource, DisplayGlyphless, DisplayItem, DisplayItemKind,
     DisplayItemLayout, DisplayLength, DisplayLineHeightPolicy, DisplayLineSpacingPolicy,
@@ -27,13 +27,12 @@ use crate::display_source_append_plan::{
 use crate::display_spec::{DisplaySpaceKey, display_space_positive_number};
 use crate::display_when::DisplayWhenConditions;
 use crate::neovm_bridge::{LayoutBufferView, OrderedFaceSources, TtyGlyphlessCharDisplay};
+use crate::string_property_snapshot::{StringPropertySnapshot, StringSourceRootScope};
 use crate::types::{NobreakDisplayMode, WindowParams};
 use crate::unicode::{EmacsTextStorage, decode_emacs_char, decode_utf8};
 use neomacs_display_protocol::face::BoxVerticalEdges;
 use neomacs_display_protocol::types::FaceId;
-use neovm_core::buffer::{
-    BufferId, CharLen, CharPos0, CharRange, EmacsBytePos, text_props::TextPropertyTable,
-};
+use neovm_core::buffer::{BufferId, CharLen, CharPos0, CharRange, EmacsBytePos};
 use neovm_core::emacs_core::Value;
 use neovm_core::emacs_core::composite::composition_display_text_for_property;
 use neovm_core::emacs_core::composite::{AutomaticCompositionRules, AutomaticCompositionSpan};
@@ -2736,6 +2735,7 @@ impl BufferDisplayReplacementStringRequest {
     pub(crate) fn into_source(
         self,
         fallback_face_id: FaceId,
+        scope: StringSourceRootScope,
     ) -> Option<BufferDisplayReplacementStringSource<LispStringSourceCursor>> {
         let string_source = LispStringSourceCursor::new_with_box_boundaries(
             self.source_id,
@@ -2743,6 +2743,7 @@ impl BufferDisplayReplacementStringRequest {
             RenderFaceRef::FaceId(fallback_face_id),
             LispStringSourceOrigin::BufferDisplayReplacement(self.replacement_source),
             self.box_boundaries,
+            scope,
         )?;
         Some(BufferDisplayReplacementStringSource::new(
             self.replacement_source,
@@ -2922,9 +2923,10 @@ impl LispStringSourceCursor {
         value: Value,
         base_face: RenderFaceRef,
         origin: LispStringSourceOrigin,
+        scope: StringSourceRootScope,
     ) -> Option<Self> {
         Some(Self {
-            stack: LispStringSourceStack::with_root(source_id, value, base_face, origin)?,
+            stack: LispStringSourceStack::with_root(source_id, value, base_face, origin, scope)?,
         })
     }
 
@@ -2934,6 +2936,7 @@ impl LispStringSourceCursor {
         base_face: RenderFaceRef,
         origin: LispStringSourceOrigin,
         box_boundaries: DisplayStringBoxBoundaries,
+        scope: StringSourceRootScope,
     ) -> Option<Self> {
         Some(Self {
             stack: LispStringSourceStack::with_root_box_boundaries(
@@ -2942,6 +2945,7 @@ impl LispStringSourceCursor {
                 base_face,
                 origin,
                 box_boundaries,
+                scope,
             )?,
         })
     }
@@ -3086,6 +3090,7 @@ enum LispStringRunExtent {
 }
 
 pub(crate) struct LispStringSourceStack {
+    scope: StringSourceRootScope,
     frames: Vec<LispStringSourceFrame>,
     next_source_id: u64,
     tty_glyphless_char_display: TtyGlyphlessCharDisplay,
@@ -3095,8 +3100,9 @@ pub(crate) struct LispStringSourceStack {
 }
 
 impl LispStringSourceStack {
-    pub(crate) fn empty(next_source_id: u64) -> Self {
+    pub(crate) fn empty(next_source_id: u64, scope: StringSourceRootScope) -> Self {
         Self {
+            scope,
             frames: Vec::new(),
             next_source_id,
             tty_glyphless_char_display: TtyGlyphlessCharDisplay::default(),
@@ -3118,9 +3124,11 @@ impl LispStringSourceStack {
         value: Value,
         base_face: RenderFaceRef,
         origin: LispStringSourceOrigin,
+        scope: StringSourceRootScope,
     ) -> Option<Self> {
-        let frame = LispStringSourceFrame::new(source_id, value, base_face, origin)?;
+        let frame = LispStringSourceFrame::new(source_id, value, base_face, origin, scope.clone())?;
         Some(Self {
+            scope,
             frames: vec![frame],
             next_source_id: source_id.saturating_add(1),
             tty_glyphless_char_display: TtyGlyphlessCharDisplay::default(),
@@ -3134,6 +3142,7 @@ impl LispStringSourceStack {
         base_face: RenderFaceRef,
         origin: LispStringSourceOrigin,
         box_boundaries: DisplayStringBoxBoundaries,
+        scope: StringSourceRootScope,
     ) -> Option<Self> {
         let frame = LispStringSourceFrame::new_with_occurrence(
             source_id,
@@ -3143,8 +3152,10 @@ impl LispStringSourceStack {
             origin.nested_display_policy(),
             origin.pointer_occurrence(),
             box_boundaries,
+            scope.clone(),
         )?;
         Some(Self {
+            scope,
             frames: vec![frame],
             next_source_id: source_id.saturating_add(1),
             tty_glyphless_char_display: TtyGlyphlessCharDisplay::default(),
@@ -3184,6 +3195,7 @@ impl LispStringSourceStack {
             NestedDisplayPolicy::ModifiersOnly,
             occurrence,
             box_boundaries,
+            self.scope.clone(),
         ) {
             self.frames
                 .push(frame.with_display_when(self.display_when.clone()));
@@ -3258,7 +3270,7 @@ struct LispStringSourceFrame {
     text: Vec<u8>,
     storage: EmacsTextStorage,
     char_byte_offsets: Vec<usize>,
-    props: Option<TextPropertyTable>,
+    props: StringPropertySnapshot,
     char_index: usize,
     base_face: RenderFaceRef,
     replacement_source: Option<BufferDisplayReplacementSource>,
@@ -3300,8 +3312,9 @@ impl LispStringSourceFrame {
         value: Value,
         base_face: RenderFaceRef,
         origin: LispStringSourceOrigin,
+        scope: StringSourceRootScope,
     ) -> Option<Self> {
-        Self::new_with_replacement_source(source_id, value, base_face, None, origin)
+        Self::new_with_replacement_source(source_id, value, base_face, None, origin, scope)
     }
 
     fn new_with_replacement_source(
@@ -3310,6 +3323,7 @@ impl LispStringSourceFrame {
         base_face: RenderFaceRef,
         replacement_source: Option<BufferDisplayReplacementSource>,
         origin: LispStringSourceOrigin,
+        scope: StringSourceRootScope,
     ) -> Option<Self> {
         Self::new_with_occurrence(
             source_id,
@@ -3328,6 +3342,7 @@ impl LispStringSourceFrame {
                     DisplayStringBoxBoundaries::default()
                 }
             },
+            scope,
         )
     }
 
@@ -3339,7 +3354,10 @@ impl LispStringSourceFrame {
         nested_display_policy: NestedDisplayPolicy,
         pointer_occurrence: DisplayPointerOccurrence,
         box_boundaries: DisplayStringBoxBoundaries,
+        scope: StringSourceRootScope,
     ) -> Option<Self> {
+        // Capture original observations and roots before the first source read.
+        let props = string_properties(value, &scope);
         let string = value.as_lisp_string()?;
         let text = string.as_bytes().to_vec();
         let storage = if string.is_multibyte() {
@@ -3363,7 +3381,7 @@ impl LispStringSourceFrame {
             text,
             storage,
             char_byte_offsets,
-            props: get_string_text_properties_table_for_value(value),
+            props,
             char_index: 0,
             base_face,
             replacement_source,
@@ -3907,7 +3925,7 @@ impl LispStringSourceFrame {
     }
 
     fn face_at(&self, char_index: usize, context: &mut DisplaySourceContext<'_>) -> RenderFaceRef {
-        let Some(props) = &self.props else {
+        let Some(props) = self.props.as_ref() else {
             return self.base_face;
         };
         let char_pos = CharPos0::new(char_index);

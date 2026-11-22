@@ -565,6 +565,9 @@ impl<'face, 'emit, FS: crate::neovm_bridge::FaceServices>
         // DisplayHost supplies graphic image/font services to this renderer;
         // terminal images are replacement text, so no host borrow is needed.
         // Keep the host on Context itself: advised Lisp callbacks still see it.
+        let string_roots = crate::string_property_snapshot::StringSourceRootScope::Rooted(
+            self.evaluator.owned_root_retainer(),
+        );
         let (display_host, evaluator) = if self.face_resolver.resolver().has_tty_realization() {
             (None, Some(&mut *self.evaluator))
         } else {
@@ -590,6 +593,7 @@ impl<'face, 'emit, FS: crate::neovm_bridge::FaceServices>
                 self.face_resolver.resolver(),
                 display_host,
                 self.face_ids,
+                string_roots,
             )
             .with_face_realizer(realizer)
             .with_automatic_composition(self.automatic_composition),
@@ -618,6 +622,9 @@ impl<'face, 'emit, FS: crate::neovm_bridge::FaceServices>
         // DisplayHost supplies graphic image/font services to this renderer;
         // terminal images are replacement text, so no host borrow is needed.
         // Keep the host on Context itself: advised Lisp callbacks still see it.
+        let string_roots = crate::string_property_snapshot::StringSourceRootScope::Rooted(
+            self.evaluator.owned_root_retainer(),
+        );
         let (display_host, evaluator) = if self.face_resolver.resolver().has_tty_realization() {
             (None, Some(&mut *self.evaluator))
         } else {
@@ -646,6 +653,7 @@ impl<'face, 'emit, FS: crate::neovm_bridge::FaceServices>
                 self.face_resolver.resolver(),
                 display_host,
                 self.face_ids,
+                string_roots,
             )
             .with_face_realizer(realizer)
             .with_automatic_composition(self.automatic_composition),
@@ -691,6 +699,9 @@ impl<'face, 'emit, FS: crate::neovm_bridge::FaceServices>
         source: &mut S,
         source_state: &mut DisplayRowSourceState,
     ) -> Option<DisplayRowRenderIntoRowResult> {
+        let string_roots = crate::string_property_snapshot::StringSourceRootScope::Rooted(
+            self.evaluator.owned_root_retainer(),
+        );
         let (display_host, evaluator) = if self.face_resolver.resolver().has_tty_realization() {
             (None, Some(&mut *self.evaluator))
         } else {
@@ -713,6 +724,7 @@ impl<'face, 'emit, FS: crate::neovm_bridge::FaceServices>
             self.face_resolver.resolver(),
             display_host,
             self.face_ids,
+            string_roots,
         )
         .with_face_realizer(realizer)
         .with_automatic_composition(self.automatic_composition);
@@ -1046,6 +1058,14 @@ pub(crate) struct TextRowSourceRenderState<
 }
 
 impl<'a, FS: crate::neovm_bridge::FaceServices> TextRowSourceRenderState<'a, FS> {
+    pub(crate) fn string_source_root_scope(
+        &self,
+    ) -> crate::string_property_snapshot::StringSourceRootScope {
+        crate::string_property_snapshot::StringSourceRootScope::Rooted(
+            self.output_render.evaluator.owned_root_retainer(),
+        )
+    }
+
     pub(crate) fn from_output_render(
         output_render: TextRowOutputRenderState<'a>,
         font_metrics: &'a mut Option<FontMetricsService>,
@@ -1651,6 +1671,7 @@ impl<'a, FS: crate::neovm_bridge::FaceServices> TextRowSourceRenderState<'a, FS>
                     *value,
                     RenderFaceRef::FaceId(margin_face_id),
                     LispStringSourceOrigin::MarginDisplayReplacement,
+                    self.string_source_root_scope(),
                 ) {
                     let _ = self.render_natural_fragment_into_current_row(
                         fragment,
@@ -2099,6 +2120,9 @@ impl<'a> TextRowSourceMeasureState<'a> {
                 self.face_resolver,
                 self.evaluator.display_host.as_deref(),
                 face_ids,
+                crate::string_property_snapshot::StringSourceRootScope::Rooted(
+                    self.evaluator.owned_root_retainer(),
+                ),
             )
             .with_automatic_composition(self.automatic_composition),
             render_policy: &mut policy,

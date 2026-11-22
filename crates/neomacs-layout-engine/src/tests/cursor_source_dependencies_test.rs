@@ -19,7 +19,10 @@ fn ordinary_cursor_proof_observes_original_string_absence() {
             .eval_str(&format!("(setq neo-proof-source {expression})"))
             .unwrap();
         let scope = Capture::begin(&context);
-        string_properties(source);
+        string_properties(
+            source,
+            &StringSourceRootScope::Rooted(context.owned_root_retainer()),
+        );
         let original = scope.finish().unwrap();
         assert_eq!(
             original.ordinary_cursor_source_proof().is_some(),
@@ -42,7 +45,10 @@ fn original_authority_unions_are_flattened_deduplicated_and_bounded() {
     for index in 0..33 {
         let source = Value::string(format!("source-{index}"));
         let scope = Capture::begin(&context);
-        string_properties(source);
+        string_properties(
+            source,
+            &StringSourceRootScope::Rooted(context.owned_root_retainer()),
+        );
         originals.push(scope.finish().unwrap());
     }
     let joined =
@@ -67,7 +73,10 @@ fn decoded_payload_domains_and_ancestor_mutations_keep_original_authority() {
     let string = Value::string("same-source");
     let capture = |context: &Context, face: Value| {
         let scope = Capture::begin(context);
-        string_properties(string);
+        string_properties(
+            string,
+            &StringSourceRootScope::Rooted(context.owned_root_retainer()),
+        );
         observe_projection(face, || neovm_core::emacs_core::value::list_to_vec(&face));
         scope.finish().unwrap()
     };
@@ -125,8 +134,14 @@ fn equal_content_sources_keep_distinct_roots() {
     context.gc_collect_exact();
     let expected = allocated();
     let capture = Capture::begin(&context);
-    let _ = string_properties(first);
-    let _ = string_properties(second);
+    let _ = string_properties(
+        first,
+        &StringSourceRootScope::Rooted(context.owned_root_retainer()),
+    );
+    let _ = string_properties(
+        second,
+        &StringSourceRootScope::Rooted(context.owned_root_retainer()),
+    );
     let sources = capture.finish().unwrap();
     drop(setup_roots);
     context.gc_collect_exact();
@@ -159,7 +174,10 @@ fn equal_content_new_source_expands_partial_domain() {
     assert_eq!(first, second);
     let capture = |value| {
         let scope = Capture::begin(&context);
-        let _ = string_properties(value);
+        let _ = string_properties(
+            value,
+            &StringSourceRootScope::Rooted(context.owned_root_retainer()),
+        );
         scope.finish().unwrap()
     };
     let original = capture(first);
@@ -179,7 +197,10 @@ fn repeated_string_projections_share_one_root_lease() {
     let value = Value::string("repeated source");
     let capture = Capture::begin(&context);
     for _ in 0..100 {
-        let _ = string_properties(value);
+        let _ = string_properties(
+            value,
+            &StringSourceRootScope::Rooted(context.owned_root_retainer()),
+        );
     }
     let sources = capture.finish().unwrap();
     let DependencyAuthority::Canonical {
@@ -211,7 +232,10 @@ fn partial_source_domains_preserve_original_authority_and_bound_history() {
         let capture = |values: &[Value]| {
             let scope = Capture::begin(&context);
             for value in values {
-                let _ = string_properties(*value);
+                let _ = string_properties(
+                    *value,
+                    &StringSourceRootScope::Rooted(context.owned_root_retainer()),
+                );
             }
             scope.finish().unwrap()
         };
@@ -240,4 +264,124 @@ fn partial_source_domains_preserve_original_authority_and_bound_history() {
             "mutation of either union arm must invalidate it: {target}"
         );
     }
+}
+
+fn allocated_interval_count() -> i64 {
+    use neovm_value::tagged::gc::MemoryUseCountSlot;
+    Value::memory_use_counts_snapshot()[MemoryUseCountSlot::Intervals.index()]
+}
+
+/// Exercise the read used by LispStringSourceFrame, not an owned-copy editing
+/// API. Alternating faces prevent adjacent intervals from being normalized away.
+fn assert_display_string_property_read_allocates_no_intervals(interval_count: usize) {
+    use neovm_core::buffer::CharPos0;
+    use neovm_core::emacs_core::value::{
+        StringTextPropertyRun, borrow_string_text_properties_table_for_value,
+    };
+    use neovm_value::value::text_props::text_property_table_clones_for_test;
+
+    let _context = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let face = Value::symbol("face");
+    let source = Value::string_with_text_properties(
+        "x".repeat(interval_count),
+        (0..interval_count)
+            .map(|index| StringTextPropertyRun {
+                start: index,
+                end: index + 1,
+                plist: Value::list(vec![face, Value::fixnum((index & 1) as i64)]),
+            })
+            .collect(),
+    );
+    assert_eq!(
+        borrow_string_text_properties_table_for_value(source)
+            .expect("propertized display string")
+            .interval_plist_runs_for_test()
+            .len(),
+        interval_count,
+        "the generated fixture must retain all distant intervals"
+    );
+
+    let before_intervals = allocated_interval_count();
+    let before_tables = text_property_table_clones_for_test();
+    let snapshot = string_properties(
+        source,
+        &StringSourceRootScope::Rooted(_context.owned_root_retainer()),
+    );
+    let properties = snapshot.as_ref().expect("display source properties");
+    for position in [0, interval_count / 2, interval_count - 1] {
+        assert_eq!(
+            properties.get_property_at_char_pos(CharPos0::new(position), face),
+            Some(Value::fixnum((position & 1) as i64)),
+            "the read still exposes the original property at {position}"
+        );
+    }
+    let allocated_intervals = allocated_interval_count() - before_intervals;
+    let table_clones = text_property_table_clones_for_test() - before_tables;
+    assert_eq!(
+        allocated_intervals, 0,
+        "a display-source property read must not copy {interval_count} interval nodes; \
+         observed {table_clones} table clones"
+    );
+}
+
+#[test]
+fn display_string_property_read_allocates_no_intervals_2k() {
+    assert_display_string_property_read_allocates_no_intervals(2_048);
+}
+
+#[test]
+fn display_string_property_read_allocates_no_intervals_16k() {
+    assert_display_string_property_read_allocates_no_intervals(16_384);
+}
+
+#[test]
+fn display_string_property_read_allocates_no_intervals_64k() {
+    assert_display_string_property_read_allocates_no_intervals(65_536);
+}
+
+#[test]
+fn propertyless_display_string_read_allocates_no_intervals() {
+    let _context = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let source = Value::string("plain margin");
+    let before = allocated_interval_count();
+    assert!(
+        string_properties(
+            source,
+            &StringSourceRootScope::Rooted(_context.owned_root_retainer())
+        )
+        .is_none()
+    );
+    assert_eq!(allocated_interval_count() - before, 0);
+}
+
+/// Buffer snapshots already share their Rc<TextPropertyTable>. Keep this
+/// passing control separate from the owned display-string read regression.
+#[test]
+fn buffer_text_snapshot_read_allocates_no_intervals() {
+    use neovm_core::buffer::{EmacsBytePos, EmacsByteRange};
+    use neovm_value::value::text_props::text_property_table_clones_for_test;
+
+    let mut context = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let id = context
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    let buffer = context.buffer_manager_mut().get_mut(id).expect("buffer");
+    buffer.insert("abc");
+    let face = Value::symbol("face");
+    assert!(buffer.text_props_put_property_in_emacs_byte_range(
+        EmacsByteRange::from_usize(0, 3),
+        face,
+        Value::T,
+    ));
+    let before_intervals = allocated_interval_count();
+    let before_tables = text_property_table_clones_for_test();
+    let snapshot = buffer.text_snapshot();
+    assert_eq!(
+        snapshot.text_prop_at_emacs_byte_pos(EmacsBytePos::new(1), face),
+        Some(Value::T)
+    );
+    assert_eq!(allocated_interval_count() - before_intervals, 0);
+    assert_eq!(text_property_table_clones_for_test() - before_tables, 0);
 }

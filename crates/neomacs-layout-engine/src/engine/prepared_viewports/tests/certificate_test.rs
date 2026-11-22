@@ -1,4 +1,5 @@
 use super::*;
+use crate::string_property_snapshot::StringSourceRootScope;
 use neovm_core::emacs_core::{Context, Value};
 
 fn viewport() -> (Context, PreparedViewport) {
@@ -110,7 +111,10 @@ fn computed_rows_keep_original_reads_instead_of_recapturing_at_admission() {
 
 fn capture(context: &Context, value: Value) -> CursorSourceDependencies {
     let capture = crate::cursor_source_dependencies::Capture::begin(context);
-    let _ = crate::cursor_source_dependencies::string_properties(value);
+    let _ = crate::cursor_source_dependencies::string_properties(
+        value,
+        &StringSourceRootScope::Rooted(context.owned_root_retainer()),
+    );
     capture.finish().unwrap()
 }
 

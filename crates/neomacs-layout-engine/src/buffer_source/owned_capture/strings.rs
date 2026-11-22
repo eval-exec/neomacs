@@ -9,18 +9,33 @@ use crate::display_source_resolver::{
     DisplayDefaultFaceInstallPolicy, DisplaySourcePropertyResolver, DisplaySourceResolveState,
 };
 
-pub(super) fn bounded_string(value: Value, max_chars: usize) -> bool {
+pub(super) fn bounded_string(
+    value: Value,
+    max_chars: usize,
+    string_roots: &StringSourceRootScope,
+) -> bool {
     if value.is_nil() {
         return true;
     }
+    // Root only the source before the native size check. Projecting its full
+    // interval root set here would defeat the budget for oversized strings.
+    let _source_roots = match string_roots {
+        StringSourceRootScope::Rooted(retainer) => Some(
+            retainer
+                .retain([value])
+                .expect("bounded string root scope retired before validation"),
+        ),
+        StringSourceRootScope::CallbackFree => None,
+    };
     let Some(string) = value.as_lisp_string() else {
         return false;
     };
     if string.schars() > max_chars || string.as_bytes().len() > max_chars.saturating_mul(4) {
         return false;
     }
-    let props = crate::cursor_source_dependencies::string_properties(value);
-    let Some(props) = props else {
+    // Preserve original cursor/category proof effects at the bounded read.
+    let snapshot = crate::cursor_source_dependencies::string_properties(value, string_roots);
+    let Some(props) = snapshot.as_ref() else {
         return true;
     };
     let unsupported = [
@@ -49,6 +64,7 @@ pub(super) fn capture_insertions<B: LayoutBufferView>(
     max_chars: usize,
     max_items: usize,
     cancelled: &impl Fn() -> bool,
+    string_roots: &StringSourceRootScope,
 ) -> Result<(), RowProgramError> {
     let mut bytes = items
         .iter()
@@ -62,7 +78,7 @@ pub(super) fn capture_insertions<B: LayoutBufferView>(
         if cancelled() {
             return Err(RowProgramError::Cancelled);
         }
-        if !bounded_string(entry.string, max_chars) {
+        if !bounded_string(entry.string, max_chars, string_roots) {
             return Err(RowProgramError::Unsupported);
         }
         bytes = bytes.saturating_add(
@@ -108,6 +124,7 @@ pub(super) fn capture_insertions<B: LayoutBufferView>(
             strings
                 .box_boundaries()
                 .sequence_member(index, strings.strings().len()),
+            string_roots.clone(),
         )
         .ok_or(RowProgramError::Unsupported)?;
         append_source(
@@ -179,11 +196,15 @@ fn append_source<B: LayoutBufferView, S: DisplayItemSource>(
     Ok(())
 }
 
-pub(super) fn bounded_replacement(value: Value, max_chars: usize) -> bool {
-    value
-        .as_lisp_string()
-        .is_some_and(|string| string.schars() > 0)
-        && bounded_string(value, max_chars)
+pub(super) fn bounded_replacement(
+    value: Value,
+    max_chars: usize,
+    string_roots: &StringSourceRootScope,
+) -> bool {
+    bounded_string(value, max_chars, string_roots)
+        && value
+            .as_lisp_string()
+            .is_some_and(|string| string.schars() > 0)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -197,6 +218,7 @@ pub(super) fn capture_replacement<B: LayoutBufferView>(
     max_chars: usize,
     max_items: usize,
     cancelled: &impl Fn() -> bool,
+    string_roots: &StringSourceRootScope,
 ) -> Result<(), RowProgramError> {
     let descriptor = replacement.descriptor();
     let classification = descriptor.classification();
@@ -204,7 +226,7 @@ pub(super) fn capture_replacement<B: LayoutBufferView>(
     if !matches!(
         classification.replacement(),
         Some(crate::display_property::DisplayReplacementProperty::String)
-    ) || !bounded_replacement(value, max_chars)
+    ) || !bounded_replacement(value, max_chars, string_roots)
     {
         return Err(RowProgramError::Unsupported);
     }
@@ -246,7 +268,7 @@ pub(super) fn capture_replacement<B: LayoutBufferView>(
     )
     .with_pointer_appearance(descriptor.pointer_appearance().cloned())
     .with_box_boundaries(descriptor.box_boundaries())
-    .into_source(base.face_id())
+    .into_source(base.face_id(), string_roots.clone())
     .ok_or(RowProgramError::Unsupported)?;
     let (measurement_face, resolved) =
         context.resolve_routed_position_face(face_ids, descriptor.anchor_charpos());

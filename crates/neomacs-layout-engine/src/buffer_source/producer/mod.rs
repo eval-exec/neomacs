@@ -87,7 +87,14 @@ impl<'request, B: LayoutBufferView> BufferElementProducer<'request, B> {
         start_charpos: i64,
         text_start_byte: usize,
     ) -> Self {
-        Self::new_for_window(buffer_id, buffer, None, start_charpos, text_start_byte)
+        Self::new_for_window(
+            buffer_id,
+            buffer,
+            None,
+            start_charpos,
+            text_start_byte,
+            crate::string_property_snapshot::StringSourceRootScope::CallbackFree,
+        )
     }
 
     pub(crate) fn new_for_window(
@@ -96,6 +103,7 @@ impl<'request, B: LayoutBufferView> BufferElementProducer<'request, B> {
         window_id: Option<u64>,
         start_charpos: i64,
         text_start_byte: usize,
+        string_roots: crate::string_property_snapshot::StringSourceRootScope,
     ) -> Self {
         Self::new_for_window_range(
             buffer_id,
@@ -104,6 +112,7 @@ impl<'request, B: LayoutBufferView> BufferElementProducer<'request, B> {
             start_charpos,
             CharPos0::new(usize::MAX),
             text_start_byte,
+            string_roots,
         )
     }
 
@@ -116,6 +125,7 @@ impl<'request, B: LayoutBufferView> BufferElementProducer<'request, B> {
         start_charpos: i64,
         end: CharPos0,
         text_start_byte: usize,
+        string_roots: crate::string_property_snapshot::StringSourceRootScope,
     ) -> Self {
         Self {
             source_cursor: BufferTextSourceCursor::new_for_window(
@@ -125,6 +135,7 @@ impl<'request, B: LayoutBufferView> BufferElementProducer<'request, B> {
                 CharPos0::new(start_charpos.max(0) as usize),
                 end,
                 RenderFaceRef::Inherit,
+                string_roots,
             ),
             source_resolve_state: DisplaySourceResolveState::default(),
             source_consumption: BufferSourceConsumptionState::new(text_start_byte),
@@ -141,6 +152,7 @@ impl<'request, B: LayoutBufferView> BufferElementProducer<'request, B> {
         start_charpos: i64,
         acquisition_end: CharPos0,
         text_start_byte: usize,
+        string_roots: crate::string_property_snapshot::StringSourceRootScope,
     ) -> Self {
         let mut producer = Self::new_for_window_range(
             buffer_id,
@@ -149,6 +161,7 @@ impl<'request, B: LayoutBufferView> BufferElementProducer<'request, B> {
             start_charpos,
             CharPos0::new(usize::MAX),
             text_start_byte,
+            string_roots,
         );
         producer
             .source_cursor

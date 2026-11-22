@@ -49,6 +49,7 @@ use crate::output::builder::DisplayOutputBuilder;
 use crate::presentation::presented_pointer_map::{
     PointerAppearanceRangeId, PresentedPointerMapBuildError,
 };
+use crate::string_property_snapshot::StringSourceRootScope;
 use crate::types::WindowParams;
 use crate::window_layout::{WindowChromeMetrics, WindowLayoutBox};
 #[cfg(test)]
@@ -214,6 +215,7 @@ pub(crate) struct ChromeRowRenderServices<'emit, 'face> {
     face_resolver: &'face FaceResolver,
     face_ids: &'emit mut FrameFaceAttempt,
     face_realizer: Option<&'emit dyn Fn(&mut ResolvedFace)>,
+    root_scope: StringSourceRootScope,
 }
 
 impl<'emit, 'face> ChromeRowRenderServices<'emit, 'face> {
@@ -228,6 +230,7 @@ impl<'emit, 'face> ChromeRowRenderServices<'emit, 'face> {
         font_metrics: &'emit mut Option<FontMetricsService>,
         face_resolver: &'face FaceResolver,
         face_ids: &'emit mut FrameFaceAttempt,
+        root_scope: StringSourceRootScope,
     ) -> Self {
         Self {
             automatic_composition: None,
@@ -238,6 +241,7 @@ impl<'emit, 'face> ChromeRowRenderServices<'emit, 'face> {
             face_resolver,
             face_ids,
             face_realizer: None,
+            root_scope,
         }
     }
 
@@ -257,6 +261,7 @@ impl<'emit, 'face> ChromeRowRenderServices<'emit, 'face> {
             face_resolver: self.face_resolver,
             face_ids: self.face_ids,
             face_realizer: self.face_realizer,
+            root_scope: self.root_scope.clone(),
         }
     }
 
@@ -290,6 +295,7 @@ impl<'emit, 'face> ChromeRowRenderServices<'emit, 'face> {
             self.face_resolver,
             display_host,
             &mut *self.face_ids,
+            self.root_scope.clone(),
         )
         .with_face_realizer(self.face_realizer)
         .with_automatic_composition(self.automatic_composition);
@@ -309,6 +315,7 @@ impl<'emit, 'face> ChromeRowRenderServices<'emit, 'face> {
             self.face_resolver,
             None,
             &mut *self.face_ids,
+            self.root_scope.clone(),
         )
         .with_face_realizer(self.face_realizer);
         render_executor.render_item_source_fragment_into_row(request, row, source, source_state)

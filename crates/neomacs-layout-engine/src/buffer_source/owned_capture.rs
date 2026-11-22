@@ -13,6 +13,7 @@ use crate::display_source_resolver::PendingDisplaySourceFace;
 use crate::frame_face_arena::FrameFaceAttempt;
 use crate::neovm_bridge::{LayoutBufferView, LayoutCharPropertyLookup};
 use crate::row_layout::program::RowProgramError;
+use crate::string_property_snapshot::StringSourceRootScope;
 use neovm_core::buffer::{BufferId, CharPos0, EmacsBytePos, EmacsByteRange};
 use neovm_core::emacs_core::Value;
 
@@ -40,9 +41,19 @@ pub(crate) fn capture_physical_line<B: LayoutBufferView>(
     context: BufferSourceFaceResolutionContext<'_, B>,
     face_ids: &mut FrameFaceAttempt,
     cancelled: impl Fn() -> bool,
+    string_roots: StringSourceRootScope,
 ) -> Result<CapturedPhysicalLine, RowProgramError> {
     let fragment = capture_source_fragment(
-        buffer_id, window, start, max_chars, max_items, false, context, face_ids, cancelled,
+        buffer_id,
+        window,
+        start,
+        max_chars,
+        max_items,
+        false,
+        context,
+        face_ids,
+        cancelled,
+        string_roots,
     )?;
     if fragment.complete {
         Ok(fragment)
@@ -64,6 +75,7 @@ pub(crate) fn capture_source_fragment<B: LayoutBufferView>(
     context: BufferSourceFaceResolutionContext<'_, B>,
     face_ids: &mut FrameFaceAttempt,
     cancelled: impl Fn() -> bool,
+    string_roots: StringSourceRootScope,
 ) -> Result<CapturedPhysicalLine, RowProgramError> {
     let buffer = context.buffer();
     let start_byte = buffer.layout_char_pos_to_emacs_byte_pos(start);
@@ -166,13 +178,15 @@ pub(crate) fn capture_source_fragment<B: LayoutBufferView>(
                 || string_lookups.iter().any(|lookup| {
                     lookup
                         .effective_overlay_value(buffer, overlay)
-                        .is_some_and(|value| !strings::bounded_string(value, max_chars))
+                        .is_some_and(|value| {
+                            !strings::bounded_string(value, max_chars, &string_roots)
+                        })
                 })
                 || display_lookup
                     .effective_overlay_value(buffer, overlay)
                     .is_some_and(|value| {
                         !(literal_raise_or_nil(value)
-                            || strings::bounded_replacement(value, max_chars))
+                            || strings::bounded_replacement(value, max_chars, &string_roots))
                     }))
         {
             return Err(RowProgramError::Unsupported);
@@ -205,7 +219,8 @@ pub(crate) fn capture_source_fragment<B: LayoutBufferView>(
             || display_lookup
                 .text_value_at(buffer, pos)
                 .is_some_and(|value| {
-                    !(literal_raise_or_nil(value) || strings::bounded_replacement(value, max_chars))
+                    !(literal_raise_or_nil(value)
+                        || strings::bounded_replacement(value, max_chars, &string_roots))
                 })
             || lookups.iter().any(|lookup| {
                 lookup
@@ -235,6 +250,7 @@ pub(crate) fn capture_source_fragment<B: LayoutBufferView>(
         start.get() as i64,
         end,
         start_byte.get(),
+        string_roots.clone(),
     );
     let mut position = DisplaySourceTextPosition::new(0, start.get() as i64);
     let mut items: Vec<DisplayItem> = Vec::new();
@@ -320,8 +336,16 @@ pub(crate) fn capture_source_fragment<B: LayoutBufferView>(
             BufferSourceConsumedItem::Renderable(item) => item,
             BufferSourceConsumedItem::OverlayStrings(strings) => {
                 strings::capture_insertions(
-                    &strings, context, face_ids, &mut items, &mut faces, &mut roots, max_chars,
-                    max_items, &cancelled,
+                    &strings,
+                    context,
+                    face_ids,
+                    &mut items,
+                    &mut faces,
+                    &mut roots,
+                    max_chars,
+                    max_items,
+                    &cancelled,
+                    &string_roots,
                 )?;
                 continue;
             }
@@ -342,6 +366,7 @@ pub(crate) fn capture_source_fragment<B: LayoutBufferView>(
                     max_chars,
                     max_items,
                     &cancelled,
+                    &string_roots,
                 )?;
                 // A pushed string can use another paint face; do not infer
                 // the next hidden span's active buffer face from that string.

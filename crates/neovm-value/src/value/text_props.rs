@@ -2659,6 +2659,182 @@ enum ReplacementPropertyNames<'a> {
     Include(&'a ConservativePropertyNames),
 }
 
+/// An owned native read projection of a text-property interval partition.
+///
+/// This copies live ranges and their ORIGINAL plist heads, not interval nodes
+/// or Lisp cons cells. It therefore keeps the existing table-clone aliasing
+/// contract: range replacement does not change these ranges, while mutation
+/// of an already-shared plist remains visible through that plist identity.
+///
+/// This is NOT a GC root. Before invoking Lisp or collecting, its owner must
+/// root every [`Self::root_operands`] value as well as the source string. The
+/// source string needs a root even when this view is absent or empty, because
+/// layout also retains the string as the object of later display sites.
+/// A liveness lease does not grant mutation freshness or replay authority.
+#[derive(Clone, Debug)]
+pub struct TextPropertyReadView {
+    // Same contiguous, zero-based partition as IntervalTree::cursor_at(0),
+    // including nil-property nodes and the tree's actual trailing extent.
+    runs: Vec<ObjectIntervalPlistRun>,
+    // Preserve the existing clone's immutable absence-proof metadata. This
+    // shares the existing Arc summary; it adds no cache or invalidation path.
+    property_names: ConservativePropertyNames,
+}
+
+static_assertions::assert_not_impl_any!(TextPropertyReadView: Send, Sync);
+
+impl TextPropertyTable {
+    /// Capture a read projection without allocating Lisp intervals.
+    ///
+    /// Capture is synchronous and callback-free. No source table borrow
+    /// escapes; callers must install roots before any subsequent safepoint.
+    pub fn read_view(&self) -> TextPropertyReadView {
+        TextPropertyReadView {
+            runs: self
+                .intervals
+                .cursor_at(CharPos0::ZERO)
+                .map(|(start, end, node)| ObjectIntervalPlistRun::new(start, end, node.plist))
+                .collect(),
+            property_names: self.property_names.clone(),
+        }
+    }
+}
+
+impl TextPropertyReadView {
+    pub fn is_empty(&self) -> bool {
+        self.runs.is_empty()
+    }
+
+    /// Original plist operands; the evaluator/layout owner supplies rooting.
+    /// Repeated heads and nil are permitted, just as in table root tracing.
+    pub fn root_operands(&self) -> impl Iterator<Item = Value> + '_ {
+        self.runs.iter().map(ObjectIntervalPlistRun::plist)
+    }
+
+    fn rank_at(&self, pos: CharPos0) -> Option<usize> {
+        let rank = self
+            .runs
+            .partition_point(|run| run.start() <= pos)
+            .checked_sub(1)?;
+        (pos < self.runs[rank].end()).then_some(rank)
+    }
+
+    fn plist_at(&self, pos: CharPos0) -> Option<Value> {
+        self.rank_at(pos).map(|rank| self.runs[rank].plist())
+    }
+
+    pub fn get_property_at_char_pos(&self, pos: CharPos0, name: Value) -> Option<Value> {
+        if self.property_names.presence(name) == PropertyNamePresence::DefinitelyAbsent {
+            return None;
+        }
+        plist_value_get(self.plist_at(pos)?, name)
+    }
+
+    /// Preserve the existing first-key-wins map projection, used by layout's
+    /// composition comparison after removing face/font-lock-face keys.
+    pub fn get_properties_at_char_pos(&self, pos: CharPos0) -> HashMap<Value, Value> {
+        let Some(rank) = self.rank_at(pos) else {
+            return HashMap::new();
+        };
+        let run = &self.runs[rank];
+        PropertyInterval::from_plist(
+            CharRange::new(run.start(), run.end()),
+            &plist_pairs(run.plist()),
+        )
+        .properties
+    }
+
+    pub fn has_any_non_nil_property_in_char_range(&self, range: CharRange, keys: &[Value]) -> bool {
+        if range.is_empty()
+            || keys.is_empty()
+            || keys.iter().all(|key| {
+                self.property_names.presence(*key) == PropertyNamePresence::DefinitelyAbsent
+            })
+        {
+            return false;
+        }
+        let Some(rank) = self.rank_at(range.start()) else {
+            return false;
+        };
+        self.runs[rank..]
+            .iter()
+            .take_while(|run| run.start() < range.end())
+            .any(|run| !watched_keys_equal_eq_plist(run.plist(), Value::NIL, keys))
+    }
+
+    /// Like TextPropertyTable, ignore raw boundaries with EQ-equivalent
+    /// complete plists, including duplicates and reordered plist pairs.
+    pub fn next_property_change_after_char_pos(&self, pos: CharPos0) -> Option<CharPos0> {
+        let rank = self.rank_at(pos)?;
+        let current = plist_pairs(self.runs[rank].plist());
+        for run in &self.runs[rank + 1..] {
+            if !plists_equal_eq(&current, &plist_pairs(run.plist())) {
+                return Some(run.start());
+            }
+        }
+        let end = self.runs.last()?.end();
+        (!plists_equal_eq(&current, &[])).then_some(end)
+    }
+
+    pub fn next_single_property_change_after_char_pos(
+        &self,
+        pos: CharPos0,
+        name: Value,
+    ) -> Option<CharPos0> {
+        if self.property_names.presence(name) == PropertyNamePresence::DefinitelyAbsent {
+            return None;
+        }
+        let rank = self.rank_at(pos)?;
+        let current = plist_value_get(self.runs[rank].plist(), name).unwrap_or(Value::NIL);
+        let mut boundary = self.runs[rank].end();
+        for run in &self.runs[rank + 1..] {
+            let value = plist_value_get(run.plist(), name).unwrap_or(Value::NIL);
+            if !eq_value(&current, &value) {
+                return Some(run.start());
+            }
+            boundary = run.end();
+        }
+        (!eq_value(&current, &Value::NIL)).then_some(boundary)
+    }
+
+    pub fn previous_single_property_change_before_char_pos(
+        &self,
+        pos: CharPos0,
+        name: Value,
+    ) -> Option<CharPos0> {
+        if self.property_names.presence(name) == PropertyNamePresence::DefinitelyAbsent {
+            return None;
+        }
+        let (current, mut boundary, mut previous) = match self.rank_at(pos) {
+            Some(rank) => (
+                plist_value_get(self.runs[rank].plist(), name),
+                self.runs[rank].start(),
+                rank.checked_sub(1),
+            ),
+            None => {
+                let rank = self.runs.len().checked_sub(1)?;
+                (None, self.runs[rank].end(), Some(rank))
+            }
+        };
+        let current_normalized = current.unwrap_or(Value::NIL);
+        loop {
+            if boundary == CharPos0::ZERO {
+                return current.is_some().then_some(CharPos0::ZERO);
+            }
+            let Some(rank) = previous else {
+                return current.is_some().then_some(CharPos0::ZERO);
+            };
+            let run = &self.runs[rank];
+            let before = plist_value_get(run.plist(), name).unwrap_or(Value::NIL);
+            if !eq_value(&current_normalized, &before) {
+                return Some(boundary);
+            }
+            boundary = run.start();
+            previous = rank.checked_sub(1);
+        }
+    }
+}
+
 /// Text-property interval storage.
 ///
 /// The backing store is a GNU-shaped augmented interval tree.  Callers still
@@ -5675,6 +5851,10 @@ mod tests;
 #[cfg(test)]
 #[path = "text_props/tests/bounded_absent_property_test.rs"]
 mod bounded_absent_property_test;
+
+#[cfg(test)]
+#[path = "text_props/tests/read_view_test.rs"]
+mod read_view_test;
 
 impl PropertyInterval {
     #[inline]

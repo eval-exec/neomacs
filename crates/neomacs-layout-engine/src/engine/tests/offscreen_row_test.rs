@@ -89,6 +89,7 @@ fn unseen_row_worker_glyphs_match_canonical_window_body() {
         context,
         &mut attempt,
         || false,
+        StringSourceRootScope::Rooted(eval.owned_root_retainer()),
     )
     .unwrap();
     let mut realizer = DisplayRowFaceRealizer::new(&mut engine.font_metrics);

@@ -1,5 +1,6 @@
 use super::*;
 use crate::display_property::DisplayPropertyObject;
+use crate::string_property_snapshot::StringSourceRootScope;
 use neomacs_display_protocol::VideoId;
 
 fn test_image_load(id: u32) -> neomacs_display_protocol::ImageLoadToken {
@@ -1337,7 +1338,14 @@ fn buffer_hscroll_skip_render_request_appends_left_truncation_marker() {
         .expect("current buffer")
         .id();
     let snapshot = current_buffer_snapshot(&context.eval, buf_id);
-    let mut source_walk = BufferSourceWalk::new(buf_id, &snapshot, 0, 0);
+    let mut source_walk = BufferSourceWalk::new_for_window(
+        buf_id,
+        &snapshot,
+        None,
+        0,
+        0,
+        StringSourceRootScope::Rooted(context.eval.owned_root_retainer()),
+    );
 
     let continuation = BufferSourceHscrollSkipRenderContext::new(
         b"\tabc",
@@ -2006,7 +2014,14 @@ fn buffer_invisible_text_render_request_appends_ellipsis_and_captures_cursor() {
     let mut trailing_whitespace = TrailingWhitespaceRenderState::new(false, 0);
     let mut face_scan = FaceScanCheckpoint::initial();
     let mut font_metrics = None;
-    let mut source_walk = BufferSourceWalk::new(buf_id, &snapshot, 0, 0);
+    let mut source_walk = BufferSourceWalk::new_for_window(
+        buf_id,
+        &snapshot,
+        None,
+        0,
+        0,
+        StringSourceRootScope::Rooted(context.eval.owned_root_retainer()),
+    );
 
     let outcome = BufferSourceInvisibleTextRenderContext::new(
         b"folded rest",
@@ -2216,12 +2231,14 @@ fn buffer_text_source_consumption_state_preserves_single_char_source_item() {
         buffer.insert("a");
     }
     let snapshot = current_buffer_snapshot(&eval, buf_id);
-    let mut cursor = BufferTextSourceCursor::new(
+    let mut cursor = BufferTextSourceCursor::new_for_window(
         buf_id,
         &snapshot,
+        None,
         CharPos0::new(0),
         CharPos0::new(1),
         RenderFaceRef::Inherit,
+        StringSourceRootScope::Rooted(eval.owned_root_retainer()),
     );
     let item = cursor
         .next_item(&mut DisplaySourceContext::empty())
@@ -2268,12 +2285,14 @@ fn buffer_text_source_consumption_state_can_return_full_text_run_item() {
         buffer.insert("abcdefghij");
     }
     let snapshot = current_buffer_snapshot(&eval, buf_id);
-    let mut cursor = BufferTextSourceCursor::new(
+    let mut cursor = BufferTextSourceCursor::new_for_window(
         buf_id,
         &snapshot,
+        None,
         CharPos0::new(0),
         CharPos0::new(3),
         RenderFaceRef::Inherit,
+        StringSourceRootScope::Rooted(eval.owned_root_retainer()),
     );
     let mut source_context = DisplaySourceContext::empty();
     let mut source_consumption = BufferSourceConsumptionState::new(0);
@@ -2305,12 +2324,14 @@ fn buffer_text_source_item_can_build_direct_single_char_step() {
         buffer.insert("a");
     }
     let snapshot = current_buffer_snapshot(&eval, buf_id);
-    let mut cursor = BufferTextSourceCursor::new(
+    let mut cursor = BufferTextSourceCursor::new_for_window(
         buf_id,
         &snapshot,
+        None,
         CharPos0::new(0),
         CharPos0::new(1),
         RenderFaceRef::Inherit,
+        StringSourceRootScope::Rooted(eval.owned_root_retainer()),
     );
     let mut source_context = DisplaySourceContext::empty();
     let mut source_consumption = BufferSourceConsumptionState::new(0);
@@ -2453,12 +2474,14 @@ fn buffer_text_source_item_builds_direct_multi_char_runs() {
         buffer.insert("ab");
     }
     let snapshot = current_buffer_snapshot(&eval, buf_id);
-    let mut cursor = BufferTextSourceCursor::new(
+    let mut cursor = BufferTextSourceCursor::new_for_window(
         buf_id,
         &snapshot,
+        None,
         CharPos0::new(0),
         CharPos0::new(2),
         RenderFaceRef::Inherit,
+        StringSourceRootScope::Rooted(eval.owned_root_retainer()),
     );
     let mut source_context = DisplaySourceContext::empty();
     let mut source_consumption = BufferSourceConsumptionState::new(0);
@@ -2559,12 +2582,14 @@ fn buffer_text_source_consumption_state_splits_persistent_text_run() {
         buffer.insert("abc");
     }
     let snapshot = current_buffer_snapshot(&eval, buf_id);
-    let mut cursor = BufferTextSourceCursor::new(
+    let mut cursor = BufferTextSourceCursor::new_for_window(
         buf_id,
         &snapshot,
+        None,
         CharPos0::new(0),
         CharPos0::new(3),
         RenderFaceRef::Inherit,
+        StringSourceRootScope::Rooted(eval.owned_root_retainer()),
     );
     let mut source_context = DisplaySourceContext::empty();
     let mut source_consumption = BufferSourceConsumptionState::new(0);
@@ -3012,7 +3037,14 @@ fn buffer_text_line_break_render_request_emits_row_transition_and_syncs_position
     );
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(20);
     context.builder.set_face_attempt(face_ids.clone());
-    let mut source_walk = BufferSourceWalk::new(buf_id, &snapshot, charpos, 0);
+    let mut source_walk = BufferSourceWalk::new_for_window(
+        buf_id,
+        &snapshot,
+        None,
+        charpos,
+        0,
+        StringSourceRootScope::Rooted(eval.owned_root_retainer()),
+    );
 
     let continuation = BufferSourceLineBreakRenderRequest::new(
         source_char,
@@ -3185,7 +3217,14 @@ fn buffer_selective_display_tail_render_request_appends_marker_and_transitions_r
         4,
     );
     let mut font_metrics = None;
-    let mut source_walk = BufferSourceWalk::new(buf_id, &snapshot, charpos, 0);
+    let mut source_walk = BufferSourceWalk::new_for_window(
+        buf_id,
+        &snapshot,
+        None,
+        charpos,
+        0,
+        StringSourceRootScope::Rooted(context.eval.owned_root_retainer()),
+    );
 
     let outcome = BufferSourceSelectiveDisplayTailRenderRequest::new(
         source_step_char,
@@ -3756,7 +3795,14 @@ fn buffer_text_special_overflow_render_request_wraps_then_keeps_prepared_append(
         0,
         4,
     );
-    let mut source_walk = BufferSourceWalk::new(buf_id, &snapshot, charpos, 0);
+    let mut source_walk = BufferSourceWalk::new_for_window(
+        buf_id,
+        &snapshot,
+        None,
+        charpos,
+        0,
+        StringSourceRootScope::Rooted(eval.owned_root_retainer()),
+    );
 
     let outcome = BufferSourceSpecialOverflowRenderRequest::new(
         &prepared_append,
@@ -4036,7 +4082,14 @@ fn buffer_text_overflow_render_request_handles_character_wrap_transition() {
         DisplayRowFallbackMetrics::from_default_face_extents(8.0, 16.0, 12.0),
         face_ids.clone(),
     );
-    let mut source_walk = BufferSourceWalk::new(buf_id, &snapshot, charpos, 0);
+    let mut source_walk = BufferSourceWalk::new_for_window(
+        buf_id,
+        &snapshot,
+        None,
+        charpos,
+        0,
+        StringSourceRootScope::Rooted(context.eval.owned_root_retainer()),
+    );
 
     let outcome = BufferSourceOverflowRenderRequest::new(
         &prepared_append,
@@ -5549,6 +5602,7 @@ fn render_natural_display_item_source_into_current_text_row_stamps_slots_at_curr
         Value::string("x"),
         RenderFaceRef::FaceId(FaceId::new(7)),
         crate::display_source::LispStringSourceOrigin::Normal,
+        StringSourceRootScope::Rooted(eval.owned_root_retainer()),
     )
     .expect("lisp string source");
     let mut source_state = DisplayRowSourceState::frame_local();
@@ -5678,12 +5732,14 @@ fn append_rendered_display_row_fragment_to_text_row_and_emit_appends_glyphs_and_
     let mut font_metrics = None;
     let rendered = {
         let buffer = eval.buffer_manager().get(buf_id).expect("buffer");
-        let mut source = crate::buffer_source::text_source::BufferTextSourceCursor::new(
+        let mut source = crate::buffer_source::text_source::BufferTextSourceCursor::new_for_window(
             buf_id,
             buffer,
+            None,
             CharPos0::new(0),
             CharPos0::new(2),
             RenderFaceRef::FaceId(FaceId::new(7)),
+            StringSourceRootScope::Rooted(eval.owned_root_retainer()),
         );
         let mut renderer =
             DisplayRowRenderer::new(&mut font_metrics, DisplayRowMeasurementMode::LogicalCells);
@@ -5706,6 +5762,7 @@ fn append_rendered_display_row_fragment_to_text_row_and_emit_appends_glyphs_and_
             &face_resolver,
             None,
             &mut face_ids,
+            StringSourceRootScope::Rooted(eval.owned_root_retainer()),
         )
         .expect("rendered source")
     };
@@ -6454,6 +6511,7 @@ fn resolve_next_display_source_item_returns_item_and_pending_faces() {
         value,
         RenderFaceRef::FaceId(FaceId::new(0)),
         crate::display_source::LispStringSourceOrigin::Normal,
+        StringSourceRootScope::Rooted(_eval.owned_root_retainer()),
     )
     .expect("string source");
 
@@ -6560,6 +6618,7 @@ fn resolve_next_display_source_item_resolves_height_modifier_to_pending_face() {
         value,
         RenderFaceRef::FaceId(FaceId::new(0)),
         crate::display_source::LispStringSourceOrigin::Normal,
+        StringSourceRootScope::Rooted(_eval.owned_root_retainer()),
     )
     .expect("string source");
 
@@ -6626,6 +6685,7 @@ fn display_row_source_walker_reuses_face_cache_across_items() {
         value,
         RenderFaceRef::FaceId(FaceId::new(0)),
         crate::display_source::LispStringSourceOrigin::Normal,
+        StringSourceRootScope::Rooted(_eval.owned_root_retainer()),
     )
     .expect("string source");
     let mut source = DisplayRowSourceWalker::new(source);
@@ -6793,8 +6853,12 @@ fn lisp_string_append_context_appends_fragment_items() {
         LispStringSourceId::PREFIX,
         Value::string("=>"),
     );
-    let session_request =
-        LispStringSourceAppendSessionRequest::frame_local(request, FaceId::new(0), base_face);
+    let session_request = LispStringSourceAppendSessionRequest::frame_local(
+        request,
+        FaceId::new(0),
+        base_face,
+        StringSourceRootScope::Rooted(eval.owned_root_retainer()),
+    );
     let end = append_context.render_active_face_source_request_to_text_row_and_emit(
         &mut text_row_source_render_state(
             &mut builder,
@@ -7099,7 +7163,14 @@ fn buffer_text_source_render_request_appends_plain_text_run_with_cursor_inside()
     let mut cursor_info = CursorCaptureState::new();
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(7);
     context.builder.set_face_attempt(face_ids.clone());
-    let mut source_walk = BufferSourceWalk::new(buf_id, &snapshot, charpos, 0);
+    let mut source_walk = BufferSourceWalk::new_for_window(
+        buf_id,
+        &snapshot,
+        None,
+        charpos,
+        0,
+        StringSourceRootScope::Rooted(context.eval.owned_root_retainer()),
+    );
     let face_resolution_context = BufferSourceFaceResolutionContext::new(
         &snapshot,
         &face_resolver,
@@ -7252,7 +7323,14 @@ fn buffer_text_source_render_request_keeps_space_run_whole_when_trailing_enabled
     let mut cursor_info = CursorCaptureState::new();
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(7);
     context.builder.set_face_attempt(face_ids.clone());
-    let mut source_walk = BufferSourceWalk::new(buf_id, &snapshot, charpos, 0);
+    let mut source_walk = BufferSourceWalk::new_for_window(
+        buf_id,
+        &snapshot,
+        None,
+        charpos,
+        0,
+        StringSourceRootScope::Rooted(context.eval.owned_root_retainer()),
+    );
     let face_resolution_context = BufferSourceFaceResolutionContext::new(
         &snapshot,
         &face_resolver,
@@ -7412,7 +7490,14 @@ fn buffer_text_source_render_request_keeps_space_run_whole_when_word_wrap_enable
     let mut cursor_info = CursorCaptureState::new();
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(7);
     context.builder.set_face_attempt(face_ids.clone());
-    let mut source_walk = BufferSourceWalk::new(buf_id, &snapshot, charpos, 0);
+    let mut source_walk = BufferSourceWalk::new_for_window(
+        buf_id,
+        &snapshot,
+        None,
+        charpos,
+        0,
+        StringSourceRootScope::Rooted(context.eval.owned_root_retainer()),
+    );
     let face_resolution_context = BufferSourceFaceResolutionContext::new(
         &snapshot,
         &face_resolver,
@@ -7574,7 +7659,14 @@ fn buffer_text_source_render_request_renders_fit_prefix_before_overflow() {
     let mut cursor_info = CursorCaptureState::new();
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(7);
     context.builder.set_face_attempt(face_ids.clone());
-    let mut source_walk = BufferSourceWalk::new(buf_id, &snapshot, charpos, 0);
+    let mut source_walk = BufferSourceWalk::new_for_window(
+        buf_id,
+        &snapshot,
+        None,
+        charpos,
+        0,
+        StringSourceRootScope::Rooted(context.eval.owned_root_retainer()),
+    );
     let face_resolution_context = BufferSourceFaceResolutionContext::new(
         &snapshot,
         &face_resolver,
@@ -8178,6 +8270,7 @@ fn buffer_text_window_body_install_request_records_positions_and_edge_markers() 
             &mut font_metrics,
             &face_resolver,
             &mut face_ids,
+            StringSourceRootScope::Rooted(eval.owned_root_retainer()),
         ),
     ));
 
@@ -8336,6 +8429,7 @@ fn buffer_text_window_terminal_right_border_request_installs_face_and_border() {
             &mut font_metrics,
             &face_resolver,
             &mut face_ids,
+            StringSourceRootScope::CallbackFree,
         ),
         &effective_default_face,
     );
@@ -8380,6 +8474,7 @@ fn terminal_right_border_decoration_preserves_the_rows_semantic_role() {
             &mut font_metrics,
             &face_resolver,
             &mut face_ids,
+            StringSourceRootScope::CallbackFree,
         ),
         &effective_default_face,
     );
@@ -8433,6 +8528,7 @@ fn terminal_right_border_face_id_comes_from_the_shared_frame_allocator() {
             &mut font_metrics,
             &face_resolver,
             &mut face_ids,
+            StringSourceRootScope::CallbackFree,
         ),
         &effective_default_face,
     );
@@ -8478,6 +8574,7 @@ fn buffer_text_window_terminal_right_border_request_pads_blank_rows_and_preserve
             &mut font_metrics,
             &face_resolver,
             &mut face_ids,
+            StringSourceRootScope::CallbackFree,
         ),
         &effective_default_face,
     );
@@ -8573,6 +8670,7 @@ fn terminal_right_border_padding_uses_the_effective_window_default_face() {
             &mut font_metrics,
             &face_resolver,
             &mut face_ids,
+            StringSourceRootScope::Rooted(_runtime.owned_root_retainer()),
         ),
         crate::display_row::special_glyphs::TextWindowRightBorder {
             ch: '|',
@@ -10188,8 +10286,12 @@ fn lisp_string_source_append_context_preserves_source_after_row_break() {
         LispStringSourceId::OVERLAY_STRING,
         Value::string("a\nb"),
     );
-    let session_request =
-        LispStringSourceAppendSessionRequest::frame_local(request, FaceId::new(7), base_face);
+    let session_request = LispStringSourceAppendSessionRequest::frame_local(
+        request,
+        FaceId::new(7),
+        base_face,
+        StringSourceRootScope::Rooted(eval.owned_root_retainer()),
+    );
     let row_session_request = LispStringSourceRowAppendSessionRequest::new(
         session_request,
         &surface,
@@ -10675,7 +10777,7 @@ fn bounded_replacement_source_text(value: Value) -> String {
         value,
         BufferDisplayReplacementSource::new(BufferId(7), CharPos0::new(4), EmacsBytePos::new(4)),
     )
-    .into_source(FaceId::new(7))
+    .into_source(FaceId::new(7), StringSourceRootScope::CallbackFree)
     .expect("resolved display string source");
     let mut context = DisplaySourceContext::empty();
     let mut emitted = String::new();
@@ -13362,7 +13464,14 @@ fn display_property_live_render_outcome(
     let mut cursor_info = CursorCaptureState::new();
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(7);
     context.builder.set_face_attempt(face_ids.clone());
-    let mut source_walk = BufferSourceWalk::new(buf_id, &snapshot, charpos, 0);
+    let mut source_walk = BufferSourceWalk::new_for_window(
+        buf_id,
+        &snapshot,
+        None,
+        charpos,
+        0,
+        StringSourceRootScope::Rooted(context.eval.owned_root_retainer()),
+    );
 
     let mut continued = Vec::new();
     // Drive the live render loop until the buffer walk stops (or all chars

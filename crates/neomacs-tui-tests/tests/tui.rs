@@ -218,3 +218,6 @@ mod treesit_debug_mode_line;
 
 mod encoded_file;
 mod mode_line_element_attribution_oracle;
+
+#[path = "r2_real_cn_intervals_oracle.rs"]
+mod r2_real_cn_intervals_oracle;

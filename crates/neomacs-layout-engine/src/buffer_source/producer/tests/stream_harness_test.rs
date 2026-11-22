@@ -47,6 +47,7 @@ use crate::display_source::DisplaySourceTextPosition;
 use crate::display_source_resolver::DisplaySourceFaceBasis;
 use crate::frame_face_arena::FrameFaceAttempt;
 use crate::neovm_bridge::{FaceResolver, LayoutBufferSnapshot, OverlayDisplayString, ResolvedFace};
+use crate::string_property_snapshot::StringSourceRootScope;
 use neomacs_display_protocol::types::FaceId;
 use neovm_core::buffer::{BufferId, CharPos0, EmacsByteRange};
 use neovm_core::emacs_core::{Context, Value};
@@ -568,6 +569,7 @@ impl Fixture {
                 Some(HARNESS_WINDOW_ID),
                 0,
                 0,
+                StringSourceRootScope::Rooted(self._eval.owned_root_retainer()),
             ),
             pending: std::collections::VecDeque::new(),
             position: DisplaySourceTextPosition::new(0, 0),

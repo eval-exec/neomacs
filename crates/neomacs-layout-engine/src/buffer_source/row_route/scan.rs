@@ -547,7 +547,7 @@ pub(super) fn routed_lisp_string_advance_cols(value: Value) -> Option<usize> {
     if text.is_empty() {
         return None;
     }
-    if neovm_core::emacs_core::value::get_string_text_properties_table_for_value(value).is_some() {
+    if neovm_core::emacs_core::value::string_has_text_properties_for_value(value) {
         return None;
     }
     let mut advance_cols = 0usize;

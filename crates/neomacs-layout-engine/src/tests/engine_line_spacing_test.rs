@@ -1,5 +1,6 @@
 //! Line spacing is row geometry, independent of point and region decoration.
 use super::*;
+use crate::string_property_snapshot::StringSourceRootScope;
 
 /// A small buffer newline changes only its own row, independently of point.
 #[test]
@@ -1171,7 +1172,10 @@ fn late_source_rejection_restores_speculative_window_end() {
         .unwrap();
     let source = eval.eval_str("neo-end-source").unwrap();
     let capture = crate::cursor_source_dependencies::Capture::begin(&eval);
-    crate::cursor_source_dependencies::string_properties(source);
+    crate::cursor_source_dependencies::string_properties(
+        source,
+        &StringSourceRootScope::Rooted(eval.owned_root_retainer()),
+    );
     eval.eval_str("(put-text-property 0 1 'cursor nil neo-end-source)")
         .unwrap();
     assert!(!capture.unchanged());
@@ -1212,7 +1216,10 @@ fn deleted_frame_source_roots_retire_during_idle_without_a_presentation() {
     let baseline = count();
     let source = Value::string("deleted-frame-unique-source");
     let capture = Capture::begin(&eval);
-    string_properties(source);
+    string_properties(
+        source,
+        &StringSourceRootScope::Rooted(eval.owned_root_retainer()),
+    );
     let certificate = capture.finish().unwrap();
     let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.frame_visual_histories.commit(

@@ -61,6 +61,7 @@ pub(crate) mod presentation;
 pub(crate) mod redisplay_fontification;
 pub(crate) mod row_layout;
 pub(crate) mod scroll_policy;
+pub(crate) mod string_property_snapshot;
 pub mod text_shaper;
 pub mod tty_menu_bar;
 pub mod types;

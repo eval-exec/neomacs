@@ -723,8 +723,14 @@ impl BufferSourceOutputSetup {
         };
         let mut emitter = output.begin_text_window_output(self.begin_request);
         let (output, evaluator) = output.into_parts();
-        let services =
-            ChromeRowRenderServices::new(font_metrics, face_resolver.resolver(), &mut face_ids);
+        let services = ChromeRowRenderServices::new(
+            font_metrics,
+            face_resolver.resolver(),
+            &mut face_ids,
+            crate::string_property_snapshot::StringSourceRootScope::Rooted(
+                evaluator.owned_root_retainer(),
+            ),
+        );
         match render_or_retain_window_chrome(
             output,
             &mut emitter,
@@ -1096,8 +1102,14 @@ impl BufferSourceOutputSetup {
             // reserved their complete frame-wide ID range before any fresh face
             // allocation. This window can now install rows without mutating the
             // namespace behind glyphs emitted by an earlier sibling.
-            let mut render_services =
-                ChromeRowRenderServices::new(font_metrics, face_resolver.resolver(), &mut face_ids);
+            let mut render_services = ChromeRowRenderServices::new(
+                font_metrics,
+                face_resolver.resolver(),
+                &mut face_ids,
+                crate::string_property_snapshot::StringSourceRootScope::Rooted(
+                    evaluator.owned_root_retainer(),
+                ),
+            );
 
             // Install retained body rows verbatim (already bidi-finalized), with
             // the prior cursor decoration stripped — the new cursor is set below.
@@ -1514,8 +1526,14 @@ impl BufferSourceOutputSetup {
                 }
             }
 
-            let mut render_services =
-                ChromeRowRenderServices::new(font_metrics, face_resolver.resolver(), &mut face_ids);
+            let mut render_services = ChromeRowRenderServices::new(
+                font_metrics,
+                face_resolver.resolver(),
+                &mut face_ids,
+                crate::string_property_snapshot::StringSourceRootScope::Rooted(
+                    evaluator.owned_root_retainer(),
+                ),
+            );
 
             // Redisplay positions: window_end is the LAST visible row.
             //  - SCROLL: reused rows sit ABOVE the exposed (bottom) rows, so the
@@ -2055,8 +2073,14 @@ impl BufferSourceOutputSetup {
 
         let (mut output, evaluator) = output.into_parts();
         let window_faces = FrameFaces::new(face_resolver).for_window(buffer);
-        let mut render_services =
-            ChromeRowRenderServices::new(font_metrics, face_resolver.resolver(), &mut face_ids);
+        let mut render_services = ChromeRowRenderServices::new(
+            font_metrics,
+            face_resolver.resolver(),
+            &mut face_ids,
+            crate::string_property_snapshot::StringSourceRootScope::Rooted(
+                evaluator.owned_root_retainer(),
+            ),
+        );
         let mut output_emitter = output_emitter;
         let redisplay_positions = walk_setup.install_body(
             output.reborrow(),

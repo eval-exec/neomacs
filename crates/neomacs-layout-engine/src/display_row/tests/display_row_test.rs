@@ -64,7 +64,12 @@ fn fresh_pen_render_lisp(
     .into_render_request(&mut face_ids)
     .with_append_start_policy(policy);
     let (plan, session_request) = request.into_render_parts();
-    let mut context = DisplayRowRenderContext::new(&resolver, None, &mut face_ids);
+    let mut context = DisplayRowRenderContext::new(
+        &resolver,
+        None,
+        &mut face_ids,
+        StringSourceRootScope::CallbackFree,
+    );
     renderer
         .render_lisp_string_plan_with_context(plan, session_request, &mut context)
         .expect("fresh Lisp chrome row")
@@ -249,7 +254,12 @@ fn fresh_chrome_integer_pen_preserves_fractional_measured_run_then_following_ite
         .with_append_start_policy(policy);
         let mut row = GlyphRow::new(GlyphRowRole::ModeLine);
         let mut state = DisplayRowSourceState::frame_local();
-        let mut context = DisplayRowRenderContext::new(&resolver, None, &mut face_ids);
+        let mut context = DisplayRowRenderContext::new(
+            &resolver,
+            None,
+            &mut face_ids,
+            StringSourceRootScope::CallbackFree,
+        );
         let result = request
             .render_fragment_step_into_row_with_policy(
                 &mut renderer,
@@ -318,7 +328,13 @@ fn fresh_chrome_integer_pen_preserves_cross_item_combining_tail_mutation() {
             GlyphRowRole::ModeLine,
         )
         .with_append_start_policy(policy)
-        .render(&mut renderer, &mut source, &resolver, &mut face_ids)
+        .render(
+            &mut renderer,
+            &mut source,
+            &resolver,
+            &mut face_ids,
+            StringSourceRootScope::CallbackFree,
+        )
         .expect("cross-item UnicodeFallback chrome row")
     }
 
@@ -434,7 +450,12 @@ fn render_lisp_string_row(
     face_resolver: &FaceResolver,
     face_ids: &mut FrameFaceAttempt,
 ) -> Option<RenderedDisplayRow> {
-    let mut context = DisplayRowRenderContext::new(face_resolver, None, face_ids);
+    let mut context = DisplayRowRenderContext::new(
+        face_resolver,
+        None,
+        face_ids,
+        StringSourceRootScope::CallbackFree,
+    );
     render_lisp_string_row_with_context(renderer, request, value, &mut context)
 }
 
@@ -446,7 +467,12 @@ fn render_lisp_string_row_with_display_host(
     display_host: Option<&dyn DisplayHost>,
     face_ids: &mut FrameFaceAttempt,
 ) -> Option<RenderedDisplayRow> {
-    let mut context = DisplayRowRenderContext::new(face_resolver, display_host, face_ids);
+    let mut context = DisplayRowRenderContext::new(
+        face_resolver,
+        display_host,
+        face_ids,
+        StringSourceRootScope::CallbackFree,
+    );
     render_lisp_string_row_with_context(renderer, request, value, &mut context)
 }
 
@@ -924,7 +950,12 @@ fn display_row_render_context_builds_source_resolve_params() {
     let face_resolver = FaceResolver::new(&table, 0x00FFFFFF, 0x00000000, 14.0, None);
     let base_face = face_resolver.default_face();
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(20);
-    let context = DisplayRowRenderContext::new(&face_resolver, None, &mut face_ids);
+    let context = DisplayRowRenderContext::new(
+        &face_resolver,
+        None,
+        &mut face_ids,
+        StringSourceRootScope::CallbackFree,
+    );
     let fallback =
         crate::display_row::metrics::DisplayRowFallbackMetrics::from_default_face_extents(
             8.0, 16.0, 12.0,
@@ -1238,6 +1269,7 @@ fn display_row_source_state_reuses_face_cache_across_items() {
         value,
         RenderFaceRef::FaceId(FaceId::new(0)),
         crate::display_source::LispStringSourceOrigin::Normal,
+        StringSourceRootScope::Rooted(_eval.owned_root_retainer()),
     )
     .expect("string source");
     let mut state = DisplayRowSourceState::frame_local();
@@ -1460,7 +1492,12 @@ fn display_row_renderer_continues_source_mapped_text_after_clip() {
         )),
     };
     let mut state = DisplayRowSourceState::frame_local();
-    let mut context = DisplayRowRenderContext::new(&resolver, None, &mut face_ids);
+    let mut context = DisplayRowRenderContext::new(
+        &resolver,
+        None,
+        &mut face_ids,
+        StringSourceRootScope::CallbackFree,
+    );
 
     let first = display_row_request_for_face(
         DisplayRowGeometry {
@@ -1551,7 +1588,12 @@ fn display_row_renderer_accepts_direct_text_run_measurement_policy() {
     let mut row = GlyphRow::new(GlyphRowRole::Text);
     let mut state = DisplayRowSourceState::frame_local();
     let mut policy = DirectTextRunPolicy;
-    let mut context = DisplayRowRenderContext::new(&resolver, None, &mut face_ids);
+    let mut context = DisplayRowRenderContext::new(
+        &resolver,
+        None,
+        &mut face_ids,
+        StringSourceRootScope::CallbackFree,
+    );
 
     let result = display_row_request_for_face(
         DisplayRowGeometry {
@@ -1732,8 +1774,13 @@ fn render_lisp_display_row_output_with_symbols_and_chrome_text_area_left(
         symbol_values,
     )
     .with_chrome_text_area_left_px(chrome_text_area_left_px);
-    let mut context = DisplayRowRenderContext::new(&resolver, None, &mut face_ids)
-        .with_automatic_composition(automatic_composition);
+    let mut context = DisplayRowRenderContext::new(
+        &resolver,
+        None,
+        &mut face_ids,
+        StringSourceRootScope::CallbackFree,
+    )
+    .with_automatic_composition(automatic_composition);
     render_lisp_string_row_with_context(&mut renderer, request, rendered, &mut context)
         .expect("display source row")
 }
@@ -1805,16 +1852,24 @@ fn render_buffer_display_row_with_properties(
         role,
         std::collections::HashMap::new(),
     );
-    let mut source = crate::buffer_source::text_source::BufferTextSourceCursor::new(
+    let mut source = crate::buffer_source::text_source::BufferTextSourceCursor::new_for_window(
         buf_id,
         &snapshot,
+        None,
         CharPos0::ZERO,
         snapshot.layout_point_max_char_pos(),
         request.base_face_ref(),
+        StringSourceRootScope::Rooted(eval.owned_root_retainer()),
     );
 
     request
-        .render(&mut renderer, &mut source, &resolver, &mut face_ids)
+        .render(
+            &mut renderer,
+            &mut source,
+            &resolver,
+            &mut face_ids,
+            StringSourceRootScope::Rooted(eval.owned_root_retainer()),
+        )
         .expect("buffer display source row")
         .into_row()
 }
@@ -1838,12 +1893,14 @@ fn render_display_item_source_row_accepts_buffer_text_source() {
     let table = FaceTable::new();
     let resolver = FaceResolver::new(&table, 0x00FFFFFF, 0x00000000, 14.0, None);
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(1);
-    let mut source = crate::buffer_source::text_source::BufferTextSourceCursor::new(
+    let mut source = crate::buffer_source::text_source::BufferTextSourceCursor::new_for_window(
         buf_id,
         buffer,
+        None,
         neovm_core::buffer::CharPos0::new(0),
         buffer.layout_point_max_char_pos(),
         RenderFaceRef::FaceId(FaceId::new(1)),
+        StringSourceRootScope::Rooted(eval.owned_root_retainer()),
     );
 
     let rendered = display_row_request_for_face(
@@ -1860,7 +1917,13 @@ fn render_display_item_source_row_accepts_buffer_text_source() {
         resolver.default_face(),
         GlyphRowRole::TabLine,
     )
-    .render(&mut renderer, &mut source, &resolver, &mut face_ids)
+    .render(
+        &mut renderer,
+        &mut source,
+        &resolver,
+        &mut face_ids,
+        StringSourceRootScope::Rooted(eval.owned_root_retainer()),
+    )
     .expect("display source row");
 
     assert_eq!(rendered.source_slots().len(), 5);
@@ -2633,12 +2696,14 @@ fn render_display_item_source_row_uses_spec_tab_policy() {
     let table = FaceTable::new();
     let resolver = FaceResolver::new(&table, 0x00FFFFFF, 0x00000000, 14.0, None);
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(1);
-    let mut source = crate::buffer_source::text_source::BufferTextSourceCursor::new(
+    let mut source = crate::buffer_source::text_source::BufferTextSourceCursor::new_for_window(
         buf_id,
         buffer,
+        None,
         neovm_core::buffer::CharPos0::new(0),
         buffer.layout_point_max_char_pos(),
         RenderFaceRef::FaceId(FaceId::new(1)),
+        StringSourceRootScope::Rooted(eval.owned_root_retainer()),
     );
 
     let rendered = display_row_request_for_face(
@@ -2659,7 +2724,13 @@ fn render_display_item_source_row_uses_spec_tab_policy() {
         resolver.default_face(),
         GlyphRowRole::TabLine,
     )
-    .render(&mut renderer, &mut source, &resolver, &mut face_ids)
+    .render(
+        &mut renderer,
+        &mut source,
+        &resolver,
+        &mut face_ids,
+        StringSourceRootScope::Rooted(eval.owned_root_retainer()),
+    )
     .expect("display source row");
 
     let glyphs = &rendered.row().glyphs[1];
@@ -3971,7 +4042,12 @@ fn display_row_lisp_string_source_request_uses_render_context() {
         GlyphRowRole::TabBar,
         std::collections::HashMap::new(),
     );
-    let mut context = DisplayRowRenderContext::new(&resolver, None, &mut face_ids);
+    let mut context = DisplayRowRenderContext::new(
+        &resolver,
+        None,
+        &mut face_ids,
+        StringSourceRootScope::Rooted(_eval.owned_root_retainer()),
+    );
 
     let rendered = render_lisp_string_row_with_context(
         &mut renderer,
@@ -4014,6 +4090,7 @@ fn display_row_render_executor_renders_lisp_string_source_request() {
         &resolver,
         None,
         &mut face_ids,
+        StringSourceRootScope::Rooted(_eval.owned_root_retainer()),
     );
 
     let rendered = executor
@@ -4178,6 +4255,7 @@ fn display_row_fragment_keeps_bidi_unfinalized_for_current_row_append() {
         Value::string("אב"),
         base_face,
         crate::display_source::LispStringSourceOrigin::Normal,
+        StringSourceRootScope::Rooted(_eval.owned_root_retainer()),
     )
     .expect("lisp string source");
     let mut state = DisplayRowSourceState::frame_local();
@@ -4190,6 +4268,7 @@ fn display_row_fragment_keeps_bidi_unfinalized_for_current_row_append() {
             &resolver,
             None,
             &mut face_ids,
+            StringSourceRootScope::Rooted(_eval.owned_root_retainer()),
         )
         .expect("unfinalized row fragment")
         .into_row();
@@ -4255,6 +4334,7 @@ fn display_row_renderer_can_render_source_fragment_into_existing_row() {
             &resolver,
             None,
             &mut face_ids,
+            StringSourceRootScope::Rooted(_eval.owned_root_retainer()),
         )
         .expect("row render fragment");
 
@@ -4663,12 +4743,14 @@ fn render_buffer_text_row_with_display_at_content_x(
     let table = FaceTable::new();
     let resolver = FaceResolver::new(&table, 0x00FFFFFF, 0x00000000, 14.0, None);
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(1);
-    let mut source = crate::buffer_source::text_source::BufferTextSourceCursor::new(
+    let mut source = crate::buffer_source::text_source::BufferTextSourceCursor::new_for_window(
         buf_id,
         &snapshot,
+        None,
         CharPos0::new(0),
         snapshot.layout_point_max_char_pos(),
         RenderFaceRef::FaceId(FaceId::new(1)),
+        StringSourceRootScope::Rooted(eval.owned_root_retainer()),
     );
     display_row_request_for_face(
         DisplayRowGeometry {
@@ -4688,7 +4770,13 @@ fn render_buffer_text_row_with_display_at_content_x(
         resolver.default_face(),
         GlyphRowRole::Text,
     )
-    .render(&mut renderer, &mut source, &resolver, &mut face_ids)
+    .render(
+        &mut renderer,
+        &mut source,
+        &resolver,
+        &mut face_ids,
+        StringSourceRootScope::Rooted(eval.owned_root_retainer()),
+    )
     .expect("buffer text row")
     .row()
     .clone()

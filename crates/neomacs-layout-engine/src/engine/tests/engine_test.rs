@@ -1,3 +1,4 @@
+use crate::string_property_snapshot::StringSourceRootScope;
 #[path = "line_number_matrix_capacity_test.rs"]
 mod line_number_matrix_capacity_test;
 
@@ -2245,12 +2246,14 @@ fn render_buffer_text_source_shadow_row(
     ascent_px: f32,
     char_width_px: f32,
 ) -> GlyphRow {
-    let mut source = crate::buffer_source::text_source::BufferTextSourceCursor::new(
+    let mut source = crate::buffer_source::text_source::BufferTextSourceCursor::new_for_window(
         buf_id,
         snapshot,
+        None,
         CharPos0::ZERO,
         line_end,
         RenderFaceRef::FaceId(FaceId::new(0)),
+        StringSourceRootScope::CallbackFree,
     );
     let mut font_metrics = None;
     let mut renderer =
@@ -2276,7 +2279,13 @@ fn render_buffer_text_source_shadow_row(
         DisplayRowPosition::new(0.0, 0),
         DisplayRowMaxX::Bounded(width_px),
     ))
-    .render(&mut renderer, &mut source, &resolver, &mut face_ids)
+    .render(
+        &mut renderer,
+        &mut source,
+        &resolver,
+        &mut face_ids,
+        StringSourceRootScope::CallbackFree,
+    )
     .expect("typed buffer text source row")
     .into_row()
 }
@@ -22889,7 +22898,13 @@ fn render_buffer_plain_item_source_shadow_row(
         DisplayRowPosition::new(0.0, 0),
         DisplayRowMaxX::Bounded(width_px),
     ))
-    .render(&mut renderer, &mut source, &resolver, &mut face_ids)
+    .render(
+        &mut renderer,
+        &mut source,
+        &resolver,
+        &mut face_ids,
+        StringSourceRootScope::CallbackFree,
+    )
     .expect("ascii item source row")
     .into_row()
 }
@@ -22969,7 +22984,13 @@ fn render_buffer_plain_item_prefix_shadow_row_at(
         start_position,
         DisplayRowMaxX::Bounded(width_px),
     ))
-    .render(&mut renderer, &mut source, &resolver, &mut face_ids)
+    .render(
+        &mut renderer,
+        &mut source,
+        &resolver,
+        &mut face_ids,
+        StringSourceRootScope::CallbackFree,
+    )
     .expect("ascii item prefix shadow row")
     .into_row()
 }
@@ -24550,7 +24571,13 @@ fn assert_segmented_plain_shadow_row(
         DisplayRowPosition::new(0.0, 0),
         DisplayRowMaxX::Bounded(640.0),
     ))
-    .render(&mut renderer, &mut source, &resolver, &mut face_ids)
+    .render(
+        &mut renderer,
+        &mut source,
+        &resolver,
+        &mut face_ids,
+        StringSourceRootScope::Rooted(eval.owned_root_retainer()),
+    )
     .expect("segmented ascii item source row")
     .into_row();
 

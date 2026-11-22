@@ -254,7 +254,15 @@ impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
         end: CharPos0,
         base_face: RenderFaceRef,
     ) -> Self {
-        Self::new_for_window(buffer_id, buffer, None, start, end, base_face)
+        Self::new_for_window(
+            buffer_id,
+            buffer,
+            None,
+            start,
+            end,
+            base_face,
+            crate::string_property_snapshot::StringSourceRootScope::CallbackFree,
+        )
     }
 
     /// Cursor scoped to `window_id`, so overlay `window` properties are honored
@@ -266,6 +274,7 @@ impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
         start: CharPos0,
         end: CharPos0,
         base_face: RenderFaceRef,
+        string_roots: crate::string_property_snapshot::StringSourceRootScope,
     ) -> Self {
         let accessible_end = buffer.layout_point_max_char_pos();
         let start = start.min(accessible_end);
@@ -285,7 +294,7 @@ impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
             char_granularity_end: None,
             overlay_strings_produced_at: None,
             base_face,
-            replacement_strings: LispStringSourceStack::empty(1)
+            replacement_strings: LispStringSourceStack::empty(1, string_roots)
                 .with_tty_glyphless_char_display(
                     crate::neovm_bridge::TtyGlyphlessCharDisplay::capture(buffer),
                 )

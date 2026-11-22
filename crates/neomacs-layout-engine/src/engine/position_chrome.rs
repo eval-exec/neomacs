@@ -103,7 +103,14 @@ impl MeasuredPositionChrome {
             DisplayRowFallbackMetrics::from_window_defaults(params),
             &name,
         );
-        let services = ChromeRowRenderServices::new(font_metrics, resolver, &mut face_ids);
+        let services = ChromeRowRenderServices::new(
+            font_metrics,
+            resolver,
+            &mut face_ids,
+            crate::string_property_snapshot::StringSourceRootScope::Rooted(
+                evaluator.owned_root_retainer(),
+            ),
+        );
         let outcome = request.measure_position(&mut WindowChromeRowsRenderState::new(
             output,
             &mut emitter,

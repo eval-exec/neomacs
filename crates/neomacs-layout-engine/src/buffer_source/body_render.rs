@@ -392,6 +392,7 @@ impl BufferSourceWalkSetup {
                 self.charpos,
                 end,
                 loop_context.text_start_byte(),
+                state.source_render.string_source_root_scope(),
             ),
             None => BufferSourceWalk::new_for_window(
                 loop_context.buffer_id(),
@@ -399,6 +400,7 @@ impl BufferSourceWalkSetup {
                 Some(params.window_id as u64),
                 self.charpos,
                 loop_context.text_start_byte(),
+                state.source_render.string_source_root_scope(),
             ),
         }
         // The two bounds are orthogonal and both numeric: the acquisition

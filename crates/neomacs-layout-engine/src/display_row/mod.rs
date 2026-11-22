@@ -40,6 +40,7 @@ use crate::font::metrics::FontMetricsService;
 use crate::frame_face_arena::FrameFaceAttempt;
 use crate::neovm_bridge::FaceResolver;
 use crate::neovm_bridge::ResolvedFace;
+use crate::string_property_snapshot::StringSourceRootScope;
 use neomacs_display_protocol::frame_glyphs::GlyphRowRole;
 use neomacs_display_protocol::glyph_matrix::{GlyphArea, GlyphRow, GlyphStringId};
 use neomacs_display_protocol::types::FaceId;
@@ -420,12 +421,16 @@ pub(crate) struct DisplayRowLispStringSourceSession {
 }
 
 impl DisplayRowLispStringSourceSession {
-    pub(crate) fn new(request: DisplayRowLispStringSourceSessionRequest) -> Option<Self> {
+    pub(crate) fn new(
+        request: DisplayRowLispStringSourceSessionRequest,
+        root_scope: StringSourceRootScope,
+    ) -> Option<Self> {
         let source = LispStringSourceCursor::new(
             request.source_id.raw(),
             request.value,
             RenderFaceRef::FaceId(request.base_face_id),
             LispStringSourceOrigin::Normal,
+            root_scope,
         )?
         .with_tty_glyphless_char_display(request.tty_glyphless_char_display)
         .with_composition_source(request.composition_source);
@@ -815,8 +820,9 @@ impl<'a> DisplayRowSourceRenderRequest<'a> {
         source: &mut S,
         face_resolver: &FaceResolver,
         face_ids: &mut FrameFaceAttempt,
+        root_scope: StringSourceRootScope,
     ) -> Option<RenderedDisplayRow> {
-        let mut context = DisplayRowRenderContext::new(face_resolver, None, face_ids);
+        let mut context = DisplayRowRenderContext::new(face_resolver, None, face_ids, root_scope);
         self.render_with_context(renderer, source, &mut context)
     }
 
@@ -856,8 +862,10 @@ impl<'a> DisplayRowSourceRenderRequest<'a> {
         face_resolver: &FaceResolver,
         display_host: Option<&dyn DisplayHost>,
         face_ids: &mut FrameFaceAttempt,
+        root_scope: StringSourceRootScope,
     ) -> Option<RenderedDisplayRow> {
-        let mut context = DisplayRowRenderContext::new(face_resolver, display_host, face_ids);
+        let mut context =
+            DisplayRowRenderContext::new(face_resolver, display_host, face_ids, root_scope);
         renderer.render_display_item_source_row_fragment_step_with_context(
             self.into_render_plan(),
             source,
@@ -877,8 +885,10 @@ impl<'a> DisplayRowSourceRenderRequest<'a> {
         face_resolver: &FaceResolver,
         display_host: Option<&dyn DisplayHost>,
         face_ids: &mut FrameFaceAttempt,
+        root_scope: StringSourceRootScope,
     ) -> Option<DisplayRowRenderIntoRowResult> {
-        let mut context = DisplayRowRenderContext::new(face_resolver, display_host, face_ids);
+        let mut context =
+            DisplayRowRenderContext::new(face_resolver, display_host, face_ids, root_scope);
         renderer.render_display_item_source_row_fragment_step_into_row_with_context(
             self.into_render_plan(),
             row,
@@ -918,6 +928,7 @@ pub(crate) struct DisplayRowRenderContext<'a, 'ids> {
     display_host: Option<&'a dyn DisplayHost>,
     face_ids: &'ids mut FrameFaceAttempt,
     face_realizer: Option<&'a dyn Fn(&mut ResolvedFace)>,
+    root_scope: StringSourceRootScope,
 }
 
 impl<'a, 'ids> DisplayRowRenderContext<'a, 'ids> {
@@ -932,6 +943,7 @@ impl<'a, 'ids> DisplayRowRenderContext<'a, 'ids> {
         face_resolver: &'a FaceResolver,
         display_host: Option<&'a dyn DisplayHost>,
         face_ids: &'ids mut FrameFaceAttempt,
+        root_scope: StringSourceRootScope,
     ) -> Self {
         Self {
             automatic_composition: None,
@@ -939,6 +951,7 @@ impl<'a, 'ids> DisplayRowRenderContext<'a, 'ids> {
             display_host,
             face_ids,
             face_realizer: None,
+            root_scope,
         }
     }
 
@@ -1006,10 +1019,16 @@ impl<'metrics, 'context, 'ids> DisplayRowRenderExecutor<'metrics, 'context, 'ids
         face_resolver: &'context FaceResolver,
         display_host: Option<&'context dyn DisplayHost>,
         face_ids: &'ids mut FrameFaceAttempt,
+        root_scope: StringSourceRootScope,
     ) -> Self {
         Self {
             renderer: DisplayRowRenderer::new(font_metrics, measurement_mode),
-            context: DisplayRowRenderContext::new(face_resolver, display_host, face_ids),
+            context: DisplayRowRenderContext::new(
+                face_resolver,
+                display_host,
+                face_ids,
+                root_scope,
+            ),
         }
     }
 
@@ -1057,7 +1076,8 @@ impl<'metrics> DisplayRowRenderer<'metrics> {
         session_request: DisplayRowLispStringSourceSessionRequest,
         context: &mut DisplayRowRenderContext<'_, '_>,
     ) -> Option<RenderedDisplayRow> {
-        let mut session = DisplayRowLispStringSourceSession::new(session_request)?;
+        let mut session =
+            DisplayRowLispStringSourceSession::new(session_request, context.root_scope.clone())?;
         session.render_next_row_plan_with_context(self, plan, context)
     }
 
