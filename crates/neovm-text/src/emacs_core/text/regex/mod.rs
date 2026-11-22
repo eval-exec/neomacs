@@ -3406,9 +3406,10 @@ fn next_search_char_boundary(text: &[u8], pos: usize) -> Option<usize> {
 // Buffer search primitives
 // ---------------------------------------------------------------------------
 
-/// Bytes [`with_buffer_emacs_bytes`] has copied out of a buffer because the
-/// range was not contiguous.  Test-only: the literal-search gap tests assert
-/// that a search loop copies nothing.
+/// Bytes a buffer search has copied out of a buffer because the range was not
+/// contiguous: the literal [`search_literal_span`] fallback and
+/// [`with_buffer_emacs_bytes`].  Test-only: the literal-search gap tests
+/// assert that a search loop copies nothing.
 #[cfg(test)]
 static SEARCH_COPIED_BYTES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
@@ -3430,16 +3431,18 @@ fn with_buffer_emacs_bytes<R>(
     f(&text)
 }
 
-/// [`with_buffer_emacs_bytes`] for the regex-engine and literal search paths.
+/// [`with_buffer_emacs_bytes`] for the regex-engine search paths.
 ///
-/// When the gap-buffer gap sits inside the searched range, every search
-/// used to copy the whole accessible region (audit #17).  GNU never
-/// copies: `re_search_2` walks the two gap segments in place.  The
-/// port's engine is single-segment, so the clean equivalent is one gap
-/// motion out of the range (amortized: after an edit parks the gap
-/// mid-buffer, the first search moves it once and the rest of the
-/// font-lock pass borrows zero-copy).  Chunked backends (piece tree,
-/// rope) still take the copy fallback inside `with_buffer_emacs_bytes`.
+/// When the gap-buffer gap sits inside the searched range, the regex search
+/// used to copy the whole accessible region (audit #17).  GNU never copies:
+/// `re_search_2` walks the two gap segments in place.  The port's regex
+/// engine is single-segment, so the clean equivalent is one gap motion out
+/// of the range (amortized: after an edit parks the gap mid-buffer, the
+/// first search moves it once and the rest of the font-lock pass borrows
+/// zero-copy).  The literal paths no longer need this: [`search_literal_span`]
+/// reads both gap halves in place, as GNU's `search_buffer_non_re` does.
+/// Chunked backends (piece tree, rope) still take the copy fallback inside
+/// `with_buffer_emacs_bytes`.
 fn with_buffer_emacs_bytes_for_search<R>(
     buf: &Buffer,
     range: EmacsByteRange,
@@ -3914,6 +3917,8 @@ fn search_literal_span(
     }
     let mut text = Vec::new();
     buf.copy_emacs_byte_range_to(range, &mut text);
+    #[cfg(test)]
+    SEARCH_COPIED_BYTES.fetch_add(text.len(), std::sync::atomic::Ordering::Relaxed);
     find(&text)
 }
 

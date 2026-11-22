@@ -2074,10 +2074,9 @@ fn literal_search_loop_with_gap_in_span_copies_nothing() {
     ] {
         let mut buf = literal_gap_test_buffer(&text);
         park_gap_at_keeping_point(&mut buf, parked);
-        assert_eq!(ascii_gap_byte(&buf), parked);
+        let parked_gap = ascii_gap_byte(&buf);
+        assert_eq!(parked_gap, parked);
         let copied_before = super::SEARCH_COPIED_BYTES.load(Ordering::Relaxed);
-        let mut gap = ascii_gap_byte(&buf);
-        let mut gap_moves = 0;
         let mut point = match direction {
             LiteralDirection::Forward => 0,
             LiteralDirection::Backward => text.len(),
@@ -2088,15 +2087,18 @@ fn literal_search_loop_with_gap_in_span_copies_nothing() {
         {
             point = found;
             hits += 1;
-            if ascii_gap_byte(&buf) != gap {
-                gap = ascii_gap_byte(&buf);
-                gap_moves += 1;
-            }
         }
         assert_eq!(hits, 2_000, "{direction:?}");
         let copied = super::SEARCH_COPIED_BYTES.load(Ordering::Relaxed) - copied_before;
         assert_eq!(copied, 0, "{direction:?}: bytes copied out of the buffer");
-        assert!(gap_moves <= 1, "{direction:?}: gap moved {gap_moves} times");
+        // GNU `search_buffer_non_re' reads both gap halves through
+        // BYTE_POS_ADDR (search.c:1298) and never calls move_gap: after the
+        // loop `gap-position' is exactly what the last edit left.
+        assert_eq!(
+            ascii_gap_byte(&buf),
+            parked_gap,
+            "{direction:?}: a literal search must leave the gap where the edit left it"
+        );
     }
 }
 
@@ -2115,6 +2117,14 @@ fn literal_search_after_edit_keeps_gap_at_the_edit() {
     for _ in 0..200 {
         buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(p));
         buf.insert("x");
+        // The edit parks the gap after the inserted character. GNU's literal
+        // search leaves it there; the search must not move it (search.c:1298).
+        let gap_after_edit = ascii_gap_byte(&buf);
+        assert_eq!(
+            gap_after_edit,
+            p + 1,
+            "insert must park the gap at the edit"
+        );
         assert!(
             literal_search_at(
                 &mut buf,
@@ -2126,10 +2136,10 @@ fn literal_search_after_edit_keeps_gap_at_the_edit() {
             )
             .is_some()
         );
-        let gap = ascii_gap_byte(&buf);
-        assert!(
-            gap.abs_diff(p) <= 1,
-            "search moved the gap from {p} to {gap}"
+        assert_eq!(
+            ascii_gap_byte(&buf),
+            gap_after_edit,
+            "search moved the gap from the edit"
         );
         buf.delete_emacs_byte_range(EmacsByteRange::new(
             neovm_edit::buffer::EmacsBytePos::new(p),
