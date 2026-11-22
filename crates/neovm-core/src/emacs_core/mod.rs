@@ -570,6 +570,9 @@ mod architecture_condition_snapshot_admission_guard_test;
 #[path = "tests/heap_registry_cross_heap_test.rs"]
 mod heap_registry_cross_heap_test;
 #[cfg(test)]
+#[path = "tests/overlay_view_memo_gc_test.rs"]
+mod overlay_view_memo_gc_test;
+#[cfg(test)]
 #[path = "tests/plist_collection_capture_test.rs"]
 mod plist_collection_capture_test;
 
