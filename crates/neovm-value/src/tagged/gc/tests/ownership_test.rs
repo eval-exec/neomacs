@@ -3594,3 +3594,33 @@ pub(crate) fn run_ownership_upper_test(
         other => panic!("unknown ownership upper test {other}"),
     }
 }
+
+/// The physical counter reports the arena slot stride and each owned payload's
+/// exact capacity (NUL included), not GNU's logical header+STRING_BYTES
+/// census. This is the per-string footprint the representation design (Neo
+/// 64-byte slot vs GNU's 32-byte in-band-marked header) is measured against;
+/// it is deliberately separate from the Lisp GC budget.
+#[test]
+fn string_physical_bytes_counter_reports_slot_plus_owned_payload_capacity() {
+    let mut heap = TaggedHeap::new();
+    set_tagged_heap(&mut heap);
+    let lengths = [0usize, 1, 93, 300];
+    let mut values = Vec::new();
+    for len in lengths {
+        let text: String = std::iter::repeat('x').take(len).collect();
+        values.push(heap.alloc_string(crate::heap_types::LispString::from_utf8(&text)));
+    }
+    let (strings, slot_bytes, payload_capacity_bytes) = heap.string_physical_bytes_for_test();
+    assert_eq!(strings, lengths.len());
+    assert_eq!(
+        slot_bytes,
+        lengths.len() * 64,
+        "a StringObj occupies one 64-byte arena slot"
+    );
+    assert_eq!(
+        payload_capacity_bytes,
+        lengths.iter().map(|len| len + 1).sum::<usize>(),
+        "an owned payload's capacity is its byte length plus the NUL"
+    );
+    assert_eq!(values.len(), lengths.len());
+}

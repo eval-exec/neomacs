@@ -38,6 +38,36 @@ fn visit_arena<T: PagedObject>(arena: &ObjectArena<T>, visit: &mut impl FnMut(*c
     }
 }
 
+#[cfg(test)]
+impl TaggedHeap {
+    /// #625 structural inventory: physical bytes of every live owned string --
+    /// arena slots at the class stride plus each owned payload capacity
+    /// (including the NUL), excluding image-resident strings. This is the
+    /// string representation's footprint, deliberately separate from GNU's
+    /// logical live-object census (32-byte header + STRING_BYTES).
+    #[doc(hidden)]
+    pub(crate) fn string_physical_bytes_for_test(&self) -> (usize, usize, usize) {
+        let mut strings = 0usize;
+        let mut slot_bytes = 0usize;
+        let mut payload_capacity_bytes = 0usize;
+        let mut visit = |header: *const GcHeader| {
+            // SAFETY: arena allocation bits establish a live initialized
+            // header; the test heap is quiescent and exclusively borrowed.
+            unsafe {
+                if (*header).flags.image_resident() || (*header).kind != HeapObjectKind::String {
+                    return;
+                }
+                let string = &*header.cast::<StringObj>();
+                strings += 1;
+                slot_bytes += <StringObj as PagedObject>::SLOT_BYTES;
+                payload_capacity_bytes += string.data.storage_capacity();
+            }
+        };
+        visit_arena(&self.string_arena, &mut visit);
+        (strings, slot_bytes, payload_capacity_bytes)
+    }
+}
+
 impl TaggedHeap {
     /// Request rows for the next completed collection, before its finalizers
     /// and post-gc-hook allocate anything. This is independent of byte pacing.
