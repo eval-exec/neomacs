@@ -1,7 +1,7 @@
 //! E4 executor substrate: the E2-independent part of the owner-local parallel
 //! evaluator (E4-DESIGN §3.1, §4 and §5), DORMANT until E4 stage 1.
 //!
-//! Four dormant pieces live here:
+//! Five dormant pieces live here:
 //!
 //! - [`dispatch`]: accessors over the generated cold dispatch rows (the
 //!   Scalar/Sealed/World arm plus the folded green-guard re-entry axis);
@@ -9,7 +9,11 @@
 //!   marks and the root schema each detachable frame publishes;
 //! - [`effective`]: the effective-Plain value API types and the one
 //!   read/write rule (E4-DESIGN §4.1-§4.2) as pure functions;
-//! - [`engine`]: the stage-1 tree-walk stepper. Tests are its only caller.
+//! - [`engine`]: the stage-1 tree-walk stepper; tests are its only caller;
+//! - [`vm`]: the stage-1 bytecode stepper over one owned frame
+//!   (VM-EXECUTOR-DESIGN r1). Scalar opcodes step the operand segment
+//!   owner-locally, the sealed cons opcodes call a port, and every World
+//!   arm is exactly one escape. Tests are its only caller.
 //!
 //! Nothing in this module is reachable from a serial dispatcher, constructs
 //! an E1 capability (there is still no `ParallelExecution` constructor), or
@@ -22,6 +26,8 @@ pub(crate) mod effective;
 pub(crate) mod engine;
 #[doc(hidden)]
 pub mod frames;
+#[allow(dead_code)] // Harness-only until E6-P wires the executor.
+pub(crate) mod vm;
 
 #[cfg(test)]
 #[path = "tests/dispatch_test.rs"]
@@ -44,3 +50,6 @@ mod poll_tests;
 #[cfg(test)]
 #[path = "tests/region_test.rs"]
 mod region_tests;
+#[cfg(test)]
+#[path = "tests/vm_test.rs"]
+mod vm_tests;
