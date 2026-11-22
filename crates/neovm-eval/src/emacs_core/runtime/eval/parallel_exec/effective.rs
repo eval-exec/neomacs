@@ -343,21 +343,19 @@ pub(crate) enum PlainRefusal {
 }
 
 /// One validated admission result. `Mint` is the only source of a production
-/// [`EffectivePlainKey`]; `Refuse` keeps the access on the serial path.
+/// [`EffectivePlainKey`]; `Refuse` keeps the access on the serial path. A Plain
+/// admission has no channel field: it always mints [`Channel::Default`], so a
+/// buffer-local Plain key is unrepresentable.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PlainAdmission {
-    Mint {
-        sym: SymId,
-        slot: TlsIndex,
-        channel: Channel,
-    },
+    Mint { sym: SymId, slot: TlsIndex },
     Refuse(PlainRefusal),
 }
 
 impl PlainAdmission {
     #[doc(hidden)]
-    pub(crate) const fn mint(sym: SymId, slot: TlsIndex, channel: Channel) -> Self {
-        Self::Mint { sym, slot, channel }
+    pub(crate) const fn mint(sym: SymId, slot: TlsIndex) -> Self {
+        Self::Mint { sym, slot }
     }
 
     #[doc(hidden)]
@@ -393,7 +391,7 @@ pub(crate) fn classify_plain_backing(
         Some(PlainSymbolBacking::Unprojected)
         | Some(PlainSymbolBacking::Projected)
         | Some(PlainSymbolBacking::VoidProjection) => match projected {
-            Some(slot) => PlainAdmission::mint(sym, slot, Channel::Default),
+            Some(slot) => PlainAdmission::mint(sym, slot),
             None => PlainAdmission::refuse(PlainRefusal::MissingProjection),
         },
     }
@@ -409,10 +407,10 @@ impl<'era> EffectivePlainKey<'era> {
         shape: ShapeGeneration,
     ) -> Result<Self, PlainRefusal> {
         match *admission {
-            PlainAdmission::Mint { sym, slot, channel } => Ok(Self {
+            PlainAdmission::Mint { sym, slot } => Ok(Self {
                 sym,
                 slot,
-                channel,
+                channel: Channel::Default,
                 era,
                 shape,
                 _era: PhantomData,

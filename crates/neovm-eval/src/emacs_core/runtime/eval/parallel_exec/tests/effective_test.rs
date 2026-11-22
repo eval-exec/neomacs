@@ -100,7 +100,7 @@ fn plain_sym(name: &'static str) -> neovm_value::intern::SymId {
 }
 
 fn mint(sym: neovm_value::intern::SymId) -> PlainAdmission {
-    PlainAdmission::mint(sym, TlsIndex::VOID, Channel::Default)
+    PlainAdmission::mint(sym, TlsIndex::VOID)
 }
 
 fn key(channel: Channel) -> EffectivePlainKey<'static> {
@@ -306,7 +306,7 @@ fn admission_is_exhaustive_over_plain_backing_kinds() {
     ] {
         assert_eq!(
             classify_plain_backing(NIL_SYM_ID, Some(backing), false, Some(TlsIndex::VOID),),
-            PlainAdmission::mint(NIL_SYM_ID, TlsIndex::VOID, Channel::Default)
+            PlainAdmission::mint(NIL_SYM_ID, TlsIndex::VOID)
         );
         assert_eq!(
             classify_plain_backing(NIL_SYM_ID, Some(backing), false, None),
@@ -319,7 +319,7 @@ fn admission_is_exhaustive_over_plain_backing_kinds() {
 fn from_admission_mints_the_key_and_carries_the_refusal() {
     let sym = plain_sym("admitted");
     let key = EffectivePlainKey::from_admission(
-        &PlainAdmission::mint(sym, TlsIndex::VOID, Channel::Default),
+        &PlainAdmission::mint(sym, TlsIndex::VOID),
         EraId::new(3),
         ShapeGeneration::new(7),
     )

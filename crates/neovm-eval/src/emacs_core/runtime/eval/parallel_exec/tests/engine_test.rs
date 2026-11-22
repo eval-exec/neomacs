@@ -1964,7 +1964,7 @@ fn engine_reads_a_bound_plain_symbol() {
     let id = symbol_id(&sym, SymbolMode::Bare).expect("interned test symbol");
     let mut stepper = engine(TestSlots::bound_with_admission(
         Value::fixnum(5),
-        PlainAdmission::mint(id, TlsIndex::VOID, Channel::Default),
+        PlainAdmission::mint(id, TlsIndex::VOID),
     ));
     let outcome = stepper.start(&mut ctx, body(&[sym]), wide());
     assert_eq!(done_value(&mut stepper, outcome), Value::fixnum(5));

@@ -353,7 +353,7 @@ fn ring_defers_grant_while_a_stop_is_queued() {
     let members = running(&keys);
 
     // A draining-resume epoch queues the pending stop; the serial grant must
-    // not jump ahead of it (lead #11190 C1).
+    // not jump ahead of it (a pending stop must win).
     state.phase = Phase::DrainingResumes;
     assert_eq!(state.request(&members), Ok(Request::Queued));
     assert!(state.queued);
