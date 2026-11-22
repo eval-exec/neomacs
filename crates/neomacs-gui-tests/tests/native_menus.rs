@@ -444,6 +444,9 @@ fn native_submenu_hover_keeps_editor_and_compositor_alive() {
             let row_y = (ready.char_height * 2).to_string();
             for cycle in 0..10 {
                 let before = popup_requests(artifacts);
+                let configured_before = fs::read_to_string(artifacts.join("wayland.log"))
+                    .map(|log| popup_trace::configured(&log).len())
+                    .unwrap_or(0);
                 input(
                     env,
                     &["mousemove", "--window", window, &x, &menu_y, "click", "1"],
@@ -459,8 +462,15 @@ fn native_submenu_hover_keeps_editor_and_compositor_alive() {
                     alive(editor, "editor", artifacts);
                     (popup_requests(artifacts) >= before + 2).then_some(())
                 });
-                // get_popup is asynchronous; allow processing before dismissing.
-                thread::sleep(Duration::from_millis(150));
+                // get_popup is asynchronous; the compositor's configure of the
+                // submenu is the receipt that both popups are mapped, so the
+                // dismissal click does not race their creation.
+                wait_for("submenu configuration", artifacts, || {
+                    alive(compositor, "compositor before submenu configure", artifacts);
+                    alive(editor, "editor before submenu configure", artifacts);
+                    let log = fs::read_to_string(artifacts.join("wayland.log")).ok()?;
+                    (popup_trace::configured(&log).len() >= configured_before + 2).then_some(())
+                });
                 alive(compositor, "compositor after submenu", artifacts);
                 alive(editor, "editor after submenu", artifacts);
                 input(
@@ -530,7 +540,8 @@ fn switching_between_sibling_submenus_keeps_the_display_connection() {
     with_native_menu(
         "menu-sibling-submenus.el",
         |env, window, ready, artifacts, editor, compositor| {
-            thread::sleep(Duration::from_millis(150));
+            // The harness already waited for the first primary-surface
+            // presentation; no fixed settle is needed before the first click.
             input(
                 env,
                 &[

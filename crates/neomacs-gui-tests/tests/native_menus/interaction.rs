@@ -113,18 +113,23 @@ fn click_at(env: &[(String, String)], window: &str, x: u32, y: u32) {
     );
 }
 
-/// Tap each menu key the way a keyboard does: hold it for a moment, then
-/// release, and leave a gap before the next key.  xdotool's `key` sends the
-/// release a few milliseconds after the press; a native popup's grab and its
-/// submenu surface take longer than that to come up on a loaded machine, and
-/// a release processed while the submenu is being created retires the menu
-/// before the test can look at it.
-fn press_menu_keys(env: &[(String, String)], keys: &[&str]) {
+/// Tap each menu key the way a keyboard does.  A submenu-opening `Right`
+/// holds the key until the compositor has requested the new popup
+/// (`xdg_popup.get_popup`) instead of for a fixed pause: releasing the key
+/// while the submenu surface is being created retires the menu before the
+/// test can look at it, and a loaded machine can take arbitrarily longer
+/// than any fixed hold.  Navigation keys have no popup receipt and can be
+/// released immediately; the editor processes the ordered key stream.
+fn press_menu_keys(env: &[(String, String)], artifacts: &Path, keys: &[&str]) {
     for key in keys {
+        let before = popup_requests(artifacts);
         input(env, &["keydown", key]);
-        thread::sleep(Duration::from_millis(60));
+        if *key == "Right" {
+            wait_for("submenu request from Right", artifacts, || {
+                (popup_requests(artifacts) > before).then_some(())
+            });
+        }
         input(env, &["keyup", key]);
-        thread::sleep(Duration::from_millis(60));
     }
 }
 fn events(artifacts: &Path) -> Vec<String> {
@@ -155,8 +160,10 @@ fn check_dropdown(scale: u32) {
         "menu-interaction.el",
         scale,
         |env, window, ready, artifacts, editor, _| {
-            thread::sleep(Duration::from_millis(200));
-            let before = capture(env, artifacts, "closed");
+            // The harness gates input on the first primary-surface
+            // presentation; obtain a settled closed baseline by stability,
+            // not by a fixed settle.
+            let before = stable_screen(env, artifacts, "closed");
             click_at(
                 env,
                 window,
@@ -231,8 +238,9 @@ fn check_nested(scale: u32) {
         "menu-interaction.el",
         scale,
         |env, window, ready, artifacts, editor, _| {
-            thread::sleep(Duration::from_millis(200));
-            let closed = capture(env, artifacts, "closed");
+            // First-frame readiness already came from the harness's primary
+            // surface receipt; settle the closed image by stability.
+            let closed = stable_screen(env, artifacts, "closed");
             click_at(env, window, 30 * scale, ready.char_height * scale / 2);
             let _ = stable_screen(env, artifacts, "root");
             let root_image = capture(env, artifacts, "root-full");
@@ -414,7 +422,7 @@ fn keyboard_opens_submenu_and_skips_disabled_item() {
         |env, window, ready, artifacts, _, _| {
             click_at(env, window, 30, ready.char_height / 2);
             let _ = stable_screen(env, artifacts, "keyboard-root");
-            press_menu_keys(env, &["Down", "Down", "Right", "Return"]);
+            press_menu_keys(env, artifacts, &["Down", "Down", "Right", "Return"]);
             wait_for("keyboard nested action", artifacts, || {
                 (events(artifacts) == ["ready", "nested"]).then_some(())
             });
@@ -443,7 +451,7 @@ fn keyboard_opens_submenu_and_skips_disabled_item() {
                 } else {
                     unchecked_indicator = Some(indicator);
                 }
-                press_menu_keys(env, &["Down", "Down", "Down", "Return"]);
+                press_menu_keys(env, artifacts, &["Down", "Down", "Down", "Return"]);
                 wait_for("skip disabled and toggle", artifacts, || {
                     (events(artifacts) == expected).then_some(())
                 });
@@ -482,7 +490,7 @@ fn pointer_switches_headings_and_disabled_click_does_not_execute() {
                 ],
             );
             let _ = stable_screen(env, artifacts, "switch-other");
-            press_menu_keys(env, &["Down", "Return"]);
+            press_menu_keys(env, artifacts, &["Down", "Return"]);
             wait_for("other heading action", artifacts, || {
                 (events(artifacts) == ["ready", "other"]).then_some(())
             });
@@ -537,7 +545,7 @@ fn popup_and_submenu_stay_on_screen_at_each_corner() {
             // Clear the pointer highlight so only the selected row changes.
             input(env, &["mousemove", "--window", window, "500", "400"]);
             let root_pixels = stable_screen(env, artifacts, &format!("edge-{corner:?}-root"));
-            press_menu_keys(env, &["Home", "Down", "Right"]);
+            press_menu_keys(env, artifacts, &["Home", "Down", "Right"]);
             wait_for("edge submenu", artifacts, || {
                 (configured_popups(artifacts).len() > before + 1).then_some(())
             });
@@ -602,7 +610,7 @@ fn right_edge_heading_dropdown_stays_visible_and_submenu_flips_left() {
                 (!configured_popups(artifacts).is_empty()).then_some(())
             });
             let root_pixels = stable_screen(env, artifacts, "edge-heading");
-            press_menu_keys(env, &["Home", "Down", "Right"]);
+            press_menu_keys(env, artifacts, &["Home", "Down", "Right"]);
             wait_for("left-facing submenu", artifacts, || {
                 (configured_popups(artifacts).len() >= 2).then_some(())
             });
@@ -678,7 +686,7 @@ fn tall_bottom_submenu_slides_up_and_last_item_remains_clickable() {
                 });
                 input(env, &["mousemove", "--window", window, "500", "400"]);
                 let root_pixels = stable_screen(env, artifacts, &format!("bottom-{cycle}-root"));
-                press_menu_keys(env, &["End"]);
+                press_menu_keys(env, artifacts, &["End"]);
                 // Keep the press alive until the native popup grab is accepted;
                 // this placement test does not exercise rapid key-release races.
                 input(env, &["keydown", "Right"]);
