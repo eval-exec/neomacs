@@ -4032,12 +4032,7 @@ pub struct Context {
     /// `garbage-collect` path uses its own stack guard instead. `Some` means
     /// those records are still out of the manager and armed as ephemerons.
     /// Appended after the pinned layout; only the Context size grows.
-    automatic_retired_processes: Option<
-        Vec<(
-            neovm_value::heap_types::ProcessId,
-            data::process_state::Process,
-        )>,
-    >,
+    automatic_retired_processes: Option<Vec<neovm_value::heap_types::ProcessId>>,
 }
 
 // A mutex does not make the host hooks, Rc leases or TLS views transferable.

@@ -171,6 +171,29 @@ impl TaggedHeap {
         self.ephemeron_records.retired_process_ephemerons = retired.into_iter().collect();
     }
 
+    /// Re-snapshot one armed retired process's fields at a stopped
+    /// termination, after Lisp may have changed them while a concurrent mark
+    /// ran. The new values are then decided by this cycle's fixpoint.
+    #[doc(hidden)]
+    /// Union the termination's current fields into the retired record's
+    /// ephemeron snapshot. The arm-time fields are the record's SATB
+    /// preimage: `set-process-*` writes happen Rust-side, so they have no
+    /// deletion barrier. Adding, never replacing, keeps every snapshot edge
+    /// live until the next collection's own reachability decision.
+    pub fn refresh_retired_process_ephemeron(
+        &mut self,
+        id: crate::heap_types::ProcessId,
+        fields: Vec<TaggedValue>,
+    ) {
+        if let Some(slot) = self
+            .ephemeron_records
+            .retired_process_ephemerons
+            .get_mut(&id)
+        {
+            slot.extend(fields);
+        }
+    }
+
     /// Take the process ids reclaimed by the last full collection.
     #[doc(hidden)]
     pub fn take_reclaimed_process_ids(&mut self) -> Vec<crate::heap_types::ProcessId> {

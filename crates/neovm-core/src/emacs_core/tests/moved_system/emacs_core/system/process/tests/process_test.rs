@@ -19211,6 +19211,504 @@ fn garbage_collect_reclaims_a_dead_process_nothing_refers_to() {
     assert_eq!(ev.processes().deleted_processes.len(), 0);
 }
 
+/// #776: GNU keeps a killed process's sentinel, filter and plist as long as Lisp
+/// still references the process object: they are slots of the Lisp process
+/// object and are traced by mark_object. Forcing a major while a retired
+/// record waits must not reap them early; the record is restored whenever
+/// the process object is reached.
+#[test]
+fn automatic_cycles_keep_a_dead_but_referenced_processes_fields() {
+    crate::test_utils::init_test_tracing();
+    let cat_bin = find_bin("cat");
+    let mut ev = crate::test_utils::new_context();
+    // Bootstrap the dump-less heap to its first major.
+    ev.eval_str_each("(setq gc-auto-root (cons 1 2))");
+    // SAFETY: test-only owner-thread heap setup through the non-swappable
+    // mutable accessor contract; the view is used in place.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(64);
+    while ev.gc_count_for_test() == 0 {
+        ev.eval_str_each("(make-list 64 0)");
+        ev.gc_safe_point();
+    }
+    let saved_threshold = ev.tagged_heap().gc_threshold();
+
+    let created = eval_lexical_with_retired_wait(
+        &mut ev,
+        &format!(
+            r#"(setq retired-live-payloads
+                     (list (make-hash-table :test 'eq :weakness 'key)
+                           (make-hash-table :test 'eq :weakness 'key)
+                           (make-hash-table :test 'eq :weakness 'key))
+                     retired-done nil
+                     retired-live-proc nil)
+               (let* ((sentinel-payload (make-list 64 's))
+                      (filter-payload (make-list 64 'f))
+                      (plist-payload (make-list 64 'p))
+                      (p (make-process
+                          :name "retired-live-ref"
+                          :buffer nil
+                          :command (list "{cat_bin}")
+                          :connection-type 'pipe
+                          :noquery t
+                          :sentinel (lambda (_p _m)
+                                      sentinel-payload
+                                      (setq retired-done t)))))
+                 (puthash sentinel-payload t (nth 0 retired-live-payloads))
+                 (set-process-filter p (lambda (_p _s) filter-payload))
+                 (puthash filter-payload t (nth 1 retired-live-payloads))
+                 (set-process-plist p (list 'payload plist-payload))
+                 (puthash plist-payload t (nth 2 retired-live-payloads))
+                 (setq retired-live-proc p)
+                 (setq retired-live-sentinel (process-sentinel p))
+                 (setq retired-live-filter (process-filter p))
+                 (setq retired-live-plist (process-plist p)))
+               (list (process-status retired-live-proc)
+                     (mapcar #'hash-table-count retired-live-payloads))"#
+        ),
+    );
+    assert_eq!(created, "OK (run (1 1 1))");
+
+    // Promote the live object, then kill it and keep the Lisp reference.
+    // SAFETY: same test-only setup contract as above.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1);
+    let gc_start = ev.gc_count_for_test();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while ev.gc_count_for_test() == gc_start && std::time::Instant::now() < deadline {
+        ev.eval_str_each("(make-list 64 0)");
+        ev.gc_safe_point();
+    }
+    assert!(
+        ev.gc_count_for_test() > gc_start,
+        "the promotion cycle must complete"
+    );
+    // SAFETY: same test-only setup contract as above.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(saved_threshold);
+    let killed = eval_lexical_with_retired_wait(
+        &mut ev,
+        r#"(progn
+             (kill-process retired-live-proc)
+             (retired-wait 'retired-done)
+             (null (get-process "retired-live-ref")))"#,
+    );
+    assert_eq!(killed, "OK t");
+    assert_eq!(ev.processes().deleted_processes.len(), 1);
+    // Read the process while a concurrent mark is in flight between safe
+    // points (the recipe of gc_safe_point_runs_concurrent_cycles_without_a_
+    // dump). A dead but referenced process must resolve at that instant: the
+    // record stays in the manager for the whole cycle.
+    // SAFETY: same test-only setup contract as above.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1024);
+    let mut mid_ok = false;
+    for _ in 0..50_000 {
+        ev.eval_str_each("(make-list 64 0)");
+        ev.gc_safe_point();
+        if !ev.tagged_heap().concurrent_mark_running() {
+            continue;
+        }
+        let mid = ev.eval_str_each(
+            "(list (eq (process-sentinel retired-live-proc) retired-live-sentinel)
+                   (eq (process-filter retired-live-proc) retired-live-filter)
+                   (eq (process-plist retired-live-proc) retired-live-plist)
+                   (mapcar #'hash-table-count retired-live-payloads))",
+        );
+        assert_eq!(
+            format_eval_result(&mid[0]),
+            "OK (t t t (1 1 1))",
+            "a dead but referenced process must resolve during a concurrent mark"
+        );
+        mid_ok = true;
+        break;
+    }
+    assert!(
+        mid_ok,
+        "a concurrent mark must be observed between safe points for the mid-cycle read"
+    );
+    let gc_start = ev.gc_count_for_test();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while ev.gc_count_for_test() == gc_start && std::time::Instant::now() < deadline {
+        ev.eval_str_each("(make-list 64 0)");
+        ev.gc_safe_point();
+    }
+    assert!(
+        ev.gc_count_for_test() > gc_start,
+        "the concurrent cycle must complete while the process is referenced"
+    );
+    // The manager's deleted map is an internal carrier: a referenced process
+    // object keeps its fields through the object itself, so the assertion
+    // here is the user-visible one below, not the record count.
+    let live = ev.eval_str_each(
+        "(list (eq (process-sentinel retired-live-proc) retired-live-sentinel)
+               (eq (process-filter retired-live-proc) retired-live-filter)
+               (eq (process-plist retired-live-proc) retired-live-plist)
+               (mapcar #'hash-table-count retired-live-payloads))",
+    );
+    assert_eq!(format_eval_result(&live[0]), "OK (t t t (1 1 1))");
+}
+
+/// A `set-process-sentinel` made while a concurrent mark is in flight must
+/// keep the new sentinel and everything it captures: the armed record is not
+/// an ordinary root, so the stopped termination re-snapshots its fields
+/// before the ephemeron fixpoint decides them.
+#[test]
+fn a_mid_cycle_sentinel_write_survives_the_automatic_collection() {
+    crate::test_utils::init_test_tracing();
+    let cat_bin = find_bin("cat");
+    let mut ev = crate::test_utils::new_context();
+    // Bootstrap the dump-less heap to its first major.
+    ev.eval_str_each("(setq gc-auto-root (cons 1 2))");
+    // SAFETY: test-only owner-thread heap setup through the non-swappable
+    // mutable accessor contract; the view is used in place.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(64);
+    while ev.gc_count_for_test() == 0 {
+        ev.eval_str_each("(make-list 64 0)");
+        ev.gc_safe_point();
+    }
+    let saved_threshold = ev.tagged_heap().gc_threshold();
+
+    let created = eval_lexical_with_retired_wait(
+        &mut ev,
+        &format!(
+            r#"(setq mid-cycle-payloads (make-hash-table :test 'eq :weakness 'key)
+                     retired-done nil
+                     retired-mid-proc nil
+                     mid-cycle-sentinel nil)
+               (let* ((old-payload (make-list 64 's))
+                      (new-payload (make-list 64 'n))
+                      (new-sentinel (lambda (_p _m) (ignore new-payload)))
+                      (p (make-process
+                          :name "retired-mid-write"
+                          :buffer nil
+                          :command (list "{cat_bin}")
+                          :connection-type 'pipe
+                          :noquery t
+                          :sentinel (lambda (_p _m)
+                                      old-payload
+                                      (setq retired-done t)))))
+                 (puthash new-payload t mid-cycle-payloads)
+                 (setq mid-cycle-sentinel new-sentinel)
+                 (setq retired-mid-proc p))
+               (list (process-status retired-mid-proc)
+                     (hash-table-count mid-cycle-payloads))"#
+        ),
+    );
+    assert_eq!(created, "OK (run 1)");
+
+    // Promote the live object, then kill it and keep the Lisp reference.
+    // SAFETY: same test-only setup contract as above.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1);
+    let gc_start = ev.gc_count_for_test();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while ev.gc_count_for_test() == gc_start && std::time::Instant::now() < deadline {
+        ev.eval_str_each("(make-list 64 0)");
+        ev.gc_safe_point();
+    }
+    assert!(
+        ev.gc_count_for_test() > gc_start,
+        "the promotion cycle must complete"
+    );
+    // SAFETY: same test-only setup contract as above.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(saved_threshold);
+    let killed = eval_lexical_with_retired_wait(
+        &mut ev,
+        r#"(progn
+             (kill-process retired-mid-proc)
+             (retired-wait 'retired-done)
+             (null (get-process "retired-mid-write")))"#,
+    );
+    assert_eq!(killed, "OK t");
+
+    // Write the new sentinel inside a concurrent mark and drop its global
+    // reference: only the armed record names it afterwards.
+    // SAFETY: same test-only setup contract as above.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1024);
+    let mut wrote_mid_cycle = false;
+    for _ in 0..50_000 {
+        ev.eval_str_each("(make-list 64 0)");
+        ev.gc_safe_point();
+        if !ev.tagged_heap().concurrent_mark_running() {
+            continue;
+        }
+        let wrote = ev.eval_str_each(
+            "(progn (set-process-sentinel retired-mid-proc mid-cycle-sentinel)
+                    (setq mid-cycle-sentinel nil)
+                    t)",
+        );
+        assert_eq!(format_eval_result(&wrote[0]), "OK t");
+        wrote_mid_cycle = true;
+        break;
+    }
+    assert!(
+        wrote_mid_cycle,
+        "a concurrent mark must be observed for the mid-cycle sentinel write"
+    );
+    let gc_start = ev.gc_count_for_test();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while ev.gc_count_for_test() == gc_start && std::time::Instant::now() < deadline {
+        ev.eval_str_each("(make-list 64 0)");
+        ev.gc_safe_point();
+    }
+    assert!(
+        ev.gc_count_for_test() > gc_start,
+        "the mid-cycle write's cycle must complete"
+    );
+    let counts = ev.eval_str_each("(hash-table-count mid-cycle-payloads)");
+    assert_eq!(
+        format_eval_result(&counts[0]),
+        "OK 1",
+        "the mid-cycle sentinel and its payload must survive the collection"
+    );
+}
+
+/// A process-sentinel value that escapes to Lisp inside the concurrent mark,
+/// followed by a `set-process-sentinel` on the same dead, referenced record,
+/// must stay alive for the whole cycle.
+///
+/// The termination refresh unions the current fields into the arm-time
+/// snapshot. Replacing it would drop the arm-time sentinel edge while the
+/// obarray is not rescanned (the start seed already passed), and the closure
+/// Lisp now holds in the escape box would be swept under it.
+#[test]
+fn a_mid_cycle_escaped_sentinel_survives_the_collection() {
+    crate::test_utils::init_test_tracing();
+    let cat_bin = find_bin("cat");
+    let mut ev = crate::test_utils::new_context();
+    // Bootstrap the dump-less heap to its first major.
+    ev.eval_str_each("(setq gc-auto-root (cons 1 2))");
+    // SAFETY: test-only owner-thread heap setup through the non-swappable
+    // mutable accessor contract; the view is used in place.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(64);
+    while ev.gc_count_for_test() == 0 {
+        ev.eval_str_each("(make-list 64 0)");
+        ev.gc_safe_point();
+    }
+    let saved_threshold = ev.tagged_heap().gc_threshold();
+
+    let created = eval_lexical_with_retired_wait(
+        &mut ev,
+        &format!(
+            r#"(setq escape-payloads (make-hash-table :test 'eq :weakness 'key)
+                     retired-done nil
+                     retired-mid-proc nil
+                     retired-escaped nil)
+               (let* ((old-payload (make-list 64 's))
+                      (p (make-process
+                          :name "retired-escape"
+                          :buffer nil
+                          :command (list "{cat_bin}")
+                          :connection-type 'pipe
+                          :noquery t
+                          :sentinel (lambda (_p _m)
+                                      old-payload
+                                      (setq retired-done t)))))
+                 (puthash old-payload t escape-payloads)
+                 (setq retired-mid-proc p))
+               (list (process-status retired-mid-proc)
+                     (hash-table-count escape-payloads))"#
+        ),
+    );
+    assert_eq!(created, "OK (run 1)");
+    // The escape destination exists before the cycle; its symbol cell is
+    // skipped by the termination re-seed, so only the snapshot can name the
+    // closure across the termination.
+
+    // Promote the live object, then kill it and keep the Lisp reference.
+    // SAFETY: same test-only setup contract as above.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1);
+    let gc_start = ev.gc_count_for_test();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while ev.gc_count_for_test() == gc_start && std::time::Instant::now() < deadline {
+        ev.eval_str_each("(make-list 64 0)");
+        ev.gc_safe_point();
+    }
+    assert!(
+        ev.gc_count_for_test() > gc_start,
+        "the promotion cycle must complete"
+    );
+    // SAFETY: same test-only setup contract as above.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(saved_threshold);
+    let killed = eval_lexical_with_retired_wait(
+        &mut ev,
+        r#"(progn
+             (kill-process retired-mid-proc)
+             (retired-wait 'retired-done)
+             (null (get-process "retired-escape")))"#,
+    );
+    assert_eq!(killed, "OK t");
+
+    // Inside a concurrent mark: escape the arm-time sentinel to Lisp, replace
+    // it on the record with #'ignore, and make sure the Rust side holds no
+    // closure.
+    // SAFETY: same test-only setup contract as above.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1024);
+    let mut escaped = false;
+    for _ in 0..50_000 {
+        ev.eval_str_each("(make-list 64 0)");
+        ev.gc_safe_point();
+        if !ev.tagged_heap().concurrent_mark_running() {
+            continue;
+        }
+        let written = ev.eval_str_each(
+            "(progn (setq retired-escaped (process-sentinel retired-mid-proc))
+                    (set-process-sentinel retired-mid-proc #'ignore)
+                    t)",
+        );
+        assert_eq!(format_eval_result(&written[0]), "OK t");
+        escaped = true;
+        break;
+    }
+    assert!(
+        escaped,
+        "a concurrent mark must be observed for the sentinel escape"
+    );
+    let gc_start = ev.gc_count_for_test();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while ev.gc_count_for_test() == gc_start && std::time::Instant::now() < deadline {
+        ev.eval_str_each("(make-list 64 0)");
+        ev.gc_safe_point();
+    }
+    assert!(
+        ev.gc_count_for_test() > gc_start,
+        "the escape cycle must complete"
+    );
+    let alive = ev.eval_str_each(
+        "(list (hash-table-count escape-payloads)
+               (progn (funcall retired-escaped retired-mid-proc \"x\") t))",
+    );
+    assert_eq!(
+        format_eval_result(&alive[0]),
+        "OK (1 t)",
+        "the arm-time sentinel edge must survive the termination refresh"
+    );
+}
+
+/// An explicit `(garbage-collect)` while an automatic cycle is armed must
+/// keep a referenced dead process and reclaim an unreferenced one, and must
+/// leave no id armed afterwards.
+#[test]
+fn explicit_gc_inside_an_in_flight_automatic_cycle_keeps_referenced_processes() {
+    crate::test_utils::init_test_tracing();
+    let cat_bin = find_bin("cat");
+    let true_bin = find_bin("true");
+    let mut ev = crate::test_utils::new_context();
+    // Bootstrap the dump-less heap to its first major.
+    ev.eval_str_each("(setq gc-auto-root (cons 1 2))");
+    // SAFETY: test-only owner-thread heap setup through the non-swappable
+    // mutable accessor contract; the view is used in place.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(64);
+    while ev.gc_count_for_test() == 0 {
+        ev.eval_str_each("(make-list 64 0)");
+        ev.gc_safe_point();
+    }
+    let saved_threshold = ev.tagged_heap().gc_threshold();
+
+    let created = eval_lexical_with_retired_wait(
+        &mut ev,
+        &format!(
+            r#"(setq explicit-gc-payloads (make-hash-table :test 'eq :weakness 'key)
+                     explicit-gc-dropped (make-hash-table :test 'eq :weakness 'key)
+                     retired-done nil
+                     unreached-done nil
+                     explicit-gc-proc nil)
+               (let* ((kept-payload (make-list 64 'k))
+                      (dropped-payload (make-list 64 'd))
+                      (kept (make-process
+                             :name "explicit-gc-kept"
+                             :buffer nil
+                             :command (list "{cat_bin}")
+                             :connection-type 'pipe
+                             :noquery t
+                             :sentinel (lambda (_p _m)
+                                         kept-payload
+                                         (setq retired-done t))))
+                      (dropped (make-process
+                                :name "explicit-gc-dropped"
+                                :buffer nil
+                                :command (list "{true_bin}")
+                                :connection-type 'pipe
+                                :noquery t
+                                :sentinel (lambda (_p _m)
+                                            dropped-payload
+                                            (setq unreached-done t)))))
+                 (puthash kept-payload t explicit-gc-payloads)
+                 (puthash dropped-payload t explicit-gc-dropped)
+                 (setq explicit-gc-proc kept)
+                 (setq explicit-gc-sentinel (process-sentinel kept)))
+               (retired-wait 'unreached-done)
+               (list (process-status explicit-gc-proc)
+                     (hash-table-count explicit-gc-payloads)
+                     (hash-table-count explicit-gc-dropped))"#
+        ),
+    );
+    assert_eq!(created, "OK (run 1 1)");
+
+    // Promote the live referenced process, kill it, keep the reference.
+    // SAFETY: same test-only setup contract as above.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1);
+    let gc_start = ev.gc_count_for_test();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while ev.gc_count_for_test() == gc_start && std::time::Instant::now() < deadline {
+        ev.eval_str_each("(make-list 64 0)");
+        ev.gc_safe_point();
+    }
+    assert!(
+        ev.gc_count_for_test() > gc_start,
+        "the promotion cycle must complete"
+    );
+    // SAFETY: same test-only setup contract as above.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(saved_threshold);
+    let killed = eval_lexical_with_retired_wait(
+        &mut ev,
+        r#"(progn
+             (kill-process explicit-gc-proc)
+             (retired-wait 'retired-done)
+             (null (get-process "explicit-gc-kept")))"#,
+    );
+    assert_eq!(killed, "OK t");
+
+    // Start a concurrent automatic cycle, then run an explicit GC inside it.
+    // SAFETY: same test-only setup contract as above.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1024);
+    let mut ran_inside = false;
+    for _ in 0..50_000 {
+        ev.eval_str_each("(make-list 64 0)");
+        ev.gc_safe_point();
+        if !ev.tagged_heap().concurrent_mark_running() {
+            continue;
+        }
+        let collected = ev.eval_str_each("(progn (garbage-collect) t)");
+        assert_eq!(format_eval_result(&collected[0]), "OK t");
+        ran_inside = true;
+        break;
+    }
+    assert!(
+        ran_inside,
+        "an explicit GC must run inside an in-flight automatic cycle"
+    );
+
+    let identity = ev.eval_str_each(
+        "(list (eq (process-sentinel explicit-gc-proc) explicit-gc-sentinel)
+               (hash-table-count explicit-gc-payloads))",
+    );
+    assert_eq!(
+        format_eval_result(&identity[0]),
+        "OK (t 1)",
+        "the referenced process keeps its sentinel through the explicit GC"
+    );
+    assert!(
+        ev.processes().ids.armed_retired_processes.is_empty(),
+        "an explicit GC must leave no retired id armed"
+    );
+    assert_eq!(
+        ev.processes().deleted_processes.len(),
+        1,
+        "the explicit GC must reclaim the unreferenced record and restore the referenced one"
+    );
+
+    // The unreferenced record was reclaimed by the explicit GC (two retired
+    // records became one); the referenced record is resolvable, and the
+    // armed set is empty for the outer automatic cycle's finish.
+}
+
 /// #776 residual: the automatic safe-point collector, not only the explicit
 /// `(garbage-collect)`, must reclaim a dead process nothing refers to.
 ///

@@ -175,7 +175,13 @@ fn stopped_mark_adapters_have_one_production_order() {
         .collect();
     assert_eq!(
         tests,
-        ["neovm-value/src/tagged/gc/tests/memory_inventory_test.rs"],
+        [
+            // observes post-fixpoint, pre-sweep marks (retired-process SATB
+            // union row: the arm-time field is only observable before sweep)
+            "neovm-value/src/tagged/gc/tests/ephemeron_cross_kind_test.rs",
+            // observes post-fixpoint, pre-sweep marks (inventory snapshot)
+            "neovm-value/src/tagged/gc/tests/memory_inventory_test.rs",
+        ],
         "{adapter:?}"
     );
 

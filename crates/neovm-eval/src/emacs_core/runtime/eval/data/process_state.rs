@@ -407,6 +407,13 @@ pub struct ProcessIdState {
     pub next_id: ProcessId,
     /// Resume live reads after this source, like GNU's last_read_channel.
     pub last_read_process: ProcessId,
+    /// #776: ids in `deleted_processes` whose fields are armed as ephemerons
+    /// for the in-flight collection. They stay in `deleted_processes` so Lisp
+    /// running during a concurrent mark can still resolve the process; the
+    /// root trace skips them and the ephemeron fixpoint decides their fields.
+    /// Boxed with the rest of this state, so ProcessManager's pinned size and
+    /// the Context/JIT layout are unchanged.
+    pub armed_retired_processes: std::collections::HashSet<ProcessId>,
 }
 
 /// Opaque, thread-safe handle a cross-thread producer uses to wake the blocked
@@ -2323,6 +2330,7 @@ impl ProcessManager {
             ids: Box::new(ProcessIdState {
                 next_id: 1,
                 last_read_process: 0,
+                armed_retired_processes: std::collections::HashSet::new(),
             }),
             process_tick: 0,
             default_read_config: ProcessReadConfig::default(),
@@ -2331,31 +2339,57 @@ impl ProcessManager {
         }
     }
 
-    /// Temporarily remove retired records from the ordinary root walk while
-    /// an explicit full collection decides which process objects remain live.
+    /// Arm every retired record's id for the next collection and return its
+    /// fields and ids. The records stay in `deleted_processes`, so Lisp
+    /// accessors resolve through the manager during a concurrent mark; only
+    /// the armed ids are skipped by the root walk.
     pub(crate) fn take_retired_processes_for_gc(
         &mut self,
-    ) -> (Vec<(ProcessId, Vec<Value>)>, Vec<(ProcessId, Process)>) {
-        let retired = std::mem::take(&mut self.deleted_processes);
-        let ephemerons = retired
+    ) -> (Vec<(ProcessId, Vec<Value>)>, Vec<ProcessId>) {
+        // The records stay in `deleted_processes`: Lisp can run during a
+        // concurrent mark, and its process accessors resolve through the
+        // manager. Arming only hides them from the root trace.
+        let ephemerons = self
+            .deleted_processes
             .iter()
             .map(|(id, process)| (*id, process.gc_fields().to_vec()))
             .collect();
-        (ephemerons, retired.into_iter().collect())
+        let ids: Vec<ProcessId> = self.deleted_processes.keys().copied().collect();
+        self.ids.armed_retired_processes.extend(ids.iter().copied());
+        (ephemerons, ids)
     }
 
     /// Restore records whose process object was reached by the collection.
     pub(crate) fn restore_reached_retired_processes(
         &mut self,
-        retired: Vec<(ProcessId, Process)>,
+        _retired: Vec<ProcessId>,
         reclaimed: Vec<ProcessId>,
     ) {
-        let reclaimed: std::collections::HashSet<ProcessId> = reclaimed.into_iter().collect();
-        self.deleted_processes.extend(
-            retired
-                .into_iter()
-                .filter(|(id, _)| !reclaimed.contains(id)),
+        for id in &reclaimed {
+            self.deleted_processes.remove(id);
+        }
+        self.ids.armed_retired_processes.clear();
+        debug_assert!(
+            self.ids.armed_retired_processes.is_empty(),
+            "finish must disarm every retired id"
         );
+    }
+
+    /// Disarm without reclaiming: an abandoned cycle restores every record.
+    pub(crate) fn abandon_armed_retired_processes(&mut self) {
+        self.ids.armed_retired_processes.clear();
+        debug_assert!(
+            self.ids.armed_retired_processes.is_empty(),
+            "abandon must disarm every retired id"
+        );
+    }
+
+    /// The current GC-visible fields of one retired record, for the stopped
+    /// termination's re-snapshot.
+    pub(crate) fn retired_process_fields(&self, id: ProcessId) -> Option<Vec<Value>> {
+        self.deleted_processes
+            .get(&id)
+            .map(|process| process.gc_fields().to_vec())
     }
 
     pub fn set_default_read_config(&mut self, config: ProcessReadConfig) {
@@ -3588,11 +3622,12 @@ impl Process {
 
 impl GcTrace for ProcessManager {
     fn trace_roots(&self, roots: &mut Vec<Value>) {
-        for process in self
-            .processes
-            .values()
-            .chain(self.deleted_processes.values())
-        {
+        for process in self.processes.values().chain(
+            self.deleted_processes
+                .iter()
+                .filter(|(id, _)| !self.ids.armed_retired_processes.contains(id))
+                .map(|(_, process)| process),
+        ) {
             roots.extend(process.gc_fields());
         }
     }

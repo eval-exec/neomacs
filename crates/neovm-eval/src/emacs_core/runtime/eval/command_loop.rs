@@ -23,10 +23,7 @@ struct ExplicitEphemeronGcGuard {
     buffers: *mut neovm_edit::buffer::BufferManager,
     heap: *mut neovm_value::tagged::gc::TaggedHeap,
     taken_frames: Vec<super::data::window_state::DeletedFrameGcRecord>,
-    taken_processes: Vec<(
-        neovm_value::heap_types::ProcessId,
-        super::data::process_state::Process,
-    )>,
+    taken_processes: Vec<neovm_value::heap_types::ProcessId>,
     taken_buffers: Vec<(neovm_edit::buffer::BufferId, neovm_edit::buffer::Buffer)>,
     committed: bool,
 }
@@ -1981,6 +1978,24 @@ impl Context {
         self.tagged_heap.bank_cycle_elapsed(start.elapsed());
     }
 
+    /// Re-snapshot the armed retired-process fields from the manager before a
+    /// concurrent mark's termination. Armed records stay in
+    /// `deleted_processes` and are skipped by the ordinary root trace, so a
+    /// field written while Lisp ran during the mark is only reachable through
+    /// this refresh.
+    fn refresh_armed_retired_process_fields(&self, heap: *mut neovm_value::tagged::gc::TaggedHeap) {
+        let Some(ids) = self.automatic_retired_processes.as_ref() else {
+            return;
+        };
+        for id in ids {
+            if let Some(fields) = self.processes.retired_process_fields(*id) {
+                // SAFETY: HEAP is this Context's tagged heap root and the
+                // caller holds the exclusive GC-driver extent.
+                unsafe { (*heap).refresh_retired_process_ephemeron(*id, fields) };
+            }
+        }
+    }
+
     /// #776: take the manager's retired-process records and arm them as
     /// ephemerons for the automatic cycle that is about to seed its roots.
     ///
@@ -2350,6 +2365,11 @@ impl Context {
         &mut self,
         heap_ptr: *mut neovm_value::tagged::gc::TaggedHeap,
     ) {
+        // Lisp ran while the concurrent mark was in flight and may have
+        // changed a reached process's sentinel/filter/plist. Re-snapshot the
+        // armed fields now, before the termination's ephemeron fixpoint
+        // decides them against this cycle's marks.
+        self.refresh_armed_retired_process_fields(heap_ptr);
         let term_t0 = std::time::Instant::now();
         let (roots_us, drain_us);
         let (ctxroots_breakdown, newsyms_us);

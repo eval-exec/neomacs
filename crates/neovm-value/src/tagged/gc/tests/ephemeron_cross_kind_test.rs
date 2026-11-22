@@ -10,6 +10,8 @@
 
 use super::*;
 use crate::heap_types::ProcessId;
+use crate::intern::intern;
+use crate::symbol::Obarray;
 use crate::value::buffer_vocab::BufferId;
 
 /// Alternations of each kind. Sequential per-kind loops advance the chain by
@@ -271,4 +273,57 @@ fn incremental_finish_reclaims_an_unreached_armed_chain() {
         assert!(heap.frame_value(id).is_none());
     }
     assert_eq!(heap.cons_live_count_exact(), 0);
+}
+
+/// The termination refresh must UNION the current fields into the arm-time
+/// snapshot, never replace it.
+///
+/// The arm-time fields are the retired record's SATB preimage: `set-process-*`
+/// writes happen Rust-side and have no deletion barrier. This row reaches the
+/// process key during the mark, then (with the ephemeron fixpoint still
+/// pending) writes the arm-time field into an already-scanned symbol cell
+/// through the real setter, and refreshes with the current fields. Replace
+/// drops the arm-time edge and the field is swept though Lisp owns it; union
+/// keeps it.
+#[test]
+fn refresh_retired_process_ephemeron_unions_the_arm_time_fields() {
+    let mut heap = TaggedHeap::new();
+    set_tagged_heap(&mut heap);
+    let process_id: ProcessId = 0x7761;
+    let process_object = heap.alloc_process(process_id);
+    heap.register_process_value(process_id, process_object);
+    let arm_time = heap.alloc_cons(TaggedValue::fixnum(0x776), TaggedValue::NIL);
+    let current = heap.alloc_cons(TaggedValue::fixnum(0x777), TaggedValue::NIL);
+    heap.arm_retired_process_ephemerons(vec![(process_id, vec![arm_time])]);
+
+    heap.begin_stw_collection();
+    // The process object is reached, but the ephemeron fixpoint runs only at
+    // termination.
+    heap.seed_root(process_object);
+    heap.incremental_drain_all();
+    assert!(heap.is_value_marked(process_object));
+
+    // A Lisp ownership move that does not pass through the record: the
+    // arm-time value goes into an already-scanned symbol cell through the
+    // real setter. Nothing after this point scans that cell again, so only
+    // the arm-time snapshot can keep the value alive.
+    let mut obarray = Obarray::new();
+    let owner = intern("retired-refresh-owner");
+    obarray.set_symbol_value_id(owner, TaggedValue::NIL);
+    obarray.set_symbol_value_id(owner, arm_time);
+
+    // The concurrent driver refreshes before the termination fixpoint
+    // (terminate_concurrent_mark -> refresh_armed_retired_process_fields).
+    heap.refresh_retired_process_ephemeron(process_id, vec![current]);
+    let _ = heap.finish_stopped_mark_adapters();
+
+    assert!(
+        heap.is_value_marked(current),
+        "the current field is published by the termination fixpoint"
+    );
+    assert!(
+        heap.is_value_marked(arm_time),
+        "the union keeps the arm-time field: a replace would sweep it though Lisp owns it"
+    );
+    heap.complete_collection();
 }
