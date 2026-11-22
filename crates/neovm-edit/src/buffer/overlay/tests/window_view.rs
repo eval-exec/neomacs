@@ -813,3 +813,219 @@ fn hl_line_scrolling_copies_follow_the_window_not_the_buffer() {
         "per-key copies grew with the buffer's overlay count"
     );
 }
+
+/// A position remap rewrites the copied ranges of every remapped overlay and
+/// leaves no stale copy behind.
+#[test]
+fn window_view_follows_a_position_remap() {
+    crate::test_utils::init_test_tracing();
+    let mut list = OverlayList::new();
+    let mut overlays = Vec::new();
+    for index in 0..50 {
+        let overlay = alloc_overlay(index * 3, index * 3 + 1);
+        list.insert_overlay(overlay);
+        overlays.push(overlay);
+    }
+    let _before = list.snapshot_in_range(emacs_byte_range(0, 200));
+    let remaps: Vec<OverlayPositionRemap> = overlays
+        .iter()
+        .enumerate()
+        .map(|(index, overlay)| OverlayPositionRemap {
+            overlay: *overlay,
+            old_range: emacs_byte_range(index * 3, index * 3 + 1),
+            range: emacs_byte_range(1_000 + index * 3, 1_001 + index * 3),
+            old_begin: CharPos0::new(index * 3),
+            new_begin: CharPos0::new(1_000 + index * 3),
+        })
+        .collect();
+
+    reset_overlay_snapshot_copy_count();
+    list.remap_overlay_positions(&remaps);
+    let after = list.snapshot_in_range(emacs_byte_range(1_000, 1_200));
+    assert_eq!(
+        overlay_snapshot_copy_count(),
+        50,
+        "every remapped overlay needs a fresh copy"
+    );
+    assert_eq!(
+        serials_in(&after, 1_000, 1_200),
+        serials_in(&list, 1_000, 1_200)
+    );
+    for index in 0..50 {
+        let serial = overlay_identity_key(overlays[index]).get();
+        let copy = overlays_at(&after, 1_000 + index * 3)
+            .into_iter()
+            .find(|overlay| overlay_identity_key(*overlay).get() == serial)
+            .expect("the remapped overlay is in the view");
+        assert_eq!(
+            after.index_range_for_test(copy),
+            Some(emacs_byte_range(1_000 + index * 3, 1_001 + index * 3))
+        );
+    }
+    reset_overlay_snapshot_copy_count();
+    let _third = list.snapshot_in_range(emacs_byte_range(1_000, 1_200));
+    assert_eq!(overlay_snapshot_copy_count(), 0);
+}
+
+/// Moving an evaporating overlay to an empty range deletes it through the
+/// ordinary owner path: the memo forgets it, and re-inserting the same object
+/// cannot resurrect its pre-deletion copy.
+#[test]
+fn window_view_forgets_an_evaporated_overlay() {
+    crate::test_utils::init_test_tracing();
+    let face = Value::symbol("face");
+    let mut list = OverlayList::new();
+    let mut overlays = Vec::new();
+    for index in 0..10 {
+        let overlay = alloc_overlay(index * 3, index * 3 + 1);
+        list.overlay_put(overlay, face, Value::symbol("bold"))
+            .unwrap();
+        list.insert_overlay(overlay);
+        overlays.push(overlay);
+    }
+    let target = overlays[4];
+    let serial = overlay_identity_key(target).get();
+    list.overlay_put(target, Value::symbol("evaporate"), Value::T)
+        .unwrap();
+    let _before = list.snapshot_in_range(emacs_byte_range(0, 100));
+
+    reset_overlay_snapshot_copy_count();
+    list.move_overlay_to_emacs_byte_range(target, emacs_byte_range(20, 20));
+    assert!(
+        !list.index.contains(target),
+        "the evaporating move must delete the overlay"
+    );
+    let after = list.snapshot_in_range(emacs_byte_range(0, 100));
+    assert_eq!(
+        overlay_snapshot_copy_count(),
+        0,
+        "deleting an evaporated overlay re-copied the survivors"
+    );
+    assert!(!serials_in(&after, 0, 100).contains(&serial));
+
+    // A detached write is only observable after the reattach, and the forget
+    // means no pre-deletion copy can be reused.
+    list.overlay_put(target, face, Value::symbol("italic"))
+        .unwrap();
+    list.insert_overlay(target);
+    list.move_overlay_to_emacs_byte_range(target, emacs_byte_range(40, 41));
+    reset_overlay_snapshot_copy_count();
+    let reinserted = list.snapshot_in_range(emacs_byte_range(0, 100));
+    assert_eq!(overlay_snapshot_copy_count(), 1);
+    let copy = overlays_at(&reinserted, 40)
+        .into_iter()
+        .find(|overlay| overlay_identity_key(*overlay).get() == serial)
+        .expect("the reinserted overlay is in the view");
+    assert_eq!(
+        reinserted.overlay_get_named(copy, face),
+        Some(Value::symbol("italic"))
+    );
+}
+
+/// Two concurrent range views may share one memoized copy. Attaching the
+/// second view re-points the copy's weak position handle, but each view must
+/// keep answering from its own index and its own captured state.
+#[test]
+fn two_concurrent_views_share_copies_without_cross_talk() {
+    crate::test_utils::init_test_tracing();
+    let face = Value::symbol("face");
+    let mut list = OverlayList::new();
+    let mut overlays = Vec::new();
+    for index in 0..200 {
+        let overlay = alloc_overlay(index * 3, index * 3 + 1);
+        list.overlay_put(overlay, face, Value::symbol("bold"))
+            .unwrap();
+        list.insert_overlay(overlay);
+        overlays.push(overlay);
+    }
+    let range = emacs_byte_range(0, 600);
+    let first = list.snapshot_in_range(range);
+    reset_overlay_snapshot_copy_count();
+    let second = list.snapshot_in_range(range);
+    assert_eq!(
+        overlay_snapshot_copy_count(),
+        0,
+        "the second view must reuse the first view's copies"
+    );
+    for pos in (0..600).step_by(3) {
+        assert_eq!(
+            serials_at(&first, pos),
+            serials_at(&second, pos),
+            "pos {pos}"
+        );
+    }
+
+    let target = overlays[10];
+    let serial = overlay_identity_key(target).get();
+    list.overlay_put(target, face, Value::symbol("italic"))
+        .unwrap();
+    reset_overlay_snapshot_copy_count();
+    let third = list.snapshot_in_range(range);
+    assert_eq!(overlay_snapshot_copy_count(), 1);
+    let copy_in = |view: &OverlayList| {
+        overlays_at(view, 30)
+            .into_iter()
+            .find(|overlay| overlay_identity_key(*overlay).get() == serial)
+            .expect("the overlay is in the view")
+    };
+    let first_copy = copy_in(&first);
+    let second_copy = copy_in(&second);
+    let third_copy = copy_in(&third);
+    assert_eq!(
+        first.overlay_get_named(first_copy, face),
+        Some(Value::symbol("bold")),
+        "the first view keeps its captured plist"
+    );
+    assert_eq!(
+        second.overlay_get_named(second_copy, face),
+        Some(Value::symbol("bold"))
+    );
+    assert_eq!(
+        third.overlay_get_named(third_copy, face),
+        Some(Value::symbol("italic"))
+    );
+    // The shared copy's weak handle may point at the second view's tree, but
+    // the first view still reports the range it captured.
+    assert_eq!(
+        first.index_range_for_test(first_copy),
+        Some(emacs_byte_range(30, 31))
+    );
+    assert_eq!(
+        second.index_range_for_test(second_copy),
+        Some(emacs_byte_range(30, 31))
+    );
+}
+
+/// Range-view copies keep the source serial for precedence identity, but they
+/// are unreachable from the live list: no live accessor returns one, and the
+/// live plist accessor refuses one, so Lisp cannot obtain and re-insert it.
+#[test]
+fn range_view_copies_cannot_be_obtained_through_the_live_list() {
+    crate::test_utils::init_test_tracing();
+    let mut list = OverlayList::new();
+    for index in 0..10 {
+        list.insert_overlay(alloc_overlay(index * 3, index * 3 + 1));
+    }
+    let view = list.snapshot_in_range(emacs_byte_range(0, 100));
+    for pos in 0..100 {
+        let live = overlays_at(&list, pos);
+        for copy in overlays_at(&view, pos) {
+            assert!(
+                !list.index.contains(copy),
+                "a range-view copy is attached to the live index"
+            );
+            assert_eq!(
+                list.overlay_plist(copy),
+                None,
+                "the live list exposed a range-view copy's plist"
+            );
+            assert!(
+                !live.iter().any(|value| value.bits() == copy.bits()),
+                "a live query returned a range-view copy"
+            );
+        }
+    }
+    // The serials match (precedence identity is preserved); object identity
+    // does not.
+    assert_eq!(serials_in(&list, 0, 100), serials_in(&view, 0, 100));
+}
