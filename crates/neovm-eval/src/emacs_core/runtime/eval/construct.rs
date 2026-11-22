@@ -199,6 +199,7 @@ impl Context {
         // continuation/truncation markers, …) and their `'fringe` indices into
         // the registry, AFTER the obarray is populated by init_builtins.
         ctx.pre_register_standard_fringe_bitmaps();
+        ctx.capture_gc_symbol_census_after_activation();
         ctx
     }
 
@@ -228,6 +229,7 @@ impl Context {
         let mut ctx = Self::new_inner(ConstructionSurface::LegacyImageWithoutDefsyms, _hooks);
         super::hooks_proof::register_core_subrs(&mut ctx);
         ctx.pre_register_standard_fringe_bitmaps();
+        ctx.capture_gc_symbol_census_after_activation();
         ctx
     }
 
@@ -331,6 +333,7 @@ impl Context {
         ev.interpreted_closure_filter_fn = None;
         register_subrs(&mut ev);
         ev.finish_runtime_activation(false);
+        ev.capture_gc_symbol_census_after_activation();
         ev
     }
 

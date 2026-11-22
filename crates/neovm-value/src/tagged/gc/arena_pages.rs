@@ -1765,9 +1765,10 @@ pub struct MappedLayoutStats {
 /// Per-kind live/free counts for the `(garbage-collect)` rows.
 ///
 /// The shape follows GNU's `gcstat` (`src/alloc.c:310-317`): USED is the live
-/// object/cell count and FREE the capacity that currently holds none. Neo's
+/// object/cell count outside the logical dump image. Neo's
 /// arenas have no per-kind free list, so FREE is page capacity minus live
-/// occupancy (vector slots: unused payload capacity).
+/// occupancy (vector slots: unused payload capacity). These rows are captured
+/// together before finalizers/hooks, independently of physical inventory.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[doc(hidden)]
 pub struct GcObjectCounts {

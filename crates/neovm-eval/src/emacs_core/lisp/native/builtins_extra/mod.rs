@@ -760,7 +760,8 @@ fn gc_count(value: usize) -> i64 {
 /// `gcstat` (`src/alloc.c:6038-6063`): list4 for objects with a free list,
 /// list3 for `string-bytes`, `vectors`, and `buffers`. USED is a live count,
 /// never the cumulative allocation counter; `vectors` counts vector OBJECTS
-/// and `vector-slots` their cells.
+/// and `vector-slots` their cells. The cache excludes mapped/image residents
+/// and was captured before hooks and this return-list allocation.
 pub(crate) fn builtin_garbage_collect_stats() -> EvalResult {
     let gc = neovm_value::tagged::gc::with_tagged_heap(|heap| heap.gc_object_counts());
 

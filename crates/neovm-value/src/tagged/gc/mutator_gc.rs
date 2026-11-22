@@ -294,6 +294,8 @@ struct MutatorSatbRegistry {
     collector_tables: Option<std::rc::Rc<Cell<*const ()>>>,
     /// The World's carried collection protocol, outside the pinned hot heap.
     observations: std::cell::OnceCell<super::super::collection_reads::ObservationWorld>,
+    /// Explicit return-row observer state, outside the pinned heap layout.
+    gc_rows: super::gc_statistics::GarbageCollectSnapshot,
 }
 
 #[repr(transparent)]
@@ -320,6 +322,14 @@ const _: () = {
 };
 
 impl MutatorSatbSlot {
+    pub(super) fn gc_rows(&self) -> &super::gc_statistics::GarbageCollectSnapshot {
+        &self.0.gc_rows
+    }
+
+    pub(super) fn gc_rows_mut(&mut self) -> &mut super::gc_statistics::GarbageCollectSnapshot {
+        &mut self.0.gc_rows
+    }
+
     pub(super) fn collector_tables(&self) -> *const () {
         self.0
             .collector_tables
@@ -358,6 +368,7 @@ impl MutatorSatbSlot {
             registered: Vec::new(),
             collector_tables: None,
             observations: std::cell::OnceCell::new(),
+            gc_rows: Default::default(),
         }))
     }
 

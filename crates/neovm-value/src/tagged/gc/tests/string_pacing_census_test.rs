@@ -5,11 +5,13 @@ use crate::tagged::header::{ConsCdrWord, ConsWord};
 use crate::value::{HashTableTest, LispHashTable};
 
 fn full(heap: &mut TaggedHeap, roots: &[TaggedValue]) {
+    heap.request_gc_object_counts();
     heap.begin_stw_collection();
     for &root in roots {
         heap.seed_root(root);
     }
     heap.complete_collection();
+    heap.publish_gc_object_counts_if_requested(0);
 }
 
 #[test]
@@ -50,6 +52,7 @@ fn string_gc_pacing_counts_collectible_survivors_not_image_residents() {
             let expected = size_of::<StringObj>() + 4096;
 
             if deferred_first {
+                heap.request_gc_object_counts();
                 heap.arm_first_cycle_concurrent();
                 heap.concurrent_begin();
                 for &root in &roots {
@@ -68,11 +71,12 @@ fn string_gc_pacing_counts_collectible_survivors_not_image_residents() {
                 heap.incremental_finish(heap.live_bytes(), std::time::Instant::now());
                 heap.finish_incremental_sweep_now();
                 heap.finish_first_partition_cycle();
+                heap.publish_gc_object_counts_if_requested(0);
             } else {
                 full(&mut heap, &roots);
             }
             assert_eq!(heap.live_bytes(), expected, "first image classification");
-            assert_eq!(heap.gc_object_counts().strings_used, 3);
+            assert_eq!(heap.gc_object_counts().strings_used, 1);
             assert_eq!(heap.memory_use_counts_snapshot(), allocation_counts);
             let layout = heap.layout_stats();
             assert_eq!(layout.mapped.strings, 1);
@@ -96,7 +100,7 @@ fn string_gc_pacing_counts_collectible_survivors_not_image_residents() {
             assert_eq!(heap.memory_use_counts_snapshot(), allocation_counts);
             full(&mut heap, &[image, image_box, mapped_value]);
             assert_eq!(heap.live_bytes(), 0, "unrooted runtime string reclaimed");
-            assert_eq!(heap.gc_object_counts().strings_used, 2);
+            assert_eq!(heap.gc_object_counts().strings_used, 0);
             drop(heap);
             // SAFETY: the heap no longer retains or inspects these mappings.
             unsafe {

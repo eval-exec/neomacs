@@ -479,11 +479,29 @@ host's startup ceiling and opt-in profiling cap can lower the budget; an explici
 through `set_gc_threshold_from_runtime`).
 
 `live_bytes` in GC traces, collection reports and published GC statistics is
-this pacing census. Full heap memory inventory and Lisp diagnostic rows retain
-mapped/image-resident objects. The layout diagnostic `managed_live_bytes` adds
+this pacing census. Full heap memory inventory retains mapped/image-resident
+objects. The layout diagnostic `managed_live_bytes` adds
 mapped object storage and subsequent allocation to the collectible census;
 page backing and payload capacities are reported separately. These quantities
 describe managed storage, not allocator-resident memory or process RSS.
+
+The `(garbage-collect)` return rows use a separate, cold snapshot requested by
+the eval and bytecode entry points. Completed-cycle publication captures USED,
+FREE, bytes and slots together before finalizers, `post-gc-hook`, and the
+return-list allocation. Reading the rows does not walk or modify the heap;
+automatic cycles do not gain an inventory walk. Activation initializes the
+fallback snapshot before the first requested collection.
+
+The snapshot excludes mapped and loader-stamped image residents, including
+before promotion, while retaining ordinary-old objects and visiting retired
+arena pages by their allocation bitmaps.
+It counts owned boxed vectorlikes as well as arena objects. String bytes are
+logical bytes without a NUL; ordinary vector slots include the header word.
+The symbol row counts the fixed Neo seed and post-activation symbol births,
+using existing allocation counters without rewriting them. Native/image
+activation establishes the World-owned baseline; Neo's retained uninterned
+IDs remain counted. Interval/buffer definitions and allocator free capacities
+remain independent of physical image inventory.
 
 ## Insertion coverage & the precise-rooting precondition (task 01 / #17)
 

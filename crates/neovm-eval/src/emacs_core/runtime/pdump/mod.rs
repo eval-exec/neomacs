@@ -955,6 +955,9 @@ fn reconstruct_evaluator_after_symbol_table_with_decoder_and_value_fixups(
     }
 
     decoder.discard_restored_file_object_descriptors();
+    // Late forwarder/native reconstruction belongs to the image baseline;
+    // only births after this complete activation join the runtime GC row.
+    eval.capture_gc_symbol_census_after_activation();
     Ok(eval)
 }
 

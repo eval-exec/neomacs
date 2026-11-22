@@ -10572,6 +10572,7 @@ impl<'a> Vm<'a> {
         if self.ctx.gc_inhibit_depth > 0 && neovm_value::hashtab::hash_test_parity_enabled() {
             return Ok(Value::NIL);
         }
+        self.ctx.tagged_heap.request_gc_object_counts();
         self.ctx.gc_collect_exact_flow()?;
         crate::emacs_core::builtins_extra::builtin_garbage_collect_stats()
     }

@@ -632,11 +632,20 @@ fn garbage_collect_cons_row_reports_live_cells() {
         conses[2].as_int().expect("USED is an integer")
     };
 
+    neovm_value::tagged::gc::with_tagged_heap(|heap| {
+        heap.request_gc_object_counts();
+        heap.collect_exact(std::iter::empty());
+        heap.publish_gc_object_counts_if_requested(0);
+    });
     let before = row_used();
     let allocated_before = Value::memory_use_counts_snapshot()[0];
     let unreachable = Value::cons(Value::fixnum(1), Value::NIL);
     drop(unreachable);
-    neovm_value::tagged::gc::with_tagged_heap(|heap| heap.collect_exact(std::iter::empty()));
+    neovm_value::tagged::gc::with_tagged_heap(|heap| {
+        heap.request_gc_object_counts();
+        heap.collect_exact(std::iter::empty());
+        heap.publish_gc_object_counts_if_requested(0);
+    });
 
     assert_eq!(
         Value::memory_use_counts_snapshot()[0],

@@ -2449,6 +2449,7 @@ pub mod mark_sweep;
 
 mod alloc_bytes;
 mod cycle_time_bank;
+mod gc_statistics;
 #[cfg(feature = "gc-memory-telemetry")]
 mod memory_inventory;
 mod memory_registry;

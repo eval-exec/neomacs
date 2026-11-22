@@ -6,6 +6,8 @@
 use super::*;
 use neovm_value::tagged::gc::MarkPhase;
 
+pub(super) mod symbol_census;
+
 /// GNU alloc.c consing_threshold + bump_consing_until_gc: the Lisp byte
 /// budget and the floating percentage of last-sweep live bytes plus half the
 /// subsequent allocation. There is no additional internal live-growth floor.
@@ -814,6 +816,10 @@ impl Context {
 
     #[doc(hidden)]
     pub fn update_gc_runtime_stats(&mut self, elapsed: std::time::Duration) {
+        self.refresh_gc_symbol_census_after_collection();
+        let symbols_used = self.gc_symbols_used();
+        self.tagged_heap
+            .publish_gc_object_counts_if_requested(symbols_used);
         #[cfg(test)]
         GC_ELAPSED_PUBLISHES.with(|count| count.set(count.get() + 1));
         self.store_variable(gcs_done_symbol(), Value::fixnum(self.gc_count as i64));
