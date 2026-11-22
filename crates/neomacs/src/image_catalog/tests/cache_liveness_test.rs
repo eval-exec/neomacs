@@ -36,6 +36,11 @@ fn saturated_publish_admission_reaches_declared_timeout_without_committing() {
 }
 
 #[test]
+fn timed_out_clear_retries_before_the_next_publish() {
+    run_owned("retry-clear");
+}
+
+#[test]
 fn terminal_phase_retires_an_admitted_wait_with_command_endpoints_and_ack_alive() {
     run_owned("exit-race");
 }
@@ -88,6 +93,12 @@ fn run_owned(case: &str) {
     loop {
         if let Some(status) = child.0.try_wait().unwrap() {
             child.1 = true;
+            fs::write(
+                directory.join("reaped.json"),
+                serde_json::to_vec_pretty(&json!({"pid":child.0.id(),"success":status.success()}))
+                    .unwrap(),
+            )
+            .unwrap();
             assert!(
                 status.success(),
                 "{case}: {status}; {}",
@@ -108,15 +119,48 @@ fn run_owned(case: &str) {
     .unwrap();
     assert_eq!(result["case"], case);
     assert_eq!(result["complete"], true);
-    fs::write(
-        directory.join("reaped.json"),
-        serde_json::to_vec_pretty(&json!({"pid":child.0.id(),"success":true})).unwrap(),
-    )
-    .unwrap();
 }
 
 fn catalog(sender: RenderCommandSender, metadata: SharedImageRenderState) -> AsyncImageCatalog {
     AsyncImageCatalog::new(sender, None, metadata, None, ImageDecoder::new().client())
+}
+
+#[test]
+fn retained_clear_precedes_a_later_public_lookup_and_usage_publish() {
+    run_owned("retry-clear-then-load");
+}
+
+fn retry_load_file_request(
+    _context: &neovm_core::emacs_core::Context,
+    path: &str,
+) -> ImageResolveRequest {
+    use neovm_core::emacs_core::Value;
+    use neovm_core::emacs_core::image::image_load_identity;
+    use neovm_core::emacs_core::image_catalog::{AxisSize, ImageSizeSpec, ImageSpecIdentity};
+    use neovm_core::emacs_core::value::list_to_vec;
+
+    // The caller retains the Context until after the catalog and request die.
+    // Derive the owned request exactly as existing file_request tests do.
+    let spec = Value::list(vec![
+        Value::symbol("image"),
+        Value::keyword(":type"),
+        Value::symbol("png"),
+        Value::keyword(":file"),
+        Value::string(path),
+    ]);
+    let items = list_to_vec(&spec).expect("owned PNG image specification");
+    ImageResolveRequest {
+        spec: ImageSpecIdentity::from_lisp_spec(&spec).expect("PNG image spec identity"),
+        identity: image_load_identity(&spec, &items),
+        source: ImageResolveSource::File(ImageFileName::from_utf8(path)),
+        size: ImageSizeSpec::new(AxisSize::Native, AxisSize::Native),
+        rotation: Default::default(),
+        colors: Default::default(),
+        mask: Default::default(),
+        animation: neomacs_display_protocol::ImageAnimationPolicy::disabled(),
+        frame: Default::default(),
+        realization: Default::default(),
+    }
 }
 
 fn take_ack(command: RenderCommand) -> std::sync::mpsc::SyncSender<()> {
@@ -210,6 +254,49 @@ fn owned_cache_policy_fixture() {
             // This tests Publish admission. The public clear's invalidation
             // admission has its own product-owner regression row.
         }
+        "retry-clear" => {
+            state.mark_renderer_ready();
+            state.publish_cache_usage(ImageCacheUsage::new(4096, 0));
+            for _ in 0..64 {
+                retained_sender
+                    .try_send(RenderCommand::Window(WindowCommand::RefreshFrameOpacity))
+                    .unwrap();
+            }
+            assert!(receiver.is_full());
+            let _ = catalog.invalidate(ImageInvalidation::All);
+            assert!(started.elapsed() >= CACHE_USAGE_SYNC_DEADLINE);
+            assert_eq!(
+                receiver.len(),
+                64,
+                "the clear did not acquire a native slot"
+            );
+            for command in receiver.try_iter() {
+                assert!(matches!(
+                    command,
+                    RenderCommand::Window(WindowCommand::RefreshFrameOpacity)
+                ));
+            }
+            let next_state = Arc::clone(&state);
+            let native = thread::spawn(move || {
+                // The original command must survive the admission timeout.
+                // Dropping it and publishing the old total would violate the
+                // public clear/read contract even after native service resumes.
+                let first = receiver.recv_timeout(Duration::from_secs(2)).unwrap();
+                assert!(
+                    matches!(first, RenderCommand::Asset(AssetCommand::ClearImageCache)),
+                    "a pending clear must precede the usage publish; got {first:?}"
+                );
+                let ack = take_ack(receiver.recv_timeout(Duration::from_secs(2)).unwrap());
+                next_state.publish_cache_usage(ImageCacheUsage::new(0, 0));
+                ack.send(()).unwrap();
+            });
+            assert_eq!(
+                catalog.cached_size_bytes(),
+                0,
+                "the first read after service resumes must observe the retried clear"
+            );
+            native.join().unwrap();
+        }
         "exit-race" => {
             state.mark_renderer_ready();
             let exit_state = Arc::clone(&state);
@@ -262,6 +349,127 @@ fn owned_cache_policy_fixture() {
             native.join().unwrap();
             assert!(state.renderer_exited());
             assert_eq!(state.cached_size_bytes(), 1290);
+        }
+        "retry-clear-then-load" => {
+            let context = neovm_core::emacs_core::eval_hook_installers::new_context();
+            let owned_decoder = ImageDecoder::new();
+            // Shadow the outer fixture catalog: this case retains its decoder owner,
+            // rather than relying on a client from an immediately dropped decoder.
+            let catalog = AsyncImageCatalog::new(
+                retained_sender.clone(),
+                None,
+                Arc::clone(&state),
+                None,
+                owned_decoder.client(),
+            );
+            let path = neomacs_infra::workspace_root().join("test/data/image/blank-100x200.png");
+            let path = fs::canonicalize(path).expect("absolute repository PNG fixture");
+            assert!(path.is_file());
+            let request =
+                retry_load_file_request(&context, path.to_str().expect("UTF-8 fixture path"));
+
+            state.mark_renderer_ready();
+            state.publish_cache_usage(ImageCacheUsage::new(4096, 0));
+            let capacity = receiver.capacity().expect("bounded native command channel");
+            assert_eq!(capacity, 64);
+            for _ in 0..capacity {
+                retained_sender
+                    .try_send(RenderCommand::Window(WindowCommand::RefreshFrameOpacity))
+                    .unwrap();
+            }
+            assert!(receiver.is_full());
+            let invalidation_started = Instant::now();
+            let _ = catalog.invalidate(ImageInvalidation::All);
+            assert!(invalidation_started.elapsed() >= CACHE_USAGE_SYNC_DEADLINE);
+            assert_eq!(
+                receiver.len(),
+                capacity,
+                "clear never acquired a native slot"
+            );
+            // Drain exactly the old commands. No synthetic actor is allowed to service
+            // the retained clear before the public lookup attempts to schedule its load.
+            for _ in 0..capacity {
+                assert!(matches!(
+                    receiver.try_recv().unwrap(),
+                    RenderCommand::Window(WindowCommand::RefreshFrameOpacity)
+                ));
+            }
+            assert!(receiver.is_empty());
+
+            let lookup = catalog.lookup(request, ImageSizeLimit::UNLIMITED);
+            let lookup_scheduled =
+                matches!(lookup, ImageLookup::Pending(_) | ImageLookup::Ready(_));
+            let next_state = Arc::clone(&state);
+            let receipt_path = result.parent().unwrap().join("native-order.json");
+            let native = thread::spawn(move || {
+                let mut order = Vec::<String>::new();
+                let mut bytes = 4096_u64;
+                let mut publish_seen = false;
+                let mut ack_delivered = false;
+                let mut receive_error = None;
+                let deadline = Instant::now() + Duration::from_secs(15);
+                loop {
+                    let remaining = deadline.saturating_duration_since(Instant::now());
+                    let command = match receiver.recv_timeout(remaining) {
+                        Ok(command) => command,
+                        Err(error) => {
+                            receive_error = Some(error.to_string());
+                            break;
+                        }
+                    };
+                    match command {
+                        RenderCommand::Asset(AssetCommand::ClearImageCache) => {
+                            order.push("clear".to_owned());
+                            bytes = 0;
+                        }
+                        RenderCommand::Asset(AssetCommand::ImageLoadFile { .. }) => {
+                            order.push("load".to_owned());
+                            // Deliberately synthetic: a distinguishable successful
+                            // later load must survive its earlier logical clear.
+                            bytes += 1234;
+                        }
+                        RenderCommand::Asset(AssetCommand::PublishImageCacheUsage { ack }) => {
+                            order.push("publish".to_owned());
+                            next_state.publish_cache_usage(ImageCacheUsage::new(bytes, 0));
+                            publish_seen = true;
+                            ack_delivered = ack.send(()).is_ok();
+                            break;
+                        }
+                        other => order.push(format!("unexpected:{other:?}")),
+                    }
+                }
+                let receipt = json!({
+                    "case":"retry-clear-then-load",
+                    "scope":"synthetic-backend-charge-and-public-catalog-command-order",
+                    "order":order,"backend_bytes":bytes,
+                    "publish_seen":publish_seen,"ack_delivered":ack_delivered,
+                    "receive_error":receive_error,
+                });
+                // Write the entire observed order even on the expected RED. No order
+                // assertion may abort this actor before the Publish witness is saved.
+                fs::write(&receipt_path, serde_json::to_vec_pretty(&receipt).unwrap()).unwrap();
+                receipt
+            });
+
+            let observed_bytes = catalog.cached_size_bytes();
+            let receipt = native
+                .join()
+                .expect("synthetic actor completed and wrote its receipt");
+            // All semantic assertions follow the native-order.json write, so a RED
+            // preserves Load/Clear/Publish instead of only the first mismatched command.
+            assert!(lookup_scheduled, "public lookup must schedule the new PNG");
+            assert_eq!(receipt["publish_seen"], true);
+            assert_eq!(receipt["ack_delivered"], true);
+            assert_eq!(receipt["receive_error"], serde_json::Value::Null);
+            assert_eq!(receipt["order"], json!(["clear", "load", "publish"]));
+            assert_eq!(receipt["backend_bytes"], 1234);
+            assert_eq!(
+                observed_bytes, 1234,
+                "earlier clear must not erase the later load"
+            );
+            drop(catalog);
+            drop(owned_decoder);
+            drop(context);
         }
         _ => panic!("unknown fixture case {case}"),
     }
