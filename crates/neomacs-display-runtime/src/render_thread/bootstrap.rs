@@ -224,6 +224,9 @@ impl RenderApp {
         }
         self.renderer = Some(renderer);
         self.publish_image_cache_usage();
+        // From here the renderer can process image commands and retain
+        // bytes; a synchronous cache read may wait for its published total.
+        self.image_metadata.mark_renderer_ready();
         #[cfg(feature = "video")]
         if !self.pending_video_recovery.is_empty()
             && let Some(renderer) = self.renderer.as_mut()
@@ -533,6 +536,40 @@ pub(crate) fn run_render_loop_with_event_loop(
     .map_err(|error| error.to_string())
 }
 
+/// Retire the renderer's admitted command obligations on every exit path.
+///
+/// A command that carries an acknowledgement (`PublishImageCacheUsage`) is
+/// answered only if the renderer executes it. When the renderer exits with
+/// such a command still buffered, crossbeam keeps the message (and its ack
+/// sender) alive for as long as the evaluator's `RenderCommandSender` clones
+/// exist, so dropping the receiver alone would let a waiter block forever.
+/// Dropping on exit: publish the exit to waiters first (they abort on their
+/// next poll), then drain the raw channel so every buffered ack sender drops.
+/// Runs via RAII so an unwind from the event loop is covered too.
+pub(crate) struct RenderExitCancellation {
+    pub(crate) image_metadata: SharedImageRenderState,
+    pub(crate) commands: crossbeam_channel::Receiver<crate::thread_comm::RenderCommand>,
+}
+
+impl Drop for RenderExitCancellation {
+    fn drop(&mut self) {
+        retire_render_command_obligations(&self.image_metadata, &self.commands);
+    }
+}
+
+/// The single retirement routine shared by the event-loop exit guard and
+/// `RenderApp::handle_exiting`: publish the exit (waiters abort on their next
+/// poll), then drop every buffered command so each queued ack sender drops.
+pub(crate) fn retire_render_command_obligations(
+    image_metadata: &SharedImageRenderState,
+    commands: &crossbeam_channel::Receiver<crate::thread_comm::RenderCommand>,
+) {
+    image_metadata.mark_renderer_exited();
+    while let Ok(command) = commands.try_recv() {
+        drop(command);
+    }
+}
+
 fn run_render_loop_with_startup(
     event_loop: EventLoop,
     comms: RenderComms,
@@ -565,6 +602,12 @@ fn run_render_loop_with_startup(
     let preparation_proxy = event_loop.create_proxy();
     let exit_input = comms.input_tx.clone();
     let command_rx = comms.cmd_rx.clone();
+    // Retires admitted ack-bearing commands and publishes the exit to any
+    // waiter before the loop's own notice and before teardown can block.
+    let exit_cancellation = RenderExitCancellation {
+        image_metadata: Arc::clone(&image_metadata),
+        commands: command_rx.clone(),
+    };
     let result = startup::run(
         event_loop,
         initial,
@@ -605,6 +648,7 @@ fn run_render_loop_with_startup(
             app
         },
     );
+    drop(exit_cancellation);
     if let Err(ref e) = result {
         tracing::error!("Event loop error: {:?}", e);
     }

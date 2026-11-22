@@ -6,8 +6,24 @@
 //! is introduced and the ordinary publication operations remain identical.
 
 use super::RenderCommand;
-use crossbeam_channel::{Receiver, SendError, Sender, TrySendError};
+use crossbeam_channel::{Receiver, SendError, SendTimeoutError, Sender, TrySendError};
 use std::num::NonZeroUsize;
+use std::time::Duration;
+
+/// Outcome of a liveness-bounded publish.
+///
+/// Unlike the plain [`RenderCommandSender::send`], the caller keeps the
+/// command on timeout, so it can re-check whether the renderer is still alive
+/// and either retry or give up without losing the command silently.
+pub enum SendTimeoutOutcome {
+    /// The command is committed to the channel in FIFO order.
+    Sent,
+    /// The timeout elapsed before the channel had room; the command is
+    /// returned uncommitted.
+    TimedOut(RenderCommand),
+    /// No receiver remains; the command is returned uncommitted.
+    Disconnected(RenderCommand),
+}
 
 /// Opaque publication endpoint for the owned native command protocol.
 ///
@@ -48,6 +64,22 @@ impl RenderCommandSender {
     #[inline(always)]
     pub fn try_send(&self, command: RenderCommand) -> Result<(), TrySendError<RenderCommand>> {
         self.sender.try_send(command)
+    }
+
+    /// Publish once, waiting at most `timeout` for room. Used by a caller
+    /// that must not stall Lisp forever on a wedged renderer: a timeout
+    /// returns the command so the caller can observe liveness and retry or
+    /// report failure. This is not the old ordering deferral: the command is
+    /// never handed to another thread or a different path, and on success it
+    /// is in the same FIFO position a blocking send would have taken.
+    pub fn send_timeout(&self, command: RenderCommand, timeout: Duration) -> SendTimeoutOutcome {
+        match self.sender.send_timeout(command, timeout) {
+            Ok(()) => SendTimeoutOutcome::Sent,
+            Err(SendTimeoutError::Timeout(command)) => SendTimeoutOutcome::TimedOut(command),
+            Err(SendTimeoutError::Disconnected(command)) => {
+                SendTimeoutOutcome::Disconnected(command)
+            }
+        }
     }
 }
 

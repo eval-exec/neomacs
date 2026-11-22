@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 mod command_projection;
-pub use command_projection::RenderCommandSender;
+pub use command_projection::{RenderCommandSender, SendTimeoutOutcome};
 
 mod frame_mailbox;
 mod frame_opacity;

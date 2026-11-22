@@ -60,6 +60,7 @@ mod window_events;
 
 #[cfg(feature = "neo-term")]
 pub use bootstrap::run_render_loop_current_thread_with_terminals;
+pub(crate) use bootstrap::{RenderExitCancellation, retire_render_command_obligations};
 pub use bootstrap::{build_render_event_loop, run_render_loop, run_render_loop_current_thread};
 pub(crate) use lifecycle::PopupCommit;
 pub use startup::{
@@ -69,7 +70,7 @@ pub use startup::{
 use state::{FpsCounter, ImeCursorArea, RenderApp};
 pub use state::{
     ImageDecodeTerminal, ImageRenderState, ImageTerminalProbe, ImageTerminalPublication,
-    MonitorInfo, SharedImageRenderState, SharedMonitorInfo,
+    MonitorInfo, RendererPhase, SharedImageRenderState, SharedMonitorInfo,
 };
 pub use thread_handle::RenderThread;
 

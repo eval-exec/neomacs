@@ -1145,6 +1145,15 @@ impl RenderApp {
     }
 
     pub(super) fn handle_exiting(&mut self) {
+        // Retire image-command obligations first: publish the exit so a cache
+        // read aborts instead of waiting for an acknowledgement this renderer
+        // will never send, then drop every buffered command (and with it each
+        // queued ack sender). This must run before any teardown that can block
+        // (GPU, clipboard, native window waits below).
+        super::bootstrap::retire_render_command_obligations(
+            &self.image_metadata,
+            &self.comms.cmd_rx,
+        );
         // Release pending native surfaces before any display teardown. Workers
         // retain only GPU objects; wgpu-core owns the descriptor's independent
         // OwnedDisplayHandle until its backend instances have been destroyed.
