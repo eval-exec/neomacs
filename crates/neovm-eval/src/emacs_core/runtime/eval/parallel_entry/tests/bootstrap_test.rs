@@ -259,17 +259,26 @@ fn pentry_l61_keeper_service_admits_and_finishes_its_own_era() {
     let private = Value::string("l61-keeper-service-private-root");
     source.lexenv = private;
     let (shell, start) = close(source).prepare_era().unwrap();
+    let main_id = std::thread::current().id();
     let (tx, rx) = std::sync::mpsc::channel();
-    let service = std::thread::spawn(move || match keeper_start(start) {
-        Ok(end) => {
-            tx.send(Ok(end)).expect("send keeper end");
-        }
-        Err(failure) => {
-            tx.send(Err(failure.notice())).expect("send keeper notice");
+    let service = std::thread::spawn(move || {
+        let service_id = std::thread::current().id();
+        match keeper_start(start) {
+            Ok(end) => {
+                tx.send((service_id, Ok(end))).expect("send keeper end");
+            }
+            Err(failure) => {
+                tx.send((service_id, Err(failure.notice())))
+                    .expect("send keeper notice");
+            }
         }
     });
-    let outcome = rx.recv().expect("keeper outcome");
+    let (service_id, outcome) = rx.recv().expect("keeper outcome");
     service.join().expect("keeper service thread");
+    assert_ne!(
+        service_id, main_id,
+        "keeper_start runs on a dedicated service OS thread, not main"
+    );
     let end = outcome.unwrap_or_else(|notice| panic!("keeper start refused: {notice:?}"));
     assert!(!neovm_value::tagged::gc::tagged_heap_is_installed());
     let returned = shell.accept_return(end).unwrap();

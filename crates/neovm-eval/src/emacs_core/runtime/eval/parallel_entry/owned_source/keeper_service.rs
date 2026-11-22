@@ -19,20 +19,18 @@ use std::thread::ThreadId;
 /// Private proof that the current thread is the keeper's service thread.
 #[must_use]
 pub(crate) struct KeeperThreadToken {
-    thread: ThreadId,
+    // Recorded for L6.2 diagnostics; the proof itself is minting on the
+    // service thread plus `!Send`.
+    _thread: ThreadId,
     _local: PhantomData<Rc<()>>,
 }
 
 impl KeeperThreadToken {
     fn mint() -> Self {
         Self {
-            thread: std::thread::current().id(),
+            _thread: std::thread::current().id(),
             _local: PhantomData,
         }
-    }
-
-    pub(crate) fn is_current(&self) -> bool {
-        self.thread == std::thread::current().id()
     }
 }
 
@@ -42,20 +40,16 @@ static_assertions::assert_not_impl_any!(KeeperThreadToken: Send, Sync, Clone, Co
 /// `with_production_era` admits and finishes around the body, so it never
 /// crosses the thread or outlives that era.
 pub(crate) struct KeeperEra<'service, 'heap> {
-    token: KeeperThreadToken,
+    _token: KeeperThreadToken,
     _era: &'service ParallelHeapEra<'heap, Baton>,
 }
 
 impl<'service, 'heap> KeeperEra<'service, 'heap> {
     fn new(era: &'service ParallelHeapEra<'heap, Baton>) -> Self {
         Self {
-            token: KeeperThreadToken::mint(),
+            _token: KeeperThreadToken::mint(),
             _era: era,
         }
-    }
-
-    pub(crate) fn token(&self) -> &KeeperThreadToken {
-        &self.token
     }
 }
 
@@ -116,10 +110,10 @@ pub(crate) fn keeper_start(
     let transfer = prepared.into_heap_transfer();
     let (transfer, ()) = transfer
         .with_production_era(|era| {
-            let keeper = KeeperEra::new(era);
-            // The token proves this is the keeper's own service thread; it is
-            // dropped before the era finishes, so no keeper state outlives it.
-            debug_assert!(keeper.token().is_current());
+            // The token is minted on the calling service thread and dropped
+            // before the era finishes, so no keeper state outlives it. The
+            // service-thread identity itself is asserted by the keeper test.
+            let _keeper = KeeperEra::new(era);
         })
         .map_err(KeeperStartFailure::Scoped)?;
     ReturnedEraEnd::from_transfer(transfer).map_err(KeeperStartFailure::Return)

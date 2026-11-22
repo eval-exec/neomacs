@@ -252,9 +252,7 @@ impl PreparedEraStart {
         )
     )]
     pub(crate) fn return_to_main(self) -> Result<ReturnedEraEnd, RetainedTransferFailure> {
-        self.transfer
-            .return_to_source()
-            .map(|transfer| ReturnedEraEnd { transfer })
+        ReturnedEraEnd::from_transfer(self.transfer)
     }
 }
 
