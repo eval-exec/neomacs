@@ -90,7 +90,7 @@ impl ChromeChange {
             } else {
                 match frame.pending_gui_resize {
                     Some(PendingGuiResize {
-                        delivery: GuiResizeDelivery::Requested { width, height, .. },
+                        delivery: GuiResizeDelivery::Sent { width, height, .. },
                         ..
                     }) => (width, height),
                     Some(pending) => {

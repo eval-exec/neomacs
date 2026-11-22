@@ -46,3 +46,6 @@ fn gnu_width_only_resize_preserves_native_height() {
             .contains("RESIZE-ORACLE columns=91")
     );
 }
+
+#[path = "frame_resize_oracle/native_rejection.rs"]
+mod native_rejection;

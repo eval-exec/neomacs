@@ -1271,8 +1271,10 @@ pub struct PendingGuiResize {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[doc(hidden)]
 pub enum GuiResizeDelivery {
+    /// Intent not yet handed to the native layer survives native allocation.
     Queued,
-    Requested { width: u32, height: u32, wait: bool },
+    /// A native allocation or this request's exact completion retires intent.
+    Sent { width: u32, height: u32, wait: bool },
 }
 
 // --- E5-FM-3a snapshot/row records (stage-4 W2/E5) ---
@@ -4477,8 +4479,7 @@ impl PendingGuiResize {
     /// A completion terminates only the dispatched request that produced it.
     /// Queued intent has not been sent and cannot have a native completion.
     pub(crate) fn after_request_completion(self, request_id: GuiResizeRequestId) -> Option<Self> {
-        if self.request_id == request_id
-            && matches!(self.delivery, GuiResizeDelivery::Requested { .. })
+        if self.request_id == request_id && matches!(self.delivery, GuiResizeDelivery::Sent { .. })
         {
             None
         } else {
@@ -4490,30 +4491,23 @@ impl PendingGuiResize {
         matches!(self.delivery, GuiResizeDelivery::Queued)
     }
 
-    /// Geometry queries may wait once for a newly sent request. An observation
-    /// consumes that wait without implying which native request produced it.
+    /// Geometry queries may wait once for a newly sent request.
     pub fn take_native_wait(&mut self) -> bool {
         match &mut self.delivery {
             GuiResizeDelivery::Queued => false,
-            GuiResizeDelivery::Requested { wait, .. } => std::mem::take(wait),
+            GuiResizeDelivery::Sent { wait, .. } => std::mem::take(wait),
         }
     }
 
-    pub(crate) fn after_native_observation(mut self, width: u32, height: u32) -> Option<Self> {
-        if let GuiResizeDelivery::Requested {
-            width: target_width,
-            height: target_height,
-            wait,
-        } = &mut self.delivery
-        {
-            if (width, height) == (*target_width, *target_height) {
-                return None;
-            }
-            *wait = false;
+    pub(crate) fn after_native_size_applied(self) -> Option<Self> {
+        // GNU change_frame_size_1 (dispnew.c:6714-6728) consumes pending size
+        // before applying actual native geometry, even if a request was
+        // rejected or another allocation arrived first. Unsent intent remains
+        // ours to dispatch; it cannot have been answered by the native layer.
+        match self.delivery {
+            GuiResizeDelivery::Queued => Some(self),
+            GuiResizeDelivery::Sent { .. } => None,
         }
-        // Actual allocation is always installed independently. Until the latest
-        // target is attained, a later font change retains the requested grid.
-        Some(self)
     }
 }
 
@@ -4526,7 +4520,7 @@ mod gui_resize_request_tests {
             request_id,
             width_cols: 101,
             total_lines: 40,
-            delivery: GuiResizeDelivery::Requested {
+            delivery: GuiResizeDelivery::Sent {
                 width: 1042,
                 height: 690,
                 wait: true,
@@ -4570,13 +4564,20 @@ mod gui_resize_request_tests {
     }
 
     #[test]
-    fn native_observations_preserve_the_existing_stale_acknowledgement_rule() {
+    fn authoritative_native_size_retires_sent_intent_even_when_rejected() {
         let pending = dispatched(GuiResizeRequestId::FIRST);
-        let retained = pending.after_native_observation(942, 690).unwrap();
-        assert_eq!(retained.request_id, pending.request_id);
-        assert_eq!(retained.width_cols, 101);
-        assert_eq!(retained.total_lines, 40);
-        assert_eq!(retained.after_native_observation(1042, 690), None);
+        // GNU dispnew.c:6714-6728 clears pending size on every applied
+        // allocation. Equality with the requested target is not required.
+        assert_eq!(pending.after_native_size_applied(), None);
+    }
+
+    #[test]
+    fn authoritative_native_size_preserves_unsent_queued_intent() {
+        let queued = PendingGuiResize {
+            delivery: GuiResizeDelivery::Queued,
+            ..dispatched(GuiResizeRequestId::FIRST)
+        };
+        assert_eq!(queued.after_native_size_applied(), Some(queued));
     }
 
     #[test]

@@ -580,7 +580,7 @@ impl DisplayFrameExt for Frame {
             width_cols,
             total_lines,
             delivery: host_target.map_or(GuiResizeDelivery::Queued, |(width, height)| {
-                GuiResizeDelivery::Requested {
+                GuiResizeDelivery::Sent {
                     width,
                     height,
                     wait: true,

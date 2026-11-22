@@ -1797,8 +1797,7 @@ fn apply_resize_input_event_in_keyboard_runtime(
         crate::emacs_core::eval::lifecycle::resize_frame_pixelwise_with_buffer_constraints(
             frame, buffers, width, height,
         );
-        frame.pending_gui_resize =
-            pending.and_then(|pending| pending.after_native_observation(width, height));
+        frame.pending_gui_resize = pending.and_then(|pending| pending.after_native_size_applied());
         (old_root_bounds != *frame.root_window().bounds()).then_some(fid)
     } else {
         None
@@ -1820,24 +1819,6 @@ fn apply_gui_resize_request_completion(
             .pending_gui_resize
             .and_then(|pending| pending.after_request_completion(request_id));
     }
-}
-
-fn pending_live_gui_resize_target(
-    frames: &crate::emacs_core::eval::data::window_state::FrameManager,
-    emacs_frame_id: u64,
-) -> Option<neovm_value::display_vocab::FrameId> {
-    let target_fid = if emacs_frame_id == 0 {
-        frames.selected_frame().map(|frame| frame.id)
-    } else {
-        Some(neovm_value::display_vocab::FrameId(emacs_frame_id))
-    }?;
-    frames.get(target_fid).and_then(|frame| {
-        frame
-            .pending_gui_resize
-            .as_ref()
-            .filter(|pending| pending.is_queued())
-            .map(|_| target_fid)
-    })
 }
 
 fn sync_pending_resize_events_in_keyboard_runtime(
@@ -1873,9 +1854,6 @@ fn sync_pending_resize_events_in_keyboard_runtime(
                 scale_factor,
                 emacs_frame_id,
             }) => {
-                if pending_live_gui_resize_target(frames, *emacs_frame_id).is_some() {
-                    break;
-                }
                 let (width, height, scale_factor, emacs_frame_id) =
                     (*width, *height, *scale_factor, *emacs_frame_id);
                 pending_input_events.pop_visible_front();
@@ -1925,17 +1903,6 @@ fn sync_pending_resize_events_in_keyboard_runtime(
                 scale_factor,
                 emacs_frame_id,
             }) => {
-                if pending_live_gui_resize_target(frames, emacs_frame_id).is_some() {
-                    // Preserve host resize acks until the geometry-query path
-                    // flushes the deferred live-GUI resize request.
-                    deferred.push_back(InputEvent::Resize {
-                        width,
-                        height,
-                        scale_factor,
-                        emacs_frame_id,
-                    });
-                    break;
-                }
                 if let Some(frame) = apply_resize_input_event_in_keyboard_runtime(
                     frames,
                     buffers,
