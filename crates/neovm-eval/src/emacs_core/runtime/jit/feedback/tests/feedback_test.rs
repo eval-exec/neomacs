@@ -47,6 +47,36 @@ fn a_symbol_site_is_monomorphic_until_a_second_symbol() {
     assert!(matches!(s.target(), CallTarget::Mega));
 }
 
+/// A compile thread reads a source slot that the owner publishes while the
+/// reader is already running, so the slot is the reader's only path to the
+/// source. The publication must order the source's initialization before
+/// the reader's upgrade. ThreadSanitizer reports an unordered (Relaxed)
+/// publication here; without TSan this row checks only the outcome.
+#[cfg(feature = "jit")]
+#[test]
+fn a_published_source_is_ordered_before_a_concurrent_compile_read() {
+    let _harness = crate::test_utils::unit_harness();
+    let s = site();
+    let started = std::sync::Barrier::new(2);
+    std::thread::scope(|scope| {
+        let reader = scope.spawn(|| {
+            started.wait();
+            loop {
+                if let CallTarget::Sources(live) = s.target() {
+                    return live.len();
+                }
+                std::hint::spin_loop();
+            }
+        });
+        started.wait();
+        // Created after the barrier: nothing but the slot orders it before
+        // the reader's upgrade.
+        let f = Value::make_bytecode(source(7));
+        s.observe(f);
+        assert_eq!(reader.join().expect("compile reader"), 1);
+    });
+}
+
 #[cfg(feature = "jit")]
 #[test]
 fn instances_of_one_source_are_one_target_and_sources_go_poly_then_mega() {
