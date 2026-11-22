@@ -160,7 +160,10 @@ impl CallSiteFeedback {
     #[inline]
     pub unsafe fn install_source(&self, i: usize, source: Weak<RuntimeState>) {
         let weak = Weak::into_raw(source);
-        let old = self.sources[i].swap(weak.cast_mut(), Ordering::Relaxed);
+        // Release publishes the source's initialization to the compile
+        // thread's Acquire load in `upgrade_source`; Acquire orders the drop
+        // of a replaced slot after its last publication.
+        let old = self.sources[i].swap(weak.cast_mut(), Ordering::AcqRel);
         if !old.is_null() {
             // SAFETY: every non-null slot holds a `Weak::into_raw`.
             drop(unsafe { Weak::from_raw(old) });
@@ -191,7 +194,9 @@ impl CallSiteFeedback {
     #[doc(hidden)]
     #[inline]
     pub unsafe fn upgrade_source(&self, i: usize) -> Option<Arc<RuntimeState>> {
-        let ptr = self.sources[i].load(Ordering::Relaxed);
+        // Acquire pairs with `install_source`'s Release, so the source's
+        // initialization happens before this upgrade reads it.
+        let ptr = self.sources[i].load(Ordering::Acquire);
         if ptr.is_null() {
             return None;
         }
