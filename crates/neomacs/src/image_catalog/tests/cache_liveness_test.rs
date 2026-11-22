@@ -183,6 +183,11 @@ fn ordered_submission_wait_cancels_on_exit_with_completion_sender_alive() {
     run_owned("ordered-submission-exit");
 }
 
+#[test]
+fn existing_pending_lookup_retires_completed_submission_and_flushes_queue() {
+    run_owned("existing-lookup-completed-submission");
+}
+
 fn take_ack(command: RenderCommand) -> std::sync::mpsc::SyncSender<()> {
     match command {
         RenderCommand::Asset(AssetCommand::PublishImageCacheUsage { ack }) => ack,
@@ -203,6 +208,83 @@ fn owned_cache_policy_fixture() {
     let catalog = catalog(sender, Arc::clone(&state));
     let started = Instant::now();
     match case.as_str() {
+        "existing-lookup-completed-submission" => {
+            let context = neovm_core::emacs_core::eval_hook_installers::new_context();
+            let owned_decoder = ImageDecoder::new();
+            let catalog = AsyncImageCatalog::new(
+                retained_sender.clone(),
+                None,
+                Arc::clone(&state),
+                None,
+                owned_decoder.client(),
+            );
+            let path = fs::canonicalize(
+                neomacs_infra::workspace_root().join("test/data/image/blank-100x200.png"),
+            )
+            .unwrap();
+            let request = retry_load_file_request(&context, path.to_str().unwrap());
+            state.mark_renderer_ready();
+            assert!(matches!(
+                catalog.lookup(request.clone(), ImageSizeLimit::UNLIMITED),
+                ImageLookup::Pending(_)
+            ));
+            assert!(matches!(
+                receiver.recv_timeout(Duration::from_secs(2)).unwrap(),
+                RenderCommand::Asset(AssetCommand::ImageLoadFile { .. })
+            ));
+            assert!(receiver.is_empty());
+
+            // Control only the submission completion. The entry came from
+            // public lookup and stays Pending because no native owner has
+            // published its terminal metadata. No new entry or cache-size
+            // read may rescue work stranded behind this completed gate.
+            let (completion, wait) = std::sync::mpsc::sync_channel(1);
+            *catalog.ordered_in_flight.borrow_mut() = Some(wait);
+            catalog
+                .pending_invalidations
+                .borrow_mut()
+                .push_back(QueuedRenderWork {
+                    command: RenderCommand::Window(WindowCommand::SetWindowTitle {
+                        title: "existing-lookup-drain-witness".to_owned(),
+                    }),
+                    resolution: None,
+                });
+            completion.send(()).unwrap();
+            let lookup = catalog.lookup(request, ImageSizeLimit::UNLIMITED);
+            let gate_retired = catalog.ordered_in_flight.borrow().is_none();
+            let queue_empty = catalog.pending_invalidations.borrow().is_empty();
+            let witness = matches!(
+                receiver.try_recv(),
+                Ok(RenderCommand::Window(WindowCommand::SetWindowTitle { title }))
+                    if title == "existing-lookup-drain-witness"
+            );
+            fs::write(
+                result.parent().unwrap().join("lookup-progress.json"),
+                serde_json::to_vec_pretty(&json!({
+                    "scope":"public-existing-pending-entry-controlled-completion-gate",
+                    "gate_retired":gate_retired,"queue_empty":queue_empty,
+                    "native_witness_received":witness,
+                    "cache_size_or_new_lookup_rescue":false,
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            assert!(matches!(lookup, ImageLookup::Pending(_)));
+            assert!(
+                gate_retired,
+                "existing lookup must retire a completed submission gate"
+            );
+            assert!(
+                queue_empty,
+                "existing lookup must flush queued ordered work"
+            );
+            assert!(witness, "native queue must receive the ordered witness");
+            assert!(receiver.is_empty());
+            drop(completion);
+            drop(catalog);
+            drop(owned_decoder);
+            drop(context);
+        }
         "before-readiness" => {
             // This is the evaluator's real clear/read pair before it could
             // publish later first-frame readiness. Nobody services commands.
