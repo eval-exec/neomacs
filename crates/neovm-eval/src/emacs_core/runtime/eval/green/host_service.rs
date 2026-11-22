@@ -42,6 +42,54 @@ pub(super) use scheduling::resume_owner_step;
 pub(super) use scheduling::{HostResume, dispatch_host};
 pub(super) use transport::NativeSettlement;
 
+/// Who asked the host service to run an effect, and therefore where the
+/// settlement must be delivered. H1 names only Green owners; H2 adds
+/// `Parallel(SerialTurnId)` without changing the Green completion path. This
+/// is deliberately not a third `ThreadKey` variant: a parallel owner has no
+/// Green seat, reservation or wake.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(super) enum HostRequester {
+    Green(ThreadKey),
+}
+
+/// The mechanism that receives the settled effect. `Green` is the existing
+/// scheduler route; H2 adds the keeper/turn target. The service actor chooses
+/// its dispatch path from this value, never from a raw `ThreadKey`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CompletionTarget {
+    Green(ThreadKey),
+}
+
+impl HostRequester {
+    #[doc(hidden)]
+    pub(super) const fn green(owner: ThreadKey) -> Self {
+        Self::Green(owner)
+    }
+
+    /// The Green owner for H1's registry keys and scheduler comparisons.
+    #[doc(hidden)]
+    pub(super) const fn green_owner(self) -> ThreadKey {
+        match self {
+            Self::Green(owner) => owner,
+        }
+    }
+
+    #[doc(hidden)]
+    pub(super) const fn completion_target(self) -> CompletionTarget {
+        CompletionTarget::Green(self.green_owner())
+    }
+}
+
+impl CompletionTarget {
+    /// Main's local service path; every routed Green worker is non-local.
+    /// Used by the H1 rows and the H2 local/routed seam.
+    #[doc(hidden)]
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) const fn is_local(self) -> bool {
+        matches!(self, Self::Green(ThreadKey::Main))
+    }
+}
+
 /// Process-wide correlation allocation, not host authority or a TLS slot.
 struct SessionSequence(AtomicU64);
 static SESSIONS: SessionSequence = SessionSequence(AtomicU64::new(1));
@@ -207,7 +255,7 @@ impl<'owner> RestoredHostOwner<'owner> {
 #[must_use = "publish or explicitly abandon the prepared host call"]
 pub(super) struct PreparedHostCall {
     key: HostRequestKey,
-    owner: ThreadKey,
+    requester: HostRequester,
     _confined: PhantomData<Rc<()>>,
 }
 
@@ -220,14 +268,14 @@ pub(super) struct AbandonedHostCall(PreparedHostCall);
 #[derive(Debug)]
 struct PublishedHostCall {
     key: HostRequestKey,
-    owner: ThreadKey,
+    requester: HostRequester,
 }
 
 /// Registry-owned linear scheduler registration, never sent through a channel.
 #[derive(Debug)]
 pub(super) struct HostParkRegistration {
     key: HostRequestKey,
-    owner: ThreadKey,
+    requester: HostRequester,
     _confined: PhantomData<Rc<()>>,
 }
 
@@ -235,7 +283,7 @@ impl PublishedHostCall {
     pub(crate) fn into_registration(self) -> HostParkRegistration {
         HostParkRegistration {
             key: self.key,
-            owner: self.owner,
+            requester: self.requester,
             _confined: PhantomData,
         }
     }
@@ -247,8 +295,16 @@ impl HostParkRegistration {
         self.key
     }
     #[doc(hidden)]
+    pub fn requester(&self) -> HostRequester {
+        self.requester
+    }
+    #[doc(hidden)]
+    pub fn completion_target(&self) -> CompletionTarget {
+        self.requester.completion_target()
+    }
+    #[doc(hidden)]
     pub fn owner(&self) -> ThreadKey {
-        self.owner
+        self.requester.green_owner()
     }
 }
 
@@ -257,6 +313,21 @@ impl PreparedHostCall {
     pub fn key(&self) -> HostRequestKey {
         self.key
     }
+
+    #[doc(hidden)]
+    pub fn requester(&self) -> HostRequester {
+        self.requester
+    }
+
+    #[doc(hidden)]
+    pub fn completion_target(&self) -> CompletionTarget {
+        self.requester.completion_target()
+    }
+
+    #[doc(hidden)]
+    pub fn owner(&self) -> ThreadKey {
+        self.requester.green_owner()
+    }
 }
 
 /// Registry-issued terminal observation; a transport notification cannot mint it.
@@ -264,7 +335,7 @@ impl PreparedHostCall {
 #[must_use = "deliver terminal settlement to its scheduler reservation"]
 pub(super) struct SettledHostCall {
     key: HostRequestKey,
-    owner: ThreadKey,
+    requester: HostRequester,
     _confined: PhantomData<Rc<()>>,
 }
 
@@ -274,8 +345,16 @@ impl SettledHostCall {
         self.key
     }
     #[doc(hidden)]
+    pub fn requester(&self) -> HostRequester {
+        self.requester
+    }
+    #[doc(hidden)]
+    pub fn completion_target(&self) -> CompletionTarget {
+        self.requester.completion_target()
+    }
+    #[doc(hidden)]
     pub fn owner(&self) -> ThreadKey {
-        self.owner
+        self.requester.green_owner()
     }
 }
 
@@ -395,11 +474,11 @@ impl WorldRootRegistry {
         &mut self,
         prepared: PreparedHostCall,
     ) -> Result<HostRequestKey, HostRootError> {
-        if !self.owners.contains_key(&prepared.owner) {
+        if !self.owners.contains_key(&prepared.owner()) {
             return Err(HostRootError::OwnerNotParked);
         }
         let record = self.hosts.record_mut(prepared.key)?;
-        if record.owner != prepared.owner {
+        if record.owner != prepared.owner() {
             return Err(HostRootError::ForeignOwner);
         }
         match record.state {
@@ -413,7 +492,7 @@ impl WorldRootRegistry {
         record.state = RecordState::Published(
             PublishedHostCall {
                 key,
-                owner: prepared.owner,
+                requester: prepared.requester(),
             }
             .into_registration(),
         );
@@ -533,7 +612,7 @@ impl HostRegistry {
         call: PreparedHostCall,
     ) -> Result<AbandonedHostCall, HostRootError> {
         self.validate_access(baton, heap)?;
-        if call.owner != owner {
+        if call.owner() != owner {
             return Err(HostRootError::ForeignOwner);
         }
         let record = self.record_mut(call.key)?;
@@ -561,7 +640,7 @@ impl HostRegistry {
     ) -> Result<(), HostRootError> {
         self.validate_access(baton, heap)?;
         let call = abandoned.0;
-        if call.owner != owner {
+        if call.owner() != owner {
             return Err(HostRootError::ForeignOwner);
         }
         let record = self.record_mut(call.key)?;
@@ -641,7 +720,7 @@ impl HostRegistry {
         );
         Ok(PreparedHostCall {
             key,
-            owner,
+            requester: HostRequester::green(owner),
             _confined: PhantomData,
         })
     }
@@ -835,7 +914,7 @@ impl HostRegistry {
                 record.state = RecordState::TerminalAwaitingOwner;
                 Ok(SettledHostCall {
                     key,
-                    owner: record.owner,
+                    requester: HostRequester::green(record.owner),
                     _confined: PhantomData,
                 })
             }
@@ -1034,3 +1113,7 @@ mod owner_runtime_tests;
 #[cfg(test)]
 #[path = "host_service/tests/prepublication.rs"]
 mod prepublication_tests;
+
+#[cfg(test)]
+#[path = "host_service/tests/requester.rs"]
+mod requester_tests;

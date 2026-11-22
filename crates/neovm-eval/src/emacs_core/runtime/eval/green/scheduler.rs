@@ -9,7 +9,9 @@
 //! deadline is not ready until another thread makes it so.
 
 use super::super::world::Baton;
-use super::host_service::{HostParkRegistration, HostRequestKey, RealWaitPermit, SettledHostCall};
+use super::host_service::{
+    HostParkRegistration, HostRequestKey, HostRequester, RealWaitPermit, SettledHostCall,
+};
 #[cfg(any(test, feature = "test-support"))]
 use crate::emacs_core::eval::data::process_state::{
     MainConnectPending, PendingConnectObservationError,
@@ -357,12 +359,12 @@ static_assertions::assert_not_impl_any!(ReservedServiceSlice: Send, Sync, Clone,
 #[must_use]
 pub(super) struct ServiceTransferPlan {
     key: HostRequestKey,
-    requester: ThreadKey,
+    requester: HostRequester,
     _confined: PhantomData<Rc<()>>,
 }
 impl ServiceTransferPlan {
     #[doc(hidden)]
-    pub fn requester(&self) -> ThreadKey {
+    pub fn requester(&self) -> HostRequester {
         self.requester
     }
 }
@@ -1486,7 +1488,7 @@ impl Control {
         let result = Self::transfer_local_metadata(
             &mut self.state(),
             plan.key,
-            plan.requester,
+            plan.requester.green_owner(),
             std::thread::current().id(),
         );
         match result {
@@ -2022,7 +2024,7 @@ impl Control {
         }
         Ok(ServiceTransferPlan {
             key: slice.key,
-            requester: slice.requester,
+            requester: HostRequester::green(slice.requester),
             _confined: PhantomData,
         })
     }
@@ -2034,7 +2036,8 @@ impl Control {
     ) -> Result<ServiceTransfer, ServiceTransferRefusal> {
         let mut state = self.state();
         let valid = state.services.get(&slice.key).is_some_and(|metadata| {
-            metadata.requester == slice.requester && metadata.phase == ServicePhase::Reserved
+            metadata.requester == slice.requester.green_owner()
+                && metadata.phase == ServicePhase::Reserved
         });
         if !valid || state.closing {
             return Err(ServiceTransferRefusal {
@@ -2056,12 +2059,16 @@ impl Control {
                 baton,
             });
         }
-        Self::set_wait(&mut state, slice.requester, Wait::HostRequest(slice.key));
-        state.ready.discard(slice.requester);
+        Self::set_wait(
+            &mut state,
+            slice.requester.green_owner(),
+            Wait::HostRequest(slice.key),
+        );
+        state.ready.discard(slice.requester.green_owner());
         Self::check_invariants(&state);
         state
             .physical
-            .insert(slice.requester, OwnerLocation::Receiving);
+            .insert(slice.requester.green_owner(), OwnerLocation::Receiving);
         match main_location {
             Some(OwnerLocation::Receiving) => {
                 if !state.pending_services.contains(&slice.key) {
@@ -2656,7 +2663,8 @@ impl Control {
                 });
             }
             if !state.services.get(&slice.key).is_some_and(|metadata| {
-                metadata.requester == slice.requester && metadata.phase == ServicePhase::Reserved
+                metadata.requester == slice.requester.green_owner()
+                    && metadata.phase == ServicePhase::Reserved
             }) {
                 return Err(ServiceTransferRefusal {
                     reason: ServiceRefusal::WrongServiceState,

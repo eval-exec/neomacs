@@ -11,7 +11,10 @@ use super::transport::{
     DispatchPoll, DispatchTicket, HostClient, HostWaiter, NativeDispatch, NativeOutcome,
     NativeSettlement, Publication, ServiceTransport, TerminalRead, TerminalReceipt,
 };
-use super::{HostRequestKey, HostRootError, PreparedHostCall, RootsRetired, SettledHostCall};
+use super::{
+    CompletionTarget, HostRequestKey, HostRequester, HostRootError, PreparedHostCall, RootsRetired,
+    SettledHostCall,
+};
 use crate::host_effect::contracts::OwnedNativeData;
 use crate::host_effect::native_pending::{NativeAdapterStep, PendingNativeOperation};
 use std::collections::BTreeMap;
@@ -1243,9 +1246,13 @@ pub(in crate::emacs_core::eval::green) fn dispatch_host(
             fatal_service(error);
         }
         let reservation = match registry.hosts().registration(key) {
-            Ok(registration) => match registration.owner() {
-                ThreadKey::Main => control.reserve_local_service(registration),
-                ThreadKey::Worker(_) => control.reserve_service(registration),
+            Ok(registration) => match registration.completion_target() {
+                CompletionTarget::Green(ThreadKey::Main) => {
+                    control.reserve_local_service(registration)
+                }
+                CompletionTarget::Green(ThreadKey::Worker(_)) => {
+                    control.reserve_service(registration)
+                }
             },
             Err(error) => fatal_service(error),
         };
@@ -1309,7 +1316,7 @@ pub(in crate::emacs_core::eval::green) fn dispatch_host(
     // The typed plan is consumed after the registry borrow has ended. Main's
     // local route enters the same native receive driver without a self-send.
     match plan.requester() {
-        ThreadKey::Main => {
+        HostRequester::Green(ThreadKey::Main) => {
             return match control.transfer_prepared_local_service(plan, baton) {
                 Ok(wake) => (wake, HostResume::Actor(key)),
                 Err(refusal) => {
@@ -1319,7 +1326,7 @@ pub(in crate::emacs_core::eval::green) fn dispatch_host(
                 }
             };
         }
-        ThreadKey::Worker(_) => {}
+        HostRequester::Green(ThreadKey::Worker(_)) => {}
     }
     let transfer = match control.transfer_prepared_service(plan, baton) {
         Ok(ServiceTransfer::Queued(baton)) => {
