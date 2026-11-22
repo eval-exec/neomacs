@@ -251,15 +251,28 @@ pub(crate) fn overlay_mirror_candidate_count() -> usize {
     OVERLAY_MIRROR_CANDIDATES.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// How many range-view copy HEADERS (each with its copied plist spine) one
+/// buffer's memo may retain. This is a count of current copies, not a byte
+/// budget: payload sizes vary. The revision map is separately bounded by the
+/// live captured serials, and the eviction queue is compacted well below any
+/// unbounded growth. Retention follows the cap and the live overlay count --
+/// never the window size or the number of redisplay captures/versions. The
+/// working window (tens of overlays) stays far below the cap, while a long
+/// scroll evicts the oldest copies in insertion order.
+pub(crate) const SNAPSHOT_COPY_MEMO_CAP: usize = 4_096;
+
 /// One read-only overlay copy handed to a layout range view.
 ///
-/// Valid only while its `generation` matches the list's current snapshot-copy
+/// Valid only while its `revision` matches the list's current snapshot-copy
 /// revision: every write that can change what a copy would contain bumps that
 /// ONE overlay's revision, so an unrelated write (hl-line moving between
 /// lines, one overlay-put) does not invalidate the other copies. Observers
 /// keep an old copy alive after a bump; range views never mutate it.
 struct SnapshotCopyEntry {
     revision: u64,
+    /// Insertion stamp; the eviction order deque carries a matching pair, so
+    /// a stale queue entry (from a superseded copy) is skipped.
+    stamp: u64,
     range: EmacsByteRange,
     front_advance: bool,
     rear_advance: bool,
@@ -292,6 +305,8 @@ pub struct OverlayList {
     // read only, so several range views can share one (see `GcTrace`).
     snapshot_copy_revisions: RefCell<FxHashMap<u64, u64>>,
     snapshot_copies: RefCell<FxHashMap<u64, SnapshotCopyEntry>>,
+    snapshot_copy_stamp: Cell<u64>,
+    snapshot_copy_insert_order: RefCell<std::collections::VecDeque<(u64, u64)>>,
 }
 #[cfg(any(test, feature = "test-support"))]
 pub struct OverlayList {
@@ -306,6 +321,8 @@ pub struct OverlayList {
     // See the production struct's comment.
     snapshot_copy_revisions: RefCell<FxHashMap<u64, u64>>,
     snapshot_copies: RefCell<FxHashMap<u64, SnapshotCopyEntry>>,
+    snapshot_copy_stamp: Cell<u64>,
+    snapshot_copy_insert_order: RefCell<std::collections::VecDeque<(u64, u64)>>,
 }
 
 /// An evaluator-owned immutable overlay index. Like overlay plist values,
@@ -433,6 +450,57 @@ impl OverlayList {
     fn clear_snapshot_copies(&mut self) {
         self.snapshot_copy_revisions.get_mut().clear();
         self.snapshot_copies.get_mut().clear();
+        self.snapshot_copy_insert_order.get_mut().clear();
+    }
+
+    /// Bound the range-view memo: evict the oldest inserted copies until it
+    /// is back under [`SNAPSHOT_COPY_MEMO_CAP`]. Stale order entries (a copy
+    /// superseded by a bump, or forgotten) are skipped, and a long-lived map
+    /// under the cap periodically compacts its queue.
+    fn trim_snapshot_copy_memo(&self) {
+        let mut order = self.snapshot_copy_insert_order.borrow_mut();
+        loop {
+            if self.snapshot_copies.borrow().len() > SNAPSHOT_COPY_MEMO_CAP {
+                let Some((serial, stamp)) = order.pop_front() else {
+                    break;
+                };
+                let mut copies = self.snapshot_copies.borrow_mut();
+                if copies
+                    .get(&serial)
+                    .is_some_and(|entry| entry.stamp == stamp)
+                {
+                    copies.remove(&serial);
+                }
+                continue;
+            }
+            if order.len() > SNAPSHOT_COPY_MEMO_CAP * 4 {
+                let copies = self.snapshot_copies.borrow();
+                order.retain(|(serial, stamp)| {
+                    copies
+                        .get(serial)
+                        .is_some_and(|entry| entry.stamp == *stamp)
+                });
+            }
+            break;
+        }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn snapshot_copy_memo_len_for_test(&self) -> usize {
+        self.snapshot_copies.borrow().len()
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn snapshot_copy_revision_len_for_test(&self) -> usize {
+        self.snapshot_copy_revisions.borrow().len()
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn snapshot_copy_memo_contains_for_test(&self, serial: u64) -> bool {
+        self.snapshot_copies.borrow().contains_key(&serial)
     }
 
     /// Keep the cached snapshot only if no observer shares it and `update`
@@ -671,10 +739,16 @@ impl OverlayList {
                     // reports the same range for this identity; a changed
                     // live range makes a fresh copy instead.
                     if memoize {
+                        let stamp = self.snapshot_copy_stamp.get().wrapping_add(1);
+                        self.snapshot_copy_stamp.set(stamp);
+                        self.snapshot_copy_insert_order
+                            .borrow_mut()
+                            .push_back((serial, stamp));
                         self.snapshot_copies.borrow_mut().insert(
                             serial,
                             SnapshotCopyEntry {
                                 revision,
+                                stamp,
                                 range,
                                 front_advance: data.front_advance,
                                 rear_advance: data.rear_advance,
@@ -682,6 +756,7 @@ impl OverlayList {
                                 copy,
                             },
                         );
+                        self.trim_snapshot_copy_memo();
                     }
                     #[cfg(test)]
                     if matches!(identity, OverlayCloneIdentity::PreservePrecedence) {
@@ -1226,6 +1301,8 @@ impl OverlayList {
             view_query_underflow: Cell::new(false),
             snapshot_copy_revisions: RefCell::new(FxHashMap::default()),
             snapshot_copies: RefCell::new(FxHashMap::default()),
+            snapshot_copy_stamp: Cell::new(0),
+            snapshot_copy_insert_order: RefCell::new(std::collections::VecDeque::new()),
         }
     }
 

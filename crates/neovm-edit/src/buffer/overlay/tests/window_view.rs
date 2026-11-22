@@ -1029,3 +1029,109 @@ fn range_view_copies_cannot_be_obtained_through_the_live_list() {
     // does not.
     assert_eq!(serials_in(&list, 0, 100), serials_in(&view, 0, 100));
 }
+
+/// A long hl-line scroll must not grow the range-view memo without bound: the
+/// working window stays far under the cap, eviction stays out of its way
+/// (per-key copies remain the entering line plus the highlight), and clearing
+/// the overlays releases every memo copy.
+#[test]
+fn hl_line_scrolling_memo_stays_bounded_at_magit_scale() {
+    crate::test_utils::init_test_tracing();
+    const LINE_BYTES: usize = 80;
+    const WINDOW_LINES: usize = 50;
+    const KEYS: usize = 5_000;
+    const LINES: usize = 65_536;
+
+    let face = Value::symbol("face");
+    let highlight = Value::symbol("highlight");
+    let mut list = OverlayList::new();
+    for line in 0..LINES {
+        list.insert_overlay(alloc_overlay(line * LINE_BYTES, line * LINE_BYTES + 1));
+    }
+    let first = 1_000;
+    let hl = alloc_overlay(first * LINE_BYTES, first * LINE_BYTES + 1);
+    list.insert_overlay(hl);
+    list.overlay_put(hl, face, highlight).unwrap();
+
+    let mut copies = 0;
+    let mut reached_cap = false;
+    for step in 0..KEYS {
+        let line = first + step;
+        list.move_overlay_to_emacs_byte_range(
+            hl,
+            emacs_byte_range(line * LINE_BYTES, line * LINE_BYTES + 1),
+        );
+        reset_overlay_snapshot_copy_count();
+        let _view = list.snapshot_in_range(emacs_byte_range(
+            line * LINE_BYTES,
+            (line + WINDOW_LINES) * LINE_BYTES,
+        ));
+        copies += overlay_snapshot_copy_count();
+        let memo_len = list.snapshot_copy_memo_len_for_test();
+        assert!(
+            memo_len <= SNAPSHOT_COPY_MEMO_CAP,
+            "step {step}: memo holds {memo_len} copies"
+        );
+        assert!(
+            list.snapshot_copy_revision_len_for_test() <= LINES + 1,
+            "step {step}: revision state outgrew the live overlays"
+        );
+        reached_cap |= memo_len == SNAPSHOT_COPY_MEMO_CAP;
+    }
+    assert!(
+        reached_cap,
+        "the scroll must actually exercise the eviction path"
+    );
+    assert!(
+        copies <= WINDOW_LINES + 2 + 3 * KEYS,
+        "eviction made the hot window re-copy: {copies} copies for {KEYS} keys"
+    );
+
+    // A captured overlay removed from the list forgets its memo entry and
+    // revision; an evaporating move does the same.
+    let removed_line = first + KEYS - 10;
+    let removed = overlay_at_line(&list, removed_line);
+    let removed_serial = overlay_identity_key(removed).get();
+    assert!(list.snapshot_copy_memo_contains_for_test(removed_serial));
+    list.delete_overlay(removed);
+    assert!(
+        !list.snapshot_copy_memo_contains_for_test(removed_serial),
+        "a deleted overlay kept its memo copy"
+    );
+    let hl_serial = overlay_identity_key(hl).get();
+    list.overlay_put(hl, Value::symbol("evaporate"), Value::T)
+        .unwrap();
+    list.move_overlay_to_emacs_byte_range(hl, emacs_byte_range(0, 0));
+    assert!(
+        !list.index.contains(hl),
+        "the evaporating move must delete the highlight"
+    );
+    assert!(
+        !list.snapshot_copy_memo_contains_for_test(hl_serial),
+        "an evaporated overlay kept its memo copy"
+    );
+
+    list.delete_all_overlays();
+    assert_eq!(
+        list.snapshot_copy_memo_len_for_test(),
+        0,
+        "clearing the overlays must release every memo copy"
+    );
+    assert_eq!(
+        list.snapshot_copy_revision_len_for_test(),
+        0,
+        "clearing the overlays must release every memo revision"
+    );
+}
+
+/// The overlay whose start is `line * LINE_BYTES`.
+fn overlay_at_line(list: &OverlayList, line: usize) -> Value {
+    overlays_at(list, line * 80)
+        .into_iter()
+        .find(|overlay| {
+            list.index_range_for_test(*overlay).is_some_and(|range| {
+                range.start().get() == line * 80 && range.end().get() == line * 80 + 1
+            })
+        })
+        .expect("the line overlay is present")
+}
