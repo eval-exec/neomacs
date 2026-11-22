@@ -1,8 +1,42 @@
 //! Copied overlay headers must survive actual redisplay fontifier callbacks.
 use super::*;
+use neovm_core::emacs_core::eval::Context;
 use neovm_core::emacs_core::xdisp::{
     ProbeRow, RedisplayFontificationRequest, ensure_fontified_for_redisplay_for_window_request,
 };
+
+/// Count how many root visits each of `targets` (numeric Value bits) gets in
+/// the evaluator's `owned_native` (lease) and `buffers` (buffer/memo) groups.
+/// The counts come from the real root registry, so a buffer-owned memo copy
+/// can never stand in for a live snapshot lease.
+fn root_group_counts(eval: &Context, targets: &[usize]) -> (Vec<usize>, Vec<usize>) {
+    let heap_id = neovm_core::tagged::gc::with_tagged_heap(|heap| heap.tagged_heap_identity());
+    let mut owned = vec![0usize; targets.len()];
+    let mut buffered = vec![0usize; targets.len()];
+    let current = std::cell::Cell::new("");
+    eval.trace_roots(
+        heap_id,
+        |roots| {
+            neovm_core::tagged::gc::with_tagged_heap(|heap| {
+                neovm_value::tagged::transport::root_table::collect_shared_root_gc_roots(
+                    heap, roots,
+                );
+            });
+        },
+        &mut |group| current.set(group),
+        &mut |value| {
+            let Some(index) = targets.iter().position(|target| *target == value.bits()) else {
+                return;
+            };
+            match current.get() {
+                "owned_native" => owned[index] += 1,
+                "buffers" => buffered[index] += 1,
+                _ => {}
+            }
+        },
+    );
+    (owned, buffered)
+}
 
 fn check_snapshot_fontification_roots(bounded: bool) {
     let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
@@ -34,11 +68,27 @@ fn check_snapshot_fontification_roots(bounded: bool) {
         eval.symbol_mode(),
         &eval.owned_root_retainer(),
     );
+    let pre_bits: Vec<usize> = snapshot
+        .layout_overlays()
+        .overlays_in_emacs_byte_range(EmacsByteRange::from_usize(0, 64))
+        .iter()
+        .map(|copy| copy.bits())
+        .collect();
+    let (leased_pre, _) = root_group_counts(&eval, &pre_bits);
+    assert!(
+        leased_pre.iter().all(|count| *count > 0),
+        "the pending snapshot must lease every copied overlay"
+    );
     let snapshot = {
         let retained = snapshot.clone();
         drop(snapshot);
         retained
     };
+    let (leased_clone, _) = root_group_counts(&eval, &pre_bits);
+    assert_eq!(
+        leased_clone, leased_pre,
+        "dropping a nonfinal clone must not retire the snapshot lease"
+    );
     let copied = snapshot
         .layout_overlays()
         .overlays_in_emacs_byte_range(EmacsByteRange::from_usize(0, 64));
@@ -98,30 +148,178 @@ fn check_snapshot_fontification_roots(bounded: bool) {
                 "snapshot copied overlay lost across fontification GC; bounded={bounded}"
             );
         }
-        for cell in plist_cells {
+        for cell in &plist_cells {
             assert!(
-                heap.owns_heap_value_for_test(cell),
+                heap.owns_heap_value_for_test(*cell),
                 "snapshot copied plist cell lost across callback GC"
             );
-            assert!(heap.value_is_marked_for_test(cell));
+            assert!(heap.value_is_marked_for_test(*cell));
         }
     });
-    for copy in copied {
+    for copy in &copied {
         assert_eq!(
             snapshot
                 .layout_overlays()
-                .overlay_get_named(copy, Value::symbol("face")),
+                .overlay_get_named(*copy, Value::symbol("face")),
             Some(Value::symbol("bold")),
             "pending view must retain its copied plist after callback GC"
         );
     }
+    // While the first view is held, invalidate one of its copies in the
+    // memo (a live overlay write) and take a second bounded view. The old
+    // copy must survive under the first view's lease, leave the buffer group,
+    // and be physically reclaimed after that view drops; the new copy is
+    // memo-owned until the overlays are cleared.
+    let mut second_addresses: Vec<usize> = Vec::new();
+    let mut second_fresh_bits: Vec<usize> = Vec::new();
+    if bounded {
+        eval.eval_str("(overlay-put (car snapshot-root-overlays) 'face 'italic)")
+            .unwrap();
+        let buffer = eval.buffer_manager().current_buffer().unwrap();
+        let second = LayoutBufferSnapshot::from_buffer_for_window_with_symbols(
+            buffer,
+            eval.variables(),
+            Some((0, 64)),
+            Some((0, 64)),
+            crate::display_property::DisplayPropertyTarget::Terminal,
+            eval.symbol_mode(),
+            &eval.owned_root_retainer(),
+        );
+        let second_copies: Vec<_> = second
+            .layout_overlays()
+            .overlays_in_emacs_byte_range(EmacsByteRange::from_usize(0, 64));
+        let second_bits: Vec<usize> = second_copies.iter().map(|copy| copy.bits()).collect();
+        second_addresses = second_copies
+            .iter()
+            .map(|copy| copy.as_veclike_ptr().unwrap() as usize)
+            .collect();
+        second_fresh_bits = second_bits
+            .iter()
+            .copied()
+            .filter(|bits| !pre_bits.contains(bits))
+            .collect();
+        assert_eq!(
+            second_fresh_bits.len(),
+            1,
+            "one invalidated copy must be fresh"
+        );
+        let (second_leased, second_buffered) = root_group_counts(&eval, &second_bits);
+        assert!(second_leased.iter().all(|count| *count > 0));
+        assert!(second_buffered.iter().all(|count| *count > 0));
+        let (first_leased_now, first_buffered_now) = root_group_counts(&eval, &pre_bits);
+        assert!(
+            first_leased_now.iter().all(|count| *count > 0),
+            "the held view must keep leasing its captured copies"
+        );
+        let evicted = first_buffered_now
+            .iter()
+            .filter(|count| **count == 0)
+            .count();
+        assert_eq!(
+            evicted, 1,
+            "the write must evict exactly the changed memo copy"
+        );
+        drop(second);
+        eval.gc_collect_exact();
+        let (fresh_leased_after, fresh_buffered_after) =
+            root_group_counts(&eval, &second_fresh_bits);
+        assert!(
+            fresh_leased_after.iter().all(|count| *count == 0),
+            "dropping the second view must retire the fresh copy's lease"
+        );
+        assert!(
+            fresh_buffered_after.iter().all(|count| *count > 0),
+            "the bounded memo must own the fresh copy"
+        );
+        // The memo no longer owns the changed old copy. Its header and plist
+        // must still be live under the first view's lease, checked BEFORE any
+        // dereference, and its old value must still read back.
+        neovm_core::tagged::gc::with_tagged_heap(|heap| {
+            for address in &addresses {
+                assert!(
+                    heap.non_cons_object_addrs_contains_for_test(*address),
+                    "a held copy's header was lost after the memo eviction GC"
+                );
+            }
+            for cell in &plist_cells {
+                assert!(
+                    heap.owns_heap_value_for_test(*cell),
+                    "a held copy's plist cell was lost after the memo eviction GC"
+                );
+                assert!(heap.value_is_marked_for_test(*cell));
+            }
+        });
+        for copy in &copied {
+            assert_eq!(
+                snapshot
+                    .layout_overlays()
+                    .overlay_get_named(*copy, Value::symbol("face")),
+                Some(Value::symbol("bold")),
+                "the held view must keep reading its old value after memo eviction"
+            );
+        }
+    }
+
+    // Why each copied overlay is live is as important as whether it is: the
+    // snapshot's native lease and the buffer's bounded range-view memo are
+    // different owners. Re-read the real lease counts before the final drop.
+    let (leased_before, _) = root_group_counts(&eval, &pre_bits);
+    assert!(
+        leased_before.iter().all(|count| *count > 0),
+        "the held snapshot must still lease every copied overlay"
+    );
+
     drop(snapshot);
     eval.gc_collect_exact();
-    neovm_core::tagged::gc::with_tagged_heap(|heap| {
-        for address in addresses {
+    let (leased_after, buffered_after) = root_group_counts(&eval, &pre_bits);
+    assert!(
+        leased_after.iter().all(|count| *count == 0),
+        "dropping the final snapshot must retire every copied overlay lease"
+    );
+    if bounded {
+        // R3 retains range-view copies in the buffer's bounded memo so the
+        // next redisplay can reuse them. Every surviving copy must therefore
+        // be owned by the buffer group; the snapshot lease above is gone.
+        let memo_owned = buffered_after.iter().filter(|count| **count > 0).count();
+        assert_eq!(
+            memo_owned,
+            buffered_after.len() - 1,
+            "the bounded memo must own exactly the unchanged copies (the invalidated one was evicted)"
+        );
+        let evicted_index = buffered_after
+            .iter()
+            .position(|count| *count == 0)
+            .expect("the invalidated copy must have left the memo");
+        neovm_core::tagged::gc::with_tagged_heap(|heap| {
             assert!(
-                !heap.non_cons_object_addrs_contains_for_test(address),
-                "dropping the final pending snapshot must release its copied overlay roots"
+                !heap.non_cons_object_addrs_contains_for_test(addresses[evicted_index]),
+                "the memo-evicted old copy must be reclaimed as soon as its lease drops"
+            );
+        });
+        eval.eval_str(
+            "(mapc #'delete-overlay (append (car (overlay-lists)) (cdr (overlay-lists))))",
+        )
+        .unwrap();
+        eval.gc_collect_exact();
+    } else {
+        assert!(
+            buffered_after.iter().all(|count| *count == 0),
+            "a full snapshot's copies must not be retained by the buffer"
+        );
+        neovm_core::tagged::gc::with_tagged_heap(|heap| {
+            for address in &addresses {
+                assert!(
+                    !heap.non_cons_object_addrs_contains_for_test(*address),
+                    "a full snapshot's copy must be reclaimed as soon as its lease drops"
+                );
+            }
+        });
+    }
+    neovm_core::tagged::gc::with_tagged_heap(|heap| {
+        for address in addresses.iter().chain(second_addresses.iter()) {
+            assert!(
+                !heap.non_cons_object_addrs_contains_for_test(*address),
+                "dropping the final snapshot (and any bounded memo owner) must release its copied overlay roots"
             );
         }
     });
