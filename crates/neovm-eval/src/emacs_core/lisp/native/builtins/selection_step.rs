@@ -1103,11 +1103,13 @@ mod cut4b {
         let form = r#"
 (progn
   (setq c4b-atomic-x 0)
-  (let ((b (make-thread (lambda () (setq c4b-atomic-x 2)))))
-    (let ((a (make-thread (lambda ()
-                            (setq c4b-atomic-x 1)
-                            (neomacs-clipboard-set "atomic")
-                            c4b-atomic-x))))
+  ;; A is queued first, so it runs first while B waits in the ready queue.
+  ;; If the routed hop yields, B runs between A's setq and A's read.
+  (let ((a (make-thread (lambda ()
+                          (setq c4b-atomic-x 1)
+                          (neomacs-clipboard-set "atomic")
+                          c4b-atomic-x))))
+    (let ((b (make-thread (lambda () (setq c4b-atomic-x 2)))))
       (let ((result (thread-join a)))
         (thread-join b)
         result))))
