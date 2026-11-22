@@ -1,8 +1,10 @@
-//! World-owned host-call roots and dormant native transport.
+//! World-owned host-call roots and the serial native transport.
 //!
 //! Host endpoints carry metadata only. Every live root publication remains in
 //! the World's existing root owner, including when no Lisp owner is parked.
-//! This module installs no native adapter and does not admit hosted Green.
+//! The only installed adapter is the selection family (C4b): main borrows its
+//! display host and executes a typed request. The other families and hosted
+//! admission remain later cuts (C4c).
 
 use super::super::world::{Baton, WorldLease};
 use super::scheduler::ThreadKey;
@@ -28,6 +30,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 mod owner_steps;
 mod pending;
 mod registered_payload;
+mod selection;
 pub(super) use owner_steps::StepKey;
 use registered_payload::RegisteredPayload;
 mod pump;

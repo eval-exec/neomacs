@@ -17,6 +17,8 @@ use super::scheduler::{
     ThreadKey, Wait, Wake,
 };
 use crate::host_effect::contracts::OwnedNativeData;
+use crate::host_effect::native_outcome::{CancelReason, NativeOutcome, NativeReply};
+use crate::host_effect::selection::{SelectionReply, SelectionRequest};
 use crate::host_effect::wake::native_wait::{NativeWaitHandoff, RealWaitPermit};
 use neovm_value::error::LispCondition;
 use neovm_value::error::signal;
@@ -27,6 +29,59 @@ use std::time::{Duration, Instant};
 
 #[doc(hidden)]
 pub use crate::host_effect::wake::SelectTurn;
+
+/// A selection request's terminal, decoded on the requesting owner.
+enum SelectionTerminal {
+    Reply(SelectionReply),
+    Interrupted(CancelReason),
+    HostClosed,
+}
+
+/// Decode the native settlement of a selection host request. The service's
+/// executor sends exactly one `SelectionReply`; any other payload at this
+/// point is a service invariant violation, not a Lisp condition.
+fn decode_selection_settlement(
+    _owner: &RestoredHostOwner<'_>,
+    settlement: &NativeSettlement,
+) -> Result<SelectionTerminal, Flow> {
+    let outcome = match settlement {
+        NativeSettlement::Completed(outcome) => outcome,
+        NativeSettlement::CompletedAfterCancellation { outcome, .. } => outcome,
+    };
+    match outcome {
+        NativeOutcome::Reply(NativeReply::Returned(OwnedNativeData::SelectionReply(reply))) => {
+            Ok(SelectionTerminal::Reply(reply.clone()))
+        }
+        NativeOutcome::Reply(NativeReply::LispError(OwnedNativeData::SelectionReply(
+            SelectionReply::HostError(message),
+        ))) => Ok(SelectionTerminal::Reply(SelectionReply::HostError(
+            message.clone(),
+        ))),
+        NativeOutcome::Interrupted(reason) => Ok(SelectionTerminal::Interrupted(*reason)),
+        NativeOutcome::HostClosed => Ok(SelectionTerminal::HostClosed),
+        other => {
+            tracing::error!(
+                ?other,
+                "selection settlement carried a foreign native payload"
+            );
+            Err(selection_internal_error(
+                "selection settlement payload does not match the request",
+            ))
+        }
+    }
+}
+
+/// The existing invariant-violation shape: a debug assertion, an error log,
+/// and a signal that names itself internal, so it cannot be read as GNU
+/// behavior.
+fn selection_internal_error(message: &str) -> Flow {
+    debug_assert!(false, "selection host invariant: {message}");
+    tracing::error!(message, "selection host invariant violated");
+    signal(
+        LispCondition::Error,
+        vec![Value::string(format!("neovm internal error: {message}"))],
+    )
+}
 
 /// What the scheduler concluded when no owner could run.
 enum DeadlockVerdict {
@@ -140,6 +195,10 @@ pub struct MainNativeHandoff<'native> {
     receiver: &'native mut OwnerReceive,
     wait_end: Instant,
     authority: MainWaitAuthority,
+    /// The display host main attached, if any. Native waits run unhosted too
+    /// (batch select/sleep), so this is optional; a hosted session keeps it
+    /// available across the wait so a worker's service turn can be served.
+    host: Option<&'native mut (dyn crate::emacs_core::eval::protocol::DisplayHost + 'static)>,
 }
 
 impl NativeWaitHandoff for MainNativeHandoff<'_> {
@@ -165,8 +224,14 @@ impl NativeWaitHandoff for MainNativeHandoff<'_> {
         let wake = self
             .control
             .reacquire_main_wait(release, self.receiver.as_channel());
+        let MainNativeHandoff {
+            control,
+            receiver,
+            host,
+            ..
+        } = self;
         self.authority = MainWaitAuthority::Held(
-            receive_owner_turn(ThreadKey::Main, wake, self.control, self.receiver)
+            receive_owner_turn(ThreadKey::Main, wake, control, receiver, host)
                 .into_ordinary_baton(),
         );
     }
@@ -289,6 +354,15 @@ impl Context {
         self.green_seat().map(|seat| seat.key)
     }
 
+    /// Whether this owner is a non-main Green worker. Read-only: no seat,
+    /// receiver or Baton access, so a builtin selector can call it.
+    pub(crate) fn is_green_worker_owner(&self) -> bool {
+        self.owner
+            .slab()
+            .and_then(|slab| slab.green_seat())
+            .is_some_and(|seat| seat.key != ThreadKey::Main)
+    }
+
     /// Seat this owner, which holds BATON, in the runtime CONTROL as KEY.
     pub(crate) fn take_green_seat(
         &mut self,
@@ -310,6 +384,22 @@ impl Context {
                 #[cfg(feature = "jit")]
                 parked_jit_scratch: Default::default(),
             }));
+    }
+
+    /// Install the hosted main's real native adapter on this owner's pump.
+    /// False when this owner is not the seated main (a worker, or no Green
+    /// runtime yet); the caller degrades to `HostClosed` rather than aborting.
+    pub(crate) fn install_main_host_effects(&mut self) -> bool {
+        let Some(seat) = self.green_seat() else {
+            return false;
+        };
+        if seat.key != ThreadKey::Main {
+            return false;
+        }
+        let Some(receiver) = seat.receiver.as_mut() else {
+            return false;
+        };
+        receiver.install_host_effects()
     }
 
     /// Copy every root only this owner holds: its private execution state
@@ -491,10 +581,6 @@ impl Context {
 
     /// One suspendable routed turn. The immutable terminal decoder is invoked
     /// only when native semantic completion has actually settled the parent.
-    #[allow(
-        dead_code,
-        reason = "owned host adapters are installed in a later range"
-    )]
     #[cold]
     pub(crate) fn green_host_call_turn<R>(
         &mut self,
@@ -536,6 +622,74 @@ impl Context {
                 ParkCompletion::Ordinary | ParkCompletion::MainNative(_) => std::process::abort(),
             },
         )
+    }
+
+    /// Route one selection host request from a non-main owner to the owning
+    /// main owner and decode its settlement. The request is already converted
+    /// (arity, nil/string/other, result and error construction stay on this
+    /// caller); no Lisp value crosses and the published root batch is empty.
+    ///
+    /// GNU raises a pending `thread-signal` when the global lock is
+    /// reacquired (`post_acquire_global_lock`, src/thread.c:141-154); this
+    /// call therefore raises it before returning a value. A signal that the
+    /// cancellation reported but that is no longer pending is an internal
+    /// invariant violation, never a Lisp error.
+    #[cold]
+    pub(crate) fn green_host_selection(
+        &mut self,
+        request: SelectionRequest,
+    ) -> Result<SelectionReply, Flow> {
+        // SAFETY: no Lisp value crosses; this original owner holds the Baton
+        // and the sole mutator, and the extent publishes no roots (capacity
+        // 0). No Lisp, collection or ownership handoff runs here.
+        let call = match unsafe { self.green_prepare_host_call(&[]) } {
+            Ok(call) => call,
+            Err(error) => {
+                tracing::error!(?error, "selection host request was not prepared");
+                return Err(signal(
+                    LispCondition::Error,
+                    vec![Value::string(error.to_string())],
+                ));
+            }
+        };
+        let turn = self.green_host_call_turn(
+            call,
+            OwnedNativeData::SelectionRequest(request),
+            decode_selection_settlement,
+        )?;
+        match turn {
+            HostOwnerTurn::Final(SelectionTerminal::Reply(reply)) => Ok(reply),
+            HostOwnerTurn::Final(SelectionTerminal::HostClosed) => Err(signal(
+                LispCondition::Error,
+                vec![Value::string("Display host is closed")],
+            )),
+            HostOwnerTurn::Final(SelectionTerminal::Interrupted(reason)) => match reason {
+                CancelReason::TargetSignal | CancelReason::TargetQuit => {
+                    let key = self.green_key().expect("a routed owner is seated");
+                    self.green_raise_pending_signal(key)?;
+                    // A cancellation that reports a target signal while no
+                    // signal is pending is an internal inconsistency; a Lisp
+                    // error here would be mistaken for GNU behavior.
+                    Err(selection_internal_error(
+                        "target signal vanished before its delivery point",
+                    ))
+                }
+                CancelReason::OwnerEnded => Err(signal(
+                    LispCondition::Error,
+                    vec![Value::string("Host request interrupted: owner ended")],
+                )),
+                CancelReason::SessionClosing => Err(signal(
+                    LispCondition::Error,
+                    vec![Value::string("Host request interrupted: session closing")],
+                )),
+            },
+            HostOwnerTurn::NeedOwner(_) => {
+                tracing::error!(
+                    "selection host request produced an owner step, but its direct body runs no Lisp"
+                );
+                std::process::abort()
+            }
+        }
     }
 
     pub(crate) fn green_park_impl<R>(
@@ -681,6 +835,9 @@ impl Context {
                     receiver: &mut receiver,
                     wait_end,
                     authority: MainWaitAuthority::Held(baton),
+                    host: self.display_host.as_mut().map(|host| {
+                        &mut **host as &mut dyn crate::emacs_core::eval::protocol::DisplayHost
+                    }),
                 };
                 let result = wait.wait_with(&mut handoff);
                 (Ok(Wake::Resume(handoff.into_baton())), None, Some(result))
@@ -717,8 +874,12 @@ impl Context {
         };
         // A service turn must not restore main's Lisp continuation, JIT pins,
         // bindings or TLS, or consume its original semantic Wait.
+        let mut host = self
+            .display_host
+            .as_mut()
+            .map(|host| &mut **host as &mut dyn crate::emacs_core::eval::protocol::DisplayHost);
         let RestoringTurn { baton, disposition } =
-            receive_owner_turn(key, wake, &control, &mut receiver);
+            receive_owner_turn(key, wake, &control, &mut receiver, &mut host);
         // Only the returning continuation refreshes its private dispatch
         // header from canonical cells. A peer's function write updates its own
         // header, so comparing our stale header would miss that redefinition.
@@ -1441,6 +1602,14 @@ impl Context {
         control.install_select(crate::emacs_core::eval::process_hooks::select_handle(self));
         let receiver = control.register_main();
         self.take_green_seat(ThreadKey::Main, control, receiver, baton);
+        // A host attached before Green start marks the World hosted; seat
+        // main's adapter now that the pump exists. Without a host this is a
+        // no-op and every host request settles closed.
+        if self.in_hosted_green_session() && !self.install_main_host_effects() {
+            tracing::warn!(
+                "hosted Green session started without a native host adapter; host requests will settle closed"
+            );
+        }
         Ok(())
     }
 
@@ -1458,6 +1627,7 @@ fn receive_owner_turn(
     mut wake: Wake,
     control: &Control,
     receiver: &mut OwnerReceive,
+    host: &mut Option<&mut (dyn crate::emacs_core::eval::protocol::DisplayHost + 'static)>,
 ) -> RestoringTurn {
     let _abort_on_panic = AbortOnPanic;
     loop {
@@ -1475,7 +1645,12 @@ fn receive_owner_turn(
                     tracing::error!(?key, "native continuation addressed a non-main owner");
                     std::process::abort();
                 }
-                receiver.continue_owner_step(parent, baton, control)
+                receiver.continue_owner_step(
+                    parent,
+                    baton,
+                    control,
+                    host.as_mut().map(|host| &mut **host),
+                )
             }
             Wake::ServiceTurn {
                 key: request,
@@ -1485,14 +1660,19 @@ fn receive_owner_turn(
                     tracing::error!(?key, "native service addressed a non-main owner");
                     std::process::abort();
                 }
-                receiver.serve(request, baton, control)
+                receiver.serve(
+                    request,
+                    baton,
+                    control,
+                    host.as_mut().map(|host| &mut **host),
+                )
             }
             Wake::NativePump { baton } => {
                 if key != ThreadKey::Main {
                     tracing::error!(?key, "native pump addressed a non-main owner");
                     std::process::abort();
                 }
-                receiver.drive(baton, control)
+                receiver.drive(baton, control, host.as_mut().map(|host| &mut **host))
             }
         };
         match result {
@@ -1592,7 +1772,10 @@ pub(super) fn run_carrier_job(
         neovm_value::tagged::gc::carrier_heap_is_acceptable_for_job_start(),
         "carrier job starts with a stale TAGGED_HEAP TLS pointer"
     );
-    let mut baton = receive_owner_turn(key, wake, &control, &mut receiver).into_ordinary_baton();
+    let mut no_host: Option<&mut (dyn crate::emacs_core::eval::protocol::DisplayHost + 'static)> =
+        None;
+    let mut baton =
+        receive_owner_turn(key, wake, &control, &mut receiver, &mut no_host).into_ordinary_baton();
     baton.enter();
     set_job_thread_name(key);
     #[cfg(feature = "jit")]

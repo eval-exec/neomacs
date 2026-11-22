@@ -116,6 +116,12 @@ struct World {
     /// allocation, taken once by the main owner's hosted activation, and kept
     /// off every builtin path by its visibility.
     activation_authority: Cell<Option<super::activation::ActivationAuthority>>,
+    /// Set once by the main owner's hosted cold activation. A worker owner
+    /// reads it to choose the routed host arm for a host-affine primitive:
+    /// without it an unhosted Green session must keep the serial TLS-cache
+    /// path. Written and read under the Baton; never cleared (there is no
+    /// host detach, and a rolled-back session is still hosted).
+    hosted_session: Cell<bool>,
 }
 
 impl Drop for World {
@@ -156,6 +162,18 @@ impl WorldLease {
         &self,
     ) -> Option<super::activation::ActivationAuthority> {
         self.0.activation_authority.take()
+    }
+
+    /// Mark this World's hosted Green session. Only the main owner's cold
+    /// activation writes it, before it takes the authority; a re-attach after
+    /// the authority is consumed still marks the session hosted.
+    pub(in crate::emacs_core::eval) fn mark_hosted_session(&self) {
+        self.0.hosted_session.set(true);
+    }
+
+    /// Whether the main owner's cold activation marked this World hosted.
+    pub(in crate::emacs_core::eval) fn hosted_session(&self) -> bool {
+        self.0.hosted_session.get()
     }
 }
 
@@ -1361,6 +1379,7 @@ impl WorldStorageBuilder {
             activation_authority: Cell::new(Some(unsafe {
                 super::activation::ActivationAuthority::mint()
             })),
+            hosted_session: Cell::new(false),
         }));
         // Reinstall the upstream TLS slot from the finalized heap's root
         // before any allocation-capable Context setup resumes. The root (not
@@ -1493,6 +1512,22 @@ impl Context {
         &self,
     ) -> Option<super::activation::ActivationAuthority> {
         self.obarray.lease.take_activation_authority()
+    }
+
+    /// Whether this World has a hosted Green session: main's cold activation
+    /// marked it before installing the Local selection arm. Read by the
+    /// owner selector to route a host-affine worker call; false for Sim,
+    /// unhosted Green and every batch session.
+    #[inline]
+    pub(crate) fn in_hosted_green_session(&self) -> bool {
+        self.obarray.lease.hosted_session()
+    }
+
+    /// Mark the session hosted. Only the main owner's cold activation calls
+    /// this (`activation_owner.rs`).
+    #[cold]
+    pub(in crate::emacs_core::eval) fn mark_hosted_session(&self) {
+        self.obarray.lease.mark_hosted_session()
     }
 
     /// Fix the World's threading mode. Only construction calls this, before

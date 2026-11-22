@@ -10,7 +10,7 @@ pub enum SelectionInstaller {
     InlineSerialMain,
     /// Hosted main owner: the local owner turn calls the direct body.
     OwnedLocalMain,
-    /// Worker-boundary install point. Never installed by cut-4a; the step
-    /// driver aborts cold if it is reached before the C4b boundary lands.
+    /// Worker boundary (C4b): the caller keeps arity, conversion and the Lisp
+    /// result, and only a typed selection request crosses to the host owner.
     OwnedRoutedWorker,
 }

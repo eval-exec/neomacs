@@ -41,8 +41,15 @@ impl Context {
         if matches!(self.green_key(), Some(super::green::ThreadKey::Worker(_))) {
             return Err(HostSessionActivationError::NotMainOwner);
         }
+        // Mark before the authority take: a re-attach after the one-shot
+        // authority was consumed is still a hosted session, and workers must
+        // route on the marker rather than fall back to a thread-local cache.
+        self.mark_hosted_session();
         match self.selection_phase() {
-            SelectionPhase::Local => return Ok(()),
+            SelectionPhase::Local => {
+                self.install_hosted_main_adapter();
+                return Ok(());
+            }
             // Only a routed owner can reach these; a routed owner is never
             // this main activation path.
             SelectionPhase::Routed | SelectionPhase::AwaitingRollback => return Ok(()),
@@ -54,7 +61,21 @@ impl Context {
             return Err(HostSessionActivationError::NotMainOwner);
         };
         match self.activate_selection_local(&authority) {
-            Ok(()) | Err(ActivateError::AlreadyInstalled) => Ok(()),
+            Ok(()) | Err(ActivateError::AlreadyInstalled) => {
+                self.install_hosted_main_adapter();
+                Ok(())
+            }
+        }
+    }
+
+    /// Attach the hosted main's native adapter when the pump already exists
+    /// (host attached after Green start). Before start the marker is enough;
+    /// `start_green_threads` installs it once main is seated.
+    fn install_hosted_main_adapter(&mut self) {
+        if self.green_seat().is_some() && !self.install_main_host_effects() {
+            tracing::warn!(
+                "hosted Green activation could not install the native host adapter; host requests will settle closed"
+            );
         }
     }
 

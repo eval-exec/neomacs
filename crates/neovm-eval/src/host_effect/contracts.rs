@@ -183,6 +183,10 @@ pub enum OwnedNativeData {
     Text(String),
     Bytes(Vec<u8>),
     Truth(NativeTruth),
+    /// A selection request, already converted by the calling Lisp thread.
+    SelectionRequest(crate::host_effect::selection::SelectionRequest),
+    /// A selection reply, converted back by the requesting Lisp thread.
+    SelectionReply(crate::host_effect::selection::SelectionReply),
 }
 
 /// A native truth result has explicit meaning at the owned boundary.

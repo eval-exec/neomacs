@@ -1,14 +1,18 @@
 //! Lowering driver for the five clipboard and primary stubs.
 //!
 //! The owner's installed [`SelectionPhase`](crate::emacs_core::eval::activation::SelectionPhase)
-//! selects the arm. `Uninstalled` is the serial direct call; `Local` is the
+//! selects the arm. `Uninstalled` is the serial direct call, except that a
+//! non-main Green owner in a hosted session routes; `Local` is the
 //! synchronous local owner turn, which is the same direct body; `Routed` is
-//! the C4b worker boundary and is not installed by this slice. Each public
+//! the C4b worker boundary, where arity, conversion and the Lisp result stay
+//! on the caller and only a typed `SelectionRequest` crosses. Each public
 //! stub unwraps [`SelectionStep::Done`]. There is no TLS read or env test in
 //! this module. The direct bodies keep the cache they already had.
 
-use neovm_value::error::EvalResult;
-use neovm_value::value::Value;
+use neovm_value::error::{EvalResult, Flow, expect_args, signal};
+use neovm_value::value::{Value, ValueKind};
+
+use crate::host_effect::selection::{SelectionOwnerReply, SelectionReply, SelectionRequest};
 
 use super::{
     direct_neomacs_clipboard_get, direct_neomacs_clipboard_set,
@@ -35,34 +39,118 @@ impl<T> SelectionStep<T> {
     }
 }
 
-/// Which lowering the owner installed. The installed phase is the single
-/// source of truth, so the phase and the lowering cannot disagree.
+/// Which lowering the owner installed. The phase is the per-owner source of
+/// truth; a non-main Green owner never installs one, so a hosted session is
+/// the World-level fact that routes it. Phase and lowering cannot disagree:
+/// both are derived from the same session state.
 #[inline]
 pub(super) fn installed(ctx: &crate::emacs_core::eval::Context) -> SelectionInstaller {
     use crate::emacs_core::eval::activation::SelectionPhase;
     match ctx.selection_phase() {
-        SelectionPhase::Uninstalled => SelectionInstaller::InlineSerialMain,
         SelectionPhase::Local => SelectionInstaller::OwnedLocalMain,
-        // Only a routed owner reaches these. The routed arm is the C4b worker
-        // boundary; until it lands, the driver refuses cold rather than
-        // running a host call on the wrong thread.
         SelectionPhase::Routed | SelectionPhase::AwaitingRollback => {
             SelectionInstaller::OwnedRoutedWorker
+        }
+        // A worker has no per-owner activation; only a hosted World routes
+        // it. Unhosted Green keeps the thread-local cache, exactly as before.
+        SelectionPhase::Uninstalled => {
+            if ctx.is_green_worker_owner() && ctx.in_hosted_green_session() {
+                SelectionInstaller::OwnedRoutedWorker
+            } else {
+                SelectionInstaller::InlineSerialMain
+            }
         }
     }
 }
 
-/// The routed arm is installed by the C4b worker boundary, not by cut-4a.
-/// Reaching it means a routed owner ran the direct path; that is a service
-/// bug, and the existing service code aborts on the same class of state.
+/// A host error crosses back as the direct body's exact signal.
 #[cold]
-#[inline(never)]
-fn routed_worker_boundary_not_installed() -> ! {
-    tracing::error!(
-        target: "neovm::eval::selection",
-        "routed selection arm reached before the C4b worker boundary was installed"
+fn host_error(message: String) -> Flow {
+    signal("error", vec![Value::string(message)])
+}
+
+/// A reply of the wrong family is a service invariant violation, never a
+/// Lisp-visible result.
+#[cold]
+fn reply_mismatch(reply: &SelectionReply) -> Flow {
+    debug_assert!(
+        false,
+        "selection reply does not match its request: {reply:?}"
     );
-    std::process::abort()
+    tracing::error!(?reply, "selection reply does not match its request");
+    signal(
+        "error",
+        vec![Value::string(
+            "neovm internal error: selection reply does not match its request",
+        )],
+    )
+}
+
+/// Set-argument semantics, identical to `direct_neomacs_*_set`: nil clears,
+/// a string is converted lossily, anything else is printed on this caller.
+fn selection_text(name: &'static str, args: &[Value]) -> Result<Option<String>, Flow> {
+    expect_args(name, args, 1)?;
+    Ok(match args[0].kind() {
+        ValueKind::Nil => None,
+        ValueKind::String => args[0]
+            .as_lisp_string()
+            .map(|ls| neovm_value::emacs_char::to_utf8_lossy(ls.as_bytes())),
+        _ => Some(format!("{}", args[0])),
+    })
+}
+
+#[cold]
+fn routed_set(
+    ctx: &mut crate::emacs_core::eval::Context,
+    args: Vec<Value>,
+    name: &'static str,
+    request: impl FnOnce(Option<String>) -> SelectionRequest,
+) -> EvalResult {
+    let text = selection_text(name, &args)?;
+    match ctx.green_host_selection(request(text)) {
+        Ok(SelectionReply::Set) => Ok(Value::NIL),
+        Ok(SelectionReply::HostError(message)) => Err(host_error(message)),
+        Ok(other) => Err(reply_mismatch(&other)),
+        Err(flow) => Err(flow),
+    }
+}
+
+#[cold]
+fn routed_text(
+    ctx: &mut crate::emacs_core::eval::Context,
+    args: Vec<Value>,
+    name: &'static str,
+    clipboard: bool,
+    request: SelectionRequest,
+) -> EvalResult {
+    expect_args(name, &args, 0)?;
+    match ctx.green_host_selection(request) {
+        Ok(SelectionReply::Clipboard(text)) if clipboard => {
+            Ok(text.map(Value::string).unwrap_or(Value::NIL))
+        }
+        Ok(SelectionReply::Primary(text)) if !clipboard => {
+            Ok(text.map(Value::string).unwrap_or(Value::NIL))
+        }
+        Ok(SelectionReply::HostError(message)) => Err(host_error(message)),
+        Ok(other) => Err(reply_mismatch(&other)),
+        Err(flow) => Err(flow),
+    }
+}
+
+#[cold]
+fn routed_owner(ctx: &mut crate::emacs_core::eval::Context, args: Vec<Value>) -> EvalResult {
+    expect_args("neomacs-primary-selection-owner", &args, 0)?;
+    match ctx.green_host_selection(SelectionRequest::PrimaryOwner) {
+        Ok(SelectionReply::Owner(owner)) => Ok(Value::symbol(match owner {
+            SelectionOwnerReply::ThisProcess => "this-process",
+            SelectionOwnerReply::OtherProcess => "other-process",
+            SelectionOwnerReply::None => "none",
+            SelectionOwnerReply::Unknown => "unknown",
+        })),
+        Ok(SelectionReply::HostError(message)) => Err(host_error(message)),
+        Ok(other) => Err(reply_mismatch(&other)),
+        Err(flow) => Err(flow),
+    }
 }
 
 #[inline(always)]
@@ -77,7 +165,12 @@ pub(super) fn clipboard_set(
         SelectionInstaller::InlineSerialMain | SelectionInstaller::OwnedLocalMain => {
             SelectionStep::Done(direct_neomacs_clipboard_set(ctx, args))
         }
-        SelectionInstaller::OwnedRoutedWorker => routed_worker_boundary_not_installed(),
+        SelectionInstaller::OwnedRoutedWorker => SelectionStep::Done(routed_set(
+            ctx,
+            args,
+            "neomacs-clipboard-set",
+            SelectionRequest::ClipboardSet,
+        )),
     }
 }
 
@@ -93,7 +186,13 @@ pub(super) fn clipboard_get(
         SelectionInstaller::InlineSerialMain | SelectionInstaller::OwnedLocalMain => {
             SelectionStep::Done(direct_neomacs_clipboard_get(ctx, args))
         }
-        SelectionInstaller::OwnedRoutedWorker => routed_worker_boundary_not_installed(),
+        SelectionInstaller::OwnedRoutedWorker => SelectionStep::Done(routed_text(
+            ctx,
+            args,
+            "neomacs-clipboard-get",
+            true,
+            SelectionRequest::ClipboardGet,
+        )),
     }
 }
 
@@ -109,7 +208,12 @@ pub(super) fn primary_selection_set(
         SelectionInstaller::InlineSerialMain | SelectionInstaller::OwnedLocalMain => {
             SelectionStep::Done(direct_neomacs_primary_selection_set(ctx, args))
         }
-        SelectionInstaller::OwnedRoutedWorker => routed_worker_boundary_not_installed(),
+        SelectionInstaller::OwnedRoutedWorker => SelectionStep::Done(routed_set(
+            ctx,
+            args,
+            "neomacs-primary-selection-set",
+            SelectionRequest::PrimarySet,
+        )),
     }
 }
 
@@ -125,7 +229,13 @@ pub(super) fn primary_selection_get(
         SelectionInstaller::InlineSerialMain | SelectionInstaller::OwnedLocalMain => {
             SelectionStep::Done(direct_neomacs_primary_selection_get(ctx, args))
         }
-        SelectionInstaller::OwnedRoutedWorker => routed_worker_boundary_not_installed(),
+        SelectionInstaller::OwnedRoutedWorker => SelectionStep::Done(routed_text(
+            ctx,
+            args,
+            "neomacs-primary-selection-get",
+            false,
+            SelectionRequest::PrimaryGet,
+        )),
     }
 }
 
@@ -141,7 +251,7 @@ pub(super) fn primary_selection_owner(
         SelectionInstaller::InlineSerialMain | SelectionInstaller::OwnedLocalMain => {
             SelectionStep::Done(direct_neomacs_primary_selection_owner(ctx, args))
         }
-        SelectionInstaller::OwnedRoutedWorker => routed_worker_boundary_not_installed(),
+        SelectionInstaller::OwnedRoutedWorker => SelectionStep::Done(routed_owner(ctx, args)),
     }
 }
 
@@ -299,40 +409,45 @@ mod tests {
             (
                 "fn clipboard_set(",
                 "SelectionStep::Done(direct_neomacs_clipboard_set(ctx, args))",
+                "SelectionStep::Done(routed_set(",
             ),
             (
                 "fn clipboard_get(",
                 "SelectionStep::Done(direct_neomacs_clipboard_get(ctx, args))",
+                "SelectionStep::Done(routed_text(",
             ),
             (
                 "fn primary_selection_set(",
                 "SelectionStep::Done(direct_neomacs_primary_selection_set(ctx, args))",
+                "SelectionStep::Done(routed_set(",
             ),
             (
                 "fn primary_selection_get(",
                 "SelectionStep::Done(direct_neomacs_primary_selection_get(ctx, args))",
+                "SelectionStep::Done(routed_text(",
             ),
             (
                 "fn primary_selection_owner(",
                 "SelectionStep::Done(direct_neomacs_primary_selection_owner(ctx, args))",
+                "SelectionStep::Done(routed_owner(",
             ),
         ];
         assert_eq!(driver.matches("match installer").count(), arms.len());
         assert_eq!(arms.len(), SERIAL_CLIPBOARD_ENTRIES.len());
-        for (signature, call) in arms {
+        for (signature, call, routed) in arms {
             let start = driver.find(signature).expect(signature);
             let rest = &driver[start..];
             let close = rest.find("\n}").expect("function end");
             let function = &rest[..=close + 1];
-            // Two arms: serial|local lowers to the direct call, routed aborts
-            // cold until the C4b worker boundary installs it.
+            // Two arms: serial|local lowers to the direct call, routed to the
+            // typed host-request helper. No cold abort remains.
             assert_eq!(function.matches("=>").count(), 2, "{signature}");
             assert!(
                 function.contains(call)
-                    && function
-                        .contains("OwnedRoutedWorker => routed_worker_boundary_not_installed()")
+                    && function.contains(routed)
+                    && !function.contains("routed_worker_boundary_not_installed")
                     && !function.contains("if "),
-                "{signature} must lower to {call}"
+                "{signature} must lower to {call} and route through {routed}"
             );
         }
         let stubs = include_str!("stubs.rs");
@@ -727,7 +842,7 @@ mod tests {
 /// the direct body writes the worker's TLS cache instead. These rows fail on
 /// that tip and pass once the routed boundary is installed.
 #[cfg(test)]
-mod cut4b_red {
+mod cut4b {
     use super::super::{
         builtin_neomacs_clipboard_get, builtin_neomacs_clipboard_set,
         builtin_neomacs_primary_selection_get, builtin_neomacs_primary_selection_owner,
@@ -745,7 +860,7 @@ mod cut4b_red {
         clipboard: Option<String>,
         primary: Option<String>,
         owner: Option<SelectionOwner>,
-        fail_clipboard: Option<String>,
+        fail: Option<String>,
     }
 
     #[derive(Clone, Default)]
@@ -769,7 +884,7 @@ mod cut4b_red {
         }
 
         fn set_clipboard_text(&mut self, text: Option<&str>) -> Result<(), String> {
-            if let Some(error) = self.state.borrow().fail_clipboard.clone() {
+            if let Some(error) = self.state.borrow().fail.clone() {
                 return Err(error);
             }
             self.state.borrow_mut().clipboard = text.map(str::to_owned);
@@ -777,19 +892,31 @@ mod cut4b_red {
         }
 
         fn clipboard_text(&mut self) -> Result<Option<String>, String> {
+            if let Some(error) = self.state.borrow().fail.clone() {
+                return Err(error);
+            }
             Ok(self.state.borrow().clipboard.clone())
         }
 
         fn set_primary_selection_text(&mut self, text: Option<&str>) -> Result<(), String> {
+            if let Some(error) = self.state.borrow().fail.clone() {
+                return Err(error);
+            }
             self.state.borrow_mut().primary = text.map(str::to_owned);
             Ok(())
         }
 
         fn primary_selection_text(&mut self) -> Result<Option<String>, String> {
+            if let Some(error) = self.state.borrow().fail.clone() {
+                return Err(error);
+            }
             Ok(self.state.borrow().primary.clone())
         }
 
         fn primary_selection_owner(&mut self) -> Result<SelectionOwner, String> {
+            if let Some(error) = self.state.borrow().fail.clone() {
+                return Err(error);
+            }
             Ok(self.state.borrow().owner.unwrap_or(SelectionOwner::None))
         }
     }
@@ -797,10 +924,8 @@ mod cut4b_red {
     /// A real Green runtime, then a host attached (so the C4c refusal is not
     /// hit), then Lisp runs as main. The worker is a real owner carrier.
     fn hosted_green_context() -> (Context, Rc<RefCell<ClipboardState>>) {
-        let mut ctx = Context::new_with_threading(
-            ThreadingMode::Green,
-            crate::test_utils::unit_runtime(),
-        );
+        let mut ctx =
+            Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
         ctx.start_green_threads().expect("green runtime starts");
         let state = Rc::new(RefCell::new(ClipboardState::default()));
         ctx.set_display_host(Box::new(SharedClipboardHost {
@@ -811,6 +936,43 @@ mod cut4b_red {
 
     fn worker(form: &str) -> String {
         format!("(thread-join (make-thread (lambda () {form})))")
+    }
+
+    fn serial_context() -> (Context, Rc<RefCell<ClipboardState>>) {
+        let mut ctx = Context::new(crate::test_utils::unit_runtime());
+        let state = Rc::new(RefCell::new(ClipboardState::default()));
+        ctx.set_display_host(Box::new(SharedClipboardHost {
+            state: Rc::clone(&state),
+        }));
+        (ctx, state)
+    }
+
+    /// Print one case's outcome and the host state it left, so the serial and
+    /// routed lowerings are compared on both the Lisp answer and the effect.
+    fn case_result(
+        ctx: &mut Context,
+        state: &Rc<RefCell<ClipboardState>>,
+        expr: &str,
+        fail: Option<&str>,
+        owner: Option<SelectionOwner>,
+        routed: bool,
+    ) -> String {
+        *state.borrow_mut() = ClipboardState {
+            fail: fail.map(str::to_owned),
+            owner,
+            ..ClipboardState::default()
+        };
+        let guarded = format!("(condition-case e {expr} (error (list 'caught (car e) (cdr e))))");
+        let form = if routed { worker(&guarded) } else { guarded };
+        let out = ctx.eval_str(&form).expect("selection case evaluates");
+        let state = state.borrow();
+        format!(
+            "{}|{:?}|{:?}|{:?}",
+            print_value(&out),
+            state.clipboard,
+            state.primary,
+            state.owner.map(|owner| format!("{owner:?}")),
+        )
     }
 
     #[test]
@@ -871,7 +1033,7 @@ mod cut4b_red {
     #[test]
     fn routed_worker_host_error_is_the_direct_body_signal() {
         let (mut ctx, state) = hosted_green_context();
-        state.borrow_mut().fail_clipboard = Some("boom".to_string());
+        state.borrow_mut().fail = Some("boom".to_string());
         let form = worker(
             r#"(condition-case e (neomacs-clipboard-set "x") (error (list 'caught (car e) (cdr e))))"#,
         );
@@ -892,5 +1054,121 @@ mod cut4b_red {
         assert_eq!(got, Value::string("pmain"));
         let owner = builtin_neomacs_primary_selection_owner(&mut ctx, vec![]).unwrap();
         assert_eq!(print_value(&owner), "none");
+    }
+
+    #[test]
+    fn selector_matrix_on_real_owners() {
+        use super::{SelectionInstaller, installed};
+        use crate::emacs_core::eval::activation::ActivationAuthority;
+
+        // Build every non-Green Context before the Green runtime starts: a
+        // Context constructed afterwards would register subrs after the
+        // runtime captured the tables (bootstrap's debug assertion).
+        let serial = Context::new(crate::test_utils::unit_runtime());
+        assert_eq!(installed(&serial), SelectionInstaller::InlineSerialMain);
+
+        let mut routed = Context::new(crate::test_utils::unit_runtime());
+        routed
+            .activate_selection_routed(&ActivationAuthority::mint_for_test())
+            .unwrap();
+        assert_eq!(installed(&routed), SelectionInstaller::OwnedRoutedWorker);
+
+        let (hosted, _state) = hosted_green_context();
+        assert_eq!(installed(&hosted), SelectionInstaller::OwnedLocalMain);
+    }
+
+    #[test]
+    fn unhosted_green_worker_keeps_the_thread_local_cache() {
+        let mut ctx =
+            Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
+        ctx.start_green_threads().expect("green runtime starts");
+        let out = ctx
+            .eval_str(&worker(
+                r#"(progn (neomacs-clipboard-set "cache") (neomacs-clipboard-get))"#,
+            ))
+            .expect("worker cache round-trip");
+        assert_eq!(out, Value::string("cache"));
+        // No host was attached: the worker used its own cache and the World
+        // is not marked hosted. The serial default is unchanged.
+        assert!(!ctx.in_hosted_green_session());
+    }
+
+    #[test]
+    fn routed_and_serial_lowerings_agree_on_every_entry() {
+        use crate::host_effect::selection::SelectionRequest;
+
+        let (mut serial, serial_state) = serial_context();
+        let (mut routed, routed_state) = hosted_green_context();
+
+        let mut cases: Vec<(String, Option<&str>, Option<SelectionOwner>)> = Vec::new();
+        for input in ["nil", "\"ascii\"", "\"λμ\"", "'sym", "42", "'(a b)"] {
+            cases.push((format!("(neomacs-clipboard-set {input})"), None, None));
+            cases.push((
+                format!("(neomacs-primary-selection-set {input})"),
+                None,
+                None,
+            ));
+        }
+        for expr in [
+            "(neomacs-clipboard-get)",
+            "(neomacs-primary-selection-get)",
+            "(progn (neomacs-clipboard-set \"seeded\") (neomacs-clipboard-get))",
+            "(progn (neomacs-primary-selection-set \"pseeded\") (neomacs-primary-selection-get))",
+            "(neomacs-clipboard-get 1)",
+            "(neomacs-primary-selection-get 1)",
+            "(neomacs-primary-selection-owner)",
+            "(neomacs-primary-selection-owner 1)",
+        ] {
+            cases.push((expr.to_string(), None, Some(SelectionOwner::ThisProcess)));
+        }
+        for expr in [
+            "(neomacs-clipboard-set \"x\")",
+            "(neomacs-primary-selection-set \"x\")",
+            "(neomacs-clipboard-get)",
+            "(neomacs-primary-selection-get)",
+            "(neomacs-primary-selection-owner)",
+        ] {
+            cases.push((
+                expr.to_string(),
+                Some("boom"),
+                Some(SelectionOwner::ThisProcess),
+            ));
+        }
+
+        for (expr, fail, owner) in cases {
+            let left = case_result(&mut serial, &serial_state, &expr, fail, owner, false);
+            let right = case_result(&mut routed, &routed_state, &expr, fail, owner, true);
+            assert_eq!(left, right, "serial and routed disagree on {expr}");
+        }
+
+        // The variant list is total: a sixth entry fails to compile here.
+        fn describe(request: SelectionRequest) -> &'static str {
+            match request {
+                SelectionRequest::ClipboardSet(_) => "clipboard-set",
+                SelectionRequest::ClipboardGet => "clipboard-get",
+                SelectionRequest::PrimarySet(_) => "primary-set",
+                SelectionRequest::PrimaryGet => "primary-get",
+                SelectionRequest::PrimaryOwner => "primary-owner",
+            }
+        }
+        let all = [
+            SelectionRequest::ClipboardSet(None),
+            SelectionRequest::ClipboardGet,
+            SelectionRequest::PrimarySet(None),
+            SelectionRequest::PrimaryGet,
+            SelectionRequest::PrimaryOwner,
+        ];
+        let described: Vec<_> = all.into_iter().map(describe).collect();
+        assert_eq!(
+            described,
+            vec![
+                "clipboard-set",
+                "clipboard-get",
+                "primary-set",
+                "primary-get",
+                "primary-owner"
+            ]
+        );
+        assert_eq!(super::SERIAL_CLIPBOARD_ENTRIES.len(), described.len());
     }
 }

@@ -555,6 +555,12 @@ impl OwnerSlab {
         self.green.as_deref_mut()
     }
 
+    /// This owner's Green seat for a read-only classification (owner vs
+    /// main); no seat mutation or channel access.
+    pub(crate) fn green_seat(&self) -> Option<&super::green::GreenSeat> {
+        self.green.as_deref()
+    }
+
     /// A Context's cold retirement breaks the seat's Baton -> World cycle
     /// and cancels any unused root-batch reservation before heap destruction.
     pub(crate) fn take_green_seat(&mut self) -> Option<Box<super::green::GreenSeat>> {

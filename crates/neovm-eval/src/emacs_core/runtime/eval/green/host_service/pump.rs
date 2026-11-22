@@ -37,7 +37,8 @@ use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 use std::time::Instant;
 
-/// Native-only test backend. Production projection adapters remain uninstalled.
+/// Native-only test backend. Production installs `HostEffects` only for the
+/// selection family; the other projection adapters remain uninstalled.
 #[cfg(test)]
 pub(in crate::emacs_core::eval::green) type FixtureNativeDriver = Box<
     dyn FnMut(HostRequestKey, OwnedNativeData, NativeCompletionRoute) -> NativeAdapterStep + Send,
@@ -94,6 +95,10 @@ enum SemanticContinuation {
 
 enum NativeBackend {
     Closed,
+    /// Hosted main's real adapter: selection effects only in this slice.
+    /// The pump was built with the host attached; `start` receives the
+    /// borrowed display host and nothing else.
+    HostEffects,
     #[cfg(test)]
     Fixture(FixtureNativeDriver),
     #[cfg(test)]
@@ -112,11 +117,20 @@ impl NativeBackend {
         key: HostRequestKey,
         native: OwnedNativeData,
         route: NativeCompletionRoute,
+        host: Option<&mut (dyn crate::emacs_core::eval::protocol::DisplayHost + 'static)>,
     ) -> NativeAdapterStep<StepKey> {
         match self {
             Self::Closed => {
-                let _ = (key, native, route);
+                let _ = (key, native, route, host);
                 NativeAdapterStep::Complete(NativeOutcome::HostClosed)
+            }
+            Self::HostEffects => {
+                let _ = (key, route);
+                let Some(host) = host else { fatal_pump() };
+                let OwnedNativeData::SelectionRequest(request) = native else {
+                    fatal_pump()
+                };
+                NativeAdapterStep::Complete(super::selection::perform_selection(host, request))
             }
             #[cfg(test)]
             Self::Fixture(driver) => match driver(key, native, route) {
@@ -138,7 +152,7 @@ impl NativeBackend {
         match self {
             #[cfg(test)]
             Self::Semantic(_) | Self::SemanticCleanup { .. } => SemanticContinuation::Semantic,
-            Self::Closed => SemanticContinuation::NativeOnly,
+            Self::Closed | Self::HostEffects => SemanticContinuation::NativeOnly,
             #[cfg(test)]
             Self::Fixture(_) => SemanticContinuation::NativeOnly,
         }
@@ -158,7 +172,7 @@ impl NativeBackend {
                 Self::Semantic(driver) | Self::SemanticCleanup { driver, .. } => {
                     driver(FixtureSemanticEvent::Native { key, outcome }, route)
                 }
-                Self::Closed => {
+                Self::Closed | Self::HostEffects => {
                     let _ = (key, outcome, route);
                     fatal_pump()
                 }
@@ -185,7 +199,7 @@ impl NativeBackend {
                 },
                 route,
             ),
-            Self::Closed => {
+            Self::Closed | Self::HostEffects => {
                 let _ = (key, ready, route);
                 fatal_pump()
             }
@@ -208,7 +222,7 @@ impl NativeBackend {
                 },
                 route,
             ),
-            Self::Closed => {
+            Self::Closed | Self::HostEffects => {
                 let _ = (step, route);
                 fatal_pump()
             }
@@ -228,7 +242,7 @@ impl NativeBackend {
             Self::SemanticCleanup { cleanup, .. } => {
                 cleanup(FixtureCleanupEvent::Native { key, outcome }, route)
             }
-            Self::Closed => {
+            Self::Closed | Self::HostEffects => {
                 let _ = (key, outcome, route);
                 fatal_pump()
             }
@@ -286,6 +300,23 @@ impl Default for MainNativePump {
 static_assertions::assert_not_impl_any!(MainNativePump: Send, Sync, Clone, Copy);
 
 impl MainNativePump {
+    /// Install the hosted main's real adapter. Called once at cold
+    /// activation (host attached after Green start) or at Green start (host
+    /// attached before), never for an unhosted session. A closed pump stays
+    /// closed; the caller degrades to HostClosed rather than aborting.
+    pub(crate) fn install_host_effects(&mut self) -> bool {
+        if matches!(
+            self.lifecycle,
+            PumpLifecycle::CloseRequested | PumpLifecycle::Draining
+        ) {
+            return false;
+        }
+        if matches!(self.backend, NativeBackend::Closed) {
+            self.backend = NativeBackend::HostEffects;
+        }
+        matches!(self.backend, NativeBackend::HostEffects)
+    }
+
     #[cfg(test)]
     pub(crate) fn install_fixture_driver(&mut self, driver: FixtureNativeDriver) {
         self.backend = NativeBackend::Fixture(driver);
@@ -315,6 +346,7 @@ impl MainNativePump {
             #[cfg(test)]
             NativeBackend::Semantic(_) | NativeBackend::SemanticCleanup { .. } => {}
             NativeBackend::Closed => {}
+            NativeBackend::HostEffects => self.backend = NativeBackend::Closed,
             #[cfg(test)]
             NativeBackend::Fixture(_) => self.backend = NativeBackend::Closed,
         }
@@ -396,8 +428,9 @@ impl MainNativePump {
         baton: Baton,
         control: &Control,
         receiver: &Receiver<Wake>,
+        host: Option<&mut (dyn crate::emacs_core::eval::protocol::DisplayHost + 'static)>,
     ) -> ServiceReturn {
-        self.run(DriverTurn::Start { key, baton }, control, receiver)
+        self.run(DriverTurn::Start { key, baton }, control, receiver, host)
     }
 
     #[doc(hidden)]
@@ -406,8 +439,9 @@ impl MainNativePump {
         baton: Baton,
         control: &Control,
         receiver: &Receiver<Wake>,
+        host: Option<&mut (dyn crate::emacs_core::eval::protocol::DisplayHost + 'static)>,
     ) -> ServiceReturn {
-        self.run(DriverTurn::Drive(baton), control, receiver)
+        self.run(DriverTurn::Drive(baton), control, receiver, host)
     }
 
     pub(crate) fn continue_owner_step(
@@ -416,8 +450,14 @@ impl MainNativePump {
         baton: Baton,
         control: &Control,
         receiver: &Receiver<Wake>,
+        host: Option<&mut (dyn crate::emacs_core::eval::protocol::DisplayHost + 'static)>,
     ) -> ServiceReturn {
-        self.run(DriverTurn::Continue { parent, baton }, control, receiver)
+        self.run(
+            DriverTurn::Continue { parent, baton },
+            control,
+            receiver,
+            host,
+        )
     }
 
     #[doc(hidden)]
@@ -582,6 +622,7 @@ impl MainNativePump {
         mut turn: DriverTurn,
         control: &Control,
         receiver: &Receiver<Wake>,
+        mut host: Option<&mut (dyn crate::emacs_core::eval::protocol::DisplayHost + 'static)>,
     ) -> ServiceReturn {
         loop {
             let baton = match turn {
@@ -589,8 +630,12 @@ impl MainNativePump {
                     let service = MainServiceTurn::from_main_wake(key, baton, control, receiver);
                     let route = self.route(control);
                     let continuation = self.backend.continuation();
-                    let step =
-                        service.serve_step(|key, native| self.backend.start(key, native, route));
+                    // A `Start` turn occurs once per pump entry; a driving
+                    // turn never needs the host again.
+                    let host = host.take();
+                    let step = service.serve_step(host, |key, native, host| {
+                        self.backend.start(key, native, route, host)
+                    });
                     match self.advance(step, continuation, PendingOrigin::New, control) {
                         PumpProgress::Returned(returned) => return returned,
                         PumpProgress::Driving(baton) => baton,
@@ -1008,30 +1053,51 @@ impl OwnerReceive {
         parent: HostRequestKey,
         baton: Baton,
         control: &Control,
+        host: Option<&mut (dyn crate::emacs_core::eval::protocol::DisplayHost + 'static)>,
     ) -> ServiceReturn {
         match &mut self.state {
             ReceiveState::Main { channel, pump } => {
-                pump.continue_owner_step(parent, baton, control, channel)
+                pump.continue_owner_step(parent, baton, control, channel, host)
             }
             ReceiveState::Worker(_) => fatal_pump(),
         }
     }
 
     #[doc(hidden)]
-    pub fn serve(&mut self, key: HostRequestKey, baton: Baton, control: &Control) -> ServiceReturn {
+    pub fn serve(
+        &mut self,
+        key: HostRequestKey,
+        baton: Baton,
+        control: &Control,
+        host: Option<&mut (dyn crate::emacs_core::eval::protocol::DisplayHost + 'static)>,
+    ) -> ServiceReturn {
         match &mut self.state {
             ReceiveState::Main { channel, pump } => {
-                super::scheduling::serve_main_wake(key, baton, control, channel, pump)
+                super::scheduling::serve_main_wake(key, baton, control, channel, pump, host)
             }
             ReceiveState::Worker(_) => fatal_pump(),
         }
     }
 
     #[doc(hidden)]
-    pub fn drive(&mut self, baton: Baton, control: &Control) -> ServiceReturn {
+    pub fn drive(
+        &mut self,
+        baton: Baton,
+        control: &Control,
+        host: Option<&mut (dyn crate::emacs_core::eval::protocol::DisplayHost + 'static)>,
+    ) -> ServiceReturn {
         match &mut self.state {
-            ReceiveState::Main { channel, pump } => pump.drive(baton, control, channel),
+            ReceiveState::Main { channel, pump } => pump.drive(baton, control, channel, host),
             ReceiveState::Worker(_) => fatal_pump(),
+        }
+    }
+
+    /// Install the hosted main's real adapter on this receiver's pump.
+    /// A worker receiver has no pump and cannot host one.
+    pub(crate) fn install_host_effects(&mut self) -> bool {
+        match &mut self.state {
+            ReceiveState::Main { pump, .. } => pump.install_host_effects(),
+            ReceiveState::Worker(_) => false,
         }
     }
 

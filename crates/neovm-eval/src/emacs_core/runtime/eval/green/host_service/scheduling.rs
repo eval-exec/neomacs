@@ -657,7 +657,12 @@ impl<'receive> MainServiceTurn<'receive> {
     /// The owned path returns a pending native record, never a borrowed scope.
     pub(crate) fn serve_step(
         self,
-        start: impl FnOnce(HostRequestKey, OwnedNativeData) -> NativeAdapterStep<StepKey>,
+        host: Option<&mut (dyn crate::emacs_core::eval::protocol::DisplayHost + 'static)>,
+        start: impl FnOnce(
+            HostRequestKey,
+            OwnedNativeData,
+            Option<&mut (dyn crate::emacs_core::eval::protocol::DisplayHost + 'static)>,
+        ) -> NativeAdapterStep<StepKey>,
     ) -> ServiceStep {
         let Self {
             key,
@@ -674,7 +679,7 @@ impl<'receive> MainServiceTurn<'receive> {
                 slice,
                 ticket,
                 native,
-            } => advance_native_step(baton, slice, ticket, start(key, native)),
+            } => advance_native_step(baton, slice, ticket, start(key, native, host)),
         }
     }
 }
@@ -1190,6 +1195,7 @@ pub(in crate::emacs_core::eval::green) fn serve_main_wake(
     control: &Control,
     receiver: &Receiver<Wake>,
     pump: &mut super::pump::MainNativePump,
+    host: Option<&mut (dyn crate::emacs_core::eval::protocol::DisplayHost + 'static)>,
 ) -> ServiceReturn {
     baton.enter();
     #[cfg(test)]
@@ -1214,7 +1220,7 @@ pub(in crate::emacs_core::eval::green) fn serve_main_wake(
             FixtureDriver::Unavailable => {}
         }
     }
-    pump.serve(key, baton, control, receiver)
+    pump.serve(key, baton, control, receiver, host)
 }
 
 /// Called only after switch.rs publishes the ordinary parked census. All
