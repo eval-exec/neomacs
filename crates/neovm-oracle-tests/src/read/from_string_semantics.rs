@@ -115,11 +115,25 @@ fn oracle_read_symbols_intern_into_the_current_obarray() {
                     (t nil)))))
    (let ((s (let ((obarray ob)) (read fn))))
      (list (eq s (intern "peer-live-sym" ob))
-           (eq s (intern "peer-live-sym"))))))
+           (eq s (intern "peer-live-sym")))))
+ (let* ((a (vector 1 nil)) (b (vector 1 nil)))
+   (let ((obarray a))
+     (condition-case e (intern "peer-prec-x" b)
+       (error (list (car e) (car (cdr e))
+                    (equal (car (cddr e)) b)
+                    (eq obarray a))))))
+ (let* ((ob (obarray-make))
+        (fn (lambda (&optional c)
+              (signal 'wrong-type-argument (list 'obarrayp ob)))))
+   (let ((obarray ob))
+     (condition-case e (read fn)
+       (error (list (car e) (car (cdr e))
+                    (eq (car (cddr e)) ob)
+                    (eq obarray ob)))))))
 "###;
 
     let expect = expect_test::expect![[
-        r#""OK ((nil t) t (wrong-type-argument (obarrayp 42)) (nil t) (t t t nil) (nil \"peer-oracle-u\") (t nil) (nil t) (\"\" t nil) (\"pre-x\" t) 42 (end-of-file nil) ((wrong-type-argument obarrayp 42) nil t) ((wrong-type-argument obarrayp 42) nil t) (t nil))""#
+        r#""OK ((nil t) t (wrong-type-argument (obarrayp 42)) (nil t) (t t t nil) (nil \"peer-oracle-u\") (t nil) (nil t) (\"\" t nil) (\"pre-x\" t) 42 (end-of-file nil) ((wrong-type-argument obarrayp 42) nil t) ((wrong-type-argument obarrayp 42) nil t) (t nil) (wrong-type-argument obarrayp t t) (wrong-type-argument obarrayp t t))""#
     ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }

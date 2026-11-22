@@ -529,7 +529,8 @@ fn read_error_for_load(
             ))],
             None,
         ),
-        super::value_reader::ReadErrorKind::Signal => EvalError::signal(
+        super::value_reader::ReadErrorKind::Signal
+        | super::value_reader::ReadErrorKind::ObarrayRejected => EvalError::signal(
             e.signal_symbol.unwrap_or_else(|| intern("error")),
             e.signal_data,
             None,

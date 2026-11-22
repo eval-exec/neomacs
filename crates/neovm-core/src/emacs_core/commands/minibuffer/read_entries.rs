@@ -269,16 +269,12 @@ pub fn builtin_read_impl(
         ResolvedReadStream::String(stream) => {
             // Read from string
             let result = read_from_string_impl_inner(
-                ctx.variables(),
+                ctx,
                 vec![stream],
                 symbol_position_mode,
                 shorthands.as_ref(),
                 ctx.symbol_mode(),
-            )
-            .map_err(|flow| {
-                crate::emacs_core::reader::reset_obarray_after_rejected_flow(ctx, &flow);
-                flow
-            })?;
+            )?;
             // Return just the car (the parsed object)
             match result.kind() {
                 ValueKind::Cons => {
@@ -437,16 +433,12 @@ pub fn builtin_read_impl(
             let prompt = Value::string("Lisp expression: ");
             let input = builtin_read_from_minibuffer(ctx, vec![prompt])?;
             let result = read_from_string_impl_inner(
-                ctx.variables(),
+                ctx,
                 vec![input],
                 symbol_position_mode,
                 shorthands.as_ref(),
                 ctx.symbol_mode(),
-            )
-            .map_err(|flow| {
-                crate::emacs_core::reader::reset_obarray_after_rejected_flow(ctx, &flow);
-                flow
-            })?;
+            )?;
             match result.kind() {
                 ValueKind::Cons => {
                     let pair_car = result.cons_car();

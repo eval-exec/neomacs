@@ -267,9 +267,18 @@ pub(crate) fn read_from_callable(
         dot_syntax: Cell::new(None),
     };
     let parsed = if reader.skip_ws_and_comments() {
-        reader
-            .read_form()
-            .map_err(crate::emacs_core::reader::signal_reader_error_from_string)
+        reader.read_form().map_err(|error| {
+            // GNU's check_obarray_slow resets Vobarray before signalling; the
+            // callable source owns the Context, so apply it here for this
+            // reader-originated rejection only.
+            if error.kind == super::ReadErrorKind::ObarrayRejected
+                && let Some(&rejected) = error.signal_data.get(1)
+            {
+                let mut guard = source.ctx.borrow_mut();
+                crate::emacs_core::builtins::symbols::reset_rejected_obarray(&mut guard, rejected);
+            }
+            crate::emacs_core::reader::signal_reader_error_from_string(error)
+        })
     } else {
         Err(crate::emacs_core::reader::ReadSourceObject::Anonymous.end_of_file_error())
     };

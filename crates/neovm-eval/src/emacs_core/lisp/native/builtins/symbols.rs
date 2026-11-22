@@ -1837,7 +1837,7 @@ pub(crate) fn is_global_obarray_proxy(eval: &super::eval::Context, value: &Value
         *SYMBOL.get_or_init(|| neovm_value::intern::intern("neovm--obarray-object"))
     }
     eval.builtin_var_value(neovm_obarray_object_sym())
-        .is_some_and(|proxy| proxy == *value)
+        .is_some_and(|proxy| proxy.bits() == value.bits())
 }
 
 pub(crate) fn current_lisp_obarray_value(eval: &super::eval::Context) -> Value {
@@ -2237,12 +2237,18 @@ pub(crate) fn intern_soft_impl(eval: &mut super::eval::Context, args: &[Value]) 
     let selected = if is_global_obarray_proxy(eval, &effective_obarray) {
         SelectedInternSoftObarray::Global
     } else {
-        match CheckedInternSoftObarray::try_from(effective_obarray) {
-            Ok(checked) => SelectedInternSoftObarray::Custom(checked),
-            Err(flow) => {
+        match check_obarray_reader(effective_obarray) {
+            Ok(value) => SelectedInternSoftObarray::Custom(CheckedInternSoftObarray {
+                value,
+                _mutator: std::marker::PhantomData,
+            }),
+            Err(rejected) => {
                 // Fintern_soft shares check_obarray_slow's reset.
-                reset_obarray_after_rejected_flow(eval, &flow);
-                return Err(flow);
+                reset_rejected_obarray(eval, rejected);
+                return Err(signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("obarrayp"), rejected],
+                ));
             }
         }
     };
@@ -2382,7 +2388,9 @@ pub fn check_obarray_value(value: Value) -> Result<Value, Flow> {
 /// cell, so writing the global proxy reproduces that reset inside the
 /// current `let`; the specpdl unwind restores the outer value as usual.
 pub(crate) fn reset_rejected_obarray(eval: &mut super::eval::Context, rejected: Value) {
-    if current_lisp_obarray_value(eval) != rejected {
+    // GNU compares `Vobarray` with `BASE_EQ`; a distinct but `equal` vector
+    // is not the current obarray.
+    if current_lisp_obarray_value(eval).bits() != rejected.bits() {
         return;
     }
     static OBARRAY: WellKnown = WellKnown::Obarray;
@@ -2391,21 +2399,6 @@ pub(crate) fn reset_rejected_obarray(eval: &mut super::eval::Context, rejected: 
         // The ordinary `setq` store, including projected bindings, so the
         // handler sees the reset exactly as GNU's `SET_SYMBOL_VAL` does.
         let _ = eval.assign_setq_dynamic_by_id(OBARRAY.id(), global);
-    }
-}
-
-/// [`reset_rejected_obarray`] for boundaries that only see the built `Flow`.
-pub(crate) fn reset_obarray_after_rejected_flow(eval: &mut super::eval::Context, flow: &Flow) {
-    let Some(signal) = flow.as_signal() else {
-        return;
-    };
-    if signal.symbol_name() != "wrong-type-argument"
-        || signal.data.first() != Some(&Value::symbol("obarrayp"))
-    {
-        return;
-    }
-    if let Some(&rejected) = signal.data.get(1) {
-        reset_rejected_obarray(eval, rejected);
     }
 }
 
@@ -6707,7 +6700,7 @@ fn is_global_obarray_proxy_in_state(
     value: &Value,
 ) -> bool {
     vars.value_by_name("obarray")
-        .is_some_and(|proxy| proxy == *value)
+        .is_some_and(|proxy| proxy.bits() == value.bits())
 }
 
 /// (mapatoms FUNCTION &optional OBARRAY) — call FUNCTION with each interned symbol.

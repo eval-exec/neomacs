@@ -124,7 +124,8 @@ fn signal_reader_error_for_eval_source(
             LispCondition::InvalidReadSyntax,
             vec![Value::string(format!("Read error: {}", e.message))],
         ),
-        super::value_reader::ReadErrorKind::Signal => signal(
+        super::value_reader::ReadErrorKind::Signal
+        | super::value_reader::ReadErrorKind::ObarrayRejected => signal(
             neovm_value::error::UserCondition::from(
                 e.signal_symbol.unwrap_or_else(|| intern("error")),
             ),

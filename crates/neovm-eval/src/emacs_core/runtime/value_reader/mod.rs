@@ -559,6 +559,12 @@ pub(crate) enum ReadErrorKind {
     EndOfFile,
     Error,
     Signal,
+    /// The reader's own `check_obarray` rejection. Unlike an arbitrary
+    /// `(wrong-type-argument obarrayp V)` that a callable source could raise,
+    /// this one carries GNU's reset of `Vobarray` to the initial obarray
+    /// before the signal (lread.c:4662-4665), applied by the boundary that
+    /// owns the Context.
+    ObarrayRejected,
 }
 
 impl std::fmt::Display for ReadError {
@@ -686,7 +692,7 @@ impl<'a> ReaderObarrayBinding<'a> {
         };
         match vars.value_by_name("obarray") {
             None => Self::Global,
-            Some(value) if value == proxy => Self::Global,
+            Some(value) if value.bits() == proxy.bits() => Self::Global,
             Some(value) => Self::Custom(value),
         }
     }
@@ -701,7 +707,7 @@ impl<'a> ReaderObarrayBinding<'a> {
             Self::LiveCallable(source) => {
                 let proxy = source.variable("neovm--obarray-object")?;
                 let value = source.variable("obarray")?;
-                (value != proxy).then_some(value)
+                (value.bits() != proxy.bits()).then_some(value)
             }
         }
     }
@@ -3413,17 +3419,10 @@ impl<'a> Reader<'a> {
         obarray_value: Value,
         name: neovm_value::heap_types::LispString,
     ) -> Result<Value, ReadError> {
-        let wrong_type = |value| {
-            self.signal_error(
-                neovm_value::error::LispCondition::WrongTypeArgument,
-                vec![Value::symbol("obarrayp"), value],
-                "Invalid obarray",
-            )
-        };
         let effective = crate::emacs_core::builtins::symbols::check_obarray_reader(obarray_value)
-            .map_err(wrong_type)?;
+            .map_err(|value| self.obarray_rejected_error(value))?;
         crate::emacs_core::builtins::symbols::obarray_intern_reader_name(effective, name)
-            .map_err(wrong_type)
+            .map_err(|value| self.obarray_rejected_error(value))
     }
 
     /// Empty #_ and ## use Fintern, including empty-prefix shorthands
@@ -3815,6 +3814,19 @@ impl<'a> Reader<'a> {
     }
 
     #[doc(hidden)]
+    /// The reader's own invalid-obarray error: GNU's `check_obarray_slow`
+    /// payload, marked so only this rejection carries the `Vobarray` reset.
+    #[doc(hidden)]
+    pub fn obarray_rejected_error(&self, value: Value) -> ReadError {
+        let mut error = self.signal_error(
+            neovm_value::error::LispCondition::WrongTypeArgument,
+            vec![Value::symbol("obarrayp"), value],
+            "Invalid obarray",
+        );
+        error.kind = ReadErrorKind::ObarrayRejected;
+        error
+    }
+
     pub fn signal_error(
         &self,
         symbol: impl neovm_value::error::IntoConditionSym,

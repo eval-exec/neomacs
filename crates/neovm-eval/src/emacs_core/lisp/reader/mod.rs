@@ -254,8 +254,7 @@ pub fn finish_minibuffer_result_after_unwind(
     } else {
         result
     };
-    let read_result =
-        read_from_string_impl(eval.variables(), vec![Value::heap_string(input.clone())])?;
+    let read_result = read_from_string_impl(eval, vec![Value::heap_string(input.clone())])?;
     let value = read_result.cons_car();
     let end_char = read_result.cons_cdr().xfixnum().max(0) as usize;
     let end_byte = if input.is_multibyte() {
@@ -678,19 +677,14 @@ pub fn reset_obarray_after_reader_error(
     ctx: &mut super::eval::Context,
     error: &super::value_reader::ReadError,
 ) {
-    if error.signal_symbol != Some(intern("wrong-type-argument"))
-        || error.signal_data.first() != Some(&Value::symbol("obarrayp"))
-    {
+    // Only the reader's own check_obarray rejection carries GNU's reset; a
+    // wrong-type-argument obarrayp raised by a callable source must not.
+    if error.kind != super::value_reader::ReadErrorKind::ObarrayRejected {
         return;
     }
     if let Some(&rejected) = error.signal_data.get(1) {
         super::builtins::symbols::reset_rejected_obarray(ctx, rejected);
     }
-}
-
-#[doc(hidden)]
-pub fn reset_obarray_after_rejected_flow(ctx: &mut super::eval::Context, flow: &Flow) {
-    super::builtins::symbols::reset_obarray_after_rejected_flow(ctx, flow);
 }
 
 #[doc(hidden)]
@@ -706,7 +700,8 @@ pub fn signal_reader_error_from_string(e: super::value_reader::ReadError) -> Flo
             LispCondition::InvalidReadSyntax,
             vec![Value::string(e.message)],
         ),
-        super::value_reader::ReadErrorKind::Signal => signal(
+        super::value_reader::ReadErrorKind::Signal
+        | super::value_reader::ReadErrorKind::ObarrayRejected => signal(
             neovm_value::error::UserCondition::from(
                 e.signal_symbol.unwrap_or_else(|| intern("error")),
             ),
@@ -736,7 +731,8 @@ pub fn signal_reader_error_from_buffer(
                 e.message,
             )
         }
-        super::value_reader::ReadErrorKind::Signal => signal(
+        super::value_reader::ReadErrorKind::Signal
+        | super::value_reader::ReadErrorKind::ObarrayRejected => signal(
             neovm_value::error::UserCondition::from(
                 e.signal_symbol.unwrap_or_else(|| intern("error")),
             ),
@@ -786,16 +782,12 @@ pub fn current_read_symbol_shorthands(
 pub fn builtin_read_from_string(ctx: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     let shorthands = current_read_symbol_shorthands(ctx);
     let result = read_from_string_impl_inner(
-        ctx.variables(),
+        ctx,
         args,
         SymbolPositionMode::Bare,
         shorthands.as_ref(),
         ctx.symbol_mode(),
-    )
-    .map_err(|flow| {
-        super::builtins::symbols::reset_obarray_after_rejected_flow(ctx, &flow);
-        flow
-    })?;
+    )?;
     if result.is_cons() {
         publish_read_symbols(ctx, result.cons_car());
     }
@@ -803,15 +795,15 @@ pub fn builtin_read_from_string(ctx: &mut super::eval::Context, args: Vec<Value>
 }
 
 pub(crate) fn read_from_string_impl(
-    vars: crate::emacs_core::eval::VariableView<'_>,
+    ctx: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    read_from_string_impl_inner(vars, args, SymbolPositionMode::Bare, None, SymbolMode::Bare)
+    read_from_string_impl_inner(ctx, args, SymbolPositionMode::Bare, None, SymbolMode::Bare)
 }
 
 #[doc(hidden)]
 pub fn read_from_string_impl_inner(
-    vars: VariableView<'_>,
+    ctx: &mut super::eval::Context,
     args: Vec<Value>,
     symbol_position_mode: SymbolPositionMode,
     shorthands: Option<&super::value_reader::ReadSymbolShorthands>,
@@ -899,16 +891,22 @@ pub fn read_from_string_impl_inner(
         start_char,
     ));
     let range = super::value_reader::CharacterReadRange::for_original(&args[0], range, start_byte)
-        .map_err(signal_reader_error_from_string)?;
+        .map_err(|error| {
+            reset_obarray_after_reader_error(ctx, &error);
+            signal_reader_error_from_string(error)
+        })?;
     let read_result = read_source.read_one_character_range_with_locate_syms_with_symbols(
         range,
         symbol_position_mode,
-        vars,
+        ctx.variables(),
         shorthands.into(),
         mode,
     );
     let (value, end_position) = read_result
-        .map_err(signal_reader_error_from_string)?
+        .map_err(|error| {
+            reset_obarray_after_reader_error(ctx, &error);
+            signal_reader_error_from_string(error)
+        })?
         .ok_or_else(|| signal(LispCondition::EndOfFile, vec![]))?;
     let absolute_end_char = end_position.get();
 
@@ -928,12 +926,7 @@ pub fn read_from_callable(
     func: Value,
     symbol_position_mode: SymbolPositionMode,
 ) -> EvalResult {
-    let value = super::value_reader::read_from_callable(ctx, func, symbol_position_mode).map_err(
-        |flow| {
-            super::builtins::symbols::reset_obarray_after_rejected_flow(ctx, &flow);
-            flow
-        },
-    )?;
+    let value = super::value_reader::read_from_callable(ctx, func, symbol_position_mode)?;
     publish_read_symbols(ctx, value);
     Ok(value)
 }
