@@ -171,9 +171,6 @@ impl TaggedHeap {
         self.ephemeron_records.retired_process_ephemerons = retired.into_iter().collect();
     }
 
-    /// Re-snapshot one armed retired process's fields at a stopped
-    /// termination, after Lisp may have changed them while a concurrent mark
-    /// ran. The new values are then decided by this cycle's fixpoint.
     #[doc(hidden)]
     /// Union the termination's current fields into the retired record's
     /// ephemeron snapshot. The arm-time fields are the record's SATB

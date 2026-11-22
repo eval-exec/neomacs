@@ -2033,6 +2033,9 @@ impl Context {
         // the exclusive GC-driver extent; the taken batch keeps every record
         // alive outside the manager.
         unsafe { (*heap).arm_retired_process_ephemerons(ephemerons) };
+        // SAFETY: same exclusive extent as the arm above.
+        self.processes
+            .note_armed_retired_generation(unsafe { (*heap).gc_collections() });
         self.automatic_retired_processes = Some(taken);
     }
 
@@ -2052,9 +2055,26 @@ impl Context {
         // borrow has finished in every call site: each runs at a safe-point
         // boundary, and the explicit driver's force-complete drain has joined
         // its worker before taking a fresh batch.
+        let generation = self.processes.armed_retired_generation();
+        self.processes.clear_armed_retired_generation();
+        // SAFETY: same exclusive extent as above.
         let reclaimed = unsafe { (*heap).take_reclaimed_process_ids() };
-        self.processes
-            .restore_reached_retired_processes(taken, reclaimed);
+        // A completed cycle settles the taken records. An abandoned one (no
+        // collection completed since the arm) restores them and puts their
+        // forced-major debt back, so the next automatic cycle must force the
+        // deciding major again.
+        // SAFETY: same exclusive extent as above.
+        let completed = generation.is_none_or(|armed| unsafe { (*heap).gc_collections() } > armed);
+        if completed {
+            self.processes
+                .restore_reached_retired_processes(taken, reclaimed);
+        } else {
+            debug_assert!(
+                reclaimed.is_empty(),
+                "an abandoned cycle must not have reclaimed a record"
+            );
+            self.processes.abandon_armed_retired_processes(&taken);
+        }
         // An abandoned cycle can leave the armed map behind even though it
         // reclaimed nothing; clear all three explicit maps (this path arms
         // only retired processes).

@@ -198,3 +198,39 @@ fn panic_inside_the_armed_window_restores_records_and_the_next_collection_reclai
     );
     assert!(ev.tagged_heap.explicit_ephemeron_arm_is_clear());
 }
+
+/// #776 R3: a forced major owes the record its DECIDING cycle. Arming clears
+/// the debt because that major owns the decision; an abandoned armed cycle
+/// (no collection completed since the arm) must put the debt back, so the
+/// next automatic cycle forces the major again. The manager-level invariant
+/// is what the driver's `has_pending_forced_retired_process` consumes.
+#[test]
+fn an_abandoned_forced_major_keeps_the_debt_for_the_next_cycle() {
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
+    ev.setup_thread_locals();
+    let records = arm_unreferenced_records(&mut ev);
+    ev.processes_mut().note_retired_process(records.process);
+    assert!(
+        ev.processes().has_pending_forced_retired_process(),
+        "a fresh retirement owes its deciding major"
+    );
+
+    let (_ephemerons, taken) = ev.processes_mut().take_retired_processes_for_gc(true);
+    assert!(taken.contains(&records.process));
+    assert!(
+        !ev.processes().has_pending_forced_retired_process(),
+        "arming hands the decision to the in-flight major"
+    );
+
+    // Abandon before any heap collection completes.
+    ev.processes_mut().abandon_armed_retired_processes(&taken);
+    assert!(
+        ev.processes().has_pending_forced_retired_process(),
+        "an abandoned major must keep the debt for the next automatic cycle"
+    );
+    let (_again, taken_again) = ev.processes_mut().take_retired_processes_for_gc(true);
+    assert!(
+        taken_again.contains(&records.process),
+        "the next forced major arms the record again"
+    );
+}

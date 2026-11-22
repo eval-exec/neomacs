@@ -421,6 +421,10 @@ pub struct ProcessIdState {
     /// record as an ordinary root again. Written by retirement (insert) and
     /// by the major arming in take_retired_processes_for_gc.
     pub must_force_major: std::collections::HashSet<ProcessId>,
+    /// Heap collection count when the current automatic batch was armed.
+    /// Finish compares it: a cycle that completed settles the taken records,
+    /// while an abandoned cycle puts their forced-major debt back.
+    pub armed_retired_generation: Option<usize>,
 }
 
 /// Opaque, thread-safe handle a cross-thread producer uses to wake the blocked
@@ -2339,6 +2343,7 @@ impl ProcessManager {
                 last_read_process: 0,
                 armed_retired_processes: std::collections::HashSet::new(),
                 must_force_major: std::collections::HashSet::new(),
+                armed_retired_generation: None,
             }),
             process_tick: 0,
             default_read_config: ProcessReadConfig::default(),
@@ -2420,9 +2425,31 @@ impl ProcessManager {
         );
     }
 
-    /// Disarm without reclaiming: an abandoned cycle restores every record.
-    pub(crate) fn abandon_armed_retired_processes(&mut self) {
+    /// Record the heap generation at which this automatic batch was armed.
+    pub(crate) fn note_armed_retired_generation(&mut self, generation: usize) {
+        self.ids.armed_retired_generation = Some(generation);
+    }
+
+    /// The generation recorded when the current automatic batch was armed.
+    pub(crate) fn armed_retired_generation(&self) -> Option<usize> {
+        self.ids.armed_retired_generation
+    }
+
+    /// Finish consumed the generation; a later batch records its own.
+    pub(crate) fn clear_armed_retired_generation(&mut self) {
+        self.ids.armed_retired_generation = None;
+    }
+
+    /// Disarm without reclaiming: an abandoned cycle restores every record
+    /// and puts its forced-major debt back, so the next automatic cycle must
+    /// force the deciding major again.
+    pub(crate) fn abandon_armed_retired_processes(&mut self, retired: &[ProcessId]) {
         self.ids.armed_retired_processes.clear();
+        for id in retired {
+            if self.deleted_processes.contains_key(id) {
+                self.ids.must_force_major.insert(*id);
+            }
+        }
         debug_assert!(
             self.ids.armed_retired_processes.is_empty(),
             "abandon must disarm every retired id"
