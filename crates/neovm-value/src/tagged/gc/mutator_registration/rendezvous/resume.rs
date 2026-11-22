@@ -1,9 +1,9 @@
 //! One-shot owner image restoration, serialized with request admission.
 
+use super::sync::atomic::Ordering;
 use std::fmt;
 use std::marker::PhantomData;
 use std::rc::Rc;
-use std::sync::atomic::Ordering;
 
 #[cfg(any(test, feature = "test-support"))]
 use super::super::a8_probes;

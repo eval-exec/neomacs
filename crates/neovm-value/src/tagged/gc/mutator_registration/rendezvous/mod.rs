@@ -5,6 +5,7 @@ mod keeper;
 mod owner;
 mod resume;
 mod run_admission;
+mod sync;
 
 pub use control::{Mode, Phase, Request};
 pub use keeper::AllStopped;

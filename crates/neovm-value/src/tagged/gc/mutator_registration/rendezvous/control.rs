@@ -3,6 +3,7 @@
 //! owners of registrations, roots, or GC images. Callers validate those facts
 //! before entering Tracing and perform all image transfers under the same gate.
 
+use std::collections::VecDeque;
 use std::num::NonZeroU64;
 
 use super::super::MutatorKey;
@@ -36,6 +37,54 @@ pub enum Request {
     Queued,
 }
 
+/// One committed serial-request identity. The generator refuses to wrap, so a
+/// retired identity is never reused (L6 condition e).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(in crate::tagged::gc) struct RequestId(NonZeroU64);
+
+impl RequestId {
+    pub(in crate::tagged::gc) const fn get(self) -> u64 {
+        self.0.get()
+    }
+}
+
+/// A ring entry is waiting for the head grant or holding it. Retirement
+/// removes the entry; a second retirement is a typed `Identity` refusal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::tagged::gc) enum RingPhase {
+    Queued,
+    Granted,
+}
+
+/// One committed serial request. The owner has already published its image and
+/// root lease before enqueueing (L6 condition b); `generation` names that
+/// publication and is re-validated by the keeper before a grant (via `ready`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::tagged::gc) struct RingEntry {
+    id: RequestId,
+    owner: MutatorKey,
+    generation: NonZeroU64,
+    phase: RingPhase,
+}
+
+impl RingEntry {
+    pub(in crate::tagged::gc) const fn id(self) -> RequestId {
+        self.id
+    }
+
+    pub(in crate::tagged::gc) const fn owner(self) -> MutatorKey {
+        self.owner
+    }
+
+    pub(in crate::tagged::gc) const fn generation(self) -> NonZeroU64 {
+        self.generation
+    }
+
+    pub(in crate::tagged::gc) const fn phase(self) -> RingPhase {
+        self.phase
+    }
+}
+
 #[derive(Debug)]
 pub(in crate::tagged::gc) struct OwnerState {
     pub(in crate::tagged::gc) mode: Mode,
@@ -67,6 +116,13 @@ pub(in crate::tagged::gc) struct State {
     pub(in crate::tagged::gc) debt: Vec<MutatorKey>,
     pub(in crate::tagged::gc) traces: usize,
     pub(in crate::tagged::gc) active_readers: usize,
+    /// The FIFO serial-request ring (L6). Opaque metadata only; ordering, not
+    /// authority: the canonical phase word and the image ledger still decide.
+    pub(in crate::tagged::gc) serial_ring: VecDeque<RingEntry>,
+    /// Monotonic request-id generator; a wrap is a typed refusal.
+    pub(in crate::tagged::gc) next_request: u64,
+    /// The one granted head, if any. Cleared only by `retire_serial`.
+    pub(in crate::tagged::gc) ring_head_granted: Option<RequestId>,
 }
 
 impl State {
@@ -80,6 +136,9 @@ impl State {
             debt: Vec::new(),
             traces: 0,
             active_readers: 0,
+            serial_ring: VecDeque::new(),
+            next_request: 0,
+            ring_head_granted: None,
         }
     }
 
@@ -140,6 +199,91 @@ impl State {
         self.phase = Phase::Stopping(next);
         self.queued = false;
         Ok(next)
+    }
+
+    /// Commit one serial request at the tail. The owner has already published
+    /// its image and root lease (L6 condition b); `generation` names that
+    /// publication. Stop requests are not enqueued here.
+    pub(in crate::tagged::gc) fn enqueue_serial(
+        &mut self,
+        owner: MutatorKey,
+        generation: NonZeroU64,
+    ) -> Result<RequestId, RendezvousError> {
+        self.live()?;
+        let next = self
+            .next_request
+            .checked_add(1)
+            .ok_or(RendezvousError::Generation)?;
+        let id = RequestId(NonZeroU64::new(next).ok_or(RendezvousError::Generation)?);
+        self.serial_ring.push_back(RingEntry {
+            id,
+            owner,
+            generation,
+            phase: RingPhase::Queued,
+        });
+        self.next_request = next;
+        Ok(id)
+    }
+
+    /// Grant the head exactly once. A stop (Stopping/Tracing) defers the grant
+    /// without touching the ring; DrainingResumes may grant when no resume debt
+    /// or Resuming member remains. `ready` is the keeper's publication check;
+    /// an unready head is never skipped.
+    pub(in crate::tagged::gc) fn try_grant_head(
+        &mut self,
+        membership: Membership<'_>,
+        ready: impl FnOnce(&RingEntry) -> bool,
+    ) -> Result<Option<RequestId>, RendezvousError> {
+        self.live()?;
+        if self.ring_head_granted.is_some() {
+            return Ok(None);
+        }
+        match self.phase {
+            Phase::Idle | Phase::DrainingResumes => {}
+            Phase::Stopping(_) | Phase::Tracing(_) => return Ok(None),
+            Phase::Poisoned => return Err(RendezvousError::Poisoned),
+        }
+        if !self.debt.is_empty() || membership.iter().any(|(_, mode)| *mode == Mode::Resuming) {
+            return Ok(None);
+        }
+        let Some(head) = self.serial_ring.front() else {
+            return Ok(None);
+        };
+        if head.phase != RingPhase::Queued || !ready(head) {
+            return Ok(None);
+        }
+        let id = head.id();
+        self.serial_ring
+            .front_mut()
+            .expect("front observed above")
+            .phase = RingPhase::Granted;
+        self.ring_head_granted = Some(id);
+        Ok(Some(id))
+    }
+
+    /// Retire a queued or granted entry exactly once. This stays available
+    /// after poison so a granted-but-unreceived ticket is not lost (L6 f); a
+    /// second retire is a typed refusal.
+    pub(in crate::tagged::gc) fn retire_serial(
+        &mut self,
+        id: RequestId,
+    ) -> Result<(), RendezvousError> {
+        let Some(index) = self.serial_ring.iter().position(|entry| entry.id() == id) else {
+            return Err(RendezvousError::Identity);
+        };
+        self.serial_ring.remove(index);
+        if self.ring_head_granted == Some(id) {
+            self.ring_head_granted = None;
+        }
+        Ok(())
+    }
+
+    pub(in crate::tagged::gc) fn ring_head(&self) -> Option<RequestId> {
+        self.serial_ring.front().map(|entry| entry.id())
+    }
+
+    pub(in crate::tagged::gc) fn ring_len(&self) -> usize {
+        self.serial_ring.len()
     }
 
     /// Control readiness only. The caller must separately validate publication

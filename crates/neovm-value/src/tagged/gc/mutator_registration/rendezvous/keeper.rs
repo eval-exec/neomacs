@@ -1,11 +1,11 @@
 //! Unique keeper admission and epoch-bounded stopped access.
 
+use super::sync::atomic::Ordering;
 use std::fmt;
 use std::marker::PhantomData;
 use std::num::NonZeroU64;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 
 #[cfg(any(test, feature = "test-support"))]
 use super::super::a8_probes;
