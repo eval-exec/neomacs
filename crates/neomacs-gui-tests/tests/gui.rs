@@ -64,6 +64,9 @@ mod desktop_font_updates;
 #[path = "wayland_font_raster.rs"]
 mod wayland_font_raster;
 
+#[path = "font_xwayland_parity.rs"]
+mod font_xwayland_parity;
+
 // Only the Linux desktop-font suites (which pin a Linux font package) use
 // this helper; compiling it on other hosts is dead code.
 #[cfg(target_os = "linux")]
