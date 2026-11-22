@@ -82,7 +82,7 @@ impl LispCollectionRevision {
         }
         super::collection_reads::with_store(|store| {
             let next = store.advance();
-            super::collection_reads::record_write(value, next);
+            super::collection_reads::record_write_in_store(store, value, next);
         });
     }
 }

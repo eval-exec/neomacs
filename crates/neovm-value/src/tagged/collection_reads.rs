@@ -859,8 +859,11 @@ pub(crate) fn journal_since_for_test(start: LispCollectionRevision) -> Option<Ve
     })
 }
 
-pub(super) fn record_write(value: TaggedValue, revision: u64) {
-    with_store(|store| store.record(value.bits(), revision));
+/// Complete a write in the store that already supplied its revision.
+/// The caller retains that owner extent, with no callback or GC in between.
+#[inline]
+pub(super) fn record_write_in_store(store: &StoreState, value: TaggedValue, revision: u64) {
+    store.record(value.bits(), revision);
 }
 
 /// A string byte store retains its original journal-before-read order.
