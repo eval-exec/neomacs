@@ -1753,3 +1753,7 @@ mod tests;
 #[cfg(test)]
 #[path = "image_catalog/tests/image_band_terminal_test.rs"]
 mod band_terminal_tests;
+
+#[cfg(test)]
+#[path = "image_catalog/tests/cache_liveness_test.rs"]
+mod cache_liveness_test;
