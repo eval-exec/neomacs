@@ -317,6 +317,19 @@ fn two_requesters_collect_transitive_world_private_and_image_roots<K, W>(
             let second = receive(&rx);
             assert_eq!(first.1, second.1, "requesters coalesce one epoch");
             let mut stopped = retry(|| era.stop());
+            // S3 exactly-once-composition pin: each owner's ACK batch is its
+            // only root source. The published image's root words come from
+            // `OwnerGcState::root_scratch`, which must stay empty here; a
+            // duplicate of the batch in `CollectionWork.roots` would make the
+            // union of pre-mark sources visit the same logical roots twice.
+            for key in [first.0, second.0] {
+                let (roots, other) = retry(|| stopped.owner_work_census_for_test(key));
+                assert!(
+                    roots.is_empty(),
+                    "the ACK batch must be the owner's only root source, \
+                     but the image carries root words {roots:?} (other work {other:?})"
+                );
+            }
             let [root, remembered, cons_write] = logs;
             retry(|| {
                 stopped.with_owner_image(first.0, |image| {
