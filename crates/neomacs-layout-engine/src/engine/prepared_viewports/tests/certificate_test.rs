@@ -31,14 +31,16 @@ fn viewport() -> (Context, PreparedViewport) {
         PreparedViewport {
             frame,
             window,
-            retained,
-            faces,
+            payload: std::rc::Rc::new(PreparedViewportPayload {
+                retained,
+                faces,
+                cursor_sources: None,
+                query_freshness: None,
+            }),
             rows: 0,
             glyphs: 0,
             computed: false,
             complete_viewport: true,
-            cursor_sources: None,
-            query_freshness: None,
         },
     )
 }
@@ -95,8 +97,8 @@ fn computed_rows_keep_original_reads_instead_of_recapturing_at_admission() {
         !prepared.insert_computed(
             entry.frame,
             entry.window,
-            entry.retained,
-            entry.faces,
+            entry.retained.clone(),
+            entry.faces.clone(),
             reads.unwrap(),
             vec![context.retain_gc_roots([a])],
             true,
@@ -245,7 +247,9 @@ fn frame_only_original_certificate_is_not_cached_as_history() {
     let mut prepared = PreparedViewports::default();
     prepared.accept(
         entry.frame,
-        [(entry.window, entry.retained)].into_iter().collect(),
+        [(entry.window, entry.retained.clone())]
+            .into_iter()
+            .collect(),
         &[(entry.window, next)].into_iter().collect(),
         Some(&FrameFaceArena::default()),
         Some(&history),
@@ -259,7 +263,7 @@ fn dead_frame_retirement_releases_original_source_roots() {
     context.gc_collect_exact();
     let allocated = || neovm_core::tagged::gc::with_tagged_heap(|heap| heap.allocated_count());
     let baseline = allocated();
-    entry.cursor_sources = Some(capture(
+    std::rc::Rc::make_mut(&mut entry.payload).cursor_sources = Some(capture(
         &context,
         Value::string("only prepared rows own this source"),
     ));
@@ -284,7 +288,8 @@ fn dead_frame_retirement_releases_original_source_roots() {
 fn retiring_dead_frames_purges_entries_exports_and_invalidations() {
     let (context, mut entry) = viewport();
     let live_frame = neovm_core::window::FrameId(entry.frame.0 + 1);
-    entry.cursor_sources = Some(capture(&context, Value::string("owned source")));
+    std::rc::Rc::make_mut(&mut entry.payload).cursor_sources =
+        Some(capture(&context, Value::string("owned source")));
     let dead_frame = entry.frame;
     let window = entry.window;
     let export = |frame| ExportedCoverage {
@@ -293,6 +298,7 @@ fn retiring_dead_frames_purges_entries_exports_and_invalidations() {
         key: entry.retained.key.clone(),
         epoch: 0,
         certified: false,
+        last_export: None,
         backward_start: None,
         visible_source: 0..10,
     };

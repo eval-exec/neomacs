@@ -408,6 +408,14 @@ impl LayoutEngine {
             .retain_live(|frame| evaluator.frame_manager().get(frame).is_some());
         self.prepared_viewports
             .retain_live_frames(|frame| evaluator.frame_manager().get(frame).is_some());
+        self.retained_by_frame
+            .retain(|frame, _| evaluator.frame_manager().get(*frame).is_some());
+        if self
+            .retained_frame
+            .is_some_and(|frame| evaluator.frame_manager().get(frame).is_none())
+        {
+            self.scroll_preview_coverage.clear();
+        }
     }
 
     /// A completed idle page needs one fresh immutable transport publication.

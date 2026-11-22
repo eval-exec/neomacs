@@ -361,6 +361,248 @@ fn resolved_scroll_preview_supports_an_unselected_window_without_raw_prediction(
     resolved_scroll_preview_for_window(true);
 }
 
+const RENEWED_PREVIEW_LINE: &str = "ordinary offscreen text\n";
+
+struct RenewedScrollPreviewFixture {
+    // Retire worker-owned roots before their evaluator heap.
+    engine: LayoutEngine,
+    eval: Context,
+    frame: neovm_core::window::FrameId,
+    buffer: BufferId,
+    window: neovm_core::window::WindowId,
+    epoch: u64,
+    row_height: f32,
+}
+
+impl RenewedScrollPreviewFixture {
+    fn new() -> Self {
+        let (mut eval, frame, buffer, window) =
+            incr_editing_frame(&RENEWED_PREVIEW_LINE.repeat(300), 800, 600);
+        eval.eval_str("(setq neomacs-compositor-scrolling t)")
+            .unwrap();
+        eval.frame_manager_mut()
+            .get_mut(frame)
+            .unwrap()
+            .window_system = Some(Value::symbol("neomacs"));
+        let mut engine = crate::font::metrics::test_catalog::layout_engine();
+        engine.layout_frame_rust(&mut eval, frame);
+        let owner = DisplayWindowId::new(window.0 as i64);
+        let body: Vec<_> = engine.retained_window_matrices[&owner]
+            .matrix
+            .rows
+            .iter()
+            .filter(|row| row.enabled && row.role == GlyphRowRole::Text)
+            .collect();
+        let row_height = body[0].height_px;
+        let target = body[body.len() - 2].start_charpos;
+        engine
+            .request_scroll_coverage(&eval, frame, window, CharPos0::new(target))
+            .unwrap();
+        await_coverage(&mut engine);
+        let FrameLayoutAttempt::Prepared(full) = engine.redisplay_frame_attempt(&mut eval, frame)
+        else {
+            panic!("full coverage publication failed")
+        };
+        let surface = full
+            .materialize()
+            .scroll_surfaces
+            .into_iter()
+            .find(|surface| surface.coverage().content.window_id == owner)
+            .expect("the full coverage publication must be admitted");
+        let epoch = surface.coverage().epoch;
+        eval.frame_manager_mut()
+            .get_mut(frame)
+            .unwrap()
+            .activate_display_presentation(neovm_core::window::geometry::PresentationId::new(
+                full.presentation_id.get(),
+            ))
+            .expect("renderer activation of the admitted full surface");
+        eval.buffer_manager_mut()
+            .get_mut(buffer)
+            .unwrap()
+            .goto_emacs_byte_pos(neovm_core::buffer::EmacsBytePos::new(1));
+        let mut fixture = Self {
+            engine,
+            eval,
+            frame,
+            buffer,
+            window,
+            epoch,
+            row_height,
+        };
+        fixture.renew_only(true);
+        fixture
+    }
+
+    fn renew_only(&mut self, compositor_enabled: bool) {
+        let owner = DisplayWindowId::new(self.window.0 as i64);
+        let FrameLayoutAttempt::Prepared(renewed) = self
+            .engine
+            .redisplay_frame_attempt(&mut self.eval, self.frame)
+        else {
+            panic!("cursor-only renewal publication failed")
+        };
+        assert_eq!(
+            self.engine.last_layout_stats().window_classes.get(&owner),
+            Some(&crate::incremental_layout::LayoutClass::CursorOnly)
+        );
+        assert!(
+            renewed.scroll_coverage.is_empty(),
+            "exercise a renewal without a fresh surface"
+        );
+        let renewal = renewed
+            .scroll_coverage_renewals
+            .iter()
+            .find(|renewal| renewal.window == owner)
+            .expect("the activated epoch must be renewed");
+        assert_eq!(renewal.epoch, self.epoch);
+        assert_eq!(renewal.compositor_enabled, compositor_enabled);
+        assert!(self.engine.last_frame_display_state.is_none());
+    }
+
+    fn move_destination_without_redisplay(&mut self) {
+        scroll_window_to(
+            &mut self.eval,
+            self.frame,
+            self.window,
+            self.buffer,
+            RENEWED_PREVIEW_LINE.len() as i64 + 1,
+            RENEWED_PREVIEW_LINE.len(),
+        );
+    }
+
+    fn preview(
+        &self,
+        receipt: neomacs_display_protocol::input_progress::InputReceipt,
+    ) -> Option<neomacs_display_protocol::scroll_coverage::ResolvedScrollIntent> {
+        self.engine
+            .resolved_scroll_preview(&self.eval, self.frame, self.window, vec![receipt])
+    }
+}
+
+#[test]
+fn resolved_scroll_preview_survives_an_activated_cursor_only_coverage_renewal() {
+    let mut fixture = RenewedScrollPreviewFixture::new();
+    fixture.move_destination_without_redisplay();
+    let stream = neomacs_display_protocol::input_progress::InputStream::default();
+    let delivery = stream.issue().unwrap();
+    let intent = fixture
+        .preview(delivery.receipt())
+        .expect("renewal must preserve the producer's certified command destination");
+    assert_eq!(intent.frame, fixture.frame.0);
+    assert_eq!(intent.window, DisplayWindowId::new(fixture.window.0 as i64));
+    assert_eq!(intent.epoch, fixture.epoch);
+    assert_eq!(intent.offset, fixture.row_height);
+    assert!(fixture.engine.last_frame_display_state.is_none());
+}
+
+#[test]
+fn resolved_scroll_preview_restores_renewed_coverage_after_switching_frames() {
+    let mut fixture = RenewedScrollPreviewFixture::new();
+    let other = fixture.eval.frame_manager_mut().create_frame(
+        "other-scroll-preview-owner",
+        800,
+        600,
+        fixture.buffer,
+    );
+    bind_minibuffer_buffer(&mut fixture.eval, other);
+    fixture
+        .eval
+        .frame_manager_mut()
+        .get_mut(other)
+        .unwrap()
+        .window_system = Some(Value::symbol("neomacs"));
+    let stream = neomacs_display_protocol::input_progress::InputStream::default();
+    let delivery = stream.issue().unwrap();
+
+    fixture.engine.load_retained_frame(other);
+    assert!(
+        fixture.preview(delivery.receipt()).is_none(),
+        "frame B cannot use frame A's coverage"
+    );
+    let FrameLayoutAttempt::Prepared(_) = fixture
+        .engine
+        .redisplay_frame_attempt(&mut fixture.eval, other)
+    else {
+        panic!("frame B publication failed")
+    };
+    assert!(fixture.preview(delivery.receipt()).is_none());
+
+    // A frame switch parks semantic coverage with its retained matrices.
+    // Publishing B must not orphan A's already activated epoch when A later
+    // emits only a renewal, with no new worker page or full surface.
+    fixture.engine.load_retained_frame(fixture.frame);
+    fixture.renew_only(true);
+    fixture.move_destination_without_redisplay();
+    let intent = fixture
+        .preview(delivery.receipt())
+        .expect("returning to frame A must restore its renewed preview coverage");
+    assert_eq!(intent.frame, fixture.frame.0);
+    assert_eq!(intent.window, DisplayWindowId::new(fixture.window.0 as i64));
+    assert_eq!(intent.epoch, fixture.epoch);
+    assert_eq!(intent.offset, fixture.row_height);
+}
+
+#[test]
+fn resolved_scroll_preview_obeys_policy_from_the_latest_coverage_renewal() {
+    let mut fixture = RenewedScrollPreviewFixture::new();
+    fixture
+        .eval
+        .eval_str("(setq neomacs-compositor-scrolling nil)")
+        .unwrap();
+    fixture.renew_only(false);
+    // Re-enable the live command policy before redisplay: the latest accepted
+    // publication still disabled this epoch on the renderer, so no intent may
+    // use it until a later publication reasserts permission.
+    fixture
+        .eval
+        .eval_str("(setq neomacs-compositor-scrolling t)")
+        .unwrap();
+    let stream = neomacs_display_protocol::input_progress::InputStream::default();
+    let delivery = stream.issue().unwrap();
+    assert!(fixture.preview(delivery.receipt()).is_none());
+    fixture.renew_only(true);
+    fixture.move_destination_without_redisplay();
+    assert!(fixture.preview(delivery.receipt()).is_some());
+}
+
+#[test]
+fn resolved_scroll_preview_expires_after_content_revokes_a_renewed_epoch() {
+    let mut fixture = RenewedScrollPreviewFixture::new();
+    let stream = neomacs_display_protocol::input_progress::InputStream::default();
+    let delivery = stream.issue().unwrap();
+    assert!(
+        fixture.preview(delivery.receipt()).is_some(),
+        "prove the renewed producer rows exist before testing their revocation"
+    );
+    fixture
+        .eval
+        .buffer_manager_mut()
+        .get_mut(fixture.buffer)
+        .unwrap()
+        .insert("edited ");
+    let FrameLayoutAttempt::Prepared(revised) = fixture
+        .engine
+        .redisplay_frame_attempt(&mut fixture.eval, fixture.frame)
+    else {
+        panic!("revised content publication failed")
+    };
+    let owner = DisplayWindowId::new(fixture.window.0 as i64);
+    assert!(
+        revised
+            .scroll_coverage
+            .iter()
+            .all(|coverage| coverage.content.window_id != owner)
+    );
+    assert!(
+        revised
+            .scroll_coverage_renewals
+            .iter()
+            .all(|renewal| renewal.window != owner)
+    );
+    assert!(fixture.preview(delivery.receipt()).is_none());
+}
+
 fn resolved_scroll_preview_for_window(other_window: bool) {
     let line = "ordinary offscreen text\n";
     let (mut eval, frame, buffer, window) = incr_editing_frame(&line.repeat(300), 800, 600);

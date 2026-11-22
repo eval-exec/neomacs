@@ -866,9 +866,9 @@ pub struct LayoutEngine {
     /// The last completed `FrameDisplayState`, produced by `layout_frame_rust()`.
     /// Used by the TTY redisplay path to drive `TtyRif` on the evaluator thread.
     pub last_frame_display_state: Option<neomacs_display_protocol::SealedFramePresentation>,
-    /// Shared paint coverage survives ownership transfer of the full frame.
-    scroll_preview_coverage:
-        Vec<std::sync::Arc<neomacs_display_protocol::scroll_coverage::ScrollCoverage>>,
+    /// Certified semantic rows survive full-frame transfer and renewal-only
+    /// publications, independently of the renderer's retained paint surface.
+    scroll_preview_coverage: scroll_preview::ScrollPreviewCoverage,
     /// Last sealed face namespace for each logical frame.
     ///
     /// A speculative layout gets a fresh [`FrameFaceAttempt`] from this arena;
@@ -1354,14 +1354,14 @@ fn chrome_reuse_context(
 
 /// One frame's retained layout state, parked while another frame is laid out.
 ///
-/// The matrix and its chrome metrics travel together because they are keyed
-/// the same way and committed at the same instant. Keeping them in one type is
-/// the point: they previously sat in two sibling maps next to a third keyed by
-/// `FrameId`, and only the frame-keyed one was right.
+/// Matrices, chrome metrics, and certified semantic scroll rows travel together
+/// because they belong to the same accepted frame. Parking all three preserves
+/// renewal-only publications when redisplay switches from one frame to another.
 #[derive(Default)]
 struct RetainedFrameState {
     matrices: rustc_hash::FxHashMap<DisplayWindowId, RetainedWindowMatrix>,
     chrome_metrics: rustc_hash::FxHashMap<DisplayWindowId, WindowChromeMetrics>,
+    scroll_preview_coverage: scroll_preview::ScrollPreviewCoverage,
 }
 
 /// An upper bound on the characters a window can display, as
@@ -1486,6 +1486,9 @@ impl LayoutEngine {
         self.retained_window_chrome_metrics.clear();
         self.last_frame_display_state = None;
         self.scroll_preview_coverage.clear();
+        for retained in self.retained_by_frame.values_mut() {
+            retained.scroll_preview_coverage.clear();
+        }
         self.reset_frame_attempt_state();
     }
 
@@ -1670,7 +1673,7 @@ impl LayoutEngine {
             frame_output: FrameOutputOwner::new(),
             pending_tab_bar_pointer: None,
             last_frame_display_state: None,
-            scroll_preview_coverage: Vec::new(),
+            scroll_preview_coverage: scroll_preview::ScrollPreviewCoverage::default(),
             frame_face_arenas: rustc_hash::FxHashMap::default(),
             face_composed_sources: None,
             face_tty_realization: None,
@@ -1715,7 +1718,7 @@ impl LayoutEngine {
             frame_output: FrameOutputOwner::new(),
             pending_tab_bar_pointer: None,
             last_frame_display_state: None,
-            scroll_preview_coverage: Vec::new(),
+            scroll_preview_coverage: scroll_preview::ScrollPreviewCoverage::default(),
             frame_face_arenas: rustc_hash::FxHashMap::default(),
             face_composed_sources: None,
             face_tty_realization: None,
@@ -4146,7 +4149,7 @@ impl LayoutEngine {
         // on a resize-retry `continue`. Phase 0a always full-rebuilds: every
         // enabled row is `relaid`, every window is classified `Full`, and the
         // retained matrices are written but NOT read (no fast path exists yet).
-        let (next_layout_stats, next_retained_window_matrices, acked_buffer_ids) = {
+        let (mut next_layout_stats, next_retained_window_matrices, acked_buffer_ids) = {
             let key_map: rustc_hash::FxHashMap<DisplayWindowId, RetainedWindowKey> =
                 retained_keys.into_iter().collect();
             let frame_state = &mut frame_display_state;
@@ -4217,7 +4220,7 @@ impl LayoutEngine {
                     if self.prepared_window_ids.contains(&window_id) {
                         next_layout_stats.prepared_windows += 1;
                     }
-                    next_layout_stats.record_window_class(LayoutClass::CursorOnly);
+                    next_layout_stats.record_window_class(window_id, LayoutClass::CursorOnly);
                 } else if let Some((ref reused, _dvpos)) = scroll_reused {
                     // Overlapping rows reused shifted; the rest were newly exposed
                     // and walked.
@@ -4227,7 +4230,7 @@ impl LayoutEngine {
                     if self.prepared_window_ids.contains(&window_id) {
                         next_layout_stats.prepared_windows += 1;
                     }
-                    next_layout_stats.record_window_class(LayoutClass::Scroll);
+                    next_layout_stats.record_window_class(window_id, LayoutClass::Scroll);
                 } else if let Some(ref reused) = edit_reused {
                     // Rows outside the regenerated edit span reused verbatim;
                     // under the edit sync the rows below a span that changed
@@ -4237,10 +4240,10 @@ impl LayoutEngine {
                     next_layout_stats.reused_rows += reused.saturating_sub(shifted);
                     next_layout_stats.reused_shifted_rows += shifted.min(reused);
                     next_layout_stats.relaid_body_rows += enabled_body - reused;
-                    next_layout_stats.record_window_class(LayoutClass::Edit);
+                    next_layout_stats.record_window_class(window_id, LayoutClass::Edit);
                 } else {
                     next_layout_stats.relaid_body_rows += enabled_body;
-                    next_layout_stats.record_window_class(LayoutClass::Full);
+                    next_layout_stats.record_window_class(window_id, LayoutClass::Full);
                 }
 
                 // Phase 5 (#44) per-row provenance. The fast paths reuse the
@@ -4423,16 +4426,25 @@ impl LayoutEngine {
         self.prepared_viewports.export(
             frame_id,
             &next_retained_window_matrices,
+            &mut next_layout_stats,
+            evaluator
+                .frame_manager()
+                .get(frame_id)
+                .and_then(|frame| frame.active_presentation())
+                .map(|id| neomacs_display_protocol::PresentationId::new(id.get())),
             &mut frame_display_state,
             &sealed_face_arena,
             &mut self.font_metrics,
+            |window| {
+                let window = neovm_core::window::WindowId(window.get() as u64);
+                (
+                    evaluator.compositor_scrolling_enabled(window),
+                    evaluator.permits_compositor_pixel_scroll(window),
+                )
+            },
         );
-        for coverage in &mut frame_display_state.scroll_coverage {
+        for coverage in &frame_display_state.scroll_coverage {
             let window = neovm_core::window::WindowId(coverage.content.window_id.get() as u64);
-            std::sync::Arc::make_mut(coverage).compositor_enabled =
-                evaluator.compositor_scrolling_enabled(window);
-            std::sync::Arc::make_mut(coverage).predict_pixels =
-                evaluator.permits_compositor_pixel_scroll(window);
             tracing::debug!(target: "neomacs_layout_engine::scroll_coverage",
                 predict_pixels = coverage.predict_pixels, window = window.0,
                 epoch = coverage.epoch, anchor_row = coverage.anchor_row, origin = coverage.origin,
@@ -4440,11 +4452,6 @@ impl LayoutEngine {
                 source_last = ?coverage.content.matrix.rows.last().map(|row| row.end_charpos),
                 text_bounds = ?coverage.content.text_clip_bounds,
                 "exported compositor coverage");
-        }
-        for renewal in &mut frame_display_state.scroll_coverage_renewals {
-            let window = neovm_core::window::WindowId(renewal.window.get() as u64);
-            renewal.compositor_enabled = evaluator.compositor_scrolling_enabled(window);
-            renewal.predict_pixels = evaluator.permits_compositor_pixel_scroll(window);
         }
         let resolved = match crate::frame_presentation::ResolvedFrame::new(frame_display_state) {
             Ok(resolved) => resolved,
@@ -4558,7 +4565,7 @@ impl LayoutEngine {
         neomacs_display_protocol::input_latency::sealed(frame_id.0, sealed.presentation(), || {
             evaluator.input_latency_viewport(frame_id.0)
         });
-        self.scroll_preview_coverage = sealed.scroll_coverage.clone();
+        self.scroll_preview_coverage.refresh(&sealed);
         self.last_frame_display_state = Some(sealed);
         // Acknowledge the chrome dirty flag for exactly the windows whose
         // chrome this layout GENERATED — GNU's `mark_window_display_accurate_1`.
@@ -5168,12 +5175,14 @@ impl LayoutEngine {
                 RetainedFrameState {
                     matrices: std::mem::take(&mut self.retained_window_matrices),
                     chrome_metrics: std::mem::take(&mut self.retained_window_chrome_metrics),
+                    scroll_preview_coverage: std::mem::take(&mut self.scroll_preview_coverage),
                 },
             );
         }
         let loaded = self.retained_by_frame.remove(&frame_id).unwrap_or_default();
         self.retained_window_matrices = loaded.matrices;
         self.retained_window_chrome_metrics = loaded.chrome_metrics;
+        self.scroll_preview_coverage = loaded.scroll_preview_coverage;
         self.retained_frame = Some(frame_id);
     }
 
