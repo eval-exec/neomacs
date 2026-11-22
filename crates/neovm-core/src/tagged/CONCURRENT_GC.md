@@ -489,25 +489,30 @@ mapped object storage and subsequent allocation to the collectible census;
 page backing and payload capacities are reported separately. These quantities
 describe managed storage, not allocator-resident memory or process RSS.
 
-Hash backing uses the actual index, slot and free-vector capacities, excluding
-parked decoded image entries. Neo materializes index and slots together on
+Hash backing uses the index's usable capacity and the slot/free-vector
+capacities, excluding parked decoded image entries. Neo materializes index and slots together on
 first access; GNU thaws hash/next/index eagerly and counts key/value storage
 only after growth. This representation difference is an explicit approximation.
 Serial hydration and capacity growth charge their positive storage delta once.
-The shared inactive mutation body remains uncharged: sealed owners already
-charge their own state around it. Ownership, promotion, and physical promotion
-telemetry remain unchanged by the image-byte exclusion.
+The unmetered inactive entry remains available to sealed owners, which charge
+their own state around it. Generic serial edits use the metered entry to the
+same mutation body. Ownership, promotion, and physical promotion telemetry
+remain unchanged by the image-byte exclusion.
 
 Typed serial insertion and fixed-length string edits report allocation only
 from the branch that materializes or grows storage. An existing-key overwrite
 or owned byte edit takes no backing snapshot or owner-heap lookup. Detached
 builders receive no serial reporter; sealed table edits retain their own sole
-billing. Unrestricted hash mutation retains a cold completion guard for
-whole-payload replacement and unwinding. The unrestricted string helper and
-its identity observer are gated behind test support; production string
+billing. Unrestricted hash mutation snapshots raw capacities at its edit
+boundary and computes the saturating total byte delta only when they change.
+A pending table keeps one completion guard across hydration and the callback,
+so replacement and unwinding retain the same positive net contract. The charge
+guard outlives the debug mutation-closure guard. The unrestricted string helper
+and its identity observer are gated behind test support; production string
 mutation is available only through the typed operations.
 
-Follow-up `N-gc-mutation-capability` is owned by gcpace, next after R4 lands.
+Follow-up `N-gc-mutation-capability` remains owned by gcpace, queued behind the
+E4 GC prerequisite work assigned after R4.
 Extend the typed insert/grow/COW operations into a capability with explicit
 replacement and growth publication. Once every production mutation uses those
 operations, remove both generic completion guards and the initial/final

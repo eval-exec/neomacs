@@ -842,6 +842,27 @@ pub struct HashTableEntry {
     pub value: Value,
 }
 
+/// Stack-only description of materialized backing, excluding parked entries.
+/// Byte conversion stays in one place and is unnecessary for unchanged edits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct HashTableStorageCapacities {
+    index: usize,
+    slots: usize,
+    free_slots: usize,
+}
+
+impl HashTableStorageCapacities {
+    pub(crate) fn materialized_bytes(self) -> usize {
+        self.index
+            .saturating_mul(size_of::<hash_index::IndexEntry>())
+            .saturating_add(
+                self.slots
+                    .saturating_mul(size_of::<Option<HashTableEntry>>()),
+            )
+            .saturating_add(self.free_slots.saturating_mul(size_of::<usize>()))
+    }
+}
+
 /// Compact backing store for a Lisp hash table.
 ///
 /// The hash index files each entry under the hash computed when it was made
@@ -1481,13 +1502,27 @@ impl HashTableStorage {
         Some(entry.value)
     }
 
+    #[inline]
     pub fn clear(&mut self) {
         self.switch_plan.invalidate();
         self.index.clear();
         self.slots.clear();
         self.free_slots.clear();
-        self.user_hashes.clear();
-        self.user_buckets.clear();
+        if !self.user_hashes.is_empty() || !self.user_buckets.is_empty() {
+            Self::clear_user_hash_maps(&mut self.user_hashes, &mut self.user_buckets);
+        }
+    }
+
+    /// Custom-test memo maps are disjoint from the paced backing. Keep their
+    /// recursive key drops out of the ordinary clear's fixed-capacity wrapper.
+    #[cold]
+    #[inline(never)]
+    fn clear_user_hash_maps(
+        hashes: &mut rustc_hash::FxHashMap<HashKey, i64>,
+        buckets: &mut rustc_hash::FxHashMap<i64, smallvec::SmallVec<[HashKey; 1]>>,
+    ) {
+        hashes.clear();
+        buckets.clear();
     }
 
     /// What the user-defined hash function answered for `key`, if it has been
@@ -1703,10 +1738,16 @@ impl HashTableStorage {
     /// hash/index/next arrays eagerly and counts key/value storage on growth;
     /// Neo materializes its index and slots together on first access.
     pub(crate) fn materialized_storage_bytes(&self) -> usize {
-        self.index
-            .storage_bytes()
-            .saturating_add(vec_storage_bytes(&self.slots))
-            .saturating_add(vec_storage_bytes(&self.free_slots))
+        self.materialized_storage_capacities().materialized_bytes()
+    }
+
+    #[inline]
+    pub(crate) fn materialized_storage_capacities(&self) -> HashTableStorageCapacities {
+        HashTableStorageCapacities {
+            index: self.index.capacity(),
+            slots: self.slots.capacity(),
+            free_slots: self.free_slots.capacity(),
+        }
     }
 
     /// What a proof-2 sealed edit charges its owner for growth (§4 Rev R3):
@@ -4017,12 +4058,10 @@ impl TaggedValue {
         self,
         f: impl FnOnce(&mut LispHashTable) -> R,
     ) -> Option<R> {
-        // SAFETY: this public serial entry supplies the inactive mutation
-        // contract. Sealed owners use mutate's shared body and charge there.
-        let _storage_charge =
-            unsafe { crate::tagged::gc::SerialHashTableStorageCharge::for_value(self) };
         // SAFETY: the caller supplies the same inactive-mutation contract.
-        unsafe { mutate::with_hash_table_mut_inactive(self, f) }
+        // Generic mutation meters the verified payload; sealed/typed owners
+        // retain the shared unmetered body and their own allocation reporters.
+        unsafe { mutate::with_hash_table_mut_inactive_metered(self, f) }
     }
 
     /// Edit through operations that report positive net backing growth.

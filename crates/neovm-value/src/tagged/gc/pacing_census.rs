@@ -126,22 +126,10 @@ impl TaggedHeap {
 /// charge their own state, so that body deliberately has no such guard.
 pub(crate) struct SerialHashTableStorageCharge {
     table: *mut HashTableObj,
-    before: usize,
+    before: crate::value::HashTableStorageCapacities,
 }
 
 impl SerialHashTableStorageCharge {
-    /// # Safety
-    /// The caller supplies the same serial access contract as [`Self::new`].
-    pub(crate) unsafe fn for_value(value: TaggedValue) -> Option<Self> {
-        if value.veclike_type()? != VecLikeType::HashTable {
-            return None;
-        }
-        let table = value.as_veclike_ptr()?.cast_mut().cast::<HashTableObj>();
-        // SAFETY: the type check establishes a table; access and lifetime
-        // remain the caller's serial mutation contract.
-        Some(unsafe { Self::new(table) })
-    }
-
     /// # Safety
     /// The caller owns serial table access (and any active Tier-H mutation
     /// lease). The initialized table must outlive this guard, with no Lisp
@@ -151,7 +139,20 @@ impl SerialHashTableStorageCharge {
             table,
             // SAFETY: the caller's exclusive serial access precedes any
             // mutation and holds no competing mutable payload reference.
-            before: unsafe { (*table).table.data.materialized_storage_bytes() },
+            before: unsafe { (*table).table.data.materialized_storage_capacities() },
+        }
+    }
+
+    /// Preserve the original saturating TOTAL net domain, including capacity
+    /// decreases and whole-payload replacement, only on a changed descriptor.
+    #[cold]
+    #[inline(never)]
+    fn charge_changed(&self, after: crate::value::HashTableStorageCapacities) {
+        let grown = after
+            .materialized_bytes()
+            .saturating_sub(self.before.materialized_bytes());
+        if grown != 0 {
+            with_tagged_heap(|heap| heap.note_allocation_bytes(grown));
         }
     }
 }
@@ -160,10 +161,9 @@ impl Drop for SerialHashTableStorageCharge {
     fn drop(&mut self) {
         // SAFETY: the guard's contract keeps the table live; the caller's
         // payload borrow has ended, including when a host closure unwinds.
-        let after = unsafe { (*self.table).table.data.materialized_storage_bytes() };
-        let grown = after.saturating_sub(self.before);
-        if grown != 0 {
-            with_tagged_heap(|heap| heap.note_allocation_bytes(grown));
+        let after = unsafe { (*self.table).table.data.materialized_storage_capacities() };
+        if after != self.before {
+            self.charge_changed(after);
         }
     }
 }

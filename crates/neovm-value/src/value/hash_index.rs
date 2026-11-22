@@ -108,12 +108,6 @@ impl HashIndex {
         self.table.capacity()
     }
 
-    pub(super) fn storage_bytes(&self) -> usize {
-        self.table
-            .capacity()
-            .saturating_mul(size_of::<IndexEntry>())
-    }
-
     pub(super) fn clear(&mut self) {
         self.table.clear();
     }
@@ -151,13 +145,14 @@ impl HashIndex {
 
     /// File a NEW entry; the caller has established that no entry matches.
     pub(super) fn insert_new(&mut self, hash: u64, key: HashKey, slot: usize) {
-        self.table
-            .insert_unique(hash, IndexEntry { hash, key, slot }, |entry| entry.hash);
+        self.insert_new_with_growth(hash, key, slot, &mut |_| {});
     }
 
     /// Only an absent-key insertion can grow the index. Keep its capacity
     /// observation out of overwrites, and let hashbrown decide whether a
     /// tombstone can be reused instead of forcing an eager reserve.
+    /// The shared generic body lets the unmetered reporter erase accounting,
+    /// and keeps insertion and its capacity observations visible together.
     #[inline]
     pub(super) fn insert_new_with_growth(
         &mut self,
@@ -166,11 +161,20 @@ impl HashIndex {
         slot: usize,
         report: &mut impl FnMut(usize),
     ) {
-        let before = self.storage_bytes();
-        self.insert_new(hash, key, slot);
-        let grown = self.storage_bytes().saturating_sub(before);
-        if grown != 0 {
-            report(grown);
+        let before = self.table.capacity();
+        self.table
+            .insert_unique(hash, IndexEntry { hash, key, slot }, |entry| entry.hash);
+        let after = self.table.capacity();
+        // Byte scaling is needed only when usable capacity increases. This
+        // includes tombstone reuse: capacity is items plus growth_left, so
+        // testing only whether the table was full would lose existing charges.
+        if after > before {
+            let before_bytes = before.saturating_mul(size_of::<IndexEntry>());
+            let after_bytes = after.saturating_mul(size_of::<IndexEntry>());
+            let grown = after_bytes.saturating_sub(before_bytes);
+            if grown != 0 {
+                report(grown);
+            }
         }
     }
 

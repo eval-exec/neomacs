@@ -719,12 +719,9 @@ pub fn with_hash_table_mut<R>(
     if super::gc::concurrent_hash_mutation_active() {
         return with_hash_table_mut_concurrent(value, f);
     }
-    // SAFETY: this branch owns serial access, and the inactive mutation
-    // contract forbids a callback or collection before the guard drops.
-    let _storage_charge = unsafe { super::gc::SerialHashTableStorageCharge::for_value(value) };
     // SAFETY: this mutation contains no collector transition. The caller's
     // closure obeys the ordinary heap-mutation contract, which forbids GC.
-    unsafe { with_hash_table_mut_inactive(value, f) }
+    unsafe { with_hash_table_mut_inactive_metered(value, f) }
 }
 
 /// Base mutation body for a caller that has already rejected Tier-H activation.
@@ -738,6 +735,30 @@ pub(crate) unsafe fn with_hash_table_mut_inactive<R>(
     value: TaggedValue,
     f: impl FnOnce(&mut LispHashTable) -> R,
 ) -> Option<R> {
+    // SAFETY: the caller supplies the inactive mutation contract. Sealed
+    // owners and typed writers retain their own allocation accounting.
+    unsafe { with_hash_table_mut_inactive_impl::<false, R>(value, f) }
+}
+
+/// Generic mutation retains a positive-net storage charge. Validation and
+/// barriers precede the normal snapshot, without repeating type observations.
+///
+/// # Safety
+/// Same inactive-owner and no-callback/no-GC contract as the unmetered entry.
+#[inline]
+pub(crate) unsafe fn with_hash_table_mut_inactive_metered<R>(
+    value: TaggedValue,
+    f: impl FnOnce(&mut LispHashTable) -> R,
+) -> Option<R> {
+    // SAFETY: the caller retains the same serialized payload extent.
+    unsafe { with_hash_table_mut_inactive_impl::<true, R>(value, f) }
+}
+
+#[inline]
+unsafe fn with_hash_table_mut_inactive_impl<const METERED: bool, R>(
+    value: TaggedValue,
+    f: impl FnOnce(&mut LispHashTable) -> R,
+) -> Option<R> {
     debug_assert!(!super::gc::concurrent_hash_mutation_active());
     LispCollectionRevision::changed(value);
     if value.veclike_type()? != VecLikeType::HashTable {
@@ -745,12 +766,44 @@ pub(crate) unsafe fn with_hash_table_mut_inactive<R>(
     }
     note_heap_write(value, HeapWriteKind::HashTableData);
     let ptr = value.as_veclike_ptr().unwrap() as *mut HashTableObj;
+    // SAFETY: validation established this initialized table; the serialized
+    // barrier enumerates pending entries directly and does not hydrate them.
+    if unsafe { (*ptr).table.needs_hydration() } {
+        // SAFETY: the cold scope keeps one net charge over both hydration and
+        // the callback, including replacement with smaller detached storage.
+        return Some(unsafe { with_pending_hash_table_mut::<METERED, R>(ptr, f) });
+    }
+    // SAFETY: the validated table is hydrated, and the caller retains serial
+    // access until the callback's borrow and its accounting guard have ended.
+    Some(unsafe { with_verified_hash_table_mut::<METERED, R>(ptr, f) })
+}
+
+#[cold]
+#[inline(never)]
+unsafe fn with_pending_hash_table_mut<const METERED: bool, R>(
+    ptr: *mut HashTableObj,
+    f: impl FnOnce(&mut LispHashTable) -> R,
+) -> R {
+    let _storage_charge = if METERED {
+        // SAFETY: this guard precedes the first materialization, and its
+        // serialized table extent also covers the verified edit below.
+        Some(unsafe { super::gc::SerialHashTableStorageCharge::new(ptr) })
+    } else {
+        None
+    };
+    // SAFETY: pending hydration precedes publication of the mutable payload.
+    unsafe { (*ptr).table.hydrate_pending() };
+    // SAFETY: the cold outer guard is the sole generic net biller. The inner
+    // debug closure guard ends before this storage guard, also on unwind.
+    unsafe { with_verified_hash_table_mut::<false, R>(ptr, f) }
+}
+
+#[inline]
+unsafe fn with_verified_hash_table_mut<const METERED: bool, R>(
+    ptr: *mut HashTableObj,
+    f: impl FnOnce(&mut LispHashTable) -> R,
+) -> R {
     unsafe {
-        // Lazy dump hydration before the caller sees the table (see
-        // `Value::as_hash_table`).
-        if (*ptr).table.needs_hydration() {
-            (*ptr).table.hydrate_pending();
-        }
         // Whatever `f` does to the table, a `switch` plan compiled from its
         // keys no longer describes it. A wholesale replacement (`*table =
         // other`) installs a table whose cache starts empty.
@@ -763,11 +816,20 @@ pub(crate) unsafe fn with_hash_table_mut_inactive<R>(
     // equal one compiled against this object.
     let epoch = unsafe { (*ptr).table.data.switch_epoch.wrapping_add(1) };
     unsafe { (*ptr).table.data.switch_epoch = epoch };
+    // Declare this before the debug closure guard: reverse-drop must end the
+    // mutation extent before allocation accounting reads the payload again.
+    let _storage_charge = if METERED {
+        // SAFETY: all non-payload bookkeeping is complete; the callback may
+        // replace this table, but its borrow cannot outlive the guard.
+        Some(unsafe { super::gc::SerialHashTableStorageCharge::new(ptr) })
+    } else {
+        None
+    };
     #[cfg(any(test, debug_assertions, feature = "test-support"))]
     let _guard = HeapMutClosureGuard::enter();
     let result = f(unsafe { &mut (*ptr).table });
     unsafe { (*ptr).table.data.switch_epoch = epoch };
-    Some(result)
+    result
 }
 
 /// Keep the snapshot, mutation lease and unwind/drop paths in the active clone.

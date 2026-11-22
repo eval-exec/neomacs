@@ -230,6 +230,62 @@ fn image_hash_pacing_lazy_hydration_is_charged_once() {
 }
 
 #[test]
+#[cfg(target_pointer_width = "64")]
+fn image_hash_pacing_pending_replacement_keeps_one_net_charge_on_unwind() {
+    // A size-3 table owns three 40-byte index entries and three 24-byte
+    // Option<HashTableEntry> slots on the supported 64-bit layout. This
+    // expected extent is independent of the pacing calculation under test.
+    const REPLACEMENT_BYTES: usize = 3 * (40 + 24);
+    for inactive_entry in [false, true] {
+        for unwind in [false, true] {
+            let mut heap = TestHeap::new();
+            let mut pending = table(0);
+            pending.set_pending_dump_entries(
+                (0..1024)
+                    .map(|key| {
+                        let value = TaggedValue::fixnum(key);
+                        (HashKey::Int(key), value, Some(value))
+                    })
+                    .collect(),
+            );
+            let image = heap.alloc_hash_table(pending);
+            assert_eq!(heap.note_image_object(image), ImageStamp::Stamped);
+            assert_eq!(backing(&heap, image), 0, "pending starts unmaterialized");
+            heap.reset_bytes_since_gc();
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let replace = |data: &mut LispHashTable| {
+                    assert!(data.data.pending_entries().is_none());
+                    assert_eq!(data.data.len(), 1024, "the callback sees hydration");
+                    *data =
+                        LispHashTable::new_with_options(HashTableTest::Eq, 3, None, 1.5, 0.8125);
+                    if unwind {
+                        panic!("after replacing hydrated backing with a smaller table");
+                    }
+                };
+                if inactive_entry {
+                    // SAFETY: sole serial fixture owner; the callback neither
+                    // calls Lisp nor collects, including before its unwind.
+                    unsafe { image.with_hash_table_mut_inactive(replace) }.unwrap();
+                } else {
+                    image.with_hash_table_mut(replace).unwrap();
+                }
+            }));
+            assert_eq!(outcome.is_err(), unwind);
+            assert_eq!(
+                heap.bytes_since_gc_exact(),
+                REPLACEMENT_BYTES,
+                "one initial/final net charge, not hydration plus replacement"
+            );
+            assert!(
+                !crate::tagged::mutate::in_heap_mut_closure_for_test(),
+                "the mutation extent ends before accounting, also on unwind"
+            );
+            assert_eq!(image.as_hash_table().unwrap().data.len(), 0);
+        }
+    }
+}
+
+#[test]
 fn image_hash_pacing_minor_first_excludes_stamped_header_and_pending() {
     for pending in [false, true] {
         let mut raw = TaggedHeap::new();
