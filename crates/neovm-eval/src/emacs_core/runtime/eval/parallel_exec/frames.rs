@@ -616,10 +616,74 @@ impl SlotRecord {
     }
 }
 
+/// Names one dynamic record the serial side holds for this owner: a specpdl
+/// entry the owner did not mirror (`save-excursion`, an unwind-protect, a
+/// localized binding). Opaque: the owner never dereferences it, and it roots
+/// nothing here. E5's `OwnerSerialState` mints it; the V1 harness double does.
+///
+/// GNU's `Bunbind` pops entries of any kind (`unbind_to` walks the specpdl,
+/// `eval.c:3946-3957`), so owner bindings and serial records share one order.
+/// That is why this is a marker in the one LIFO, not a count beside it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct SerialRecordToken(pub(crate) u64);
+
+/// Names one handler the serial side holds for this owner (`catch`,
+/// `condition-case`). A second type because GNU keeps the handler list apart
+/// from the specpdl (`struct handler` carries its own `pdlcount`,
+/// `lisp.h:3863`), and so does this arena.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct SerialHandlerToken(pub(crate) u64);
+
+/// One entry of the owner's dynamic-record LIFO: an owner binding, or the
+/// marker of a record the serial side holds. A `Serial` entry publishes no
+/// root.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum OwnerRecord {
+    Plain(SlotRecord),
+    Serial(SerialRecordToken),
+}
+
+impl From<SlotRecord> for OwnerRecord {
+    fn from(record: SlotRecord) -> Self {
+        Self::Plain(record)
+    }
+}
+
+impl From<SerialRecordToken> for OwnerRecord {
+    fn from(token: SerialRecordToken) -> Self {
+        Self::Serial(token)
+    }
+}
+
+/// One entry of the owner's handler LIFO. See [`OwnerRecord`].
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum OwnerHandler {
+    Owner(HandlerRecord),
+    Serial(SerialHandlerToken),
+}
+
+impl From<HandlerRecord> for OwnerHandler {
+    fn from(record: HandlerRecord) -> Self {
+        Self::Owner(record)
+    }
+}
+
+impl From<SerialHandlerToken> for OwnerHandler {
+    fn from(token: SerialHandlerToken) -> Self {
+        Self::Serial(token)
+    }
+}
+
 /// The owner's handler stack with typed marks.
+///
+/// Marks are depths, so they keep their meaning over entries of either kind.
+/// [`HandlerStack::truncate`] removes every entry above the mark. A frame
+/// that owns an [`OwnerHandler::Serial`] entry above its base never truncates
+/// owner-locally: the serial cleanup removes it and reports what it removed
+/// (VM-EXECUTOR-DESIGN r1 §5).
 #[derive(Default)]
 pub(crate) struct HandlerStack {
-    records: Vec<HandlerRecord>,
+    records: Vec<OwnerHandler>,
 }
 
 impl HandlerStack {
@@ -634,8 +698,8 @@ impl HandlerStack {
     }
 
     #[doc(hidden)]
-    pub fn push(&mut self, record: HandlerRecord) {
-        self.records.push(record);
+    pub fn push(&mut self, record: impl Into<OwnerHandler>) {
+        self.records.push(record.into());
     }
 
     /// Pop every record above MARK; returns how many were removed.
@@ -652,18 +716,63 @@ impl HandlerStack {
         self.records.len()
     }
 
+    /// The entries above MARK, outermost first.
+    #[doc(hidden)]
+    pub fn above(&self, mark: HandlerMark) -> impl Iterator<Item = OwnerHandler> + '_ {
+        let keep = mark.depth().min(self.records.len());
+        self.records[keep..].iter().copied()
+    }
+
+    /// Whether a serial handler sits above MARK.
+    #[doc(hidden)]
+    pub fn has_serial_above(&self, mark: HandlerMark) -> bool {
+        self.above(mark)
+            .any(|entry| matches!(entry, OwnerHandler::Serial(_)))
+    }
+
+    /// Whether exactly these serial markers are the top run, `tokens[0]`
+    /// innermost (the pop order of `unbind_to`). A caller checks every LIFO
+    /// it will touch before it pops on any of them.
+    #[doc(hidden)]
+    pub fn serial_run_matches(&self, tokens: &[SerialHandlerToken]) -> bool {
+        self.records
+            .len()
+            .checked_sub(tokens.len())
+            .is_some_and(|keep| {
+                self.records[keep..].iter().rev().zip(tokens).all(
+                    |(entry, token)| matches!(entry, OwnerHandler::Serial(seen) if *seen == *token),
+                )
+            })
+    }
+
+    /// Remove exactly these serial markers from the top, `tokens[0]` innermost.
+    ///
+    /// Every entry is compared before any is removed: on a mismatch nothing
+    /// changes and the caller has applied nothing.
+    #[doc(hidden)]
+    pub fn pop_serial_run(&mut self, tokens: &[SerialHandlerToken]) -> Result<usize, ()> {
+        if !self.serial_run_matches(tokens) {
+            return Err(());
+        }
+        self.records.truncate(self.records.len() - tokens.len());
+        Ok(tokens.len())
+    }
+
     #[doc(hidden)]
     pub fn trace_roots(&self, visit: &mut dyn FnMut(RootGroup, Value)) {
         for record in &self.records {
-            record.trace_frame_roots(visit);
+            if let OwnerHandler::Owner(record) = record {
+                record.trace_frame_roots(visit);
+            }
         }
     }
 }
 
-/// The owner's binding-record stack with typed marks.
+/// The owner's binding-record stack with typed marks. Entry kinds and the
+/// truncation rule are [`HandlerStack`]'s.
 #[derive(Default)]
 pub(crate) struct BindStack {
-    records: Vec<SlotRecord>,
+    records: Vec<OwnerRecord>,
 }
 
 impl BindStack {
@@ -678,8 +787,8 @@ impl BindStack {
     }
 
     #[doc(hidden)]
-    pub fn push(&mut self, record: SlotRecord) {
-        self.records.push(record);
+    pub fn push(&mut self, record: impl Into<OwnerRecord>) {
+        self.records.push(record.into());
     }
 
     /// Pop every record above MARK; returns how many were removed.
@@ -696,10 +805,52 @@ impl BindStack {
         self.records.len()
     }
 
+    /// The entries above MARK, outermost first.
+    #[doc(hidden)]
+    pub fn above(&self, mark: OwnerRecordMark) -> impl Iterator<Item = OwnerRecord> + '_ {
+        let keep = mark.depth().min(self.records.len());
+        self.records[keep..].iter().copied()
+    }
+
+    /// Whether a serial record sits above MARK.
+    #[doc(hidden)]
+    pub fn has_serial_above(&self, mark: OwnerRecordMark) -> bool {
+        self.above(mark)
+            .any(|entry| matches!(entry, OwnerRecord::Serial(_)))
+    }
+
+    /// Whether exactly these serial markers are the top run; see
+    /// [`HandlerStack::serial_run_matches`].
+    #[doc(hidden)]
+    pub fn serial_run_matches(&self, tokens: &[SerialRecordToken]) -> bool {
+        self.records
+            .len()
+            .checked_sub(tokens.len())
+            .is_some_and(|keep| {
+                self.records[keep..].iter().rev().zip(tokens).all(
+                    |(entry, token)| matches!(entry, OwnerRecord::Serial(seen) if *seen == *token),
+                )
+            })
+    }
+
+    /// Remove exactly these serial markers from the top, `tokens[0]` innermost.
+    /// Every entry is compared before any is removed; see
+    /// [`HandlerStack::pop_serial_run`].
+    #[doc(hidden)]
+    pub fn pop_serial_run(&mut self, tokens: &[SerialRecordToken]) -> Result<usize, ()> {
+        if !self.serial_run_matches(tokens) {
+            return Err(());
+        }
+        self.records.truncate(self.records.len() - tokens.len());
+        Ok(tokens.len())
+    }
+
     #[doc(hidden)]
     pub fn trace_roots(&self, visit: &mut dyn FnMut(RootGroup, Value)) {
         for record in &self.records {
-            record.trace_frame_roots(visit);
+            if let OwnerRecord::Plain(record) = record {
+                record.trace_frame_roots(visit);
+            }
         }
     }
 }
@@ -1053,6 +1204,61 @@ impl FrameArena {
         }
     }
 
+    /// The VM frame ID names, if it is still the live top. Refusal rules are
+    /// [`FrameArena::interp`]'s.
+    #[doc(hidden)]
+    pub fn vm(&self, id: FrameId) -> Option<&VmFrame> {
+        let slot = self.frames.last()?;
+        if slot.generation != id.generation {
+            return None;
+        }
+        if u32::try_from(self.frames.len()).ok() != Some(id.depth.get()) {
+            return None;
+        }
+        match &slot.frame {
+            OwnedFrame::Vm(frame) => Some(frame),
+            OwnedFrame::Interp(_) => None,
+        }
+    }
+
+    /// Update the VM frame ID names in place. Refusal rules are
+    /// [`FrameArena::with_interp`]'s.
+    #[doc(hidden)]
+    pub fn with_vm<R>(&mut self, id: FrameId, update: impl FnOnce(&mut VmFrame) -> R) -> Option<R> {
+        let depth = u32::try_from(self.frames.len()).ok();
+        let slot = self.frames.last_mut()?;
+        if slot.generation != id.generation {
+            return None;
+        }
+        if depth != Some(id.depth.get()) {
+            return None;
+        }
+        match &mut slot.frame {
+            OwnedFrame::Vm(frame) => Some(update(frame)),
+            OwnedFrame::Interp(_) => None,
+        }
+    }
+
+    /// The live top VM frame and its segment, in one borrow.
+    ///
+    /// The executor reads an opcode's operands here. The segment is the
+    /// arena's operand vector from the frame's base to its top.
+    #[doc(hidden)]
+    pub fn vm_segment(&self, id: FrameId) -> Option<&[Value]> {
+        let frame = self.vm(id)?;
+        Some(self.operand_segment(frame.operands))
+    }
+
+    /// The live top frame's segment when it is a VM frame. A poll or escape
+    /// handler that holds no [`FrameId`] reads the published operands here.
+    #[doc(hidden)]
+    pub fn top_vm_segment(&self) -> Option<&[Value]> {
+        let OwnedFrame::Vm(frame) = &self.frames.last()?.frame else {
+            return None;
+        };
+        Some(self.operand_segment(frame.operands))
+    }
+
     /// Pop the frame ID names. A stale or non-top handle is refused, exactly
     /// like an owner binding record: the arena is a stack, not a map.
     #[doc(hidden)]
@@ -1106,9 +1312,94 @@ impl FrameArena {
         self.operands.get(start..end).unwrap_or(&[])
     }
 
+    /// The top VM frame's cursor and the operand vector, after the
+    /// stale/non-top check. Two disjoint borrows, so a mutator updates both in
+    /// one call.
+    ///
+    /// The segment mutators refuse a frame whose segment does not end at the
+    /// operand vector's end: only the top frame appends, and a frame whose
+    /// cursor was not maintained through these methods is not one this arena
+    /// can grow consistently.
+    fn top_vm_parts(&mut self, id: FrameId) -> Option<(&mut OperandCursor, &mut Vec<Value>)> {
+        let depth = u32::try_from(self.frames.len()).ok();
+        let slot = self.frames.last_mut()?;
+        if slot.generation != id.generation {
+            return None;
+        }
+        if depth != Some(id.depth.get()) {
+            return None;
+        }
+        let OwnedFrame::Vm(frame) = &mut slot.frame else {
+            return None;
+        };
+        if frame.operands.base() + frame.operands.len() != self.operands.len() {
+            return None;
+        }
+        Some((&mut frame.operands, &mut self.operands))
+    }
+
+    /// Append VALUE to the top VM frame's segment. One store site: the value
+    /// is published (it is in the operand vector the scan walks) when this
+    /// returns.
+    #[doc(hidden)]
+    pub fn vm_push(&mut self, id: FrameId, value: Value) -> Option<()> {
+        let (cursor, operands) = self.top_vm_parts(id)?;
+        operands.push(value);
+        *cursor = OperandCursor::new(cursor.base(), cursor.len() + 1);
+        Some(())
+    }
+
+    /// Remove and return the top VM frame's top operand. Never pops below the
+    /// frame's base; an empty segment is `None`.
+    #[doc(hidden)]
+    pub fn vm_pop(&mut self, id: FrameId) -> Option<Value> {
+        let (cursor, operands) = self.top_vm_parts(id)?;
+        if cursor.len() == 0 {
+            return None;
+        }
+        let value = operands.pop()?;
+        *cursor = OperandCursor::new(cursor.base(), cursor.len() - 1);
+        Some(value)
+    }
+
+    /// Replace the operand OFFSET slots below the top (0 is the top).
+    #[doc(hidden)]
+    pub fn vm_set_operand(&mut self, id: FrameId, offset: usize, value: Value) -> Option<()> {
+        let (cursor, operands) = self.top_vm_parts(id)?;
+        if offset >= cursor.len() {
+            return None;
+        }
+        let index = cursor.base() + cursor.len() - 1 - offset;
+        *operands.get_mut(index)? = value;
+        Some(())
+    }
+
+    /// Cut the top VM frame's segment down to LEN operands. LEN above the
+    /// current length is refused.
+    #[doc(hidden)]
+    pub fn vm_truncate_operands(&mut self, id: FrameId, len: usize) -> Option<()> {
+        let (cursor, operands) = self.top_vm_parts(id)?;
+        if len > cursor.len() {
+            return None;
+        }
+        operands.truncate(cursor.base() + len);
+        *cursor = OperandCursor::new(cursor.base(), len);
+        Some(())
+    }
+
+    #[doc(hidden)]
+    pub fn handlers(&self) -> &HandlerStack {
+        &self.handlers
+    }
+
     #[doc(hidden)]
     pub fn handlers_mut(&mut self) -> &mut HandlerStack {
         &mut self.handlers
+    }
+
+    #[doc(hidden)]
+    pub fn bindings(&self) -> &BindStack {
+        &self.bindings
     }
 
     #[doc(hidden)]

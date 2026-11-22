@@ -34,6 +34,7 @@ use crate::emacs_core::builtins::{
     builtin_stringp_1, builtin_treesit_available_p,
 };
 use crate::emacs_core::builtins_extra::builtin_byteorder;
+use crate::emacs_core::bytecode::Op;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::eval::world::poll::PollOutcome;
 use crate::emacs_core::subr::effect_schema::{ParallelArm, SealedAuthority, WorldSplit};
@@ -142,6 +143,13 @@ pub(crate) trait SealedOps {
     fn read_header_word(&mut self, ctx: &mut Context, name: &str, args: &[Value]) -> CoreOutcome;
 }
 
+/// Which record LIFO an [`EngineFault::EscapeRecordContract`] names.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RecordStack {
+    Bindings,
+    Handlers,
+}
+
 /// Why the stepper stopped before a Lisp value.
 #[derive(Debug)]
 pub(crate) enum EngineFault {
@@ -157,6 +165,30 @@ pub(crate) enum EngineFault {
     /// A [`OwnerPoll`] edge refused. `Busy` is retried inside `Mutator::poll`,
     /// so this is a genuine refusal. [`Stage1::settle`] unwinds it to `Idle`.
     Poll(RendezvousError),
+    /// A VM escape completion reported operand counts other than the
+    /// opcode's static stack effect (VM-EXECUTOR-DESIGN r1 R3). Nothing was
+    /// applied: the fault is raised before the record LIFOs or the segment.
+    EscapeStackEffect {
+        op: Op,
+        expected_consumed: u16,
+        expected_produced: u16,
+        got_consumed: u16,
+        got_produced: u16,
+    },
+    /// A VM escape completion consumes more operands than the frame's
+    /// segment holds. Nothing was applied.
+    EscapeStackUnderflow {
+        op: Op,
+        consumed: u16,
+        available: u16,
+    },
+    /// A VM escape completion's serial tokens are not the top run of the
+    /// named LIFO (r1 R1). Both LIFOs are checked before either is touched,
+    /// so nothing was applied.
+    EscapeRecordContract(RecordStack),
+    /// The dispatch table admitted an opcode, or an escape returned a
+    /// completion shape, this executor has no arm for.
+    DispatchContract(Op),
 }
 
 /// Why a plain slot access stopped before it touched the slot.
