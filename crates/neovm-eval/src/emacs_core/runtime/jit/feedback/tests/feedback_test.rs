@@ -61,10 +61,15 @@ fn a_published_source_is_ordered_before_a_concurrent_compile_read() {
     std::thread::scope(|scope| {
         let reader = scope.spawn(|| {
             started.wait();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
             loop {
                 if let CallTarget::Sources(live) = s.target() {
                     return live.len();
                 }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "the compile reader never saw the published source"
+                );
                 std::hint::spin_loop();
             }
         });
