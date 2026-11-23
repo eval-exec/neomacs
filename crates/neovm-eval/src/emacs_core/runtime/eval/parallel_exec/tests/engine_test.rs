@@ -456,6 +456,12 @@ impl PlainAccess for TestSlots {
         true
     }
 
+    /// This double models no watchers, no retired projection and no dead
+    /// channel: every owner binding is undone on the owner.
+    fn unbind_needs_serial(&self, _sym: neovm_value::intern::SymId) -> bool {
+        false
+    }
+
     fn push_binding(
         &mut self,
         sym: neovm_value::intern::SymId,

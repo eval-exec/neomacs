@@ -240,6 +240,7 @@ impl VmEscape for RecordingEscape {
                         .collect::<Vec<_>>()
                         .join(" ")
                 ),
+                EscapeWhy::PlainUnbind { .. } => " [plain]".to_string(),
                 _ => String::new(),
             };
             log.push(format!("escape {:?}{why}", request.op));
@@ -569,6 +570,11 @@ struct HarnessPlain {
     admissions_asked: Cell<usize>,
     slot_writes: usize,
     canonical_writes: usize,
+    /// The symbols whose binding the serial side must undo
+    /// (N-v2-unbind-revalidate): a watcher was added while the binding was
+    /// live, the projection was retired, or the channel died. Read at unbind
+    /// time through `unbind_needs_serial`.
+    watched: std::cell::RefCell<std::collections::HashSet<SymId>>,
     log: Option<EffectLog>,
 }
 
@@ -585,8 +591,16 @@ impl HarnessPlain {
             admissions_asked: Cell::new(0),
             slot_writes: 0,
             canonical_writes: 0,
+            watched: std::cell::RefCell::new(std::collections::HashSet::new()),
             log: None,
         }
+    }
+
+    /// A watcher is added for `sym` while its binding is live: the serial
+    /// side's `add-variable-watch`, run from an escape inside the `let`.
+    fn watched(mut self, sym: SymId) -> Self {
+        self.watched.borrow_mut().insert(sym);
+        self
     }
 
     /// Admit SYM with the harness slot.
@@ -713,6 +727,10 @@ impl PlainAccess for HarnessPlain {
 
     fn canonical_bound(&self, sym: SymId) -> bool {
         self.canonical.contains_key(&sym)
+    }
+
+    fn unbind_needs_serial(&self, sym: SymId) -> bool {
+        self.watched.borrow().contains(&sym)
     }
 
     fn push_binding(
@@ -3582,6 +3600,93 @@ fn vm_unbind_walks_mixed_records_in_lifo_order() {
         );
         assert_clear(&engine);
     }
+}
+
+#[test]
+fn vm_unbind_after_a_watcher_added_inside_let_takes_the_serial_unbind() {
+    // N-v2-unbind-revalidate. GNU's `do_one_unbind` for a `SPECPDL_LET`
+    // (eval.c:3848-3870) re-reads the symbol as the binding leaves: a watcher
+    // added while the binding was live gets the `unlet` notification through
+    // `set_internal`, and a variable made local or forwarded goes through
+    // `set_default_internal`. The serial `unbind_owner_binding`
+    // (owner_bindings.rs:1250-1293) keeps a slow path for exactly that; the
+    // owner-local restore writes the slot and nothing else. So when the
+    // symbol gained a watcher inside the `let`, the walk must NOT restore on
+    // the owner: it hands the record to the serial unbind as ONE
+    // `PlainUnbind` escape naming the symbol, and the slot is as the serial
+    // side left it. The serial run above it still leaves first, as before.
+    let mut ctx = context();
+    let x = plain_sym("pvm-watched");
+    let (xs, one, two) = (Value::from_sym_id(x), Value::fixnum(1), Value::fixnum(2));
+    let ops = plain_program(vec![
+        Op::Constant(1),
+        Op::VarBind(0),
+        Op::SaveExcursion,
+        Op::Unbind(2),
+        Op::Nil,
+    ]);
+    // Constant(1)=0, VarBind(0)=1, SaveExcursion=2, Unbind(2)=3, Nil=4.
+    let unbind_pc = 3;
+    let log_shared = EffectLog::default();
+    // The watcher is on `x` by the time the binding leaves: the serial side
+    // added it from the SaveExcursion escape, inside the `let`.
+    let plain = HarnessPlain::new()
+        .admit(x)
+        .watched(x)
+        .logging(log_shared.clone());
+    let mut engine = harness_with_plain(
+        RecordingEscape::logging_with_script(
+            vec![
+                Some(completion_pushing(&Op::SaveExcursion, token(9))),
+                Some(completion_popping(&Op::Unbind(2), &[token(9)])),
+                // The PlainUnbind escape: the serial side undoes `x`'s
+                // binding; nothing is pushed or popped by token.
+                Some(EscapeCompletion::fall_through(&Op::Unbind(2))),
+                None,
+            ],
+            log_shared.clone(),
+        ),
+        plain,
+    );
+    let outcome = engine.run(&mut ctx, program_with(&ops, &vec![xs, one, two]));
+    assert_eq!(done_value(&mut engine, outcome), Value::NIL);
+    assert_eq!(
+        log_shared.entries(),
+        vec![
+            "slot <- 1",
+            "escape SaveExcursion",
+            "escape Unbind(2) [9]",
+            "escape Unbind(2) [plain]",
+            "escape Return",
+        ],
+        "the serial run leaves first, then the watched binding is handed to the serial unbind, and the owner never restores it"
+    );
+    let escape = engine.escape_handler();
+    assert_eq!(
+        escape.requests.len(),
+        4,
+        "record, serial run, plain, Return"
+    );
+    assert!(
+        matches!(
+            escape.requests[2].why,
+            EscapeWhy::PlainUnbind { symbol } if symbol == x
+        ),
+        "the second Unbind escape names the watched symbol"
+    );
+    assert_eq!(escape.requests[2].pc, Pc::new(unbind_pc));
+    assert_eq!(escape.requests[2].op, ops[unbind_pc]);
+    // The LIFO at the plain hand-off holds exactly the one owner entry.
+    assert_eq!(
+        escape.lifos[2].0,
+        vec![None],
+        "the owner record for x is the only entry left at the hand-off"
+    );
+    assert_eq!(
+        escape.lifos[3].0,
+        Vec::<Option<u64>>::new(),
+        "empty at Return"
+    );
 }
 
 #[test]

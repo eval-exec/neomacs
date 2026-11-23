@@ -455,6 +455,18 @@ pub(crate) trait PlainAccess: OwnerSlotsMut {
     /// so an unbind of anything but the top is a defect on one side of the
     /// record pairing, which the caller reports as such.
     fn pop_binding(&mut self, id: OwnerRecordId) -> Option<OwnerBindingRecord>;
+    /// Whether a binding of `sym` must be undone by the serial side
+    /// (N-v2-unbind-revalidate). GNU's `do_one_unbind` for a `SPECPDL_LET`
+    /// re-reads the symbol when the binding leaves (eval.c:3848-3870): a
+    /// watcher added while the binding was live gets the `unlet` notification
+    /// through `set_internal`, a variable made local or forwarded goes
+    /// through `set_default_internal`. The owner-local restore writes the
+    /// slot and nothing else, so the serial `unbind_owner_binding`
+    /// (owner_bindings.rs:1250-1293) keeps its slow path for exactly these
+    /// cases: `has_watchers`, a retired projection, a dead channel. This is
+    /// that predicate, read cold at unbind time. A `true` hands the record
+    /// to the serial unbind; nothing is restored on the owner.
+    fn unbind_needs_serial(&self, sym: SymId) -> bool;
 }
 
 /// The slab half of [`PlainAccess::pop_binding`] over a slab the implementor
@@ -596,6 +608,10 @@ pub(crate) fn effective_plain_bind<A: PlainAccess + ?Sized>(
 ///
 /// A record that is not the slab's top is [`RecordMismatch`]: the caller's
 /// entry and the slab disagree, nothing was taken, and the slot is as it was.
+///
+/// This is the restore without the unbind-time re-validation; the stepper's
+/// walk and the unwinds go through [`effective_plain_unbind_checked`], which
+/// is this function behind [`PlainAccess::unbind_needs_serial`].
 pub(crate) fn effective_plain_unbind<A: PlainAccess + ?Sized>(
     access: &mut A,
     record: SlotRecord,
@@ -615,4 +631,35 @@ pub(crate) fn effective_plain_unbind<A: PlainAccess + ?Sized>(
         }
     }
     Ok(())
+}
+
+/// What the stepper's walk does with one owner binding entry (N-v2-
+/// unbind-revalidate). The re-validation runs BEFORE anything is taken, so a
+/// refused record leaves the slab, the slot and the executor's LIFO exactly
+/// as they were for the serial unbind to undo.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PlainUnbind {
+    /// Undone on the owner: the slot and the canonical storage are restored.
+    Done,
+    /// The serial side undoes it: [`PlainAccess::unbind_needs_serial`] held
+    /// for the symbol, and nothing was taken or restored.
+    NeedsSerial { symbol: SymId },
+}
+
+/// One composed unbind with the unbind-time re-validation: GNU's
+/// `do_one_unbind` for a `SPECPDL_LET` re-reads the symbol as the binding
+/// leaves (eval.c:3848-3870), so a watcher added while the binding was live
+/// is notified, and a variable made local or forwarded takes the default
+/// path. The predicate is [`PlainAccess::unbind_needs_serial`]; a refusal
+/// hands the record to the serial unbind and restores nothing here.
+pub(crate) fn effective_plain_unbind_checked<A: PlainAccess + ?Sized>(
+    access: &mut A,
+    record: SlotRecord,
+) -> Result<PlainUnbind, RecordMismatch> {
+    if access.unbind_needs_serial(record.symbol) {
+        return Ok(PlainUnbind::NeedsSerial {
+            symbol: record.symbol,
+        });
+    }
+    effective_plain_unbind(access, record).map(|()| PlainUnbind::Done)
 }

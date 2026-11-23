@@ -29,8 +29,9 @@
 
 use super::dispatch::opcode_slot;
 use super::effective::{
-    EffectivePlainKey, EraId, PlainAccess, PlainRefusal, ShapeGeneration, effective_plain_bind,
-    effective_plain_read, effective_plain_unbind, effective_plain_write,
+    EffectivePlainKey, EraId, PlainAccess, PlainRefusal, PlainUnbind, ShapeGeneration,
+    effective_plain_bind, effective_plain_read, effective_plain_unbind_checked,
+    effective_plain_write,
 };
 use super::engine::{CoreOutcome, EngineFault, RecordStack};
 use super::frames::{
@@ -266,6 +267,16 @@ pub(crate) enum EscapeWhy {
     /// completion's `popped` is that run.
     SerialUnbind {
         records: Vec<SerialRecordToken>,
+    },
+    /// `Unbind n` reached an owner binding whose symbol the unbind-time
+    /// re-validation refused (N-v2-unbind-revalidate): GNU's `do_one_unbind`
+    /// for a `SPECPDL_LET` re-reads the symbol as the binding leaves
+    /// (eval.c:3848-3870), so a watcher added while the binding was live is
+    /// notified through `set_internal`. The serial side undoes this one
+    /// binding by symbol, the slow path of `unbind_owner_binding`
+    /// (owner_bindings.rs:1250-1293); the owner restored nothing.
+    PlainUnbind {
+        symbol: SymId,
     },
 }
 
@@ -1149,16 +1160,56 @@ where
             };
             match top {
                 OwnerRecord::Plain(record) => {
-                    // C2: the slab record this entry names is taken from the
-                    // top of the slab's LIFO and undone; only then does the
-                    // entry leave. The entry's id is not the slab's top: the
-                    // record-contract fault, nothing taken, the scene kept.
-                    if effective_plain_unbind(&mut self.plain, record).is_err() {
-                        return Self::record_contract_fault();
+                    // N-v2-unbind-revalidate: re-validate the symbol before
+                    // anything is taken. GNU's `do_one_unbind` for a LET
+                    // re-reads it as the binding leaves (eval.c:3848-3870); a
+                    // watcher added while the binding was live, a retired
+                    // projection or a dead channel all take the serial
+                    // unbind's slow path.
+                    let symbol = record.symbol;
+                    match effective_plain_unbind_checked(&mut self.plain, record) {
+                        Ok(PlainUnbind::Done) => {
+                            // C2: the slab record this entry names is taken
+                            // from the top of the slab's LIFO and undone;
+                            // only then does the entry leave. The entry's id
+                            // is not the slab's top: the record-contract fault,
+                            // nothing taken, the scene kept. Nothing touched
+                            // the LIFO between the peek and this pop.
+                            self.arena.bindings_mut().pop();
+                            remaining -= 1;
+                        }
+                        Ok(PlainUnbind::NeedsSerial { .. }) => {
+                            // Refused: ONE escape naming the symbol, and the
+                            // serial side undoes the binding by it
+                            // (`unbind_owner_binding`'s slow path).
+                            if let Step::Stop(outcome) = self.escape(
+                                op.clone(),
+                                EscapeWhy::PlainUnbind { symbol },
+                                frame,
+                                operands,
+                                branch_pc,
+                                program,
+                            ) {
+                                return Step::Stop(outcome);
+                            }
+                            if let Err(fault) = self.set_pc(frame, branch_pc) {
+                                return Step::Stop(VmOutcome::Fault(fault));
+                            }
+                            // The completion undid the binding; the entry
+                            // leaves the executor's LIFO with it. The record
+                            // is still the top unless the completion pushed a
+                            // record above it, which the next iteration walks.
+                            match self.arena.bindings().above(bind_base).last() {
+                                Some(OwnerRecord::Plain(top)) if top.symbol == symbol => {
+                                    self.arena.bindings_mut().pop();
+                                }
+                                Some(_) => {}
+                                None => return Self::record_contract_fault(),
+                            }
+                            remaining -= 1;
+                        }
+                        Err(_) => return Self::record_contract_fault(),
                     }
-                    // Nothing touched the LIFO between the peek and this pop.
-                    self.arena.bindings_mut().pop();
-                    remaining -= 1;
                 }
                 OwnerRecord::Serial(innermost) => {
                     // The maximal run from the top, at most `remaining` long.
