@@ -294,7 +294,7 @@ impl FontResolver {
             size: Some(key.size),
             fontset_generation: key.fontset_generation,
         };
-        if let Some(cached) = self.cached_character(&key, &order_key) {
+        if let Some(cached) = self.cached_character(&key) {
             return cached;
         }
         let (selected, fallback_winner, fallback_order_gen) =

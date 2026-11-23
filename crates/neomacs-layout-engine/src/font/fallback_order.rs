@@ -117,7 +117,10 @@ pub(crate) fn order_fallback_group(
         }
     }
     group.entries.clone_from(&ordered);
-    if group.entries.first() != previous_front.as_ref() {
+    // A new group has no stamps. Clear already bumped, so a missing group
+    // cannot be named by a live answer. Bumping here would drop every other
+    // face's fast path.
+    if previous_front.is_some() && group.entries.first() != previous_front.as_ref() {
         bump_order_generation();
     }
     ordered

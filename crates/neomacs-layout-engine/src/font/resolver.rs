@@ -939,7 +939,7 @@ impl FontResolver {
             size: Some(size),
             fontset_generation: key.fontset_generation,
         };
-        if let Some(cached) = self.cached_character(&key, &order_key) {
+        if let Some(cached) = self.cached_character(&key) {
             return cached;
         }
 
@@ -1674,11 +1674,7 @@ impl FontResolver {
     /// A generation match takes no order lock. A mismatch checks the front
     /// while `char_cache` is held and then takes `FALLBACK_ORDERS`. Callers
     /// must not hold `FALLBACK_ORDERS` here.
-    fn cached_character(
-        &self,
-        key: &CharCacheKey,
-        _order_key: &crate::font::fallback_order::FallbackOrderKey,
-    ) -> Option<CharacterResolution> {
+    fn cached_character(&self, key: &CharCacheKey) -> Option<CharacterResolution> {
         let mut cache = self.char_cache.lock().ok()?;
         let cached = cache.get_mut(key)?;
         if let Some(stamp) = cached.fallback.as_mut()

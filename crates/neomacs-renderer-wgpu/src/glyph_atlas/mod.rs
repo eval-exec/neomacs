@@ -730,8 +730,8 @@ pub struct WgpuGlyphAtlas {
     /// of re-running semantic selection.
     frame_fonts: ResolvedFontTable,
     /// Layout-resolved per-character fallback fonts (`face_id → repr char →
-    /// font id`), installed alongside `frame_fonts`. Consulted before any
-    /// render-side `match_font_for_char`.
+    /// font id`), installed alongside `frame_fonts`. The exact-character
+    /// path reads this table instead of selecting a font again.
     frame_char_fonts: CharFontTable,
     /// Layout-shaped composed clusters (`face_id → cluster text → resolved
     /// glyphs`). Consulted before re-shaping cluster text. Cleared per
