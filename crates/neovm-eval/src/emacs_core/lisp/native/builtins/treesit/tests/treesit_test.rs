@@ -953,6 +953,44 @@ fn treesit_pattern_keyword_domain_matches_gnu_symbols() {
     assert_eq!(TreesitPatternKeyword::EqQuestion.name(), ":eq?");
 }
 
+/// The Lisp builtin must not call `Tree::clone`. A clone that skips
+/// `ParserEntry::walk_clone` leaves the live-walk count at zero, so the
+/// next edit rewrites the tree in place under the clone.
+#[test]
+fn lisp_treesit_builtin_does_not_clone_a_parser_tree() {
+    let src = include_str!("../../treesit.rs");
+    assert!(
+        !src.contains(".tree().clone()"),
+        "Tree::clone in the Lisp builtin skips the walk-clone count"
+    );
+}
+
+/// GNU `Ftreesit_parser_set_included_ranges` returns before touching the
+/// parser when `Fequal` says the new list matches the saved one
+/// (`src/treesit.c:2737-2738`). A freshly built equal list is that case.
+#[test]
+fn treesit_parser_set_included_ranges_equal_list_does_not_reparse() {
+    let (mut eval, parser) = eval_with_json_parser("{}");
+    reset_treesit_reparse_count();
+    builtin_treesit_parser_root_node(&mut eval, vec![parser]).expect("parse");
+    let ranges = Value::list(vec![Value::cons(Value::fixnum(1), Value::fixnum(3))]);
+    builtin_treesit_parser_set_included_ranges(&mut eval, vec![parser, ranges]).expect("set");
+    builtin_treesit_parser_root_node(&mut eval, vec![parser]).expect("reparse after ranges");
+    let after_change = treesit_reparse_count();
+    let fresh = Value::list(vec![Value::cons(Value::fixnum(1), Value::fixnum(3))]);
+    assert!(
+        !neovm_value::value::eq_value(&ranges, &fresh),
+        "the second list is a different object"
+    );
+    builtin_treesit_parser_set_included_ranges(&mut eval, vec![parser, fresh]).expect("equal set");
+    builtin_treesit_parser_root_node(&mut eval, vec![parser]).expect("root after equal set");
+    assert_eq!(
+        treesit_reparse_count(),
+        after_change,
+        "an equal range list must not mark the parser for reparse"
+    );
+}
+
 #[test]
 fn treesit_parser_set_included_ranges_accepts_valid_fixnum_ranges() {
     let (mut eval, parser) = eval_with_json_parser("{}");

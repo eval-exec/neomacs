@@ -157,9 +157,18 @@ impl ParsedTree {
         Self { tree, visible }
     }
 
-    #[doc(hidden)]
-    pub const fn tree(&self) -> &Tree {
+    /// Crate-private. Other crates must not see a `&Tree`: `Tree::clone` is
+    /// public, and an uncounted copy shares the root that an in-place edit
+    /// rewrites.
+    pub(crate) const fn tree(&self) -> &Tree {
         &self.tree
+    }
+
+    /// Uncounted `ts_tree_copy`. Reparse and the in-walk edit snapshot are
+    /// the only callers, and both drop the copy before returning. A walk
+    /// uses [`ParserEntry::walk_clone`], which counts the extra owner.
+    pub(crate) fn clone_tree(&self) -> Tree {
+        self.tree.clone()
     }
 
     #[doc(hidden)]
@@ -773,6 +782,29 @@ fn clamp_into(pos: EmacsBytePos, range: EmacsByteRange) -> EmacsBytePos {
     pos.max(range.start()).min(range.end())
 }
 
+/// Owns one `ts_tree_copy` and the parser's live-walk count.
+///
+/// The tree is not `Clone`. Another copy would share the root without being
+/// counted, and the next edit would rewrite that root in place.
+#[doc(hidden)]
+pub struct WalkClone {
+    tree: Tree,
+    live: Arc<AtomicU32>,
+}
+
+impl Drop for WalkClone {
+    fn drop(&mut self) {
+        self.live.fetch_sub(1, Ordering::Release);
+    }
+}
+
+impl WalkClone {
+    #[doc(hidden)]
+    pub fn root_node(&self) -> tree_sitter::Node<'_> {
+        self.tree.root_node()
+    }
+}
+
 #[derive(Default)]
 #[doc(hidden)]
 pub struct TreeSitterManager {
@@ -801,6 +833,61 @@ impl TreeSitterManager {
             linecol_caches: HashMap::new(),
             pending_edits: HashMap::new(),
         }
+    }
+
+    /// Replace the parser tree. The previous tree is cloned only here, for
+    /// `ts_parser_parse` to diff against, and dropped before return. That
+    /// copy is not a walk.
+    ///
+    /// The callback type matches `Parser::parse_with_options` so a slice
+    /// borrowed from the caller's buffer stays a concrete `T`, not a
+    /// higher-ranked `&[u8]`.
+    #[doc(hidden)]
+    pub fn reparse_parser<T, F>(
+        &mut self,
+        parser_id: u64,
+        visible: EmacsByteRange,
+        revision: ParserInputRevision,
+        incremental: bool,
+        collect_changes: bool,
+        read: &mut F,
+    ) -> Result<Vec<SourceByteRange>, ()>
+    where
+        T: AsRef<[u8]>,
+        F: FnMut(usize, Point) -> T,
+    {
+        let Some(parser) = self.parsers.get_mut(&parser_id) else {
+            return Err(());
+        };
+        let old_tree = if incremental {
+            parser.tree.as_ref().map(ParsedTree::clone_tree)
+        } else {
+            None
+        };
+        let tree = parser
+            .parser
+            .parse_with_options(read, old_tree.as_ref(), None)
+            .ok_or(())?;
+        let changed_ranges = if !collect_changes {
+            Vec::new()
+        } else if let Some(old_tree) = old_tree.as_ref() {
+            old_tree
+                .changed_ranges(&tree)
+                .map(|range| SourceByteRange::new(range.start_byte, range.end_byte))
+                .collect()
+        } else if visible.is_empty() {
+            Vec::new()
+        } else {
+            vec![SourceByteRange::new(0, visible.len().get())]
+        };
+        parser.tree = Some(ParsedTree::new(tree, visible));
+        parser.freshness = ParserFreshness::Clean(revision);
+        parser.generation = parser.generation.saturating_add(1);
+        parser.reparse_epoch = parser.reparse_epoch.saturating_add(1);
+        if collect_changes {
+            parser.last_changed_ranges = changed_ranges.clone();
+        }
+        Ok(changed_ranges)
     }
 
     /// Trace every native Value owner independently of the parser record's
@@ -1253,7 +1340,7 @@ impl TreeSitterManager {
             let Some(tree) = parser.tree.as_ref() else {
                 return Vec::new();
             };
-            let snapshot = tree.tree().clone();
+            let snapshot = tree.clone_tree();
             let snap_ptr = snapshot.root_node().into_raw().tree;
             let root_id = tree.tree().root_node().into_raw().id;
             (snapshot, snap_ptr, root_id)
@@ -1574,6 +1661,31 @@ impl ParserEntry {
     #[doc(hidden)]
     pub fn walk_clones(&self) -> Arc<AtomicU32> {
         Arc::clone(&self.walk_clones)
+    }
+
+    /// Counted `ts_tree_copy`. The guard is the only walk clone other crates
+    /// can hold. Dropping it releases the count that chooses an in-place edit.
+    #[doc(hidden)]
+    pub fn walk_clone(&self) -> Option<WalkClone> {
+        let tree = self.tree.as_ref()?.clone_tree();
+        self.walk_clones.fetch_add(1, Ordering::AcqRel);
+        Some(WalkClone {
+            tree,
+            live: Arc::clone(&self.walk_clones),
+        })
+    }
+
+    #[doc(hidden)]
+    pub fn root_raw(&self) -> Option<ffi::TSNode> {
+        self.tree
+            .as_ref()
+            .map(|parsed| parsed.tree().root_node().into_raw())
+    }
+
+    #[doc(hidden)]
+    pub fn node_raw_at_index_path(&self, path: &[u32]) -> Option<ffi::TSNode> {
+        let root = self.tree.as_ref()?.tree().root_node();
+        node_at_index_path(root, path).map(|node| node.into_raw())
     }
 
     #[doc(hidden)]

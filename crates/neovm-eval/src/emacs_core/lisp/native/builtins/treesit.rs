@@ -5,8 +5,6 @@ pub use neovm_value::error::{
     FlowKind, FlowResultExt, expect_args, expect_args_range, expect_fixnum, signal_with_data,
 };
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
 use strum::{EnumString, IntoStaticStr};
 use tree_sitter::{
     LANGUAGE_VERSION, Language, MIN_COMPATIBLE_LANGUAGE_VERSION, Parser, Point, Range as TSRange,
@@ -936,55 +934,26 @@ fn ensure_parser_reparsed(
                     vec![Value::string("Parser buffer has been killed")],
                 )
             })?;
-        let parser = eval
-            .treesit
-            .parser_mut(parser_id)
-            .ok_or_else(|| signal("error", vec![Value::string("Missing tree-sitter parser")]))?;
-        // GNU always hands the previous tree back to tree-sitter
-        // (`treesit_ensure_parsed`, `src/treesit.c:1925`); `Full` is reached
-        // only for a parser that has no usable tree at all.
-        let old_tree = match request.kind {
-            ParserReparseKind::Incremental => parser.tree().map(|tree| tree.tree().clone()),
-            ParserReparseKind::Full => None,
-        };
         #[cfg(test)]
         TREESIT_REPARSES.with(|count| count.set(count.get() + 1));
         // Issue #131: feed the parser the exact Emacs bytes so byte offsets
         // match the buffer and real PUA glyphs / eight-bit bytes survive --
         // read in place, gap-aware, as GNU's `treesit_read_buffer` does.
+        // The old-tree clone stays inside `reparse_parser`.
         let visible = request.visible;
         let mut read_buffer = |byte_offset: usize, _position: Point| {
             treesit_read_buffer(buffer, visible, byte_offset)
         };
-        let tree = parser
-            .parser_mut()
-            .parse_with_options(&mut read_buffer, old_tree.as_ref(), None)
-            .ok_or_else(|| treesit_parse_error(request.parser_value))?;
-        let changed_ranges = match changed_range_collection {
-            ChangedRangeCollection::Ignore => Vec::new(),
-            ChangedRangeCollection::Collect => {
-                if let Some(old_tree) = old_tree.as_ref() {
-                    old_tree
-                        .changed_ranges(&tree)
-                        .map(|range| {
-                            runtime::SourceByteRange::new(range.start_byte, range.end_byte)
-                        })
-                        .collect::<Vec<_>>()
-                } else if visible.is_empty() {
-                    Vec::new()
-                } else {
-                    vec![runtime::SourceByteRange::new(0, visible.len().get())]
-                }
-            }
-        };
-        parser.set_tree(Some(runtime::ParsedTree::new(tree, request.visible)));
-        parser.set_freshness(ParserFreshness::Clean(request.current_revision));
-        parser.set_generation(parser.generation().saturating_add(1));
-        parser.set_reparse_epoch(parser.reparse_epoch().saturating_add(1));
-        if changed_range_collection == ChangedRangeCollection::Collect {
-            parser.set_last_changed_ranges(changed_ranges.clone());
-        }
-        changed_ranges
+        eval.treesit
+            .reparse_parser(
+                parser_id,
+                request.visible,
+                request.current_revision,
+                matches!(request.kind, ParserReparseKind::Incremental),
+                changed_range_collection == ChangedRangeCollection::Collect,
+                &mut read_buffer,
+            )
+            .map_err(|()| treesit_parse_error(request.parser_value))?
     };
     eval.treesit.clear_nodes_for_parser(parser_id);
     Ok(Some(changed_ranges))
@@ -1262,8 +1231,7 @@ fn resolve_node_input(
                 .parser(parser_id)
                 .ok_or_else(|| parser_deleted_error(value))?;
             parser
-                .tree()
-                .map(|tree| tree.tree().root_node().into_raw())
+                .root_raw()
                 .ok_or_else(|| treesit_parse_error(value))?
         };
         let node_value = make_node_value_for_parser(eval, parser_id, unsafe {
@@ -1338,46 +1306,16 @@ fn treesit_buffer_changed(predicate: Value) -> Flow {
     signal("treesit-buffer_changed", vec![predicate])
 }
 
-/// Owns one `ts_tree_copy` and the parser's live-walk count.
-///
-/// The guard cannot borrow `TreeSitterManager`: a Lisp callback reenters
-/// through `&mut Context`. The count is an `Arc` so `finish_buffer_edit`
-/// can see it and skip the per-node remap when no walk is alive.
-struct WalkClone {
-    tree: tree_sitter::Tree,
-    live: Arc<AtomicU32>,
-}
-
-impl Drop for WalkClone {
-    fn drop(&mut self) {
-        self.live.fetch_sub(1, Ordering::Release);
-    }
-}
-
-impl std::ops::Deref for WalkClone {
-    type Target = tree_sitter::Tree;
-
-    fn deref(&self) -> &tree_sitter::Tree {
-        &self.tree
-    }
-}
-
 fn parser_tree_clone(
     eval: &super::eval::Context,
     parser_id: u64,
     node_value: Value,
-) -> Result<WalkClone, Flow> {
-    let parser = eval
-        .treesit
+) -> Result<runtime::WalkClone, Flow> {
+    eval.treesit
         .parser(parser_id)
-        .ok_or_else(|| node_outdated_error(node_value))?;
-    let parsed = parser
-        .tree()
-        .ok_or_else(|| node_outdated_error(node_value))?;
-    let tree = parsed.tree().clone();
-    let live = parser.walk_clones();
-    live.fetch_add(1, Ordering::AcqRel);
-    Ok(WalkClone { tree, live })
+        .ok_or_else(|| node_outdated_error(node_value))?
+        .walk_clone()
+        .ok_or_else(|| node_outdated_error(node_value))
 }
 
 /// Epoch and edit generation captured when a walk clones the parser tree.
@@ -1414,7 +1352,7 @@ fn walk_share(eval: &super::eval::Context, parser_id: u64) -> WalkShare {
 fn node_on_clone<'tree>(
     eval: &super::eval::Context,
     parser_id: u64,
-    tree: &'tree tree_sitter::Tree,
+    tree: &'tree runtime::WalkClone,
     raw: tree_sitter::ffi::TSNode,
     share: &mut WalkShare,
 ) -> tree_sitter::Node<'tree> {
@@ -1423,8 +1361,8 @@ fn node_on_clone<'tree>(
     let is_parser_root = eval
         .treesit
         .parser(parser_id)
-        .and_then(|parser| parser.tree())
-        .is_some_and(|parsed| parsed.tree().root_node().into_raw().id == raw.id);
+        .and_then(|parser| parser.root_raw())
+        .is_some_and(|root| root.id == raw.id);
     if is_parser_root {
         // A root id is the address of that tree's `TSTree.root` field, not a
         // shared heap subtree. The parser's field changes in `ts_tree_edit`.
@@ -1449,21 +1387,20 @@ fn project_node_to_parser(
     share: WalkShare,
 ) -> Option<tree_sitter::ffi::TSNode> {
     let parser = eval.treesit.parser(parser_id)?;
-    let live = parser.tree()?.tree();
+    let live_root = parser.root_raw()?;
     if parser.reparse_epoch() == share.reparse_epoch && parser.generation() == share.generation {
         // The clone root id dies with the clone. Publish the parser root,
         // whose id is that tree's own `TSTree.root` field.
         if node.into_raw().id as usize == share.clone_root {
-            return Some(live.root_node().into_raw());
+            return Some(live_root);
         }
         let mut raw = node.into_raw();
-        raw.tree = live.root_node().into_raw().tree;
+        raw.tree = live_root.tree;
         return Some(raw);
     }
     let source = node.into_raw();
     let path = runtime::node_index_path(node)?;
-    let live_node = runtime::node_at_index_path(live.root_node(), &path)?;
-    let mut raw = live_node.into_raw();
+    let mut raw = parser.node_raw_at_index_path(&path)?;
     // Keep the clone node's start byte. `ts_node_end_byte` is that start
     // plus the live subtree's size (`lib/src/node.c`). An insert that does
     // not change the subtree size leaves both ends stale, matching GNU.
@@ -2692,9 +2629,7 @@ pub fn builtin_treesit_parser_root_node(
             .parser(parser_id)
             .ok_or_else(|| parser_deleted_error(args[0]))?;
         parser
-            .tree()
-            .map(|tree| tree.tree().root_node())
-            .map(tree_sitter::Node::into_raw)
+            .root_raw()
             .ok_or_else(|| treesit_parse_error(args[0]))?
     };
     Ok(make_node_value_for_parser(eval, parser_id, unsafe {
@@ -2710,6 +2645,8 @@ pub fn builtin_treesit_parser_set_included_ranges(
     expect_args("treesit-parser-set-included-ranges", &args, 2)?;
     let parser_id = expect_live_parser_id(eval, "treesit-parser-set-included-ranges", args[0])?;
     let current_ranges = parser_record_slot(args[0], runtime::PARSER_SLOT_INCLUDED_RANGES)?;
+    // `Value`'s `==` is structural `equal`, GNU `Fequal` (`src/treesit.c:2737`).
+    // A freshly allocated list with the same ranges is a no-op.
     if current_ranges == args[1] {
         return Ok(Value::NIL);
     }
