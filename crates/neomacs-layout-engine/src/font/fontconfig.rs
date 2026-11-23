@@ -7,13 +7,13 @@
 //!
 //! This module mirrors that shape:
 //! - generic family resolution uses Fontconfig directly
-//! - character fallback uses Neovm's shared fontset state
 //! - candidate discovery uses Fontconfig's `FcFontList`
 //! - style selection is scored in Rust instead of delegated to Fontconfig
 
 use crate::font::policy::{
     combined_query_langs, query_charset_ranges, registry_language, representative_char_for_spec,
 };
+#[cfg(test)]
 use crate::font::selection::{CandidateSelectionScore, candidate_selection_score};
 pub use crate::font::subpixel::FontconfigSubpixelOrder;
 use crate::font_backend::{FontFamilyName, PlatformFontSize};
@@ -22,9 +22,7 @@ use fontconfig_sys::constants::{
     FC_RGBA, FC_RGBA_BGR, FC_RGBA_NONE, FC_RGBA_RGB, FC_RGBA_VBGR, FC_RGBA_VRGB,
 };
 use neomacs_display_protocol::font::FontVariationCoord;
-use neovm_core::emacs_core::fontset::{
-    FontSpecEntry, StoredFontSpec, fontset_generation, rendering_groups_for_char,
-};
+use neovm_core::emacs_core::fontset::StoredFontSpec;
 use neovm_core::emacs_core::intern::{intern, resolve_sym};
 use neovm_core::face::{FontSlant, FontWeight, FontWidth};
 use std::collections::HashMap;
@@ -62,13 +60,6 @@ struct FontconfigCaches {
     aliases: Option<HashMap<String, String>>,
     spacing: HashMap<String, Option<i32>>,
     subpixel_order: Option<FontconfigSubpixelOrder>,
-    char_matches: HashMap<CharMatchCacheKey, CachedCharMatch>,
-}
-
-/// A character answer. A fallback winner is valid only while it is the front.
-struct CachedCharMatch {
-    fallback_winner: Option<FontSpecEntry>,
-    font: Option<FontMatch>,
 }
 
 static FC_CACHES: OnceLock<Mutex<FontconfigCaches>> = OnceLock::new();
@@ -252,16 +243,6 @@ pub(crate) fn list_families() -> Vec<FontFamilyName> {
         .collect()
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-struct CharMatchCacheKey {
-    family: String,
-    codepoint: u32,
-    prefer_monospace: bool,
-    requested_weight: u16,
-    italic: bool,
-    fontset_generation: u64,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ListedFont {
     pub(crate) matched: FontMatch,
@@ -274,12 +255,18 @@ pub(crate) struct ListedFont {
     pub(crate) foundry: Option<String>,
 }
 
+#[cfg(test)]
 const FONT_SPACING_PROPORTIONAL: i32 = 0;
+#[cfg(test)]
 const FONT_SPACING_DUAL: i32 = 90;
+#[cfg(test)]
 const FONT_SPACING_MONO: i32 = 100;
+#[cfg(test)]
 const FONT_SPACING_CHARCELL: i32 = 110;
+#[cfg(test)]
 const FONT_SPACING_MONO_MAX: i32 = FONT_SPACING_CHARCELL - 1;
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SpacingClass {
     Proportional,
@@ -379,91 +366,6 @@ pub fn family_prefers_monospace(
         owner,
         family,
     ) == Some(100)
-}
-
-/// Resolve a character-capable fallback font through shared fontset state and
-/// a Fontconfig candidate list, approximating GNU Emacs' `face_for_char`
-/// pipeline.
-pub fn match_font_for_char(
-    family: &str,
-    ch: char,
-    prefer_monospace: bool,
-    requested_weight: u16,
-    italic: bool,
-) -> Option<FontMatch> {
-    if ch.is_ascii() {
-        return None;
-    }
-
-    let generation = fontset_generation();
-    let order_key = char_fallback_order_key(family, requested_weight, italic, generation);
-    let key = CharMatchCacheKey {
-        family: family.to_string(),
-        codepoint: ch as u32,
-        prefer_monospace,
-        requested_weight,
-        italic,
-        fontset_generation: generation,
-    };
-    if let Some(cached) = fontconfig_caches()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .char_matches
-        .get(&key)
-        && cached
-            .fallback_winner
-            .as_ref()
-            .is_none_or(|winner| crate::font::fallback_order::fallback_front_is(&order_key, winner))
-    {
-        return cached.font.clone();
-    }
-
-    let (matched, fallback_winner) = match_font_for_char_uncached(
-        family,
-        ch,
-        prefer_monospace,
-        requested_weight,
-        italic,
-        &order_key,
-    );
-
-    fontconfig_caches()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .char_matches
-        .insert(
-            key,
-            CachedCharMatch {
-                fallback_winner,
-                font: matched.clone(),
-            },
-        );
-
-    matched
-}
-
-/// The fontconfig walker has no pixel size. `size: None` keeps its permutation
-/// off the layout resolver's face key. Width is normal because this walker
-/// does not take a width.
-fn char_fallback_order_key(
-    family: &str,
-    weight: u16,
-    italic: bool,
-    fontset_generation: u64,
-) -> crate::font::fallback_order::FallbackOrderKey {
-    crate::font::fallback_order::FallbackOrderKey {
-        family: family.to_owned(),
-        weight,
-        slant: if italic {
-            FontSlant::Italic
-        } else {
-            FontSlant::Normal
-        }
-        .gnu_numeric(),
-        width: FontWidth::Normal.gnu_numeric(),
-        size: None,
-        fontset_generation,
-    }
 }
 
 pub fn find_font_for_spec(
@@ -569,163 +471,6 @@ fn requested_width_distance(requested: Option<FontWidth>, candidate: Option<Font
     })
 }
 
-fn match_font_for_char_uncached(
-    family: &str,
-    ch: char,
-    prefer_monospace: bool,
-    requested_weight: u16,
-    italic: bool,
-    order_key: &crate::font::fallback_order::FallbackOrderKey,
-) -> (Option<FontMatch>, Option<FontSpecEntry>) {
-    let (specific, fallback) = rendering_groups_for_char(ch);
-    for entry in specific {
-        if let Some(matched) = match_one_fontset_entry(
-            family,
-            ch,
-            prefer_monospace,
-            requested_weight,
-            italic,
-            &entry,
-        ) {
-            return (matched, None);
-        }
-    }
-    let fallback = crate::font::fallback_order::order_fallback_group(order_key, fallback);
-    for entry in &fallback {
-        if let Some(matched) = match_one_fontset_entry(
-            family,
-            ch,
-            prefer_monospace,
-            requested_weight,
-            italic,
-            entry,
-        ) {
-            let winner = matched.as_ref().map(|_| entry.clone());
-            if winner.is_some() {
-                crate::font::fallback_order::promote_fallback(order_key, entry);
-            }
-            return (matched, winner);
-        }
-    }
-
-    let fallback_spec = StoredFontSpec {
-        family: None,
-        registry: None,
-        lang: None,
-        weight: None,
-        slant: None,
-        width: None,
-        otf: None,
-        definition: None,
-    };
-    let matched = match_font_from_spec(
-        family,
-        ch,
-        prefer_monospace,
-        requested_weight,
-        italic,
-        &fallback_spec,
-    );
-    if let Some(ref matched) = matched {
-        tracing::debug!(
-            "fontconfig: generic fallback matched U+{:04X} req_family={} -> {:?}",
-            ch as u32,
-            family,
-            matched
-        );
-    }
-    (matched, None)
-}
-
-/// `None` continues the walk. `Some(None)` is an explicit nil spec, which
-/// stops the group. `Some(Some(_))` is a realized font.
-fn match_one_fontset_entry(
-    family: &str,
-    ch: char,
-    prefer_monospace: bool,
-    requested_weight: u16,
-    italic: bool,
-    entry: &FontSpecEntry,
-) -> Option<Option<FontMatch>> {
-    match entry {
-        FontSpecEntry::ExplicitNone => {
-            tracing::debug!(
-                "fontconfig: U+{:04X} hit explicit nil fontset entry",
-                ch as u32
-            );
-            Some(None)
-        }
-        FontSpecEntry::Font(spec) => {
-            match_font_from_spec(family, ch, prefer_monospace, requested_weight, italic, spec).map(
-                |matched| {
-                    tracing::debug!(
-                        "fontconfig: fontset matched U+{:04X} req_family={} spec={:?} -> {:?}",
-                        ch as u32,
-                        family,
-                        spec,
-                        matched
-                    );
-                    Some(matched)
-                },
-            )
-        }
-    }
-}
-
-fn match_font_from_spec(
-    requested_family: &str,
-    ch: char,
-    prefer_monospace: bool,
-    requested_weight: u16,
-    italic: bool,
-    spec: &StoredFontSpec,
-) -> Option<FontMatch> {
-    let effective_weight = spec
-        .weight
-        .map(FontWeight::css_weight)
-        .unwrap_or(requested_weight);
-    let query_charset_ranges = query_charset_ranges(spec, ch);
-    let registry_lang = spec.registry.map(resolve_sym).and_then(registry_language);
-    let query_langs = combined_query_langs(registry_lang, spec.lang.map(resolve_sym));
-    let requested_spacing = requested_spacing(spec);
-
-    let family_policy =
-        crate::font::policy::FontFamilySource::for_spec(requested_family, spec).capture();
-    let search_order = family_policy.search_order(
-        #[cfg(all(test, unix))]
-        |family| resolve_family(test_config::QueryOwner::System, family),
-        #[cfg(not(all(test, unix)))]
-        resolve_family,
-    );
-    for family in search_order {
-        let family_option = family.as_family();
-        let candidates = fc_list_candidates(
-            #[cfg(all(test, unix))]
-            test_config::QueryOwner::System,
-            family_option,
-            &query_charset_ranges,
-            Some(ch as u32),
-            &query_langs,
-        );
-        if candidates.is_empty() {
-            continue;
-        }
-
-        let best = best_candidate_for_pass(
-            candidates,
-            effective_weight,
-            italic,
-            spec.slant,
-            requested_spacing,
-            prefer_monospace,
-            family_option,
-        )?;
-        return Some(best);
-    }
-
-    None
-}
-
 fn candidate_matches_find_font_spec(candidate: &ListedFont, spec: &StoredFontSpec) -> bool {
     if let Some(weight) = spec.weight
         && candidate
@@ -745,6 +490,7 @@ fn candidate_matches_find_font_spec(candidate: &ListedFont, spec: &StoredFontSpe
     true
 }
 
+#[cfg(test)]
 fn best_candidate_for_pass(
     candidates: Vec<ListedFont>,
     requested_weight: u16,
@@ -791,6 +537,7 @@ fn family_search_order(
         .collect()
 }
 
+#[cfg(test)]
 fn candidate_score(
     candidate: &ListedFont,
     requested_weight: u16,
@@ -828,14 +575,7 @@ fn candidate_score(
     .expect("this legacy listing path scores only scalable candidates")
 }
 
-fn requested_spacing(_spec: &StoredFontSpec) -> Option<i32> {
-    // GNU ftfont only filters by FC_SPACING when the font-spec itself requests
-    // spacing.  Inferring "monospace" from the current face family over-weights
-    // Fontconfig spacing metadata and makes variable CJK companions lose to
-    // unrelated fixed-pitch families.
-    None
-}
-
+#[cfg(test)]
 fn spacing_score(
     requested_spacing: Option<i32>,
     candidate_spacing: Option<i32>,
@@ -885,6 +625,7 @@ fn family_affinity_score(queried_family: Option<&str>, candidate_family: &str) -
     80
 }
 
+#[cfg(test)]
 fn normalize_spacing(spacing: i32) -> Option<SpacingClass> {
     match spacing {
         i32::MIN..=-1 => None,
@@ -895,6 +636,7 @@ fn normalize_spacing(spacing: i32) -> Option<SpacingClass> {
     }
 }
 
+#[cfg(test)]
 fn spacing_distance(requested: SpacingClass, candidate: SpacingClass) -> u32 {
     use SpacingClass::{Charcell, Dual, Mono, Proportional};
 

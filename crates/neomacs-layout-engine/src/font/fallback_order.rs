@@ -76,15 +76,6 @@ pub(crate) fn clear_fallback_orders() {
     }
 }
 
-/// True when `winner` is still the front of this face's fallback group.
-///
-/// A missing group is not a match: `clear_fallback_orders` drops the history,
-/// and a cached winner must not survive that just because a later history
-/// would have reused an epoch number.
-pub(crate) fn fallback_front_is(key: &FallbackOrderKey, winner: &FontSpecEntry) -> bool {
-    lock().get(key).and_then(|group| group.entries.first()) == Some(winner)
-}
-
 /// Fast path when `stamp.order_gen` is still current. A mismatch takes the
 /// order lock, accepts the answer only if `winner` is still the front, and
 /// refreshes the stored generation from that same critical section.
