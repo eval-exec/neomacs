@@ -700,6 +700,11 @@ impl Context {
     }
 
     #[doc(hidden)]
+    pub fn has_pending_safe_funcalls(&self) -> bool {
+        !self.pending_safe_funcalls.is_empty()
+    }
+
+    #[doc(hidden)]
     pub fn flush_pending_safe_funcalls(&mut self) {
         while let Some(funcall) = self.pending_safe_funcalls.pop() {
             let _ = self.apply(funcall.function, funcall.args);

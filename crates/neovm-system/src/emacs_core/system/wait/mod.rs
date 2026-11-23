@@ -1110,6 +1110,7 @@ pub trait WaitContextExt {
     fn service_read_char_preliminary_redisplay(
         &mut self,
         idle_policy: neovm_eval::emacs_core::eval::keyboard::IdleTransitionPolicy,
+        redisplay_phase: neovm_eval::emacs_core::eval::keyboard::ReadCharRedisplayPhase,
     ) -> Result<(), Flow>;
 
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
@@ -1228,6 +1229,22 @@ pub trait WaitContextExt {
     fn wait_block(&self, request: &WaitRequest, wait_time: Duration) -> WaitBlock;
 }
 
+/// After-select notification owns its redraw before a bounded wait can
+/// return DeadlineElapsed. Folding the activity into completion afterward
+/// cannot repair a callback's display debt (GNU process.c:5554-5555, 5854-5855).
+/// Keep the sealed notification-site token required by the underlying call.
+fn record_notify_and_redisplay_status_changes(
+    context: &mut neovm_eval::emacs_core::eval::Context,
+    request: &WaitRequest,
+    site: WaitStatusNotifySite,
+) -> Result<ProcessOutputServiceOutcome, Flow> {
+    let notified = context.record_and_notify_status_changes(request, site)?;
+    if request.redisplay && notified.has_serviced_activity() {
+        context.redisplay()?;
+    }
+    Ok(notified)
+}
+
 impl WaitContextExt for neovm_eval::emacs_core::eval::Context {
     fn service_wait_request_once(&mut self, request: &WaitRequest) -> Result<(), Flow> {
         let _ = self.service_wait_request_once_outcome(request)?;
@@ -1249,12 +1266,21 @@ impl WaitContextExt for neovm_eval::emacs_core::eval::Context {
     fn service_read_char_preliminary_redisplay(
         &mut self,
         idle_policy: neovm_eval::emacs_core::eval::keyboard::IdleTransitionPolicy,
+        redisplay_phase: neovm_eval::emacs_core::eval::keyboard::ReadCharRedisplayPhase,
     ) -> Result<(), Flow> {
         // GNU's initial-frame and inhibit guards are inside redisplay, not
         // around timer-aware detection (xdisp.c:17369-17387). Neither guard
         // suppresses this timer-only pass; it preserves the current idle epoch.
-        self.service_timers_without_redisplay()?;
-        self.redisplay_for_input_wait()?;
+        let timers = self.service_wait_request_once_outcome(&WaitRequest::timer_service(false))?;
+        // A native maintenance deadline resumes this read; it is not GNU's
+        // next read_char entry. Actual timer callbacks still own a redisplay.
+        // The caller retains the preliminary phase for deferred safe Lisp.
+        if redisplay_phase
+            == neovm_eval::emacs_core::eval::keyboard::ReadCharRedisplayPhase::Preliminary
+            || timers.has_timer_activity()
+        {
+            self.redisplay_for_input_wait()?;
+        }
 
         // Initial batch frames suppress display, including redisplay caused
         // by service, while retaining the input/process service pass.
@@ -1365,7 +1391,7 @@ impl WaitContextExt for neovm_eval::emacs_core::eval::Context {
         // sleeping to its deadline.
         self.stage_pending_thread_events()?;
         let mut outcome = WaitServiceOutcome::default();
-        let special_input = if request.services_special_input() {
+        let mut special_input = if request.services_special_input() {
             self.service_wait_request_special_input_events_with_idle_policy(request.idle_policy)?
         } else {
             SpecialInputServiceOutcome::default()
@@ -1388,7 +1414,15 @@ impl WaitContextExt for neovm_eval::emacs_core::eval::Context {
             // catches `error` signals only).  `?` returns the throw up through
             // `accept-process-output` to the VM `catch`, e.g. the
             // `jsonrpc-request` catch tag completed by a zero-delay timer.
+            // timer_check also drains deferred frame/terminal hooks before
+            // checking timers (GNU keyboard.c:4763-4769). Those callbacks
+            // can mutate displayed buffers without firing a timer. Retain
+            // their display debt without changing wait completion activity.
+            let safe_callbacks_pending = self.has_pending_safe_funcalls();
             outcome.record_timer_activity(self.service_pending_timers_with_wait_policy(false)?);
+            if safe_callbacks_pending {
+                special_input = special_input.after_callback();
+            }
         }
 
         // A timer may request quit while inhibit-quit is temporarily bound.
@@ -1480,8 +1514,11 @@ impl WaitContextExt for neovm_eval::emacs_core::eval::Context {
         // are that pair: a child that exits after writing its last bytes is
         // notified inside the same wait instead of at the caller's next
         // observation.
-        let notified = self
-            .record_and_notify_status_changes(request, WaitStatusNotifySite::after_the_block())?;
+        let notified = record_notify_and_redisplay_status_changes(
+            self,
+            request,
+            WaitStatusNotifySite::after_the_block(),
+        )?;
         let activity = if self.processes().has_wait_notification_backend() {
             let events = self
                 .processes()
@@ -1493,8 +1530,11 @@ impl WaitContextExt for neovm_eval::emacs_core::eval::Context {
         };
         let mut serviced = self.service_wait_request_block_activity(request, activity, true)?;
         serviced.absorb_process_activity(notified);
-        let late = self
-            .record_and_notify_status_changes(request, WaitStatusNotifySite::after_the_block())?;
+        let late = record_notify_and_redisplay_status_changes(
+            self,
+            request,
+            WaitStatusNotifySite::after_the_block(),
+        )?;
         serviced.absorb_process_activity(late);
         Ok(serviced)
     }
@@ -1750,7 +1790,8 @@ impl WaitContextExt for neovm_eval::emacs_core::eval::Context {
             // SIGCHLD recorded is not necessarily in it -- GNU's
             // `status_notify` walks the whole alist and has no such
             // restriction.
-            let notified = self.record_and_notify_status_changes(
+            let notified = record_notify_and_redisplay_status_changes(
+                self,
                 &request,
                 WaitStatusNotifySite::after_the_block(),
             )?;
@@ -1770,7 +1811,8 @@ impl WaitContextExt for neovm_eval::emacs_core::eval::Context {
                 // Do it unconditionally: a status change recorded by the
                 // walk just above must not be left to the caller's next
                 // observation.
-                let late = self.record_and_notify_status_changes(
+                let late = record_notify_and_redisplay_status_changes(
+                    self,
                     &request,
                     WaitStatusNotifySite::after_the_block(),
                 )?;
@@ -1778,7 +1820,8 @@ impl WaitContextExt for neovm_eval::emacs_core::eval::Context {
                 return Ok(completion);
             }
             if self.wait_request_target_terminated(&request) {
-                let late = self.record_and_notify_status_changes(
+                let late = record_notify_and_redisplay_status_changes(
+                    self,
                     &request,
                     WaitStatusNotifySite::after_the_block(),
                 )?;

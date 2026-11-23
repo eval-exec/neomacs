@@ -354,6 +354,16 @@ impl SpecialInputServiceOutcome {
         }
     }
 
+    /// A host callback can mutate displayed Lisp state even when no native
+    /// window dimensions changed. Carry its display debt through the wait.
+    #[doc(hidden)]
+    pub fn after_callback(self) -> Self {
+        Self {
+            redisplay_needed: true,
+            ..self
+        }
+    }
+
     #[doc(hidden)]
     pub fn merge(self, other: Self) -> Self {
         Self {
@@ -743,6 +753,16 @@ impl ReadCharWaitMode {
 pub enum IdleTransitionPolicy {
     Manage,
     Preserve,
+}
+
+/// A frontend maintenance deadline resumes the same logical input read.
+/// Timer and input service still run, but a quiet resume owes no new Lisp
+/// preliminary redisplay (GNU keyboard.c:2693-2721).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[doc(hidden)]
+pub enum ReadCharRedisplayPhase {
+    Preliminary,
+    IdleMaintenance,
 }
 
 impl IdleTransitionPolicy {
@@ -3431,7 +3451,8 @@ impl crate::emacs_core::eval::Context {
                     )?;
                 }
                 InputEvent::MonitorsChanged { monitors } => {
-                    outcome = outcome.merge(SpecialInputServiceOutcome::any_activity());
+                    outcome =
+                        outcome.merge(SpecialInputServiceOutcome::any_activity().after_callback());
                     crate::emacs_core::builtins::set_neomacs_monitor_info(monitors);
                     let hook_sym = crate::emacs_core::hook_runtime::hook_symbol_by_name(
                         self,
@@ -3467,11 +3488,13 @@ impl crate::emacs_core::eval::Context {
                     idle_policy.resume_idle(self);
                 }
                 InputEvent::WindowClose { emacs_frame_id } => {
-                    outcome = outcome.merge(SpecialInputServiceOutcome::any_activity());
+                    outcome =
+                        outcome.merge(SpecialInputServiceOutcome::any_activity().after_callback());
                     self.handle_window_close_input_event(emacs_frame_id, idle_policy)?;
                 }
                 InputEvent::TtyHangup { terminal_id } => {
-                    outcome = outcome.merge(SpecialInputServiceOutcome::any_activity());
+                    outcome =
+                        outcome.merge(SpecialInputServiceOutcome::any_activity().after_callback());
                     self.delete_input_terminal_noelisp(terminal_id)?;
                 }
                 InputEvent::DisplayReset => {
@@ -3489,9 +3512,10 @@ impl crate::emacs_core::eval::Context {
                     }
                 }
                 InputEvent::SurfaceCreateFailed { id, error } => {
-                    // Not user activity and needs no redisplay — just run the
-                    // hook (mirrors MonitorsChanged running its hook here).
+                    // The hook may change displayed Lisp state, just like the
+                    // monitor callback, even though geometry did not change.
                     self.handle_surface_create_failed_input_event(id, &error)?;
+                    outcome = outcome.merge(SpecialInputServiceOutcome::default().after_callback());
                 }
                 InputEvent::FrameShaderFailed { error } => {
                     let effects =
@@ -3501,12 +3525,15 @@ impl crate::emacs_core::eval::Context {
                 }
                 InputEvent::TerminalCreateFailed { id, error } => {
                     self.handle_terminal_create_failed_input_event(id, &error)?;
+                    outcome = outcome.merge(SpecialInputServiceOutcome::default().after_callback());
                 }
                 InputEvent::TerminalExited { id } => {
                     self.handle_terminal_exited_input_event(id)?;
+                    outcome = outcome.merge(SpecialInputServiceOutcome::default().after_callback());
                 }
                 InputEvent::TerminalTitleChanged { id, title } => {
                     self.handle_terminal_title_changed_input_event(id, &title)?;
+                    outcome = outcome.merge(SpecialInputServiceOutcome::default().after_callback());
                 }
                 _ => {}
             }
@@ -5421,6 +5448,7 @@ impl crate::emacs_core::eval::Context {
         self.redecorate_immediate_key_echo();
         let mut idle_auto_save_deadline = None;
         let mut key_echo_deadline = self.delayed_key_echo_deadline(timeout);
+        let mut redisplay_phase = ReadCharRedisplayPhase::Preliminary;
 
         loop {
             self.sync_keyboard_terminal_owner();
@@ -5432,7 +5460,10 @@ impl crate::emacs_core::eval::Context {
             crate::emacs_core::eval::lifecycle::dbusbind_drain_events(self)?;
             match self.pop_queued_read_char_event(idle_policy)? {
                 QueuedReadCharEvent::Event(event) => return Ok(Some(event)),
-                QueuedReadCharEvent::HandledInternally => continue,
+                QueuedReadCharEvent::HandledInternally => {
+                    redisplay_phase = ReadCharRedisplayPhase::Preliminary;
+                    continue;
+                }
                 QueuedReadCharEvent::None => {}
             }
 
@@ -5451,16 +5482,26 @@ impl crate::emacs_core::eval::Context {
                         ..ReadCharEvent::fresh_input_method_candidate(value)
                     }));
                 }
+                redisplay_phase = ReadCharRedisplayPhase::Preliminary;
                 continue;
             }
             if self.shutdown_request.is_some() {
                 return Err(neovm_value::error::signal(LispCondition::Quit, vec![]));
             }
 
+            // Timer service also flushes deferred safe Lisp callbacks. A
+            // pending callback is real work even when no timer is due.
+            if self.has_pending_safe_funcalls() {
+                redisplay_phase = ReadCharRedisplayPhase::Preliminary;
+            }
             crate::emacs_core::eval::hooks_proof::wait::service_read_char_preliminary_redisplay(
                 self,
                 idle_policy,
+                redisplay_phase,
             )?;
+            // Preserve ordinary event/callback retry boundaries. Only a pure
+            // maintenance timeout below opts into reusing this preparation.
+            redisplay_phase = ReadCharRedisplayPhase::Preliminary;
 
             // GNU read_char re-checks Vunread_command_events after idle
             // timers/sit-for/read-event can requeue input, before consulting
@@ -5605,6 +5646,10 @@ impl crate::emacs_core::eval::Context {
                         idle_policy.stop_idle(self);
                         return Ok(None);
                     }
+                    let only_maintenance = display_idle_deadline
+                        .is_some_and(|deadline| now >= deadline)
+                        && !key_echo_deadline.is_some_and(|deadline| now >= deadline)
+                        && !idle_auto_save_deadline.is_some_and(|deadline| now >= deadline);
                     if key_echo_deadline.is_some_and(|deadline| now >= deadline) {
                         key_echo_deadline = None;
                         if self.current_message_value().is_none()
@@ -5628,6 +5673,9 @@ impl crate::emacs_core::eval::Context {
                         idle_auto_save_deadline = None;
                         self.run_command_loop_auto_save("idle timeout");
                         self.redisplay()?;
+                    }
+                    if only_maintenance {
+                        redisplay_phase = ReadCharRedisplayPhase::IdleMaintenance;
                     }
                     continue;
                 }

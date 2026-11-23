@@ -76,8 +76,11 @@ pub struct WaitServiceHooks {
     #[doc(hidden)]
     pub service_input_pending_with_timers: fn(&mut Context) -> Result<(), Flow>,
     #[doc(hidden)]
-    pub service_read_char_preliminary_redisplay:
-        fn(&mut Context, keyboard::IdleTransitionPolicy) -> Result<(), Flow>,
+    pub service_read_char_preliminary_redisplay: fn(
+        &mut Context,
+        keyboard::IdleTransitionPolicy,
+        keyboard::ReadCharRedisplayPhase,
+    ) -> Result<(), Flow>,
     #[doc(hidden)]
     pub service_timers_without_redisplay: fn(&mut Context) -> Result<(), Flow>,
     #[doc(hidden)]
@@ -324,8 +327,13 @@ pub(crate) mod wait {
     pub(crate) fn service_read_char_preliminary_redisplay(
         ctx: &mut Context,
         idle_policy: keyboard::IdleTransitionPolicy,
+        redisplay_phase: keyboard::ReadCharRedisplayPhase,
     ) -> Result<(), Flow> {
-        (installed().wait.service_read_char_preliminary_redisplay)(ctx, idle_policy)
+        (installed().wait.service_read_char_preliminary_redisplay)(
+            ctx,
+            idle_policy,
+            redisplay_phase,
+        )
     }
 
     pub(crate) fn service_timers_without_redisplay(ctx: &mut Context) -> Result<(), Flow> {

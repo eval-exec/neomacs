@@ -131,6 +131,10 @@ use neovm_value::symbol::CanonicalAccess;
 mod input_wait;
 
 #[cfg(test)]
+#[path = "input_wait_redisplay_count.rs"]
+mod input_wait_redisplay_count;
+
+#[cfg(test)]
 #[path = "gd_b_native.rs"]
 mod gd_b_native;
 

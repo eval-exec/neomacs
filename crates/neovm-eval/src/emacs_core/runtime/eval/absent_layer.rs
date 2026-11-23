@@ -24,7 +24,7 @@ macro_rules! eval_absent_layer_slots {
             use $crate::emacs_core::eval::data::window_state::{
                 Frame, FrameManager, MiniWindowResize, PresentationGeometry, PresentationId, WindowDomain, WindowRegions, WindowTree,
             };
-            use $crate::emacs_core::eval::keyboard::{FrontendWebViewEvent, IdleTransitionPolicy, InputEvent};
+            use $crate::emacs_core::eval::keyboard::{FrontendWebViewEvent, IdleTransitionPolicy, InputEvent, ReadCharRedisplayPhase};
             use $crate::emacs_core::eval::input_hooks::CommandInputWaitOutcome;
             use $crate::emacs_core::eval::call_interactively::CallInteractivelyPlan;
             use $crate::emacs_core::eval::data::process_state::{ChildOwnership, WaitNotifier};
@@ -819,7 +819,7 @@ macro_rules! eval_absent_layer_slots {
                 absent_layer_panic("ABSENT-LAYER core::wait.service_input_pending_with_timers");
             }
 
-            pub(crate) fn wait_service_read_char_preliminary_redisplay(ctx: &mut Context, idle_policy: IdleTransitionPolicy) -> Result<(), Flow> {
+            pub(crate) fn wait_service_read_char_preliminary_redisplay(ctx: &mut Context, idle_policy: IdleTransitionPolicy, redisplay_phase: ReadCharRedisplayPhase) -> Result<(), Flow> {
                 absent_layer_panic("ABSENT-LAYER core::wait.service_read_char_preliminary_redisplay");
             }
 
