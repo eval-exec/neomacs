@@ -37,7 +37,8 @@ use super::frames::{
     FrameArena, FrameId, HandlerMark, OperandCursor, OwnerRecord, OwnerRecordMark, Pc, PollBudget,
     RootGroup, RootHandle, RootRevokeError, SerialHandlerToken, SerialRecordToken, VmFrame,
 };
-use crate::emacs_core::bytecode::{ArithGenericKind, Op};
+use crate::emacs_core::bytecode::Op;
+use crate::emacs_core::bytecode::arith_kind::ArithGenericKind;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::eval::world::poll::PollOutcome;
 use crate::emacs_core::subr::effect_schema::{
