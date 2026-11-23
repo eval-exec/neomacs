@@ -1627,6 +1627,137 @@ fn synchronous_window_end_uses_the_final_source_buffer_identity() {
     );
 }
 
+#[test]
+fn synchronous_window_end_fontification_message_reenters_geometry_preparation() {
+    use neovm_core::emacs_core::eval::data::window_layout_query::WindowLayoutQueryAdapter;
+    use std::cell::Cell;
+
+    let _policy = neovm_core::emacs_core::eval::RedisplayHookPolicyGuard::gnu();
+    let (mut eval, _buffer_id, frame_id, window_id) = initialized_redisplay_test_frame(
+        "query-fontification-message",
+        800,
+        320,
+        "query fontification message fixture\n",
+        80,
+    );
+    {
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
+        frame.set_window_system(Some(Value::symbol("neo")));
+        frame.visibility = FrameVisibility::Visible;
+        assert!(!frame.initial);
+    }
+    assert!(!eval.noninteractive());
+    assert!(eval.gnu_redisplay_hooks_policy_enabled());
+    super::super::frame_layout::install_frame_snapshot_fn(&mut eval);
+    eval.redisplay_fn = Some(Box::new(move |eval| {
+        if let Some(prepared) = super::super::frame_layout::layout_frame_display_state(
+            eval,
+            frame_id,
+            super::super::frame_layout::FrameLayoutPurpose::Redisplay,
+        ) {
+            let _ = prepared
+                .activate(eval)
+                .expect("activate frontend redisplay");
+        }
+    }));
+    eval.eval_str(
+        "(setq inhibit-redisplay nil inhibit-message nil
+               set-message-function nil clear-message-function nil)",
+    )
+    .expect("permit interactive echo geometry preparation");
+    eval.eval_str("(redisplay t)")
+        .expect("warm the real frontend presentation before installing the fontifier");
+
+    // Forward both real frontend callbacks. Positive counts distinguish this
+    // path from an unavailable adapter or a message suppressed before sizing.
+    let preparations = Rc::new(Cell::new(0usize));
+    let observed_preparations = preparations.clone();
+    let mut canonical_prepare = eval
+        .redisplay_prepare_fn
+        .take()
+        .expect("the frontend must install its geometry preparer");
+    eval.redisplay_prepare_fn = Some(Box::new(move |eval, request| {
+        observed_preparations.set(observed_preparations.get() + 1);
+        canonical_prepare(eval, request)
+    }));
+    let mut take = eval.take_window_layout_query();
+    let original = take.take_previous();
+    take.put_previous(WindowLayoutQueryAdapter::Unavailable);
+    eval.restore_window_layout_query(take);
+    let WindowLayoutQueryAdapter::Ready(mut canonical_query) = original else {
+        panic!("the real frontend layout-query adapter must be installed");
+    };
+    let queries = Rc::new(Cell::new(0usize));
+    let observed_queries = queries.clone();
+    eval.install_window_layout_query_handler(move |eval, frame, window, scope| {
+        observed_queries.set(observed_queries.get() + 1);
+        canonical_query(eval, frame, window, scope)
+    })
+    .expect("wrap the canonical query without replacing its geometry");
+
+    eval.eval_str(
+        r#"(progn
+             (setq qf-once nil qf-calls 0 qf-message 'not-called qf-query-error nil)
+             (set (make-local-variable 'fontification-functions)
+                  (list (lambda (_start)
+                          (setq qf-calls (1+ qf-calls))
+                          (unless qf-once
+                            (setq qf-once t)
+                            (put-text-property (point-min) (point-max) 'fontified t)
+                            (let ((inhibit-redisplay nil))
+                              (setq qf-message
+                                    (condition-case err
+                                        (list 'ok (message "query fontify"))
+                                      (error (list 'error (error-message-string err))))))))))
+             (goto-char (point-max))
+             (insert "stale query\n")
+             (goto-char (point-min))
+             (put-text-property (point-min) (point-max) 'fontified nil))"#,
+    )
+    .expect("arm a once-only message from a real fontification callback");
+    eval.frame_manager_mut()
+        .get_mut(frame_id)
+        .and_then(|frame| frame.find_window_mut(window_id))
+        .expect("query window")
+        .invalidate_window_end();
+    let witness = eval
+        .eval_str(
+            r#"(progn
+                 (setq qf-end
+                       (condition-case err
+                           (window-end nil t)
+                         (error (setq qf-query-error (error-message-string err)) nil)))
+                 (list qf-once (> qf-calls 0) qf-message
+                       (integerp qf-end) qf-query-error (current-message)))"#,
+        )
+        .expect("capture message and outer query errors before fontification demotes them");
+    let witness = print_value_with_eval(&eval, &witness);
+    assert!(queries.get() > 0, "the real query must run: {witness}");
+    assert!(
+        eval.eval_str("(and qf-once (> qf-calls 0))")
+            .expect("fontification callback witness")
+            .is_truthy(),
+        "the query must invoke the fontifier: {witness}"
+    );
+    assert!(
+        preparations.get() > 0,
+        "the message must enter the real geometry preparer: {witness}"
+    );
+    // Attested GNU 31.1 accepts this same-height message while its stack-local
+    // window-end iterator runs. Capture the result inside the fontifier so
+    // later safe-call error demotion cannot conceal a Lisp-visible failure.
+    assert!(
+        eval.eval_str(
+            r#"(and (equal qf-message '(ok "query fontify"))
+                    (integerp qf-end) (null qf-query-error)
+                    (<= (point-min) qf-end) (<= qf-end (point-max)))"#,
+        )
+        .expect("inspect the captured callback and query results")
+        .is_truthy(),
+        "message-time geometry preparation must complete during the synchronous query: {witness}"
+    );
+}
+
 fn test_image_catalog(
     cmd_tx: &neomacs_display_runtime::thread_comm::RenderCommandSender,
     image_metadata: SharedImageRenderState,

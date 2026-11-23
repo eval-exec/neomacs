@@ -174,6 +174,9 @@ mod minibuffer_line_gui;
 #[path = "minibuffer_selected_window.rs"]
 mod minibuffer_selected_window;
 
+#[path = "mini_query_geometry_gui_oracle.rs"]
+mod mini_query_geometry_gui_oracle;
+
 #[path = "mouse_position_in_root_frame_gui_oracle.rs"]
 mod mouse_position_in_root_frame_gui_oracle;
 
