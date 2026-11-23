@@ -329,6 +329,9 @@ pub(crate) fn string_properties(
 ) -> StringPropertySnapshot {
     let mut requires_selection = false;
     let properties = observe_projection(value, || {
+        // Rooted callers keep the originating evaluator active throughout
+        // this synchronous capture. Retirement violates that caller contract;
+        // it must not be interpreted as an absent property table.
         let properties = scope
             .capture(value)
             .expect("display string source root scope retired before capture");

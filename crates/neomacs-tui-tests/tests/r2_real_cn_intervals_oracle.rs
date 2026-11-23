@@ -1,5 +1,12 @@
 #![cfg(unix)]
-//! Proposed, unexecuted live allocation oracle for real C-n + TUI redisplay.
+//! Live allocation oracle for real C-n + TUI redisplay.
+//!
+//! Recorded 2026-11-22 with `NEOVM_ORACLE_MODE=verify` and the attested GNU
+//! Emacs 31.1 oracle: over 64 real keys, GNU allocated 0 intervals, the unfixed
+//! Neo BASE allocated 44,544 (expected allocation-assertion failure), and the
+//! fixed Neo candidate allocated 0 (pass). All key and paint witnesses passed.
+//! The documenting fixup commit records the exact commands and GNU path; these
+//! results describe those frozen products, not every subsequent source build.
 use crate::support::{
     assert_pair_exact_display, boot_pair, eval_expression, read_both, send_both_raw,
     write_home_file,

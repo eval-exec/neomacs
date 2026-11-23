@@ -19,6 +19,9 @@ pub(super) fn bounded_string(
     }
     // Root only the source before the native size check. Projecting its full
     // interval root set here would defeat the budget for oversized strings.
+    // Rooted callers keep the originating evaluator active throughout this
+    // synchronous validation. Retirement violates that caller contract, rather
+    // than indicating a string-budget refusal, and must fail before dereference.
     let _source_roots = match string_roots {
         StringSourceRootScope::Rooted(retainer) => Some(
             retainer
