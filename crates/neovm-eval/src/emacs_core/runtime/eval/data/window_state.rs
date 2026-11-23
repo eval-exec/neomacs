@@ -3472,6 +3472,13 @@ pub struct Frame {
     pub tool_bar_height: u32,
     /// Linux toolkit allocation for this frame. See [`ToolkitToolBar`].
     pub toolkit_tool_bar: ToolkitToolBar,
+    /// GNU `f->n_tool_bar_items` survives `free_frame_tool_bar`
+    /// (`gtkutil.c:6168-6206`). A later positive line count calls
+    /// `update_frame_tool_bar` immediately (`xfns.c:1902-1908`), and that
+    /// update packs when the count is still non-zero (`gtkutil.c:6149-6155`).
+    /// This flag is that surviving count. It starts false, so a frame that
+    /// has never packed a bar stays unallocated.
+    pub tool_bar_items_packed: bool,
     /// Compact bar height in pixels.
     pub compact_bar_height: u32,
     /// Tab bar height in pixels.
@@ -6949,6 +6956,7 @@ impl Frame {
             toolkit_tool_bar: ToolkitToolBar::Unallocated {
                 explicit_size_omitted: false,
             },
+            tool_bar_items_packed: false,
             compact_bar_height: 0,
             tab_bar_height: 0,
             font_pixel_size: 16.0,

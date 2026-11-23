@@ -6,6 +6,9 @@
 ;;;   redisplay        — a timer, after the first redisplay
 ;;;   before-redisplay — hook applies the size and samples before `kill-emacs'
 ;;;   init-redisplay   — `(redisplay)' and `(sit-for 0)' during load, then the hook
+;;;   reenable         — after the first redisplay, one timer runs
+;;;                      `(tool-bar-mode -1)', `(tool-bar-mode 1)', and the
+;;;                      explicit size before another redisplay
 ;;; N827_INHIBIT selects t, tool-bar-lines, or default. The default is t.
 ;;; Reading `frame-width' before the sample would flush a queued resize.
 (require 'subr-x)
@@ -68,6 +71,16 @@
     (sit-for 0)
     (add-hook 'window-setup-hook #'n827-apply-size)
     (run-with-timer 2 nil #'n827-sample))
+   ((equal when "reenable")
+    ;; One timer, after the first redisplay has packed the bar. Turning the
+    ;; mode off and on calls `x_change_tool_bar_height` before the explicit
+    ;; size, and that size runs before the next redisplay (xfns.c:1902-1908).
+    (run-with-timer 1 nil
+                    (lambda ()
+                      (tool-bar-mode -1)
+                      (tool-bar-mode 1)
+                      (n827-apply-size)))
+    (run-with-timer 3 nil #'n827-sample))
    (t
     (add-hook 'window-setup-hook #'n827-apply-size)
     (run-with-timer 2 nil #'n827-sample))))

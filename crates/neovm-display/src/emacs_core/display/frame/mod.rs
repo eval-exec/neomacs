@@ -845,6 +845,7 @@ pub fn note_linux_toolkit_tool_bar_allocation(
         };
         if let Some(frame) = eval.frame_manager_mut().get_mut(fid) {
             frame.toolkit_tool_bar = ToolkitToolBar::Allocated;
+            frame.tool_bar_items_packed = true;
         }
         if grow {
             let (frames, buffers, display_host) = eval.frame_manager_buffers_and_display_host_mut();

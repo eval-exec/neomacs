@@ -967,6 +967,67 @@ fn erroring_window_setup_hook_still_allocates_the_tool_bar() {
     );
 }
 
+/// Packed bar, lines to 0, lines back to 1, then an explicit size before the
+/// next item-bearing redisplay. GNU `x_change_tool_bar_height` calls
+/// `update_frame_tool_bar` as soon as the height is positive again
+/// (`xfns.c:1902-1908`). `n_tool_bar_items` survives `free_frame_tool_bar`
+/// (`gtkutil.c:6168-6206`), so that update packs (`gtkutil.c:6149-6155`) and
+/// the following inhibit-1 size includes `FRAME_TOOLBAR_HEIGHT`
+/// (`gtkutil.c:1181-1182`).
+#[cfg(target_os = "linux")]
+#[test]
+fn explicit_size_after_tool_bar_reenable_includes_the_bar_before_redisplay() {
+    let mut fixture = ChromeResizeFixture::new();
+    fixture
+        .eval
+        .eval_str("(setq frame-inhibit-implied-resize t)")
+        .unwrap();
+    fixture.requests.borrow_mut().clear();
+    fixture
+        .eval
+        .eval_str("(modify-frame-parameters nil '((tool-bar-lines . 0)))")
+        .unwrap();
+    assert!(
+        fixture.requests.borrow().is_empty(),
+        "inhibit t sends no request when the bar is removed"
+    );
+    assert_eq!(
+        tool_bar_state(&fixture),
+        crate::window::ToolkitToolBar::Unallocated {
+            explicit_size_omitted: false
+        }
+    );
+    fixture
+        .eval
+        .eval_str("(modify-frame-parameters nil '((tool-bar-lines . 1)))")
+        .unwrap();
+    assert!(
+        fixture.requests.borrow().is_empty(),
+        "inhibit t sends no request when the bar is restored"
+    );
+    fixture.requests.borrow_mut().clear();
+    fixture.eval.eval_str("(set-frame-size nil 90 40)").unwrap();
+    let request = fixture.requests.borrow()[0].clone();
+    let toolbar = fixture
+        .eval
+        .frame_manager()
+        .get(fixture.frame_id)
+        .unwrap()
+        .tool_bar_height;
+    assert!(toolbar > 0);
+    assert_eq!(
+        (request.width, request.height),
+        (720, 640 + toolbar + fixture.menu_height),
+        "a re-enabled bar is in the explicit outer height before redisplay"
+    );
+    assert_eq!(
+        tool_bar_state(&fixture),
+        crate::window::ToolkitToolBar::Allocated
+    );
+    fixture.acknowledge(&request);
+    fixture.assert_geometry(90, 40, 640);
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn tool_bar_lines_zero_clears_toolkit_allocation() {
