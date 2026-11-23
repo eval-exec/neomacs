@@ -497,6 +497,8 @@ impl WorkerFontMeasurements {
                 self.faces.push(key);
             }
         }
+        // The worker keeps opened fallbacks until `clear_caches`, the same
+        // lifetime as the main thread. It does not call `begin_fallback_pass`.
         service.install_worker_font_policy(&snapshot.policy);
         Ok(service)
     }

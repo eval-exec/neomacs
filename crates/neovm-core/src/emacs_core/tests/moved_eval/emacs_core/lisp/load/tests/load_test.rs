@@ -7526,6 +7526,45 @@ fn bootstrap_runtime_setup_default_fontset_preserves_gnu_han_order() {
     );
 }
 
+/// `setup-default-fontset` tries Han as GB2312 and kana as JISX0208.
+///
+/// GNU `fontset.el` lists those registries first (han at the GB2312 entry,
+/// kana at the JISX0208 entry). Rendering walks that order and lets the
+/// opened font's glyph coverage decide. `fontset-font` is the encoding
+/// filter: 検 (U+691C) is not in GB2312, so its first public pattern is
+/// JISX0208, the same registry kana uses. A bare Han character does not
+/// invent `lang=ja`; the GB2312 spec still carries `zh-cn`.
+#[test]
+fn bootstrap_runtime_setup_default_fontset_splits_han_and_kana_on_the_line() {
+    crate::test_utils::init_test_tracing();
+    let mut eval =
+        create_bootstrap_evaluator_with_features(&["neomacs"]).expect("fresh bootstrap evaluator");
+    let rendered = eval_rendered(
+        &mut eval,
+        r#"(progn
+             (setup-default-fontset)
+             (list (aref char-script-table ?検)
+                   (aref char-script-table ?リ)
+                   (mapcar (lambda (ch) (car (fontset-font t ch t))) '(?検 ?リ ?ピ))))"#,
+    );
+    assert_eq!(
+        rendered,
+        "OK (han kana ((nil . \"jisx0208*\") (nil . \"jisx0208*\") (nil . \"jisx0208*\")))"
+    );
+
+    let first_registry = |ch| {
+        matching_entries_for_fontset(DEFAULT_FONTSET_NAME, ch)
+            .into_iter()
+            .find_map(|entry| match entry {
+                FontSpecEntry::Font(spec) => spec.registry.map(|sym| resolve_sym(sym).to_string()),
+                FontSpecEntry::ExplicitNone => None,
+            })
+    };
+    assert_eq!(first_registry('検').as_deref(), Some("gb2312.1980-0"));
+    assert_eq!(first_registry('リ').as_deref(), Some("jisx0208*"));
+    assert_eq!(first_registry('ピ').as_deref(), Some("jisx0208*"));
+}
+
 #[test]
 fn bootstrap_runtime_fontset_font_for_han_matches_gnu_order() {
     crate::test_utils::init_test_tracing();

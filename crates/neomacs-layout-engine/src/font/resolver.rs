@@ -982,11 +982,23 @@ impl FontResolver {
         generation: u64,
     ) -> Option<SpecResolution> {
         let group = OpenedFallbackKey::from_policy(&policy, generation);
+        // A character the requested family covers must not inherit a fallback
+        // opened for a different character. That reuse changed é from 16px on
+        // a fresh engine to 17px after offscreen preparation.
+        if let Some(matched) =
+            self.resolve_from_policy(&policy, prefer_monospace, CatalogPass::NamedFamilies)
+        {
+            return Some(SpecResolution::Fresh(group, matched));
+        }
         if let Some(reused) = self.reuse_opened(&group, policy.ch) {
             return Some(SpecResolution::Reused(reused));
         }
-        self.resolve_from_policy(&policy, prefer_monospace)
-            .map(|matched| SpecResolution::Fresh(group, matched))
+        self.resolve_from_policy(
+            &policy,
+            prefer_monospace,
+            CatalogPass::UnconstrainedFallback,
+        )
+        .map(|matched| SpecResolution::Fresh(group, matched))
     }
 
     fn finish_character_resolution(
@@ -1133,19 +1145,16 @@ impl FontResolver {
         result
     }
 
-    /// Drop realized fallbacks and the per-character answers that recorded them.
+    /// A redisplay pass does not drop opened fallbacks.
     ///
-    /// One redisplay pass reuses an opened font so a line does not mix faces.
-    /// Keeping that font into the next pass makes the visible result depend on
-    /// earlier windows and on offscreen preparation.
-    pub(crate) fn begin_fallback_pass(&self) {
-        if let Ok(mut opened) = self.opened_fallbacks.lock() {
-            opened.clear();
-        }
-        if let Ok(mut cache) = self.char_cache.lock() {
-            cache.clear();
-        }
-    }
+    /// GNU keeps a realized font for the life of the face's fontset. The
+    /// cache key includes the face, the font spec, and `fontset_generation`,
+    /// so a fontset change misses. [`Self::clear_caches`] drops the entries
+    /// when the catalog changes. The worker holds its own resolver and does
+    /// not enter this function; leaving the caches in place is the lifetime
+    /// both sides share. Reuse applies only after the requested family misses,
+    /// so a character that family covers is not drawn with an older fallback.
+    pub(crate) fn begin_fallback_pass(&self) {}
 
     pub(crate) fn clear_caches(&mut self) {
         if let Some(policy) = &mut self.worker_policy {
@@ -1204,7 +1213,7 @@ impl FontResolver {
             size,
             spec,
         );
-        self.resolve_from_policy(&policy, prefer_monospace)
+        self.resolve_from_policy(&policy, prefer_monospace, CatalogPass::All)
     }
 
     /// Native discovery and scoring use only owned policy, never Lisp symbols
@@ -1213,11 +1222,16 @@ impl FontResolver {
         &self,
         policy: &CapturedCharacterPolicy,
         prefer_monospace: bool,
+        pass: CatalogPass,
     ) -> Option<PlatformFontCandidate> {
         let search_order = policy
             .families
             .search_order(|family| self.backend.resolve_family(family));
         for family in search_order {
+            let unconstrained = family.as_family().is_none();
+            if !pass.allows(unconstrained) {
+                continue;
+            }
             let scope = match &family {
                 FontFamilyCandidate::Family(family) => {
                     FontCandidateScope::Family(FontFamilyName::new(family.as_ref())?)
@@ -1281,7 +1295,7 @@ impl FontResolver {
     }
 
     /// `FcFontSort` order for this face and the character's language.
-    /// A fontset language wins; otherwise kana and Han use `ja`.
+    /// A fontset language wins; otherwise kana, Hangul, and Bopomofo name one.
     fn fallback_sort_ranks(
         &self,
         policy: &CapturedCharacterPolicy,
@@ -1483,7 +1497,7 @@ struct OpenedFallbackKey {
     slant: u16,
     width: u16,
     size: FontSelectionSize,
-    otf: String,
+    otf: Option<StoredOtfSpec>,
     fontset_generation: u64,
 }
 
@@ -1509,7 +1523,7 @@ impl OpenedFallbackKey {
             slant: policy.slant.gnu_numeric(),
             width: policy.width.gnu_numeric(),
             size: policy.size,
-            otf: format!("{:?}", policy.otf),
+            otf: policy.otf.clone(),
             fontset_generation,
         }
     }
@@ -1596,15 +1610,37 @@ fn requested_width_distance(requested: Option<FontWidth>, candidate: Option<Font
 
 /// Language for the fallback `FcFontSort` pattern when the font spec has none.
 ///
-/// Kana is Japanese. A bare Han ideograph has no script of its own; issue 815
-/// asks for `lang=ja` so the JP face wins the tie the way `fc-match -s` does.
+/// Kana, Hangul, and Bopomofo name a language. A bare Han ideograph does
+/// not: GNU takes that language from the fontset registry (`fontset.el`
+/// orders GB2312/`zh-cn` ahead of JISX0208/`ja` for `han`).
 fn tie_break_language(ch: char) -> Option<&'static str> {
     match ch {
         '\u{3040}'..='\u{30FF}' | '\u{31F0}'..='\u{31FF}' | '\u{FF66}'..='\u{FF9D}' => Some("ja"),
         '\u{1100}'..='\u{11FF}' | '\u{3130}'..='\u{318F}' | '\u{AC00}'..='\u{D7AF}' => Some("ko"),
         '\u{3100}'..='\u{312F}' => Some("zh"),
-        '\u{3400}'..='\u{4DBF}' | '\u{4E00}'..='\u{9FFF}' | '\u{F900}'..='\u{FAFF}' => Some("ja"),
         _ => None,
+    }
+}
+
+/// Which part of the family search to run.
+///
+/// Named families are tried before an opened fallback. The unconstrained
+/// catalog pass runs only when those families miss, so a character the
+/// requested family covers does not inherit an older fallback.
+#[derive(Clone, Copy)]
+enum CatalogPass {
+    NamedFamilies,
+    UnconstrainedFallback,
+    All,
+}
+
+impl CatalogPass {
+    fn allows(self, unconstrained: bool) -> bool {
+        match self {
+            Self::NamedFamilies => !unconstrained,
+            Self::UnconstrainedFallback => unconstrained,
+            Self::All => true,
+        }
     }
 }
 
@@ -1628,7 +1664,14 @@ fn select_best_candidate(
     // fallback replaces it: `FcFontSort` rank, then family name, then path.
     // The discovery ordinal stays last, so two instances of one file do not
     // borrow each other's rank. Primary and explicit-family searches stay on
-    // the GNU list order.
+    // the GNU list order. An empty rank list is that list order too: macOS
+    // and Windows have no `FcFontSort`, and a missing language does not
+    // invent an alphabetical order.
+    let tie = if tie == EqualScoreTie::Fallback && !sort_ranks.iter().any(|rank| rank.is_some()) {
+        EqualScoreTie::Discovery
+    } else {
+        tie
+    };
     let mut ranked = Vec::new();
     for (ordinal, candidate) in candidates.into_iter().enumerate() {
         let Some(score) = candidate_score(&candidate, request) else {

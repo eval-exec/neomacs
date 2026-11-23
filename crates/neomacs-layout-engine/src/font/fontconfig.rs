@@ -34,6 +34,8 @@ use std::ffi::{CStr, CString};
 use std::process::Command;
 #[cfg(unix)]
 use std::ptr;
+#[cfg(all(test, unix))]
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 #[cfg(unix)]
 use {fontconfig::Pattern, fontconfig_sys};
@@ -52,6 +54,11 @@ struct FontconfigCaches {
     candidate_epoch: u64,
     #[cfg(unix)]
     candidate_queries: candidate_cache::CandidateQueries,
+    /// `FcFontSort` families for one `(family, lang)` inside this catalog epoch.
+    /// [`invalidate_catalog_caches`] replaces the whole cache, so the epoch is
+    /// the third part of the key.
+    #[cfg(unix)]
+    sorted_families: HashMap<(String, String), Vec<String>>,
     aliases: Option<HashMap<String, String>>,
     spacing: HashMap<String, Option<i32>>,
     subpixel_order: Option<FontconfigSubpixelOrder>,
@@ -59,6 +66,20 @@ struct FontconfigCaches {
 }
 
 static FC_CACHES: OnceLock<Mutex<FontconfigCaches>> = OnceLock::new();
+
+/// Native `FcFontSort` calls. A cache hit must not increment this.
+#[cfg(all(test, unix))]
+static FC_SORT_QUERIES: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(all(test, unix))]
+pub(crate) fn reset_sort_queries_for_test() {
+    FC_SORT_QUERIES.store(0, Ordering::Relaxed);
+}
+
+#[cfg(all(test, unix))]
+pub(crate) fn sort_query_count() -> usize {
+    FC_SORT_QUERIES.load(Ordering::Relaxed)
+}
 #[cfg(unix)]
 static FC_HANDLE: OnceLock<Option<fontconfig::Fontconfig>> = OnceLock::new();
 
@@ -1604,6 +1625,25 @@ pub(crate) fn fc_sorted_families(
     if family.is_empty() || lang.is_empty() {
         return Vec::new();
     }
+    let cache_key = (family.to_owned(), lang.to_owned());
+    if let Some(cached) = ({
+        #[cfg(test)]
+        {
+            owner.caches()
+        }
+        #[cfg(not(test))]
+        {
+            fontconfig_caches()
+        }
+    })
+    .lock()
+    .unwrap_or_else(|poisoned| poisoned.into_inner())
+    .sorted_families
+    .get(&cache_key)
+    .cloned()
+    {
+        return cached;
+    }
     #[cfg(test)]
     let access = owner.acquire();
     #[cfg(test)]
@@ -1672,6 +1712,8 @@ pub(crate) fn fc_sorted_families(
     // SAFETY: the pattern and configuration stay live. A null charset out-param
     // asks Fontconfig not to build the coverage union. trim is false so every
     // family remains in the order `fc-match -s` would print.
+    #[cfg(test)]
+    FC_SORT_QUERIES.fetch_add(1, Ordering::Relaxed);
     let fontset = unsafe {
         FcFontSetGuard(fontconfig_sys::FcFontSort(
             native_config,
@@ -1706,6 +1748,20 @@ pub(crate) fn fc_sorted_families(
         }
         families.push(name);
     }
+    ({
+        #[cfg(test)]
+        {
+            owner.caches()
+        }
+        #[cfg(not(test))]
+        {
+            fontconfig_caches()
+        }
+    })
+    .lock()
+    .unwrap_or_else(|poisoned| poisoned.into_inner())
+    .sorted_families
+    .insert(cache_key, families.clone());
     families
 }
 

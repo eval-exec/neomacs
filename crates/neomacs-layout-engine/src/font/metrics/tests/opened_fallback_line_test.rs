@@ -107,6 +107,67 @@ fn pinned_tie() -> (TestFontCatalog, BTreeSet<(String, u16, i32)>, u16) {
     (portable, shared, requested_weight)
 }
 
+/// Width and cluster caches outlive one redisplay. `clear_caches` is the
+/// lifetime boundary the worker and the main thread share.
+#[test]
+fn begin_fallback_pass_keeps_width_caches_until_clear_caches() {
+    let dejavu = neomacs_test_fonts::dejavu_2_37();
+    let mut svc = TestFontCatalog::from_files(&[dejavu.sans_regular()])
+        .expect("pinned DejaVu")
+        .metrics_service();
+    let key = svc.realized_face_font_cache_key(RealizedFaceFontSelection::new(
+        "DejaVu Sans",
+        400,
+        false,
+        16.0,
+    ));
+    svc.char_cache.insert((key.clone(), 'A'), 8.0);
+    svc.resolved_char_font_cache
+        .insert((key.clone(), 'A'), None);
+    svc.text_extents_cache.insert(('A', key.clone()), None);
+    svc.resolved_cluster_cache
+        .insert((key, "A".to_owned()), None);
+    svc.begin_fallback_pass();
+    assert_eq!(svc.char_cache.len(), 1);
+    assert_eq!(svc.resolved_char_font_cache.len(), 1);
+    assert_eq!(svc.text_extents_cache.len(), 1);
+    assert_eq!(svc.resolved_cluster_cache.len(), 1);
+    svc.clear_caches();
+    assert!(svc.char_cache.is_empty());
+    assert!(svc.resolved_char_font_cache.is_empty());
+    assert!(svc.text_extents_cache.is_empty());
+    assert!(svc.resolved_cluster_cache.is_empty());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn fc_font_sort_is_reused_until_the_catalog_changes() {
+    let (portable, _, _) = pinned_tie();
+    let native = portable.to_native_fontconfig();
+    let owner =
+        || crate::font::fontconfig::test_config::QueryOwner::Fixture(native.native_fontconfig());
+    crate::font::fontconfig::reset_sort_queries_for_test();
+    let first = crate::font::fontconfig::fc_sorted_families(owner(), "DejaVu Sans", "ja");
+    assert!(
+        !first.is_empty(),
+        "FcFontSort returned no families for DejaVu Sans:lang=ja"
+    );
+    let after_first = crate::font::fontconfig::sort_query_count();
+    let second = crate::font::fontconfig::fc_sorted_families(owner(), "DejaVu Sans", "ja");
+    assert_eq!(second, first);
+    assert_eq!(
+        crate::font::fontconfig::sort_query_count(),
+        after_first,
+        "the same family and language must not sort the catalog again"
+    );
+    crate::font::fontconfig::invalidate_catalog_caches(owner());
+    let _third = crate::font::fontconfig::fc_sorted_families(owner(), "DejaVu Sans", "ja");
+    assert!(
+        crate::font::fontconfig::sort_query_count() > after_first,
+        "a catalog epoch change sorts again"
+    );
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn layout_line_uses_one_pinned_fallback_when_two_faces_cover_it() {
@@ -127,9 +188,13 @@ fn layout_line_uses_one_pinned_fallback_when_two_faces_cover_it() {
         );
         identities.push(platform.identity.clone());
     }
+    assert_eq!(
+        identities[1], identities[2],
+        "kana shares one opened fallback, got {identities:?}"
+    );
     assert!(
-        identities.windows(2).all(|pair| pair[0] == pair[1]),
-        "every character of the line uses one fallback, got {identities:?}"
+        !identities[0].stable_key.is_empty(),
+        "Han still resolves to a face"
     );
 }
 

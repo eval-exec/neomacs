@@ -30,7 +30,7 @@ pub struct StoredFontSpec {
 ///
 /// Tags are owned text because the layout engine compares them against the
 /// capability it reads from the font file, outside the evaluator.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct StoredOtfSpec {
     pub script: String,
     pub langsys: StoredOtfLangsys,
@@ -45,7 +45,7 @@ pub struct StoredOtfSpec {
 /// `font_check_otf_features` then compares it with `eq` against langsys tag
 /// symbols, which can never match, so every feature requirement rejects all
 /// fonts. `Unmatchable` preserves that observable outcome.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub enum StoredOtfLangsys {
     /// nil: prefer the default langsys, else the script's first langsys.
     #[default]
@@ -58,7 +58,7 @@ pub enum StoredOtfLangsys {
 ///
 /// Features before the `nil` separator must be present; features after it must
 /// be absent (`src/font.c` `font_check_otf_features`).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct StoredOtfFeatures {
     pub required: Vec<String>,
     pub forbidden: Vec<String>,

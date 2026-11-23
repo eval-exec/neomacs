@@ -1026,7 +1026,7 @@ fn captured_character_policy_selects_on_a_thread_without_evaluator_state() {
         );
         let resolver = FontResolver::new(Box::new(CandidateBackend { candidates }));
         resolver
-            .resolve_from_policy(&policy, true)
+            .resolve_from_policy(&policy, true, CatalogPass::All)
             .expect("captured selection")
     })
     .join()
@@ -1514,6 +1514,9 @@ struct TieOrderBackend {
     first: FontCandidate,
     second: FontCandidate,
     first_misses: Vec<char>,
+    /// Answer only the unconstrained fallback scope, so the tie is
+    /// `EqualScoreTie::Fallback` rather than the named-family discovery tie.
+    fallback_only: bool,
 }
 
 impl TieOrderBackend {
@@ -1528,8 +1531,11 @@ impl TieOrderBackend {
     }
 
     fn covering(&self, ch: char) -> Vec<FontCandidate> {
-        let noto_first = ch == '検';
-        let ordered: [&FontCandidate; 2] = if noto_first {
+        // `検` is the reuse-on-tie row. `ア` is the skip row's first character.
+        // Every other character lists the second face first, so a fresh search
+        // would not pick the face the skip row expects to reuse.
+        let lead_with_first = ch == '検' || ch == 'ア';
+        let ordered: [&FontCandidate; 2] = if lead_with_first {
             [&self.first, &self.second]
         } else {
             [&self.second, &self.first]
@@ -1560,6 +1566,9 @@ impl FontBackend for TieOrderBackend {
     }
 
     fn list_candidates(&self, query: &FontCandidateQuery) -> Vec<FontCandidate> {
+        if self.fallback_only && !matches!(query.scope, FontCandidateScope::NativeFallback { .. }) {
+            return Vec::new();
+        }
         self.listings.fetch_add(1, Ordering::Relaxed);
         query
             .required
@@ -1613,6 +1622,7 @@ fn opened_fallback_is_reused_when_a_later_character_ties() {
         first: candidate("Noto Sans Mono CJK JP", 400, FontSlant::Normal, 0),
         second: candidate("Cica", 400, FontSlant::Normal, 0),
         first_misses: Vec::new(),
+        fallback_only: true,
     }));
 
     let kanji = resolve_tie(&resolver, '検');
@@ -1621,7 +1631,7 @@ fn opened_fallback_is_reused_when_a_later_character_ties() {
     assert_eq!(
         kanji.family(),
         "Noto Sans Mono CJK JP",
-        "the named-family pass keeps discovery order; Noto is listed first for this character"
+        "the unconstrained fallback keeps list order; Noto is listed first for this character"
     );
     assert_eq!(
         kana.family(),
@@ -1643,20 +1653,78 @@ fn opened_fallback_skips_a_font_that_does_not_cover_the_character() {
         first: candidate("Cica", 400, FontSlant::Normal, 0),
         second: candidate("Noto Sans Mono CJK JP", 400, FontSlant::Normal, 0),
         first_misses: vec!['リ'],
+        // The face family must miss. Otherwise the named-family pass selects
+        // before reuse, and this row never reaches the opened-font list.
+        fallback_only: true,
     }));
 
-    let kanji = resolve_tie(&resolver, '検');
+    // Kana share one fontset spec, so they share one opened-fallback group.
+    let kana = resolve_tie(&resolver, 'ア');
     let missing = resolve_tie(&resolver, 'リ');
     let later = resolve_tie(&resolver, 'ピ');
 
-    assert_eq!(kanji.family(), "Cica");
+    assert_eq!(kana.family(), "Cica");
     assert_eq!(missing.family(), "Noto Sans Mono CJK JP");
     assert_eq!(
         later.family(),
-        kanji.family(),
+        kana.family(),
         "a later character uses the first opened font that covers it"
     );
     assert_eq!(listings.load(Ordering::Relaxed), 2);
+}
+
+#[test]
+fn opened_unconstrained_fallback_survives_the_next_layout_pass() {
+    let listings = Arc::new(AtomicUsize::new(0));
+    let resolver = FontResolver::new(Box::new(TieOrderBackend {
+        listings: Arc::clone(&listings),
+        first: candidate("Noto Sans Mono CJK JP", 400, FontSlant::Normal, 0),
+        second: candidate("Cica", 400, FontSlant::Normal, 0),
+        first_misses: Vec::new(),
+        fallback_only: true,
+    }));
+
+    let first = resolve_tie(&resolver, '検');
+    resolver.begin_fallback_pass();
+    let second = resolve_tie(&resolver, 'リ');
+
+    assert_eq!(
+        second.family(),
+        first.family(),
+        "a later pass reuses the opened fallback"
+    );
+    assert_eq!(
+        listings.load(Ordering::Relaxed),
+        1,
+        "begin_fallback_pass must not list the catalog again"
+    );
+}
+
+#[test]
+fn empty_sort_ranks_keep_list_order() {
+    let request = equal_score_request();
+    let chosen = select_best_candidate(
+        vec![
+            candidate("Noto Sans CJK JP", 400, FontSlant::Normal, 0),
+            candidate("Cica", 400, FontSlant::Normal, 0),
+        ],
+        &request,
+        EqualScoreTie::Fallback,
+        &[],
+    )
+    .expect("list-order tie");
+    assert_eq!(
+        chosen.family(),
+        "Noto Sans CJK JP",
+        "with no sort ranks the driver's list order wins, not the family name"
+    );
+}
+
+#[test]
+fn han_without_a_fontset_language_does_not_invent_japanese() {
+    assert_eq!(tie_break_language('検'), None);
+    assert_eq!(tie_break_language('リ'), Some("ja"));
+    assert_eq!(tie_break_language('피'), Some("ko"));
 }
 
 fn equal_score_request() -> SelectionRequest<'static> {
@@ -1686,8 +1754,8 @@ fn equal_score_tie_breaks_by_sort_rank_then_family_name() {
     .expect("family-name tie break");
     assert_eq!(
         by_name.family(),
-        "Cica",
-        "with no FcFontSort rank, family name then path decides"
+        "Noto Sans CJK JP",
+        "with no FcFontSort rank the driver's list order wins"
     );
 
     let by_rank = select_best_candidate(
@@ -1720,12 +1788,12 @@ fn equal_score_tie_breaks_by_sort_rank_then_family_name() {
         vec![later_path, earlier_path],
         &request,
         EqualScoreTie::Fallback,
-        &[],
+        &[Some(0), Some(0)],
     )
     .expect("path tie break");
     assert_eq!(
         by_path.file_path(),
         Some("/fixture/a.ttf"),
-        "with the same family and no FcFontSort rank, the file path decides"
+        "equal FcFontSort ranks break by file path"
     );
 }

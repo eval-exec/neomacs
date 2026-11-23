@@ -4048,16 +4048,14 @@ impl FontMetricsService {
         }
     }
 
-    /// Start one layout pass. Fallback reuse stays inside the pass.
+    /// Mark a layout pass. Opened fallbacks and measured widths stay.
     ///
-    /// Widths, cluster glyphs, and text extents are keyed by the face and the
-    /// text, not by the font file the previous pass happened to open.
+    /// Those maps are keyed by the face and the fontset generation.
+    /// [`Self::clear_caches`] is the lifetime the main thread and the worker
+    /// share. The worker never calls this function; clearing here made the
+    /// two pick different fonts for one character.
     pub(crate) fn begin_fallback_pass(&mut self) {
         self.font_resolver.begin_fallback_pass();
-        self.resolved_char_font_cache.clear();
-        self.char_cache.clear();
-        self.text_extents_cache.clear();
-        self.resolved_cluster_cache.clear();
     }
 
     /// Clear all caches. Call when fonts change (e.g., text-scale-adjust).
