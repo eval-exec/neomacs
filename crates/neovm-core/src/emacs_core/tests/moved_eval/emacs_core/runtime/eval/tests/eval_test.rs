@@ -5648,6 +5648,70 @@ fn read_key_sequence_dispatches_gui_tool_bar_click_by_item_key() {
 }
 
 #[test]
+/// A tool-bar `:filter` that returns another command is the command the click
+/// runs. GNU `lookup-key` of `[tool-bar n827]` is that symbol
+/// (`keymap.c:701-710`); the oracle prints `n827-replacement`.
+#[test]
+fn read_key_sequence_tool_bar_click_runs_filtered_binding() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = crate::test_utils::new_context();
+    ev.frame_manager_mut()
+        .create_frame("F1", 960, 640, neovm_edit::buffer::BufferId(1));
+
+    let global_map = crate::emacs_core::keymap::make_sparse_list_keymap();
+    let tool_bar_map = crate::emacs_core::keymap::make_sparse_list_keymap();
+    install_global_map_for_test(&mut ev, global_map);
+    ev.obarray_mut()
+        .set_symbol_value("tool-bar-map", tool_bar_map);
+    let item_filter = ev
+        .eval_str("(lambda (_cmd) 'n827-replacement)")
+        .expect("item filter");
+    let map_filter = ev
+        .eval_str("(lambda (_) tool-bar-map)")
+        .expect("tool-bar map filter");
+    crate::emacs_core::keymap::list_keymap_define(
+        tool_bar_map,
+        Value::symbol("n827"),
+        Value::list(vec![
+            Value::symbol("menu-item"),
+            Value::string("N827"),
+            Value::symbol("ignore"),
+            Value::symbol(":filter"),
+            item_filter,
+            Value::symbol(":image"),
+            Value::string("n827.svg"),
+        ]),
+        neovm_value::tagged::SymbolMode::Bare,
+    );
+    crate::emacs_core::keymap::list_keymap_define(
+        global_map,
+        Value::symbol("tool-bar"),
+        Value::list(vec![
+            Value::symbol("menu-item"),
+            Value::string("tool bar"),
+            Value::symbol("ignore"),
+            Value::symbol(":filter"),
+            map_filter,
+        ]),
+        neovm_value::tagged::SymbolMode::Bare,
+    );
+
+    ev.command_loop_mut()
+        .keyboard
+        .pending_input_events
+        .push_back(
+            crate::emacs_core::eval::keyboard::InputEvent::ToolBarClick {
+                index: 0,
+                emacs_frame_id: 0,
+            },
+        );
+
+    let (_keys, binding) = ev
+        .read_key_sequence()
+        .expect("read filtered tool-bar click");
+    assert_eq!(binding, Value::symbol("n827-replacement"));
+}
+
 fn read_key_sequence_dispatches_gui_tool_bar_click_from_owning_frame() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();

@@ -29,6 +29,29 @@ fn parse_tool_bar_item_preserves_raw_unibyte_label_and_help() {
 }
 
 #[test]
+/// GNU `parse_tool_bar_item` stores the `:filter` result as the binding and
+/// drops the item when that binding is a keymap (`keyboard.c:9988-9990`).
+#[test]
+fn parse_tool_bar_item_omits_item_when_filter_returns_keymap() {
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    eval.setup_thread_locals();
+    eval.eval_str("(fset 'n827-keymap-filter (lambda (_cmd) (make-sparse-keymap)))")
+        .expect("keymap filter");
+    let def = Value::list(vec![
+        Value::symbol("menu-item"),
+        Value::string("Submap"),
+        Value::symbol("ignore"),
+        Value::symbol(":filter"),
+        Value::symbol("n827-keymap-filter"),
+    ]);
+
+    assert!(
+        parse_tool_bar_item(&mut eval, "submap", &def, 0).is_none(),
+        "a keymap binding is not a tool-bar button"
+    );
+}
+
+#[test]
 fn parse_tool_bar_item_keeps_wrap_separate_from_button_type() {
     let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.setup_thread_locals();

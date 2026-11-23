@@ -450,28 +450,19 @@ fn parse_tool_bar_item(
     }
 
     let (mut label, plist) = extract_menu_item_label_and_plist(eval, def)?;
-    // GNU `parse_tool_bar_item` applies `:filter` to the binding
-    // (keyboard.c:9980-9986). The pixels still come from the original
-    // properties. The call is the Lisp a redisplay must not repeat.
+    // `:filter` replaces the binding (keyboard.c:9980-9986). A keymap
+    // binding is not a button (keyboard.c:9988-9990). A click resolves
+    // that same value again through `get_keyelt` (keymap.c:701-710).
+    let mut binding = menu_item_binding(eval, def);
     if KeymapMarker::MenuItem.is_value(def.cons_car(), eval.symbol_mode())
         && let Some(filter) = plist_lookup(&plist, MenuItemProperty::Filter, eval.symbol_mode())
     {
-        let command = {
-            let named = def.cons_cdr();
-            if named.is_cons() {
-                let defined = named.cons_cdr();
-                if defined.is_cons() {
-                    defined.cons_car()
-                } else {
-                    Value::NIL
-                }
-            } else {
-                Value::NIL
-            }
-        };
-        let _filtered = eval
-            .eval_menu_item_property(filter, vec![command])
+        binding = eval
+            .eval_menu_item_property(filter, vec![binding])
             .unwrap_or(Value::NIL);
+    }
+    if tool_bar_binding_is_keymap(eval, binding) {
+        return None;
     }
     if let Some(visible) = plist_lookup(&plist, MenuItemProperty::Visible, eval.symbol_mode())
         && !eval_menu_property(eval, visible).is_truthy()
@@ -509,6 +500,29 @@ fn parse_tool_bar_item(
         item_type,
         wrap,
     })
+}
+
+fn menu_item_binding(eval: &Context, def: &Value) -> Value {
+    if !KeymapMarker::MenuItem.is_value(def.cons_car(), eval.symbol_mode()) || !def.is_cons() {
+        return Value::NIL;
+    }
+    let named = def.cons_cdr();
+    if !named.is_cons() {
+        return Value::NIL;
+    }
+    let defined = named.cons_cdr();
+    if defined.is_cons() {
+        defined.cons_car()
+    } else {
+        Value::NIL
+    }
+}
+
+/// GNU `get_keymap (binding, 0, 1)` is a cons for a keymap binding.
+fn tool_bar_binding_is_keymap(eval: &mut Context, binding: Value) -> bool {
+    !neovm_core::emacs_core::keymap::maybe_keymap_in_runtime(eval, &binding, true)
+        .unwrap_or(Value::NIL)
+        .is_nil()
 }
 
 fn extract_menu_item_label_and_plist(eval: &mut Context, def: &Value) -> Option<(String, Value)> {
