@@ -331,6 +331,48 @@ fn e8s_a_signal_before_a_thread_runs_is_raised_at_its_next_delivery_point() {
     );
 }
 
+/// A thread's own uncaught error does not consume a pending `thread-signal`.
+/// GNU's `record_thread_error` (src/thread.c:753-758) only stores
+/// `last_thread_error`. The pending pair stays in `error_symbol`, and a later
+/// `thread-join` re-raises it from its snapshot (:1134-1141).
+#[test]
+fn e8s_a_threads_own_error_leaves_a_pending_signal_for_join() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    assert_default_threads_oracle(
+        r##"
+(let* ((settle (lambda (th)
+                 (let ((deadline (+ (float-time) 5.0)))
+                   (while (and (thread-live-p th) (< (float-time) deadline))
+                     (thread-yield)))))
+       (join (lambda (th)
+               (condition-case err (list 'joined (thread-join th))
+                 (t (list 'join-raised err)))))
+       (own (make-thread (lambda () (error "own")) "e8s-own"))
+       (own-wta nil)
+       (shape nil)
+       (results nil))
+  (thread-signal own 'error '("early"))
+  (funcall settle own)
+  (push (list (thread-live-p own) (thread-last-error)
+              (funcall join own) (funcall join own))
+        results)
+  (setq own-wta (make-thread (lambda () (signal 'wrong-type-argument '(own-wta)))
+                             "e8s-own-wta"))
+  (thread-signal own-wta 'quit '(early-quit))
+  (funcall settle own-wta)
+  (push (list (thread-last-error t) (funcall join own-wta)) results)
+  (setq shape (make-thread (lambda () 'ok) "e8s-shape"))
+  (thread-signal shape 'error '(a (b c) 3))
+  (funcall settle shape)
+  (push (funcall join shape) results)
+  (nreverse results))
+"##,
+        expect_test::expect![[
+            r#""OK ((nil (error \"own\") (join-raised (error \"early\")) (join-raised (error \"early\"))) ((wrong-type-argument own-wta) (join-raised (quit early-quit))) (join-raised (error a (b c) 3)))""#
+        ]],
+    );
+}
+
 #[test]
 fn e8s_thread_yield_in_main_and_worker() {
     return_if_neovm_enable_oracle_proptest_not_set!();
