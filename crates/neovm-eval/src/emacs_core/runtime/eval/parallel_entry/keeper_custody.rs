@@ -72,17 +72,27 @@ pub enum CustodyFailureNotice {
     Return,
 }
 
-/// Dormant return envelope. No notice conversion. The only constructor is
-/// the test seam below; production return is L6.4.
+/// Dormant return envelope. No notice conversion.
 #[allow(dead_code)]
 #[must_use]
 pub struct ReturnedSerialTicket {
     _not_sync: PhantomData<Cell<()>>,
 }
 
+impl ReturnedSerialTicket {
+    /// Production return. Consumes the owner `end_serial` yielded.
+    #[allow(dead_code)] // the L6.4 row is the caller until activation lands.
+    pub(crate) fn from_end(owner: super::serial_ticket::ReturnableSerialOwner) -> Self {
+        drop(owner);
+        Self {
+            _not_sync: PhantomData,
+        }
+    }
+}
+
 #[cfg(test)]
 impl ReturnedSerialTicket {
-    /// Test-only return. Production `end_serial` is the constructor in L6.4.
+    /// Test-only return. Production return is [`Self::from_end`].
     pub(crate) fn for_test() -> Self {
         Self {
             _not_sync: PhantomData,

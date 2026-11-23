@@ -129,7 +129,8 @@ impl ReceivedSerial {
 pub(crate) enum ReceiveReason {
     WrongOwner,
     StaleGeneration,
-    Era,
+    /// The heap word does not match. This is not an era epoch.
+    WrongHeap,
     SecondReceive,
 }
 
@@ -142,11 +143,72 @@ pub(crate) struct ReceiveRefusal {
     pub reason: ReceiveReason,
 }
 
+/// The destination seat. `end_serial` is the only Occupied -> Empty transition.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Seat {
+    Empty,
+    Occupied,
+}
+
 /// Destination seat. Occupied only after every check has passed.
 #[allow(dead_code)] // Dormant L6.3; L6.4 begin is the caller.
 pub(crate) struct SerialDestination {
     expected: TicketIdentity,
-    occupied: bool,
+    seat: Seat,
+}
+
+/// The local guard around one received ticket. `finish` consumes it.
+#[derive(Debug)]
+#[must_use]
+pub(crate) struct LocalSerialOwner {
+    received: ReceivedSerial,
+    _local: PhantomData<Rc<()>>,
+}
+
+/// What `end_serial` yields. `return_ticket` consumes it.
+#[derive(Debug)]
+#[must_use]
+pub(crate) struct ReturnableSerialOwner {
+    identity: TicketIdentity,
+    _local: PhantomData<Rc<()>>,
+}
+
+#[allow(dead_code)] // L6.4 rows call this; production activation is the next edit.
+impl ReceivedSerial {
+    /// Enter the local guard. The received ticket cannot be used after this.
+    pub(crate) fn guard(self) -> LocalSerialOwner {
+        LocalSerialOwner {
+            received: self,
+            _local: PhantomData,
+        }
+    }
+}
+
+#[allow(dead_code)] // L6.4 rows call this; production activation is the next edit.
+impl LocalSerialOwner {
+    pub(crate) fn identity(&self) -> TicketIdentity {
+        self.received.identity()
+    }
+
+    /// End the turn and re-arm the seat. A mismatch returns this guard.
+    pub(crate) fn finish(
+        self,
+        seat: &mut SerialDestination,
+    ) -> Result<ReturnableSerialOwner, Self> {
+        seat.end_serial(self)
+    }
+}
+
+#[allow(dead_code)] // L6.4 rows call this; production activation is the next edit.
+impl ReturnableSerialOwner {
+    pub(crate) fn identity(&self) -> TicketIdentity {
+        self.identity
+    }
+
+    /// The production return envelope. Consumes this owner.
+    pub(crate) fn return_ticket(self) -> super::keeper_custody::ReturnedSerialTicket {
+        super::keeper_custody::ReturnedSerialTicket::from_end(self)
+    }
 }
 
 impl SerialDestination {
@@ -154,7 +216,7 @@ impl SerialDestination {
     pub(crate) fn new(expected: TicketIdentity) -> Self {
         Self {
             expected,
-            occupied: false,
+            seat: Seat::Empty,
         }
     }
 
@@ -163,23 +225,38 @@ impl SerialDestination {
         &mut self,
         ticket: StoppedSerialTicket,
     ) -> Result<ReceivedSerial, ReceiveRefusal> {
-        let reason = if self.occupied {
+        let reason = if self.seat == Seat::Occupied {
             Some(ReceiveReason::SecondReceive)
         } else if ticket.identity.owner != self.expected.owner {
             Some(ReceiveReason::WrongOwner)
         } else if ticket.identity.generation != self.expected.generation {
             Some(ReceiveReason::StaleGeneration)
         } else if ticket.identity.heap != self.expected.heap {
-            Some(ReceiveReason::Era)
+            Some(ReceiveReason::WrongHeap)
         } else {
             None
         };
         if let Some(reason) = reason {
             return Err(ReceiveRefusal { ticket, reason });
         }
-        self.occupied = true;
+        self.seat = Seat::Occupied;
         Ok(ReceivedSerial {
             identity: ticket.identity,
+            _local: PhantomData,
+        })
+    }
+
+    #[allow(dead_code)] // finish is the caller; both wait for the activation edit.
+    fn end_serial(
+        &mut self,
+        local: LocalSerialOwner,
+    ) -> Result<ReturnableSerialOwner, LocalSerialOwner> {
+        if self.seat != Seat::Occupied || local.identity() != self.expected {
+            return Err(local);
+        }
+        self.seat = Seat::Empty;
+        Ok(ReturnableSerialOwner {
+            identity: local.received.identity,
             _local: PhantomData,
         })
     }
@@ -189,6 +266,8 @@ static_assertions::assert_impl_all!(StoppedSerialTicket: Send);
 static_assertions::assert_not_impl_any!(StoppedSerialTicket: Sync, Clone, Copy);
 static_assertions::assert_not_impl_any!(SerialLendHeld<'static, 'static>: Send, Sync, Clone, Copy);
 static_assertions::assert_not_impl_any!(ReceivedSerial: Send, Sync, Clone, Copy);
+static_assertions::assert_not_impl_any!(LocalSerialOwner: Send, Sync, Clone, Copy);
+static_assertions::assert_not_impl_any!(ReturnableSerialOwner: Send, Sync, Clone, Copy);
 static_assertions::assert_impl_all!(ReceiveRefusal: Send);
 
 #[cfg(test)]
@@ -236,7 +315,7 @@ mod tests {
         let era = seat
             .receive_serial(StoppedSerialTicket::transport(identity(7, 2, 2)))
             .expect_err("wrong era");
-        assert_eq!(era.reason, ReceiveReason::Era);
+        assert_eq!(era.reason, ReceiveReason::WrongHeap);
         assert_eq!(era.ticket.identity().heap, heap(2));
         assert!(
             seat.receive_serial(StoppedSerialTicket::transport(expected))
@@ -284,5 +363,27 @@ mod tests {
         let got = done_rx.recv().expect("receive result");
         destination.join().expect("destination thread");
         assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn pentry_l64_end_serial_rearms_the_seat() {
+        let expected = identity(7, 1, 1);
+        let mut seat = SerialDestination::new(expected);
+        let local = seat
+            .receive_serial(StoppedSerialTicket::transport(expected))
+            .expect("receive")
+            .guard();
+        let mut other = SerialDestination::new(identity(9, 1, 1));
+        let local = match local.finish(&mut other) {
+            Err(local) => local,
+            Ok(_) => panic!("a different seat must not take the guard"),
+        };
+        let returned = local.finish(&mut seat).expect("re-arm this seat");
+        assert_eq!(returned.identity(), expected);
+        let _envelope = returned.return_ticket();
+        let again = seat
+            .receive_serial(StoppedSerialTicket::transport(expected))
+            .expect("the seat is empty again");
+        assert_eq!(again.identity(), expected);
     }
 }
