@@ -263,3 +263,72 @@ fn cpu_is_not_chosen_while_hardware_remains() {
     assert!(!pick.software);
     assert!(pick.warning.is_none());
 }
+
+fn intel(
+    name: &str,
+    backend: wgpu::Backend,
+    device_type: wgpu::DeviceType,
+) -> StartupAdapterCandidate {
+    let mut adapter = candidate("placeholder", 0x8086, 0x8a52, device_type);
+    adapter.identity.backend = backend;
+    adapter.identity.name = name.to_string();
+    adapter
+}
+
+#[test]
+fn windows_prefers_dx12_over_vulkan_for_the_same_intel_device() {
+    let adapters = [
+        intel(
+            "Intel Iris Plus (Vulkan)",
+            wgpu::Backend::Vulkan,
+            wgpu::DeviceType::IntegratedGpu,
+        ),
+        intel(
+            "Microsoft Basic Render Driver",
+            wgpu::Backend::Dx12,
+            wgpu::DeviceType::Cpu,
+        ),
+        intel(
+            "Intel Iris Plus (DX12)",
+            wgpu::Backend::Dx12,
+            wgpu::DeviceType::IntegratedGpu,
+        ),
+    ];
+    let pick = choose_startup_adapter_on(
+        &adapters,
+        high_performance(),
+        &StartupAdapterChoice::Ranked,
+        StartupOs::Windows,
+        StartupBackendPolicy::Default,
+    )
+    .expect("DX12 hardware remains");
+    assert_eq!(pick.index, 2, "DX12 wins over Vulkan for the same device");
+    assert!(!pick.software);
+    assert!(pick.warning.is_none());
+}
+
+#[test]
+fn explicit_vulkan_backend_keeps_vulkan_on_windows() {
+    let adapters = [
+        intel(
+            "Intel Iris Plus (DX12)",
+            wgpu::Backend::Dx12,
+            wgpu::DeviceType::IntegratedGpu,
+        ),
+        intel(
+            "Intel Iris Plus (Vulkan)",
+            wgpu::Backend::Vulkan,
+            wgpu::DeviceType::IntegratedGpu,
+        ),
+    ];
+    let pick = choose_startup_adapter_on(
+        &adapters,
+        high_performance(),
+        &StartupAdapterChoice::Ranked,
+        StartupOs::Windows,
+        StartupBackendPolicy::Explicit(wgpu::Backend::Vulkan),
+    )
+    .expect("explicit Vulkan remains");
+    assert_eq!(pick.index, 1);
+    assert_eq!(adapters[pick.index].identity.backend, wgpu::Backend::Vulkan);
+}

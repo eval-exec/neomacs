@@ -368,7 +368,10 @@ pub(super) fn select_adapter(
             }
         })
         .collect();
-    let Some(pick) = choose_startup_adapter(&candidates, preference, choice) else {
+    let os = host_startup_os();
+    let backends = startup_backend_policy();
+    let Some(pick) = choose_startup_adapter_on(&candidates, preference, choice, os, backends)
+    else {
         if let StartupAdapterChoice::SkipFailed { excluded } = choice {
             tracing::error!(
                 adapter = %excluded.name,
@@ -386,6 +389,7 @@ pub(super) fn select_adapter(
         if let Some(other) = (0..adapters.len()).find(|&index| {
             index != chosen
                 && candidates[index].surface_compatible
+                && backend_allowed(backends, candidates[index].identity.backend)
                 && excluded.is_none_or(|id| &candidates[index].identity != id)
                 && !lavapipe_drops_x11_frames(&adapters[index].get_info())
         }) {
@@ -421,6 +425,21 @@ pub(super) fn select_adapter(
             "skipping the adapter that failed before the first present"
         );
     }
+    let chosen_info = adapters[chosen].get_info();
+    let why = match (os, backends) {
+        (_, StartupBackendPolicy::Explicit(backend)) => {
+            format!("WGPU_BACKEND={}", backend.to_str())
+        }
+        (StartupOs::Windows, StartupBackendPolicy::Default | StartupBackendPolicy::Limited(_)) => {
+            "Windows default rank is DX12, then Vulkan, then GL".to_string()
+        }
+        _ => "device-type rank".to_string(),
+    };
+    tracing::info!(
+        backend = chosen_info.backend.to_str(),
+        adapter = %chosen_info.name,
+        "{why}"
+    );
     Some(adapters[chosen].clone())
 }
 
@@ -503,6 +522,23 @@ pub(super) struct StartupAdapterPick {
     pub warning: Option<String>,
 }
 
+/// Host used to rank backends. Tests pass `Windows` on Linux.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum StartupOs {
+    Windows,
+    Other,
+}
+
+/// `WGPU_BACKEND` when set, otherwise the platform default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum StartupBackendPolicy {
+    Default,
+    /// One backend, for example `WGPU_BACKEND=vulkan`.
+    Explicit(wgpu::Backend),
+    /// Several backends named together. Windows still ranks inside this set.
+    Limited(wgpu::Backends),
+}
+
 /// Rank surface-compatible adapters and apply a pre-present failure skip.
 ///
 /// A `DeviceType::Cpu` adapter is chosen only when every hardware adapter is
@@ -513,12 +549,34 @@ pub(super) fn choose_startup_adapter(
     preference: wgpu::PowerPreference,
     choice: &StartupAdapterChoice,
 ) -> Option<StartupAdapterPick> {
+    choose_startup_adapter_on(
+        candidates,
+        preference,
+        choice,
+        StartupOs::Other,
+        StartupBackendPolicy::Default,
+    )
+}
+
+/// Same choice as [`choose_startup_adapter`], plus a platform backend policy.
+///
+/// On Windows, with no single `WGPU_BACKEND`, DX12 ranks ahead of Vulkan and
+/// GL after the device-type rank. `DeviceType::Cpu` stays last. An explicit
+/// backend drops every other backend before that rank.
+pub(super) fn choose_startup_adapter_on(
+    candidates: &[StartupAdapterCandidate],
+    preference: wgpu::PowerPreference,
+    choice: &StartupAdapterChoice,
+    os: StartupOs,
+    backends: StartupBackendPolicy,
+) -> Option<StartupAdapterPick> {
     let excluded = match choice {
         StartupAdapterChoice::Ranked => None,
         StartupAdapterChoice::SkipFailed { excluded } => Some(excluded),
     };
     let eligible: Vec<usize> = (0..candidates.len())
         .filter(|&index| candidates[index].surface_compatible)
+        .filter(|&index| backend_allowed(backends, candidates[index].identity.backend))
         .filter(|&index| excluded.is_none_or(|id| &candidates[index].identity != id))
         .collect();
     let hardware: Vec<usize> = eligible
@@ -532,7 +590,12 @@ pub(super) fn choose_startup_adapter(
         &hardware
     };
     let mut ranked = pool.clone();
-    ranked.sort_by_key(|&index| adapter_rank(candidates[index].device_type, preference));
+    ranked.sort_by_key(|&index| {
+        (
+            adapter_rank(candidates[index].device_type, preference),
+            windows_backend_rank(os, backends, candidates[index].identity.backend),
+        )
+    });
     let index = *ranked.first()?;
     let software = candidates[index].device_type == wgpu::DeviceType::Cpu;
     let warning = software.then(|| {
@@ -546,6 +609,71 @@ pub(super) fn choose_startup_adapter(
         software,
         warning,
     })
+}
+
+fn backend_allowed(policy: StartupBackendPolicy, backend: wgpu::Backend) -> bool {
+    match policy {
+        StartupBackendPolicy::Default => true,
+        StartupBackendPolicy::Explicit(required) => backend == required,
+        StartupBackendPolicy::Limited(allowed) => allowed.contains(wgpu::Backends::from(backend)),
+    }
+}
+
+/// DX12, then Vulkan, then GL. Other policies do not reorder backends.
+fn windows_backend_rank(os: StartupOs, policy: StartupBackendPolicy, backend: wgpu::Backend) -> u8 {
+    let rank_backends = matches!(
+        (os, policy),
+        (
+            StartupOs::Windows,
+            StartupBackendPolicy::Default | StartupBackendPolicy::Limited(_)
+        )
+    );
+    if !rank_backends {
+        return 0;
+    }
+    match backend {
+        wgpu::Backend::Dx12 => 0,
+        wgpu::Backend::Vulkan => 1,
+        wgpu::Backend::Gl => 2,
+        _ => 3,
+    }
+}
+
+/// `WGPU_BACKEND` when set. A single name is [`StartupBackendPolicy::Explicit`].
+pub(super) fn startup_backend_policy() -> StartupBackendPolicy {
+    let Ok(raw) = std::env::var("WGPU_BACKEND") else {
+        return StartupBackendPolicy::Default;
+    };
+    if raw.trim().is_empty() {
+        return StartupBackendPolicy::Default;
+    }
+    let set = wgpu::Backends::from_comma_list(&raw);
+    if set.is_empty() {
+        tracing::warn!("WGPU_BACKEND={raw}: no known backend, using the platform default");
+        return StartupBackendPolicy::Default;
+    }
+    let singles = [
+        (wgpu::Backends::DX12, wgpu::Backend::Dx12),
+        (wgpu::Backends::VULKAN, wgpu::Backend::Vulkan),
+        (wgpu::Backends::GL, wgpu::Backend::Gl),
+        (wgpu::Backends::METAL, wgpu::Backend::Metal),
+        (wgpu::Backends::BROWSER_WEBGPU, wgpu::Backend::BrowserWebGpu),
+        (wgpu::Backends::NOOP, wgpu::Backend::Noop),
+    ];
+    for (bits, backend) in singles {
+        if set == bits {
+            return StartupBackendPolicy::Explicit(backend);
+        }
+    }
+    StartupBackendPolicy::Limited(set)
+}
+
+fn host_startup_os() -> StartupOs {
+    if cfg!(target_os = "windows") {
+        StartupOs::Windows
+    } else {
+        StartupOs::Other
+    }
 }
 
 fn adapter_rank(kind: wgpu::DeviceType, preference: wgpu::PowerPreference) -> u8 {
