@@ -10,7 +10,7 @@ use crate::frame_face_arena::{
     FrameFaceAttempt, FrameFaceSeal, FrameFaceStillShared, FrameFaceTableAttempt,
 };
 use crate::neovm_bridge::{DividerCornerPolicy, ResolvedFace};
-use crate::output::builder::DisplayOutputBuilder;
+use crate::output::builder::{DisplayOutputBuilder, OutputLeafAttemptCheckpoint};
 use crate::types::{FrameParams, WindowParams};
 use crate::window_layout::WindowDividerPaint;
 use crate::window_output::TextWindowOutputTarget;
@@ -146,6 +146,20 @@ impl FrameOutputOwner {
 
     pub(crate) fn text_window_output_target(&mut self) -> TextWindowOutputTarget<'_> {
         TextWindowOutputTarget::from_builder(&mut self.builder)
+    }
+
+    pub(crate) fn capture_leaf_attempt_checkpoint(
+        &self,
+        window_id: DisplayWindowId,
+    ) -> OutputLeafAttemptCheckpoint {
+        self.builder.capture_leaf_attempt_checkpoint(window_id)
+    }
+
+    pub(crate) fn restore_leaf_attempt_checkpoint(
+        &mut self,
+        checkpoint: OutputLeafAttemptCheckpoint,
+    ) {
+        self.builder.restore_leaf_attempt_checkpoint(checkpoint);
     }
 
     fn frame_output_target(&mut self) -> FrameOutputTarget<'_> {

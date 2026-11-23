@@ -32,6 +32,8 @@ pub(crate) struct OutputSourceWindowCheckpoint {
     current_text_clip_bounds: Rect,
     current_selected: bool,
     current_row: usize,
+    current_bidi_paragraph_directions: ParagraphDirections,
+    current_text_geometry_units: TextGeometryUnits,
 }
 
 /// Completed GNU automatic-mini observation, owned only by this output attempt.
@@ -99,6 +101,8 @@ impl OutputWindowBuildState {
             current_text_clip_bounds: self.current_text_clip_bounds,
             current_selected: self.current_selected,
             current_row: self.current_row,
+            current_bidi_paragraph_directions: self.current_bidi_paragraph_directions,
+            current_text_geometry_units: self.current_text_geometry_units,
         }
     }
 
@@ -113,6 +117,22 @@ impl OutputWindowBuildState {
             checkpoint.windows_len,
             "source horizon retry must precede completed window publication"
         );
+        self.restore_leaf_attempt_checkpoint(checkpoint);
+    }
+
+    /// Reject one leaf even when its tail already closed the speculative grid.
+    /// Previously completed siblings retain their original row ownership.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn restore_leaf_attempt_checkpoint(
+        &mut self,
+        checkpoint: OutputSourceWindowCheckpoint,
+    ) {
+        assert!(
+            self.windows.len() >= checkpoint.windows_len,
+            "a leaf attempt must not remove completed sibling windows"
+        );
+        self.windows.truncate(checkpoint.windows_len);
         self.current_row_grid = None;
         self.current_window_id = checkpoint.current_window_id;
         self.current_pixel_bounds = checkpoint.current_pixel_bounds;
@@ -120,6 +140,8 @@ impl OutputWindowBuildState {
         self.current_text_clip_bounds = checkpoint.current_text_clip_bounds;
         self.current_selected = checkpoint.current_selected;
         self.current_row = checkpoint.current_row;
+        self.current_bidi_paragraph_directions = checkpoint.current_bidi_paragraph_directions;
+        self.current_text_geometry_units = checkpoint.current_text_geometry_units;
     }
 
     /// The window owning the currently open (unpublished) row grid, if any.

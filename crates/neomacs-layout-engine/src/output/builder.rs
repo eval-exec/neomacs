@@ -56,6 +56,10 @@ pub(crate) struct OutputSourceAttemptCheckpoint {
     window: crate::output::window_state::OutputSourceWindowCheckpoint,
 }
 
+/// A whole leaf's speculative output, including grids closed by its tail.
+/// Face identities remain in the same monotonic arena lineage on rejection.
+pub(crate) struct OutputLeafAttemptCheckpoint(OutputSourceAttemptCheckpoint);
+
 pub(crate) struct DisplayOutputBuilder {
     window_state: OutputWindowBuildState,
     frame_state: OutputFrameBuildState,
@@ -133,6 +137,35 @@ impl DisplayOutputBuilder {
                 .capture_source_attempt_checkpoint(window_id),
             window: self.window_state.capture_source_attempt_checkpoint(),
         }
+    }
+
+    #[inline]
+    pub(crate) fn capture_leaf_attempt_checkpoint(
+        &self,
+        window_id: DisplayWindowId,
+    ) -> OutputLeafAttemptCheckpoint {
+        assert!(
+            self.edit_sync.is_none() && self.edit_sync_reached.is_none(),
+            "a leaf attempt must begin without an armed edit synchronization"
+        );
+        OutputLeafAttemptCheckpoint(self.capture_source_attempt_checkpoint(window_id))
+    }
+
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn restore_leaf_attempt_checkpoint(
+        &mut self,
+        checkpoint: OutputLeafAttemptCheckpoint,
+    ) {
+        let OutputLeafAttemptCheckpoint(checkpoint) = checkpoint;
+        // Window metadata belongs only to an accepted leaf. Keep the source
+        // checkpoint's assertion that this attempt did not publish it.
+        self.frame_state
+            .restore_source_attempt_checkpoint(checkpoint.frame);
+        self.window_state
+            .restore_leaf_attempt_checkpoint(checkpoint.window);
+        self.edit_sync = None;
+        self.edit_sync_reached = None;
     }
 
     /// The window owning the currently open (unpublished) row grid, if any
@@ -902,3 +935,7 @@ where
 #[cfg(test)]
 #[path = "builder/tests/builder_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "builder/tests/leaf_attempt_checkpoint_test.rs"]
+mod leaf_attempt_checkpoint_tests;

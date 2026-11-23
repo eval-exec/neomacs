@@ -9,6 +9,7 @@ use neovm_core::emacs_core::neo::scroll::ScrollContextExt;
 use neovm_core::emacs_core::xdisp::XdispContextExt;
 use neovm_core::window::display::WindowDisplayContextExt;
 mod diagnostic_knobs;
+mod leaf_cursor_checkpoint;
 mod window_input_ownership;
 use neovm_core::window::DisplayFrameExt;
 use neovm_core::window::DisplayFrameManagerExt;
@@ -1085,6 +1086,8 @@ enum LeafLayoutAttempt {
     Completed {
         outcome: WindowLayoutOutcome,
         window_end_attempt: Option<neovm_core::window::WindowEndAttempt>,
+        /// Attempt-owned geometry; retries cannot publish a candidate.
+        snapshot: Option<WindowPresentationSnapshot>,
     },
     Effect(LayoutEffect),
     /// The attempt unwound and asks the window loop to re-enter with these
@@ -1718,18 +1721,11 @@ impl LayoutEngine {
     /// temporary geometry, but window-end/posn/vertical-motion must never
     /// mistake those rows for evidence about the minibuffer's real buffer.
     fn mark_inactive_echo_snapshot_geometry_only(
-        &mut self,
-        window_id: neovm_core::window::WindowId,
+        snapshot: &mut Option<WindowPresentationSnapshot>,
         publication: WindowPositionPublication,
     ) {
-        if publication != WindowPositionPublication::InactiveEchoArea {
-            return;
-        }
-        if let Some(snapshot) = self
-            .window_snapshots
-            .iter_mut()
-            .rev()
-            .find(|snapshot| snapshot.display_snapshot().window_id == window_id)
+        if publication == WindowPositionPublication::InactiveEchoArea
+            && let Some(snapshot) = snapshot
         {
             snapshot.retain_as_geometry_only();
         }
@@ -3359,7 +3355,15 @@ impl LayoutEngine {
                         continue 'frame_layout;
                     }
                     let bound_faces = face_services.bind(&face_resolver);
-                    match self.layout_window_rust(
+                    let output_checkpoint =
+                        self.frame_output
+                            .capture_leaf_attempt_checkpoint(DisplayWindowId::new(
+                                live_inputs.window.window_id,
+                            ));
+                    let cursor_checkpoint = leaf_cursor_checkpoint::LeafCursorCheckpoint::capture(
+                        evaluator, frame_id, window_id,
+                    );
+                    let attempt = self.layout_window_rust(
                         evaluator,
                         frame_id,
                         &live_inputs.window,
@@ -3381,11 +3385,35 @@ impl LayoutEngine {
                         &mut lisp_ledger,
                         attempt_topology_generation,
                         &face_attempt,
-                    ) {
+                    );
+                    // Every in-leaf continuation passes this boundary, including
+                    // implicit loop re-entry after Retry/Effect. The closed row
+                    // grid and paint/cursor artifacts remain speculative until
+                    // the post-walk checks accept this attempt.
+                    if !matches!(&attempt, LeafLayoutAttempt::Completed { .. }) {
+                        self.frame_output
+                            .restore_leaf_attempt_checkpoint(output_checkpoint);
+                    }
+                    let accepted = matches!(
+                        &attempt,
+                        LeafLayoutAttempt::Completed {
+                            outcome: WindowLayoutOutcome::Stable { .. }
+                                | WindowLayoutOutcome::Skipped,
+                            ..
+                        }
+                    );
+                    if !accepted && let Some(checkpoint) = cursor_checkpoint {
+                        checkpoint.restore(evaluator, frame_id, window_id);
+                    }
+                    match attempt {
                         LeafLayoutAttempt::Completed {
                             outcome,
                             window_end_attempt,
+                            snapshot,
                         } => {
+                            if accepted {
+                                self.window_snapshots.extend(snapshot);
+                            }
                             frame_window_end_attempts.stage(window_end_attempt);
                             break outcome;
                         }
@@ -6105,6 +6133,10 @@ impl LayoutEngine {
         topology_generation: u64,
         face_attempt: &FrameFaceAttempt,
     ) -> LeafLayoutAttempt {
+        // A row walk may finish before coverage, freshness or viewport checks
+        // reject it. Keep its sole snapshot local until Completed transfers it
+        // to the frame coordinator; all other returns drop the candidate.
+        let mut window_snapshot = None;
         let source_capture = crate::cursor_source_dependencies::Capture::begin(evaluator);
         let source_window = DisplayWindowId::new(params.window_id);
         lisp_ledger.cursor_sources.remove(&source_window);
@@ -6456,21 +6488,20 @@ impl LayoutEngine {
                         // produced and there is no field on screen to report.
                         None,
                     ));
-                self.window_snapshots.push(WindowPresentationSnapshot::live(
-                    WindowDisplaySnapshot {
-                        window_id,
-                        cell_origin: neovm_core::window::geometry::CellOrigin::new(
-                            params.left_col,
-                            params.top_line,
-                        ),
-                        regions: layout_box.regions(),
-                        regions_materialized: false,
-                        ..Default::default()
-                    },
-                ));
+                window_snapshot = Some(WindowPresentationSnapshot::live(WindowDisplaySnapshot {
+                    window_id,
+                    cell_origin: neovm_core::window::geometry::CellOrigin::new(
+                        params.left_col,
+                        params.top_line,
+                    ),
+                    regions: layout_box.regions(),
+                    regions_materialized: false,
+                    ..Default::default()
+                }));
                 return LeafLayoutAttempt::Completed {
                     outcome: WindowLayoutOutcome::Skipped,
                     window_end_attempt: None,
+                    snapshot: window_snapshot,
                 };
             }
         };
@@ -6706,7 +6737,7 @@ impl LayoutEngine {
                 &mut self.font_metrics,
                 face_services,
                 face_attempt.clone(),
-                &mut self.window_snapshots,
+                &mut window_snapshot,
             ),
             &mut self.text_buf,
             remaining_visibility_retries,
@@ -6976,8 +7007,7 @@ impl LayoutEngine {
             } else {
                 fontification_probe_row(evaluator, params, frame_id, window_id, buf_id, window_end)
             };
-            let coverage = self
-                .window_snapshots
+            let coverage = window_snapshot
                 .iter()
                 .rev()
                 .map(WindowPresentationSnapshot::display_snapshot)
@@ -7226,6 +7256,7 @@ impl LayoutEngine {
                         measured,
                     },
                     window_end_attempt: None,
+                    snapshot: window_snapshot,
                 };
             }
             BufferSourceRenderAttemptOutcome::Skipped
@@ -7238,22 +7269,24 @@ impl LayoutEngine {
                         // produced and there is no field on screen to report.
                         None,
                     ));
-                self.window_snapshots.push(WindowPresentationSnapshot::live(
-                    WindowDisplaySnapshot {
-                        window_id,
-                        cell_origin: neovm_core::window::geometry::CellOrigin::new(
-                            params.left_col,
-                            params.top_line,
-                        ),
-                        regions: layout_box.regions(),
-                        regions_materialized: false,
-                        ..WindowDisplaySnapshot::default()
-                    },
-                ));
-                self.mark_inactive_echo_snapshot_geometry_only(window_id, position_publication);
+                window_snapshot = Some(WindowPresentationSnapshot::live(WindowDisplaySnapshot {
+                    window_id,
+                    cell_origin: neovm_core::window::geometry::CellOrigin::new(
+                        params.left_col,
+                        params.top_line,
+                    ),
+                    regions: layout_box.regions(),
+                    regions_materialized: false,
+                    ..WindowDisplaySnapshot::default()
+                }));
+                Self::mark_inactive_echo_snapshot_geometry_only(
+                    &mut window_snapshot,
+                    position_publication,
+                );
                 return LeafLayoutAttempt::Completed {
                     outcome: WindowLayoutOutcome::Skipped,
                     window_end_attempt,
+                    snapshot: window_snapshot,
                 };
             }
             BufferSourceRenderAttemptOutcome::ReplayMispredicted
@@ -7481,8 +7514,7 @@ impl LayoutEngine {
                 if params.measurement_pixels.is_some() {
                     self.query_restart_rows = query_restart_rows;
                 }
-                if let Some(snapshot) = self
-                    .window_snapshots
+                if let Some(snapshot) = window_snapshot
                     .iter_mut()
                     .rev()
                     .map(|snapshot| snapshot.display_snapshot_mut())
@@ -7530,8 +7562,7 @@ impl LayoutEngine {
         );
 
         let assumed = WindowChromeMetrics::from_params(params);
-        let measured = self
-            .window_snapshots
+        let measured = window_snapshot
             .iter()
             .rev()
             .map(WindowPresentationSnapshot::display_snapshot)
@@ -7551,11 +7582,15 @@ impl LayoutEngine {
                 "window chrome metrics changed; rejecting speculative layout"
             );
         } else {
-            self.mark_inactive_echo_snapshot_geometry_only(window_id, position_publication);
+            Self::mark_inactive_echo_snapshot_geometry_only(
+                &mut window_snapshot,
+                position_publication,
+            );
         }
         LeafLayoutAttempt::Completed {
             outcome,
             window_end_attempt,
+            snapshot: window_snapshot,
         }
     }
 

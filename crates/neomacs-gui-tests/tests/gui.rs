@@ -53,6 +53,8 @@ mod bidi_paragraph_direction_785_r2_gui_oracle;
 mod composite_shaping_785_gui_oracle;
 #[path = "composition_gstring_metrics_n_orphan.rs"]
 mod composition_gstring_metrics_n_orphan;
+#[path = "composition_retry_folded_buffer.rs"]
+mod composition_retry_folded_buffer;
 
 #[path = "config_env_boot.rs"]
 mod config_env_boot;

@@ -44,7 +44,7 @@ pub(crate) struct BufferSourceRenderAttemptContext<
     font_metrics: &'a mut Option<FontMetricsService>,
     face_resolver: &'face FS,
     face_attempt: FrameFaceAttempt,
-    window_snapshots: &'a mut Vec<WindowPresentationSnapshot>,
+    window_snapshot: &'a mut Option<WindowPresentationSnapshot>,
 }
 
 /// Which live window state may be published by a completed row walk.
@@ -365,14 +365,14 @@ impl<'a, 'face, FS: crate::neovm_bridge::FaceServices>
         font_metrics: &'a mut Option<FontMetricsService>,
         face_resolver: &'face FS,
         face_attempt: FrameFaceAttempt,
-        window_snapshots: &'a mut Vec<WindowPresentationSnapshot>,
+        window_snapshot: &'a mut Option<WindowPresentationSnapshot>,
     ) -> Self {
         Self {
             output: BufferSourceOutputState::from_parts(output, evaluator),
             font_metrics,
             face_resolver,
             face_attempt,
-            window_snapshots,
+            window_snapshot,
         }
     }
 
@@ -382,7 +382,7 @@ impl<'a, 'face, FS: crate::neovm_bridge::FaceServices>
         font_metrics: &'a mut Option<FontMetricsService>,
         face_resolver: &'face FS,
         face_attempt: FrameFaceAttempt,
-        window_snapshots: &'a mut Vec<WindowPresentationSnapshot>,
+        window_snapshot: &'a mut Option<WindowPresentationSnapshot>,
     ) -> Self {
         Self::new(
             frame_output.text_window_output_target(),
@@ -390,7 +390,7 @@ impl<'a, 'face, FS: crate::neovm_bridge::FaceServices>
             font_metrics,
             face_resolver,
             face_attempt,
-            window_snapshots,
+            window_snapshot,
         )
     }
 
@@ -403,7 +403,7 @@ impl<'a, 'face, FS: crate::neovm_bridge::FaceServices>
             font_metrics: self.font_metrics,
             face_resolver: self.face_resolver,
             face_attempt: self.face_attempt.clone(),
-            window_snapshots: self.window_snapshots,
+            window_snapshot: self.window_snapshot,
         }
     }
 
@@ -433,14 +433,14 @@ impl<'a, 'face, FS: crate::neovm_bridge::FaceServices>
         &'a mut Option<FontMetricsService>,
         &'face FS,
         FrameFaceAttempt,
-        &'a mut Vec<WindowPresentationSnapshot>,
+        &'a mut Option<WindowPresentationSnapshot>,
     ) {
         (
             self.output,
             self.font_metrics,
             self.face_resolver,
             self.face_attempt,
-            self.window_snapshots,
+            self.window_snapshot,
         )
     }
 }

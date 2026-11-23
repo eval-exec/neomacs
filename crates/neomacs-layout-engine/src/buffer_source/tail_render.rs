@@ -307,12 +307,13 @@ impl<'a> BufferSourceTailRequestContext<'a> {
         &self,
         finish_state: TextWindowFinishState<'_>,
         measured_chrome_heights: WindowChromeMetrics,
-        window_snapshots: &mut Vec<WindowPresentationSnapshot>,
+        window_snapshot: &mut Option<WindowPresentationSnapshot>,
     ) {
         let finished_window = self
             .finish_request(measured_chrome_heights)
             .finish_and_snapshot(finish_state);
-        window_snapshots.push(WindowPresentationSnapshot::live(
+        assert!(window_snapshot.is_none(), "one snapshot per leaf attempt");
+        *window_snapshot = Some(WindowPresentationSnapshot::live(
             finished_window.into_snapshot(),
         ));
     }

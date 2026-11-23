@@ -888,7 +888,7 @@ impl BufferSourceOutputSetup {
     where
         B: LayoutBufferView,
     {
-        let (mut output, font_metrics, face_resolver, mut face_ids, window_snapshots) =
+        let (mut output, font_metrics, face_resolver, mut face_ids, window_snapshot) =
             state.into_parts();
         let retry_checkpoint = output.capture_retry_checkpoint();
         let effective_default_face =
@@ -1297,7 +1297,7 @@ impl BufferSourceOutputSetup {
             tail_context.finish_and_install(
                 TextWindowFinishState::new(output, output_emitter, evaluator),
                 measured_chrome_heights,
-                window_snapshots,
+                window_snapshot,
             );
             return BufferSourceRenderAttemptOutcome::Finished {
                 redisplay_positions,
@@ -1937,7 +1937,7 @@ impl BufferSourceOutputSetup {
             tail_context.finish_and_install(
                 TextWindowFinishState::new(output, output_emitter, evaluator),
                 measured_chrome_heights,
-                window_snapshots,
+                window_snapshot,
             );
             #[cfg(test)]
             if scroll.edit && synced_stop.is_some() {
@@ -2244,7 +2244,7 @@ impl BufferSourceOutputSetup {
         tail_context.finish_and_install(
             TextWindowFinishState::new(output, output_emitter, evaluator),
             measured_chrome_heights,
-            window_snapshots,
+            window_snapshot,
         );
         BufferSourceRenderAttemptOutcome::Finished {
             redisplay_positions,
