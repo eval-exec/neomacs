@@ -3,6 +3,9 @@
 //! Lifecycle wiring and the two native parking owners have separate rows.
 //! Timeout controls require the declared deadline to elapse and an independent
 //! 30-second detector bounds the child. They do not assert an exact wall time.
+//! Every clear is issued before this fixture submits any CPU image job: seeded
+//! byte counters are synthetic, so the exact logical admission cutoff is zero.
+//! A later eager decode must not move that cutoff while native service waits.
 
 use super::*;
 use neomacs_display_protocol::ImageCacheUsage;
@@ -294,7 +297,7 @@ fn owned_cache_policy_fixture() {
             assert!(started.elapsed() < Duration::from_secs(2));
             assert!(matches!(
                 receiver.try_recv().unwrap(),
-                RenderCommand::Asset(AssetCommand::ClearImageCache)
+                RenderCommand::Asset(AssetCommand::ClearImageCache { through: 0 })
             ));
             assert!(
                 receiver.is_empty(),
@@ -385,7 +388,10 @@ fn owned_cache_policy_fixture() {
                 // public clear/read contract even after native service resumes.
                 let first = receiver.recv_timeout(Duration::from_secs(2)).unwrap();
                 assert!(
-                    matches!(first, RenderCommand::Asset(AssetCommand::ClearImageCache)),
+                    matches!(
+                        first,
+                        RenderCommand::Asset(AssetCommand::ClearImageCache { through: 0 })
+                    ),
                     "a pending clear must precede the usage publish; got {first:?}"
                 );
                 let ack = take_ack(receiver.recv_timeout(Duration::from_secs(2)).unwrap());
@@ -520,7 +526,7 @@ fn owned_cache_policy_fixture() {
                         }
                     };
                     match command {
-                        RenderCommand::Asset(AssetCommand::ClearImageCache) => {
+                        RenderCommand::Asset(AssetCommand::ClearImageCache { through: 0 }) => {
                             order.push("clear".to_owned());
                             bytes = 0;
                         }
@@ -764,7 +770,7 @@ fn owned_cache_policy_fixture() {
                         }
                     };
                     match command {
-                        RenderCommand::Asset(AssetCommand::ClearImageCache) => {
+                        RenderCommand::Asset(AssetCommand::ClearImageCache { through: 0 }) => {
                             order.push("clear".to_owned());
                             bytes = 0;
                             next_state.publish_cache_usage(ImageCacheUsage::new(0, 0));
