@@ -278,7 +278,7 @@ pub use release_point::SimReleasePoint;
 pub(crate) use neovm_value::heap_types::threading::{
     BlockedWait, CondVarId, CondVarPayload, HandlerList, JoinObservation, MutexId, MutexOwnership,
     MutexPayload, MutexReference, RecursionDepth, RunState, StoredThreadEvent, ThreadChildren,
-    ThreadId, ThreadIds, ThreadNativeState, ThreadOutcome, ThreadPayload, ThreadPhase,
+    ThreadId, ThreadIds, ThreadNativeState, ThreadOutcome, ThreadPayload, ThreadPhase, WaitCondvar,
 };
 
 /// A validated object identity. This word is not a GC root by itself: Lisp

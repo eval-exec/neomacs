@@ -422,6 +422,19 @@ impl ThreadManager {
         signal_wakes_blocked_wait(self.blocked_wait(native))
     }
 
+    /// Record the GNU `wait_condvar` NATIVE enters (`Some`) or leaves (`None`)
+    /// on its own thread (src/thread.c:231-236, :460-464, :1109-1113).
+    pub(crate) fn set_wait_condvar(&mut self, native: u64, wait: Option<WaitCondvar>) {
+        self.update_thread_native(native, |state| *state.wait_condvar_mut() = wait);
+    }
+
+    /// Whether NATIVE is inside a `wait_condvar` wait it has not yet resumed
+    /// from, woken or not.
+    pub(crate) fn in_wait_condvar(&self, native: u64) -> bool {
+        self.get_thread(native)
+            .is_some_and(|thread| thread.native().wait_condvar().is_some())
+    }
+
     #[doc(hidden)]
     pub fn thread_is_woken(&self, native: u64) -> bool {
         self.get_thread(native)

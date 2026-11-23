@@ -6,7 +6,9 @@
 
 use super::{ConditionId, MutexId, ThreadKey, Wait};
 use crate::emacs_core::eval::Context;
-use crate::emacs_core::threads::{CondVarHandle, MutexAcquisition, MutexHandle, ThreadManager};
+use crate::emacs_core::threads::{
+    CondVarHandle, MutexAcquisition, MutexHandle, ThreadManager, WaitCondvar,
+};
 use neovm_value::error::{EvalResult, Flow, signal};
 use neovm_value::heap_types::threading::RecursionDepth;
 use neovm_value::value::Value;
@@ -162,9 +164,12 @@ pub(super) fn wait(context: &mut Context, condition: CondVarHandle) -> EvalResul
         .pending_thread_signal(owner.key.id())
         .is_none()
     {
-        owner.context.green_park(Wait::Condition(ConditionId::new(
-            waiting.condition.native_key(),
-        )))?;
+        let condition = ConditionId::new(waiting.condition.native_key());
+        owner
+            .context
+            .green_in_wait_condvar(WaitCondvar::Condition, |context| {
+                context.green_park(Wait::Condition(condition))
+            })?;
     }
     owner.start_reacquiring()?;
     loop {
@@ -175,9 +180,16 @@ pub(super) fn wait(context: &mut Context, condition: CondVarHandle) -> EvalResul
             .mutex_relock_after_wait(waiting.mutex, waiting.depth)
         {
             MutexAcquisition::Acquired => break,
-            MutexAcquisition::Blocked => owner
-                .context
-                .green_park(Wait::Mutex(MutexId::new(waiting.mutex.native_key())))?,
+            // GNU's relock waits on the mutex's `wait_condvar`
+            // (`lisp_mutex_lock_for_thread`, src/thread.c:231-236).
+            MutexAcquisition::Blocked => {
+                let mutex = MutexId::new(waiting.mutex.native_key());
+                owner
+                    .context
+                    .green_in_wait_condvar(WaitCondvar::Mutex, |context| {
+                        context.green_park(Wait::Mutex(mutex))
+                    })?
+            }
             MutexAcquisition::DepthExhausted => return Err(super::api::mutex_depth_exhausted()),
         }
     }

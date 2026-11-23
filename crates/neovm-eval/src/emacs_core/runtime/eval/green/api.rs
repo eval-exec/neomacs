@@ -6,7 +6,7 @@
 use super::{ConditionId, MutexId, ThreadKey, Wait};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::threads::{
-    CondVarHandle, MutexAcquisition, MutexHandle, MutexRelease, NotificationScope,
+    CondVarHandle, MutexAcquisition, MutexHandle, MutexRelease, NotificationScope, WaitCondvar,
 };
 use neovm_value::error::{EvalResult, expect_args, signal};
 use neovm_value::value::Value;
@@ -62,9 +62,12 @@ impl Context {
             // while this thread has no pending error, then its
             // `post_acquire_global_lock` raises one, ahead of the snapshot.
             self.green_blocked_on(args[0], |ctx| {
-                while !control.exited(key) && !ctx.threads.has_pending_thread_signal(joiner) {
-                    ctx.green_wait(Wait::Join(key))?;
-                }
+                ctx.green_in_wait_condvar(WaitCondvar::Join, |ctx| {
+                    while !control.exited(key) && !ctx.threads.has_pending_thread_signal(joiner) {
+                        ctx.green_wait(Wait::Join(key))?;
+                    }
+                    Ok(())
+                })?;
                 ctx.green_raise_pending_signal(ThreadKey::from_id(joiner))
             })?;
         }
@@ -106,11 +109,15 @@ impl Context {
             Some(Wait::Join(_) | Wait::Mutex(_) | Wait::Condition(_))
         ) {
             control.wake(key);
-            // GNU's `thread_signal_callback` ends with the sender's own
-            // `post_acquire_global_lock` (src/thread.c:974-982).
-            if let Some(sender) = self.green_key() {
-                self.green_raise_pending_signal(sender)?;
-            }
+        }
+        // GNU's `thread_signal_callback` runs for a target with a
+        // `wait_condvar`, also one already woken that has not run yet, and
+        // ends with the sender's own `post_acquire_global_lock`
+        // (src/thread.c:974-982, :1029-1030).
+        if self.threads.in_wait_condvar(id)
+            && let Some(sender) = self.green_key()
+        {
+            self.green_raise_pending_signal(sender)?;
         }
         Ok(Value::NIL)
     }
@@ -139,17 +146,19 @@ impl Context {
         }
         let key = self.green_key().expect("a Green thread");
         self.green_blocked_on(mutex.value(), |ctx| {
-            loop {
-                // GNU `lisp_mutex_lock_for_thread`: a signal ends the wait;
-                // `post_acquire_global_lock` raises it.
-                ctx.green_raise_pending_signal(key)?;
-                ctx.green_wait(Wait::Mutex(MutexId::new(mutex.native_key())))?;
-                match ctx.threads.mutex_lock(mutex) {
-                    MutexAcquisition::Acquired => return Ok(()),
-                    MutexAcquisition::Blocked => {}
-                    MutexAcquisition::DepthExhausted => return Err(mutex_depth_exhausted()),
+            ctx.green_in_wait_condvar(WaitCondvar::Mutex, |ctx| {
+                loop {
+                    // GNU `lisp_mutex_lock_for_thread`: a signal ends the wait;
+                    // `post_acquire_global_lock` raises it.
+                    ctx.green_raise_pending_signal(key)?;
+                    ctx.green_wait(Wait::Mutex(MutexId::new(mutex.native_key())))?;
+                    match ctx.threads.mutex_lock(mutex) {
+                        MutexAcquisition::Acquired => return Ok(()),
+                        MutexAcquisition::Blocked => {}
+                        MutexAcquisition::DepthExhausted => return Err(mutex_depth_exhausted()),
+                    }
                 }
-            }
+            })
         })?;
         Ok(Value::NIL)
     }
@@ -265,6 +274,22 @@ impl Context {
         self.threads.set_thread_blocker(id, object);
         let result = wait(self);
         self.threads.clear_thread_blocker(id);
+        result
+    }
+
+    /// Run WAIT inside GNU's `wait_condvar` of KIND (src/thread.c:231-236,
+    /// :460-464, :1109-1113): set as this thread enters the wait and cleared
+    /// when this thread leaves it, whichever way. In between, a woken thread
+    /// that has not run yet still counts as waiting.
+    pub(crate) fn green_in_wait_condvar<R>(
+        &mut self,
+        kind: WaitCondvar,
+        wait: impl FnOnce(&mut Self) -> Result<R, neovm_value::error::Flow>,
+    ) -> Result<R, neovm_value::error::Flow> {
+        let id = self.green_current_id();
+        self.threads.set_wait_condvar(id, Some(kind));
+        let result = wait(self);
+        self.threads.set_wait_condvar(id, None);
         result
     }
 
