@@ -2163,6 +2163,86 @@ fn clear_after_renderer_exit_reports_the_known_post_clear_zero() {
     );
 }
 
+/// A load admitted after a whole-cache clear that becomes READY charges bytes,
+/// so it must invalidate the clear's known zero. The renderer-gone path that
+/// would otherwise answer 0 must instead fall back to the last published
+/// total. `clear_then_failed_load_then_renderer_exit_is_zero` pins the
+/// complementary non-drawable case: there the zero stands.
+#[test]
+fn post_clear_ready_load_invalidates_the_known_zero() {
+    use neomacs_display_protocol::ImageCacheUsage;
+    use neomacs_display_runtime::thread_comm::RenderCommandSender;
+    use neovm_core::emacs_core::image_catalog::ImageInvalidation;
+
+    // Control: a clear alone keeps the known zero even with the renderer gone.
+    {
+        let (cmd_tx, cmd_rx) =
+            RenderCommandSender::bounded(std::num::NonZeroUsize::new(64).expect("capacity"));
+        let image_state =
+            Arc::new(neomacs_display_runtime::render_thread::ImageRenderState::default());
+        image_state.mark_renderer_ready();
+        image_state.publish_cache_usage(ImageCacheUsage::new(4_096, 0));
+        let catalog = test_image_catalog(&cmd_tx, Arc::clone(&image_state));
+        let _ = catalog.invalidate(ImageInvalidation::All);
+        image_state.mark_renderer_exited();
+        drop(cmd_rx);
+        assert_eq!(
+            catalog.cached_size_bytes(),
+            0,
+            "control: a clear with no later ready load is the known zero"
+        );
+    }
+
+    let (cmd_tx, cmd_rx) =
+        RenderCommandSender::bounded(std::num::NonZeroUsize::new(64).expect("capacity"));
+    let image_state = Arc::new(neomacs_display_runtime::render_thread::ImageRenderState::default());
+    image_state.mark_renderer_ready();
+    image_state.publish_cache_usage(ImageCacheUsage::new(4_096, 0));
+    let catalog = test_image_catalog(&cmd_tx, Arc::clone(&image_state));
+
+    let _ = catalog.invalidate(ImageInvalidation::All);
+    let request = ImageResolveRequest {
+        spec: test_image_spec_identity("after-clear-ready"),
+        source: ImageResolveSource::Data(ImageDataSource::Isolated(EncodedBytes::new(
+            b"not an image".to_vec(),
+        ))),
+        identity: test_file_image_identity("after-clear-ready"),
+        size: ImageSizeSpec::new(AxisSize::AtMost(50), AxisSize::AtMost(50)),
+        rotation: ImageRotation::None,
+        colors: ImageColorContext::default(),
+        mask: Default::default(),
+        frame: ImageFrameIndex::new(3),
+        animation: ImageAnimationPolicy::disabled(),
+        realization: Default::default(),
+    };
+    let ImageLookup::Pending(pending) = unbounded_lookup(&catalog, request.clone()) else {
+        panic!("headerless source lookup should be pending");
+    };
+    image_state.publish_terminal(
+        pending.load(),
+        ImageDecodeTerminal::Ready(ResolvedImageMetadata::layout_is_image_pixels(
+            25,
+            50,
+            0x12_34_56,
+            false,
+            Default::default(),
+        )),
+    );
+    let ImageLookup::Ready(_) = unbounded_lookup(&catalog, request) else {
+        panic!("the post-clear load should be ready");
+    };
+    // The renderer's published total now includes the post-clear image.
+    image_state.publish_cache_usage(ImageCacheUsage::new(4_096, 0));
+    image_state.mark_renderer_exited();
+    drop(cmd_rx);
+
+    assert_eq!(
+        catalog.cached_size_bytes(),
+        4_096,
+        "a post-clear READY load invalidates the known zero; the read must use the published total"
+    );
+}
+
 #[test]
 fn runtime_mode_binary_names_match_gnu_shaped_roles() {
     assert_eq!(RuntimeMode::Raw.binary_name(), "neomacs-temacs");
