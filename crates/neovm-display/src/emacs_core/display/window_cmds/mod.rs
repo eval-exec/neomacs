@@ -2262,12 +2262,9 @@ pub(crate) fn gui_frame_edges_value(
     let top = top.round() as i64;
     let right = left.saturating_add(i64::from(frame.width));
     let bottom = top.saturating_add(i64::from(frame.height));
-    let external_bar_height = i64::from(
-        frame
-            .menu_bar_height
-            .saturating_add(frame.tool_bar_height)
-            .saturating_add(frame.compact_bar_height),
-    );
+    // `FRAME_TOOLBAR_HEIGHT` is 0 until the bar is packed (xfns.c:6884-6886).
+    // That reserved height is `external_bar_height`, not the stored pixels.
+    let external_bar_height = i64::from(frame.external_bar_height());
     let border = frame.internal_border_width().max(0);
     let native_top = top.saturating_add(external_bar_height);
 

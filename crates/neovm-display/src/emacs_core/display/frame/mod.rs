@@ -36,9 +36,10 @@ use super::window_cmds::{
     stringish_value, sync_selected_window_buffer_in_state,
 };
 use crate::window::FrameManager;
+#[cfg(target_os = "linux")]
+use crate::window::ToolkitToolBar;
 use crate::window::{
     FrameDivider, FrameFullscreen, FrameId, FrameParam, FrameParamKey, FrameVisibility,
-    ToolkitToolBar,
 };
 use neovm_edit::buffer::{BufferId, BufferManager};
 use neovm_value::error::Flow;

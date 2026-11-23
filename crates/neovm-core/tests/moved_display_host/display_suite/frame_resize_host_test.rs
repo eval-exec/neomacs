@@ -816,6 +816,26 @@ fn explicit_size_before_tool_bar_allocation_omits_the_bar() {
             explicit_size_omitted: true
         }
     ));
+    let outer = fixture
+        .eval
+        .eval_str("(neomacs-frame-edges nil 'outer-edges)")
+        .unwrap();
+    let native = fixture.eval.eval_str("(neomacs-frame-edges)").unwrap();
+    let outer_top = list_to_vec(&outer).unwrap()[1].as_int().unwrap();
+    let native_top = list_to_vec(&native).unwrap()[1].as_int().unwrap();
+    assert_eq!(
+        native_top,
+        outer_top + i64::from(fixture.menu_height),
+        "an omitted tool bar is outside the native top"
+    );
+    let gap_y = fixture.menu_height as f32 + 1.0;
+    let position = Context::make_mouse_position(4.0, gap_y, fixture.frame_id.0, &fixture.eval);
+    let area = list_to_vec(&position).unwrap()[1].as_bare_symbol_name();
+    assert_ne!(
+        area,
+        Some("tool-bar"),
+        "the omitted gap is text, so that click is not the tool bar"
+    );
 }
 
 #[cfg(target_os = "linux")]

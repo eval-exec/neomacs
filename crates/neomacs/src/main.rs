@@ -3995,11 +3995,13 @@ fn sync_selected_gui_chrome_state(eval: &mut Context) {
     } else {
         Vec::new()
     };
-    // The frame-context collector is the one GNU-shaped source
-    // (`update_tool_bar` selects the frame's window and buffer first); it
-    // also retains its result across frames until GNU's rebuild predicate
-    // fires, so the layout's own collection of the same frame is a cache hit.
-    let tool_items = if tool_enabled {
+    // Layout's collection is `update_tool_bar`. Doing it here as well re-runs
+    // item Lisp on a chrome-dirty window, because the collector skips its
+    // cache until layout acknowledges that flag. Compact mode is the
+    // exception: it has to know whether any item exists before choosing the
+    // presentation. The separate tool bar does not.
+    let compact_wanted = compact_bar_mode_enabled(eval);
+    let tool_items = if tool_enabled && compact_wanted {
         selected_gui_frame_id
             .map(|frame_id| collect_gui_tool_bar_items_for_frame(eval, frame_id))
             .unwrap_or_default()
@@ -4062,28 +4064,42 @@ fn sync_selected_gui_chrome_state(eval: &mut Context) {
 
 /// Allocate this frame's toolkit tool bar on the redisplay that has items.
 ///
-/// GNU's `update_frame_tool_bar` runs per frame (`gtkutil.c:6149`). A global
-/// hook flag on the selected frame would miss every other frame and would
-/// stay clear when `window-setup-hook` signals.
+/// GNU's `update_frame_tool_bar` runs per frame (`gtkutil.c:6149`), and
+/// `update_tool_bar` runs once (`xdisp.c`). Layout collects the items for
+/// drawing. This earlier pass exists only so a Linux frame whose bar is
+/// still unallocated, and whose pixel height is already non-zero, can see
+/// whether that redisplay has items. An allocated frame, a compact bar
+/// (`tool_bar_height` == 0), and every non-Linux frame return before the
+/// collector, so item Lisp is not run twice while the selected window is
+/// still chrome-dirty.
 fn note_redisplayed_linux_tool_bar(eval: &mut Context, frame_id: FrameId) {
-    if throw_on_input_active(eval) {
-        return;
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (eval, frame_id);
     }
-    let tool_enabled = eval.frame_manager().get(frame_id).is_some_and(|frame| {
-        frame.effective_window_system().is_some()
-            && frame
-                .known_frame_parameter_int(FrameParam::ToolBarLines)
-                .is_some_and(|lines| lines > 0)
-    });
-    if !tool_enabled {
-        return;
+    #[cfg(target_os = "linux")]
+    {
+        if throw_on_input_active(eval) {
+            return;
+        }
+        let collect = eval.frame_manager().get(frame_id).is_some_and(|frame| {
+            frame.effective_window_system().is_some()
+                && matches!(
+                    frame.toolkit_tool_bar,
+                    neovm_core::window::ToolkitToolBar::Unallocated { .. }
+                )
+                && frame.tool_bar_height > 0
+        });
+        if !collect {
+            return;
+        }
+        let items = collect_gui_tool_bar_items_for_frame(eval, frame_id);
+        neovm_core::emacs_core::frame::note_linux_toolkit_tool_bar_allocation(
+            eval,
+            frame_id,
+            !items.is_empty(),
+        );
     }
-    let items = collect_gui_tool_bar_items_for_frame(eval, frame_id);
-    neovm_core::emacs_core::frame::note_linux_toolkit_tool_bar_allocation(
-        eval,
-        frame_id,
-        !items.is_empty(),
-    );
 }
 
 fn gui_frame_font_scale_from_observation(

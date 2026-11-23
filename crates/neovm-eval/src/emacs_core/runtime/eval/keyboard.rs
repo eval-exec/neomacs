@@ -6831,7 +6831,9 @@ impl crate::emacs_core::eval::Context {
         }
         let frame_height = frame.height as i64;
         let menu_bar_height = frame.menu_bar_height as i64;
-        let tool_bar_height = frame.tool_bar_height as i64;
+        // The omitted gap is text. Classify it with the reserved height, the
+        // same pixels `frame-edges` and layout use (`FRAME_TOOLBAR_HEIGHT`).
+        let tool_bar_height = i64::from(frame.reserved_tool_bar_height());
         let tab_bar_height = frame.tab_bar_height as i64;
 
         if menu_bar_height > 0 && frame_y < menu_bar_height {

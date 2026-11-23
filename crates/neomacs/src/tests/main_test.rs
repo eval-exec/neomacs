@@ -5011,6 +5011,82 @@ fn publish_gui_frame_sends_every_visible_top_level_frame_tree() {
     assert_eq!(published, vec![selected, second]);
 }
 
+/// One dirty redisplay evaluates a tool-bar item `:filter` once.
+///
+/// `note_redisplayed_linux_tool_bar` used to collect before layout while the
+/// selected window was still chrome-dirty, so the filter ran again. Layout
+/// is the collection GNU's `update_tool_bar` corresponds to. An allocated
+/// bar must not add another pass.
+#[cfg(target_os = "linux")]
+#[test]
+fn allocated_tool_bar_redisplay_evaluates_item_filter_once() {
+    let mut eval = create_bootstrap_evaluator_cached_with_features(&["neomacs"])
+        .expect("cached bootstrap evaluator");
+    let _bootstrap = bootstrap_buffers(&mut eval, 960, 640, gui_display());
+    let frame_id = eval
+        .frame_manager()
+        .selected_frame()
+        .expect("selected frame after bootstrap")
+        .id;
+    configure_gnu_startup_state(&mut eval, frame_id, &gui_startup());
+    eval.set_variable("n827-filter-count", Value::fixnum(0));
+    eval.eval_str(
+        r#"(setq tool-bar-map
+             (let ((map (make-sparse-keymap)))
+               (define-key map [n827]
+                 '(menu-item "N827" ignore
+                    :filter (lambda (cmd)
+                              (setq n827-filter-count (1+ n827-filter-count))
+                              cmd)))
+               map))"#,
+    )
+    .expect("install a counting tool-bar filter");
+    {
+        let frame = eval.frame_manager_mut().get_mut(frame_id).unwrap();
+        assert!(frame.tool_bar_height > 0);
+        frame.toolkit_tool_bar = neovm_core::window::ToolkitToolBar::Allocated;
+    }
+    let window = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
+    eval.mark_chrome_dirty_window(window);
+
+    super::super::frame_layout::enable_cosmic_metrics_for_test();
+    let comms = neomacs_display_runtime::thread_comm::ThreadComms::new();
+    publish_gui_frame(&mut eval, &comms.frame_tx, None);
+    assert!(
+        comms.frame_rx.try_recv().is_ok(),
+        "the dirty redisplay publishes the frame"
+    );
+
+    let count = |eval: &Context| {
+        eval.default_value_only_by_name("n827-filter-count")
+            .expect("filter counter")
+    };
+    assert_eq!(
+        count(&eval),
+        Value::fixnum(1),
+        "an allocated dirty redisplay runs the tool-bar :filter once"
+    );
+
+    eval.frame_manager_mut()
+        .get_mut(frame_id)
+        .unwrap()
+        .toolkit_tool_bar = neovm_core::window::ToolkitToolBar::Unallocated {
+        explicit_size_omitted: false,
+    };
+    eval.mark_chrome_dirty_window(window);
+    publish_gui_frame(&mut eval, &comms.frame_tx, None);
+    let _ = comms.frame_rx.try_recv();
+    assert!(
+        count(&eval).as_int().unwrap() > 2,
+        "the unallocated redisplay still collects before layout, got {}",
+        count(&eval).as_int().unwrap()
+    );
+}
+
 #[test]
 fn rejected_gui_frame_is_discarded_instead_of_becoming_active() {
     let mut eval = create_bootstrap_evaluator_cached_with_features(&["neomacs"])

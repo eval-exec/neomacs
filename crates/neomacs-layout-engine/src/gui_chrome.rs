@@ -450,6 +450,29 @@ fn parse_tool_bar_item(
     }
 
     let (mut label, plist) = extract_menu_item_label_and_plist(eval, def)?;
+    // GNU `parse_tool_bar_item` applies `:filter` to the binding
+    // (keyboard.c:9980-9986). The pixels still come from the original
+    // properties. The call is the Lisp a redisplay must not repeat.
+    if KeymapMarker::MenuItem.is_value(def.cons_car(), eval.symbol_mode())
+        && let Some(filter) = plist_lookup(&plist, MenuItemProperty::Filter, eval.symbol_mode())
+    {
+        let command = {
+            let named = def.cons_cdr();
+            if named.is_cons() {
+                let defined = named.cons_cdr();
+                if defined.is_cons() {
+                    defined.cons_car()
+                } else {
+                    Value::NIL
+                }
+            } else {
+                Value::NIL
+            }
+        };
+        let _filtered = eval
+            .eval_menu_item_property(filter, vec![command])
+            .unwrap_or(Value::NIL);
+    }
     if let Some(visible) = plist_lookup(&plist, MenuItemProperty::Visible, eval.symbol_mode())
         && !eval_menu_property(eval, visible).is_truthy()
     {
