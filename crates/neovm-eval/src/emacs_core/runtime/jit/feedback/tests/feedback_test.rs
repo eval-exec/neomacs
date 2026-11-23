@@ -229,9 +229,10 @@ fn a_stale_recorder_joins_the_word_it_lost_to() {
 
 /// Recorders on POLY threads seat distinct sources in one fresh site while
 /// a compile thread reads it, each recorder dropping its own strong hold
-/// when done. No observation is lost (the word counts every source) and no
-/// published slot is released (the site still holds each source's Weak).
-/// ThreadSanitizer checks the slot and word handoff.
+/// when done. The reader finds every slot the word counts already filled
+/// (the publication order), no observation is lost (the word counts every
+/// source) and no published slot is released (the site still holds each
+/// source's Weak). ThreadSanitizer checks the slot and word handoff.
 #[cfg(feature = "jit")]
 #[test]
 fn concurrent_recorders_lose_no_source_and_release_none() {
@@ -245,7 +246,22 @@ fn concurrent_recorders_lose_no_source_and_release_none() {
             scope.spawn(|| {
                 start.wait();
                 while recording.load(Ordering::Acquire) != 0 {
-                    let _ = s.target();
+                    // Every slot the word counts must read non-null: the
+                    // sources stay strongly alive, so a null upgrade here
+                    // is a counted slot published out of order.
+                    let word = s.state_word().load(Ordering::Acquire);
+                    let n = match word & TAG_BITS {
+                        _ if word == STATE_UNINIT => 0,
+                        TAG_SOURCE => 1,
+                        TAG_POLY => (word >> 3) as usize,
+                        _ => panic!("only sources were recorded: {word:#x}"),
+                    };
+                    for i in 0..n {
+                        assert!(
+                            s.upgrade_source(i).is_some(),
+                            "slot {i}, counted by {word:#x}, reads null"
+                        );
+                    }
                 }
             });
             for source in &sources {
