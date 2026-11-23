@@ -2,7 +2,11 @@
 
 use crossbeam_channel::{Receiver, Sender, TryRecvError};
 use raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
-use std::{collections::VecDeque, sync::Arc};
+use std::{
+    collections::VecDeque,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use winit::{
     event::WindowEvent,
     event_loop::EventLoopProxy,
@@ -165,6 +169,9 @@ pub(super) enum PendingGpu {
         window: Arc<dyn Window>,
         reply: Reply<(wgpu::Instance, Vec<wgpu::Adapter>)>,
         choice: StartupAdapterChoice,
+        /// One 10s budget from [`PendingGpu::start`], shared with the device phase.
+        watch_started: Instant,
+        watch_warned: bool,
     },
     Device {
         window: Arc<dyn Window>,
@@ -176,6 +183,8 @@ pub(super) enum PendingGpu {
         /// The device request already failed once. A second failure stops.
         retried: bool,
         reply: Reply<(wgpu::Device, wgpu::Queue)>,
+        watch_started: Instant,
+        watch_warned: bool,
     },
 }
 
@@ -197,6 +206,8 @@ impl PendingGpu {
             window,
             reply,
             choice: StartupAdapterChoice::Ranked,
+            watch_started: Instant::now(),
+            watch_warned: false,
         })
     }
 
@@ -210,16 +221,32 @@ impl PendingGpu {
     pub(super) fn poll(self, proxy: &EventLoopProxy) -> Result<GpuPoll, String> {
         match self {
             Self::SurfaceSize(prepared) => Ok(Self::when_sized(prepared)),
-            Self::Adapters { ref reply, .. } => {
+            Self::Adapters {
+                reply,
+                window,
+                choice,
+                watch_started,
+                mut watch_warned,
+            } => {
+                note_startup_watch(
+                    watch_started,
+                    &mut watch_warned,
+                    &StartupWatchPhase::Enumeration,
+                );
                 let result = match reply.try_recv() {
                     Ok(result) => result?,
-                    Err(TryRecvError::Empty) => return Ok(GpuPoll::Pending(self)),
+                    Err(TryRecvError::Empty) => {
+                        return Ok(GpuPoll::Pending(Self::Adapters {
+                            window,
+                            reply,
+                            choice,
+                            watch_started,
+                            watch_warned,
+                        }));
+                    }
                     Err(TryRecvError::Disconnected) => {
                         return Err("GPU adapter worker exited without a result".into());
                     }
-                };
-                let Self::Adapters { window, choice, .. } = self else {
-                    unreachable!()
                 };
                 let (instance, adapters) = result;
                 let surface = instance
@@ -244,24 +271,34 @@ impl PendingGpu {
                     choice,
                     retried: false,
                     reply,
+                    watch_started,
+                    watch_warned,
                 }))
             }
-            Self::Device { ref reply, .. } => {
+            Self::Device {
+                reply,
+                window,
+                instance,
+                surface,
+                adapters,
+                adapter,
+                choice,
+                retried,
+                watch_started,
+                mut watch_warned,
+            } => {
+                let info = adapter.get_info();
+                note_startup_watch(
+                    watch_started,
+                    &mut watch_warned,
+                    &StartupWatchPhase::Device {
+                        name: info.name,
+                        driver: info.driver,
+                    },
+                );
                 let ready = match reply.try_recv() {
                     Ok(Ok(ready)) => ready,
                     Ok(Err(error)) => {
-                        let Self::Device {
-                            window,
-                            instance,
-                            surface,
-                            adapters,
-                            adapter,
-                            retried,
-                            ..
-                        } = self
-                        else {
-                            unreachable!()
-                        };
                         if retried {
                             tracing::error!(
                                 %error,
@@ -303,24 +340,29 @@ impl PendingGpu {
                             choice,
                             retried: true,
                             reply,
+                            watch_started,
+                            watch_warned,
                         }));
                     }
-                    Err(TryRecvError::Empty) => return Ok(GpuPoll::Pending(self)),
+                    Err(TryRecvError::Empty) => {
+                        return Ok(GpuPoll::Pending(Self::Device {
+                            window,
+                            instance,
+                            surface,
+                            adapters,
+                            adapter,
+                            choice,
+                            retried,
+                            reply,
+                            watch_started,
+                            watch_warned,
+                        }));
+                    }
                     Err(TryRecvError::Disconnected) => {
                         return Err("GPU device worker exited without a result".into());
                     }
                 };
                 let (device, queue) = ready;
-                let Self::Device {
-                    window,
-                    instance,
-                    surface,
-                    adapter,
-                    ..
-                } = self
-                else {
-                    unreachable!()
-                };
                 Ok(Self::when_sized(PreparedGpu {
                     window,
                     instance,
@@ -355,7 +397,7 @@ pub(super) fn select_adapter(
     choice: &StartupAdapterChoice,
 ) -> Option<wgpu::Adapter> {
     let preference = crate::gpu_power_preference();
-    let candidates: Vec<StartupAdapterCandidate> = adapters
+    let mut candidates: Vec<StartupAdapterCandidate> = adapters
         .iter()
         .map(|adapter| {
             let info = adapter.get_info();
@@ -366,6 +408,29 @@ pub(super) fn select_adapter(
             }
         })
         .collect();
+    let decision = integrated_startup_scope(&candidates, startup_gpu_scope());
+    if decision.restored_discrete {
+        tracing::warn!(
+            skipped = ?decision.skipped_names,
+            "NEOMACS_GPU=integrated left no surface-capable adapter; restoring discrete adapters"
+        );
+    } else {
+        for name in &decision.skipped_names {
+            tracing::info!(
+                adapter = %name,
+                "NEOMACS_GPU=integrated skipping discrete adapter"
+            );
+        }
+    }
+    let mut allowed = vec![false; candidates.len()];
+    for index in decision.indexes {
+        allowed[index] = true;
+    }
+    for (index, candidate) in candidates.iter_mut().enumerate() {
+        if !allowed[index] {
+            candidate.surface_compatible = false;
+        }
+    }
     let os = host_startup_os();
     let backends = startup_backend_policy();
     let Some(pick) = choose_startup_adapter_on(&candidates, preference, choice, os, backends)
@@ -833,6 +898,107 @@ pub(super) fn open_startup_instance(
         tracing::warn!("no hardware adapter on any startup instance; keeping the software adapter");
     }
     opened.swap_remove(index)
+}
+
+/// Where the 10s startup budget is waiting. Enumeration has no adapter yet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum StartupWatchPhase {
+    Enumeration,
+    Device { name: String, driver: String },
+}
+
+/// One warning at 10s. Enumeration has no adapter name yet. The device phase
+/// names the adapter and driver, including NVK when that is the driver.
+pub(super) fn startup_watch_warning(
+    elapsed: Duration,
+    already_warned: bool,
+    phase: &StartupWatchPhase,
+) -> Option<String> {
+    if already_warned || elapsed < Duration::from_secs(10) {
+        return None;
+    }
+    let workaround = "try WGPU_BACKEND=gl or NEOMACS_GPU=integrated";
+    Some(match phase {
+        StartupWatchPhase::Enumeration => {
+            format!("GPU enumeration still running after {}s; {workaround}", elapsed.as_secs())
+        }
+        StartupWatchPhase::Device { name, driver } => format!(
+            "GPU startup still running after {}s on adapter {name} ({driver}); {workaround}",
+            elapsed.as_secs()
+        ),
+    })
+}
+
+fn note_startup_watch(started: Instant, warned: &mut bool, phase: &StartupWatchPhase) {
+    if let Some(warning) = startup_watch_warning(started.elapsed(), *warned, phase) {
+        *warned = true;
+        tracing::warn!("{warning}");
+    }
+}
+
+/// `NEOMACS_GPU=integrated` drops discrete adapters before ranking.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum StartupGpuScope {
+    Any,
+    Integrated,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct IntegratedScopeDecision {
+    pub indexes: Vec<usize>,
+    pub skipped_names: Vec<String>,
+    pub restored_discrete: bool,
+}
+
+/// `NEOMACS_GPU=integrated` or `low`. Other values keep every adapter.
+pub(super) fn startup_gpu_scope() -> StartupGpuScope {
+    match std::env::var("NEOMACS_GPU").as_deref() {
+        Ok("low") | Ok("integrated") => StartupGpuScope::Integrated,
+        _ => StartupGpuScope::Any,
+    }
+}
+
+/// Drop `DeviceType::DiscreteGpu` before ranking. If nothing left supports
+/// the surface, restore the full list and say so.
+pub(super) fn integrated_startup_scope(
+    candidates: &[StartupAdapterCandidate],
+    scope: StartupGpuScope,
+) -> IntegratedScopeDecision {
+    let all: Vec<usize> = (0..candidates.len()).collect();
+    if scope != StartupGpuScope::Integrated {
+        return IntegratedScopeDecision {
+            indexes: all,
+            skipped_names: Vec::new(),
+            restored_discrete: false,
+        };
+    }
+    let skipped_names: Vec<String> = candidates
+        .iter()
+        .filter(|candidate| candidate.device_type == wgpu::DeviceType::DiscreteGpu)
+        .map(|candidate| candidate.identity.name.clone())
+        .collect();
+    let kept: Vec<usize> = candidates
+        .iter()
+        .enumerate()
+        .filter(|(_, candidate)| candidate.device_type != wgpu::DeviceType::DiscreteGpu)
+        .map(|(index, _)| index)
+        .collect();
+    let kept_supports_surface = kept
+        .iter()
+        .any(|&index| candidates[index].surface_compatible);
+    if kept_supports_surface || skipped_names.is_empty() {
+        IntegratedScopeDecision {
+            indexes: kept,
+            skipped_names,
+            restored_discrete: false,
+        }
+    } else {
+        IntegratedScopeDecision {
+            indexes: all,
+            skipped_names,
+            restored_discrete: true,
+        }
+    }
 }
 
 fn adapter_rank(kind: wgpu::DeviceType, preference: wgpu::PowerPreference) -> u8 {

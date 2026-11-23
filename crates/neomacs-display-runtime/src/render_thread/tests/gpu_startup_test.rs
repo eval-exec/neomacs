@@ -1,4 +1,5 @@
 use super::*;
+use std::time::Duration;
 use winit::{
     event::{Ime, Modifiers, MouseScrollDelta, TouchPhase},
     keyboard::ModifiersState,
@@ -456,6 +457,93 @@ fn other_os_startup_instance_keeps_descriptor_backends() {
             fallback: false,
         }]
     );
+}
+
+#[test]
+#[test]
+fn startup_watch_is_silent_before_ten_seconds() {
+    let phase = StartupWatchPhase::Device {
+        name: "Quadro P620".to_string(),
+        driver: "NVK".to_string(),
+    };
+    assert!(startup_watch_warning(Duration::from_millis(9_900), false, &phase).is_none());
+}
+
+#[test]
+fn startup_watch_warns_once_at_ten_seconds() {
+    let phase = StartupWatchPhase::Device {
+        name: "Quadro P620".to_string(),
+        driver: "NVK".to_string(),
+    };
+    let warning = startup_watch_warning(Duration::from_secs(10), false, &phase)
+        .expect("one warning at 10s");
+    assert!(warning.contains("Quadro P620"), "{warning}");
+    assert!(warning.contains("NVK"), "{warning}");
+    assert!(warning.contains("WGPU_BACKEND=gl"), "{warning}");
+    assert!(warning.contains("NEOMACS_GPU=integrated"), "{warning}");
+    assert!(startup_watch_warning(Duration::from_secs(30), true, &phase).is_none());
+}
+
+#[test]
+fn startup_watch_names_enumeration_before_an_adapter_exists() {
+    let warning =
+        startup_watch_warning(Duration::from_secs(10), false, &StartupWatchPhase::Enumeration)
+            .expect("enumeration warning at 10s");
+    assert!(warning.contains("enumeration"), "{warning}");
+    assert!(warning.contains("WGPU_BACKEND=gl"), "{warning}");
+    assert!(warning.contains("NEOMACS_GPU=integrated"), "{warning}");
+}
+
+#[test]
+fn integrated_scope_drops_discrete_quadro_and_keeps_intel() {
+    let adapters = [
+        candidate(
+            "Quadro P620",
+            0x10de,
+            0x1cb6,
+            wgpu::DeviceType::DiscreteGpu,
+        ),
+        candidate("Intel UHD", 0x8086, 0x3e92, wgpu::DeviceType::IntegratedGpu),
+    ];
+    let decision = integrated_startup_scope(&adapters, StartupGpuScope::Integrated);
+    assert_eq!(decision.indexes, vec![1]);
+    assert_eq!(decision.skipped_names, vec!["Quadro P620".to_string()]);
+    assert!(!decision.restored_discrete);
+}
+
+#[test]
+fn integrated_scope_restores_discrete_when_nothing_else_supports_the_surface() {
+    let mut adapters = [
+        candidate(
+            "Quadro P620",
+            0x10de,
+            0x1cb6,
+            wgpu::DeviceType::DiscreteGpu,
+        ),
+        candidate("Intel UHD", 0x8086, 0x3e92, wgpu::DeviceType::IntegratedGpu),
+    ];
+    adapters[1].surface_compatible = false;
+    let decision = integrated_startup_scope(&adapters, StartupGpuScope::Integrated);
+    assert!(decision.restored_discrete);
+    assert_eq!(decision.indexes, vec![0, 1]);
+    assert_eq!(decision.skipped_names, vec!["Quadro P620".to_string()]);
+}
+
+#[test]
+fn any_scope_keeps_discrete_and_integrated() {
+    let adapters = [
+        candidate(
+            "Quadro P620",
+            0x10de,
+            0x1cb6,
+            wgpu::DeviceType::DiscreteGpu,
+        ),
+        candidate("Intel UHD", 0x8086, 0x3e92, wgpu::DeviceType::IntegratedGpu),
+    ];
+    let decision = integrated_startup_scope(&adapters, StartupGpuScope::Any);
+    assert_eq!(decision.indexes, vec![0, 1]);
+    assert!(decision.skipped_names.is_empty());
+    assert!(!decision.restored_discrete);
 }
 
 #[test]
