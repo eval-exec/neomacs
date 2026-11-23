@@ -140,6 +140,15 @@ impl DisplayRowFaceMetrics {
         DisplayRowCharWidthPolicy::new(fallback_char_width).width(self.char_width_px)
     }
 
+    pub(crate) fn char_width_for_mode(
+        self,
+        fallback_char_width: f32,
+        mode: DisplayRowMeasurementMode,
+    ) -> f32 {
+        DisplayRowMeasurementPolicy::for_mode(mode)
+            .face_char_width(self.char_width_px, fallback_char_width)
+    }
+
     pub(crate) fn char_width_or_measured_px(
         self,
         fallback_char_width: f32,
@@ -150,7 +159,12 @@ impl DisplayRowFaceMetrics {
     }
 
     pub(crate) fn normalize_char_width(&mut self, fallback_char_width: f32) {
-        self.set_char_width_px(self.char_width_px(fallback_char_width));
+        // Realization records font facts. A narrower valid font must survive
+        // capture; the consumer's measurement policy decides whether to use
+        // its concrete pixels or the logical frame grid.
+        if !self.has_char_width(fallback_char_width) {
+            self.set_char_width_px(DisplayRowCharWidthPolicy::new(fallback_char_width).fallback());
+        }
     }
 
     pub(crate) fn include_in_layout(self, layout: &mut DisplayRowLayout) {
@@ -509,9 +523,7 @@ impl<'a> DisplayRowFaceRealizer<'a> {
 
         if needs_metrics && let Some(metrics) = self.measured_font_metrics_for_face(face) {
             if !face.has_char_width(fallback_char_width) {
-                face.metrics.set_char_width_px(
-                    DisplayRowCharWidthPolicy::new(fallback_char_width).width(metrics.char_width),
-                );
+                face.metrics.set_char_width_px(metrics.char_width);
             }
             if face.metrics.ascent_px() <= 0.0 && metrics.ascent > 0.0 {
                 face.metrics.set_ascent_px(metrics.ascent);
@@ -838,6 +850,15 @@ impl DisplayRowMeasurementPolicy {
         Self { mode }
     }
 
+    fn face_char_width(self, measured_width: f32, fallback_char_width: f32) -> f32 {
+        let policy = DisplayRowCharWidthPolicy::new(fallback_char_width);
+        if self.uses_concrete_font_geometry() && policy.has_width(measured_width) {
+            measured_width
+        } else {
+            policy.width(measured_width)
+        }
+    }
+
     pub(crate) fn uses_concrete_font_geometry(self) -> bool {
         self.mode.uses_concrete_font_geometry()
     }
@@ -882,13 +903,8 @@ impl DisplayRowMeasurementPolicy {
                 // face remapping. The grid width is only its missing-metrics
                 // fallback; flooring it here widens captured text/newline
                 // cursors even though shaping uses the smaller font advances.
-                let char_width = if self.uses_concrete_font_geometry()
-                    && fallback_width_policy.has_width(metrics.char_width)
-                {
-                    metrics.char_width
-                } else {
-                    fallback_width_policy.width(metrics.char_width)
-                };
+                let char_width =
+                    self.face_char_width(metrics.char_width, fallback_width_policy.fallback());
                 (char_width, metrics.line_height, metrics.ascent)
             })
             .unwrap_or((

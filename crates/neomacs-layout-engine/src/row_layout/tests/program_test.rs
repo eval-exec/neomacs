@@ -60,6 +60,109 @@ fn faces() -> Vec<DisplayRowFace> {
     ]
 }
 
+fn narrow_newline_face() -> ResolvedFace {
+    let mut face = ResolvedFace::default();
+    face.set_measured_char_width_px(19.0);
+    face.font_ascent = 14.0;
+    face.font_line_height = 18.0;
+    face
+}
+
+#[test]
+fn row_capture_preserves_a_measured_face_width_below_the_frame_grid() {
+    use crate::display_row::face_state::DisplayRowFaceRealizer;
+
+    let mut native_fonts = None;
+    let captured = DisplayRowFaceRealizer::new(&mut native_fonts).realize_face(
+        FaceId::new(1),
+        &narrow_newline_face(),
+        20.0,
+        14.0,
+        18.0,
+    );
+    // Capture retains the measured fact. Interpreting it as GUI pixels or
+    // terminal cells belongs to replay, after the measurement mode is known.
+    assert_eq!(captured.metrics.char_width_px(1.0), 19.0);
+    assert_eq!(captured.metrics.line_height_px(), 18.0);
+}
+
+fn assert_captured_newline_matches_canonical_width(
+    mode: DisplayRowMeasurementMode,
+    expected_width: f32,
+) {
+    use crate::display_row::face_state::{DisplayRowFaceRealizer, DisplayRowMeasurementPolicy};
+    use crate::font::metrics::FontMetrics;
+
+    let id = FaceId::new(1);
+    let resolved = narrow_newline_face();
+    let fallback = DisplayRowFallbackMetrics::from_default_face_extents(20.0, 18.0, 14.0);
+    let metrics = FontMetrics {
+        ascent: 14.0,
+        descent: 4.0,
+        line_height: 18.0,
+        char_width: 19.0,
+        space_width: 19.0,
+    };
+    let mut native_fonts = None;
+    let canonical = DisplayRowMeasurementPolicy::for_mode(mode).measured_face(
+        id,
+        &resolved,
+        Some(metrics),
+        20.0,
+        fallback,
+        &mut native_fonts,
+    );
+    assert_eq!(canonical.metrics().char_width(), expected_width);
+    // The direct face isolates the replay getter from realization; the
+    // realized face also exercises the actual worker capture boundary.
+    let realized = DisplayRowFaceRealizer::new(&mut native_fonts)
+        .realize_face(id, &resolved, 20.0, 14.0, 18.0);
+    for face in [DisplayRowFace::from_resolved(id, &resolved), realized] {
+        let faces = vec![face];
+        let mut geometry = geometry(200.0);
+        geometry.metrics = fallback;
+        let mut measurer = DisplayRowGlyphMeasurer::with_mode(
+            &faces,
+            None,
+            20.0,
+            GlyphAdvanceQuantization::PreserveLogicalPixels,
+            mode,
+        );
+        // No glyph shaping or native service is needed for an empty line.
+        // GNU still appends a face-font space to size its newline cursor.
+        let row = RowProgram::capture(
+            geometry,
+            [DisplayItem::new(
+                SourceSpan::synthetic(1, 0, 1),
+                RenderFaceRef::FaceId(id),
+                DisplayItemKind::RowBreak(DisplayRowBreak {
+                    line_height: DisplayLineHeightPolicy::Default,
+                    line_spacing: DisplayLineSpacingPolicy::Inherit,
+                }),
+            )],
+            faces.clone(),
+            &mut measurer,
+            limits(),
+        )
+        .unwrap()
+        .compute(|| false)
+        .unwrap();
+        assert_eq!(row.end_kind, ComputedRowEnd::Newline);
+        assert_eq!(row.terminator_width, canonical.metrics().char_width());
+        assert_eq!(row.terminator_height, 18.0);
+    }
+}
+
+#[test]
+fn captured_newline_preserves_concrete_face_width_below_the_frame_grid() {
+    assert_captured_newline_matches_canonical_width(DisplayRowMeasurementMode::ConcreteFont, 19.0);
+}
+
+#[test]
+fn captured_newline_keeps_the_logical_cell_grid_for_a_narrower_face() {
+    assert_captured_newline_matches_canonical_width(DisplayRowMeasurementMode::LogicalCells, 20.0);
+}
+
 fn ascii_wrapped_program(text: &str) -> RowProgram {
     let face = FaceId::new(1);
     let faces = vec![DisplayRowFace::from_resolved(

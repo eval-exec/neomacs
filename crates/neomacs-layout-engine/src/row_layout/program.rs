@@ -755,6 +755,10 @@ impl RowProgram {
         if row_limit == 0 {
             return Err(RowProgramError::Budget);
         }
+        let measurement_mode = match self.measurements.backend {
+            DisplayGeometryBackend::WindowSystemPixels => DisplayRowMeasurementMode::ConcreteFont,
+            DisplayGeometryBackend::TerminalCells => DisplayRowMeasurementMode::LogicalCells,
+        };
         // Buffer text may wrap around owned strings. A string that itself
         // overflows still needs a resumable string-stack row entry point.
         let can_wrap = self.geometry.character_wrap
@@ -927,7 +931,10 @@ impl RowProgram {
                         value.background,
                         face,
                         crate::display_row::metrics::DisplayRowMeasuredFaceMetrics::new(
-                            face_metrics.char_width_px(self.geometry.metrics.char_width()),
+                            face_metrics.char_width_for_mode(
+                                self.geometry.metrics.char_width(),
+                                measurement_mode,
+                            ),
                             face_height,
                             face_metrics.ascent_px(),
                             0.0,
@@ -1233,28 +1240,20 @@ impl RowProgram {
                 {
                     terminator_width = realized
                         .metrics
-                        .char_width_px(self.geometry.metrics.char_width());
+                        .char_width_for_mode(self.geometry.metrics.char_width(), measurement_mode);
                     terminator_height = realized.metrics.line_height_px();
                 }
-                let mode = match self.measurements.backend {
-                    DisplayGeometryBackend::WindowSystemPixels => {
-                        DisplayRowMeasurementMode::ConcreteFont
-                    }
-                    DisplayGeometryBackend::TerminalCells => {
-                        DisplayRowMeasurementMode::LogicalCells
-                    }
-                };
                 let finalizer = DisplayRowLineEndFinalizer::new(
                     value,
                     face,
                     self.geometry.right_edge() - position.x_px(),
                     self.geometry.metrics,
                     self.geometry.background,
-                    mode,
+                    measurement_mode,
                     edges,
                     membership,
                 );
-                let finalizer = if mode.uses_concrete_font_geometry() {
+                let finalizer = if measurement_mode.uses_concrete_font_geometry() {
                     terminator_height = minimum.height_px();
                     finalizer.with_newline_font_metrics(minimum)
                 } else {
@@ -1265,7 +1264,7 @@ impl RowProgram {
                 }
                 // As in the canonical row transition, line spacing contributes
                 // to logical descent after newline fills and hit cells are set.
-                if mode.uses_concrete_font_geometry()
+                if measurement_mode.uses_concrete_font_geometry()
                     && value.line_height != DisplayLineHeightPolicy::ContentOnly
                 {
                     row.line_spacing_px =
