@@ -73,6 +73,7 @@ cargo xtask perf run sustained-editing
 cargo xtask perf run gui-input-latency
 cargo xtask perf run org-editing
 cargo xtask perf run magit-status
+cargo xtask perf run magit-log-doubling
 cargo xtask perf run large-file-editing
 cargo xtask perf run indentation
 cargo xtask perf run regex-search
@@ -104,6 +105,15 @@ cargo xtask perf suite standard \
   --samples 9 --cpu 3 --require-governor performance \
   --hardware-counters
 ```
+
+`magit-log-doubling` is the heavy, opt-in log-wash row: it starts
+`magit-log-all` at `-n1024` and performs five
+`magit-log-double-commit-limit` refreshes to `-n32768` over a deterministic
+32,768-commit history. The default GUI frontend measures the user-visible
+path: Magit's per-commit wash (`magit-wash-sequence`) plus the redisplay of the
+growing 2.3 MB log after every doubling. `--frontend batch` isolates the wash
+and skips display. It is deliberately absent from the standard suite; request
+more than one sample explicitly.
 
 The default editor is `target/release/neomacs`. Use `--editor PATH` to measure
 another build. Frontend choices are `batch`, `tui`, and `gui`; each scenario

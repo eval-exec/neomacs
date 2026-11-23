@@ -5,8 +5,9 @@
 //! generated fixture bytes are unchanged.
 
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use crate::harness::ScenarioId;
 
@@ -25,12 +26,24 @@ enum MagitRepositoryShape {
     /// A working repository: real history, files of real length, and every
     /// status section populated.
     Working,
+    /// A long linear history with no working-tree changes. The log wash is
+    /// the workload, so every commit costs a section to parse; no diff text
+    /// is needed.
+    LogHistory,
 }
+
+/// The initial `-n` limit of `magit-log-doubling`.
+pub(super) const MAGIT_LOG_INITIAL_LIMIT: u32 = 1024;
+/// Number of `magit-log-double-commit-limit` refreshes in one operation.
+pub(super) const MAGIT_LOG_DOUBLINGS: u32 = 5;
+/// The final limit; the generated history has exactly this many commits.
+pub(super) const MAGIT_LOG_COMMITS: u32 = MAGIT_LOG_INITIAL_LIMIT << MAGIT_LOG_DOUBLINGS;
 
 impl MagitRepositoryShape {
     const fn of(scenario: ScenarioId) -> Self {
         match scenario {
             ScenarioId::MagitStatusHeavy => Self::Working,
+            ScenarioId::MagitLogDoubling => Self::LogHistory,
             _ => Self::Minimal,
         }
     }
@@ -109,6 +122,69 @@ fn git_commit(repository: &Path, message: &str) -> Result<(), String> {
     run_git(repository, &["commit", "--quiet", "-m", message])
 }
 
+/// Run one git command with a generated stdin stream and the same pinned
+/// environment as every other fixture command.
+fn run_git_with_stdin(repository: &Path, arguments: &[&str], stdin: &[u8]) -> Result<(), String> {
+    let mut child = Command::new("git")
+        .args(arguments)
+        .current_dir(repository)
+        .envs(MAGIT_FIXTURE_GIT_ENV)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("failed to launch git for Magit fixture: {error}"))?;
+    {
+        let mut pipe = child
+            .stdin
+            .take()
+            .ok_or_else(|| "git fixture stdin is unavailable".to_string())?;
+        pipe.write_all(stdin)
+            .map_err(|error| format!("failed to write git fixture stream: {error}"))?;
+        // Dropping `pipe` closes stdin, which is what tells fast-import the
+        // stream is complete.
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|error| format!("failed to wait for git fixture: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "failed to prepare Magit fixture repository ({}): {}",
+            arguments.join(" "),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(())
+}
+
+/// Fixed timestamp base for the generated history. Commit IDs are a function
+/// of the parent chain, message, identities and timestamps; pinning the base
+/// keeps two builds byte-for-byte identical.
+const MAGIT_FIXTURE_EPOCH: u64 = 1_767_225_600;
+
+/// Build `commits` empty linear commits through one `git fast-import` stream.
+///
+/// The log wash creates a section per commit; a file tree would add diff text
+/// that this workload never reads. Empty commits keep the fixture small and
+/// the generation fast while preserving the exact section count.
+fn prepare_log_history(repository: &Path, commits: u32) -> Result<(), String> {
+    let mut stream = String::new();
+    for index in 0..commits {
+        let timestamp = MAGIT_FIXTURE_EPOCH + u64::from(index);
+        let message = format!("fixture: revision {index}\n");
+        stream.push_str("commit refs/heads/main\n");
+        stream.push_str(&format!(
+            "author neomacs-perf <perf@example.invalid> {timestamp} +0000\n"
+        ));
+        stream.push_str(&format!(
+            "committer neomacs-perf <perf@example.invalid> {timestamp} +0000\n"
+        ));
+        stream.push_str(&format!("data {}\n", message.len()));
+        stream.push_str(&message);
+    }
+    run_git_with_stdin(repository, &["fast-import", "--quiet"], stream.as_bytes())
+}
+
 /// Files, commits, and per-section working-tree changes in the `Working`
 /// repository. Sized so `magit-refresh` parses thousands of diff lines across
 /// every section it renders, not one line in one.
@@ -159,6 +235,9 @@ pub(super) fn prepare_magit_repository(
         }
         MagitRepositoryShape::Working => {
             prepare_working_magit_repository(&repository)?;
+        }
+        MagitRepositoryShape::LogHistory => {
+            prepare_log_history(&repository, MAGIT_LOG_COMMITS)?;
         }
     }
     Ok(repository)
@@ -256,4 +335,50 @@ fn prepare_working_magit_repository(repository: &Path) -> Result<(), String> {
         .map_err(|error| format!("failed to write untracked Magit fixture: {error}"))?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn git_stdout(repository: &Path, arguments: &[&str]) -> String {
+        let output = Command::new("git")
+            .args(arguments)
+            .current_dir(repository)
+            .envs(MAGIT_FIXTURE_GIT_ENV)
+            .output()
+            .expect("launch git");
+        assert!(output.status.success(), "git {arguments:?} failed");
+        String::from_utf8(output.stdout).expect("utf-8 git output")
+    }
+
+    #[test]
+    fn log_history_has_the_requested_commits_and_is_deterministic() {
+        let first = tempfile::tempdir().expect("first run directory");
+        let second = tempfile::tempdir().expect("second run directory");
+        for directory in [first.path(), second.path()] {
+            run_git(directory, &["init", "--quiet", "--initial-branch=main"])
+                .expect("init log repository");
+            prepare_log_history(directory, 64).expect("prepare log history");
+        }
+        assert_eq!(
+            git_stdout(first.path(), &["rev-list", "--count", "main"]).trim(),
+            "64"
+        );
+        assert_eq!(
+            git_stdout(first.path(), &["rev-parse", "HEAD"]),
+            git_stdout(second.path(), &["rev-parse", "HEAD"])
+        );
+    }
+
+    #[test]
+    fn magit_log_commit_count_matches_the_five_doublings() {
+        assert_eq!(MAGIT_LOG_INITIAL_LIMIT, 1024);
+        assert_eq!(MAGIT_LOG_DOUBLINGS, 5);
+        assert_eq!(MAGIT_LOG_COMMITS, 32_768);
+        assert_eq!(
+            MAGIT_LOG_INITIAL_LIMIT << MAGIT_LOG_DOUBLINGS,
+            MAGIT_LOG_COMMITS
+        );
+    }
 }

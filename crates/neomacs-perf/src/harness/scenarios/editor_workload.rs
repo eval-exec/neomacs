@@ -1,6 +1,6 @@
 //! The shared editor-workload scenario family: one elisp fixture
-//! (`fixtures/editor-workloads.el`) driving the nine catalogued workloads
-//! over deterministic sources, with per-scenario phase invariants.
+//! (`fixtures/editor-workloads.el`) driving the catalogued workloads over
+//! deterministic sources, with per-scenario phase invariants.
 //!
 //! Fixture-only measurement controls (read once before the selected workload):
 //!
@@ -88,7 +88,10 @@ pub(crate) fn prepare(
     let mut packages = None;
     let repository = if matches!(
         request.scenario,
-        ScenarioId::MagitStatus | ScenarioId::MagitStatusCompiled | ScenarioId::MagitStatusHeavy
+        ScenarioId::MagitStatus
+            | ScenarioId::MagitStatusCompiled
+            | ScenarioId::MagitStatusHeavy
+            | ScenarioId::MagitLogDoubling
     ) {
         let magit_source = locked_melpa_sources()?
             .into_iter()
@@ -425,6 +428,7 @@ pub(crate) fn validate_editor_workload_result(
         ScenarioId::MagitStatus
         | ScenarioId::MagitStatusCompiled
         | ScenarioId::MagitStatusHeavy
+        | ScenarioId::MagitLogDoubling
         | ScenarioId::RegexSearch => {
             require_positive_phase(&mut mismatches, "regex-phase-time", result.regex_phase_us);
         }
