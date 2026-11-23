@@ -545,12 +545,16 @@ pub(crate) fn with_string_text_props_mut<R>(
     value: TaggedValue,
     f: impl FnOnce(&mut TextPropertyTable) -> R,
 ) -> Option<R> {
-    LispCollectionRevision::changed(value);
     let ptr = value.as_string_ptr()? as *mut StringObj;
     note_heap_write(value, HeapWriteKind::StringTextProps);
     #[cfg(any(test, debug_assertions, feature = "test-support"))]
     let _guard = HeapMutClosureGuard::enter();
-    Some(f(unsafe { (*ptr).data.intervals_mut() }))
+    // SAFETY: the published string is exclusively borrowed until `f` returns.
+    // The journal sentinel is armed here and recorded by the caller only when
+    // the closure changes property contents. The GC barrier stays first.
+    let table = unsafe { (*ptr).data.intervals_mut() };
+    table.arm_journal_mark();
+    Some(f(table))
 }
 
 /// Fixture-only unrestricted edits; production callers use typed string operations.
@@ -665,6 +669,22 @@ pub fn clear_string_intervals(value: TaggedValue) -> bool {
     // clear_intervals enforces its interval-child SATB preimage barrier.
     unsafe { (*ptr.cast_mut()).data.clear_intervals() };
     true
+}
+
+/// Drop a table `intervals_mut` installed when the closure changed nothing.
+///
+/// The string's observable properties are still absent, so this is not a
+/// collection write. The heap barrier still covers the pointer store.
+#[inline]
+pub(crate) fn drop_unmodified_string_intervals(value: TaggedValue) {
+    let Some(ptr) = value.as_string_ptr() else {
+        return;
+    };
+    note_heap_write(value, HeapWriteKind::StringTextProps);
+    #[cfg(any(test, debug_assertions, feature = "test-support"))]
+    let _guard = HeapMutClosureGuard::enter();
+    // SAFETY: same exclusive string borrow as `clear_string_intervals`.
+    unsafe { (*ptr.cast_mut()).data.clear_intervals() };
 }
 
 /// Overwrite one byte of a string's text in place (see

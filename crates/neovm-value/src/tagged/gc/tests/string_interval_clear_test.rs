@@ -55,3 +55,115 @@ fn clearing_an_interval_tree_journals_and_drops_it() {
     );
     assert!(!has_intervals(value));
 }
+
+fn fresh_string(bytes: &[u8]) -> TaggedValue {
+    // The string is addressed by the thread-local heap. Leak the fixture so
+    // it outlives this helper; nextest runs each test in its own process.
+    let heap: &'static mut TaggedHeap = Box::leak(Box::new(TaggedHeap::new()));
+    set_tagged_heap(heap);
+    heap.alloc_string(LispString::from_unibyte(bytes.to_vec()))
+}
+
+fn char_len(value: TaggedValue) -> usize {
+    value.as_lisp_string().expect("string").schars()
+}
+
+fn whole_range(value: TaggedValue) -> crate::value::positions::CharRange {
+    crate::value::positions::CharRange::from_usize(0, char_len(value))
+}
+
+fn put_face(value: TaggedValue, face: TaggedValue) {
+    let len = char_len(value);
+    crate::value::mutate_string_text_properties(value, |table| {
+        table.put_property_for_object_char_len(
+            whole_range(value),
+            crate::value::positions::CharLen::new(len),
+            TaggedValue::symbol("face"),
+            face,
+        );
+    })
+    .expect("string");
+}
+
+/// GNU `add_text_properties_1` returns nil without modifying when the interval
+/// already has the property (`src/textprop.c`, emacs-31.1).
+#[test]
+fn noop_put_of_an_equal_value_does_not_journal() {
+    let value = fresh_string(b"abcd");
+    let bold = TaggedValue::symbol("bold");
+    put_face(value, bold);
+    let start = LispCollectionRevision::current();
+
+    put_face(value, bold);
+
+    assert_eq!(
+        journal_since_for_test(start).expect("journal window"),
+        Vec::<usize>::new(),
+        "putting the property the string already has must not journal"
+    );
+}
+
+/// GNU `Fremove_text_properties` returns nil without modifying when no interval
+/// in the range holds the name.
+#[test]
+fn remove_of_an_absent_property_does_not_journal() {
+    let value = fresh_string(b"abcd");
+    put_face(value, TaggedValue::symbol("bold"));
+    let start = LispCollectionRevision::current();
+    let names = [TaggedValue::symbol("absent-prop")];
+
+    let removed = crate::value::mutate_string_text_properties(value, |table| {
+        table.remove_properties_in_char_range(whole_range(value), &names)
+    })
+    .expect("string");
+
+    assert!(!removed, "the name is not on the string");
+    assert_eq!(
+        journal_since_for_test(start).expect("journal window"),
+        Vec::<usize>::new(),
+        "a remove that removes nothing must not journal"
+    );
+}
+
+/// Replacing the interval tree with an empty one is one collection write.
+/// `mutate_string_text_properties` used to journal inside the closure and
+/// again when it nulled the empty table.
+#[test]
+fn emptying_a_string_interval_tree_journals_once() {
+    let value = fresh_string(b"abcd");
+    put_face(value, TaggedValue::symbol("bold"));
+    assert!(has_intervals(value));
+    let start = LispCollectionRevision::current();
+
+    crate::value::mutate_string_text_properties(value, |table| {
+        *table = crate::value::text_props::TextPropertyTable::new();
+    })
+    .expect("string");
+
+    assert_eq!(
+        journal_since_for_test(start).expect("journal window"),
+        vec![value.bits()],
+        "emptying the tree records one collection write"
+    );
+    assert!(!has_intervals(value));
+}
+
+/// `set_string_text_properties_table_for_value` write-back of an equal table
+/// is not a mutation.
+#[test]
+fn writing_an_equal_text_property_table_does_not_journal() {
+    let value = fresh_string(b"abcd");
+    put_face(value, TaggedValue::symbol("bold"));
+    let table = crate::value::get_string_text_properties_table_for_value(value)
+        .expect("the face property is installed");
+    let start = LispCollectionRevision::current();
+
+    crate::value::set_string_text_properties_table_for_value(value, table);
+
+    assert_eq!(
+        journal_since_for_test(start).expect("journal window"),
+        Vec::<usize>::new(),
+        "writing an equal interval table must not journal"
+    );
+    assert!(has_intervals(value));
+}

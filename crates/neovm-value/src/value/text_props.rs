@@ -12,6 +12,7 @@
 //! | `NEOMACS_WATCHED_PROP_DEMAND` | `on` | `off`; `on`/`1`/`true`/`yes` | Advance bounded watched-property scans only after another interval is needed; generic cursors remain eager. |
 
 use crate::intern::SymId;
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::sync::{
     Arc,
@@ -2859,6 +2860,9 @@ pub struct TextPropertyTable {
     /// memos on it (together with the buffer content epoch) so a property
     /// change invalidates them. Monotonic, wraps never (u64).
     pub(crate) mutation_tick: u64,
+    /// String collection-journal sentinel. `0` is a fresh table, `1` is armed
+    /// around a closure, `2` means property contents changed. Not a Lisp root.
+    journal_mark: Cell<u8>,
     /// Bumped only by mutations that can change `syntax-table`/`category`
     /// presence or values: exact for by-name put/remove, conservative for
     /// bulk plist replacement, and NOT bumped by pure position adjusts
@@ -3065,6 +3069,9 @@ impl Clone for TextPropertyTable {
             interval_tree_present: self.interval_tree_present,
             property_names: self.property_names.clone(),
             mutation_tick: self.mutation_tick,
+            // A copy is a new table. Resetting the sentinel makes a wholesale
+            // replacement inside an armed closure visible to the journal.
+            journal_mark: Cell::new(0),
             syntax_prop_tick: self.syntax_prop_tick,
             syntax_prop_any: std::sync::atomic::AtomicU64::new(
                 self.syntax_prop_any.load(Ordering::Relaxed),
@@ -3164,6 +3171,7 @@ impl TextPropertyTable {
             interval_tree_present: false,
             property_names: ConservativePropertyNames::default(),
             mutation_tick: 0,
+            journal_mark: Cell::new(0),
             syntax_prop_tick: 0,
             syntax_prop_any: std::sync::atomic::AtomicU64::new(0),
             syntax_prop_ranges: std::sync::Mutex::new((0, Vec::new())),
@@ -3216,6 +3224,21 @@ impl TextPropertyTable {
     /// Current mutation tick — see the field doc.
     pub fn mutation_tick(&self) -> u64 {
         self.mutation_tick
+    }
+
+    /// Armed by `with_string_text_props_mut` before the closure runs.
+    pub(crate) fn arm_journal_mark(&self) {
+        self.journal_mark.set(1);
+    }
+
+    /// Property contents changed. A no-op put or remove leaves the sentinel armed.
+    pub(crate) fn mark_journal_dirty(&self) {
+        self.journal_mark.set(2);
+    }
+
+    /// The closure replaced the table or changed property contents.
+    pub(crate) fn journal_mark_changed(&self) -> bool {
+        self.journal_mark.get() != 1
     }
 
     /// Current syntax-relevant mutation tick — see the field doc.
@@ -3360,6 +3383,7 @@ impl TextPropertyTable {
             interval_tree_present,
             property_names,
             mutation_tick: 0,
+            journal_mark: Cell::new(0),
             syntax_prop_tick: 0,
             syntax_prop_any: std::sync::atomic::AtomicU64::new(0),
             syntax_prop_ranges: std::sync::Mutex::new((0, Vec::new())),
@@ -3383,6 +3407,7 @@ impl TextPropertyTable {
             interval_tree_present,
             property_names,
             mutation_tick: 0,
+            journal_mark: Cell::new(0),
             syntax_prop_tick: 0,
             syntax_prop_any: std::sync::atomic::AtomicU64::new(0),
             syntax_prop_ranges: std::sync::Mutex::new((0, Vec::new())),
@@ -3560,6 +3585,9 @@ impl TextPropertyTable {
         }
         self.intervals.prune_trailing_empty_intervals();
         self.note_interval_tree_presence();
+        if changed {
+            self.mark_journal_dirty();
+        }
         changed
     }
 
@@ -3626,6 +3654,9 @@ impl TextPropertyTable {
             // would cut its entry at a position that is no boundary.
             let noted = written.unwrap_or_else(|| CharRange::new(range.start(), range.start()));
             self.syntax_ranges_note_put(noted);
+        }
+        if changed {
+            self.mark_journal_dirty();
         }
         changed
     }
@@ -4560,6 +4591,9 @@ impl TextPropertyTable {
             node_start = node_end;
             id = next_id;
         }
+        if changed {
+            self.mark_journal_dirty();
+        }
         changed
     }
 
@@ -4583,10 +4617,14 @@ impl TextPropertyTable {
         let affected = self
             .intervals
             .existing_intervals_overlapping_after_splits(range);
+        let wrote = !affected.is_empty();
         for (_, id) in affected {
             self.intervals.set_node_plist(id, Value::NIL);
         }
         self.intervals.prune_trailing_empty_intervals();
+        if wrote {
+            self.mark_journal_dirty();
+        }
     }
 
     pub fn set_properties_for_object_char_len(
@@ -4649,6 +4687,7 @@ impl TextPropertyTable {
             cursor = node_end;
         }
         self.note_interval_tree_presence();
+        self.mark_journal_dirty();
     }
 
     /// GNU `Ftext_property_not_all`'s walk (src/textprop.c): ONE descent
@@ -5975,6 +6014,7 @@ pub(crate) mod b13_test_hooks {
                 self.note_interval_tree_presence();
                 self.intervals.prune_trailing_empty_intervals();
             }
+            self.mark_journal_dirty();
         }
 
         pub(crate) fn raw_plist_at_for_test(&self, pos: CharPos0) -> Option<Value> {

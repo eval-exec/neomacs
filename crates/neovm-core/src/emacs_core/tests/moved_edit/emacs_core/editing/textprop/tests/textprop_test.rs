@@ -3669,6 +3669,50 @@ fn graft_at_boundary_rehomes_predecessor_so_held_plists_survive_undo() {
     assert_eq!(got, Value::T);
 }
 
+/// GNU `set_text_properties` returns nil before `modify_text_properties` when
+/// the buffer has no intervals and PROPERTIES is nil (`src/textprop.c`
+/// emacs-31.1, the `!i` branch).
+#[test]
+fn set_text_properties_nil_on_a_propertyless_buffer_is_gnu_nil() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = eval_with_text("hello");
+    let tick = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("buffer")
+        .props_modified_tick();
+    let modified = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("buffer")
+        .modified_tick();
+
+    let result = builtin_set_text_properties(
+        &mut eval,
+        vec![Value::fixnum(1), Value::fixnum(6), Value::NIL],
+    )
+    .expect("set-text-properties");
+
+    assert_eq!(
+        result,
+        Value::NIL,
+        "a propertyless buffer asked for no properties returns nil"
+    );
+    let buf = eval.edit.buffers.current_buffer().expect("buffer");
+    assert_eq!(
+        buf.props_modified_tick(),
+        tick,
+        "the no-op must not record a property modification"
+    );
+    assert_eq!(
+        buf.modified_tick(),
+        modified,
+        "the no-op must not bump the buffer modification tick"
+    );
+}
+
 /// Helper: create an evaluator with a buffer containing the given text.
 fn eval_with_text(text: &str) -> Context {
     let mut eval = crate::test_utils::new_context();

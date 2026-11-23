@@ -2916,12 +2916,23 @@ pub fn builtin_set_text_properties_in_buffers(
     }
 
     let buf_id = resolve_text_property_buffer_id_in_buffers(buffers, args.get(3))?;
-    let buf = buffers
-        .get(buf_id)
-        .ok_or_else(|| signal("error", vec![Value::string("Buffer does not exist")]))?;
-
-    let Some(byte_range) = validate_buffer_property_range(buf, beg, end, args[0], args[1])? else {
-        return Ok(Value::NIL);
+    let byte_range = {
+        let buf = buffers
+            .get(buf_id)
+            .ok_or_else(|| signal("error", vec![Value::string("Buffer does not exist")]))?;
+        let Some(byte_range) = validate_buffer_property_range(buf, beg, end, args[0], args[1])?
+        else {
+            return Ok(Value::NIL);
+        };
+        // GNU `set_text_properties` returns nil without `modify_text_properties`
+        // when PROPERTIES is nil and the range has no interval
+        // (`src/textprop.c`, emacs-31.1).
+        if pairs.is_empty()
+            && !buf.text_props_range_has_any_interval_in_emacs_byte_range(byte_range)
+        {
+            return Ok(Value::NIL);
+        }
+        byte_range
     };
     let _ = buffers.set_buffer_text_properties_in_emacs_byte_range(buf_id, byte_range, pairs);
     let _ = buffers.record_buffer_text_property_modification(buf_id, byte_range);

@@ -404,9 +404,24 @@ pub fn set_string_text_properties_table_for_value(value: Value, table: TextPrope
         clear_string_text_properties_for_value(value);
         return;
     }
-    let _ = mutate::with_string_text_props_mut(value, |props| {
+    let len = value
+        .as_lisp_string()
+        .map(|string| string.schars())
+        .unwrap_or(0);
+    if TextPropertyTable::equal_including_property_values(
+        string_text_props(value),
+        Some(&table),
+        len,
+    ) {
+        return;
+    }
+    if mutate::with_string_text_props_mut(value, |props| {
         *props = table;
-    });
+    })
+    .is_some()
+    {
+        mutate::LispCollectionRevision::changed(value);
+    }
 }
 
 /// Mutate a string's interval tree IN PLACE.
@@ -426,9 +441,21 @@ pub fn mutate_string_text_properties<R>(
     value: Value,
     f: impl FnOnce(&mut TextPropertyTable) -> R,
 ) -> Option<R> {
+    let had = string_has_text_property_interval_tree(value);
     let result = mutate::with_string_text_props_mut(value, f)?;
-    if string_text_props(value).is_some_and(TextPropertyTable::is_empty) {
-        clear_string_text_properties_for_value(value);
+    let props = string_text_props(value);
+    let empty = props.is_some_and(TextPropertyTable::is_empty);
+    let changed = props.is_some_and(TextPropertyTable::journal_mark_changed);
+    if empty {
+        if had || changed {
+            // One journal: `clear_string_intervals` records the drop. The
+            // closure itself no longer journals.
+            clear_string_text_properties_for_value(value);
+        } else {
+            mutate::drop_unmodified_string_intervals(value);
+        }
+    } else if changed {
+        mutate::LispCollectionRevision::changed(value);
     }
     Some(result)
 }
