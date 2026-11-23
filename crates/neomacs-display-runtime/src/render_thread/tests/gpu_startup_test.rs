@@ -494,6 +494,33 @@ fn startup_watch_names_enumeration_before_an_adapter_exists() {
 }
 
 #[test]
+fn enumeration_warning_names_vk_driver_files() {
+    let warning = startup_watch_warning(
+        Duration::from_secs(10),
+        false,
+        &StartupWatchPhase::Enumeration,
+    )
+    .expect("enumeration warning");
+    assert!(warning.contains("WGPU_BACKEND=gl"), "{warning}");
+    assert!(warning.contains("VK_DRIVER_FILES"), "{warning}");
+}
+
+#[test]
+fn device_line_names_the_adapter_after_enumeration_warned() {
+    assert!(
+        startup_device_watch_line(Duration::from_millis(9_900), false, "Quadro P620", "NVK")
+            .is_none()
+    );
+    let line = startup_device_watch_line(Duration::from_secs(65), false, "Quadro P620", "NVK")
+        .expect("device line after the enumeration warning");
+    assert!(line.contains("Quadro P620"), "{line}");
+    assert!(line.contains("NVK"), "{line}");
+    assert!(
+        startup_device_watch_line(Duration::from_secs(65), true, "Quadro P620", "NVK").is_none()
+    );
+}
+
+#[test]
 fn integrated_scope_drops_discrete_quadro_and_keeps_intel() {
     let adapters = [
         candidate("Quadro P620", 0x10de, 0x1cb6, wgpu::DeviceType::DiscreteGpu),

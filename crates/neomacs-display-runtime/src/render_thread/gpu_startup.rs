@@ -209,6 +209,9 @@ pub(super) enum PendingGpu {
         reply: Reply<(wgpu::Device, wgpu::Queue)>,
         watch_started: EventTime,
         watch_warned: bool,
+        /// The device-phase line already named this adapter. Enumeration may
+        /// have spent the 10s warning before this becomes true.
+        device_named: bool,
     },
 }
 
@@ -349,6 +352,7 @@ impl PendingGpu {
                     reply,
                     watch_started,
                     watch_warned,
+                    device_named: false,
                 }))
             }
             Self::Device {
@@ -361,6 +365,7 @@ impl PendingGpu {
                 choice,
                 watch_started,
                 watch_warned,
+                mut device_named,
             } => {
                 let ready = match reply.try_recv() {
                     Ok(Ok(ready)) => ready,
@@ -375,11 +380,23 @@ impl PendingGpu {
                             choice,
                             watch_started,
                             watch_warned,
+                            device_named,
                             error,
                         );
                     }
                     Err(TryRecvError::Empty) => {
                         let info = adapter.get_info();
+                        if watch_warned {
+                            if let Some(line) = startup_device_watch_line(
+                                now.saturating_since(watch_started),
+                                device_named,
+                                &info.name,
+                                &info.driver,
+                            ) {
+                                tracing::warn!("{line}");
+                                device_named = true;
+                            }
+                        }
                         let step = drive_startup_watch(
                             watch_started,
                             watch_warned,
@@ -391,6 +408,9 @@ impl PendingGpu {
                             },
                         );
                         warn_if_startup_still_running(&step);
+                        if step.warning.is_some() {
+                            device_named = true;
+                        }
                         return Ok(GpuPoll::Pending(Self::Device {
                             window,
                             instance,
@@ -401,6 +421,7 @@ impl PendingGpu {
                             reply,
                             watch_started,
                             watch_warned: step.warned,
+                            device_named,
                         }));
                     }
                     Err(TryRecvError::Disconnected) => {
@@ -438,6 +459,7 @@ impl PendingGpu {
         mut choice: StartupAdapterChoice,
         watch_started: EventTime,
         watch_warned: bool,
+        device_named: bool,
         error: String,
     ) -> Result<GpuPoll, GpuStartupError> {
         let failed = AdapterIdentity::from_info(&adapter.get_info());
@@ -488,6 +510,7 @@ impl PendingGpu {
             reply,
             watch_started,
             watch_warned,
+            device_named,
         }))
     }
 
@@ -1062,19 +1085,33 @@ pub(super) fn startup_watch_warning(
     if already_warned || elapsed < Duration::from_secs(10) {
         return None;
     }
-    let workaround = "try WGPU_BACKEND=gl or NEOMACS_GPU=integrated";
     Some(match phase {
-        StartupWatchPhase::Enumeration => {
-            format!(
-                "GPU enumeration still running after {}s; {workaround}",
-                elapsed.as_secs()
-            )
-        }
+        StartupWatchPhase::Enumeration => format!(
+            "GPU enumeration still running after {}s; try WGPU_BACKEND=gl or VK_DRIVER_FILES. NEOMACS_GPU=integrated applies after enumeration",
+            elapsed.as_secs()
+        ),
         StartupWatchPhase::Device { name, driver } => format!(
-            "GPU startup still running after {}s on adapter {name} ({driver}); {workaround}",
+            "GPU startup still running after {}s on adapter {name} ({driver}); try WGPU_BACKEND=gl or NEOMACS_GPU=integrated",
             elapsed.as_secs()
         ),
     })
+}
+
+/// Device-phase line after enumeration already spent the 10s warning.
+/// `device_named` keeps the line from printing on every later poll.
+pub(super) fn startup_device_watch_line(
+    elapsed: Duration,
+    device_named: bool,
+    name: &str,
+    driver: &str,
+) -> Option<String> {
+    if device_named || elapsed < Duration::from_secs(10) {
+        return None;
+    }
+    Some(format!(
+        "GPU startup still running after {}s on adapter {name} ({driver}); try WGPU_BACKEND=gl or NEOMACS_GPU=integrated",
+        elapsed.as_secs()
+    ))
 }
 
 fn warn_if_startup_still_running(step: &StartupWatchStep) {
