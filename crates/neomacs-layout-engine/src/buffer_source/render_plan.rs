@@ -721,8 +721,9 @@ impl BufferSourceOutputSetup {
             Ok(freshness) => freshness,
             Err(changed) => return changed.into(),
         };
+        let window_id = self.begin_request.window_id();
         let mut emitter = output.begin_text_window_output(self.begin_request);
-        let (output, evaluator) = output.into_parts();
+        let (mut output, evaluator) = output.into_parts();
         let services = ChromeRowRenderServices::new(
             font_metrics,
             face_resolver.resolver(),
@@ -731,14 +732,21 @@ impl BufferSourceOutputSetup {
                 evaluator.owned_root_retainer(),
             ),
         );
-        match render_or_retain_window_chrome(
-            output,
+        let measured = render_or_retain_window_chrome(
+            output.reborrow(),
             &mut emitter,
             evaluator,
             request,
             services,
             WindowChromeRowSource::Recompute,
-        ) {
+        );
+        // This query needs chrome metrics, never a chrome-only presentation.
+        // Discard its scratch grid on success and source invalidation alike;
+        // closing it would publish rows without a finished window snapshot.
+        output
+            .builder()
+            .discard_unpublished_window_grid(window_id.0);
+        match measured {
             Ok((measured, chrome_lisp_admission)) => {
                 BufferSourceRenderAttemptOutcome::EmptyBodyChromeMeasured {
                     measured,
@@ -2262,3 +2270,7 @@ impl BufferSourceOutputSetup {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "render_plan/tests/empty_body_chrome_lifecycle_test.rs"]
+mod empty_body_chrome_lifecycle_tests;

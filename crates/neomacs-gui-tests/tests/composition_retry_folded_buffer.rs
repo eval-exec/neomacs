@@ -138,8 +138,10 @@ fn folded_cloud_variation_selector_redisplay_survives_against_gnu() {
             receipt.to_string_lossy(),
         )
         .with_env("FONTCONFIG_FILE", fontconfig.to_string_lossy())
-        .with_env("GDK_BACKEND", "x11")
         .with_env("GSETTINGS_BACKEND", "memory");
+        if backend == GuiBackend::LinuxX11 {
+            plan = plan.with_env("GDK_BACKEND", "x11");
+        }
         for key in [
             "HOME",
             "XDG_CONFIG_HOME",

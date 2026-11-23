@@ -2,6 +2,7 @@
 use super::*;
 
 #[test]
+#[tracing_test::traced_test]
 fn invisible_composition_retry_publishes_each_window_once() {
     let (mut eval, frame_id, _, selected) = incr_editing_frame("", 800, 480);
     realize_test_gui_frame(&mut eval, frame_id);
@@ -59,4 +60,8 @@ fn invisible_composition_retry_publishes_each_window_once() {
             );
         }
     }
+    assert!(
+        logs_contain("automatic composition coverage retry"),
+        "the folded span must exercise coverage retry before publishing"
+    );
 }

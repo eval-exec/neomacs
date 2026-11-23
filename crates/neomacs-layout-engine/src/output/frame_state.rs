@@ -133,9 +133,10 @@ impl OutputFrameBuildState {
         &mut self,
         checkpoint: OutputSourceFrameCheckpoint,
     ) {
-        // Horizon failure returns before install_body/tail/chrome publication.
-        // Do not extend this guard past that boundary: published window info or
-        // geometry must use the existing outer continuation instead.
+        // Both source-horizon and whole-leaf rejection precede window metadata
+        // publication. A leaf may already have closed its speculative row grid;
+        // its separate window checkpoint can discard that grid, but neither
+        // checkpoint can retract accepted window info or presented geometry.
         assert_eq!(
             self.window_infos.len(),
             checkpoint.window_infos_len,

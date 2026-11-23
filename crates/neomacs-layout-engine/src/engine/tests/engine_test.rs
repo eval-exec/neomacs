@@ -81,6 +81,9 @@ mod composition_advance_cache;
 #[path = "composition_retry_publication_test.rs"]
 mod composition_retry_publication;
 
+#[path = "leaf_cursor_checkpoint_test.rs"]
+mod leaf_cursor_checkpoint;
+
 #[path = "../../tests/engine_face_identity_test.rs"]
 mod face_identity;
 
