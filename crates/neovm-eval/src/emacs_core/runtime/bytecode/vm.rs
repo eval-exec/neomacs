@@ -983,9 +983,10 @@ impl InterpreterFrameCleanup {
     /// Both fields are the typed zero values `new(0, 0)` would compute: the
     /// checked conversions of literal zero always succeed, and the entry
     /// frame is a placeholder whose cleanup is never read (frame finish
-    /// returns immediately for `is_entry`). Using the constant keeps the
-    /// outlined, checked constructor for every variable caller frame while
-    /// removing its call from every driver entry.
+    /// returns immediately for `is_entry`). The underflow backstop must not
+    /// read them either: base 0 would drop every outer catch. Using the
+    /// constant keeps the outlined, checked constructor for every variable
+    /// caller frame while removing its call from every driver entry.
     const ENTRY: Self = Self {
         condition_stack_base: 0,
         specpdl_base: 0,
@@ -3241,15 +3242,21 @@ impl<'a> Vm<'a> {
 
     /// Drop this frame's handlers so an underflow backstop cannot resume
     /// inside the frame whose prefix was just padded with nil.
+    ///
+    /// Each [`Handler::Condition`] owns one condition frame. The count is
+    /// taken from the live stack, not from the frame cleanup word: the
+    /// driver's entry frame stores a placeholder base of 0, and truncating
+    /// to that base would drop every outer catch and condition-case.
     #[cold]
     #[inline(never)]
-    fn drop_underflowed_frame_handlers(
-        &mut self,
-        callers: &InterpreterCallerStack,
-        aux_stack: &mut InterpreterFrameAuxStack,
-    ) {
-        let base = callers.active().cleanup.condition_stack_base();
-        self.ctx.truncate_condition_stack(base);
+    fn drop_underflowed_frame_handlers(&mut self, aux_stack: &mut InterpreterFrameAuxStack) {
+        let owned = aux_stack.current_mut().handlers.len();
+        let len = self.ctx.condition_stack_len();
+        debug_assert!(
+            owned <= len,
+            "each Handler::Condition owns one condition frame"
+        );
+        self.ctx.truncate_condition_stack(len.saturating_sub(owned));
         aux_stack.current_mut().handlers.clear();
     }
 
@@ -4769,17 +4776,19 @@ impl<'a> Vm<'a> {
     /// iterations -- buffer edits, variable stores, calls -- so the frame's
     /// pre-transfer stack is stale and interpreting on from it would run those
     /// iterations again. OSR captures the operand stack, binding stack and pc
-    /// of this frame: both stacks are installed in place, and the driver
-    /// continues at the pc on the Rust stack it already uses. The suspended
-    /// interpreter frame retains final cleanup ownership. State it could
-    /// not adopt (unreachable with the current eligibility gate) finishes the
-    /// function in a resumed frame instead -- latched against another
-    /// transfer, on a guarded stack.
+    /// of this frame. The checked driver installs both stacks in place and
+    /// continues at the pc. The verified driver does not: it has no
+    /// frame-depth check, and a deopt stack is only known to be within
+    /// `max_stack`, so it finishes through [`Self::run_resumed_frame_latched`]
+    /// on the checked driver. The suspended interpreter frame retains final
+    /// cleanup ownership on the in-place path. State the checked driver
+    /// could not adopt finishes in a resumed frame instead -- latched
+    /// against another transfer, on a guarded stack.
     #[cfg(feature = "jit")]
     #[cold]
     #[inline(never)]
     #[doc(hidden)]
-    fn osr_transfer(
+    fn osr_transfer<const VERIFIED: bool>(
         &mut self,
         func: &ByteCodeFunction,
         frame_base: usize,
@@ -4846,7 +4855,11 @@ impl<'a> Vm<'a> {
             inlined,
             ..
         } = *resume;
-        if handlers == 0
+        // Verified dispatch trusts a proven depth. A precise deopt only
+        // proved `stack.len() <= max_stack`, the same trust resumed frames
+        // no longer get, so that monomorph finishes on the checked driver.
+        if !VERIFIED
+            && handlers == 0
             && spec_base == entry_spec_depth
             && cond_base == self.ctx.condition_stack_len()
             && stack.len() <= func.max_stack().get()
@@ -5472,7 +5485,9 @@ impl<'a> Vm<'a> {
                                 && func.jit_runtime().is_hot()
                             {
                                 publish_phase!();
-                                match self.osr_transfer(func, frame_base, target, aux_stack) {
+                                match self
+                                    .osr_transfer::<VERIFIED>(func, frame_base, target, aux_stack)
+                                {
                                     OsrOutcome::Interpret { pc, retry } => {
                                         // Not transferred, a plain deopt, or a precise
                                         // deopt installed in place: this frame's state
@@ -5546,7 +5561,7 @@ impl<'a> Vm<'a> {
                     // the compare keeps that monomorph from paying for it.
                     if !VERIFIED && cursor.len < frame_base {
                         self.pad_bytecode_frame_base(&mut cursor, frame_base);
-                        self.drop_underflowed_frame_handlers(callers, aux_stack);
+                        self.drop_underflowed_frame_handlers(aux_stack);
                         invalid_bytecode!("frame-base-rejoin");
                     }
                 }};
@@ -5562,7 +5577,7 @@ impl<'a> Vm<'a> {
             // arrive here below `frame_base`.
             if !VERIFIED && cursor.len < frame_base {
                 self.pad_bytecode_frame_base(&mut cursor, frame_base);
-                self.drop_underflowed_frame_handlers(callers, aux_stack);
+                self.drop_underflowed_frame_handlers(aux_stack);
                 let invalid_pc = pc_local.saturating_sub(1);
                 let stack_len = cursor.len;
                 publish_phase!();

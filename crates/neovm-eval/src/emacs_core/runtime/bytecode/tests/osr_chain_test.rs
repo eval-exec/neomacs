@@ -440,7 +440,7 @@ fn osr_hof_chain_in_place_resumes_the_current_callback_and_mapping_once() {
         .load(std::sync::atomic::Ordering::Relaxed);
     let mut vm = Vm::from_context(&mut ctx);
     let mut aux = InterpreterFrameAuxStack::new(HandlerStack::new(), BindStack::new());
-    let outcome = vm.osr_transfer(physical.get_bytecode_data().unwrap(), 0, 0, &mut aux);
+    let outcome = vm.osr_transfer::<false>(physical.get_bytecode_data().unwrap(), 0, 0, &mut aux);
     let OsrOutcome::Interpret { pc: next, .. } = outcome else {
         panic!("a callback overflow must hand the physical frame back in place");
     };
@@ -470,6 +470,58 @@ fn osr_hof_chain_in_place_resumes_the_current_callback_and_mapping_once() {
     assert_eq!(vm.cleanup_bytecode_frame(result, 0, 0, 0).unwrap(), mapped);
     assert!(vm.ctx.bc_buf.is_empty());
     assert!(vm.ctx.bc_frames.is_empty());
+    compile::force_inline2_for_test(None);
+    crate::emacs_core::jit::inline::force_inline_for_test(None);
+}
+
+/// A verified driver has no frame-depth check. The same precise deopt that
+/// the checked driver resumes in place must finish on the checked driver
+/// instead of continuing inside the verified monomorph.
+#[cfg(feature = "jit")]
+#[test]
+fn verified_osr_precise_deopt_finishes_on_the_checked_driver() {
+    use crate::emacs_core::jit::compile::{self, Inline2Mode};
+    let _mode =
+        crate::emacs_core::jit::bg::TestModeScope::enter(crate::emacs_core::jit::bg::BgMode::Sync);
+    crate::emacs_core::jit::inline::force_inline_for_test(Some(true));
+    compile::force_inline2_for_test(Some(Inline2Mode::Hof));
+    compile::force_deopt_for_test(false);
+    let mut ctx = context();
+    crate::emacs_core::jit::force_jit_off_for_test(false);
+    let inner = code(1, vec![Op::StackRef(0), Op::Add1, Op::Return], vec![]);
+    inner
+        .get_bytecode_data()
+        .unwrap()
+        .jit_runtime()
+        .set_hot_for_test();
+    let physical = code(
+        1,
+        vec![
+            Op::Constant(0),
+            Op::Constant(1),
+            Op::StackRef(2),
+            Op::Call(2),
+            Op::Return,
+        ],
+        vec![Value::symbol("mapcar"), inner],
+    );
+    let maximum = Value::fixnum(Value::MOST_POSITIVE_FIXNUM);
+    let sequence = Value::list_from_slice(&[maximum, Value::fixnum(5)]);
+    ctx.bc_buf.push(sequence);
+    park_physical(&mut ctx, physical, 0);
+    let mut vm = Vm::from_context(&mut ctx);
+    let mut aux = InterpreterFrameAuxStack::new(HandlerStack::new(), BindStack::new());
+    let outcome = vm.osr_transfer::<true>(physical.get_bytecode_data().unwrap(), 0, 0, &mut aux);
+    let mapped = match outcome {
+        OsrOutcome::Returned(mapped) => mapped,
+        OsrOutcome::Interpret { pc, .. } => {
+            panic!("verified precise deopt resumed in place at pc {pc}")
+        }
+        OsrOutcome::Exited => panic!("verified precise deopt exited instead of returning"),
+    };
+    assert!(mapped.cons_car().is_bignum());
+    assert_eq!(mapped.cons_cdr().cons_car(), Value::fixnum(6));
+    assert!(mapped.cons_cdr().cons_cdr().is_nil());
     compile::force_inline2_for_test(None);
     crate::emacs_core::jit::inline::force_inline_for_test(None);
 }

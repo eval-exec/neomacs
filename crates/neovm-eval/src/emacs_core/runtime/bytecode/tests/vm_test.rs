@@ -407,7 +407,7 @@ fn vm_unverified_cons_stack_set_does_not_write_caller_slots() {
         .get_bytecode_data()
         .expect("make-byte-code returns a bytecode object");
     assert!(
-        !bad_code.stack_verified(),
+        !bad_code.executes_verified_ops(),
         "cons at depth 0 must stay on the checked driver"
     );
 
@@ -487,6 +487,82 @@ fn vm_unverified_cons_stack_set_does_not_write_caller_slots() {
     };
     let value = result.expect("cons then stack-ref underflow is caught");
     assert_eq!(value.cons_cdr().cons_car(), Value::fixnum(4242));
+}
+
+/// The driver's entry frame stores a placeholder condition-stack base of 0.
+/// Firing the underflow backstop there must drop only this frame's handlers,
+/// not an outer condition-case that was already on the stack.
+#[test]
+fn entry_frame_underflow_backstop_keeps_outer_condition_case() {
+    crate::test_utils::init_test_tracing();
+    let mut func = ByteCodeFunction::new(LambdaParams {
+        required: vec![],
+        optional: vec![],
+        rest: None,
+    });
+    func.set_ops(vec![Op::Return]);
+    func.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(1));
+    func.set_lexical(false);
+    func.seal_hand_assembled_ops_for_test();
+
+    let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
+    eval.push_condition_frame(ConditionFrame::ConditionCase {
+        conditions: Value::symbol("arith-error"),
+        resume: ResumeTarget::InterpreterConditionCase {
+            handler_index: 0,
+            condition_stack_base: 0,
+        },
+    });
+    eval.push_condition_frame(ConditionFrame::ConditionCase {
+        conditions: Value::symbol("error"),
+        resume: ResumeTarget::InterpreterConditionCase {
+            handler_index: 1,
+            condition_stack_base: 1,
+        },
+    });
+
+    let result = {
+        let mut vm = new_vm(&mut eval);
+        vm.ctx.bc_buf.push(Value::fixnum(1));
+        vm.ctx.bc_buf.push(Value::fixnum(2));
+        let frame_base = vm.ctx.bc_buf.len();
+        vm.ctx.bc_buf.clear();
+        assert!(
+            vm.ctx.bc_buf.capacity() >= frame_base,
+            "the backstop pads only when the frame reservation is still held"
+        );
+        let mut pc = 0usize;
+        let mut handlers = HandlerStack::new();
+        handlers.push(Handler::Condition);
+        let mut binds = BindStack::new();
+        vm.run_loop(
+            &func,
+            frame_base,
+            &mut pc,
+            &mut handlers,
+            &mut binds,
+            false,
+            false,
+        )
+    };
+    let Err(flow) = result else {
+        panic!("entry-frame underflow must be invalid byte-code, got {result:?}");
+    };
+    let rendered = crate::emacs_core::format_eval_result(&Err(map_flow(flow)));
+    assert!(
+        rendered.contains("Invalid byte-code"),
+        "entry-frame underflow: {rendered}"
+    );
+    match eval.condition_stack_for_test().as_slice() {
+        [ConditionFrame::ConditionCase { conditions, .. }] => {
+            assert_eq!(
+                *conditions,
+                Value::symbol("arith-error"),
+                "the outer condition-case must survive the entry-frame backstop"
+            );
+        }
+        other => panic!("outer condition-case was dropped: {other:?}"),
+    }
 }
 
 /// A verified body resumed with fewer slots than the proof at `start_pc`
