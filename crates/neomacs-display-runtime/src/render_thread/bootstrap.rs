@@ -95,11 +95,7 @@ impl RenderApp {
 
         let instance_descriptor =
             crate::wgpu_instance_descriptor_with_display(event_loop.owned_display_handle());
-        tracing::info!(
-            "wgpu requested backends: {:?}",
-            instance_descriptor.backends
-        );
-        let instance = wgpu::Instance::new(instance_descriptor);
+        let (instance, adapters) = super::gpu_startup::open_startup_instance(instance_descriptor);
 
         let surface = match instance.create_surface(window.clone()) {
             Ok(s) => s,
@@ -108,8 +104,6 @@ impl RenderApp {
                 return;
             }
         };
-
-        let adapters = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()));
         let Some(adapter) = super::gpu_startup::select_adapter(
             adapters.clone(),
             &surface,

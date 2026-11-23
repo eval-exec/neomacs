@@ -308,6 +308,157 @@ fn windows_prefers_dx12_over_vulkan_for_the_same_intel_device() {
 }
 
 #[test]
+fn windows_default_startup_instance_is_dx12_only() {
+    let plan = instance_backend_plan(
+        StartupOs::Windows,
+        StartupBackendPolicy::Default,
+        wgpu::Backends::all(),
+    );
+    assert_eq!(plan[0].backends, wgpu::Backends::DX12);
+    assert!(
+        !plan[0].backends.contains(wgpu::Backends::GL),
+        "GL stays off the default Windows instance"
+    );
+    assert!(
+        !plan[0].backends.contains(wgpu::Backends::VULKAN),
+        "Vulkan stays off the default Windows instance"
+    );
+    assert!(!plan[0].fallback);
+    assert_eq!(
+        startup_display_slot(plan[0].backends),
+        StartupDisplaySlot::Omit
+    );
+}
+
+#[test]
+fn windows_startup_instance_honors_wgpu_backend() {
+    let vulkan = instance_backend_plan(
+        StartupOs::Windows,
+        StartupBackendPolicy::Explicit(wgpu::Backend::Vulkan),
+        wgpu::Backends::all(),
+    );
+    assert_eq!(
+        vulkan,
+        vec![InstanceBackendAttempt {
+            backends: wgpu::Backends::VULKAN,
+            fallback: false,
+        }]
+    );
+
+    let gl = instance_backend_plan(
+        StartupOs::Windows,
+        StartupBackendPolicy::Explicit(wgpu::Backend::Gl),
+        wgpu::Backends::all(),
+    );
+    assert_eq!(
+        gl,
+        vec![InstanceBackendAttempt {
+            backends: wgpu::Backends::GL,
+            fallback: false,
+        }]
+    );
+    assert_eq!(startup_display_slot(gl[0].backends), StartupDisplaySlot::Attach);
+
+    let limited = instance_backend_plan(
+        StartupOs::Windows,
+        StartupBackendPolicy::Limited(wgpu::Backends::DX12 | wgpu::Backends::VULKAN),
+        wgpu::Backends::all(),
+    );
+    assert_eq!(
+        limited,
+        vec![InstanceBackendAttempt {
+            backends: wgpu::Backends::DX12 | wgpu::Backends::VULKAN,
+            fallback: false,
+        }]
+    );
+}
+
+#[test]
+fn windows_startup_instance_falls_back_gl_then_vulkan() {
+    let plan = instance_backend_plan(
+        StartupOs::Windows,
+        StartupBackendPolicy::Default,
+        wgpu::Backends::all(),
+    );
+    assert_eq!(
+        plan,
+        vec![
+            InstanceBackendAttempt {
+                backends: wgpu::Backends::DX12,
+                fallback: false,
+            },
+            InstanceBackendAttempt {
+                backends: wgpu::Backends::GL,
+                fallback: true,
+            },
+            InstanceBackendAttempt {
+                backends: wgpu::Backends::VULKAN,
+                fallback: true,
+            },
+        ]
+    );
+    assert_eq!(
+        startup_display_slot(plan[1].backends),
+        StartupDisplaySlot::Attach
+    );
+    assert_eq!(
+        startup_display_slot(plan[2].backends),
+        StartupDisplaySlot::Omit
+    );
+
+    // Microsoft Basic Render is Cpu. It is not a usable adapter, so GL is next.
+    assert_eq!(
+        choose_startup_instance(&[
+            vec![wgpu::DeviceType::Cpu],
+            vec![wgpu::DeviceType::IntegratedGpu],
+            vec![wgpu::DeviceType::DiscreteGpu],
+        ]),
+        Some(1)
+    );
+    assert_eq!(
+        choose_startup_instance(&[
+            vec![],
+            vec![],
+            vec![wgpu::DeviceType::IntegratedGpu],
+        ]),
+        Some(2)
+    );
+    assert_eq!(
+        choose_startup_instance(&[
+            vec![wgpu::DeviceType::IntegratedGpu, wgpu::DeviceType::Cpu],
+            vec![wgpu::DeviceType::DiscreteGpu],
+        ]),
+        Some(0)
+    );
+    // No hardware anywhere: keep the first software adapter.
+    assert_eq!(
+        choose_startup_instance(&[
+            vec![wgpu::DeviceType::Cpu],
+            vec![],
+            vec![wgpu::DeviceType::Cpu],
+        ]),
+        Some(0)
+    );
+    assert_eq!(
+        choose_startup_instance(&[vec![], vec![], vec![]]),
+        None
+    );
+}
+
+#[test]
+fn other_os_startup_instance_keeps_descriptor_backends() {
+    let backends = wgpu::Backends::VULKAN | wgpu::Backends::GL;
+    let plan = instance_backend_plan(StartupOs::Other, StartupBackendPolicy::Default, backends);
+    assert_eq!(
+        plan,
+        vec![InstanceBackendAttempt {
+            backends,
+            fallback: false,
+        }]
+    );
+}
+
+#[test]
 fn explicit_vulkan_backend_keeps_vulkan_on_windows() {
     let adapters = [
         intel(

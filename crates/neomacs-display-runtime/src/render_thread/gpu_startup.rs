@@ -191,9 +191,7 @@ impl PendingGpu {
         proxy: EventLoopProxy,
     ) -> Result<Self, String> {
         let reply = spawn("gpu-adapters", proxy, move || {
-            let instance = wgpu::Instance::new(descriptor);
-            let adapters = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()));
-            Ok((instance, adapters))
+            Ok(open_startup_instance(descriptor))
         })?;
         Ok(Self::Adapters {
             window,
@@ -430,8 +428,11 @@ pub(super) fn select_adapter(
         (_, StartupBackendPolicy::Explicit(backend)) => {
             format!("WGPU_BACKEND={}", backend.to_str())
         }
-        (StartupOs::Windows, StartupBackendPolicy::Default | StartupBackendPolicy::Limited(_)) => {
-            "Windows default rank is DX12, then Vulkan, then GL".to_string()
+        (StartupOs::Windows, StartupBackendPolicy::Default) => {
+            "Windows default instance is DX12; GL then Vulkan are later instances".to_string()
+        }
+        (StartupOs::Windows, StartupBackendPolicy::Limited(_)) => {
+            "Windows rank inside WGPU_BACKEND is DX12, then Vulkan, then GL".to_string()
         }
         _ => "device-type rank".to_string(),
     };
@@ -674,6 +675,164 @@ fn host_startup_os() -> StartupOs {
     } else {
         StartupOs::Other
     }
+}
+
+/// One `Instance` to open, in order. A fallback runs only after the previous
+/// instance enumerated no hardware adapter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct InstanceBackendAttempt {
+    pub backends: wgpu::Backends,
+    pub fallback: bool,
+}
+
+/// GLES present needs the display handle. DX12 and Vulkan ignore it, so the
+/// owned handle stays available for a later GL instance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum StartupDisplaySlot {
+    Attach,
+    Omit,
+}
+
+/// Windows default opens DX12 only. GL, then Vulkan, are later instances.
+/// `WGPU_BACKEND` is that set alone. Other hosts keep `descriptor_backends`,
+/// which already includes `Backends::with_env`.
+pub(super) fn instance_backend_plan(
+    os: StartupOs,
+    policy: StartupBackendPolicy,
+    descriptor_backends: wgpu::Backends,
+) -> Vec<InstanceBackendAttempt> {
+    match (os, policy) {
+        (StartupOs::Windows, StartupBackendPolicy::Default) => vec![
+            InstanceBackendAttempt {
+                backends: wgpu::Backends::DX12,
+                fallback: false,
+            },
+            InstanceBackendAttempt {
+                backends: wgpu::Backends::GL,
+                fallback: true,
+            },
+            InstanceBackendAttempt {
+                backends: wgpu::Backends::VULKAN,
+                fallback: true,
+            },
+        ],
+        (StartupOs::Windows, StartupBackendPolicy::Explicit(backend)) => {
+            vec![InstanceBackendAttempt {
+                backends: wgpu::Backends::from(backend),
+                fallback: false,
+            }]
+        }
+        (StartupOs::Windows, StartupBackendPolicy::Limited(backends)) => {
+            vec![InstanceBackendAttempt {
+                backends,
+                fallback: false,
+            }]
+        }
+        (StartupOs::Other, _) => vec![InstanceBackendAttempt {
+            backends: descriptor_backends,
+            fallback: false,
+        }],
+    }
+}
+
+pub(super) fn startup_display_slot(backends: wgpu::Backends) -> StartupDisplaySlot {
+    if backends.contains(wgpu::Backends::GL) {
+        StartupDisplaySlot::Attach
+    } else {
+        StartupDisplaySlot::Omit
+    }
+}
+
+/// First attempt that enumerated something other than `DeviceType::Cpu`.
+/// CPU-only (Microsoft Basic Render) is not usable, so a later attempt can
+/// still win. When every attempt is empty or CPU-only, the first CPU-only
+/// attempt remains so the software last resort still runs.
+pub(super) fn choose_startup_instance(attempts: &[Vec<wgpu::DeviceType>]) -> Option<usize> {
+    if let Some(index) = attempts.iter().position(|types| {
+        types
+            .iter()
+            .any(|kind| *kind != wgpu::DeviceType::Cpu)
+    }) {
+        return Some(index);
+    }
+    attempts
+        .iter()
+        .position(|types| types.iter().any(|kind| *kind == wgpu::DeviceType::Cpu))
+}
+
+/// Open the startup instance plan. Enumerate only each attempt's backends.
+/// A single attempt keeps the display handle. A multi-attempt plan attaches
+/// it to the GL instance, because DX12 and Vulkan do not use it.
+pub(super) fn open_startup_instance(
+    descriptor: wgpu::InstanceDescriptor,
+) -> (wgpu::Instance, Vec<wgpu::Adapter>) {
+    let plan = instance_backend_plan(
+        host_startup_os(),
+        startup_backend_policy(),
+        descriptor.backends,
+    );
+    tracing::info!(
+        attempts = ?plan.iter().map(|attempt| attempt.backends).collect::<Vec<_>>(),
+        "startup instance backend plan"
+    );
+    let plan_len = plan.len();
+    let mut display = descriptor.display;
+    let mut opened = Vec::with_capacity(plan_len);
+    let mut device_types = Vec::with_capacity(plan_len);
+    for attempt in plan {
+        if attempt.fallback {
+            tracing::warn!(
+                backends = ?attempt.backends,
+                "no hardware adapter on the previous startup instance; opening a fallback instance"
+            );
+        }
+        let attach_display = plan_len == 1
+            || matches!(
+                startup_display_slot(attempt.backends),
+                StartupDisplaySlot::Attach
+            );
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: attempt.backends,
+            flags: descriptor.flags,
+            memory_budget_thresholds: descriptor.memory_budget_thresholds,
+            backend_options: descriptor.backend_options.clone(),
+            display: if attach_display { display.take() } else { None },
+        });
+        let adapters = pollster::block_on(instance.enumerate_adapters(attempt.backends));
+        let types = adapters
+            .iter()
+            .map(|adapter| adapter.get_info().device_type)
+            .collect::<Vec<_>>();
+        let hardware = types.iter().any(|kind| *kind != wgpu::DeviceType::Cpu);
+        if hardware {
+            tracing::info!(
+                backends = ?attempt.backends,
+                adapters = adapters.len(),
+                "startup instance has a hardware adapter"
+            );
+        } else if types.iter().any(|kind| *kind == wgpu::DeviceType::Cpu) {
+            tracing::info!(
+                backends = ?attempt.backends,
+                "startup instance enumerated only a software adapter"
+            );
+        }
+        device_types.push(types);
+        opened.push((instance, adapters));
+        if hardware {
+            break;
+        }
+    }
+    let Some(index) = choose_startup_instance(&device_types) else {
+        tracing::error!("no adapter enumerated on any startup instance");
+        return opened.pop().expect("instance backend plan opens one instance");
+    };
+    if device_types[index]
+        .iter()
+        .all(|kind| *kind == wgpu::DeviceType::Cpu)
+    {
+        tracing::warn!("no hardware adapter on any startup instance; keeping the software adapter");
+    }
+    opened.swap_remove(index)
 }
 
 fn adapter_rank(kind: wgpu::DeviceType, preference: wgpu::PowerPreference) -> u8 {
