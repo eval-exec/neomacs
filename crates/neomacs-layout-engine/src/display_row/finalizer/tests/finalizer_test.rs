@@ -202,3 +202,64 @@ fn remapped_cursor_includes_ltr_row_origin() {
     );
     assert_eq!(cursor.x, 34.0, "window 4 + row origin 10 + advance 20");
 }
+
+fn assert_narrow_face_extend_columns(
+    mode: DisplayRowMeasurementMode,
+    expected_pixels: f32,
+    expected_columns: u16,
+) {
+    use crate::display_item::{DisplayLineSpacingPolicy, DisplayRowBreak};
+    use crate::display_row::face_state::DisplayRowFace;
+    use crate::neovm_bridge::ResolvedFace;
+    use neomacs_display_protocol::face::{BoxRunMembership, BoxVerticalEdges};
+    use neomacs_display_protocol::glyph_matrix::Glyph;
+
+    let id = FaceId::new(17);
+    let mut resolved = ResolvedFace::default();
+    resolved.set_measured_char_width_px(7.0);
+    resolved.font_ascent = 12.0;
+    resolved.font_line_height = 16.0;
+    resolved.bg = 0xff0000;
+    resolved.extend = true;
+    let face = DisplayRowFace::from_resolved(id, &resolved);
+    let mut row = GlyphRow::new(GlyphRowRole::Text);
+    row.height_px = 16.0;
+    row.ascent_px = 12.0;
+    row.glyphs[GlyphArea::Text.index()].push(Glyph::char('x', id, 0).with_pixel_width(7.0));
+    DisplayRowLineEndFinalizer::new(
+        DisplayRowBreak {
+            line_height: DisplayLineHeightPolicy::Default,
+            line_spacing: DisplayLineSpacingPolicy::Inherit,
+        },
+        id,
+        160.0,
+        DisplayRowFallbackMetrics::from_default_face_extents(20.0, 16.0, 12.0),
+        Color::BLACK,
+        mode,
+        BoxVerticalEdges::Unboxed,
+        BoxRunMembership::Unboxed,
+    )
+    .finalize(&mut row, &[face]);
+    let fill = row.glyphs[GlyphArea::Text.index()]
+        .iter()
+        .find(|glyph| matches!(glyph.glyph_type, GlyphType::Stretch { .. }))
+        .expect("the newline's extending face fills the remaining row");
+    assert_eq!(fill.pixel_width, expected_pixels);
+    assert_eq!(
+        fill.glyph_type,
+        GlyphType::Stretch {
+            width_cols: expected_columns
+        }
+    );
+}
+
+#[test]
+fn newline_extend_fill_counts_concrete_columns_in_the_face_font() {
+    assert_narrow_face_extend_columns(DisplayRowMeasurementMode::ConcreteFont, 160.0, 23);
+}
+
+#[test]
+fn newline_extend_fill_keeps_logical_columns_on_the_frame_grid() {
+    // The terminal newline consumes one 20px cell before the remaining fill.
+    assert_narrow_face_extend_columns(DisplayRowMeasurementMode::LogicalCells, 140.0, 7);
+}

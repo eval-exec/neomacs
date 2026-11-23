@@ -196,8 +196,13 @@ impl DisplayRowLineEndFinalizer {
             ascent_px: ascent_px.max(0.0).min(height_px),
             fill_char_width: extend_face
                 .map(|face| {
-                    face.metrics
-                        .char_width_px(self.fallback_metrics.char_width())
+                    // GNU extends with the selected face (xdisp.c:24389–24412).
+                    // Keep its concrete font unit for column accounting too;
+                    // logical-cell rows still use the frame grid lower bound.
+                    face.metrics.char_width_for_mode(
+                        self.fallback_metrics.char_width(),
+                        self.measurement_mode,
+                    )
                 })
                 .unwrap_or_else(|| self.fallback_metrics.char_width()),
             indicator_char_width: self.fallback_metrics.char_width(),
