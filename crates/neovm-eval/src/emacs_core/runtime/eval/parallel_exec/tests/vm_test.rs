@@ -3995,6 +3995,118 @@ fn vm_unbind_of_nested_watched_bindings_hands_each_record_to_serial_innermost_fi
 }
 
 #[test]
+fn vm_a_plain_unbind_completion_that_also_pops_a_serial_token_faults_and_leaves_the_rest_bound() {
+    // The completion is checked against the request: a `PlainUnbind`
+    // hand-off pops no token (the entry already left; the serial side undoes
+    // the one binding on the slab). A completion that also pops the serial
+    // token below it used to pass, since it was still the top run, and the
+    // walk then counted the loss away and unbound past n. GNU `unbind_to`
+    // walks to the absolute index the opcode named (eval.c:3940-3954); here
+    // `Unbind 2` over [y, t1, x] names x and t1, and y must stay bound.
+    let mut ctx = context();
+    let x = plain_sym("pvm-watched-overpop-x");
+    let y = plain_sym("pvm-watched-overpop-y");
+    let (xs, ys) = (Value::from_sym_id(x), Value::from_sym_id(y));
+    let (one, two) = (Value::fixnum(1), Value::fixnum(2));
+    // Two symbols precede the values: Constant(2)=1, Constant(3)=2.
+    let ops = plain_program(vec![
+        Op::Constant(2),
+        Op::VarBind(0),
+        Op::SaveExcursion,
+        Op::Constant(3),
+        Op::VarBind(1),
+        Op::Unbind(2),
+        Op::Nil,
+    ]);
+    let log_shared = EffectLog::default();
+    let plain = HarnessPlain::new()
+        .admit(x)
+        .admit(y)
+        .watched(x)
+        .logging(log_shared.clone());
+    let mut engine = harness_with_plain(
+        RecordingEscape::logging_with_script(
+            vec![
+                Some(completion_pushing(&Op::SaveExcursion, token(1))),
+                // The hand-off's completion pops t1 as well: not its to pop.
+                Some(completion_popping(&Op::Unbind(2), &[token(1)])),
+            ],
+            log_shared.clone(),
+        ),
+        plain,
+    );
+    let outcome = engine.run(&mut ctx, program_with(&ops, &vec![ys, xs, one, two]));
+    assert!(
+        matches!(
+            fault_of(outcome),
+            EngineFault::EscapeRecordContract(RecordStack::Bindings)
+        ),
+        "a completion popping past its request is the record-contract fault"
+    );
+    // The harness mints every symbol one slot, so x's undo is Previous(1):
+    // the serial side's restore of x writes y's value back. y's own record
+    // is untouched.
+    assert_eq!(
+        log_shared.entries(),
+        vec![
+            "slot <- 1",
+            "escape SaveExcursion",
+            "slot <- 2",
+            "escape Unbind(2) [plain]",
+            "slot <- 1",
+        ],
+        "the serial side undid x (the hand-off); y was never restored"
+    );
+    let live = engine.plain_handler().live_records();
+    assert_eq!(live.len(), 1, "y's record alone is live");
+    assert_eq!(live[0].0, y);
+}
+
+#[test]
+fn vm_a_serial_unbind_completion_that_pops_past_its_named_run_faults() {
+    // `Unbind 1` over [t1, t2] names t2 alone. A completion that pops t2 and
+    // t1 is still the top run, so it used to pass `serial_run_matches`; the
+    // walk then had two records gone for one, and unbound past n. The
+    // completion must pop exactly the tokens the request named.
+    let mut ctx = context();
+    let ops = plain_program(vec![
+        Op::SaveExcursion,
+        Op::SaveExcursion,
+        Op::Unbind(1),
+        Op::Nil,
+    ]);
+    let log_shared = EffectLog::default();
+    let mut engine = harness_with_plain(
+        RecordingEscape::logging_with_script(
+            vec![
+                Some(completion_pushing(&Op::SaveExcursion, token(1))),
+                Some(completion_pushing(&Op::SaveExcursion, token(2))),
+                // Innermost first: pops t2 (named) and t1 (not named).
+                Some(completion_popping(&Op::Unbind(1), &[token(2), token(1)])),
+            ],
+            log_shared.clone(),
+        ),
+        HarnessPlain::new().logging(log_shared.clone()),
+    );
+    let outcome = engine.run(&mut ctx, program_with(&ops, &Vec::new()));
+    assert!(
+        matches!(
+            fault_of(outcome),
+            EngineFault::EscapeRecordContract(RecordStack::Bindings)
+        ),
+        "a completion popping past its named run is the record-contract fault"
+    );
+    assert_eq!(
+        log_shared.entries(),
+        vec![
+            "escape SaveExcursion",
+            "escape SaveExcursion",
+            "escape Unbind(1) [2]",
+        ]
+    );
+}
+
+#[test]
 fn vm_unbind_splits_into_minimal_serial_runs_in_order() {
     // R1b: each maximal run of consecutive serial records is one escape,
     // the runs in LIFO order, so an owner record between two serial records
@@ -4232,9 +4344,14 @@ fn vm_unbind_beyond_the_frame_records_signals_invalid_byte_code_and_unbinds_noth
 
 #[test]
 fn vm_an_unbind_escape_that_leaves_a_named_serial_record_faults_as_a_record_contract() {
-    // The completion of an unbind escape must have removed the run the
-    // request named. One that leaves a named record behind is a defect on
-    // one side of the escape: the record-contract fault, the scene kept.
+    // The completion of an unbind escape must pop exactly the run the
+    // request named. One that pops only part of it is a defect on one side
+    // of the escape: the record-contract fault, and - R1, both LIFOs are
+    // checked before either is touched - NOTHING applied. (The pop used to
+    // be applied first and the leftover faulted after; the scene then held
+    // the half-unwound LIFO.) GNU's `unbind_to` always reaches its index or
+    // longjmps out; a completion that stops short is the serial side's
+    // contract failure, reported before anything changes.
     let ops = plain_program(vec![
         Op::SaveExcursion,
         Op::SaveExcursion,
@@ -4253,7 +4370,7 @@ fn vm_an_unbind_escape_that_leaves_a_named_serial_record_faults_as_a_record_cont
         EngineFault::EscapeRecordContract(RecordStack::Bindings)
     ));
     assert!(!engine.is_idle());
-    assert_eq!(lifos(engine.arena()).0, vec![Some(1)]);
+    assert_eq!(lifos(engine.arena()).0, vec![Some(1), Some(2)]);
     assert_eq!(engine.frame_id().is_some(), true, "the frame stays");
     assert!(matches!(
         engine.run(&mut context(), program(&[Op::Nil, Op::Return])),

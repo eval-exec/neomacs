@@ -1235,11 +1235,20 @@ where
                             remaining -= 1;
                             // A record the unbind's code pushed is walked
                             // next, in addition to n: GNU walks to an
-                            // absolute specpdl index.
-                            let pushed = (self.arena.bindings().above(bind_base).count() as isize
-                                - len_before as isize)
-                                .max(0) as usize;
-                            remaining += pushed;
+                            // absolute specpdl index. Fewer records than the
+                            // escape found cannot happen once the completion
+                            // pops only what the request named; it is the
+                            // backstop.
+                            let pushed = self.arena.bindings().above(bind_base).count() as isize
+                                - len_before as isize;
+                            if pushed < 0 {
+                                tracing::error!(
+                                    op = ?op,
+                                    "a PlainUnbind escape left fewer records than it found"
+                                );
+                                return Self::record_contract_fault();
+                            }
+                            remaining += pushed as usize;
                         }
                         Err(_) => return Self::record_contract_fault(),
                     }
@@ -1302,11 +1311,17 @@ where
                         return Self::record_contract_fault();
                     }
                     remaining -= run;
-                    let pushed = (self.arena.bindings().above(bind_base).count() as isize
+                    let pushed = self.arena.bindings().above(bind_base).count() as isize
                         - len_before as isize
-                        + run as isize)
-                        .max(0) as usize;
-                    remaining += pushed;
+                        + run as isize;
+                    if pushed < 0 {
+                        tracing::error!(
+                            op = ?op,
+                            "an unbind escape left fewer records than it found"
+                        );
+                        return Self::record_contract_fault();
+                    }
+                    remaining += pushed as usize;
                 }
             }
         }
@@ -1346,6 +1361,9 @@ where
         if let Err(error) = self.poll.serial_request(&self.arena) {
             return Step::Stop(VmOutcome::Fault(EngineFault::Poll(error)));
         }
+        // The request's `why` names what the serial side may pop; the
+        // completion is checked against it below, before anything is applied.
+        let named = why.clone();
         let request = VmEscapeRequest {
             op: op.clone(),
             why,
@@ -1417,11 +1435,29 @@ where
                 available,
             }));
         }
-        // R1: both LIFOs are checked before either is touched.
+        // R1: both LIFOs are checked before either is touched, and the
+        // binding records the completion pops are exactly the ones the
+        // request named. "The top run" alone lets a completion pop past its
+        // request: the walk would then count the extra as pushed, or clamp
+        // the loss away, and unbind past n. GNU `unbind_to` walks to the
+        // absolute index the opcode named (eval.c:3940-3954).
+        let popped_as_named = match &named {
+            EscapeWhy::SerialUnbind { records } => completion.records.popped == *records,
+            EscapeWhy::PlainUnbind { .. } => completion.records.popped.is_empty(),
+            // A World escape names no token: `WorldSplit::Escape` is one
+            // variant for every World op, so its pop is checked as the top
+            // run only, as before. A handler-pop op legitimately pops the
+            // pair its push made; a `symbol-value` popping a token is the
+            // same hole as the Unbind arms had, and closes when `why` names
+            // the pair (V8's `SerialUnwind` is that naming). Named, not
+            // fixed here: N-world-escape-popped-as-named.
+            _ => true,
+        };
         let contract = if !self
             .arena
             .bindings()
             .serial_run_matches(&completion.records.popped)
+            || !popped_as_named
         {
             Some(RecordStack::Bindings)
         } else if !self
@@ -1437,7 +1473,8 @@ where
             tracing::error!(
                 op = ?op,
                 stack = ?stack,
-                "escape completion pops serial tokens that are not the top run"
+                named = ?named,
+                "escape completion pops serial tokens that are not the top run, or not the ones the request named"
             );
             return Step::Stop(VmOutcome::Fault(EngineFault::EscapeRecordContract(stack)));
         }
