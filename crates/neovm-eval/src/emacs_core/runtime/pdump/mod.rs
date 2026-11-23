@@ -640,13 +640,17 @@ fn load_from_mapped_image(
         .section(DumpSectionKind::SymbolTable)
         .ok_or_else(|| DumpError::ImageFormatError("missing symbol-table section".into()))?;
     symbol_table_image::load_symbol_table_section(symbol_table_payload)?;
+    // Take the writable heap base before any section borrow is held.
+    // `LoadedSpans` keeps the object-starts bytes, so a later `&mut`
+    // on the image cannot overlap that borrow. `as_mut_ptr` needs the
+    // mutable borrow; the view keeps only the raw pointer.
+    let mapped_heap = image
+        .section_mut_ptr(DumpSectionKind::HeapImage)
+        .map(|(ptr, len)| unsafe { mapped_heap::MappedHeapView::from_raw_parts(ptr, len, true) });
     let object_starts_payload = image
         .section(DumpSectionKind::ObjectStarts)
         .ok_or_else(|| DumpError::ImageFormatError("missing object-starts section".into()))?;
     let spans = object_starts::load_object_starts(object_starts_payload)?;
-    let mapped_heap = image
-        .section_mut_ptr(DumpSectionKind::HeapImage)
-        .map(|(ptr, len)| unsafe { mapped_heap::MappedHeapView::from_raw_parts(ptr, len, true) });
     let object_extra_payload = image
         .section(DumpSectionKind::ObjectExtra)
         .ok_or_else(|| DumpError::ImageFormatError("missing object-extra section".into()))?;
