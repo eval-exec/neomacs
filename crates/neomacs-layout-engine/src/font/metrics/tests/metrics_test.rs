@@ -4202,6 +4202,115 @@ fn glyph_vertical_metrics_match_canonical_font_selection_across_cache_changes() 
     }
 }
 
+/// Two faces of the pinned CJK collection. The family string is the fontset
+/// spec; the face index keeps the interned identities distinct.
+#[cfg(target_os = "linux")]
+struct MetricsFallbackBackend {
+    file: String,
+}
+
+#[cfg(target_os = "linux")]
+impl crate::font_backend::FontBackend for MetricsFallbackBackend {
+    fn kind(&self) -> FontBackendKind {
+        FontBackendKind::Fontconfig
+    }
+
+    fn list_families(&self) -> Vec<crate::font_backend::FontFamilyName> {
+        Vec::new()
+    }
+
+    fn resolve_family(&self, family: &str) -> String {
+        family.to_owned()
+    }
+
+    fn family_prefers_monospace(&self, _family: &str) -> bool {
+        false
+    }
+
+    fn list_candidates(
+        &self,
+        query: &crate::font_backend::FontCandidateQuery,
+    ) -> Vec<crate::font_backend::FontCandidate> {
+        let Some(ch) = query.required.single_char() else {
+            return Vec::new();
+        };
+        let Some(family) = query.scope.queried_family() else {
+            return Vec::new();
+        };
+        let face_index = match family {
+            "OnlyC2" if ch == 'リ' => 0,
+            "CoversBoth" if matches!(ch, '検' | 'リ') => 1,
+            _ => return Vec::new(),
+        };
+        vec![crate::font_backend::FontCandidate {
+            matched: platform_file_candidate(
+                ResolvedFontIdentity::from_file(&self.file, face_index, None),
+                crate::font_backend::PlatformFontMetadata {
+                    foundry: None,
+                    family: family.to_owned(),
+                    weight: Some(400),
+                    slant: FontSlant::Normal,
+                    width: Some(FontWidth::Normal),
+                    spacing: None,
+                    design_metrics: None,
+                    size: crate::font_backend::PlatformFontSize::Scalable,
+                },
+            ),
+        }]
+    }
+
+    fn advance_catalog_generation(&mut self) {}
+
+    fn poll_catalog_change(&mut self) -> crate::font::catalog::FontCatalogChange {
+        crate::font::catalog::FontCatalogChange::Unchanged
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn materialized_seen_character_follows_a_later_fallback_move() {
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    eval.eval_str(
+        r#"(progn
+            (set-fontset-font t nil "OnlyC2")
+            (set-fontset-font t nil "CoversBoth" nil 'append))"#,
+    )
+    .expect("fallback specs");
+    let mut svc = make_svc();
+    svc.font_resolver
+        .replace_backend(Box::new(MetricsFallbackBackend {
+            file: test_font_path(neomacs_test_fonts::noto_sans_cjk_variable().to_path_buf()),
+        }));
+    let selection = RealizedFaceFontSelection::new("DejaVu Sans", 400, false, 16.0);
+    let family = |svc: &mut FontMetricsService, ch| {
+        svc.resolved_font_for_realized_face_char(ch, selection)
+            .unwrap_or_else(|| panic!("materialized font for {ch}"))
+            .family
+    };
+    let cluster = |svc: &mut FontMetricsService, text: &str| {
+        svc.resolved_glyphs_for_realized_face_cluster(text, selection)
+            .unwrap_or_else(|| panic!("cluster {text}"))
+            .1
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| panic!("no font for {text}"))
+            .family
+    };
+    assert_eq!(family(&mut svc, 'リ'), "OnlyC2");
+    assert_eq!(cluster(&mut svc, "リ"), "OnlyC2");
+    assert_eq!(family(&mut svc, '検'), "CoversBoth");
+    assert_eq!(
+        family(&mut svc, 'リ'),
+        "CoversBoth",
+        "layout's character cache must follow the fallback that moved to the front"
+    );
+    assert_eq!(
+        cluster(&mut svc, "リ"),
+        "CoversBoth",
+        "the cluster cache must follow the same front"
+    );
+}
+
 #[test]
 fn ascii_worker_policy_keeps_unicode_font_caches_warm() {
     let source = crate::font::metrics::test_catalog::metrics_service();

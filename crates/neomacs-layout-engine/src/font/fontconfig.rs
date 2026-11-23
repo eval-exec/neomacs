@@ -65,9 +65,9 @@ struct FontconfigCaches {
     char_matches: HashMap<CharMatchCacheKey, CachedCharMatch>,
 }
 
-/// A character answer plus the fallback-order epoch it was computed under.
+/// A character answer. A fallback winner is valid only while it is the front.
 struct CachedCharMatch {
-    epoch: u64,
+    fallback_winner: Option<FontSpecEntry>,
     font: Option<FontMatch>,
 }
 
@@ -405,18 +405,20 @@ pub fn match_font_for_char(
         italic,
         fontset_generation: generation,
     };
-    let epoch = crate::font::fallback_order::fallback_epoch(&order_key);
     if let Some(cached) = fontconfig_caches()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .char_matches
         .get(&key)
-        && cached.epoch == epoch
+        && cached
+            .fallback_winner
+            .as_ref()
+            .is_none_or(|winner| crate::font::fallback_order::fallback_front_is(&order_key, winner))
     {
         return cached.font.clone();
     }
 
-    let matched = match_font_for_char_uncached(
+    let (matched, fallback_winner) = match_font_for_char_uncached(
         family,
         ch,
         prefer_monospace,
@@ -424,7 +426,6 @@ pub fn match_font_for_char(
         italic,
         &order_key,
     );
-    let epoch = crate::font::fallback_order::fallback_epoch(&order_key);
 
     fontconfig_caches()
         .lock()
@@ -433,7 +434,7 @@ pub fn match_font_for_char(
         .insert(
             key,
             CachedCharMatch {
-                epoch,
+                fallback_winner,
                 font: matched.clone(),
             },
         );
@@ -575,7 +576,7 @@ fn match_font_for_char_uncached(
     requested_weight: u16,
     italic: bool,
     order_key: &crate::font::fallback_order::FallbackOrderKey,
-) -> Option<FontMatch> {
+) -> (Option<FontMatch>, Option<FontSpecEntry>) {
     let (specific, fallback) = rendering_groups_for_char(ch);
     for entry in specific {
         if let Some(matched) = match_one_fontset_entry(
@@ -586,7 +587,7 @@ fn match_font_for_char_uncached(
             italic,
             &entry,
         ) {
-            return matched;
+            return (matched, None);
         }
     }
     let fallback = crate::font::fallback_order::order_fallback_group(order_key, fallback);
@@ -599,10 +600,11 @@ fn match_font_for_char_uncached(
             italic,
             entry,
         ) {
-            if matched.is_some() {
+            let winner = matched.as_ref().map(|_| entry.clone());
+            if winner.is_some() {
                 crate::font::fallback_order::promote_fallback(order_key, entry);
             }
-            return matched;
+            return (matched, winner);
         }
     }
 
@@ -632,7 +634,7 @@ fn match_font_for_char_uncached(
             matched
         );
     }
-    matched
+    (matched, None)
 }
 
 /// `None` continues the walk. `Some(None)` is an explicit nil spec, which

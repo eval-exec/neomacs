@@ -274,14 +274,18 @@ impl FontResolver {
     pub(super) fn resolve_worker_character(
         &self,
         mut key: CharCacheKey,
-    ) -> Option<PlatformFontMatch> {
-        let state = self.worker_policy.as_ref()?;
+    ) -> super::CharacterResolution {
+        let Some(state) = self.worker_policy.as_ref() else {
+            return super::CharacterResolution::none();
+        };
         key.fontset_generation = state.policies.generation.get();
         let Some(query) = state.policies.queries.get(&key) else {
             state.missing.store(true, Ordering::Relaxed);
-            return None;
+            return super::CharacterResolution::none();
         };
-        let style = WorkerFontStyle::from_key(&key)?;
+        let Some(style) = WorkerFontStyle::from_key(&key) else {
+            return super::CharacterResolution::none();
+        };
         let order_key = crate::font::fallback_order::FallbackOrderKey {
             family: key.family.clone(),
             weight: key.weight,
@@ -293,10 +297,15 @@ impl FontResolver {
         if let Some(cached) = self.cached_character(&key, &order_key) {
             return cached;
         }
-        let (selected, from_fallback) = self.resolve_frozen_query(&key, query, &style, &order_key);
-        let epoch = from_fallback.then(|| crate::font::fallback_order::fallback_epoch(&order_key));
-        self.store_character(key, epoch, selected.clone());
-        selected
+        let (selected, fallback_winner) =
+            self.resolve_frozen_query(&key, query, &style, &order_key);
+        let fallback = fallback_winner
+            .map(|winner| crate::font::fallback_order::FallbackAnswerStamp { order_key, winner });
+        self.store_character(key, fallback.clone(), selected.clone());
+        super::CharacterResolution {
+            font: selected,
+            fallback,
+        }
     }
 
     /// Specific group, then the shared fallback order. A failed open tries the
@@ -307,17 +316,17 @@ impl FontResolver {
         query: &FrozenCharacterQuery,
         style: &WorkerFontStyle,
         order_key: &crate::font::fallback_order::FallbackOrderKey,
-    ) -> (Option<PlatformFontMatch>, bool) {
+    ) -> (Option<PlatformFontMatch>, Option<FontSpecEntry>) {
         let prefer_monospace = self.family_prefers_monospace(&key.family);
         let (specific, fallback) = query.chain.rendering_groups();
         for (_, entry) in specific {
             match entry {
-                FontsetRenderingEntry::ExplicitNone => return (None, false),
+                FontsetRenderingEntry::ExplicitNone => return (None, None),
                 FontsetRenderingEntry::Font(spec) => {
                     if let Some(font) =
                         self.open_rendering_entry(key, query, style, &spec, prefer_monospace)
                     {
-                        return (Some(font), false);
+                        return (Some(font), None);
                     }
                 }
             }
@@ -325,13 +334,13 @@ impl FontResolver {
         let ordered = order_fallback_pairs(order_key, fallback);
         for (spec, entry) in ordered {
             match entry {
-                FontsetRenderingEntry::ExplicitNone => return (None, false),
+                FontsetRenderingEntry::ExplicitNone => return (None, None),
                 FontsetRenderingEntry::Font(rendering) => {
                     if let Some(font) =
                         self.open_rendering_entry(key, query, style, &rendering, prefer_monospace)
                     {
                         crate::font::fallback_order::promote_fallback(order_key, &spec);
-                        return (Some(font), true);
+                        return (Some(font), Some(spec));
                     }
                 }
             }
@@ -346,7 +355,7 @@ impl FontResolver {
             otf: None,
         };
         let font = self.open_rendering_entry(key, query, style, &fallback, prefer_monospace);
-        (font, false)
+        (font, None)
     }
 
     fn open_rendering_entry(

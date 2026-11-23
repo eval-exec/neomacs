@@ -1709,18 +1709,29 @@ impl FontBackend for FallbackGroupBackend {
             "SpecA" | "SpecB" => matches!(ch, 'ア' | 'イ'),
             "SpecC" => ch == 'ウ',
             "CoversSecondOnly" => ch == 'ピ',
-            // Listed for 検, then `finalize_match` refuses it. リ is covered
-            // by the spec that should be tried only after that refusal.
-            "FailsFinalize" => ch == '検',
-            "AfterFail" => matches!(ch, '検' | 'リ'),
+            // 検 is listed and then `finalize_match` refuses it. リ opens,
+            // so a later character can show whether the failed entry moved.
+            "FailsFinalize" => matches!(ch, '検' | 'リ'),
+            "AfterFail" => ch == '検',
             "Between" => ch == 'リ',
+            // Epoch collision: P and Q both cover リ, and only one of them
+            // covers the character that promotes it.
+            "EpochP" => matches!(ch, 'ピ' | 'リ'),
+            "EpochQ" => matches!(ch, 'リ' | '検'),
+            "EpochR" => ch == 'ウ',
             _ => false,
         };
-        if covers {
-            vec![candidate(family, 400, FontSlant::Normal, 0)]
-        } else {
-            Vec::new()
+        if !covers {
+            return Vec::new();
         }
+        // The failed spec opens for リ under a different family so the
+        // assertion can see that it stayed behind Between.
+        let opened = if family == "FailsFinalize" && ch == 'リ' {
+            "FailsThenOpens"
+        } else {
+            family
+        };
+        vec![candidate(opened, 400, FontSlant::Normal, 0)]
     }
 
     fn list_candidates_for_identity(
@@ -1896,20 +1907,57 @@ fn specific_group_keeps_charset_order_after_a_later_entry_matches() {
 fn failed_open_does_not_move_the_fallback_and_tries_the_next() {
     let _eval = hold_fontset(
         r#"(progn
-            (set-fontset-font t nil "FailsFinalize")
-            (set-fontset-font t nil "Between" nil 'append)
+            (set-fontset-font t nil "Between")
+            (set-fontset-font t nil "FailsFinalize" nil 'append)
             (set-fontset-font t nil "AfterFail" nil 'append))"#,
     );
     let resolver = FontResolver::new(Box::new(FallbackGroupBackend));
     assert_eq!(
         fallback_family(&resolver, '検', 400),
         "AfterFail",
-        "a failed open is skipped and does not end the fallback group"
+        "a failed open is skipped and the next entry is tried"
     );
     assert_eq!(
         fallback_family(&resolver, 'リ', 400),
+        "Between",
+        "the failed entry stays behind Between; only AfterFail moved to the front"
+    );
+}
+
+#[test]
+fn specific_group_tries_the_next_entry_after_a_failed_finalize() {
+    let _eval = hold_fontset(
+        r#"(progn
+            (set-fontset-font t ?検 "FailsFinalize")
+            (set-fontset-font t ?検 "AfterFail" nil 'append))"#,
+    );
+    let resolver = FontResolver::new(Box::new(FallbackGroupBackend));
+    assert_eq!(
+        fallback_family(&resolver, '検', 400),
         "AfterFail",
-        "only the opened font moves to the front, so リ does not land on Between"
+        "a failed open in the specific group continues to the next entry"
+    );
+}
+
+#[test]
+fn cached_fallback_misses_when_a_cleared_order_reuses_its_epoch() {
+    let _eval = hold_fontset(
+        r#"(progn
+            (set-fontset-font t nil "EpochP")
+            (set-fontset-font t nil "EpochQ" nil 'append)
+            (set-fontset-font t nil "EpochR" nil 'append))"#,
+    );
+    let resolver = FontResolver::new(Box::new(FallbackGroupBackend));
+    assert_eq!(fallback_family(&resolver, 'ウ', 400), "EpochR");
+    assert_eq!(fallback_family(&resolver, '検', 400), "EpochQ");
+    assert_eq!(fallback_family(&resolver, 'リ', 400), "EpochQ");
+    crate::font::fallback_order::clear_fallback_orders();
+    assert_eq!(fallback_family(&resolver, '検', 400), "EpochQ");
+    assert_eq!(fallback_family(&resolver, 'ピ', 400), "EpochP");
+    assert_eq!(
+        fallback_family(&resolver, 'リ', 400),
+        "EpochP",
+        "a new history that reaches the same epoch with a different front must not reuse the cached font"
     );
 }
 

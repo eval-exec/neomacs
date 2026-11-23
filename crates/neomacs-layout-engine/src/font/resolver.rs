@@ -891,8 +891,28 @@ impl FontResolver {
         requested_width: FontWidth,
         size: FontSelectionSize,
     ) -> Option<PlatformFontMatch> {
+        self.resolve_character(
+            family,
+            ch,
+            requested_weight,
+            requested_slant,
+            requested_width,
+            size,
+        )
+        .font
+    }
+
+    pub(crate) fn resolve_character(
+        &self,
+        family: &str,
+        ch: char,
+        requested_weight: u16,
+        requested_slant: FontSlant,
+        requested_width: FontWidth,
+        size: FontSelectionSize,
+    ) -> CharacterResolution {
         if ch.is_ascii() {
-            return None;
+            return CharacterResolution::none();
         }
         let key = CharCacheKey {
             family: family.to_string(),
@@ -929,7 +949,7 @@ impl FontResolver {
         let mut allow_generic_fallback = true;
         let (specific, fallback) = rendering_groups_for_char(ch);
         let mut selected = None;
-        let mut from_fallback = false;
+        let mut fallback_winner = None;
         for entry in specific {
             let keep_going = self.consider_fontset_entry(
                 &entry,
@@ -975,7 +995,7 @@ impl FontResolver {
                 {
                     crate::font::fallback_order::promote_fallback(&order_key, entry);
                     selected = Some(font);
-                    from_fallback = true;
+                    fallback_winner = Some(entry.clone());
                     break;
                 }
                 if !keep_going {
@@ -1009,9 +1029,13 @@ impl FontResolver {
                 generation,
             ));
         }
-        let epoch = from_fallback.then(|| crate::font::fallback_order::fallback_epoch(&order_key));
-        self.store_character(key, epoch, selected.clone());
-        selected
+        let fallback = fallback_winner
+            .map(|winner| crate::font::fallback_order::FallbackAnswerStamp { order_key, winner });
+        self.store_character(key, fallback.clone(), selected.clone());
+        CharacterResolution {
+            font: selected,
+            fallback,
+        }
     }
 
     /// Reuse an opened font for this face and font-def when it covers `ch`.
@@ -1616,37 +1640,59 @@ struct PrimaryCacheKey {
     size: FontSelectionSize,
 }
 
-/// A cached character answer. Fallback-group hits record the face's order
-/// epoch; any other answer stays valid when that order moves.
+/// A cached character answer. Fallback-group hits record the entry that was
+/// the front when the answer was stored. Any other answer stays valid when
+/// that order moves.
 struct CachedCharResolution {
-    epoch: Option<u64>,
+    fallback: Option<crate::font::fallback_order::FallbackAnswerStamp>,
     font: Option<PlatformFontMatch>,
 }
 
+pub(crate) struct CharacterResolution {
+    pub(crate) font: Option<PlatformFontMatch>,
+    pub(crate) fallback: Option<crate::font::fallback_order::FallbackAnswerStamp>,
+}
+
+impl CharacterResolution {
+    fn none() -> Self {
+        Self {
+            font: None,
+            fallback: None,
+        }
+    }
+}
+
 impl FontResolver {
+    /// `None` is a miss. `Some` is a hit, including a cached absence.
+    ///
+    /// The front check runs while `char_cache` is held and then takes
+    /// `FALLBACK_ORDERS`. Callers must not hold `FALLBACK_ORDERS` here.
     fn cached_character(
         &self,
         key: &CharCacheKey,
         order_key: &crate::font::fallback_order::FallbackOrderKey,
-    ) -> Option<Option<PlatformFontMatch>> {
+    ) -> Option<CharacterResolution> {
         let cache = self.char_cache.lock().ok()?;
         let cached = cache.get(key)?;
-        match cached.epoch {
-            Some(stored) if stored != crate::font::fallback_order::fallback_epoch(order_key) => {
-                None
-            }
-            _ => Some(cached.font.clone()),
+        if let Some(stamp) = &cached.fallback
+            && !crate::font::fallback_order::fallback_front_is(order_key, &stamp.winner)
+        {
+            return None;
         }
+        Some(CharacterResolution {
+            font: cached.font.clone(),
+            fallback: cached.fallback.clone(),
+        })
     }
 
     fn store_character(
         &self,
         key: CharCacheKey,
-        epoch: Option<u64>,
+        fallback: Option<crate::font::fallback_order::FallbackAnswerStamp>,
         font: Option<PlatformFontMatch>,
     ) {
         if let Ok(mut cache) = self.char_cache.lock() {
-            cache.insert(key, CachedCharResolution { epoch, font });
+            cache.insert(key, CachedCharResolution { fallback, font });
         }
     }
 }

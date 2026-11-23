@@ -479,6 +479,20 @@ struct ResolvedCharFont {
     /// Complete backend answer, when selection crossed the platform seam.
     /// Its identity is authoritative; `family` remains selector metadata.
     platform: Option<crate::font_backend::PlatformFontMatch>,
+    /// Set when this answer came from the fontset fallback group. It stays
+    /// valid only while that entry is still the group's front.
+    fallback: Option<crate::font::fallback_order::FallbackAnswerStamp>,
+}
+
+struct OrderStamped<T> {
+    value: T,
+    fallback: Option<crate::font::fallback_order::FallbackAnswerStamp>,
+}
+
+fn fallback_stamp_holds(stamp: &Option<crate::font::fallback_order::FallbackAnswerStamp>) -> bool {
+    stamp.as_ref().is_none_or(|stamp| {
+        crate::font::fallback_order::fallback_front_is(&stamp.order_key, &stamp.winner)
+    })
 }
 
 /// One exact, generation-local font selection shared by metadata, layout, and
@@ -891,14 +905,17 @@ pub struct FontMetricsService {
     /// Cache: (realized face/fontset selection, char) → the exact selected
     /// font. Same generation contract as the other caches: cleared by
     /// `clear_caches`.
-    resolved_char_font_cache: HashMap<(RealizedFaceFontCacheKey, char), Option<LayoutFontHandle>>,
+    resolved_char_font_cache:
+        HashMap<(RealizedFaceFontCacheKey, char), OrderStamped<Option<LayoutFontHandle>>>,
     /// Cache: (face attrs, char) → GNU `text_extents` (unshaped ink box,
     /// advance, ascent, descent).  Automatic composition fills its gstring
     /// with these before any rule runs; only combining marks and other rare
     /// characters are ever queried, so the map stays small.  Same generation
     /// contract as the other caches.
-    text_extents_cache:
-        HashMap<(char, MetricsCacheKey), Option<neomacs_font_materializer::GlyphTextMetrics>>,
+    text_extents_cache: HashMap<
+        (char, MetricsCacheKey),
+        OrderStamped<Option<neomacs_font_materializer::GlyphTextMetrics>>,
+    >,
     /// Cache: (face attrs, cluster text) → shaped glyphs with interned font
     /// identities. Same generation contract; clear-on-overflow like
     /// `shaped_run_cache`.
@@ -906,7 +923,7 @@ pub struct FontMetricsService {
     #[allow(clippy::type_complexity)]
     resolved_cluster_cache: HashMap<
         (RealizedFaceFontCacheKey, String),
-        Option<(Vec<ResolvedGlyph>, Vec<ResolvedFont>)>,
+        OrderStamped<Option<(Vec<ResolvedGlyph>, Vec<ResolvedFont>)>>,
     >,
     /// Cache: complete face selection request → the synthetic family to use when
     /// fontconfig's chosen file differs from cosmic-text's own pick
@@ -2260,6 +2277,10 @@ impl FontMetricsService {
                 selection.font_size,
             );
         };
+        // Keyed by the materialized font, not the face. A fallback move that
+        // selects a different font misses this cache. The face-keyed caches
+        // above (`resolved_char_font_cache`, `resolved_cluster_cache`,
+        // `text_extents_cache`) carry the fallback-front stamp instead.
         let key = MetricsCacheKey::new(
             &materialized.font.identity.stable_key,
             materialized.font.weight,
@@ -2919,12 +2940,17 @@ impl FontMetricsService {
         ch: char,
         selection: RealizedFaceFontSelection<'_>,
     ) -> Option<neomacs_font_materializer::GlyphTextMetrics> {
-        let key = (ch, self.realized_face_font_cache_key(selection));
-        if let Some(cached) = self.text_extents_cache.get(&key) {
-            return *cached;
+        let face_key = self.realized_face_font_cache_key(selection);
+        let key = (ch, face_key.clone());
+        if let Some(cached) = self.text_extents_cache.get(&key)
+            && fallback_stamp_holds(&cached.fallback)
+        {
+            return cached.value;
         }
         let value = self.compute_glyph_text_metrics(ch, selection);
-        self.text_extents_cache.insert(key, value);
+        let fallback = self.cached_char_fallback(&face_key, ch);
+        self.text_extents_cache
+            .insert(key, OrderStamped { value, fallback });
         value
     }
 
@@ -2978,12 +3004,19 @@ impl FontMetricsService {
         }
 
         let key = (self.realized_face_font_cache_key(selection), ch);
-        if let Some(cached) = self.resolved_char_font_cache.get(&key) {
-            return cached.clone();
+        if let Some(cached) = self.resolved_char_font_cache.get(&key)
+            && fallback_stamp_holds(&cached.fallback)
+        {
+            return cached.value.clone();
         }
-        let materialized = self.materialize_char_font(ch, selection);
-        self.resolved_char_font_cache
-            .insert(key, materialized.clone());
+        let (materialized, fallback) = self.materialize_char_font(ch, selection);
+        self.resolved_char_font_cache.insert(
+            key,
+            OrderStamped {
+                value: materialized.clone(),
+                fallback,
+            },
+        );
         materialized
     }
 
@@ -2991,8 +3024,24 @@ impl FontMetricsService {
         &mut self,
         ch: char,
         selection: RealizedFaceFontSelection<'_>,
-    ) -> Option<LayoutFontHandle> {
+    ) -> (
+        Option<LayoutFontHandle>,
+        Option<crate::font::fallback_order::FallbackAnswerStamp>,
+    ) {
         let resolved = self.font_request_for_char(ch, selection);
+        let fallback = resolved.fallback.clone();
+        (
+            self.materialize_requested_char_font(ch, selection, resolved),
+            fallback,
+        )
+    }
+
+    fn materialize_requested_char_font(
+        &mut self,
+        ch: char,
+        selection: RealizedFaceFontSelection<'_>,
+        resolved: ResolvedCharFont,
+    ) -> Option<LayoutFontHandle> {
         let spacing = resolved
             .platform
             .as_ref()
@@ -3192,19 +3241,37 @@ impl FontMetricsService {
         if text.is_empty() {
             return None;
         }
-        let key = (
-            self.realized_face_font_cache_key(selection),
-            text.to_string(),
-        );
-        if let Some(cached) = self.resolved_cluster_cache.get(&key) {
-            return cached.clone();
+        let face_key = self.realized_face_font_cache_key(selection);
+        let key = (face_key.clone(), text.to_string());
+        if let Some(cached) = self.resolved_cluster_cache.get(&key)
+            && fallback_stamp_holds(&cached.fallback)
+        {
+            return cached.value.clone();
         }
         let result = self.resolve_cluster_uncached(text, selection);
+        let fallback = crate::composition::representative_char_for_cluster(text)
+            .and_then(|ch| self.cached_char_fallback(&face_key, ch));
         if self.resolved_cluster_cache.len() >= self.shaped_run_cache_cap {
             self.resolved_cluster_cache.clear();
         }
-        self.resolved_cluster_cache.insert(key, result.clone());
+        self.resolved_cluster_cache.insert(
+            key,
+            OrderStamped {
+                value: result.clone(),
+                fallback,
+            },
+        );
         result
+    }
+
+    fn cached_char_fallback(
+        &self,
+        face_key: &RealizedFaceFontCacheKey,
+        ch: char,
+    ) -> Option<crate::font::fallback_order::FallbackAnswerStamp> {
+        self.resolved_char_font_cache
+            .get(&(face_key.clone(), ch))
+            .and_then(|cached| cached.fallback.clone())
     }
 
     fn resolve_cluster_uncached(
@@ -3306,7 +3373,8 @@ impl FontMetricsService {
             let materialized = if self.materialized_font_has_char(&primary, ch) {
                 primary.clone()
             } else {
-                let fallback = self.materialize_char_font(ch, selection)?;
+                let (fallback, _) = self.materialize_char_font(ch, selection);
+                let fallback = fallback?;
                 self.materialized_font_has_char(&fallback, ch)
                     .then_some(fallback)?
             };
@@ -3571,17 +3639,19 @@ impl FontMetricsService {
                 weight: resolved_weight,
                 slant: resolved_slant,
                 platform,
+                fallback: None,
             };
         }
 
-        if let Some(matched) = self.font_resolver.resolve_for_char(
+        let resolution = self.font_resolver.resolve_character(
             selection.family,
             ch,
             selection.weight,
             requested_slant,
             FontWidth::Normal,
             self.selection_size(selection.font_size),
-        ) {
+        );
+        if let Some(matched) = resolution.font {
             let resolved_family = self.resolve_family(matched.family(), matched.file_path());
             let resolved_weight = matched.weight().unwrap_or_else(|| {
                 crate::font::font_match::resolve_weight_in_family(
@@ -3598,6 +3668,7 @@ impl FontMetricsService {
                 family: resolved_family,
                 slant: resolved_slant,
                 platform,
+                fallback: resolution.fallback,
             };
         }
 
@@ -3606,6 +3677,7 @@ impl FontMetricsService {
             weight: selection.weight,
             slant: requested_slant,
             platform: None,
+            fallback: resolution.fallback,
         }
     }
 
