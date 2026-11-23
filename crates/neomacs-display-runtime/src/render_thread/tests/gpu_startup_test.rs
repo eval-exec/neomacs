@@ -533,6 +533,11 @@ fn any_scope_keeps_discrete_and_integrated() {
 fn startup_watch_arms_a_deadline_until_the_empty_poll_warns() {
     let started = Instant::now();
     let phase = StartupWatchPhase::Enumeration;
+    assert_eq!(
+        watch_deadline_for(started, false),
+        Some(started + Duration::from_secs(10))
+    );
+    assert!(watch_deadline_for(started, true).is_none());
     let early = drive_startup_watch(
         started,
         false,
@@ -542,7 +547,7 @@ fn startup_watch_arms_a_deadline_until_the_empty_poll_warns() {
     );
     assert!(early.warning.is_none());
     assert!(!early.warned);
-    assert_eq!(early.deadline, Some(started + Duration::from_secs(10)));
+    assert_eq!(early.deadline, watch_deadline_for(started, early.warned));
 
     let due = drive_startup_watch(
         started,

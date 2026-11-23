@@ -259,11 +259,7 @@ impl PendingGpu {
                 ..
             } => (*watch_started, *watch_warned),
         };
-        if warned {
-            None
-        } else {
-            Some(started + Duration::from_secs(10))
-        }
+        watch_deadline_for(started, warned)
     }
 
     pub(super) fn window(&self) -> &dyn Window {
@@ -1120,11 +1116,16 @@ pub(super) fn drive_startup_watch(
     StartupWatchStep {
         warned,
         warning,
-        deadline: if warned {
-            None
-        } else {
-            Some(started + Duration::from_secs(10))
-        },
+        deadline: watch_deadline_for(started, warned),
+    }
+}
+
+/// Instant `watch_deadline` waits until. One formula for the event loop and the row.
+pub(super) fn watch_deadline_for(started: Instant, warned: bool) -> Option<Instant> {
+    if warned {
+        None
+    } else {
+        Some(started + Duration::from_secs(10))
     }
 }
 
