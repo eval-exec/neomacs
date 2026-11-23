@@ -1667,6 +1667,19 @@ fn synchronous_window_end_fontification_message_reenters_geometry_preparation() 
     .expect("permit interactive echo geometry preparation");
     eval.eval_str("(redisplay t)")
         .expect("warm the real frontend presentation before installing the fontifier");
+    let mini_window = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .minibuffer_window
+        .expect("graphical frame has a minibuffer window");
+    let mini_height_before = eval
+        .frame_manager()
+        .get(frame_id)
+        .and_then(|frame| frame.find_window(mini_window))
+        .expect("committed minibuffer window")
+        .bounds()
+        .height;
 
     // Forward both real frontend callbacks. Positive counts distinguish this
     // path from an unavailable adapter or a message suppressed before sizing.
@@ -1732,6 +1745,17 @@ fn synchronous_window_end_fontification_message_reenters_geometry_preparation() 
         )
         .expect("capture message and outer query errors before fontification demotes them");
     let witness = print_value_with_eval(&eval, &witness);
+    let mini_height_after = eval
+        .frame_manager()
+        .get(frame_id)
+        .and_then(|frame| frame.find_window(mini_window))
+        .expect("minibuffer survives the query callback")
+        .bounds()
+        .height;
+    assert_eq!(
+        mini_height_after, mini_height_before,
+        "same-height message must retain committed mini geometry: {witness}"
+    );
     assert!(queries.get() > 0, "the real query must run: {witness}");
     assert!(
         eval.eval_str("(and qf-once (> qf-calls 0))")

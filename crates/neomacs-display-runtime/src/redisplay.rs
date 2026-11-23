@@ -351,6 +351,13 @@ impl RedisplayRuntime {
             // rebind inhibit-redisplay and call message. GNU accepts a
             // same-height message here; a Rust borrow conflict is not a Lisp
             // error and cannot authorize a second preparatory row walk.
+            // A taller message remains a known divergence: GNU grows the mini
+            // window synchronously, echo_area_display runs redisplay_internal,
+            // and dsafe__call throws to top-level so window-end never returns.
+            // This committed answer returns without growing. Follow-up
+            // N-mini-taller-message pairs a two-line message with
+            // resize-mini-windows=t, records mini height inside the callback,
+            // and distinguishes top-level exit from normal query completion.
             return Self::retain_committed_minibuffer_geometry();
         };
         engine.prepare_minibuffer_geometry(evaluator, request)

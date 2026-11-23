@@ -321,7 +321,6 @@ impl RedisplayHookOwnership {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RedisplayMiniPreparationFailure {
     DidNotConverge,
-    PresentationBorrowed,
 }
 
 impl Context {
@@ -375,9 +374,6 @@ impl Context {
         let message = match reason {
             RedisplayMiniPreparationFailure::DidNotConverge => {
                 "Minibuffer geometry preparation did not converge"
-            }
-            RedisplayMiniPreparationFailure::PresentationBorrowed => {
-                "Minibuffer geometry preparation is already active"
             }
         };
         neovm_value::error::signal("error", vec![Value::string(message)])
