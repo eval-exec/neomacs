@@ -792,13 +792,17 @@ fn e4p2_k2_join_after_worker_void_returns_and_last_error_holds_the_form() {
         r##"
 (progn
   (thread-last-error t)
-  (let ((th (make-thread (lambda () unbound-var-e4p2))))
-    (while (thread-live-p th) (thread-yield))
-    (list
-     (condition-case err
-         (progn (thread-join th) 'joined)
-       (error err))
-     (thread-last-error))))
+  (let ((th (make-thread (lambda () unbound-var-e4p2)))
+        (deadline (+ (float-time) 0.5)))
+    (while (and (thread-live-p th) (< (float-time) deadline))
+      (thread-yield))
+    (if (thread-live-p th)
+        'still-live
+      (list
+       (condition-case err
+           (progn (thread-join th) 'joined)
+         (error err))
+       (thread-last-error)))))
 "##,
         expect_test::expect![[r#""OK (joined (void-variable unbound-var-e4p2))""#]],
     );
@@ -849,12 +853,17 @@ fn e4p2_k2_thread_last_error_cleanup_returns_nil() {
         r##"
 (progn
   (thread-last-error t)
-  (let ((th (make-thread (lambda () unbound-var-e4p2-clear))))
-    (while (thread-live-p th) (thread-yield))
-    (thread-join th)
-    (list (thread-last-error)
-          (thread-last-error t)
-          (thread-last-error))))
+  (let ((th (make-thread (lambda () unbound-var-e4p2-clear)))
+        (deadline (+ (float-time) 0.5)))
+    (while (and (thread-live-p th) (< (float-time) deadline))
+      (thread-yield))
+    (if (thread-live-p th)
+        'still-live
+      (progn
+        (thread-join th)
+        (list (thread-last-error)
+              (thread-last-error t)
+              (thread-last-error))))))
 "##,
         expect_test::expect![[
             r#""OK ((void-variable unbound-var-e4p2-clear) (void-variable unbound-var-e4p2-clear) nil)""#
