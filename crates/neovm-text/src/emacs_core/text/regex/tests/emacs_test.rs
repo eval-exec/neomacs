@@ -332,3 +332,77 @@ fn gap_window_dispatch_handles_one_sided_and_seam_windows() {
         );
     }
 }
+
+/// Org's outline expression has an unbounded heading prefix. Parking an
+/// edit's gap inside the buffer must not turn every inline emphasis star
+/// into a matcher invocation: physical storage is not a search condition.
+#[test]
+fn split_gap_org_heading_search_keeps_candidate_work_bounded() {
+    let text = "ordinary * emphasis * and *inline* text\n".repeat(1024);
+    let pattern = regex_compile(r"^\*+ ", false, false).unwrap();
+    let syntax = DefaultSyntaxLookup;
+    let before = matcher_entry_count();
+    assert!(
+        re_search(
+            &pattern,
+            text.as_bytes(),
+            0,
+            text.len() as isize,
+            &syntax,
+            0
+        )
+        .is_none()
+    );
+    let contiguous = matcher_entry_count() - before;
+    let split = text.len() / 2;
+    let before = matcher_entry_count();
+    assert!(
+        re_search_segments(
+            &pattern,
+            &text.as_bytes()[..split],
+            &text.as_bytes()[split..],
+            0,
+            text.len() as isize,
+            &syntax,
+            0
+        )
+        .is_none()
+    );
+    let segmented = matcher_entry_count() - before;
+    assert!(
+        segmented <= contiguous * 2 + 2,
+        "a mid-buffer edit must preserve bounded candidate work: contiguous={contiguous}, split={segmented}"
+    );
+}
+
+/// The whole forward scan borrows the physical chunks once. A matcher-entry
+/// bound alone misses per-line setup when the first-byte fastmap rejects all
+/// body lines. Count the actual Haystack queries, independent of line count.
+#[test]
+fn split_gap_org_heading_scan_borrows_chunks_once() {
+    let pattern = regex_compile(r"^\*+ ", false, false).unwrap();
+    let syntax = DefaultSyntaxLookup;
+    for lines in [1024, 2048] {
+        let text = "ordinary * emphasis * and *inline* text in journal\n".repeat(lines);
+        for split in [0, text.len() / 2, text.len()] {
+            let before = chunk_query_count();
+            assert!(
+                re_search_segments(
+                    &pattern,
+                    &text.as_bytes()[..split],
+                    &text.as_bytes()[split..],
+                    0,
+                    text.len() as isize,
+                    &syntax,
+                    0,
+                )
+                .is_none()
+            );
+            let queries = chunk_query_count() - before;
+            assert!(
+                queries <= 1,
+                "one scan must borrow chunks once: lines={lines}, split={split}, queries={queries}"
+            );
+        }
+    }
+}

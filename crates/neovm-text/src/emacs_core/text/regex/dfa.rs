@@ -43,7 +43,7 @@
 //! | `NEOVM_REGEX_DFA_FIRST_STEP` | `on` (default), `off` | Reject cached prefixes of at most eight bytes inline; verify also checks the predicate against the matcher ([`first_step_enabled`]). |
 
 use super::{
-    CompiledPattern, LookupClassKey, MatchRegisters, MatchScratch, MatchSyntax, RegexOp,
+    CompiledPattern, Haystack, LookupClassKey, MatchRegisters, MatchScratch, MatchSyntax, RegexOp,
     SyntaxAssertion, SyntaxCacheKey, SyntaxLookup, evaluate_syntax_assertion, extract_number,
     extract_number_u16, fail_stack_overflow_free_span, match_anychar_at, match_categoryspec_at,
     match_charset_at, match_exactn_char_at, match_syntaxspec_at, match_syntaxspecset_at,
@@ -527,10 +527,10 @@ impl Nfa {
     /// the real position, so the closure is exactly the set of configurations
     /// the backtracker can reach from `items` at `at` without consuming.
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    pub(crate) fn closure(
+    pub(crate) fn closure<H: Haystack + ?Sized>(
         &self,
         items: &[KernelItem],
-        at: &Place<'_>,
+        at: &Place<'_, H>,
         scratch: &mut ClosureScratch,
         out: &mut Vec<u16>,
     ) -> bool {
@@ -596,8 +596,8 @@ enum Epsilon {
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// A text position the closure evaluates assertions at: the matcher's view
 /// (`text`, `d`, `stop`, point, representation, syntax).
-pub(crate) struct Place<'a> {
-    pub(crate) text: &'a [u8],
+pub(crate) struct Place<'a, H: Haystack + ?Sized = [u8]> {
+    pub(crate) text: &'a H,
     pub(crate) d: usize,
     pub(crate) stop: usize,
     pub(crate) point: usize,
@@ -605,15 +605,15 @@ pub(crate) struct Place<'a> {
     pub(crate) syntax: MatchSyntax<'a>,
 }
 
-impl Place<'_> {
+impl<H: Haystack + ?Sized> Place<'_, H> {
     /// The backtracker's test for `op` at this position (`re_match_loop`'s
     /// arms, verbatim).
     #[inline]
     fn assertion_holds(&self, op: RegexOp) -> bool {
         let (text, d) = (self.text, self.d);
         match op {
-            RegexOp::BegLine => d == 0 || (d > 0 && text[d - 1] == b'\n'),
-            RegexOp::EndLine => d >= text.len() || text[d] == b'\n',
+            RegexOp::BegLine => d == 0 || (d > 0 && text.byte(d - 1) == b'\n'),
+            RegexOp::EndLine => d >= text.len() || text.byte(d) == b'\n',
             RegexOp::BegBuf => d == 0,
             RegexOp::EndBuf => d == text.len(),
             RegexOp::AtDot => d == self.point,
@@ -904,11 +904,11 @@ impl SyntaxLookup for BaseTableView<'_> {
 impl Nfa {
     /// Whether `predicate` accepts the character at `d` (`len` bytes): the
     /// matcher's own per-character test.
-    fn predicate_accepts(
+    fn predicate_accepts<H: Haystack + ?Sized>(
         &self,
         predicate: Predicate,
         pattern: &CompiledPattern,
-        text: &[u8],
+        text: &H,
         d: usize,
         len: usize,
         syntax: &dyn SyntaxLookup,
@@ -962,10 +962,10 @@ impl Nfa {
     /// The class of the character at `d` of `text`, `len` bytes long, under
     /// `syntax` (the base table, or the real lookup at `d`).
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn class_key_at(
+    pub(crate) fn class_key_at<H: Haystack + ?Sized>(
         &self,
         pattern: &CompiledPattern,
-        text: &[u8],
+        text: &H,
         d: usize,
         character: emacs_char::EmacsChar,
         len: usize,
@@ -983,7 +983,7 @@ impl Nfa {
             accepts,
             facts: Facts::of_char(
                 character,
-                text[d],
+                text.byte(d),
                 pattern.target_multibyte,
                 syntax,
                 d,
@@ -1261,15 +1261,15 @@ impl CharClasses {
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// The class and byte length of the character at `d` (`d < text.len()`),
     /// from the maps or computed now.
-    pub(crate) fn class_at(
+    pub(crate) fn class_at<H: Haystack + ?Sized>(
         &mut self,
         nfa: &Nfa,
         pattern: &CompiledPattern,
-        text: &[u8],
+        text: &H,
         d: usize,
         base: &BaseTableView<'_>,
     ) -> Result<(u8, usize), TooManyClasses> {
-        let byte = text[d];
+        let byte = text.byte(d);
         let tabled = !pattern.target_multibyte || byte < 0x80;
         if tabled {
             let class = self.byte_class[byte as usize];
@@ -1304,11 +1304,11 @@ impl CharClasses {
     /// GNU symbol-current additionally reads the raw byte for unibyte input.
     /// Both facts key the memo, and a base-table class is reusable only when
     /// both answers agree with the base table.
-    pub(crate) fn class_at_position(
+    pub(crate) fn class_at_position<H: Haystack + ?Sized>(
         &mut self,
         nfa: &Nfa,
         pattern: &CompiledPattern,
-        text: &[u8],
+        text: &H,
         d: usize,
         base: &BaseTableView<'_>,
         syntax: &dyn SyntaxLookup,
@@ -1318,7 +1318,13 @@ impl CharClasses {
         let code = ch.code();
         let promoted = syntax.emacs_char_syntax_at(ch, d);
         let current_symbol = if self.mask.contains(Facts::CURRENT_WORD_OR_SYMBOL) {
-            SymbolMembership::of_current(text[d], pattern.target_multibyte, syntax, d, promoted)
+            SymbolMembership::of_current(
+                text.byte(d),
+                pattern.target_multibyte,
+                syntax,
+                d,
+                promoted,
+            )
         } else {
             SymbolMembership::Outside
         };
@@ -1335,7 +1341,13 @@ impl CharClasses {
         }
         let base_promoted = base.emacs_char_syntax(ch);
         let base_current = if self.mask.contains(Facts::CURRENT_WORD_OR_SYMBOL) {
-            SymbolMembership::of_current(text[d], pattern.target_multibyte, base, d, base_promoted)
+            SymbolMembership::of_current(
+                text.byte(d),
+                pattern.target_multibyte,
+                base,
+                d,
+                base_promoted,
+            )
         } else {
             SymbolMembership::Outside
         };
@@ -1352,14 +1364,14 @@ impl CharClasses {
     /// The facts of the tabled byte `text[at]` (a byte of unibyte text, or
     /// ASCII) where the base table applies: its class's facts, or memoized.
     #[inline]
-    fn byte_facts_at(
+    fn byte_facts_at<H: Haystack + ?Sized>(
         &mut self,
-        text: &[u8],
+        text: &H,
         at: usize,
         target_multibyte: bool,
         base: &BaseTableView<'_>,
     ) -> Facts {
-        let byte = text[at];
+        let byte = text.byte(at);
         let class = self.byte_class[byte as usize];
         if class != UNKNOWN_CLASS {
             return self.facts(class);
@@ -1376,9 +1388,9 @@ impl CharClasses {
     /// The facts of the character at `at` (the matcher's view of the
     /// character before a candidate), read through `syntax` at `at`.  A
     /// memoized class carries the same facts where the base table applies.
-    pub(crate) fn facts_at(
+    pub(crate) fn facts_at<H: Haystack + ?Sized>(
         &self,
-        text: &[u8],
+        text: &H,
         at: usize,
         target_multibyte: bool,
         syntax: &dyn SyntaxLookup,
@@ -1387,7 +1399,7 @@ impl CharClasses {
             re_text_char(text, at, target_multibyte).expect("the previous character exists");
         // These facts describe only the previous character of a candidate.
         let mask = Facts(self.mask.bits() & !Facts::CURRENT_WORD_OR_SYMBOL.bits());
-        Facts::of_char(character, text[at], target_multibyte, syntax, at, mask)
+        Facts::of_char(character, text.byte(at), target_multibyte, syntax, at, mask)
     }
 }
 
@@ -1823,7 +1835,13 @@ impl ExistenceDfa {
     /// class `class` at `at.d`: the closure at `at`, then every consuming
     /// position whose predicate accepts the class.  Cached unless `cache` is
     /// false or the pair decides it.
-    fn transition(&mut self, row: u32, class: u8, at: &Place<'_>, cache: bool) -> u32 {
+    fn transition<H: Haystack + ?Sized>(
+        &mut self,
+        row: u32,
+        class: u8,
+        at: &Place<'_, H>,
+        cache: bool,
+    ) -> u32 {
         let index = self.index_of(row) as usize;
         let prev = self.states[index].prev;
         let kernel = std::mem::take(&mut self.kernel);
@@ -1860,7 +1878,9 @@ impl ExistenceDfa {
                 // `!CHAR_HEAD_P`), so the facts carried here do not decide
                 // what a closure reads.  Mark the state, keeping every
                 // transition out of it out of the cache.
-                if self.prev_reads_syntax() && at.target_multibyte && (at.text[at.d] & 0xC0) == 0x80
+                if self.prev_reads_syntax()
+                    && at.target_multibyte
+                    && (at.text.byte(at.d) & 0xC0) == 0x80
                 {
                     facts = facts | Facts::NON_HEAD_PREV;
                 }
@@ -1884,12 +1904,17 @@ impl ExistenceDfa {
     /// The closure of the state at `row` at `at`, and the consuming step on
     /// the character there, never cached: a special position (point for a
     /// `\=` pattern).  Returns the next row, `MATCH` or `DEAD`.
-    fn special_transition(&mut self, row: u32, class: u8, at: &Place<'_>) -> u32 {
+    fn special_transition<H: Haystack + ?Sized>(
+        &mut self,
+        row: u32,
+        class: u8,
+        at: &Place<'_, H>,
+    ) -> u32 {
         self.transition(row, class, at, false)
     }
 
     /// Whether the state at `row`, at `at` (the match stop), accepts.
-    fn accepts_at(&mut self, row: u32, at: &Place<'_>) -> bool {
+    fn accepts_at<H: Haystack + ?Sized>(&mut self, row: u32, at: &Place<'_, H>) -> bool {
         let index = self.index_of(row) as usize;
         let mut positions = std::mem::take(&mut self.positions);
         positions.clear();
@@ -1920,17 +1945,17 @@ impl ExistenceDfa {
         syntax: &dyn SyntaxLookup,
     ) -> Exists {
         let syntax = MatchSyntax::for_pattern(pattern, syntax);
-        self.anchored_exists_inner::<true>(pattern, text, p, stop, point, &syntax)
+        self.anchored_exists_inner::<true, _>(pattern, text, p, stop, point, &syntax)
     }
 
     /// The candidate path after a caller's inline probe omits that probe
     /// here (`FIRST_STEP == false`); direct and verify calls retain it.
     #[inline]
     #[allow(clippy::too_many_arguments)]
-    fn anchored_exists_inner<const FIRST_STEP: bool>(
+    fn anchored_exists_inner<const FIRST_STEP: bool, H: Haystack + ?Sized>(
         &mut self,
         pattern: &CompiledPattern,
-        text: &[u8],
+        text: &H,
         p: usize,
         stop: usize,
         point: usize,
@@ -1975,10 +2000,10 @@ impl ExistenceDfa {
     #[inline]
     #[allow(clippy::too_many_arguments)]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    fn cached_prefix_rejection(
+    fn cached_prefix_rejection<H: Haystack + ?Sized>(
         &self,
         pattern: &CompiledPattern,
-        text: &[u8],
+        text: &H,
         p: usize,
         stop: usize,
         point: usize,
@@ -1989,7 +2014,7 @@ impl ExistenceDfa {
         if p >= text.len() {
             return None;
         }
-        let class = self.classes.byte_class[text[p] as usize];
+        let class = self.classes.byte_class[text.byte(p) as usize];
         if class == UNKNOWN_CLASS {
             return None;
         }
@@ -2003,13 +2028,13 @@ impl ExistenceDfa {
             Facts::EDGE.0
         } else if !reads_prev_syntax {
             // EDGE and newline facts do not depend on syntax or decoding.
-            if text[p - 1] == b'\n' {
+            if text.byte(p - 1) == b'\n' {
                 Facts::NEWLINE.0
             } else {
                 0
             }
         } else {
-            let byte = text[p - 1];
+            let byte = text.byte(p - 1);
             if pattern.target_multibyte && byte >= 0x80 {
                 return None;
             }
@@ -2056,7 +2081,7 @@ impl ExistenceDfa {
             let class = if d == p {
                 class
             } else {
-                self.classes.byte_class[text[d] as usize]
+                self.classes.byte_class[text.byte(d) as usize]
             };
             if class == UNKNOWN_CLASS {
                 return None;
@@ -2113,9 +2138,9 @@ impl ExistenceDfa {
     /// stretch the cached loop may run in from `p`: the previous character's
     /// facts come from its memoized class when the base table applies there.
     #[inline(always)]
-    fn start_at(
+    fn start_at<H: Haystack + ?Sized>(
         &mut self,
-        text: &[u8],
+        text: &H,
         p: usize,
         target_multibyte: bool,
         syntax: &dyn SyntaxLookup,
@@ -2132,7 +2157,7 @@ impl ExistenceDfa {
                 plain_end,
             );
         }
-        let byte = text[p - 1];
+        let byte = text.byte(p - 1);
         if byte < 0x80 || !target_multibyte {
             // A single-byte previous character at `p - 1`: one lookup says
             // both whether its memoized class applies and how far the
@@ -2170,9 +2195,9 @@ impl ExistenceDfa {
     /// position (the lookup the closures use).
     #[cold]
     #[inline(never)]
-    fn start_row_slow(
+    fn start_row_slow<H: Haystack + ?Sized>(
         &mut self,
-        text: &[u8],
+        text: &H,
         p: usize,
         target_multibyte: bool,
         syntax: &dyn SyntaxLookup,
@@ -2195,10 +2220,10 @@ impl ExistenceDfa {
     /// everything else resumes out of line.
     #[inline(always)]
     #[allow(clippy::too_many_arguments)]
-    fn run(
+    fn run<H: Haystack + ?Sized>(
         &mut self,
         pattern: &CompiledPattern,
-        text: &[u8],
+        text: &H,
         p: usize,
         stop: usize,
         point: usize,
@@ -2234,25 +2259,29 @@ impl ExistenceDfa {
         {
             let byte_class = &self.classes.byte_class;
             let trans = &self.trans[..];
-            let window = &text[..chunk];
-            while d < window.len() {
-                let class = byte_class[window[d] as usize];
-                if class == UNKNOWN_CLASS {
-                    next = UNKNOWN;
-                    break;
+            // A property boundary can put `chunk` before `d`: the cached
+            // loop must then leave the position to the slow path.
+            let (first, second) = text.chunks(d.min(chunk), chunk);
+            'chunks: for window in [first, second] {
+                for &byte in window {
+                    let class = byte_class[byte as usize];
+                    if class == UNKNOWN_CLASS {
+                        next = UNKNOWN;
+                        break 'chunks;
+                    }
+                    let at = row as usize + class as usize;
+                    debug_assert!(at < trans.len());
+                    // SAFETY: `row` is the row of a live state (every row is
+                    // `stride` entries of `trans`) and a class in the byte table
+                    // is below `classes.len() <= stride` (`fit_classes` runs after
+                    // every new class).
+                    next = unsafe { *trans.get_unchecked(at) };
+                    if next < stride {
+                        break 'chunks;
+                    }
+                    row = next;
+                    d += 1;
                 }
-                let at = row as usize + class as usize;
-                debug_assert!(at < trans.len());
-                // SAFETY: `row` is the row of a live state (every row is
-                // `stride` entries of `trans`) and a class in the byte table
-                // is below `classes.len() <= stride` (`fit_classes` runs after
-                // every new class).
-                next = unsafe { *trans.get_unchecked(at) };
-                if next < stride {
-                    break;
-                }
-                row = next;
-                d += 1;
             }
         }
         // A cached dead or accepting transition at `d` (a plain position
@@ -2277,10 +2306,10 @@ impl ExistenceDfa {
     /// classes and transitions, property runs, point, the stop, quit polls.
     #[inline(never)]
     #[allow(clippy::too_many_arguments)]
-    fn resume(
+    fn resume<H: Haystack + ?Sized>(
         &mut self,
         pattern: &CompiledPattern,
-        text: &[u8],
+        text: &H,
         p: usize,
         mut d: usize,
         mut row: u32,
@@ -2333,21 +2362,23 @@ impl ExistenceDfa {
                 let byte_class = &self.classes.byte_class;
                 let trans = &self.trans[..];
                 let stride = 1u32 << self.stride_shift;
-                let window = &text[..chunk];
-                while d < window.len() {
-                    let class = byte_class[window[d] as usize];
-                    if class == UNKNOWN_CLASS {
-                        break;
+                let (first, second) = text.chunks(d.min(chunk), chunk);
+                'chunks: for window in [first, second] {
+                    for &byte in window {
+                        let class = byte_class[byte as usize];
+                        if class == UNKNOWN_CLASS {
+                            break 'chunks;
+                        }
+                        let at = row as usize + class as usize;
+                        debug_assert!(at < trans.len());
+                        // SAFETY: as in `run`.
+                        let next = unsafe { *trans.get_unchecked(at) };
+                        if next < stride {
+                            break 'chunks;
+                        }
+                        row = next;
+                        d += 1;
                     }
-                    let at = row as usize + class as usize;
-                    debug_assert!(at < trans.len());
-                    // SAFETY: as in `run`.
-                    let next = unsafe { *trans.get_unchecked(at) };
-                    if next < stride {
-                        break;
-                    }
-                    row = next;
-                    d += 1;
                 }
             }
             polled += d - start;
@@ -3010,10 +3041,10 @@ impl Drop for DfaLease<'_> {
 /// The matcher alone at one candidate (`re_search`'s own call).
 #[inline]
 #[allow(clippy::too_many_arguments)]
-fn classic_candidate(
+fn classic_candidate<H: Haystack + ?Sized>(
     scratch: &mut MatchScratch,
     pattern: &CompiledPattern,
-    text: &[u8],
+    text: &H,
     pos: usize,
     stop: usize,
     syntax: &MatchSyntax<'_>,
@@ -3133,10 +3164,10 @@ impl<'p> DfaLease<'p> {
     /// the cache lookup reads no Lisp state and calls no syntax lookup.
     #[inline]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    pub(super) fn try_inline_first_step_skip(
+    pub(super) fn try_inline_first_step_skip<H: Haystack + ?Sized>(
         &mut self,
         pattern: &CompiledPattern,
-        text: &[u8],
+        text: &H,
         pos: usize,
         stop: usize,
         point: usize,
@@ -3180,7 +3211,7 @@ impl<'p> DfaLease<'p> {
         &mut self,
         scratch: &mut MatchScratch,
         pattern: &CompiledPattern,
-        text: &[u8],
+        text: &(impl Haystack + ?Sized),
         pos: usize,
         stop: usize,
         syntax: &MatchSyntax<'_>,
@@ -3192,7 +3223,7 @@ impl<'p> DfaLease<'p> {
         {
             let verdict = live
                 .dfa
-                .anchored_exists_inner::<FIRST_STEP>(pattern, text, pos, stop, point, syntax);
+                .anchored_exists_inner::<FIRST_STEP, _>(pattern, text, pos, stop, point, syntax);
             live.note(verdict);
             // A rejection within the fail-stack bound: the matcher would
             // fail here without a side effect.  (A DFA that gave up answers
@@ -3226,12 +3257,12 @@ impl<'p> DfaLease<'p> {
     /// runs (after retiring a DFA that gave up).
     #[inline(never)]
     #[allow(clippy::too_many_arguments)]
-    fn settle(
+    fn settle<H: Haystack + ?Sized>(
         &mut self,
         verdict: Exists,
         scratch: &mut MatchScratch,
         pattern: &CompiledPattern,
-        text: &[u8],
+        text: &H,
         pos: usize,
         stop: usize,
         syntax: &MatchSyntax<'_>,
@@ -3259,11 +3290,11 @@ impl<'p> DfaLease<'p> {
     /// Every candidate of a slot that is not live, and of verify mode.
     #[inline(never)]
     #[allow(clippy::too_many_arguments)]
-    fn candidate_slow(
+    fn candidate_slow<H: Haystack + ?Sized>(
         &mut self,
         scratch: &mut MatchScratch,
         pattern: &CompiledPattern,
-        text: &[u8],
+        text: &H,
         pos: usize,
         stop: usize,
         syntax: &MatchSyntax<'_>,
@@ -3289,7 +3320,7 @@ impl<'p> DfaLease<'p> {
         };
         let verdict = live
             .dfa
-            .anchored_exists_inner::<true>(pattern, text, pos, stop, point, syntax);
+            .anchored_exists_inner::<true, H>(pattern, text, pos, stop, point, syntax);
         live.note(verdict);
         if let Some(why) = live.dfa.gave_up() {
             self.retire(why);

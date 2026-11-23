@@ -392,10 +392,6 @@ pub struct CompiledPattern {
     /// searched a buffer.
     pub prefilter: std::cell::OnceCell<Option<LiteralPrefilter>>,
 
-    /// Conservative byte bound on one match, cached; `None` when no finite
-    /// bound is known (repetition, backreferences, repeat counters).
-    match_bound: std::cell::OnceCell<Option<usize>>,
-
     /// Immutable whole-literal codes for bounded folded searches (CL2 knob).
     short_literal: Option<short_literal::Literal>,
 
@@ -574,10 +570,6 @@ pub struct CompiledPattern {
     /// searched a buffer.
     pub prefilter: std::cell::OnceCell<Option<LiteralPrefilter>>,
 
-    /// Conservative byte bound on one match, cached; `None` when no finite
-    /// bound is known (repetition, backreferences, repeat counters).
-    match_bound: std::cell::OnceCell<Option<usize>>,
-
     /// Immutable whole-literal codes for bounded folded searches (CL2 knob).
     short_literal: Option<short_literal::Literal>,
 
@@ -616,18 +608,6 @@ impl CompiledPattern {
         self.prefilter
             .get_or_init(|| build_literal_prefilter(self))
             .as_ref()
-    }
-
-    /// Conservative bound, in BYTES, on the text one match attempt of this
-    /// pattern can consume; `None` when no finite bound is known.  Derived
-    /// once from the bytecode (the analysis counts characters, hence the
-    /// maximum-width factor) and used to decide which side of a gap a
-    /// candidate's whole match must lie on.
-    fn match_bound_bytes(&self) -> Option<usize> {
-        *self.match_bound.get_or_init(|| {
-            pattern_max_match_chars(self)
-                .and_then(|chars| chars.checked_mul(emacs_char::MAX_MULTIBYTE_LENGTH))
-        })
     }
 
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -695,6 +675,75 @@ pub(crate) struct LiteralPrefilter {
     /// text index `j` means a candidate match may start at `j - offset`.
     /// Currently always `0` (see `build_literal_prefilter`).
     offset: usize,
+}
+
+impl LiteralPrefilter {
+    /// Preserve the contiguous prefilter's candidate order across a storage
+    /// split. Any crossing needle starts at most `max_needle_len - 1`
+    /// bytes before it and ends at most that far after it.
+    fn find<H: Haystack + ?Sized>(&self, text: &H, start: usize, end: usize) -> Option<Span> {
+        let (first, second) = text.chunks(start, end);
+        let shift = |span: Span, base: usize| Span {
+            start: base + span.start,
+            end: base + span.end,
+        };
+        let left = self
+            .pf
+            .find(
+                first,
+                Span {
+                    start: 0,
+                    end: first.len(),
+                },
+            )
+            .map(|span| shift(span, start));
+        if second.is_empty() {
+            return left;
+        }
+        let overlap = self.pf.max_needle_len().saturating_sub(1);
+        // build_literal_prefilter caps every needle at 64 bytes.
+        debug_assert!(overlap < 64);
+        let split = start + first.len();
+        let before = first.len().min(overlap);
+        let after = second.len().min(overlap);
+        if left.is_some_and(|hit| hit.start < split - before) {
+            return left;
+        }
+        let mut seam = [0; 126];
+        seam[..before].copy_from_slice(&first[first.len() - before..]);
+        seam[before..before + after].copy_from_slice(&second[..after]);
+        let crossing = self
+            .pf
+            .find(
+                &seam[..before + after],
+                Span {
+                    start: 0,
+                    end: before + after,
+                },
+            )
+            .map(|span| shift(span, split - before));
+        let best = match (left, crossing) {
+            (Some(a), Some(b)) => Some(if a.start < b.start { a } else { b }),
+            (a, b) => a.or(b),
+        };
+        if best.is_some_and(|hit| hit.start < split) {
+            return best;
+        }
+        let right = self
+            .pf
+            .find(
+                second,
+                Span {
+                    start: 0,
+                    end: second.len(),
+                },
+            )
+            .map(|span| shift(span, split));
+        match (best, right) {
+            (Some(a), Some(b)) => Some(if a.start < b.start { a } else { b }),
+            (a, b) => a.or(b),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1094,7 +1143,6 @@ impl CompiledPattern {
             buffer_sealed: false,
             rewind: RewindView::Buffer,
             prefilter: std::cell::OnceCell::new(),
-            match_bound: std::cell::OnceCell::new(),
             short_literal: None,
             start_anchor: StartAnchor::None,
             dfa: dfa::DfaCell::default(),
@@ -1426,11 +1474,21 @@ thread_local! {
     /// Matcher entries made by `re_search`'s candidate scans, for tests that
     /// check how many candidates a scan leaves to the matcher.
     static MATCHER_ENTRY_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// Actual borrowed-chunk queries, including repeated queries within one
+    /// candidate scan. Unlike matcher entries, this catches repeated setup
+    /// when the fastmap rejects every line before entering the matcher.
+    static CHUNK_QUERY_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 #[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn matcher_entry_count() -> u64 {
     MATCHER_ENTRY_COUNT.with(|c| c.get())
+}
+
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn chunk_query_count() -> u64 {
+    CHUNK_QUERY_COUNT.with(|c| c.get())
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -2389,8 +2447,9 @@ pub(crate) fn regex_compile_lisp_with_translation(
     // The multi-literal SIMD prefilter (AUGMENTS the fastmap; the
     // backtracker still verifies every candidate) is built at the first
     // search that can use it (`CompiledPattern::literal_prefilter`). It
-    // depends only on the bytecode's required-literal structure, which is
-    // syntax-table independent, so it survives `recompute_fastmap` cloning.
+    // uses the bytecode's required literals and the pattern/target byte
+    // representations, fixed before cache publication. These are syntax-
+    // table independent, so it survives `recompute_fastmap` cloning.
 
     // The rewind view of any keep-string loops, then whether the
     // non-backtracking Pike VM can simulate this bytecode byte-exactly (see
@@ -5291,6 +5350,10 @@ pub(crate) trait Haystack {
     fn len(&self) -> usize;
     fn byte(&self, i: usize) -> u8;
     fn get(&self, i: usize) -> Option<u8>;
+    /// Borrow `[start, end)` as one or two contiguous slices. Their lengths
+    /// sum to `end - start`; concatenating them gives exactly that interval.
+    /// The split is physical storage only, never a matcher boundary.
+    fn chunks(&self, start: usize, end: usize) -> (&[u8], &[u8]);
     fn string_char(&self, pos: usize) -> (emacs_char::EmacsChar, usize);
     fn prev_char_start(&self, pos: usize, target_multibyte: bool) -> Option<usize>;
     /// A borrowed slice for `[start, start+len)`; a two-segment text copies
@@ -5320,6 +5383,12 @@ impl Haystack for [u8] {
     #[inline(always)]
     fn get(&self, i: usize) -> Option<u8> {
         <[u8]>::get(self, i).copied()
+    }
+    #[inline]
+    fn chunks(&self, start: usize, end: usize) -> (&[u8], &[u8]) {
+        #[cfg(any(test, feature = "test-support"))]
+        CHUNK_QUERY_COUNT.with(|c| c.set(c.get() + 1));
+        (&self[start..end], &[])
     }
     #[inline]
     fn string_char(&self, pos: usize) -> (emacs_char::EmacsChar, usize) {
@@ -5382,6 +5451,19 @@ impl Haystack for Segments<'_> {
     #[inline(always)]
     fn get(&self, i: usize) -> Option<u8> {
         (i < self.len()).then(|| self.byte(i))
+    }
+    #[inline]
+    fn chunks(&self, start: usize, end: usize) -> (&[u8], &[u8]) {
+        #[cfg(any(test, feature = "test-support"))]
+        CHUNK_QUERY_COUNT.with(|c| c.set(c.get() + 1));
+        let split = self.left.len();
+        if end <= split {
+            (&self.left[start..end], &[])
+        } else if start >= split {
+            (&self.right[start - split..end - split], &[])
+        } else {
+            (&self.left[start..], &self.right[..end - split])
+        }
     }
     #[inline]
     fn string_char(&self, pos: usize) -> (emacs_char::EmacsChar, usize) {
@@ -6291,10 +6373,10 @@ fn re_match_candidate(
 /// out of the return slot at EVERY candidate position, matched or not:
 /// ~22K per org-editing operation, ~30 Ir each.
 #[allow(clippy::too_many_arguments)]
-fn re_match_candidate_in(
+fn re_match_candidate_in<H: Haystack + ?Sized>(
     scratch: &mut MatchScratch,
     pattern: &CompiledPattern,
-    text: &[u8],
+    text: &H,
     pos: usize,
     stop: usize,
     syntax: &MatchSyntax<'_>,
@@ -6316,28 +6398,6 @@ fn re_match_candidate_in(
     result
 }
 
-/// One match attempt over the two halves of a gap buffer.
-///
-/// The Pike VM is single-segment; GNU's `re_match_2_internal` is the
-/// backtracker this port translated, and it reads both strings. Disable the
-/// Pike hand-off so a budgeted attempt never asks for a single-slice
-/// fallback, and let the backtracker decide the candidate across the halves.
-#[allow(clippy::too_many_arguments)]
-fn re_match_candidate_two(
-    scratch: &mut MatchScratch,
-    pattern: &CompiledPattern,
-    text: &Segments<'_>,
-    pos: usize,
-    stop: usize,
-    syntax: &MatchSyntax<'_>,
-    point: usize,
-    regs: &mut MatchRegisters,
-) -> Option<usize> {
-    re_match_internal(
-        scratch, pattern, text, pos, stop, syntax, point, false, regs,
-    )
-}
-
 /// The budgeted backtracker's hand-off: the Pike VM decides the candidate
 /// linearly and byte-exactly, but it cannot run out of fail stack, and GNU's
 /// backtracker can ("Stack overflow in regexp matcher", which search.c turns
@@ -6348,10 +6408,10 @@ fn re_match_candidate_two(
 #[cold]
 #[inline(never)]
 #[allow(clippy::too_many_arguments)]
-fn pike_fallback_into(
+fn pike_fallback_into<H: Haystack + ?Sized>(
     scratch: &mut MatchScratch,
     pattern: &CompiledPattern,
-    text: &[u8],
+    text: &H,
     pos: usize,
     stop: usize,
     syntax: &MatchSyntax<'_>,
@@ -6445,9 +6505,9 @@ pub(crate) fn fail_stack_overflow_free_span(push_sites: usize) -> usize {
 
 /// [`pike_match`] with [`re_match_candidate_in`]'s out-parameter protocol.
 #[cold]
-fn pike_match_into(
+fn pike_match_into<H: Haystack + ?Sized>(
     pattern: &CompiledPattern,
-    text: &[u8],
+    text: &H,
     pos: usize,
     stop: usize,
     syntax: &MatchSyntax<'_>,
@@ -7770,14 +7830,14 @@ struct PikeThread {
 /// continues at the fall-through and pushes the jump target as a failure
 /// point) — this is what preserves greedy / left-alternation priority.
 #[allow(clippy::too_many_arguments)]
-fn pike_add_thread(
+fn pike_add_thread<H: Haystack + ?Sized>(
     bytecode: &[u8],
     list: &mut Vec<PikeThread>,
     seen: &mut [u32],
     generation: u32,
     start_pc: usize,
     start_caps: PikeCaps,
-    text: &[u8],
+    text: &H,
     d: usize,
     stop: usize,
     point: usize,
@@ -7842,12 +7902,12 @@ fn pike_add_thread(
             }
 
             RegexOp::BegLine => {
-                if d == 0 || (d > 0 && text[d - 1] == b'\n') {
+                if d == 0 || (d > 0 && text.byte(d - 1) == b'\n') {
                     stack.push((pc + 1, caps));
                 }
             }
             RegexOp::EndLine => {
-                if d >= text.len() || text[d] == b'\n' {
+                if d >= text.len() || text.byte(d) == b'\n' {
                     stack.push((pc + 1, caps));
                 }
             }
@@ -7981,9 +8041,9 @@ pub(crate) fn pike_match(
     pike_match_outcome(pattern, text, pos, stop, syntax, point).found
 }
 
-fn pike_match_outcome(
+fn pike_match_outcome<H: Haystack + ?Sized>(
     pattern: &CompiledPattern,
-    text: &[u8],
+    text: &H,
     pos: usize,
     stop: usize,
     syntax: &MatchSyntax<'_>,
@@ -8005,10 +8065,10 @@ fn pike_match_outcome(
     })
 }
 
-fn pike_match_inner(
+fn pike_match_inner<H: Haystack + ?Sized>(
     scratch: &mut PikeScratch,
     pattern: &CompiledPattern,
-    text: &[u8],
+    text: &H,
     pos: usize,
     stop: usize,
     syntax: &MatchSyntax<'_>,
@@ -9824,8 +9884,26 @@ fn collect_prefix_literals(
                 if count == 0 || pc + 2 + count > bytecode.len() {
                     return None;
                 }
-                prefix.extend_from_slice(&bytecode[pc + 2..pc + 2 + count]);
-                if prefix.len() >= PREFILTER_MAX_LITERAL_LEN {
+                // The cap bounds the seam window used by the scanner. An
+                // Exactn run may hold 255 bytes, so cap the appended span,
+                // not just the decision to stop after appending the run.
+                let literal = &bytecode[pc + 2..pc + 2 + count];
+                // Exactn compares characters across representations: an
+                // unibyte FF is C1 BF in a multibyte target (and conversely).
+                // Only the ASCII prefix has identical bytes in both. Keep
+                // that acceleration and leave the first non-ASCII character
+                // to the matcher; every match still contains this prefix.
+                let compatible = if buf.multibyte != buf.target_multibyte {
+                    literal
+                        .iter()
+                        .position(|&byte| byte >= 0x80)
+                        .unwrap_or(count)
+                } else {
+                    count
+                };
+                let take = compatible.min(PREFILTER_MAX_LITERAL_LEN - prefix.len());
+                prefix.extend_from_slice(&literal[..take]);
+                if take < count || prefix.len() >= PREFILTER_MAX_LITERAL_LEN {
                     // Sound early cut: a shorter required prefix still holds.
                     return finalize_prefix(prefix, out);
                 }
@@ -10213,21 +10291,9 @@ pub(crate) fn start_anchor(bytecode: &[u8]) -> StartAnchor {
 
 /// Search for a match of the compiled pattern in text.
 ///
-/// Equivalent to GNU's `re_search_2()` operating on a single
-/// contiguous string. GNU also exposes the two-string variant
-/// `re_match_2(pattern, string1, size1, string2, size2, ...)` which
-/// walks the buffer text across the gap boundary
-/// (`BEG..GPT` and `GPT..ZV`) without copying — for a 100MB buffer
-/// that saves a 100MB allocation per search. Audit finding #17 in
-/// `drafts/regex-search-audit.md` flags this as missing in neomacs.
-///
-/// We currently allocate the full buffer text via
-/// `Buffer::buffer_substring_range(Buffer::accessible_emacs_byte_range())` at
-/// the call site in `regex/mod.rs::re_search_forward_with_posix` and friends, which is
-/// correctness-equivalent to GNU's `re_match_2_internal` running
-/// over a single string but is O(buffer-size) per search instead of
-/// O(match-length). Porting the gap-aware path is a separate
-/// optimization (audit Phase D Task 4.1, ~1 day).
+/// Equivalent to GNU's `re_search_2()` over one contiguous string. The
+/// shared search policy also reads gap-buffer halves through [`Haystack`],
+/// retaining the same candidate skips, DFA filter, captures and overflow.
 ///
 /// # Arguments
 /// * `pattern` - Compiled pattern
@@ -10244,6 +10310,17 @@ pub(crate) fn start_anchor(bytecode: &[u8]) -> StartAnchor {
 pub(crate) fn re_search(
     pattern: &CompiledPattern,
     text: &[u8],
+    start: usize,
+    range: isize,
+    syntax: &dyn SyntaxLookup,
+    point: usize,
+) -> Option<(usize, MatchRegisters)> {
+    re_search_haystack(pattern, text, start, range, syntax, point)
+}
+
+fn re_search_haystack<H: Haystack + ?Sized>(
+    pattern: &CompiledPattern,
+    text: &H,
     start: usize,
     range: isize,
     syntax: &dyn SyntaxLookup,
@@ -10434,33 +10511,42 @@ pub(crate) fn re_search(
                 // `begline`. The fastmap still pre-rejects a line whose first
                 // byte can't start a match; BOL positions are always char
                 // boundaries, so no continuation-byte check is needed.
-                loop {
-                    if pos > end {
-                        break 'scan None;
-                    }
-                    if pos == 0 || text[pos - 1] == b'\n' {
-                        let first_ok = !use_fastmap
-                            || pos >= text_len
-                            || match translate {
-                                Some(table) => {
-                                    pattern.fastmap[table.translate_byte(text[pos]) as usize]
-                                }
-                                None => pattern.fastmap[text[pos] as usize],
-                            };
-                        if first_ok && let Some(result) = try_candidate!(pos, end) {
+                if pos > end {
+                    break 'scan None;
+                }
+                let first_ok = |pos: usize| {
+                    !use_fastmap
+                        || pos >= text_len
+                        || match translate {
+                            Some(table) => {
+                                pattern.fastmap[table.translate_byte(text.byte(pos)) as usize]
+                            }
+                            None => pattern.fastmap[text.byte(pos) as usize],
+                        }
+                };
+                if (pos == 0 || text.byte(pos - 1) == b'\n')
+                    && first_ok(pos)
+                    && let Some(result) = try_candidate!(pos, end)
+                {
+                    break 'scan Some((pos, result.1));
+                }
+                // Borrow the scan's chunks once, rather than rebuilding the
+                // remaining two-slice view at every newline. The iterator
+                // retains its contiguous memchr state within each chunk.
+                // Scan only [start, end): newline at end - 1 still yields a
+                // candidate at end, including a possible zero-width EOF hit.
+                let (first, second) = text.chunks(start, end);
+                for (base, chunk) in [(start, first), (start + first.len(), second)] {
+                    for at in memchr::memchr_iter(b'\n', chunk) {
+                        let pos = base + at + 1;
+                        if first_ok(pos)
+                            && let Some(result) = try_candidate!(pos, end)
+                        {
                             break 'scan Some((pos, result.1));
                         }
                     }
-                    let search_from = pos.min(text_len);
-                    // Only newlines before `end` can yield a candidate at or
-                    // before the bound. Include `end - 1`: a zero-width match
-                    // may start at `end`. A short bounded failure must not scan
-                    // the remaining buffer when it contains no nearby newline.
-                    match memchr::memchr(b'\n', &text[search_from..end]) {
-                        Some(idx) => pos = search_from + idx + 1,
-                        None => break 'scan None,
-                    }
                 }
+                break 'scan None;
             }
             if use_fastmap {
                 // Whether this search is long enough to build a lazily derived
@@ -10514,13 +10600,7 @@ pub(crate) fn re_search(
                     // it is the MATCH that is bounded, not the literal.
                     let scan_end = end.saturating_add(1).min(text_len);
                     while next_lit <= scan_end {
-                        let Some(span) = pref.pf.find(
-                            text,
-                            Span {
-                                start: next_lit,
-                                end: scan_end,
-                            },
-                        ) else {
+                        let Some(span) = pref.find(text, next_lit, scan_end) else {
                             break;
                         };
                         let lit_at = span.start;
@@ -10541,7 +10621,7 @@ pub(crate) fn re_search(
                         // is never a real match — skip it.
                         if pattern.target_multibyte
                             && cand < text_len
-                            && (text[cand] & 0xC0) == 0x80
+                            && (text.byte(cand) & 0xC0) == 0x80
                         {
                             continue;
                         }
@@ -10576,19 +10656,10 @@ pub(crate) fn re_search(
                         let hi = if end < text_len { end + 1 } else { text_len };
                         while pos <= end {
                             if pos < text_len {
-                                let found = match bytes {
-                                    SparseAsciiFastmap::One(b0) => {
-                                        memchr::memchr(b0, &text[pos..hi])
-                                    }
-                                    SparseAsciiFastmap::Two(b0, b1) => {
-                                        memchr::memchr2(b0, b1, &text[pos..hi])
-                                    }
-                                    SparseAsciiFastmap::Three(b0, b1, b2) => {
-                                        memchr::memchr3(b0, b1, b2, &text[pos..hi])
-                                    }
-                                };
+                                let found =
+                                    next_candidate(text, AsciiScan::Sparse(bytes), false, pos, hi);
                                 match found {
-                                    Some(idx) => pos += idx,
+                                    Some(at) => pos = at,
                                     None => {
                                         // No candidate byte before `hi`; the only
                                         // remaining attempt position is text_len
@@ -10614,8 +10685,9 @@ pub(crate) fn re_search(
                         let hi = if end < text_len { end + 1 } else { text_len };
                         while pos <= end {
                             if pos < hi {
-                                match text[pos..hi].iter().position(|&b| accept[b as usize]) {
-                                    Some(idx) => pos += idx,
+                                match next_candidate(text, AsciiScan::Table(accept), false, pos, hi)
+                                {
+                                    Some(at) => pos = at,
                                     // Only the end of the text remains, when in range.
                                     None => pos = hi,
                                 }
@@ -10639,7 +10711,7 @@ pub(crate) fn re_search(
                                 break;
                             }
                             if pos < text_len {
-                                let byte = text[pos];
+                                let byte = text.byte(pos);
                                 if byte < 0x80 {
                                     if !pattern.fastmap_translated
                                         [ascii_translated_leading_code(table, byte)]
@@ -10677,7 +10749,7 @@ pub(crate) fn re_search(
                             // is what lets a fastmap built for a bitmap of lowercase
                             // characters still catch uppercase input (audit #9).
                             if pos < text_len {
-                                let idx = table.translate_byte(text[pos]) as usize;
+                                let idx = table.translate_byte(text.byte(pos)) as usize;
                                 if !pattern.fastmap[idx] {
                                     pos += 1;
                                     continue;
@@ -10695,12 +10767,12 @@ pub(crate) fn re_search(
                             }
                             if pattern.target_multibyte
                                 && pos < text_len
-                                && (text[pos] & 0xC0) == 0x80
+                                && (text.byte(pos) & 0xC0) == 0x80
                             {
                                 pos += 1;
                                 continue;
                             }
-                            if pos < text_len && !pattern.fastmap[text[pos] as usize] {
+                            if pos < text_len && !pattern.fastmap[text.byte(pos) as usize] {
                                 pos += 1;
                                 continue;
                             }
@@ -10716,7 +10788,8 @@ pub(crate) fn re_search(
                     if pos > text_len {
                         break;
                     }
-                    if pattern.target_multibyte && pos < text_len && (text[pos] & 0xC0) == 0x80 {
+                    if pattern.target_multibyte && pos < text_len && (text.byte(pos) & 0xC0) == 0x80
+                    {
                         pos += 1;
                         continue;
                     }
@@ -10759,26 +10832,14 @@ pub(crate) fn re_search(
                     }
                     // Invariant: `end <= upper < text_len`.
                     loop {
-                        let window = &text[end..=upper];
-                        let found = match scan {
-                            FoldedScan::Sparse(SparseAsciiFastmap::One(b0)) => {
-                                memchr::memrchr(*b0, window)
-                            }
-                            FoldedScan::Sparse(SparseAsciiFastmap::Two(b0, b1)) => {
-                                memchr::memrchr2(*b0, *b1, window)
-                            }
-                            FoldedScan::Sparse(SparseAsciiFastmap::Three(b0, b1, b2)) => {
-                                memchr::memrchr3(*b0, *b1, *b2, window)
-                            }
-                            FoldedScan::Table(accept) => {
-                                window.iter().rposition(|&b| accept[b as usize])
-                            }
+                        let scan = match scan {
+                            FoldedScan::Sparse(bytes) => AsciiScan::Sparse(*bytes),
+                            FoldedScan::Table(accept) => AsciiScan::Table(accept),
                             FoldedScan::PerChar => unreachable!("excluded by the pattern above"),
                         };
-                        let Some(idx) = found else {
+                        let Some(cand) = prev_candidate(text, scan, false, end, upper + 1) else {
                             break 'scan None;
                         };
-                        let cand = end + idx;
                         // Backward candidates end at `start` (see below).
                         if let Some(result) = try_candidate!(cand, start) {
                             break 'scan Some((cand, result.1));
@@ -10795,7 +10856,7 @@ pub(crate) fn re_search(
                         if pos < text_len {
                             // As forward: the leading code of the translated
                             // character (GNU `re_search_2`).
-                            let byte = text[pos];
+                            let byte = text.byte(pos);
                             let lead = if byte < 0x80 {
                                 ascii_translated_leading_code(table, byte)
                             } else if (byte & 0xC0) == 0x80 {
@@ -10815,14 +10876,16 @@ pub(crate) fn re_search(
                 } else if let Some(table) = translate {
                     for pos in (end..=start).rev() {
                         // Skip UTF-8 continuation bytes — only try at character boundaries.
-                        if pattern.target_multibyte && pos < text_len && (text[pos] & 0xC0) == 0x80
+                        if pattern.target_multibyte
+                            && pos < text_len
+                            && (text.byte(pos) & 0xC0) == 0x80
                         {
                             continue;
                         }
                         // GNU disables fastmap skipping for nullable patterns so zero-width
                         // matches like `\\(?:...\\)\\=` are still considered at every point.
                         if pos < text_len {
-                            let idx = table.translate_byte(text[pos]) as usize;
+                            let idx = table.translate_byte(text.byte(pos)) as usize;
                             if !pattern.fastmap[idx] {
                                 continue;
                             }
@@ -10839,11 +10902,13 @@ pub(crate) fn re_search(
                     }
                 } else {
                     for pos in (end..=start).rev() {
-                        if pattern.target_multibyte && pos < text_len && (text[pos] & 0xC0) == 0x80
+                        if pattern.target_multibyte
+                            && pos < text_len
+                            && (text.byte(pos) & 0xC0) == 0x80
                         {
                             continue;
                         }
-                        if pos < text_len && !pattern.fastmap[text[pos] as usize] {
+                        if pos < text_len && !pattern.fastmap[text.byte(pos) as usize] {
                             continue;
                         }
                         if let Some(result) = try_candidate!(pos, start) {
@@ -10854,7 +10919,8 @@ pub(crate) fn re_search(
             } else {
                 for pos in (end..=start).rev() {
                     // Skip UTF-8 continuation bytes — only try at character boundaries.
-                    if pattern.target_multibyte && pos < text_len && (text[pos] & 0xC0) == 0x80 {
+                    if pattern.target_multibyte && pos < text_len && (text.byte(pos) & 0xC0) == 0x80
+                    {
                         continue;
                     }
                     // GNU `search.c:1195-1201` calls `re_search_2` for backward
@@ -10928,382 +10994,39 @@ fn scan_backward(hay: &[u8], scan: AsciiScan<'_>, skip_continuation: bool) -> Op
     }
 }
 
-/// The first candidate in `[from, hi)`, scanning the two halves in place.
+/// The first accepted byte in the logical interval, scanning borrowed chunks.
 #[inline]
-fn segments_next_candidate(
-    text: &Segments<'_>,
+fn next_candidate<H: Haystack + ?Sized>(
+    text: &H,
     scan: AsciiScan<'_>,
     skip_continuation: bool,
     from: usize,
-    hi: usize,
+    end: usize,
 ) -> Option<usize> {
-    let hi = hi.min(text.len());
-    let left_len = text.left.len();
-    if from >= hi {
-        return None;
-    }
-    if from < left_len {
-        let end = hi.min(left_len);
-        if let Some(idx) = scan_forward(&text.left[from..end], scan, skip_continuation) {
-            return Some(from + idx);
-        }
-    }
-    let right_from = from.max(left_len);
-    if right_from < hi {
-        let hay = &text.right[right_from - left_len..hi - left_len];
-        if let Some(idx) = scan_forward(hay, scan, skip_continuation) {
-            return Some(right_from + idx);
-        }
-    }
-    None
+    let (first, second) = text.chunks(from, end);
+    scan_forward(first, scan, skip_continuation)
+        .map(|at| from + at)
+        .or_else(|| scan_forward(second, scan, skip_continuation).map(|at| from + first.len() + at))
 }
 
-/// The last candidate in `[low, from]`, scanning the two halves in place.
+/// The last accepted byte in the logical interval, in descending order.
 #[inline]
-fn segments_prev_candidate(
-    text: &Segments<'_>,
+fn prev_candidate<H: Haystack + ?Sized>(
+    text: &H,
     scan: AsciiScan<'_>,
     skip_continuation: bool,
-    low: usize,
     from: usize,
+    end: usize,
 ) -> Option<usize> {
-    let left_len = text.left.len();
-    let hi = from.min(text.len().saturating_sub(1));
-    if low > hi {
-        return None;
-    }
-    if hi >= left_len {
-        let right_low = low.max(left_len);
-        if right_low <= hi {
-            let hay = &text.right[right_low - left_len..=hi - left_len];
-            if let Some(idx) = scan_backward(hay, scan, skip_continuation) {
-                return Some(right_low + idx);
-            }
-        }
-    }
-    let left_hi = hi.min(left_len.saturating_sub(1));
-    if left_len > 0 && low <= left_hi {
-        let hay = &text.left[low..=left_hi];
-        if let Some(idx) = scan_backward(hay, scan, skip_continuation) {
-            return Some(low + idx);
-        }
-    }
-    None
+    let (first, second) = text.chunks(from, end);
+    scan_backward(second, scan, skip_continuation)
+        .map(|at| from + first.len() + at)
+        .or_else(|| scan_backward(first, scan, skip_continuation).map(|at| from + at))
 }
 
-/// Rewrite slice-local register positions as positions in the concatenated
-/// pair (the right half starts at `base`).
-fn shift_match_registers(regs: &mut MatchRegisters, base: usize) {
-    let base = base as i64;
-    for slot in regs.start.iter_mut().chain(regs.end.iter_mut()) {
-        if *slot >= 0 {
-            *slot += base;
-        }
-    }
-}
-
-/// Candidates this close to the gap on its right are decided by the seam
-/// matcher instead of a second accelerated search (setup dominates for a
-/// window this short).
-const SEAM_FOLD_BYTES: usize = 64;
-
-/// Forward counterpart of [`re_search_backward_windowed`]: decide a span by
-/// the accelerated single-slice searcher wherever a candidate's whole match
-/// must stay inside one half, and leave only a `bound`-byte seam around the
-/// gap to the two-segment matcher.
-///
-/// `bound` is a conservative maximum match length in BYTES
-/// ([`pattern_max_match_chars`] times the maximum character width); a
-/// candidate at `m` cannot reach the gap when `m + bound < gap`.  Searches
-/// whose window lies entirely in one half need no bound at all.
-///
-/// Outer `None` means no window split applies (a straddling search of a
-/// pattern with no finite length bound); the caller then scans the segments
-/// directly.
-#[allow(clippy::too_many_arguments)]
-fn re_search_forward_windowed(
-    pattern: &CompiledPattern,
-    left: &[u8],
-    right: &[u8],
-    start: usize,
-    end: usize,
-    bound: Option<usize>,
-    lookup: &dyn SyntaxLookup,
-    point: usize,
-) -> Option<Option<(usize, MatchRegisters)>> {
-    let text_len = left.len() + right.len();
-    if start > text_len || start > end {
-        return Some(None);
-    }
-    let gap = left.len();
-    if end < gap {
-        // The whole window is one contiguous half.
-        return Some(re_search(
-            pattern,
-            left,
-            start,
-            (end - start) as isize,
-            lookup,
-            point,
-        ));
-    }
-    if start > gap {
-        let p = if point > gap { point - gap } else { usize::MAX };
-        return Some(
-            re_search(
-                pattern,
-                right,
-                start - gap,
-                (end - start) as isize,
-                lookup,
-                p,
-            )
-            .map(|(pos, mut regs)| {
-                shift_match_registers(&mut regs, gap);
-                (pos + gap, regs)
-            }),
-        );
-    }
-    let bound = bound?;
-    // Candidates at or beyond `trusted_end` can reach the gap; only those
-    // strictly below it are decided by the left half alone.
-    let trusted_end = gap.saturating_sub(bound);
-    if start < gap {
-        // Stop the slice at the gap: the window cannot cross it.  A match
-        // found below `trusted_end` ends before the gap and is exact.
-        if let Some((pos, regs)) =
-            re_search(pattern, left, start, (gap - start) as isize, lookup, point)
-        {
-            if pos < trusted_end {
-                return Some(Some((pos, regs)));
-            }
-        } else if matcher_overflow_pending() {
-            return Some(None);
-        }
-    }
-    let segments = Segments { left, right };
-    let seam_lo = start.max(trusted_end);
-    // Fold a short right-hand remainder into the seam scan: one matcher entry
-    // per byte is cheaper than a second accelerated search's setup.
-    let seam_hi = end.min(gap.saturating_add(SEAM_FOLD_BYTES));
-    if seam_lo <= seam_hi {
-        let mut lease = MatchScratchLease::take();
-        let scratch: &mut MatchScratch = lease.get();
-        let match_syntax = MatchSyntax::for_pattern(pattern, lookup);
-        let mut regs = MatchRegisters::default();
-        for pos in seam_lo..=seam_hi {
-            if pattern.target_multibyte && pos < end {
-                let byte = if pos < gap {
-                    left[pos]
-                } else {
-                    right[pos - gap]
-                };
-                if (byte & 0xC0) == 0x80 {
-                    continue;
-                }
-            }
-            if re_match_candidate_two(
-                scratch,
-                pattern,
-                &segments,
-                pos,
-                end,
-                &match_syntax,
-                point,
-                &mut regs,
-            )
-            .is_some()
-            {
-                return Some(Some((pos, regs)));
-            }
-            if matcher_overflow_pending() {
-                return Some(None);
-            }
-        }
-    }
-    let right_start = start.max(seam_hi + 1);
-    if right_start <= end {
-        let p = if point > gap { point - gap } else { usize::MAX };
-        return Some(
-            re_search(
-                pattern,
-                right,
-                right_start - gap,
-                (end - right_start) as isize,
-                lookup,
-                p,
-            )
-            .map(|(pos, mut regs)| {
-                shift_match_registers(&mut regs, gap);
-                (pos + gap, regs)
-            }),
-        );
-    }
-    Some(None)
-}
-
-/// Backward counterpart of [`re_search_forward_windowed`].  Backward matches
-/// end at the original point, so the seam is bounded on the left of the gap:
-/// candidates starting at or below `gap - bound - 1` end strictly before the
-/// slice boundary used by the left-half scan.
-#[allow(clippy::too_many_arguments)]
-fn re_search_backward_windowed(
-    pattern: &CompiledPattern,
-    left: &[u8],
-    right: &[u8],
-    start: usize,
-    end: usize,
-    bound: Option<usize>,
-    lookup: &dyn SyntaxLookup,
-    point: usize,
-) -> Option<Option<(usize, MatchRegisters)>> {
-    let text_len = left.len() + right.len();
-    if start > text_len {
-        return Some(None);
-    }
-    let gap = left.len();
-    if start < gap {
-        return Some(re_search(
-            pattern,
-            left,
-            start,
-            -((start - end) as isize),
-            lookup,
-            point,
-        ));
-    }
-    if end > gap {
-        let p = if point > gap { point - gap } else { usize::MAX };
-        return Some(
-            re_search(
-                pattern,
-                right,
-                start - gap,
-                -((start - end) as isize),
-                lookup,
-                p,
-            )
-            .map(|(pos, mut regs)| {
-                shift_match_registers(&mut regs, gap);
-                (pos + gap, regs)
-            }),
-        );
-    }
-    let bound = bound?;
-    // Right of the gap first (descending candidates), then the seam, then the
-    // trusted left region.
-    let right_lo = end.max(gap + 1);
-    if right_lo <= start {
-        let p = if point > gap { point - gap } else { usize::MAX };
-        match re_search(
-            pattern,
-            right,
-            start - gap,
-            -((start - right_lo) as isize),
-            lookup,
-            p,
-        ) {
-            Some((pos, mut regs)) => {
-                shift_match_registers(&mut regs, gap);
-                return Some(Some((pos + gap, regs)));
-            }
-            None if matcher_overflow_pending() => return Some(None),
-            None => {}
-        }
-    }
-    let segments = Segments { left, right };
-    // Strict margin: the left scan's stop is the gap boundary minus one, so a
-    // match ending at that stop must not be trusted (an end-of-line assertion
-    // there would see the slice end instead of the following byte).
-    let trust = gap.saturating_sub(bound + 1);
-    let seam_hi = start.min(gap);
-    let seam_lo = end.max(trust);
-    if seam_lo <= seam_hi {
-        let mut lease = MatchScratchLease::take();
-        let scratch: &mut MatchScratch = lease.get();
-        let match_syntax = MatchSyntax::for_pattern(pattern, lookup);
-        let mut regs = MatchRegisters::default();
-        for pos in (seam_lo..=seam_hi).rev() {
-            if pattern.target_multibyte && pos < gap && (left[pos] & 0xC0) == 0x80 {
-                continue;
-            }
-            if re_match_candidate_two(
-                scratch,
-                pattern,
-                &segments,
-                pos,
-                start,
-                &match_syntax,
-                point,
-                &mut regs,
-            )
-            .is_some()
-            {
-                return Some(Some((pos, regs)));
-            }
-            if matcher_overflow_pending() {
-                return Some(None);
-            }
-        }
-    }
-    if trust > end && gap > 0 {
-        let scan_start = gap - 1;
-        match re_search(
-            pattern,
-            left,
-            scan_start,
-            -((scan_start - end) as isize),
-            lookup,
-            usize::MAX,
-        ) {
-            Some((pos, regs)) if pos < trust => Some(Some((pos, regs))),
-            Some((_pos, _regs)) => {
-                // A truncation artifact at the slice boundary: the seam above
-                // already rejected [trust, gap].  Decide the trusted region
-                // with the matcher directly (the scan cannot resume below it
-                // without repeating the artifact).
-                let mut lease = MatchScratchLease::take();
-                let scratch: &mut MatchScratch = lease.get();
-                let match_syntax = MatchSyntax::for_pattern(pattern, lookup);
-                let mut regs = MatchRegisters::default();
-                for pos in (end..=(trust - 1)).rev() {
-                    if pattern.target_multibyte && (left[pos] & 0xC0) == 0x80 {
-                        continue;
-                    }
-                    if re_match_candidate_two(
-                        scratch,
-                        pattern,
-                        &segments,
-                        pos,
-                        start,
-                        &match_syntax,
-                        point,
-                        &mut regs,
-                    )
-                    .is_some()
-                    {
-                        return Some(Some((pos, regs)));
-                    }
-                    if matcher_overflow_pending() {
-                        return Some(None);
-                    }
-                }
-                Some(None)
-            }
-            None if matcher_overflow_pending() => Some(None),
-            None => Some(None),
-        }
-    } else {
-        Some(None)
-    }
-}
-
-/// Search for a match over the two halves of a gap-buffer span.
-///
-/// GNU's `re_search_2` scans candidate positions over `string1`/`string2` and
-/// calls `re_match_2` on each; this is the same algorithm over [`Segments`].
-/// It is used only when the gap sits inside the searched span, so the common
-/// contiguous path keeps the faster single-slice searcher.
+/// Search the virtual concatenation of the existing gap halves. All
+/// accelerators and matcher policies are shared with contiguous searches;
+/// neither representation moves the gap or copies the searched region.
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn re_search_segments(
     pattern: &CompiledPattern,
@@ -11314,223 +11037,14 @@ pub(crate) fn re_search_segments(
     syntax: &dyn SyntaxLookup,
     point: usize,
 ) -> Option<(usize, MatchRegisters)> {
-    let text = Segments { left, right };
-    let text_len = text.len();
-    let use_fastmap = pattern.fastmap_accurate && !pattern.can_be_null && !fastmap_force_disabled();
-    let translate = pattern.translate.as_ref();
-    clear_matcher_overflow();
-    // A pattern with a finite match-length bound lets candidates farther
-    // than one match from the gap be decided by the accelerated single-slice
-    // searcher; only a match-sized seam around the gap needs the two-segment
-    // matcher.  Without that dispatch a miss pays a matcher entry for every
-    // fastmap hit where the single-slice search would have skipped them.
-    let match_bound = pattern.match_bound_bytes();
-    let windowed = if range >= 0 {
-        let end = start.saturating_add(range as usize).min(text_len);
-        re_search_forward_windowed(pattern, left, right, start, end, match_bound, syntax, point)
-    } else {
-        let end = start.saturating_sub((-range) as usize);
-        re_search_backward_windowed(pattern, left, right, start, end, match_bound, syntax, point)
-    };
-    if let Some(result) = windowed {
-        return result;
-    }
-    let mut lease = MatchScratchLease::take();
-    let scratch: &mut MatchScratch = lease.get();
-    let mut regs = MatchRegisters::default();
-    let match_syntax = MatchSyntax::for_pattern(pattern, syntax);
-    let syntax = &match_syntax;
-
-    // GNU regex-emacs.c:3568 translates the byte before consulting the
-    // fastmap; every standard table keeps a continuation byte out of it.
-    let candidate_allowed = |pos: usize| -> bool {
-        if pos > text_len {
-            return false;
-        }
-        let byte = text.get(pos);
-        if !use_fastmap {
-            return !pattern.target_multibyte
-                || byte.is_none()
-                || (byte.is_some_and(|b| (b & 0xC0) != 0x80));
-        }
-        let Some(byte) = byte else {
-            // The end of the text is a candidate: a zero-width match may
-            // start there (GNU tries the end position unconditionally).
-            return true;
-        };
-        let index = match translate {
-            Some(table) if pattern.target_multibyte => {
-                if byte < 0x80 {
-                    ascii_translated_leading_code(table, byte)
-                } else if (byte & 0xC0) == 0x80 {
-                    return false;
-                } else {
-                    multibyte_translated_leading_code(table, &text, pos).0
-                }
-            }
-            Some(table) => table.translate_byte(byte) as usize,
-            None => {
-                if pattern.target_multibyte && (byte & 0xC0) == 0x80 {
-                    return false;
-                }
-                byte as usize
-            }
-        };
-        if translate.is_some() && pattern.target_multibyte {
-            pattern.fastmap_translated[index]
-        } else {
-            pattern.fastmap[index]
-        }
-    };
-
-    // The single-slice searcher accelerates the candidate scan with memchr
-    // over a tiny ASCII first-byte set, or a folded accept table.  Both are
-    // pure functions of one byte, so the same scan can run over each gap half
-    // and finds exactly the concatenated candidate set: the fast mapper is
-    // skipped only as far as the single-slice search would skip it.
-    let ascii_scan: Option<AsciiScan<'_>> = if use_fastmap {
-        match translate {
-            None => match pattern.sparse_ascii_fastmap() {
-                Some(sparse) => Some(AsciiScan::Sparse(sparse)),
-                None => Some(AsciiScan::Table(&pattern.fastmap)),
-            },
-            Some(case_table) => {
-                let span = if range >= 0 {
-                    text_len.saturating_sub(start)
-                } else {
-                    start.saturating_sub(start.saturating_sub((-range) as usize))
-                };
-                let exact = case_table.ascii_preimage_for_span(span) == AsciiPreimage::AsciiOnly;
-                match (
-                    exact,
-                    pattern.folded_scan(case_table, span >= PREFILTER_MIN_BUILD_SPAN),
-                ) {
-                    (true, Some(FoldedScan::Sparse(sparse))) => Some(AsciiScan::Sparse(*sparse)),
-                    (true, Some(FoldedScan::Table(table))) => Some(AsciiScan::Table(&**table)),
-                    _ => None,
-                }
-            }
-        }
-    } else {
-        None
-    };
-    let skip_continuation = pattern.target_multibyte;
-
-    if range >= 0 {
-        let end = start.saturating_add(range as usize).min(text_len);
-        if start > end {
-            return None;
-        }
-        if let Some(scan) = ascii_scan {
-            // Include the byte at `end` (a zero-width match may start there),
-            // then stop; when the text ends, `text_len` itself is the last
-            // candidate, tried below like GNU's unconditional end attempt.
-            let hi = if end < text_len { end + 1 } else { text_len };
-            let mut pos = start;
-            while pos <= end {
-                if pos < text_len {
-                    match segments_next_candidate(&text, scan, skip_continuation, pos, hi) {
-                        Some(found) => pos = found,
-                        None => {
-                            pos = text_len;
-                            if pos > end {
-                                break;
-                            }
-                        }
-                    }
-                }
-                if re_match_candidate_two(
-                    scratch, pattern, &text, pos, end, syntax, point, &mut regs,
-                )
-                .is_some()
-                {
-                    return Some((pos, regs));
-                }
-                if matcher_overflow_pending() {
-                    return None;
-                }
-                pos += 1;
-            }
-            None
-        } else {
-            for pos in start..=end {
-                if candidate_allowed(pos)
-                    && re_match_candidate_two(
-                        scratch, pattern, &text, pos, end, syntax, point, &mut regs,
-                    )
-                    .is_some()
-                {
-                    return Some((pos, regs));
-                }
-                if matcher_overflow_pending() {
-                    return None;
-                }
-            }
-            None
-        }
-    } else {
-        // Backward candidates end at `start` (GNU passes point as the
-        // matcher's stop).
-        let end = start.saturating_sub((-range) as usize);
-        if let Some(scan) = ascii_scan {
-            let mut upper = start;
-            if upper == text_len {
-                if re_match_candidate_two(
-                    scratch, pattern, &text, text_len, start, syntax, point, &mut regs,
-                )
-                .is_some()
-                {
-                    return Some((text_len, regs));
-                }
-                if matcher_overflow_pending() {
-                    return None;
-                }
-                if end == text_len {
-                    return None;
-                }
-                upper = text_len - 1;
-            }
-            if upper < text_len {
-                loop {
-                    let Some(cand) =
-                        segments_prev_candidate(&text, scan, skip_continuation, end, upper)
-                    else {
-                        break;
-                    };
-                    if re_match_candidate_two(
-                        scratch, pattern, &text, cand, start, syntax, point, &mut regs,
-                    )
-                    .is_some()
-                    {
-                        return Some((cand, regs));
-                    }
-                    if matcher_overflow_pending() {
-                        return None;
-                    }
-                    if cand == end {
-                        break;
-                    }
-                    upper = cand - 1;
-                }
-            }
-            None
-        } else {
-            for pos in (end..=start).rev() {
-                if candidate_allowed(pos)
-                    && re_match_candidate_two(
-                        scratch, pattern, &text, pos, start, syntax, point, &mut regs,
-                    )
-                    .is_some()
-                {
-                    return Some((pos, regs));
-                }
-                if matcher_overflow_pending() {
-                    return None;
-                }
-            }
-            None
-        }
-    }
+    re_search_haystack(
+        pattern,
+        &Segments { left, right },
+        start,
+        range,
+        syntax,
+        point,
+    )
 }
 
 /// One match attempt over the two halves of a gap buffer with GNU
@@ -11538,8 +11052,8 @@ pub(crate) fn re_search_segments(
 /// (`search.c:318`). `pos`, `stop` and `point` are relative to the start of
 /// the concatenated halves.
 ///
-/// The Pike VM is single-segment, so like [`re_search_segments`] this goes
-/// through the backtracker, which is the call GNU's matcher translates.
+/// The shared matcher keeps the same budget, Pike fallback and fail-stack
+/// overflow behavior as a contiguous match.
 pub(crate) fn re_match_segments(
     pattern: &CompiledPattern,
     left: &[u8],
@@ -11555,7 +11069,7 @@ pub(crate) fn re_match_segments(
     let scratch: &mut MatchScratch = lease.get();
     let mut regs = MatchRegisters::default();
     let match_syntax = MatchSyntax::for_pattern(pattern, syntax);
-    let end = re_match_candidate_two(
+    let end = re_match_candidate_in(
         scratch,
         pattern,
         &text,
@@ -11628,6 +11142,10 @@ mod suffix_literal;
 
 #[path = "short_literal.rs"]
 mod short_literal;
+
+#[cfg(test)]
+#[path = "tests/split_gap_fast_paths_test.rs"]
+mod split_gap_fast_paths_tests;
 
 #[cfg(test)]
 #[path = "tests/short_literal_test.rs"]
