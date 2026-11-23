@@ -980,3 +980,7 @@ pub(super) use cons_suspend::SuspendedConsCollector;
 pub mod heap_transfer;
 
 mod source_observations;
+
+#[cfg(all(test, miri))]
+#[path = "facade_mark/numeric_storage_miri.rs"]
+mod numeric_storage_miri;

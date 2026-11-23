@@ -51,3 +51,6 @@ impl<'heap> SuspendedConsCollector<'heap> {
     }
 }
 static_assertions::assert_not_impl_any!(SuspendedConsCollector<'static>: Send, Sync, Clone, Copy);
+
+#[cfg(any(test, feature = "test-support"))]
+mod test_support;

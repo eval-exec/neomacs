@@ -6,7 +6,7 @@
 use super::*;
 use crate::tagged::gc::ProofEra as ParallelHeapEra;
 use crate::tagged::gc::TaggedHeap;
-use crate::tagged::gc::arena_pages::{ObjectArena, PagedObject};
+use crate::tagged::gc::arena_pages::ArenaStorageSnapshot;
 use crate::tagged::gc::card_table::ChunkSlot;
 use crate::tagged::gc::chunk_map::{ChunkClass, ChunkEntry};
 use crate::tagged::gc::cons_allocator::ConsBlockBase;
@@ -307,52 +307,21 @@ pub(crate) fn run_cons_allocation_test<K, W>(
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
-struct NumericArenaShape {
-    pages: Vec<(usize, usize, usize)>,
-    page_index: Vec<(usize, usize)>,
-    spare_storage: Vec<usize>,
-}
-
-fn numeric_arena_shape<T: PagedObject>(arena: &ObjectArena<T>) -> NumericArenaShape {
-    let mut page_index = arena
-        .page_index_by_base
-        .iter()
-        .map(|(&base, &index)| (base, index))
-        .collect::<Vec<_>>();
-    page_index.sort_unstable();
-    NumericArenaShape {
-        pages: arena
-            .pages
-            .iter()
-            .map(|page| (page.base_addr(), page.next_index, page.allocated))
-            .collect(),
-        page_index,
-        spare_storage: arena
-            .spare_storage
-            .iter()
-            .map(|&ptr| ptr as usize)
-            .collect(),
-    }
-}
-
-fn check_numeric_arena_placeholder<T: PagedObject>(arena: &ObjectArena<T>, class: &str) {
+fn check_numeric_arena_placeholder(arena: &ArenaStorageSnapshot, class: &str) {
     assert!(
         arena.pages.is_empty(),
         "{class} pages stayed in the serial shell"
     );
     assert_eq!(
-        arena.pages.capacity(),
-        0,
+        arena.pages_capacity, 0,
         "{class} page descriptor allocation stayed behind"
     );
     assert!(
-        arena.page_index_by_base.is_empty(),
+        arena.page_index.is_empty(),
         "{class} page index stayed in the serial shell"
     );
     assert_eq!(
-        arena.page_index_by_base.capacity(),
-        0,
+        arena.page_index_capacity, 0,
         "{class} page index allocation stayed behind"
     );
     assert!(
@@ -360,9 +329,17 @@ fn check_numeric_arena_placeholder<T: PagedObject>(arena: &ObjectArena<T>, class
         "{class} spare storage stayed in the serial shell"
     );
     assert_eq!(
-        arena.spare_storage.capacity(),
-        0,
+        arena.spare_storage_capacity, 0,
         "{class} spare descriptor allocation stayed behind"
+    );
+    assert_eq!(
+        arena.spare_unused_floor, 0,
+        "{class} spare history stayed behind"
+    );
+    assert_eq!(
+        arena.partial_head,
+        usize::MAX,
+        "{class} partial chain stayed behind"
     );
 }
 
@@ -394,35 +371,27 @@ fn numeric_storage_transfers_into_era_and_round_trips_at_stops<K, W>(
         >,
 {
     roots_era(&mut |era, (numbers, nil)| {
-        let (heap_designator, initial_shape) = {
+        let initial_shape = {
             let mut collector = era.core.collector.borrow_mut();
             let heap = collector.as_mut().unwrap().registration_heap_mut();
             check_numeric_roots(heap, &numbers);
             (
-                heap as *mut TaggedHeap,
-                (
-                    numeric_arena_shape(&heap.float_arena),
-                    numeric_arena_shape(&heap.bignum_arena),
-                ),
+                heap.float_arena.storage_snapshot_for_test(),
+                heap.bignum_arena.storage_snapshot_for_test(),
             )
         };
         assert!(!initial_shape.0.pages.is_empty());
         assert!(!initial_shape.1.pages.is_empty());
         era.start_cons_storage().unwrap();
-        // SAFETY: the original collector loan is suspended, and no owner has
-        // activated. There are no readers, runs, or marker workers. This reads
-        // only the two inert numeric shell fields through the saved designator;
-        // it never mints a reference to the whole suspended heap or its storage.
-        unsafe {
-            check_numeric_arena_placeholder(
-                &*std::ptr::addr_of!((*heap_designator).float_arena),
-                "float",
-            );
-            check_numeric_arena_placeholder(
-                &*std::ptr::addr_of!((*heap_designator).bignum_arena),
-                "bignum",
-            );
-        }
+        let placeholders = era
+            .core
+            .suspended_cons
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .numeric_storage_snapshot_for_test();
+        check_numeric_arena_placeholder(&placeholders.0, "float");
+        check_numeric_arena_placeholder(&placeholders.1, "bignum");
 
         let mut owner_a = activate(era.register(1730, 0).unwrap(), era.heap_identity(), 1730);
         let mut owner_b = activate(era.register(1731, 0).unwrap(), era.heap_identity(), 1731);
@@ -434,8 +403,14 @@ fn numeric_storage_transfers_into_era_and_round_trips_at_stops<K, W>(
         era.return_cons_storage(&stopped).unwrap();
         era.with_stopped_heap_for_test(&stopped, |heap| {
             check_numeric_roots(heap, &numbers);
-            assert_eq!(numeric_arena_shape(&heap.float_arena), initial_shape.0);
-            assert_eq!(numeric_arena_shape(&heap.bignum_arena), initial_shape.1);
+            assert_eq!(
+                heap.float_arena.storage_snapshot_for_test(),
+                initial_shape.0
+            );
+            assert_eq!(
+                heap.bignum_arena.storage_snapshot_for_test(),
+                initial_shape.1
+            );
         })
         .unwrap();
         era.collect_stopped(&mut stopped, world_roots).unwrap();
@@ -443,8 +418,8 @@ fn numeric_storage_transfers_into_era_and_round_trips_at_stops<K, W>(
             .with_stopped_heap_for_test(&stopped, |heap| {
                 check_numeric_roots(heap, &numbers);
                 (
-                    numeric_arena_shape(&heap.float_arena),
-                    numeric_arena_shape(&heap.bignum_arena),
+                    heap.float_arena.storage_snapshot_for_test(),
+                    heap.bignum_arena.storage_snapshot_for_test(),
                 )
             })
             .unwrap();
@@ -463,8 +438,14 @@ fn numeric_storage_transfers_into_era_and_round_trips_at_stops<K, W>(
         era.return_cons_storage(&stopped).unwrap();
         era.with_stopped_heap_for_test(&stopped, |heap| {
             check_numeric_roots(heap, &numbers);
-            assert_eq!(numeric_arena_shape(&heap.float_arena), collected_shape.0);
-            assert_eq!(numeric_arena_shape(&heap.bignum_arena), collected_shape.1);
+            assert_eq!(
+                heap.float_arena.storage_snapshot_for_test(),
+                collected_shape.0
+            );
+            assert_eq!(
+                heap.bignum_arena.storage_snapshot_for_test(),
+                collected_shape.1
+            );
         })
         .unwrap();
         era.collect_stopped(&mut stopped, world_roots).unwrap();

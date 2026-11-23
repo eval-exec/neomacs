@@ -2144,3 +2144,8 @@ impl HandshakeStats {
         )
     }
 }
+
+#[cfg(any(test, feature = "test-support"))]
+mod storage_snapshot;
+#[cfg(any(test, feature = "test-support"))]
+pub(in crate::tagged::gc) use storage_snapshot::ArenaStorageSnapshot;
