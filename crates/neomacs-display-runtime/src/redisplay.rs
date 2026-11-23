@@ -20,6 +20,7 @@ use neomacs_layout_engine::engine::{
 use neomacs_layout_engine::font::metrics::FontMetricsService;
 use neomacs_layout_engine::font::sizing::FontSizing;
 use neovm_core::emacs_core::eval::Context;
+use neovm_core::emacs_core::{Value, error::EvalResult};
 use neovm_core::window::geometry::{PresentationActivateError, PresentationId};
 use neovm_core::window::{FrameId, WindowId, WindowLayoutQueryOutcome};
 
@@ -325,19 +326,33 @@ impl RedisplayRuntime {
         }
     }
 
-    /// Prepare only mini/echo geometry before the owned hook pass. This uses
-    /// the exclusively borrowed idle presentation engine, publishes no paint
-    /// ticket, and carries a callback Flow to the enclosing transaction.
+    /// Answer a nested preparation using the geometry already committed in
+    /// Context. The caller has stored the echo text; an active producer must
+    /// keep its window bounds and starts stable until its walk finishes.
+    ///
+    /// Nil is the ordinary unchanged-height result. The next complete
+    /// redisplay still requests mini geometry and runs the full producer.
+    /// A whole-pass lease can use this answer without borrowing its engine.
+    pub fn retain_committed_minibuffer_geometry() -> EvalResult {
+        Ok(Value::NIL)
+    }
+
+    /// Prepare only mini/echo geometry before the owned hook pass. An idle
+    /// engine runs the full producer; a nested request keeps committed
+    /// geometry. Neither answer publishes a paint ticket. Producer Flow still
+    /// belongs to the enclosing transaction.
     pub fn prepare_minibuffer_geometry(
         &self,
         evaluator: &mut Context,
         request: neovm_core::emacs_core::eval::RedisplayMiniGeometryRequest,
     ) -> Result<neovm_core::emacs_core::Value, neovm_core::emacs_core::error::Flow> {
-        let mut engine = self.engine.try_borrow_mut().map_err(|_| {
-            evaluator.failed_redisplay_mini_preparation(
-                neovm_core::emacs_core::eval::RedisplayMiniPreparationFailure::PresentationBorrowed,
-            )
-        })?;
+        let Ok(mut engine) = self.engine.try_borrow_mut() else {
+            // A fontification callback in a synchronous window-end query can
+            // rebind inhibit-redisplay and call message. GNU accepts a
+            // same-height message here; a Rust borrow conflict is not a Lisp
+            // error and cannot authorize a second preparatory row walk.
+            return Self::retain_committed_minibuffer_geometry();
+        };
         engine.prepare_minibuffer_geometry(evaluator, request)
     }
 
