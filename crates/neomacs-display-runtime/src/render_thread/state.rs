@@ -1022,8 +1022,9 @@ pub(super) struct RenderApp {
     /// and the surface-acquire path; drained at the top of
     /// `handle_about_to_wait`, which runs `recover_from_device_loss`.
     pub(super) device_lost: super::device_loss::DeviceLossDetector,
-    /// Adapter choice for the next `init_wgpu`. `SkipFailed` is recorded only
-    /// when the current adapter fails before the first present.
+    /// Adapter choice for the next `init_wgpu`. `SkipFailed` lists every
+    /// adapter that failed before the first present. A later failure is
+    /// appended so an earlier exclusion is not retried.
     pub(super) startup_adapter_choice: super::gpu_startup::StartupAdapterChoice,
     /// Set when startup refused to select another adapter. Recovery must not
     /// rearm the device-lost latch, or the excluded adapter is retried forever.

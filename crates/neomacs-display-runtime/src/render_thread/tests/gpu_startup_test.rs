@@ -1,5 +1,5 @@
 use super::*;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use winit::{
     event::{Ime, Modifiers, MouseScrollDelta, TouchPhase},
     keyboard::ModifiersState,
@@ -198,7 +198,7 @@ fn excluded_discrete_yields_the_integrated_adapter() {
         &adapters,
         high_performance(),
         &StartupAdapterChoice::SkipFailed {
-            excluded: adapters[0].identity.clone(),
+            excluded: vec![adapters[0].identity.clone()],
         },
     )
     .expect("an integrated adapter remains");
@@ -219,7 +219,7 @@ fn excluded_sole_discrete_yields_none() {
         &adapters,
         high_performance(),
         &StartupAdapterChoice::SkipFailed {
-            excluded: adapters[0].identity.clone(),
+            excluded: vec![adapters[0].identity.clone()],
         },
     );
     assert!(
@@ -238,7 +238,7 @@ fn no_hardware_left_yields_cpu_with_a_warning() {
         &adapters,
         high_performance(),
         &StartupAdapterChoice::SkipFailed {
-            excluded: adapters[0].identity.clone(),
+            excluded: vec![adapters[0].identity.clone()],
         },
     )
     .expect("a software adapter remains");
@@ -527,6 +527,104 @@ fn any_scope_keeps_discrete_and_integrated() {
     assert_eq!(decision.indexes, vec![0, 1]);
     assert!(decision.skipped_names.is_empty());
     assert!(!decision.restored_discrete);
+}
+
+#[test]
+fn startup_watch_arms_a_deadline_until_the_empty_poll_warns() {
+    let started = Instant::now();
+    let phase = StartupWatchPhase::Enumeration;
+    let early = drive_startup_watch(
+        started,
+        false,
+        started + Duration::from_millis(9_900),
+        StartupWorkerPoll::Empty,
+        &phase,
+    );
+    assert!(early.warning.is_none());
+    assert!(!early.warned);
+    assert_eq!(early.deadline, Some(started + Duration::from_secs(10)));
+
+    let due = drive_startup_watch(
+        started,
+        false,
+        started + Duration::from_secs(10),
+        StartupWorkerPoll::Empty,
+        &phase,
+    );
+    let warning = due.warning.expect("empty poll at 10s warns");
+    assert!(warning.contains("enumeration"), "{warning}");
+    assert!(warning.contains("WGPU_BACKEND=gl"), "{warning}");
+    assert!(warning.contains("NEOMACS_GPU=integrated"), "{warning}");
+    assert!(due.warned);
+    assert!(due.deadline.is_none());
+
+    let again = drive_startup_watch(
+        started,
+        true,
+        started + Duration::from_secs(30),
+        StartupWorkerPoll::Empty,
+        &phase,
+    );
+    assert!(again.warning.is_none());
+    assert!(again.deadline.is_none());
+}
+
+#[test]
+fn finished_startup_does_not_warn_that_it_is_still_running() {
+    let started = Instant::now();
+    let phase = StartupWatchPhase::Device {
+        name: "Quadro P620".to_string(),
+        driver: "NVK".to_string(),
+    };
+    let step = drive_startup_watch(
+        started,
+        false,
+        started + Duration::from_secs(65),
+        StartupWorkerPoll::Finished,
+        &phase,
+    );
+    assert!(
+        step.warning.is_none(),
+        "a finished worker is not still running: {:?}",
+        step.warning
+    );
+    assert!(step.deadline.is_none());
+}
+
+#[test]
+fn two_failed_adapters_stay_excluded() {
+    let adapters = [
+        candidate("Quadro P620", 0x10de, 0x1cb6, wgpu::DeviceType::DiscreteGpu),
+        candidate("Intel UHD", 0x8086, 0x3e92, wgpu::DeviceType::IntegratedGpu),
+    ];
+    let mut choice = StartupAdapterChoice::Ranked;
+    choice.record_failure(adapters[0].identity.clone());
+    let second = choose_startup_adapter(&adapters, high_performance(), &choice)
+        .expect("the integrated adapter is still eligible");
+    assert_eq!(second.index, 1);
+    choice.record_failure(adapters[1].identity.clone());
+    assert!(
+        choose_startup_adapter(&adapters, high_performance(), &choice).is_none(),
+        "both hardware adapters failed; do not return to the first"
+    );
+}
+
+#[test]
+fn two_failed_hardware_adapters_fall_back_to_cpu_then_exhaust() {
+    let adapters = [
+        candidate("Quadro P620", 0x10de, 0x1cb6, wgpu::DeviceType::DiscreteGpu),
+        candidate("Intel UHD", 0x8086, 0x3e92, wgpu::DeviceType::IntegratedGpu),
+        candidate("llvmpipe", 0x10005, 0, wgpu::DeviceType::Cpu),
+    ];
+    let mut choice = StartupAdapterChoice::Ranked;
+    choice.record_failure(adapters[0].identity.clone());
+    choice.record_failure(adapters[1].identity.clone());
+    let software = choose_startup_adapter(&adapters, high_performance(), &choice)
+        .expect("software remains after both hardware adapters fail");
+    assert_eq!(software.index, 2);
+    assert!(software.software);
+    choice.record_failure(adapters[2].identity.clone());
+    assert!(choose_startup_adapter(&adapters, high_performance(), &choice).is_none());
 }
 
 #[test]

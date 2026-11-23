@@ -32,8 +32,7 @@ impl RenderApp {
             adapter = %identity.name,
             "adapter failed before the first present; the next startup skips it"
         );
-        self.startup_adapter_choice =
-            super::gpu_startup::StartupAdapterChoice::SkipFailed { excluded: identity };
+        self.startup_adapter_choice.record_failure(identity);
     }
 
     fn request_startup_device(
@@ -43,48 +42,54 @@ impl RenderApp {
         window: &Arc<dyn Window>,
         adapter: wgpu::Adapter,
     ) -> Option<(wgpu::Adapter, wgpu::Device, wgpu::Queue)> {
-        match pollster::block_on(neomacs_renderer_wgpu::request_renderer_device(
-            &adapter,
-            "Neomacs Render Thread Device",
-        )) {
-            Ok((device, queue)) => Some((adapter, device, queue)),
-            Err(error) => {
-                if super::frame_stats::SURFACE_SUBMISSIONS
-                    .load(std::sync::atomic::Ordering::Relaxed)
-                    != 0
-                {
-                    tracing::error!("Failed to create wgpu device: {error}");
-                    return None;
-                }
-                let failed = super::gpu_startup::AdapterIdentity::from_info(&adapter.get_info());
-                tracing::error!(
-                    adapter = %failed.name,
-                    %error,
-                    "renderer device request failed before the first present"
-                );
-                let choice =
-                    super::gpu_startup::StartupAdapterChoice::SkipFailed { excluded: failed };
-                self.startup_adapter_choice = choice.clone();
-                let Some(next) = super::gpu_startup::select_adapter(
-                    adapters.to_vec(),
-                    surface,
-                    window.as_ref(),
-                    &choice,
-                ) else {
-                    self.startup_adapter_exhausted = true;
-                    tracing::error!("device request failed and no alternate adapter remains");
-                    return None;
-                };
-                match pollster::block_on(neomacs_renderer_wgpu::request_renderer_device(
-                    &next,
-                    "Neomacs Render Thread Device",
-                )) {
-                    Ok((device, queue)) => Some((next, device, queue)),
-                    Err(error) => {
-                        self.startup_adapter_exhausted = true;
-                        tracing::error!(%error, "alternate adapter device request failed");
-                        None
+        let mut adapter = adapter;
+        loop {
+            match pollster::block_on(neomacs_renderer_wgpu::request_renderer_device(
+                &adapter,
+                "Neomacs Render Thread Device",
+            )) {
+                Ok((device, queue)) => return Some((adapter, device, queue)),
+                Err(error) => {
+                    if super::frame_stats::SURFACE_SUBMISSIONS
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                        != 0
+                    {
+                        tracing::error!("Failed to create wgpu device: {error}");
+                        return None;
                     }
+                    let failed =
+                        super::gpu_startup::AdapterIdentity::from_info(&adapter.get_info());
+                    tracing::error!(
+                        adapter = %failed.name,
+                        %error,
+                        "renderer device request failed before the first present"
+                    );
+                    self.startup_adapter_choice.record_failure(failed.clone());
+                    if self.startup_adapter_choice.exclusion_len() >= adapters.len() {
+                        self.startup_adapter_exhausted = true;
+                        tracing::error!("device request failed and no alternate adapter remains");
+                        return None;
+                    }
+                    let choice = self.startup_adapter_choice.clone();
+                    let Some(next) = super::gpu_startup::select_adapter(
+                        adapters.to_vec(),
+                        surface,
+                        window.as_ref(),
+                        &choice,
+                    ) else {
+                        self.startup_adapter_exhausted = true;
+                        tracing::error!("device request failed and no alternate adapter remains");
+                        return None;
+                    };
+                    if super::gpu_startup::AdapterIdentity::from_info(&next.get_info()) == failed {
+                        self.startup_adapter_exhausted = true;
+                        tracing::error!(
+                            %error,
+                            "device request failed and the same adapter was selected again"
+                        );
+                        return None;
+                    }
+                    adapter = next;
                 }
             }
         }

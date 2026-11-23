@@ -120,11 +120,24 @@ pub(super) struct PendingGpuAttempt {
     input: StartupInputReplay,
 }
 
+pub(super) struct GpuStartupError {
+    pub(super) message: String,
+    pub(super) choice: StartupAdapterChoice,
+}
+
+fn startup_err(choice: StartupAdapterChoice, message: impl Into<String>) -> GpuStartupError {
+    GpuStartupError {
+        message: message.into(),
+        choice,
+    }
+}
+
 pub(super) enum GpuAttemptPoll {
     Pending(PendingGpuAttempt),
     Ready {
         gpu: PreparedGpu,
         input: StartupInputReplay,
+        choice: StartupAdapterChoice,
     },
 }
 
@@ -154,17 +167,28 @@ impl PendingGpuAttempt {
         let _ = self.input.defer_input(event);
     }
 
-    pub(super) fn poll(self, proxy: &EventLoopProxy) -> Result<GpuAttemptPoll, String> {
+    pub(super) fn poll(self, proxy: &EventLoopProxy) -> Result<GpuAttemptPoll, GpuStartupError> {
         let Self { gpu, input } = self;
         match gpu.poll(proxy)? {
             GpuPoll::Pending(gpu) => Ok(GpuAttemptPoll::Pending(Self { gpu, input })),
-            GpuPoll::Ready(gpu) => Ok(GpuAttemptPoll::Ready { gpu, input }),
+            GpuPoll::Ready { gpu, choice } => Ok(GpuAttemptPoll::Ready { gpu, input, choice }),
         }
+    }
+
+    pub(super) fn watch_deadline(&self) -> Option<Instant> {
+        self.gpu.watch_deadline()
+    }
+
+    pub(super) fn adapter_choice(&self) -> &StartupAdapterChoice {
+        self.gpu.adapter_choice()
     }
 }
 
 pub(super) enum PendingGpu {
-    SurfaceSize(PreparedGpu),
+    SurfaceSize {
+        prepared: PreparedGpu,
+        choice: StartupAdapterChoice,
+    },
     Adapters {
         window: Arc<dyn Window>,
         reply: Reply<(wgpu::Instance, Vec<wgpu::Adapter>)>,
@@ -180,8 +204,6 @@ pub(super) enum PendingGpu {
         adapters: Vec<wgpu::Adapter>,
         adapter: wgpu::Adapter,
         choice: StartupAdapterChoice,
-        /// The device request already failed once. A second failure stops.
-        retried: bool,
         reply: Reply<(wgpu::Device, wgpu::Queue)>,
         watch_started: Instant,
         watch_warned: bool,
@@ -190,7 +212,10 @@ pub(super) enum PendingGpu {
 
 pub(super) enum GpuPoll {
     Pending(PendingGpu),
-    Ready(PreparedGpu),
+    Ready {
+        gpu: PreparedGpu,
+        choice: StartupAdapterChoice,
+    },
 }
 
 impl PendingGpu {
@@ -211,57 +236,106 @@ impl PendingGpu {
         })
     }
 
+    pub(super) fn adapter_choice(&self) -> &StartupAdapterChoice {
+        match self {
+            Self::SurfaceSize { choice, .. }
+            | Self::Adapters { choice, .. }
+            | Self::Device { choice, .. } => choice,
+        }
+    }
+
+    /// `Some(start + 10s)` until the one startup warning has been sent.
+    pub(super) fn watch_deadline(&self) -> Option<Instant> {
+        let (started, warned) = match self {
+            Self::SurfaceSize { .. } => return None,
+            Self::Adapters {
+                watch_started,
+                watch_warned,
+                ..
+            }
+            | Self::Device {
+                watch_started,
+                watch_warned,
+                ..
+            } => (*watch_started, *watch_warned),
+        };
+        if warned {
+            None
+        } else {
+            Some(started + Duration::from_secs(10))
+        }
+    }
+
     pub(super) fn window(&self) -> &dyn Window {
         match self {
-            Self::SurfaceSize(prepared) => prepared.window.as_ref(),
+            Self::SurfaceSize { prepared, .. } => prepared.window.as_ref(),
             Self::Adapters { window, .. } | Self::Device { window, .. } => window.as_ref(),
         }
     }
 
-    pub(super) fn poll(self, proxy: &EventLoopProxy) -> Result<GpuPoll, String> {
+    pub(super) fn poll(self, proxy: &EventLoopProxy) -> Result<GpuPoll, GpuStartupError> {
         match self {
-            Self::SurfaceSize(prepared) => Ok(Self::when_sized(prepared)),
+            Self::SurfaceSize { prepared, choice } => Ok(Self::when_sized(prepared, choice)),
             Self::Adapters {
                 reply,
                 window,
                 choice,
                 watch_started,
-                mut watch_warned,
+                watch_warned,
             } => {
-                note_startup_watch(
-                    watch_started,
-                    &mut watch_warned,
-                    &StartupWatchPhase::Enumeration,
-                );
                 let result = match reply.try_recv() {
-                    Ok(result) => result?,
+                    Ok(result) => result,
                     Err(TryRecvError::Empty) => {
+                        let step = drive_startup_watch(
+                            watch_started,
+                            watch_warned,
+                            Instant::now(),
+                            StartupWorkerPoll::Empty,
+                            &StartupWatchPhase::Enumeration,
+                        );
+                        warn_if_startup_still_running(&step);
                         return Ok(GpuPoll::Pending(Self::Adapters {
                             window,
                             reply,
                             choice,
                             watch_started,
-                            watch_warned,
+                            watch_warned: step.warned,
                         }));
                     }
                     Err(TryRecvError::Disconnected) => {
-                        return Err("GPU adapter worker exited without a result".into());
+                        return Err(startup_err(
+                            choice,
+                            "GPU adapter worker exited without a result",
+                        ));
                     }
                 };
-                let (instance, adapters) = result;
-                let surface = instance
-                    .create_surface(window.clone())
-                    .map_err(|error| error.to_string())?;
-                let adapter = select_adapter(adapters.clone(), &surface, window.as_ref(), &choice)
-                    .ok_or_else(|| "no GPU adapter supports the native surface".to_owned())?;
+                let (instance, adapters) = match result {
+                    Ok(ready) => ready,
+                    Err(message) => return Err(startup_err(choice, message)),
+                };
+                let surface = match instance.create_surface(window.clone()) {
+                    Ok(surface) => surface,
+                    Err(error) => return Err(startup_err(choice, error.to_string())),
+                };
+                let Some(adapter) =
+                    select_adapter(adapters.clone(), &surface, window.as_ref(), &choice)
+                else {
+                    return Err(startup_err(
+                        choice,
+                        "no GPU adapter supports the native surface",
+                    ));
+                };
                 let worker_adapter = adapter.clone();
-                let reply = spawn("gpu-device", proxy.clone(), move || {
+                let reply = match spawn("gpu-device", proxy.clone(), move || {
                     pollster::block_on(neomacs_renderer_wgpu::request_renderer_device(
                         &worker_adapter,
                         "Neomacs Render Thread Device",
                     ))
                     .map_err(|error| error.to_string())
-                })?;
+                }) {
+                    Ok(reply) => reply,
+                    Err(message) => return Err(startup_err(choice, message)),
+                };
                 Ok(GpuPoll::Pending(Self::Device {
                     window,
                     instance,
@@ -269,7 +343,6 @@ impl PendingGpu {
                     adapters,
                     adapter,
                     choice,
-                    retried: false,
                     reply,
                     watch_started,
                     watch_warned,
@@ -283,68 +356,38 @@ impl PendingGpu {
                 adapters,
                 adapter,
                 choice,
-                retried,
                 watch_started,
-                mut watch_warned,
+                watch_warned,
             } => {
-                let info = adapter.get_info();
-                note_startup_watch(
-                    watch_started,
-                    &mut watch_warned,
-                    &StartupWatchPhase::Device {
-                        name: info.name,
-                        driver: info.driver,
-                    },
-                );
                 let ready = match reply.try_recv() {
                     Ok(Ok(ready)) => ready,
                     Ok(Err(error)) => {
-                        if retried {
-                            tracing::error!(
-                                %error,
-                                "alternate adapter device request failed before the first present"
-                            );
-                            return Err(error);
-                        }
-                        let failed = AdapterIdentity::from_info(&adapter.get_info());
-                        let choice = StartupAdapterChoice::SkipFailed {
-                            excluded: failed.clone(),
-                        };
-                        let Some(next) =
-                            select_adapter(adapters.clone(), &surface, window.as_ref(), &choice)
-                        else {
-                            tracing::error!(
-                                %error,
-                                adapter = %failed.name,
-                                "device request failed and no alternate adapter remains"
-                            );
-                            return Err(error);
-                        };
-                        if AdapterIdentity::from_info(&next.get_info()) == failed {
-                            return Err(error);
-                        }
-                        let worker_adapter = next.clone();
-                        let reply = spawn("gpu-device", proxy.clone(), move || {
-                            pollster::block_on(neomacs_renderer_wgpu::request_renderer_device(
-                                &worker_adapter,
-                                "Neomacs Render Thread Device",
-                            ))
-                            .map_err(|error| error.to_string())
-                        })?;
-                        return Ok(GpuPoll::Pending(Self::Device {
+                        return Self::retry_device(
+                            proxy,
                             window,
                             instance,
                             surface,
                             adapters,
-                            adapter: next,
+                            adapter,
                             choice,
-                            retried: true,
-                            reply,
                             watch_started,
                             watch_warned,
-                        }));
+                            error,
+                        );
                     }
                     Err(TryRecvError::Empty) => {
+                        let info = adapter.get_info();
+                        let step = drive_startup_watch(
+                            watch_started,
+                            watch_warned,
+                            Instant::now(),
+                            StartupWorkerPoll::Empty,
+                            &StartupWatchPhase::Device {
+                                name: info.name,
+                                driver: info.driver,
+                            },
+                        );
+                        warn_if_startup_still_running(&step);
                         return Ok(GpuPoll::Pending(Self::Device {
                             window,
                             instance,
@@ -352,35 +395,108 @@ impl PendingGpu {
                             adapters,
                             adapter,
                             choice,
-                            retried,
                             reply,
                             watch_started,
-                            watch_warned,
+                            watch_warned: step.warned,
                         }));
                     }
                     Err(TryRecvError::Disconnected) => {
-                        return Err("GPU device worker exited without a result".into());
+                        return Err(startup_err(
+                            choice,
+                            "GPU device worker exited without a result",
+                        ));
                     }
                 };
                 let (device, queue) = ready;
-                Ok(Self::when_sized(PreparedGpu {
-                    window,
-                    instance,
-                    surface,
-                    adapter,
-                    device,
-                    queue,
-                }))
+                Ok(Self::when_sized(
+                    PreparedGpu {
+                        window,
+                        instance,
+                        surface,
+                        adapter,
+                        device,
+                        queue,
+                    },
+                    choice,
+                ))
             }
         }
     }
 
-    fn when_sized(prepared: PreparedGpu) -> GpuPoll {
+    /// Record this adapter and request the next one. Stop once every enumerated
+    /// adapter has failed, or the choice would select the adapter that just failed.
+    fn retry_device(
+        proxy: &EventLoopProxy,
+        window: Arc<dyn Window>,
+        instance: wgpu::Instance,
+        surface: wgpu::Surface<'static>,
+        adapters: Vec<wgpu::Adapter>,
+        adapter: wgpu::Adapter,
+        mut choice: StartupAdapterChoice,
+        watch_started: Instant,
+        watch_warned: bool,
+        error: String,
+    ) -> Result<GpuPoll, GpuStartupError> {
+        let failed = AdapterIdentity::from_info(&adapter.get_info());
+        choice.record_failure(failed.clone());
+        if choice.exclusion_len() >= adapters.len() {
+            tracing::error!(
+                %error,
+                adapter = %failed.name,
+                "device request failed and no alternate adapter remains"
+            );
+            return Err(startup_err(choice, error));
+        }
+        let Some(next) = select_adapter(adapters.clone(), &surface, window.as_ref(), &choice)
+        else {
+            tracing::error!(
+                %error,
+                adapter = %failed.name,
+                "device request failed and no alternate adapter remains"
+            );
+            return Err(startup_err(choice, error));
+        };
+        if AdapterIdentity::from_info(&next.get_info()) == failed {
+            tracing::error!(
+                %error,
+                adapter = %failed.name,
+                "device request failed and the same adapter was selected again"
+            );
+            return Err(startup_err(choice, error));
+        }
+        let worker_adapter = next.clone();
+        let reply = match spawn("gpu-device", proxy.clone(), move || {
+            pollster::block_on(neomacs_renderer_wgpu::request_renderer_device(
+                &worker_adapter,
+                "Neomacs Render Thread Device",
+            ))
+            .map_err(|error| error.to_string())
+        }) {
+            Ok(reply) => reply,
+            Err(message) => return Err(startup_err(choice, message)),
+        };
+        Ok(GpuPoll::Pending(Self::Device {
+            window,
+            instance,
+            surface,
+            adapters,
+            adapter: next,
+            choice,
+            reply,
+            watch_started,
+            watch_warned,
+        }))
+    }
+
+    fn when_sized(prepared: PreparedGpu, choice: StartupAdapterChoice) -> GpuPoll {
         let size = prepared.window.surface_size();
         if size.width == 0 || size.height == 0 {
-            GpuPoll::Pending(Self::SurfaceSize(prepared))
+            GpuPoll::Pending(Self::SurfaceSize { prepared, choice })
         } else {
-            GpuPoll::Ready(prepared)
+            GpuPoll::Ready {
+                gpu: prepared,
+                choice,
+            }
         }
     }
 }
@@ -437,23 +553,19 @@ pub(super) fn select_adapter(
     else {
         if let StartupAdapterChoice::SkipFailed { excluded } = choice {
             tracing::error!(
-                adapter = %excluded.name,
-                "excluded adapter is the only surface-compatible choice; not selecting it again"
+                adapters = %excluded.iter().map(|id| id.name.as_str()).collect::<Vec<_>>().join(", "),
+                "excluded adapters are the only surface-compatible choices; not selecting them again"
             );
         }
         return None;
     };
     let mut chosen = pick.index;
     if is_x11(window) && lavapipe_drops_x11_frames(&adapters[chosen].get_info()) {
-        let excluded = match choice {
-            StartupAdapterChoice::SkipFailed { excluded } => Some(excluded),
-            StartupAdapterChoice::Ranked => None,
-        };
         if let Some(other) = (0..adapters.len()).find(|&index| {
             index != chosen
                 && candidates[index].surface_compatible
                 && backend_allowed(backends, candidates[index].identity.backend)
-                && excluded.is_none_or(|id| &candidates[index].identity != id)
+                && !choice.excludes(&candidates[index].identity)
                 && !lavapipe_drops_x11_frames(&adapters[index].get_info())
         }) {
             let from = adapters[chosen].get_info();
@@ -483,9 +595,9 @@ pub(super) fn select_adapter(
     if let StartupAdapterChoice::SkipFailed { excluded } = choice {
         let using = adapters[chosen].get_info();
         tracing::warn!(
-            skipped = %excluded.name,
+            skipped = %excluded.iter().map(|id| id.name.as_str()).collect::<Vec<_>>().join(", "),
             using = %using.name,
-            "skipping the adapter that failed before the first present"
+            "skipping adapters that failed before the first present"
         );
     }
     let chosen_info = adapters[chosen].get_info();
@@ -566,8 +678,41 @@ impl AdapterIdentity {
 pub(super) enum StartupAdapterChoice {
     /// Highest `adapter_rank`, then the surface filter.
     Ranked,
-    /// The named adapter failed before the first present. Skip it.
-    SkipFailed { excluded: AdapterIdentity },
+    /// Adapters that failed before the first present. The set should grow.
+    /// Replacing it retries an adapter that already failed.
+    SkipFailed { excluded: Vec<AdapterIdentity> },
+}
+
+impl StartupAdapterChoice {
+    /// Append one failure. Replacing the list would retry an adapter that already failed.
+    pub(super) fn record_failure(&mut self, failed: AdapterIdentity) {
+        match self {
+            Self::Ranked => {
+                *self = Self::SkipFailed {
+                    excluded: vec![failed],
+                };
+            }
+            Self::SkipFailed { excluded } => {
+                if !excluded.contains(&failed) {
+                    excluded.push(failed);
+                }
+            }
+        }
+    }
+
+    pub(super) fn exclusion_len(&self) -> usize {
+        match self {
+            Self::Ranked => 0,
+            Self::SkipFailed { excluded } => excluded.len(),
+        }
+    }
+
+    pub(super) fn excludes(&self, identity: &AdapterIdentity) -> bool {
+        match self {
+            Self::Ranked => false,
+            Self::SkipFailed { excluded } => excluded.iter().any(|id| id == identity),
+        }
+    }
 }
 
 /// One enumerated adapter reduced to the fields the pure choice uses.
@@ -636,14 +781,10 @@ pub(super) fn choose_startup_adapter_on(
     os: StartupOs,
     backends: StartupBackendPolicy,
 ) -> Option<StartupAdapterPick> {
-    let excluded = match choice {
-        StartupAdapterChoice::Ranked => None,
-        StartupAdapterChoice::SkipFailed { excluded } => Some(excluded),
-    };
     let eligible: Vec<usize> = (0..candidates.len())
         .filter(|&index| candidates[index].surface_compatible)
         .filter(|&index| backend_allowed(backends, candidates[index].identity.backend))
-        .filter(|&index| excluded.is_none_or(|id| &candidates[index].identity != id))
+        .filter(|&index| !choice.excludes(&candidates[index].identity))
         .collect();
     let hardware: Vec<usize> = eligible
         .iter()
@@ -933,10 +1074,57 @@ pub(super) fn startup_watch_warning(
     })
 }
 
-fn note_startup_watch(started: Instant, warned: &mut bool, phase: &StartupWatchPhase) {
-    if let Some(warning) = startup_watch_warning(started.elapsed(), *warned, phase) {
-        *warned = true;
+fn warn_if_startup_still_running(step: &StartupWatchStep) {
+    if let Some(warning) = &step.warning {
         tracing::warn!("{warning}");
+    }
+}
+
+/// Whether the worker has produced a result on this poll.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum StartupWorkerPoll {
+    /// `try_recv` returned empty. The request is still running.
+    Empty,
+    /// The worker returned. Do not describe that work as still running.
+    Finished,
+}
+
+/// One step of the startup watch: the warning, the latch, and the next wake.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct StartupWatchStep {
+    pub warned: bool,
+    pub warning: Option<String>,
+    /// `WaitUntil` this instant while the warning has not been sent.
+    pub deadline: Option<Instant>,
+}
+
+/// Warn only while the worker is still empty. A finished worker is not
+/// "still running". Arm `start + 10s` until that warning has been sent.
+pub(super) fn drive_startup_watch(
+    started: Instant,
+    already_warned: bool,
+    now: Instant,
+    worker: StartupWorkerPoll,
+    phase: &StartupWatchPhase,
+) -> StartupWatchStep {
+    if worker == StartupWorkerPoll::Finished {
+        return StartupWatchStep {
+            warned: already_warned,
+            warning: None,
+            deadline: None,
+        };
+    }
+    let elapsed = now.saturating_duration_since(started);
+    let warning = startup_watch_warning(elapsed, already_warned, phase);
+    let warned = already_warned || warning.is_some();
+    StartupWatchStep {
+        warned,
+        warning,
+        deadline: if warned {
+            None
+        } else {
+            Some(started + Duration::from_secs(10))
+        },
     }
 }
 

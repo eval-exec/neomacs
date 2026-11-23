@@ -264,6 +264,12 @@ impl RenderApp {
         self.refresh_monitor_snapshot(event_loop, false);
     }
 
+    fn startup_watch_deadline(&self) -> Option<std::time::Instant> {
+        self.gpu_startup
+            .as_ref()
+            .and_then(|pending| pending.watch_deadline())
+    }
+
     pub(super) fn handle_about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
         // An application Quit that found a full input queue is retried here
         // rather than dropped or blocked on the AppKit main thread.
@@ -296,14 +302,20 @@ impl RenderApp {
         if let Some(pending) = self.gpu_startup.take() {
             match pending.poll(&event_loop.create_proxy()) {
                 Ok(super::gpu_startup::GpuAttemptPoll::Pending(pending)) => {
+                    self.startup_adapter_choice = pending.adapter_choice().clone();
                     self.gpu_startup = Some(pending)
                 }
-                Ok(super::gpu_startup::GpuAttemptPoll::Ready { gpu, input }) => {
+                Ok(super::gpu_startup::GpuAttemptPoll::Ready { gpu, input, choice }) => {
+                    self.startup_adapter_choice = choice;
                     self.install_wgpu(gpu);
                     self.startup_input = Some(input);
                 }
                 Err(error) => {
-                    self.startup_error = Some(error);
+                    self.startup_adapter_choice = error.choice;
+                    if self.startup_adapter_choice.exclusion_len() > 0 {
+                        self.startup_adapter_exhausted = true;
+                    }
+                    self.startup_error = Some(error.message);
                     event_loop.exit();
                     return;
                 }
@@ -332,7 +344,12 @@ impl RenderApp {
                 }
                 self.startup_commands.push_back(command);
             }
-            event_loop.set_control_flow(ControlFlow::Wait);
+            // Enumeration can outlive this wake. Arm the 10s watch or the
+            // warning never runs until the worker itself finishes.
+            event_loop.set_control_flow(match self.startup_watch_deadline() {
+                Some(deadline) => ControlFlow::WaitUntil(deadline),
+                None => ControlFlow::Wait,
+            });
             return;
         }
         // Device-loss recovery (SHADER_SURFACES.md: user shader hang → TDR):
@@ -575,6 +592,9 @@ impl RenderApp {
         }
         if let Some(tooltip_deadline) = self.menus.tooltip_deadline() {
             deadline = Some(deadline.map_or(tooltip_deadline, |d| d.min(tooltip_deadline)));
+        }
+        if let Some(watch) = self.startup_watch_deadline() {
+            deadline = Some(deadline.map_or(watch, |existing| existing.min(watch)));
         }
         // A deferred application Quit must not wait for an unrelated event:
         // keep a bounded retry deadline until the queue has room.
