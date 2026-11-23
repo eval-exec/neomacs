@@ -28,7 +28,7 @@ use crate::font_backend::{
 use neomacs_display_protocol::font::{FontBackendKind, FontFileAsset, ResolvedFontIdentity};
 use neovm_core::emacs_core::eval::FontSpecSelection;
 use neovm_core::emacs_core::fontset::{
-    FontSpecEntry, StoredFontSpec, StoredOtfSpec, fontset_generation, matching_entries_for_char,
+    FontSpecEntry, StoredFontSpec, StoredOtfSpec, fontset_generation, rendering_groups_for_char,
 };
 use neovm_core::emacs_core::intern::intern;
 use neovm_core::face::{FontSlant, FontWeight, FontWidth};
@@ -227,6 +227,12 @@ pub struct FontResolver {
     /// font spec, not the character, so a later character covered by an
     /// opened fallback does not get a new equal-score pick.
     opened_fallbacks: Mutex<HashMap<OpenedFallbackKey, Vec<PlatformFontMatch>>>,
+    /// Fallback specs in the order the next character tries them.
+    ///
+    /// GNU moves the found fallback object to the front of the fallback
+    /// group (`src/fontset.c`, the `found:` label) and leaves the
+    /// character-specific group in charset order. Empty means "no move yet".
+    fallback_order: Mutex<Vec<FontSpecEntry>>,
 }
 
 impl FontResolver {
@@ -243,6 +249,7 @@ impl FontResolver {
             char_cache: Mutex::new(HashMap::default()),
             exact_cache: Mutex::new(HashMap::default()),
             opened_fallbacks: Mutex::new(HashMap::default()),
+            fallback_order: Mutex::new(Vec::new()),
         }
     }
 
@@ -921,26 +928,46 @@ impl FontResolver {
         let prefer_monospace = self.family_prefers_monospace(family);
         let mut resolution = None;
         let mut allow_generic_fallback = true;
-        for entry in matching_entries_for_char(ch) {
-            match entry {
-                FontSpecEntry::ExplicitNone => {
-                    allow_generic_fallback = false;
+        let (specific, fallback) = rendering_groups_for_char(ch);
+        let fallback = self.ordered_fallback_group(fallback);
+        for entry in specific {
+            let keep_going = self.consider_fontset_entry(
+                &entry,
+                family,
+                ch,
+                requested_weight,
+                requested_slant,
+                requested_width,
+                size,
+                prefer_monospace,
+                generation,
+                &mut allow_generic_fallback,
+                &mut resolution,
+            );
+            if !keep_going || resolution.is_some() {
+                break;
+            }
+        }
+        if resolution.is_none() && allow_generic_fallback {
+            for entry in &fallback {
+                if !self.consider_fontset_entry(
+                    entry,
+                    family,
+                    ch,
+                    requested_weight,
+                    requested_slant,
+                    requested_width,
+                    size,
+                    prefer_monospace,
+                    generation,
+                    &mut allow_generic_fallback,
+                    &mut resolution,
+                ) {
                     break;
                 }
-                FontSpecEntry::Font(spec) => {
-                    let policy = CapturedCharacterPolicy::capture(
-                        family,
-                        ch,
-                        requested_weight,
-                        requested_slant,
-                        requested_width,
-                        size,
-                        &spec,
-                    );
-                    if let Some(found) = self.resolve_spec(policy, prefer_monospace, generation) {
-                        resolution = Some(found);
-                        break;
-                    }
+                if resolution.is_some() {
+                    self.promote_fallback(entry);
+                    break;
                 }
             }
         }
@@ -1018,6 +1045,83 @@ impl FontResolver {
                 selected
             }
             None => None,
+        }
+    }
+
+    /// Charset order, with any fallback already found moved to the front.
+    fn ordered_fallback_group(&self, base: Vec<FontSpecEntry>) -> Vec<FontSpecEntry> {
+        let Ok(mut stored) = self.fallback_order.lock() else {
+            return base;
+        };
+        if stored.is_empty() {
+            *stored = base.clone();
+            return base;
+        }
+        let mut ordered = Vec::with_capacity(base.len());
+        for entry in stored.iter() {
+            if base.contains(entry) && !ordered.contains(entry) {
+                ordered.push(entry.clone());
+            }
+        }
+        for entry in &base {
+            if !ordered.contains(entry) {
+                ordered.push(entry.clone());
+            }
+        }
+        *stored = ordered.clone();
+        ordered
+    }
+
+    /// GNU's `found:` label: the fallback that covered this character is tried
+    /// first for the next one. The character-specific group is not reordered.
+    fn promote_fallback(&self, found: &FontSpecEntry) {
+        let Ok(mut stored) = self.fallback_order.lock() else {
+            return;
+        };
+        if let Some(index) = stored.iter().position(|entry| entry == found) {
+            let entry = stored.remove(index);
+            stored.insert(0, entry);
+        } else {
+            stored.insert(0, found.clone());
+        }
+    }
+
+    /// Try one fontset entry. Returns false when the walk must stop.
+    #[allow(clippy::too_many_arguments)]
+    fn consider_fontset_entry(
+        &self,
+        entry: &FontSpecEntry,
+        family: &str,
+        ch: char,
+        requested_weight: u16,
+        requested_slant: FontSlant,
+        requested_width: FontWidth,
+        size: FontSelectionSize,
+        prefer_monospace: bool,
+        generation: u64,
+        allow_generic_fallback: &mut bool,
+        resolution: &mut Option<SpecResolution>,
+    ) -> bool {
+        match entry {
+            FontSpecEntry::ExplicitNone => {
+                *allow_generic_fallback = false;
+                false
+            }
+            FontSpecEntry::Font(spec) => {
+                let policy = CapturedCharacterPolicy::capture(
+                    family,
+                    ch,
+                    requested_weight,
+                    requested_slant,
+                    requested_width,
+                    size,
+                    spec,
+                );
+                if let Some(found) = self.resolve_spec(policy, prefer_monospace, generation) {
+                    *resolution = Some(found);
+                }
+                true
+            }
         }
     }
 
@@ -1175,6 +1279,10 @@ impl FontResolver {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clear();
         self.opened_fallbacks
+            .get_mut()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
+        self.fallback_order
             .get_mut()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clear();
@@ -1396,6 +1504,10 @@ impl FontResolver {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clear();
         self.opened_fallbacks
+            .get_mut()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
+        self.fallback_order
             .get_mut()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clear();

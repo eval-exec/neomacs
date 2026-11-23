@@ -1674,6 +1674,104 @@ fn opened_fallback_skips_a_font_that_does_not_cover_the_character() {
     assert_eq!(listings.load(Ordering::Relaxed), 2);
 }
 
+/// The second fallback spec's font covers `検` and `リ`. The first covers
+/// only `リ`. GNU moves the found fallback to the front of that group
+/// (`src/fontset.c`, the `found:` label), so `リ` must use the second font.
+struct FallbackGroupBackend;
+
+impl FontBackend for FallbackGroupBackend {
+    fn kind(&self) -> FontBackendKind {
+        FontBackendKind::Fontconfig
+    }
+
+    fn list_families(&self) -> Vec<FontFamilyName> {
+        Vec::new()
+    }
+
+    fn resolve_family(&self, family: &str) -> String {
+        family.to_owned()
+    }
+
+    fn family_prefers_monospace(&self, _family: &str) -> bool {
+        false
+    }
+
+    fn list_candidates(&self, query: &FontCandidateQuery) -> Vec<FontCandidate> {
+        let Some(ch) = query.required.single_char() else {
+            return Vec::new();
+        };
+        let Some(family) = query.scope.queried_family() else {
+            return Vec::new();
+        };
+        let covers = match family {
+            "OnlyC2" => ch == 'リ',
+            "CoversBoth" => ch == '検' || ch == 'リ',
+            _ => false,
+        };
+        if covers {
+            vec![candidate(family, 400, FontSlant::Normal, 0)]
+        } else {
+            Vec::new()
+        }
+    }
+
+    fn list_candidates_for_identity(
+        &self,
+        query: &FontCandidateQuery,
+        identity: &ResolvedFontIdentity,
+    ) -> Vec<FontCandidate> {
+        self.list_candidates(query)
+            .into_iter()
+            .filter(|candidate| candidate.matched.identity == *identity)
+            .collect()
+    }
+
+    fn advance_catalog_generation(&mut self) {}
+
+    fn poll_catalog_change(&mut self) -> crate::font::catalog::FontCatalogChange {
+        crate::font::catalog::FontCatalogChange::Unchanged
+    }
+}
+
+#[test]
+fn fallback_group_tries_the_last_found_font_first() {
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    eval.eval_str(
+        r#"(progn
+            (set-fontset-font t nil "OnlyC2")
+            (set-fontset-font t nil "CoversBoth" nil 'append))"#,
+    )
+    .expect("two fallback specs");
+    let resolver = FontResolver::new(Box::new(FallbackGroupBackend));
+    let resolve = |ch| {
+        resolver
+            .resolve_for_char(
+                "DejaVu Sans",
+                ch,
+                400,
+                FontSlant::Normal,
+                FontWidth::Normal,
+                selection_size(),
+            )
+            .unwrap_or_else(|| panic!("fallback for {ch}"))
+    };
+
+    let han = resolve('検');
+    assert_eq!(
+        han.family(),
+        "CoversBoth",
+        "検 is covered only by the second spec"
+    );
+    let kana = resolve('リ');
+    assert_eq!(
+        kana.family(),
+        "CoversBoth",
+        "the fallback found for 検 moves to the front, so リ uses it, got {}",
+        kana.family()
+    );
+    drop(eval);
+}
+
 #[test]
 fn empty_sort_ranks_keep_list_order() {
     let request = equal_score_request();
