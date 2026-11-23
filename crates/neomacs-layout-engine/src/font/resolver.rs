@@ -1263,14 +1263,14 @@ impl FontResolver {
         result
     }
 
-    /// Drop opened fallbacks and the per-character answers.
+    /// Drop this resolver's caches. The process-global fallback orders stay:
+    /// a worker rebuild must not wipe moves that belong to other frames.
     ///
     /// A redisplay does not call this. The entries live until the catalog
-    /// changes, or until `fontset_generation` in the key misses. The worker
-    /// holds its own resolver and uses the same boundary. Reuse applies only
-    /// after the requested family misses, so a character that family covers
-    /// is not drawn with an older fallback.
-    pub(crate) fn clear_caches(&mut self) {
+    /// changes, or until `fontset_generation` in the key misses. Reuse applies
+    /// only after the requested family misses, so a character that family
+    /// covers is not drawn with an older fallback.
+    pub(crate) fn clear_service_caches(&mut self) {
         if let Some(policy) = &mut self.worker_policy {
             policy.admitted_queries.clear();
         }
@@ -1296,7 +1296,6 @@ impl FontResolver {
             .get_mut()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clear();
-        crate::font::fallback_order::clear_fallback_orders();
         self.capability_cache
             .get_mut()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -1305,6 +1304,29 @@ impl FontResolver {
             .get_mut()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clear();
+    }
+
+    /// Service-local clear plus the process-global fallback orders.
+    /// Main-side catalog, fontset, and symbol-policy changes use this.
+    /// A worker install uses [`Self::clear_service_caches`].
+    pub(crate) fn clear_caches(&mut self) {
+        self.clear_service_caches();
+        crate::font::fallback_order::clear_fallback_orders();
+    }
+
+    /// Drop admitted worker queries whose fontset epoch is older than
+    /// `epoch`, when `epoch` is still at the high-water mark. A stale job
+    /// leaves the newer epoch's keys in place.
+    pub(crate) fn discard_stale_worker_queries(&mut self, epoch: u64) {
+        if epoch < crate::font::fallback_order::fontset_epoch_high_water() {
+            return;
+        }
+        let Some(policy) = &mut self.worker_policy else {
+            return;
+        };
+        policy
+            .admitted_queries
+            .retain(|key| key.fontset.frame == 0 || key.fontset.face_epoch >= epoch);
     }
 
     /// Drop per-character answers for realized fontsets that `drop_fontset`
@@ -1318,6 +1340,11 @@ impl FontResolver {
             .get_mut()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .retain(|key, _| !drop_fontset(&key.fontset));
+        if let Some(policy) = &mut self.worker_policy {
+            policy
+                .admitted_queries
+                .retain(|key| !drop_fontset(&key.fontset));
+        }
     }
 
     #[cfg(test)]

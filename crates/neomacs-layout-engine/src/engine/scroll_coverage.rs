@@ -411,13 +411,38 @@ impl LayoutEngine {
             .retain_live_frames(|frame| evaluator.frame_manager().get(frame).is_some());
         self.retained_by_frame
             .retain(|frame, _| evaluator.frame_manager().get(*frame).is_some());
-        if let Some(service) = self.font_metrics.as_mut() {
-            service.prune_dead_frame_fontsets(|frame| {
-                evaluator
-                    .frame_manager()
-                    .get(neovm_core::window::FrameId(frame))
-                    .is_some()
-            });
+        // Five cache retains and the global order lock run only after a
+        // frame that owns fontset state has actually disappeared. A live
+        // redisplay pays for a small frame-id set, not the CJK caches.
+        let mut watched = crate::font::fallback_order::fallback_order_frames();
+        if let Some(service) = self.font_metrics.as_ref() {
+            watched.extend(service.keyed_fontset_frames());
+        }
+        let frame_died = watched.into_iter().any(|frame| {
+            evaluator
+                .frame_manager()
+                .get(neovm_core::window::FrameId(frame))
+                .is_none()
+        });
+        if frame_died {
+            if let Some(service) = self.font_metrics.as_mut() {
+                service.prune_dead_frame_fontsets(|frame| {
+                    evaluator
+                        .frame_manager()
+                        .get(neovm_core::window::FrameId(frame))
+                        .is_some()
+                });
+            } else {
+                crate::font::fallback_order::prune_fallback_orders(
+                    &|fontset: &crate::font::fallback_order::FaceFontsetId| {
+                        fontset.frame != 0
+                            && evaluator
+                                .frame_manager()
+                                .get(neovm_core::window::FrameId(fontset.frame))
+                                .is_none()
+                    },
+                );
+            }
         }
         if self
             .retained_frame

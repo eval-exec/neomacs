@@ -4855,13 +4855,18 @@ fn worker_frame_switch_keeps_the_main_fallback_order() {
         size: None,
         fontset_generation: 1,
     };
+    let captured = crate::font::fallback_order::fallback_order_groups_for_frame(11);
+    assert!(
+        captured >= 1,
+        "the worker's first install must not clear the group capture just recorded"
+    );
     crate::font::fallback_order::promote_fallback(
         &moved,
         &neovm_core::emacs_core::fontset::FontSpecEntry::ExplicitNone,
     );
-    assert_eq!(
-        crate::font::fallback_order::fallback_order_groups_for_frame(11),
-        1,
+    let planted = crate::font::fallback_order::fallback_order_groups_for_frame(11);
+    assert!(
+        planted >= captured,
         "the move under test is planted after the worker's first install"
     );
     main.set_realized_fontset_context(22, 1);
@@ -4876,8 +4881,103 @@ fn worker_frame_switch_keeps_the_main_fallback_order() {
     );
     assert_eq!(
         crate::font::fallback_order::fallback_order_groups_for_frame(11),
-        1,
+        planted,
         "frame B's prepare must not clear frame A's moved front"
+    );
+    drop(eval);
+}
+
+#[test]
+fn stale_epoch_context_keeps_the_newer_fallback_group() {
+    let mut newer = make_svc();
+    newer.set_realized_fontset_context(4, 2);
+    let key = crate::font::fallback_order::FallbackOrderKey {
+        fontset: crate::font::fallback_order::FaceFontsetId {
+            frame: 4,
+            face: 1,
+            face_epoch: 2,
+        },
+        family: "Probe".to_string(),
+        weight: 400,
+        slant: 0,
+        width: 100,
+        size: None,
+        fontset_generation: 1,
+    };
+    crate::font::fallback_order::promote_fallback(
+        &key,
+        &neovm_core::emacs_core::fontset::FontSpecEntry::ExplicitNone,
+    );
+    let mut stale = make_svc();
+    stale.set_realized_fontset_context(4, 1);
+    assert_eq!(
+        crate::font::fallback_order::fallback_order_groups_for_frame(4),
+        1,
+        "a stale epoch must not drop the newer epoch's group"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn worker_epoch_churn_past_the_query_cap_keeps_the_moved_front() {
+    use crate::display_item::{
+        DisplayItem, DisplayItemKind, DisplayTextRun, RenderFaceRef, SourceSpan,
+    };
+    use crate::display_row::face_state::DisplayRowFace;
+    use crate::row_layout::font_measurement::{FontMeasurementSnapshot, WorkerFontMeasurements};
+
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let mut main = make_svc();
+    assert!(main.synchronize_symbol_font_policy(true, None).changed());
+    let mut face = DisplayRowFace::from_resolved(
+        FaceId::new(1),
+        &crate::neovm_bridge::ResolvedFace::default(),
+    );
+    face.font_family = std::sync::Arc::from("DejaVu Sans");
+    face.font_weight = 400;
+    face.font_size = 16.0;
+    let faces = [face];
+    let items = [DisplayItem::new(
+        SourceSpan::synthetic(1, 0, 1),
+        RenderFaceRef::FaceId(faces[0].face_id),
+        DisplayItemKind::TextRun(DisplayTextRun::independent("検")),
+    )];
+    let mut worker = WorkerFontMeasurements::default();
+    // One new key per epoch. 513 epochs is one past the 512-query cap.
+    for epoch in 1..=513 {
+        main.set_realized_fontset_context(11, epoch);
+        if epoch == 513 {
+            crate::font::fallback_order::promote_fallback(
+                &crate::font::fallback_order::FallbackOrderKey {
+                    fontset: crate::font::fallback_order::FaceFontsetId {
+                        frame: 11,
+                        face: 1,
+                        face_epoch: 513,
+                    },
+                    family: "DejaVu Sans".to_string(),
+                    weight: 400,
+                    slant: 0,
+                    width: 100,
+                    size: None,
+                    fontset_generation: 1,
+                },
+                &neovm_core::emacs_core::fontset::FontSpecEntry::ExplicitNone,
+            );
+        }
+        let snapshot =
+            FontMeasurementSnapshot::capture(&faces, &mut main, &items).expect("epoch snapshot");
+        worker
+            .prepare(&snapshot, &faces, &|| false)
+            .expect("epoch prepare");
+    }
+    assert_eq!(
+        worker.cache_rebuilds(),
+        1,
+        "stale epochs are dropped before the fit check, so the cap does not rebuild"
+    );
+    assert!(
+        crate::font::fallback_order::fallback_order_groups_for_frame(11) >= 1,
+        "crossing the query cap must not clear the current epoch's moved front"
     );
     drop(eval);
 }

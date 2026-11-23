@@ -131,8 +131,15 @@ fn deleting_a_frame_drops_its_fallback_group() {
         crate::font::fallback_order::fallback_order_groups_for_frame(dead.0),
         1
     );
-    ctx.frame_manager_mut().delete_frame(dead);
     let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    let locks_before = crate::font::fallback_order::fallback_order_lock_count();
+    engine.retire_removed_frame_owners(&ctx);
+    assert_eq!(
+        crate::font::fallback_order::fallback_order_lock_count(),
+        locks_before,
+        "redisplay does not walk the order map while every keyed frame is alive"
+    );
+    ctx.frame_manager_mut().delete_frame(dead);
     engine.retire_removed_frame_owners(&ctx);
     assert_eq!(
         crate::font::fallback_order::fallback_order_groups_for_frame(dead.0),

@@ -461,6 +461,9 @@ impl WorkerFontMeasurements {
             .is_some_and(|service| service.test_catalog() != snapshot.catalog);
         #[cfg(not(test))]
         let catalog_changed = false;
+        if let Some(service) = self.service.as_mut() {
+            service.discard_stale_worker_queries(snapshot.revision.face_epoch);
+        }
         if self.revision.map(MeasurementRevision::rebuild_key)
             != Some(snapshot.revision.rebuild_key())
             || catalog_changed

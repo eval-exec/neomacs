@@ -972,6 +972,9 @@ pub struct FontMetricsService {
     /// unmatched instead of clearing every frame's fontset.
     realized_fontset_frame: u64,
     realized_fontset_epoch: u64,
+    /// Frames this service has measured. Frame deletion checks the set
+    /// before walking the character caches.
+    keyed_frames: rustc_hash::FxHashSet<u64>,
 }
 
 /// Whether primary-font pinning is enabled (default on). Pinning routes the
@@ -1181,6 +1184,7 @@ impl FontMetricsService {
             symbol_font_policy: SymbolFontPolicy::default(),
             realized_fontset_frame: 0,
             realized_fontset_epoch: 0,
+            keyed_frames: rustc_hash::FxHashSet::default(),
         }
     }
 
@@ -1189,21 +1193,34 @@ impl FontMetricsService {
     }
 
     pub(crate) fn set_realized_fontset_context(&mut self, frame: u64, face_epoch: u64) {
-        let epoch_changed = self.realized_fontset_epoch != face_epoch;
         self.realized_fontset_frame = frame;
         self.realized_fontset_epoch = face_epoch;
-        if epoch_changed {
-            // GNU frees realized fontsets on `face_change`. The implicit
-            // frame 0 fontset is the test and `font-at` default, not a
-            // retired face, so it stays.
+        if frame != 0 {
+            self.keyed_frames.insert(frame);
+        }
+        // A stale epoch installs context and leaves the newer groups. Only
+        // a new high-water mark drops strictly older epochs.
+        if crate::font::fallback_order::note_fontset_epoch(face_epoch) {
             self.drop_realized_fontsets(&|fontset| {
-                fontset.frame != 0 && fontset.face_epoch != face_epoch
+                fontset.frame != 0 && fontset.face_epoch < face_epoch
             });
         }
     }
 
+    pub(crate) fn keyed_fontset_frames(&self) -> impl Iterator<Item = u64> + '_ {
+        self.keyed_frames.iter().copied()
+    }
+
+    /// Drop worker query keys from epochs older than `epoch` before the
+    /// 512-query fit check. The fit check runs before context installation,
+    /// so this has to happen first or history alone rebuilds the service.
+    pub(crate) fn discard_stale_worker_queries(&mut self, epoch: u64) {
+        self.font_resolver.discard_stale_worker_queries(epoch);
+    }
+
     /// Drop one deleted frame's fontset groups and this service's copies.
     pub(crate) fn prune_dead_frame_fontsets(&mut self, live: impl Fn(u64) -> bool) {
+        self.keyed_frames.retain(|frame| live(*frame));
         self.drop_realized_fontsets(&|fontset| fontset.frame != 0 && !live(fontset.frame));
     }
 
@@ -1309,7 +1326,10 @@ impl FontMetricsService {
         // ASCII always selects its face's primary font. Keep the previous
         // symbol classifier/cache warm until a Unicode row actually needs it.
         if policy.query_count() != 0 && self.symbol_font_policy != policy.symbols {
-            self.clear_caches();
+            // The fresh worker service differs from the default symbol policy.
+            // That reset is local. The process-global fallback orders belong
+            // to every frame and survive a worker rebuild.
+            self.clear_local_caches();
             self.symbol_font_policy = policy.symbols.clone();
         }
         self.font_resolver
@@ -4262,6 +4282,19 @@ impl FontMetricsService {
     /// Canonical font instances intentionally survive: IDs are durable and
     /// records are dropped only by a catalog advance, not request changes.
     pub fn clear_caches(&mut self) {
+        self.clear_measurement_caches();
+        self.font_resolver.clear_caches();
+    }
+
+    /// Worker-local reset. Catalog, fontset, and symbol-policy changes on
+    /// the main service still go through [`Self::clear_caches`], which also
+    /// drops the process-global fallback orders.
+    pub(crate) fn clear_local_caches(&mut self) {
+        self.clear_measurement_caches();
+        self.font_resolver.clear_service_caches();
+    }
+
+    fn clear_measurement_caches(&mut self) {
         self.coverage_bitmap_fonts.clear();
         self.ascii_cache.clear();
         self.char_cache.clear();
@@ -4271,7 +4304,6 @@ impl FontMetricsService {
         self.resolved_char_font_cache.clear();
         self.text_extents_cache.clear();
         self.resolved_cluster_cache.clear();
-        self.font_resolver.clear_caches();
         self.primary_pin_cache.clear();
         self.primary_match_cache.clear();
         // A previously missing/replaced file may become available after the

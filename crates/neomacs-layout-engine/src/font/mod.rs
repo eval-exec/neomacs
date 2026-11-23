@@ -1,12 +1,8 @@
 //! Font selection, metrics, and probing (moved from flat font_* files).
 
 pub mod catalog;
-// Engine lifetime tests plant and count groups. The module stays private
-// in the product build.
-#[cfg(test)]
+// The layout engine prunes these groups when a frame dies.
 pub(crate) mod fallback_order;
-#[cfg(not(test))]
-mod fallback_order;
 pub mod font_match;
 #[cfg(target_os = "linux")]
 pub mod fontconfig;

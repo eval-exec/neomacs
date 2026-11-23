@@ -15,6 +15,7 @@
 use crate::font_backend::FontSelectionSize;
 use neovm_core::emacs_core::fontset::FontSpecEntry;
 use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -91,6 +92,12 @@ fn bump(group: &FallbackGroup) {
 }
 
 static FALLBACK_ORDERS: OnceLock<Mutex<HashMap<FallbackOrderKey, FallbackGroup>>> = OnceLock::new();
+/// Highest face epoch any service has installed. A stale context must not
+/// prune groups that belong to a newer epoch.
+static FONTSET_EPOCH_HIGH_WATER: AtomicU64 = AtomicU64::new(0);
+/// Frames that currently own a fallback group. Frame-deletion checks this
+/// set instead of walking every cache entry on each redisplay.
+static ORDER_FRAMES: OnceLock<Mutex<HashSet<u64>>> = OnceLock::new();
 
 #[cfg(test)]
 static ORDER_LOCKS: AtomicU64 = AtomicU64::new(0);
@@ -112,6 +119,65 @@ pub(crate) fn fallback_order_lock_count() -> u64 {
     ORDER_LOCKS.load(Ordering::Relaxed)
 }
 
+pub(crate) fn fontset_epoch_high_water() -> u64 {
+    FONTSET_EPOCH_HIGH_WATER.load(Ordering::Acquire)
+}
+
+/// Record `epoch` when it moves the process-wide high-water mark forward.
+/// A stale or repeated epoch returns false and must not drop newer groups.
+pub(crate) fn note_fontset_epoch(epoch: u64) -> bool {
+    let mut current = FONTSET_EPOCH_HIGH_WATER.load(Ordering::Acquire);
+    loop {
+        if epoch <= current {
+            return false;
+        }
+        match FONTSET_EPOCH_HIGH_WATER.compare_exchange(
+            current,
+            epoch,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => return true,
+            Err(observed) => current = observed,
+        }
+    }
+}
+
+fn order_frames() -> &'static Mutex<HashSet<u64>> {
+    ORDER_FRAMES.get_or_init(|| Mutex::new(HashSet::default()))
+}
+
+fn remember_order_frame(frame: u64) {
+    if frame == 0 {
+        return;
+    }
+    order_frames()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(frame);
+}
+
+fn replace_order_frames(frames: impl IntoIterator<Item = u64>) {
+    let mut recorded = order_frames()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    recorded.clear();
+    recorded.extend(frames);
+}
+
+/// Frames that own a fallback group. Empty when no group has been created.
+pub(crate) fn fallback_order_frames() -> Vec<u64> {
+    let Some(frames) = ORDER_FRAMES.get() else {
+        return Vec::new();
+    };
+    frames
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .iter()
+        .copied()
+        .collect()
+}
+
 pub(crate) fn clear_fallback_orders() {
     if let Some(orders) = FALLBACK_ORDERS.get() {
         let mut orders = orders
@@ -121,6 +187,12 @@ pub(crate) fn clear_fallback_orders() {
             bump(group);
         }
         orders.clear();
+    }
+    if let Some(frames) = ORDER_FRAMES.get() {
+        frames
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
     }
 }
 
@@ -139,6 +211,11 @@ pub(crate) fn prune_fallback_orders(drop_fontset: &impl Fn(&FaceFontsetId) -> bo
             true
         }
     });
+    let frames = orders
+        .keys()
+        .filter(|key| key.fontset.frame != 0)
+        .map(|key| key.fontset.frame);
+    replace_order_frames(frames);
 }
 
 #[cfg(test)]
@@ -193,6 +270,7 @@ pub(crate) fn order_fallback_group(
         .get(key)
         .and_then(|group| group.entries.first().cloned());
     let group = orders.entry(key.clone()).or_default();
+    remember_order_frame(key.fontset.frame);
     let mut ordered = Vec::with_capacity(base.len());
     for entry in &group.entries {
         if base.contains(entry) && !ordered.contains(entry) {
@@ -218,6 +296,7 @@ pub(crate) fn order_fallback_group(
 pub(crate) fn promote_fallback(key: &FallbackOrderKey, found: &FontSpecEntry) -> OrderGeneration {
     let mut orders = lock();
     let group = orders.entry(key.clone()).or_default();
+    remember_order_frame(key.fontset.frame);
     let changed = match group.entries.iter().position(|entry| entry == found) {
         Some(0) => false,
         Some(index) => {
