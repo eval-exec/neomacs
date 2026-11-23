@@ -15,6 +15,9 @@ pub use owner::RootedRetireFailure;
 pub use resume::ResumeGcImage;
 pub use resume::ResumeGcImageFailure;
 
+#[cfg(any(test, feature = "test-support"))]
+use std::num::NonZeroU64;
+
 use super::*;
 use crate::tagged::transport::{ParallelRootBatchError, ParallelRootIdentity, SharedRoot};
 
@@ -303,6 +306,68 @@ pub(super) fn request(registry: &Registry) -> Result<Request, RendezvousError> {
     registry.park.wake.notify_all();
     Ok(request)
 }
+
+/// Queue one serial request on the live registry. L6.7 owns the product
+/// enqueue. `generation` is recorded and is not checked here; a stop refuses
+/// the grant before the keeper's publication `ready` callback.
+#[cfg(any(test, feature = "test-support"))]
+pub(super) fn enqueue_serial_for_test(
+    registry: &Registry,
+    owner: MutatorKey,
+    generation: NonZeroU64,
+) -> Result<u64, RendezvousError> {
+    let mut gate = registry.lock()?;
+    Ok(gate.rendezvous.enqueue_serial(owner, generation)?.get())
+}
+
+/// Ring length, head id, and whether a grant is issued now. Stopping and
+/// Tracing return no grant and leave the ring unchanged.
+#[cfg(any(test, feature = "test-support"))]
+pub(super) fn serial_stop_priority_for_test(
+    registry: &Registry,
+) -> Result<(usize, Option<u64>, Option<u64>), RendezvousError> {
+    let mut gate = registry.lock()?;
+    gate.rendezvous.live()?;
+    let len = gate.rendezvous.ring_len();
+    let head = gate.rendezvous.ring_head().map(|id| id.get());
+    let members = membership(&gate)?;
+    let granted = gate
+        .rendezvous
+        .try_grant_head(&members, |_| true)?
+        .map(|id| id.get());
+    Ok((len, head, granted))
+}
+
+/// Head of the live ring, without granting it.
+#[cfg(any(test, feature = "test-support"))]
+pub(super) fn serial_ring_head_for_test(
+    registry: &Registry,
+) -> Result<(usize, Option<u64>), RendezvousError> {
+    let gate = registry.lock()?;
+    gate.rendezvous.live()?;
+    Ok((
+        gate.rendezvous.ring_len(),
+        gate.rendezvous.ring_head().map(|id| id.get()),
+    ))
+}
+
+/// Retire the current head when it is `id`. A granted head retires the same way.
+#[cfg(any(test, feature = "test-support"))]
+pub(super) fn retire_serial_head_for_test(
+    registry: &Registry,
+    id: u64,
+) -> Result<(), RendezvousError> {
+    let mut gate = registry.lock()?;
+    let head = gate
+        .rendezvous
+        .ring_head()
+        .ok_or(RendezvousError::Identity)?;
+    if head.get() != id {
+        return Err(RendezvousError::Identity);
+    }
+    gate.rendezvous.retire_serial(head)
+}
+
 pub(super) fn finish_debt(
     registry: &Registry,
     gate: &mut RegistryState,

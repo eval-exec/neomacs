@@ -10,7 +10,7 @@
 use neovm_value::tagged::gc::heap_transfer::{
     PublishedOwner, StopScope, StoppedInterval, UnenteredReservation,
 };
-use neovm_value::tagged::gc::{AllStopped, RendezvousError};
+use neovm_value::tagged::gc::{AllStopped, AllStoppedFailure, RendezvousError};
 use std::cell::Cell;
 use std::marker::PhantomData;
 use std::rc::Rc;
@@ -160,6 +160,13 @@ impl<'s, 'era> SuspendedKeeper<'s, 'era> {
             local: PhantomData,
         })
     }
+
+    /// Finish the traced epoch this lend holds. The export reservation stays
+    /// inert: it has no collect or heap method, and this does not add one.
+    /// The keeper writes the phase only by completing the stopped proof.
+    pub(crate) fn complete_traced(self) -> Result<(), AllStoppedFailure<'era>> {
+        self.export.reservation.into_all_stopped().complete()
+    }
 }
 
 #[allow(dead_code)]
@@ -181,6 +188,17 @@ impl<'s, 'era> RestoredKeeper<'s, 'era> {
             stop: PhantomData,
             local: PhantomData,
         })
+    }
+}
+
+#[allow(dead_code)]
+impl<'s, 'era> KeeperCustodyFailure<'s, 'era> {
+    /// Finish the traced epoch this failure still holds. Not a heap loan.
+    pub(crate) fn complete_traced(self) -> Result<(), AllStoppedFailure<'era>> {
+        match self.retained {
+            RetainedCustody::Interval(interval) => interval.into_all_stopped().complete(),
+            RetainedCustody::Reservation(reservation) => reservation.into_all_stopped().complete(),
+        }
     }
 }
 

@@ -288,7 +288,6 @@ fn pentry_l61_keeper_service_admits_and_finishes_its_own_era() {
 #[test]
 fn pentry_l62_real_thread_stop_and_resume_on_the_service_thread() {
     use super::super::keeper_service::keeper_serve;
-    use neovm_value::tagged::gc::RendezvousError;
     let Some(mut source) = ready() else {
         return;
     };
@@ -300,22 +299,9 @@ fn pentry_l62_real_thread_stop_and_resume_on_the_service_thread() {
     let service = std::thread::spawn(move || {
         let service_id = std::thread::current().id();
         let outcome = keeper_serve(start, |keeper| {
-            // The stop is the real rendezvous stop with no other owner
-            // registered: the keeper itself requests it on its own service
-            // thread. A Busy phase transition is retried (the value crate's
-            // serial histories do the same); any other refusal fails the row.
-            let mut stopped = None;
-            for _ in 0..1024 {
-                match keeper.stop() {
-                    Ok(stopped_now) => {
-                        stopped = Some(stopped_now);
-                        break;
-                    }
-                    Err(RendezvousError::Busy) => std::thread::yield_now(),
-                    Err(reason) => panic!("keeper stop refused: {reason:?}"),
-                }
-            }
-            let mut stopped = stopped.expect("keeper stop made progress");
+            // No other owner is registered. The keeper's stop returns as soon
+            // as it requests the epoch; a Busy retry cannot clear that.
+            let mut stopped = keeper.stop().expect("keeper stop");
             assert!(stopped.epoch().get() > 0, "the real stop has an epoch");
             // A stopped epoch completes only after its trace callback; this
             // control-only slice traces nothing (L6.5 runs the collection
@@ -347,7 +333,6 @@ fn pentry_l62_real_thread_stop_and_resume_on_the_service_thread() {
 #[test]
 fn pentry_l62_keeper_era_control_persists_across_two_stops() {
     use super::super::keeper_service::keeper_serve;
-    use neovm_value::tagged::gc::RendezvousError;
     let Some(mut source) = ready() else {
         return;
     };
@@ -359,18 +344,7 @@ fn pentry_l62_keeper_era_control_persists_across_two_stops() {
         let outcome = keeper_serve(start, |keeper| {
             let mut last_epoch = 0;
             for _round in 0..2 {
-                let mut stopped = None;
-                for _ in 0..1024 {
-                    match keeper.stop() {
-                        Ok(stopped_now) => {
-                            stopped = Some(stopped_now);
-                            break;
-                        }
-                        Err(RendezvousError::Busy) => std::thread::yield_now(),
-                        Err(reason) => panic!("keeper stop refused: {reason:?}"),
-                    }
-                }
-                let mut stopped = stopped.expect("keeper stop made progress");
+                let mut stopped = keeper.stop().expect("keeper stop");
                 let epoch = stopped.epoch().get();
                 assert!(
                     epoch > last_epoch,
@@ -391,6 +365,234 @@ fn pentry_l62_keeper_era_control_persists_across_two_stops() {
     let outcome = rx.recv().expect("keeper outcome");
     service.join().expect("keeper service thread");
     let end = outcome.unwrap_or_else(|notice| panic!("keeper stops refused: {notice:?}"));
+    assert!(!neovm_value::tagged::gc::tagged_heap_is_installed());
+    let returned = shell.accept_return(end).unwrap();
+    finish_fixture(returned, private);
+}
+
+/// Live L6.2 stop/export/lend on a real `PublishedOwner`.
+///
+/// The current owner waits on the product condvar, then publishes native.
+/// The keeper's single `stop` cannot return until that publish, and the two
+/// epochs match. A serial request queued before the stop is still the head
+/// and is not granted. A retired receipt is stale (`Publication`). A
+/// superseded receipt is the wrong generation (`Generation`). One lend
+/// consumes the stopped keeper. `SuspendedKeeper` has no lend, so a second
+/// stop while it is held is `Busy`. `ExportReservation` stays inert: this
+/// row never collects or loans the heap through it. Completing the
+/// already-traced epoch is the keeper control finish, the queued request is
+/// still there, and the same `KeeperEra` then stops again.
+#[test]
+fn pentry_l62_live_lend_refuses_a_stale_owner_a_wrong_generation_and_a_second_stop() {
+    use super::super::super::keeper_custody::StoppedKeeper;
+    use super::super::keeper_service::keeper_serve;
+    use neovm_value::tagged::gc::heap_transfer::with_stop_scope;
+    use neovm_value::tagged::gc::{MutatorPermit, RegistrationError, RendezvousError};
+    use std::num::NonZeroU64;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    const STALE_OWNER: u64 = 6201;
+    const CURRENT_OWNER: u64 = 6202;
+    // Recorded by the test probe. Stopping refuses the grant before any
+    // publication check, so this is not a product ring generation.
+    const SERIAL_GENERATION: NonZeroU64 = NonZeroU64::MIN;
+
+    fn activate(
+        mut permit: MutatorPermit<'_>,
+        heap: neovm_value::tagged::gc::HeapIdentity,
+        owner: u64,
+    ) -> neovm_value::tagged::gc::Mutator<'_> {
+        let start = std::time::Instant::now();
+        loop {
+            match permit.activate(heap, owner) {
+                Ok(mutator) => return mutator,
+                Err(failure)
+                    if failure.reason == RegistrationError::Busy
+                        && start.elapsed() < Duration::from_secs(30) =>
+                {
+                    permit = failure.into_permit();
+                    std::thread::yield_now();
+                }
+                Err(failure) => panic!("activate: {:?}", failure.reason),
+            }
+        }
+    }
+
+    fn retry_native<T>(label: &str, mut op: impl FnMut() -> Result<T, RendezvousError>) -> T {
+        let start = std::time::Instant::now();
+        loop {
+            match op() {
+                Ok(value) => return value,
+                Err(RendezvousError::Busy) if start.elapsed() < Duration::from_secs(30) => {
+                    std::thread::yield_now()
+                }
+                Err(reason) => panic!("{label}: {reason:?}"),
+            }
+        }
+    }
+
+    fn retire(mut owner: neovm_value::tagged::gc::Mutator<'_>) {
+        let start = std::time::Instant::now();
+        loop {
+            match owner.retire_rooted(&[]) {
+                Ok(()) => return,
+                Err(failure)
+                    if failure.reason == RendezvousError::Busy
+                        && start.elapsed() < Duration::from_secs(30) =>
+                {
+                    owner = failure.into_owner();
+                    std::thread::yield_now();
+                }
+                Err(failure) => panic!("retire: {:?}", failure.reason),
+            }
+        }
+    }
+
+    let Some(mut source) = ready() else {
+        return;
+    };
+    let private = Value::string("l62-live-lend-private-root");
+    source.lexenv = private;
+    let (shell, start) = close(source).prepare_era().unwrap();
+    let (tx, rx) = mpsc::channel();
+    let service = std::thread::spawn(move || {
+        let outcome = keeper_serve(start, |keeper| {
+            let heap = keeper.heap_identity();
+            let stale_permit = keeper
+                .register(STALE_OWNER, 0)
+                .expect("register the stale owner");
+            let current_permit = keeper
+                .register(CURRENT_OWNER, 0)
+                .expect("register the current owner");
+            let current_key = current_permit.key();
+            let (stale_tx, stale_rx) = mpsc::channel();
+            let (ready_tx, ready_rx) = mpsc::channel::<()>();
+            let (ack_tx, ack_rx) = mpsc::channel();
+            let (release_tx, release_rx) = mpsc::channel::<()>();
+            std::thread::scope(|scope| {
+                scope.spawn(move || {
+                    let mut owner = activate(stale_permit, heap, STALE_OWNER);
+                    let stale = retry_native("publish stale", || owner.publish_native_owner(&[]));
+                    retire(owner);
+                    stale_tx.send(stale).expect("send the stale receipt");
+                });
+                scope.spawn(move || {
+                    let mut owner = activate(current_permit, heap, CURRENT_OWNER);
+                    let superseded = retry_native("publish first generation", || {
+                        owner.publish_native_owner(&[])
+                    });
+                    retry_native("leave native", || owner.leave_native().map(|_| ()));
+                    ready_tx
+                        .send(())
+                        .expect("the owner is running and about to wait");
+                    let epoch = owner
+                        .wait_request()
+                        .expect("the product wait observes the keeper stop");
+                    let current =
+                        retry_native("publish the stop ack", || owner.publish_native_owner(&[]));
+                    ack_tx
+                        .send((epoch, superseded, current))
+                        .expect("send the stop ack");
+                    let _ = release_rx.recv();
+                    retire(owner);
+                });
+                let stale = stale_rx.recv().expect("stale owner published");
+                ready_rx.recv().expect("current owner is waiting");
+                let queued = keeper
+                    .enqueue_serial_for_test(current_key, SERIAL_GENERATION)
+                    .expect("queue one serial request ahead of the stop");
+                let mut stopped = keeper
+                    .stop()
+                    .expect("the keeper stop waits for the native publish");
+                let (epoch, superseded, current) = ack_rx.recv().expect("stop ack");
+                let acked = stopped.epoch();
+                assert_eq!(
+                    epoch, acked,
+                    "the worker's wait and the keeper stop share one epoch"
+                );
+                let (len, head, granted) = keeper
+                    .serial_stop_priority_for_test()
+                    .expect("read the ring while the stop is open");
+                assert_eq!(
+                    granted, None,
+                    "a stop does not grant a queued serial request"
+                );
+                assert_eq!((len, head), (1, Some(queued)), "the stop keeps the head");
+                stopped
+                    .trace(|_stopped, _proof| Ok(()))
+                    .expect("control trace");
+                with_stop_scope(|scope| {
+                    let bound = StoppedKeeper::from_scope(scope, stopped).unwrap_or_else(
+                        |(_scope, stopped, reason)| {
+                            drop(stopped);
+                            panic!("bind the real stop: {reason:?}");
+                        },
+                    );
+                    match bound.ready_request(stale) {
+                        Err(RendezvousError::Publication) => {}
+                        Err(reason) => panic!("stale owner refused with {reason:?}"),
+                        Ok(_) => panic!("a retired receipt was accepted"),
+                    }
+                    match bound.ready_request(superseded) {
+                        Err(RendezvousError::Generation) => {}
+                        Err(reason) => panic!("wrong generation refused with {reason:?}"),
+                        Ok(_) => panic!("a superseded receipt was accepted"),
+                    }
+                    let request = match bound.ready_request(current) {
+                        Ok(request) => request,
+                        Err(reason) => panic!("current owner refused: {reason:?}"),
+                    };
+                    let suspended = match bound.lend_serial(request) {
+                        Ok(suspended) => suspended,
+                        Err(failure) => {
+                            let _ = failure.complete_traced();
+                            panic!("lend the current owner");
+                        }
+                    };
+                    // The export reservation is held and inert. A second stop
+                    // cannot mint another lend while this one is out.
+                    assert!(
+                        matches!(keeper.stop(), Err(RendezvousError::Busy)),
+                        "a second stop is refused while the lend is outstanding"
+                    );
+                    suspended
+                        .complete_traced()
+                        .expect("complete the traced epoch the lend held");
+                });
+                let (len, head) = keeper
+                    .serial_ring_head_for_test()
+                    .expect("the ring survives the traced epoch");
+                assert_eq!(
+                    (len, head),
+                    (1, Some(queued)),
+                    "completing the epoch keeps the queued request"
+                );
+                keeper
+                    .retire_serial_head_for_test(queued)
+                    .expect("retire the probe request");
+                let mut reopened = keeper
+                    .stop()
+                    .expect("the same keeper stops again after the lend");
+                assert!(
+                    reopened.epoch() > acked,
+                    "the reopen has its own later epoch"
+                );
+                reopened
+                    .trace(|_stopped, _proof| Ok(()))
+                    .expect("reopen trace");
+                reopened.complete().expect("reopen complete");
+                release_tx.send(()).expect("release the owner");
+            });
+        });
+        match outcome {
+            Ok((end, ())) => tx.send(Ok(end)).expect("send keeper end"),
+            Err(failure) => tx.send(Err(failure.notice())).expect("send keeper notice"),
+        }
+    });
+    let outcome = rx.recv().expect("keeper outcome");
+    service.join().expect("keeper service thread");
+    let end = outcome.unwrap_or_else(|notice| panic!("live lend refused: {notice:?}"));
     assert!(!neovm_value::tagged::gc::tagged_heap_is_installed());
     let returned = shell.accept_return(end).unwrap();
     finish_fixture(returned, private);

@@ -41,6 +41,13 @@ impl<'s, 'era> UnenteredReservation<'s, 'era> {
     ) -> Result<(), super::super::RendezvousError> {
         self.interval.validate_owner(owner)
     }
+
+    /// Return the stopped proof. This reservation does not collect, loan the
+    /// heap, or write the phase word.
+    #[doc(hidden)]
+    pub fn into_all_stopped(self) -> AllStopped<'era> {
+        self.interval.into_all_stopped()
+    }
 }
 
 impl<'s> StopScope<'s> {

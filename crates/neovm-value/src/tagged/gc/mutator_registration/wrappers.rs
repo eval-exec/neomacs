@@ -597,6 +597,42 @@ impl<'heap, K: EraKeeper> ParallelHeapEra<'heap, K> {
             table.chunk_slots().get(),
         ))
     }
+
+    /// Queue one serial request ahead of a live stop. Not the product ring.
+    /// L6.7 owns that enqueue. The generation is stored and is not a
+    /// publication check.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn enqueue_serial_for_test(
+        &self,
+        owner: super::MutatorKey,
+        generation: std::num::NonZeroU64,
+    ) -> Result<u64, RendezvousError> {
+        super::rendezvous::enqueue_serial_for_test(self.core.registry(), owner, generation)
+    }
+
+    /// `(ring length, head id, grant issued now)`. A stop issues no grant.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn serial_stop_priority_for_test(
+        &self,
+    ) -> Result<(usize, Option<u64>, Option<u64>), RendezvousError> {
+        super::rendezvous::serial_stop_priority_for_test(self.core.registry())
+    }
+
+    /// Head of the live ring. This does not grant it.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn serial_ring_head_for_test(&self) -> Result<(usize, Option<u64>), RendezvousError> {
+        super::rendezvous::serial_ring_head_for_test(self.core.registry())
+    }
+
+    /// Retire the queued or granted head when its id is `id`.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn retire_serial_head_for_test(&self, id: u64) -> Result<(), RendezvousError> {
+        super::rendezvous::retire_serial_head_for_test(self.core.registry(), id)
+    }
 }
 
 #[cfg(any(test, feature = "test-support"))]

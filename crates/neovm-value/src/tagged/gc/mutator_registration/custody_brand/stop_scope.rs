@@ -73,6 +73,13 @@ impl<'s, 'era> StoppedInterval<'s, 'era> {
     pub fn into_unentered(self) -> super::reservation::UnenteredReservation<'s, 'era> {
         super::reservation::UnenteredReservation::from_interval(self)
     }
+
+    /// Return the stopped proof. Does not collect, loan the heap, or write
+    /// the phase word. The keeper completes an already-traced epoch itself.
+    #[doc(hidden)]
+    pub fn into_all_stopped(self) -> AllStopped<'era> {
+        self.stopped
+    }
 }
 
 static_assertions::assert_not_impl_any!(StopScope<'static>: Send, Sync, Clone, Copy);
