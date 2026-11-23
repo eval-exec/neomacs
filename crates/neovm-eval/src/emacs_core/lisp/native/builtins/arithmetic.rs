@@ -1364,11 +1364,34 @@ fn check_integer_coerce_marker(value: &Value) -> Result<Value, Flow> {
     }
 }
 
-/// `(mod X Y)` — modulo, mirrors GNU `Fmod` (`src/data.c:3412`).
+/// GNU `check_number_coerce_marker` (src/data.c:2696-2703): a marker becomes
+/// its position; anything that is not a number signals number-or-marker-p.
+fn coerce_number_or_marker_value(
+    eval: &super::super::eval::Context,
+    value: &Value,
+) -> Result<Value, Flow> {
+    if super::marker::is_marker(value) {
+        return Ok(Value::fixnum(
+            super::marker::marker_position_as_int_with_buffers(&eval.edit.buffers, value)?,
+        ));
+    }
+    match value.kind() {
+        ValueKind::Fixnum(_) | ValueKind::Veclike(VecLikeType::Bignum) => Ok(*value),
+        _ if value.is_float() => Ok(*value),
+        _ => Err(wrong_number_or_marker(value)),
+    }
+}
+
+/// `(mod X Y)` — modulo, mirrors GNU `Fmod` (`src/data.c:3448`).
 ///
 /// Result has the same sign as the divisor.
 #[doc(hidden)]
-pub fn builtin_mod(_eval: &mut super::eval::Context, num: Value, den: Value) -> EvalResult {
+pub fn builtin_mod(eval: &mut super::eval::Context, num: Value, den: Value) -> EvalResult {
+    // GNU `Fmod` runs `check_number_coerce_marker` on both operands before
+    // the float/integer dispatch (src/data.c:3454-3458).  Validating here
+    // keeps the bignum path from reporting the integer-only predicate.
+    let num = coerce_number_or_marker_value(eval, &num)?;
+    let den = coerce_number_or_marker_value(eval, &den)?;
     if let (Some(a), Some(b)) = (num.as_fixnum(), den.as_fixnum())
         && b != 0
     {
@@ -1935,11 +1958,33 @@ pub(crate) enum NumCmp {
     Ge,
 }
 
+/// GNU `coerce_marker` (src/data.c:2705-2709): a marker becomes its buffer
+/// position and everything else is returned unchanged.  A detached marker's
+/// position access signals "Marker does not point anywhere", which is why GNU
+/// runs this on both operands before looking at either one's type.
+fn coerce_marker_value(eval: &super::super::eval::Context, value: &Value) -> Result<Value, Flow> {
+    if super::marker::is_marker(value) {
+        Ok(Value::fixnum(
+            super::marker::marker_position_as_int_with_buffers(&eval.edit.buffers, value)?,
+        ))
+    } else {
+        Ok(*value)
+    }
+}
+
 fn arithcompare(
     eval: &super::super::eval::Context,
     a: &Value,
     b: &Value,
 ) -> Result<Option<std::cmp::Ordering>, Flow> {
+    // GNU `arithcompare` coerces BOTH operands before any type check
+    // (src/data.c:2705-2709, called at :2720-2721).  A detached marker's
+    // `marker_position` signals "Marker does not point anywhere" even when
+    // the other operand is not a number, so this prelude must stay ahead of
+    // every branch below (including the NaN arm).
+    let a_coerced = coerce_marker_value(eval, a)?;
+    let b_coerced = coerce_marker_value(eval, b)?;
+    let (a, b) = (&a_coerced, &b_coerced);
     // Float on either side. GNU `arithcompare` compares a float against
     // an integer (fixnum OR bignum) EXACTLY — it never coerces the
     // integer to a double first (data.c:2734-2758 / 2777-2795 /

@@ -7,6 +7,9 @@
 #[path = "../src/common.rs"]
 mod common;
 
+#[path = "../src/arithcompare_marker_order.rs"]
+mod arithcompare_marker_order;
+
 #[path = "oracle_backend_quit_binding.rs"]
 mod oracle_backend_quit_binding;
 
