@@ -3671,6 +3671,15 @@ impl<'a> Vm<'a> {
             handlers.push(Handler::Condition);
         }
         let mut bind_stack: BindStack = bind_entries.iter().copied().collect();
+        // One check for the whole resumed driver, including its iterative
+        // callees. A short stack, a stale max_stack, or a handler stack the
+        // proof does not describe stays on the checked monomorph.
+        let trust_stack_proof =
+            Self::resume_trusts_stack_proof(func, start_pc, stack.len(), handlers_active);
+        #[cfg(test)]
+        if trust_stack_proof {
+            VERIFIED_RESUME_ENTRIES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
         let result = self.run_loop(
             func,
             frame_base,
@@ -3678,7 +3687,7 @@ impl<'a> Vm<'a> {
             &mut handlers,
             &mut bind_stack,
             osr_tried,
-            false,
+            trust_stack_proof,
         );
         self.cleanup_bytecode_frame(result, condition_stack_base, specpdl_base, frame_base)
     }
@@ -4776,11 +4785,12 @@ impl<'a> Vm<'a> {
     /// iterations -- buffer edits, variable stores, calls -- so the frame's
     /// pre-transfer stack is stale and interpreting on from it would run those
     /// iterations again. OSR captures the operand stack, binding stack and pc
-    /// of this frame. The checked driver installs both stacks in place and
-    /// continues at the pc. The verified driver does not: it has no
-    /// frame-depth check, and a deopt stack is only known to be within
-    /// `max_stack`, so it finishes through [`Self::run_resumed_frame_latched`]
-    /// on the checked driver. The suspended interpreter frame retains final
+    /// of this frame. Either driver installs both stacks in place and
+    /// continues at the pc when the handler shape is unchanged. The verified
+    /// driver also requires the live depth to equal the proof at that pc:
+    /// it has no frame-depth check. A stack that fails that one check finishes
+    /// through [`Self::run_resumed_frame_latched`] on the checked driver. The
+    /// suspended interpreter frame retains final
     /// cleanup ownership on the in-place path. State the checked driver
     /// could not adopt finishes in a resumed frame instead -- latched
     /// against another transfer, on a guarded stack.
@@ -4855,15 +4865,20 @@ impl<'a> Vm<'a> {
             inlined,
             ..
         } = *resume;
-        // Verified dispatch trusts a proven depth. A precise deopt only
-        // proved `stack.len() <= max_stack`, the same trust resumed frames
-        // no longer get, so that monomorph finishes on the checked driver.
-        if !VERIFIED
-            && handlers == 0
+        // In place only when the handler shape still matches this frame.
+        // The verified monomorph also requires the one O(1) depth proof:
+        // a short or deep deopt stack must not run without the frame check.
+        let handler_shape_matches = handlers == 0
             && spec_base == entry_spec_depth
             && cond_base == self.ctx.condition_stack_len()
-            && stack.len() <= func.max_stack().get()
-        {
+            && stack.len() <= func.max_stack().get();
+        let depth_matches =
+            !VERIFIED || Self::resume_trusts_stack_proof(func, pc, stack.len(), handlers);
+        if handler_shape_matches && depth_matches {
+            #[cfg(test)]
+            if VERIFIED {
+                VERIFIED_RESUME_ENTRIES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
             bind_stack.clear();
             bind_stack.extend_from_slice(&binds);
             if let Some(inlined) = inlined {
@@ -5011,6 +5026,35 @@ impl<'a> Vm<'a> {
         }
     }
 
+    /// Whether a resume at `start_pc` may run the verified driver.
+    ///
+    /// One lookup. The live operand depth must be the verifier's depth at
+    /// that pc, `max_stack` must still be the limit the proof used, and the
+    /// handler stack must be empty: that is the shape the in-place deopt
+    /// path can prove against the live frame. A hand-assembled body has no
+    /// depth table, so it stays checked. A short or deep stack stays checked.
+    fn resume_trusts_stack_proof(
+        func: &ByteCodeFunction,
+        start_pc: usize,
+        depth: usize,
+        handlers: usize,
+    ) -> bool {
+        if handlers != 0 || !func.executes_verified_ops() {
+            return false;
+        }
+        let max_stack = func.max_stack().get();
+        if depth > max_stack {
+            return false;
+        }
+        let Some(lazy) = func.lazy_gnu_code().as_ref() else {
+            return false;
+        };
+        let Some(proof) = lazy.proof() else {
+            return false;
+        };
+        proof.max_stack() == max_stack && proof.proves_depth(start_pc, depth)
+    }
+
     #[inline(never)]
     #[doc(hidden)]
     fn run_loop(
@@ -5021,9 +5065,10 @@ impl<'a> Vm<'a> {
         handlers: &mut HandlerStack,
         bind_stack: &mut BindStack,
         #[cfg_attr(not(feature = "jit"), allow(unused_variables))] entry_osr_tried: bool,
-        // Resume passes false. A stack shorter than the proof at `start_pc`
-        // must not enter the verified driver: StackRef and StackSet there
-        // index below `frame_base` with no check.
+        // True only when [`Self::resume_trusts_stack_proof`] accepted this
+        // entry. A stack shorter than the proof at `start_pc` must not enter
+        // the verified driver: StackRef and StackSet there index below
+        // `frame_base` with no check.
         trust_stack_proof: bool,
     ) -> EvalResult {
         #[cfg(test)]
@@ -11241,6 +11286,11 @@ pub(crate) mod resumed_chain_probe;
 pub mod resumed_chain_probe;
 #[cfg(feature = "jit")]
 pub(crate) use vm_leaf::render_vm_leaf_stats;
+
+/// Resumes that entered the verified driver. Release builds do not count.
+#[cfg(test)]
+pub(crate) static VERIFIED_RESUME_ENTRIES: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
 
 #[cfg(test)]
 #[path = "tests/vm_test.rs"]

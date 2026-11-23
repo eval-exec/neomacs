@@ -67,13 +67,22 @@ fn switch_with_instruction_start_targets_is_admitted() {
     assert!(!proof.proves_depth(6, 1));
     assert!(!proof.proves_depth(4, 0));
     assert!(!proof.proves_depth(8, 0), "past the end");
-    // A stream without a switch keeps no depth table.
+    // A stream without a switch still keeps the per-instruction depths.
+    // Resume checks that table once, in O(1), instead of refusing the
+    // verified driver for every non-switch body.
     let (plain_ops, _) =
         decode_gnu_bytecode_with_offset_map(&[192, 135], &mut vec![Value::NIL]).unwrap();
-    assert_eq!(
-        verify_stack_effects_with_tables(&plain_ops, 0, 1, None),
-        Some(StackProof::default())
+    let plain = verify_stack_effects_with_tables(&plain_ops, 0, 1, None).expect("plain proof");
+    assert!(
+        plain.proves_depth(0, 0),
+        "entry depth of a non-switch body stays in the proof"
     );
+    assert!(
+        plain.proves_depth(1, 1),
+        "depth after constant stays in the proof"
+    );
+    assert!(!plain.proves_depth(1, 0));
+    assert_eq!(plain.max_stack(), 1);
     // Without its tables the proof still refuses every switch (the eager
     // installers and hand-assembled chunks take this form).
     let mut scratch = constants.clone();

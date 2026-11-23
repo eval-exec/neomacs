@@ -565,6 +565,50 @@ fn entry_frame_underflow_backstop_keeps_outer_condition_case() {
     }
 }
 
+/// A lazy body resumed at the verifier's depth for that pc, with the same
+/// `max_stack` and an empty handler stack, enters the verified driver.
+/// A short stack, or a handler stack the proof did not accept, stays checked.
+#[test]
+fn resumed_matching_depth_enters_the_verified_driver() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
+    // constant, stack-ref 0, return. The stack-ref is entered at depth 1.
+    // Return alone accepts an empty stack, so the short row has to be the ref.
+    let value = eval
+        .eval_str(r#"(make-byte-code 0 "\300\000\207" [42] 2)"#)
+        .expect("make-byte-code");
+    let func = value.get_bytecode_data().expect("bytecode");
+    assert!(
+        func.executes_verified_ops(),
+        "deferred make-byte-code keeps a stack proof"
+    );
+    let before = super::VERIFIED_RESUME_ENTRIES.load(std::sync::atomic::Ordering::Relaxed);
+    let mut vm = new_vm(&mut eval);
+    let matched = vm.run_resumed_frame(func, value, 1, &[Value::fixnum(42)], 0, &[], 0, 0);
+    assert_eq!(matched.expect("matching resume"), Value::fixnum(42));
+    assert_eq!(
+        super::VERIFIED_RESUME_ENTRIES.load(std::sync::atomic::Ordering::Relaxed),
+        before + 1,
+        "a resume at the proven depth must enter the verified driver"
+    );
+    let short = vm.run_resumed_frame(func, value, 1, &[], 0, &[], 0, 0);
+    assert!(
+        short.is_err(),
+        "a short resume stays on the checked driver and signals"
+    );
+    assert_eq!(
+        super::VERIFIED_RESUME_ENTRIES.load(std::sync::atomic::Ordering::Relaxed),
+        before + 1,
+        "a short resume must not enter the verified driver"
+    );
+    let _with_handler = vm.run_resumed_frame(func, value, 1, &[Value::fixnum(42)], 1, &[], 0, 0);
+    assert_eq!(
+        super::VERIFIED_RESUME_ENTRIES.load(std::sync::atomic::Ordering::Relaxed),
+        before + 1,
+        "a handler stack the proof did not accept stays checked"
+    );
+}
+
 /// A verified body resumed with fewer slots than the proof at `start_pc`
 /// must not read the caller's slot through the verified driver.
 #[test]

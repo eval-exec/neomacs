@@ -632,19 +632,24 @@ pub(crate) fn verify_stack_effects_with_tables(
             return None;
         }
     }
-    let depths = if switch_depth.is_some() {
-        depths
-            .iter()
-            .map(|depth| depth.map_or(StackProof::UNREACHABLE, |depth| depth as u32))
-            .collect()
-    } else {
-        Vec::new()
-    };
+    // Every admitted stream keeps its depth table. Resume checks one entry,
+    // in O(1), and a switch still uses the same table after a mutated jump
+    // table retargets. Dropping the table for non-switch bodies made that
+    // resume check fail closed and left every deopt on the checked driver.
+    let depths = depths
+        .iter()
+        .map(|depth| depth.map_or(StackProof::UNREACHABLE, |depth| depth as u32))
+        .collect();
     switch_targets.sort_unstable();
     switch_targets.dedup_by_key(|entry| entry.0);
     Some(unsafe {
         /* SAFETY: the proof must be the verifier's result for exactly these ops */
-        StackProof::from_parts(switch_depth, switch_targets.into_boxed_slice(), depths)
+        StackProof::from_parts(
+            switch_depth,
+            switch_targets.into_boxed_slice(),
+            depths,
+            max_stack,
+        )
     })
 }
 

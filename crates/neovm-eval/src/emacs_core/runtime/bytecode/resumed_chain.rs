@@ -523,6 +523,12 @@ impl<'a> Vm<'a> {
             handlers.push(Handler::Condition);
         }
         let mut bind_stack: BindStack = frame.binds.iter().copied().collect();
+        let depth = self.ctx.bc_buf.len().saturating_sub(frame_base);
+        let trust_stack_proof = Self::resume_trusts_stack_proof(code, pc, depth, frame.handlers);
+        #[cfg(test)]
+        if trust_stack_proof {
+            super::VERIFIED_RESUME_ENTRIES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
         let result = match entry {
             ChainFrameEntry::Run => self.run_loop(
                 code,
@@ -531,7 +537,7 @@ impl<'a> Vm<'a> {
                 &mut handlers,
                 &mut bind_stack,
                 false,
-                false,
+                trust_stack_proof,
             ),
             ChainFrameEntry::Raise(flow) => {
                 match self.resume_nonlocal(code, &mut pc, &mut handlers, &mut bind_stack, flow) {
@@ -542,7 +548,7 @@ impl<'a> Vm<'a> {
                         &mut handlers,
                         &mut bind_stack,
                         false,
-                        false,
+                        trust_stack_proof,
                     ),
                     Err(flow) => Err(flow),
                 }
