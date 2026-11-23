@@ -1,6 +1,101 @@
 use super::*;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodePolicyExt;
 
+fn sample_mixed_backtrace_frames(depth: usize) -> Vec<Option<String>> {
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
+    let base = ctx.specpdl.len();
+    ctx.push_backtrace_frame(Value::symbol("profiler-general"), &[]);
+    ctx.push_specpdl_root(Value::NIL);
+    ctx.push_backtrace_frame(Value::symbol("profiler-one"), &[Value::fixnum(1)]);
+    ctx.push_specpdl_root(Value::fixnum(2));
+    ctx.push_backtrace_frame(
+        Value::symbol("profiler-two"),
+        &[Value::fixnum(3), Value::fixnum(4)],
+    );
+    let native_args =
+        [Value::fixnum(5), Value::fixnum(6), Value::fixnum(7)].map(|value| value.bits() as i64);
+    // SAFETY: this array contains valid tagged words and stays live until
+    // unbind_to below removes the native frame. No pointer escapes the test.
+    unsafe {
+        ctx.push_backtrace_frame_from_native_args(
+            Value::symbol("profiler-native"),
+            native_args.as_ptr(),
+            native_args.len(),
+        );
+    }
+    assert!(matches!(
+        ctx.specpdl.get(base),
+        Some(SpecBinding::Backtrace { .. })
+    ));
+    assert!(matches!(
+        ctx.specpdl.get(base + 2),
+        Some(SpecBinding::Backtrace1 { .. })
+    ));
+    assert!(matches!(
+        ctx.specpdl.get(base + 4),
+        Some(SpecBinding::Backtrace2 { .. })
+    ));
+    assert!(matches!(
+        ctx.specpdl.get(base + 5),
+        Some(SpecBinding::BacktraceNative { .. })
+    ));
+
+    // CPU and memory profiling share this collector. A heap allocation gives
+    // it a deterministic sample weight without clocks or a watchdog thread.
+    ctx.profiler.memory_log = Some(ProfilerLog::new(depth, 10));
+    ctx.profiler.memory_running = true;
+    let before = ctx.tagged_heap.total_allocated_bytes();
+    ctx.profiler.memory_last_allocated = before;
+    let witness = ctx
+        .tagged_heap
+        .alloc_string(neovm_value::heap_types::LispString::from_utf8(
+            "profiler allocation witness",
+        ));
+    ctx.push_specpdl_root(witness);
+    let allocated = ctx.tagged_heap.total_allocated_bytes() - before;
+    ctx.profiler_poll_sample();
+    ctx.profiler.memory_running = false;
+    ctx.unbind_to(base);
+    std::hint::black_box(&native_args);
+
+    assert!(allocated > 0);
+    let log = ctx.profiler.memory_log.as_ref().unwrap();
+    assert_eq!(log.entries.len(), 1);
+    let sample = log.entries.values().next().unwrap();
+    assert_eq!(sample.count, allocated);
+    sample
+        .frames
+        .iter()
+        .map(|frame| (!frame.is_nil()).then(|| frame_label(*frame)))
+        .collect()
+}
+
+#[test]
+fn profiler_poll_sample_preserves_all_backtrace_frame_kinds() {
+    assert_eq!(
+        sample_mixed_backtrace_frames(6),
+        vec![
+            Some("profiler-native".to_owned()),
+            Some("profiler-two".to_owned()),
+            Some("profiler-one".to_owned()),
+            Some("profiler-general".to_owned()),
+            None,
+            None,
+        ]
+    );
+}
+
+#[test]
+fn profiler_poll_sample_applies_depth_after_skipping_non_frame_bindings() {
+    assert_eq!(
+        sample_mixed_backtrace_frames(2),
+        vec![
+            Some("profiler-native".to_owned()),
+            Some("profiler-two".to_owned())
+        ]
+    );
+}
+
 #[test]
 fn cpu_folded_renders_recorded_stacks_with_names_and_sorts_by_count() {
     let mut ctx = Context::new(crate::test_utils::unit_runtime());

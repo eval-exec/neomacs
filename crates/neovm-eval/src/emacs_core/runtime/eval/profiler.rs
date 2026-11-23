@@ -385,7 +385,10 @@ impl Context {
             .iter()
             .rev()
             .filter_map(|binding| match binding {
-                SpecBinding::Backtrace { function, .. } => Some(*function),
+                SpecBinding::Backtrace { function, .. }
+                | SpecBinding::Backtrace1 { function, .. }
+                | SpecBinding::Backtrace2 { function, .. }
+                | SpecBinding::BacktraceNative { function, .. } => Some(*function),
                 _ => None,
             })
             .take(depth)
