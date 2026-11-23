@@ -1149,23 +1149,19 @@ impl Context {
         &mut self.gstring_shape_cache
     }
 
-    /// The next free ID for a cached shaped gstring: one past the largest ID
-    /// currently live.  GNU IDs are hash-table indices, so they are unique
-    /// among live entries and may be reused after `close-font` /
-    /// `clear-composition-cache` removes entries; `map.len()` would collide
-    /// with a live ID once the length falls below the highest assigned one.
-    #[doc(hidden)]
-    pub fn gstring_shape_cache_next_id(&self) -> i64 {
-        self.gstring_shape_cache
-            .values()
-            .filter_map(|gstring| {
-                gstring
-                    .as_vector_data()
-                    .and_then(|slots| slots.get(1))
-                    .and_then(|id| id.as_int())
-            })
-            .max()
-            .map_or(0, |id| id + 1)
+    /// Process-wide monotonic source for a cached gstring's ID.
+    ///
+    /// GNU stores the header with `hash_put` and uses the returned table index
+    /// as the ID (`composition_gstring_put_cache`, src/composite.c:651-668).
+    /// That value is only ever tested for non-nil — it marks the gstring as
+    /// already shaped so `autocmp_chars` skips the rule (src/composite.c:973)
+    /// — so Neomacs only needs a unique non-nil fixnum.  A counter is O(1); the
+    /// previous maximum-live-ID scan was O(entries) per `font-shape-gstring`,
+    /// and an ID is never reused after `clear-composition-cache` / `close-font`
+    /// removes its entry.
+    fn next_gstring_shape_cache_id() -> i64 {
+        static NEXT_ID: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+        NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     }
 
     /// GNU `composition_gstring_put_cache (gstring, -1)`
@@ -1201,7 +1197,7 @@ impl Context {
             .iter()
             .take_while(|glyph| !glyph.is_nil())
             .count();
-        let id = self.gstring_shape_cache_next_id();
+        let id = Self::next_gstring_shape_cache_id();
         let mut copy_slots = Vec::with_capacity(2 + glyph_count);
         copy_slots.push(Value::vector(header.to_vec()));
         copy_slots.push(Value::fixnum(id));
