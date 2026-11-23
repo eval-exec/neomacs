@@ -29,6 +29,7 @@ pub(crate) struct TicketIdentity {
 /// Send ticket from the keeper to the destination owner.
 #[derive(Debug)]
 #[must_use]
+#[allow(dead_code)] // Dormant L6.3; L6.4 begin is the caller.
 pub(crate) struct StoppedSerialTicket {
     identity: TicketIdentity,
     _not_sync: PhantomData<Cell<()>>,
@@ -80,6 +81,7 @@ impl StoppedSerialTicket {
         (ticket, SerialLendHeld { lend })
     }
 
+    #[allow(dead_code)] // Dormant L6.3; L6.4 begin is the caller.
     pub(crate) fn identity(&self) -> TicketIdentity {
         self.identity
     }
@@ -108,12 +110,14 @@ impl<'s, 'era> SerialLendHeld<'s, 'era> {
 /// One successful receive. `!Send`: it stays on the destination thread.
 #[derive(Debug)]
 #[must_use]
+#[allow(dead_code)] // Dormant L6.3; L6.4 begin is the caller.
 pub(crate) struct ReceivedSerial {
     identity: TicketIdentity,
     _local: PhantomData<Rc<()>>,
 }
 
 impl ReceivedSerial {
+    #[allow(dead_code)] // Dormant L6.3; L6.4 begin is the caller.
     pub(crate) fn identity(&self) -> TicketIdentity {
         self.identity
     }
@@ -121,6 +125,7 @@ impl ReceivedSerial {
 
 /// Why `receive_serial` gave the ticket back.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)] // Dormant L6.3; L6.4 begin is the caller.
 pub(crate) enum ReceiveReason {
     WrongOwner,
     StaleGeneration,
@@ -131,18 +136,21 @@ pub(crate) enum ReceiveReason {
 /// The ticket is inside the error. The seat is unchanged.
 #[derive(Debug)]
 #[must_use]
+#[allow(dead_code)] // Dormant L6.3; L6.4 begin is the caller.
 pub(crate) struct ReceiveRefusal {
     pub ticket: StoppedSerialTicket,
     pub reason: ReceiveReason,
 }
 
 /// Destination seat. Occupied only after every check has passed.
+#[allow(dead_code)] // Dormant L6.3; L6.4 begin is the caller.
 pub(crate) struct SerialDestination {
     expected: TicketIdentity,
     occupied: bool,
 }
 
 impl SerialDestination {
+    #[allow(dead_code)] // Dormant L6.3; L6.4 begin is the caller.
     pub(crate) fn new(expected: TicketIdentity) -> Self {
         Self {
             expected,
@@ -150,6 +158,7 @@ impl SerialDestination {
         }
     }
 
+    #[allow(dead_code)] // Dormant L6.3; L6.4 begin is the caller.
     pub(crate) fn receive_serial(
         &mut self,
         ticket: StoppedSerialTicket,
