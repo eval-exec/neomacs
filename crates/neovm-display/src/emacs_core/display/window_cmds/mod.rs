@@ -39,7 +39,6 @@ pub(crate) use neovm_value::error::{
 use neovm_value::intern::{SymId, intern, resolve_sym};
 use neovm_value::value::{Value, ValueKind, VecLikeType, list_to_vec};
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicU32, Ordering};
 use strum::{EnumString, IntoStaticStr};
 
 mod body_geometry;
@@ -6165,55 +6164,36 @@ pub(crate) fn frame_non_text_total_height_pixels(frame: &crate::window::Frame) -
     frame_non_text_height_pixels(frame).saturating_add(frame_internal_border_total_pixels(frame))
 }
 
-/// GTK menu-bar requisition in pixels. Zero until the GUI process measures it.
-///
-/// GNU stores this on the frame as `FRAME_MENUBAR_HEIGHT` after
-/// `gtk_widget_get_preferred_size` (`gtkutil.c` `xg_update_frame_menubar`).
-/// It is the widget's height, not `menu-bar-lines` times the frame font.
-static TOOLKIT_MENU_BAR_HEIGHT_PX: AtomicU32 = AtomicU32::new(0);
-
-/// Record the toolkit menu-bar height for later outer-window requests.
-///
-/// The GUI process calls this once, before the first frame resize. Host
-/// tests leave it unset, so they keep the character-row menu bar.
-pub fn install_toolkit_menu_bar_height(px: u32) {
-    if px > 0 {
-        TOOLKIT_MENU_BAR_HEIGHT_PX.store(px, Ordering::Relaxed);
-    }
-}
-
-fn toolkit_menu_bar_height_px() -> Option<u32> {
-    match TOOLKIT_MENU_BAR_HEIGHT_PX.load(Ordering::Relaxed) {
-        0 => None,
-        px => Some(px),
-    }
-}
-
 /// Chrome added above a requested text height when building the host window.
 ///
-/// GTK's explicit size asks for the text rows plus the menu bar. The external
-/// tool bar is not part of that request: `FRAME_TOOLBAR_HEIGHT` stays 0
-/// (`xg_frame_set_char_size`, gtkutil.c). The bar's later ConfigureNotify is
-/// inhibit 2 (frame.c:800-805). When that follow-up is inhibited the bar
-/// occupies text rows and the outer window stays; a preserved text grid grows
-/// the window by the bar instead. `include_tool_bar` selects that end state.
-///
-/// The menu-bar term is the toolkit requisition when the GUI process has
-/// measured one (`gtkutil.c:4214-4231`), and the frame's character-row height
-/// otherwise.
-fn host_outer_non_text_height_pixels(frame: &crate::window::Frame, include_tool_bar: bool) -> u32 {
+/// Menu-bar pixels are this frame's own `menu_bar_height` (a character row).
+/// Neomacs does not measure a GTK menu bar. `include_tool_bar` is false only
+/// for an explicit text size whose toolkit tool bar is not allocated yet, so
+/// the request matches `FRAME_TOOLBAR_HEIGHT` == 0 in `xg_frame_set_char_size`
+/// (gtkutil.c:1181-1182).
+pub(crate) fn host_outer_non_text_height_pixels(
+    frame: &crate::window::Frame,
+    include_tool_bar: bool,
+) -> u32 {
     let mut height = frame_non_text_total_height_pixels(frame);
     if !include_tool_bar {
         height = height.saturating_sub(frame.tool_bar_height);
     }
-    if frame.menu_bar_height > 0
-        && let Some(toolkit) = toolkit_menu_bar_height_px()
-    {
-        height = height
-            .saturating_sub(frame.menu_bar_height)
-            .saturating_add(toolkit);
-    }
     height
+}
+
+pub(crate) fn note_explicit_tool_bar_omission(
+    frame: &mut crate::window::Frame,
+    include_tool_bar: bool,
+) {
+    #[cfg(target_os = "linux")]
+    if !include_tool_bar && !frame.toolkit_tool_bar_allocated {
+        frame.explicit_size_omitted_unallocated_tool_bar = true;
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (frame, include_tool_bar);
+    }
 }
 
 pub(crate) fn frame_text_width_pixels_in_state(frames: &FrameManager, fid: FrameId) -> u32 {
@@ -6374,6 +6354,7 @@ pub(crate) fn resize_live_gui_frame(
         let frame = frames
             .get_mut(fid)
             .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+        note_explicit_tool_bar_omission(frame, include_tool_bar);
         frame.clear_pending_gui_resize();
         tracing::debug!(
             "resize_live_gui_frame: fid={:?} pretend={} total={}x{} cols={} text_lines={}",
@@ -6495,6 +6476,7 @@ pub(crate) fn request_live_gui_frame_resize(
         let frame = frames
             .get_mut(fid)
             .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+        note_explicit_tool_bar_omission(frame, include_tool_bar);
         frame.clear_pending_gui_resize();
         set_frame_text_size(frame, cols, text_lines);
         if frame.parent_frame.as_frame_id().is_some() {
@@ -6504,6 +6486,7 @@ pub(crate) fn request_live_gui_frame_resize(
     }
 
     if let Some(frame) = frames.get_mut(fid) {
+        note_explicit_tool_bar_omission(frame, include_tool_bar);
         frame.clear_pending_gui_resize();
     }
 

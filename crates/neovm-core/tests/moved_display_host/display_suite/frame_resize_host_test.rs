@@ -609,6 +609,11 @@ impl ChromeResizeFixture {
             frame.set_parameter(Value::symbol(key), value);
         }
         frame.sync_bar_heights_from_parameters();
+        // This fixture is a live frame after the first tool-bar allocation.
+        // `FRAME_TOOLBAR_HEIGHT` is already stored (gtkutil.c:5804). The
+        // window-setup-hook case, where that field is still 0, is a separate
+        // row.
+        frame.toolkit_tool_bar_allocated = true;
         // Keep the text allocation fixed across frontend chrome models. GNU
         // NS has a global menu; GTK reserves a menu band in this window.
         let menu_height = frame.menu_bar_height;
@@ -724,7 +729,7 @@ fn toolbar_implied_resize_honors_true_parameter_list_and_force_inhibition() {
 }
 
 #[test]
-fn inhibited_explicit_size_keeps_the_tool_bar_inside_the_outer_window() {
+fn allocated_explicit_size_includes_the_tool_bar_under_inhibition() {
     for form in [
         "(modify-frame-parameters nil '((width . 90) (height . 40)))",
         "(set-frame-size nil 90 40)",
@@ -745,15 +750,49 @@ fn inhibited_explicit_size_keeps_the_tool_bar_inside_the_outer_window() {
             .unwrap()
             .tool_bar_height;
         assert!(toolbar > 0, "{form}");
+        // gtkutil.c:1181-1182 adds FRAME_TOOLBAR_HEIGHT once the bar exists.
+        // frame-inhibit-implied-resize is not consulted for inhibit 1.
         assert_eq!(
             (request.width, request.height),
-            (720, 640 + fixture.menu_height),
-            "{form}: inhibit t keeps the tool bar inside the requested text height"
+            (720, 640 + toolbar + fixture.menu_height),
+            "{form}: an allocated tool bar stays in the explicit outer height"
         );
         fixture.acknowledge(&request);
-        let text_px = 640u32.saturating_sub(toolbar);
-        fixture.assert_geometry(90, (text_px / 16) as i64, text_px as i64);
+        fixture.assert_geometry(90, 40, 640);
     }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn explicit_size_before_tool_bar_allocation_omits_the_bar() {
+    let mut fixture = ChromeResizeFixture::new();
+    fixture
+        .eval
+        .frame_manager_mut()
+        .get_mut(fixture.frame_id)
+        .unwrap()
+        .toolkit_tool_bar_allocated = false;
+    fixture
+        .eval
+        .eval_str("(setq frame-inhibit-implied-resize t)")
+        .unwrap();
+    fixture.requests.borrow_mut().clear();
+    fixture.eval.eval_str("(set-frame-size nil 90 40)").unwrap();
+    let request = fixture.requests.borrow()[0].clone();
+    let toolbar = fixture
+        .eval
+        .frame_manager()
+        .get(fixture.frame_id)
+        .unwrap()
+        .tool_bar_height;
+    assert!(toolbar > 0);
+    assert_eq!(
+        (request.width, request.height),
+        (720, 640 + fixture.menu_height)
+    );
+    fixture.acknowledge(&request);
+    let text_px = 640u32.saturating_sub(toolbar);
+    fixture.assert_geometry(90, (text_px / 16) as i64, text_px as i64);
 }
 
 #[cfg(target_os = "linux")]

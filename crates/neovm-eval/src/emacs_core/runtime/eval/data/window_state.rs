@@ -3446,8 +3446,20 @@ pub struct Frame {
     pub gui_bar_presentation: GuiBarPresentation,
     /// Menu bar height in pixels.
     pub menu_bar_height: u32,
-    /// Tool bar height in pixels.
+    /// Tool bar height in pixels. Layout always subtracts this. An explicit
+    /// outer-window request adds it only once `toolkit_tool_bar_allocated`
+    /// is set, matching GNU `FRAME_TOOLBAR_HEIGHT` (0 until the first
+    /// item-bearing `update_frame_tool_bar`).
     pub tool_bar_height: u32,
+    /// GNU `f->tool_bar_resized` after `xg_update_tool_bar_sizes` has stored
+    /// a toolbar height (gtkutil.c:5804, :6160). Linux explicit sizes consult
+    /// this. Other profiles keep the pre-allocation request behavior out of
+    /// this flag.
+    pub toolkit_tool_bar_allocated: bool,
+    /// The last explicit size was sent while the toolkit bar was still
+    /// unallocated, so the host window does not yet include `tool_bar_height`.
+    /// The first allocation applies inhibit 2 from this fact.
+    pub explicit_size_omitted_unallocated_tool_bar: bool,
     /// Compact bar height in pixels.
     pub compact_bar_height: u32,
     /// Tab bar height in pixels.
@@ -3623,6 +3635,9 @@ pub struct FrameManager {
     /// are rare and pay the increment; redisplay can then reject a stale leaf
     /// plan in O(1) after arbitrary Lisp callbacks.
     pub window_topology_generation: u64,
+    /// `window-setup-hook` has returned. GTK's first tool-bar allocation is
+    /// still in the future while that hook applies an explicit size.
+    pub window_setup_hook_completed: bool,
 }
 
 // --- E5-FM-6b snapshot/record impls (stage-4 W2/E5) ---
@@ -4642,6 +4657,7 @@ impl Default for FrameManager {
             next_navigation_intent_generation: std::num::NonZeroU64::MIN,
             pending_content_transition_intents: PendingContentTransitionIntents::default(),
             window_topology_generation: 1,
+            window_setup_hook_completed: false,
         }
     }
 }
@@ -6922,6 +6938,8 @@ impl Frame {
             gui_bar_presentation: GuiBarPresentation::Separate,
             menu_bar_height: 0,
             tool_bar_height: 0,
+            toolkit_tool_bar_allocated: false,
+            explicit_size_omitted_unallocated_tool_bar: false,
             compact_bar_height: 0,
             tab_bar_height: 0,
             font_pixel_size: 16.0,
@@ -7603,6 +7621,7 @@ impl FrameManager {
             next_navigation_intent_generation: std::num::NonZeroU64::MIN,
             pending_content_transition_intents: PendingContentTransitionIntents::default(),
             window_topology_generation: 1,
+            window_setup_hook_completed: false,
         }
     }
 

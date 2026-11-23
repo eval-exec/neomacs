@@ -56,7 +56,7 @@ fn gnu_width_only_resize_preserves_native_height() {
 /// stays near 65 columns until something flushes a queued resize.
 #[test]
 fn explicit_size_after_font_is_on_the_x_window_before_a_geometry_query() {
-    let (gnu, actual) = sample_explicit_sizes("explicit-size-after-font");
+    let (gnu, actual) = sample_explicit_sizes("explicit-size-after-font", &[]);
     // Frame width 120 is true of the pre-fix binary too. The external column
     // count is what separates a delivered resize from a queued one.
     assert_eq!(gnu.frame.0, 120, "gnu width {gnu:?}");
@@ -75,26 +75,74 @@ fn explicit_size_after_font_is_on_the_x_window_before_a_geometry_query() {
     );
 }
 
-/// N-827-toolbar-height. GNU sizes the outer window before the GTK tool bar
-/// is realized (`xg_frame_set_char_size`, gtkutil.c:1181-1183), then the
-/// tool-bar ConfigureNotify is inhibit 2 (frame.c:800-805). With
-/// `frame-inhibit-implied-resize` t, GNU keeps that outer height and
-/// `frame-height` drops to 38. Neomacs must do the same.
+/// N-827-toolbar-height, window-setup-hook timing. GNU's explicit size runs
+/// before the tool bar is realized, so `FRAME_TOOLBAR_HEIGHT` is still 0
+/// (gtkutil.c:1181-1182). Inhibit t then keeps that outer window when the
+/// bar allocates. Compared numbers are `frame-width`, `frame-height`, and
+/// `frame-text-height` plus each editor's own tool-bar pixels. The menu
+/// cancels, because each side subtracts the menu it put in the outer
+/// request. Raw text pixels differ by the tool bar (Neo's scaled image bar
+/// versus the GTK widget, xfns.c `HAVE_EXT_TOOL_BAR`). Outer pixels are not
+/// compared.
 #[test]
-fn n827_toolbar_height_matches_gnu_outer_height() {
-    let (gnu, actual) = sample_explicit_sizes("n827-toolbar-height");
+fn n827_toolbar_height_matches_gnu_frame_lines_and_text_height() {
+    let (gnu, actual) = sample_explicit_sizes("n827-toolbar-height", &[]);
     assert_eq!(
         (actual.frame.0, actual.frame.1),
         (gnu.frame.0, gnu.frame.1),
         "N-827-toolbar-height frame neomacs {actual:?} gnu {gnu:?}"
     );
+    assert!(
+        actual.tool_height > 0 && gnu.tool_height > 0,
+        "{actual:?} {gnu:?}"
+    );
+    assert!(
+        actual.menu_height > 0 && gnu.menu_height > 0,
+        "menu bar pixels neomacs {} gnu {}",
+        actual.menu_height, gnu.menu_height
+    );
     assert_eq!(
-        actual.xwin.1, gnu.xwin.1,
-        "N-827-toolbar-height outer height neomacs {actual:?} gnu {gnu:?}"
+        actual.text_height + actual.tool_height,
+        gnu.text_height + gnu.tool_height,
+        "frame-text-height plus tool bar neomacs {actual:?} gnu {gnu:?}"
     );
 }
 
-fn sample_explicit_sizes(artifact_name: &str) -> (ExplicitSize, ExplicitSize) {
+/// Explicit size after the first redisplay. The tool bar is allocated, so
+/// inhibit 1 adds it (gtkutil.c:1181-1182). `frame-height` and
+/// `frame-text-height` are the compared numbers, under `t`,
+/// `(tool-bar-lines)`, and the default.
+fn assert_explicit_size_after_redisplay(inhibit: &str) {
+    let (gnu, actual) = sample_explicit_sizes(
+        &format!("n827-after-redisplay-{inhibit}"),
+        &[("N827_INHIBIT", inhibit), ("N827_WHEN", "redisplay")],
+    );
+    assert_eq!(
+        (actual.frame.0, actual.frame.1, actual.text_height),
+        (gnu.frame.0, gnu.frame.1, gnu.text_height),
+        "inhibit {inhibit} neomacs {actual:?} gnu {gnu:?}"
+    );
+}
+
+#[test]
+fn n827_after_redisplay_inhibit_t_keeps_requested_text_height() {
+    assert_explicit_size_after_redisplay("t");
+}
+
+#[test]
+fn n827_after_redisplay_inhibit_tool_bar_lines_keeps_requested_text_height() {
+    assert_explicit_size_after_redisplay("tool-bar-lines");
+}
+
+#[test]
+fn n827_after_redisplay_default_inhibit_keeps_requested_text_height() {
+    assert_explicit_size_after_redisplay("default");
+}
+
+fn sample_explicit_sizes(
+    artifact_name: &str,
+    extra_env: &[(&str, &str)],
+) -> (ExplicitSize, ExplicitSize) {
     let root = neomacs_infra::workspace_root();
     let artifacts = root.join("target/neomacs-gui-tests").join(artifact_name);
     let _ = fs::remove_dir_all(&artifacts);
@@ -116,8 +164,9 @@ fn sample_explicit_sizes(artifact_name: &str) -> (ExplicitSize, ExplicitSize) {
         &artifacts.join("gnu"),
         oracle.executable_path(),
         &session,
+        extra_env,
     );
-    let actual = observe_explicit_size(&root, &artifacts.join("neo"), neo, &session);
+    let actual = observe_explicit_size(&root, &artifacts.join("neo"), neo, &session, extra_env);
     (gnu, actual)
 }
 
@@ -126,6 +175,9 @@ struct ExplicitSize {
     xwin: (u32, u32),
     frame: (u32, u32),
     char_px: (u32, u32),
+    text_height: u32,
+    tool_height: u32,
+    menu_height: u32,
 }
 
 impl ExplicitSize {
@@ -143,6 +195,7 @@ fn observe_explicit_size(
     artifacts: &std::path::Path,
     binary: PathBuf,
     session: &neomacs_gui_tests::DisplaySession,
+    extra_env: &[(&str, &str)],
 ) -> ExplicitSize {
     let fixture = root.join("crates/neomacs-gui-tests/fixtures/explicit-size-after-font-oracle.el");
     let mut plan = GuiTestPlan::new(
@@ -162,6 +215,9 @@ fn observe_explicit_size(
     ])
     .with_env("GDK_BACKEND", "x11")
     .with_env("GSETTINGS_BACKEND", "memory");
+    for (key, value) in extra_env {
+        plan = plan.with_env(*key, *value);
+    }
     for (key, value) in session.env() {
         plan = plan.with_env(key, value);
     }
@@ -185,6 +241,9 @@ fn parse_explicit_size(stderr: &str) -> ExplicitSize {
     let mut xwin = (0, 0);
     let mut frame = (0, 0);
     let mut char_px = (0, 0);
+    let mut text_height = None;
+    let mut tool_height = None;
+    let mut menu_height = None;
     for field in line.split_whitespace() {
         if let Some(value) = field.strip_prefix("xwin=") {
             xwin = parse_pair(value);
@@ -192,12 +251,21 @@ fn parse_explicit_size(stderr: &str) -> ExplicitSize {
             frame = parse_pair(value);
         } else if let Some(value) = field.strip_prefix("char=") {
             char_px = parse_pair(value);
+        } else if let Some(value) = field.strip_prefix("text=") {
+            text_height = value.parse().ok();
+        } else if let Some(value) = field.strip_prefix("tool=") {
+            tool_height = value.parse().ok();
+        } else if let Some(value) = field.strip_prefix("menu=") {
+            menu_height = value.parse().ok();
         }
     }
     ExplicitSize {
         xwin,
         frame,
         char_px,
+        text_height: text_height.unwrap_or_else(|| panic!("missing text height: {line}")),
+        tool_height: tool_height.unwrap_or_else(|| panic!("missing tool height: {line}")),
+        menu_height: menu_height.unwrap_or_else(|| panic!("missing menu height: {line}")),
     }
 }
 

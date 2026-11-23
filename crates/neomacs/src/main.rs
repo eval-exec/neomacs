@@ -121,8 +121,6 @@ use input_bridge::publication::{InputPublisher, InputRoute, PrimaryInputPublishe
 use neomacs_display_runtime::tty_input::Publication;
 use neovm_core::window::DisplayFrameExt;
 use neovm_core::window::DisplayFrameManagerExt;
-#[cfg(target_os = "linux")]
-mod gtk_menu_bar;
 mod secondary_tty;
 mod startup_font;
 mod startup_frame;
@@ -4060,6 +4058,10 @@ fn sync_selected_gui_chrome_state(eval: &mut Context) {
             let _ = host.set_gui_frame_geometry_hints(frame_id, hints);
         }
     }
+    neovm_core::emacs_core::frame::note_linux_toolkit_tool_bar_allocation(
+        eval,
+        !tool_items.is_empty(),
+    );
 }
 
 fn gui_frame_font_scale_from_observation(
@@ -5287,10 +5289,6 @@ pub fn run(mode: RuntimeMode) {
     // from a graphical session, retain native hosting on the OS main thread;
     // the existing startup lifecycle waits without creating a window until
     // Lisp receives the first graphical frame request.
-    if startup.frontend == FrontendKind::Gui {
-        #[cfg(target_os = "linux")]
-        gtk_menu_bar::install_measured_height();
-    }
     let gui_connection = if startup.frontend == FrontendKind::Gui {
         let system_name = graphical_system_name();
         Some(

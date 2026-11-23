@@ -29,7 +29,8 @@ use super::window_cmds::{
     frame_non_text_total_width_pixels_in_state, frame_realized_lines, frame_size_param_to_cells,
     frame_size_param_to_pixels, frame_text_height_pixels, frame_text_width_pixels,
     frame_text_width_pixels_in_state, frame_total_cols, frame_total_lines,
-    make_frame_plain_on_terminal, other_frames_in_state, parse_frame_size_param,
+    host_outer_non_text_height_pixels, make_frame_plain_on_terminal,
+    note_explicit_tool_bar_omission, other_frames_in_state, parse_frame_size_param,
     remember_selected_window_point_in_state, request_live_gui_frame_resize, resize_live_gui_frame,
     resolve_frame_id, resolve_frame_id_in_state, selected_frame_impl, set_frame_text_size,
     stringish_value, sync_selected_window_buffer_in_state,
@@ -748,31 +749,127 @@ pub fn builtin_frame_position(
     ))
 }
 
-/// Whether an explicit text height should add the tool bar to the host window.
+/// Whether an explicit text height adds the tool bar to the host window.
 ///
-/// GTK delivers the explicit size without `FRAME_TOOLBAR_HEIGHT` (that field
-/// stays 0). The external bar's ConfigureNotify is inhibit 2. Preserving the
-/// text grid grows the window by the bar; preserving the allocation leaves
-/// the bar inside the requested rows.
+/// GTK's inhibit-1 hook adds `FRAME_TOOLBAR_HEIGHT`, which stays 0 until the
+/// first item-bearing `update_frame_tool_bar` (gtkutil.c:1181-1182, :6149-6160).
+/// `frame-inhibit-implied-resize` is not consulted here. It applies to the
+/// later inhibit-2 allocation. On Linux the discriminator is that allocation
+/// flag. NS `ns_set_window_size` (nsterm.m:1877-1917) has no attested row in
+/// this change, so non-Linux builds keep the tool bar in the explicit request.
 fn explicit_outer_includes_tool_bar(
-    eval: &mut neovm_eval::emacs_core::eval::Context,
+    eval: &neovm_eval::emacs_core::eval::Context,
     fid: FrameId,
 ) -> Result<bool, Flow> {
+    let frame = eval
+        .frame_manager()
+        .get(fid)
+        .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+    #[cfg(target_os = "linux")]
+    {
+        Ok(frame.toolkit_tool_bar_allocated)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = frame;
+        Ok(true)
+    }
+}
+
+/// First Linux tool-bar allocation after `window-setup-hook`.
+///
+/// GNU packs the bar in `update_frame_tool_bar` and then runs inhibit 2
+/// (`gtkutil.c:6149-6160`, `frame.c:885-905`). Preserving the text grid grows
+/// the window by the bar. Preserving the allocation leaves the outer size
+/// and the text stays shrunk. A startup window that already contains the bar
+/// is only marked allocated.
+pub fn note_linux_toolkit_tool_bar_allocation(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    has_tool_bar_items: bool,
+) {
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (eval, has_tool_bar_items);
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if !has_tool_bar_items || !eval.frame_manager().window_setup_hook_completed {
+            return;
+        }
+        let Some(fid) = eval
+            .frame_manager()
+            .selected_frame()
+            .filter(|frame| frame.effective_window_system().is_some())
+            .map(|frame| frame.id)
+        else {
+            return;
+        };
+        let Some((omitted, text_width, text_height)) =
+            eval.frame_manager().get(fid).and_then(|frame| {
+                if frame.toolkit_tool_bar_allocated || frame.tool_bar_height == 0 {
+                    None
+                } else {
+                    Some((
+                        frame.explicit_size_omitted_unallocated_tool_bar,
+                        frame_text_width_pixels(frame),
+                        frame_text_height_pixels(frame).saturating_add(frame.tool_bar_height),
+                    ))
+                }
+            })
+        else {
+            return;
+        };
+        let grow = omitted && {
+            match tool_bar_lines_policy(eval, fid) {
+                Ok(policy) => policy == implied_resize::ResizePolicy::PreserveTextGrid,
+                Err(err) => {
+                    tracing::warn!("tool-bar allocation policy failed: {err:?}");
+                    false
+                }
+            }
+        };
+        if let Some(frame) = eval.frame_manager_mut().get_mut(fid) {
+            frame.toolkit_tool_bar_allocated = true;
+            frame.explicit_size_omitted_unallocated_tool_bar = false;
+        }
+        if !grow {
+            return;
+        }
+        let (frames, buffers, display_host) = eval.frame_manager_buffers_and_display_host_mut();
+        if let Err(err) = resize_live_gui_frame(
+            frames,
+            buffers,
+            display_host,
+            fid,
+            text_width,
+            text_height,
+            false,
+            true,
+        ) {
+            tracing::warn!("tool-bar allocation resize failed: {err:?}");
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn tool_bar_lines_policy(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    fid: FrameId,
+) -> Result<implied_resize::ResizePolicy, Flow> {
     let inhibit = eval.eval_symbol_by_id(intern("frame-inhibit-implied-resize"))?;
     let symbols = eval.symbol_mode();
     let frame = eval
         .frame_manager()
         .get(fid)
         .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
-    let policy = implied_resize::policy(
+    implied_resize::policy(
         frame,
         inhibit,
         implied_resize_creation_phase(frame),
         implied_resize::ImpliedResizeReason::ToolBarLines,
         implied_resize::ResizeAxis::Vertical,
         symbols,
-    )?;
-    Ok(policy == implied_resize::ResizePolicy::PreserveTextGrid)
+    )
 }
 
 /// `(set-frame-height FRAME HEIGHT &optional PRETEND PIXELWISE)` -> nil.
@@ -2830,11 +2927,7 @@ pub(crate) fn request_live_gui_frame_resize_and_keep_pending(
             .get(fid)
             .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
         let non_text_width = frame_non_text_total_width_pixels_in_state(frames, fid);
-        let non_text_height = if include_tool_bar {
-            frame_non_text_total_height_pixels(frame)
-        } else {
-            frame_non_text_total_height_pixels(frame).saturating_sub(frame.tool_bar_height)
-        };
+        let non_text_height = host_outer_non_text_height_pixels(frame, include_tool_bar);
         (
             text_width_px.saturating_add(non_text_width).max(1),
             text_height_px.saturating_add(non_text_height).max(1),
@@ -2868,6 +2961,7 @@ pub(crate) fn request_live_gui_frame_resize_and_keep_pending(
         let frame = frames
             .get_mut(fid)
             .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+        note_explicit_tool_bar_omission(frame, include_tool_bar);
         let previous_pending = frame.pending_gui_resize;
         let request_id = frame.queue_pending_gui_resize(
             desired_cols,

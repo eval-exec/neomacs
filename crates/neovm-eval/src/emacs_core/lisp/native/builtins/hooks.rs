@@ -10,7 +10,15 @@ use neovm_value::gc_trace::GcTrace;
 // ===========================================================================
 
 pub(crate) fn builtin_run_hooks(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
-    hook_runtime::run_named_hooks(eval, &args)
+    let result = hook_runtime::run_named_hooks(eval, &args)?;
+    let mode = eval.symbol_mode();
+    if args.iter().any(|arg| {
+        arg.as_symbol_name(mode)
+            .is_some_and(|name| name == "window-setup-hook")
+    }) {
+        eval.frame_manager_mut().window_setup_hook_completed = true;
+    }
+    Ok(result)
 }
 
 #[doc(hidden)]
