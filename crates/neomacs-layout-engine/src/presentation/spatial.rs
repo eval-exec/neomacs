@@ -1027,3 +1027,7 @@ pub(crate) fn body_text_positions(
 #[cfg(test)]
 #[path = "tests/spatial_coverage_test.rs"]
 mod coverage_tests;
+
+#[cfg(test)]
+#[path = "tests/spatial_visible_order_test.rs"]
+mod visible_order_tests;
