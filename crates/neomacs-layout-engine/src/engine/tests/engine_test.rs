@@ -92,6 +92,8 @@ mod font_selection;
 
 #[path = "../../tests/engine_line_spacing_test.rs"]
 mod line_spacing;
+#[path = "no_op_chrome_source_test.rs"]
+mod no_op_chrome_source;
 #[path = "../../tests/engine_trailing_whitespace_test.rs"]
 mod trailing_whitespace;
 

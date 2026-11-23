@@ -1302,6 +1302,10 @@ mod recent_clear_tests;
 #[path = "collection_reads/tests/validation_cache_test.rs"]
 mod validation_cache_tests;
 
+#[cfg(test)]
+#[path = "collection_reads/tests/no_op_string_clear_test.rs"]
+mod no_op_string_clear_tests;
+
 /// Round 3w (plan-3w.md section 7, C1): this World state lives in a
 /// thread-local while its World's Baton holder runs, and in the World while
 /// it is parked; the Green runtime moves it at each park and resume, so

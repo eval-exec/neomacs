@@ -56,6 +56,9 @@ mod composition_gstring_metrics_n_orphan;
 #[path = "composition_retry_folded_buffer.rs"]
 mod composition_retry_folded_buffer;
 
+#[path = "agent_shell_source.rs"]
+mod agent_shell_source;
+
 #[path = "config_env_boot.rs"]
 mod config_env_boot;
 
