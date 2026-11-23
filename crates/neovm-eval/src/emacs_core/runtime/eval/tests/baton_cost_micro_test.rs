@@ -324,9 +324,9 @@ fn baton_condition_handoff_all() {
 /// the Baton and the peer makes progress during it.
 ///
 /// This is the native-wait shape of `baton_blocking_io_peer_progress`. The
-/// pipe-readiness shape needs `make-process`, which is defined in Lisp and
-/// is not loaded in this crate's unit runtime; it is a follow-up row at the
-/// level of the bootstrapped runtime.
+/// pipe-readiness shape needs the process subrs, which this crate's unit
+/// runtime does not register; it is `baton_pipe_readiness_peer_progress` in
+/// neovm-core, on the bare evaluator.
 #[test]
 fn baton_blocking_io_peer_progress() {
     let (route, n) = (Route::from_driver(), iterations());

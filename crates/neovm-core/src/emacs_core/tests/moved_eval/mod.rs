@@ -690,6 +690,10 @@ mod emacs_core_lisp_native_builtins_tests_gc_tls_window_configuration_class_b_te
 #[path = "emacs_core/lisp/native/builtins/tests/positioned_final_boundaries_class_b_test.rs"]
 mod emacs_core_lisp_native_builtins_tests_positioned_final_boundaries_class_b_test_rs;
 
+#[cfg(all(test, feature = "perf-probes"))]
+#[path = "emacs_core/runtime/eval/tests/baton_pipe_cost_test.rs"]
+mod emacs_core_runtime_eval_tests_baton_pipe_cost_test_rs;
+
 #[cfg(test)]
 #[path = "emacs_core/runtime/eval/tests/green_switch_class_b_test.rs"]
 mod emacs_core_runtime_eval_tests_green_switch_class_b_test_rs;
