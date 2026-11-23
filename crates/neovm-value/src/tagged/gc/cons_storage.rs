@@ -26,7 +26,13 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 mod numeric_storage;
+pub(crate) use numeric_storage::InitializedNumeric;
 use numeric_storage::NumericStorage;
+pub(in crate::tagged::gc) use numeric_storage::{BignumRun, FloatRun};
+mod numeric_catalog;
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use numeric_catalog::NumericCatalogSnapshot;
+use numeric_catalog::{NumericEpoch, NumericHistory, NumericInterval};
 
 const MAX_GRANT: usize = 128;
 
@@ -239,6 +245,8 @@ static_assertions::assert_not_impl_any!(OwnedConsTail: Send, Sync, Clone, Copy);
 
 struct CatalogState {
     numeric: NumericStorage,
+    numeric_epoch: NumericEpoch,
+    numeric_interval: NumericInterval,
     allocator: ConsAllocatorOwner,
     blocks: Vec<ConsBlock>,
     by_base: FxHashMap<usize, usize>,
@@ -266,9 +274,11 @@ struct CatalogState {
 // The raw residual-Box list also moves as owned storage; only unpublished
 // headers are changed, under the same gate. No heap/Box reference is retained.
 // Storage is never freed until stopped restoration or is retained on failure.
-// Complete numeric arenas move as owned page allocations under this same
-// mutex. Their integer limb buffers have no Lisp children. No numeric grant,
-// arena descriptor reference, or mutable payload loan leaves the gate.
+// Complete numeric arenas and the cold raw Box owner move as owned storage
+// under this same mutex. Their integer limb buffers have no Lisp children.
+// Only exclusive, confined numeric page runs leave the gate; their direct
+// bitmap/occupancy pointers address disjoint pages in fixed descriptor buffers.
+// Frozen bank operations never borrow those arenas, Vecs or descriptors.
 unsafe impl Send for CatalogState {}
 
 /// Era-local catalog identity. This is not a cloneable heap facade.
@@ -278,6 +288,9 @@ pub(super) struct ConsCatalog {
     heap: HeapIdentity,
     identity: Arc<CatalogIdentity>,
     state: Mutex<Option<CatalogState>>,
+    /// Cold history survives catalog return. Every acquisition follows the
+    /// existing state gate; no owner ID, mailbox, lease or descriptor lives here.
+    numeric_history: Mutex<NumericHistory>,
     /// Installation flag for slice admission, set under the gate at install
     /// and cleared under the gate at restore. A live RunAccess loan excludes
     /// stopped restoration of this catalog, so an acquire load inside a slice
@@ -407,6 +420,7 @@ impl ConsCatalog {
                 abandoned: AtomicBool::new(false),
             }),
             state: Mutex::new(None),
+            numeric_history: Mutex::new(NumericHistory::new()),
             installed: AtomicBool::new(false),
             card_base: AtomicUsize::new(0),
         }
@@ -512,6 +526,39 @@ impl ConsCatalog {
         {
             return Err(RegistrationError::Busy);
         }
+        // The state gate is always acquired before the cold history lock.
+        // Initial N1 admission with no exhaustion request mints nothing.
+        let mut numeric_history = self.lock_numeric_history()?;
+        let numeric_plan = numeric_history.plan()?;
+        let mut numeric = NumericStorage::detach(heap);
+        let numeric_epoch = if let Some(plan) = &numeric_plan {
+            if let Err(error) = numeric.freeze_new_pool(
+                plan.float_pages,
+                plan.bignum_pages,
+                numeric_history.retained(),
+                Arc::clone(&self.identity),
+                plan.generation,
+                heap.mark_parity,
+            ) {
+                // Freeze's owned refusal preserves Mutable storage. No cons
+                // field has moved yet, so restore the complete original heap
+                // and retain every request for retry under the outer protocol.
+                let restorable = match numeric.take_restorable() {
+                    Ok(restorable) => restorable,
+                    Err(restore_error) => {
+                        // An unexpected phase cannot expose the inert heap as
+                        // usable. Frozen Drop retains its backing on this path.
+                        self.identity.abandoned.store(true, Ordering::Release);
+                        return Err(restore_error);
+                    }
+                };
+                restorable.restore(heap);
+                return Err(error);
+            }
+            plan.epoch()
+        } else {
+            NumericEpoch::Unprepared
+        };
         let placeholder = ConsAllocatorOwner::new(self.heap);
         if !heap.cons_allocator.threads_admitted() {
             // SAFETY: install already verified closed regions and stopped,
@@ -523,7 +570,9 @@ impl ConsCatalog {
         let placeholder =
             (&*heap.cons_allocator as *const super::cons_allocator::ConsAllocator) as usize;
         let state = CatalogState {
-            numeric: NumericStorage::detach(heap),
+            numeric,
+            numeric_epoch,
+            numeric_interval: NumericInterval::default(),
             allocator,
             blocks: std::mem::take(&mut heap.cons_blocks),
             by_base: std::mem::take(&mut heap.cons_block_index_by_base),
@@ -540,6 +589,11 @@ impl ConsCatalog {
             source_grants: [0; 3],
         };
         *gate = Some(state);
+        if let Some(plan) = numeric_plan {
+            // There is no remaining fallible action. Only committing the
+            // complete installed pool may consume the exhaustion counts.
+            numeric_history.commit_mint(plan);
+        }
         self.installed.store(true, Ordering::Release);
         self.publish_card_base(heap);
         Ok(())
@@ -556,10 +610,17 @@ impl ConsCatalog {
             return Err(RegistrationError::WrongHeap);
         }
         let mut gate = self.lock()?;
-        let state = gate.as_ref().ok_or(RegistrationError::Publication)?;
+        let state = gate.as_mut().ok_or(RegistrationError::Publication)?;
         if state.active_regions != 0 {
             return Err(RegistrationError::OpenRegion);
         }
+        let mut numeric_history = self.lock_numeric_history()?;
+        // SAFETY contract above supplies matching AllStopped. A checked-thaw
+        // refusal retains the bank. A later placeholder refusal may leave it
+        // Mutable in state, preserving ownership for retry or terminal retention.
+        state
+            .numeric
+            .checked_thaw(state.numeric_epoch.generation())?;
         let placeholder =
             (&*heap.cons_allocator as *const super::cons_allocator::ConsAllocator) as usize;
         let same_map = match (&state.chunk_map, &heap.chunk_map) {
@@ -587,9 +648,12 @@ impl ConsCatalog {
         {
             return Err(RegistrationError::Publication);
         }
+        // This is the final fallible action. The typed exit owns only thawed
+        // storage; its restoration cannot inspect or destruct a Frozen bank.
+        let numeric = state.numeric.take_restorable()?;
         let state = gate.take().expect("validated installed catalog");
         self.installed.store(false, Ordering::Release);
-        state.numeric.restore(heap);
+        let retention = numeric.restore(heap);
         heap.cons_allocator = state.allocator;
         heap.cons_blocks = state.blocks;
         heap.cons_block_index_by_base = state.by_base;
@@ -599,6 +663,7 @@ impl ConsCatalog {
         if let Some(cards) = state.cards {
             *heap.card_slots_mut().expect("validated card carrier") = cards;
         }
+        numeric_history.finish_interval(state.numeric_interval, retention);
         Ok(())
     }
 

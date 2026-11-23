@@ -45,3 +45,5 @@ pub(crate) use root_table::with_root_table_lock_for_test;
 pub use shared_root::RootedSlot;
 pub(crate) use shared_root::{ConsRootSeal, RootSlotOps, RootedConsInputs, cons_into};
 pub use shared_root::{LocalRoot, SharedRoot, SharedRootError};
+
+pub(crate) use shared_root::{RootedNumericDestination, bignum_into, float_into};

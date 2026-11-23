@@ -2663,9 +2663,10 @@ pub use mutator_registration::TableRef;
 pub(crate) use mutator_registration::symbol_functions::boundary as function_boundary_testkit;
 pub use mutator_registration::{
     AllStopped, CollectionError, CollectionReport, FunctionActivation, FunctionError,
-    FunctionSelection, KeeperSymbols, MinorCollectionError, Mode, Mutator, OwnerRootSlot,
-    ParallelExecutionAdmission, ParallelHeapEra, Phase, PlainSymbolBacking, PollOutcome,
-    RegistrationError, RendezvousError, Request, RunAccess, RunSlice, Snapshot, SymbolHandle,
+    FunctionSelection, KeeperSymbols, MinorCollectionError, Mode, Mutator, NumericAllocError,
+    NumericClass, OwnerRootSlot, ParallelExecutionAdmission, ParallelHeapEra, Phase,
+    PlainSymbolBacking, PollOutcome, RegistrationError, RendezvousError, Request, RunAccess,
+    RunSlice, Snapshot, SymbolHandle,
 };
 pub use mutator_registration::{
     AllStoppedFailure, MutatorEntry, MutatorFinishFailure, MutatorStartFailure, NativeReturn,

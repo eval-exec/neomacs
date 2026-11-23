@@ -4,6 +4,7 @@
 //! parent's view of its private items (`use super::*`).
 
 use super::*;
+use rustc_hash::FxHashSet;
 
 //
 // Floats (v1), strings and vectors (stage 3), and bytecode (task 03/3a) live
@@ -732,6 +733,224 @@ pub(super) struct ObjectArena<T: PagedObject> {
 }
 
 impl<T: PagedObject> ObjectArena<T> {
+    /// Reserve a complete owner page without claiming that any payload is
+    /// initialized. Only the stopped numeric bank calls this; the ordinary
+    /// allocator continues to use `reserve_run` and its existing bit contract.
+    #[cold]
+    pub(super) fn mint_uninit_numeric_owner_page(&mut self, first_index: usize) -> usize {
+        self.mint_uninit_numeric_owner_page_excluding(first_index, &FxHashSet::default())
+    }
+
+    #[cold]
+    pub(super) fn mint_uninit_numeric_owner_page_excluding(
+        &mut self,
+        first_index: usize,
+        retained: &FxHashSet<usize>,
+    ) -> usize {
+        // A stopped mint walks monotonically through descriptor indices, so
+        // an already selected clear-bit page cannot be selected again.
+        let reuse = self
+            .pages
+            .iter()
+            .enumerate()
+            .skip(first_index)
+            .find_map(|(index, page)| {
+                (page.allocated == 0 && !page.retired && !retained.contains(&index))
+                    .then_some(index)
+            });
+        if let Some(index) = reuse {
+            debug_assert!(self.pages[index].alloc_bits.iter().all(|&word| word == 0));
+            self.reserve_numeric_descriptor(index);
+            return index;
+        }
+        let mut page = match self.spare_storage.pop() {
+            Some(storage) => {
+                self.spare_unused_floor = self.spare_unused_floor.min(self.spare_storage.len());
+                ObjectPage::<T>::over_storage(storage)
+            }
+            None => ObjectPage::<T>::new(),
+        };
+        page.next_index = ObjectPage::<T>::SLOTS;
+        let base = page.base_addr();
+        self.pages.push(page);
+        let index = self.pages.len() - 1;
+        let previous = self.page_index_by_base.insert(base, index);
+        debug_assert!(previous.is_none(), "numeric page registered twice");
+        self.chunk_map_set(base, index);
+        index
+    }
+
+    /// Only stopped Mutable ownership may detach a page's serial free list.
+    /// The initialized bitmap and occupancy remain unchanged.
+    #[cold]
+    fn reserve_numeric_descriptor(&mut self, index: usize) {
+        // An empty returned page may still be on the partial chain. The
+        // whole page now belongs to one future owner, not that chain.
+        let next = self.pages[index].next_partial;
+        if self.partial_head == index {
+            self.partial_head = next;
+        } else {
+            let mut previous = self.partial_head;
+            while previous != PAGE_NONE {
+                let following = self.pages[previous].next_partial;
+                if following == index {
+                    self.pages[previous].next_partial = next;
+                    break;
+                }
+                previous = following;
+            }
+        }
+        let page = &mut self.pages[index];
+        page.next_index = ObjectPage::<T>::SLOTS;
+        page.free_head = PAGE_NONE;
+        page.next_partial = PAGE_NONE;
+        page.on_partial = false;
+    }
+
+    /// At zero-view refreeze the bitmap, not a saved bump cursor, defines
+    /// the claimable tail. Serial stopped work may add initialized slots;
+    /// collection may remove a dead tail or the whole page. No slot receipt
+    /// survives this transition. SLOTS means there is no tail to retain.
+    #[cold]
+    pub(super) fn numeric_retained_page_frontier(&self, base: usize) -> Option<usize> {
+        let Some(&index) = self.page_index_by_base.get(&base) else {
+            return Some(0);
+        };
+        let page = &self.pages[index];
+        let mut live = 0;
+        let mut frontier = 0;
+        for (word, &bits) in page.alloc_bits.iter().enumerate() {
+            let first = word * usize::BITS as usize;
+            let count = ObjectPage::<T>::SLOTS
+                .saturating_sub(first)
+                .min(usize::BITS as usize);
+            let allowed = if count == usize::BITS as usize {
+                usize::MAX
+            } else {
+                (1usize << count) - 1
+            };
+            if bits & !allowed != 0 {
+                return None;
+            }
+            live += bits.count_ones() as usize;
+            if bits != 0 {
+                frontier = first + (usize::BITS - bits.leading_zeros()) as usize;
+            }
+        }
+        if live != page.allocated || (page.retired && frontier != ObjectPage::<T>::SLOTS) {
+            return None;
+        }
+        Some(frontier)
+    }
+
+    /// Recover a retained page after descriptor compaction. If all its prefix
+    /// died and storage was trimmed, a fresh allocation carries the same logical
+    /// frontier; no live value can name the removed physical page.
+    #[cold]
+    pub(super) fn recover_numeric_owner_page(
+        &mut self,
+        base: usize,
+        recovered: &FxHashSet<usize>,
+    ) -> usize {
+        if let Some(&index) = self.page_index_by_base.get(&base) {
+            // A fresh replacement for an earlier trimmed key may reuse this
+            // address. It already represents that earlier logical page, so
+            // it cannot also represent this retained frontier.
+            if !recovered.contains(&index) {
+                self.reserve_numeric_descriptor(index);
+                return index;
+            }
+        }
+        let mut page =
+            if let Some(index) = self.spare_storage.iter().position(|&p| p as usize == base) {
+                let storage = self.spare_storage.swap_remove(index);
+                self.spare_unused_floor = self.spare_unused_floor.min(self.spare_storage.len());
+                ObjectPage::<T>::over_storage(storage)
+            } else {
+                // Do not consume an arbitrary spare: it may be another retained
+                // key that this same stopped transition has not recovered yet.
+                ObjectPage::<T>::new()
+            };
+        page.next_index = ObjectPage::<T>::SLOTS;
+        let actual_base = page.base_addr();
+        self.pages.push(page);
+        let index = self.pages.len() - 1;
+        let previous = self.page_index_by_base.insert(actual_base, index);
+        debug_assert!(previous.is_none(), "retained numeric page registered twice");
+        self.chunk_map_set(actual_base, index);
+        index
+    }
+
+    /// Rejoin one returned owner page after the bank has proved that no raw
+    /// descriptor view remains. Set bits already name exactly the completely
+    /// initialized objects below the frontier; returning clear slots never
+    /// reads or drops their payloads.
+    #[cold]
+    pub(super) fn reconcile_numeric_owner_page(&mut self, index: usize, initialized: usize) {
+        let page = &mut self.pages[index];
+        debug_assert!(initialized <= ObjectPage::<T>::SLOTS);
+        debug_assert_eq!(
+            page.allocated,
+            page.alloc_bits
+                .iter()
+                .map(|bits| bits.count_ones() as usize)
+                .sum::<usize>()
+        );
+        debug_assert!((initialized..ObjectPage::<T>::SLOTS).all(|slot| !page.is_allocated(slot)));
+        debug_assert!(!page.retired && !page.on_partial);
+        // Only the newest serial page may have an unused bump tail. Make
+        // every returned suffix a free list so older pages remain usable too.
+        // Descending pushes put the lowest clear slot at the head, so serial
+        // stopped work fills holes and the low suffix before a high slot.
+        // Clear slots include the never-initialized tail and already-swept
+        // prefix holes. Write only their trailing free links, without setting
+        // bits, charging allocations, or dropping payloads again.
+        page.next_index = ObjectPage::<T>::SLOTS;
+        page.free_head = PAGE_NONE;
+        page.next_partial = PAGE_NONE;
+        for slot in (0..ObjectPage::<T>::SLOTS).rev() {
+            if !page.is_allocated(slot) {
+                // SAFETY: zero-view thaw owns every clear-bit slot, including
+                // swept prefix holes. Only the trailing free link is written.
+                unsafe { page.free_link_ptr(slot).write(page.free_head) };
+                page.free_head = slot;
+            }
+        }
+        if page.free_head != PAGE_NONE {
+            page.on_partial = true;
+            page.next_partial = self.partial_head;
+            self.partial_head = index;
+        }
+    }
+
+    /// Check an inert replacement using identity copied before the bank froze;
+    /// this never borrows the detached arena or its descriptor buffer.
+    #[cold]
+    pub(super) fn is_numeric_transfer_placeholder(
+        &self,
+        expected_map: Option<&std::sync::Arc<ChunkMap>>,
+    ) -> bool {
+        let same_map = match (&self.chunk_map, expected_map) {
+            (None, None) => true,
+            (Some(a), Some(b)) => std::sync::Arc::ptr_eq(a, b),
+            _ => false,
+        };
+        self.pages.is_empty()
+            && self.pages.capacity() == 0
+            && self.page_index_by_base.is_empty()
+            && self.page_index_by_base.capacity() == 0
+            && self.spare_storage.is_empty()
+            && self.spare_storage.capacity() == 0
+            && self.spare_unused_floor == 0
+            && self.partial_head == PAGE_NONE
+            && same_map
+    }
+
+    #[cold]
+    pub(super) fn numeric_transfer_map(&self) -> Option<std::sync::Arc<ChunkMap>> {
+        self.chunk_map.clone()
+    }
+
     /// A storage-free replacement with the same ownership-map identity.
     /// Used only while the stopped era transfers this entire arena.
     #[cold]

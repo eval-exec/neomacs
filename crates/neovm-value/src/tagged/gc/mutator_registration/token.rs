@@ -160,7 +160,7 @@ impl Drop for RunAccess<'_, '_> {
             .owner
             .local
             .as_ref()
-            .is_some_and(|local| local.catalog_region.is_some())
+            .is_some_and(|local| local.catalog_region.is_some() || !local.numeric.is_closed())
         {
             // No allocator work in Drop. Retain the run obligation and all
             // backing until terminal era cleanup; never ACK an open region.

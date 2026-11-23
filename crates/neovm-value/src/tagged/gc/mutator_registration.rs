@@ -29,6 +29,8 @@ pub(crate) use admission_probe::{
 mod authority_word;
 mod collection;
 mod cons_allocation;
+mod numeric_allocation;
+pub use numeric_allocation::{NumericAllocError, NumericClass};
 mod cons_catalog;
 mod construction;
 #[cfg(feature = "test-support")]
@@ -1104,3 +1106,9 @@ pub(crate) mod restricted_lisp;
 
 // Shared dormant production-entry contention vocabulary.
 pub(crate) mod retry;
+
+// Direct storage aliasing qualification; full-World admission/rooting rows stay
+// native. No fixture authority or code is present in shipping builds.
+#[cfg(all(test, miri))]
+#[path = "mutator_registration/numeric_storage_miri.rs"]
+mod numeric_storage_miri;

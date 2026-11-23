@@ -68,6 +68,7 @@ pub(in crate::tagged::gc) struct OwnerGcState {
     /// tails block publication exactly like an open region: the collector's
     /// stopped picture must see one coherent catalog.
     pub(super) cons_tails: Vec<super::super::cons_storage::OwnedConsTail>,
+    pub(super) numeric: super::numeric_allocation::NumericOwnerBook,
 }
 
 impl std::fmt::Debug for OwnerGcState {
@@ -317,6 +318,7 @@ impl OwnerGcState {
             root_slot_generation: 1,
             catalog_region: None,
             cons_tails: Vec::new(),
+            numeric: super::numeric_allocation::NumericOwnerBook::new(),
         })
     }
 
@@ -332,7 +334,8 @@ impl OwnerGcState {
         &self,
         owner: &OwnerAllocRegion,
     ) -> Result<(), ImageError> {
-        if self.catalog_region.is_some() || !self.cons_tails.is_empty() {
+        if self.catalog_region.is_some() || !self.cons_tails.is_empty() || !self.numeric.is_closed()
+        {
             return Err(ImageError::RegionsOpen);
         }
         validate_closed(&self.hot, &self.cold, &self.jit, &self.regions, owner)
@@ -361,7 +364,9 @@ impl OwnerGcState {
             &OwnerAllocRegion::new(),
         )
         .and_then(|()| {
-            if empty_destination(&self.hot, &self.cold, &self.root_scratch) {
+            if !self.numeric.is_closed() {
+                Err(ImageError::RegionsOpen)
+            } else if empty_destination(&self.hot, &self.cold, &self.root_scratch) {
                 Ok(())
             } else {
                 Err(ImageError::DestinationOccupied)
