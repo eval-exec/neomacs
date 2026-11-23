@@ -1907,8 +1907,12 @@ fn build_sparse_tree(
     } else {
         None
     };
+    // GNU visits children only when `limit > 0` (`src/treesit.c:4957`).
+    // Zero and negative DEPTH match this node and do not walk downward.
+    // A negative limit used to stay negative under `saturating_sub` and
+    // recurse without bound.
     let mut children = Vec::new();
-    if depth != 0 {
+    if depth > 0 {
         for idx in 0..node.child_count() {
             if let Some(child) = node.child(idx) {
                 children.extend(build_sparse_tree(

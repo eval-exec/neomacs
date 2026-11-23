@@ -644,6 +644,22 @@ fn treesit_induce_sparse_tree_calls_process_fn_before_children() {
     );
 }
 
+/// Attested on Emacs 31.1 `a360712c9d`: `treesit_build_sparse_tree` visits
+/// children only when `limit > 0` (`src/treesit.c:4957`). A negative DEPTH
+/// still matches ROOT and does not walk downward, so a document root and
+/// `"pair"` return nil.
+#[test]
+fn treesit_induce_sparse_tree_negative_depth_returns_nil() {
+    let (mut eval, parser) = eval_with_json_parser(r#"{"a": 1, "b": 2}"#);
+    let root = builtin_treesit_parser_root_node(&mut eval, vec![parser]).expect("root");
+    let tree = builtin_treesit_induce_sparse_tree(
+        &mut eval,
+        vec![root, Value::string("pair"), Value::NIL, Value::fixnum(-1)],
+    )
+    .expect("no signal");
+    assert!(tree.is_nil(), "negative DEPTH must return nil, got {tree}");
+}
+
 /// Attested on Emacs 31.1 `a360712c9d`: `treesit-parser-set-included-ranges`
 /// inside a search predicate leaves the matched node live and not outdated.
 /// Row 13 of the e150 bounce. `("pair" nil)`.
