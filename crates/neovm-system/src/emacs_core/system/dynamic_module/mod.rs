@@ -1226,22 +1226,25 @@ unsafe extern "C" fn module_copy_string_contents(
     })
 }
 
-fn module_input_bytes<'a>(ptr: *const u8, len: isize) -> Result<&'a [u8], ()> {
+/// Bytes of a module string argument.
+///
+/// # Safety
+///
+/// When `len > 0`, `ptr` must address `len` initialized bytes that stay valid
+/// for `'a`. `len == 0` does not read `ptr` (GNU `emacs-module.c` returns the
+/// empty string without consulting `str`). A null `ptr` with `len > 0` is
+/// rejected and is not dereferenced.
+unsafe fn module_input_bytes<'a>(ptr: *const u8, len: isize) -> Result<&'a [u8], ()> {
     if len < 0 {
         return Err(());
     }
-    // GNU `module_make_string` / `module_make_unibyte_string` return the empty
-    // string when `len == 0` and do not read `str` (emacs-module.c). A null
-    // pointer with length 0 is that case; `from_raw_parts(null, 0)` is UB.
     if len == 0 {
         return Ok(&[]);
     }
     if ptr.is_null() {
         return Err(());
     }
-    // SAFETY: `len > 0` and `ptr` is non-null. The module caller guarantees
-    // `ptr` addresses `len` initialized bytes for this call, as GNU requires
-    // before `make_unibyte_string` / `module_decode_utf_8`.
+    // SAFETY: the caller promised `ptr` addresses `len` initialized bytes for `'a`.
     Ok(unsafe { std::slice::from_raw_parts(ptr, len as usize) })
 }
 
@@ -1254,7 +1257,9 @@ unsafe extern "C" fn module_make_string(
         if !module_function_begin(env) {
             return std::ptr::null_mut();
         }
-        let bytes = match module_input_bytes(str as *const u8, len) {
+        // SAFETY: the module caller of `make_string` passes `len` initialized
+        // bytes, or `len == 0`, matching `module_make_string` in emacs-module.c.
+        let bytes = match unsafe { module_input_bytes(str as *const u8, len) } {
             Ok(bytes) => bytes,
             Err(()) => return std::ptr::null_mut(),
         };
@@ -1292,7 +1297,9 @@ unsafe extern "C" fn module_make_unibyte_string(
         if !module_function_begin(env) {
             return std::ptr::null_mut();
         }
-        let bytes = match module_input_bytes(str as *const u8, len) {
+        // SAFETY: the module caller of `make_unibyte_string` passes `len`
+        // initialized bytes, or `len == 0`, matching emacs-module.c.
+        let bytes = match unsafe { module_input_bytes(str as *const u8, len) } {
             Ok(bytes) => bytes,
             Err(()) => return std::ptr::null_mut(),
         };
@@ -2465,12 +2472,14 @@ mod module_string_tests {
 
     #[test]
     fn module_make_string_null_zero_is_empty_without_reading_the_pointer() {
-        let bytes = module_input_bytes(std::ptr::null(), 0).expect("empty string");
+        // SAFETY: length 0 does not read the pointer.
+        let bytes = unsafe { module_input_bytes(std::ptr::null(), 0) }.expect("empty string");
         assert!(bytes.is_empty());
     }
 
     #[test]
     fn module_make_string_null_nonzero_is_rejected() {
-        assert!(module_input_bytes(std::ptr::null(), 4).is_err());
+        // SAFETY: a null pointer with a positive length is rejected before any read.
+        assert!(unsafe { module_input_bytes(std::ptr::null(), 4) }.is_err());
     }
 }

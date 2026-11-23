@@ -1085,6 +1085,9 @@ impl Device {
             return;
         }
         let handle = self.handle.as_raw_handle();
+        // The raw pointer does not borrow `state`, so `posted` can be cleared
+        // by `finish_cancelled_serial_read` after the wait returns.
+        let overlapped = &raw const state.overlapped;
         // SAFETY: `overlapped` is the exact block the pending read used, and
         // the Box target stays put through this call. `CancelIoEx` returns
         // before the kernel has finished with that block. `GetOverlappedResult`
@@ -1092,17 +1095,16 @@ impl Device {
         // `ERROR_OPERATION_ABORTED`, before `posted` is cleared and before
         // Drop frees the block. GNU collects a serial overlapped read the same
         // way (`src/w32.c` `_sys_read_ahead`, `GetOverlappedResult(..., TRUE)`).
-        unsafe {
-            windows_sys::Win32::System::IO::CancelIoEx(handle, &raw const state.overlapped);
+        finish_cancelled_serial_read(&mut state.posted, |_still_posted| unsafe {
+            windows_sys::Win32::System::IO::CancelIoEx(handle, overlapped);
             let mut transferred = 0u32;
             let _completed = windows_sys::Win32::System::IO::GetOverlappedResult(
                 handle,
-                &raw const state.overlapped,
+                overlapped,
                 &raw mut transferred,
                 1,
             );
-        }
-        state.posted = false;
+        });
     }
 
     /// `sys_read`'s FILE_SERIAL arm, src/w32.c:9126-9234.
@@ -3932,34 +3934,40 @@ impl std::fmt::Debug for ChildOwnership {
 #[path = "tests/process_wait_backend_test.rs"]
 mod process_wait_backend_tests;
 
+/// `CancelIoEx` returns before the kernel has finished writing the overlapped
+/// block. `wait` is `GetOverlappedResult(..., TRUE)`. It runs while `posted`
+/// is still set, and `posted` is cleared only after `wait` returns.
+fn finish_cancelled_serial_read(posted: &mut bool, wait: impl FnOnce(&bool)) {
+    if !*posted {
+        return;
+    }
+    wait(posted);
+    *posted = false;
+}
+
 #[cfg(test)]
 mod serial_cancel_order {
-    /// `CancelIoEx` returns before the kernel has finished writing the
-    /// overlapped block. Clearing `posted` (and then dropping the `Box` that
-    /// holds it) without `GetOverlappedResult(..., TRUE)` is a use after free.
+    use super::finish_cancelled_serial_read;
+
     #[test]
-    fn cancel_serial_read_ahead_collects_completion_before_clearing_posted() {
-        let src = include_str!("process_state.rs");
-        let start = src
-            .find("fn cancel_serial_read_ahead(")
-            .expect("cancel_serial_read_ahead");
-        let clear_rel = src[start..]
-            .find("posted = false")
-            .expect("posted is cleared");
-        let before_clear = &src[start..start + clear_rel];
-        assert!(
-            before_clear.contains("CancelIoEx"),
-            "cancel must request cancellation"
-        );
-        let wait_rel = before_clear.find("GetOverlappedResult").unwrap_or_else(|| {
-            panic!(
-                "CancelIoEx does not wait; the overlapped block can be freed while the kernel still writes it"
-            )
+    fn cancel_waits_before_clearing_posted() {
+        let mut posted = true;
+        let mut waited_while_posted = false;
+        finish_cancelled_serial_read(&mut posted, |still_posted| {
+            waited_while_posted = *still_posted;
         });
-        let wait_call = &before_clear[wait_rel..];
-        assert!(
-            wait_call.lines().any(|line| line.trim() == "1,"),
-            "GetOverlappedResult bWait must be TRUE before posted is cleared: {wait_call}"
-        );
+        assert!(waited_while_posted);
+        assert!(!posted);
+    }
+
+    #[test]
+    fn idle_serial_read_does_not_wait() {
+        let mut posted = false;
+        let mut waited = false;
+        finish_cancelled_serial_read(&mut posted, |_still_posted| {
+            waited = true;
+        });
+        assert!(!waited);
+        assert!(!posted);
     }
 }
