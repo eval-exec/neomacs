@@ -699,6 +699,10 @@ mod emacs_core_runtime_eval_tests_baton_pipe_cost_test_rs;
 mod emacs_core_runtime_eval_tests_green_switch_class_b_test_rs;
 
 #[cfg(test)]
+#[path = "emacs_core/runtime/eval/tests/opt_in_creator_test.rs"]
+mod emacs_core_runtime_eval_tests_opt_in_creator_test_rs;
+
+#[cfg(test)]
 #[path = "emacs_core/runtime/eval/tests/green_thread_buffer_test.rs"]
 mod emacs_core_runtime_eval_tests_green_thread_buffer_test_rs;
 

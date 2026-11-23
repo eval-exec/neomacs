@@ -73,6 +73,39 @@ fn e8s_make_thread_arity_and_main_thread_identity() {
     );
 }
 
+/// E6-P.1: a program that feature-detects the opt-in creator runs the same
+/// in GNU, which has no `neomacs-make-parallel-thread` and takes
+/// `make-thread`, and in Neomacs, which takes the extension and (until an
+/// N-mutator admission exists) gets an ordinary Baton thread with the hint
+/// nil. A default thread made inside it, and the creator's argument errors,
+/// match too (pentry DESIGN §6).
+#[test]
+fn e6p1_a_feature_detected_opt_in_creator_matches_make_thread() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    assert_default_threads_oracle(
+        r##"
+(let* ((creator (if (fboundp 'neomacs-make-parallel-thread)
+                    #'neomacs-make-parallel-thread
+                  #'make-thread))
+       (hint (lambda (th)
+               (and (fboundp 'neomacs-thread-parallel-p)
+                    (funcall 'neomacs-thread-parallel-p th))))
+       (name (copy-sequence "e6p1"))
+       (th (funcall creator
+                    (lambda ()
+                      (let ((child (make-thread (lambda () 'child))))
+                        (list 'result (eq (current-thread) main-thread)
+                              (thread-join child) (funcall hint child))))
+                    name)))
+  (list (func-arity creator) (threadp th) (eq name (thread-name th))
+        (and (memq th (all-threads)) t) (funcall hint th)
+        (thread-join th) (thread-live-p th)
+        (condition-case err (funcall creator (lambda () 1) 42) (error err))))
+"##,
+        expect_test::expect![[r#""#]],
+    );
+}
+
 #[test]
 fn e8s_make_thread_join_value_name_and_liveness() {
     return_if_neovm_enable_oracle_proptest_not_set!();
