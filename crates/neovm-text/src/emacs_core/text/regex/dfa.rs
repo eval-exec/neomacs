@@ -2054,17 +2054,16 @@ impl ExistenceDfa {
             return None;
         }
         let mut row = start << self.stride_shift;
-        // Every consumed byte must be before the stop, frontier and point's
-        // special closure, and within already established plain syntax.
-        // Eight probes cover short literal failures without making a true
-        // candidate walk an unbounded prefix twice.
-        let mut limit = stop
-            .min(text.len())
-            .min(self.search.read_limit)
-            .min(p.saturating_add(CACHED_PREFIX_BYTES))
-            .min(p.saturating_add(overflow_free_span));
-        if self.has_at_dot && point >= p {
-            limit = limit.min(point);
+        // Test only the first byte's eligibility here. Since p < text.len()
+        // and the probe cap is positive, p < saturating_add(p, cap) already
+        // holds; p < saturating_add(p, overflow_free_span) means span > 0.
+        // Point limits the first byte only when point == p, not point < p.
+        if p >= stop
+            || p >= self.search.read_limit
+            || overflow_free_span == 0
+            || (self.has_at_dot && point == p)
+        {
+            return None;
         }
         if self.search.positional {
             // The current class is a base-table class. Previous word/symbol
@@ -2073,7 +2072,6 @@ impl ExistenceDfa {
             if from < self.plain.start || p >= self.plain.end {
                 return None;
             }
-            limit = limit.min(self.plain.end);
         }
         let stride = 1u32 << self.stride_shift;
         let transition = |row: u32, class: u8| {
@@ -2084,11 +2082,8 @@ impl ExistenceDfa {
             // neither rows nor classes.
             unsafe { *self.trans.get_unchecked(at) }
         };
-        if p >= limit {
-            return None;
-        }
-        // Most cached rejections end at the first transition. Keep those
-        // independent of chunk setup, and reuse the class already read.
+        // A first-transition rejection needs neither tail bounds nor chunk
+        // setup. Reuse the class already read.
         let next = transition(row, class);
         if next == DEAD {
             return Some(0);
@@ -2097,6 +2092,20 @@ impl ExistenceDfa {
             return None;
         }
         row = next;
+        // Only a live first transition needs the remaining bounded prefix.
+        // Every further byte stays before stop, frontier, point's special
+        // closure and the end of already established plain syntax.
+        let mut limit = stop
+            .min(text.len())
+            .min(self.search.read_limit)
+            .min(p.saturating_add(CACHED_PREFIX_BYTES))
+            .min(p.saturating_add(overflow_free_span));
+        if self.has_at_dot && point >= p {
+            limit = limit.min(point);
+        }
+        if self.search.positional {
+            limit = limit.min(self.plain.end);
+        }
         let mut d = p + 1;
         if d >= limit {
             return None;
