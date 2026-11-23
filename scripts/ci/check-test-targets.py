@@ -24,6 +24,8 @@ import sys
 # - a process-wide global allocator must not leak into other tests
 ALLOWED_EXTRA_TARGETS = {
     ("neovm-core", "main_thread_stack"),
+    # cfg(miri)-only era fixture entry avoids enumerating the full core harness.
+    ("neovm-core", "numeric_storage_miri"),
     # Compile-fail contract runners: the Linux compile-contracts job selects
     # each one with `--test` and counts the runner that ran
     # (.github/workflows/test-suite.yml, "Run the compile-fail contracts").
