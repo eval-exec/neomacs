@@ -95,7 +95,10 @@ fn create_rooted_marker_at_anchor(
     let gc_root = unsafe {
         Value::from_veclike_ptr(marker_ptr as *const neovm_value::tagged::header::VecLikeHeader)
     };
-    (neovm_edit::buffer::MarkerRef::new(marker_ptr), gc_root)
+    (
+        unsafe { neovm_edit::buffer::MarkerRef::new(marker_ptr) },
+        gc_root,
+    )
 }
 
 /// Attach the complete GNU position-marker set to one leaf window.

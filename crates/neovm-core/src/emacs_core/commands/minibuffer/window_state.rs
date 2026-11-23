@@ -380,25 +380,36 @@ pub(crate) fn unwind_minibuffer_session(
             let depth_after_pop = shared.minibuffers().depth();
             super::redisplay::teardown(shared, state.minibuf_id, depth_after_pop, saved)
         } else {
+            // Erase, run Lisp, then re-borrow. The mode hook must not run
+            // while frame and buffer field borrows of this context are live:
+            // it can make a frame or kill a buffer and reallocate that storage.
             let depth_after_pop = shared.minibuffers().depth();
-            let shared_ptr = std::ptr::NonNull::from(&mut *shared);
-            let (frames, buffers, minibuffer_selected_window, active_minibuffer_window) =
-                shared.frame_manager_buffers_and_minibuffer_selection_mut();
-            teardown_minibuffer_level_in_state(
-                frames,
-                buffers,
-                minibuffer_selected_window,
-                active_minibuffer_window,
-                state.minibuf_id,
-                depth_after_pop,
-                saved,
-                move || unsafe {
-                    run_minibuffer_mode_if_bound(
-                        shared_ptr.as_ptr().as_mut().unwrap(),
-                        "minibuffer-inactive-mode",
-                    )
-                },
-            )
+            let minibuf_id = state.minibuf_id;
+            erase_expired_minibuffer_buffer_in_state(&mut shared.edit.buffers, minibuf_id);
+            let inactive_mode_result =
+                run_minibuffer_mode_if_bound(shared, "minibuffer-inactive-mode");
+            let teardown_frame_id = saved.minibuffer_frame.0;
+            let window_restore = {
+                #[cfg(test)]
+                let _field_borrows = FieldBorrowGuard::enter();
+                let (frames, buffers, minibuffer_selected_window, active_minibuffer_window) =
+                    shared.frame_manager_buffers_and_minibuffer_selection_mut();
+                let window_restore = restore_minibuffer_window_in_state(
+                    frames,
+                    buffers,
+                    minibuffer_selected_window,
+                    active_minibuffer_window,
+                    saved,
+                );
+                if depth_after_pop == 0 {
+                    frames.force_resize_mini_window_to_one_line(teardown_frame_id);
+                }
+                window_restore
+            };
+            MinibufferTeardownOutcome {
+                inactive_mode_result,
+                window_restore,
+            }
         }
     } else {
         super::redisplay::publish_expired_buffer(shared, state.minibuf_id);
@@ -514,10 +525,41 @@ pub(crate) fn install_minibuffer_ambient_directory_in_state(
     }
 }
 
+/// Set while the default minibuffer unwind holds `&mut` field borrows of
+/// the same `Context` a mode hook can re-enter. The mode must not run then:
+/// a hook that builds a frame or kills a buffer aliases those borrows.
+#[cfg(test)]
+std::thread_local! {
+    static MINIBUFFER_FIELD_BORROWS_LIVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+struct FieldBorrowGuard;
+
+#[cfg(test)]
+impl FieldBorrowGuard {
+    fn enter() -> Self {
+        MINIBUFFER_FIELD_BORROWS_LIVE.with(|live| live.set(true));
+        Self
+    }
+}
+
+#[cfg(test)]
+impl Drop for FieldBorrowGuard {
+    fn drop(&mut self) {
+        MINIBUFFER_FIELD_BORROWS_LIVE.with(|live| live.set(false));
+    }
+}
+
 pub(crate) fn run_minibuffer_mode_if_bound(
     eval: &mut crate::emacs_core::eval::Context,
     mode: &str,
 ) -> EvalResult {
+    #[cfg(test)]
+    debug_assert!(
+        !MINIBUFFER_FIELD_BORROWS_LIVE.with(|live| live.get()),
+        "minibuffer mode runs while frame and buffer field borrows are live"
+    );
     if eval.obarray().symbol_function(mode).is_some() {
         eval.apply0(Value::from_sym_id(intern(mode)))
     } else {

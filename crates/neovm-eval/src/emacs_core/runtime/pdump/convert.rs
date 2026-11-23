@@ -6175,7 +6175,8 @@ fn load_buffer(
                         debug_assert!(false, "state marker id {mid} missing from the chain walk");
                         std::ptr::null_mut()
                     });
-                MarkerRef::new(ptr)
+                // SAFETY: the dump decoder's marker table holds the loaded object.
+                unsafe { MarkerRef::new(ptr) }
             };
             Some(neovm_edit::buffer::buffer::BufferStateMarkers {
                 pt_marker: resolve(pt_marker),
@@ -6209,7 +6210,10 @@ fn load_buffer(
         mark_marker: db
             .mark_marker
             .and_then(|id| decoder.state.markers_by_id.get(&id).copied())
-            .map(MarkerRef::new)
+            .map(|ptr| {
+                // SAFETY: the dump decoder's marker table holds the loaded object.
+                unsafe { MarkerRef::new(ptr) }
+            })
             .unwrap_or(MarkerRef::NONE),
         accessible_start: dump_text_position_anchor(begv_char, db.begv),
         accessible_end: dump_text_position_anchor(zv_char, db.zv),

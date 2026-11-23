@@ -1849,19 +1849,30 @@ pub struct MarkerRef(Option<NonNull<neovm_value::tagged::header::MarkerObj>>);
 impl MarkerRef {
     pub const NONE: Self = Self(None);
 
+    /// # Safety
+    /// `ptr` is null, or it points at a live `MarkerObj` that the caller
+    /// roots for as long as this `MarkerRef` is read. Reading `anchor`,
+    /// `insertion_type`, `buffer_id`, `is_chained`, or `as_value` after the
+    /// last root is dropped is a use-after-free.
     #[inline]
-    pub fn new(ptr: *mut neovm_value::tagged::header::MarkerObj) -> Self {
+    pub unsafe fn new(ptr: *mut neovm_value::tagged::header::MarkerObj) -> Self {
         Self(NonNull::new(ptr))
     }
 
+    /// # Safety
+    /// When `value` is a marker, the caller roots that marker for as long as
+    /// the returned `MarkerRef` is read. A non-marker returns `None` and
+    /// dereferences nothing.
     #[inline]
-    pub fn from_value(value: &Value) -> Option<Self> {
+    pub unsafe fn from_value(value: &Value) -> Option<Self> {
         if !value.is_marker() {
             return None;
         }
-        value
-            .as_veclike_ptr()
-            .map(|ptr| Self::new(ptr as *mut neovm_value::tagged::header::MarkerObj))
+        value.as_veclike_ptr().map(|ptr| {
+            // SAFETY: `value` is a marker, so the veclike pointer is its
+            // `MarkerObj`. The caller upholds the rooting contract above.
+            unsafe { Self::new(ptr as *mut neovm_value::tagged::header::MarkerObj) }
+        })
     }
 
     #[inline]
@@ -4838,18 +4849,25 @@ impl Buffer {
         self.goto_emacs_byte_pos(self.point_emacs_byte_pos());
     }
 
+    /// # Safety
+    /// `marker_ptr` is a live `MarkerObj` from `TaggedHeap::alloc_marker`,
+    /// not currently on a chain. The caller roots it.
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    pub(crate) fn register_marker_at_emacs_byte_pos(
+    pub(crate) unsafe fn register_marker_at_emacs_byte_pos(
         &mut self,
         marker_ptr: *mut neovm_value::tagged::header::MarkerObj,
         pos: EmacsBytePos,
         insertion_type: InsertionType,
     ) {
         let position = self.marker_anchor_for_emacs_byte_pos(pos);
-        self.register_marker_at_anchor(marker_ptr, position, insertion_type);
+        // SAFETY: same pointer and rooting contract as this function.
+        unsafe { self.register_marker_at_anchor(marker_ptr, position, insertion_type) };
     }
 
-    pub(crate) fn register_marker_at_anchor(
+    /// # Safety
+    /// `marker_ptr` is a live `MarkerObj` from `TaggedHeap::alloc_marker`,
+    /// not currently on a chain. The caller roots it.
+    pub(crate) unsafe fn register_marker_at_anchor(
         &mut self,
         marker_ptr: *mut neovm_value::tagged::header::MarkerObj,
         position: TextPositionAnchor,
@@ -4948,7 +4966,9 @@ impl Buffer {
         &self,
         marker: MarkerRef,
     ) -> Option<(TextPositionAnchor, InsertionType)> {
-        self.text.marker_chain_anchor_of(marker.as_ptr())
+        // SAFETY: `MarkerRef`'s constructor contract is that the owner roots
+        // the marker for as long as this reference is read.
+        unsafe { self.text.marker_chain_anchor_of(marker.as_ptr()) }
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -5004,8 +5024,11 @@ impl Buffer {
     }
 
     pub fn move_marker_ref_to_anchor(&self, marker: MarkerRef, position: TextPositionAnchor) {
-        self.text
-            .move_marker_ptr_to_anchor(marker.as_ptr(), position);
+        // SAFETY: `marker` was constructed under `MarkerRef`'s rooting contract.
+        unsafe {
+            self.text
+                .move_marker_ptr_to_anchor(marker.as_ptr(), position)
+        };
     }
 
     /// Move a marker that is ALREADY on this buffer's chain to `pos`, GNU
@@ -5014,13 +5037,17 @@ impl Buffer {
     /// The anchor is canonicalised exactly as `register_marker_at_anchor`
     /// does, so the in-place and the re-chaining path cannot disagree about
     /// where a given byte position lands.
-    pub(crate) fn move_marker_ptr_to_emacs_byte_pos(
+    /// # Safety
+    /// `marker_ptr` is a live `MarkerObj` already on this buffer's chain.
+    /// The caller roots it for the duration of the write.
+    pub(crate) unsafe fn move_marker_ptr_to_emacs_byte_pos(
         &self,
         marker_ptr: *mut neovm_value::tagged::header::MarkerObj,
         pos: EmacsBytePos,
     ) {
         let position = self.marker_anchor_for_emacs_byte_pos(pos);
-        self.text.move_marker_ptr_to_anchor(marker_ptr, position);
+        // SAFETY: the caller upholds this function's contract.
+        unsafe { self.text.move_marker_ptr_to_anchor(marker_ptr, position) };
     }
 
     // -- Mark ----------------------------------------------------------------
@@ -5051,7 +5078,8 @@ impl Buffer {
                 self.text
                     .register_marker(ptr, self.id, position, super::InsertionType::Before);
             }
-            self.mark_marker = MarkerRef::new(ptr);
+            // SAFETY: `ptr` is the marker just registered on this buffer.
+            self.mark_marker = unsafe { MarkerRef::new(ptr) };
             return;
         }
         let ptr = self.mark_marker.as_ptr();
@@ -7561,9 +7589,11 @@ impl BufferManager {
             .buffers
             .get_mut(&buffer_id)?
             .state_markers = Some(BufferStateMarkers {
-            pt_marker: MarkerRef::new(pt_marker),
-            begv_marker: MarkerRef::new(begv_marker),
-            zv_marker: MarkerRef::new(zv_marker),
+            // SAFETY: each pointer was just returned by
+            // `create_marker_at_emacs_byte_pos`, which chained the node.
+            pt_marker: unsafe { MarkerRef::new(pt_marker) },
+            begv_marker: unsafe { MarkerRef::new(begv_marker) },
+            zv_marker: unsafe { MarkerRef::new(zv_marker) },
         });
         Some(())
     }
@@ -7585,24 +7615,28 @@ impl BufferManager {
             buf.text.chain_unlink(markers.begv_marker.as_ptr());
             buf.text.chain_unlink(markers.zv_marker.as_ptr());
         }
-        self.register_marker_at_emacs_byte_pos(
-            markers.pt_marker.as_ptr(),
-            buffer_id,
-            pt,
-            InsertionType::Before,
-        )?;
-        self.register_marker_at_emacs_byte_pos(
-            markers.begv_marker.as_ptr(),
-            buffer_id,
-            begv,
-            InsertionType::Before,
-        )?;
-        self.register_marker_at_emacs_byte_pos(
-            markers.zv_marker.as_ptr(),
-            buffer_id,
-            zv,
-            InsertionType::After,
-        )?;
+        // SAFETY: these are the buffer's own state markers, unlinked just
+        // above, and the buffer roots them.
+        unsafe {
+            self.register_marker_at_emacs_byte_pos(
+                markers.pt_marker.as_ptr(),
+                buffer_id,
+                pt,
+                InsertionType::Before,
+            )?;
+            self.register_marker_at_emacs_byte_pos(
+                markers.begv_marker.as_ptr(),
+                buffer_id,
+                begv,
+                InsertionType::Before,
+            )?;
+            self.register_marker_at_emacs_byte_pos(
+                markers.zv_marker.as_ptr(),
+                buffer_id,
+                zv,
+                InsertionType::After,
+            )?;
+        }
         Some(())
     }
 
@@ -7938,7 +7972,8 @@ impl BufferManager {
             buf.marker_chain_anchor_lookup(marker)?
         };
         let marker_ptr = self.create_marker_at_anchor(buffer_id, position, insertion_type);
-        Some(MarkerRef::new(marker_ptr))
+        // SAFETY: `create_marker_at_anchor` just chained this node.
+        Some(unsafe { MarkerRef::new(marker_ptr) })
     }
 
     fn clone_labeled_restrictions(
@@ -8019,8 +8054,9 @@ impl BufferManager {
             .or_default()
             .push(LabeledRestriction {
                 label,
-                beg_marker: MarkerRef::new(beg_marker),
-                end_marker: MarkerRef::new(end_marker),
+                // SAFETY: both pointers were just created and chained above.
+                beg_marker: unsafe { MarkerRef::new(beg_marker) },
+                end_marker: unsafe { MarkerRef::new(end_marker) },
             });
         Some(())
     }
@@ -8761,8 +8797,9 @@ impl BufferManager {
             let end_marker =
                 self.create_marker_at_emacs_byte_pos(buffer_id, zv, InsertionType::After);
             SavedRestrictionKind::Markers {
-                beg_marker: MarkerRef::new(beg_marker),
-                end_marker: MarkerRef::new(end_marker),
+                // SAFETY: both pointers were just created and chained above.
+                beg_marker: unsafe { MarkerRef::new(beg_marker) },
+                end_marker: unsafe { MarkerRef::new(end_marker) },
             }
         };
         let labeled_restrictions = self.clone_labeled_restrictions(buffer_id).unwrap_or(None);
@@ -9009,7 +9046,13 @@ impl BufferManager {
         insertion_type: InsertionType,
     ) -> *mut neovm_value::tagged::header::MarkerObj {
         let marker_ptr = Self::allocate_marker_node(buffer_id, insertion_type);
-        let _ = self.register_marker_at_emacs_byte_pos(marker_ptr, buffer_id, pos, insertion_type);
+        // SAFETY: `allocate_marker_node` just built this MarkerObj. The
+        // returned Value inside that helper is dropped, so the chain is the
+        // root until the caller retains a Value. Callers of this function
+        // document that duty.
+        let _ = unsafe {
+            self.register_marker_at_emacs_byte_pos(marker_ptr, buffer_id, pos, insertion_type)
+        };
         marker_ptr
     }
 
@@ -9020,7 +9063,10 @@ impl BufferManager {
         insertion_type: InsertionType,
     ) -> *mut neovm_value::tagged::header::MarkerObj {
         let marker_ptr = Self::allocate_marker_node(buffer_id, insertion_type);
-        let _ = self.register_marker_at_anchor(marker_ptr, buffer_id, position, insertion_type);
+        // SAFETY: the node was just allocated and is not on a chain.
+        let _ = unsafe {
+            self.register_marker_at_anchor(marker_ptr, buffer_id, position, insertion_type)
+        };
         marker_ptr
     }
 
@@ -9045,8 +9091,11 @@ impl BufferManager {
             as *mut neovm_value::tagged::header::MarkerObj
     }
 
+    /// # Safety
+    /// `marker_ptr` is a live `MarkerObj` not currently on a chain. The
+    /// caller roots it.
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    pub(crate) fn register_marker_at_emacs_byte_pos(
+    pub(crate) unsafe fn register_marker_at_emacs_byte_pos(
         &mut self,
         marker_ptr: *mut neovm_value::tagged::header::MarkerObj,
         buffer_id: BufferId,
@@ -9054,11 +9103,15 @@ impl BufferManager {
         insertion_type: InsertionType,
     ) -> Option<()> {
         let buf = self.storage_mut().buffers.get_mut(&buffer_id)?;
-        buf.register_marker_at_emacs_byte_pos(marker_ptr, pos, insertion_type);
+        // SAFETY: the caller upholds this function's contract.
+        unsafe { buf.register_marker_at_emacs_byte_pos(marker_ptr, pos, insertion_type) };
         Some(())
     }
 
-    pub(crate) fn register_marker_at_anchor(
+    /// # Safety
+    /// `marker_ptr` is a live `MarkerObj` not currently on a chain. The
+    /// caller roots it.
+    pub(crate) unsafe fn register_marker_at_anchor(
         &mut self,
         marker_ptr: *mut neovm_value::tagged::header::MarkerObj,
         buffer_id: BufferId,
@@ -9066,7 +9119,8 @@ impl BufferManager {
         insertion_type: InsertionType,
     ) -> Option<()> {
         let buf = self.storage_mut().buffers.get_mut(&buffer_id)?;
-        buf.register_marker_at_anchor(marker_ptr, position, insertion_type);
+        // SAFETY: the caller upholds this function's contract.
+        unsafe { buf.register_marker_at_anchor(marker_ptr, position, insertion_type) };
         Some(())
     }
 
@@ -9101,15 +9155,22 @@ impl BufferManager {
     }
 
     /// See `Buffer::move_marker_ptr_to_emacs_byte_pos`.
-    pub(crate) fn move_marker_ptr_to_emacs_byte_pos(
+    ///
+    /// # Safety
+    /// `marker_ptr` is a live `MarkerObj` already on `buffer_id`'s chain.
+    /// The caller roots it.
+    pub(crate) unsafe fn move_marker_ptr_to_emacs_byte_pos(
         &self,
         buffer_id: BufferId,
         marker_ptr: *mut neovm_value::tagged::header::MarkerObj,
         pos: EmacsBytePos,
     ) -> Option<()> {
-        self.buffers
-            .get(&buffer_id)?
-            .move_marker_ptr_to_emacs_byte_pos(marker_ptr, pos);
+        // SAFETY: the caller upholds this function's contract.
+        unsafe {
+            self.buffers
+                .get(&buffer_id)?
+                .move_marker_ptr_to_emacs_byte_pos(marker_ptr, pos);
+        }
         Some(())
     }
 

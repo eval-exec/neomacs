@@ -22,7 +22,8 @@ pub unsafe fn chain_splice_at_head_for_test(
     text: &crate::buffer::buffer_text::BufferText,
     marker: *mut neovm_value::tagged::header::MarkerObj,
 ) {
-    text.chain_splice_at_head(marker);
+    // SAFETY: the caller of this fence upholds the same contract.
+    unsafe { text.chain_splice_at_head(marker) };
 }
 
 /// P1-CLASSES-ALL-CRATES FENCE (N2 counter reset): zero the buffer-local

@@ -243,3 +243,52 @@ fn gnu_reader_without_configuration_preserves_final_mini_buffer_transition() {
 fn gnu_reader_same_epoch_setup_abort_keeps_mini_buffer_callbacks_silent() {
     exercise_reader(true, false, false);
 }
+
+/// The default unwind (GNU redisplay hooks off) must let
+/// `minibuffer-inactive-mode` kill a buffer and make a frame. That hook used
+/// to run while frame and buffer field borrows of the same context were live.
+#[test]
+fn default_path_inactive_mode_may_kill_a_buffer_and_make_a_frame() {
+    let (mut eval, frame, _, _) = fixture();
+    crate::emacs_core::terminal::pure::mark_selected_terminal_usable_for_test(&eval);
+    assert!(
+        !crate::emacs_core::eval::gnu_redisplay_hooks_enabled(),
+        "this row is the default path"
+    );
+    eval.obarray_mut()
+        .set_symbol_value("read-minibuffer-restore-windows", Value::bool(true));
+    eval.eval_str(
+        r#"(progn
+          (setq d5-victim (generate-new-buffer " d5-victim"))
+          (fset 'minibuffer-inactive-mode
+            (lambda ()
+              (kill-buffer d5-victim)
+              (setq d5-made (make-frame)))))"#,
+    )
+    .expect("inactive-mode hook");
+    let tx = HostInputPublisher::install(&mut eval);
+    tx.send(InputEvent::key_press(KeyEvent::char(' ')))
+        .expect("queue reader exit");
+    let map = eval
+        .obarray()
+        .symbol_value_copied("d5-mini-map")
+        .expect("map");
+    let result = crate::emacs_core::minibuffer::read_entries::finish_read_from_minibuffer_in_vm_runtime_with_setup_for_test(
+        &mut eval,
+        &[Value::string("Prompt: "), Value::string("answer"), map],
+        |eval| {
+            eval.gnu_mark_frame_window_change(frame);
+            crate::emacs_core::eval::lifecycle::run_redisplay_window_change_hooks(eval)
+        },
+    );
+    assert_eq!(result.expect("reader result").as_utf8_str(), Some("answer"));
+    let live = eval
+        .eval_str("(buffer-live-p d5-victim)")
+        .expect("victim liveness");
+    assert!(live.is_nil(), "the inactive-mode hook kills its buffer");
+    let made = eval.eval_str("(frame-live-p d5-made)").expect("made frame");
+    assert!(
+        !made.is_nil(),
+        "the inactive-mode hook's frame survives exit"
+    );
+}

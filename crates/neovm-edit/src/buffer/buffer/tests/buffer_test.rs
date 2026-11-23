@@ -105,7 +105,8 @@ fn marker_chain_lookup_for_test(
     buf: &Buffer,
     marker: &Value,
 ) -> Option<(usize, usize, InsertionType)> {
-    let marker = crate::buffer::MarkerRef::from_value(marker).expect("marker value");
+    // SAFETY: `marker` is the live Value that roots this MarkerObj.
+    let marker = unsafe { crate::buffer::MarkerRef::from_value(marker) }.expect("marker value");
     buf.marker_chain_anchor_lookup(marker)
         .map(|(anchor, insertion_type)| {
             (
@@ -130,7 +131,10 @@ fn register_marker_for_test(buf: &mut Buffer, pos: usize, insertion_type: Insert
         .as_veclike_ptr()
         .expect("freshly allocated marker should have a veclike ptr")
         as *mut neovm_value::tagged::header::MarkerObj;
-    buf.register_marker_at_emacs_byte_pos(marker_ptr, EmacsBytePos::new(pos), insertion_type);
+    // SAFETY: `marker_value` was just allocated and roots `marker_ptr`.
+    unsafe {
+        buf.register_marker_at_emacs_byte_pos(marker_ptr, EmacsBytePos::new(pos), insertion_type);
+    }
     marker_value
 }
 

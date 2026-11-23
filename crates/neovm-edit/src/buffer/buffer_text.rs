@@ -2091,10 +2091,14 @@ impl BufferText {
         // chain link or null.
         unsafe {
             while !curr.is_null() {
-                let data = &mut (*curr).data;
-                let new_position = remap(marker_data_anchor(data));
-                set_marker_data_anchor(data, new_position);
-                curr = data.next_marker_ptr();
+                // Copy the anchor and the next link out before the closure.
+                // The closure may read this marker through another `MarkerRef`,
+                // and that read must not alias a live `&mut` of the same node.
+                let old_position = marker_data_anchor(&(*curr).data);
+                let next = (*curr).data.next_marker_ptr();
+                let new_position = remap(old_position);
+                set_marker_data_anchor(&mut (*curr).data, new_position);
+                curr = next;
             }
         }
     }
@@ -2943,7 +2947,8 @@ impl BufferText {
                 .data
                 .set_insertion_type(insertion_type == InsertionType::After);
         }
-        self.chain_splice_at_head(marker_ptr);
+        // SAFETY: `register_marker`'s contract is this splice's contract.
+        unsafe { self.chain_splice_at_head(marker_ptr) };
     }
 
     /// Walk the chain and invoke `f` with each node's raw pointer. The pdump
@@ -3003,7 +3008,10 @@ impl BufferText {
 
     /// GNU `attach_marker's position write (src/marker.c): `m->charpos' and
     /// `m->bytepos', and nothing else.
-    pub(crate) fn move_marker_ptr_to_anchor(
+    /// # Safety
+    /// `marker` is a live `MarkerObj` on this buffer's chain. The caller
+    /// roots it for the duration of the write.
+    pub(crate) unsafe fn move_marker_ptr_to_anchor(
         &self,
         marker: *mut neovm_value::tagged::header::MarkerObj,
         position: TextPositionAnchor,
@@ -3020,7 +3028,10 @@ impl BufferText {
     /// Read a chained marker's position anchor and insertion type directly
     /// from its payload. `None` when the marker is detached from every chain
     /// (GNU `marker_position` reports nil for an unchained marker).
-    pub(crate) fn marker_chain_anchor_of(
+    /// # Safety
+    /// `marker` is null, or it is a live `MarkerObj` the caller roots for
+    /// the duration of the read.
+    pub(crate) unsafe fn marker_chain_anchor_of(
         &self,
         marker: *mut neovm_value::tagged::header::MarkerObj,
     ) -> Option<(TextPositionAnchor, InsertionType)> {
@@ -3344,7 +3355,14 @@ impl BufferText {
     /// **Precondition:** `marker.next_marker` must be null (marker is not
     /// currently on any chain). Violating this silently truncates the
     /// other chain. `debug_assert!` enforces it in debug builds.
-    pub(crate) fn chain_splice_at_head(&self, marker: *mut neovm_value::tagged::header::MarkerObj) {
+    /// # Safety
+    /// `marker` is a live `MarkerObj` allocated by `TaggedHeap::alloc_marker`,
+    /// not currently on any chain. The caller roots it. `next_marker` is null;
+    /// a non-null link truncates the other chain.
+    pub(crate) unsafe fn chain_splice_at_head(
+        &self,
+        marker: *mut neovm_value::tagged::header::MarkerObj,
+    ) {
         let mut storage = self.storage.borrow_mut();
         let old_head = storage.markers_head;
         unsafe {
