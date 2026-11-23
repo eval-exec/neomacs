@@ -25,7 +25,10 @@ fn swap_type(mut state: OwnerSerialState<i32, Ticket>) {
         Ok(turn) => turn,
         Err(_) => return,
     };
-    let (parked, _ticket) = turn.park("mutex");
+    let (parked, _ticket) = match turn.park("mutex") {
+        Ok(pair) => pair,
+        Err(_) => return,
+    };
     let _ = parked.resume(OtherTicket);
 }
 fn main() {}

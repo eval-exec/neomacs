@@ -48,10 +48,10 @@ pub(crate) trait TicketOwner {
 pub(crate) trait SerialHost {
     /// The proof that the host is off its OS thread.
     type Detached;
-    /// Why a reattach was refused.
+    /// Why a detach or reattach was refused.
     type Refusal;
-    /// Take the host off this OS thread.
-    fn detach(&mut self, transition: HostTransition) -> Self::Detached;
+    /// Take the host off this OS thread, or refuse and leave it as it was.
+    fn detach(&mut self, transition: HostTransition) -> Result<Self::Detached, Self::Refusal>;
     /// Put the host back on this OS thread, or refuse and hand the proof
     /// back unchanged.
     fn reattach(
@@ -107,13 +107,16 @@ const LIVE_HOST: &str = "a dormant host is detached between turns";
 
 #[allow(dead_code)] // Dormant E5.1; E6-P.2 builds the owner's Context.
 impl<C: SerialHost> DormantContext<C> {
-    /// Take a freshly built host off this OS thread.
-    fn new(mut context: Box<C>) -> Self {
-        let detached = context.detach(HostTransition(()));
-        Self {
-            context,
-            detached: Some(detached),
-            confined: PhantomData,
+    /// Take a freshly built host off this OS thread. A refusal hands it
+    /// back.
+    fn new(mut context: Box<C>) -> Result<Self, (Box<C>, C::Refusal)> {
+        match context.detach(HostTransition(())) {
+            Ok(detached) => Ok(Self {
+                context,
+                detached: Some(detached),
+                confined: PhantomData,
+            }),
+            Err(refusal) => Err((context, refusal)),
         }
     }
 
@@ -129,10 +132,12 @@ impl<C: SerialHost> DormantContext<C> {
             })
     }
 
-    /// Take the host off this OS thread when its turn ends or parks.
-    fn detach(&mut self) {
+    /// Take the host off this OS thread when its turn ends or parks. A
+    /// refusal leaves the turn live.
+    fn detach(&mut self) -> Result<(), C::Refusal> {
         debug_assert!(self.detached.is_none(), "{LIVE_HOST}");
-        self.detached = Some(self.context.detach(HostTransition(())));
+        self.detached = Some(self.context.detach(HostTransition(()))?);
+        Ok(())
     }
 }
 
@@ -172,12 +177,13 @@ const PARKED_DROPPED: &str = "a parked serial turn was dropped without resume";
 #[allow(dead_code)] // Dormant E5.1; E6-P.2 builds the owner's Context.
 impl<C: SerialHost, L: TicketOwner> OwnerSerialState<C, L> {
     /// Keep CONTEXT dormant for OWNER's turns. CONTEXT was just built on this
-    /// OS thread; it leaves the thread here.
-    pub(crate) fn new(owner: L::Owner, context: Box<C>) -> Self {
-        Self {
-            dormant: DormantContext::new(context),
+    /// OS thread; it leaves the thread here. A host that refuses to detach is
+    /// handed back.
+    pub(crate) fn new(owner: L::Owner, context: Box<C>) -> Result<Self, (Box<C>, C::Refusal)> {
+        Ok(Self {
+            dormant: DormantContext::new(context)?,
             owner,
-        }
+        })
     }
 
     /// Begin a turn for LOCAL, the local owner of the received ticket: the
@@ -216,30 +222,35 @@ impl<'turn, C: SerialHost, L: TicketOwner> SerialTurn<'turn, C, L> {
     }
 
     /// End the turn: the host leaves this OS thread, and the local owner goes
-    /// back to L6.4's finish and return.
-    pub(crate) fn end(self) -> L {
-        let SerialTurn {
-            state,
-            local,
-            armed,
-            ..
-        } = self;
-        state.dormant.detach();
+    /// back to L6.4's finish and return. A host that refuses to detach keeps
+    /// the turn live, and the turn is handed back.
+    pub(crate) fn end(self) -> Result<L, (Self, C::Refusal)> {
+        if let Err(refusal) = self.state.dormant.detach() {
+            return Err((self, refusal));
+        }
+        let SerialTurn { local, armed, .. } = self;
         armed.disarm();
-        local
+        Ok(local)
     }
 
     /// Park on WAIT: the host leaves this OS thread, the local owner goes
     /// back with the ticket, and the parked turn keeps only the owner's
-    /// state.
-    pub(crate) fn park<W>(self, wait: W) -> (ParkedTurn<'turn, C, L, W>, L) {
+    /// state. A host that refuses to detach keeps the turn live, and the turn
+    /// and WAIT are handed back.
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn park<W>(
+        self,
+        wait: W,
+    ) -> Result<(ParkedTurn<'turn, C, L, W>, L), (Self, W, C::Refusal)> {
+        if let Err(refusal) = self.state.dormant.detach() {
+            return Err((self, wait, refusal));
+        }
         let SerialTurn {
             state,
             local,
             armed,
             ..
         } = self;
-        state.dormant.detach();
         armed.disarm();
         let parked = ParkedTurn {
             state,
@@ -247,7 +258,7 @@ impl<'turn, C: SerialHost, L: TicketOwner> SerialTurn<'turn, C, L> {
             armed: Armed(PARKED_DROPPED),
             confined: PhantomData,
         };
-        (parked, local)
+        Ok((parked, local))
     }
 }
 
@@ -307,7 +318,9 @@ struct AssertedHost;
 impl SerialHost for AssertedHost {
     type Detached = ();
     type Refusal = ();
-    fn detach(&mut self, _: HostTransition) {}
+    fn detach(&mut self, _: HostTransition) -> Result<(), ()> {
+        Ok(())
+    }
     fn reattach(&mut self, _: (), _: HostTransition) -> Result<(), ((), ())> {
         Ok(())
     }
@@ -320,16 +333,19 @@ static_assertions::assert_not_impl_any!(ParkedTurn<'static, AssertedHost, Assert
 
 #[cfg(test)]
 mod tests {
-    use super::{HostTransition, OwnerSerialState, SerialHost, TurnRefusal};
+    use super::{
+        HostTransition, OwnerSerialState, ParkedTurn, SerialHost, SerialTurn, TurnRefusal,
+    };
     use std::cell::Cell;
     use std::rc::Rc;
 
     /// A stand-in Context that counts its constructions in the test's own
     /// counter and logs its host transitions. While `refuse` is set it
-    /// refuses to reattach.
+    /// refuses to reattach, and while `stuck` is set it refuses to detach.
     struct Counted {
         writes: Vec<&'static str>,
         refuse: Rc<Cell<bool>>,
+        stuck: Rc<Cell<bool>>,
     }
 
     impl Counted {
@@ -338,6 +354,7 @@ mod tests {
             Self {
                 writes: Vec::new(),
                 refuse: Rc::new(Cell::new(false)),
+                stuck: Rc::new(Cell::new(false)),
             }
         }
     }
@@ -345,9 +362,12 @@ mod tests {
     impl SerialHost for Counted {
         type Detached = &'static str;
         type Refusal = &'static str;
-        fn detach(&mut self, _: HostTransition) -> &'static str {
+        fn detach(&mut self, _: HostTransition) -> Result<&'static str, &'static str> {
+            if self.stuck.get() {
+                return Err("stuck");
+            }
             self.writes.push("detach");
-            "proof"
+            Ok("proof")
         }
         fn reattach(
             &mut self,
@@ -363,14 +383,32 @@ mod tests {
         }
     }
 
-    type State = OwnerSerialState<Counted, (u64, &'static str)>;
+    type Ticket = (u64, &'static str);
+    type State = OwnerSerialState<Counted, Ticket>;
+
+    fn dormant(host: Counted) -> State {
+        OwnerSerialState::new(7, Box::new(host))
+            .ok()
+            .expect("a fresh host detaches")
+    }
 
     fn owner_seven_counted(built: &Rc<Cell<usize>>) -> State {
-        OwnerSerialState::new(7, Box::new(Counted::new(built)))
+        dormant(Counted::new(built))
     }
 
     fn owner_seven() -> State {
         owner_seven_counted(&Rc::new(Cell::new(0)))
+    }
+
+    fn ended(turn: SerialTurn<'_, Counted, Ticket>) -> Ticket {
+        turn.end().ok().expect("the host detaches")
+    }
+
+    fn parked<'t, W>(
+        turn: SerialTurn<'t, Counted, Ticket>,
+        wait: W,
+    ) -> (ParkedTurn<'t, Counted, Ticket, W>, Ticket) {
+        turn.park(wait).ok().expect("the host detaches")
     }
 
     #[test]
@@ -379,13 +417,13 @@ mod tests {
         let mut state = owner_seven_counted(&built);
         let mut first = state.begin((7, "ticket-1")).ok().expect("own ticket");
         first.with_world(|context| context.writes.push("first"));
-        assert_eq!(first.end(), (7, "ticket-1"));
+        assert_eq!(ended(first), (7, "ticket-1"));
         let mut second = state.begin((7, "ticket-2")).ok().expect("own ticket");
         let seen = second.with_world(|context| {
             context.writes.push("second");
             context.writes.clone()
         });
-        assert_eq!(second.end(), (7, "ticket-2"));
+        assert_eq!(ended(second), (7, "ticket-2"));
         assert_eq!(
             seen,
             [
@@ -401,7 +439,7 @@ mod tests {
         let mut state = owner_seven();
         let mut turn = state.begin((7, "ticket-1")).ok().expect("own ticket");
         turn.with_world(|context| context.writes.push("before park"));
-        let (parked, returned) = turn.park("mutex");
+        let (parked, returned) = parked(turn, "mutex");
         assert_eq!(returned, (7, "ticket-1"), "park gives the ticket back");
         assert_eq!(*parked.wait(), "mutex");
         let mut resumed = parked.resume((7, "ticket-2")).ok().expect("own ticket");
@@ -409,7 +447,7 @@ mod tests {
             context.writes.push("after resume");
             context.writes.clone()
         });
-        assert_eq!(resumed.end(), (7, "ticket-2"));
+        assert_eq!(ended(resumed), (7, "ticket-2"));
         assert_eq!(
             seen,
             [
@@ -430,27 +468,26 @@ mod tests {
         let refused = state.begin((8, "foreign")).err().expect("foreign ticket");
         assert_eq!(refused, ((8, "foreign"), TurnRefusal::WrongOwner));
         let turn = state.begin((7, "ticket-1")).ok().expect("own ticket");
-        let (parked, _) = turn.park("join");
+        let (parked, _) = parked(turn, "join");
         let (parked, refused, why) = parked.resume((9, "foreign")).err().expect("foreign ticket");
         assert_eq!((refused, why), ((9, "foreign"), TurnRefusal::WrongOwner));
         assert_eq!(*parked.wait(), "join", "the refused resume keeps the wait");
         let turn = parked.resume((7, "ticket-2")).ok().expect("own ticket");
-        assert_eq!(turn.end(), (7, "ticket-2"));
+        assert_eq!(ended(turn), (7, "ticket-2"));
     }
 
     #[test]
     fn e51_a_host_that_refuses_to_reattach_stays_dormant_and_hands_the_ticket_back() {
-        let built = Rc::new(Cell::new(0));
-        let host = Counted::new(&built);
+        let host = Counted::new(&Rc::new(Cell::new(0)));
         let refuse = Rc::clone(&host.refuse);
-        let mut state: State = OwnerSerialState::new(7, Box::new(host));
+        let mut state = dormant(host);
         refuse.set(true);
         let refused = state.begin((7, "ticket-1")).err().expect("refused host");
         assert_eq!(refused, ((7, "ticket-1"), TurnRefusal::Host("busy")));
         refuse.set(false);
         let mut turn = state.begin((7, "ticket-1")).ok().expect("host reattaches");
         turn.with_world(|context| context.writes.push("ran"));
-        let (parked, _) = turn.park("mutex");
+        let (parked, _) = parked(turn, "mutex");
         refuse.set(true);
         let (parked, refused, why) = parked.resume((7, "ticket-2")).err().expect("refused host");
         assert_eq!((refused, why), ((7, "ticket-2"), TurnRefusal::Host("busy")));
@@ -460,11 +497,47 @@ mod tests {
             .ok()
             .expect("host reattaches");
         let seen = turn.with_world(|context| context.writes.clone());
-        assert_eq!(turn.end(), (7, "ticket-2"));
+        assert_eq!(ended(turn), (7, "ticket-2"));
         assert_eq!(
             seen,
             ["detach", "reattach", "ran", "detach", "reattach"],
             "a refused reattach leaves the proof in place for the next one"
+        );
+    }
+
+    #[test]
+    fn e51_a_host_that_refuses_to_detach_keeps_its_turn_live() {
+        let host = Counted::new(&Rc::new(Cell::new(0)));
+        let stuck = Rc::clone(&host.stuck);
+        stuck.set(true);
+        let host = match OwnerSerialState::<Counted, Ticket>::new(7, Box::new(host)) {
+            Ok(_) => panic!("a stuck host cannot be kept dormant"),
+            Err((host, why)) => {
+                assert_eq!(why, "stuck");
+                host
+            }
+        };
+        stuck.set(false);
+        let mut state = dormant(*host);
+        let turn = state.begin((7, "ticket-1")).ok().expect("own ticket");
+        stuck.set(true);
+        let Err((mut turn, why)) = turn.end() else {
+            panic!("a stuck host keeps the turn");
+        };
+        assert_eq!(why, "stuck");
+        turn.with_world(|context| context.writes.push("still live"));
+        let Err((turn, wait, why)) = turn.park("mutex") else {
+            panic!("a stuck host keeps the turn");
+        };
+        assert_eq!((wait, why), ("mutex", "stuck"));
+        stuck.set(false);
+        let mut turn = turn;
+        let seen = turn.with_world(|context| context.writes.clone());
+        assert_eq!(ended(turn), (7, "ticket-1"));
+        assert_eq!(
+            seen,
+            ["detach", "reattach", "still live"],
+            "a refused detach leaves the host attached for the live turn"
         );
     }
 
@@ -483,7 +556,7 @@ mod tests {
     fn e51_a_parked_turn_dropped_without_resume_is_reported() {
         let mut state = owner_seven();
         let turn = state.begin((7, "ticket-1")).ok().expect("own ticket");
-        let (parked, _) = turn.park("mutex");
+        let (parked, _) = parked(turn, "mutex");
         drop(parked);
     }
 }

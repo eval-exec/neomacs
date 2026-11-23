@@ -12,5 +12,5 @@ error[E0382]: borrow of moved value: `turn`
 note: `SerialTurn::<'turn, C, L>::end` takes ownership of the receiver `self`, which moves `turn`
   --> tests/e51_turn_ui/../../../neovm-eval/src/emacs_core/runtime/eval/parallel_entry/serial_turn.rs
    |
-   |     pub(crate) fn end(self) -> L {
+   |     pub(crate) fn end(self) -> Result<L, (Self, C::Refusal)> {
    |                       ^^^^

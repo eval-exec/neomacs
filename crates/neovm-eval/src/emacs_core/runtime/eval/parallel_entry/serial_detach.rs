@@ -2,7 +2,10 @@
 //! `end`): the typed proofs that a serial turn took its owner off this OS
 //! thread, and the one way back onto it.
 //!
-//! Detachment runs in a fixed order:
+//! Detachment first refuses, in release builds too, unless this Context's
+//! own heap is the one installed on the thread: a Context swapped into the
+//! turn would otherwise take down the live Context's TLS. It then runs in a
+//! fixed order:
 //! 1. the owner's host bindings swap out (`park_owner`, GNU's
 //!    `unbind_for_thread_switch`, src/thread.c:95-99). This writes buffer
 //!    storage, so the heap must still be installed;
@@ -60,11 +63,15 @@ pub(crate) struct DetachedOwner {
     tls: DetachedTls,
 }
 
-/// Why a detached owner did not come back onto this OS thread.
+/// Why an owner did not leave, or did not come back onto, this OS thread.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ReattachRefusal {
-    /// Another Context's heap is installed on this thread: its turn is live.
+pub(crate) enum HostRefusal {
+    /// Reattach: another Context's heap is installed on this thread, so its
+    /// turn is live.
     HeapInstalled,
+    /// Detach: this Context's heap is not the one installed on this thread,
+    /// so taking the TLS down would take down another Context's.
+    NotInstalled,
 }
 
 static_assertions::assert_not_impl_any!(DetachedHostBindings: Send, Sync, Clone, Copy);
@@ -90,20 +97,24 @@ impl Drop for AbortOnPanic {
 }
 
 impl Context {
-    /// Take this owner off its OS thread at the end of a serial turn: host
-    /// bindings out first, then the carrier TLS down.
+    /// Take this owner off its OS thread at the end of a serial turn: refuse
+    /// unless its own heap is the installed one, else host bindings out
+    /// first, then the carrier TLS down.
     #[cold]
     #[inline(never)]
-    fn detach_serial_owner(&mut self) -> DetachedOwner {
+    fn detach_serial_owner(&mut self) -> Result<DetachedOwner, HostRefusal> {
+        if !neovm_value::tagged::gc::tagged_heap_is_current(&self.tagged_heap) {
+            return Err(HostRefusal::NotInstalled);
+        }
         let _abort = AbortOnPanic("detach");
         let parked = self.park_owner();
         park_carrier_tls();
-        DetachedOwner {
+        Ok(DetachedOwner {
             host: DetachedHostBindings { parked },
             tls: DetachedTls {
                 _thread: PhantomData,
             },
-        }
+        })
     }
 
     /// Put this owner back on the OS thread for the next serial turn: refuse
@@ -114,9 +125,9 @@ impl Context {
     fn reattach_serial_owner(
         &mut self,
         detached: DetachedOwner,
-    ) -> Result<(), (DetachedOwner, ReattachRefusal)> {
+    ) -> Result<(), (DetachedOwner, HostRefusal)> {
         if !neovm_value::tagged::gc::carrier_heap_is_acceptable_for_job_start() {
-            return Err((detached, ReattachRefusal::HeapInstalled));
+            return Err((detached, HostRefusal::HeapInstalled));
         }
         let _abort = AbortOnPanic("reattach");
         let DetachedOwner {
@@ -129,11 +140,14 @@ impl Context {
     }
 }
 
+/// The only non-test `SerialHost`: a [`HostTransition`] arrives by value, and
+/// a host must never forward it to another host. The guard row
+/// `l64_context_is_the_only_production_serial_host` keeps it so.
 impl SerialHost for Context {
     type Detached = DetachedOwner;
-    type Refusal = ReattachRefusal;
+    type Refusal = HostRefusal;
 
-    fn detach(&mut self, _: HostTransition) -> DetachedOwner {
+    fn detach(&mut self, _: HostTransition) -> Result<DetachedOwner, HostRefusal> {
         self.detach_serial_owner()
     }
 
@@ -141,7 +155,7 @@ impl SerialHost for Context {
         &mut self,
         detached: DetachedOwner,
         _: HostTransition,
-    ) -> Result<(), (DetachedOwner, ReattachRefusal)> {
+    ) -> Result<(), (DetachedOwner, HostRefusal)> {
         self.reattach_serial_owner(detached)
     }
 }

@@ -1,8 +1,10 @@
 //! L6.4's suspend half: a detached owner leaves no heap on its OS thread,
 //! and reattaching it restores everything its next serial turn reads.
 
-use super::ReattachRefusal;
-use crate::emacs_core::eval::parallel_entry::serial_turn::{OwnerSerialState, TurnRefusal};
+use super::HostRefusal;
+use crate::emacs_core::eval::parallel_entry::serial_turn::{
+    OwnerSerialState, SerialTurn, TurnRefusal,
+};
 use crate::emacs_core::eval::{Context, SpecBinding};
 use crate::emacs_core::print::print_value;
 use neovm_value::intern::{SymId, intern};
@@ -50,6 +52,19 @@ fn owner() -> Context {
     ev
 }
 
+fn detach(ev: &mut Context) -> super::DetachedOwner {
+    match ev.detach_serial_owner() {
+        Ok(detached) => detached,
+        Err(refusal) => panic!("this Context's heap is installed: {refusal:?}"),
+    }
+}
+
+/// This thread names no heap at all. Stricter than the carrier's job-start
+/// check, which accepts an armed test fallback heap.
+fn names_no_heap() -> bool {
+    !neovm_value::tagged::gc::tagged_heap_is_installed()
+}
+
 fn reattach(ev: &mut Context, detached: super::DetachedOwner) {
     if ev.reattach_serial_owner(detached).is_err() {
         panic!("no other heap is installed on this thread");
@@ -70,11 +85,8 @@ fn l64_detach_leaves_no_heap_on_this_thread_and_reattach_restores_the_turn() {
     let mut ev = owner();
     assert_eq!(eval(&mut ev, OWNER_STATE), "1", "the match starts at 1");
     assert_eq!(eval(&mut ev, PROBE), OWNER_ANSWER, "the owner state is set");
-    let detached = ev.detach_serial_owner();
-    assert!(
-        neovm_value::tagged::gc::carrier_heap_is_acceptable_for_job_start(),
-        "a detached owner's thread names no heap"
-    );
+    let detached = detach(&mut ev);
+    assert!(names_no_heap(), "a detached owner's thread names no heap");
     super::super::super::green::carrier_tls::carrier_tls_idle_state_and_check();
     reattach(&mut ev, detached);
     assert_eq!(
@@ -116,7 +128,7 @@ fn l64_an_in_place_binding_swaps_out_on_detach_and_back_on_reattach() {
     };
     assert_eq!(saved(&ev), Value::NIL, "the let saves the value it hid");
 
-    let detached = ev.detach_serial_owner();
+    let detached = detach(&mut ev);
     assert_eq!(
         saved(&ev),
         Value::T,
@@ -149,7 +161,7 @@ fn l64_two_turns_in_a_row_detach_and_reattach_the_same_owner() {
     let mut ev = owner();
     eval(&mut ev, OWNER_STATE);
     for turn in 0..2 {
-        let detached = ev.detach_serial_owner();
+        let detached = detach(&mut ev);
         reattach(&mut ev, detached);
         assert_eq!(eval(&mut ev, PROBE), OWNER_ANSWER, "turn {turn}");
     }
@@ -163,15 +175,21 @@ fn dormant(owner_id: u64) -> State {
     let mut ev = owner();
     eval(&mut ev, OWNER_STATE);
     OwnerSerialState::new(owner_id, Box::new(ev))
+        .ok()
+        .expect("a freshly built Context detaches")
+}
+
+fn ended(turn: SerialTurn<'_, Context, (u64, &'static str)>) -> (u64, &'static str) {
+    match turn.end() {
+        Ok(ticket) => ticket,
+        Err((_, refusal)) => panic!("the turn's own heap is installed: {refusal:?}"),
+    }
 }
 
 #[test]
 fn l64_turns_through_the_owner_state_reattach_and_detach_its_context() {
     let mut state = dormant(7);
-    assert!(
-        neovm_value::tagged::gc::carrier_heap_is_acceptable_for_job_start(),
-        "a dormant owner's thread names no heap"
-    );
+    assert!(names_no_heap(), "a dormant owner's thread names no heap");
     for ticket in ["ticket-1", "ticket-2"] {
         let mut turn = state.begin((7, ticket)).ok().expect("own ticket");
         assert!(
@@ -179,9 +197,9 @@ fn l64_turns_through_the_owner_state_reattach_and_detach_its_context() {
             "begin installs the owner's heap"
         );
         assert_eq!(turn.with_world(|ev| eval(ev, PROBE)), OWNER_ANSWER);
-        assert_eq!(turn.end(), (7, ticket));
+        assert_eq!(ended(turn), (7, ticket));
         assert!(
-            neovm_value::tagged::gc::carrier_heap_is_acceptable_for_job_start(),
+            names_no_heap(),
             "an ended turn leaves no heap on this thread"
         );
     }
@@ -197,7 +215,7 @@ fn l64_a_second_owner_cannot_begin_while_another_owners_turn_is_live() {
         refused,
         (
             (8, "ticket-2"),
-            TurnRefusal::Host(ReattachRefusal::HeapInstalled)
+            TurnRefusal::Host(HostRefusal::HeapInstalled)
         ),
         "the second owner's ticket comes back and its Context stays dormant"
     );
@@ -206,14 +224,14 @@ fn l64_a_second_owner_cannot_begin_while_another_owners_turn_is_live() {
         "the refusal left the live turn's TLS alone"
     );
     assert_eq!(turn.with_world(|ev| eval(ev, PROBE)), OWNER_ANSWER);
-    assert_eq!(turn.end(), (7, "ticket-1"));
+    assert_eq!(ended(turn), (7, "ticket-1"));
     let mut turn = second.begin((8, "ticket-2")).ok().expect("thread is free");
     assert!(
         turn.with_world(owns_the_thread),
         "the second owner's own heap"
     );
     assert_eq!(turn.with_world(|ev| eval(ev, PROBE)), OWNER_ANSWER);
-    assert_eq!(turn.end(), (8, "ticket-2"));
+    assert_eq!(ended(turn), (8, "ticket-2"));
 }
 
 #[test]
@@ -221,11 +239,108 @@ fn l64_dropping_a_dormant_owner_is_ordinary_teardown() {
     let state = dormant(7);
     drop(state);
     assert!(
-        neovm_value::tagged::gc::carrier_heap_is_acceptable_for_job_start(),
+        names_no_heap(),
         "teardown of a dormant owner leaves no heap on this thread"
     );
     let mut next = dormant(8);
     let mut turn = next.begin((8, "ticket-1")).ok().expect("own ticket");
     assert_eq!(turn.with_world(|ev| eval(ev, PROBE)), OWNER_ANSWER);
-    assert_eq!(turn.end(), (8, "ticket-1"));
+    assert_eq!(ended(turn), (8, "ticket-1"));
+}
+
+#[test]
+fn l64_detach_refuses_a_context_whose_heap_is_not_installed() {
+    let mut first = owner();
+    let mut second = owner();
+    assert!(
+        owns_the_thread(&mut second),
+        "the last Context built is installed"
+    );
+    match first.detach_serial_owner() {
+        Ok(_) => panic!("the first Context's heap is not the installed one"),
+        Err(refusal) => assert_eq!(refusal, HostRefusal::NotInstalled),
+    }
+    assert!(
+        owns_the_thread(&mut second),
+        "the refusal left the installed Context's TLS alone"
+    );
+    assert_eq!(eval(&mut second, "(+ 1 2)"), "3");
+}
+
+#[test]
+fn l64_a_turn_whose_context_was_swapped_out_cannot_end() {
+    // A Context that is not installed: built, then detached by hand.
+    let mut stranger = owner();
+    let stranger_proof = detach(&mut stranger);
+    let mut state = dormant(7);
+    let mut turn = state.begin((7, "ticket-1")).ok().expect("own ticket");
+    // The body swaps the stranger in, which `with_world`'s `&mut` allows.
+    turn.with_world(|ev| std::mem::swap(ev, &mut stranger));
+    let Err((mut turn, refusal)) = turn.end() else {
+        panic!("the swapped-in Context is not installed");
+    };
+    assert_eq!(refusal, HostRefusal::NotInstalled);
+    assert!(
+        owns_the_thread(&mut stranger),
+        "the owner's Context, now outside the state, still has its TLS"
+    );
+    let Err((mut turn, wait, refusal)) = turn.park("mutex") else {
+        panic!("park refuses the same way");
+    };
+    assert_eq!((wait, refusal), ("mutex", HostRefusal::NotInstalled));
+    // Swapping back lets the turn end.
+    turn.with_world(|ev| std::mem::swap(ev, &mut stranger));
+    assert_eq!(ended(turn), (7, "ticket-1"));
+    assert!(names_no_heap());
+    reattach(&mut stranger, stranger_proof);
+}
+
+/// A `HostTransition` arrives by value, and a host could forward it to
+/// another host. `Context` is the only production host; the other two
+/// implement nothing that can forward one.
+#[test]
+fn l64_context_is_the_only_production_serial_host() {
+    fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(dir).expect("readable source directory") {
+            let path = entry.expect("directory entry").path();
+            if path.is_dir() {
+                walk(&path, out);
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
+                out.push(path);
+            }
+        }
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut files = Vec::new();
+    walk(&root, &mut files);
+    let mut impls: Vec<(String, String)> = Vec::new();
+    for file in files {
+        let source = std::fs::read_to_string(&file).expect("readable source");
+        for line in source.lines() {
+            let line = line.trim();
+            if line.starts_with("impl") && line.contains("SerialHost for ") {
+                let path = file.strip_prefix(&root).expect("under src");
+                impls.push((path.display().to_string(), line.to_owned()));
+            }
+        }
+    }
+    impls.sort();
+    let dir = "emacs_core/runtime/eval/parallel_entry";
+    let expected = [
+        (
+            format!("{dir}/serial_detach.rs"),
+            "impl SerialHost for Context {".to_owned(),
+        ),
+        (
+            // Static assertions only; its methods discard the token.
+            format!("{dir}/serial_turn.rs"),
+            "impl SerialHost for AssertedHost {".to_owned(),
+        ),
+        (
+            // cfg(test) stand-in.
+            format!("{dir}/serial_turn.rs"),
+            "impl SerialHost for Counted {".to_owned(),
+        ),
+    ];
+    assert_eq!(impls, expected, "a new SerialHost impl needs review");
 }

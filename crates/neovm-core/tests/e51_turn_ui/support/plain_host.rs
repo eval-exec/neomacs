@@ -3,7 +3,9 @@
 impl SerialHost for i32 {
     type Detached = ();
     type Refusal = ();
-    fn detach(&mut self, _: HostTransition) {}
+    fn detach(&mut self, _: HostTransition) -> Result<(), ()> {
+        Ok(())
+    }
     fn reattach(&mut self, _: (), _: HostTransition) -> Result<(), ((), ())> {
         Ok(())
     }

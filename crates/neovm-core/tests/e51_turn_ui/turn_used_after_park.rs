@@ -17,7 +17,7 @@ fn after_park(mut state: OwnerSerialState<i32, Ticket>) {
         Ok(turn) => turn,
         Err(_) => return,
     };
-    let (_parked, _ticket) = turn.park("mutex");
+    let _parked = turn.park("mutex");
     turn.with_world(|world| *world += 1);
 }
 fn main() {}

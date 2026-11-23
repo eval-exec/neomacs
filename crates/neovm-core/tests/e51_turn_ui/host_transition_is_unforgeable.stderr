@@ -1,8 +1,8 @@
 error[E0423]: cannot initialize a tuple struct which contains private fields
-  --> tests/e51_turn_ui/host_transition_is_unforgeable.rs:10:17
+  --> tests/e51_turn_ui/host_transition_is_unforgeable.rs:10:25
    |
-10 |     host.detach(HostTransition(()));
-   |                 ^^^^^^^^^^^^^^
+10 |     let _ = host.detach(HostTransition(()));
+   |                         ^^^^^^^^^^^^^^
    |
 note: constructor is not visible here due to private fields
   --> tests/e51_turn_ui/../../../neovm-eval/src/emacs_core/runtime/eval/parallel_entry/serial_turn.rs
