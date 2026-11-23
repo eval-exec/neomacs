@@ -578,3 +578,190 @@ fn split_gap_literal_prefilter_respects_pattern_and_target_byte_encodings() {
         }
     }
 }
+
+/// Warming must not make every candidate re-select both halves. The probe is
+/// charged by actual Segments byte/get/chunk operations inside the prefix.
+#[test]
+fn split_gap_warm_prefix_storage_selection_is_bounded_per_search_half() {
+    let syntax = DefaultSyntaxLookup;
+    dfa::with_first_step(true, || {
+        dfa::with_cold_path(false, || {
+            dfa::with_dfa_mode(dfa::DfaMode::On, || {
+                for repeats in [256usize, 1024] {
+                    let text = "abcdefx ".repeat(repeats);
+                    let bytes = text.as_bytes();
+                    let split = bytes.len() / 2;
+                    let pattern = regex_compile("a[bcdef]*Z", false, false).unwrap();
+                    assert!(
+                        pattern.literal_prefilter().is_none(),
+                        "one-byte prefix must not bypass the DFA"
+                    );
+                    for range in [bytes.len() as isize, -(bytes.len() as isize)] {
+                        let start = if range >= 0 { 0 } else { bytes.len() };
+                        // Warm the real slot in the same direction, then compare the
+                        // contiguous and segmented invocation's work and outcomes.
+                        for _ in 0..2 {
+                            assert!(
+                                re_search(&pattern, bytes, start, range, &syntax, start).is_none()
+                            );
+                        }
+                        let before = prefix_storage_probe();
+                        assert!(re_search(&pattern, bytes, start, range, &syntax, start).is_none());
+                        let contiguous = prefix_storage_probe().since(before);
+                        let before = prefix_storage_probe();
+                        assert!(
+                            re_search_segments(
+                                &pattern,
+                                &bytes[..split],
+                                &bytes[split..],
+                                start,
+                                range,
+                                &syntax,
+                                start
+                            )
+                            .is_none()
+                        );
+                        let segmented = prefix_storage_probe().since(before);
+                        assert!(
+                            segmented.calls >= repeats as u64,
+                            "fixture must enter cached prefixes: {segmented:?}"
+                        );
+                        assert!(
+                            segmented.rejected >= repeats as u64,
+                            "fixture must use warmed rejections: {segmented:?}"
+                        );
+                        assert_eq!(
+                            (
+                                segmented.calls,
+                                segmented.rejected,
+                                segmented.undecided,
+                                segmented.rejected_bytes,
+                                segmented.scalar_reads
+                            ),
+                            (
+                                contiguous.calls,
+                                contiguous.rejected,
+                                contiguous.undecided,
+                                contiguous.rejected_bytes,
+                                contiguous.scalar_reads
+                            ),
+                            "the storage route must preserve actual prefix work and outcomes"
+                        );
+                        eprintln!(
+                            "cached prefix storage: repeats={repeats} range={range} {segmented:?}"
+                        );
+                        assert!(
+                            segmented.segment_bytes
+                                + segmented.segment_gets
+                                + segmented.segment_chunks
+                                <= 64,
+                            "prefix geometry must be bounded by the seam, not candidates: repeats={repeats} range={range} {segmented:?}"
+                        );
+                        assert!(
+                            segmented.batch_checks >= repeats as u64,
+                            "candidate batch checks must remain visible: {segmented:?}"
+                        );
+                        assert_eq!(
+                            segmented.batch_prepares, 1,
+                            "one real storage preparation per warmed search"
+                        );
+                        assert!(
+                            segmented.batch_advances <= 2,
+                            "monotonic candidates can cross at most two batch boundaries: {segmented:?}"
+                        );
+                        assert!(
+                            segmented.selections <= 2,
+                            "borrow prefix windows once per physical half: repeats={repeats} range={range} {segmented:?}"
+                        );
+                    }
+                }
+            })
+        })
+    });
+}
+
+#[test]
+fn prepared_prefix_batches_keep_the_seam_bounded_in_both_directions() {
+    let bytes = b"0123456789abcdefABCDEFGHIJKLMNOP";
+    for split in 0..=bytes.len() {
+        let text = Segments {
+            left: &bytes[..split],
+            right: &bytes[split..],
+        };
+        for forward in [true, false] {
+            let before = prefix_storage_probe();
+            let mut batches = PrefixBatches::new(forward);
+            assert_eq!(
+                prefix_storage_probe().since(before).selections,
+                0,
+                "constructing a scan must not query storage eagerly"
+            );
+            let positions: Vec<_> = if forward {
+                (0..=bytes.len()).collect()
+            } else {
+                (0..=bytes.len()).rev().collect()
+            };
+            for position in positions {
+                let input = batches.input(&text, position);
+                let interior = position < bytes.len()
+                    && (split == 0
+                        || split == bytes.len()
+                        || position < split.saturating_sub(dfa::PREFIX_READ_CAP - 1)
+                        || position > split);
+                assert_eq!(
+                    input.is_some(),
+                    interior,
+                    "split={split} forward={forward} position={position}"
+                );
+            }
+            let counts = prefix_storage_probe().since(before);
+            assert_eq!(counts.batch_prepares, 1);
+            assert_eq!(
+                counts.selections, 1,
+                "the counted query must include real preparation outside the prefix scope"
+            );
+            assert!(counts.batch_advances <= 2, "{counts:?}");
+            assert_eq!(
+                counts.calls, 0,
+                "view preparation is not a cached prefix call"
+            );
+        }
+    }
+}
+
+#[test]
+fn prepared_prefix_slice_keeps_a_global_dynamic_point_and_bounded_stop() {
+    let syntax = DefaultSyntaxLookup;
+    let text = b"abcdefgh x";
+    let pattern = regex_compile(r"\=x\|Q", false, false).unwrap();
+    dfa::with_first_step(true, || {
+        dfa::with_cold_path(false, || {
+            dfa::with_dfa_mode(dfa::DfaMode::On, || {
+                for _ in 0..2 {
+                    assert!(
+                        re_search_segments(&pattern, &text[..8], &text[8..], 0, 10, &syntax, 0)
+                            .is_none()
+                    );
+                }
+                assert!(
+                    re_search_segments(&pattern, &text[..8], &text[8..], 0, 9, &syntax, 9)
+                        .is_none()
+                );
+                let actual = captured(re_search_segments(
+                    &pattern,
+                    &text[..8],
+                    &text[8..],
+                    0,
+                    10,
+                    &syntax,
+                    9,
+                ));
+                assert_eq!(
+                    actual,
+                    reference_search(&pattern, "abcdefgh x", 0, 10, &syntax, 9)
+                );
+                assert_eq!(actual.as_ref().map(|found| found.0), Some(9));
+            })
+        })
+    });
+}

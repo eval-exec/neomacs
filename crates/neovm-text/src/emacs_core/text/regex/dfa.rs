@@ -1653,6 +1653,31 @@ pub struct ExistenceDfa {
     pub(crate) gave_up: Option<DfaGaveUp>,
 }
 
+/// One physical half, retaining its logical origin. This is a prefix byte
+/// reader, not a shortened matcher input: all assertion and cache bounds stay
+/// in the complete input's coordinates. The caller admits only candidates
+/// whose preceding byte and bounded prefix lie within this view.
+#[derive(Clone, Copy)]
+pub(super) struct PrefixSlice<'a> {
+    bytes: &'a [u8],
+    origin: usize,
+}
+impl<'a> PrefixSlice<'a> {
+    pub(super) fn new(bytes: &'a [u8], origin: usize) -> Self {
+        Self { bytes, origin }
+    }
+    fn byte(self, at: usize) -> u8 {
+        #[cfg(test)]
+        super::note_prefix_storage(true, false, false, false, false);
+        self.bytes[at - self.origin]
+    }
+    fn tail(self, start: usize, end: usize) -> &'a [u8] {
+        &self.bytes[start - self.origin..end - self.origin]
+    }
+}
+
+pub(super) const PREFIX_READ_CAP: usize = CACHED_PREFIX_BYTES;
+
 impl ExistenceDfa {
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn new(nfa: Nfa) -> Self {
@@ -2009,12 +2034,40 @@ impl ExistenceDfa {
         point: usize,
         overflow_free_span: usize,
     ) -> Option<usize> {
+        self.cached_prefix_rejection_with_readers(
+            pattern,
+            text.len(),
+            |at| text.byte(at),
+            |start, end| text.chunks(start, end),
+            p,
+            stop,
+            point,
+            overflow_free_span,
+        )
+    }
+
+    /// Shared cached-state decisions; byte storage and global coordinates are
+    /// separate. A slice reader is admitted only by its candidate batch.
+    #[allow(clippy::too_many_arguments)]
+    fn cached_prefix_rejection_with_readers<'a>(
+        &self,
+        pattern: &CompiledPattern,
+        text_len: usize,
+        read_byte: impl Fn(usize) -> u8,
+        read_tail: impl Fn(usize, usize) -> (&'a [u8], &'a [u8]),
+        p: usize,
+        stop: usize,
+        point: usize,
+        overflow_free_span: usize,
+    ) -> Option<usize> {
+        #[cfg(test)]
+        let mut storage_probe = super::PrefixProbeGuard::enter();
         // Establish memory safety first. The remaining guards apply only
         // once an existing DEAD entry could actually reject this candidate.
-        if p >= text.len() {
+        if p >= text_len {
             return None;
         }
-        let class = self.classes.byte_class[text.byte(p) as usize];
+        let class = self.classes.byte_class[read_byte(p) as usize];
         if class == UNKNOWN_CLASS {
             return None;
         }
@@ -2028,13 +2081,13 @@ impl ExistenceDfa {
             Facts::EDGE.0
         } else if !reads_prev_syntax {
             // EDGE and newline facts do not depend on syntax or decoding.
-            if text.byte(p - 1) == b'\n' {
+            if read_byte(p - 1) == b'\n' {
                 Facts::NEWLINE.0
             } else {
                 0
             }
         } else {
-            let byte = text.byte(p - 1);
+            let byte = read_byte(p - 1);
             if pattern.target_multibyte && byte >= 0x80 {
                 return None;
             }
@@ -2054,7 +2107,7 @@ impl ExistenceDfa {
             return None;
         }
         let mut row = start << self.stride_shift;
-        // Test only the first byte's eligibility here. Since p < text.len()
+        // Test only the first byte's eligibility here. Since p < text_len
         // and the probe cap is positive, p < saturating_add(p, cap) already
         // holds; p < saturating_add(p, overflow_free_span) means span > 0.
         // Point limits the first byte only when point == p, not point < p.
@@ -2086,6 +2139,10 @@ impl ExistenceDfa {
         // setup. Reuse the class already read.
         let next = transition(row, class);
         if next == DEAD {
+            #[cfg(test)]
+            {
+                storage_probe.rejected = Some(0);
+            }
             return Some(0);
         }
         if next < stride {
@@ -2096,7 +2153,7 @@ impl ExistenceDfa {
         // Every further byte stays before stop, frontier, point's special
         // closure and the end of already established plain syntax.
         let mut limit = stop
-            .min(text.len())
+            .min(text_len)
             .min(self.search.read_limit)
             .min(p.saturating_add(CACHED_PREFIX_BYTES))
             .min(p.saturating_add(overflow_free_span));
@@ -2113,15 +2170,21 @@ impl ExistenceDfa {
         // Select split storage once for the remaining bounded prefix.
         // The slices carry bytes only: assertions retain the full virtual
         // text and all stop/frontier/point/plain-syntax guards above.
-        let (first, second) = text.chunks(d, limit);
+        let (first, second) = read_tail(d, limit);
         for chunk in [first, second] {
             for &byte in chunk {
+                #[cfg(test)]
+                super::note_prefix_storage(true, false, false, false, false);
                 let class = self.classes.byte_class[byte as usize];
                 if class == UNKNOWN_CLASS {
                     return None;
                 }
                 let next = transition(row, class);
                 if next == DEAD {
+                    #[cfg(test)]
+                    {
+                        storage_probe.rejected = Some(d - p);
+                    }
                     return Some(d - p);
                 }
                 if next < stride {
@@ -3202,6 +3265,43 @@ impl<'p> DfaLease<'p> {
         stop: usize,
         point: usize,
     ) -> bool {
+        self.try_inline_first_step_skip_with(|dfa, span| {
+            dfa.cached_prefix_rejection(pattern, text, pos, stop, point, span)
+        })
+    }
+
+    /// Preparing storage is deferred until the slot is live and the same
+    /// memory, give-up and overflow guards permit a cached probe.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn try_inline_first_step_skip_prepared<'a, H: Haystack + ?Sized>(
+        &mut self,
+        pattern: &CompiledPattern,
+        text: &'a H,
+        text_len: usize,
+        pos: usize,
+        stop: usize,
+        point: usize,
+        prepare: impl FnOnce() -> Option<PrefixSlice<'a>>,
+    ) -> bool {
+        self.try_inline_first_step_skip_with(|dfa, span| match prepare() {
+            Some(input) => dfa.cached_prefix_rejection_with_readers(
+                pattern,
+                text_len,
+                |at| input.byte(at),
+                |start, end| (input.tail(start, end), &[]),
+                pos,
+                stop,
+                point,
+                span,
+            ),
+            None => dfa.cached_prefix_rejection(pattern, text, pos, stop, point, span),
+        })
+    }
+
+    fn try_inline_first_step_skip_with(
+        &mut self,
+        probe: impl FnOnce(&ExistenceDfa, usize) -> Option<usize>,
+    ) -> bool {
         debug_assert_eq!(self.mode, DfaMode::On);
         let DfaSlot::Live(live) = &mut *self.slot else {
             return false;
@@ -3214,14 +3314,7 @@ impl<'p> DfaLease<'p> {
         {
             return false;
         }
-        let Some(consumed) = live.dfa.cached_prefix_rejection(
-            pattern,
-            text,
-            pos,
-            stop,
-            point,
-            live.overflow_free_span,
-        ) else {
+        let Some(consumed) = probe(&live.dfa, live.overflow_free_span) else {
             return false;
         };
         live.dfa.counters.no += 1;

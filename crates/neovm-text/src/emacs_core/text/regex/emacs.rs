@@ -1510,6 +1510,144 @@ fn segment_byte_query_count() -> u64 {
     SEGMENT_BYTE_QUERY_COUNT.with(|c| c.get())
 }
 
+// Native work probes charge the actual storage operations while the cached
+// prefix is active. They are absent from product builds.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct PrefixStorageProbe {
+    calls: u64,
+    scalar_reads: u64,
+    segment_bytes: u64,
+    segment_gets: u64,
+    segment_chunks: u64,
+    selections: u64,
+    rejected: u64,
+    undecided: u64,
+    rejected_bytes: u64,
+    batch_checks: u64,
+    batch_prepares: u64,
+    batch_advances: u64,
+}
+#[cfg(test)]
+impl PrefixStorageProbe {
+    fn since(self, before: Self) -> Self {
+        Self {
+            calls: self.calls - before.calls,
+            scalar_reads: self.scalar_reads - before.scalar_reads,
+            segment_bytes: self.segment_bytes - before.segment_bytes,
+            segment_gets: self.segment_gets - before.segment_gets,
+            segment_chunks: self.segment_chunks - before.segment_chunks,
+            selections: self.selections - before.selections,
+            rejected: self.rejected - before.rejected,
+            undecided: self.undecided - before.undecided,
+            rejected_bytes: self.rejected_bytes - before.rejected_bytes,
+            batch_checks: self.batch_checks - before.batch_checks,
+            batch_prepares: self.batch_prepares - before.batch_prepares,
+            batch_advances: self.batch_advances - before.batch_advances,
+        }
+    }
+}
+#[cfg(test)]
+thread_local! {
+    static PREFIX_PROBE_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static PREFIX_STORAGE_PROBE: std::cell::Cell<PrefixStorageProbe> = const {
+        std::cell::Cell::new(PrefixStorageProbe { calls: 0, scalar_reads: 0,
+            segment_bytes: 0, segment_gets: 0, segment_chunks: 0, selections: 0,
+            rejected: 0, undecided: 0, rejected_bytes: 0,
+            batch_checks: 0, batch_prepares: 0, batch_advances: 0 })
+    };
+}
+#[cfg(test)]
+fn prefix_storage_probe() -> PrefixStorageProbe {
+    PREFIX_STORAGE_PROBE.with(std::cell::Cell::get)
+}
+#[cfg(test)]
+fn note_prefix_storage(
+    scalar: bool,
+    segment_byte: bool,
+    segment_get: bool,
+    chunk: bool,
+    segment_chunk: bool,
+) {
+    if PREFIX_PROBE_DEPTH.with(|depth| depth.get() != 0) {
+        PREFIX_STORAGE_PROBE.with(|slot| {
+            let mut counts = slot.get();
+            counts.scalar_reads += u64::from(scalar);
+            counts.segment_bytes += u64::from(segment_byte);
+            counts.segment_gets += u64::from(segment_get);
+            counts.selections += u64::from(chunk);
+            counts.segment_chunks += u64::from(segment_chunk);
+            slot.set(counts);
+        });
+    }
+}
+#[cfg(test)]
+enum PrefixBatchEvent {
+    Check,
+    Prepare,
+    Advance,
+}
+#[cfg(test)]
+fn note_prefix_batch(event: PrefixBatchEvent) {
+    PREFIX_STORAGE_PROBE.with(|slot| {
+        let mut counts = slot.get();
+        match event {
+            PrefixBatchEvent::Check => counts.batch_checks += 1,
+            PrefixBatchEvent::Prepare => counts.batch_prepares += 1,
+            PrefixBatchEvent::Advance => counts.batch_advances += 1,
+        }
+        slot.set(counts);
+    });
+}
+#[cfg(test)]
+struct PrefixSelectionGuard;
+#[cfg(test)]
+impl PrefixSelectionGuard {
+    fn enter() -> Self {
+        PREFIX_PROBE_DEPTH.with(|depth| depth.set(depth.get() + 1));
+        Self
+    }
+}
+#[cfg(test)]
+impl Drop for PrefixSelectionGuard {
+    fn drop(&mut self) {
+        PREFIX_PROBE_DEPTH.with(|depth| depth.set(depth.get() - 1));
+    }
+}
+
+#[cfg(test)]
+struct PrefixProbeGuard {
+    rejected: Option<usize>,
+}
+#[cfg(test)]
+impl PrefixProbeGuard {
+    fn enter() -> Self {
+        PREFIX_PROBE_DEPTH.with(|depth| depth.set(depth.get() + 1));
+        PREFIX_STORAGE_PROBE.with(|slot| {
+            let mut counts = slot.get();
+            counts.calls += 1;
+            slot.set(counts);
+        });
+        Self { rejected: None }
+    }
+}
+#[cfg(test)]
+impl Drop for PrefixProbeGuard {
+    fn drop(&mut self) {
+        PREFIX_PROBE_DEPTH.with(|depth| depth.set(depth.get() - 1));
+        PREFIX_STORAGE_PROBE.with(|slot| {
+            let mut counts = slot.get();
+            if let Some(bytes) = self.rejected {
+                counts.rejected += 1;
+                counts.rejected_bytes += bytes as u64;
+            } else {
+                counts.undecided += 1;
+            }
+            slot.set(counts);
+        });
+    }
+}
+
 #[cfg(any(test, feature = "test-support"))]
 thread_local! {
     /// The deepest fail stack (frames plus undo entries) any backtracker run
@@ -5397,14 +5535,20 @@ impl Haystack for [u8] {
     }
     #[inline(always)]
     fn byte(&self, i: usize) -> u8 {
+        #[cfg(test)]
+        note_prefix_storage(true, false, false, false, false);
         self[i]
     }
     #[inline(always)]
     fn get(&self, i: usize) -> Option<u8> {
+        #[cfg(test)]
+        note_prefix_storage(false, false, false, false, false);
         <[u8]>::get(self, i).copied()
     }
     #[inline(always)]
     fn chunks(&self, start: usize, end: usize) -> (&[u8], &[u8]) {
+        #[cfg(test)]
+        note_prefix_storage(false, false, false, true, false);
         #[cfg(any(test, feature = "test-support"))]
         CHUNK_QUERY_COUNT.with(|c| c.set(c.get() + 1));
         (&self[start..end], &[])
@@ -5462,6 +5606,8 @@ impl Haystack for Segments<'_> {
     #[inline(always)]
     fn byte(&self, i: usize) -> u8 {
         #[cfg(test)]
+        note_prefix_storage(true, true, false, false, false);
+        #[cfg(test)]
         SEGMENT_BYTE_QUERY_COUNT.with(|c| c.set(c.get() + 1));
         if i < self.left.len() {
             self.left[i]
@@ -5471,10 +5617,14 @@ impl Haystack for Segments<'_> {
     }
     #[inline(always)]
     fn get(&self, i: usize) -> Option<u8> {
+        #[cfg(test)]
+        note_prefix_storage(false, false, true, false, false);
         (i < self.len()).then(|| self.byte(i))
     }
     #[inline(always)]
     fn chunks(&self, start: usize, end: usize) -> (&[u8], &[u8]) {
+        #[cfg(test)]
+        note_prefix_storage(false, false, false, true, true);
         #[cfg(any(test, feature = "test-support"))]
         CHUNK_QUERY_COUNT.with(|c| c.set(c.get() + 1));
         let split = self.left.len();
@@ -10339,6 +10489,102 @@ pub(crate) fn re_search(
     re_search_haystack(pattern, text, start, range, syntax, point)
 }
 
+/// Candidate starts are monotonic within one search. Keep physical prefix
+/// views across those starts; full matcher input and STOP never change.
+struct PrefixBatches<'a> {
+    prepared: Option<PreparedPrefixBatches<'a>>,
+    forward: bool,
+}
+enum PreparedPrefixBatches<'a> {
+    Whole(dfa::PrefixSlice<'a>),
+    Split {
+        batches: [PrefixBatch<'a>; 3],
+        active: usize,
+    },
+}
+#[derive(Clone, Copy)]
+struct PrefixBatch<'a> {
+    start: usize,
+    end: usize,
+    input: Option<dfa::PrefixSlice<'a>>,
+}
+impl<'a> PrefixBatches<'a> {
+    fn new(forward: bool) -> Self {
+        Self {
+            prepared: None,
+            forward,
+        }
+    }
+    fn input<H: Haystack + ?Sized>(
+        &mut self,
+        text: &'a H,
+        position: usize,
+    ) -> Option<dfa::PrefixSlice<'a>> {
+        #[cfg(test)]
+        note_prefix_batch(PrefixBatchEvent::Check);
+        let len = text.len();
+        if position >= len {
+            return None;
+        }
+        if self.prepared.is_none() {
+            #[cfg(test)]
+            note_prefix_batch(PrefixBatchEvent::Prepare);
+            // The query is real storage selection, even though it is outside
+            // an individual cached-probe invocation. Charge it there too.
+            #[cfg(test)]
+            let _selection_scope = PrefixSelectionGuard::enter();
+            let (first, second) = text.chunks(0, len);
+            self.prepared = Some(if second.is_empty() {
+                PreparedPrefixBatches::Whole(dfa::PrefixSlice::new(first, 0))
+            } else {
+                let split = first.len();
+                // Only the last cap-1 left candidates can read across the
+                // seam. The first right candidate needs a left previous byte.
+                let seam_start = split.saturating_sub(dfa::PREFIX_READ_CAP - 1);
+                let seam_end = split + 1;
+                PreparedPrefixBatches::Split {
+                    batches: [
+                        PrefixBatch {
+                            start: 0,
+                            end: seam_start,
+                            input: Some(dfa::PrefixSlice::new(first, 0)),
+                        },
+                        PrefixBatch {
+                            start: seam_start,
+                            end: seam_end,
+                            input: None,
+                        },
+                        PrefixBatch {
+                            start: seam_end,
+                            end: len,
+                            input: Some(dfa::PrefixSlice::new(second, split)),
+                        },
+                    ],
+                    active: if self.forward { 0 } else { 2 },
+                }
+            });
+        }
+        match self.prepared.as_mut()? {
+            PreparedPrefixBatches::Whole(input) => Some(*input),
+            PreparedPrefixBatches::Split { batches, active } => {
+                // These are normal candidate-batch bounds, not a repeated
+                // physical-half selection or a per-byte segmented reader.
+                while position < batches[*active].start && *active > 0 {
+                    *active -= 1;
+                    #[cfg(test)]
+                    note_prefix_batch(PrefixBatchEvent::Advance);
+                }
+                while position >= batches[*active].end && *active < 2 {
+                    *active += 1;
+                    #[cfg(test)]
+                    note_prefix_batch(PrefixBatchEvent::Advance);
+                }
+                batches[*active].input
+            }
+        }
+    }
+}
+
 fn re_search_haystack<H: Haystack + ?Sized>(
     pattern: &CompiledPattern,
     text: &H,
@@ -10444,6 +10690,7 @@ fn re_search_haystack<H: Haystack + ?Sized>(
         .as_ref()
         .is_some_and(|lease| lease.inline_first_step_enabled());
     let mut dfa_cold_heat = dfa::ColdSearchHeat::default();
+    let mut prefix_batches = PrefixBatches::new(range >= 0);
     // Literal searches above never consume boundary coordinates. Keep the
     // invocation's typed plan out of their path and out of DFA setup, then
     // select it once for all candidates that enter either matcher.
@@ -10461,7 +10708,16 @@ fn re_search_haystack<H: Haystack + ?Sized>(
                 }
                 Some(lease) => {
                     if dfa_first_step {
-                        if lease.try_inline_first_step_skip(pattern, text, $pos, $stop, point) {
+                        let skipped = lease.try_inline_first_step_skip_prepared(
+                            pattern,
+                            text,
+                            text_len,
+                            $pos,
+                            $stop,
+                            point,
+                            || prefix_batches.input(text, $pos),
+                        );
+                        if skipped {
                             None
                         } else {
                             // The inline check already tried the cached
