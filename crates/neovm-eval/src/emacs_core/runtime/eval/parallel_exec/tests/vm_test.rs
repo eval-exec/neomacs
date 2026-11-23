@@ -2,8 +2,14 @@
 //! carries the `vm_` prefix. The sealed-ops double reads conses this harness
 //! allocated and nothing shared.
 
-use super::super::owner_bindings::{BindingKind, Channel, OwnerSlab, UndoTarget};
+use super::super::owner_bindings::{
+    BindingKind, Channel, OwnerBindingRecord, OwnerRecordId, OwnerSlab, SlotState, UndoTarget,
+};
 use super::dispatch::{admits_owner_local, opcode_slot};
+use super::effective::{
+    EraId, OwnerSlots, OwnerSlotsMut, PlainAccess, PlainAdmission, PlainRefusal, ShapeGeneration,
+    take_top_binding,
+};
 use super::engine::{CoreOutcome, EngineFault, RecordStack, apply_one};
 use super::frames::{
     BindStack, FrameArena, FrameId, HandlerKind, HandlerMark, HandlerRecord, HandlerStack,
@@ -12,28 +18,33 @@ use super::frames::{
 };
 use super::vm::{
     ArithOps, ArithRefusal, EscapeCompletion, EscapeStack, EscapeWhy, HandlerDelta, RecordDelta,
-    VmEscape, VmEscapeRequest, VmExec, VmOutcome, VmPoll, VmProgram, VmSealed, static_stack_effect,
+    VmEscape, VmEscapeRequest, VmExec, VmOutcome, VmPlain, VmPoll, VmProgram, VmSealed,
+    static_stack_effect,
 };
 use crate::emacs_core::builtins::{
     builtin_car_1, builtin_car_safe_1, builtin_cdr_1, builtin_cdr_safe_1, builtin_div, builtin_mul,
     builtin_percent, builtin_setcar_2, builtin_setcdr_2,
 };
 use crate::emacs_core::bytecode::decode::verify_stack_effects;
-use crate::emacs_core::bytecode::{ArithGenericKind, Op, Vm};
+use crate::emacs_core::bytecode::{ArithGenericKind, ByteCodeFunction, Op, StackDepth, Vm};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::eval::world::poll::PollOutcome;
 use crate::emacs_core::format_eval_result;
 use crate::emacs_core::subr::effect_schema::{
-    ArithOperands, ParallelArm, SealedAuthority, WorldSplit,
+    ArithOperands, ParallelArm, PlainVarAccess, SealedAuthority, WorldSplit,
 };
 use crate::test_utils::unit_runtime;
 use neovm_edit::emacs_core::marker::make_marker_value;
 use neovm_value::error::{EvalResult, Flow, LispCondition, expect_args, signal};
 use neovm_value::forward::TlsIndex;
-use neovm_value::intern::NIL_SYM_ID;
+use neovm_value::intern::{NIL_SYM_ID, SymId};
+use neovm_value::tagged::SymbolMode;
 use neovm_value::tagged::gc::RendezvousError;
-use neovm_value::value::Value;
+use neovm_value::value::{LambdaParams, Value, symbol_id};
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::num::NonZeroU32;
+use std::rc::Rc;
 
 // ---------------------------------------------------------------- doubles
 
@@ -123,6 +134,21 @@ fn lifos(arena: &FrameArena) -> (Lifo, Lifo) {
     )
 }
 
+/// An ordered effect log the doubles of one harness share: the Plain port's
+/// writes and the escape handler's requests land in one order.
+#[derive(Clone, Default)]
+struct EffectLog(Rc<RefCell<Vec<String>>>);
+
+impl EffectLog {
+    fn push(&self, entry: impl Into<String>) {
+        self.0.borrow_mut().push(entry.into());
+    }
+
+    fn entries(&self) -> Vec<String> {
+        self.0.borrow().clone()
+    }
+}
+
 struct RecordingEscape {
     requests: Vec<VmEscapeRequest>,
     /// The escaping frame's segment at each escape, before anything applied.
@@ -136,6 +162,8 @@ struct RecordingEscape {
     /// value (`Breturn`: `val = TOP`, bytecode.c:897-921); the default
     /// completion reports nil.
     mirror_return: bool,
+    /// Where each request is logged, when a row shares the log.
+    log: Option<EffectLog>,
 }
 
 impl RecordingEscape {
@@ -146,6 +174,7 @@ impl RecordingEscape {
             lifos: Vec::new(),
             script: Vec::new(),
             mirror_return: false,
+            log: None,
         }
     }
 
@@ -170,12 +199,51 @@ impl RecordingEscape {
             ..Self::mirroring_return()
         }
     }
+
+    fn logging(log: EffectLog) -> Self {
+        Self {
+            log: Some(log),
+            ..Self::new()
+        }
+    }
+
+    fn logging_with_script(script: Vec<Option<EscapeCompletion>>, log: EffectLog) -> Self {
+        Self {
+            script,
+            ..Self::logging(log)
+        }
+    }
+
+    /// Logs each request and mirrors the serial `Return`.
+    fn mirroring_logging_with_script(
+        script: Vec<Option<EscapeCompletion>>,
+        log: EffectLog,
+    ) -> Self {
+        Self {
+            mirror_return: true,
+            ..Self::logging_with_script(script, log)
+        }
+    }
 }
 
 impl VmEscape for RecordingEscape {
     fn escape(&mut self, request: VmEscapeRequest, arena: &FrameArena) -> EscapeCompletion {
         let segment = arena.vm_segment(request.frame).unwrap_or(&[]).to_vec();
         let top = segment.last().copied();
+        if let Some(log) = &self.log {
+            let why = match &request.why {
+                EscapeWhy::SerialUnbind { records } => format!(
+                    " [{}]",
+                    records
+                        .iter()
+                        .map(|token| token.0.to_string())
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                ),
+                _ => String::new(),
+            };
+            log.push(format!("escape {:?}{why}", request.op));
+        }
         self.segments.push(segment);
         self.lifos.push(lifos(arena));
         let index = self.requests.len();
@@ -477,9 +545,244 @@ impl ArithOps for HarnessArith {
     }
 }
 
+// -------------------------------------------------- the Plain variable double
+
+/// The owner-local Plain port's double (V2). The slot storage and the
+/// binding-record LIFO are a real `OwnerSlab` (C2, one record two views: a
+/// bind pushes the slab record, the executor's entry names it, and an unbind
+/// takes it from the top). One owner slot: the test seam mints only
+/// `TlsIndex::VOID`, so one admitted symbol owns the harness slot and a row
+/// admits at most one symbol at a time. The admission is per symbol; the
+/// canonical store holds a symbol's value, absent when the variable is void.
+/// `era`/`shape` are the generation a row moves to make a cached key stale.
+/// Every access is counted, so a row can prove a stale or refused key
+/// touched nothing; every write lands in the shared log.
+struct HarnessPlain {
+    slab: OwnerSlab,
+    admissions: HashMap<SymId, PlainAdmission>,
+    canonical: HashMap<SymId, Value>,
+    era: EraId,
+    shape: ShapeGeneration,
+    /// The reads, which go through `&self`.
+    slot_reads: Cell<usize>,
+    canonical_reads: Cell<usize>,
+    admissions_asked: Cell<usize>,
+    slot_writes: usize,
+    canonical_writes: usize,
+    log: Option<EffectLog>,
+}
+
+impl HarnessPlain {
+    fn new() -> Self {
+        Self {
+            slab: OwnerSlab::new(0),
+            admissions: HashMap::new(),
+            canonical: HashMap::new(),
+            era: EraId::new(3),
+            shape: ShapeGeneration::new(7),
+            slot_reads: Cell::new(0),
+            canonical_reads: Cell::new(0),
+            admissions_asked: Cell::new(0),
+            slot_writes: 0,
+            canonical_writes: 0,
+            log: None,
+        }
+    }
+
+    /// Admit SYM with the harness slot.
+    fn admit(mut self, sym: SymId) -> Self {
+        self.admissions
+            .insert(sym, PlainAdmission::mint(sym, TlsIndex::VOID));
+        self
+    }
+
+    /// Refuse SYM for REASON.
+    fn refuse(mut self, sym: SymId, reason: PlainRefusal) -> Self {
+        self.admissions.insert(sym, PlainAdmission::refuse(reason));
+        self
+    }
+
+    /// Refuse SYM from now on, on a harness already in use.
+    fn refuse_later(&mut self, sym: SymId, reason: PlainRefusal) {
+        self.admissions.insert(sym, PlainAdmission::refuse(reason));
+    }
+
+    /// What a read of SYM observes now: the owner slot's value, or the
+    /// canonical value when the slot holds no binding.
+    fn observed(&self, sym: SymId) -> String {
+        match self.slab.slot(TlsIndex::VOID, Channel::Default) {
+            SlotState::Bound(value) => plain_value(&value.get()),
+            SlotState::NoBinding => {
+                plain_value(self.canonical.get(&sym).unwrap_or(&Value::UNBOUND))
+            }
+        }
+    }
+
+    /// Give SYM the canonical value VALUE.
+    fn with_canonical(mut self, sym: SymId, value: Value) -> Self {
+        self.canonical.insert(sym, value);
+        self
+    }
+
+    fn logging(mut self, log: EffectLog) -> Self {
+        self.log = Some(log);
+        self
+    }
+
+    /// A structural change the serial side made: the era moves.
+    fn next_era(&mut self) {
+        self.era = EraId::new(self.era.get() + 1);
+    }
+
+    /// (slot reads, slot writes, canonical reads, canonical writes,
+    /// admissions) so far.
+    fn accesses(&self) -> (usize, usize, usize, usize, usize) {
+        (
+            self.slot_reads.get(),
+            self.slot_writes,
+            self.canonical_reads.get(),
+            self.canonical_writes,
+            self.admissions_asked.get(),
+        )
+    }
+
+    /// The slab record an executor entry names; it must name a live one.
+    fn stored(&self, record: SlotRecord) -> OwnerBindingRecord {
+        *self
+            .slab
+            .record(record.record)
+            .expect("the entry names a live slab record")
+    }
+
+    /// The slab's top record.
+    fn top_record(&self) -> Option<OwnerRecordId> {
+        self.slab.live_records().last().map(|(id, _)| id)
+    }
+
+    /// The slab's live records, outermost first, as (symbol, kind, undo).
+    /// `UndoTarget` has no `PartialEq`: a row matches the undo by hand.
+    fn live_records(&self) -> Vec<(SymId, BindingKind, UndoTarget)> {
+        self.slab
+            .live_records()
+            .map(|(_, record)| (record.sym, record.kind, record.undo))
+            .collect()
+    }
+
+    /// The serial side takes the record ID names off the slab, under the
+    /// executor's feet: an `unbind` exchange gone wrong (owner_bindings.rs
+    /// has the exchange paths around :1480).
+    fn take_record_for_test(&mut self, id: OwnerRecordId) {
+        self.slab
+            .take_record(id)
+            .expect("the record was live before the take");
+    }
+
+    /// The serial side pushes a record the executor's LIFO never heard of.
+    fn push_foreign_record(&mut self, sym: SymId) {
+        self.slab.push_record(
+            sym,
+            TlsIndex::VOID,
+            BindingKind::Let,
+            Channel::Default,
+            UndoTarget::Retired,
+        );
+    }
+}
+
+impl PlainAccess for HarnessPlain {
+    fn admission(&self, sym: SymId) -> PlainAdmission {
+        self.admissions_asked.set(self.admissions_asked.get() + 1);
+        self.admissions
+            .get(&sym)
+            .copied()
+            .unwrap_or_else(|| PlainAdmission::refuse(PlainRefusal::NotPlain))
+    }
+
+    fn canonical_read(&self, sym: SymId) -> Value {
+        self.canonical_reads.set(self.canonical_reads.get() + 1);
+        self.canonical.get(&sym).copied().unwrap_or(Value::UNBOUND)
+    }
+
+    fn canonical_write(&mut self, sym: SymId, value: Value) {
+        self.canonical_writes += 1;
+        if let Some(log) = &self.log {
+            log.push(format!("canonical <- {}", plain_value(&value)));
+        }
+        self.canonical.insert(sym, value);
+    }
+
+    fn canonical_bound(&self, sym: SymId) -> bool {
+        self.canonical.contains_key(&sym)
+    }
+
+    fn push_binding(
+        &mut self,
+        sym: SymId,
+        slot: TlsIndex,
+        channel: Channel,
+        undo: UndoTarget,
+    ) -> OwnerRecordId {
+        self.slab
+            .push_record(sym, slot, BindingKind::Let, channel, undo)
+    }
+
+    fn pop_binding(&mut self, id: OwnerRecordId) -> Option<OwnerBindingRecord> {
+        take_top_binding(&mut self.slab, id)
+    }
+}
+
+impl OwnerSlots for HarnessPlain {
+    fn slot_state(&self, slot: TlsIndex, channel: Channel) -> SlotState {
+        self.slot_reads.set(self.slot_reads.get() + 1);
+        match channel {
+            Channel::Default => self.slab.slot(slot, channel),
+            Channel::BufferLocal(_) => SlotState::NoBinding,
+        }
+    }
+}
+
+impl OwnerSlotsMut for HarnessPlain {
+    fn set_slot_state(&mut self, slot: TlsIndex, channel: Channel, state: SlotState) {
+        self.slot_writes += 1;
+        if let Some(log) = &self.log {
+            log.push(format!("slot <- {}", plain_state(&state)));
+        }
+        self.slab.set_slot(slot, channel, state);
+    }
+}
+
+impl VmPlain for HarnessPlain {
+    fn generation(&self) -> (EraId, ShapeGeneration) {
+        (self.era, self.shape)
+    }
+}
+
+/// A value as the log prints it: a fixnum's digits, `unbound`, else its
+/// kind name.
+fn plain_value(value: &Value) -> String {
+    match value.as_fixnum() {
+        Some(number) => number.to_string(),
+        None if value.is_unbound() => "unbound".to_string(),
+        None => format!("{value:?}"),
+    }
+}
+
+fn plain_state(state: &SlotState) -> String {
+    match state {
+        SlotState::NoBinding => "none".to_string(),
+        SlotState::Bound(value) => plain_value(&value.get()),
+    }
+}
+
+/// A dynamic test symbol.
+fn plain_sym(name: &'static str) -> SymId {
+    symbol_id(&Value::symbol(name), SymbolMode::Bare).expect("interned test symbol")
+}
+
 // ---------------------------------------------------------------- helpers
 
-type Harness = VmExec<RecordingEscape, HarnessVmSealed, HarnessArith, RecordingPoll>;
+type Harness =
+    VmExec<'static, RecordingEscape, HarnessVmSealed, HarnessArith, HarnessPlain, RecordingPoll>;
 
 fn context() -> Context {
     Context::new(unit_runtime())
@@ -490,10 +793,16 @@ fn harness() -> Harness {
 }
 
 fn harness_with(escape: RecordingEscape) -> Harness {
+    harness_with_plain(escape, HarnessPlain::new())
+}
+
+fn harness_with_plain(escape: RecordingEscape, plain: HarnessPlain) -> Harness {
     VmExec::new(
+        &(),
         escape,
         HarnessVmSealed,
         HarnessArith::new(),
+        plain,
         RecordingPoll::new(),
     )
 }
@@ -502,6 +811,11 @@ fn harness_with(escape: RecordingEscape) -> Harness {
 /// read what an arithmetic opcode left on the stack.
 fn arithmetic_harness() -> Harness {
     harness_with(RecordingEscape::mirroring_return())
+}
+
+/// The same over a Plain port of the row's.
+fn value_harness(plain: HarnessPlain) -> Harness {
+    harness_with_plain(RecordingEscape::mirroring_return(), plain)
 }
 
 fn program(ops: &[Op]) -> VmProgram<'_> {
@@ -531,6 +845,7 @@ fn done_value(engine: &mut Harness, outcome: VmOutcome) -> Value {
     match outcome {
         VmOutcome::Done { pending } => engine.take(pending).expect("done root"),
         VmOutcome::Signaled(flow) => panic!("signaled {}", signal_key(&flow).0),
+        VmOutcome::VoidVariable { symbol } => panic!("void-variable {symbol:?}"),
         VmOutcome::MissingCore { name } => panic!("missing core {name}"),
         VmOutcome::Fault(fault) => panic!("fault {fault:?}"),
     }
@@ -544,7 +859,9 @@ fn fault_of(outcome: VmOutcome) -> EngineFault {
     }
 }
 
-fn assert_clear<S: VmSealed>(engine: &VmExec<RecordingEscape, S, HarnessArith, RecordingPoll>) {
+fn assert_clear<S: VmSealed, V: VmPlain>(
+    engine: &VmExec<'_, RecordingEscape, S, HarnessArith, V, RecordingPoll>,
+) {
     assert_eq!(engine.arena_depth(), 0, "arena depth");
     assert_eq!(engine.live_root_count(), 0, "live roots");
     assert_eq!(engine.arena().handlers().len(), 0, "handlers");
@@ -589,6 +906,30 @@ fn completion_jumping(op: &Op, produced: Vec<Value>, jump: u32) -> EscapeComplet
         },
         records: RecordDelta::default(),
         handlers: HandlerDelta::default(),
+    }
+}
+
+/// A completed escape that also pushes one serial record: the serial side
+/// pushed a specpdl entry the owner did not mirror (`save-excursion`, an
+/// unwind-protect, a localized binding).
+fn completion_pushing(op: &Op, token: SerialRecordToken) -> EscapeCompletion {
+    EscapeCompletion {
+        records: RecordDelta {
+            popped: Vec::new(),
+            pushed: vec![token],
+        },
+        ..EscapeCompletion::fall_through(op)
+    }
+}
+
+/// A completed escape that also pops these serial records, innermost first.
+fn completion_popping(op: &Op, popped: &[SerialRecordToken]) -> EscapeCompletion {
+    EscapeCompletion {
+        records: RecordDelta {
+            popped: popped.to_vec(),
+            pushed: Vec::new(),
+        },
+        ..EscapeCompletion::fall_through(op)
     }
 }
 
@@ -881,9 +1222,11 @@ fn is_call(op: &Op) -> bool {
 }
 
 #[test]
-fn vm_every_non_arith_world_opcode_is_exactly_one_escape() {
+fn vm_every_world_opcode_outside_the_arith_and_plain_classes_is_exactly_one_escape() {
     // The arithmetic opcodes escape only for a marker operand
-    // (`vm_a_marker_operand_escapes_through_the_one_stub`).
+    // (`vm_a_marker_operand_escapes_through_the_one_stub`); the Plain
+    // variable opcodes run on the owner slab and escape only for a refused
+    // symbol or a serial record run (the `vm_var…` and `vm_unbind…` rows).
     let mut escaped = 0;
     let mut ctx = context();
     for (name, op) in op_samples() {
@@ -891,7 +1234,7 @@ fn vm_every_non_arith_world_opcode_is_exactly_one_escape() {
         let ParallelArm::World(split) = opcode_slot(&op).arm else {
             continue;
         };
-        if matches!(split, WorldSplit::Arith(_)) {
+        if matches!(split, WorldSplit::Arith(_) | WorldSplit::PlainVar(_)) {
             continue;
         }
         escaped += 1;
@@ -951,7 +1294,7 @@ fn vm_every_non_arith_world_opcode_is_exactly_one_escape() {
         }
         assert_clear(&engine);
     }
-    assert_eq!(escaped, 47, "escaped opcodes");
+    assert_eq!(escaped, 43, "escaped opcodes");
 }
 
 #[test]
@@ -968,6 +1311,15 @@ fn vm_the_dispatch_table_and_the_inventory_agree_on_all_89_opcodes() {
             ArithGenericKind::from_op(&op).is_some(),
             matches!(slot.arm, ParallelArm::World(WorldSplit::Arith(_))),
             "{name}: the Arith arm is exactly the kinds"
+        );
+        // The PlainVar arm is exactly the four variable opcodes (V2).
+        assert_eq!(
+            matches!(
+                op,
+                Op::VarRef(_) | Op::VarSet(_) | Op::VarBind(_) | Op::Unbind(_)
+            ),
+            matches!(slot.arm, ParallelArm::World(WorldSplit::PlainVar(_))),
+            "{name}: the PlainVar arm is exactly the variable opcodes"
         );
         match slot.arm {
             ParallelArm::Scalar => scalar += 1,
@@ -991,7 +1343,9 @@ fn vm_the_dispatch_table_and_the_inventory_agree_on_all_89_opcodes() {
         }
         // The stage-1 accessor admits every typed World split and no bare
         // escape; this executor runs `Arith(Numeric)` through the port when
-        // no operand is a marker, and escapes every other World arm.
+        // no operand is a marker and the Plain variable opcodes through the
+        // Plain port when the admission mints a key, and escapes every other
+        // World arm.
         assert_eq!(
             admits_owner_local(slot),
             !matches!(slot.arm, ParallelArm::World(WorldSplit::Escape)),
@@ -1031,9 +1385,11 @@ fn vm_escape_result_is_in_the_published_segment_before_the_next_poll() {
         Some(completion(&Op::Switch, Vec::new())),
     ];
     let mut engine = VmExec::new(
+        &(),
         RecordingEscape::with_script(script),
         HarnessVmSealed,
         HarnessArith::new(),
+        HarnessPlain::new(),
         RecordingPoll::new(),
     );
     let outcome = engine.run(&mut ctx, program_with(&ops, &[cons]));
@@ -1107,9 +1463,11 @@ fn vm_a_completion_that_jumps_for_an_opcode_other_than_switch_is_a_typed_fault()
     ];
     for (ops, script, op, bindings) in cases {
         let mut engine = VmExec::new(
+            &(),
             RecordingEscape::with_script(script),
             HarnessVmSealed,
             HarnessArith::new(),
+            HarnessPlain::new(),
             RecordingPoll::new(),
         );
         let outcome = engine.run(&mut ctx, program(&ops));
@@ -1173,9 +1531,11 @@ fn vm_poll_refusal_is_engine_fault_poll_and_restarts() {
     let mut ctx = context();
     for (name, ops, edge) in cases {
         let mut engine = VmExec::new(
+            &(),
             RecordingEscape::new(),
             HarnessVmSealed,
             HarnessArith::new(),
+            HarnessPlain::new(),
             RecordingPoll::refusing_on(edge, RendezvousError::Publication),
         );
         let outcome = engine.run(&mut ctx, program(&ops));
@@ -1228,9 +1588,11 @@ fn vm_a_signal_from_an_escape_settles_to_idle_and_never_resumes() {
         }),
     ];
     let mut engine = VmExec::new(
+        &(),
         RecordingEscape::with_script(script),
         HarnessVmSealed,
         HarnessArith::new(),
+        HarnessPlain::new(),
         RecordingPoll::new(),
     );
     let outcome = engine.run(&mut ctx, program(&ops));
@@ -1297,9 +1659,11 @@ fn vm_an_escape_completion_with_the_wrong_arity_is_a_typed_fault_and_keeps_the_s
         }),
     ];
     let mut engine = VmExec::new(
+        &(),
         RecordingEscape::with_script(script),
         HarnessVmSealed,
         HarnessArith::new(),
+        HarnessPlain::new(),
         RecordingPoll::new(),
     );
     let outcome = engine.run(&mut context(), program(&ops));
@@ -1413,9 +1777,11 @@ fn vm_escape_completions_mirror_serial_records_and_handlers_in_lifo_order() {
         }),
     ];
     let mut engine = VmExec::new(
+        &(),
         RecordingEscape::with_script(script),
         HarnessVmSealed,
         HarnessArith::new(),
+        HarnessPlain::new(),
         RecordingPoll::new(),
     );
     let outcome = engine.run(&mut context(), program(&ops));
@@ -1489,9 +1855,11 @@ fn vm_a_completion_that_pops_a_non_top_serial_record_faults_and_applies_nothing(
             }),
         ];
         let mut engine = VmExec::new(
+            &(),
             RecordingEscape::with_script(script),
             HarnessVmSealed,
             HarnessArith::new(),
+            HarnessPlain::new(),
             RecordingPoll::new(),
         );
         let outcome = engine.run(&mut context(), program(&ops));
@@ -1625,9 +1993,11 @@ fn vm_a_return_escape_ends_the_run_with_the_reported_value() {
     let ops = [Op::Constant(0), Op::Return];
     let script = vec![Some(completion(&Op::Return, vec![Value::fixnum(7)]))];
     let mut engine = VmExec::new(
+        &(),
         RecordingEscape::with_script(script),
         HarnessVmSealed,
         HarnessArith::new(),
+        HarnessPlain::new(),
         RecordingPoll::new(),
     );
     let outcome = engine.run(&mut context(), program_with(&ops, &constants));
@@ -1746,9 +2116,11 @@ fn vm_a_sealed_core_signal_settles_to_idle() {
 #[test]
 fn vm_a_sealed_port_without_a_core_is_missing_core() {
     let mut engine = VmExec::new(
+        &(),
         RecordingEscape::new(),
         MissingSealed,
         HarnessArith::new(),
+        HarnessPlain::new(),
         RecordingPoll::new(),
     );
     let outcome = engine.run(&mut context(), program(&[Op::Nil, Op::Car, Op::Return]));
@@ -2378,4 +2750,1399 @@ fn vm_arithmetic_results_tie_the_serial_builtin() {
         }
     }
     assert!(tied > 3000, "shapes tied: {tied}");
+}
+
+// ------------------------------------------------------- V2: Plain variables
+
+/// `ops`, `Return`: the Plain rows' programs end in `Return`, whose mirror
+/// hands back the top operand.
+fn plain_program(mut ops: Vec<Op>) -> Vec<Op> {
+    ops.push(Op::Return);
+    ops
+}
+
+/// `assert_clear` over a run whose frame exit left its owner records for
+/// V4's typed disposition: the frame and the roots are gone, the stepper is
+/// Idle, and the record LIFO holds exactly `records`.
+fn assert_finished_with_records<S: VmSealed, V: VmPlain>(
+    engine: &VmExec<'_, RecordingEscape, S, HarnessArith, V, RecordingPoll>,
+    records: usize,
+) {
+    assert_eq!(engine.arena_depth(), 0, "arena depth");
+    assert_eq!(engine.live_root_count(), 0, "live roots");
+    assert_eq!(engine.arena().handlers().len(), 0, "handlers");
+    assert_eq!(engine.arena().bindings().len(), records, "bindings left");
+    assert!(engine.is_idle(), "idle");
+}
+
+/// The outcome as the serial VM's `EvalResult`: a void variable is the
+/// signal its datum names (data.c:1645-1657).
+fn outcome_result(engine: &mut Harness, outcome: VmOutcome) -> EvalResult {
+    match outcome {
+        VmOutcome::Done { .. } => Ok(done_value(engine, outcome)),
+        VmOutcome::Signaled(flow) => Err(flow),
+        VmOutcome::VoidVariable { symbol } => {
+            Err(signal(LispCondition::VoidVariable, vec![symbol]))
+        }
+        other => panic!("expected a value or a signal, got {other:?}"),
+    }
+}
+
+#[test]
+fn vm_varref_reads_the_owner_slot_without_a_poll() {
+    // GNU `Bvarref` (bytecode.c:638-647): a PLAINVAL with a value is its
+    // value cell read; no call, no `maybe_quit`. E4 §4.2 items 2-3: a Bound
+    // owner slot supplies the value, no owner binding the canonical value.
+    // One port read per opcode, no request, no poll, no escape.
+    let mut ctx = context();
+    let x = plain_sym("pvm-varref");
+    let (five, seven) = (Value::fixnum(5), Value::fixnum(7));
+
+    // No owner binding: the canonical value.
+    let plain = HarnessPlain::new().admit(x).with_canonical(x, five);
+    let mut engine = value_harness(plain);
+    let constants = [Value::from_sym_id(x)];
+    let ops = plain_program(vec![Op::VarRef(0)]);
+    let outcome = engine.run(&mut ctx, program_with(&ops, &constants));
+    assert_eq!(done_value(&mut engine, outcome), five);
+    assert_eq!(
+        engine.plain_handler().accesses(),
+        (1, 0, 1, 0, 1),
+        "one slot read, one canonical read, one admission"
+    );
+    let escape = engine.escape_handler();
+    assert_eq!(escape.requests.len(), 1, "only Return escapes");
+    assert_eq!(escape.requests[0].op, Op::Return);
+    assert_eq!(
+        escape.segments[0],
+        vec![five],
+        "the value is on the segment when Return escapes"
+    );
+    assert_eq!(
+        engine.poll_handler().edges,
+        vec![PollEdge::SerialRequest],
+        "Return's own request poll; the read took none"
+    );
+    assert_clear(&engine);
+
+    // An owner binding: the slot's value, twice; the canonical store is not
+    // read. The `let`'s record stays for V4's frame disposition.
+    let plain = HarnessPlain::new().admit(x).with_canonical(x, five);
+    let mut engine = value_harness(plain);
+    let constants = [Value::from_sym_id(x), seven];
+    let ops = plain_program(vec![
+        Op::Constant(1),
+        Op::VarBind(0),
+        Op::VarRef(0),
+        Op::VarRef(0),
+    ]);
+    let outcome = engine.run(&mut ctx, program_with(&ops, &constants));
+    assert_eq!(done_value(&mut engine, outcome), seven);
+    assert_eq!(
+        engine.plain_handler().accesses(),
+        (3, 1, 0, 0, 1),
+        "the bind's slot read and write, the two reads; no canonical read"
+    );
+    assert_eq!(engine.escape_handler().segments[0], vec![seven, seven]);
+    assert_eq!(engine.poll_handler().edges, vec![PollEdge::SerialRequest]);
+    assert_finished_with_records(&engine, 1);
+}
+
+#[test]
+fn vm_varset_writes_the_owner_slot_without_a_poll() {
+    // GNU `Bvarset` (bytecode.c:710-719): a PLAINVAL without a trapped
+    // write is `SET_SYMBOL_VAL`, one store. E4 §4.2 item 3: an existing
+    // owner slot is replaced in place; no owner binding is a canonical
+    // write. The read-back is the proof of the store.
+    let mut ctx = context();
+    let x = plain_sym("pvm-varset");
+    let (five, seven, nine) = (Value::fixnum(5), Value::fixnum(7), Value::fixnum(9));
+
+    // No owner binding: the canonical store.
+    let plain = HarnessPlain::new().admit(x);
+    let mut engine = value_harness(plain);
+    let constants = [Value::from_sym_id(x), nine];
+    let ops = plain_program(vec![Op::Constant(1), Op::VarSet(0), Op::VarRef(0)]);
+    let outcome = engine.run(&mut ctx, program_with(&ops, &constants));
+    assert_eq!(done_value(&mut engine, outcome), nine, "the read-back");
+    assert_eq!(engine.plain_handler().canonical.get(&x), Some(&nine));
+    assert_eq!(
+        engine.plain_handler().accesses(),
+        (2, 0, 1, 1, 1),
+        "two decision reads, one canonical read, one canonical write; the slot is never written"
+    );
+    assert_eq!(engine.escape_handler().requests.len(), 1, "only Return");
+    assert_eq!(engine.poll_handler().edges, vec![PollEdge::SerialRequest]);
+    assert_clear(&engine);
+
+    // An owner binding: the slot is replaced; the canonical store keeps 5.
+    let plain = HarnessPlain::new().admit(x).with_canonical(x, five);
+    let mut engine = value_harness(plain);
+    let constants = [Value::from_sym_id(x), seven, nine];
+    let ops = plain_program(vec![
+        Op::Constant(1),
+        Op::VarBind(0),
+        Op::Constant(2),
+        Op::VarSet(0),
+        Op::VarRef(0),
+    ]);
+    let outcome = engine.run(&mut ctx, program_with(&ops, &constants));
+    assert_eq!(done_value(&mut engine, outcome), nine, "the read-back");
+    assert_eq!(engine.plain_handler().canonical.get(&x), Some(&five));
+    assert_eq!(
+        engine.plain_handler().accesses(),
+        (3, 2, 0, 0, 1),
+        "the bind and the set read and write the slot, the read-back reads it; no canonical access"
+    );
+    assert_finished_with_records(&engine, 1);
+}
+
+#[test]
+fn vm_varbind_pushes_an_owner_binding_record_and_unbind_restores_the_slot() {
+    // GNU `Bvarbind` (bytecode.c:743-746) is `specbind (vectorp[arg], POP)`:
+    // the old value is saved and the new one stored (eval.c:3664-3672), and
+    // `Bunbind` (bytecode.c:843-851) undoes it where it stands. The
+    // stepper's mirror: the owner slot is replaced, an owner record that
+    // names the slot and the undo goes on the frame's LIFO, and `Unbind`
+    // pops it and restores the slot.
+    let mut ctx = context();
+    let x = plain_sym("pvm-varbind");
+    let (one, two) = (Value::fixnum(1), Value::fixnum(2));
+
+    // One let over nothing: the record undoes to "no owner binding".
+    let plain = HarnessPlain::new().admit(x);
+    let mut engine = value_harness(plain);
+    let constants = [Value::from_sym_id(x), one];
+    let ops = [Op::Constant(1), Op::VarBind(0), Op::Nil, Op::Return];
+    let outcome = engine.run(&mut ctx, program_with(&ops, &constants));
+    assert_eq!(done_value(&mut engine, outcome), Value::NIL);
+    assert_eq!(
+        engine.escape_handler().segments[0],
+        vec![Value::NIL],
+        "the bind consumed its operand"
+    );
+    let records: Vec<OwnerRecord> = engine
+        .arena()
+        .bindings()
+        .above(OwnerRecordMark::EMPTY)
+        .collect();
+    let [OwnerRecord::Plain(record)] = records[..] else {
+        panic!("one owner record, got {records:?}")
+    };
+    // The entry names the record the slab stores, and the slab's top is
+    // that record (C2: one record, two views).
+    assert_eq!(record.symbol, x);
+    assert_eq!(engine.plain_handler().top_record(), Some(record.record));
+    let stored = engine.plain_handler().stored(record);
+    assert_eq!(stored.sym, x);
+    assert_eq!(stored.index, TlsIndex::VOID);
+    assert_eq!(stored.channel, Channel::Default);
+    assert_eq!(stored.kind, BindingKind::Let);
+    assert!(
+        matches!(stored.undo, UndoTarget::Inherited { suspended: None }),
+        "{:?}",
+        stored.undo
+    );
+    assert_finished_with_records(&engine, 1);
+
+    // A let over a let: the inner record saves the outer value, and it is
+    // the slab's top above the outer record.
+    let plain = HarnessPlain::new().admit(x);
+    let mut engine = value_harness(plain);
+    let constants = [Value::from_sym_id(x), one, two];
+    let ops = [
+        Op::Constant(1),
+        Op::VarBind(0),
+        Op::Constant(2),
+        Op::VarBind(0),
+        Op::Nil,
+        Op::Return,
+    ];
+    let outcome = engine.run(&mut ctx, program_with(&ops, &constants));
+    assert_eq!(done_value(&mut engine, outcome), Value::NIL);
+    let records: Vec<OwnerRecord> = engine
+        .arena()
+        .bindings()
+        .above(OwnerRecordMark::EMPTY)
+        .collect();
+    assert_eq!(records.len(), 2);
+    let [OwnerRecord::Plain(outer), OwnerRecord::Plain(inner)] = records[..] else {
+        panic!("two owner entries, got {records:?}")
+    };
+    assert_ne!(outer.record, inner.record);
+    assert_eq!(engine.plain_handler().top_record(), Some(inner.record));
+    // The slab holds both records, outermost first, and each entry's record
+    // saves what the slot held before it.
+    let live = engine.plain_handler().live_records();
+    assert_eq!(live.len(), 2);
+    assert_eq!(
+        (live[0].0, live[0].1, live[1].0, live[1].1),
+        (x, BindingKind::Let, x, BindingKind::Let)
+    );
+    assert!(
+        matches!(live[0].2, UndoTarget::Inherited { suspended: None }),
+        "{:?}",
+        live[0].2
+    );
+    assert!(
+        matches!(live[1].2, UndoTarget::Previous(saved) if saved.get() == one),
+        "{:?}",
+        live[1].2
+    );
+    assert_finished_with_records(&engine, 2);
+
+    // The unbind: the record leaves and the slot is back to no binding.
+    let log = EffectLog::default();
+    let plain = HarnessPlain::new().admit(x).logging(log.clone());
+    let mut engine = harness_with_plain(RecordingEscape::logging(log.clone()), plain);
+    let constants = [Value::from_sym_id(x), one];
+    let ops = [
+        Op::Constant(1),
+        Op::VarBind(0),
+        Op::Unbind(1),
+        Op::Nil,
+        Op::Return,
+    ];
+    let outcome = engine.run(&mut ctx, program_with(&ops, &constants));
+    assert_eq!(done_value(&mut engine, outcome), Value::NIL);
+    assert_eq!(
+        log.entries(),
+        vec!["slot <- 1", "slot <- none", "escape Return"],
+        "the bind's write, the unbind's restore, then Return"
+    );
+    assert_eq!(
+        engine.plain_handler().accesses(),
+        (1, 2, 0, 0, 1),
+        "the bind reads and writes the slot, the unbind writes it; no canonical access"
+    );
+    assert_eq!(
+        engine
+            .escape_handler()
+            .requests
+            .iter()
+            .map(|request| request.op.clone())
+            .collect::<Vec<_>>(),
+        vec![Op::Return],
+        "the owner unbind escapes nothing"
+    );
+    assert_eq!(engine.poll_handler().edges, vec![PollEdge::SerialRequest]);
+    assert_clear(&engine);
+}
+
+#[test]
+fn vm_a_void_binding_signals_void_variable_on_the_owner() {
+    // GNU `Bvarref` of a void variable reaches `Fsymbol_value`, which signals
+    // `void-variable` with the symbol as its only datum (bytecode.c:638-647,
+    // data.c:1645-1657; the serial `fast_path_var_ref`,
+    // bytecode/vm.rs:7320-7327). E4 §2.4: the owner raises it itself, the
+    // typed `StepOutcome::VoidVariable` of C4 (engine.rs:222-236). Three
+    // shapes: no owner binding and no canonical value; a canonical unbound
+    // value; an owner slot that is a local void binding (GNU `makunbound`
+    // inside a `let`, eval.c:3664-3672 saving the void).
+    let mut ctx = context();
+    let x = plain_sym("pvm-void");
+    let (unbound, five) = (Value::UNBOUND, Value::fixnum(5));
+    let xs = Value::from_sym_id(x);
+    let cases: Vec<(
+        &str,
+        Vec<Op>,
+        Vec<Value>,
+        HarnessPlain,
+        (usize, usize, usize, usize, usize),
+    )> = vec![
+        (
+            "no owner binding, no canonical value",
+            plain_program(vec![Op::VarRef(0)]),
+            vec![xs],
+            HarnessPlain::new().admit(x),
+            (1, 0, 1, 0, 1),
+        ),
+        (
+            "no owner binding, a canonical unbound value",
+            plain_program(vec![Op::VarRef(0)]),
+            vec![xs],
+            HarnessPlain::new().admit(x).with_canonical(x, unbound),
+            (1, 0, 1, 0, 1),
+        ),
+        (
+            "a local void binding over a canonical value",
+            plain_program(vec![Op::Constant(1), Op::VarBind(0), Op::VarRef(0)]),
+            vec![xs, unbound],
+            HarnessPlain::new().admit(x).with_canonical(x, five),
+            (2, 1, 0, 0, 1),
+        ),
+    ];
+    for (name, ops, constants, plain, accesses) in cases {
+        let mut engine = value_harness(plain);
+        let outcome = engine.run(&mut ctx, program_with(&ops, &constants));
+        let VmOutcome::VoidVariable { symbol } = outcome else {
+            panic!("{name}: got {outcome:?}")
+        };
+        assert_eq!(
+            symbol.as_bare_symbol_id(),
+            Some(x),
+            "{name}: the symbol is the signal's datum"
+        );
+        assert_eq!(engine.plain_handler().accesses(), accesses, "{name}");
+        assert!(
+            engine.escape_handler().requests.is_empty(),
+            "{name}: no escape"
+        );
+        assert!(engine.poll_handler().edges.is_empty(), "{name}: no poll");
+        assert!(engine.is_idle(), "{name}: settled to Idle");
+        assert_clear(&engine);
+    }
+
+    // Unbinding the void binding shows the canonical value again.
+    let plain = HarnessPlain::new().admit(x).with_canonical(x, five);
+    let mut engine = value_harness(plain);
+    let ops = plain_program(vec![
+        Op::Constant(1),
+        Op::VarBind(0),
+        Op::Unbind(1),
+        Op::VarRef(0),
+    ]);
+    let outcome = engine.run(&mut ctx, program_with(&ops, &vec![xs, unbound]));
+    assert_eq!(done_value(&mut engine, outcome), five);
+    assert_eq!(
+        engine.plain_handler().accesses(),
+        (2, 2, 1, 0, 1),
+        "the bind's read and write, the unbind's write, one canonical read"
+    );
+    assert_clear(&engine);
+}
+
+#[test]
+fn vm_a_refused_key_escapes_once_with_zero_slot_access() {
+    // A symbol the admission refuses stays on the serial path: the ONE
+    // escape carries the access kind and the refusal (E4 §4.2), and the
+    // serial side performs the access. Nothing is read or written through
+    // the owner before the request. Ref, Set and Bind alike, a `Constant`
+    // refusal the same way; a refused bind's serial specbind is a record
+    // the completion reports.
+    let mut ctx = context();
+    let x = plain_sym("pvm-refused");
+    let xs = Value::from_sym_id(x);
+    let (five, nine) = (Value::fixnum(5), Value::fixnum(9));
+    // (name, op, the ops before it, completion, access, refusal, the value
+    // Return reports, the records left)
+    let cases: Vec<(
+        &str,
+        Op,
+        Vec<Op>,
+        EscapeCompletion,
+        PlainVarAccess,
+        PlainRefusal,
+        Value,
+        usize,
+    )> = vec![
+        (
+            "ref, not plain",
+            Op::VarRef(0),
+            Vec::new(),
+            completion(&Op::VarRef(0), vec![five]),
+            PlainVarAccess::Ref,
+            PlainRefusal::NotPlain,
+            five,
+            0,
+        ),
+        (
+            "set, not plain",
+            Op::VarSet(0),
+            vec![Op::Constant(1)],
+            completion(&Op::VarSet(0), Vec::new()),
+            PlainVarAccess::Set,
+            PlainRefusal::NotPlain,
+            Value::NIL,
+            0,
+        ),
+        (
+            "bind, not plain",
+            Op::VarBind(0),
+            vec![Op::Constant(1)],
+            completion_pushing(&Op::VarBind(0), token(5)),
+            PlainVarAccess::Bind,
+            PlainRefusal::NotPlain,
+            Value::NIL,
+            1,
+        ),
+        (
+            "set, a constant symbol",
+            Op::VarSet(0),
+            vec![Op::Constant(1)],
+            completion(&Op::VarSet(0), Vec::new()),
+            PlainVarAccess::Set,
+            PlainRefusal::Constant,
+            Value::NIL,
+            0,
+        ),
+    ];
+    for (name, op, before, completion, access, refusal, reported, left) in cases {
+        // A ref leaves the serial side's value as the frame's value.
+        let after = if matches!(op, Op::VarRef(_)) {
+            Vec::new()
+        } else {
+            vec![Op::Nil]
+        };
+        // The opcode's pc is after the operands it consumes.
+        let opcode_pc = before.len();
+        let ops = plain_program([before, vec![op.clone()], after].concat());
+        let plain = HarnessPlain::new().refuse(x, refusal);
+        let mut engine = harness_with_plain(
+            RecordingEscape::mirroring_with_script(vec![Some(completion), None]),
+            plain,
+        );
+        let constants = [xs, nine];
+        let outcome = engine.run(&mut ctx, program_with(&ops, &constants));
+        assert_eq!(done_value(&mut engine, outcome), reported, "{name}");
+        let escape = engine.escape_handler();
+        assert_eq!(escape.requests.len(), 2, "{name}: the access, then Return");
+        assert_eq!(escape.requests[0].op, op, "{name}");
+        assert_eq!(
+            escape.requests[0].why,
+            EscapeWhy::PlainRefused { access, refusal },
+            "{name}: the escape says the access and the refusal"
+        );
+        assert_eq!(
+            escape.requests[0].pc,
+            Pc::new(opcode_pc),
+            "{name}: the opcode's own pc, after its operands"
+        );
+        assert_eq!(
+            engine.plain_handler().accesses(),
+            (0, 0, 0, 0, 1),
+            "{name}: one admission, no slot or canonical access"
+        );
+        assert!(engine.plain_handler().canonical.is_empty(), "{name}");
+        assert_eq!(
+            engine.poll_handler().edges,
+            vec![PollEdge::SerialRequest, PollEdge::SerialRequest],
+            "{name}: each escape's request poll"
+        );
+        assert_finished_with_records(&engine, left);
+    }
+
+    // The underflow check comes first: `VarSet` with no operand is the
+    // malformed-code signal, before any admission.
+    let plain = HarnessPlain::new().refuse(x, PlainRefusal::NotPlain);
+    let mut engine = harness_with_plain(RecordingEscape::mirroring_return(), plain);
+    let ops = [Op::VarSet(0), Op::Nil, Op::Return];
+    let outcome = engine.run(&mut ctx, program_with(&ops, &[xs]));
+    let VmOutcome::Signaled(flow) = outcome else {
+        panic!("got {outcome:?}")
+    };
+    assert_eq!(signal_key(&flow).0, "error");
+    assert_eq!(
+        engine.plain_handler().accesses(),
+        (0, 0, 0, 0, 0),
+        "the port is not asked"
+    );
+    assert!(engine.escape_handler().requests.is_empty());
+    assert_clear(&engine);
+}
+
+#[test]
+fn vm_a_stale_plain_key_escapes_once_and_reads_nothing_stale() {
+    // E4 §4.2: a structural change the serial side made moves the era; a
+    // cached key is checked against the generation at use, and a stale one
+    // is re-derived through the admission before any access. Re-derived as
+    // refused: the ONE escape, and the stale key read nothing.
+    let mut ctx = context();
+    let x = plain_sym("pvm-stale");
+    let (five, six) = (Value::fixnum(5), Value::fixnum(6));
+    let plain = HarnessPlain::new().admit(x).with_canonical(x, five);
+    let mut engine = harness_with_plain(
+        RecordingEscape::mirroring_with_script(vec![
+            None,
+            Some(completion(&Op::VarRef(0), vec![six])),
+            None,
+        ]),
+        plain,
+    );
+    let ops = plain_program(vec![Op::VarRef(0)]);
+    let constants = [Value::from_sym_id(x)];
+    let outcome = engine.run(&mut ctx, program_with(&ops, &constants));
+    assert_eq!(
+        done_value(&mut engine, outcome),
+        five,
+        "the first run mints the key"
+    );
+    assert_eq!(engine.plain_handler().accesses(), (1, 0, 1, 0, 1));
+    assert_clear(&engine);
+
+    // The era moves, and the symbol is no longer Plain.
+    engine.plain_handler_mut().next_era();
+    engine
+        .plain_handler_mut()
+        .refuse_later(x, PlainRefusal::NotPlain);
+    let outcome = engine.run(&mut ctx, program_with(&ops, &constants));
+    assert_eq!(
+        done_value(&mut engine, outcome),
+        six,
+        "the serial side's value"
+    );
+    assert_eq!(
+        engine.plain_handler().accesses(),
+        (1, 0, 1, 0, 2),
+        "one more admission, no stale read"
+    );
+    let escape = engine.escape_handler();
+    assert_eq!(
+        escape.requests.len(),
+        3,
+        "Return, the re-derived read, Return"
+    );
+    assert_eq!(escape.requests[1].op, Op::VarRef(0));
+    assert_eq!(
+        escape.requests[1].why,
+        EscapeWhy::PlainRefused {
+            access: PlainVarAccess::Ref,
+            refusal: PlainRefusal::NotPlain,
+        }
+    );
+    assert_eq!(
+        escape.segments[1],
+        Vec::<Value>::new(),
+        "nothing was pushed before the escape"
+    );
+    assert_clear(&engine);
+}
+
+#[test]
+fn vm_a_stale_plain_key_that_is_still_plain_is_rederived_without_an_escape() {
+    // Re-derived as admitted: a fresh key for the moved era, the same slot,
+    // no escape.
+    let mut ctx = context();
+    let x = plain_sym("pvm-rederived");
+    let five = Value::fixnum(5);
+    let plain = HarnessPlain::new().admit(x).with_canonical(x, five);
+    let mut engine = value_harness(plain);
+    let ops = plain_program(vec![Op::VarRef(0)]);
+    let constants = [Value::from_sym_id(x)];
+    let outcome = engine.run(&mut ctx, program_with(&ops, &constants));
+    assert_eq!(done_value(&mut engine, outcome), five);
+    assert_eq!(engine.plain_handler().accesses(), (1, 0, 1, 0, 1));
+    assert_clear(&engine);
+    engine.plain_handler_mut().next_era();
+    let outcome = engine.run(&mut ctx, program_with(&ops, &constants));
+    assert_eq!(done_value(&mut engine, outcome), five);
+    assert_eq!(
+        engine.plain_handler().accesses(),
+        (2, 0, 2, 0, 2),
+        "each run reads the slot, then the canonical value; the key was re-derived once"
+    );
+    let escape = engine.escape_handler();
+    assert_eq!(
+        escape
+            .requests
+            .iter()
+            .map(|request| request.op.clone())
+            .collect::<Vec<_>>(),
+        vec![Op::Return, Op::Return],
+        "no escape for the re-derivation"
+    );
+    assert_clear(&engine);
+}
+
+#[test]
+fn vm_a_constant_that_is_no_symbol_is_nil_to_the_admission() {
+    // The serial `sym_id_at` (bytecode/vm.rs:10882-10893) resolves a constant
+    // that is no symbol, and an index past the pool, to `nil`; GNU's
+    // `XBARE_SYMBOL` on one is unchecked (bytecode.c:640). The stepper
+    // resolves the same way, so it invents no signal: `nil` reaches the
+    // admission, which refuses a constant symbol, and the serial side runs
+    // the opcode. A symbol-with-pos resolves to its bare symbol.
+    let mut ctx = context();
+    let x = plain_sym("pvm-positioned");
+    let xs = Value::from_sym_id(x);
+    let (five, seven) = (Value::fixnum(5), Value::fixnum(7));
+    // (name, op, the ops before it, constants, completion)
+    let cases: Vec<(&str, Op, Vec<Op>, Vec<Value>, EscapeCompletion)> = vec![
+        (
+            "a fixnum",
+            Op::VarRef(0),
+            Vec::new(),
+            vec![five],
+            completion(&Op::VarRef(0), vec![Value::NIL]),
+        ),
+        (
+            "an index past the pool",
+            Op::VarSet(3),
+            vec![Op::Constant(1)],
+            vec![xs, five],
+            completion(&Op::VarSet(3), Vec::new()),
+        ),
+    ];
+    for (name, op, before, constants, completion) in cases {
+        let ops = plain_program([before, vec![op.clone(), Op::Nil]].concat());
+        let plain = HarnessPlain::new()
+            .admit(x)
+            .refuse(NIL_SYM_ID, PlainRefusal::Constant);
+        let mut engine = harness_with_plain(
+            RecordingEscape::mirroring_with_script(vec![Some(completion), None]),
+            plain,
+        );
+        let outcome = engine.run(&mut ctx, program_with(&ops, &constants));
+        assert_eq!(done_value(&mut engine, outcome), Value::NIL, "{name}");
+        let escape = engine.escape_handler();
+        assert_eq!(escape.requests.len(), 2, "{name}");
+        assert_eq!(
+            escape.requests[0].why,
+            EscapeWhy::PlainRefused {
+                access: match op {
+                    Op::VarRef(_) => PlainVarAccess::Ref,
+                    Op::VarSet(_) => PlainVarAccess::Set,
+                    _ => PlainVarAccess::Bind,
+                },
+                refusal: PlainRefusal::Constant,
+            },
+            "{name}: nil is a constant symbol"
+        );
+        assert_eq!(
+            engine.plain_handler().accesses(),
+            (0, 0, 0, 0, 1),
+            "{name}: nil's admission, no access"
+        );
+        assert_clear(&engine);
+    }
+
+    // A symbol-with-pos: the bare symbol's slot.
+    let positioned = ctx
+        .tagged_heap
+        .alloc_symbol_with_pos(Value::symbol("pvm-positioned"), Value::fixnum(0));
+    assert!(positioned.is_symbol_with_pos(), "the fixture");
+    let plain = HarnessPlain::new().admit(x);
+    let mut engine = value_harness(plain);
+    let ops = plain_program(vec![Op::Constant(1), Op::VarBind(0), Op::VarRef(0)]);
+    let outcome = engine.run(&mut ctx, program_with(&ops, &[positioned, seven]));
+    assert_eq!(done_value(&mut engine, outcome), seven);
+    assert_eq!(
+        engine.plain_handler().accesses(),
+        (2, 1, 0, 0, 1),
+        "the bind's slot read for its undo target and its write, the ref's slot read; one admission (the ref's key is cached)"
+    );
+    assert_eq!(engine.escape_handler().requests.len(), 1, "only Return");
+    assert_finished_with_records(&engine, 1);
+}
+
+#[test]
+fn vm_unbind_walks_mixed_records_in_lifo_order() {
+    // GNU `Bunbind n` (bytecode.c:843-851) is `unbind_to (SPECPDL_INDEX ()
+    // - n)`: n entries of any kind leave in LIFO order, each undone as it
+    // leaves (eval.c:3946-3957). The serial frame marks a `specbind`, a
+    // `save-excursion` and an unwind-protect alike (bytecode/vm.rs:5722-5734,
+    // 6158-6162, 7176-7186), so the stepper counts the serial tokens the
+    // escapes pushed and the owner records in the one order. An owner record
+    // is undone on the owner; each serial record is ONE escape whose request
+    // names it.
+    let mut ctx = context();
+    let x = plain_sym("pvm-mixed");
+    let y = plain_sym("pvm-localized");
+    let (xs, ys) = (Value::from_sym_id(x), Value::from_sym_id(y));
+    let (one, two, ninety_nine) = (Value::fixnum(1), Value::fixnum(2), Value::fixnum(99));
+    // (name, ops, constants, port, script, the log, the lifos at the Unbind
+    // escape and at Return)
+    let cases: Vec<(
+        &str,
+        Vec<Op>,
+        Vec<Value>,
+        HarnessPlain,
+        Vec<Option<EscapeCompletion>>,
+        Vec<&str>,
+        Lifo,
+    )> = vec![
+        (
+            "let, save-excursion, let",
+            vec![
+                Op::Constant(1),
+                Op::VarBind(0),
+                Op::SaveExcursion,
+                Op::Constant(2),
+                Op::VarBind(0),
+                Op::Unbind(3),
+                Op::Nil,
+            ],
+            vec![xs, one, two],
+            HarnessPlain::new().admit(x),
+            vec![
+                Some(completion_pushing(&Op::SaveExcursion, token(9))),
+                Some(completion_popping(&Op::Unbind(3), &[token(9)])),
+                None,
+            ],
+            vec![
+                "slot <- 1",
+                "escape SaveExcursion",
+                "slot <- 2",
+                "slot <- 1",
+                "escape Unbind(3) [9]",
+                "slot <- none",
+                "escape Return",
+            ],
+            vec![None, Some(9)],
+        ),
+        (
+            "let, unwind-protect, let",
+            vec![
+                Op::Constant(1),
+                Op::VarBind(0),
+                Op::Constant(2),
+                Op::UnwindProtectPop,
+                Op::Constant(3),
+                Op::VarBind(0),
+                Op::Unbind(3),
+                Op::Nil,
+            ],
+            vec![xs, one, ninety_nine, two],
+            HarnessPlain::new().admit(x),
+            vec![
+                Some(completion_pushing(&Op::UnwindProtectPop, token(7))),
+                Some(completion_popping(&Op::Unbind(3), &[token(7)])),
+                None,
+            ],
+            vec![
+                "slot <- 1",
+                "escape UnwindProtectPop",
+                "slot <- 2",
+                "slot <- 1",
+                "escape Unbind(3) [7]",
+                "slot <- none",
+                "escape Return",
+            ],
+            vec![None, Some(7)],
+        ),
+        (
+            "let, a localized binding the admission refused, let",
+            vec![
+                Op::Constant(2),
+                Op::VarBind(0),
+                Op::Constant(3),
+                Op::VarBind(1),
+                Op::Unbind(2),
+                Op::Nil,
+            ],
+            vec![xs, ys, one, two],
+            HarnessPlain::new()
+                .admit(x)
+                .refuse(y, PlainRefusal::NotPlain),
+            vec![
+                Some(completion_pushing(&Op::VarBind(1), token(5))),
+                Some(completion_popping(&Op::Unbind(2), &[token(5)])),
+                None,
+            ],
+            vec![
+                "slot <- 1",
+                "escape VarBind(1)",
+                "escape Unbind(2) [5]",
+                "slot <- none",
+                "escape Return",
+            ],
+            vec![None, Some(5)],
+        ),
+    ];
+    for (name, ops, constants, plain, script, log, lifo) in cases {
+        let ops = plain_program(ops);
+        let unbind_pc = ops.len() - 3;
+        let log_shared = EffectLog::default();
+        let plain = plain.logging(log_shared.clone());
+        let mut engine = harness_with_plain(
+            RecordingEscape::logging_with_script(script, log_shared.clone()),
+            plain,
+        );
+        let outcome = engine.run(&mut ctx, program_with(&ops, &constants));
+        assert_eq!(done_value(&mut engine, outcome), Value::NIL, "{name}");
+        assert_eq!(log_shared.entries(), log, "{name}");
+        let escape = engine.escape_handler();
+        assert_eq!(
+            escape.requests.len(),
+            3,
+            "{name}: the record, the Unbind, Return"
+        );
+        assert_eq!(escape.requests[1].op, ops[unbind_pc], "{name}");
+        assert!(
+            matches!(
+                escape.requests[1].why,
+                EscapeWhy::SerialUnbind { ref records } if records.len() == 1
+            ),
+            "{name}"
+        );
+        assert_eq!(escape.requests[1].pc, Pc::new(unbind_pc), "{name}");
+        assert_eq!(
+            escape.lifos[1].0, lifo,
+            "{name}: the LIFO at the Unbind escape"
+        );
+        assert_eq!(
+            escape.lifos[2].0,
+            Vec::<Option<u64>>::new(),
+            "{name}: empty at Return"
+        );
+        assert_eq!(
+            engine.poll_handler().edges,
+            vec![PollEdge::SerialRequest; 3],
+            "{name}: each escape's request poll"
+        );
+        assert_clear(&engine);
+    }
+}
+
+#[test]
+fn vm_unbind_splits_into_minimal_serial_runs_in_order() {
+    // R1b: each maximal run of consecutive serial records is one escape,
+    // the runs in LIFO order, so an owner record between two serial records
+    // is undone on the owner between the two escapes.
+    let mut ctx = context();
+    let x = plain_sym("pvm-runs");
+    let (xs, one, two) = (Value::from_sym_id(x), Value::fixnum(1), Value::fixnum(2));
+    let ops = plain_program(vec![
+        Op::Constant(1),
+        Op::VarBind(0),
+        Op::SaveExcursion,
+        Op::Constant(2),
+        Op::VarBind(0),
+        Op::SaveExcursion,
+        Op::Unbind(4),
+        Op::Nil,
+    ]);
+    let log = EffectLog::default();
+    let plain = HarnessPlain::new().admit(x).logging(log.clone());
+    let mut engine = harness_with_plain(
+        RecordingEscape::logging_with_script(
+            vec![
+                Some(completion_pushing(&Op::SaveExcursion, token(1))),
+                Some(completion_pushing(&Op::SaveExcursion, token(2))),
+                Some(completion_popping(&Op::Unbind(4), &[token(2)])),
+                Some(completion_popping(&Op::Unbind(4), &[token(1)])),
+                None,
+            ],
+            log.clone(),
+        ),
+        plain,
+    );
+    let outcome = engine.run(&mut ctx, program_with(&ops, &[xs, one, two]));
+    assert_eq!(done_value(&mut engine, outcome), Value::NIL);
+    assert_eq!(
+        log.entries(),
+        vec![
+            "slot <- 1",
+            "escape SaveExcursion",
+            "slot <- 2",
+            "escape SaveExcursion",
+            "escape Unbind(4) [2]",
+            "slot <- 1",
+            "escape Unbind(4) [1]",
+            "slot <- none",
+            "escape Return",
+        ]
+    );
+    let escape = engine.escape_handler();
+    assert_eq!(escape.requests.len(), 5);
+    let unbind_pc = Pc::new(6);
+    assert_eq!(escape.requests[2].op, Op::Unbind(4));
+    assert_eq!(escape.requests[2].pc, unbind_pc);
+    assert_eq!(
+        escape.requests[2].why,
+        EscapeWhy::SerialUnbind {
+            records: vec![token(2)]
+        }
+    );
+    assert_eq!(
+        escape.requests[3].why,
+        EscapeWhy::SerialUnbind {
+            records: vec![token(1)]
+        }
+    );
+    assert_eq!(
+        escape.requests[3].pc, unbind_pc,
+        "the walk is still at the opcode"
+    );
+    assert_eq!(escape.lifos[2].0, vec![None, Some(1), None, Some(2)]);
+    assert_eq!(escape.lifos[3].0, vec![None, Some(1)]);
+    assert_eq!(
+        engine.poll_handler().edges,
+        vec![PollEdge::SerialRequest; 5]
+    );
+    assert_clear(&engine);
+}
+
+#[test]
+fn vm_unbind_walks_a_run_of_serial_records_as_one_escape_naming_the_tokens_innermost_first() {
+    // The request of a run names exactly its tokens, innermost first; a run
+    // longer than the count is cut to the count.
+    let mut ctx = context();
+    // Two serial records, unbind 2: one escape, both tokens.
+    let ops = plain_program(vec![
+        Op::SaveExcursion,
+        Op::SaveExcursion,
+        Op::Unbind(2),
+        Op::Nil,
+    ]);
+    let mut engine = harness_with(RecordingEscape::with_script(vec![
+        Some(completion_pushing(&Op::SaveExcursion, token(1))),
+        Some(completion_pushing(&Op::SaveExcursion, token(2))),
+        Some(completion_popping(&Op::Unbind(2), &[token(2), token(1)])),
+        None,
+    ]));
+    let outcome = engine.run(&mut ctx, program(&ops));
+    assert_eq!(done_value(&mut engine, outcome), Value::NIL);
+    let escape = engine.escape_handler();
+    assert_eq!(
+        escape.requests.len(),
+        4,
+        "the two records, the walk, Return"
+    );
+    assert_eq!(
+        escape.requests[2].why,
+        EscapeWhy::SerialUnbind {
+            records: vec![token(2), token(1)]
+        }
+    );
+    assert_eq!(escape.lifos[2].0, vec![Some(1), Some(2)]);
+    assert_clear(&engine);
+
+    // The same records, unbind 1: one escape, the innermost token, and the
+    // outer record stays for the frame's exit.
+    let ops = plain_program(vec![
+        Op::SaveExcursion,
+        Op::SaveExcursion,
+        Op::Unbind(1),
+        Op::Nil,
+    ]);
+    let mut engine = harness_with(RecordingEscape::with_script(vec![
+        Some(completion_pushing(&Op::SaveExcursion, token(1))),
+        Some(completion_pushing(&Op::SaveExcursion, token(2))),
+        Some(completion_popping(&Op::Unbind(1), &[token(2)])),
+        None,
+    ]));
+    let outcome = engine.run(&mut ctx, program(&ops));
+    assert_eq!(done_value(&mut engine, outcome), Value::NIL);
+    let escape = engine.escape_handler();
+    assert_eq!(
+        escape.requests.len(),
+        4,
+        "the two records, the walk, Return"
+    );
+    assert_eq!(
+        escape.requests[2].why,
+        EscapeWhy::SerialUnbind {
+            records: vec![token(2)]
+        }
+    );
+    assert_finished_with_records(&engine, 1);
+    assert_eq!(lifos(engine.arena()).0, vec![Some(1)]);
+}
+
+#[test]
+fn vm_unbind_zero_is_a_no_op_without_an_escape() {
+    // `Bunbind0` unwinds nothing (frame_bindings.rs:95-113, the serial
+    // `consume` of zero): no escape, no record leaves, the owner slot is
+    // not touched.
+    let mut ctx = context();
+    let x = plain_sym("pvm-unbind-zero");
+    let (xs, one) = (Value::from_sym_id(x), Value::fixnum(1));
+    let log = EffectLog::default();
+    let plain = HarnessPlain::new().admit(x).logging(log.clone());
+    let mut engine = harness_with_plain(
+        RecordingEscape::mirroring_logging_with_script(Vec::new(), log.clone()),
+        plain,
+    );
+    let ops = [
+        Op::Constant(1),
+        Op::VarBind(0),
+        Op::Unbind(0),
+        Op::VarRef(0),
+        Op::Return,
+    ];
+    let outcome = engine.run(&mut ctx, program_with(&ops, &[xs, one]));
+    assert_eq!(done_value(&mut engine, outcome), one, "still bound");
+    assert_eq!(log.entries(), vec!["slot <- 1", "escape Return"]);
+    assert_eq!(engine.escape_handler().requests.len(), 1, "only Return");
+    assert_finished_with_records(&engine, 1);
+
+    // Above a serial record too.
+    let ops = plain_program(vec![Op::SaveExcursion, Op::Unbind(0), Op::Nil]);
+    let mut engine = harness_with(RecordingEscape::with_script(vec![
+        Some(completion_pushing(&Op::SaveExcursion, token(1))),
+        None,
+    ]));
+    let outcome = engine.run(&mut ctx, program(&ops));
+    assert_eq!(done_value(&mut engine, outcome), Value::NIL);
+    assert_eq!(
+        engine
+            .escape_handler()
+            .requests
+            .iter()
+            .map(|request| request.op.clone())
+            .collect::<Vec<_>>(),
+        vec![Op::SaveExcursion, Op::Return]
+    );
+    assert_finished_with_records(&engine, 1);
+}
+
+#[test]
+fn vm_unbind_beyond_the_frame_records_signals_invalid_byte_code_and_unbinds_nothing() {
+    // A count the frame does not own is the serial `consume`'s `TooMany`
+    // (frame_bindings.rs:95-113): `Invalid byte-code`, nothing unbound, no
+    // escape, before any poll.
+    let mut ctx = context();
+    let x = plain_sym("pvm-unbind-too-many");
+    let (xs, one) = (Value::from_sym_id(x), Value::fixnum(1));
+    let plain = HarnessPlain::new().admit(x);
+    let mut engine = value_harness(plain);
+    let ops = [Op::Constant(1), Op::VarBind(0), Op::Unbind(2), Op::Return];
+    let outcome = engine.run(&mut ctx, program_with(&ops, &[xs, one]));
+    let VmOutcome::Signaled(flow) = outcome else {
+        panic!("got {outcome:?}")
+    };
+    assert_eq!(
+        signal_key(&flow),
+        (
+            "error".to_string(),
+            vec![Value::string("Invalid byte-code")]
+        )
+    );
+    assert!(engine.escape_handler().requests.is_empty());
+    assert!(engine.poll_handler().edges.is_empty());
+    assert_eq!(
+        engine.plain_handler().slot_writes,
+        1,
+        "the bind's write only"
+    );
+    assert!(engine.is_idle());
+    assert_clear(&engine);
+
+    // An empty frame owns no record either.
+    let mut engine = harness();
+    let ops = [Op::Unbind(1), Op::Return];
+    let outcome = engine.run(&mut ctx, program(&ops));
+    let VmOutcome::Signaled(flow) = outcome else {
+        panic!("got {outcome:?}")
+    };
+    assert_eq!(signal_key(&flow).0, "error");
+    assert_clear(&engine);
+}
+
+#[test]
+fn vm_an_unbind_escape_that_leaves_a_named_serial_record_faults_as_a_record_contract() {
+    // The completion of an unbind escape must have removed the run the
+    // request named. One that leaves a named record behind is a defect on
+    // one side of the escape: the record-contract fault, the scene kept.
+    let ops = plain_program(vec![
+        Op::SaveExcursion,
+        Op::SaveExcursion,
+        Op::Unbind(2),
+        Op::Nil,
+    ]);
+    let mut engine = harness_with(RecordingEscape::with_script(vec![
+        Some(completion_pushing(&Op::SaveExcursion, token(1))),
+        Some(completion_pushing(&Op::SaveExcursion, token(2))),
+        Some(completion_popping(&Op::Unbind(2), &[token(2)])),
+        None,
+    ]));
+    let outcome = engine.run(&mut context(), program(&ops));
+    assert!(matches!(
+        fault_of(outcome),
+        EngineFault::EscapeRecordContract(RecordStack::Bindings)
+    ));
+    assert!(!engine.is_idle());
+    assert_eq!(lifos(engine.arena()).0, vec![Some(1)]);
+    assert_eq!(engine.frame_id().is_some(), true, "the frame stays");
+    assert!(matches!(
+        engine.run(&mut context(), program(&[Op::Nil, Op::Return])),
+        VmOutcome::Fault(EngineFault::Poisoned)
+    ));
+}
+
+#[test]
+fn vm_an_unbind_whose_entry_is_not_the_slab_top_faults_as_a_record_contract_and_takes_nothing() {
+    // C2 (peer #11640): the executor's entry and the slab record are two
+    // views of one record, paired LIFO. An entry that names a record the
+    // slab does not hold on top is a defect on one side of the pairing: the
+    // record-contract fault, nothing taken from either store, the slot as it
+    // was, the scene kept. Two shapes: the record is gone (an `unbind`
+    // exchange took it under the stepper), and another record sits above it.
+    let mut ctx = context();
+    let x = plain_sym("pvm-mismatch");
+    let (xs, one, two) = (Value::from_sym_id(x), Value::fixnum(1), Value::fixnum(2));
+    let bind = [Op::Constant(1), Op::VarBind(0), Op::Nil, Op::Return];
+    let unbind = [Op::Unbind(1), Op::Nil, Op::Return];
+    for (name, under) in [
+        ("the record is gone", false),
+        ("a record sits above it", true),
+    ] {
+        let plain = HarnessPlain::new().admit(x);
+        let mut engine = value_harness(plain);
+        // The first run binds and leaves its record on both stores.
+        let outcome = engine.run(&mut ctx, program_with(&bind, &[xs, one]));
+        assert_eq!(done_value(&mut engine, outcome), Value::NIL, "{name}");
+        let entries: Vec<OwnerRecord> = engine
+            .arena()
+            .bindings()
+            .above(OwnerRecordMark::EMPTY)
+            .collect();
+        let [OwnerRecord::Plain(entry)] = entries[..] else {
+            panic!("{name}: one owner entry, got {entries:?}")
+        };
+        assert_eq!(
+            engine.plain_handler().top_record(),
+            Some(entry.record),
+            "{name}"
+        );
+        if under {
+            engine.plain_handler_mut().push_foreign_record(x);
+        } else {
+            engine
+                .plain_handler_mut()
+                .take_record_for_test(entry.record);
+        }
+        let records_before = engine.plain_handler().live_records();
+        let accesses_before = engine.plain_handler().accesses();
+        let escapes_before = engine.escape_handler().requests.len();
+        let polls_before = engine.poll_handler().edges.len();
+
+        let outcome = engine.run(&mut ctx, program_with(&unbind, &[xs, two]));
+        assert!(
+            matches!(
+                outcome,
+                VmOutcome::Fault(EngineFault::EscapeRecordContract(RecordStack::Bindings))
+            ),
+            "{name}: got {outcome:?}"
+        );
+        assert!(!engine.is_idle(), "{name}: the scene is kept");
+        assert_eq!(engine.frame_id().is_some(), true, "{name}: the frame stays");
+        assert_eq!(
+            lifos(engine.arena()).0,
+            vec![None],
+            "{name}: the executor's entry stays"
+        );
+        assert_eq!(
+            format!("{:?}", engine.plain_handler().live_records()),
+            format!("{records_before:?}"),
+            "{name}: nothing was taken from the slab"
+        );
+        assert_eq!(
+            engine.plain_handler().accesses(),
+            accesses_before,
+            "{name}: no slot or canonical access"
+        );
+        assert_eq!(
+            engine.plain_handler().observed(x),
+            "1",
+            "{name}: the slot still holds the bind"
+        );
+        assert_eq!(
+            engine.escape_handler().requests.len(),
+            escapes_before,
+            "{name}: no escape"
+        );
+        assert_eq!(
+            engine.poll_handler().edges.len(),
+            polls_before,
+            "{name}: no poll"
+        );
+        assert!(matches!(
+            engine.run(&mut ctx, program(&[Op::Nil, Op::Return])),
+            VmOutcome::Fault(EngineFault::Poisoned)
+        ));
+    }
+}
+
+/// The serial VM's answer to `ops` over `constants`, through the
+/// hand-assembled function of `thread_projection_readers_test.rs`.
+fn serial_bytecode(ctx: &mut Context, ops: &[Op], constants: &[Value]) -> EvalResult {
+    let mut f = ByteCodeFunction::new(LambdaParams {
+        required: Vec::new(),
+        optional: Vec::new(),
+        rest: None,
+    });
+    f.lexical = true;
+    f.ops = ops.to_vec();
+    f.constants = constants.to_vec().into();
+    f.max_stack = StackDepth::for_test(8);
+    Vm::from_context(ctx).execute(&f, vec![])
+}
+
+#[test]
+fn vm_unbind_ties_the_serial_vm_on_the_same_programs() {
+    // GNU `Bunbind n` counts every specpdl entry the frame pushed and
+    // unwinds to the n-th (bytecode.c:843-851, eval.c:3946-3957): the serial
+    // frame's `bind_stack` marks a `specbind`, a `save-excursion` and an
+    // unwind-protect alike (bytecode/vm.rs:5722-5734, 6158-6162, 7176-7186;
+    // frame_bindings.rs:95-113). The same programs run through the serial
+    // VM and through the stepper, whose serial side is scripted to push and
+    // pop the same records: both answer alike. (Neomacs against Neomacs: a
+    // harness tie, not an oracle run.)
+    let mut ctx = context();
+    ctx.eval_str("(defvar pvm-tie-x 10) (defvar pvm-tie-y 20)")
+        .expect("the fixture defines");
+    let x = plain_sym("pvm-tie-x");
+    let never = plain_sym("pvm-tie-never");
+    let (xs, never_s) = (Value::from_sym_id(x), Value::from_sym_id(never));
+    let (one, two) = (Value::fixnum(1), Value::fixnum(2));
+    let ten = Value::fixnum(10);
+    // (name, ops, constants, port, script, the stepper's x after, the
+    // records the stepper leaves)
+    let cases: Vec<(
+        &str,
+        Vec<Op>,
+        Vec<Value>,
+        HarnessPlain,
+        Vec<Option<EscapeCompletion>>,
+        &str,
+        usize,
+    )> = vec![
+        (
+            "let, save-excursion, let, unbind 3",
+            vec![
+                Op::Constant(1),
+                Op::VarBind(0),
+                Op::SaveExcursion,
+                Op::Constant(2),
+                Op::VarBind(0),
+                Op::Unbind(3),
+                Op::Nil,
+                Op::Return,
+            ],
+            vec![xs, one, two],
+            HarnessPlain::new().admit(x).with_canonical(x, ten),
+            vec![
+                Some(completion_pushing(&Op::SaveExcursion, token(9))),
+                Some(completion_popping(&Op::Unbind(3), &[token(9)])),
+                None,
+            ],
+            "10",
+            0,
+        ),
+        (
+            "let, unwind-protect, let, unbind 3",
+            vec![
+                Op::Constant(1),
+                Op::VarBind(0),
+                Op::Constant(2),
+                Op::UnwindProtectPop,
+                Op::Constant(3),
+                Op::VarBind(0),
+                Op::Unbind(3),
+                Op::Nil,
+                Op::Return,
+            ],
+            // The cleanup form is evaluated by the serial unbind (specpdl.rs
+            // pops UnwindProtect with LispCleanup), so it is a form: nil.
+            vec![xs, one, Value::NIL, two],
+            HarnessPlain::new().admit(x).with_canonical(x, ten),
+            vec![
+                Some(completion_pushing(&Op::UnwindProtectPop, token(7))),
+                Some(completion_popping(&Op::Unbind(3), &[token(7)])),
+                None,
+            ],
+            "10",
+            0,
+        ),
+        (
+            "two lets, unbind 2, read",
+            vec![
+                Op::Constant(1),
+                Op::VarBind(0),
+                Op::Constant(2),
+                Op::VarBind(0),
+                Op::Unbind(2),
+                Op::VarRef(0),
+                Op::Return,
+            ],
+            vec![xs, one, two],
+            HarnessPlain::new().admit(x).with_canonical(x, ten),
+            vec![None],
+            "10",
+            0,
+        ),
+        (
+            "unbind 0 leaves the binding",
+            vec![
+                Op::Constant(1),
+                Op::VarBind(0),
+                Op::Unbind(0),
+                Op::VarRef(0),
+                Op::Return,
+            ],
+            vec![xs, one],
+            HarnessPlain::new().admit(x).with_canonical(x, ten),
+            vec![None],
+            "1",
+            1,
+        ),
+        (
+            "unbind a void binding, read",
+            vec![
+                Op::Constant(1),
+                Op::VarBind(0),
+                Op::Unbind(1),
+                Op::VarRef(0),
+                Op::Return,
+            ],
+            vec![never_s, one],
+            HarnessPlain::new().admit(never),
+            vec![None],
+            "unbound",
+            0,
+        ),
+        (
+            "unbind 2 over one let",
+            vec![Op::Constant(1), Op::VarBind(0), Op::Unbind(2), Op::Return],
+            vec![xs, one],
+            HarnessPlain::new().admit(x).with_canonical(x, ten),
+            vec![],
+            "",
+            0,
+        ),
+        (
+            "unbind 1 over nothing",
+            vec![Op::Unbind(1), Op::Return],
+            vec![xs],
+            HarnessPlain::new().admit(x).with_canonical(x, ten),
+            vec![],
+            "",
+            0,
+        ),
+    ];
+    for (name, ops, constants, plain, script, after, left) in cases {
+        // The serial VM: the frame leaves no record behind, and x is back.
+        let base = ctx.specpdl.len();
+        let want = serial_bytecode(&mut ctx, &ops, &constants);
+        assert_eq!(
+            ctx.specpdl.len(),
+            base,
+            "{name}: the serial frame's records left"
+        );
+        let x_after = ctx
+            .eval_str("pvm-tie-x")
+            .expect("x is bound after the serial run");
+        assert_eq!(
+            plain_value(&x_after),
+            "10",
+            "{name}: the serial VM restored x"
+        );
+        // The stepper.
+        let mut engine = harness_with_plain(RecordingEscape::mirroring_with_script(script), plain);
+        let outcome = engine.run(&mut ctx, program_with(&ops, &constants));
+        let got = outcome_result(&mut engine, outcome);
+        // A signal is compared by its key; a value by its printed form.
+        match (&got, &want) {
+            (Err(got), Err(want)) => {
+                assert_eq!(signal_key(got), signal_key(want), "{name}: the same signal")
+            }
+            _ => assert_eq!(printed(&got), printed(&want), "{name}: the same answer"),
+        }
+        if after.is_empty() {
+            // A signal: `unwind_to_idle` drops the frame and its records
+            // without undoing them. The frame-exit disposition that restores
+            // the owner slot is V4's.
+            assert!(engine.is_idle(), "{name}");
+            assert_clear(&engine);
+        } else {
+            assert_eq!(
+                engine.plain_handler().observed(x),
+                after,
+                "{name}: the slot after the run"
+            );
+            assert_finished_with_records(&engine, left);
+        }
+    }
 }

@@ -5,9 +5,11 @@
 //! dispatch table (`opcode_slot`). Scalar opcodes step the frame's operand
 //! segment owner-locally; the eight sealed cons opcodes call [`VmSealed`];
 //! the fifteen arithmetic opcodes call [`ArithOps`] (R6) and escape only
-//! when an operand is a marker; every other World arm, `Return` included,
-//! is exactly ONE escape through [`VmEscape`], after the [`VmPoll`] edges
-//! r1 §6 names.
+//! when an operand is a marker; the four Plain variable opcodes run on the
+//! owner slab through [`VmPlain`] (V2) and escape only for a symbol the
+//! admission refuses or for the serial side's own records under `Unbind`;
+//! every other World arm, `Return` included, is exactly ONE escape through
+//! [`VmEscape`], after the [`VmPoll`] edges r1 §6 names.
 //!
 //! An escape completion is a typed contract, checked before anything is
 //! applied: the operand counts against [`static_stack_effect`] (R3), and the
@@ -26,18 +28,23 @@
 #![allow(dead_code)]
 
 use super::dispatch::opcode_slot;
+use super::effective::{
+    EffectivePlainKey, EraId, PlainAccess, PlainRefusal, ShapeGeneration, effective_plain_bind,
+    effective_plain_read, effective_plain_unbind, effective_plain_write,
+};
 use super::engine::{CoreOutcome, EngineFault, RecordStack};
 use super::frames::{
-    FrameArena, FrameId, HandlerMark, OperandCursor, OwnerRecordMark, Pc, PollBudget, RootGroup,
-    RootHandle, RootRevokeError, SerialHandlerToken, SerialRecordToken, VmFrame,
+    FrameArena, FrameId, HandlerMark, OperandCursor, OwnerRecord, OwnerRecordMark, Pc, PollBudget,
+    RootGroup, RootHandle, RootRevokeError, SerialHandlerToken, SerialRecordToken, VmFrame,
 };
 use crate::emacs_core::bytecode::{ArithGenericKind, Op};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::eval::world::poll::PollOutcome;
 use crate::emacs_core::subr::effect_schema::{
-    ArithOperands, ParallelArm, SealedAuthority, WorldSplit,
+    ArithOperands, ParallelArm, PlainVarAccess, SealedAuthority, WorldSplit,
 };
 use neovm_value::error::{Flow, signal};
+use neovm_value::intern::{NIL_SYM_ID, SymId};
 use neovm_value::tagged::gc::RendezvousError;
 use neovm_value::value::Value;
 use std::num::NonZeroU32;
@@ -229,11 +236,36 @@ pub(crate) trait ArithOps {
     fn arith(&mut self, kind: ArithGenericKind, operands: &[Value]) -> Result<Value, ArithRefusal>;
 }
 
+/// The owner-local Plain variable port (V2; E4-P1's composed [`PlainAccess`]
+/// for the VM): the owner slot view and the canonical Plain storage, plus
+/// the (era, shape) generation a cached key is checked against, read at
+/// use. A structural change the serial side made during an escape moves
+/// it, and the next Plain opcode re-derives its key through `admission`
+/// (the cold compare after every serial escape, E4 §4.2). E4-P2 supplies
+/// the production implementation from the owner slab lease and C3; the
+/// classification runs under the real symbol-reader authority there.
+pub(crate) trait VmPlain: PlainAccess {
+    fn generation(&self) -> (EraId, ShapeGeneration);
+}
+
 /// Why an opcode escaped.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum EscapeWhy {
     World(WorldSplit),
     UnimplementedSealed(SealedAuthority),
+    /// A Plain variable opcode whose symbol the admission refused, on the
+    /// first use or after a stale key was re-derived (V2): the access stays
+    /// on the serial path, which sees the access kind and the refusal.
+    PlainRefused {
+        access: PlainVarAccess,
+        refusal: PlainRefusal,
+    },
+    /// `Unbind n` reached a run of consecutive serial records (R1b): the
+    /// request names exactly those tokens, innermost first, and the
+    /// completion's `popped` is that run.
+    SerialUnbind {
+        records: Vec<SerialRecordToken>,
+    },
 }
 
 /// One escape request. The handler reads the operands through the arena
@@ -343,6 +375,16 @@ pub(crate) enum VmOutcome {
         pending: RootHandle,
     },
     Signaled(Flow),
+    /// A `VarRef` whose effective value is void: an owner slot that is a
+    /// local void binding, or no owner binding and an unbound canonical
+    /// value. GNU's bare-symbol read reaches `Fsymbol_value`, which signals
+    /// `void-variable` with the symbol as its only datum (`eval.c:2584-2592`,
+    /// `data.c:1645-1657`; the serial `fast_path_var_ref`,
+    /// bytecode/vm.rs:7320-7327). The typed outcome of `StepOutcome::
+    /// VoidVariable`: the caller raises the signal.
+    VoidVariable {
+        symbol: Value,
+    },
     MissingCore {
         name: &'static str,
     },
@@ -355,16 +397,25 @@ enum Step {
 }
 
 /// The harness VM stepper. `E` is the escape handler, `S` the sealed-ops
-/// port, `A` the arithmetic port and `P` the poll capability; tests supply
-/// the doubles.
-pub(crate) struct VmExec<E, S, A, P> {
+/// port, `A` the arithmetic port, `V` the Plain variable port and `P` the
+/// poll capability; tests supply the doubles.
+pub(crate) struct VmExec<'era, E, S, A, V, P> {
     arena: FrameArena,
     escape: E,
     sealed: S,
     arith: A,
+    plain: V,
     poll: P,
     frame: Option<FrameId>,
     state: RunState,
+    /// The Plain keys this stepper admitted, one per symbol (V2; N1 picks
+    /// the production structure). A key survives runs; its validity is
+    /// checked at use against the port's generation.
+    keys: Vec<(SymId, EffectivePlainKey<'era>)>,
+    /// The borrow the cached keys are valid in. Production passes the era
+    /// the lease lends the stepper (E6-P), so no key outlives it; the
+    /// harness passes `&()`.
+    era: &'era (),
 }
 
 fn invalid() -> Step {
@@ -393,22 +444,27 @@ fn sealed_core_name(op: &Op) -> Option<&'static str> {
     }
 }
 
-impl<E, S, A, P> VmExec<E, S, A, P>
+impl<'era, E, S, A, V, P> VmExec<'era, E, S, A, V, P>
 where
     E: VmEscape,
     S: VmSealed,
     A: ArithOps,
+    V: VmPlain,
     P: VmPoll,
 {
-    pub(crate) fn new(escape: E, sealed: S, arith: A, poll: P) -> Self {
+    /// `era` is the borrow the admitted keys live in (see the field).
+    pub(crate) fn new(era: &'era (), escape: E, sealed: S, arith: A, plain: V, poll: P) -> Self {
         Self {
             arena: FrameArena::new(FRAME_DEPTH_LIMIT),
             escape,
             sealed,
             arith,
+            plain,
             poll,
             frame: None,
             state: RunState::Idle,
+            keys: Vec::new(),
+            era,
         }
     }
 
@@ -418,6 +474,14 @@ where
 
     pub(crate) fn arith_handler(&self) -> &A {
         &self.arith
+    }
+
+    pub(crate) fn plain_handler(&self) -> &V {
+        &self.plain
+    }
+
+    pub(crate) fn plain_handler_mut(&mut self) -> &mut V {
+        &mut self.plain
     }
 
     pub(crate) fn poll_handler(&self) -> &P {
@@ -512,7 +576,10 @@ where
                 | EngineFault::EscapeRecordContract(_)
                 | EngineFault::DispatchContract(_),
             ) => self.state = RunState::Poisoned,
-            VmOutcome::Signaled(_) | VmOutcome::MissingCore { .. } | VmOutcome::Fault(_) => {
+            VmOutcome::Signaled(_)
+            | VmOutcome::VoidVariable { .. }
+            | VmOutcome::MissingCore { .. }
+            | VmOutcome::Fault(_) => {
                 if let Err(fault) = self.unwind_to_idle() {
                     return VmOutcome::Fault(fault);
                 }
@@ -567,6 +634,9 @@ where
             }
             ParallelArm::World(WorldSplit::Arith(_)) => {
                 self.step_arith(op, frame, operands, branch_pc, program)
+            }
+            ParallelArm::World(WorldSplit::PlainVar(access)) => {
+                self.step_plain(access, op, frame, operands, branch_pc, program)
             }
             ParallelArm::World(split) => self.escape(
                 op,
@@ -865,6 +935,286 @@ where
                 program,
             ),
         }
+    }
+
+    /// V2: the four Plain variable opcodes on the owner slab (E4 §2.4, the
+    /// composed rule through [`VmPlain`]). A key the admission mints runs
+    /// owner-locally with no poll, no request and no escape (GNU's
+    /// `Bvarref`/`Bvarset`/`Bvarbind` on an untrapped PLAINVAL are a value
+    /// cell read, a value cell store and a `specbind`, bytecode.c:638-647,
+    /// :710-719, :743-746); a symbol the admission refuses takes the ONE
+    /// escape with the refusal and the serial side performs the access;
+    /// `Unbind n` walks the frame's own records (R1b).
+    fn step_plain(
+        &mut self,
+        access: PlainVarAccess,
+        op: Op,
+        frame: FrameId,
+        operands: OperandCursor,
+        branch_pc: usize,
+        program: VmProgram<'_>,
+    ) -> Step {
+        match op {
+            Op::VarRef(_) => self.step_var_ref(access, op, frame, operands, branch_pc, program),
+            Op::VarSet(_) | Op::VarBind(_) => {
+                self.step_var_write(access, op, frame, operands, branch_pc, program)
+            }
+            Op::Unbind(_) => self.step_unbind(op, frame, operands, branch_pc, program),
+            _ => Step::Stop(VmOutcome::Fault(EngineFault::DispatchContract(op))),
+        }
+    }
+
+    /// The symbol a Plain variable opcode names, resolved as the serial
+    /// `sym_id_at` (bytecode/vm.rs:10882-10893): the constant as a bare
+    /// symbol or the symbol inside a symbol-with-pos, else `nil`. The
+    /// stepper invents no signal for a constant that is no symbol (GNU's
+    /// `XBARE_SYMBOL` on one is unchecked, bytecode.c:640): `nil` is a
+    /// constant symbol, so the admission refuses it and the serial side
+    /// runs the opcode.
+    fn plain_symbol(program: VmProgram<'_>, op: &Op) -> SymId {
+        let index = match op {
+            Op::VarRef(index) | Op::VarSet(index) | Op::VarBind(index) => usize::from(*index),
+            _ => return NIL_SYM_ID,
+        };
+        let Some(constant) = program.constants.get(index) else {
+            return NIL_SYM_ID;
+        };
+        let bare = constant.as_symbol_with_pos_sym().unwrap_or(*constant);
+        bare.as_bare_symbol_id().unwrap_or(NIL_SYM_ID)
+    }
+
+    /// The key for SYM: a cached key that is still valid for the generation
+    /// read now is used as is; otherwise the admission re-derives it and
+    /// the cache takes the result. A refusal drops the cached entry and is
+    /// the caller's ONE escape: nothing is read or written through a stale
+    /// key. `admission` is the classification E4-P2 runs under the real
+    /// symbol-reader authority.
+    fn plain_key(&mut self, sym: SymId) -> Result<EffectivePlainKey<'era>, PlainRefusal> {
+        let (era, shape) = self.plain.generation();
+        if let Some((_, key)) = self.keys.iter().find(|(cached, _)| *cached == sym)
+            && key.is_valid_for(era, shape)
+        {
+            return Ok(*key);
+        }
+        let admission = self.plain.admission(sym);
+        match EffectivePlainKey::from_admission(&admission, era, shape) {
+            Ok(key) => {
+                match self.keys.iter_mut().find(|(cached, _)| *cached == sym) {
+                    Some(entry) => entry.1 = key,
+                    None => self.keys.push((sym, key)),
+                }
+                Ok(key)
+            }
+            Err(refusal) => {
+                self.keys.retain(|(cached, _)| *cached != sym);
+                Err(refusal)
+            }
+        }
+    }
+
+    /// `Bvarref` (bytecode.c:638-647): a PLAINVAL with a value is pushed;
+    /// anything else reaches `Fsymbol_value`, which signals
+    /// `void-variable` with the symbol (data.c:1645-1657). Serial arm:
+    /// bytecode/vm.rs:5665-5675.
+    fn step_var_ref(
+        &mut self,
+        access: PlainVarAccess,
+        op: Op,
+        frame: FrameId,
+        operands: OperandCursor,
+        branch_pc: usize,
+        program: VmProgram<'_>,
+    ) -> Step {
+        let sym = Self::plain_symbol(program, &op);
+        let key = match self.plain_key(sym) {
+            Ok(key) => key,
+            Err(refusal) => {
+                return self.escape(
+                    op,
+                    EscapeWhy::PlainRefused { access, refusal },
+                    frame,
+                    operands,
+                    branch_pc,
+                    program,
+                );
+            }
+        };
+        let len = operands.len();
+        let read = effective_plain_read(&self.plain, &key);
+        let Some(value) = read.value().filter(|value| !value.is_unbound()) else {
+            return Self::void_variable(sym);
+        };
+        Self::stop(self.store(frame, branch_pc, len, &[value]))
+    }
+
+    fn void_variable(sym: SymId) -> Step {
+        Step::Stop(VmOutcome::VoidVariable {
+            symbol: Value::from_sym_id(sym),
+        })
+    }
+
+    /// `Bvarset` (bytecode.c:710-719): a PLAINVAL takes `SET_SYMBOL_VAL`,
+    /// anything else `set_internal`; `Bvarbind` (bytecode.c:743-746) is
+    /// `specbind (vectorp[arg], POP)`, which for a PLAINVAL saves the old
+    /// value and stores the new one (eval.c:3666-3672). Both consume their
+    /// value first. Serial arms: bytecode/vm.rs:5676-5733. A missing value
+    /// is malformed code: the stepper's `Invalid byte-code`, before any key
+    /// or slot access.
+    ///
+    /// A bind pairs two stores (C2): the slab record is pushed and holds the
+    /// binding, and the frame's LIFO then takes the `SlotRecord` naming
+    /// that record's id. The serial arm's specpdl entry and frame mark
+    /// (bytecode/vm.rs:5722-5734) are the same two facts.
+    fn step_var_write(
+        &mut self,
+        access: PlainVarAccess,
+        op: Op,
+        frame: FrameId,
+        operands: OperandCursor,
+        branch_pc: usize,
+        program: VmProgram<'_>,
+    ) -> Step {
+        let len = operands.len();
+        let Some(value) = self.peek(operands, 0) else {
+            return invalid();
+        };
+        let sym = Self::plain_symbol(program, &op);
+        let key = match self.plain_key(sym) {
+            Ok(key) => key,
+            Err(refusal) => {
+                return self.escape(
+                    op,
+                    EscapeWhy::PlainRefused { access, refusal },
+                    frame,
+                    operands,
+                    branch_pc,
+                    program,
+                );
+            }
+        };
+        if matches!(op, Op::VarBind(_)) {
+            let record = effective_plain_bind(&mut self.plain, &key, value);
+            self.arena.bindings_mut().push(record);
+        } else {
+            effective_plain_write(&mut self.plain, &key, value);
+        }
+        Self::stop(self.store(frame, branch_pc, len - 1, &[]))
+    }
+
+    fn record_contract_fault() -> Step {
+        Step::Stop(VmOutcome::Fault(EngineFault::EscapeRecordContract(
+            RecordStack::Bindings,
+        )))
+    }
+
+    /// `Bunbind n` (bytecode.c:843-852) is `unbind_to (SPECPDL_INDEX () - n)`:
+    /// n records of any kind leave in LIFO order, each undone as it leaves
+    /// (eval.c:3946-3957, a loop to the depth target). The serial arm
+    /// consumes n of the frame's own marks and unwinds to the depth the
+    /// n-th saved (bytecode/vm.rs:5734-5742, frame_bindings.rs:95-113): zero
+    /// is a no-op, more than the frame holds is `Invalid byte-code` and
+    /// unwinds nothing. R1b: an owner binding record is undone on the owner
+    /// slab with no escape; each maximal run of consecutive serial records
+    /// is ONE escape whose request names exactly those tokens, innermost
+    /// first, and whose completion must have removed them: the escape's R1
+    /// mirror checks the completion's popped run against the LIFO, and the
+    /// walk then checks that none of the named tokens is left above the
+    /// frame's base. A record the completion pushes lands above the walk
+    /// and is walked next, as GNU's loop.
+    fn step_unbind(
+        &mut self,
+        op: Op,
+        frame: FrameId,
+        operands: OperandCursor,
+        branch_pc: usize,
+        program: VmProgram<'_>,
+    ) -> Step {
+        let Op::Unbind(count) = op else {
+            return Step::Stop(VmOutcome::Fault(EngineFault::DispatchContract(op)));
+        };
+        let Some(bind_base) = self.arena.vm(frame).map(|vm| vm.bind_base) else {
+            return Step::Stop(VmOutcome::Fault(EngineFault::StaleFrame));
+        };
+        let count = usize::from(count);
+        if count > self.arena.bindings().above(bind_base).count() {
+            return invalid();
+        }
+        let mut remaining = count;
+        while remaining > 0 {
+            // Read the top again after every escape: the serial side may
+            // have changed the run.
+            let Some(top) = self.arena.bindings().above(bind_base).last() else {
+                return Self::record_contract_fault();
+            };
+            match top {
+                OwnerRecord::Plain(record) => {
+                    // C2: the slab record this entry names is taken from the
+                    // top of the slab's LIFO and undone; only then does the
+                    // entry leave. The entry's id is not the slab's top: the
+                    // record-contract fault, nothing taken, the scene kept.
+                    if effective_plain_unbind(&mut self.plain, record).is_err() {
+                        return Self::record_contract_fault();
+                    }
+                    // Nothing touched the LIFO between the peek and this pop.
+                    self.arena.bindings_mut().pop();
+                    remaining -= 1;
+                }
+                OwnerRecord::Serial(innermost) => {
+                    // The maximal run from the top, at most `remaining` long.
+                    let mut records = vec![innermost];
+                    for record in self
+                        .arena
+                        .bindings()
+                        .above(bind_base)
+                        .rev()
+                        .skip(1)
+                        .take(remaining - 1)
+                    {
+                        match record {
+                            OwnerRecord::Serial(next) => records.push(next),
+                            OwnerRecord::Plain(_) => break,
+                        }
+                    }
+                    let run = records.len();
+                    let named = records.clone();
+                    if let Step::Stop(outcome) = self.escape(
+                        op.clone(),
+                        EscapeWhy::SerialUnbind { records },
+                        frame,
+                        operands,
+                        branch_pc,
+                        program,
+                    ) {
+                        return Step::Stop(outcome);
+                    }
+                    // The escape's store advanced the pc; the walk is still
+                    // at this opcode.
+                    if let Err(fault) = self.set_pc(frame, branch_pc) {
+                        return Step::Stop(VmOutcome::Fault(fault));
+                    }
+                    // The walk's own check: none of the tokens the request
+                    // named is above the frame's base any more. A serial
+                    // record the count cut the run short of stays, on top,
+                    // and is the next run; a record the completion pushed
+                    // is walked next too.
+                    let still_named = self
+                        .arena
+                        .bindings()
+                        .above(bind_base)
+                        .any(|record| matches!(record, OwnerRecord::Serial(seen) if named.contains(&seen)));
+                    if still_named {
+                        tracing::error!(
+                            op = ?op,
+                            run,
+                            "an unbind escape left a serial record it was asked to remove"
+                        );
+                        return Self::record_contract_fault();
+                    }
+                    remaining -= run;
+                }
+            }
+        }
+        Self::stop(self.next_pc(frame, branch_pc))
     }
 
     /// The ONE escape stub (r1 §4.2), in order: the call poll, the
