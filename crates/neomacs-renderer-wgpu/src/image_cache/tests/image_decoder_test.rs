@@ -280,7 +280,7 @@ fn clear_through_retires_only_jobs_admitted_before_the_cutoff() {
     submit(&client, after, png(), ImageSizeLimit::UNLIMITED);
     assert!(client.accepts(after));
 
-    client.clear_through(cutoff);
+    client.clear_through(cutoff, &[]);
     assert!(
         !client.accepts(before),
         "a decode admitted before the clear must be retired"
@@ -290,6 +290,36 @@ fn clear_through_retires_only_jobs_admitted_before_the_cutoff() {
         "a decode admitted after the clear ticket must survive"
     );
 
-    client.clear_through(u64::MAX);
-    assert!(!client.accepts(after), "a full clear retires every decode");
+    let full = client.admission_ticket();
+    client.clear_through(full, &[]);
+    assert!(
+        !client.accepts(after),
+        "a clear at the last ticket retires every decode"
+    );
+}
+
+/// A load the renderer starts itself is older than the clear command even
+/// when its CPU submission carries a newer ticket. The clear must retire it
+/// by renderer admission, while leaving an unrelated later submission alone.
+#[test]
+fn clear_through_retires_a_renderer_admitted_load_newer_than_the_cutoff() {
+    let decoder = ImageDecoder::new();
+    let client = decoder.client();
+    let cutoff = client.admission_ticket();
+    let renderer_load = token(303, 1);
+    submit(&client, renderer_load, png(), ImageSizeLimit::UNLIMITED);
+    let unrelated = token(304, 1);
+    submit(&client, unrelated, png(), ImageSizeLimit::UNLIMITED);
+    assert!(client.accepts(renderer_load));
+    assert!(client.accepts(unrelated));
+
+    client.clear_through(cutoff, &[renderer_load.image()]);
+    assert!(
+        !client.accepts(renderer_load),
+        "a renderer-admitted load predates the clear command"
+    );
+    assert!(
+        client.accepts(unrelated),
+        "an unrelated decode requested after the clear must survive"
+    );
 }

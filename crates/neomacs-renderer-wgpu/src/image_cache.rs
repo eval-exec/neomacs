@@ -592,6 +592,13 @@ impl ImageLoadLifecycle {
             .is_some_and(|phase| phase.attempt() == load.attempt())
     }
 
+    /// Every image whose load this renderer has already admitted. At a clear
+    /// these predate the clear command, even when their CPU submission does
+    /// not (renderer-originated toolbar/icon loads).
+    fn admitted_images(&self) -> impl Iterator<Item = ImageId> + '_ {
+        self.current.keys().copied()
+    }
+
     /// Accept `outcome` if its attempt is still the current one.
     ///
     /// A band and a terminal outcome differ here: a band is progress from a
@@ -2752,9 +2759,11 @@ impl ImageCache {
             .collect()
     }
 
-    /// Clear the cache of the images that existed at the caller's admission
-    /// cutoff. Decodes admitted after `through` survive: they were requested
-    /// after the clear, even if their CPU job started eagerly.
+    /// Clear the cache of the images that existed when the caller issued the
+    /// clear. Decodes admitted after `through` survive only when the renderer
+    /// had not already admitted their load: a renderer-originated load
+    /// (toolbar icon, ID-less `load_image_*`) is older than the clear command
+    /// even though its CPU submission carries a newer ticket.
     pub fn clear(&mut self, through: u64) {
         // Every resident texture was charged to the media budget when it was
         // created.  A wholesale clear drops them all at once, so it must
@@ -2762,7 +2771,10 @@ impl ImageCache {
         // otherwise the budget keeps counting images that no longer exist.
         self.accounting
             .extend(Self::cleared_image_accounting(self.textures.keys()));
-        self.decoder.client.clear_through(through);
+        let renderer_admitted: Vec<ImageId> = self.loads.admitted_images().collect();
+        self.decoder
+            .client
+            .clear_through(through, &renderer_admitted);
         self.loads.clear();
         self.residency.clear();
         self.retained_images = RetainedImageSet::default();

@@ -446,16 +446,29 @@ impl ImageDecodeClient {
         state.next_admission
     }
 
-    /// Retire every decode admitted at or before `through`. Jobs submitted
-    /// after that ticket (an eager CPU decode issued after the clear was
-    /// requested) keep running, which is what GNU's synchronous clear leaves
-    /// behind. `u64::MAX` clears everything (teardown).
-    pub(super) fn clear_through(&self, through: u64) {
+    /// Retire every decode admitted at or before `through`, plus every image
+    /// the renderer has already admitted in `renderer_admitted`.
+    ///
+    /// Jobs submitted after the ticket (an eager CPU decode issued after the
+    /// clear was requested) survive, which is what GNU's synchronous clear
+    /// leaves behind. The second clause covers loads the renderer starts
+    /// itself -- toolbar icons and ID-less `load_image_*` calls: their CPU
+    /// submission can carry a newer ticket, but their render command already
+    /// preceded the clear in renderer order, so GNU's clear frees them too.
+    /// Without it their outcome could never be admitted again after
+    /// `ImageCache::clear` drops the load lifecycle, leaking the pixels.
+    ///
+    /// A caller that wants every decode retired passes the current
+    /// [`Self::admission_ticket`]; no production path passes a synthetic
+    /// maximum.
+    pub(super) fn clear_through(&self, through: u64, renderer_admitted: &[ImageId]) {
         let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
         let retired: HashSet<_> = state
             .entries
             .iter()
-            .filter_map(|(image, entry)| (entry.admission <= through).then_some(*image))
+            .filter_map(|(image, entry)| {
+                (entry.admission <= through || renderer_admitted.contains(image)).then_some(*image)
+            })
             .collect();
         for image in &retired {
             if let Some(entry) = state.entries.get_mut(image) {

@@ -138,6 +138,10 @@ fn a_delayed_clear_does_not_retire_the_eager_decode_requested_after_it() {
         "the physical clear frees the old texture"
     );
     assert!(!client.accepts(old), "the clear retires the old decode");
+    assert!(
+        matches!(client.wait_for_terminal(fresh, Duration::ZERO), Some(Ok(_))),
+        "the post-clear decode keeps its synchronous metadata across the clear"
+    );
 
     // The matching load command arrives after the clear and must adopt the
     // decode that survived it -- and only once.
@@ -157,4 +161,50 @@ fn a_delayed_clear_does_not_retire_the_eager_decode_requested_after_it() {
         cache.process_pending(&device, &queue).is_empty(),
         "a repeated poll does not adopt the same decode twice"
     );
+}
+
+/// A load the renderer starts itself -- a toolbar icon or an ID-less
+/// `load_image_*` call -- is admitted after the evaluator's cutoff but before
+/// the clear command executes. Its CPU submission carries a newer ticket, yet
+/// the render command already preceded the clear, so the physical clear must
+/// retire it: otherwise `ImageCache::clear` drops the load lifecycle that
+/// alone could adopt the outcome, and the decoded pixels leak.
+#[test]
+fn a_clear_retires_a_renderer_originated_load_admitted_after_the_cutoff() {
+    let (device, queue) = real_device();
+    let decoder = ImageDecoder::new();
+    let client = decoder.client();
+    let mut cache = ImageCache::with_decoder(&device, decoder);
+
+    // The evaluator issues the clear now. No decode has been admitted.
+    let through = client.admission_ticket();
+
+    // A renderer-originated load is taken in before the clear command runs:
+    // `ImageCache::load_*` admits it to the load lifecycle and submits its
+    // CPU decode with a ticket above the cutoff.
+    let icon = token(703, 1);
+    admitted_load(&mut cache, icon, png());
+    assert!(
+        client
+            .wait_for_terminal(icon, Duration::from_secs(5))
+            .expect("the renderer-originated decode reaches a terminal state")
+            .is_ok()
+    );
+    assert!(client.accepts(icon), "the CPU decode is still live");
+
+    cache.clear(through);
+
+    assert!(
+        !client.accepts(icon),
+        "a renderer-admitted load predates the clear command and must be retired"
+    );
+    assert!(
+        client.wait_for_terminal(icon, Duration::ZERO).is_none(),
+        "the clear must not leave an outcome waiting for an admission it can never get"
+    );
+    assert!(
+        cache.process_pending(&device, &queue).is_empty(),
+        "no orphan outcome is adopted after the clear"
+    );
+    assert!(!cache.has_pending());
 }
