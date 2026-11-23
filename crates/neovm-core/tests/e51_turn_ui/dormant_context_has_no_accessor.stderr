@@ -1,5 +1,5 @@
 error[E0616]: field `dormant` of struct `serial_turn::OwnerSerialState` is private
-  --> tests/e51_turn_ui/dormant_context_has_no_accessor.rs:15:12
+  --> tests/e51_turn_ui/dormant_context_has_no_accessor.rs:16:12
    |
-15 |     &state.dormant.context
+16 |     &state.dormant.context
    |            ^^^^^^^ private field

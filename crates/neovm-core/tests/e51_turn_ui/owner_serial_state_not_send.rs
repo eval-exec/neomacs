@@ -2,6 +2,7 @@
 #[path = "../../../neovm-eval/src/emacs_core/runtime/eval/parallel_entry/serial_turn.rs"]
 mod serial_turn;
 use serial_turn::*;
+include!("support/plain_host.rs");
 
 struct Ticket;
 impl TicketOwner for Ticket {
