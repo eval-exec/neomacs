@@ -813,11 +813,10 @@ pub(super) fn startup_display_slot(backends: wgpu::Backends) -> StartupDisplaySl
 /// still win. When every attempt is empty or CPU-only, the first CPU-only
 /// attempt remains so the software last resort still runs.
 pub(super) fn choose_startup_instance(attempts: &[Vec<wgpu::DeviceType>]) -> Option<usize> {
-    if let Some(index) = attempts.iter().position(|types| {
-        types
-            .iter()
-            .any(|kind| *kind != wgpu::DeviceType::Cpu)
-    }) {
+    if let Some(index) = attempts
+        .iter()
+        .position(|types| types.iter().any(|kind| *kind != wgpu::DeviceType::Cpu))
+    {
         return Some(index);
     }
     attempts
@@ -889,7 +888,9 @@ pub(super) fn open_startup_instance(
     }
     let Some(index) = choose_startup_instance(&device_types) else {
         tracing::error!("no adapter enumerated on any startup instance");
-        return opened.pop().expect("instance backend plan opens one instance");
+        return opened
+            .pop()
+            .expect("instance backend plan opens one instance");
     };
     if device_types[index]
         .iter()
@@ -920,7 +921,10 @@ pub(super) fn startup_watch_warning(
     let workaround = "try WGPU_BACKEND=gl or NEOMACS_GPU=integrated";
     Some(match phase {
         StartupWatchPhase::Enumeration => {
-            format!("GPU enumeration still running after {}s; {workaround}", elapsed.as_secs())
+            format!(
+                "GPU enumeration still running after {}s; {workaround}",
+                elapsed.as_secs()
+            )
         }
         StartupWatchPhase::Device { name, driver } => format!(
             "GPU startup still running after {}s on adapter {name} ({driver}); {workaround}",

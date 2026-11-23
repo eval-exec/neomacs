@@ -1,6 +1,6 @@
 use super::{
-    gpu_exit_disposition, CONSECUTIVE_SURFACE_LOST_THRESHOLD, DeviceLossDetector,
-    GpuExitDisposition,
+    CONSECUTIVE_SURFACE_LOST_THRESHOLD, DeviceLossDetector, GpuExitDisposition,
+    gpu_exit_disposition,
 };
 use std::sync::atomic::Ordering;
 
@@ -61,10 +61,7 @@ fn successful_acquire_resets_the_streak() {
 
 #[test]
 fn lost_device_exit_abandons_the_context() {
-    assert_eq!(
-        gpu_exit_disposition(true),
-        GpuExitDisposition::Abandon
-    );
+    assert_eq!(gpu_exit_disposition(true), GpuExitDisposition::Abandon);
 }
 
 #[test]
