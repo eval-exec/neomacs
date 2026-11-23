@@ -6,9 +6,10 @@
 //! here is a one-arm call of that body. Both still return today's batch
 //! result. There is no thread test, TLS read, env read, clipboard read, or
 //! second algorithm. `builtin_handle_switch_frame` (R37) stays direct.
-//! The clipboard stubs read the owner's installed phase: `Uninstalled` is
-//! this inline serial arm, `Local` lowers to the same direct body, and the
-//! routed arm refuses until the C4b worker boundary exists.
+//! The clipboard stubs read the owner's installed phase: `Uninstalled` is this
+//! inline serial arm unless a hosted Green worker routes it, `Local` lowers to
+//! the same direct body, and a hosted Green worker's routed phase executes the
+//! C4b host call.
 
 use neovm_value::error::EvalResult;
 use neovm_value::value::Value;
@@ -146,21 +147,23 @@ mod tests {
             "clipboard stubs must ask the installed phase, not hard-code an arm"
         );
         assert!(
-            clipboard_driver
-                .contains("SelectionPhase::Uninstalled => SelectionInstaller::InlineSerialMain")
+            clipboard_driver.contains("SelectionPhase::Uninstalled")
+                && clipboard_driver.contains("SelectionInstaller::InlineSerialMain")
                 && clipboard_driver
                     .contains("SelectionPhase::Local => SelectionInstaller::OwnedLocalMain")
                 && clipboard_driver
                     .contains("SelectionPhase::Routed | SelectionPhase::AwaitingRollback")
                 && clipboard_driver.contains("SelectionInstaller::OwnedRoutedWorker")
                 && clipboard_driver
-                    .matches("OwnedRoutedWorker => routed_worker_boundary_not_installed()")
+                    .contains("ctx.is_green_worker_owner() && ctx.in_hosted_green_session()")
+                && clipboard_driver
+                    .matches("OwnedRoutedWorker => SelectionStep::Done(routed_")
                     .count()
                     == 5
                 && !clipboard_driver.contains("std::env"),
-            "clipboard stubs stay on the direct body for the inline serial and \
-             local arms; every routed phase maps to OwnedRoutedWorker, whose \
-             five match arms refuse until C4b"
+            "clipboard stubs keep the direct body for the serial/local arms; a \
+             hosted Green worker's routed phase maps to OwnedRoutedWorker, and \
+             each of the five entries executes its routed host call (C4b)"
         );
     }
 
