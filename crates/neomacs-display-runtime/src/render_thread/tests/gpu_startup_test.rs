@@ -164,3 +164,102 @@ fn lavapipe_drops_x11_frames_before_mesa_24_0_2() {
         );
     }
 }
+
+fn candidate(
+    name: &str,
+    vendor: u32,
+    device: u32,
+    device_type: wgpu::DeviceType,
+) -> StartupAdapterCandidate {
+    StartupAdapterCandidate {
+        identity: AdapterIdentity {
+            backend: wgpu::Backend::Vulkan,
+            vendor,
+            device,
+            name: name.to_string(),
+        },
+        device_type,
+        surface_compatible: true,
+    }
+}
+
+fn high_performance() -> wgpu::PowerPreference {
+    wgpu::PowerPreference::HighPerformance
+}
+
+#[test]
+fn excluded_discrete_yields_the_integrated_adapter() {
+    let adapters = [
+        candidate("Quadro P620", 0x10de, 0x1cb6, wgpu::DeviceType::DiscreteGpu),
+        candidate("Intel UHD", 0x8086, 0x3e92, wgpu::DeviceType::IntegratedGpu),
+    ];
+    let pick = choose_startup_adapter(
+        &adapters,
+        high_performance(),
+        &StartupAdapterChoice::SkipFailed {
+            excluded: adapters[0].identity.clone(),
+        },
+    )
+    .expect("an integrated adapter remains");
+    assert_eq!(pick.index, 1);
+    assert!(!pick.software);
+    assert!(pick.warning.is_none());
+}
+
+#[test]
+fn excluded_sole_discrete_yields_none() {
+    let adapters = [candidate(
+        "Quadro P620",
+        0x10de,
+        0x1cb6,
+        wgpu::DeviceType::DiscreteGpu,
+    )];
+    let pick = choose_startup_adapter(
+        &adapters,
+        high_performance(),
+        &StartupAdapterChoice::SkipFailed {
+            excluded: adapters[0].identity.clone(),
+        },
+    );
+    assert!(
+        pick.is_none(),
+        "the only adapter already failed; do not select it again"
+    );
+}
+
+#[test]
+fn no_hardware_left_yields_cpu_with_a_warning() {
+    let adapters = [
+        candidate("Quadro P620", 0x10de, 0x1cb6, wgpu::DeviceType::DiscreteGpu),
+        candidate("llvmpipe", 0x10005, 0, wgpu::DeviceType::Cpu),
+    ];
+    let pick = choose_startup_adapter(
+        &adapters,
+        high_performance(),
+        &StartupAdapterChoice::SkipFailed {
+            excluded: adapters[0].identity.clone(),
+        },
+    )
+    .expect("a software adapter remains");
+    assert_eq!(pick.index, 1);
+    assert!(pick.software);
+    let warning = pick.warning.expect("software fallback warns");
+    assert!(
+        warning.contains("llvmpipe"),
+        "warning should name the software adapter, got {warning}"
+    );
+}
+
+#[test]
+fn cpu_is_not_chosen_while_hardware_remains() {
+    let adapters = [
+        candidate("Quadro P620", 0x10de, 0x1cb6, wgpu::DeviceType::DiscreteGpu),
+        candidate("Intel UHD", 0x8086, 0x3e92, wgpu::DeviceType::IntegratedGpu),
+        candidate("llvmpipe", 0x10005, 0, wgpu::DeviceType::Cpu),
+    ];
+    let pick = choose_startup_adapter(&adapters, high_performance(), &StartupAdapterChoice::Ranked)
+        .expect("hardware remains");
+    assert_eq!(pick.index, 0);
+    assert!(!pick.software);
+    assert!(pick.warning.is_none());
+}

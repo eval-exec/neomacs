@@ -341,6 +341,7 @@ impl RenderApp {
         // command. Rebuild the whole GPU stack before doing anything else
         // with it.
         if self.device_lost.take() {
+            self.note_pre_present_adapter_failure();
             self.comms.tooltip_context.invalidate();
             self.tooltips.shutdown();
             self.menus.cancel();

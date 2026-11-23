@@ -1022,6 +1022,12 @@ pub(super) struct RenderApp {
     /// and the surface-acquire path; drained at the top of
     /// `handle_about_to_wait`, which runs `recover_from_device_loss`.
     pub(super) device_lost: super::device_loss::DeviceLossDetector,
+    /// Adapter choice for the next `init_wgpu`. `SkipFailed` is recorded only
+    /// when the current adapter fails before the first present.
+    pub(super) startup_adapter_choice: super::gpu_startup::StartupAdapterChoice,
+    /// Set when startup refused to select another adapter. Recovery must not
+    /// rearm the device-lost latch, or the excluded adapter is retried forever.
+    pub(super) startup_adapter_exhausted: bool,
 
     /// Shared media memory accounting. Fed from the asset-command choke
     /// point (`asset_commands.rs`); shader surfaces only so far — see the
@@ -1259,6 +1265,8 @@ impl RenderApp {
             backend_profile,
             render_policy,
             device_lost: super::device_loss::DeviceLossDetector::new(),
+            startup_adapter_choice: super::gpu_startup::StartupAdapterChoice::Ranked,
+            startup_adapter_exhausted: false,
             faces: rustc_hash::FxHashMap::default(),
             faces_signature: Vec::new(),
             modifiers: 0,

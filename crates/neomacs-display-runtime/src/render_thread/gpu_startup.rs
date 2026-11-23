@@ -164,12 +164,17 @@ pub(super) enum PendingGpu {
     Adapters {
         window: Arc<dyn Window>,
         reply: Reply<(wgpu::Instance, Vec<wgpu::Adapter>)>,
+        choice: StartupAdapterChoice,
     },
     Device {
         window: Arc<dyn Window>,
         instance: wgpu::Instance,
         surface: wgpu::Surface<'static>,
+        adapters: Vec<wgpu::Adapter>,
         adapter: wgpu::Adapter,
+        choice: StartupAdapterChoice,
+        /// The device request already failed once. A second failure stops.
+        retried: bool,
         reply: Reply<(wgpu::Device, wgpu::Queue)>,
     },
 }
@@ -190,7 +195,11 @@ impl PendingGpu {
             let adapters = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()));
             Ok((instance, adapters))
         })?;
-        Ok(Self::Adapters { window, reply })
+        Ok(Self::Adapters {
+            window,
+            reply,
+            choice: StartupAdapterChoice::Ranked,
+        })
     }
 
     pub(super) fn window(&self) -> &dyn Window {
@@ -211,14 +220,14 @@ impl PendingGpu {
                         return Err("GPU adapter worker exited without a result".into());
                     }
                 };
-                let Self::Adapters { window, .. } = self else {
+                let Self::Adapters { window, choice, .. } = self else {
                     unreachable!()
                 };
                 let (instance, adapters) = result;
                 let surface = instance
                     .create_surface(window.clone())
                     .map_err(|error| error.to_string())?;
-                let adapter = select_adapter(adapters, &surface, window.as_ref())
+                let adapter = select_adapter(adapters.clone(), &surface, window.as_ref(), &choice)
                     .ok_or_else(|| "no GPU adapter supports the native surface".to_owned())?;
                 let worker_adapter = adapter.clone();
                 let reply = spawn("gpu-device", proxy.clone(), move || {
@@ -232,18 +241,78 @@ impl PendingGpu {
                     window,
                     instance,
                     surface,
+                    adapters,
                     adapter,
+                    choice,
+                    retried: false,
                     reply,
                 }))
             }
             Self::Device { ref reply, .. } => {
-                let (device, queue) = match reply.try_recv() {
-                    Ok(result) => result?,
+                let ready = match reply.try_recv() {
+                    Ok(Ok(ready)) => ready,
+                    Ok(Err(error)) => {
+                        let Self::Device {
+                            window,
+                            instance,
+                            surface,
+                            adapters,
+                            adapter,
+                            retried,
+                            ..
+                        } = self
+                        else {
+                            unreachable!()
+                        };
+                        if retried {
+                            tracing::error!(
+                                %error,
+                                "alternate adapter device request failed before the first present"
+                            );
+                            return Err(error);
+                        }
+                        let failed = AdapterIdentity::from_info(&adapter.get_info());
+                        let choice = StartupAdapterChoice::SkipFailed {
+                            excluded: failed.clone(),
+                        };
+                        let Some(next) =
+                            select_adapter(adapters.clone(), &surface, window.as_ref(), &choice)
+                        else {
+                            tracing::error!(
+                                %error,
+                                adapter = %failed.name,
+                                "device request failed and no alternate adapter remains"
+                            );
+                            return Err(error);
+                        };
+                        if AdapterIdentity::from_info(&next.get_info()) == failed {
+                            return Err(error);
+                        }
+                        let worker_adapter = next.clone();
+                        let reply = spawn("gpu-device", proxy.clone(), move || {
+                            pollster::block_on(neomacs_renderer_wgpu::request_renderer_device(
+                                &worker_adapter,
+                                "Neomacs Render Thread Device",
+                            ))
+                            .map_err(|error| error.to_string())
+                        })?;
+                        return Ok(GpuPoll::Pending(Self::Device {
+                            window,
+                            instance,
+                            surface,
+                            adapters,
+                            adapter: next,
+                            choice,
+                            retried: true,
+                            reply,
+                        }));
+                    }
                     Err(TryRecvError::Empty) => return Ok(GpuPoll::Pending(self)),
                     Err(TryRecvError::Disconnected) => {
                         return Err("GPU device worker exited without a result".into());
                     }
                 };
+                let (device, queue) = ready;
                 let Self::Device {
                     window,
                     instance,
@@ -282,39 +351,77 @@ impl PendingGpu {
 /// preserves wgpu-core's stable preference ranking, then applies its same
 /// surface-capability filter.
 pub(super) fn select_adapter(
-    mut adapters: Vec<wgpu::Adapter>,
+    adapters: Vec<wgpu::Adapter>,
     surface: &wgpu::Surface<'_>,
     window: &dyn Window,
+    choice: &StartupAdapterChoice,
 ) -> Option<wgpu::Adapter> {
     let preference = crate::gpu_power_preference();
-    adapters.sort_by_key(|adapter| adapter_rank(adapter.get_info().device_type, preference));
-    let mut supported = adapters
-        .into_iter()
-        .filter(|adapter| adapter.is_surface_supported(surface));
-    let first = supported.next()?;
-    let info = first.get_info();
-    if !is_x11(window) || !lavapipe_drops_x11_frames(&info) {
-        return Some(first);
-    }
-    let Some(other) = supported.find(|adapter| !lavapipe_drops_x11_frames(&adapter.get_info()))
-    else {
-        // An explicit WGPU_BACKEND=vulkan leaves nothing else to choose.
-        tracing::warn!(
-            "{} ({}) presents nothing to X11 windows before Mesa 24.0.2, and no other adapter supports the window",
-            info.name,
-            info.driver_info
-        );
-        return Some(first);
+    let candidates: Vec<StartupAdapterCandidate> = adapters
+        .iter()
+        .map(|adapter| {
+            let info = adapter.get_info();
+            StartupAdapterCandidate {
+                identity: AdapterIdentity::from_info(&info),
+                device_type: info.device_type,
+                surface_compatible: adapter.is_surface_supported(surface),
+            }
+        })
+        .collect();
+    let Some(pick) = choose_startup_adapter(&candidates, preference, choice) else {
+        if let StartupAdapterChoice::SkipFailed { excluded } = choice {
+            tracing::error!(
+                adapter = %excluded.name,
+                "excluded adapter is the only surface-compatible choice; not selecting it again"
+            );
+        }
+        return None;
     };
-    let other_info = other.get_info();
-    tracing::warn!(
-        "skipping {} ({}): it presents nothing to X11 windows before Mesa 24.0.2; using {} ({:?})",
-        info.name,
-        info.driver_info,
-        other_info.name,
-        other_info.backend
-    );
-    Some(other)
+    let mut chosen = pick.index;
+    if is_x11(window) && lavapipe_drops_x11_frames(&adapters[chosen].get_info()) {
+        let excluded = match choice {
+            StartupAdapterChoice::SkipFailed { excluded } => Some(excluded),
+            StartupAdapterChoice::Ranked => None,
+        };
+        if let Some(other) = (0..adapters.len()).find(|&index| {
+            index != chosen
+                && candidates[index].surface_compatible
+                && excluded.is_none_or(|id| &candidates[index].identity != id)
+                && !lavapipe_drops_x11_frames(&adapters[index].get_info())
+        }) {
+            let from = adapters[chosen].get_info();
+            let to = adapters[other].get_info();
+            tracing::warn!(
+                "skipping {} ({}): it presents nothing to X11 windows before Mesa 24.0.2; using {} ({:?})",
+                from.name,
+                from.driver_info,
+                to.name,
+                to.backend
+            );
+            chosen = other;
+        } else {
+            let info = adapters[chosen].get_info();
+            tracing::warn!(
+                "{} ({}) presents nothing to X11 windows before Mesa 24.0.2, and no other adapter supports the window",
+                info.name,
+                info.driver_info
+            );
+        }
+    }
+    if chosen == pick.index
+        && let Some(warning) = pick.warning
+    {
+        tracing::warn!("{warning}");
+    }
+    if let StartupAdapterChoice::SkipFailed { excluded } = choice {
+        let using = adapters[chosen].get_info();
+        tracing::warn!(
+            skipped = %excluded.name,
+            using = %using.name,
+            "skipping the adapter that failed before the first present"
+        );
+    }
+    Some(adapters[chosen].clone())
 }
 
 fn is_x11(window: &dyn Window) -> bool {
@@ -346,6 +453,99 @@ fn mesa_version(driver_info: &str) -> Option<(u32, u32, u32)> {
         .split(|c: char| !c.is_ascii_digit());
     let mut next = || numbers.next()?.parse().ok();
     Some((next()?, next()?, next()?))
+}
+
+/// Identity of one enumerated adapter. A pre-present failure records this
+/// and the next startup skips that adapter.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct AdapterIdentity {
+    pub backend: wgpu::Backend,
+    pub vendor: u32,
+    pub device: u32,
+    pub name: String,
+}
+
+impl AdapterIdentity {
+    pub(super) fn from_info(info: &wgpu::AdapterInfo) -> Self {
+        Self {
+            backend: info.backend,
+            vendor: info.vendor,
+            device: info.device,
+            name: info.name.clone(),
+        }
+    }
+}
+
+/// How startup picks among the enumerated adapters.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum StartupAdapterChoice {
+    /// Highest `adapter_rank`, then the surface filter.
+    Ranked,
+    /// The named adapter failed before the first present. Skip it.
+    SkipFailed { excluded: AdapterIdentity },
+}
+
+/// One enumerated adapter reduced to the fields the pure choice uses.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct StartupAdapterCandidate {
+    pub identity: AdapterIdentity,
+    pub device_type: wgpu::DeviceType,
+    pub surface_compatible: bool,
+}
+
+/// The adapter startup will request a device from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct StartupAdapterPick {
+    pub index: usize,
+    /// `DeviceType::Cpu` chosen only after every hardware adapter is gone.
+    pub software: bool,
+    /// Set when the pick is the software last resort.
+    pub warning: Option<String>,
+}
+
+/// Rank surface-compatible adapters and apply a pre-present failure skip.
+///
+/// A `DeviceType::Cpu` adapter is chosen only when every hardware adapter is
+/// gone, and that pick carries a warning. Hardware that is still eligible
+/// wins even when power preference gives every device the same rank.
+pub(super) fn choose_startup_adapter(
+    candidates: &[StartupAdapterCandidate],
+    preference: wgpu::PowerPreference,
+    choice: &StartupAdapterChoice,
+) -> Option<StartupAdapterPick> {
+    let excluded = match choice {
+        StartupAdapterChoice::Ranked => None,
+        StartupAdapterChoice::SkipFailed { excluded } => Some(excluded),
+    };
+    let eligible: Vec<usize> = (0..candidates.len())
+        .filter(|&index| candidates[index].surface_compatible)
+        .filter(|&index| excluded.is_none_or(|id| &candidates[index].identity != id))
+        .collect();
+    let hardware: Vec<usize> = eligible
+        .iter()
+        .copied()
+        .filter(|&index| candidates[index].device_type != wgpu::DeviceType::Cpu)
+        .collect();
+    let pool = if hardware.is_empty() {
+        &eligible
+    } else {
+        &hardware
+    };
+    let mut ranked = pool.clone();
+    ranked.sort_by_key(|&index| adapter_rank(candidates[index].device_type, preference));
+    let index = *ranked.first()?;
+    let software = candidates[index].device_type == wgpu::DeviceType::Cpu;
+    let warning = software.then(|| {
+        format!(
+            "no hardware adapter left; using software adapter {}",
+            candidates[index].identity.name
+        )
+    });
+    Some(StartupAdapterPick {
+        index,
+        software,
+        warning,
+    })
 }
 
 fn adapter_rank(kind: wgpu::DeviceType, preference: wgpu::PowerPreference) -> u8 {

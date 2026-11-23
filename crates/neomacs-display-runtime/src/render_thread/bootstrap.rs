@@ -18,6 +18,78 @@ use winit::window::Window;
 use x11_dl::xlib;
 
 impl RenderApp {
+    /// Record the installed adapter when it fails with no surface submission yet.
+    /// A later loss keeps the same adapter so a shader-surface TDR can rebuild it.
+    pub(super) fn note_pre_present_adapter_failure(&mut self) {
+        if super::frame_stats::SURFACE_SUBMISSIONS.load(std::sync::atomic::Ordering::Relaxed) != 0 {
+            return;
+        }
+        let Some(gpu) = self.gpu.as_ref() else {
+            return;
+        };
+        let identity = super::gpu_startup::AdapterIdentity::from_info(&gpu.adapter.get_info());
+        tracing::warn!(
+            adapter = %identity.name,
+            "adapter failed before the first present; the next startup skips it"
+        );
+        self.startup_adapter_choice =
+            super::gpu_startup::StartupAdapterChoice::SkipFailed { excluded: identity };
+    }
+
+    fn request_startup_device(
+        &mut self,
+        adapters: &[wgpu::Adapter],
+        surface: &wgpu::Surface<'_>,
+        window: &Arc<dyn Window>,
+        adapter: wgpu::Adapter,
+    ) -> Option<(wgpu::Adapter, wgpu::Device, wgpu::Queue)> {
+        match pollster::block_on(neomacs_renderer_wgpu::request_renderer_device(
+            &adapter,
+            "Neomacs Render Thread Device",
+        )) {
+            Ok((device, queue)) => Some((adapter, device, queue)),
+            Err(error) => {
+                if super::frame_stats::SURFACE_SUBMISSIONS
+                    .load(std::sync::atomic::Ordering::Relaxed)
+                    != 0
+                {
+                    tracing::error!("Failed to create wgpu device: {error}");
+                    return None;
+                }
+                let failed = super::gpu_startup::AdapterIdentity::from_info(&adapter.get_info());
+                tracing::error!(
+                    adapter = %failed.name,
+                    %error,
+                    "renderer device request failed before the first present"
+                );
+                let choice =
+                    super::gpu_startup::StartupAdapterChoice::SkipFailed { excluded: failed };
+                self.startup_adapter_choice = choice.clone();
+                let Some(next) = super::gpu_startup::select_adapter(
+                    adapters.to_vec(),
+                    surface,
+                    window.as_ref(),
+                    &choice,
+                ) else {
+                    self.startup_adapter_exhausted = true;
+                    tracing::error!("device request failed and no alternate adapter remains");
+                    return None;
+                };
+                match pollster::block_on(neomacs_renderer_wgpu::request_renderer_device(
+                    &next,
+                    "Neomacs Render Thread Device",
+                )) {
+                    Ok((device, queue)) => Some((next, device, queue)),
+                    Err(error) => {
+                        self.startup_adapter_exhausted = true;
+                        tracing::error!(%error, "alternate adapter device request failed");
+                        None
+                    }
+                }
+            }
+        }
+    }
+
     pub(super) fn init_wgpu(&mut self, event_loop: &dyn ActiveEventLoop, window: Arc<dyn Window>) {
         tracing::info!("Initializing wgpu for render thread");
 
@@ -38,24 +110,28 @@ impl RenderApp {
         };
 
         let adapters = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()));
-        let Some(adapter) = super::gpu_startup::select_adapter(adapters, &surface, window.as_ref())
-        else {
+        let Some(adapter) = super::gpu_startup::select_adapter(
+            adapters.clone(),
+            &surface,
+            window.as_ref(),
+            &self.startup_adapter_choice,
+        ) else {
             tracing::error!(
                 "Failed to find suitable GPU adapter: none supports the native surface"
             );
+            if matches!(
+                self.startup_adapter_choice,
+                super::gpu_startup::StartupAdapterChoice::SkipFailed { .. }
+            ) {
+                self.startup_adapter_exhausted = true;
+            }
             return;
         };
 
-        let (device, queue) =
-            match pollster::block_on(neomacs_renderer_wgpu::request_renderer_device(
-                &adapter,
-                "Neomacs Render Thread Device",
-            )) {
-                Ok((d, q)) => (d, q),
-                Err(e) => {
-                    tracing::error!("Failed to create wgpu device: {e}");
-                    return;
-                }
+        let (adapter, device, queue) =
+            match self.request_startup_device(&adapters, &surface, &window, adapter) {
+                Some(ready) => ready,
+                None => return,
             };
 
         self.install_wgpu(super::gpu_startup::PreparedGpu {
@@ -377,9 +453,16 @@ impl RenderApp {
         // primary glyph atlas (cleared above). populate_primary_native is
         // replace-safe: it re-keys the same winit window id and preserves
         // the Active lifecycle's IME/mouse state.
+        self.startup_adapter_exhausted = false;
         self.init_wgpu(event_loop, primary_window);
 
         if self.gpu.is_none() {
+            if self.startup_adapter_exhausted {
+                tracing::error!(
+                    "device-loss recovery: no alternate adapter remains; not rearming the loss latch"
+                );
+                return;
+            }
             // The driver may still be resetting. Leave the latch set so the
             // next event-loop pass retries; no explicit wake, so this cannot
             // busy-spin.
