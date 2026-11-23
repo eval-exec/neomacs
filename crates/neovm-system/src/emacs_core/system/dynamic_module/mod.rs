@@ -840,6 +840,9 @@ unsafe extern "C" fn module_make_global_ref(
             let mut tag_cell = emacs_value_tag::new(lisp_val);
             tag_cell.set_metadata(metadata);
             let tag = Box::into_raw(Box::new(tag_cell));
+            // SAFETY: `tag` is `Box::into_raw` of a live `emacs_value_tag`.
+            // The registry owns the entry, and `Drop` writes nil only into
+            // that cell. It does not free it.
             let entry = GlobalRefEntry::new(lisp_val, heap_identity, tag);
             if let Some(pos) = refs.iter().position(|e| e.is_none()) {
                 refs[pos] = Some(entry);
