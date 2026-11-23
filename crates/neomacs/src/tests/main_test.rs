@@ -80,6 +80,7 @@ use neovm_core::window::{
     FrameFullscreen, FrameId, FrameParam, FrameVisibility, GuiFrameGeometryHints, WindowId,
     default_gui_tool_bar_line_height,
 };
+use std::cell::RefCell;
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::atomic::AtomicBool;
@@ -3031,6 +3032,24 @@ impl DisplayHost for StartupGuiDisplayHost {
     }
 }
 
+/// Records `resize_gui_frame` so a test can see an explicit size.
+#[cfg(target_os = "linux")]
+struct RecordingResizeHost {
+    requests: Rc<RefCell<Vec<GuiFrameHostRequest>>>,
+}
+
+#[cfg(target_os = "linux")]
+impl DisplayHost for RecordingResizeHost {
+    fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn resize_gui_frame(&mut self, request: GuiFrameHostRequest) -> Result<(), String> {
+        self.requests.borrow_mut().push(request);
+        Ok(())
+    }
+}
+
 /// Give a GUI startup fixture the display connection its bootstrap declares.
 fn install_synthetic_startup_display(eval: &mut Context) {
     let identity = gui_display_identity();
@@ -5084,6 +5103,168 @@ fn allocated_tool_bar_redisplay_evaluates_item_filter_once() {
         count(&eval).as_int().unwrap() > 2,
         "the unallocated redisplay still collects before layout, got {}",
         count(&eval).as_int().unwrap()
+    );
+}
+
+/// A non-selected frame allocates its tool bar on its own redisplay.
+///
+/// GNU `prepare_menu_bars` calls `update_tool_bar` for every frame when
+/// `all_windows` is set (`xdisp.c:14328-14350`). `update_tool_bar` selects
+/// that frame only while it builds items (`xdisp.c:15698-15709`). An explicit
+/// size taken before that redisplay still omits `FRAME_TOOLBAR_HEIGHT`
+/// (`gtkutil.c:1181-1182`).
+#[cfg(target_os = "linux")]
+#[test]
+fn second_unselected_frame_allocates_its_tool_bar_on_its_own_redisplay() {
+    let mut eval = create_bootstrap_evaluator_cached_with_features(&["neomacs"])
+        .expect("cached bootstrap evaluator");
+    let _bootstrap = bootstrap_buffers(&mut eval, 960, 640, gui_display());
+    let selected = eval
+        .frame_manager()
+        .selected_frame()
+        .expect("selected frame after bootstrap")
+        .id;
+    configure_gnu_startup_state(&mut eval, selected, &gui_startup());
+
+    let second_buffer = eval.buffer_manager_mut().create_buffer("*second-frame*");
+    let second = eval
+        .frame_manager_mut()
+        .create_frame("second", 960, 640, second_buffer);
+    {
+        let frame = eval
+            .frame_manager_mut()
+            .get_mut(second)
+            .expect("second frame");
+        frame.set_window_system(Some(Value::symbol("neo")));
+        frame.displays_chrome = true;
+        frame.char_width = 8.0;
+        frame.char_height = 16.0;
+        frame.font_pixel_size = 14.0;
+        for (key, value) in [
+            ("vertical-scroll-bars", Value::NIL),
+            ("horizontal-scroll-bars", Value::NIL),
+            ("left-fringe", Value::fixnum(0)),
+            ("right-fringe", Value::fixnum(0)),
+            ("internal-border-width", Value::fixnum(0)),
+            ("menu-bar-lines", Value::fixnum(1)),
+            ("tool-bar-lines", Value::fixnum(1)),
+            ("tab-bar-lines", Value::fixnum(0)),
+            ("min-width", Value::fixnum(10)),
+            ("min-height", Value::fixnum(5)),
+        ] {
+            frame.set_parameter(Value::symbol(key), value);
+        }
+        frame.sync_bar_heights_from_parameters();
+    }
+    let (menu_height, tool_height) = {
+        let frame = eval.frame_manager().get(second).expect("second frame");
+        assert!(
+            frame.tool_bar_height > 0,
+            "frame 2 projects a tool-bar band"
+        );
+        assert_eq!(
+            frame.toolkit_tool_bar,
+            neovm_core::window::ToolkitToolBar::Unallocated {
+                explicit_size_omitted: false
+            }
+        );
+        (frame.menu_bar_height, frame.tool_bar_height)
+    };
+    assert_eq!(
+        eval.frame_manager().selected_frame().map(|frame| frame.id),
+        Some(selected),
+        "creating another top-level frame must not make it selected"
+    );
+
+    let requests = Rc::new(RefCell::new(Vec::new()));
+    eval.set_display_host(Box::new(RecordingResizeHost {
+        requests: Rc::clone(&requests),
+    }));
+    eval.set_variable("n827-other", Value::make_frame(second.0));
+    eval.eval_str(
+        r#"(progn
+            (setq frame-inhibit-implied-resize t)
+            (setq-default tool-bar-map
+              (let ((map (make-sparse-keymap)))
+                (define-key map [n827] '(menu-item "N827" ignore))
+                map))
+            (setq tool-bar-map (default-value 'tool-bar-map))
+            (with-current-buffer "*second-frame*"
+              (setq tool-bar-map (default-value 'tool-bar-map)))
+            (set-frame-size n827-other 90 40))"#,
+    )
+    .expect("explicit size on the unselected frame");
+
+    let request = {
+        let recorded = requests.borrow();
+        assert_eq!(
+            recorded.len(),
+            1,
+            "the unselected frame sends one explicit size"
+        );
+        assert_eq!(recorded[0].frame_id, second);
+        recorded[0].clone()
+    };
+    assert_eq!(
+        (request.width, request.height),
+        (720, 640 + menu_height),
+        "frame 2's explicit size omits its {tool_height}px tool bar"
+    );
+    assert_eq!(
+        eval.frame_manager().get(second).unwrap().toolkit_tool_bar,
+        neovm_core::window::ToolkitToolBar::Unallocated {
+            explicit_size_omitted: true
+        }
+    );
+    eval.apply_resize_input_event(request.width, request.height, 1.0, second.0, false)
+        .expect("host applies the omitted size");
+    assert_eq!(
+        eval.frame_manager().get(second).unwrap().toolkit_tool_bar,
+        neovm_core::window::ToolkitToolBar::Unallocated {
+            explicit_size_omitted: true
+        },
+        "applying the size keeps the bar omitted until this frame redisplays"
+    );
+    assert_eq!(
+        eval.frame_manager().selected_frame().map(|frame| frame.id),
+        Some(selected)
+    );
+
+    super::super::frame_layout::enable_cosmic_metrics_for_test();
+    let comms = neomacs_display_runtime::thread_comm::ThreadComms::new();
+    publish_gui_frame(&mut eval, &comms.frame_tx, None);
+
+    let mut published = comms
+        .frame_rx
+        .try_iter()
+        .map(|state| FrameId(state.frame_placement.frame().get()))
+        .collect::<Vec<_>>();
+    published.sort_by_key(|frame_id| frame_id.0);
+    assert_eq!(published, vec![selected, second]);
+    assert_eq!(
+        eval.frame_manager().get(selected).unwrap().toolkit_tool_bar,
+        neovm_core::window::ToolkitToolBar::Allocated,
+        "the selected frame allocates on this redisplay"
+    );
+    assert_eq!(
+        eval.frame_manager().get(second).unwrap().toolkit_tool_bar,
+        neovm_core::window::ToolkitToolBar::Allocated,
+        "the unselected frame allocates on its own redisplay"
+    );
+    assert_eq!(
+        requests.borrow().len(),
+        1,
+        "inhibit t reflows the omitted frame inside the explicit outer size"
+    );
+    assert_eq!(
+        eval.frame_manager().get(second).unwrap().height,
+        request.height,
+        "the second frame's outer pixels stay the size that omitted the bar"
+    );
+    assert_eq!(
+        eval.frame_manager().selected_frame().map(|frame| frame.id),
+        Some(selected),
+        "publishing the second frame must not select it"
     );
 }
 
