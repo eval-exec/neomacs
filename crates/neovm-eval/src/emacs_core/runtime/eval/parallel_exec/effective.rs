@@ -462,9 +462,9 @@ pub(crate) trait PlainAccess: OwnerSlotsMut {
     /// through `set_internal`, a variable made local or forwarded goes
     /// through `set_default_internal`. The owner-local restore writes the
     /// slot and nothing else, so the serial `unbind_owner_binding`
-    /// (owner_bindings.rs:1250-1293) keeps its slow path for exactly these
-    /// cases: `has_watchers`, a retired projection, a dead channel
-    /// (owner_bindings.rs:1276-1360). This is that predicate, read cold at
+    /// (owner_bindings.rs:1276-1360) keeps its slow path for exactly these
+    /// cases: `has_watchers`, a retired projection, a dead channel. This is
+    /// that predicate, read cold at
     /// unbind time. A `true` hands the record to the serial unbind; nothing
     /// is restored on the owner.
     fn unbind_needs_serial(&self, sym: SymId) -> bool;
@@ -474,6 +474,13 @@ pub(crate) trait PlainAccess: OwnerSlotsMut {
     /// for a serial run is that the named tokens are gone. A record still
     /// live after the hand-off is the record-contract fault.
     fn record_live(&self, id: OwnerRecordId) -> bool;
+    /// The id of the slab's innermost live record, O(1). Read before a
+    /// `PlainUnbind` hand-off: the record the walk hands to the serial side
+    /// is the top Plain entry above the frame's base, and the executor's
+    /// entries mirror the slab's records in one LIFO order (C2), so it is
+    /// the slab's top. Anything else is a record the owner's frame never
+    /// pushed: the record-contract fault, nothing handed off.
+    fn top_record(&self) -> Option<OwnerRecordId>;
 }
 
 /// The slab half of [`PlainAccess::pop_binding`] over a slab the implementor

@@ -138,7 +138,11 @@ impl PlainAccess for TestSlots {
     }
 
     fn record_live(&self, record: super::super::owner_bindings::OwnerRecordId) -> bool {
-        self.records.live_records().any(|(id, _)| id == record)
+        self.records.record(record).is_some()
+    }
+
+    fn top_record(&self) -> Option<super::super::owner_bindings::OwnerRecordId> {
+        self.records.top_record_id()
     }
 
     fn push_binding(

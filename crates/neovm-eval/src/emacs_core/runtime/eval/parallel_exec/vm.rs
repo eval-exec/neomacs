@@ -363,6 +363,14 @@ pub(crate) trait VmEscape {
     /// through the escape because undoing an owner binding IS a write to
     /// that storage: a `PlainUnbind` request is served by taking the record
     /// it names (`PlainAccess::pop_binding`) and running the restore.
+    ///
+    /// PROVISIONAL HARNESS SCAFFOLDING (peer #13059): production releases
+    /// the executor's Plain lease BY VALUE into the serial turn, where it
+    /// folds back into the owner Context, and the completion hands a fresh
+    /// lease back; the serial side then runs the ordinary
+    /// `unbind_owner_binding` slow path through `SerialTurn::with_world`,
+    /// one route to the slab at every instant. G1's production `VmEscape`
+    /// removes this parameter.
     fn escape(
         &mut self,
         request: VmEscapeRequest,
@@ -1140,13 +1148,17 @@ where
     /// n-th saved (bytecode/vm.rs:5734-5742, frame_bindings.rs:95-113): zero
     /// is a no-op, more than the frame holds is `Invalid byte-code` and
     /// unwinds nothing. R1b: an owner binding record is undone on the owner
-    /// slab with no escape; each maximal run of consecutive serial records
-    /// is ONE escape whose request names exactly those tokens, innermost
-    /// first, and whose completion must have removed them: the escape's R1
-    /// mirror checks the completion's popped run against the LIFO, and the
-    /// walk then checks that none of the named tokens is left above the
-    /// frame's base. A record the completion pushes lands above the walk
-    /// and is walked next, as GNU's loop.
+    /// slab with no escape when the unbind-time re-validation admits it
+    /// (N-v2-unbind-revalidate); one it refuses is ONE `PlainUnbind` escape
+    /// naming the symbol and the record, served by the serial unbind's slow
+    /// path, the entry leaving before the escape (GNU's order) and the walk
+    /// checking the record is gone after. Each maximal run of consecutive
+    /// serial records is ONE escape whose request names exactly those
+    /// tokens, innermost first, and whose completion must pop exactly them
+    /// (R1 checks the popped run against the request): the walk then checks
+    /// that none of the named tokens is left above the frame's base. A
+    /// record a completion pushes lands above the walk and is walked next,
+    /// in addition to n, as GNU's loop to a fixed depth.
     fn step_unbind(
         &mut self,
         op: Op,
@@ -1193,6 +1205,17 @@ where
                             remaining -= 1;
                         }
                         Ok(PlainUnbind::NeedsSerial { .. }) => {
+                            // The record handed off is the slab's top (the
+                            // entries mirror the records, C2); a record the
+                            // owner's frame never pushed sits above it
+                            // otherwise. Checked before anything is touched.
+                            if self.plain.top_record() != Some(record.record) {
+                                tracing::error!(
+                                    op = ?op,
+                                    "a Plain binding entry does not name the slab's top record"
+                                );
+                                return Self::record_contract_fault();
+                            }
                             // Refused: ONE escape naming the symbol and the
                             // record, and the serial side undoes the binding
                             // (`unbind_owner_binding`'s slow path). GNU's
@@ -1444,13 +1467,18 @@ where
         let popped_as_named = match &named {
             EscapeWhy::SerialUnbind { records } => completion.records.popped == *records,
             EscapeWhy::PlainUnbind { .. } => completion.records.popped.is_empty(),
+            // A refused Plain access pushes (a refused bind) or reads; it
+            // never pops a record. A sealed cons op pops none.
+            EscapeWhy::PlainRefused { .. } | EscapeWhy::UnimplementedSealed(_) => {
+                completion.records.popped.is_empty()
+            }
             // A World escape names no token: `WorldSplit::Escape` is one
             // variant for every World op, so its pop is checked as the top
-            // run only, as before. A handler-pop op legitimately pops the
-            // pair its push made; a `symbol-value` popping a token is the
-            // same hole as the Unbind arms had, and closes when `why` names
-            // the pair (V8's `SerialUnwind` is that naming). Named, not
-            // fixed here: N-world-escape-popped-as-named.
+            // run only, as before, and is the one residual. A handler-pop
+            // op legitimately pops the pair its push made; a `symbol-value`
+            // popping a token is the same hole as the Unbind arms had, and
+            // closes when `why` names the pair (V8's `SerialUnwind` is that
+            // naming). Named, not fixed here: N-world-escape-popped-as-named.
             _ => true,
         };
         let contract = if !self
