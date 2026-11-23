@@ -26,7 +26,9 @@ static_assertions::assert_not_impl_any!(HashTableWrite<'static>: Send, Sync, Clo
 /// existing inactive typed Value accessor can construct this private module's
 /// witness, and it consumes the witness before invoking the typed callback.
 /// The marker ties the copied handle to that accessor and forbids thread transfer;
-/// the accessor's existing contract supplies inactive-owner exclusion.
+/// the witness proves hydration only. The accessor's unsafe contract also
+/// requires Tier-H to remain inactive and excludes Lisp callbacks, GC or
+/// safepoints, heap installation changes and owner retirement until return.
 pub(crate) struct HydratedHashTable<'a> {
     value: Value,
     _scope: PhantomData<(&'a Value, Rc<()>)>,

@@ -97,7 +97,12 @@ impl TaggedHeap {
     /// Post-sweep pacing visits only registered image hash tables. In
     /// particular, minor GC never filters unrelated owned or mapped headers.
     pub(super) fn image_hash_table_storage_bytes(&self) -> usize {
-        if cfg!(test) || std::env::var("NEOVM_GC_VERIFY_PARTITION").as_deref() == Ok("1") {
+        // The diagnostic switch is process-wide; tests always verify.
+        static VERIFY_PARTITION: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if cfg!(test)
+            || *VERIFY_PARTITION
+                .get_or_init(|| std::env::var("NEOVM_GC_VERIFY_PARTITION").as_deref() == Ok("1"))
+        {
             self.verify_image_hash_table_registry();
         }
         let registry = self._satb_layout_reserve.image_hash_tables();

@@ -163,6 +163,70 @@ fn removal_shape(table: Value) -> (usize, usize, usize, usize) {
 }
 
 #[test]
+fn image_hash_pacing_typed_equal_remove_signals_without_mutation_or_backing_charge() {
+    let mut heap = TestHeap::new();
+    let deep_key = || {
+        let mut key = Value::fixnum(7);
+        for _ in 0..210 {
+            key = Value::cons(key, Value::NIL);
+        }
+        key
+    };
+    let stored = deep_key();
+    let probe = deep_key();
+    let error_symbol = crate::intern::intern("error");
+    assert_ne!(stored.bits(), probe.bits());
+    assert_eq!(equal_value_hash(stored), equal_value_hash(probe));
+
+    let mut detached = LispHashTable::new(HashTableTest::Equal);
+    detached.insert(
+        stored.to_hash_key_for_insert(HashTableTest::Equal, false),
+        stored,
+        Value::fixnum(42),
+    );
+    let table = heap.alloc_hash_table(detached);
+    let before = removal_shape(table);
+
+    // GNU internal_equal_1 signals beyond depth 200, before hash_remove
+    // changes an entry. Constructing that signal allocates its message;
+    // compare its standalone charge with the typed removal's whole charge.
+    heap.reset_bytes_since_gc();
+    let expected_error = try_equal_value_swp(&probe, &stored, 0, false).unwrap_err();
+    let signal_bytes = heap.bytes_since_gc_exact();
+    assert!(signal_bytes > 0, "the signal message is a real allocation");
+    let expected_signal = expected_error.as_signal().unwrap();
+    assert_eq!(expected_signal.symbol, error_symbol);
+    let expected_message = expected_signal.data[0].as_lisp_string().unwrap();
+    assert_eq!(expected_message.as_bytes(), b"Stack overflow in equal");
+
+    heap.reset_bytes_since_gc();
+    // SAFETY: this sole serial owner stays installed with Tier-H inactive;
+    // comparison signals without invoking Lisp, collecting or retiring it.
+    let error = unsafe { table.with_hash_table_write_inactive(|write| write.remove(probe, false)) }
+        .unwrap()
+        .unwrap_err();
+    let actual_signal = error.as_signal().unwrap();
+    assert_eq!(actual_signal.symbol, expected_signal.symbol);
+    assert_eq!(actual_signal.data.len(), expected_signal.data.len());
+    assert_eq!(
+        actual_signal.data[0].as_lisp_string().unwrap().as_bytes(),
+        expected_message.as_bytes()
+    );
+    assert_eq!(
+        heap.bytes_since_gc_exact(),
+        signal_bytes,
+        "a failed comparison charges its signal but no hash backing growth"
+    );
+    assert_eq!(removal_shape(table), before);
+    let table = table.as_hash_table().unwrap();
+    assert_eq!(table.data.len(), 1);
+    assert_eq!(
+        table.data.lookup(stored, HashTableTest::Equal, false),
+        Some(&Value::fixnum(42))
+    );
+}
+
+#[test]
 fn image_hash_pacing_typed_remove_preserves_net_growth_hydration_and_unwind() {
     let mut heap = TestHeap::new();
     heap.reset_bytes_since_gc();
