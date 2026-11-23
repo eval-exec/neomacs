@@ -3822,6 +3822,7 @@ dependencies = [
  "crossterm_winapi",
  "hostname",
  "libc",
+ "libloading 0.9.0",
  "libmimalloc-sys",
  "mimalloc",
  "neomacs-allocator",

@@ -852,6 +852,7 @@ fn sync_live_frame_font_state_rooted(
         display_host,
         frame_id,
         super::window_cmds::FrameResizeRequest::TextPixels { width, height },
+        true,
     ) {
         tracing::warn!(
             "failed to request implied font resize for frame 0x{:x}: {:?}",

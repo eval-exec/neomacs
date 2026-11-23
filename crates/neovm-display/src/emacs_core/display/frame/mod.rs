@@ -748,6 +748,33 @@ pub fn builtin_frame_position(
     ))
 }
 
+/// Whether an explicit text height should add the tool bar to the host window.
+///
+/// GTK delivers the explicit size without `FRAME_TOOLBAR_HEIGHT` (that field
+/// stays 0). The external bar's ConfigureNotify is inhibit 2. Preserving the
+/// text grid grows the window by the bar; preserving the allocation leaves
+/// the bar inside the requested rows.
+fn explicit_outer_includes_tool_bar(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    fid: FrameId,
+) -> Result<bool, Flow> {
+    let inhibit = eval.eval_symbol_by_id(intern("frame-inhibit-implied-resize"))?;
+    let symbols = eval.symbol_mode();
+    let frame = eval
+        .frame_manager()
+        .get(fid)
+        .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+    let policy = implied_resize::policy(
+        frame,
+        inhibit,
+        implied_resize_creation_phase(frame),
+        implied_resize::ImpliedResizeReason::ToolBarLines,
+        implied_resize::ResizeAxis::Vertical,
+        symbols,
+    )?;
+    Ok(policy == implied_resize::ResizePolicy::PreserveTextGrid)
+}
+
 /// `(set-frame-height FRAME HEIGHT &optional PRETEND PIXELWISE)` -> nil.
 #[doc(hidden)]
 pub fn builtin_set_frame_height(
@@ -793,6 +820,7 @@ pub fn builtin_set_frame_height(
             let desired_total_lines = ((text_height_px as f32) / char_height.max(1.0))
                 .floor()
                 .max(1.0) as i64;
+            let include_tool_bar = explicit_outer_includes_tool_bar(ctx, fid)?;
             let (frames, buffers, display_host) = ctx.frame_manager_buffers_and_display_host_mut();
             request_live_gui_frame_resize_and_keep_pending(
                 frames,
@@ -810,8 +838,10 @@ pub fn builtin_set_frame_height(
                         total_lines: desired_total_lines,
                     }
                 },
+                include_tool_bar,
             )?;
         } else {
+            let include_tool_bar = explicit_outer_includes_tool_bar(ctx, fid)?;
             let (frames, buffers, display_host) = ctx.frame_manager_buffers_and_display_host_mut();
             request_live_gui_frame_resize(
                 frames,
@@ -821,6 +851,7 @@ pub fn builtin_set_frame_height(
                 current_text_width_px,
                 text_height_px,
                 pretend,
+                include_tool_bar,
             )?;
         }
     } else if ctx
@@ -920,6 +951,7 @@ pub fn builtin_set_frame_width(
                 display_host,
                 fid,
                 FrameResizeRequest::TextWidth(text_width_px),
+                true,
             )?;
         } else {
             let (frames, buffers, display_host) = ctx.frame_manager_buffers_and_display_host_mut();
@@ -931,6 +963,7 @@ pub fn builtin_set_frame_width(
                 text_width_px,
                 current_text_height_px,
                 pretend,
+                true,
             )?;
         }
     } else if ctx
@@ -1044,6 +1077,7 @@ pub fn builtin_set_frame_size(
             .floor()
             .max(1.0) as i64;
         if ctx.display_host.is_some() {
+            let include_tool_bar = explicit_outer_includes_tool_bar(ctx, fid)?;
             let (frames, buffers, display_host) = ctx.frame_manager_buffers_and_display_host_mut();
             request_live_gui_frame_resize_and_keep_pending(
                 frames,
@@ -1061,8 +1095,10 @@ pub fn builtin_set_frame_size(
                         total_lines: desired_total_lines,
                     }
                 },
+                include_tool_bar,
             )?;
         } else {
+            let include_tool_bar = explicit_outer_includes_tool_bar(ctx, fid)?;
             let (frames, buffers, display_host) = ctx.frame_manager_buffers_and_display_host_mut();
             request_live_gui_frame_resize(
                 frames,
@@ -1072,6 +1108,7 @@ pub fn builtin_set_frame_size(
                 text_width_px,
                 text_height_px,
                 false,
+                include_tool_bar,
             )?;
         }
     } else if ctx
@@ -2355,8 +2392,23 @@ pub fn builtin_modify_frame_parameters(
             requested_width,
             requested_height,
         )?;
+        // A chrome-only target's text height is already net of the bars, so
+        // the host add must put the tool bar back. An explicit height in this
+        // alist is a user text size and follows the tool-bar inhibition.
+        let include_tool_bar = if requested_height.is_some() {
+            explicit_outer_includes_tool_bar(eval, fid)?
+        } else {
+            true
+        };
         let (frames, buffers, host) = eval.frame_manager_buffers_and_display_host_mut();
-        request_live_gui_frame_resize_and_keep_pending(frames, buffers, host, fid, request)?;
+        request_live_gui_frame_resize_and_keep_pending(
+            frames,
+            buffers,
+            host,
+            fid,
+            request,
+            include_tool_bar,
+        )?;
         requested_width = None;
         requested_height = None;
     }
@@ -2408,6 +2460,7 @@ pub fn builtin_modify_frame_parameters(
             // explicit size queued until a later geometry query.
             let (text_width_px, text_height_px) =
                 resize_request.text_pixels(&eval.frame_manager(), fid)?;
+            let include_tool_bar = explicit_outer_includes_tool_bar(eval, fid)?;
             let (frames, buffers, display_host) = eval.frame_manager_buffers_and_display_host_mut();
             resize_live_gui_frame(
                 frames,
@@ -2417,6 +2470,7 @@ pub fn builtin_modify_frame_parameters(
                 text_width_px,
                 text_height_px,
                 false,
+                include_tool_bar,
             )?;
         } else if eval
             .frame_manager()
@@ -2768,6 +2822,7 @@ pub(crate) fn request_live_gui_frame_resize_and_keep_pending(
     display_host: &mut Option<Box<dyn neovm_eval::emacs_core::eval::DisplayHost>>,
     fid: FrameId,
     request: FrameResizeRequest,
+    include_tool_bar: bool,
 ) -> Result<(), Flow> {
     let (text_width_px, text_height_px) = request.text_pixels(frames, fid)?;
     let (total_width_px, total_height_px, title, geometry_hints, visibility, decorated) = {
@@ -2775,7 +2830,11 @@ pub(crate) fn request_live_gui_frame_resize_and_keep_pending(
             .get(fid)
             .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
         let non_text_width = frame_non_text_total_width_pixels_in_state(frames, fid);
-        let non_text_height = frame_non_text_total_height_pixels(frame);
+        let non_text_height = if include_tool_bar {
+            frame_non_text_total_height_pixels(frame)
+        } else {
+            frame_non_text_total_height_pixels(frame).saturating_sub(frame.tool_bar_height)
+        };
         (
             text_width_px.saturating_add(non_text_width).max(1),
             text_height_px.saturating_add(non_text_height).max(1),
@@ -2800,6 +2859,7 @@ pub(crate) fn request_live_gui_frame_resize_and_keep_pending(
             text_width_px,
             text_height_px,
             false,
+            include_tool_bar,
         );
     };
 

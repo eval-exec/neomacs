@@ -39,6 +39,7 @@ pub(crate) use neovm_value::error::{
 use neovm_value::intern::{SymId, intern, resolve_sym};
 use neovm_value::value::{Value, ValueKind, VecLikeType, list_to_vec};
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicU32, Ordering};
 use strum::{EnumString, IntoStaticStr};
 
 mod body_geometry;
@@ -6164,6 +6165,57 @@ pub(crate) fn frame_non_text_total_height_pixels(frame: &crate::window::Frame) -
     frame_non_text_height_pixels(frame).saturating_add(frame_internal_border_total_pixels(frame))
 }
 
+/// GTK menu-bar requisition in pixels. Zero until the GUI process measures it.
+///
+/// GNU stores this on the frame as `FRAME_MENUBAR_HEIGHT` after
+/// `gtk_widget_get_preferred_size` (`gtkutil.c` `xg_update_frame_menubar`).
+/// It is the widget's height, not `menu-bar-lines` times the frame font.
+static TOOLKIT_MENU_BAR_HEIGHT_PX: AtomicU32 = AtomicU32::new(0);
+
+/// Record the toolkit menu-bar height for later outer-window requests.
+///
+/// The GUI process calls this once, before the first frame resize. Host
+/// tests leave it unset, so they keep the character-row menu bar.
+pub fn install_toolkit_menu_bar_height(px: u32) {
+    if px > 0 {
+        TOOLKIT_MENU_BAR_HEIGHT_PX.store(px, Ordering::Relaxed);
+    }
+}
+
+fn toolkit_menu_bar_height_px() -> Option<u32> {
+    match TOOLKIT_MENU_BAR_HEIGHT_PX.load(Ordering::Relaxed) {
+        0 => None,
+        px => Some(px),
+    }
+}
+
+/// Chrome added above a requested text height when building the host window.
+///
+/// GTK's explicit size asks for the text rows plus the menu bar. The external
+/// tool bar is not part of that request: `FRAME_TOOLBAR_HEIGHT` stays 0
+/// (`xg_frame_set_char_size`, gtkutil.c). The bar's later ConfigureNotify is
+/// inhibit 2 (frame.c:800-805). When that follow-up is inhibited the bar
+/// occupies text rows and the outer window stays; a preserved text grid grows
+/// the window by the bar instead. `include_tool_bar` selects that end state.
+///
+/// The menu-bar term is the toolkit requisition when the GUI process has
+/// measured one (`gtkutil.c:4214-4231`), and the frame's character-row height
+/// otherwise.
+fn host_outer_non_text_height_pixels(frame: &crate::window::Frame, include_tool_bar: bool) -> u32 {
+    let mut height = frame_non_text_total_height_pixels(frame);
+    if !include_tool_bar {
+        height = height.saturating_sub(frame.tool_bar_height);
+    }
+    if frame.menu_bar_height > 0
+        && let Some(toolkit) = toolkit_menu_bar_height_px()
+    {
+        height = height
+            .saturating_sub(frame.menu_bar_height)
+            .saturating_add(toolkit);
+    }
+    height
+}
+
 pub(crate) fn frame_text_width_pixels_in_state(frames: &FrameManager, fid: FrameId) -> u32 {
     frames.get(fid).map(frame_text_width_pixels).unwrap_or(0)
 }
@@ -6296,6 +6348,7 @@ pub(crate) fn resize_live_gui_frame(
     text_width_px: u32,
     text_height_px: u32,
     pretend: bool,
+    include_tool_bar: bool,
 ) -> Result<(), Flow> {
     let (total_width_px, total_height_px, title, cols, text_lines) = {
         let frame = frames
@@ -6306,7 +6359,7 @@ pub(crate) fn resize_live_gui_frame(
         let cols = ((text_width_px as f32) / char_width).floor().max(1.0) as i64;
         let text_lines = ((text_height_px as f32) / char_height).floor().max(1.0) as i64;
         let non_text_width = frame_non_text_total_width_pixels_in_state(frames, fid);
-        let non_text_height = frame_non_text_total_height_pixels(frame);
+        let non_text_height = host_outer_non_text_height_pixels(frame, include_tool_bar);
         let title = frame.host_title_lisp_string();
         (
             text_width_px.saturating_add(non_text_width).max(1),
@@ -6339,10 +6392,15 @@ pub(crate) fn resize_live_gui_frame(
                 total_width_px,
                 total_height_px,
             );
-            frame.set_parameter(
-                Value::symbol(FRAME_TEXT_LINES_PARAM),
-                Value::fixnum(text_lines),
-            );
+            // The pixel resize already stored the lines that fit. When the
+            // tool bar sits inside the requested text height, those lines are
+            // fewer than `text_lines`; keep them.
+            if include_tool_bar {
+                frame.set_parameter(
+                    Value::symbol(FRAME_TEXT_LINES_PARAM),
+                    Value::fixnum(text_lines),
+                );
+            }
         }
     }
 
@@ -6400,6 +6458,7 @@ pub(crate) fn request_live_gui_frame_resize(
     text_width_px: u32,
     text_height_px: u32,
     pretend: bool,
+    include_tool_bar: bool,
 ) -> Result<(), Flow> {
     let (total_width_px, total_height_px, title, cols, text_lines) = {
         let frame = frames
@@ -6410,7 +6469,7 @@ pub(crate) fn request_live_gui_frame_resize(
         let cols = ((text_width_px as f32) / char_width).floor().max(1.0) as i64;
         let text_lines = ((text_height_px as f32) / char_height).floor().max(1.0) as i64;
         let non_text_width = frame_non_text_total_width_pixels_in_state(frames, fid);
-        let non_text_height = frame_non_text_total_height_pixels(frame);
+        let non_text_height = host_outer_non_text_height_pixels(frame, include_tool_bar);
         let title = frame.host_title_lisp_string();
         (
             text_width_px.saturating_add(non_text_width).max(1),
@@ -6483,10 +6542,12 @@ pub(crate) fn request_live_gui_frame_resize(
         .get_mut(fid)
         .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
     frame.resize_pixelwise_with_buffer_constraints(buffers, total_width_px, total_height_px);
-    frame.set_parameter(
-        Value::symbol(FRAME_TEXT_LINES_PARAM),
-        Value::fixnum(text_lines),
-    );
+    if include_tool_bar {
+        frame.set_parameter(
+            Value::symbol(FRAME_TEXT_LINES_PARAM),
+            Value::fixnum(text_lines),
+        );
+    }
     adjust_frame_glyph_matrices_in_state(frames, buffers, fid);
     Ok(())
 }
@@ -6530,6 +6591,7 @@ pub(crate) fn flush_pending_live_gui_resize(
                 cols: pending.width_cols,
                 total_lines: pending.total_lines,
             },
+            true,
         )?;
     }
     Ok(eval
@@ -8384,7 +8446,7 @@ pub(crate) fn x_create_frame_impl(
         );
         // No native allocation exists yet. Finish logical geometry against
         // the actual opened font, then publish it in the realization request.
-        resize_live_gui_frame(frames, buffers, &mut None, fid, width, height, false)?;
+        resize_live_gui_frame(frames, buffers, &mut None, fid, width, height, false, true)?;
     }
     if is_child_frame {
         // Resolve text dimensions after installing effective chrome and the
@@ -8399,7 +8461,16 @@ pub(crate) fn x_create_frame_impl(
             || frame_text_height_pixels(frame),
             |size| frame_size_param_to_pixels(size, frame.char_height),
         );
-        resize_live_gui_frame(frames, buffers, display_host, fid, width, height, false)?;
+        resize_live_gui_frame(
+            frames,
+            buffers,
+            display_host,
+            fid,
+            width,
+            height,
+            false,
+            true,
+        )?;
     }
     // Identity, opened default font, chrome and owned mini geometry are final.
     adjust_frame_glyph_matrices_in_state(frames, buffers, fid);

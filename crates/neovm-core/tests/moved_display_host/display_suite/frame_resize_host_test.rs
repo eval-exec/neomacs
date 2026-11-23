@@ -723,6 +723,39 @@ fn toolbar_implied_resize_honors_true_parameter_list_and_force_inhibition() {
     }
 }
 
+#[test]
+fn inhibited_explicit_size_keeps_the_tool_bar_inside_the_outer_window() {
+    for form in [
+        "(modify-frame-parameters nil '((width . 90) (height . 40)))",
+        "(set-frame-size nil 90 40)",
+    ] {
+        let mut fixture = ChromeResizeFixture::new();
+        fixture
+            .eval
+            .eval_str("(setq frame-inhibit-implied-resize t)")
+            .unwrap();
+        fixture.requests.borrow_mut().clear();
+        fixture.eval.eval_str(form).unwrap();
+        assert_eq!(fixture.requests.borrow().len(), 1, "{form}");
+        let request = fixture.requests.borrow()[0].clone();
+        let toolbar = fixture
+            .eval
+            .frame_manager()
+            .get(fixture.frame_id)
+            .unwrap()
+            .tool_bar_height;
+        assert!(toolbar > 0, "{form}");
+        assert_eq!(
+            (request.width, request.height),
+            (720, 640 + fixture.menu_height),
+            "{form}: inhibit t keeps the tool bar inside the requested text height"
+        );
+        fixture.acknowledge(&request);
+        let text_px = 640u32.saturating_sub(toolbar);
+        fixture.assert_geometry(90, (text_px / 16) as i64, text_px as i64);
+    }
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn toolbar_creation_geometry_ignores_ordinary_inhibition_but_honors_force() {

@@ -112,6 +112,7 @@ libmimalloc-sys = { version = "0.1", optional = true, default-features = false, 
 tikv-jemallocator = { version = "0.7", optional = true, default-features = false }
 
 # Utilities
+libloading.workspace = true
 tracing.workspace = true
 static_assertions.workspace = true
 crossbeam-channel.workspace = true

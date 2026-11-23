@@ -75,6 +75,25 @@ fn explicit_size_after_font_is_on_the_x_window_before_a_geometry_query() {
     );
 }
 
+/// N-827-toolbar-height. GNU sizes the outer window before the GTK tool bar
+/// is realized (`xg_frame_set_char_size`, gtkutil.c:1181-1183), then the
+/// tool-bar ConfigureNotify is inhibit 2 (frame.c:800-805). With
+/// `frame-inhibit-implied-resize` t, GNU keeps that outer height and
+/// `frame-height` drops to 38. Neomacs must do the same.
+#[test]
+fn n827_toolbar_height_matches_gnu_outer_height() {
+    let (gnu, actual) = sample_explicit_sizes("n827-toolbar-height");
+    assert_eq!(
+        (actual.frame.0, actual.frame.1),
+        (gnu.frame.0, gnu.frame.1),
+        "N-827-toolbar-height frame neomacs {actual:?} gnu {gnu:?}"
+    );
+    assert_eq!(
+        actual.xwin.1, gnu.xwin.1,
+        "N-827-toolbar-height outer height neomacs {actual:?} gnu {gnu:?}"
+    );
+}
+
 fn sample_explicit_sizes(artifact_name: &str) -> (ExplicitSize, ExplicitSize) {
     let root = neomacs_infra::workspace_root();
     let artifacts = root.join("target/neomacs-gui-tests").join(artifact_name);
