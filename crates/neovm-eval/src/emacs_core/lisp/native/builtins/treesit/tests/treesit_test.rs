@@ -292,6 +292,101 @@ fn treesit_query_predicate_receives_the_returned_capture_node() {
     assert_eq!(returned_node, saved_node);
 }
 
+fn reparse_predicate(eval: &mut super::super::eval::Context) -> Value {
+    eval.eval_str(
+        "(defalias 'neomacs--treesit-reparse-p \
+           (lambda (node) \
+             (insert \"x\") \
+             (treesit-parser-root-node (treesit-node-parser node)) \
+             nil))",
+    )
+    .expect("reparse predicate");
+    Value::symbol("neomacs--treesit-reparse-p")
+}
+
+/// GNU `treesit_pred_with_guard` signals `treesit-buffer_changed` (data is
+/// the predicate) when a function predicate reparses. Attested on Emacs 31.1
+/// `a360712c9d` for `treesit-search-subtree`, `treesit-search-forward`, and
+/// `treesit-induce-sparse-tree`.
+#[test]
+fn treesit_search_subtree_predicate_that_reparses_signals_buffer_changed() {
+    let (mut eval, parser) = eval_with_json_parser(r#"{"a": 1}"#);
+    let root = builtin_treesit_parser_root_node(&mut eval, vec![parser]).expect("root");
+    let pred = reparse_predicate(&mut eval);
+    let sig = expect_signal(
+        builtin_treesit_search_subtree(&mut eval, vec![root, pred]),
+        "treesit-buffer_changed",
+    );
+    assert_eq!(sig.data, vec![pred]);
+}
+
+#[test]
+fn treesit_search_forward_predicate_that_reparses_signals_buffer_changed() {
+    let (mut eval, parser) = eval_with_json_parser(r#"{"a": 1}"#);
+    let root = builtin_treesit_parser_root_node(&mut eval, vec![parser]).expect("root");
+    let child = builtin_treesit_node_child(&mut eval, vec![root, Value::fixnum(0)]).expect("child");
+    let pred = reparse_predicate(&mut eval);
+    let sig = expect_signal(
+        builtin_treesit_search_forward(&mut eval, vec![child, pred]),
+        "treesit-buffer_changed",
+    );
+    assert_eq!(sig.data, vec![pred]);
+}
+
+#[test]
+fn treesit_induce_sparse_tree_predicate_that_reparses_signals_buffer_changed() {
+    let (mut eval, parser) = eval_with_json_parser(r#"{"a": 1}"#);
+    let root = builtin_treesit_parser_root_node(&mut eval, vec![parser]).expect("root");
+    let pred = reparse_predicate(&mut eval);
+    let sig = expect_signal(
+        builtin_treesit_induce_sparse_tree(&mut eval, vec![root, pred]),
+        "treesit-buffer_changed",
+    );
+    assert_eq!(sig.data, vec![pred]);
+}
+
+fn dotted_reparse_predicate(eval: &mut super::super::eval::Context) -> Value {
+    eval.eval_str(
+        "(defalias 'neomacs--treesit-dotted-reparse-p \
+           (lambda (node) \
+             (insert \"x\") \
+             (treesit-parser-root-node (treesit-node-parser node)) \
+             nil))",
+    )
+    .expect("dotted reparse predicate");
+    eval.eval_str("(cons \"document\" 'neomacs--treesit-dotted-reparse-p)")
+        .expect("dotted predicate")
+}
+
+/// GNU `treesit_traverse_match_predicate` calls a dotted `(string . function)`
+/// predicate with `calln`, not `treesit_pred_with_guard`. Attested on Emacs
+/// 31.1 `a360712c9d`: `treesit-search-subtree` returns nil and does not signal
+/// when that function inserts and reparses.
+#[test]
+fn treesit_search_subtree_dotted_predicate_that_reparses_does_not_signal() {
+    let (mut eval, parser) = eval_with_json_parser(r#"{"a": 1}"#);
+    let root = builtin_treesit_parser_root_node(&mut eval, vec![parser]).expect("root");
+    let pred = dotted_reparse_predicate(&mut eval);
+    let found = builtin_treesit_search_subtree(&mut eval, vec![root, pred]).expect("no signal");
+    assert!(found.is_nil());
+    assert_eq!(
+        eval.eval_str("(buffer-string)").expect("buffer text"),
+        Value::string("{\"a\": 1}x")
+    );
+}
+
+#[test]
+fn treesit_search_subtree_string_predicate_returns_a_live_node() {
+    let (mut eval, parser) = eval_with_json_parser(r#"{"a": 1}"#);
+    let root = builtin_treesit_parser_root_node(&mut eval, vec![parser]).expect("root");
+    let found = builtin_treesit_search_subtree(&mut eval, vec![root, Value::string("number")])
+        .expect("number node");
+    assert_eq!(
+        builtin_treesit_node_type(&mut eval, vec![found]).expect("node type"),
+        Value::string("number")
+    );
+}
+
 #[test]
 fn treesit_query_predicate_rejects_parser_buffer_mutation() {
     let (mut eval, parser) = eval_with_json_parser(r#"["first"]"#);
