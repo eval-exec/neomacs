@@ -1974,6 +1974,60 @@ fn opcode(kind: ArithGenericKind) -> Op {
 }
 
 #[test]
+fn vm_an_arith_opcode_with_too_few_operands_signals_invalid_byte_code_before_the_port() {
+    // An Arith opcode reached with fewer operands than its static effect
+    // consumes is malformed code, the Scalar and Sealed arms' `Invalid
+    // byte-code` (lead C3), refused before the port is asked and before any
+    // poll. GNU's arms POP (bytecode.c:1331-1343); verified code never
+    // underflows. One operand short for every kind, and none for the unary
+    // kinds; the port is never called and the stepper restarts.
+    let mut ctx = context();
+    for kind in ArithGenericKind::iter() {
+        let op = opcode(kind);
+        let consumed = usize::from(static_stack_effect(&op).consumed);
+        assert!(consumed >= 1, "{kind:?}: every arith opcode consumes");
+        let operands = vec![Value::fixnum(1); consumed - 1];
+        let ops = arith_program(op, &operands);
+        let mut engine = arithmetic_harness();
+        let outcome = engine.run(&mut ctx, program_with(&ops, &operands));
+        let flow = match outcome {
+            VmOutcome::Signaled(flow) => flow,
+            other => panic!(
+                "{kind:?} with {} operand(s): expected a signal, got {other:?}",
+                operands.len()
+            ),
+        };
+        assert_eq!(
+            signal_key(&flow),
+            (
+                "error".to_string(),
+                vec![Value::string("Invalid byte-code")]
+            ),
+            "{kind:?} with {} operand(s)",
+            operands.len()
+        );
+        assert!(
+            engine.arith_handler().calls.is_empty(),
+            "{kind:?}: the port is not asked"
+        );
+        assert!(
+            engine.escape_handler().requests.is_empty(),
+            "{kind:?}: no request"
+        );
+        assert!(engine.poll_handler().edges.is_empty(), "{kind:?}: no poll");
+        assert!(engine.is_idle(), "{kind:?}: settled to Idle");
+        assert_clear(&engine);
+        let outcome = engine.run(&mut ctx, program(&[Op::Nil, Op::Return]));
+        assert_eq!(
+            done_value(&mut engine, outcome),
+            Value::NIL,
+            "{kind:?}: restart"
+        );
+        assert_clear(&engine);
+    }
+}
+
+#[test]
 fn vm_fixnum_add_runs_owner_locally() {
     // GNU `Bplus` (bytecode.c:1331-1343) is straight-line code: the fixnum
     // fast path or `Fplus (2, &TOP)`, no `maybe_quit`, no funcall. R6: two
