@@ -866,9 +866,11 @@ unsafe fn with_verified_hash_table_mut<const METERED: bool, R>(
     if METERED {
         // Declare this before the debug closure guard in the payload loan:
         // reverse-drop must end that extent before accounting reads it again.
+        // Retain the existing metered representation and unwind consumer;
+        // only the unmetered branch needs to omit the optional charge object.
         // SAFETY: all non-payload bookkeeping is complete; the callback may
         // replace this table, but its borrow cannot outlive the guard.
-        let _storage_charge = unsafe { super::gc::SerialHashTableStorageCharge::new(ptr) };
+        let _storage_charge = Some(unsafe { super::gc::SerialHashTableStorageCharge::new(ptr) });
         payload_loan!()
     } else {
         // The unmetered extent has no charge object, including on unwind.
