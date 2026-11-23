@@ -848,6 +848,64 @@ impl StipplePattern {
         })
     }
 
+    /// Foreground quads for this bitmap tiled over a rectangle at `(x, y)`.
+    ///
+    /// GNU samples the bitmap at the frame pixel. `xterm.c` leaves the tile
+    /// origin on the frame drawable; the offscreen pixmap path sets
+    /// `XSetTSOrigin(-s->x, -s->y)` so that same phase survives. indent-bars
+    /// rotates its bitmap for that frame origin. Each set bit is one logical
+    /// pixel. The rect pipeline scales those quads to device pixels once.
+    pub fn covered_runs(
+        &self,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+    ) -> Vec<(f32, f32, f32, f32)> {
+        let mut runs = Vec::new();
+        if self.width == 0 || self.height == 0 || width <= 0.0 || height <= 0.0 {
+            return runs;
+        }
+        let bytes_per_row = self.width.div_ceil(8) as usize;
+        let period_x = self.width as i64;
+        let period_y = self.height as i64;
+        let w_pixels = width.ceil() as u32;
+        let h_pixels = height.ceil() as u32;
+        for py in 0..h_pixels {
+            let pat_y = ((y + py as f32).floor() as i64).rem_euclid(period_y) as u32;
+            let mut px = 0u32;
+            while px < w_pixels {
+                let pat_x = ((x + px as f32).floor() as i64).rem_euclid(period_x) as u32;
+                if !self.bit_at(pat_x, pat_y, bytes_per_row) {
+                    px += 1;
+                    continue;
+                }
+                let run_start = px;
+                px += 1;
+                while px < w_pixels {
+                    let pat_x2 = ((x + px as f32).floor() as i64).rem_euclid(period_x) as u32;
+                    if !self.bit_at(pat_x2, pat_y, bytes_per_row) {
+                        break;
+                    }
+                    px += 1;
+                }
+                runs.push((
+                    x + run_start as f32,
+                    y + py as f32,
+                    (px - run_start) as f32,
+                    1.0,
+                ));
+            }
+        }
+        runs
+    }
+
+    fn bit_at(&self, pat_x: u32, pat_y: u32, bytes_per_row: usize) -> bool {
+        let byte_idx = pat_y as usize * bytes_per_row + (pat_x / 8) as usize;
+        let bit_idx = pat_x % 8;
+        byte_idx < self.bits.len() && (self.bits[byte_idx] >> bit_idx) & 1 != 0
+    }
+
     /// Parse an X BitMap (XBM) source file into a stipple pattern, mirroring
     /// GNU's `image_create_bitmap_from_file`. Handles the standard form:
     ///

@@ -104,6 +104,9 @@ mod face_background_mode_gui_oracle;
 #[path = "fill_column_stipple.rs"]
 mod fill_column_stipple;
 
+#[path = "indent_bars_stipple.rs"]
+mod indent_bars_stipple;
+
 #[path = "font_coverage.rs"]
 mod font_coverage;
 

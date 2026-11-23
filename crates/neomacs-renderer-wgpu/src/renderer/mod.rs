@@ -1719,55 +1719,8 @@ impl WgpuRenderer {
         fg: &Color,
         pattern: &StipplePattern,
     ) {
-        if pattern.width == 0 || pattern.height == 0 {
-            return;
-        }
-        let bytes_per_row = pattern.width.div_ceil(8) as usize;
-        // Round the fractional cell size UP so the tiled fill covers the whole
-        // domain: with a proportional font the per-glyph cell width is
-        // fractional (e.g. 16.25px), and truncating left a ~1px unfilled column
-        // at every glyph boundary. Any overdraw past the domain is clipped by
-        // the paint clip and overpainted by the next glyph's own fill.
-        let w_pixels = width.ceil() as u32;
-        let h_pixels = height.ceil() as u32;
-
-        // Tile the pattern over the area, merging horizontal runs
-        for py in 0..h_pixels {
-            let pat_y = py % pattern.height;
-            let mut px = 0u32;
-            while px < w_pixels {
-                let pat_x = px % pattern.width;
-                let byte_idx = pat_y as usize * bytes_per_row + (pat_x / 8) as usize;
-                let bit_idx = pat_x % 8;
-                let bit_set =
-                    byte_idx < pattern.bits.len() && (pattern.bits[byte_idx] >> bit_idx) & 1 != 0;
-                if !bit_set {
-                    px += 1;
-                    continue;
-                }
-                // Start of a run — find how far it extends
-                let run_start = px;
-                px += 1;
-                while px < w_pixels {
-                    let pat_x2 = px % pattern.width;
-                    let bi2 = pat_y as usize * bytes_per_row + (pat_x2 / 8) as usize;
-                    let bit2 = pat_x2 % 8;
-                    let set2 = bi2 < pattern.bits.len() && (pattern.bits[bi2] >> bit2) & 1 != 0;
-                    if !set2 {
-                        break;
-                    }
-                    px += 1;
-                }
-                let run_len = px - run_start;
-                self.add_rect(
-                    vertices,
-                    x + run_start as f32,
-                    y + py as f32,
-                    run_len as f32,
-                    1.0,
-                    fg,
-                );
-            }
+        for (qx, qy, qw, qh) in pattern.covered_runs(x, y, width, height) {
+            self.add_rect(vertices, qx, qy, qw, qh, fg);
         }
     }
 
