@@ -7064,7 +7064,7 @@ impl LayoutEngine {
         // matrix records it at acceptance, after redisplay's own fontification.
         let window_outdated = match (retained_matrix, buffer_state) {
             (Some(retained), Some(buffer)) => {
-                retained.gnu_accuracy.as_ref().is_some_and(|accuracy| {
+                retained.gnu_accuracy.as_ref().is_none_or(|accuracy| {
                     buffer.modified_tick() != accuracy.modified_tick
                         || buffer.overlay_modified_tick() != accuracy.overlay_modified_tick
                 })
@@ -7076,7 +7076,7 @@ impl LayoutEngine {
         // A moved body revision -- GNU `force-window-update` -- refuses too.
         let prevent_redisplay_optimizations = retained_matrix.is_some_and(|retained| {
             retained.key.body_redisplay != evaluator.body_redisplay_revision(window_id, buf_id)
-                || retained.gnu_accuracy.as_ref().is_some_and(|accuracy| {
+                || retained.gnu_accuracy.as_ref().is_none_or(|accuracy| {
                     accuracy.redisplay_optimizations
                         != evaluator.prevent_redisplay_optimizations_revision(buf_id)
                 })

@@ -580,3 +580,155 @@ fn probe_row_runs_after_a_persistent_narrowing() {
         window_end.as_i64()
     );
 }
+
+/// Unknown GNU accuracy must not suppress Lisp's real past-end probe. This
+/// uses the real producer and recording hook, not GnuMatrixReuse directly.
+#[test]
+fn probe_row_runs_for_unknown_accuracy_while_body_rows_still_reuse() {
+    // Direct engine calls intentionally do not own RedisplayTransaction's
+    // pending scopes. Keep those unrelated refusal inputs out of this cache
+    // authority test; actual whole-frame acceptance still stamps accuracy.
+    let _policy = neovm_core::emacs_core::eval::RedisplayHookPolicyGuard::legacy();
+    let text = ("a".repeat(150) + "\n").repeat(60);
+    let (mut eval, frame_id, buffer_id, window_id) = tty_probe_frame(&text, 160, 37);
+    eval.edit.buffers.set_current(buffer_id);
+    for index in 0..60i64 {
+        let start = index * 151 + 1;
+        neovm_edit::emacs_core::textprop::builtin_put_text_property(
+            &mut eval,
+            vec![
+                Value::fixnum(start),
+                Value::fixnum(start + 150),
+                Value::symbol("p640"),
+                Value::fixnum(index),
+            ],
+        )
+        .expect("actual interval stops for the declining hook");
+    }
+    install_recording_fontification_hook(&mut eval, "c2-unknown-accuracy-calls");
+    let target = DisplayWindowId::new(window_id.0 as i64);
+    let mut engine = LayoutEngine::new_without_font_metrics();
+    engine.layout_frame_rust(&mut eval, frame_id);
+    let buffer_z = eval
+        .buffer_manager()
+        .get(buffer_id)
+        .unwrap()
+        .point_max_lisp_char_pos();
+    let leaf = eval
+        .frame_manager()
+        .get(frame_id)
+        .unwrap()
+        .find_window(window_id)
+        .unwrap();
+    assert_eq!(leaf.window_end_valid(), Some(true));
+    let window_end = leaf.window_end_charpos(buffer_z).unwrap();
+    assert!(
+        window_end.as_i64() > 1 && window_end < buffer_z,
+        "a genuine following probe row must exist"
+    );
+    assert!(
+        leaf.display()
+            .unwrap()
+            .redisplay_output()
+            .unwrap()
+            .gnu_accuracy
+            .is_some(),
+        "warm-up must be an actually stamped accepted output"
+    );
+    assert!(
+        engine
+            .retained_window_matrices
+            .get(&target)
+            .unwrap()
+            .gnu_accuracy
+            .is_some()
+    );
+    let warm_calls = recorded_fontification_positions(&mut eval, "c2-unknown-accuracy-calls");
+    assert!(
+        warm_calls.iter().any(|pos| *pos >= window_end.as_i64()),
+        "the full warm-up proves the hook can reach the following row: {warm_calls:?}"
+    );
+
+    // Positive control FIRST: real unchanged-body reuse plus known accepted
+    // accuracy must suppress the past-end hook, independently of this fix.
+    eval.eval_str("(setq c2-unknown-accuracy-calls nil)")
+        .unwrap();
+    eval.eval_str("(goto-char 5)").unwrap();
+    engine.layout_frame_rust(&mut eval, frame_id);
+    assert!(
+        engine.cursor_only_window_ids.contains(&target),
+        "the selected target, not merely its minibuffer, actually reuses rows: {:?}",
+        engine.last_layout_stats()
+    );
+    let known_calls = recorded_fontification_positions(&mut eval, "c2-unknown-accuracy-calls");
+    assert!(
+        !known_calls.iter().any(|pos| *pos >= window_end.as_i64()),
+        "known current accuracy must skip the actual probe: {known_calls:?}"
+    );
+    assert!(
+        engine
+            .retained_window_matrices
+            .get(&target)
+            .unwrap()
+            .gnu_accuracy
+            .is_some()
+    );
+    assert!(
+        engine
+            .frame_visual_histories
+            .get(frame_id)
+            .unwrap()
+            .cursor_sources_for(target)
+            .unwrap()
+            .unchanged(),
+        "original producer read authority stays current"
+    );
+    let current_leaf = eval
+        .frame_manager()
+        .get(frame_id)
+        .unwrap()
+        .find_window(window_id)
+        .unwrap();
+    assert_eq!(current_leaf.window_end_valid(), Some(true));
+    assert_eq!(current_leaf.window_end_charpos(buffer_z), Some(window_end));
+
+    eval.eval_str("(setq c2-unknown-accuracy-calls nil)")
+        .unwrap();
+    // ONLY the retained cache's GNU-accuracy authority becomes unknown.
+    // Live end/output, point, source inputs, row key and read leases remain.
+    engine
+        .retained_window_matrices
+        .get_mut(&target)
+        .unwrap()
+        .gnu_accuracy = None;
+    assert!(
+        engine
+            .frame_visual_histories
+            .get(frame_id)
+            .unwrap()
+            .cursor_sources_for(target)
+            .unwrap()
+            .unchanged()
+    );
+    engine.layout_frame_rust(&mut eval, frame_id);
+    assert!(
+        engine.cursor_only_window_ids.contains(&target),
+        "unknown GNU skip authority must not prevent internally safe row reuse: {:?}",
+        engine.last_layout_stats()
+    );
+    let unknown_calls = recorded_fontification_positions(&mut eval, "c2-unknown-accuracy-calls");
+    assert!(
+        unknown_calls.iter().any(|pos| *pos >= window_end.as_i64()),
+        "unknown GNU accuracy must enter the actual probe past published end {}: {unknown_calls:?}",
+        window_end.as_i64()
+    );
+    assert!(
+        engine
+            .retained_window_matrices
+            .get(&target)
+            .unwrap()
+            .gnu_accuracy
+            .is_some(),
+        "the successful new normal acceptance stamps its own accuracy again"
+    );
+}

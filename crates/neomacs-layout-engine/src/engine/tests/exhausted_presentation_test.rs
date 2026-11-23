@@ -28,7 +28,7 @@ fn changing_header_frame() -> (
 }
 
 #[test]
-fn exhausted_header_mutation_keeps_closed_paint_without_live_authority() {
+fn late_header_source_mutation_publishes_complete_live_output() {
     let (mut eval, frame, window) = changing_header_frame();
     let before_window_end = eval
         .frame_manager()
@@ -42,12 +42,11 @@ fn exhausted_header_mutation_keeps_closed_paint_without_live_authority() {
     let mut engine = crate::font::metrics::test_catalog::layout_engine();
     crate::font::metrics::test_catalog::enable_metrics(&mut engine);
 
-    // Keep the original first failing assertion and panic text for RED provenance.
+    // The original failing Prepared condition is unchanged. The recorded RED
+    // source preserves its former name and paint-only panic text.
     let FrameLayoutAttempt::Prepared(output) = engine.redisplay_frame_attempt(&mut eval, frame)
     else {
-        panic!(
-            "a closed first presentation must survive exhaustion without claiming live authority"
-        );
+        panic!("late header mutation must publish the completed live presentation");
     };
     let state = output.state();
     let windows: std::collections::HashSet<_> = state
