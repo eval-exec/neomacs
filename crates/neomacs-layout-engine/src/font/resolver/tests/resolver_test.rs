@@ -1503,3 +1503,152 @@ fn native_open_by_spec_rejects_an_unavailable_family() {
         .with_selection(FontSpecSelection::OpenBySpec);
     assert!(service.resolve_font_entity(&known).is_some());
 }
+
+/// Two equal-score fallbacks whose discovery order flips with the character.
+/// GNU `fontset_find_font` reuses an opened font that covers the next character
+/// (`src/fontset.c`) before it lists candidates again.
+struct TieOrderBackend {
+    listings: Arc<AtomicUsize>,
+    first: FontCandidate,
+    second: FontCandidate,
+    first_misses: Vec<char>,
+}
+
+impl TieOrderBackend {
+    fn covers(&self, identity: &ResolvedFontIdentity, ch: char) -> bool {
+        if identity == &self.first.matched.identity {
+            !self.first_misses.contains(&ch)
+        } else if identity == &self.second.matched.identity {
+            true
+        } else {
+            false
+        }
+    }
+
+    fn covering(&self, ch: char) -> Vec<FontCandidate> {
+        let noto_first = ch == '検';
+        let ordered: [&FontCandidate; 2] = if noto_first {
+            [&self.first, &self.second]
+        } else {
+            [&self.second, &self.first]
+        };
+        ordered
+            .into_iter()
+            .filter(|candidate| self.covers(&candidate.matched.identity, ch))
+            .cloned()
+            .collect()
+    }
+}
+
+impl FontBackend for TieOrderBackend {
+    fn kind(&self) -> FontBackendKind {
+        FontBackendKind::Fontconfig
+    }
+
+    fn list_families(&self) -> Vec<FontFamilyName> {
+        Vec::new()
+    }
+
+    fn resolve_family(&self, family: &str) -> String {
+        family.to_owned()
+    }
+
+    fn family_prefers_monospace(&self, _family: &str) -> bool {
+        false
+    }
+
+    fn list_candidates(&self, query: &FontCandidateQuery) -> Vec<FontCandidate> {
+        self.listings.fetch_add(1, Ordering::Relaxed);
+        query
+            .required
+            .single_char()
+            .map(|ch| self.covering(ch))
+            .unwrap_or_default()
+    }
+
+    fn list_candidates_for_identity(
+        &self,
+        query: &FontCandidateQuery,
+        identity: &ResolvedFontIdentity,
+    ) -> Vec<FontCandidate> {
+        let Some(ch) = query.required.single_char() else {
+            return Vec::new();
+        };
+        if !self.covers(identity, ch) {
+            return Vec::new();
+        }
+        self.covering(ch)
+            .into_iter()
+            .filter(|candidate| candidate.matched.identity == *identity)
+            .collect()
+    }
+
+    fn advance_catalog_generation(&mut self) {}
+
+    fn poll_catalog_change(&mut self) -> crate::font::catalog::FontCatalogChange {
+        crate::font::catalog::FontCatalogChange::Unchanged
+    }
+}
+
+fn resolve_tie(resolver: &FontResolver, ch: char) -> PlatformFontMatch {
+    resolver
+        .resolve_for_char(
+            "IBM Plex Mono",
+            ch,
+            400,
+            FontSlant::Normal,
+            FontWidth::Normal,
+            selection_size(),
+        )
+        .unwrap_or_else(|| panic!("fallback for {ch}"))
+}
+
+#[test]
+fn opened_fallback_is_reused_when_a_later_character_ties() {
+    let listings = Arc::new(AtomicUsize::new(0));
+    let resolver = FontResolver::new(Box::new(TieOrderBackend {
+        listings: Arc::clone(&listings),
+        first: candidate("Noto Sans Mono CJK JP", 400, FontSlant::Normal, 0),
+        second: candidate("Cica", 400, FontSlant::Normal, 0),
+        first_misses: Vec::new(),
+    }));
+
+    let kanji = resolve_tie(&resolver, '検');
+    let kana = resolve_tie(&resolver, 'リ');
+
+    assert_eq!(kanji.family(), "Noto Sans Mono CJK JP");
+    assert_eq!(
+        kana.family(),
+        kanji.family(),
+        "an opened fallback that covers the next character is reused"
+    );
+    assert_eq!(
+        listings.load(Ordering::Relaxed),
+        1,
+        "the second character must not list candidates again"
+    );
+}
+
+#[test]
+fn opened_fallback_skips_a_font_that_does_not_cover_the_character() {
+    let listings = Arc::new(AtomicUsize::new(0));
+    let resolver = FontResolver::new(Box::new(TieOrderBackend {
+        listings: Arc::clone(&listings),
+        first: candidate("Noto Sans Mono CJK JP", 400, FontSlant::Normal, 0),
+        second: candidate("Cica", 400, FontSlant::Normal, 0),
+        first_misses: vec!['リ'],
+    }));
+
+    let kanji = resolve_tie(&resolver, '検');
+    let missing = resolve_tie(&resolver, 'リ');
+    let later = resolve_tie(&resolver, 'ピ');
+
+    assert_eq!(kanji.family(), "Noto Sans Mono CJK JP");
+    assert_eq!(missing.family(), "Cica");
+    assert_eq!(
+        later.family(),
+        kanji.family(),
+        "a later character uses the first opened font that covers it"
+    );
+    assert_eq!(listings.load(Ordering::Relaxed), 2);
+}

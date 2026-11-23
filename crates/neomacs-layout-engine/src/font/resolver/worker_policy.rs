@@ -289,8 +289,7 @@ impl FontResolver {
         let style = WorkerFontStyle::from_key(&key)?;
         let selected = self
             .resolve_frozen_query(&key, query, &style)
-            .and_then(|matched| self.backend.finalize_match(matched))
-            .map(|matched| self.with_native_metrics(matched));
+            .and_then(|resolution| self.finish_character_resolution(Some(resolution)));
         if let Ok(mut cache) = self.char_cache.lock() {
             cache.insert(key, selected.clone());
         }
@@ -302,7 +301,7 @@ impl FontResolver {
         key: &CharCacheKey,
         query: &FrozenCharacterQuery,
         style: &WorkerFontStyle,
-    ) -> Option<PlatformFontCandidate> {
+    ) -> Option<SpecResolution> {
         let prefer_monospace = self.family_prefers_monospace(&key.family);
         for entry in query.chain.iter() {
             match entry {
@@ -314,8 +313,10 @@ impl FontResolver {
                         style,
                         spec,
                     );
-                    if let Some(matched) = self.resolve_from_policy(&policy, prefer_monospace) {
-                        return Some(matched);
+                    if let Some(found) =
+                        self.resolve_spec(policy, prefer_monospace, key.fontset_generation)
+                    {
+                        return Some(found);
                     }
                 }
             }
@@ -331,7 +332,7 @@ impl FontResolver {
         };
         let policy =
             CapturedCharacterPolicy::from_rendering_spec(key, &query.inherited, style, &fallback);
-        self.resolve_from_policy(&policy, prefer_monospace)
+        self.resolve_spec(policy, prefer_monospace, key.fontset_generation)
     }
 }
 

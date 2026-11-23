@@ -220,6 +220,13 @@ pub struct FontResolver {
     primary_cache: Mutex<HashMap<PrimaryCacheKey, Option<PlatformFontMatch>>>,
     char_cache: Mutex<HashMap<CharCacheKey, Option<PlatformFontMatch>>>,
     exact_cache: Mutex<HashMap<ResolvedFontIdentity, Option<PlatformFontMatch>>>,
+    /// Fonts already opened for one face and font-def, in open order.
+    ///
+    /// GNU `fontset_find_font` checks these with `font_has_char` before
+    /// `font_find_for_lface` (`src/fontset.c`). The key is the face plus the
+    /// font spec, not the character, so a later character covered by an
+    /// opened fallback does not get a new equal-score pick.
+    opened_fallbacks: Mutex<HashMap<OpenedFallbackKey, Vec<PlatformFontMatch>>>,
 }
 
 impl FontResolver {
@@ -235,6 +242,7 @@ impl FontResolver {
             primary_cache: Mutex::new(HashMap::default()),
             char_cache: Mutex::new(HashMap::default()),
             exact_cache: Mutex::new(HashMap::default()),
+            opened_fallbacks: Mutex::new(HashMap::default()),
         }
     }
 
@@ -903,8 +911,9 @@ impl FontResolver {
             return cached.clone();
         }
 
+        let generation = key.fontset_generation;
         let prefer_monospace = self.family_prefers_monospace(family);
-        let mut selected = None;
+        let mut resolution = None;
         let mut allow_generic_fallback = true;
         for entry in matching_entries_for_char(ch) {
             match entry {
@@ -913,28 +922,27 @@ impl FontResolver {
                     break;
                 }
                 FontSpecEntry::Font(spec) => {
-                    if let Some(matched) = self.resolve_from_spec(
+                    let policy = CapturedCharacterPolicy::capture(
                         family,
                         ch,
-                        prefer_monospace,
                         requested_weight,
                         requested_slant,
                         requested_width,
                         size,
                         &spec,
-                    ) {
-                        selected = Some(matched);
+                    );
+                    if let Some(found) = self.resolve_spec(policy, prefer_monospace, generation) {
+                        resolution = Some(found);
                         break;
                     }
                 }
             }
         }
 
-        if selected.is_none() && allow_generic_fallback {
-            selected = self.resolve_from_spec(
+        if resolution.is_none() && allow_generic_fallback {
+            let policy = CapturedCharacterPolicy::capture(
                 family,
                 ch,
-                prefer_monospace,
                 requested_weight,
                 requested_slant,
                 requested_width,
@@ -950,14 +958,92 @@ impl FontResolver {
                     definition: None,
                 },
             );
+            resolution = self.resolve_spec(policy, prefer_monospace, generation);
         }
-        let selected = selected
-            .and_then(|matched| self.backend.finalize_match(matched))
-            .map(|matched| self.with_native_metrics(matched));
+        let selected = self.finish_character_resolution(resolution);
         if let Ok(mut cache) = self.char_cache.lock() {
             cache.insert(key, selected.clone());
         }
         selected
+    }
+
+    /// Reuse an opened font for this face and font-def when it covers `ch`.
+    /// A miss lists candidates and records the newly opened font.
+    fn resolve_spec(
+        &self,
+        policy: CapturedCharacterPolicy,
+        prefer_monospace: bool,
+        generation: u64,
+    ) -> Option<SpecResolution> {
+        let group = OpenedFallbackKey::from_policy(&policy, generation);
+        if let Some(reused) = self.reuse_opened(&group, policy.ch) {
+            return Some(SpecResolution::Reused(reused));
+        }
+        self.resolve_from_policy(&policy, prefer_monospace)
+            .map(|matched| SpecResolution::Fresh(group, matched))
+    }
+
+    fn finish_character_resolution(
+        &self,
+        resolution: Option<SpecResolution>,
+    ) -> Option<PlatformFontMatch> {
+        match resolution {
+            Some(SpecResolution::Reused(matched)) => Some(matched),
+            Some(SpecResolution::Fresh(group, matched)) => {
+                let selected = self
+                    .backend
+                    .finalize_match(matched)
+                    .map(|matched| self.with_native_metrics(matched));
+                if let Some(selected) = &selected {
+                    self.remember_opened(group, selected.clone());
+                }
+                selected
+            }
+            None => None,
+        }
+    }
+
+    fn reuse_opened(&self, key: &OpenedFallbackKey, ch: char) -> Option<PlatformFontMatch> {
+        let opened = {
+            let guard = self.opened_fallbacks.lock().ok()?;
+            guard.get(key).cloned().unwrap_or_default()
+        };
+        opened
+            .into_iter()
+            .find(|matched| self.opened_font_covers(matched, ch))
+    }
+
+    /// GNU `font_has_char` on an already opened font object. This asks the
+    /// backend about that identity only; it does not score a new entity list.
+    fn opened_font_covers(&self, matched: &PlatformFontMatch, ch: char) -> bool {
+        let query = FontCandidateQuery {
+            scope: FontCandidateScope::All,
+            required: RequiredFontCoverage::Character(ch),
+            charset_ranges: Vec::new(),
+            languages: Vec::new(),
+            requested_weight: matched.weight().unwrap_or(400),
+            requested_slant: matched.slant(),
+            requested_width: FontWidth::Normal,
+            direction: TextDirection::for_char(ch),
+        };
+        self.backend
+            .list_candidates_for_identity(&query, &matched.identity)
+            .iter()
+            .any(|candidate| candidate.matched.identity == matched.identity)
+    }
+
+    fn remember_opened(&self, key: OpenedFallbackKey, matched: PlatformFontMatch) {
+        let Ok(mut opened) = self.opened_fallbacks.lock() else {
+            return;
+        };
+        let fonts = opened.entry(key).or_default();
+        if fonts
+            .iter()
+            .any(|existing| existing.identity == matched.identity)
+        {
+            return;
+        }
+        fonts.push(matched);
     }
 
     pub(super) fn with_native_metrics(&self, mut matched: PlatformFontMatch) -> PlatformFontMatch {
@@ -1060,6 +1146,10 @@ impl FontResolver {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clear();
         self.exact_cache
+            .get_mut()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
+        self.opened_fallbacks
             .get_mut()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clear();
@@ -1242,6 +1332,10 @@ impl FontResolver {
             .get_mut()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clear();
+        self.opened_fallbacks
+            .get_mut()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
         self.capability_cache
             .get_mut()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -1317,6 +1411,54 @@ impl CapturedCharacterPolicy {
         self.width = spec.width.unwrap_or(self.width);
         self.otf = spec.otf.cloned();
         self
+    }
+}
+
+enum SpecResolution {
+    Reused(PlatformFontMatch),
+    Fresh(OpenedFallbackKey, PlatformFontCandidate),
+}
+
+/// Identity of one realized font-def on one face. The character is absent:
+/// coverage is asked of the opened font, the way `RFONT_DEF_OBJECT` is.
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+struct OpenedFallbackKey {
+    requested_family: String,
+    families: OpenedFamilyKey,
+    languages: Vec<String>,
+    weight: u16,
+    slant: u16,
+    width: u16,
+    size: FontSelectionSize,
+    otf: String,
+    fontset_generation: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+enum OpenedFamilyKey {
+    Explicit(String),
+    Inherited(Vec<String>),
+}
+
+impl OpenedFallbackKey {
+    fn from_policy(policy: &CapturedCharacterPolicy, fontset_generation: u64) -> Self {
+        let families = match &policy.families {
+            CapturedFontFamilyPolicy::Explicit(family) => OpenedFamilyKey::Explicit(family.clone()),
+            CapturedFontFamilyPolicy::Inherited(families) => {
+                OpenedFamilyKey::Inherited(families.iter().map(str::to_owned).collect())
+            }
+        };
+        Self {
+            requested_family: policy.requested_family.clone(),
+            families,
+            languages: policy.languages.clone(),
+            weight: policy.weight,
+            slant: policy.slant.gnu_numeric(),
+            width: policy.width.gnu_numeric(),
+            size: policy.size,
+            otf: format!("{:?}", policy.otf),
+            fontset_generation,
+        }
     }
 }
 

@@ -4371,3 +4371,7 @@ mod desktop_render_policy_tests;
 #[cfg(all(test, target_os = "linux"))]
 #[path = "metrics/tests/text_extents_test.rs"]
 mod text_extents_tests;
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "metrics/tests/opened_fallback_line_test.rs"]
+mod opened_fallback_line_tests;
