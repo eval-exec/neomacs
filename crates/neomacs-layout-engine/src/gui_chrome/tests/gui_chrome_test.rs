@@ -51,6 +51,65 @@ fn parse_tool_bar_item_omits_item_when_filter_returns_keymap() {
     );
 }
 
+/// GNU appends `where-is` of the filtered binding to the tooltip
+/// (`keyboard.c:10001-10015`). A missing `:help` uses the caption.
+#[test]
+fn parse_tool_bar_item_appends_where_is_of_the_filtered_binding_to_help() {
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    eval.setup_thread_locals();
+    eval.eval_str(
+        r#"(progn
+            (fset 'n827-help-cmd #'ignore)
+            (fset 'n827-help-other #'ignore)
+            (fset 'n827-help-filter (lambda (_cmd) 'n827-help-cmd))
+            (use-global-map (make-sparse-keymap))
+            (define-key (current-global-map) [3 120] 'n827-help-cmd))"#,
+    )
+    .expect("bind the filtered command");
+    let desc = eval
+        .eval_str("(key-description (where-is-internal 'n827-help-cmd nil t))")
+        .expect("describe the binding")
+        .as_runtime_string_owned()
+        .expect("key description");
+    assert!(!desc.is_empty(), "the filtered command has a key");
+    assert!(
+        eval.eval_str("(where-is-internal 'n827-help-other nil t)")
+            .expect("where-is of the original binding")
+            .is_nil(),
+        "the unfiltered command has no key"
+    );
+
+    let filtered = Value::list(vec![
+        Value::symbol("menu-item"),
+        Value::string("Save"),
+        Value::symbol("n827-help-other"),
+        Value::symbol(":filter"),
+        Value::symbol("n827-help-filter"),
+        Value::symbol(":help"),
+        Value::string("Write the file"),
+    ]);
+    let item = parse_tool_bar_item(&mut eval, "save", &filtered, 0).expect("filtered item");
+    assert_eq!(item.help, format!("Write the file  ({desc})"));
+
+    let caption = Value::list(vec![
+        Value::symbol("menu-item"),
+        Value::string("Caption"),
+        Value::symbol("n827-help-cmd"),
+    ]);
+    let item = parse_tool_bar_item(&mut eval, "caption", &caption, 0).expect("caption item");
+    assert_eq!(item.help, format!("Caption  ({desc})"));
+
+    let unbound = Value::list(vec![
+        Value::symbol("menu-item"),
+        Value::string("Plain"),
+        Value::symbol("n827-help-other"),
+        Value::symbol(":help"),
+        Value::string("No keys"),
+    ]);
+    let item = parse_tool_bar_item(&mut eval, "plain", &unbound, 0).expect("unbound item");
+    assert_eq!(item.help, "No keys");
+}
+
 #[test]
 fn parse_tool_bar_item_keeps_wrap_separate_from_button_type() {
     let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();

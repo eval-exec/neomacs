@@ -469,6 +469,7 @@ fn parse_tool_bar_item(
     {
         return None;
     }
+    let caption = label.clone();
     if label.is_empty() {
         label = plist_lookup(&plist, MenuItemProperty::Label, eval.symbol_mode())
             .and_then(|value| value.as_runtime_string_owned())
@@ -476,9 +477,12 @@ fn parse_tool_bar_item(
     }
     let image = plist_lookup(&plist, MenuItemProperty::Image, eval.symbol_mode())
         .and_then(|image| tool_bar_image_source(eval, &image));
-    let help = plist_lookup(&plist, MenuItemProperty::Help, eval.symbol_mode())
-        .and_then(|value| value.as_runtime_string_owned())
-        .unwrap_or_default();
+    let help = tool_bar_help_with_binding(
+        eval,
+        plist_lookup(&plist, MenuItemProperty::Help, eval.symbol_mode()),
+        &caption,
+        binding,
+    );
     let enabled = plist_lookup(&plist, MenuItemProperty::Enable, eval.symbol_mode())
         .map(|value| eval_menu_property(eval, value).is_truthy())
         .unwrap_or(true);
@@ -500,6 +504,44 @@ fn parse_tool_bar_item(
         item_type,
         wrap,
     })
+}
+
+/// Append the binding's key to the tooltip.
+///
+/// GNU calls `where-is-internal` with FIRSTONLY t on the binding after
+/// `:filter`, then `key-description` (`keyboard.c:10001-10015`). A nil
+/// `:help` uses the caption only when that key exists. A lookup failure
+/// leaves the help string unsuffixed so tooltip text cannot drop the item.
+fn tool_bar_help_with_binding(
+    eval: &mut Context,
+    help: Option<Value>,
+    caption: &str,
+    binding: Value,
+) -> String {
+    let explicit = help.and_then(|value| value.as_runtime_string_owned());
+    let Ok(keys) = eval.funcall_general(
+        Value::symbol("where-is-internal"),
+        vec![binding, Value::NIL, Value::T, Value::NIL, Value::NIL],
+    ) else {
+        return explicit.unwrap_or_default();
+    };
+    if keys.is_nil() {
+        return explicit.unwrap_or_default();
+    }
+    let Ok(desc) = eval.funcall_general(Value::symbol("key-description"), vec![keys]) else {
+        return explicit.unwrap_or_default();
+    };
+    let Some(desc) = desc
+        .as_runtime_string_owned()
+        .filter(|text| !text.is_empty())
+    else {
+        return explicit.unwrap_or_default();
+    };
+    let mut text = explicit.unwrap_or_else(|| caption.to_string());
+    text.push_str("  (");
+    text.push_str(&desc);
+    text.push(')');
+    text
 }
 
 fn menu_item_binding(eval: &Context, def: &Value) -> Value {
