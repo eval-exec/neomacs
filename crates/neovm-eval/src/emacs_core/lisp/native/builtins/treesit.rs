@@ -5,6 +5,8 @@ pub use neovm_value::error::{
     FlowKind, FlowResultExt, expect_args, expect_args_range, expect_fixnum, signal_with_data,
 };
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use strum::{EnumString, IntoStaticStr};
 use tree_sitter::{
     LANGUAGE_VERSION, Language, MIN_COMPATIBLE_LANGUAGE_VERSION, Parser, Point, Range as TSRange,
@@ -1336,46 +1338,35 @@ fn treesit_buffer_changed(predicate: Value) -> Flow {
     signal("treesit-buffer_changed", vec![predicate])
 }
 
-/// Child-index path from `node` to its tree root. The root's path is empty.
+/// Owns one `ts_tree_copy` and the parser's live-walk count.
 ///
-/// `Tree::clone` (`ts_tree_copy`) does not retarget existing nodes, so a walk
-/// that must outlive a reparse names nodes by this path.
-fn node_index_path(node: tree_sitter::Node<'_>) -> Option<Vec<u32>> {
-    let mut reversed = Vec::new();
-    let mut current = node;
-    while let Some(parent) = current.parent() {
-        let mut index = None;
-        for child_index in 0..parent.child_count() {
-            if parent
-                .child(child_index)
-                .is_some_and(|child| child.id() == current.id())
-            {
-                index = Some(child_index);
-                break;
-            }
-        }
-        reversed.push(index?);
-        current = parent;
-    }
-    reversed.reverse();
-    Some(reversed)
+/// The guard cannot borrow `TreeSitterManager`: a Lisp callback reenters
+/// through `&mut Context`. The count is an `Arc` so `finish_buffer_edit`
+/// can see it and skip the per-node remap when no walk is alive.
+struct WalkClone {
+    tree: tree_sitter::Tree,
+    live: Arc<AtomicU32>,
 }
 
-fn node_at_index_path<'tree>(
-    mut node: tree_sitter::Node<'tree>,
-    path: &[u32],
-) -> Option<tree_sitter::Node<'tree>> {
-    for &index in path {
-        node = node.child(index)?;
+impl Drop for WalkClone {
+    fn drop(&mut self) {
+        self.live.fetch_sub(1, Ordering::Release);
     }
-    Some(node)
+}
+
+impl std::ops::Deref for WalkClone {
+    type Target = tree_sitter::Tree;
+
+    fn deref(&self) -> &tree_sitter::Tree {
+        &self.tree
+    }
 }
 
 fn parser_tree_clone(
     eval: &super::eval::Context,
     parser_id: u64,
     node_value: Value,
-) -> Result<tree_sitter::Tree, Flow> {
+) -> Result<WalkClone, Flow> {
     let parser = eval
         .treesit
         .parser(parser_id)
@@ -1383,7 +1374,10 @@ fn parser_tree_clone(
     let parsed = parser
         .tree()
         .ok_or_else(|| node_outdated_error(node_value))?;
-    Ok(parsed.tree().clone())
+    let tree = parsed.tree().clone();
+    let live = parser.walk_clones();
+    live.fetch_add(1, Ordering::AcqRel);
+    Ok(WalkClone { tree, live })
 }
 
 /// Epoch and edit generation captured when a walk clones the parser tree.
@@ -1466,9 +1460,15 @@ fn project_node_to_parser(
         raw.tree = live.root_node().into_raw().tree;
         return Some(raw);
     }
-    let path = node_index_path(node)?;
-    let live_node = node_at_index_path(live.root_node(), &path)?;
-    Some(live_node.into_raw())
+    let source = node.into_raw();
+    let path = runtime::node_index_path(node)?;
+    let live_node = runtime::node_at_index_path(live.root_node(), &path)?;
+    let mut raw = live_node.into_raw();
+    // Keep the clone node's start byte. `ts_node_end_byte` is that start
+    // plus the live subtree's size (`lib/src/node.c`). An insert that does
+    // not change the subtree size leaves both ends stale, matching GNU.
+    raw.context = source.context;
+    Some(raw)
 }
 
 fn make_node_value_from_raw(
@@ -1865,7 +1865,8 @@ fn build_sparse_tree(
 ) -> Result<Vec<Value>, Flow> {
     // GNU `treesit_build_sparse_tree` (`src/treesit.c:4937-4975`) omits a
     // node that does not match and attaches its matches to the nearest
-    // matching ancestor. Children are still visited before `process_fn`.
+    // matching ancestor. `process_fn` runs before the children
+    // (`src/treesit.c:4941-4950`).
     let matched = predicate_matches_node(
         eval,
         parser_id,
@@ -1876,6 +1877,36 @@ fn build_sparse_tree(
         true,
         share,
     )?;
+    let payload = if matched {
+        let changed_by = if process_fn.is_nil() {
+            predicate
+        } else {
+            process_fn
+        };
+        let raw = project_node_to_parser(eval, parser_id, node, share)
+            .ok_or_else(|| treesit_buffer_changed(changed_by))?;
+        let epoch = eval
+            .treesit
+            .parser(parser_id)
+            .map(|parser| parser.reparse_epoch());
+        let node_value = make_node_value_from_raw(eval, parser_id, raw);
+        let value = if process_fn.is_nil() {
+            node_value
+        } else {
+            let value = eval.funcall_general(process_fn, vec![node_value])?;
+            let now = eval
+                .treesit
+                .parser(parser_id)
+                .map(|parser| parser.reparse_epoch());
+            if now != epoch {
+                return Err(treesit_buffer_changed(process_fn));
+            }
+            value
+        };
+        Some(value)
+    } else {
+        None
+    };
     let mut children = Vec::new();
     if depth != 0 {
         for idx in 0..node.child_count() {
@@ -1893,35 +1924,10 @@ fn build_sparse_tree(
             }
         }
     }
-    if !matched {
-        return Ok(children);
+    match payload {
+        None => Ok(children),
+        Some(payload) => Ok(vec![Value::cons(payload, Value::list(children))]),
     }
-    let changed_by = if process_fn.is_nil() {
-        predicate
-    } else {
-        process_fn
-    };
-    let raw = project_node_to_parser(eval, parser_id, node, share)
-        .ok_or_else(|| treesit_buffer_changed(changed_by))?;
-    let epoch = eval
-        .treesit
-        .parser(parser_id)
-        .map(|parser| parser.reparse_epoch());
-    let node_value = make_node_value_from_raw(eval, parser_id, raw);
-    let payload = if process_fn.is_nil() {
-        node_value
-    } else {
-        let value = eval.funcall_general(process_fn, vec![node_value])?;
-        let now = eval
-            .treesit
-            .parser(parser_id)
-            .map(|parser| parser.reparse_epoch());
-        if now != epoch {
-            return Err(treesit_buffer_changed(process_fn));
-        }
-        value
-    };
-    Ok(vec![Value::cons(payload, Value::list(children))])
 }
 
 #[doc(hidden)]
