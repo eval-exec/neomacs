@@ -27,6 +27,7 @@
 
 #![allow(dead_code)]
 
+use super::super::owner_bindings::OwnerRecordId;
 use super::dispatch::opcode_slot;
 use super::effective::{
     EffectivePlainKey, EraId, PlainAccess, PlainRefusal, PlainUnbind, ShapeGeneration,
@@ -273,10 +274,14 @@ pub(crate) enum EscapeWhy {
     /// for a `SPECPDL_LET` re-reads the symbol as the binding leaves
     /// (eval.c:3848-3870), so a watcher added while the binding was live is
     /// notified through `set_internal`. The serial side undoes this one
-    /// binding by symbol, the slow path of `unbind_owner_binding`
-    /// (owner_bindings.rs:1250-1293); the owner restored nothing.
+    /// binding, the slow path of `unbind_owner_binding`
+    /// (owner_bindings.rs:1276-1360), taking the slab record `record`; the
+    /// owner restored nothing. The executor's entry left before the escape
+    /// (GNU's order, eval.c:3940-3954), so the walk's check after it is that
+    /// the record is gone from the slab.
     PlainUnbind {
         symbol: SymId,
+        record: OwnerRecordId,
     },
 }
 
@@ -354,7 +359,16 @@ impl EscapeCompletion {
 
 /// The serial side of an escape. The production impl arrives with E5.
 pub(crate) trait VmEscape {
-    fn escape(&mut self, request: VmEscapeRequest, arena: &FrameArena) -> EscapeCompletion;
+    /// `plain` is the owner's Plain storage. The serial side reaches it
+    /// through the escape because undoing an owner binding IS a write to
+    /// that storage: a `PlainUnbind` request is served by taking the record
+    /// it names (`PlainAccess::pop_binding`) and running the restore.
+    fn escape(
+        &mut self,
+        request: VmEscapeRequest,
+        arena: &FrameArena,
+        plain: &mut dyn PlainAccess,
+    ) -> EscapeCompletion;
 }
 
 /// The lowered code one run executes.
@@ -1179,12 +1193,24 @@ where
                             remaining -= 1;
                         }
                         Ok(PlainUnbind::NeedsSerial { .. }) => {
-                            // Refused: ONE escape naming the symbol, and the
-                            // serial side undoes the binding by it
-                            // (`unbind_owner_binding`'s slow path).
+                            // Refused: ONE escape naming the symbol and the
+                            // record, and the serial side undoes the binding
+                            // (`unbind_owner_binding`'s slow path). GNU's
+                            // `unbind_to` (eval.c:3940-3954) copies the
+                            // binding and decrements `specpdl_ptr` BEFORE
+                            // the unbind runs its code: an error in unbinding
+                            // never tries the entry twice, and a binding the
+                            // code pushes is walked next. The executor's entry
+                            // leaves the same way; the slab record stays for
+                            // the serial side to take.
+                            self.arena.bindings_mut().pop();
+                            let len_before = self.arena.bindings().above(bind_base).count();
                             if let Step::Stop(outcome) = self.escape(
                                 op.clone(),
-                                EscapeWhy::PlainUnbind { symbol },
+                                EscapeWhy::PlainUnbind {
+                                    symbol,
+                                    record: record.record,
+                                },
                                 frame,
                                 operands,
                                 branch_pc,
@@ -1195,18 +1221,25 @@ where
                             if let Err(fault) = self.set_pc(frame, branch_pc) {
                                 return Step::Stop(VmOutcome::Fault(fault));
                             }
-                            // The completion undid the binding; the entry
-                            // leaves the executor's LIFO with it. The record
-                            // is still the top unless the completion pushed a
-                            // record above it, which the next iteration walks.
-                            match self.arena.bindings().above(bind_base).last() {
-                                Some(OwnerRecord::Plain(top)) if top.symbol == symbol => {
-                                    self.arena.bindings_mut().pop();
-                                }
-                                Some(_) => {}
-                                None => return Self::record_contract_fault(),
+                            // The walk's own check: the serial side took the
+                            // slab record. (A serial run's check is that its
+                            // named tokens are gone; this is the same check
+                            // for the one record the hand-off named.)
+                            if self.plain.record_live(record.record) {
+                                tracing::error!(
+                                    op = ?op,
+                                    "a PlainUnbind escape left the owner record it was asked to undo"
+                                );
+                                return Self::record_contract_fault();
                             }
                             remaining -= 1;
+                            // A record the unbind's code pushed is walked
+                            // next, in addition to n: GNU walks to an
+                            // absolute specpdl index.
+                            let pushed = (self.arena.bindings().above(bind_base).count() as isize
+                                - len_before as isize)
+                                .max(0) as usize;
+                            remaining += pushed;
                         }
                         Err(_) => return Self::record_contract_fault(),
                     }
@@ -1229,6 +1262,12 @@ where
                     }
                     let run = records.len();
                     let named = records.clone();
+                    // GNU `unbind_to` (eval.c:3940-3954) walks to an absolute
+                    // specpdl index: a record the completion pushed during
+                    // the unbind is undone IN ADDITION to the n the opcode
+                    // named. The walk counts the originals, so a pushed record
+                    // is added to `remaining`, not taken from it.
+                    let len_before = self.arena.bindings().above(bind_base).count();
                     if let Step::Stop(outcome) = self.escape(
                         op.clone(),
                         EscapeWhy::SerialUnbind { records },
@@ -1263,6 +1302,11 @@ where
                         return Self::record_contract_fault();
                     }
                     remaining -= run;
+                    let pushed = (self.arena.bindings().above(bind_base).count() as isize
+                        - len_before as isize
+                        + run as isize)
+                        .max(0) as usize;
+                    remaining += pushed;
                 }
             }
         }
@@ -1309,7 +1353,7 @@ where
             frame,
             operands,
         };
-        let completion = self.escape.escape(request, &self.arena);
+        let completion = self.escape.escape(request, &self.arena, &mut self.plain);
         let (consumed, produced, jump) = match completion.stack {
             EscapeStack::Flow(flow) => return Step::Stop(VmOutcome::Signaled(flow)),
             EscapeStack::Completed {

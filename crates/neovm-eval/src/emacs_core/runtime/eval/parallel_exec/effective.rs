@@ -463,10 +463,17 @@ pub(crate) trait PlainAccess: OwnerSlotsMut {
     /// through `set_default_internal`. The owner-local restore writes the
     /// slot and nothing else, so the serial `unbind_owner_binding`
     /// (owner_bindings.rs:1250-1293) keeps its slow path for exactly these
-    /// cases: `has_watchers`, a retired projection, a dead channel. This is
-    /// that predicate, read cold at unbind time. A `true` hands the record
-    /// to the serial unbind; nothing is restored on the owner.
+    /// cases: `has_watchers`, a retired projection, a dead channel
+    /// (owner_bindings.rs:1276-1360). This is that predicate, read cold at
+    /// unbind time. A `true` hands the record to the serial unbind; nothing
+    /// is restored on the owner.
     fn unbind_needs_serial(&self, sym: SymId) -> bool;
+    /// Whether the slab still holds the record `id` names. Read cold after a
+    /// `PlainUnbind` escape: the serial side undoes the binding by taking
+    /// that record, and the walk's own check is that it is gone, as its check
+    /// for a serial run is that the named tokens are gone. A record still
+    /// live after the hand-off is the record-contract fault.
+    fn record_live(&self, id: OwnerRecordId) -> bool;
 }
 
 /// The slab half of [`PlainAccess::pop_binding`] over a slab the implementor
@@ -610,8 +617,10 @@ pub(crate) fn effective_plain_bind<A: PlainAccess + ?Sized>(
 /// entry and the slab disagree, nothing was taken, and the slot is as it was.
 ///
 /// This is the restore without the unbind-time re-validation; the stepper's
-/// walk and the unwinds go through [`effective_plain_unbind_checked`], which
-/// is this function behind [`PlainAccess::unbind_needs_serial`].
+/// walk goes through [`effective_plain_unbind_checked`], which is this
+/// function behind [`PlainAccess::unbind_needs_serial`]. V4's idle undo and
+/// V8's unwind loop will take the checked form as well; neither call site
+/// exists yet.
 pub(crate) fn effective_plain_unbind<A: PlainAccess + ?Sized>(
     access: &mut A,
     record: SlotRecord,
@@ -651,7 +660,8 @@ pub(crate) enum PlainUnbind {
 /// leaves (eval.c:3848-3870), so a watcher added while the binding was live
 /// is notified, and a variable made local or forwarded takes the default
 /// path. The predicate is [`PlainAccess::unbind_needs_serial`]; a refusal
-/// hands the record to the serial unbind and restores nothing here.
+/// hands the record to the serial unbind (owner_bindings.rs:1276-1360)
+/// and restores nothing here.
 pub(crate) fn effective_plain_unbind_checked<A: PlainAccess + ?Sized>(
     access: &mut A,
     record: SlotRecord,

@@ -137,6 +137,10 @@ impl PlainAccess for TestSlots {
         false
     }
 
+    fn record_live(&self, record: super::super::owner_bindings::OwnerRecordId) -> bool {
+        self.records.live_records().any(|(id, _)| id == record)
+    }
+
     fn push_binding(
         &mut self,
         sym: neovm_value::intern::SymId,
