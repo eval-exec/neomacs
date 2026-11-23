@@ -6490,20 +6490,12 @@ fn a6_ht_growth_memory_overhead<H: HostParts>(host: &mut H) {
     let growing_table = host
         .eval_form("a6-tZ1")
         .unwrap_or_else(|error| panic!("growing table: {error}"));
-    let storage_before = growing_table
-        .as_hash_table()
-        .expect("serial setup made a table")
-        .data
-        .known_storage_bytes();
+    let storage_before = test_support::serial_table_storage_bytes(host, growing_table);
     let before_growing = host.charged_bytes();
     host.eval_form("(a6-arm a6-tZ1)")
         .unwrap_or_else(|error| panic!("growing arm: {error}"));
     let growing = host.charged_bytes() - before_growing;
-    let storage_after = growing_table
-        .as_hash_table()
-        .expect("the grown table remains rooted by a6-tZ1")
-        .data
-        .known_storage_bytes();
+    let storage_after = test_support::serial_table_storage_bytes(host, growing_table);
     assert!(
         storage_after > storage_before,
         "fresh keys grow the backing"
@@ -6756,6 +6748,9 @@ mod allocation_tables;
 
 #[path = "restricted_lisp/copy_oracle.rs"]
 mod copy_oracle;
+
+#[path = "restricted_lisp/test_support.rs"]
+mod test_support;
 
 mod weak_copy;
 mod weak_tables;
