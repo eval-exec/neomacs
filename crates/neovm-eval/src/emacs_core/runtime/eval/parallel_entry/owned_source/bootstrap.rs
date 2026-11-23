@@ -286,3 +286,7 @@ impl SuspendedMain {
 #[cfg(test)]
 #[path = "../tests/bootstrap_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../tests/era_fixture.rs"]
+pub(in crate::emacs_core::eval::parallel_entry) mod era_fixture;
