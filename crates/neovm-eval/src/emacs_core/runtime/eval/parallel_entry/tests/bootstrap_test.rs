@@ -389,7 +389,8 @@ fn pentry_l62_live_lend_refuses_a_stale_owner_a_wrong_generation_and_a_second_st
     use neovm_value::tagged::gc::heap_transfer::with_stop_scope;
     use neovm_value::tagged::gc::{MutatorPermit, RegistrationError, RendezvousError};
     use std::num::NonZeroU64;
-    use std::sync::mpsc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, mpsc};
     use std::time::Duration;
 
     const STALE_OWNER: u64 = 6201;
@@ -470,6 +471,12 @@ fn pentry_l62_live_lend_refuses_a_stale_owner_a_wrong_generation_and_a_second_st
             let (ready_tx, ready_rx) = mpsc::channel::<()>();
             let (ack_tx, ack_rx) = mpsc::channel();
             let (release_tx, release_rx) = mpsc::channel::<()>();
+            let (pre_tx, pre_rx) = mpsc::channel::<()>();
+            let (go_tx, go_rx) = mpsc::channel::<()>();
+            // Set only after `stop` returns. The checker must observe it
+            // still false between the product wait and the native publish.
+            let stop_returned = Arc::new(AtomicBool::new(false));
+            let checker_flag = Arc::clone(&stop_returned);
             std::thread::scope(|scope| {
                 scope.spawn(move || {
                     let mut owner = activate(stale_permit, heap, STALE_OWNER);
@@ -489,6 +496,10 @@ fn pentry_l62_live_lend_refuses_a_stale_owner_a_wrong_generation_and_a_second_st
                     let epoch = owner
                         .wait_request()
                         .expect("the product wait observes the keeper stop");
+                    pre_tx
+                        .send(())
+                        .expect("the worker is between the wait and the publish");
+                    go_rx.recv().expect("the checker released the publish");
                     let current =
                         retry_native("publish the stop ack", || owner.publish_native_owner(&[]));
                     ack_tx
@@ -496,6 +507,16 @@ fn pentry_l62_live_lend_refuses_a_stale_owner_a_wrong_generation_and_a_second_st
                         .expect("send the stop ack");
                     let _ = release_rx.recv();
                     retire(owner);
+                });
+                scope.spawn(move || {
+                    pre_rx
+                        .recv()
+                        .expect("the worker reached the pre-publish check");
+                    assert!(
+                        !checker_flag.load(Ordering::Acquire),
+                        "stop returned before the native publish"
+                    );
+                    go_tx.send(()).expect("release the publish");
                 });
                 let stale = stale_rx.recv().expect("stale owner published");
                 ready_rx.recv().expect("current owner is waiting");
@@ -505,6 +526,7 @@ fn pentry_l62_live_lend_refuses_a_stale_owner_a_wrong_generation_and_a_second_st
                 let mut stopped = keeper
                     .stop()
                     .expect("the keeper stop waits for the native publish");
+                stop_returned.store(true, Ordering::Release);
                 let (epoch, superseded, current) = ack_rx.recv().expect("stop ack");
                 let acked = stopped.epoch();
                 assert_eq!(
@@ -556,21 +578,34 @@ fn pentry_l62_live_lend_refuses_a_stale_owner_a_wrong_generation_and_a_second_st
                         matches!(keeper.stop(), Err(RendezvousError::Busy)),
                         "a second stop is refused while the lend is outstanding"
                     );
-                    suspended
+                    let restored = match suspended.accept_return(
+                        super::super::super::keeper_custody::ReturnedSerialTicket::for_test(),
+                    ) {
+                        Ok(restored) => restored,
+                        Err(failure) => {
+                            let _ = failure.complete_traced();
+                            panic!("accept the test return");
+                        }
+                    };
+                    restored
                         .complete_traced()
-                        .expect("complete the traced epoch the lend held");
+                        .expect("complete the traced epoch after the ticket returned");
                 });
-                let (len, head) = keeper
-                    .serial_ring_head_for_test()
-                    .expect("the ring survives the traced epoch");
+                // Grant after the epoch is Idle. A grant during Stopping is
+                // `ring_stop_priority_keeps_order_and_defers_the_grant`: this
+                // `stop` does not return while the phase is Stopping. The
+                // product ring that issues the grant is L6.7.
+                let (len, head, granted) = keeper
+                    .serial_stop_priority_for_test()
+                    .expect("grant the queued head after the epoch");
                 assert_eq!(
-                    (len, head),
-                    (1, Some(queued)),
-                    "completing the epoch keeps the queued request"
+                    (len, head, granted),
+                    (1, Some(queued), Some(queued)),
+                    "the queued head is granted once the stop has completed"
                 );
                 keeper
                     .retire_serial_head_for_test(queued)
-                    .expect("retire the probe request");
+                    .expect("retire the granted probe request");
                 let mut reopened = keeper
                     .stop()
                     .expect("the same keeper stops again after the lend");

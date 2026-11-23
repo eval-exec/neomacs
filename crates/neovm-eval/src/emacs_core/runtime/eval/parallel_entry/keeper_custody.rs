@@ -72,11 +72,22 @@ pub enum CustodyFailureNotice {
     Return,
 }
 
-/// Dormant return envelope. No constructor and no notice conversion.
+/// Dormant return envelope. No notice conversion. The only constructor is
+/// the test seam below; production return is L6.4.
 #[allow(dead_code)]
 #[must_use]
 pub struct ReturnedSerialTicket {
     _not_sync: PhantomData<Cell<()>>,
+}
+
+#[cfg(test)]
+impl ReturnedSerialTicket {
+    /// Test-only return. Production `end_serial` is the constructor in L6.4.
+    pub(crate) fn for_test() -> Self {
+        Self {
+            _not_sync: PhantomData,
+        }
+    }
 }
 
 #[allow(dead_code)]
@@ -160,13 +171,6 @@ impl<'s, 'era> SuspendedKeeper<'s, 'era> {
             local: PhantomData,
         })
     }
-
-    /// Finish the traced epoch this lend holds. The export reservation stays
-    /// inert: it has no collect or heap method, and this does not add one.
-    /// The keeper writes the phase only by completing the stopped proof.
-    pub(crate) fn complete_traced(self) -> Result<(), AllStoppedFailure<'era>> {
-        self.export.reservation.into_all_stopped().complete()
-    }
 }
 
 #[allow(dead_code)]
@@ -189,6 +193,12 @@ impl<'s, 'era> RestoredKeeper<'s, 'era> {
             local: PhantomData,
         })
     }
+
+    /// Finish the traced epoch after the ticket has come back. The export
+    /// reservation stays inert: it has no collect or heap method.
+    pub(crate) fn complete_traced(self) -> Result<(), AllStoppedFailure<'era>> {
+        self.export.reservation.complete_traced()
+    }
 }
 
 #[allow(dead_code)]
@@ -196,8 +206,8 @@ impl<'s, 'era> KeeperCustodyFailure<'s, 'era> {
     /// Finish the traced epoch this failure still holds. Not a heap loan.
     pub(crate) fn complete_traced(self) -> Result<(), AllStoppedFailure<'era>> {
         match self.retained {
-            RetainedCustody::Interval(interval) => interval.into_all_stopped().complete(),
-            RetainedCustody::Reservation(reservation) => reservation.into_all_stopped().complete(),
+            RetainedCustody::Interval(interval) => interval.complete_traced(),
+            RetainedCustody::Reservation(reservation) => reservation.complete_traced(),
         }
     }
 }

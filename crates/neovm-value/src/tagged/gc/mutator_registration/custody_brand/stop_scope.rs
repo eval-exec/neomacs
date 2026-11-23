@@ -2,7 +2,7 @@
 //! Binding consumes today's `AllStopped` proof; it does not replace `stop`.
 
 use super::super::RendezvousError;
-use super::super::rendezvous::AllStopped;
+use super::super::rendezvous::{AllStopped, AllStoppedFailure};
 use super::PublishedOwner;
 use std::marker::PhantomData;
 use std::rc::Rc;
@@ -74,11 +74,11 @@ impl<'s, 'era> StoppedInterval<'s, 'era> {
         super::reservation::UnenteredReservation::from_interval(self)
     }
 
-    /// Return the stopped proof. Does not collect, loan the heap, or write
-    /// the phase word. The keeper completes an already-traced epoch itself.
+    /// Finish the already-traced epoch. This does not hand out `AllStopped`,
+    /// so there is no collector, loan, or resume API on the interval.
     #[doc(hidden)]
-    pub fn into_all_stopped(self) -> AllStopped<'era> {
-        self.stopped
+    pub fn complete_traced(self) -> Result<(), AllStoppedFailure<'era>> {
+        self.stopped.complete()
     }
 }
 

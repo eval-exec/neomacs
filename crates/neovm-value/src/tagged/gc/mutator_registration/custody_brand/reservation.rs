@@ -6,7 +6,7 @@
 //! consumes that scope and today's [`AllStopped`] proof.
 
 use super::super::RendezvousError;
-use super::super::rendezvous::AllStopped;
+use super::super::rendezvous::{AllStopped, AllStoppedFailure};
 use super::stop_scope::{StopScope, StoppedInterval};
 use std::marker::PhantomData;
 use std::rc::Rc;
@@ -42,11 +42,11 @@ impl<'s, 'era> UnenteredReservation<'s, 'era> {
         self.interval.validate_owner(owner)
     }
 
-    /// Return the stopped proof. This reservation does not collect, loan the
-    /// heap, or write the phase word.
+    /// Finish the already-traced epoch. This reservation does not collect,
+    /// loan the heap, or hand out the stopped proof.
     #[doc(hidden)]
-    pub fn into_all_stopped(self) -> AllStopped<'era> {
-        self.interval.into_all_stopped()
+    pub fn complete_traced(self) -> Result<(), AllStoppedFailure<'era>> {
+        self.interval.complete_traced()
     }
 }
 
