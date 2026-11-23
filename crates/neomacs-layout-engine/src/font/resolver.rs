@@ -1145,17 +1145,13 @@ impl FontResolver {
         result
     }
 
-    /// A redisplay pass does not drop opened fallbacks.
+    /// Drop opened fallbacks and the per-character answers.
     ///
-    /// GNU keeps a realized font for the life of the face's fontset. The
-    /// cache key includes the face, the font spec, and `fontset_generation`,
-    /// so a fontset change misses. [`Self::clear_caches`] drops the entries
-    /// when the catalog changes. The worker holds its own resolver and does
-    /// not enter this function; leaving the caches in place is the lifetime
-    /// both sides share. Reuse applies only after the requested family misses,
-    /// so a character that family covers is not drawn with an older fallback.
-    pub(crate) fn begin_fallback_pass(&self) {}
-
+    /// A redisplay does not call this. The entries live until the catalog
+    /// changes, or until `fontset_generation` in the key misses. The worker
+    /// holds its own resolver and uses the same boundary. Reuse applies only
+    /// after the requested family misses, so a character that family covers
+    /// is not drawn with an older fallback.
     pub(crate) fn clear_caches(&mut self) {
         if let Some(policy) = &mut self.worker_policy {
             policy.admitted_queries.clear();

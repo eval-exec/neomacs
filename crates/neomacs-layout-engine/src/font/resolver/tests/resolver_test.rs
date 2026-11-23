@@ -1658,7 +1658,8 @@ fn opened_fallback_skips_a_font_that_does_not_cover_the_character() {
         fallback_only: true,
     }));
 
-    // Kana share one fontset spec, so they share one opened-fallback group.
+    // No fontset is installed. Every character shares the generic fallback
+    // group. ア lists Cica first; a fresh search for ピ would list Noto first.
     let kana = resolve_tie(&resolver, 'ア');
     let missing = resolve_tie(&resolver, 'リ');
     let later = resolve_tie(&resolver, 'ピ');
@@ -1671,33 +1672,6 @@ fn opened_fallback_skips_a_font_that_does_not_cover_the_character() {
         "a later character uses the first opened font that covers it"
     );
     assert_eq!(listings.load(Ordering::Relaxed), 2);
-}
-
-#[test]
-fn opened_unconstrained_fallback_survives_the_next_layout_pass() {
-    let listings = Arc::new(AtomicUsize::new(0));
-    let resolver = FontResolver::new(Box::new(TieOrderBackend {
-        listings: Arc::clone(&listings),
-        first: candidate("Noto Sans Mono CJK JP", 400, FontSlant::Normal, 0),
-        second: candidate("Cica", 400, FontSlant::Normal, 0),
-        first_misses: Vec::new(),
-        fallback_only: true,
-    }));
-
-    let first = resolve_tie(&resolver, '検');
-    resolver.begin_fallback_pass();
-    let second = resolve_tie(&resolver, 'リ');
-
-    assert_eq!(
-        second.family(),
-        first.family(),
-        "a later pass reuses the opened fallback"
-    );
-    assert_eq!(
-        listings.load(Ordering::Relaxed),
-        1,
-        "begin_fallback_pass must not list the catalog again"
-    );
 }
 
 #[test]

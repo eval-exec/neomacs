@@ -80,6 +80,16 @@ pub(crate) fn reset_sort_queries_for_test() {
 pub(crate) fn sort_query_count() -> usize {
     FC_SORT_QUERIES.load(Ordering::Relaxed)
 }
+
+#[cfg(all(test, unix))]
+pub(crate) fn reset_list_queries_for_test() {
+    NATIVE_CANDIDATE_QUERIES.with(|count| count.set(0));
+}
+
+#[cfg(all(test, unix))]
+pub(crate) fn list_query_count() -> usize {
+    NATIVE_CANDIDATE_QUERIES.with(|count| count.get())
+}
 #[cfg(unix)]
 static FC_HANDLE: OnceLock<Option<fontconfig::Fontconfig>> = OnceLock::new();
 

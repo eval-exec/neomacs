@@ -4048,16 +4048,6 @@ impl FontMetricsService {
         }
     }
 
-    /// Mark a layout pass. Opened fallbacks and measured widths stay.
-    ///
-    /// Those maps are keyed by the face and the fontset generation.
-    /// [`Self::clear_caches`] is the lifetime the main thread and the worker
-    /// share. The worker never calls this function; clearing here made the
-    /// two pick different fonts for one character.
-    pub(crate) fn begin_fallback_pass(&mut self) {
-        self.font_resolver.begin_fallback_pass();
-    }
-
     /// Clear all caches. Call when fonts change (e.g., text-scale-adjust).
     /// Canonical font instances intentionally survive: IDs are durable and
     /// records are dropped only by a catalog advance, not request changes.

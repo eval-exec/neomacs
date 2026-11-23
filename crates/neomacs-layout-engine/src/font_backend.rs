@@ -598,11 +598,11 @@ pub trait FontBackend: Send {
     fn list_candidates(&self, query: &FontCandidateQuery) -> Vec<FontCandidate>;
 
     /// Rank of each candidate in `FcFontSort` order for the default face and
-    /// a language. `None` means this platform has no sort, so the resolver
-    /// falls back to family name, then file path.
+    /// a language.
     ///
-    /// The slice is parallel to `candidates`. An empty return leaves every
-    /// candidate unranked. Scoring is unchanged; only equal scores use this.
+    /// The slice is parallel to `candidates`. An empty return, or a `None`
+    /// rank, leaves that candidate unranked. Unranked equal scores keep the
+    /// driver's list order. Scoring is unchanged; only equal scores use this.
     fn equal_score_sort_ranks(
         &self,
         _default_family: &str,

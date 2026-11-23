@@ -2260,9 +2260,6 @@ impl LayoutEngine {
         face_services: &F,
         position_chrome: Option<&position_chrome::MeasuredPositionChrome>,
     ) -> Option<neovm_core::window::WindowLayoutQuery> {
-        if let Some(fonts) = self.font_metrics.as_mut() {
-            fonts.begin_fallback_pass();
-        }
         // Anything recorded since the last pass that no pass has reported yet.
         // The drain below covers what this pass observes; this one covers
         // whatever a path outside layout observed -- a `:channel0` image spec
