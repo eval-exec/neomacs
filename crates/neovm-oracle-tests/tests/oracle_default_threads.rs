@@ -102,7 +102,9 @@ fn e6p1_a_feature_detected_opt_in_creator_matches_make_thread() {
         (thread-join th) (thread-live-p th)
         (condition-case err (funcall creator (lambda () 1) 42) (error err))))
 "##,
-        expect_test::expect![[r#""#]],
+        expect_test::expect![[
+            r#""OK ((1 . 3) t t t nil (result nil child nil) nil (wrong-type-argument stringp 42))""#
+        ]],
     );
 }
 
