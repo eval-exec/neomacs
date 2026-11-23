@@ -428,6 +428,7 @@ impl OwnerEraReserve {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 fn capped(wanted: usize) -> (usize, bool) {
     if wanted > OWNER_RESERVE_CAP {
         (OWNER_RESERVE_CAP, true)
@@ -436,6 +437,7 @@ fn capped(wanted: usize) -> (usize, bool) {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 fn mint_cons_block(heap: &mut TaggedHeap) -> ReservedCons {
     if let Some(block_index) = heap
         .cons_blocks
@@ -472,6 +474,7 @@ fn mint_cons_block(heap: &mut TaggedHeap) -> ReservedCons {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 fn note_cons_block(heap: &mut TaggedHeap, origin: usize) {
     if !heap.generational.enabled {
         return;
@@ -521,7 +524,10 @@ fn check_stop(stopped: &AllStopped<'_>, heap: &TaggedHeap) -> Result<(), Reserve
         })
 }
 
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(all(
+    any(test, feature = "test-support"),
+    not(feature = "gc-memory-telemetry")
+))]
 #[path = "owner_era_reserve/tests.rs"]
 pub(in crate::tagged::gc) mod tests;
 

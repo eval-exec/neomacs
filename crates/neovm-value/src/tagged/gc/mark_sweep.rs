@@ -61,6 +61,8 @@ impl TaggedHeap {
     /// The heap must be exclusively borrowed and quiescent: the call asserts
     /// that no concurrent marker is running and starts a major cycle.
     pub(crate) unsafe fn begin_collection(&mut self) {
+        // Refuse before changing the cycle. The delegated entry also serves
+        // direct STW and minor callers, so it needs its own guard below.
         self.assert_no_owner_cons_reserves();
         self.generational.cycle = generational::GenerationCycle::Major;
         self.begin_collection_with(false);

@@ -85,6 +85,10 @@ pub(crate) fn poll_serial_request(
 
 /// Allocation-region refill. Requests a stop, then parks through [`Mutator::poll`].
 /// The closure is the complete `publish_scan` batch and runs only on that slow path.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "the test-only owner reserve refill calls this")
+)]
 pub(crate) fn poll_region_refill(
     owner: &mut Mutator<'_>,
     rendezvous: Rendezvous<'_>,

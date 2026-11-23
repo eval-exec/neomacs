@@ -62,6 +62,7 @@ impl std::ops::Deref for ConsAllocatorOwner {
 impl ConsAllocatorOwner {
     /// Credit one whole stopped-owner block. The granting caller checks the
     /// complete grant's capacity before minting any block.
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn credit_owner_reserved_block(&mut self) {
         let allocator = self
             .0
@@ -986,6 +987,9 @@ enum AllocatorAccessMode {
 }
 
 /// Confined owner. Only its mutex-only facade can cross threads.
+/// C layout keeps the existing allocator storage at offset zero when the
+/// cold reserve count is appended. The owner remains boxed, so this count
+/// does not grow the inline heap layout.
 #[derive(Debug)]
 #[repr(C)]
 pub(super) struct ConsAllocator {

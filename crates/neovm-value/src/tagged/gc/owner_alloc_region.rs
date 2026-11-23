@@ -232,6 +232,11 @@ impl OwnerAllocRegion {
     /// Only a publication that precedes a stop calls this. A poll that does
     /// not block must not. The returned record is the give-back; this method
     /// does not write the shared free list or `heap.jit`.
+    ///
+    /// A run carved from an [`super::OwnerEraReserve`] must instead use
+    /// [`super::OwnerEraReserve::close_for_stop`] so its book records the
+    /// refund. Closing that run here alone strands the book and leaves
+    /// collection refused.
     pub fn close_for_stop(&mut self) -> OwnerRegionRefund {
         let cons_step = stride(CursorClass::Cons);
         let float_step = stride(CursorClass::Float);
@@ -265,16 +270,6 @@ impl OwnerAllocRegion {
         self.install_cons(first, cells, source);
     }
 
-    /// Install a float run the stopped collector already reserved.
-    pub(in crate::tagged::gc) fn install_granted_float(
-        &mut self,
-        first: usize,
-        slots: usize,
-        source: FloatRegionSource,
-    ) {
-        self.install_float(first, slots, source);
-    }
-
     fn install_cons(&mut self, first: usize, cells: usize, source: ConsRegionSource) {
         assert!(
             matches!(self.cons, ConsRegionSource::Closed),
@@ -287,6 +282,7 @@ impl OwnerAllocRegion {
         self.cons = source;
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     fn install_float(&mut self, first: usize, slots: usize, source: FloatRegionSource) {
         assert!(
             matches!(self.float, FloatRegionSource::Closed),

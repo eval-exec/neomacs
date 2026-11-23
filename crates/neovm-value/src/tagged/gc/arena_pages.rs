@@ -1165,17 +1165,6 @@ impl<T: PagedObject> ObjectArena<T> {
         self.reserve_run_in_new_page(want)
     }
 
-    /// A whole page at its start.
-    ///
-    /// [`Self::reserve_run`] would take the newest page's bump tail when
-    /// that tail is shorter than a page, or a free-list run. An owner grant
-    /// is a whole page and does not share either of those with the serial
-    /// region.
-    #[cold]
-    pub(super) fn reserve_fresh_page(&mut self) -> ArenaRun {
-        self.reserve_run_in_new_page(ObjectPage::<T>::SLOTS)
-    }
-
     /// [`Self::reserve_run`]'s third source, out of line: a new page (over a
     /// released page's storage when one is spare), the run at its start.
     #[cold]
