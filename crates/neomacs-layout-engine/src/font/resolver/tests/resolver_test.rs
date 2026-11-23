@@ -605,6 +605,8 @@ fn equal_score_entities_keep_their_own_discovery_order() {
             queried_family: Some("Fixture"),
             size: selection_size(),
         },
+        EqualScoreTie::Discovery,
+        &[],
     )
     .expect("equal-score entity");
 
@@ -1616,7 +1618,11 @@ fn opened_fallback_is_reused_when_a_later_character_ties() {
     let kanji = resolve_tie(&resolver, '検');
     let kana = resolve_tie(&resolver, 'リ');
 
-    assert_eq!(kanji.family(), "Noto Sans Mono CJK JP");
+    assert_eq!(
+        kanji.family(),
+        "Noto Sans Mono CJK JP",
+        "the named-family pass keeps discovery order; Noto is listed first for this character"
+    );
     assert_eq!(
         kana.family(),
         kanji.family(),
@@ -1634,8 +1640,8 @@ fn opened_fallback_skips_a_font_that_does_not_cover_the_character() {
     let listings = Arc::new(AtomicUsize::new(0));
     let resolver = FontResolver::new(Box::new(TieOrderBackend {
         listings: Arc::clone(&listings),
-        first: candidate("Noto Sans Mono CJK JP", 400, FontSlant::Normal, 0),
-        second: candidate("Cica", 400, FontSlant::Normal, 0),
+        first: candidate("Cica", 400, FontSlant::Normal, 0),
+        second: candidate("Noto Sans Mono CJK JP", 400, FontSlant::Normal, 0),
         first_misses: vec!['リ'],
     }));
 
@@ -1643,12 +1649,83 @@ fn opened_fallback_skips_a_font_that_does_not_cover_the_character() {
     let missing = resolve_tie(&resolver, 'リ');
     let later = resolve_tie(&resolver, 'ピ');
 
-    assert_eq!(kanji.family(), "Noto Sans Mono CJK JP");
-    assert_eq!(missing.family(), "Cica");
+    assert_eq!(kanji.family(), "Cica");
+    assert_eq!(missing.family(), "Noto Sans Mono CJK JP");
     assert_eq!(
         later.family(),
         kanji.family(),
         "a later character uses the first opened font that covers it"
     );
     assert_eq!(listings.load(Ordering::Relaxed), 2);
+}
+
+fn equal_score_request() -> SelectionRequest<'static> {
+    SelectionRequest {
+        weight: 400,
+        slant: FontSlant::Normal,
+        width: Some(FontWidth::Normal),
+        spacing: None,
+        prefer_monospace: false,
+        queried_family: Some("IBM Plex Mono"),
+        size: selection_size(),
+    }
+}
+
+#[test]
+fn equal_score_tie_breaks_by_sort_rank_then_family_name() {
+    let request = equal_score_request();
+    let by_name = select_best_candidate(
+        vec![
+            candidate("Noto Sans CJK JP", 400, FontSlant::Normal, 0),
+            candidate("Cica", 400, FontSlant::Normal, 0),
+        ],
+        &request,
+        EqualScoreTie::Fallback,
+        &[],
+    )
+    .expect("family-name tie break");
+    assert_eq!(
+        by_name.family(),
+        "Cica",
+        "with no FcFontSort rank, family name then path decides"
+    );
+
+    let by_rank = select_best_candidate(
+        vec![
+            candidate("Cica", 400, FontSlant::Normal, 0),
+            candidate("Noto Sans CJK JP", 400, FontSlant::Normal, 0),
+        ],
+        &request,
+        EqualScoreTie::Fallback,
+        &[Some(1), Some(0)],
+    )
+    .expect("FcFontSort tie break");
+    assert_eq!(
+        by_rank.family(),
+        "Noto Sans CJK JP",
+        "an earlier FcFontSort rank wins over family name and discovery order"
+    );
+
+    let mut later_path = candidate("Cica", 400, FontSlant::Normal, 0);
+    let mut earlier_path = candidate("Cica", 400, FontSlant::Normal, 0);
+    replace_file_identity(
+        &mut later_path,
+        ResolvedFontIdentity::from_file("/fixture/z.ttf", 0, None),
+    );
+    replace_file_identity(
+        &mut earlier_path,
+        ResolvedFontIdentity::from_file("/fixture/a.ttf", 0, None),
+    );
+    let by_path = select_best_candidate(
+        vec![later_path, earlier_path],
+        &request,
+        EqualScoreTie::Fallback,
+        &[],
+    )
+    .expect("path tie break");
+    assert_eq!(
+        by_path.file_path(),
+        Some("/fixture/a.ttf"),
+        "with the same family and no FcFontSort rank, the file path decides"
+    );
 }

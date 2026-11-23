@@ -1591,6 +1591,124 @@ fn fc_query_candidates_uncached(
     candidates
 }
 
+/// Families in `FcFontSort` order for `family:lang=lang`.
+///
+/// This is the order `fc-match -s` reports. It is a tie-break only: discovery
+/// stays on `FcFontList`, and a missing sort leaves the caller unranked.
+#[cfg(unix)]
+pub(crate) fn fc_sorted_families(
+    #[cfg(test)] owner: test_config::QueryOwner<'_>,
+    family: &str,
+    lang: &str,
+) -> Vec<String> {
+    if family.is_empty() || lang.is_empty() {
+        return Vec::new();
+    }
+    #[cfg(test)]
+    let access = owner.acquire();
+    #[cfg(test)]
+    let config = access.borrow();
+    #[cfg(test)]
+    let native_config = match config.native_ptr() {
+        Ok(pointer) => pointer,
+        Err(test_config::ConfigAccessError::SystemUnavailable) => return Vec::new(),
+    };
+    #[cfg(not(test))]
+    let native_config = ptr::null_mut();
+    #[cfg(not(test))]
+    if fontconfig_handle().is_none() {
+        return Vec::new();
+    }
+    let pattern = unsafe { fontconfig_sys::FcPatternCreate() };
+    if pattern.is_null() {
+        return Vec::new();
+    }
+    let pattern = FcPatternGuard(pattern);
+    let Ok(family_value) = CString::new(family) else {
+        return Vec::new();
+    };
+    let Ok(lang_value) = CString::new(lang) else {
+        return Vec::new();
+    };
+    let family_ok = unsafe {
+        fontconfig_sys::FcPatternAddString(
+            pattern.0,
+            fontconfig::FC_FAMILY.as_ptr(),
+            family_value.as_ptr().cast(),
+        )
+    };
+    if family_ok == 0 {
+        return Vec::new();
+    }
+    // `FC_LANG` is a langset. A string property is rejected, and the sort
+    // would then ignore the language the caller asked for.
+    let langset = unsafe { fontconfig_sys::FcLangSetCreate() };
+    if langset.is_null() {
+        return Vec::new();
+    }
+    let langset = FcLangSetGuard(langset);
+    let lang_added = unsafe { fontconfig_sys::FcLangSetAdd(langset.0, lang_value.as_ptr().cast()) };
+    if lang_added == 0 {
+        return Vec::new();
+    }
+    let lang_ok = unsafe {
+        fontconfig_sys::FcPatternAddLangSet(pattern.0, fontconfig::FC_LANG.as_ptr(), langset.0)
+    };
+    if lang_ok == 0 {
+        return Vec::new();
+    }
+    #[cfg(test)]
+    if config.apply_defaults(&pattern).is_err() {
+        return Vec::new();
+    }
+    if unsafe {
+        fontconfig_sys::FcConfigSubstitute(native_config, pattern.0, fontconfig_sys::FcMatchPattern)
+    } == 0
+    {
+        return Vec::new();
+    }
+    unsafe { fontconfig_sys::FcDefaultSubstitute(pattern.0) };
+    let mut result = fontconfig_sys::FcResultNoMatch;
+    // SAFETY: the pattern and configuration stay live. A null charset out-param
+    // asks Fontconfig not to build the coverage union. trim is false so every
+    // family remains in the order `fc-match -s` would print.
+    let fontset = unsafe {
+        FcFontSetGuard(fontconfig_sys::FcFontSort(
+            native_config,
+            pattern.0,
+            0,
+            ptr::null_mut(),
+            &mut result,
+        ))
+    };
+    if fontset.0.is_null() {
+        return Vec::new();
+    }
+    let nfont = unsafe { (*fontset.0).nfont };
+    if nfont <= 0 {
+        return Vec::new();
+    }
+    let fonts = unsafe { (*fontset.0).fonts };
+    if fonts.is_null() {
+        return Vec::new();
+    }
+    let patterns = unsafe { std::slice::from_raw_parts(fonts, nfont as usize) };
+    let mut families = Vec::new();
+    for pattern in patterns {
+        let Some(name) = raw_pattern_string(*pattern, fontconfig::FC_FAMILY) else {
+            continue;
+        };
+        if families
+            .iter()
+            .any(|existing: &String| existing.eq_ignore_ascii_case(&name))
+        {
+            continue;
+        }
+        families.push(name);
+    }
+    families
+}
+
 #[cfg(not(unix))]
 pub(crate) fn fc_list_candidates(
     family: Option<&str>,

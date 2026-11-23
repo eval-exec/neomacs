@@ -597,6 +597,21 @@ pub trait FontBackend: Send {
     /// [`crate::font::resolver::FontResolver`]'s responsibility.
     fn list_candidates(&self, query: &FontCandidateQuery) -> Vec<FontCandidate>;
 
+    /// Rank of each candidate in `FcFontSort` order for the default face and
+    /// a language. `None` means this platform has no sort, so the resolver
+    /// falls back to family name, then file path.
+    ///
+    /// The slice is parallel to `candidates`. An empty return leaves every
+    /// candidate unranked. Scoring is unchanged; only equal scores use this.
+    fn equal_score_sort_ranks(
+        &self,
+        _default_family: &str,
+        _lang: &str,
+        _candidates: &[FontCandidate],
+    ) -> Vec<Option<u32>> {
+        Vec::new()
+    }
+
     /// Enumerate only an already chosen identity, without selecting a family
     /// substitute. Native adapters can discard unrelated catalog entries
     /// before opening files to establish their renderer identities.

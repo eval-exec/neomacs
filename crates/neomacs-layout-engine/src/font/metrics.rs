@@ -4048,6 +4048,18 @@ impl FontMetricsService {
         }
     }
 
+    /// Start one layout pass. Fallback reuse stays inside the pass.
+    ///
+    /// Widths, cluster glyphs, and text extents are keyed by the face and the
+    /// text, not by the font file the previous pass happened to open.
+    pub(crate) fn begin_fallback_pass(&mut self) {
+        self.font_resolver.begin_fallback_pass();
+        self.resolved_char_font_cache.clear();
+        self.char_cache.clear();
+        self.text_extents_cache.clear();
+        self.resolved_cluster_cache.clear();
+    }
+
     /// Clear all caches. Call when fonts change (e.g., text-scale-adjust).
     /// Canonical font instances intentionally survive: IDs are durable and
     /// records are dropped only by a catalog advance, not request changes.

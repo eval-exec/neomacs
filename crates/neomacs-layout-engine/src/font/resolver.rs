@@ -735,6 +735,8 @@ impl FontResolver {
                 queried_family: Some(&family),
                 size,
             },
+            EqualScoreTie::Discovery,
+            &[],
         )
         .and_then(|matched| self.backend.finalize_match(matched))
         .map(|matched| self.with_native_metrics(matched));
@@ -812,9 +814,13 @@ impl FontResolver {
                     queried_family: None,
                     size,
                 };
-                if let Some(matched) =
-                    select_best_candidate(self.classify_unknown_candidate_sizes(matching), &request)
-                        .and_then(|selected| self.backend.finalize_match(selected))
+                if let Some(matched) = select_best_candidate(
+                    self.classify_unknown_candidate_sizes(matching),
+                    &request,
+                    EqualScoreTie::Discovery,
+                    &[],
+                )
+                .and_then(|selected| self.backend.finalize_match(selected))
                 {
                     return Some(self.with_native_metrics(matched));
                 }
@@ -1127,6 +1133,20 @@ impl FontResolver {
         result
     }
 
+    /// Drop realized fallbacks and the per-character answers that recorded them.
+    ///
+    /// One redisplay pass reuses an opened font so a line does not mix faces.
+    /// Keeping that font into the next pass makes the visible result depend on
+    /// earlier windows and on offscreen preparation.
+    pub(crate) fn begin_fallback_pass(&self) {
+        if let Ok(mut opened) = self.opened_fallbacks.lock() {
+            opened.clear();
+        }
+        if let Ok(mut cache) = self.char_cache.lock() {
+            cache.clear();
+        }
+    }
+
     pub(crate) fn clear_caches(&mut self) {
         if let Some(policy) = &mut self.worker_policy {
             policy.admitted_queries.clear();
@@ -1241,13 +1261,46 @@ impl FontResolver {
                     .collect(),
                 None => candidates,
             };
-            if let Some(matched) =
-                select_best_candidate(self.classify_unknown_candidate_sizes(candidates), &request)
-            {
+            let candidates = self.classify_unknown_candidate_sizes(candidates);
+            // FcFontSort reorders only the unconstrained fallback. An explicit
+            // fontset family, and the primary face, keep GNU list order when
+            // scores tie. Scoring itself is unchanged.
+            let (tie, sort_ranks) = if family.as_family().is_none() {
+                (
+                    EqualScoreTie::Fallback,
+                    self.fallback_sort_ranks(policy, &candidates),
+                )
+            } else {
+                (EqualScoreTie::Discovery, Vec::new())
+            };
+            if let Some(matched) = select_best_candidate(candidates, &request, tie, &sort_ranks) {
                 return Some(matched);
             }
         }
         None
+    }
+
+    /// `FcFontSort` order for this face and the character's language.
+    /// A fontset language wins; otherwise kana and Han use `ja`.
+    fn fallback_sort_ranks(
+        &self,
+        policy: &CapturedCharacterPolicy,
+        candidates: &[FontCandidate],
+    ) -> Vec<Option<u32>> {
+        let Some(lang) = policy
+            .languages
+            .first()
+            .map(String::as_str)
+            .filter(|lang| !lang.is_empty())
+            .or_else(|| tie_break_language(policy.ch))
+        else {
+            return Vec::new();
+        };
+        if policy.requested_family.is_empty() {
+            return Vec::new();
+        }
+        self.backend
+            .equal_score_sort_ranks(&policy.requested_family, lang, candidates)
     }
 
     /// GNU `font_spec_match`'s `:otf` arm: the candidate must advertise the
@@ -1541,34 +1594,98 @@ fn requested_width_distance(requested: Option<FontWidth>, candidate: Option<Font
     })
 }
 
+/// Language for the fallback `FcFontSort` pattern when the font spec has none.
+///
+/// Kana is Japanese. A bare Han ideograph has no script of its own; issue 815
+/// asks for `lang=ja` so the JP face wins the tie the way `fc-match -s` does.
+fn tie_break_language(ch: char) -> Option<&'static str> {
+    match ch {
+        '\u{3040}'..='\u{30FF}' | '\u{31F0}'..='\u{31FF}' | '\u{FF66}'..='\u{FF9D}' => Some("ja"),
+        '\u{1100}'..='\u{11FF}' | '\u{3130}'..='\u{318F}' | '\u{AC00}'..='\u{D7AF}' => Some("ko"),
+        '\u{3100}'..='\u{312F}' => Some("zh"),
+        '\u{3400}'..='\u{4DBF}' | '\u{4E00}'..='\u{9FFF}' | '\u{F900}'..='\u{FAFF}' => Some("ja"),
+        _ => None,
+    }
+}
+
+/// How an equal [`candidate_score`] chooses among entities.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum EqualScoreTie {
+    /// GNU `font_sort_entities` does not reorder. The driver's list order wins.
+    Discovery,
+    /// Unconstrained fallback. `FcFontSort`, then family name, then file path.
+    Fallback,
+}
+
 fn select_best_candidate(
     candidates: Vec<FontCandidate>,
     request: &SelectionRequest<'_>,
+    tie: EqualScoreTie,
+    sort_ranks: &[Option<u32>],
 ) -> Option<PlatformFontCandidate> {
-    // GNU scores every entity independently. Equal scores retain the entity's
-    // own Fontconfig discovery order; a different named instance in the same
-    // variable file must not donate an earlier ordinal to the winner.
-    let selected = candidates
-        .into_iter()
-        .enumerate()
-        .filter_map(|(ordinal, candidate)| {
-            let score = candidate_score(&candidate, request)?;
-            Some((ordinal, score, candidate.matched))
-        })
-        .min_by_key(|(ordinal, score, _)| (*score, *ordinal));
-    if let Some((ordinal, score, matched)) = selected.as_ref() {
+    // GNU scores every entity independently and keeps `FcFontList` order on a
+    // tie. That order follows the font directory, so only the unconstrained
+    // fallback replaces it: `FcFontSort` rank, then family name, then path.
+    // The discovery ordinal stays last, so two instances of one file do not
+    // borrow each other's rank. Primary and explicit-family searches stay on
+    // the GNU list order.
+    let mut ranked = Vec::new();
+    for (ordinal, candidate) in candidates.into_iter().enumerate() {
+        let Some(score) = candidate_score(&candidate, request) else {
+            continue;
+        };
+        let (sort_rank, family, path) = if tie == EqualScoreTie::Fallback {
+            (
+                sort_ranks
+                    .get(ordinal)
+                    .copied()
+                    .flatten()
+                    .unwrap_or(u32::MAX),
+                candidate.matched.family().to_ascii_lowercase(),
+                candidate.matched.file_path().unwrap_or("").to_owned(),
+            )
+        } else {
+            (0, String::new(), String::new())
+        };
+        ranked.push((score, sort_rank, family, path, ordinal, candidate.matched));
+    }
+    ranked.sort_by(|left, right| {
+        let by_score = left.0.cmp(&right.0);
+        if tie == EqualScoreTie::Discovery {
+            return by_score.then(left.4.cmp(&right.4));
+        }
+        by_score
+            .then(left.1.cmp(&right.1))
+            .then(left.2.cmp(&right.2))
+            .then(left.3.cmp(&right.3))
+            .then(left.4.cmp(&right.4))
+    });
+    for (rank, (score, sort_rank, _, _, ordinal, matched)) in ranked.iter().enumerate() {
         tracing::trace!(
             target: "font_boundary",
+            rank,
             family = matched.family(),
             identity = %matched.identity.stable_key,
             weight = matched.weight(),
             slant = ?matched.slant(),
             ordinal,
+            sort_rank,
             ?score,
-            "shared font resolver selected platform candidate"
+            "shared font resolver ranked platform candidate"
         );
     }
-    selected.map(|(_, _, matched)| matched)
+    let (score, _, _, _, ordinal, matched) = ranked.into_iter().next()?;
+    tracing::trace!(
+        target: "font_boundary",
+        family = matched.family(),
+        identity = %matched.identity.stable_key,
+        weight = matched.weight(),
+        slant = ?matched.slant(),
+        ordinal,
+        ?score,
+        "shared font resolver selected platform candidate"
+    );
+    Some(matched)
 }
 
 fn candidate_score(
