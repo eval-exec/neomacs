@@ -55,12 +55,28 @@ const SLEEP_FOR_RELEASE_FORM: &str = r#"
   (list gnu-rp-x (progn (sleep-for 0.02) gnu-rp-x) (null (sleep-for 0))))
 "#;
 
-/// `accept-process-output` reaches the same `thread_select`. GNU: `(nil t)`.
+/// `accept-process-output` reaches the same `thread_select`. GNU computes
+/// the SECONDS timeout as an absolute deadline at entry of
+/// `wait_reading_process_output` (process.c:5381-5385) and returns before
+/// any select when that deadline has already passed (process.c:5467-5473,
+/// "Exit if already run out"). The global-lock release is only inside
+/// `thread_select` (thread.c:620-625), so one 20 ms call is not
+/// guaranteed to run the worker. The form retries with a fresh 0.05 s
+/// budget per `accept-process-output` until the worker runs, bounded by
+/// 5 s of wall clock. That call is still the release point under test: a
+/// regressed release leaves `gnu-rp-x` nil through every retry and the
+/// second element fails after the bound. GNU 31.1 (a360712c9d) prints
+/// `(nil t)`, the same tuple as the single-shot probe.
 const ACCEPT_OUTPUT_RELEASE_FORM: &str = r#"
 (progn
   (setq gnu-rp-x nil)
   (make-thread (lambda () (setq gnu-rp-x t)))
-  (list gnu-rp-x (progn (accept-process-output nil 0.02) gnu-rp-x)))
+  (list gnu-rp-x
+        (progn
+          (setq gnu-rp-until (+ (float-time) 5))
+          (while (and (null gnu-rp-x) (< (float-time) gnu-rp-until))
+            (accept-process-output nil 0.05))
+          gnu-rp-x)))
 "#;
 
 /// The command-input wait (`read-event` with a timeout) is the idle wait
@@ -97,9 +113,19 @@ const READ_EVENT_RELEASE_FORM: &str = r#"
 "#;
 
 /// A worker blocking on a mutex the main thread owns: GNU parks it on the
-/// mutex's condition (`lisp_mutex_lock_for_thread`) and shows it through
-/// `thread--blocker`; unlocking and releasing the global lock lets it finish.
-/// GNU: `(t nil t nil worker nil nil)`.
+/// mutex (`mutex-lock` stores the mutex in `event_object`, thread.c:365,
+/// which `thread--blocker` returns, thread.c:1083-1097) inside
+/// `lisp_mutex_lock_for_thread` (thread.c:230-234). Unlocking broadcasts
+/// the wait (thread.c:268). The old probe used one `(sleep-for 0.02)` to
+/// reach that park and another to see the worker finish. That unit wait
+/// releases the global lock only while its deadline has not already
+/// expired, so on a loaded runner the worker never parks and the blocker
+/// slot is nil. Settle on the parked state with `thread-yield` (thread.c:
+/// 725-731), bounded to 5 s, then after the unlock settle until the worker
+/// is no longer live. The contended `mutex-lock` is still what parks it:
+/// the yield only lets the worker run. If it never blocks, or never
+/// finishes after the unlock, the asserted tuple fails. GNU:
+/// `(t nil t nil worker nil nil)`.
 const MUTEX_CONTENTION_FORM: &str = r#"
 (progn
   (setq gnu-rp-x nil gnu-rp-m (make-mutex))
@@ -108,13 +134,19 @@ const MUTEX_CONTENTION_FORM: &str = r#"
                                 (mutex-lock gnu-rp-m)
                                 (setq gnu-rp-x 'worker)
                                 (mutex-unlock gnu-rp-m))))
-  (sleep-for 0.02)
+  (let ((deadline (+ (float-time) 5.0)))
+    (while (and (< (float-time) deadline)
+                (null (eq (thread--blocker gnu-rp-w) gnu-rp-m)))
+      (thread-yield)))
   (let ((before (list (thread-live-p gnu-rp-w)
                       gnu-rp-x
                       (eq (thread--blocker gnu-rp-w) gnu-rp-m)
                       (thread-last-error))))
     (mutex-unlock gnu-rp-m)
-    (sleep-for 0.02)
+    (let ((deadline (+ (float-time) 5.0)))
+      (while (and (< (float-time) deadline)
+                  (thread-live-p gnu-rp-w))
+        (thread-yield)))
     (append before (list gnu-rp-x (thread-live-p gnu-rp-w) (thread-join gnu-rp-w)))))
 "#;
 
@@ -142,8 +174,15 @@ const MAIN_MUTEX_CONTENTION_FORM: &str = r#"
       (append blocked (list after (thread-join gnu-rp-w) gnu-rp-x)))))
 "#;
 
-/// A worker waits on a condition variable; GNU shows it blocked on COND and
-/// the notification resumes it, which reacquires the mutex. GNU:
+/// A worker waits on a condition variable; GNU shows it blocked on COND
+/// (`condition-wait` stores the condvar in `event_object`, thread.c:455,
+/// and waits at thread.c:460-462) and the notification resumes it, which
+/// reacquires the mutex (thread.c:470). The old probe slept 20 ms to
+/// observe that park and another 20 ms to observe the resume. Settle on
+/// `(eq (thread--blocker THREAD) CV)` with `thread-yield`, bounded to 5 s,
+/// then after `condition-notify` settle until the worker is no longer
+/// live. The wait under test is still `condition-wait`: the yield only
+/// lets the worker reach it and, after the notify, leave it. GNU:
 /// `((t t nil) woken nil nil)`.
 const WORKER_CONDITION_WAIT_FORM: &str = r#"
 (progn
@@ -154,14 +193,20 @@ const WORKER_CONDITION_WAIT_FORM: &str = r#"
                                 (condition-wait gnu-rp-cv)
                                 (setq gnu-rp-state 'woken)
                                 (mutex-unlock gnu-rp-m))))
-  (sleep-for 0.02)
+  (let ((deadline (+ (float-time) 5.0)))
+    (while (and (< (float-time) deadline)
+                (null (eq (thread--blocker gnu-rp-w) gnu-rp-cv)))
+      (thread-yield)))
   (let ((blocked (list (thread-live-p gnu-rp-w)
                        (eq (thread--blocker gnu-rp-w) gnu-rp-cv)
                        (thread-last-error))))
     (mutex-lock gnu-rp-m)
     (condition-notify gnu-rp-cv)
     (mutex-unlock gnu-rp-m)
-    (sleep-for 0.02)
+    (let ((deadline (+ (float-time) 5.0)))
+      (while (and (< (float-time) deadline)
+                  (thread-live-p gnu-rp-w))
+        (thread-yield)))
     (list blocked gnu-rp-state (thread-live-p gnu-rp-w) (thread-join gnu-rp-w))))
 "#;
 
