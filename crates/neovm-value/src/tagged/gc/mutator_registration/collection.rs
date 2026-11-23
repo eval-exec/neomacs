@@ -112,12 +112,13 @@ pub struct CollectionReport {
     pub major: bool,
     pub roots: usize,
     pub frozen_owners: usize,
-    /// Root words the keeper read from every frozen owner's published batch.
+    /// Frozen owner root words the keeper actually seeded before the mark.
     ///
     /// This isolates the joined-scan contribution from legacy, World, image
-    /// and shared-root transport sources in `roots`, so a two-owner join can
-    /// assert that BOTH batches were traced even when a dropped `SharedRoot`
-    /// would otherwise keep an object alive for one collection.
+    /// and shared-root transport sources in `roots`, and it is counted at the
+    /// seed site (not at the read site), so a two-owner join can assert that
+    /// BOTH batches were seeded even when a dropped `SharedRoot` would
+    /// otherwise keep an object alive for one collection.
     pub frozen_root_words: usize,
     pub cycle: usize,
     /// Last completed collectible-heap census, excluding immortal image rows.
@@ -530,8 +531,7 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
             facade_mark::CollectorQuiescence::check(heap).map_err(|_| RendezvousError::Busy)?;
             crate::tagged::transport::collect_shared_root_gc_roots(heap, &mut roots);
         }
-        let frozen_root_words = words.len();
-        let root_count = roots.len() + frozen_root_words;
+        let root_count = roots.len() + words.len();
         #[cfg(any(test, feature = "test-support"))]
         super::a8_probes::mark(super::a8_probes::ROOT_CENSUS_DONE, stopped.epoch().get(), 0);
         let traced = stopped.trace(|guard, proof| {
@@ -550,15 +550,8 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
                 |heap| {
                     let job = StoppedCollectorJob::new(heap, proof, guard, registry, kind)?;
                     let mut images = ImageSession::take(registry, &entries, &keys)?;
-                    let report = job.run(
-                        &mut images,
-                        roots,
-                        words,
-                        heads,
-                        root_count,
-                        keys.len(),
-                        frozen_root_words,
-                    )?;
+                    let report =
+                        job.run(&mut images, roots, words, heads, root_count, keys.len())?;
                     // Restore publications before releasing the table bridge.
                     images.restore()?;
                     Ok(report)
@@ -633,7 +626,6 @@ impl<'heap, 'stop, 'era> StoppedCollectorJob<'heap, 'stop, 'era> {
         heads: Vec<*mut *mut MarkerObj>,
         root_count: usize,
         frozen_owners: usize,
-        frozen_root_words: usize,
     ) -> Result<CollectionReport, CollectionError> {
         let epoch = self.epoch;
         let heap = self.heap;
@@ -681,11 +673,15 @@ impl<'heap, 'stop, 'era> StoppedCollectorJob<'heap, 'stop, 'era> {
         for root in roots {
             heap.seed_root(root);
         }
+        // Count at the seed site: this is the number of frozen owner root
+        // words the collector actually seeds, not merely the number it read.
+        let mut frozen_root_words = 0usize;
         for word in words {
             heap.seed_root(unsafe {
                 /* SAFETY: value-internal construction from a real Value */
                 TaggedValue::from_bits(word)
             });
+            frozen_root_words += 1;
         }
         for item in &images.work {
             trace_work(heap, item);
