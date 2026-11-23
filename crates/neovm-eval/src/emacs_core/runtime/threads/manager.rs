@@ -235,11 +235,12 @@ impl ThreadManager {
         }
     }
 
+    /// GNU `record_thread_error` (src/thread.c:753-758) stores only the
+    /// error form. A `thread-signal` still pending when the thread died of
+    /// its own error stays in `error_symbol`, for a later join's snapshot.
     pub(crate) fn record_thread_internal_error(&mut self, native: u64, error: Value) {
         self.update_thread(native, |children| {
             *children.last_error_mut() = Some(error);
-            *children.error_symbol_mut() = Value::NIL;
-            *children.error_data_mut() = Value::NIL;
         });
         self.update_thread_native(native, |state| {
             *state.phase_mut() = ThreadPhase::Completing(ThreadOutcome::InternalError)
@@ -259,14 +260,17 @@ impl ThreadManager {
 
     #[doc(hidden)]
     pub fn pending_thread_signal_for_value(&self, value: Value) -> Option<Flow> {
-        let thread = self.thread_payload(value)?;
-        if thread.children().error_symbol().is_nil() {
+        // The pending pair itself (GNU `error_symbol`/`error_data`): the
+        // thread's own recorded error is no signal for anyone to raise.
+        let children = self.thread_payload(value)?.children();
+        let symbol = children.error_symbol();
+        if symbol.is_nil() {
             return None;
         }
-        thread
-            .children()
-            .last_error()
-            .and_then(signal_from_binding_value)
+        Some(signal_with_data_id(
+            symbol.as_bare_symbol_id()?,
+            children.error_data(),
+        ))
     }
 
     pub(crate) fn take_pending_thread_signal(&mut self, native: u64) -> Option<Flow> {

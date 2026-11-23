@@ -60,7 +60,7 @@ fn invalid_wait_state() -> Flow {
 
 /// Restores native continuation state and the existing event_object on every
 /// return, including a refused park or process shutdown. It never runs Lisp or
-/// waits in Drop; deferred errors remain owned by the Green seat.
+/// waits in Drop; a deferred binding-resume error stays in the Green seat.
 struct WaitOwner<'a> {
     context: &'a mut Context,
     key: ThreadKey,
