@@ -1,0 +1,13 @@
+error[E0505]: cannot move out of `turn` because it is borrowed
+  --> tests/e51_turn_ui/park_inside_with_world.rs:8:21
+   |
+ 7 |     let mut turn = state.begin(());
+   |         -------- binding `turn` declared here
+ 8 |     turn.with_world(|world| {
+   |     ---- ---------- ^^^^^^^ move out of `turn` occurs here
+   |     |    |
+   |     |    borrow later used by call
+   |     borrow of `turn` occurs here
+ 9 |         *world += 1;
+10 |         let _ = turn.park("mutex");
+   |                 ---- move occurs due to use in closure

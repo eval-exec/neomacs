@@ -4,6 +4,7 @@ pub(crate) mod keeper_custody;
 pub(crate) mod owned_source;
 mod quit_requester;
 pub(crate) mod serial_ticket;
+pub(crate) mod serial_turn;
 pub(crate) mod source_entry;
 pub(crate) mod source_jit_backend;
 pub(crate) mod source_jit_cache;

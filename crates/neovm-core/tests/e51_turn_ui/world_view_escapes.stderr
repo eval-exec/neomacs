@@ -1,0 +1,8 @@
+error: lifetime may not live long enough
+  --> tests/e51_turn_ui/world_view_escapes.rs:11:29
+   |
+11 |     turn.with_world(|world| &world.buffer)
+   |                      ------ ^^^^^^^^^^^^^ returning this value requires that `'1` must outlive `'2`
+   |                      |    |
+   |                      |    return type of closure is &'2 i32
+   |                      has type `&'1 mut World`

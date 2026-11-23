@@ -73,6 +73,9 @@ mod pentry_contracts;
 #[path = "pentry_e2_loan_contracts.rs"]
 mod pentry_e2_loan_contracts;
 
+#[path = "e51_turn_contracts.rs"]
+mod e51_turn_contracts;
+
 #[cfg(feature = "contract-fixtures")]
 #[test]
 fn nmjit_n1_sketch_compile_contracts() {
