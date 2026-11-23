@@ -2214,8 +2214,8 @@ fn vm_a_nan_compared_with_a_non_number_is_a_wrong_type_argument() {
     // GNU's comparison opcodes go straight to `arithcompare` (bytecode.c:1256,
     // 1267-1309), whose float arms validate the other operand whatever the
     // float is (data.c:2718-2746): `(< +nan nil)` signals, on either side,
-    // NaN or not. The double answers that on the owner, with no escape.
-    // (The serial arm short-circuits a NaN first: `serial_nan_short_circuit`.)
+    // NaN or not. The double answers that on the owner, with no escape; the
+    // serial arm answers the same, so the tie row runs these shapes too.
     let mut ctx = context();
     let nan = Value::make_float(f64::NAN);
     let predicate = Value::symbol("number-or-marker-p");
@@ -2298,31 +2298,6 @@ fn in_domain(kind: ArithGenericKind, operands: &[Value]) -> bool {
     true
 }
 
-/// The one place the serial arm is not GNU today: `arithcompare`
-/// (lisp/native/builtins/arithmetic.rs:1952-1956, 1965-1969) answers
-/// "unordered" for a NaN operand before it validates the other one, so
-/// `(< +nan nil)` is nil there. GNU validates the other operand whatever the
-/// float is (`not_number_or_marker`, data.c:2712-2715, reached from every
-/// float arm of `arithcompare`, :2718-2746). The double answers GNU's signal
-/// (`vm_a_nan_compared_with_a_non_number_is_a_wrong_type_argument`); the tie
-/// is not run over these shapes until the serial arm is corrected.
-fn serial_nan_short_circuit(kind: ArithGenericKind, operands: &[Value]) -> bool {
-    let comparison = matches!(
-        kind,
-        ArithGenericKind::NumEq
-            | ArithGenericKind::Lt
-            | ArithGenericKind::Gt
-            | ArithGenericKind::Le
-            | ArithGenericKind::Ge
-    );
-    let non_number = |value: &Value| !(value.is_fixnum() || value.is_bignum() || value.is_float());
-    comparison
-        && operands
-            .iter()
-            .any(|value| value.is_float() && value.xfloat().is_nan())
-        && operands.iter().any(non_number)
-}
-
 /// One shape through the stepper and through the serial arm: both printed.
 fn tie(ctx: &mut Context, kind: ArithGenericKind, operands: &[Value]) -> (String, String) {
     let op = opcode(kind);
@@ -2400,7 +2375,7 @@ fn vm_arithmetic_results_tie_the_serial_builtin() {
                 pool.iter().map(|b| vec![*a, *b]).collect()
             };
             for operands in shapes {
-                if !in_domain(kind, &operands) || serial_nan_short_circuit(kind, &operands) {
+                if !in_domain(kind, &operands) {
                     continue;
                 }
                 let (got, want) = tie(&mut ctx, kind, &operands);

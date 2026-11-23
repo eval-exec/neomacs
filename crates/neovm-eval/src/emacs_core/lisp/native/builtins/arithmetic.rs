@@ -1952,6 +1952,11 @@ fn arithcompare(
         if a.is_float() && !b.is_float() {
             let f = a.xfloat();
             if f.is_nan() {
+                // The NaN rule is "every relation false" only against a
+                // number or marker: GNU tests isnan inside the BIGNUMP arm,
+                // after the other operand's type is settled, and a non-number
+                // on the other side signals first (data.c:2760-2773, 2850).
+                integer_or_marker_to_big(eval, b)?;
                 return Ok(None);
             }
             // We have bi.partial_cmp(f); reverse to get a.cmp(b).
@@ -1965,6 +1970,8 @@ fn arithcompare(
         if b.is_float() && !a.is_float() {
             let f = b.xfloat();
             if f.is_nan() {
+                // Same rule, mirrored (data.c:2777-2829, 2847).
+                integer_or_marker_to_big(eval, a)?;
                 return Ok(None);
             }
             if let Some(ai) = a.as_bignum() {
