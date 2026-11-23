@@ -249,19 +249,27 @@ impl TableRef<'_> {
     /// lives. The borrow is shared: two readers from one run stay legal.
     /// Pending dump entries are hydrated under WRITER, then the reader
     /// count is taken. Already-hydrated tables skip the writer CAS.
+    ///
+    /// `needs_hydration` reads the payload. That read happens only while
+    /// this thread holds the reader count or WRITER. Hydration is one-way;
+    /// a payload replace that parks entries again is why the check repeats.
     pub fn enter<'a>(
         access: &'a RunAccess<'_, '_>,
         table: TaggedValue,
     ) -> Result<TableRef<'a>, RegistrationError> {
         access.owner.check_thread()?;
         let ptr = table_object(table)?;
-        // SAFETY: the mint validated the object. Hydration rebuilds the
-        // index, so it runs under WRITER, never under the reader count.
-        // The recheck after the CAS keeps two racers from hydrating twice.
-        // `WriterHold` releases the bit if hydration panics.
+        // SAFETY: the mint validated the object. The pending flag is a
+        // plain payload field, so it is read only under the reader count
+        // or under WRITER. `WriterHold` releases WRITER if hydration panics.
         unsafe {
-            if (*ptr).table.needs_hydration() {
-                let word = std::ptr::addr_of!((*ptr).authority);
+            let word = std::ptr::addr_of!((*ptr).authority);
+            loop {
+                reader_enter(&*word);
+                if !(*ptr).table.needs_hydration() {
+                    break;
+                }
+                reader_exit(&*word);
                 writer_enter(&*word);
                 let hold = WriterHold(word);
                 if (*ptr).table.needs_hydration() {
@@ -269,7 +277,6 @@ impl TableRef<'_> {
                 }
                 drop(hold);
             }
-            reader_enter(&(*ptr).authority);
         }
         Ok(TableRef {
             table: ptr,
@@ -486,8 +493,9 @@ impl KeeperTableMut<'_> {
     /// One keeper edit. Enter already holds WRITER for the lease lifetime.
     /// Same serial body as [`TableMut`].
     pub fn edit<R>(&mut self, f: impl FnOnce(&mut LispHashTable) -> R) -> R {
-        // SAFETY: every owner is stopped; the serial single-editor
-        // assumption holds without taking the word.
+        // SAFETY: enter's CAS holds WRITER for this lease, and the live
+        // AllStopped borrow excludes every owner. The serial single-editor
+        // assumption holds because that word is held.
         unsafe {
             crate::tagged::mutate::with_hash_table_mut_inactive(self.value, f)
                 .expect("mint validated the table type")

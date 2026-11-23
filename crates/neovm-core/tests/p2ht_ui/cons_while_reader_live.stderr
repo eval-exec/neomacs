@@ -7,3 +7,13 @@ error[E0499]: cannot borrow `run` as mutable more than once at a time
    |             ^^^ second mutable borrow occurs here
 18 | }
    | - first borrow might be used here, when `_lease` is dropped and runs the `Drop` code for type `TableRef`
+
+error[E0502]: cannot borrow `run` as mutable because it is also borrowed as immutable
+  --> tests/p2ht_ui/cons_while_reader_live.rs:28:13
+   |
+27 |     let _lease = TableRef::enter(&run, table).unwrap();
+   |                                  ---- immutable borrow occurs here
+28 |     let _ = run.cons(car, cdr);
+   |             ^^^^^^^^^^^^^^^^^^ mutable borrow occurs here
+29 | }
+   | - immutable borrow might be used here, when `_lease` is dropped and runs the `Drop` code for type `TableRef`

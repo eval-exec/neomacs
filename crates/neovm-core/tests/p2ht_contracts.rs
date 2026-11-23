@@ -2,7 +2,8 @@
 //!
 //! The three A7 rows live in `tests/p2ht_ui`. The mutation control copies
 //! the branded model, removes one lifetime brand, and the same body then
-//! type-checks. That copy is written under the repository `tmp/` tree.
+//! type-checks. That copy is written to a per-run directory under the
+//! process temp dir.
 
 #[test]
 #[cfg(feature = "contract-fixtures")]
@@ -51,7 +52,7 @@ fn p2ht_compile_contracts() {
             "access: &RunAccess<'_, 'a>",
         ),
     ];
-    let output = manifest.join("../../tmp/p2ht-brand-mutations");
+    let output = std::env::temp_dir().join(format!("p2ht-brand-mutations-{}", std::process::id()));
     for (name, before, after) in mutations {
         assert_eq!(
             brand.matches(before).count(),

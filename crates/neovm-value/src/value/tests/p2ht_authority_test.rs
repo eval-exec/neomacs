@@ -20,8 +20,13 @@ fn p2ht_layout_pins_the_jit_read_offset() {
     // padding, so removing it did not move `switch_epoch`. The object is
     // header + shell + authority + depth, rounded to the 8-byte alignment
     // (304). 304 does not fit the usable payload of the glibc 304-byte
-    // chunk (304 - 8 = 296), so this shell takes the next size class.
+    // chunk (304 - 8 = 296), so this shell takes the 320-byte chunk.
+    // That chunk's usable payload is 312. Growth past 312 leaves the class.
     assert_eq!(size_of::<HashTableObj>(), 304);
+    assert!(
+        size_of::<HashTableObj>() <= 312,
+        "glibc 320-byte chunk usable payload is 312"
+    );
     assert_eq!(size_of::<LispHashTable>(), 264);
     assert_eq!(size_of::<HashTableStorage>(), 192);
 
