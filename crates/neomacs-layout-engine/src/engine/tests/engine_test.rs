@@ -74,6 +74,9 @@ fn debug_logging_renders_mode_line_with_ellipsis_across_preview_byte_limit() {
     );
 }
 
+#[path = "composition_advance_cache_test.rs"]
+mod composition_advance_cache;
+
 #[path = "../../tests/engine_face_identity_test.rs"]
 mod face_identity;
 

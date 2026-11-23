@@ -57,6 +57,11 @@
     (progn
       (set-frame-font "FreeSerif-14" nil t)
       (setq auto-composition-mode t)
+      ;; Fontification is irrelevant to these rows and can add text
+      ;; properties (moving the buffer modified tick) between two layouts
+      ;; whose only intended change is a face remapping; keep the C1
+      ;; comparison to the input under test.
+      (setq fontification-functions nil)
       (write-region "" nil n-orphan-result)
       (erase-buffer)
       (insert n-orphan-text)
@@ -183,7 +188,38 @@
                    (if (> calls 0) 1 0) (and comp t))))
         (setq calls 0)
         (find-composition 1)
-        (n-orphan-log (format "cache-calls-reshaped-search %d" calls))))
+        (n-orphan-log (format "cache-calls-reshaped-search %d" calls)))
+
+      ;; 7a) C1: text-scale-adjust must re-derive a composed span's advance.
+      ;;     GNU re-evaluates the face (and therefore the font-at font) on
+      ;;     every compute (src/xfaces.c:2141, 5188-5223), so a face-remapping
+      ;;     write changes the shaped width.  Neo retains the resolved advance
+      ;;     per window while its display inputs are unchanged, so the
+      ;;     buffer-local `face-remapping-alist' write (a display-variable
+      ;;     change: `display_var_change_count') must invalidate it.  A base +
+      ;;     combining mark shapes through `font-shape-gstring', whose width
+      ;;     follows the font's pixel size; the pen after it moves with it.
+      ;;     The earlier arms installed a counting `auto-composition-function'
+      ;;     lambda buffer-locally; the redisplay snapshot only captures
+      ;;     automatic compositions when the function is the symbol
+      ;;     `auto-compose-chars', so restore the global value first.
+      (kill-local-variable 'auto-composition-function)
+      (erase-buffer)
+      (insert (decode-coding-string (unibyte-string #x65 #xcc #x81 #x62) 'utf-8))
+      (goto-char (point-min))
+      (redisplay t)
+      (let ((before-mark (car (window-text-pixel-size nil 1 3)))
+            (before-pen (car (posn-x-y (posn-at-point 3)))))
+        (text-scale-increase 2)
+        (redisplay t)
+        (let ((after-mark (car (window-text-pixel-size nil 1 3)))
+              (after-pen (car (posn-x-y (posn-at-point 3)))))
+          (n-orphan-log (format "scale-mark %S %S grown %s"
+                                before-mark after-mark
+                                (if (> after-mark before-mark) "t" "nil")))
+          (n-orphan-log (format "scale-pen %S %S grown %s"
+                                before-pen after-pen
+                                (if (> after-pen before-pen) "t" "nil"))))))
   (error (n-orphan-log (format "error %S" err))))
 
 (kill-emacs 0)

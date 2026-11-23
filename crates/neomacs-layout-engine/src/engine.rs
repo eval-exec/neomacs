@@ -1391,6 +1391,8 @@ struct RetainedCompositionAdvances {
     buffer_modiff: i64,
     overlay_modified_tick: i64,
     face_change_count: u64,
+    display_var_change_count: u64,
+    body_redisplay: neovm_core::window::BodyRedisplayRevision,
     fontset_generation: u64,
     window_parameters_generation: u64,
     char_width_bits: u32,
@@ -1399,17 +1401,38 @@ struct RetainedCompositionAdvances {
 
 impl RetainedCompositionAdvances {
     /// Whether these advances still describe the same composition inputs.
-    /// Text/property changes move `buffer_modiff`; overlay changes move
-    /// `overlay_modified_tick`; face and fontset definitions move their
-    /// generations; a per-window face parameter moves the window parameter
-    /// generation.  `char_width_bits` catches a window font-size change that
-    /// only the layout parameters record.
+    ///
+    /// This is deliberately the logical-input subset of
+    /// [`neovm_core::window::WindowDisplaySnapshotFreshness`], not the whole
+    /// token: the cache mirrors GNU's matrix-row reuse, which legitimately
+    /// survives point, vscroll and repaint-only (`redisplay_generation`)
+    /// moves, so comparing the full token would defeat the cache on every
+    /// cursor move.  The fields below are the ones that decide the shaped
+    /// width:
+    ///
+    /// - text/property changes move `buffer_modiff`;
+    /// - overlay changes move `overlay_modified_tick`;
+    /// - face definitions and fontsets move their generations;
+    /// - a per-window face parameter moves the window parameter generation,
+    ///   and `char_width_bits` catches a window font-size change that only
+    ///   the layout parameters record;
+    /// - `display_var_change_count` moves when a display-affecting variable
+    ///   changes without any of the above ticks — `face-remap-add-relative`
+    ///   (hence `text-scale-adjust`) writes buffer-local
+    ///   `face-remapping-alist`, and GNU re-derives the face (and therefore
+    ///   the font and the composition width) on every compute
+    ///   (src/xfaces.c:2141, 5188-5223);
+    /// - `body_redisplay` moves on `force-window-update`, which must re-derive
+    ///   the body even when no buffer/face/font tick moved
+    ///   (src/window.c:4492).
     fn is_current_for(
         &self,
         buffer_id: neovm_core::buffer::BufferId,
         buffer_modiff: i64,
         overlay_modified_tick: i64,
         face_change_count: u64,
+        display_var_change_count: u64,
+        body_redisplay: neovm_core::window::BodyRedisplayRevision,
         fontset_generation: u64,
         window_parameters_generation: u64,
         char_width_bits: u32,
@@ -1418,10 +1441,49 @@ impl RetainedCompositionAdvances {
             && self.buffer_modiff == buffer_modiff
             && self.overlay_modified_tick == overlay_modified_tick
             && self.face_change_count == face_change_count
+            && self.display_var_change_count == display_var_change_count
+            && self.body_redisplay == body_redisplay
             && self.fontset_generation == fontset_generation
             && self.window_parameters_generation == window_parameters_generation
             && self.char_width_bits == char_width_bits
     }
+}
+
+/// The advances one layout publishes for its window.
+///
+/// Every span the current snapshot captured keeps this layout's resolved
+/// width, or the validated previous layout's width for spans this pass did not
+/// resolve (a replay frame's narrow band must not erase the widths a
+/// full-screen pass resolved).  Resolutions for spans the snapshot no longer
+/// has are dropped, so the map stays bounded by the snapshot.
+fn retained_composition_advances_for_spans(
+    spans: impl Iterator<Item = (usize, usize)>,
+    resolved: &rustc_hash::FxHashMap<usize, f32>,
+    seeded: &rustc_hash::FxHashMap<(usize, usize), f32>,
+) -> rustc_hash::FxHashMap<(usize, usize), f32> {
+    let mut retained = rustc_hash::FxHashMap::default();
+    for (start, end) in spans {
+        let width = resolved
+            .get(&start)
+            .copied()
+            .or_else(|| seeded.get(&(start, end)).copied());
+        if let Some(width) = width {
+            retained.insert((start, end), width);
+        }
+    }
+    retained
+}
+
+/// Drop parked advances for windows the accepted frame no longer has.
+///
+/// The per-window caches are inserted while a layout attempt runs, so an
+/// attempt that retried, or a frame switch that removed a window, can leave an
+/// entry behind.  The accepted break owns this cleanup.
+fn prune_retained_composition_advances(
+    caches: &mut rustc_hash::FxHashMap<DisplayWindowId, RetainedCompositionAdvances>,
+    accepted: impl Fn(&DisplayWindowId) -> bool,
+) {
+    caches.retain(|window, _| accepted(window));
 }
 
 /// An upper bound on the characters a window can display, as
@@ -4675,6 +4737,14 @@ impl LayoutEngine {
             self.frame_visual_histories.get(frame_id),
         );
         self.retained_window_matrices = next_retained_window_matrices;
+        // Composition advances are inserted per window while the attempt
+        // runs, including attempts that later retry and windows a frame
+        // switch removed. The accepted matrices are exactly this frame's
+        // windows, so prune to them here: a deleted window must not leave its
+        // shaped widths (and its buffer's roots) behind.
+        prune_retained_composition_advances(&mut self.retained_composition_advances, |window| {
+            self.retained_window_matrices.contains_key(window)
+        });
         self.frame_face_arenas.insert(frame_id, sealed_face_arena);
         for buffer_id in acked_buffer_ids {
             if let Some(buffer) = evaluator
@@ -6461,6 +6531,8 @@ impl LayoutEngine {
                 .map(|buffer| (buffer.modified_tick(), buffer.overlay_modified_tick()))
                 .unwrap_or((i64::MIN, i64::MIN));
             let composition_face_change_count = evaluator.face_change_count();
+            let composition_display_var_change_count = evaluator.display_var_change_count();
+            let composition_body_redisplay = evaluator.body_redisplay_revision(window_id, buf_id);
             let composition_fontset_generation =
                 neovm_core::emacs_core::fontset::fontset_generation();
             let composition_window_parameters_generation = evaluator
@@ -6471,6 +6543,31 @@ impl LayoutEngine {
                 .unwrap_or(0);
             let composition_char_width_bits = params.char_width.to_bits();
             let composition_window = DisplayWindowId::new(params.window_id);
+            if let Some(previous) = self.retained_composition_advances.get(&composition_window) {
+                tracing::debug!(
+                    target: "neomacs_layout_engine::composition_resolver",
+                    previous = ?(
+                        previous.buffer_modiff,
+                        previous.overlay_modified_tick,
+                        previous.face_change_count,
+                        previous.display_var_change_count,
+                        previous.fontset_generation,
+                        previous.window_parameters_generation,
+                        previous.char_width_bits,
+                    ),
+                    current = ?(
+                        composition_buffer_modiff,
+                        composition_overlay_modified_tick,
+                        composition_face_change_count,
+                        composition_display_var_change_count,
+                        composition_fontset_generation,
+                        composition_window_parameters_generation,
+                        composition_char_width_bits,
+                    ),
+                    body_unchanged = previous.body_redisplay == composition_body_redisplay,
+                    "composition cache inputs"
+                );
+            }
             let seeded_composition_advances = self
                 .retained_composition_advances
                 .get(&composition_window)
@@ -6480,6 +6577,8 @@ impl LayoutEngine {
                         composition_buffer_modiff,
                         composition_overlay_modified_tick,
                         composition_face_change_count,
+                        composition_display_var_change_count,
+                        composition_body_redisplay,
                         composition_fontset_generation,
                         composition_window_parameters_generation,
                         composition_char_width_bits,
@@ -6503,20 +6602,11 @@ impl LayoutEngine {
                 "composition resolve timing"
             );
             let resolved_advances = layout_buffer.resolved_automatic_composition_advances();
-            let mut retained_advances = rustc_hash::FxHashMap::default();
-            for (start, end) in layout_buffer.automatic_composition_span_ranges() {
-                // Keep the previous layout's width for spans this layout did
-                // not resolve (outside its range): a replay frame's narrow
-                // band must not erase the widths a full-screen pass resolved,
-                // or the next full pass would re-enter Lisp for the screen.
-                let width = resolved_advances
-                    .get(&start)
-                    .copied()
-                    .or_else(|| seeded_composition_advances.get(&(start, end)).copied());
-                if let Some(width) = width {
-                    retained_advances.insert((start, end), width);
-                }
-            }
+            let retained_advances = retained_composition_advances_for_spans(
+                layout_buffer.automatic_composition_span_ranges(),
+                &resolved_advances,
+                &seeded_composition_advances,
+            );
             self.retained_composition_advances.insert(
                 composition_window,
                 RetainedCompositionAdvances {
@@ -6524,6 +6614,8 @@ impl LayoutEngine {
                     buffer_modiff: composition_buffer_modiff,
                     overlay_modified_tick: composition_overlay_modified_tick,
                     face_change_count: composition_face_change_count,
+                    display_var_change_count: composition_display_var_change_count,
+                    body_redisplay: composition_body_redisplay,
                     fontset_generation: composition_fontset_generation,
                     window_parameters_generation: composition_window_parameters_generation,
                     char_width_bits: composition_char_width_bits,
