@@ -1187,36 +1187,63 @@ impl RenderApp {
             Err("display is shutting down".to_owned()),
         ));
 
-        // Drop the renderer first. Its WebView retirement queue waits for each
-        // exact GPU copy submission and releases the corresponding remote WPE
-        // lease. The WPE reactor must still be alive to consume those release
-        // commands and acknowledge the native buffers.
-        drop(self.renderer.take());
-        // Now no renderer-owned browser frame can refer back to WPE; stop the
-        // WebKit views and their reactor-local EGL/GObject state.
-        #[cfg(feature = "webview")]
-        {
-            self.webview_system = None;
-        }
-        // Drop adopted primary state (surface holds wl_surface proxy if on Wayland)
-        drop(self.frame_windows.take_primary_window());
-        // Drop multi-window state (secondary surfaces)
-        self.frame_windows.destroy_all();
-        // Leak the adapter to prevent eglTerminate crash on Wayland.
-        // The adapter's Drop triggers eglTerminate → dri2_teardown_wayland which
-        // SEGVs if the Wayland connection is already gone. Since we're exiting,
-        // the OS will reclaim all GPU/EGL resources.
-        if let Some(gpu) = self.gpu.take() {
-            let RenderGpuContext {
-                instance,
-                adapter,
-                device,
-                queue,
-            } = gpu;
-            drop(device);
-            drop(queue);
-            drop(instance);
-            std::mem::forget(adapter);
+        // A lost device's Drop waits inside the wedged driver (the NVK exit
+        // spent about 80s here). Forget that graph. A live device still drops
+        // device, queue, and instance while the display connection is up, and
+        // still forgets the adapter so eglTerminate cannot run after it.
+        match super::device_loss::gpu_exit_disposition(self.device_lost.is_latched()) {
+            super::device_loss::GpuExitDisposition::Abandon => {
+                tracing::warn!(
+                    "GPU device is lost; abandoning devices, surfaces, and the renderer instead of dropping them"
+                );
+                if let Some(renderer) = self.renderer.take() {
+                    std::mem::forget(renderer);
+                }
+                #[cfg(feature = "webview")]
+                if let Some(webview) = self.webview_system.take() {
+                    std::mem::forget(webview);
+                }
+                std::mem::forget(std::mem::replace(
+                    &mut self.frame_windows,
+                    super::frame_windows::GuiFrameWindowManager::new(),
+                ));
+                if let Some(gpu) = self.gpu.take() {
+                    std::mem::forget(gpu);
+                }
+            }
+            super::device_loss::GpuExitDisposition::Release => {
+                // Drop the renderer first. Its WebView retirement queue waits for each
+                // exact GPU copy submission and releases the corresponding remote WPE
+                // lease. The WPE reactor must still be alive to consume those release
+                // commands and acknowledge the native buffers.
+                drop(self.renderer.take());
+                // Now no renderer-owned browser frame can refer back to WPE; stop the
+                // WebKit views and their reactor-local EGL/GObject state.
+                #[cfg(feature = "webview")]
+                {
+                    self.webview_system = None;
+                }
+                // Drop adopted primary state (surface holds wl_surface proxy if on Wayland)
+                drop(self.frame_windows.take_primary_window());
+                // Drop multi-window state (secondary surfaces)
+                self.frame_windows.destroy_all();
+                // Leak the adapter to prevent eglTerminate crash on Wayland.
+                // The adapter's Drop triggers eglTerminate → dri2_teardown_wayland which
+                // SEGVs if the Wayland connection is already gone. Since we're exiting,
+                // the OS will reclaim all GPU/EGL resources.
+                if let Some(gpu) = self.gpu.take() {
+                    let RenderGpuContext {
+                        instance,
+                        adapter,
+                        device,
+                        queue,
+                    } = gpu;
+                    drop(device);
+                    drop(queue);
+                    drop(instance);
+                    std::mem::forget(adapter);
+                }
+            }
         }
 
         tracing::info!("GPU resources cleaned up");

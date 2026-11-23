@@ -16,6 +16,26 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+/// What exit does with the wgpu context.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum GpuExitDisposition {
+    /// Live device. Drop device, queue, and instance. Forget the adapter so
+    /// `eglTerminate` does not run after the Wayland display is gone.
+    Release,
+    /// Lost device. `Drop` waits inside the wedged driver. Forget the
+    /// context; the process is exiting and the OS reclaims it.
+    Abandon,
+}
+
+/// A latched device loss must not drop into the wedged driver on exit.
+pub(super) fn gpu_exit_disposition(device_lost: bool) -> GpuExitDisposition {
+    if device_lost {
+        GpuExitDisposition::Abandon
+    } else {
+        GpuExitDisposition::Release
+    }
+}
+
 /// Consecutive `CurrentSurfaceTexture::Lost` results escalated to a device
 /// loss. A one-off Lost is a normal swapchain hiccup and is merely skipped;
 /// a device that keeps answering Lost never presents again without a
@@ -47,6 +67,12 @@ impl DeviceLossDetector {
     /// failed recovery that must be retried on the next pass).
     pub(super) fn mark_lost_now(&self) {
         self.flag.store(true, Ordering::SeqCst);
+    }
+
+    /// Read the latch without draining it. Exit uses this so a lost device
+    /// is not dropped into a wedged driver.
+    pub(super) fn is_latched(&self) -> bool {
+        self.flag.load(Ordering::SeqCst)
     }
 
     /// Drain the latch; true means a recovery pass must run now.
