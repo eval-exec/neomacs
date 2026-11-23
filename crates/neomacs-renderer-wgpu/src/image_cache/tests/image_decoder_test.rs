@@ -270,7 +270,7 @@ fn retirement_before_deferred_submission_cannot_resurrect_identity() {
 /// This is the shared-decoder boundary GNU's synchronous clear leaves behind.
 #[test]
 fn clear_through_retires_only_jobs_admitted_before_the_cutoff() {
-    let mut decoder = ImageDecoder::new();
+    let decoder = ImageDecoder::new();
     let client = decoder.client();
     let before = token(301, 1);
     submit(&client, before, png(), ImageSizeLimit::UNLIMITED);

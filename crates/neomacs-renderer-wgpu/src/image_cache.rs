@@ -2776,3 +2776,7 @@ impl ImageCache {
 #[cfg(test)]
 #[path = "image_cache/tests/image_cache_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "image_cache/tests/clear_admission_test.rs"]
+mod clear_admission_test;
