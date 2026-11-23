@@ -753,6 +753,86 @@ fn fontset_revision_invalidates_every_retained_row_fast_path() {
 }
 
 #[test]
+fn intrinsic_row_content_survives_fractional_viewport_capacity_changes() {
+    let mut before = synthetic_key(4320, 4320);
+    before.vscroll = -8;
+    before.viewport_rows = 31;
+    let mut placed = before.clone();
+    placed.window_start += 24;
+    placed.point += 24;
+    placed.vscroll = -4;
+    placed.viewport_rows = 30;
+
+    assert!(RetainedWindowKey::row_content_eligible(&before, &placed));
+    assert!(RetainedWindowKey::row_content_eligible(&placed, &before));
+    assert!(!RetainedWindowKey::cursor_only_eligible(&before, &placed));
+
+    // Foreground replay still observes capacity even without a start change:
+    // scroll margins must use the current visible viewport, not worker rows.
+    let mut capacity_only = before.clone();
+    capacity_only.viewport_rows = 30;
+    assert!(RetainedWindowKey::row_content_eligible(
+        &before,
+        &capacity_only
+    ));
+    assert!(!RetainedWindowKey::cursor_only_eligible(
+        &before,
+        &capacity_only,
+    ));
+}
+
+#[test]
+fn fractional_row_content_reuse_keeps_intrinsic_layout_invalidators() {
+    let mut before = synthetic_key(4320, 4320);
+    before.vscroll = -8;
+    before.viewport_rows = 31;
+    let mut placed = before.clone();
+    placed.window_start += 24;
+    placed.vscroll = -4;
+    placed.viewport_rows = 30;
+    assert!(RetainedWindowKey::row_content_eligible(&before, &placed));
+
+    let invalidators: [(&str, fn(&mut RetainedWindowKey)); 10] = [
+        ("body partition", |key| {
+            key.partition = WindowPartitionSignature::from_regions(
+                neovm_core::window::PresentedWindowRegions {
+                    outer: Rect::new(0.0, 0.0, 800.0, 616.0),
+                    text_body: Rect::new(0.0, 0.0, 800.0, 584.0),
+                    mode_line: Some(Rect::new(0.0, 584.0, 800.0, 16.0)),
+                    ..Default::default()
+                },
+            );
+        }),
+        ("window width", |key| {
+            key.partition = WindowPartitionSignature::from_regions(
+                neovm_core::window::PresentedWindowRegions {
+                    outer: Rect::new(0.0, 0.0, 640.0, 616.0),
+                    text_body: Rect::new(0.0, 0.0, 640.0, 600.0),
+                    mode_line: Some(Rect::new(0.0, 600.0, 640.0, 16.0)),
+                    ..Default::default()
+                },
+            );
+        }),
+        ("font set", |key| key.fontset_generation += 1),
+        ("font size", |key| key.font_pixel_size += 1.0),
+        ("character width", |key| key.char_width += 1.0),
+        ("source identity", |key| key.buffer_id += 1),
+        ("source text", |key| key.chars_modified_tick += 1),
+        ("source properties", |key| key.props_modified_tick += 1),
+        ("horizontal scroll", |key| key.hscroll += 1),
+        ("tab policy", |key| key.tab_width += 1),
+    ];
+    for (name, invalidate) in invalidators {
+        let mut changed = placed.clone();
+        invalidate(&mut changed);
+        assert!(
+            !RetainedWindowKey::row_content_eligible(&before, &changed),
+            "fractional placement must not authorize changed {name}",
+        );
+    }
+}
+
+#[test]
 fn wrapped_projection_requires_the_same_source_origin_and_a_complete_join() {
     let mut retained = synthetic_matrix(0, 5);
     MatrixRow::make_mut(&mut retained.matrix.rows[0]).continued = true;

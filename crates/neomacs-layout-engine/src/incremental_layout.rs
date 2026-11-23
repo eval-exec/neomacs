@@ -302,6 +302,10 @@ impl RetainedWindowKey {
         let mut placed = current.clone();
         placed.window_start = previous.window_start;
         placed.vscroll = previous.vscroll;
+        // Visible capacity includes the fractional pixel offset. It bounds
+        // foreground scroll margins, but does not change intrinsic row content.
+        // Keep its comparison in the ordinary cursor-only/whole-matrix gate.
+        placed.viewport_rows = previous.viewport_rows;
         Self::cursor_only_eligible(previous, &placed)
     }
 
