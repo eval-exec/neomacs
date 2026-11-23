@@ -576,8 +576,28 @@ fn pentry_l62_live_lend_refuses_a_stale_owner_a_wrong_generation_and_a_second_st
                         super::super::super::serial_ticket::StoppedSerialTicket::from_lend(
                             suspended,
                         );
-                    assert_eq!(ticket.identity().owner, CURRENT_OWNER);
-                    assert_eq!(ticket.identity().heap, heap);
+                    let cut = ticket.identity();
+                    assert_eq!(cut.owner, CURRENT_OWNER);
+                    assert_eq!(cut.heap, heap);
+                    assert_eq!(cut.epoch, acked, "the ticket carries this stop's epoch");
+                    let mut wrong = cut;
+                    wrong.epoch = std::num::NonZeroU64::new(cut.epoch.get().saturating_add(1))
+                        .expect("a later epoch");
+                    let (held, wrong_return) = match held.accept_return(
+                        super::super::super::keeper_custody::ReturnedSerialTicket::for_test(wrong),
+                    ) {
+                        Err(refused) => refused,
+                        Ok(_) => panic!("a different epoch is not the ticket this lend cut"),
+                    };
+                    assert_eq!(wrong_return.identity(), wrong);
+                    let mut seat = super::super::super::serial_ticket::SerialDestination::new(cut);
+                    let returned = seat
+                        .receive_serial(ticket)
+                        .expect("receive the cut ticket")
+                        .guard()
+                        .finish(&mut seat)
+                        .expect("end the turn")
+                        .return_ticket();
                     // The export reservation is held and inert. Cutting the
                     // ticket consumed the lend typestate and did not drop the
                     // stop. A second stop cannot mint another lend.
@@ -585,13 +605,13 @@ fn pentry_l62_live_lend_refuses_a_stale_owner_a_wrong_generation_and_a_second_st
                         matches!(keeper.stop(), Err(RendezvousError::Busy)),
                         "a second stop is refused while the lend is outstanding"
                     );
-                    let restored = match held.accept_return(
-                        super::super::super::keeper_custody::ReturnedSerialTicket::for_test(),
-                    ) {
+                    let restored = match held.accept_return(returned) {
                         Ok(restored) => restored,
-                        Err(failure) => {
-                            let _ = failure.complete_traced();
-                            panic!("accept the test return");
+                        Err((_held, rejected)) => {
+                            panic!(
+                                "the cut ticket was refused: epoch {}",
+                                rejected.identity().epoch
+                            );
                         }
                     };
                     restored

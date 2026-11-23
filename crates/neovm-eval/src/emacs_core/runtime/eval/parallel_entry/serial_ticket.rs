@@ -1,7 +1,8 @@
 //! L6.3: the dormant serial-ticket transport.
 //!
-//! The ticket carries the owner, the generation, and the era the destination
-//! validates. It does not carry a Context, a collector, a slab, or a manager.
+//! The ticket carries the owner, the generation, the heap, and the stop epoch
+//! the destination validates. It does not carry a Context, a collector, a
+//! slab, or a manager.
 //! The Baton and the heap transfer stay the held keeper loan until L6.4
 //! activates the owner's dormant Context. A refusal returns the ticket.
 //! Nothing is half-received.
@@ -24,6 +25,9 @@ pub(crate) struct TicketIdentity {
     pub owner: u64,
     pub generation: NonZeroU64,
     pub heap: HeapIdentity,
+    /// Epoch of the stop that cut this ticket. A later stop of the same
+    /// owner is a different epoch.
+    pub epoch: NonZeroU64,
 }
 
 /// Send ticket from the keeper to the destination owner.
@@ -42,6 +46,7 @@ pub(crate) struct StoppedSerialTicket {
 #[must_use]
 pub(crate) struct SerialLendHeld<'s, 'era> {
     lend: super::keeper_custody::SuspendedKeeper<'s, 'era>,
+    cut: TicketIdentity,
 }
 
 impl StoppedSerialTicket {
@@ -69,16 +74,18 @@ impl StoppedSerialTicket {
     pub(crate) fn from_lend<'s, 'era>(
         lend: super::keeper_custody::SuspendedKeeper<'s, 'era>,
     ) -> (Self, SerialLendHeld<'s, 'era>) {
-        let (owner, generation, heap) = lend.serial_facts();
+        let (owner, generation, heap, epoch) = lend.serial_facts();
         let ticket = Self {
             identity: TicketIdentity {
                 owner,
                 generation,
                 heap,
+                epoch,
             },
             _not_sync: PhantomData,
         };
-        (ticket, SerialLendHeld { lend })
+        let cut = ticket.identity;
+        (ticket, SerialLendHeld { lend, cut })
     }
 
     #[allow(dead_code)] // Dormant L6.3; L6.4 begin is the caller.
@@ -93,7 +100,7 @@ impl<'s, 'era> SerialLendHeld<'s, 'era> {
         not(test),
         expect(
             dead_code,
-            reason = "L6.4 end_serial returns the ticket; the live lend row uses the test return"
+            reason = "L6.4 end_serial returns the ticket; the live lend row accepts that return"
         )
     )]
     pub(crate) fn accept_return(
@@ -101,9 +108,18 @@ impl<'s, 'era> SerialLendHeld<'s, 'era> {
         returned: super::keeper_custody::ReturnedSerialTicket,
     ) -> Result<
         super::keeper_custody::RestoredKeeper<'s, 'era>,
-        super::keeper_custody::KeeperCustodyFailure<'s, 'era>,
+        (Self, super::keeper_custody::ReturnedSerialTicket),
     > {
-        self.lend.accept_return(returned)
+        if returned.identity() != self.cut {
+            return Err((self, returned));
+        }
+        match self.lend.accept_return(returned) {
+            Ok(restored) => Ok(restored),
+            Err(failure) => {
+                let _ = failure.complete_traced();
+                panic!("the lend refused the ticket whose identity it cut");
+            }
+        }
     }
 }
 
@@ -129,8 +145,10 @@ impl ReceivedSerial {
 pub(crate) enum ReceiveReason {
     WrongOwner,
     StaleGeneration,
-    /// The heap word does not match. This is not an era epoch.
+    /// The heap word does not match.
     WrongHeap,
+    /// The stop epoch does not match. The owner, generation, and heap did.
+    Era,
     SecondReceive,
 }
 
@@ -233,6 +251,8 @@ impl SerialDestination {
             Some(ReceiveReason::StaleGeneration)
         } else if ticket.identity.heap != self.expected.heap {
             Some(ReceiveReason::WrongHeap)
+        } else if ticket.identity.epoch != self.expected.epoch {
+            Some(ReceiveReason::Era)
         } else {
             None
         };
@@ -282,10 +302,15 @@ mod tests {
     }
 
     fn identity(owner: u64, generation: u64, heap_word: usize) -> TicketIdentity {
+        identity_at(owner, generation, heap_word, 1)
+    }
+
+    fn identity_at(owner: u64, generation: u64, heap_word: usize, epoch: u64) -> TicketIdentity {
         TicketIdentity {
             owner,
             generation: NonZeroU64::new(generation).expect("nonzero generation"),
             heap: heap(heap_word),
+            epoch: NonZeroU64::new(epoch).expect("nonzero epoch"),
         }
     }
 
@@ -363,6 +388,22 @@ mod tests {
         let got = done_rx.recv().expect("receive result");
         destination.join().expect("destination thread");
         assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn pentry_l64_wrong_epoch_is_era_and_returns_the_ticket() {
+        let expected = identity_at(7, 2, 1, 4);
+        let mut seat = SerialDestination::new(expected);
+        let other_stop = identity_at(7, 2, 1, 3);
+        let refusal = seat
+            .receive_serial(StoppedSerialTicket::transport(other_stop))
+            .expect_err("a different stop epoch");
+        assert_eq!(refusal.reason, ReceiveReason::Era);
+        assert_eq!(refusal.ticket.identity(), other_stop);
+        let received = seat
+            .receive_serial(StoppedSerialTicket::transport(expected))
+            .expect("the seat was not half-received");
+        assert_eq!(received.identity(), expected);
     }
 
     #[test]

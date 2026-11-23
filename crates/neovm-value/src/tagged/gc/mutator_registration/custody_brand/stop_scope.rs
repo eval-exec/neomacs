@@ -68,6 +68,11 @@ impl<'s, 'era> StoppedInterval<'s, 'era> {
         self.stopped.heap_identity()
     }
 
+    /// Stop epoch recorded on the proof. Not a loan and not a new stop.
+    pub(super) fn epoch(&self) -> std::num::NonZeroU64 {
+        self.stopped.epoch()
+    }
+
     /// Move this proof into the dormant reservation. Not a second mint.
     #[doc(hidden)]
     pub fn into_unentered(self) -> super::reservation::UnenteredReservation<'s, 'era> {

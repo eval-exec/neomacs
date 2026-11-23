@@ -76,25 +76,34 @@ pub enum CustodyFailureNotice {
 #[allow(dead_code)]
 #[must_use]
 pub struct ReturnedSerialTicket {
+    identity: super::serial_ticket::TicketIdentity,
     _not_sync: PhantomData<Cell<()>>,
 }
 
 impl ReturnedSerialTicket {
-    /// Production return. Consumes the owner `end_serial` yielded.
+    /// Production return. Consumes the owner `end_serial` yielded, so the
+    /// envelope is that lend's received ticket and not a copied blank.
     #[allow(dead_code)] // the L6.4 row is the caller until activation lands.
     pub(crate) fn from_end(owner: super::serial_ticket::ReturnableSerialOwner) -> Self {
+        let identity = owner.identity();
         drop(owner);
         Self {
+            identity,
             _not_sync: PhantomData,
         }
+    }
+
+    pub(crate) fn identity(&self) -> super::serial_ticket::TicketIdentity {
+        self.identity
     }
 }
 
 #[cfg(test)]
 impl ReturnedSerialTicket {
     /// Test-only return. Production return is [`Self::from_end`].
-    pub(crate) fn for_test() -> Self {
+    pub(crate) fn for_test(identity: super::serial_ticket::TicketIdentity) -> Self {
         Self {
+            identity,
             _not_sync: PhantomData,
         }
     }
@@ -177,11 +186,13 @@ impl<'s, 'era> SuspendedKeeper<'s, 'era> {
         u64,
         std::num::NonZeroU64,
         neovm_value::tagged::gc::HeapIdentity,
+        std::num::NonZeroU64,
     ) {
         let (owner, generation, owner_heap) = self.request.owner.serial_facts();
         let heap = self.export.reservation.heap_identity();
+        let epoch = self.export.reservation.epoch();
         debug_assert_eq!(owner_heap, heap);
-        (owner, generation, heap)
+        (owner, generation, heap, epoch)
     }
 
     /// Consumes a returned envelope. A failure notice does not satisfy this input.
@@ -189,7 +200,10 @@ impl<'s, 'era> SuspendedKeeper<'s, 'era> {
         self,
         returned: ReturnedSerialTicket,
     ) -> Result<RestoredKeeper<'s, 'era>, KeeperCustodyFailure<'s, 'era>> {
-        let ReturnedSerialTicket { _not_sync: _ } = returned;
+        let ReturnedSerialTicket {
+            identity: _,
+            _not_sync: _,
+        } = returned;
         Ok(RestoredKeeper {
             export: self.export,
             request: self.request,

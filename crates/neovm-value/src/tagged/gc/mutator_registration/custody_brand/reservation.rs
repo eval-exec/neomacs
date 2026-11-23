@@ -33,6 +33,12 @@ impl<'s, 'era> UnenteredReservation<'s, 'era> {
         self.interval.heap_identity()
     }
 
+    /// Stop epoch recorded on the proof. Not a loan and not a new stop.
+    #[doc(hidden)]
+    pub fn epoch(&self) -> std::num::NonZeroU64 {
+        self.interval.epoch()
+    }
+
     /// Re-check the publication. Not a heap loan and not a phase write.
     #[doc(hidden)]
     pub fn validate_owner(
