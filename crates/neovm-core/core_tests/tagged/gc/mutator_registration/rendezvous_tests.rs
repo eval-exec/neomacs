@@ -124,6 +124,8 @@ shells! {
     first_restored_owner_waits_for_the_final_peer_debt => FirstRestoredOwnerWaitsForTheFinalPeerDebt,
     poison_wakes_a_restored_owner_waiting_for_peer_debt => PoisonWakesARestoredOwnerWaitingForPeerDebt,
     stop_and_unrestored_owner_refuse_instead_of_waiting_for_themselves => StopAndUnrestoredOwnerRefuseInsteadOfWaitingForThemselves,
+    native_receipt_outlasts_a_gate_holder_after_the_commit => NativeReceiptOutlastsAGateHolderAfterTheCommit,
+    stopped_keeper_waits_out_a_brief_gate_holder => StoppedKeeperWaitsOutABriefGateHolder,
 }
 
 #[test]

@@ -60,6 +60,8 @@ pub enum RootedRendezvousCase {
     FirstRestoredOwnerWaitsForTheFinalPeerDebt,
     PoisonWakesARestoredOwnerWaitingForPeerDebt,
     StopAndUnrestoredOwnerRefuseInsteadOfWaitingForThemselves,
+    NativeReceiptOutlastsAGateHolderAfterTheCommit,
+    StoppedKeeperWaitsOutABriefGateHolder,
 }
 
 impl RootedRendezvousCase {
@@ -99,6 +101,8 @@ impl RootedRendezvousCase {
         Self::FirstRestoredOwnerWaitsForTheFinalPeerDebt,
         Self::PoisonWakesARestoredOwnerWaitingForPeerDebt,
         Self::StopAndUnrestoredOwnerRefuseInsteadOfWaitingForThemselves,
+        Self::NativeReceiptOutlastsAGateHolderAfterTheCommit,
+        Self::StoppedKeeperWaitsOutABriefGateHolder,
     ];
 }
 

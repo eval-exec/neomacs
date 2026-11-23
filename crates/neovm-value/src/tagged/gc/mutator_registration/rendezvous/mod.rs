@@ -153,6 +153,7 @@ mod owner_test_hooks {
     pub(in crate::tagged::gc::mutator_registration) struct Hooks {
         pub(super) publication_hook: Option<Box<dyn FnOnce()>>,
         pub(super) restore_wait_hook: Option<Box<dyn FnOnce()>>,
+        pub(super) receipt_hook: Option<Box<dyn FnOnce()>>,
     }
     impl Hooks {
         pub(super) fn take_publication(&mut self) -> Option<Box<dyn FnOnce()>> {
@@ -160,6 +161,12 @@ mod owner_test_hooks {
         }
         pub(super) fn take_restore_wait(&mut self) -> Option<Box<dyn FnOnce()>> {
             self.restore_wait_hook.take()
+        }
+        /// Runs after a native publication commits, before its receipt is read.
+        pub(in crate::tagged::gc::mutator_registration) fn take_receipt(
+            &mut self,
+        ) -> Option<Box<dyn FnOnce()>> {
+            self.receipt_hook.take()
         }
     }
 }
