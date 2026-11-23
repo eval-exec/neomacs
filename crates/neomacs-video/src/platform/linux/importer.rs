@@ -6,7 +6,7 @@ use crate::sampling::{GpuVideoContext, PreparedBiPlanarTexture, PreparedSampledT
 use crate::surface_pool::{BoundedSurfacePool, SurfacePoolAcquire};
 use crate::{GpuVideoFrame, VideoCompositorImport, VideoFrameFormat};
 
-use super::dmabuf::{ImportedDmaBufSurface, import_dmabuf};
+use super::dmabuf::{ImportedDmaBufSurface, import_dmabuf, validate_surface_layout};
 use super::frame::{DmaBufSurfaceKey, LinuxFrameLease, LinuxFrameStorage, dmabuf_cache_key};
 
 const IMPORTED_SURFACE_CAPACITY: usize = 64;
@@ -60,6 +60,21 @@ impl FrameImporter<LinuxFrameLease> for LinuxFrameImporter {
         } = frame;
         match &lease.storage {
             LinuxFrameStorage::DmaBuf(surface) => {
+                // Validate before cache reuse as well as before raw import:
+                // a decoder's declared format must match the actual surface.
+                let allocation_bytes =
+                    match validate_surface_layout(surface.fourcc, geometry, format) {
+                        Ok(bytes) => bytes,
+                        Err(reason) => {
+                            return Ok(FrameImportOutcome::ReconfigureDecoder {
+                                rejection: DecoderOutputRejection {
+                                    generation: output_generation,
+                                    format,
+                                    reason,
+                                },
+                            });
+                        }
+                    };
                 let key = dmabuf_cache_key(
                     surface,
                     geometry.coded_width,
@@ -69,31 +84,22 @@ impl FrameImporter<LinuxFrameLease> for LinuxFrameImporter {
                 let cached = match self.imported.acquire(key) {
                     SurfacePoolAcquire::Reused(lease) => lease,
                     SurfacePoolAcquire::Allocate(reservation) => {
-                        let (texture, imported) = match import_dmabuf(
-                            self.gpu.device(),
-                            surface,
-                            geometry.coded_width,
-                            geometry.coded_height,
-                        ) {
-                            Ok(imported) => imported,
-                            Err(reason) => {
-                                return Ok(FrameImportOutcome::ReconfigureDecoder {
-                                    rejection: DecoderOutputRejection {
-                                        generation: output_generation,
-                                        format,
-                                        reason,
-                                    },
-                                });
-                            }
-                        };
+                        let (texture, imported) =
+                            match import_dmabuf(self.gpu.device(), surface, geometry, format) {
+                                Ok(imported) => imported,
+                                Err(reason) => {
+                                    return Ok(FrameImportOutcome::ReconfigureDecoder {
+                                        rejection: DecoderOutputRejection {
+                                            generation: output_generation,
+                                            format,
+                                            reason,
+                                        },
+                                    });
+                                }
+                            };
                         let prepared = match format {
                             VideoFrameFormat::Packed(_) => PreparedLinuxSample::Packed(
-                                self.gpu.prepare_texture(
-                                    texture,
-                                    format
-                                        .allocation_bytes(geometry)
-                                        .map_err(|error| error.to_string())?,
-                                ),
+                                self.gpu.prepare_texture(texture, allocation_bytes),
                             ),
                             VideoFrameFormat::BiPlanar420(format) => PreparedLinuxSample::BiPlanar(
                                 self.gpu.prepare_multi_planar_texture(

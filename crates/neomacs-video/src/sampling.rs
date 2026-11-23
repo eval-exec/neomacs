@@ -93,6 +93,13 @@ pub(crate) struct PreparedBiPlanarTexture {
     _allocation: Arc<GpuAllocation>,
 }
 
+#[cfg(all(feature = "native-validation-fixtures", target_os = "linux"))]
+impl PreparedBiPlanarTexture {
+    pub(crate) fn native_plane_views_for_validation(&self) -> [&wgpu::TextureView; 2] {
+        [&self.luma_view, &self.chroma_view]
+    }
+}
+
 struct BiPlanarTexturePlanes {
     luma_texture: wgpu::Texture,
     chroma_texture: wgpu::Texture,

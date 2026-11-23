@@ -200,6 +200,10 @@ mod native_menus;
 #[path = "native_scrolling.rs"]
 mod native_scrolling;
 
+#[cfg(all(target_os = "linux", feature = "native-video-validation"))]
+#[path = "native_video_validation.rs"]
+mod native_video_validation;
+
 #[path = "neomacsclient_frames.rs"]
 mod neomacsclient_frames;
 

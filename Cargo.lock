@@ -3990,6 +3990,7 @@ dependencies = [
  "neomacs-test-env",
  "neomacs-test-fonts",
  "neomacs-test-oracle",
+ "neomacs-video",
  "pollster",
  "rustix 1.1.6",
  "serde",
