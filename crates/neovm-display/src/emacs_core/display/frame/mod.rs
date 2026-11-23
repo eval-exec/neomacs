@@ -2376,7 +2376,6 @@ pub fn builtin_modify_frame_parameters(
                 current_text_height_px,
                 char_width,
                 char_height,
-                should_defer_resize,
             ) = {
                 let frame = eval
                     .frame_manager()
@@ -2389,7 +2388,6 @@ pub fn builtin_modify_frame_parameters(
                     frame_text_height_pixels(frame),
                     frame.char_width,
                     frame.char_height,
-                    frame.should_defer_gui_parameter_resize(),
                 )
             };
             let resize_request = frame_resize_request_from_params(
@@ -2402,29 +2400,24 @@ pub fn builtin_modify_frame_parameters(
                 char_width,
                 char_height,
             );
-            if should_defer_resize {
-                let (desired_cols, desired_total_lines) =
-                    resize_request.logical_size(&eval.frame_manager(), fid)?;
-                let frame = eval
-                    .frame_manager_mut()
-                    .get_mut(fid)
-                    .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
-                frame.queue_pending_gui_resize(desired_cols, desired_total_lines, None);
-            } else {
-                let (text_width_px, text_height_px) =
-                    resize_request.text_pixels(&eval.frame_manager(), fid)?;
-                let (frames, buffers, display_host) =
-                    eval.frame_manager_buffers_and_display_host_mut();
-                resize_live_gui_frame(
-                    frames,
-                    buffers,
-                    display_host,
-                    fid,
-                    text_width_px,
-                    text_height_px,
-                    false,
-                )?;
-            }
+            // GNU `gui_set_frame_parameters` calls `adjust_frame_size` with
+            // inhibit 1 (src/frame.c:5307). Inhibit 1 calls
+            // `set_window_size_hook` before returning (src/frame.c:976-995).
+            // `frame-inhibit-implied-resize` applies only to inhibit 2-4
+            // (src/frame.c:886-900), so a font change must not leave this
+            // explicit size queued until a later geometry query.
+            let (text_width_px, text_height_px) =
+                resize_request.text_pixels(&eval.frame_manager(), fid)?;
+            let (frames, buffers, display_host) = eval.frame_manager_buffers_and_display_host_mut();
+            resize_live_gui_frame(
+                frames,
+                buffers,
+                display_host,
+                fid,
+                text_width_px,
+                text_height_px,
+                false,
+            )?;
         } else if eval
             .frame_manager()
             .get(fid)

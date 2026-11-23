@@ -47,5 +47,138 @@ fn gnu_width_only_resize_preserves_native_height() {
     );
 }
 
+/// Explicit width/height after a font change is already on the X window
+/// before any Lisp geometry read. GNU `adjust_frame_size` inhibit 1
+/// (src/frame.c:5307, :976-995) applies it immediately. A later external
+/// tool-bar ConfigureNotify (inhibit 2, src/frame.c:801-805) can shrink the
+/// native height by the tool bar's pixels, so `frame-height` may be 38
+/// while the outer window is still the requested grid. The startup window
+/// stays near 65 columns until something flushes a queued resize.
+#[test]
+fn explicit_size_after_font_is_on_the_x_window_before_a_geometry_query() {
+    let root = neomacs_infra::workspace_root();
+    let artifacts = root.join("target/neomacs-gui-tests/explicit-size-after-font");
+    let _ = fs::remove_dir_all(&artifacts);
+    fs::create_dir_all(&artifacts).unwrap();
+    let oracle = neomacs_test_oracle::gnu::gnu_oracle();
+    assert!(
+        oracle.is_attested(),
+        "set NEOVM_FORCE_ORACLE_PATH to the pinned GUI oracle"
+    );
+    let neo = std::env::var_os("NEOMACS_GUI_TEST_BINARY")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| root.join("target/release/neomacs"));
+    let backend = GuiBackend::LinuxX11;
+    let session = DisplayHarness::for_backend(backend)
+        .start_session(&artifacts)
+        .unwrap();
+    let gnu = observe_explicit_size(
+        &root,
+        &artifacts.join("gnu"),
+        oracle.executable_path(),
+        &session,
+    );
+    let actual = observe_explicit_size(&root, &artifacts.join("neo"), neo, &session);
+    assert_eq!(gnu.frame.0, 120, "gnu width {gnu:?}");
+    assert_eq!(actual.frame.0, 120, "neomacs width {actual:?}");
+    assert!(
+        gnu.external_cols() >= 110 && gnu.external_rows() >= 36,
+        "gnu window was not the requested grid before a geometry query: {gnu:?}"
+    );
+    assert!(
+        actual.external_cols() >= 110 && actual.external_rows() >= 36,
+        "neomacs window was not the requested grid before a geometry query: {actual:?}"
+    );
+    assert!(
+        gnu.xwin.0.abs_diff(actual.xwin.0) <= 32,
+        "outer width diverged before a geometry query: neomacs {actual:?} gnu {gnu:?}"
+    );
+}
+
+#[derive(Debug)]
+struct ExplicitSize {
+    xwin: (u32, u32),
+    frame: (u32, u32),
+    char_px: (u32, u32),
+}
+
+impl ExplicitSize {
+    fn external_cols(&self) -> u32 {
+        self.xwin.0 / self.char_px.0.max(1)
+    }
+
+    fn external_rows(&self) -> u32 {
+        self.xwin.1 / self.char_px.1.max(1)
+    }
+}
+
+fn observe_explicit_size(
+    root: &std::path::Path,
+    artifacts: &std::path::Path,
+    binary: PathBuf,
+    session: &neomacs_gui_tests::DisplaySession,
+) -> ExplicitSize {
+    let fixture = root.join("crates/neomacs-gui-tests/fixtures/explicit-size-after-font-oracle.el");
+    let mut plan = GuiTestPlan::new(
+        GuiBackend::LinuxX11,
+        root,
+        artifacts,
+        GuiScenario::new("explicit-size-after-font", &fixture),
+    )
+    .without_paint_proof()
+    .with_program(binary)
+    .with_args([
+        "-Q".to_string(),
+        "--font=DejaVu Sans Mono-10".to_string(),
+        "--geometry=65x29".to_string(),
+        "-l".to_string(),
+        fixture.display().to_string(),
+    ])
+    .with_env("GDK_BACKEND", "x11")
+    .with_env("GSETTINGS_BACKEND", "memory");
+    for (key, value) in session.env() {
+        plan = plan.with_env(key, value);
+    }
+    let result = plan
+        .run_with(
+            &mut ProcessGuiCommandRunner,
+            GuiRunOptions::with_timeout(Duration::from_secs(25)),
+        )
+        .unwrap();
+    assert!(!result.timed_out, "{result:#?}");
+    assert_eq!(result.exit_code, Some(0), "{result:#?}");
+    let stderr = fs::read_to_string(&result.artifacts.stderr).unwrap();
+    parse_explicit_size(&stderr)
+}
+
+fn parse_explicit_size(stderr: &str) -> ExplicitSize {
+    let line = stderr
+        .lines()
+        .find(|line| line.contains("EXPLICIT-SIZE"))
+        .unwrap_or_else(|| panic!("missing EXPLICIT-SIZE line: {stderr}"));
+    let mut xwin = (0, 0);
+    let mut frame = (0, 0);
+    let mut char_px = (0, 0);
+    for field in line.split_whitespace() {
+        if let Some(value) = field.strip_prefix("xwin=") {
+            xwin = parse_pair(value);
+        } else if let Some(value) = field.strip_prefix("frame=") {
+            frame = parse_pair(value);
+        } else if let Some(value) = field.strip_prefix("char=") {
+            char_px = parse_pair(value);
+        }
+    }
+    ExplicitSize {
+        xwin,
+        frame,
+        char_px,
+    }
+}
+
+fn parse_pair(value: &str) -> (u32, u32) {
+    let (width, height) = value.split_once('x').unwrap();
+    (width.parse().unwrap(), height.parse().unwrap())
+}
+
 #[path = "frame_resize_oracle/native_rejection.rs"]
 mod native_rejection;

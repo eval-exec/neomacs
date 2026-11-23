@@ -115,7 +115,7 @@ fn overlapping_native_observations_commit_actual_grid_before_font_changes() {
 }
 
 #[test]
-fn inhibited_font_change_preserves_an_unsent_explicit_resize() {
+fn explicit_resize_is_delivered_before_an_inhibited_font_change() {
     let mut eval = crate::test_utils::new_context();
     let buffer = eval.edit.buffers.create_buffer("*font-resize*");
     let fid = eval
@@ -131,8 +131,25 @@ fn inhibited_font_change_preserves_an_unsent_explicit_resize() {
     eval.eval_str("(internal-set-lisp-face-attribute 'default :font \"Remapped Mono-24\" nil)")
         .unwrap();
     assert_eq!(requests.borrow().len(), 1);
+    // Attested linux-gtk3 oracle (private Xvfb, emacs 31.1 a360712c): a font
+    // height change, then (modify-frame-parameters nil '((width . 80)
+    // (height . 25))), already resized the X window before any Lisp geometry
+    // read. Inhibit 1 delivers that size inside the call (src/frame.c:5307).
     eval.eval_str("(modify-frame-parameters nil '((width . 80) (height . 25)))")
         .unwrap();
+    assert_eq!(
+        requests.borrow().len(),
+        2,
+        "explicit width/height is delivered without a geometry query"
+    );
+    assert!(
+        eval.frame_manager()
+            .get(fid)
+            .unwrap()
+            .pending_gui_resize
+            .is_none(),
+        "an explicit size must not stay queued"
+    );
 
     let mut host = RecordingDisplayHost::with_resolved_frame_font(resolved_frame_font(
         "Small Mono",
@@ -156,14 +173,11 @@ fn inhibited_font_change_preserves_an_unsent_explicit_resize() {
         .unwrap();
     assert_eq!(
         requests.borrow().len(),
-        1,
-        "inhibition must not request another native resize"
+        2,
+        "an inhibited font change keeps the delivered pixels and sends nothing more"
     );
 
     let tx = crate::host_input::HostInputPublisher::install(&mut eval);
-    // 80 columns at 9px plus 16px of fringes and the GNU 16px scroll-bar
-    // default: the explicit native resize is column-aligned, so it must reach
-    // the host unchanged.
     tx.send(neovm_eval::emacs_core::eval::keyboard::InputEvent::Resize {
         width: 752,
         height: 450,
@@ -172,13 +186,12 @@ fn inhibited_font_change_preserves_an_unsent_explicit_resize() {
     })
     .unwrap();
     eval.eval_str("(frame-native-width)").unwrap();
-    let requests = requests.borrow();
     assert_eq!(
-        requests.len(),
+        requests.borrow().len(),
         2,
-        "the explicit request must still reach the host"
+        "a geometry query must not rediscover an explicit size that was already sent"
     );
-    assert_eq!((requests[1].width, requests[1].height), (752, 450));
+    assert_eq!(eval.frame_manager().get(fid).unwrap().width, 752);
 }
 
 struct ChromeResizeFixture {
@@ -244,10 +257,12 @@ fn asynchronous_rejected_resize_commits_native_grid_before_later_font_change() {
 }
 
 #[test]
-fn authoritative_native_resize_preserves_unsent_queued_grid_for_later_font_change() {
+fn explicit_resize_is_delivered_and_a_native_resize_replaces_it() {
     let mut fixture = ChromeResizeFixture::new();
-    // A same-metric font change defers parameter geometry without sending a
-    // native resize. Queued intent has not yet reached the native system.
+    // Attested linux-gtk3 oracle: a same-metric font change, then
+    // (modify-frame-parameters nil '((width . 90) (height . 40))), already
+    // resized the X window (752x749) before any Lisp geometry read. A later
+    // foreign resize to 400x300 was adopted. No unsent 90x40 survived it.
     fixture
         .eval
         .eval_str(r#"(internal-set-lisp-face-attribute 'default :font "Chrome Mono-14" nil)"#)
@@ -256,15 +271,21 @@ fn authoritative_native_resize_preserves_unsent_queued_grid_for_later_font_chang
         .eval
         .eval_str("(modify-frame-parameters nil '((width . 90) (height . 40)))")
         .unwrap();
-    assert!(fixture.requests.borrow().is_empty());
-    let queued = fixture
-        .eval
-        .frame_manager()
-        .get(fixture.frame_id)
-        .unwrap()
-        .pending_gui_resize
-        .unwrap();
-    assert!(queued.is_queued());
+    assert_eq!(
+        fixture.requests.borrow().len(),
+        1,
+        "explicit width/height is delivered without a geometry query"
+    );
+    assert!(
+        fixture
+            .eval
+            .frame_manager()
+            .get(fixture.frame_id)
+            .unwrap()
+            .pending_gui_resize
+            .is_none(),
+        "an explicit size must not stay queued"
+    );
     fixture
         .eval
         .apply_resize_input_event(760, fixture.initial_height, 1.0, fixture.frame_id.0, false)
@@ -278,14 +299,15 @@ fn authoritative_native_resize_preserves_unsent_queued_grid_for_later_font_chang
             .width,
         760
     );
-    assert_eq!(
+    assert!(
         fixture
             .eval
             .frame_manager()
             .get(fixture.frame_id)
             .unwrap()
-            .pending_gui_resize,
-        Some(queued)
+            .pending_gui_resize
+            .is_none(),
+        "the adopted native size leaves no unsent explicit grid"
     );
 
     let host = RecordingDisplayHost::with_resolved_frame_font(remapped_mono_font_metrics());
@@ -295,22 +317,24 @@ fn authoritative_native_resize_preserves_unsent_queued_grid_for_later_font_chang
         .eval
         .eval_str(r#"(internal-set-lisp-face-attribute 'default :font "Remapped Mono-24" nil)"#)
         .unwrap();
-    assert_eq!(requests.borrow().last().unwrap().width, 90 * 16);
-    assert_eq!(
+    assert_ne!(
+        requests.borrow().last().unwrap().width,
+        90 * 16,
+        "the later font change scales the adopted native grid, not an unsent 90 columns"
+    );
+    assert!(
         fixture
             .eval
             .frame_manager()
             .get(fixture.frame_id)
             .unwrap()
             .pending_gui_resize
-            .unwrap()
-            .total_lines,
-        40
+            .is_none_or(|pending| pending.total_lines != 40 || !pending.is_queued())
     );
 }
 
 #[test]
-fn native_resize_drains_before_queued_geometry_flush_without_losing_input_order() {
+fn native_resize_keeps_input_order_after_delivered_explicit_size() {
     use neovm_eval::emacs_core::eval::keyboard::{InputEvent, KeyEvent};
 
     for staged in [false, true] {
@@ -323,15 +347,20 @@ fn native_resize_drains_before_queued_geometry_flush_without_losing_input_order(
             .eval
             .eval_str("(modify-frame-parameters nil '((width . 90) (height . 40)))")
             .unwrap();
-        let queued = fixture
-            .eval
-            .frame_manager()
-            .get(fixture.frame_id)
-            .unwrap()
-            .pending_gui_resize
-            .unwrap();
-        assert!(queued.is_queued());
-        assert!(fixture.requests.borrow().is_empty());
+        assert_eq!(
+            fixture.requests.borrow().len(),
+            1,
+            "explicit width/height is delivered before input is drained"
+        );
+        assert!(
+            fixture
+                .eval
+                .frame_manager()
+                .get(fixture.frame_id)
+                .unwrap()
+                .pending_gui_resize
+                .is_none()
+        );
         let tx = crate::host_input::HostInputPublisher::install(&mut fixture.eval);
         for event in [
             InputEvent::Focus {
@@ -366,14 +395,18 @@ fn native_resize_drains_before_queued_geometry_flush_without_losing_input_order(
 
         assert!(
             fixture.eval.sync_pending_resize_events(),
-            "native observation must drain even while geometry is queued; staged={staged}"
+            "native observation must drain after an explicit size was delivered; staged={staged}"
         );
         let frame = fixture.eval.frame_manager().get(fixture.frame_id).unwrap();
         assert_eq!(frame.width, 760);
-        assert_eq!(frame.pending_gui_resize, Some(queued));
         assert!(
-            fixture.requests.borrow().is_empty(),
-            "sync must not dispatch queued geometry"
+            frame.pending_gui_resize.is_none(),
+            "an adopted native size leaves no unsent explicit grid; staged={staged}"
+        );
+        assert_eq!(
+            fixture.requests.borrow().len(),
+            1,
+            "sync must not send the explicit size again"
         );
         assert!(matches!(
             fixture
@@ -394,15 +427,12 @@ fn native_resize_drains_before_queued_geometry_flush_without_losing_input_order(
             2
         );
 
-        // A separate geometry query now sends the unsent grid exactly once.
         fixture.eval.eval_str("(frame-native-width)").unwrap();
-        let requests = fixture.requests.borrow();
-        assert_eq!(requests.len(), 1);
         assert_eq!(
-            (requests[0].width, requests[0].height),
-            (720, 640 + 34 + fixture.menu_height)
+            fixture.requests.borrow().len(),
+            1,
+            "a geometry query must not send an explicit size that was already delivered"
         );
-        drop(requests);
         assert_eq!(fixture.eval.read_char().unwrap(), Value::fixnum('r' as i64));
     }
 }
@@ -782,10 +812,10 @@ fn toolbar_change_commits_each_native_observation_after_coalesced_requests() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn toolbar_change_preserves_unsent_explicit_size_after_same_metric_font_change() {
+fn toolbar_change_follows_a_delivered_explicit_size_after_same_metric_font_change() {
     let mut fixture = ChromeResizeFixture::new();
-    // Opening a different font with the same cell metrics defers subsequent
-    // explicit parameters, without itself requiring a native size change.
+    // A same-metric font change does not itself resize. The following explicit
+    // size is delivered immediately, and the toolbar change is a later request.
     fixture
         .eval
         .eval_str(r#"(internal-set-lisp-face-attribute 'default :font "Chrome Mono-14" nil)"#)
@@ -794,15 +824,28 @@ fn toolbar_change_preserves_unsent_explicit_size_after_same_metric_font_change()
         .eval
         .eval_str("(modify-frame-parameters nil '((width . 90) (height . 40)))")
         .unwrap();
-    assert!(fixture.requests.borrow().is_empty());
+    assert_eq!(fixture.requests.borrow().len(), 1);
+    let explicit = fixture.requests.borrow()[0].clone();
+    assert_eq!(explicit.width, 720);
+    assert!(explicit.height > 640);
+    assert!(
+        fixture
+            .eval
+            .frame_manager()
+            .get(fixture.frame_id)
+            .unwrap()
+            .pending_gui_resize
+            .is_none()
+    );
     fixture
         .eval
         .eval_str("(modify-frame-parameters nil '((tool-bar-lines . 0)))")
         .unwrap();
-    assert_eq!(fixture.requests.borrow().len(), 1);
-    let request = fixture.requests.borrow()[0].clone();
-    assert_eq!((request.width, request.height), (720, 656));
-    fixture.acknowledge(&request);
+    assert_eq!(fixture.requests.borrow().len(), 2);
+    let toolbar = fixture.requests.borrow()[1].clone();
+    assert_eq!(toolbar.width, 720);
+    assert!(toolbar.height < explicit.height);
+    fixture.acknowledge(&toolbar);
     fixture.assert_geometry(90, 40, 640);
 }
 
