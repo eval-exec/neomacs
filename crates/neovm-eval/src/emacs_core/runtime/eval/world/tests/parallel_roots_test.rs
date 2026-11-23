@@ -238,7 +238,7 @@ fn assert_unreachable_native_fixture_is_admitted_and_drained(
     let mut stopped = era.stop().expect("stopped world");
     era.collect_stopped(
         &mut stopped,
-        crate::test_support::authority::baton_collect_parallel_world_roots,
+        Baton::collect_parallel_world_roots,
     )
     .expect("stopped major admits and sweeps the native fixture");
     let (batch, retained) = era
