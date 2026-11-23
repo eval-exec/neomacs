@@ -4117,6 +4117,24 @@ impl<'a> Vm<'a> {
         Self::can_enter_eager_interpreter_frame_iteratively(func, nargs)
     }
 
+    /// [`Self::can_enter_interpreter_frame_iteratively`] for a caller that
+    /// must not write shared function state: the same answer whenever that
+    /// answer needs no write, and `None` when only initializing the lazy
+    /// admission cell could give it. A parallel owner's call classifier
+    /// (V7) reads this and escapes on `None`; the serial driver keeps the
+    /// probe that initializes.
+    #[inline(never)]
+    #[doc(hidden)]
+    pub fn iterative_admission_if_known(func: &ByteCodeFunction, nargs: usize) -> Option<bool> {
+        match func.peek_lazy_iterative_admission(nargs) {
+            super::chunk::LazyAdmissionPeek::Known(admitted) => Some(admitted),
+            super::chunk::LazyAdmissionPeek::Unknown => None,
+            super::chunk::LazyAdmissionPeek::Eager => Some(
+                Self::can_enter_eager_interpreter_frame_iteratively(func, nargs),
+            ),
+        }
+    }
+
     /// Preserve the eager classifier's exact gates behind a tail-callable
     /// fallback, keeping its decode/verification frame off cached GNU hits.
     #[inline(never)]

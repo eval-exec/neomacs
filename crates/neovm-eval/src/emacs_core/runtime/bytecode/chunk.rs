@@ -109,6 +109,19 @@ const _: () = assert!(
         == std::mem::size_of::<crate::emacs_core::jit::Runtime>()
 );
 
+/// What a function's lazy iterative admission says without being written
+/// ([`ByteCodeFunctionExt::peek_lazy_iterative_admission`]).
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LazyAdmissionPeek {
+    /// Eager code: no lazy contract; the eager predicate decides.
+    Eager,
+    /// The answer, with nothing written.
+    Known(bool),
+    /// Only initializing the shared admission cell can answer.
+    Unknown,
+}
+
 /// Upper policy methods on the lowered bytecode storage (T1 storage cut).
 ///
 /// The storage definitions live in the value layer; decoding, verification,
@@ -138,6 +151,13 @@ pub(crate) trait ByteCodeFunctionExt {
     /// impl to the type it will no longer own. The `#[inline(always)]` lives
     /// on the impl (required trait methods take no inline attribute).
     fn lazy_iterative_admission(&self, nargs: usize) -> Option<bool>;
+
+    /// What [`Self::lazy_iterative_admission`] can answer without writing:
+    /// every answer it would give, except the one that initializes the
+    /// shared admission cell, which is [`LazyAdmissionPeek::Unknown`]. A
+    /// caller that must not mutate a function another owner may be running
+    /// (a parallel owner's call classifier) reads this and never the probe.
+    fn peek_lazy_iterative_admission(&self, nargs: usize) -> LazyAdmissionPeek;
 
     /// Initialize the immutable iterative-admission proof on a lazy miss.
     ///
@@ -248,14 +268,34 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
     /// prototype's admission, or consume admission from that prototype.
     #[inline(always)]
     fn lazy_iterative_admission(&self, nargs: usize) -> Option<bool> {
-        let lazy = self.lazy_gnu_code().as_ref()?;
+        match self.peek_lazy_iterative_admission(nargs) {
+            LazyAdmissionPeek::Eager => None,
+            LazyAdmissionPeek::Known(admitted) => Some(admitted),
+            LazyAdmissionPeek::Unknown => Some(self.initialize_lazy_iterative_admission(nargs)),
+        }
+    }
+
+    /// The cached projection, then the pure refusals the cold initializer
+    /// makes before it decodes or publishes anything (no stack shape, or
+    /// `nargs` outside `required..=nonrest`). Only what remains needs the
+    /// write.
+    #[inline(always)]
+    fn peek_lazy_iterative_admission(&self, nargs: usize) -> LazyAdmissionPeek {
+        let Some(lazy) = self.lazy_gnu_code().as_ref() else {
+            return LazyAdmissionPeek::Eager;
+        };
         if self.env.is_some() {
-            return Some(false);
+            return LazyAdmissionPeek::Known(false);
         }
         if let Some(range) = lazy.iterative_admission() {
-            return Some((*range).is_some_and(|range| range.accepts(nargs)));
+            return LazyAdmissionPeek::Known((*range).is_some_and(|range| range.accepts(nargs)));
         }
-        Some(self.initialize_lazy_iterative_admission(nargs))
+        match self.params.stack_shape() {
+            Some(shape) if shape.required() <= nargs && nargs <= shape.nonrest() => {
+                LazyAdmissionPeek::Unknown
+            }
+            _ => LazyAdmissionPeek::Known(false),
+        }
     }
 
     /// Initialize the immutable admission proof without imposing a save frame
