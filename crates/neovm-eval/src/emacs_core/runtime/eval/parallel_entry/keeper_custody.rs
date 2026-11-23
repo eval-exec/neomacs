@@ -158,6 +158,22 @@ impl<'s, 'era> StoppedKeeper<'s, 'era> {
 
 #[allow(dead_code)]
 impl<'s, 'era> SuspendedKeeper<'s, 'era> {
+    /// Owner tag, publication generation, and the stopped proof's heap.
+    ///
+    /// Copyable facts for one ticket. Not a second lend.
+    pub(crate) fn serial_facts(
+        &self,
+    ) -> (
+        u64,
+        std::num::NonZeroU64,
+        neovm_value::tagged::gc::HeapIdentity,
+    ) {
+        let (owner, generation, owner_heap) = self.request.owner.serial_facts();
+        let heap = self.export.reservation.heap_identity();
+        debug_assert_eq!(owner_heap, heap);
+        (owner, generation, heap)
+    }
+
     /// Consumes a returned envelope. A failure notice does not satisfy this input.
     pub fn accept_return(
         self,

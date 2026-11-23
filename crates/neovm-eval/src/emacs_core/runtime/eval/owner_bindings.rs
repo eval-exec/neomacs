@@ -692,13 +692,6 @@ impl OwnerSlab {
     /// [`Self::take_record`] of the top pops it and trims trailing holes, and
     /// a take below the top leaves the last slot live, so the last slot is
     /// the top whenever any record remains. O(1).
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the plain unbind calls this once that caller lands; the unit test covers it"
-        )
-    )]
     pub(crate) fn top_record_id(&self) -> Option<OwnerRecordId> {
         let record = self.records.last()?.as_ref()?;
         let depth = u32::try_from(self.records.len())

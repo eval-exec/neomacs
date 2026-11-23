@@ -572,13 +572,20 @@ fn pentry_l62_live_lend_refuses_a_stale_owner_a_wrong_generation_and_a_second_st
                             panic!("lend the current owner");
                         }
                     };
-                    // The export reservation is held and inert. A second stop
-                    // cannot mint another lend while this one is out.
+                    let (ticket, held) =
+                        super::super::super::serial_ticket::StoppedSerialTicket::from_lend(
+                            suspended,
+                        );
+                    assert_eq!(ticket.identity().owner, CURRENT_OWNER);
+                    assert_eq!(ticket.identity().heap, heap);
+                    // The export reservation is held and inert. Cutting the
+                    // ticket consumed the lend typestate and did not drop the
+                    // stop. A second stop cannot mint another lend.
                     assert!(
                         matches!(keeper.stop(), Err(RendezvousError::Busy)),
                         "a second stop is refused while the lend is outstanding"
                     );
-                    let restored = match suspended.accept_return(
+                    let restored = match held.accept_return(
                         super::super::super::keeper_custody::ReturnedSerialTicket::for_test(),
                     ) {
                         Ok(restored) => restored,

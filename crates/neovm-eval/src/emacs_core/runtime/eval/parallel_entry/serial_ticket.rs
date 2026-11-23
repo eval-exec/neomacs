@@ -5,6 +5,12 @@
 //! The Baton and the heap transfer stay the held keeper loan until L6.4
 //! activates the owner's dormant Context. A refusal returns the ticket.
 //! Nothing is half-received.
+//!
+//! Production mint is [`StoppedSerialTicket::from_lend`]: it consumes the
+//! keeper lend, so a ticket exists only because that lend was cut. The
+//! identity constructor [`StoppedSerialTicket::transport`] exists only in
+//! tests. A non-test build has no way to mint a ticket from a copied
+//! [`TicketIdentity`].
 
 use neovm_value::tagged::gc::HeapIdentity;
 use std::cell::Cell;
@@ -28,7 +34,19 @@ pub(crate) struct StoppedSerialTicket {
     _not_sync: PhantomData<Cell<()>>,
 }
 
+/// The lend after its one ticket has been cut.
+///
+/// The ticket cannot hold this loan: the ticket is `Send` and the stopped
+/// reservation is not. Dropping the reservation would poison the epoch.
+#[must_use]
+pub(crate) struct SerialLendHeld<'s, 'era> {
+    lend: super::keeper_custody::SuspendedKeeper<'s, 'era>,
+}
+
 impl StoppedSerialTicket {
+    /// Test-only mint from copied facts. A non-test build does not have this
+    /// function. Production mint is [`Self::from_lend`].
+    #[cfg(test)]
     pub(crate) fn transport(identity: TicketIdentity) -> Self {
         Self {
             identity,
@@ -36,8 +54,54 @@ impl StoppedSerialTicket {
         }
     }
 
+    /// Cut the one ticket `lend` can issue.
+    ///
+    /// `lend` is consumed, so a second ticket cannot be cut from it. The
+    /// returned loan still holds the stopped reservation.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "L6.4 is the production caller; the live lend row cuts one ticket"
+        )
+    )]
+    pub(crate) fn from_lend<'s, 'era>(
+        lend: super::keeper_custody::SuspendedKeeper<'s, 'era>,
+    ) -> (Self, SerialLendHeld<'s, 'era>) {
+        let (owner, generation, heap) = lend.serial_facts();
+        let ticket = Self {
+            identity: TicketIdentity {
+                owner,
+                generation,
+                heap,
+            },
+            _not_sync: PhantomData,
+        };
+        (ticket, SerialLendHeld { lend })
+    }
+
     pub(crate) fn identity(&self) -> TicketIdentity {
         self.identity
+    }
+}
+
+impl<'s, 'era> SerialLendHeld<'s, 'era> {
+    /// Hand the still-held lend to the existing return path.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "L6.4 end_serial returns the ticket; the live lend row uses the test return"
+        )
+    )]
+    pub(crate) fn accept_return(
+        self,
+        returned: super::keeper_custody::ReturnedSerialTicket,
+    ) -> Result<
+        super::keeper_custody::RestoredKeeper<'s, 'era>,
+        super::keeper_custody::KeeperCustodyFailure<'s, 'era>,
+    > {
+        self.lend.accept_return(returned)
     }
 }
 
@@ -114,6 +178,7 @@ impl SerialDestination {
 
 static_assertions::assert_impl_all!(StoppedSerialTicket: Send);
 static_assertions::assert_not_impl_any!(StoppedSerialTicket: Sync, Clone, Copy);
+static_assertions::assert_not_impl_any!(SerialLendHeld<'static, 'static>: Send, Sync, Clone, Copy);
 static_assertions::assert_not_impl_any!(ReceivedSerial: Send, Sync, Clone, Copy);
 static_assertions::assert_impl_all!(ReceiveRefusal: Send);
 

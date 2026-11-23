@@ -89,6 +89,18 @@ fn current_native(
 }
 
 impl PublishedOwner {
+    /// Owner tag, publication generation, and heap of this receipt.
+    ///
+    /// Copyable facts only. Not a loan, a resume right, or a second receipt.
+    #[doc(hidden)]
+    pub fn serial_facts(&self) -> (u64, std::num::NonZeroU64, crate::tagged::gc::HeapIdentity) {
+        (
+            self.identity.key().owner(),
+            self.identity.publication_generation(),
+            self.identity.heap_identity(),
+        )
+    }
+
     pub(in crate::tagged::gc::mutator_registration) fn validate_current(
         &self,
         registry: &Registry,
