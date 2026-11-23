@@ -780,3 +780,84 @@ fn e8s_buffer_disposition_custom_signal_name() {
         expect_test::expect![[r#""ERR (thread-buffer-killed)""#]],
     );
 }
+
+/// K2 (E4-P2 C4). A worker's own uncaught `void-variable` is
+/// `thread-last-error`. `thread-join` returns. Expectations are the
+/// `src/thread.c` reading at `a360712c` (`record_thread_error` :754-757,
+/// `Fthread_join` :1134-1141). Verify on the attested oracle is the check.
+#[test]
+fn e4p2_k2_join_after_worker_void_returns_and_last_error_holds_the_form() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    assert_default_threads_oracle(
+        r##"
+(progn
+  (thread-last-error t)
+  (let ((th (make-thread (lambda () unbound-var-e4p2))))
+    (while (thread-live-p th) (thread-yield))
+    (list
+     (condition-case err
+         (progn (thread-join th) 'joined)
+       (error err))
+     (thread-last-error))))
+"##,
+        expect_test::expect![[r#""OK (joined (void-variable unbound-var-e4p2))""#]],
+    );
+}
+
+/// Join starts only after the worker is observed live and blocked, then the
+/// worker reads the void variable. `error_symbol` stays nil, so join returns.
+#[test]
+fn e4p2_k2_join_while_worker_live_then_void_returns() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    assert_default_threads_oracle(
+        r##"
+(progn
+  (thread-last-error t)
+  (let* ((m (make-mutex))
+         (c (make-condition-variable m))
+         (phase 'start)
+         (th (make-thread
+              (lambda ()
+                (with-mutex m
+                  (setq phase 'blocked)
+                  (condition-notify c)
+                  (while (eq phase 'blocked)
+                    (condition-wait c))
+                  unbound-var-e4p2-live))
+              "e4p2-live")))
+    (with-mutex m
+      (while (eq phase 'start) (condition-wait c)))
+    (let ((live (thread-live-p th)))
+      (with-mutex m
+        (setq phase 'go)
+        (condition-notify c))
+      (list live
+            (condition-case err
+                (progn (thread-join th) 'joined)
+              (error (list 'signaled (car err))))
+            (thread-last-error)))))
+"##,
+        expect_test::expect![[r#""OK (t joined (void-variable unbound-var-e4p2-live))""#]],
+    );
+}
+
+/// `(thread-last-error t)` returns the stored form and clears it.
+#[test]
+fn e4p2_k2_thread_last_error_cleanup_returns_nil() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    assert_default_threads_oracle(
+        r##"
+(progn
+  (thread-last-error t)
+  (let ((th (make-thread (lambda () unbound-var-e4p2-clear))))
+    (while (thread-live-p th) (thread-yield))
+    (thread-join th)
+    (list (thread-last-error)
+          (thread-last-error t)
+          (thread-last-error))))
+"##,
+        expect_test::expect![[
+            r#""OK ((void-variable unbound-var-e4p2-clear) (void-variable unbound-var-e4p2-clear) nil)""#
+        ]],
+    );
+}
