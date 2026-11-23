@@ -682,7 +682,7 @@ fn expect_live_parser_id(
 struct NodeHandle {
     parser_id: u64,
     raw: tree_sitter::ffi::TSNode,
-    generation: u64,
+    reparse_epoch: u64,
 }
 
 fn expect_node_handle(
@@ -699,7 +699,7 @@ fn expect_node_handle(
     Ok(NodeHandle {
         parser_id: entry.parser_id(),
         raw: entry.raw(),
-        generation: entry.generation(),
+        reparse_epoch: entry.reparse_epoch(),
     })
 }
 
@@ -712,7 +712,7 @@ fn ensure_current_node(
     let Some(parser) = eval.treesit.parser(handle.parser_id) else {
         return Err(node_outdated_error(value));
     };
-    if parser.generation() != handle.generation {
+    if parser.reparse_epoch() != handle.reparse_epoch {
         return Err(node_outdated_error(value));
     }
     if eval.edit.buffers.get(parser.orig_buffer_id()).is_none() {
@@ -733,16 +733,16 @@ fn make_node_value_for_parser(
     parser_id: u64,
     node: tree_sitter::Node<'_>,
 ) -> Value {
-    let (parser_value, generation) = {
+    let (parser_value, reparse_epoch) = {
         let parser = eval
             .treesit
             .parser(parser_id)
             .expect("parser should exist while creating node value");
-        (parser.value(), parser.generation())
+        (parser.value(), parser.reparse_epoch())
     };
     let id = eval
         .treesit
-        .insert_node(parser_id, node.into_raw(), generation);
+        .insert_node(parser_id, node.into_raw(), reparse_epoch);
     runtime::make_node_value(id, parser_value)
 }
 
@@ -978,6 +978,7 @@ fn ensure_parser_reparsed(
         parser.set_tree(Some(runtime::ParsedTree::new(tree, request.visible)));
         parser.set_freshness(ParserFreshness::Clean(request.current_revision));
         parser.set_generation(parser.generation().saturating_add(1));
+        parser.set_reparse_epoch(parser.reparse_epoch().saturating_add(1));
         if changed_range_collection == ChangedRangeCollection::Collect {
             parser.set_last_changed_ranges(changed_ranges.clone());
         }
@@ -1385,25 +1386,89 @@ fn parser_tree_clone(
     Ok(parsed.tree().clone())
 }
 
-fn node_on_tree<'tree>(
-    tree: &'tree tree_sitter::Tree,
-    raw: tree_sitter::ffi::TSNode,
-) -> Option<tree_sitter::Node<'tree>> {
-    // SAFETY: `raw` is the node `ensure_current_node` just accepted, so its
-    // tree is the parser's current tree. This only reads parent and child links.
-    let path = node_index_path(unsafe { tree_sitter::Node::from_raw(raw) })?;
-    node_at_index_path(tree.root_node(), &path)
+/// Epoch and edit generation captured when a walk clones the parser tree.
+///
+/// O(1) retarget of `TSNode.tree` is sound only while both are unchanged:
+/// `ts_tree_copy` shares subtrees, but `ts_tree_edit` copy-on-writes once
+/// another owner holds the tree, so an edit makes the ids diverge even
+/// though `reparse_epoch` did not move.
+///
+/// `clone_root` is the clone root's `TSNode.id` (`&TSTree.root` of that
+/// clone). It is an address, not a heap subtree, and is only compared.
+#[derive(Clone, Copy)]
+struct WalkShare {
+    reparse_epoch: u64,
+    generation: u64,
+    clone_root: usize,
 }
 
-fn copy_node_onto_parser(
+fn walk_share(eval: &super::eval::Context, parser_id: u64) -> WalkShare {
+    match eval.treesit.parser(parser_id) {
+        Some(parser) => WalkShare {
+            reparse_epoch: parser.reparse_epoch(),
+            generation: parser.generation(),
+            clone_root: 0,
+        },
+        None => WalkShare {
+            reparse_epoch: 0,
+            generation: 0,
+            clone_root: 0,
+        },
+    }
+}
+
+fn node_on_clone<'tree>(
+    eval: &super::eval::Context,
+    parser_id: u64,
+    tree: &'tree tree_sitter::Tree,
+    raw: tree_sitter::ffi::TSNode,
+    share: &mut WalkShare,
+) -> tree_sitter::Node<'tree> {
+    let clone_root = tree.root_node().into_raw();
+    share.clone_root = clone_root.id as usize;
+    let is_parser_root = eval
+        .treesit
+        .parser(parser_id)
+        .and_then(|parser| parser.tree())
+        .is_some_and(|parsed| parsed.tree().root_node().into_raw().id == raw.id);
+    if is_parser_root {
+        // A root id is the address of that tree's `TSTree.root` field, not a
+        // shared heap subtree. The parser's field changes in `ts_tree_edit`.
+        // The clone has its own field, which still names the pre-edit subtree.
+        return tree.root_node();
+    }
+    let mut raw = raw;
+    raw.tree = clone_root.tree;
+    // SAFETY: `tree` is a `ts_tree_copy` taken before any callback in this
+    // walk. A non-root id addresses a heap subtree both trees share until an
+    // edit copy-on-writes the parser side. Only the tree pointer changes.
+    // This stays O(1) for the imenu string-predicate case and does not use
+    // `node_index_path`, which fails on zero-width and missing nodes
+    // (GNU bug#60127, `src/treesit.c:4262-4268`).
+    unsafe { tree_sitter::Node::from_raw(raw) }
+}
+
+fn project_node_to_parser(
     eval: &super::eval::Context,
     parser_id: u64,
     node: tree_sitter::Node<'_>,
+    share: WalkShare,
 ) -> Option<tree_sitter::ffi::TSNode> {
+    let parser = eval.treesit.parser(parser_id)?;
+    let live = parser.tree()?.tree();
+    if parser.reparse_epoch() == share.reparse_epoch && parser.generation() == share.generation {
+        // The clone root id dies with the clone. Publish the parser root,
+        // whose id is that tree's own `TSTree.root` field.
+        if node.into_raw().id as usize == share.clone_root {
+            return Some(live.root_node().into_raw());
+        }
+        let mut raw = node.into_raw();
+        raw.tree = live.root_node().into_raw().tree;
+        return Some(raw);
+    }
     let path = node_index_path(node)?;
-    let parsed = eval.treesit.parser(parser_id)?.tree()?;
-    let live = node_at_index_path(parsed.tree().root_node(), &path)?;
-    Some(live.into_raw())
+    let live_node = node_at_index_path(live.root_node(), &path)?;
+    Some(live_node.into_raw())
 }
 
 fn make_node_value_from_raw(
@@ -1412,7 +1477,7 @@ fn make_node_value_from_raw(
     raw: tree_sitter::ffi::TSNode,
 ) -> Value {
     // SAFETY: `raw` was copied from the parser's current tree. Publishing it
-    // copies the `TSNode` and stamps the current generation; it does not walk.
+    // copies the `TSNode` and stamps the current reparse epoch; it does not walk.
     make_node_value_for_parser(eval, parser_id, unsafe { tree_sitter::Node::from_raw(raw) })
 }
 
@@ -1422,24 +1487,28 @@ fn call_node_predicate(
     parser_id: u64,
     node: tree_sitter::Node<'_>,
     guard: bool,
+    share: WalkShare,
 ) -> Result<bool, Flow> {
-    let raw = copy_node_onto_parser(eval, parser_id, node)
+    let raw = project_node_to_parser(eval, parser_id, node, share)
         .ok_or_else(|| treesit_buffer_changed(predicate))?;
-    let generation = eval
+    let epoch = eval
         .treesit
         .parser(parser_id)
-        .map(|parser| parser.generation());
+        .map(|parser| parser.reparse_epoch());
     let node_value = make_node_value_from_raw(eval, parser_id, raw);
     let result = eval.funcall_general(predicate, vec![node_value])?;
-    // GNU `treesit_pred_with_guard` (`src/treesit.c`) signals when a function
-    // predicate reparses. A dotted `(string . function)` predicate is not
-    // wrapped in that guard.
+    // GNU `treesit_pred_with_guard` (`src/treesit.c:2232-2245`) signals when a
+    // function predicate reparses. The timestamp advances only in
+    // `treesit_ensure_parsed` after `ts_parser_parse`, so an edit that does
+    // not reparse is allowed. A dotted `(string . function)` predicate is not
+    // wrapped in that guard. This checks `reparse_epoch`, not `generation`:
+    // `generation` also advances on every buffer edit.
     if guard {
         let now = eval
             .treesit
             .parser(parser_id)
-            .map(|parser| parser.generation());
-        if now != generation {
+            .map(|parser| parser.reparse_epoch());
+        if now != epoch {
             return Err(treesit_buffer_changed(predicate));
         }
     }
@@ -1454,6 +1523,7 @@ fn predicate_matches_node(
     predicate: Value,
     named_only: bool,
     ignore_missing: bool,
+    share: WalkShare,
 ) -> Result<bool, Flow> {
     if named_only && !node.is_named() {
         return Ok(false);
@@ -1482,6 +1552,7 @@ fn predicate_matches_node(
             definition,
             named_only,
             ignore_missing,
+            share,
         );
     }
 
@@ -1496,7 +1567,7 @@ fn predicate_matches_node(
     }
 
     if predicate_function_p(eval, predicate) && !predicate.is_cons() {
-        return call_node_predicate(eval, predicate, parser_id, node, true);
+        return call_node_predicate(eval, predicate, parser_id, node, true, share);
     }
 
     if !predicate.is_cons() {
@@ -1530,6 +1601,7 @@ fn predicate_matches_node(
                     args[0],
                     named_only,
                     ignore_missing,
+                    share,
                 )?)
             }
             TreesitBooleanPredicate::Or | TreesitBooleanPredicate::And => {
@@ -1556,6 +1628,7 @@ fn predicate_matches_node(
                                 item,
                                 named_only,
                                 ignore_missing,
+                                share,
                             )? {
                                 return Ok(true);
                             }
@@ -1572,6 +1645,7 @@ fn predicate_matches_node(
                                 item,
                                 named_only,
                                 ignore_missing,
+                                share,
                             )? {
                                 return Ok(false);
                             }
@@ -1596,7 +1670,13 @@ fn predicate_matches_node(
         {
             return Ok(false);
         }
-        return call_node_predicate(eval, tail, parser_id, node, false);
+        // GNU calls this dotted predicate with `calln` and no
+        // `treesit_pred_with_guard` (`src/treesit.c:4667-4683`). A reparse
+        // inside it frees the tree GNU is still walking; that is UB and not a
+        // contract. Neomacs walks a clone. If this predicate returns t, the
+        // result sites path-remap the clone node onto the live tree, which
+        // can have a different type than the regexp matched.
+        return call_node_predicate(eval, tail, parser_id, node, false, share);
     }
 
     Err(treesit_invalid_predicate(
@@ -1662,6 +1742,7 @@ fn search_subtree_impl<'tree>(
     named_only: bool,
     depth: i64,
     skip_root: bool,
+    share: WalkShare,
 ) -> Result<Option<tree_sitter::Node<'tree>>, Flow> {
     if !skip_root
         && predicate_matches_node(
@@ -1672,6 +1753,7 @@ fn search_subtree_impl<'tree>(
             predicate,
             named_only,
             false,
+            share,
         )?
     {
         return Ok(Some(node));
@@ -1693,6 +1775,7 @@ fn search_subtree_impl<'tree>(
             named_only,
             depth - 1,
             false,
+            share,
         )? {
             return Ok(Some(found));
         }
@@ -1712,6 +1795,7 @@ fn search_forward_impl<'tree>(
     predicate: Value,
     forward: bool,
     named_only: bool,
+    share: WalkShare,
 ) -> Result<Option<tree_sitter::Node<'tree>>, Flow> {
     let mut current = start;
     loop {
@@ -1725,6 +1809,7 @@ fn search_forward_impl<'tree>(
                 predicate,
                 named_only,
                 false,
+                share,
             )? {
                 return Ok(Some(candidate));
             }
@@ -1745,6 +1830,7 @@ fn search_forward_impl<'tree>(
             predicate,
             named_only,
             false,
+            share,
         )? {
             return Ok(Some(current));
         }
@@ -1775,14 +1861,26 @@ fn build_sparse_tree(
     predicate: Value,
     process_fn: Value,
     depth: i64,
-) -> Result<Option<Value>, Flow> {
-    let matched =
-        predicate_matches_node(eval, parser_id, parser_value, node, predicate, false, true)?;
+    share: WalkShare,
+) -> Result<Vec<Value>, Flow> {
+    // GNU `treesit_build_sparse_tree` (`src/treesit.c:4937-4975`) omits a
+    // node that does not match and attaches its matches to the nearest
+    // matching ancestor. Children are still visited before `process_fn`.
+    let matched = predicate_matches_node(
+        eval,
+        parser_id,
+        parser_value,
+        node,
+        predicate,
+        false,
+        true,
+        share,
+    )?;
     let mut children = Vec::new();
     if depth != 0 {
         for idx in 0..node.child_count() {
-            if let Some(child) = node.child(idx)
-                && let Some(item) = build_sparse_tree(
+            if let Some(child) = node.child(idx) {
+                children.extend(build_sparse_tree(
                     eval,
                     parser_id,
                     parser_value,
@@ -1790,45 +1888,40 @@ fn build_sparse_tree(
                     predicate,
                     process_fn,
                     depth.saturating_sub(1),
-                )?
-            {
-                children.push(item);
+                    share,
+                )?);
             }
         }
     }
-    if !matched && children.is_empty() {
-        return Ok(None);
+    if !matched {
+        return Ok(children);
     }
-    let payload = if matched {
-        let changed_by = if process_fn.is_nil() {
-            predicate
-        } else {
-            process_fn
-        };
-        let raw = copy_node_onto_parser(eval, parser_id, node)
-            .ok_or_else(|| treesit_buffer_changed(changed_by))?;
-        let generation = eval
+    let changed_by = if process_fn.is_nil() {
+        predicate
+    } else {
+        process_fn
+    };
+    let raw = project_node_to_parser(eval, parser_id, node, share)
+        .ok_or_else(|| treesit_buffer_changed(changed_by))?;
+    let epoch = eval
+        .treesit
+        .parser(parser_id)
+        .map(|parser| parser.reparse_epoch());
+    let node_value = make_node_value_from_raw(eval, parser_id, raw);
+    let payload = if process_fn.is_nil() {
+        node_value
+    } else {
+        let value = eval.funcall_general(process_fn, vec![node_value])?;
+        let now = eval
             .treesit
             .parser(parser_id)
-            .map(|parser| parser.generation());
-        let node_value = make_node_value_from_raw(eval, parser_id, raw);
-        if process_fn.is_nil() {
-            node_value
-        } else {
-            let value = eval.funcall_general(process_fn, vec![node_value])?;
-            let now = eval
-                .treesit
-                .parser(parser_id)
-                .map(|parser| parser.generation());
-            if now != generation {
-                return Err(treesit_buffer_changed(process_fn));
-            }
-            value
+            .map(|parser| parser.reparse_epoch());
+        if now != epoch {
+            return Err(treesit_buffer_changed(process_fn));
         }
-    } else {
-        Value::NIL
+        value
     };
-    Ok(Some(Value::cons(payload, Value::list(children))))
+    Ok(vec![Value::cons(payload, Value::list(children))])
 }
 
 #[doc(hidden)]
@@ -1863,8 +1956,9 @@ pub fn builtin_treesit_induce_sparse_tree(
         .parser(handle.parser_id)
         .ok_or_else(|| node_outdated_error(args[0]))?
         .value();
+    let mut share = walk_share(eval, handle.parser_id);
     let walk = parser_tree_clone(eval, handle.parser_id, args[0])?;
-    let root = node_on_tree(&walk, handle.raw).ok_or_else(|| node_outdated_error(args[0]))?;
+    let root = node_on_clone(eval, handle.parser_id, &walk, handle.raw, &mut share);
     match build_sparse_tree(
         eval,
         handle.parser_id,
@@ -1873,11 +1967,15 @@ pub fn builtin_treesit_induce_sparse_tree(
         args[1],
         args.get(2).copied().unwrap_or(Value::NIL),
         depth,
+        share,
     )
     .kinded()
     {
-        Ok(Some(tree)) => Ok(tree),
-        Ok(None) => Ok(Value::NIL),
+        Ok(nodes) if nodes.is_empty() => Ok(Value::NIL),
+        // GNU returns the dummy parent `(nil . matches)` (`treesit.c:5051-5069`).
+        // Its car is nil when the start node does not match. When the start
+        // node matches, it is the single element of that list.
+        Ok(nodes) => Ok(Value::cons(Value::NIL, Value::list(nodes))),
         Err(FlowKind::Signal(sig)) if sig.symbol == intern("treesit-predicate-not-found") => {
             Ok(Value::NIL)
         }
@@ -1969,7 +2067,7 @@ pub fn builtin_treesit_node_check(eval: &mut super::eval::Context, args: Vec<Val
         .ok_or_else(|| node_outdated_error(args[0]))?;
 
     if property == TreesitNodeProperty::Outdated {
-        return Ok(if parser.generation() == handle.generation {
+        return Ok(if parser.reparse_epoch() == handle.reparse_epoch {
             Value::NIL
         } else {
             Value::T
@@ -2123,7 +2221,7 @@ pub fn builtin_treesit_node_eq(eval: &mut super::eval::Context, args: Vec<Value>
     let left = ensure_current_node(eval, "treesit-node-eq", args[0])?;
     let right = ensure_current_node(eval, "treesit-node-eq", args[1])?;
     let equal = left.parser_id == right.parser_id
-        && left.generation == right.generation
+        && left.reparse_epoch == right.reparse_epoch
         && unsafe {
             tree_sitter::Node::from_raw(left.raw) == tree_sitter::Node::from_raw(right.raw)
         };
@@ -2204,14 +2302,18 @@ pub fn builtin_treesit_node_match_p(
         .parser(handle.parser_id)
         .ok_or_else(|| node_outdated_error(args[0]))?
         .value();
+    let mut share = walk_share(eval, handle.parser_id);
+    let walk = parser_tree_clone(eval, handle.parser_id, args[0])?;
+    let node = node_on_clone(eval, handle.parser_id, &walk, handle.raw, &mut share);
     let matched = predicate_matches_node(
         eval,
         handle.parser_id,
         parser_value,
-        unsafe { tree_sitter::Node::from_raw(handle.raw) },
+        node,
         args[1],
         false,
         ignore_missing,
+        share,
     )?;
     Ok(if matched { Value::T } else { Value::NIL })
 }
@@ -3327,8 +3429,9 @@ pub fn builtin_treesit_search_forward(
         .value();
     let forward = args.get(2).is_none_or(|value| value.is_nil());
     let named_only = args.get(3).is_none_or(|value| value.is_nil());
+    let mut share = walk_share(eval, handle.parser_id);
     let walk = parser_tree_clone(eval, handle.parser_id, args[0])?;
-    let start = node_on_tree(&walk, handle.raw).ok_or_else(|| node_outdated_error(args[0]))?;
+    let start = node_on_clone(eval, handle.parser_id, &walk, handle.raw, &mut share);
     match search_forward_impl(
         eval,
         handle.parser_id,
@@ -3337,11 +3440,15 @@ pub fn builtin_treesit_search_forward(
         args[1],
         forward,
         named_only,
+        share,
     )
     .kinded()
     {
         Ok(Some(node)) => {
-            let raw = copy_node_onto_parser(eval, handle.parser_id, node)
+            // Neomacs choice, not GNU. After an unguarded dotted reparse, GNU
+            // returns a node of the tree `ts_tree_delete` freed (`src/treesit.c:1945`),
+            // which is UB. This projects the clone node onto the live tree.
+            let raw = project_node_to_parser(eval, handle.parser_id, node, share)
                 .ok_or_else(|| treesit_buffer_changed(args[1]))?;
             Ok(make_node_value_from_raw(eval, handle.parser_id, raw))
         }
@@ -3371,8 +3478,9 @@ pub fn builtin_treesit_search_subtree(
         value if value.is_nil() => 1000,
         value => expect_fixnum(&value)?,
     };
+    let mut share = walk_share(eval, handle.parser_id);
     let walk = parser_tree_clone(eval, handle.parser_id, args[0])?;
-    let start = node_on_tree(&walk, handle.raw).ok_or_else(|| node_outdated_error(args[0]))?;
+    let start = node_on_clone(eval, handle.parser_id, &walk, handle.raw, &mut share);
     match search_subtree_impl(
         eval,
         handle.parser_id,
@@ -3383,11 +3491,15 @@ pub fn builtin_treesit_search_subtree(
         named_only,
         depth,
         false,
+        share,
     )
     .kinded()
     {
         Ok(Some(node)) => {
-            let raw = copy_node_onto_parser(eval, handle.parser_id, node)
+            // Neomacs choice, not GNU. After an unguarded dotted reparse, GNU
+            // returns a node of the tree `ts_tree_delete` freed (`src/treesit.c:1945`),
+            // which is UB. This projects the clone node onto the live tree.
+            let raw = project_node_to_parser(eval, handle.parser_id, node, share)
                 .ok_or_else(|| treesit_buffer_changed(args[1]))?;
             Ok(make_node_value_from_raw(eval, handle.parser_id, raw))
         }

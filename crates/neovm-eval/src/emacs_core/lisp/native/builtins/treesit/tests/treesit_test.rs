@@ -387,6 +387,137 @@ fn treesit_search_subtree_string_predicate_returns_a_live_node() {
     );
 }
 
+fn edit_only_nil_predicate(eval: &mut super::super::eval::Context) -> Value {
+    eval.eval_str("(defalias 'neomacs--treesit-edit-only-p (lambda (_n) (insert \"x\") nil))")
+        .expect("edit-only predicate");
+    Value::symbol("neomacs--treesit-edit-only-p")
+}
+
+/// GNU `treesit_pred_with_guard` lets an edit through when it does not reparse
+/// (`src/treesit.c:2232-2245`). Attested on Emacs 31.1 `a360712c9d`:
+/// `(treesit-search-subtree root (lambda (_n) (insert "x") nil))` => nil.
+#[test]
+fn treesit_search_subtree_edit_only_predicate_returns_nil() {
+    let (mut eval, parser) = eval_with_json_parser(r#"{"a": 1}"#);
+    let root = builtin_treesit_parser_root_node(&mut eval, vec![parser]).expect("root");
+    let pred = edit_only_nil_predicate(&mut eval);
+    let found = builtin_treesit_search_subtree(&mut eval, vec![root, pred]).expect("no signal");
+    assert!(found.is_nil());
+    assert_eq!(
+        builtin_treesit_node_type(&mut eval, vec![root]).expect("root stays current"),
+        Value::string("document")
+    );
+}
+
+/// Attested: `(treesit-search-forward child (lambda (_n) (insert "x") nil))` => nil.
+#[test]
+fn treesit_search_forward_edit_only_predicate_returns_nil() {
+    let (mut eval, parser) = eval_with_json_parser(r#"{"a": 1}"#);
+    let root = builtin_treesit_parser_root_node(&mut eval, vec![parser]).expect("root");
+    let child = builtin_treesit_node_child(&mut eval, vec![root, Value::fixnum(0)]).expect("child");
+    let pred = edit_only_nil_predicate(&mut eval);
+    let found = builtin_treesit_search_forward(&mut eval, vec![child, pred]).expect("no signal");
+    assert!(found.is_nil());
+}
+
+/// Attested: `(treesit-induce-sparse-tree root (lambda (_n) (insert "x") nil))` => nil.
+#[test]
+fn treesit_induce_sparse_tree_edit_only_predicate_returns_nil() {
+    let (mut eval, parser) = eval_with_json_parser(r#"{"a": 1}"#);
+    let root = builtin_treesit_parser_root_node(&mut eval, vec![parser]).expect("root");
+    let pred = edit_only_nil_predicate(&mut eval);
+    let tree = builtin_treesit_induce_sparse_tree(&mut eval, vec![root, pred]).expect("no signal");
+    assert!(tree.is_nil());
+}
+
+/// Attested: `(treesit-induce-sparse-tree root "pair" (lambda (n) (insert "x") (treesit-node-type n)))`
+/// => `(nil ("pair"))`.
+#[test]
+fn treesit_induce_sparse_tree_edit_only_process_fn_returns_pair() {
+    let (mut eval, parser) = eval_with_json_parser(r#"{"a": 1}"#);
+    let root = builtin_treesit_parser_root_node(&mut eval, vec![parser]).expect("root");
+    eval.eval_str(
+        "(defalias 'neomacs--treesit-edit-type \
+           (lambda (n) (insert \"x\") (treesit-node-type n)))",
+    )
+    .expect("process fn");
+    let tree = builtin_treesit_induce_sparse_tree(
+        &mut eval,
+        vec![
+            root,
+            Value::string("pair"),
+            Value::symbol("neomacs--treesit-edit-type"),
+        ],
+    )
+    .expect("no signal");
+    assert!(tree.cons_car().is_nil());
+    let pair = tree.cons_cdr().cons_car();
+    assert_eq!(pair.cons_car(), Value::string("pair"));
+    assert!(pair.cons_cdr().is_nil());
+    assert!(tree.cons_cdr().cons_cdr().is_nil());
+}
+
+/// Attested: `(treesit-node-match-p root (lambda (_n) (insert "x") t))` => t.
+#[test]
+fn treesit_node_match_p_edit_only_predicate_returns_t() {
+    let (mut eval, parser) = eval_with_json_parser(r#"{"a": 1}"#);
+    let root = builtin_treesit_parser_root_node(&mut eval, vec![parser]).expect("root");
+    eval.eval_str("(defalias 'neomacs--treesit-edit-true-p (lambda (_n) (insert \"x\") t))")
+        .expect("edit-only true predicate");
+    let matched = builtin_treesit_node_match_p(
+        &mut eval,
+        vec![root, Value::symbol("neomacs--treesit-edit-true-p")],
+    )
+    .expect("no signal");
+    assert_eq!(matched, Value::T);
+}
+
+/// GNU walks the live tree here and is UB after the dotted reparse. Neomacs
+/// must stay sound: the second arm runs on a clone and matches `"document"`.
+#[test]
+fn treesit_node_match_p_dotted_reparse_inside_or_stays_sound() {
+    let (mut eval, parser) = eval_with_json_parser(r#"{"a": 1}"#);
+    let root = builtin_treesit_parser_root_node(&mut eval, vec![parser]).expect("root");
+    let pred = eval
+        .eval_str(
+            "(progn \
+               (defalias 'neomacs--treesit-or-reparse-p \
+                 (lambda (node) \
+                   (insert \"x\") \
+                   (treesit-parser-root-node (treesit-node-parser node)) \
+                   nil)) \
+               (list 'or (cons \"document\" 'neomacs--treesit-or-reparse-p) \"document\"))",
+        )
+        .expect("or predicate");
+    let matched = builtin_treesit_node_match_p(&mut eval, vec![root, pred]).expect("no signal");
+    assert_eq!(matched, Value::T);
+}
+
+/// Neomacs-only. GNU segfaults if a dotted predicate returns t after a reparse
+/// (`ts_tree_delete` then `ts_language_symbol_name`). Neomacs path-remaps the
+/// clone node onto the live tree. The returned node is the document root.
+#[test]
+fn treesit_search_subtree_dotted_reparse_returning_t_remaps_onto_live_tree() {
+    let (mut eval, parser) = eval_with_json_parser(r#"{"a": 1}"#);
+    let root = builtin_treesit_parser_root_node(&mut eval, vec![parser]).expect("root");
+    let pred = eval
+        .eval_str(
+            "(progn \
+               (defalias 'neomacs--treesit-dotted-reparse-t \
+                 (lambda (node) \
+                   (insert \"x\") \
+                   (treesit-parser-root-node (treesit-node-parser node)) \
+                   t)) \
+               (cons \"document\" 'neomacs--treesit-dotted-reparse-t))",
+        )
+        .expect("dotted predicate");
+    let found = builtin_treesit_search_subtree(&mut eval, vec![root, pred]).expect("no signal");
+    assert_eq!(
+        builtin_treesit_node_type(&mut eval, vec![found]).expect("remapped node"),
+        Value::string("document")
+    );
+}
+
 #[test]
 fn treesit_query_predicate_rejects_parser_buffer_mutation() {
     let (mut eval, parser) = eval_with_json_parser(r#"["first"]"#);

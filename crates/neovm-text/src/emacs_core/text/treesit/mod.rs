@@ -344,6 +344,11 @@ pub struct ParserEntry {
     pub(crate) tree: Option<ParsedTree>,
     pub(crate) freshness: ParserFreshness,
     pub(crate) generation: u64,
+    /// Advances only when a reparse replaces the tree. Lisp node handles
+    /// compare this, matching GNU's parser timestamp (`src/treesit.c:1941`).
+    /// `generation` also advances on a buffer edit and stays the query `:pred`
+    /// check.
+    pub(crate) reparse_epoch: u64,
     pub(crate) need_to_gc_buffer: bool,
     pub(crate) deleted: bool,
     pub(crate) tracking_linecol: bool,
@@ -361,6 +366,11 @@ pub struct ParserEntry {
     pub(crate) tree: Option<ParsedTree>,
     pub(crate) freshness: ParserFreshness,
     pub(crate) generation: u64,
+    /// Advances only when a reparse replaces the tree. Lisp node handles
+    /// compare this, matching GNU's parser timestamp (`src/treesit.c:1941`).
+    /// `generation` also advances on a buffer edit and stays the query `:pred`
+    /// check.
+    pub(crate) reparse_epoch: u64,
     pub(crate) need_to_gc_buffer: bool,
     pub(crate) deleted: bool,
     pub(crate) tracking_linecol: bool,
@@ -371,7 +381,7 @@ pub struct ParserEntry {
 pub struct NodeEntry {
     pub(crate) parser_id: u64,
     pub(crate) raw: tree_sitter::ffi::TSNode,
-    pub(crate) generation: u64,
+    pub(crate) reparse_epoch: u64,
 }
 
 #[doc(hidden)]
@@ -843,6 +853,7 @@ impl TreeSitterManager {
                 tree: None,
                 freshness: ParserFreshness::Unparsed,
                 generation: 0,
+                reparse_epoch: 0,
                 need_to_gc_buffer: false,
                 deleted: false,
                 tracking_linecol,
@@ -911,7 +922,7 @@ impl TreeSitterManager {
         &mut self,
         parser_id: u64,
         raw: tree_sitter::ffi::TSNode,
-        generation: u64,
+        reparse_epoch: u64,
     ) -> u64 {
         let id = self.next_node_id;
         self.next_node_id += 1;
@@ -920,7 +931,7 @@ impl TreeSitterManager {
             NodeEntry {
                 parser_id,
                 raw,
-                generation,
+                reparse_epoch,
             },
         );
         id
@@ -1089,8 +1100,21 @@ impl TreeSitterManager {
         };
         let new_revision = ParserInputRevision::for_buffer(buffer);
 
-        let mut edited_parser_ids = Vec::new();
-        for (parser_id, parser) in &mut self.parsers {
+        let parser_ids: Vec<u64> = self.parsers.keys().copied().collect();
+        // `(node id, new raw)`. `None` drops a node whose pre-edit id cannot
+        // be named on the post-edit tree.
+        let mut node_updates: Vec<(u64, Option<ffi::TSNode>)> = Vec::new();
+        let mut drop_nodes_for = Vec::new();
+        for parser_id in parser_ids {
+            let node_raws: Vec<(u64, ffi::TSNode)> = self
+                .nodes
+                .iter()
+                .filter(|(_, entry)| entry.parser_id == parser_id)
+                .map(|(id, entry)| (*id, entry.raw))
+                .collect();
+            let Some(parser) = self.parsers.get_mut(&parser_id) else {
+                continue;
+            };
             if parser.deleted || parser.orig_buffer_id != buffer_id {
                 continue;
             }
@@ -1099,9 +1123,48 @@ impl TreeSitterManager {
                     .freshness
                     .accepts_incremental_edit(edit.content_revision)
                 {
-                    let relative =
-                        edit.for_window(buffer, *parser_id, tree.visible(), new_end_byte);
-                    tree.apply_edit(&relative.edit, relative.new_visible);
+                    let relative = edit.for_window(buffer, parser_id, tree.visible(), new_end_byte);
+                    if node_raws.is_empty() {
+                        tree.apply_edit(&relative.edit, relative.new_visible);
+                    } else {
+                        // A walk may already hold `ts_tree_copy`. `ts_tree_edit`
+                        // then copy-on-writes, so published subtree ids would
+                        // dangle once that clone drops. Snapshot the pre-edit
+                        // tree and retarget onto this parser's own tree. The
+                        // stored `TSNode.tree` has to be that tree: a temporary
+                        // clone's pointer is freed when the clone drops.
+                        let snapshot = tree.tree().clone();
+                        let snap_ptr = snapshot.root_node().into_raw().tree;
+                        tree.apply_edit(&relative.edit, relative.new_visible);
+                        let live_root = tree.tree().root_node();
+                        let live_root_raw = live_root.into_raw();
+                        for (id, mut raw) in node_raws {
+                            // A root id is the address of this parser's
+                            // `TSTree.root` field. `ts_tree_edit` writes a new
+                            // subtree there and does not move the field, so
+                            // the published root is already the live root.
+                            // The pre-edit snapshot has its own field, and
+                            // path-walking this id against that snapshot fails.
+                            if raw.id == live_root_raw.id {
+                                node_updates.push((id, Some(live_root_raw)));
+                                continue;
+                            }
+                            raw.tree = snap_ptr;
+                            // SAFETY: `snapshot` is a `ts_tree_copy` taken
+                            // before `ts_tree_edit`, so it still owns the
+                            // subtree `raw.id` names. The node stored below
+                            // comes from `live_root`, whose `TSTree` this
+                            // parser owns. A failed path drops the entry
+                            // rather than leaving an id the snapshot will free
+                            // (GNU bug#60127). That drop is safety, not a GNU
+                            // match.
+                            let path = node_index_path(unsafe { tree_sitter::Node::from_raw(raw) });
+                            let mapped = path
+                                .and_then(|path| node_at_index_path(live_root, &path))
+                                .map(|node| node.into_raw());
+                            node_updates.push((id, mapped));
+                        }
+                    }
                     parser.freshness = ParserFreshness::ReparsePending(new_revision);
                 } else {
                     // A text change that never reached this hook left the tree's
@@ -1109,17 +1172,63 @@ impl TreeSitterManager {
                     // GNU -- which sees every change -- the tree cannot be
                     // reused.
                     parser.freshness = ParserFreshness::FullReparseRequired;
+                    drop_nodes_for.push(parser_id);
                 }
+                // `generation` still advances on an edit so query `:pred` keeps
+                // rejecting an insert that does not reparse. Node handles use
+                // `reparse_epoch`, which this path does not bump.
                 parser.generation = parser.generation.saturating_add(1);
                 parser.last_changed_ranges.clear();
-                edited_parser_ids.push(*parser_id);
             }
         }
 
-        for parser_id in edited_parser_ids {
+        for (id, mapped) in node_updates {
+            match mapped {
+                Some(raw) => {
+                    if let Some(entry) = self.nodes.get_mut(&id) {
+                        entry.raw = raw;
+                    }
+                }
+                None => {
+                    self.nodes.remove(&id);
+                }
+            }
+        }
+        for parser_id in drop_nodes_for {
             self.clear_nodes_for_parser(parser_id);
         }
     }
+}
+
+fn node_index_path(node: tree_sitter::Node<'_>) -> Option<Vec<u32>> {
+    let mut reversed = Vec::new();
+    let mut current = node;
+    while let Some(parent) = current.parent() {
+        let mut index = None;
+        for child_index in 0..parent.child_count() {
+            if parent
+                .child(child_index)
+                .is_some_and(|child| child.id() == current.id())
+            {
+                index = Some(child_index);
+                break;
+            }
+        }
+        reversed.push(index?);
+        current = parent;
+    }
+    reversed.reverse();
+    Some(reversed)
+}
+
+fn node_at_index_path<'tree>(
+    mut node: tree_sitter::Node<'tree>,
+    path: &[u32],
+) -> Option<tree_sitter::Node<'tree>> {
+    for &index in path {
+        node = node.child(index)?;
+    }
+    Some(node)
 }
 
 #[cfg(test)]
@@ -1309,6 +1418,16 @@ impl ParserEntry {
     }
 
     #[doc(hidden)]
+    pub fn reparse_epoch(&self) -> u64 {
+        self.reparse_epoch
+    }
+
+    #[doc(hidden)]
+    pub fn set_reparse_epoch(&mut self, reparse_epoch: u64) {
+        self.reparse_epoch = reparse_epoch;
+    }
+
+    #[doc(hidden)]
     pub fn orig_buffer_id(&self) -> BufferId {
         self.orig_buffer_id
     }
@@ -1382,8 +1501,8 @@ impl NodeEntry {
     }
 
     #[doc(hidden)]
-    pub fn generation(&self) -> u64 {
-        self.generation
+    pub fn reparse_epoch(&self) -> u64 {
+        self.reparse_epoch
     }
 }
 
