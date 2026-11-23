@@ -12,8 +12,7 @@
 //! frame-local state. [`FrameKind`] enumerates the frames the arena can hold;
 //! the architecture test pins that enumeration against this source.
 
-use super::super::owner_bindings::{BindingKind, Channel, UndoTarget};
-use neovm_value::forward::TlsIndex;
+use super::super::owner_bindings::OwnerRecordId;
 use neovm_value::intern::SymId;
 use neovm_value::tagged::gc::{
     Mutator, OwnerAllocRegion, OwnerEraReserve, OwnerRegionRefund, PollOutcome, Rendezvous,
@@ -566,53 +565,29 @@ impl HandlerRecord {
     }
 }
 
-/// The generation a slot record was issued at, so a stale id never names a
-/// reused record position.
+/// One owner binding as the executor holds it: the frame-unwind index of the
+/// record the E2 owner slab stores (one record, two views). The slab record
+/// is the storage — the undo target, the channel and the slot — and the
+/// collector's root phase traces its values through the slab, so this entry
+/// names it by its [`OwnerRecordId`] and carries no `Value`: the arena's
+/// root walk publishes nothing for it. `symbol` is the bound symbol, as the
+/// serial specpdl's `OwnerBindingRef` carries it for the unwinder.
+///
+/// The pairing is kept by construction: a bind pushes the slab record and
+/// then this entry for the id it got; an unbind takes the slab record the id
+/// names from the top and then removes the entry. An entry whose id is not
+/// the slab's top is a defect on one side of that pairing, not a Lisp
+/// outcome.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct SlotGeneration(NonZeroU32);
-
-impl SlotGeneration {
-    #[doc(hidden)]
-    pub const fn new(generation: NonZeroU32) -> Self {
-        Self(generation)
-    }
-
-    #[doc(hidden)]
-    pub const fn get(self) -> NonZeroU32 {
-        self.0
-    }
-}
-
-/// One owner binding record: the executor's plain mirror of what the E2
-/// owner slab stores, carrying the saved value the root walk publishes.
-#[derive(Clone, Copy, Debug)]
 pub(crate) struct SlotRecord {
     pub(crate) symbol: SymId,
-    pub(crate) slot: TlsIndex,
-    pub(crate) channel: Channel,
-    pub(crate) kind: BindingKind,
-    pub(crate) undo: UndoTarget,
-    pub(crate) generation: SlotGeneration,
+    pub(crate) record: OwnerRecordId,
 }
 
 impl SlotRecord {
     #[doc(hidden)]
-    pub const fn new(
-        symbol: SymId,
-        slot: TlsIndex,
-        channel: Channel,
-        kind: BindingKind,
-        undo: UndoTarget,
-        generation: SlotGeneration,
-    ) -> Self {
-        Self {
-            symbol,
-            slot,
-            channel,
-            kind,
-            undo,
-            generation,
-        }
+    pub const fn new(symbol: SymId, record: OwnerRecordId) -> Self {
+        Self { symbol, record }
     }
 }
 
@@ -635,8 +610,9 @@ pub(crate) struct SerialRecordToken(pub(crate) u64);
 pub(crate) struct SerialHandlerToken(pub(crate) u64);
 
 /// One entry of the owner's dynamic-record LIFO: an owner binding, or the
-/// marker of a record the serial side holds. A `Serial` entry publishes no
-/// root.
+/// marker of a record the serial side holds. Neither entry publishes a
+/// root: a [`SlotRecord`] only names the slab record that stores and roots
+/// the binding, and a `Serial` entry is an opaque marker.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum OwnerRecord {
     Plain(SlotRecord),
@@ -770,6 +746,10 @@ impl HandlerStack {
 
 /// The owner's binding-record stack with typed marks. Entry kinds and the
 /// truncation rule are [`HandlerStack`]'s.
+///
+/// A [`SlotRecord`] here stands for the slab record it names (see the type):
+/// a bind pushes the slab record first and this entry second; an unbind
+/// takes the slab record first and removes this entry second.
 #[derive(Default)]
 pub(crate) struct BindStack {
     records: Vec<OwnerRecord>,
@@ -791,6 +771,13 @@ impl BindStack {
         self.records.push(record.into());
     }
 
+    /// Pop the top record; `None` on an empty stack. The `Unbind` walk of
+    /// the VM stepper removes one owner binding at a time (V2, R1b).
+    #[doc(hidden)]
+    pub fn pop(&mut self) -> Option<OwnerRecord> {
+        self.records.pop()
+    }
+
     /// Pop every record above MARK; returns how many were removed.
     #[doc(hidden)]
     pub fn truncate(&mut self, mark: OwnerRecordMark) -> usize {
@@ -805,9 +792,13 @@ impl BindStack {
         self.records.len()
     }
 
-    /// The entries above MARK, outermost first.
+    /// The entries above MARK, outermost first; double-ended, so the top
+    /// run can be read from the inner end (`Unbind`, vm.rs) without a copy.
     #[doc(hidden)]
-    pub fn above(&self, mark: OwnerRecordMark) -> impl Iterator<Item = OwnerRecord> + '_ {
+    pub fn above(
+        &self,
+        mark: OwnerRecordMark,
+    ) -> impl DoubleEndedIterator<Item = OwnerRecord> + '_ {
         let keep = mark.depth().min(self.records.len());
         self.records[keep..].iter().copied()
     }
@@ -843,15 +834,6 @@ impl BindStack {
         }
         self.records.truncate(self.records.len() - tokens.len());
         Ok(tokens.len())
-    }
-
-    #[doc(hidden)]
-    pub fn trace_roots(&self, visit: &mut dyn FnMut(RootGroup, Value)) {
-        for record in &self.records {
-            if let OwnerRecord::Plain(record) = record {
-                record.trace_frame_roots(visit);
-            }
-        }
     }
 }
 
@@ -1001,32 +983,6 @@ impl FrameRoots for HandlerRecord {
         } = self;
         visit(RootGroup::Handlers, *tag);
         visit(RootGroup::Handlers, *handlers);
-    }
-}
-
-impl FrameRoots for SlotRecord {
-    const ROOT_GROUPS: &'static [RootGroup] = &[RootGroup::Specpdl];
-
-    fn trace_frame_roots(&self, visit: &mut dyn FnMut(RootGroup, Value)) {
-        let Self {
-            symbol: _,
-            slot: _,
-            channel: _,
-            kind: _,
-            undo,
-            generation: _,
-        } = self;
-        match undo {
-            UndoTarget::Inherited { suspended } => {
-                if let Some(value) = suspended {
-                    visit(RootGroup::Specpdl, value.get());
-                }
-            }
-            UndoTarget::Previous(value) | UndoTarget::Captured(value) => {
-                visit(RootGroup::Specpdl, value.get());
-            }
-            UndoTarget::Retired => {}
-        }
     }
 }
 
@@ -1553,7 +1509,9 @@ impl FrameArena {
             }
         }
         self.handlers.trace_roots(visit);
-        self.bindings.trace_roots(visit);
+        // The record LIFO publishes nothing: an owner binding's values live
+        // in the slab record its `SlotRecord` names, and the collector's
+        // root phase traces the slab.
         self.roots.trace_roots(visit);
     }
 
@@ -1581,16 +1539,18 @@ impl FrameArena {
     /// [`InterpFrame::ROOT_GROUPS`]. VM frame fields and the operand stack
     /// publish as [`RootGroup::VmFrames`]. The operand vector is one source:
     /// a frame cursor is a view of it, so the cursor is not walked again.
-    /// Handler tags, binding undo values, and the registry keep their own
-    /// groups. The destructure names every arena field, and [`ArenaScan`]
-    /// names every [`RootGroup`], so a new source or group fails to compile
-    /// until this scan publishes it.
+    /// Handler tags and the registry keep their own groups. The record LIFO
+    /// is not a source: a [`SlotRecord`] names the slab record that stores
+    /// and roots the binding, and a serial marker roots nothing. The
+    /// destructure names every arena field, and [`ArenaScan`] names every
+    /// [`RootGroup`], so a new source or group fails to compile until this
+    /// scan publishes it.
     fn for_each_owner_root(&self, visit: &mut dyn FnMut(RootGroup, Value)) {
         let Self {
             frames,
             operands,
             handlers,
-            bindings,
+            bindings: _,
             roots,
             region: _,
             depth: _,
@@ -1608,7 +1568,6 @@ impl FrameArena {
             visit(RootGroup::VmFrames, *value);
         }
         handlers.trace_roots(visit);
-        bindings.trace_roots(visit);
         // Registry contribution: every group, including an empty one.
         // `trace_root_groups` is not the owner publication.
         roots.trace_root_groups(&mut |group, values| {

@@ -1,16 +1,19 @@
 //! A sole cons survives a stop only when the owner scan is acknowledged.
 //!
-//! The five sources of one arena each hold one cons. Setup publishes that
+//! The four sources of one arena each hold one cons. Setup publishes that
 //! scan while this thread is still the mutator. The owner thread then
 //! acknowledges the published batch and drops it, so the collection's only
 //! root for those conses is the batch `collect_stopped` already traces.
+//!
+//! The record LIFO is not a source: an owner binding entry names the slab
+//! record that stores the binding's values (C2, one record, two views), and
+//! the collector's root phase traces every registered slab
+//! (`OwnerSlabRegistry::trace_roots`, owner_bindings.rs:788-800), not this
+//! scan.
 
-use super::super::owner_bindings::{BindingKind, Channel, SlotValue, UndoTarget};
 use super::frames::*;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::eval::world::{ParallelHeapEraWorldCollectExt, WorldProofEra};
-use neovm_value::forward::TlsIndex;
-use neovm_value::intern::NIL_SYM_ID;
 use neovm_value::tagged::gc::{
     AllStopped, HeapIdentity, MeasuredInterval, Mutator, MutatorKey, MutatorPermit,
     OwnerEraReserve, RegistrationError, RendezvousError, Request,
@@ -34,7 +37,6 @@ struct SoleRoots {
     frame: usize,
     operand: usize,
     handler: usize,
-    binding: usize,
     registry: usize,
 }
 
@@ -60,13 +62,12 @@ fn cons(context: &mut Context, tag: i64) -> (Value, SharedRoot) {
     (value, root)
 }
 
-fn publish_five(context: &mut Context) -> SoleRoots {
+fn publish_four(context: &mut Context) -> SoleRoots {
     context.set_gc_stress_for_test(false);
     context.tagged_heap.set_gc_threshold(usize::MAX);
     let (frame, frame_root) = cons(context, 101);
     let (operand, operand_root) = cons(context, 102);
     let (handler, handler_root) = cons(context, 103);
-    let (binding, binding_root) = cons(context, 104);
     let (registry, registry_root) = cons(context, 105);
     let mut arena = FrameArena::new(4);
     let id = arena
@@ -101,14 +102,6 @@ fn publish_five(context: &mut Context) -> SoleRoots {
         id,
         OwnerRecordMark::EMPTY,
     ));
-    arena.bindings_mut().push(SlotRecord::new(
-        NIL_SYM_ID,
-        TlsIndex::VOID,
-        Channel::Default,
-        BindingKind::Let,
-        UndoTarget::Previous(SlotValue::new(binding)),
-        SlotGeneration::new(NonZeroU32::MIN),
-    ));
     arena
         .roots_mut()
         .push(RootGroup::Misc, registry)
@@ -119,17 +112,10 @@ fn publish_five(context: &mut Context) -> SoleRoots {
         .expect("owner scan");
     SoleRoots {
         scratch,
-        keepers: vec![
-            frame_root,
-            operand_root,
-            handler_root,
-            binding_root,
-            registry_root,
-        ],
+        keepers: vec![frame_root, operand_root, handler_root, registry_root],
         frame: frame.bits(),
         operand: operand.bits(),
         handler: handler.bits(),
-        binding: binding.bits(),
         registry: registry.bits(),
     }
 }
@@ -316,7 +302,7 @@ fn publish_and_ack(
 
 #[test]
 fn sole_root_in_each_owner_source_survives_only_through_the_joined_scan() {
-    Context::with_test_collection_era(publish_five, |era, mut roots| {
+    Context::with_test_collection_era(publish_four, |era, mut roots| {
         drop(roots.keepers);
         let heap = era.heap_identity();
         let rendezvous = era.rendezvous();
@@ -344,7 +330,6 @@ fn sole_root_in_each_owner_source_survives_only_through_the_joined_scan() {
                 ("frame", roots.frame),
                 ("operand", roots.operand),
                 ("handler", roots.handler),
-                ("binding", roots.binding),
                 ("registry", roots.registry),
             ]
             .into_iter()

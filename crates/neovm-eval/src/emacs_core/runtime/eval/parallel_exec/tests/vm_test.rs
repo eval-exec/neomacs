@@ -2,13 +2,13 @@
 //! carries the `vm_` prefix. The sealed-ops double reads conses this harness
 //! allocated and nothing shared.
 
-use super::super::owner_bindings::{BindingKind, Channel, SlotValue, UndoTarget};
+use super::super::owner_bindings::{BindingKind, Channel, OwnerSlab, UndoTarget};
 use super::dispatch::{admits_owner_local, opcode_slot};
 use super::engine::{CoreOutcome, EngineFault, RecordStack, apply_one};
 use super::frames::{
     BindStack, FrameArena, FrameId, HandlerKind, HandlerMark, HandlerRecord, HandlerStack,
     InterpFrame, OperandCursor, OwnerHandler, OwnerRecord, OwnerRecordMark, Pc, PollBudget,
-    RootGroup, SerialHandlerToken, SerialRecordToken, SlotGeneration, SlotRecord,
+    RootGroup, SerialHandlerToken, SerialRecordToken, SlotRecord,
 };
 use super::vm::{
     ArithOps, ArithRefusal, EscapeCompletion, EscapeStack, EscapeWhy, HandlerDelta, RecordDelta,
@@ -1567,15 +1567,17 @@ fn handler_record(frame: FrameId, tag: i64, handlers: i64) -> HandlerRecord {
     )
 }
 
-fn slot_record(saved: i64) -> SlotRecord {
-    SlotRecord::new(
+/// An owner binding entry naming a record a throwaway slab issued: it holds
+/// no value of its own (C2), so the arena walk publishes nothing for it.
+fn slot_record() -> SlotRecord {
+    let record = OwnerSlab::new(0).push_record(
         NIL_SYM_ID,
         TlsIndex::VOID,
-        Channel::Default,
         BindingKind::Let,
-        UndoTarget::Previous(SlotValue::new(Value::fixnum(saved))),
-        SlotGeneration::new(NonZeroU32::MIN),
-    )
+        Channel::Default,
+        UndoTarget::Retired,
+    );
+    SlotRecord::new(NIL_SYM_ID, record)
 }
 
 fn handler_and_specpdls(arena: &FrameArena) -> Vec<(&'static str, Option<i64>)> {
@@ -1589,37 +1591,28 @@ fn handler_and_specpdls(arena: &FrameArena) -> Vec<(&'static str, Option<i64>)> 
 }
 
 #[test]
-fn vm_serial_markers_publish_no_roots_and_owner_records_still_do() {
+fn vm_serial_markers_and_owner_binding_entries_publish_no_roots() {
+    // A handler record publishes its tag and its handler list; a serial
+    // marker publishes nothing; an owner binding entry publishes nothing
+    // either (C2, peer #11640): it names the slab record that stores the
+    // binding's values, and the collector traces the slab.
     let mut arena = FrameArena::new(8);
     let frame = arena.push_interp(interp_frame()).expect("interp frame");
     arena.handlers_mut().push(handler_record(frame, 19, 20));
-    arena.bindings_mut().push(slot_record(21));
-    assert_eq!(
-        handler_and_specpdls(&arena),
-        vec![
-            ("handlers", Some(19)),
-            ("handlers", Some(20)),
-            ("specpdl", Some(21))
-        ]
-    );
+    arena.bindings_mut().push(slot_record());
+    let owner_records = vec![("handlers", Some(19)), ("handlers", Some(20))];
+    assert_eq!(handler_and_specpdls(&arena), owner_records);
     // Markers join both LIFOs above the owner records and publish nothing.
     let mark = arena.handlers_mut().mark();
     arena.handlers_mut().push(handler(1));
     arena.bindings_mut().push(token(2));
     assert!(arena.handlers().has_serial_above(mark));
     assert!(arena.bindings().has_serial_above(OwnerRecordMark::EMPTY));
-    assert_eq!(handler_and_specpdls(&arena).len(), 3);
+    assert_eq!(handler_and_specpdls(&arena), owner_records);
     // Truncation to the mark removes the marker and keeps the owner record.
     assert_eq!(arena.handlers_mut().truncate(mark), 1);
     assert!(!arena.handlers().has_serial_above(mark));
-    assert_eq!(
-        handler_and_specpdls(&arena),
-        vec![
-            ("handlers", Some(19)),
-            ("handlers", Some(20)),
-            ("specpdl", Some(21))
-        ]
-    );
+    assert_eq!(handler_and_specpdls(&arena), owner_records);
     // Truncation to the base removes owner records and markers alike.
     assert_eq!(arena.handlers_mut().truncate(HandlerMark::EMPTY), 1);
     assert_eq!(arena.bindings_mut().truncate(OwnerRecordMark::EMPTY), 2);

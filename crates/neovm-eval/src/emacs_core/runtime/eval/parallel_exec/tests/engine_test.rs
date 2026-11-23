@@ -1,11 +1,14 @@
 //! Stage-1 harness stepper. The sealed-ops impl reads only conses this
 //! harness allocated. It does not read a shared object.
 
-use super::super::owner_bindings::{Channel, SlotState, SlotValue};
+use super::super::owner_bindings::{
+    BindingKind, Channel, OwnerBindingRecord, OwnerRecordId, OwnerSlab, SlotState, SlotValue,
+    UndoTarget,
+};
 use super::dispatch::primitive_slot_by_name;
 use super::effective::{
     EffectivePlainKey, EffectiveRead, EffectiveWrite, EraId, OwnerSlots, OwnerSlotsMut,
-    PlainAccess, PlainAdmission, PlainRefusal, ShapeGeneration,
+    PlainAccess, PlainAdmission, PlainRefusal, ShapeGeneration, take_top_binding,
 };
 use super::engine::{
     CoreOutcome, EngineFault, EscapeClass, EscapeRequest, OwnerPoll, PlainStop, SealedOps,
@@ -374,6 +377,9 @@ struct TestSlots {
     canonical: Value,
     canonical_reads: Cell<usize>,
     canonical_writes: Cell<usize>,
+    /// The binding-record LIFO, on a real slab: the stepper of this harness
+    /// binds nothing, so the trait's record half is the slab's own API.
+    records: OwnerSlab,
 }
 
 impl TestSlots {
@@ -384,6 +390,7 @@ impl TestSlots {
             canonical: Value::NIL,
             canonical_reads: Cell::new(0),
             canonical_writes: Cell::new(0),
+            records: OwnerSlab::new(0),
         }
     }
 
@@ -447,6 +454,21 @@ impl PlainAccess for TestSlots {
 
     fn canonical_bound(&self, _sym: neovm_value::intern::SymId) -> bool {
         true
+    }
+
+    fn push_binding(
+        &mut self,
+        sym: neovm_value::intern::SymId,
+        slot: TlsIndex,
+        channel: Channel,
+        undo: UndoTarget,
+    ) -> OwnerRecordId {
+        self.records
+            .push_record(sym, slot, BindingKind::Let, channel, undo)
+    }
+
+    fn pop_binding(&mut self, id: OwnerRecordId) -> Option<OwnerBindingRecord> {
+        take_top_binding(&mut self.records, id)
     }
 }
 

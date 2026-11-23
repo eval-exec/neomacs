@@ -1,11 +1,11 @@
 //! E4-S0 frame arena, record and root-schema unit tests (plain data only).
 
-use super::super::owner_bindings::{BindingKind, Channel, SlotValue, UndoTarget};
+use super::super::owner_bindings::{BindingKind, Channel, OwnerRecordId, OwnerSlab, UndoTarget};
 use super::frames::*;
 use crate::emacs_core::eval::Context;
 use crate::test_utils::unit_runtime;
 use neovm_value::forward::TlsIndex;
-use neovm_value::intern::NIL_SYM_ID;
+use neovm_value::intern::{NIL_SYM_ID, SymId};
 use neovm_value::tagged::gc::RendezvousError;
 use neovm_value::tagged::transport::SharedRoot;
 use neovm_value::value::Value;
@@ -51,14 +51,23 @@ fn handler_record(frame: FrameId, tag: i64, handlers: i64) -> HandlerRecord {
     )
 }
 
-fn slot_record(saved: i64) -> SlotRecord {
-    SlotRecord::new(
-        NIL_SYM_ID,
+/// An owner binding entry naming a record a throwaway slab issued. The arena
+/// never dereferences the record, and the entry publishes no root: the
+/// record's values are the slab's (C2, one record, two views).
+fn slot_record() -> SlotRecord {
+    let record = slab_record(NIL_SYM_ID, UndoTarget::Retired);
+    SlotRecord::new(NIL_SYM_ID, record)
+}
+
+/// A record issued by a slab of its own: an id no live slab holds.
+fn slab_record(sym: SymId, undo: UndoTarget) -> OwnerRecordId {
+    let mut slab = OwnerSlab::new(0);
+    slab.push_record(
+        sym,
         TlsIndex::VOID,
-        Channel::Default,
         BindingKind::Let,
-        UndoTarget::Previous(SlotValue::new(Value::fixnum(saved))),
-        SlotGeneration::new(NonZeroU32::MIN),
+        Channel::Default,
+        undo,
     )
 }
 
@@ -145,7 +154,7 @@ fn handler_and_bind_marks_truncate_only_above_the_mark() {
     assert_eq!(arena.handlers_mut().mark(), handler_mark);
 
     let bind_mark = arena.bindings_mut().mark();
-    arena.bindings_mut().push(slot_record(20));
+    arena.bindings_mut().push(slot_record());
     assert_eq!(arena.bindings_mut().len(), 1);
     assert_eq!(arena.bindings_mut().truncate(bind_mark), 1);
     assert_eq!(arena.bindings_mut().mark(), bind_mark);
@@ -171,7 +180,7 @@ fn root_walk_publishes_every_frame_record_and_registry_root() {
     );
     arena.push_vm(vm).expect("vm frame");
     arena.handlers_mut().push(handler_record(frame, 19, 20));
-    arena.bindings_mut().push(slot_record(21));
+    arena.bindings_mut().push(slot_record());
     let rooted = arena
         .roots_mut()
         .push(RootGroup::Misc, Value::fixnum(22))
@@ -197,7 +206,6 @@ fn root_walk_publishes_every_frame_record_and_registry_root() {
         ("vm_frames", 16),
         ("handlers", 19),
         ("handlers", 20),
-        ("specpdl", 21),
         ("misc", 22),
     ] {
         assert!(
@@ -210,7 +218,12 @@ fn root_walk_publishes_every_frame_record_and_registry_root() {
         seen.iter().any(|entry| *entry == ("eval_temp", None)),
         "the progn accumulator is rooted, in {seen:?}"
     );
-    assert_eq!(seen.len(), 13, "each root visited exactly once");
+    // The binding entry names a slab record; it holds no value of its own.
+    assert!(
+        seen.iter().all(|entry| entry.0 != "specpdl"),
+        "an owner binding entry published a root, in {seen:?}"
+    );
+    assert_eq!(seen.len(), 12, "each root visited exactly once");
 }
 
 #[test]
@@ -370,7 +383,7 @@ fn loaded_arena() -> FrameArena {
         .push_vm(vm_frame(17, 18, OperandCursor::new(0, 2)))
         .expect("vm frame");
     arena.handlers_mut().push(handler_record(frame, 19, 20));
-    arena.bindings_mut().push(slot_record(21));
+    arena.bindings_mut().push(slot_record());
     arena
         .roots_mut()
         .push(RootGroup::Misc, Value::fixnum(22))
@@ -417,21 +430,21 @@ fn publish_scan_copies_every_owner_source_once() {
     let mut acknowledged = false;
     publish_then_acknowledge(&arena, &context, &mut out, |roots| {
         acknowledged = true;
-        assert_eq!(roots.len(), 14);
+        assert_eq!(roots.len(), 13);
     })
     .expect("scan");
     assert!(acknowledged);
     assert_eq!(out[0].parallel_word(), prefix);
-    assert_eq!(out.len(), 14);
+    assert_eq!(out.len(), 13);
     let published: Vec<usize> = out[1..].iter().map(SharedRoot::parallel_word).collect();
-    for expected in [11, 12, 13, 14, 17, 18, 15, 16, 19, 20, 21, 22] {
+    for expected in [11, 12, 13, 14, 17, 18, 15, 16, 19, 20, 22] {
         let word = Value::fixnum(expected).bits();
         assert!(
             published.contains(&word),
             "missing fixnum {expected} in {published:?}"
         );
     }
-    assert_eq!(published.len(), 13);
+    assert_eq!(published.len(), 12);
     assert!(
         published.contains(&Value::NIL.bits()),
         "publish_scan carries the progn accumulator"
@@ -460,8 +473,9 @@ fn arena_scan_enters_each_group_once_including_empty_groups() {
     });
     // RootGroup::ALL order: VmFrames, EvalTemp, Bc, JitWindow, Handlers,
     // Specpdl, Misc. `loaded_arena` has five interp roots, four VM
-    // frame/operand roots, two handler roots, one binding, one registry root.
-    assert_eq!(counts, [4, 5, 0, 0, 2, 1, 1]);
+    // frame/operand roots, two handler roots, one registry root, and one
+    // binding entry that publishes nothing (its record lives in the slab).
+    assert_eq!(counts, [4, 5, 0, 0, 2, 0, 1]);
     assert_eq!(counts[RootGroup::Bc as usize], 0);
     assert_eq!(counts[RootGroup::JitWindow as usize], 0);
 

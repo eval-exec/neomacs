@@ -7,13 +7,17 @@
 //! `default-value` / `default-boundp` / `set-default` use the SAME effective
 //! Default channel, so they never bypass the owner's own Plain `let`.
 //!
-//! The functions here are pure: they take a slot view and a canonical
-//! read/write closure and return a typed outcome. They construct no E1
+//! The functions here are composed, not capability-bearing: they take a
+//! slot view, a canonical read/write closure and, for a bind or an unbind,
+//! the slab's record API, and return a typed outcome. They construct no E1
 //! capability and are not reachable from a serial dispatcher; stage 1's
 //! executor supplies the slot view (the E2 owner slab) and the canonical C3
 //! access, and roots the returned values before the lease closes.
 
-use super::super::owner_bindings::{Channel, OwnerSlab, SlotState, SlotValue};
+use super::super::owner_bindings::{
+    Channel, OwnerBindingRecord, OwnerRecordId, OwnerSlab, SlotState, SlotValue, UndoTarget,
+};
+use super::frames::SlotRecord;
 use neovm_value::forward::TlsIndex;
 use neovm_value::intern::SymId;
 use neovm_value::symbol::parallel::PlainSymbolBacking;
@@ -422,9 +426,10 @@ impl<'era> EffectivePlainKey<'era> {
 }
 
 /// The composed owner access shared by the E4 interpreter and the parallel VM:
-/// the owner slot view plus the canonical Plain storage. The production
-/// implementation is E4-P2 (owner slab lease + C3); the trait itself names no
-/// test type and the only E4-P1 implementation is the harness double.
+/// the owner slot view plus the canonical Plain storage plus the slab's
+/// binding-record LIFO. The production implementation is E4-P2 (owner slab
+/// lease + C3); the trait itself names no test type and the only E4-P1
+/// implementation is the harness double.
 pub(crate) trait PlainAccess: OwnerSlotsMut {
     /// Classify one symbol for this owner (admission only; no slot access).
     fn admission(&self, sym: SymId) -> PlainAdmission;
@@ -434,7 +439,38 @@ pub(crate) trait PlainAccess: OwnerSlotsMut {
     fn canonical_write(&mut self, sym: SymId, value: Value);
     /// Whether canonical Plain storage has a binding.
     fn canonical_bound(&self, sym: SymId) -> bool;
+    /// Push one binding record on the owner slab's record LIFO and name it.
+    /// The record is the binding's storage: the collector traces its values
+    /// through the slab, so a caller keeps only the id.
+    fn push_binding(
+        &mut self,
+        sym: SymId,
+        slot: TlsIndex,
+        channel: Channel,
+        undo: UndoTarget,
+    ) -> OwnerRecordId;
+    /// Take the top record when it is the one `id` names, and nothing
+    /// otherwise: a record below the top, or one already taken, leaves the
+    /// LIFO as it was. The serial unwinder is LIFO (`unbind_to`, eval.c:3946),
+    /// so an unbind of anything but the top is a defect on one side of the
+    /// record pairing, which the caller reports as such.
+    fn pop_binding(&mut self, id: OwnerRecordId) -> Option<OwnerBindingRecord>;
 }
+
+/// The slab half of [`PlainAccess::pop_binding`] over a slab the implementor
+/// holds: the top record when it is `id`. `OwnerSlab::take_record` alone does
+/// not do: of a record below the top it takes that record and leaves a hole.
+pub(crate) fn take_top_binding(
+    slab: &mut OwnerSlab,
+    id: OwnerRecordId,
+) -> Option<OwnerBindingRecord> {
+    let top = slab.live_records().last().map(|(top, _)| top)?;
+    (top == id).then(|| slab.take_record(id)).flatten()
+}
+
+/// An executor record did not name the slab's top record: nothing was taken.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct RecordMismatch;
 
 /// One composed read: delegates to the pure rule with the canonical closure.
 pub(crate) fn effective_plain_read<A: PlainAccess + ?Sized>(
@@ -510,4 +546,70 @@ pub(crate) fn effective_plain_default_bound<A: PlainAccess + ?Sized>(
     key: &EffectivePlainKey<'_>,
 ) -> bool {
     default_bound_effective(access, key, || access.canonical_bound(key.symbol()))
+}
+
+/// One composed bind (GNU `Bvarbind`, bytecode.c:743-746, is `specbind
+/// (vectorp[arg], POP)`; the serial arm pushes the specpdl entry and its
+/// frame mark, bytecode/vm.rs:5722-5734). In the order of the unwatched
+/// Plain bind of `specbind_owner` (owner_bindings.rs:1048-1068): the owner
+/// slot is replaced with VALUE, the undo target is what the slot held — a
+/// bound outer value is [`UndoTarget::Previous`], no owner binding is
+/// [`UndoTarget::Inherited`] with nothing suspended — and the record goes on
+/// the slab's LIFO. The returned [`SlotRecord`] is the executor's index of
+/// that record (one record, two views): the slab stores and roots the saved
+/// value, the executor keeps the id for its frame-unwind LIFO. The bind is
+/// composed rather than a closure rule for `effective_plain_write`'s reason:
+/// no second borrow of the access.
+pub(crate) fn effective_plain_bind<A: PlainAccess + ?Sized>(
+    access: &mut A,
+    key: &EffectivePlainKey<'_>,
+    value: Value,
+) -> SlotRecord {
+    let undo = match access.slot_state(key.slot(), key.channel()) {
+        SlotState::Bound(outer) => UndoTarget::Previous(outer),
+        SlotState::NoBinding => UndoTarget::Inherited { suspended: None },
+    };
+    access.set_slot_state(
+        key.slot(),
+        key.channel(),
+        SlotState::Bound(SlotValue::new(value)),
+    );
+    let record = access.push_binding(key.symbol(), key.slot(), key.channel(), undo);
+    SlotRecord::new(key.symbol(), record)
+}
+
+/// One composed unbind: the slab record the executor's entry names is taken
+/// from the top of the LIFO, then the storage transitions of the serial
+/// unbind for one `let` record run in the serial order (slot first, then
+/// canonical storage; `discard_owner_binding`, owner_bindings.rs:1504-1516,
+/// whose four arms these are, read off the record the slab stored). `Retired`
+/// leaves the slot as it is; `Previous` puts the outer value back, a void
+/// binding included; `Inherited` clears the slot so the canonical value shows
+/// through again; `Captured` clears the slot and stores the value the binding
+/// captured from canonical storage. GNU `unbind_to` → `do_one_unbind`
+/// (eval.c:3946-3957) is the reference for "undo the binding where it
+/// stands"; the host mirror's publication is not an admitted Plain record's
+/// concern.
+///
+/// A record that is not the slab's top is [`RecordMismatch`]: the caller's
+/// entry and the slab disagree, nothing was taken, and the slot is as it was.
+pub(crate) fn effective_plain_unbind<A: PlainAccess + ?Sized>(
+    access: &mut A,
+    record: SlotRecord,
+) -> Result<(), RecordMismatch> {
+    let taken = access.pop_binding(record.record).ok_or(RecordMismatch)?;
+    match taken.undo {
+        UndoTarget::Retired => {}
+        UndoTarget::Previous(outer) => {
+            access.set_slot_state(taken.index, taken.channel, SlotState::Bound(outer));
+        }
+        UndoTarget::Inherited { .. } => {
+            access.set_slot_state(taken.index, taken.channel, SlotState::NoBinding);
+        }
+        UndoTarget::Captured(saved) => {
+            access.set_slot_state(taken.index, taken.channel, SlotState::NoBinding);
+            access.canonical_write(taken.sym, saved.get());
+        }
+    }
+    Ok(())
 }
