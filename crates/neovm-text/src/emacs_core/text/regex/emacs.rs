@@ -10515,6 +10515,50 @@ impl<'a> PrefixBatches<'a> {
             forward,
         }
     }
+    /// The bytewise scanner needs these native slices even before a cold
+    /// DFA becomes live. Reuse the same query for its later prefix probes.
+    fn prepare_native<H: Haystack + ?Sized>(&mut self, text: &'a H) -> (&'a [u8], &'a [u8]) {
+        debug_assert!(self.prepared.is_none());
+        let len = text.len();
+        #[cfg(test)]
+        note_prefix_batch(PrefixBatchEvent::Prepare);
+        // The query is real storage selection, even though it is outside
+        // an individual cached-probe invocation. Charge it there too.
+        #[cfg(test)]
+        let _selection_scope = PrefixSelectionGuard::enter();
+        let (first, second) = text.chunks(0, len);
+        self.prepared = Some(if second.is_empty() {
+            PreparedPrefixBatches::Whole(dfa::PrefixSlice::new(first, 0))
+        } else {
+            let split = first.len();
+            // Only the last cap-1 left candidates can read across the
+            // seam. The first right candidate needs a left previous byte.
+            let seam_start = split.saturating_sub(dfa::PREFIX_READ_CAP - 1);
+            let seam_end = split + 1;
+            PreparedPrefixBatches::Split {
+                batches: [
+                    PrefixBatch {
+                        start: 0,
+                        end: seam_start,
+                        input: Some(dfa::PrefixSlice::new(first, 0)),
+                    },
+                    PrefixBatch {
+                        start: seam_start,
+                        end: seam_end,
+                        input: None,
+                    },
+                    PrefixBatch {
+                        start: seam_end,
+                        end: len,
+                        input: Some(dfa::PrefixSlice::new(second, split)),
+                    },
+                ],
+                active: if self.forward { 0 } else { 2 },
+            }
+        });
+        (first, second)
+    }
+
     fn input<H: Haystack + ?Sized>(
         &mut self,
         text: &'a H,
@@ -10527,42 +10571,7 @@ impl<'a> PrefixBatches<'a> {
             return None;
         }
         if self.prepared.is_none() {
-            #[cfg(test)]
-            note_prefix_batch(PrefixBatchEvent::Prepare);
-            // The query is real storage selection, even though it is outside
-            // an individual cached-probe invocation. Charge it there too.
-            #[cfg(test)]
-            let _selection_scope = PrefixSelectionGuard::enter();
-            let (first, second) = text.chunks(0, len);
-            self.prepared = Some(if second.is_empty() {
-                PreparedPrefixBatches::Whole(dfa::PrefixSlice::new(first, 0))
-            } else {
-                let split = first.len();
-                // Only the last cap-1 left candidates can read across the
-                // seam. The first right candidate needs a left previous byte.
-                let seam_start = split.saturating_sub(dfa::PREFIX_READ_CAP - 1);
-                let seam_end = split + 1;
-                PreparedPrefixBatches::Split {
-                    batches: [
-                        PrefixBatch {
-                            start: 0,
-                            end: seam_start,
-                            input: Some(dfa::PrefixSlice::new(first, 0)),
-                        },
-                        PrefixBatch {
-                            start: seam_start,
-                            end: seam_end,
-                            input: None,
-                        },
-                        PrefixBatch {
-                            start: seam_end,
-                            end: len,
-                            input: Some(dfa::PrefixSlice::new(second, split)),
-                        },
-                    ],
-                    active: if self.forward { 0 } else { 2 },
-                }
-            });
+            self.prepare_native(text);
         }
         match self.prepared.as_mut()? {
             PreparedPrefixBatches::Whole(input) => Some(*input),
@@ -10697,7 +10706,23 @@ fn re_search_haystack<H: Haystack + ?Sized>(
     let match_syntax = MatchSyntax::for_pattern(pattern, syntax);
     let syntax = &match_syntax;
     macro_rules! try_candidate {
-        ($pos:expr, $stop:expr) => {{
+        ($pos:expr, $stop:expr) => {
+            try_candidate!($pos, $stop, lease => lease.try_inline_first_step_skip_prepared(
+                pattern, text, text_len, $pos, $stop, point,
+                || prefix_batches.input(text, $pos),
+            ))
+        };
+        ($pos:expr, $stop:expr, slice $input:expr) => {
+            try_candidate!($pos, $stop, lease => lease.try_inline_first_step_skip_slice(
+                pattern, text_len, $input, $pos, $stop, point,
+            ))
+        };
+        ($pos:expr, $stop:expr, full) => {
+            try_candidate!($pos, $stop, lease => lease.try_inline_first_step_skip(
+                pattern, text, $pos, $stop, point,
+            ))
+        };
+        ($pos:expr, $stop:expr, $lease:ident => $skip:expr) => {{
             let found = match dfa_lease.as_mut() {
                 None => {
                     #[cfg(any(test, feature = "test-support"))]
@@ -10706,28 +10731,20 @@ fn re_search_haystack<H: Haystack + ?Sized>(
                         scratch, pattern, text, $pos, $stop, syntax, point, &mut regs,
                     )
                 }
-                Some(lease) => {
+                Some($lease) => {
                     if dfa_first_step {
-                        let skipped = lease.try_inline_first_step_skip_prepared(
-                            pattern,
-                            text,
-                            text_len,
-                            $pos,
-                            $stop,
-                            point,
-                            || prefix_batches.input(text, $pos),
-                        );
+                        let skipped = $skip;
                         if skipped {
                             None
                         } else {
                             // The inline check already tried the cached
                             // rejection: do not repeat it inside candidate.
-                            lease.candidate::<false>(
+                            $lease.candidate::<false>(
                                 scratch, pattern, text, $pos, $stop, syntax, point, &mut regs,
                             )
                         }
                     } else {
-                        lease.candidate::<true>(
+                        $lease.candidate::<true>(
                             scratch, pattern, text, $pos, $stop, syntax, point, &mut regs,
                         )
                     }
@@ -10765,6 +10782,108 @@ fn re_search_haystack<H: Haystack + ?Sized>(
                         }
                     }
                     None
+                }
+            }
+        }};
+    }
+
+    // One native piece and one prefix strategy for the whole inner loop.
+    // Only candidate starts are clipped; matcher input and STOP are global.
+    macro_rules! scan_native_piece {
+        ($out:lifetime, $piece:expr, $origin:expr, $lo:expr, $hi:expr,
+         $scan:expr, $skip_continuation:expr, $stop:expr, $forward:expr, $($probe:tt)+) => {{
+            let piece = $piece;
+            let origin = $origin;
+            let lo = $lo.max(origin);
+            let hi = $hi.min(origin + piece.len());
+            if lo < hi {
+                let hay = &piece[lo - origin..hi - origin];
+                if $forward {
+                    let mut from = 0;
+                    while let Some(at) = scan_forward(&hay[from..], $scan, $skip_continuation) {
+                        let candidate = lo + from + at;
+                        from += at + 1;
+                        if let Some(result) = try_candidate!(candidate, $stop, $($probe)+) {
+                            break $out Some((candidate, result.1));
+                        }
+                    }
+                } else {
+                    let mut remaining = hay;
+                    while let Some(at) = scan_backward(remaining, $scan, $skip_continuation) {
+                        let candidate = lo + at;
+                        remaining = &remaining[..at];
+                        if let Some(result) = try_candidate!(candidate, $stop, $($probe)+) {
+                            break $out Some((candidate, result.1));
+                        }
+                    }
+                }
+            }
+        }};
+    }
+    macro_rules! scan_native_band {
+        ($out:lifetime, $first:expr, $second:expr, $lo:expr, $hi:expr,
+         $scan:expr, $skip_continuation:expr, $stop:expr, $forward:expr, $($probe:tt)+) => {{
+            let first = $first;
+            let second = $second;
+            let split = first.len();
+            let pieces = if $forward {
+                [(first, 0), (second, split)]
+            } else {
+                [(second, split), (first, 0)]
+            };
+            for (piece, origin) in pieces {
+                scan_native_piece!($out, piece, origin, $lo, $hi,
+                    $scan, $skip_continuation, $stop, $forward, $($probe)+);
+            }
+        }};
+    }
+    macro_rules! scan_bytewise {
+        ($out:lifetime, $scan:expr, $skip_continuation:expr, $lower:expr,
+         $upper:expr, $stop:expr, $forward:expr) => {{
+            let scan = $scan;
+            let skip_continuation = $skip_continuation;
+            let lower = $lower;
+            let upper = $upper;
+            let forward = $forward;
+            // EOF has no physical byte. Preserve its original attempt and
+            // ordering without invoking a physical-band chooser.
+            if !forward && upper == text_len {
+                if let Some(result) = try_candidate!(text_len, $stop, full) {
+                    break $out Some((text_len, result.1));
+                }
+            }
+            let byte_end = if upper < text_len { upper + 1 } else { text_len };
+            if lower < byte_end {
+                let (first, second) = prefix_batches.prepare_native(text);
+                let split = first.len();
+                let bounds = if second.is_empty() {
+                    [(0, text_len), (text_len, text_len), (text_len, text_len)]
+                } else {
+                    let seam_start = split.saturating_sub(dfa::PREFIX_READ_CAP - 1);
+                    let seam_end = split + 1;
+                    [(0, seam_start), (seam_start, seam_end), (seam_end, text_len)]
+                };
+                let order = if forward { [0, 1, 2] } else { [2, 1, 0] };
+                for index in order {
+                    let (lo, hi) = bounds[index];
+                    let lo = lo.max(lower);
+                    let hi = hi.min(byte_end);
+                    if lo >= hi { continue; }
+                    // This actual lookup, including its counter, occurs once
+                    // per outer band. The selected view is then only borrowed.
+                    let entry = if forward { lo } else { hi - 1 };
+                    let input = prefix_batches.input(text, entry);
+                    match input.as_ref() {
+                        Some(input) => scan_native_band!($out, first, second, lo, hi,
+                            scan, skip_continuation, $stop, forward, slice input),
+                        None => scan_native_band!($out, first, second, lo, hi,
+                            scan, skip_continuation, $stop, forward, full),
+                    }
+                }
+            }
+            if forward && upper == text_len && lower <= text_len {
+                if let Some(result) = try_candidate!(text_len, $stop, full) {
+                    break $out Some((text_len, result.1));
                 }
             }
         }};
@@ -10920,63 +11039,18 @@ fn re_search_haystack<H: Haystack + ?Sized>(
                         (Some(_), Some(FoldedScan::Sparse(bytes))) => Some(*bytes),
                         (Some(_), _) => None,
                     };
-                    if let Some(bytes) = sparse {
-                        // The candidate first-byte set is tiny and pure ASCII
-                        // (e.g. `{'('}` for the font-lock defun matchers, or
-                        // `{'D', 'd'}` for a case-folded `defun`):
-                        // let memchr's SIMD scan find candidates instead of
-                        // testing the fastmap byte by byte.  ASCII hits are
-                        // never UTF-8 continuation bytes, so the char-boundary
-                        // skip is vacuous here.  GNU uses the plain
-                        // `while (range > lim && !fastmap[*d]) d++` loop; the
-                        // candidate set and attempt positions are identical.
-                        let hi = if end < text_len { end + 1 } else { text_len };
-                        while pos <= end {
-                            if pos < text_len {
-                                let found =
-                                    next_candidate(text, AsciiScan::Sparse(bytes), false, pos, hi);
-                                match found {
-                                    Some(at) => pos = at,
-                                    None => {
-                                        // No candidate byte before `hi`; the only
-                                        // remaining attempt position is text_len
-                                        // itself (when the range allows it).
-                                        pos = text_len;
-                                        if pos > end {
-                                            break;
-                                        }
-                                    }
-                                }
-                            }
-                            if let Some(result) = try_candidate!(pos, end) {
-                                break 'scan Some((pos, result.1));
-                            }
-                            pos += 1;
+                    let byte_scan = match (sparse, folded, translate) {
+                        (Some(bytes), _, _) => Some((AsciiScan::Sparse(bytes), false)),
+                        (_, Some(FoldedScan::Table(accept)), _) => {
+                            Some((AsciiScan::Table(accept), false))
                         }
-                    } else if let Some(FoldedScan::Table(accept)) = folded {
-                        let accept: &[bool; 256] = accept;
-                        // GNU `while (range > lim && !fastmap[*d]) d++`, with
-                        // TRANSLATE and the fastmap folded into one table.  The
-                        // table admits no byte >= 0x80 of multibyte text, so no
-                        // continuation byte is ever a candidate.
-                        let hi = if end < text_len { end + 1 } else { text_len };
-                        while pos <= end {
-                            if pos < hi {
-                                match next_candidate(text, AsciiScan::Table(accept), false, pos, hi)
-                                {
-                                    Some(at) => pos = at,
-                                    // Only the end of the text remains, when in range.
-                                    None => pos = hi,
-                                }
-                            }
-                            if pos > end {
-                                break;
-                            }
-                            if let Some(result) = try_candidate!(pos, end) {
-                                break 'scan Some((pos, result.1));
-                            }
-                            pos += 1;
+                        (_, _, None) => {
+                            Some((AsciiScan::Table(&pattern.fastmap), pattern.target_multibyte))
                         }
+                        _ => None,
+                    };
+                    if let Some((scan, skip_continuation)) = byte_scan {
+                        scan_bytewise!('scan, scan, skip_continuation, start, end, end, true);
                     } else if let Some(table) = translate
                         && pattern.target_multibyte
                     {
@@ -11092,40 +11166,28 @@ fn re_search_haystack<H: Haystack + ?Sized>(
                     }
                     _ => None,
                 };
-                if let Some(scan @ (FoldedScan::Sparse(_) | FoldedScan::Table(_))) = folded {
-                    // Candidates descend from `start` to `end`: GNU's backward
-                    // `re_search_2` tests one position per step.  The end of the
-                    // text (no byte to test) is tried unconditionally, as the
-                    // per-character loops do.
-                    let mut upper = start;
-                    if upper == text_len {
-                        if let Some(result) = try_candidate!(text_len, start) {
-                            break 'scan Some((text_len, result.1));
+                let byte_scan = if start <= text_len {
+                    match (folded, translate) {
+                        (Some(FoldedScan::Sparse(bytes)), _) => {
+                            Some((AsciiScan::Sparse(*bytes), false))
                         }
-                        if end == text_len {
-                            break 'scan None;
+                        (Some(FoldedScan::Table(accept)), _) => {
+                            Some((AsciiScan::Table(accept), false))
                         }
-                        upper = text_len - 1;
+                        (_, None) => Some((
+                            pattern
+                                .sparse_ascii_fastmap()
+                                .map(AsciiScan::Sparse)
+                                .unwrap_or(AsciiScan::Table(&pattern.fastmap)),
+                            pattern.target_multibyte,
+                        )),
+                        _ => None,
                     }
-                    // Invariant: `end <= upper < text_len`.
-                    loop {
-                        let scan = match scan {
-                            FoldedScan::Sparse(bytes) => AsciiScan::Sparse(*bytes),
-                            FoldedScan::Table(accept) => AsciiScan::Table(accept),
-                            FoldedScan::PerChar => unreachable!("excluded by the pattern above"),
-                        };
-                        let Some(cand) = prev_candidate(text, scan, false, end, upper + 1) else {
-                            break 'scan None;
-                        };
-                        // Backward candidates end at `start` (see below).
-                        if let Some(result) = try_candidate!(cand, start) {
-                            break 'scan Some((cand, result.1));
-                        }
-                        if cand == end {
-                            break 'scan None;
-                        }
-                        upper = cand - 1;
-                    }
+                } else {
+                    None
+                };
+                if let Some((scan, skip_continuation)) = byte_scan {
+                    scan_bytewise!('scan, scan, skip_continuation, end, start, start, false);
                 } else if let Some(table) = translate
                     && pattern.target_multibyte
                 {
@@ -11239,7 +11301,8 @@ fn re_search_haystack<H: Haystack + ?Sized>(
 enum AsciiScan<'a> {
     /// 1-3 ASCII first bytes: memchr/memrchr finds them SIMD-fast.
     Sparse(SparseAsciiFastmap),
-    /// `accept[byte]`, optionally on character boundaries only.
+    /// Raw or folded `accept[byte]`, optionally on character boundaries only.
+    /// Raw maps may admit non-ASCII leading bytes, including Emacs five-byte heads.
     Table(&'a [bool; 256]),
 }
 
@@ -11269,36 +11332,6 @@ fn scan_backward(hay: &[u8], scan: AsciiScan<'_>, skip_continuation: bool) -> Op
             .iter()
             .rposition(|&b| (!skip_continuation || (b & 0xC0) != 0x80) && accept[b as usize]),
     }
-}
-
-/// The first accepted byte in the logical interval, scanning borrowed chunks.
-#[inline]
-fn next_candidate<H: Haystack + ?Sized>(
-    text: &H,
-    scan: AsciiScan<'_>,
-    skip_continuation: bool,
-    from: usize,
-    end: usize,
-) -> Option<usize> {
-    let (first, second) = text.chunks(from, end);
-    scan_forward(first, scan, skip_continuation)
-        .map(|at| from + at)
-        .or_else(|| scan_forward(second, scan, skip_continuation).map(|at| from + first.len() + at))
-}
-
-/// The last accepted byte in the logical interval, in descending order.
-#[inline]
-fn prev_candidate<H: Haystack + ?Sized>(
-    text: &H,
-    scan: AsciiScan<'_>,
-    skip_continuation: bool,
-    from: usize,
-    end: usize,
-) -> Option<usize> {
-    let (first, second) = text.chunks(from, end);
-    scan_backward(second, scan, skip_continuation)
-        .map(|at| from + first.len() + at)
-        .or_else(|| scan_backward(first, scan, skip_continuation).map(|at| from + at))
 }
 
 /// Search the virtual concatenation of the existing gap halves. All

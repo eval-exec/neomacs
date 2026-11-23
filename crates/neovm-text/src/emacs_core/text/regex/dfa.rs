@@ -1666,12 +1666,12 @@ impl<'a> PrefixSlice<'a> {
     pub(super) fn new(bytes: &'a [u8], origin: usize) -> Self {
         Self { bytes, origin }
     }
-    fn byte(self, at: usize) -> u8 {
+    fn byte(&self, at: usize) -> u8 {
         #[cfg(test)]
         super::note_prefix_storage(true, false, false, false, false);
         self.bytes[at - self.origin]
     }
-    fn tail(self, start: usize, end: usize) -> &'a [u8] {
+    fn tail(&self, start: usize, end: usize) -> &'a [u8] {
         &self.bytes[start - self.origin..end - self.origin]
     }
 }
@@ -3267,6 +3267,33 @@ impl<'p> DfaLease<'p> {
     ) -> bool {
         self.try_inline_first_step_skip_with(|dfa, span| {
             dfa.cached_prefix_rejection(pattern, text, pos, stop, point, span)
+        })
+    }
+
+    /// The scanner selected this physical reader once for the whole band.
+    /// Assertions and the DFA's limits retain complete-input coordinates.
+    #[inline(always)]
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn try_inline_first_step_skip_slice(
+        &mut self,
+        pattern: &CompiledPattern,
+        text_len: usize,
+        input: &PrefixSlice<'_>,
+        pos: usize,
+        stop: usize,
+        point: usize,
+    ) -> bool {
+        self.try_inline_first_step_skip_with(|dfa, span| {
+            dfa.cached_prefix_rejection_with_readers(
+                pattern,
+                text_len,
+                |at| input.byte(at),
+                |start, end| (input.tail(start, end), &[]),
+                pos,
+                stop,
+                point,
+                span,
+            )
         })
     }
 

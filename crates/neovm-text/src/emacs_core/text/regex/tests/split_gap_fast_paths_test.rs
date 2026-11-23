@@ -579,10 +579,21 @@ fn split_gap_literal_prefilter_respects_pattern_and_target_byte_encodings() {
     }
 }
 
-/// Warming must not make every candidate re-select both halves. The probe is
-/// charged by actual Segments byte/get/chunk operations inside the prefix.
-#[test]
-fn split_gap_warm_prefix_storage_selection_is_bounded_per_search_half() {
+/// Real warmed searches must bound both physical queries and candidate-band
+/// admissions while preserving prefix work for sparse and dense scanners.
+#[derive(Clone, Copy, Debug)]
+enum WarmPrefixScan {
+    Sparse,
+    Dense,
+}
+
+fn assert_warm_prefix_admission_is_bounded(scan: WarmPrefixScan) {
+    let (expression, max_selections) = match scan {
+        WarmPrefixScan::Sparse => ("a[bcdef]*Z", 2),
+        // A split prefix can read at most eight seam candidate starts. Each
+        // may query its bounded tail once, plus one whole-search preparation.
+        WarmPrefixScan::Dense => ("[a-z][bcdef]*Z", 9),
+    };
     let syntax = DefaultSyntaxLookup;
     dfa::with_first_step(true, || {
         dfa::with_cold_path(false, || {
@@ -591,10 +602,20 @@ fn split_gap_warm_prefix_storage_selection_is_bounded_per_search_half() {
                     let text = "abcdefx ".repeat(repeats);
                     let bytes = text.as_bytes();
                     let split = bytes.len() / 2;
-                    let pattern = regex_compile("a[bcdef]*Z", false, false).unwrap();
+                    let pattern = regex_compile(expression, false, false).unwrap();
+                    match scan {
+                        WarmPrefixScan::Sparse => assert!(
+                            pattern.sparse_ascii_fastmap().is_some(),
+                            "fixture must use sparse candidate scanning"
+                        ),
+                        WarmPrefixScan::Dense => assert!(
+                            pattern.sparse_ascii_fastmap().is_none(),
+                            "fixture must use dense candidate scanning"
+                        ),
+                    }
                     assert!(
                         pattern.literal_prefilter().is_none(),
-                        "one-byte prefix must not bypass the DFA"
+                        "fixture must not bypass the DFA through a required literal"
                     );
                     for range in [bytes.len() as isize, -(bytes.len() as isize)] {
                         let start = if range >= 0 { 0 } else { bytes.len() };
@@ -648,7 +669,7 @@ fn split_gap_warm_prefix_storage_selection_is_bounded_per_search_half() {
                             "the storage route must preserve actual prefix work and outcomes"
                         );
                         eprintln!(
-                            "cached prefix storage: repeats={repeats} range={range} {segmented:?}"
+                            "cached prefix storage: scan={scan:?} repeats={repeats} range={range} contiguous={contiguous:?} segmented={segmented:?}"
                         );
                         assert!(
                             segmented.segment_bytes
@@ -656,10 +677,6 @@ fn split_gap_warm_prefix_storage_selection_is_bounded_per_search_half() {
                                 + segmented.segment_chunks
                                 <= 64,
                             "prefix geometry must be bounded by the seam, not candidates: repeats={repeats} range={range} {segmented:?}"
-                        );
-                        assert!(
-                            segmented.batch_checks >= repeats as u64,
-                            "candidate batch checks must remain visible: {segmented:?}"
                         );
                         assert_eq!(
                             segmented.batch_prepares, 1,
@@ -670,14 +687,32 @@ fn split_gap_warm_prefix_storage_selection_is_bounded_per_search_half() {
                             "monotonic candidates can cross at most two batch boundaries: {segmented:?}"
                         );
                         assert!(
-                            segmented.selections <= 2,
-                            "borrow prefix windows once per physical half: repeats={repeats} range={range} {segmented:?}"
+                            segmented.selections <= max_selections,
+                            "prefix preparation and seam reads must stay bounded: scan={scan:?} repeats={repeats} range={range} max_selections={max_selections} {segmented:?}"
+                        );
+                        assert!(
+                            segmented.batch_checks > 0 && segmented.batch_checks <= 3,
+                            "admit candidate batches once per search half and seam, not per prefix: scan={scan:?} repeats={repeats} range={range} {segmented:?}"
+                        );
+                        assert_eq!(
+                            contiguous.batch_checks, 1,
+                            "admit contiguous storage once per search, not per prefix: scan={scan:?} repeats={repeats} range={range} {contiguous:?}"
                         );
                     }
                 }
             })
         })
     });
+}
+
+#[test]
+fn split_gap_warm_prefix_storage_selection_is_bounded_per_search_half() {
+    assert_warm_prefix_admission_is_bounded(WarmPrefixScan::Sparse);
+}
+
+#[test]
+fn split_gap_warm_dense_prefix_admission_is_bounded_per_search_half() {
+    assert_warm_prefix_admission_is_bounded(WarmPrefixScan::Dense);
 }
 
 #[test]
@@ -761,6 +796,167 @@ fn prepared_prefix_slice_keeps_a_global_dynamic_point_and_bounded_stop() {
                     reference_search(&pattern, "abcdefgh x", 0, 10, &syntax, 9)
                 );
                 assert_eq!(actual.as_ref().map(|found| found.0), Some(9));
+            })
+        })
+    });
+}
+
+#[test]
+fn split_gap_warm_prefix_bands_keep_long_positive_captures_and_stop() {
+    let syntax = DefaultSyntaxLookup;
+    let misses = "abcdefx ".repeat(8);
+    dfa::with_first_step(true, || {
+        dfa::with_cold_path(false, || {
+            dfa::with_dfa_mode(dfa::DfaMode::On, || {
+                for (expression, head, sparse) in [
+                    (r"\(a\)\([bcdef]*\)Z", "a", true),
+                    // Requiring the second 'a' makes the dense hit unique in
+                    // both directions, rather than matching the last b + Z.
+                    (r"\([a-z]a\)\([bcdef]*\)Z", "qa", false),
+                ] {
+                    let pattern = regex_compile(expression, false, false).unwrap();
+                    assert_eq!(pattern.sparse_ascii_fastmap().is_some(), sparse);
+                    assert!(pattern.literal_prefilter().is_none());
+                    let text = format!("{misses}{head}{}Z{}", "b".repeat(32), " ".repeat(64));
+                    let bytes = text.as_bytes();
+                    for forward in [true, false] {
+                        let warm_start = if forward { 0 } else { misses.len() };
+                        let warm_range = if forward {
+                            misses.len() as isize
+                        } else {
+                            -(misses.len() as isize)
+                        };
+                        for _ in 0..3 {
+                            assert!(
+                                re_search(
+                                    &pattern,
+                                    misses.as_bytes(),
+                                    warm_start,
+                                    warm_range,
+                                    &syntax,
+                                    warm_start,
+                                )
+                                .is_none()
+                            );
+                        }
+                        assert!(matches!(*pattern.dfa.slot(), dfa::DfaSlot::Live(_)));
+                        let start = if forward { 0 } else { bytes.len() };
+                        let full_range = if forward {
+                            bytes.len() as isize
+                        } else {
+                            -(bytes.len() as isize)
+                        };
+                        let full = dfa::with_dfa_mode(dfa::DfaMode::Off, || {
+                            reference_search(&pattern, &text, start, full_range, &syntax, start)
+                        });
+                        let (winner, _, ends) = full.as_ref().expect("positive fixture");
+                        let winner = *winner;
+                        let hit_end = ends[0] as usize;
+                        assert!(hit_end - winner > dfa::PREFIX_READ_CAP);
+                        let bounded_range = if forward {
+                            hit_end as isize
+                        } else {
+                            -((start - winner) as isize)
+                        };
+                        for range in [full_range, bounded_range] {
+                            let expected = dfa::with_dfa_mode(dfa::DfaMode::Off, || {
+                                reference_search(&pattern, &text, start, range, &syntax, start)
+                            });
+                            assert_eq!(expected, full);
+                            for split in [winner - 1, winner, winner + 1, winner + 7, winner + 8] {
+                                let before = prefix_storage_probe();
+                                let actual = captured(re_search_segments(
+                                    &pattern,
+                                    &bytes[..split],
+                                    &bytes[split..],
+                                    start,
+                                    range,
+                                    &syntax,
+                                    start,
+                                ));
+                                let work = prefix_storage_probe().since(before);
+                                assert_eq!(
+                                    actual, expected,
+                                    "expression={expression} forward={forward} split={split} range={range}"
+                                );
+                                assert!(
+                                    work.calls > 0,
+                                    "positive fixture must execute warmed prefixes: {work:?}"
+                                );
+                                assert!(
+                                    work.batch_checks > 0,
+                                    "positive fixture must reach actual prefix batch admission: {work:?}"
+                                );
+                            }
+                        }
+                    }
+                }
+            })
+        })
+    });
+}
+
+#[test]
+fn split_gap_cold_promotion_admits_prefix_batches_once_per_search() {
+    let syntax = DefaultSyntaxLookup;
+    let text = "abcdefx ".repeat(1024);
+    let bytes = text.as_bytes();
+    let split = bytes.len() / 2;
+    dfa::with_first_step(true, || {
+        dfa::with_cold_path(true, || {
+            dfa::with_dfa_mode(dfa::DfaMode::On, || {
+                for expression in ["a[bcdef]*Z", "[a-z][bcdef]*Z"] {
+                    for forward in [true, false] {
+                        let start = if forward { 0 } else { bytes.len() };
+                        let range = if forward {
+                            bytes.len() as isize
+                        } else {
+                            -(bytes.len() as isize)
+                        };
+                        for segmented in [false, true] {
+                            // Each route starts cold: promotion must happen in
+                            // this invocation, not in a warm-up or another arm.
+                            let pattern = regex_compile(expression, false, false).unwrap();
+                            assert!(pattern.literal_prefilter().is_none());
+                            assert!(matches!(*pattern.dfa.slot(), dfa::DfaSlot::Cold { .. }));
+                            let before = prefix_storage_probe();
+                            let found = if segmented {
+                                re_search_segments(
+                                    &pattern,
+                                    &bytes[..split],
+                                    &bytes[split..],
+                                    start,
+                                    range,
+                                    &syntax,
+                                    start,
+                                )
+                            } else {
+                                re_search(&pattern, bytes, start, range, &syntax, start)
+                            };
+                            let work = prefix_storage_probe().since(before);
+                            assert!(found.is_none());
+                            assert!(matches!(*pattern.dfa.slot(), dfa::DfaSlot::Live(_)));
+                            assert!(
+                                work.calls > 0,
+                                "promotion must execute cached prefixes: {work:?}"
+                            );
+                            assert_eq!(work.batch_prepares, 1, "{work:?}");
+                            let max_checks = if segmented { 3 } else { 1 };
+                            assert!(
+                                work.batch_checks > 0 && work.batch_checks <= max_checks,
+                                "expression={expression} forward={forward} segmented={segmented}: {work:?}"
+                            );
+                            if !segmented {
+                                assert_eq!(work.batch_checks, 1, "{work:?}");
+                            }
+                            assert!(work.batch_advances <= 2, "{work:?}");
+                            assert!(
+                                work.segment_bytes + work.segment_gets + work.segment_chunks <= 64,
+                                "cold promotion must keep prefix geometry seam-bounded: {work:?}"
+                            );
+                        }
+                    }
+                }
             })
         })
     });
