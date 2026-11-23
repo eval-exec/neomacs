@@ -15,7 +15,7 @@
 //! revalidate, expire — and the lookups answer "is this epoch certified for
 //! exactly this presentation".
 
-use neomacs_display_protocol::scroll_coverage::ScrollSurface;
+use neomacs_display_protocol::scroll_coverage::{CoveragePublicationId, ScrollSurface};
 use neomacs_display_protocol::types::DisplayWindowId;
 use neomacs_display_protocol::{FrameGlyphBuffer, PresentationId};
 use std::collections::{HashMap, HashSet};
@@ -119,6 +119,20 @@ impl CoverageRetention {
     ) -> Option<&RetainedCoverage> {
         self.certified_at(presentation, window)
             .filter(|entry| entry.surface.coverage().epoch == epoch)
+    }
+
+    /// An offset belongs to one exact export, not merely its content lease.
+    /// Renewals keep that retained export's identity; a same-epoch replacement
+    /// must not inherit permission to use offsets chosen against its predecessor.
+    pub(in crate::render_thread) fn certified_publication_at(
+        &self,
+        presentation: PresentationId,
+        window: DisplayWindowId,
+        epoch: u64,
+        publication: CoveragePublicationId,
+    ) -> Option<&RetainedCoverage> {
+        self.certified_epoch_at(presentation, window, epoch)
+            .filter(|entry| entry.surface.coverage().publication == publication)
     }
 
     /// Every entry certified for exactly this presentation, in map order.

@@ -2,7 +2,9 @@
 
 use super::*;
 use neomacs_display_protocol::glyph_matrix::{GlyphMatrix, MatrixRow};
-use neomacs_display_protocol::scroll_coverage::{ScrollCoverage, ScrollCoverageRenewal};
+use neomacs_display_protocol::scroll_coverage::{
+    CoveragePublicationId, ScrollCoverage, ScrollCoverageRenewal,
+};
 use neomacs_display_protocol::{FrameDisplayState, GlyphRowRole, Rect};
 use neovm_core::window::{PresentedBodyRowSnapshot, WindowDisplaySnapshot};
 use std::rc::Rc;
@@ -234,6 +236,24 @@ impl PreparedViewports {
                 .map(|row| CharPos0::new(row.start_charpos));
             match coverage {
                 Some(mut coverage) => {
+                    if same_inputs
+                        && let Some(previous) = self.exports[index].last_export.as_ref()
+                        && matches!(previous.receipt, ExportReceipt::AwaitingActivation { .. })
+                    {
+                        let held = previous.surface.coverage();
+                        // Any earlier equivalent full export can activate
+                        // this family. Its renderer-held surface and the
+                        // evaluator's latest mirror must name the same offset
+                        // coordinates even if an intervening frame coalesces.
+                        if held.origin == coverage.origin
+                            && held.anchor_row == coverage.anchor_row
+                            && held.viewport == coverage.viewport
+                            && held.content.text_pixel_bounds == coverage.content.text_pixel_bounds
+                            && held.content.text_clip_bounds == coverage.content.text_clip_bounds
+                        {
+                            coverage.publication = held.publication;
+                        }
+                    }
                     let (compositor_enabled, predict_pixels) = window_policy(*window);
                     self.exports[index].certified = true;
                     coverage.compositor_enabled = compositor_enabled;
@@ -614,6 +634,7 @@ impl PreparedViewports {
             crate::presentation::pointer::window_pointer_source_map(&fonts).ok()?;
         Some(ScrollCoverage {
             epoch,
+            publication: CoveragePublicationId::allocate()?,
             predict_pixels: false,
             compositor_enabled: false,
             anchor_row: anchor_index - begin,

@@ -10,6 +10,8 @@ fn coverage(window: i64, epoch: u64) -> Arc<ScrollCoverage> {
     let viewport = Rect::new(0.0, 0.0, 80.0, 32.0);
     Arc::new(ScrollCoverage {
         epoch,
+        publication: neomacs_display_protocol::scroll_coverage::CoveragePublicationId::allocate()
+            .unwrap(),
         predict_pixels: true,
         compositor_enabled: true,
         anchor_row: 0,

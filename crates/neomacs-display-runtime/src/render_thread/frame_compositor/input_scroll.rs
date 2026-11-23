@@ -72,11 +72,25 @@ impl InputScroll {
             return false;
         };
         let surface = entry.surface();
-        if self
-            .active
-            .as_ref()
-            .is_none_or(|active| active.surface.coverage().epoch != surface.coverage().epoch)
-        {
+        if self.active.as_ref().is_some_and(|active| {
+            let previous = active.surface.coverage();
+            let current = surface.coverage();
+            previous.content.window_id == current.content.window_id
+                && previous.epoch == current.epoch
+                && previous.publication != current.publication
+        }) {
+            // Growth can change the coverage origin without changing its
+            // lease. Translate the existing target through a common row
+            // before accumulating input in the replacement's coordinates.
+            self.reconcile(retention, Some(frame));
+        }
+        if self.active.as_ref().is_none_or(|active| {
+            let previous = active.surface.coverage();
+            let current = surface.coverage();
+            previous.content.window_id != current.content.window_id
+                || previous.epoch != current.epoch
+                || previous.publication != current.publication
+        }) {
             self.active = Some(PendingScroll {
                 resolved: false,
                 surface: Arc::clone(surface),
@@ -138,18 +152,21 @@ impl InputScroll {
         {
             return false;
         }
-        // The intent was resolved against the coverage epoch it names; the
-        // retention map says whether that epoch is still certified for the
-        // frame being displayed, which may be a later presentation that
-        // renewed it without re-exporting.
-        let Some(entry) =
-            retention.certified_epoch_at(frame.presentation_id, intent.window, intent.epoch)
-        else {
+        // A lease can cover multiple prefixes with different coordinate
+        // origins. Only the exact exported surface can interpret this offset.
+        // A later frame may renew that same surface without re-exporting it.
+        let Some(entry) = retention.certified_publication_at(
+            frame.presentation_id,
+            intent.window,
+            intent.epoch,
+            intent.publication,
+        ) else {
             tracing::debug!(target: "neomacs_display_runtime::input_scroll",
                 window = intent.window.get(), epoch = intent.epoch,
+                publication = intent.publication.get(),
                 intent_presentation = ?intent.presentation,
                 frame_presentation = ?frame.presentation_id,
-                "dropping resolved scroll intent: coverage epoch not certified for current frame");
+                "dropping resolved scroll intent: exact coverage publication not certified for current frame");
             return false;
         };
         if !entry.compositor_enabled() {
@@ -162,6 +179,7 @@ impl InputScroll {
         if let Some(active) = &self.active
             && active.surface.coverage().epoch == intent.epoch
             && active.surface.coverage().content.window_id == intent.window
+            && active.surface.coverage().publication == intent.publication
         {
             for input in &active.receipts {
                 if !intent.inputs.iter().any(|new| new.same_input(input)) {

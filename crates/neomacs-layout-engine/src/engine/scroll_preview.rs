@@ -126,6 +126,7 @@ impl LayoutEngine {
             window: owner,
             presentation: coverage.hit_index.presentation(),
             epoch: coverage.epoch,
+            publication: coverage.publication,
             offset,
             inputs,
         })

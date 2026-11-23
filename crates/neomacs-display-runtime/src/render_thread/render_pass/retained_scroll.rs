@@ -215,8 +215,10 @@ fn coverage_live(
     frame: &FrameGlyphBuffer,
 ) -> bool {
     let coverage = cache.paint.surface.coverage();
-    // Retained coverage stays live through renewals (publishes that certified
-    // the epoch without re-exporting a surface); only silence expires it.
+    // Residency alone grants no coordinate authority. Before sampling,
+    // prepare checks every raster input and uses the staged surface's own
+    // origin/offset. Keep pixel-equivalent pictures across fresh exports of
+    // the same lease instead of retiring them before that equality check.
     render
         .compositor
         .coverage_retention

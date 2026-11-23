@@ -9,6 +9,32 @@ use crate::{
     PresentedRegionKind, Rect, WindowMatrixEntry,
 };
 
+/// Identifies immutable coverage coordinates, independently of their content
+/// lease and logical frame. Proven identical retries may share an identity;
+/// growing a prefix may preserve the lease while changing these coordinates.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(transparent)]
+pub struct CoveragePublicationId(std::num::NonZeroU64);
+
+impl CoveragePublicationId {
+    /// Allocate a process-unique identity for new coordinates. Exhaustion
+    /// refuses another export rather than authorizing a foreign offset.
+    pub fn allocate() -> Option<Self> {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        NEXT.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
+            next.checked_add(1)
+        })
+        .ok()
+        .and_then(std::num::NonZeroU64::new)
+        .map(Self)
+    }
+
+    pub const fn get(self) -> u64 {
+        self.0.get()
+    }
+}
+
 /// The publishing redisplay's assertion that a certified coverage epoch still
 /// describes this frame's rows, carried on publishes that re-export no
 /// coverage surface. A publish re-exports nothing whenever preparation adds no
@@ -18,6 +44,9 @@ use crate::{
 /// plus this publish's projection policy, and the compositor keeps its
 /// retained surface valid for exactly this presentation. Silence — neither a
 /// surface nor a renewal — expires the retained coverage.
+/// A renewal certifies whichever immutable export the renderer retained; it
+/// does not claim that the renderer acquired the evaluator's latest export.
+/// Exact-coordinate consumers additionally require its publication identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ScrollCoverageRenewal {
     pub window: crate::DisplayWindowId,
@@ -36,6 +65,7 @@ pub struct ResolvedScrollIntent {
     pub window: crate::DisplayWindowId,
     pub presentation: crate::PresentationId,
     pub epoch: u64,
+    pub publication: CoveragePublicationId,
     pub offset: f32,
     pub inputs: Vec<crate::input_progress::InputReceipt>,
 }
@@ -44,6 +74,7 @@ pub struct ResolvedScrollIntent {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ScrollCoverage {
     pub epoch: u64,
+    pub publication: CoveragePublicationId,
     #[serde(default)]
     pub predict_pixels: bool,
     #[serde(default)]
@@ -619,6 +650,7 @@ mod prepared_surface_tests {
         });
         state.scroll_coverage.push(Arc::new(ScrollCoverage {
             epoch: 1,
+            publication: CoveragePublicationId::allocate().unwrap(),
             predict_pixels: true,
             compositor_enabled: true,
             anchor_row: 0,

@@ -99,6 +99,7 @@ fn fixture_with(change: impl FnOnce(&mut scroll_coverage::ScrollCoverage)) -> Fr
         .scroll_coverage
         .push(Arc::new(scroll_coverage::ScrollCoverage {
             epoch: 1,
+            publication: scroll_coverage::CoveragePublicationId::allocate().unwrap(),
             anchor_row: 0,
             predict_pixels: true,
             compositor_enabled: true,

@@ -774,6 +774,11 @@ fn unactivated_coverage_repeats_full_export_before_renderer_confirmed_renewal() 
         Some(&1)
     );
     assert_eq!(repeated.coverage().epoch, epoch);
+    assert_eq!(
+        initial.coverage().publication,
+        repeated.coverage().publication,
+        "identical activation-family retries keep the held surface's coordinate authority"
+    );
     assert!(
         fixture
             .engine
@@ -802,6 +807,126 @@ fn unactivated_coverage_repeats_full_export_before_renderer_confirmed_renewal() 
     fixture.layout();
     fixture.assert_renewed(window, epoch);
     fixture.assert_hits_match_forced_export(window, &repeated);
+}
+
+#[test]
+fn coalesced_same_input_reexport_keeps_resolved_preview_on_the_held_publication() {
+    let mut fixture = CoverageReuseFixture::new();
+    fixture
+        .eval
+        .eval_str("(setq neomacs-compositor-scrolling t)")
+        .unwrap();
+    fixture.layout();
+    let window = fixture.window;
+    let owner = DisplayWindowId::new(window.0 as i64);
+    let epoch = certified_coverage(
+        &mut fixture.eval,
+        fixture.frame,
+        &mut fixture.engine,
+        window,
+        owner,
+    );
+    // The renderer acquires I, but its activation is delayed until after R has
+    // been exported. R can be coalesced away while the evaluator mirrors it.
+    let held = fixture.surface(window);
+    fixture.eval.eval_str("(forward-char 1)").unwrap();
+    fixture.layout();
+    let repeated = fixture.surface(window);
+    assert_eq!(held.coverage().epoch, repeated.coverage().epoch);
+    assert_eq!(held.coverage().origin, repeated.coverage().origin);
+    assert_eq!(held.coverage().anchor_row, repeated.coverage().anchor_row);
+    assert_eq!(
+        held.coverage().content.text_clip_bounds,
+        repeated.coverage().content.text_clip_bounds
+    );
+    assert_surface_hits_equal(&held, &repeated);
+    fixture
+        .eval
+        .frame_manager_mut()
+        .get_mut(fixture.frame)
+        .unwrap()
+        .activate_display_presentation(neovm_core::window::geometry::PresentationId::new(
+            held.coverage().hit_index.presentation().get(),
+        ))
+        .expect("renderer acquired I; equivalent R was coalesced away");
+    fixture.eval.eval_str("(forward-char 1)").unwrap();
+    fixture.layout();
+    fixture.assert_renewed(window, epoch);
+    fixture.activate_latest();
+
+    // The renewal carries no surface. The renderer still owns I, whereas the
+    // evaluator's latest accepted coverage mirror was refreshed by R.
+    let destination = COVERAGE_REUSE_LINE.len() + 1;
+    fixture
+        .eval
+        .eval_str(&format!(
+            "(goto-char {destination}) (set-window-start nil {destination} t)",
+        ))
+        .unwrap();
+    let stream = neomacs_display_protocol::input_progress::InputStream::default();
+    let delivery = stream.issue().unwrap();
+    let intent = fixture
+        .engine
+        .resolved_scroll_preview(
+            &fixture.eval,
+            fixture.frame,
+            window,
+            vec![delivery.receipt()],
+        )
+        .expect("the renewed rows must resolve a real committed scroll destination");
+    assert_eq!(intent.epoch, held.coverage().epoch);
+    assert!(
+        intent.offset > 0.0,
+        "exercise a real scroll destination, not an idle zero offset"
+    );
+    assert_eq!(
+        intent.publication,
+        held.coverage().publication,
+        "same-input re-export must keep preview authority usable after earlier activation and renewal"
+    );
+}
+
+#[test]
+fn unactivated_reexport_with_a_changed_origin_gets_new_coordinate_authority() {
+    let mut fixture = CoverageReuseFixture::new();
+    let window = fixture.window;
+    let owner = DisplayWindowId::new(window.0 as i64);
+    certified_coverage(
+        &mut fixture.eval,
+        fixture.frame,
+        &mut fixture.engine,
+        window,
+        owner,
+    );
+    let initial = fixture.surface(window);
+    if let neovm_core::window::Window::Leaf {
+        vscroll,
+        force_start,
+        ..
+    } = fixture
+        .eval
+        .frame_manager_mut()
+        .get_mut(fixture.frame)
+        .unwrap()
+        .find_window_mut(window)
+        .unwrap()
+    {
+        *vscroll = -4;
+        *force_start = true;
+    }
+    fixture.layout();
+    let replacement = fixture.surface(window);
+    assert_eq!(initial.coverage().epoch, replacement.coverage().epoch);
+    assert_ne!(
+        initial.coverage().origin,
+        replacement.coverage().origin,
+        "the control must actually change the offset coordinate system"
+    );
+    assert_ne!(
+        initial.coverage().publication,
+        replacement.coverage().publication,
+        "same lease cannot reuse offset authority after an origin change"
+    );
 }
 
 #[test]

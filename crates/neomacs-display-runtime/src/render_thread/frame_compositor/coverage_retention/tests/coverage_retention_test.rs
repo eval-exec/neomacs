@@ -58,6 +58,8 @@ fn surface(window: u64, epoch: u64, presentation: u64) -> Arc<ScrollSurface> {
     state.window_matrices.push(content.clone());
     state.scroll_coverage.push(Arc::new(ScrollCoverage {
         epoch,
+        publication: neomacs_display_protocol::scroll_coverage::CoveragePublicationId::allocate()
+            .unwrap(),
         anchor_row: 0,
         predict_pixels: true,
         compositor_enabled: true,
@@ -114,6 +116,77 @@ fn fresh_surfaces_install_and_silence_expires() {
             .certified_epoch_at(PresentationId::new(2), window, 3)
             .is_none()
     );
+}
+
+#[test]
+fn exact_publication_replaces_within_a_presentation_and_survives_renewal() {
+    let mut retention = CoverageRetention::default();
+    let first = surface_frame(1, 7, 3);
+    let second = surface_frame(1, 7, 3);
+    let first_id = first.scroll_surfaces[0].coverage().publication;
+    let second_id = second.scroll_surfaces[0].coverage().publication;
+    let window = DisplayWindowId::new(7);
+    let presentation = PresentationId::new(1);
+    assert_ne!(first_id, second_id);
+
+    retention.refresh(&first);
+    let entry = retention
+        .certified_publication_at(presentation, window, 3, first_id)
+        .expect("the exact first export is certified");
+    assert!(Arc::ptr_eq(entry.surface(), &first.scroll_surfaces[0]));
+
+    // An auxiliary replacement can keep both the logical presentation and
+    // content lease. Neither authorizes coordinates from the previous export.
+    retention.refresh(&second);
+    assert!(
+        retention
+            .certified_publication_at(presentation, window, 3, first_id)
+            .is_none()
+    );
+    let entry = retention
+        .certified_publication_at(presentation, window, 3, second_id)
+        .expect("the replacement export is certified");
+    assert!(Arc::ptr_eq(entry.surface(), &second.scroll_surfaces[0]));
+    assert!(
+        retention
+            .certified_publication_at(presentation, window, 4, second_id)
+            .is_none()
+    );
+    assert!(
+        retention
+            .certified_publication_at(presentation, DisplayWindowId::new(8), 3, second_id)
+            .is_none()
+    );
+
+    // Renewal certifies the immutable export actually held by the renderer,
+    // rather than inventing a new identity for the later logical frame.
+    retention.refresh(&renewal_frame(2, 7, 3, true));
+    let renewed = PresentationId::new(2);
+    let entry = retention
+        .certified_publication_at(renewed, window, 3, second_id)
+        .expect("renewal retains the replacement's exact identity");
+    assert!(Arc::ptr_eq(entry.surface(), &second.scroll_surfaces[0]));
+    assert!(
+        retention
+            .certified_publication_at(renewed, window, 3, first_id)
+            .is_none()
+    );
+    assert!(
+        retention
+            .certified_publication_at(presentation, window, 3, second_id)
+            .is_none()
+    );
+
+    let mut silent = FrameGlyphBuffer::with_size(100.0, 100.0);
+    silent.presentation_id = PresentationId::new(3);
+    retention.refresh(&silent);
+    for requested in [renewed, silent.presentation_id] {
+        assert!(
+            retention
+                .certified_publication_at(requested, window, 3, second_id)
+                .is_none()
+        );
+    }
 }
 
 #[test]
