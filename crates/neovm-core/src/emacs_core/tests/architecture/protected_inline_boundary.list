@@ -73,6 +73,7 @@ never	emacs_core/runtime/bytecode/vm.rs	Vm::osr_transfer	run_loop
 never	emacs_core/runtime/bytecode/vm.rs	Vm::pad_bytecode_frame_base	run_loop	# #[cold] #[inline(never)]: an invalid-bytecode rejoin pads a truncated frame and must stay out of the driver
 never	emacs_core/runtime/bytecode/vm.rs	Vm::drop_underflowed_frame_handlers	run_loop	# #[cold] #[inline(never)]: an underflow backstop drops this frame's handlers before the error propagates
 never	emacs_core/runtime/bytecode/vm.rs	Vm::reject_bytecode_frame_for_budget	run_loop	# #[cold] #[inline(never)]: the bytecode-stack-overflow reject is a cold exit, never inlined into run_loop
+never	emacs_core/runtime/bytecode/vm.rs	Vm::run_checked_interpreter	run_loop	# checked monomorph only; #[inline(never)] #[cold] so it does not share run_loop's registers. Verified run_interpreter_driver stays #[inline(always)] inside run_loop
 never	emacs_core/runtime/bytecode/vm.rs	Vm::resolve_stack_call_target	run_loop
 never	emacs_core/runtime/bytecode/vm.rs	Vm::resume_flow_out_of_line	run_loop
 never	emacs_core/runtime/bytecode/vm.rs	invalid_bytecode_flow	run_loop

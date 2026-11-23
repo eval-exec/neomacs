@@ -5121,10 +5121,13 @@ impl<'a> Vm<'a> {
         // drops the per-push capacity guard on the strength of the decode-time
         // `verify_stack_effects` proof; everything else runs the checked
         // instance with today's exact behavior. Chosen once per driver entry.
+        // The checked monomorph is a separate cold function. Inlining both
+        // into `run_loop` spilled the verified fetch's ops pointer and jump
+        // table (a reload per opcode). The verified driver stays inlined here.
         let result = if trust_stack_proof && entry_func.executes_verified_ops() {
             self.run_interpreter_driver::<true>(&mut callers, &mut aux_stack, &mut quitcounter)
         } else {
-            self.run_interpreter_driver::<false>(&mut callers, &mut aux_stack, &mut quitcounter)
+            self.run_checked_interpreter(&mut callers, &mut aux_stack, &mut quitcounter)
         };
         *pc = callers.active().pc();
         let (entry_handlers, entry_bind_stack) = aux_stack.take_entry();
@@ -5135,6 +5138,23 @@ impl<'a> Vm<'a> {
             suspended: aux_stack.into_suspended(),
         });
         result
+    }
+
+    /// Checked driver, out of line from `run_loop`.
+    ///
+    /// `#[inline(always)]` on `run_interpreter_driver` still inlines this
+    /// monomorph into this function. It must not be inlined into `run_loop`:
+    /// the verified fetch keeps the ops pointer and the jump table in
+    /// registers only when the checked copy is not competing for them.
+    #[inline(never)]
+    #[cold]
+    fn run_checked_interpreter(
+        &mut self,
+        callers: &mut InterpreterCallerStack,
+        aux_stack: &mut InterpreterFrameAuxStack,
+        driver_quitcounter: &mut u8,
+    ) -> EvalResult {
+        self.run_interpreter_driver::<false>(callers, aux_stack, driver_quitcounter)
     }
 
     /// Run every eligible Tier-0 bytecode frame in one GNU-shaped dispatcher.
