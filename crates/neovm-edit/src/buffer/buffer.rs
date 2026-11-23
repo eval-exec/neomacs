@@ -4851,7 +4851,7 @@ impl Buffer {
 
     /// # Safety
     /// `marker_ptr` is a live `MarkerObj` from `TaggedHeap::alloc_marker`,
-    /// not currently on a chain. The caller roots it.
+    /// not currently on a chain, and not collected during this call.
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) unsafe fn register_marker_at_emacs_byte_pos(
         &mut self,
@@ -4866,7 +4866,7 @@ impl Buffer {
 
     /// # Safety
     /// `marker_ptr` is a live `MarkerObj` from `TaggedHeap::alloc_marker`,
-    /// not currently on a chain. The caller roots it.
+    /// not currently on a chain, and not collected during this call.
     pub(crate) unsafe fn register_marker_at_anchor(
         &mut self,
         marker_ptr: *mut neovm_value::tagged::header::MarkerObj,
@@ -7589,8 +7589,10 @@ impl BufferManager {
             .buffers
             .get_mut(&buffer_id)?
             .state_markers = Some(BufferStateMarkers {
-            // SAFETY: each pointer was just returned by
-            // `create_marker_at_emacs_byte_pos`, which chained the node.
+            // SAFETY: each pointer is the live node just returned. Nothing
+            // collects before these `MarkerRef::new` calls. `BufferStateMarkers`
+            // is the owner that traces them once they are stored. The marker
+            // chain is weak and is not a root.
             pt_marker: unsafe { MarkerRef::new(pt_marker) },
             begv_marker: unsafe { MarkerRef::new(begv_marker) },
             zv_marker: unsafe { MarkerRef::new(zv_marker) },
@@ -7972,7 +7974,10 @@ impl BufferManager {
             buf.marker_chain_anchor_lookup(marker)?
         };
         let marker_ptr = self.create_marker_at_anchor(buffer_id, position, insertion_type);
-        // SAFETY: `create_marker_at_anchor` just chained this node.
+        // SAFETY: the pointer is the live node just returned. Nothing collects
+        // before `MarkerRef::new` returns. The labeled-restriction table traces
+        // this `MarkerRef` once it is stored. The marker chain is weak and is
+        // not a root.
         Some(unsafe { MarkerRef::new(marker_ptr) })
     }
 
@@ -9046,10 +9051,11 @@ impl BufferManager {
         insertion_type: InsertionType,
     ) -> *mut neovm_value::tagged::header::MarkerObj {
         let marker_ptr = Self::allocate_marker_node(buffer_id, insertion_type);
-        // SAFETY: `allocate_marker_node` just built this MarkerObj. The
-        // returned Value inside that helper is dropped, so the chain is the
-        // root until the caller retains a Value. Callers of this function
-        // document that duty.
+        // SAFETY: `allocate_marker_node` just built this MarkerObj. It is
+        // live, not on a chain, and not collected during registration. The
+        // marker chain is weak (`unchain_dead_markers` drops unmarked nodes),
+        // so it is not a root. The caller must root the node before a later
+        // collection.
         let _ = unsafe {
             self.register_marker_at_emacs_byte_pos(marker_ptr, buffer_id, pos, insertion_type)
         };
@@ -9063,7 +9069,9 @@ impl BufferManager {
         insertion_type: InsertionType,
     ) -> *mut neovm_value::tagged::header::MarkerObj {
         let marker_ptr = Self::allocate_marker_node(buffer_id, insertion_type);
-        // SAFETY: the node was just allocated and is not on a chain.
+        // SAFETY: the node was just allocated. It is live, not on a chain,
+        // and not collected during registration. The marker chain is weak
+        // and is not a root.
         let _ = unsafe {
             self.register_marker_at_anchor(marker_ptr, buffer_id, position, insertion_type)
         };
@@ -9092,8 +9100,8 @@ impl BufferManager {
     }
 
     /// # Safety
-    /// `marker_ptr` is a live `MarkerObj` not currently on a chain. The
-    /// caller roots it.
+    /// `marker_ptr` is a live `MarkerObj` not currently on a chain, and not
+    /// collected during this call.
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) unsafe fn register_marker_at_emacs_byte_pos(
         &mut self,
@@ -9109,8 +9117,8 @@ impl BufferManager {
     }
 
     /// # Safety
-    /// `marker_ptr` is a live `MarkerObj` not currently on a chain. The
-    /// caller roots it.
+    /// `marker_ptr` is a live `MarkerObj` not currently on a chain, and not
+    /// collected during this call.
     pub(crate) unsafe fn register_marker_at_anchor(
         &mut self,
         marker_ptr: *mut neovm_value::tagged::header::MarkerObj,

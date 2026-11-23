@@ -46,13 +46,21 @@ fn every_context_offset_is_mains() {
     // predates these test adjustments (1808505616) and records production
     // InteractiveRegistry=272, MinibufferManager=80, ProcessManager=200.
     const INTERACTIVE_EXTRA: usize = 16; // two reverse-index usize counters
-    const MINIBUFFER_EXTRA: usize = 8; // cfg(test) max_depth: usize
+    // cfg(test) max_depth: usize. field_borrows_live: Cell<bool> sits in that
+    // tail, so the cfg(test) manager stays 88 bytes and later Context offsets
+    // do not move. The flag is also present in test-support builds so
+    // neovm-core's tests can read it. Release builds have neither field.
+    const MINIBUFFER_EXTRA: usize = 8;
     const WAIT_GATE_EXTRA: usize = 24;
     const OBSERVATION_EXTRA: usize = 40;
     type WaitGate = std::sync::Mutex<Option<Box<dyn FnOnce(BackendWaitEntry) + Send>>>;
     assert_eq!(size_of::<usize>(), 8);
     assert_eq!(size_of::<InteractiveRegistry>(), 272 + INTERACTIVE_EXTRA);
     assert_eq!(size_of::<MinibufferManager>(), 80 + MINIBUFFER_EXTRA);
+    assert!(
+        std::mem::offset_of!(MinibufferManager, field_borrows_live) < 80 + MINIBUFFER_EXTRA,
+        "field_borrows_live must live inside the cfg(test) manager"
+    );
     assert_eq!(size_of::<WaitGate>(), WAIT_GATE_EXTRA);
     assert_eq!(size_of::<NativeConnectObservationSlot>(), OBSERVATION_EXTRA);
     assert_eq!(

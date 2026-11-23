@@ -2079,6 +2079,9 @@ impl BufferText {
     /// keeps those two coordinates together on `struct Lisp_Marker`; Neomacs
     /// uses `TextPositionAnchor` at this semantic boundary so callers cannot
     /// accidentally update one coordinate without the other.
+    ///
+    /// The closure must not run Lisp or collect. The next link is copied out
+    /// before the call, and a collection could free that node.
     pub(crate) fn remap_marker_anchors<F>(&self, mut remap: F)
     where
         F: FnMut(TextPositionAnchor) -> TextPositionAnchor,
@@ -3357,8 +3360,8 @@ impl BufferText {
     /// other chain. `debug_assert!` enforces it in debug builds.
     /// # Safety
     /// `marker` is a live `MarkerObj` allocated by `TaggedHeap::alloc_marker`,
-    /// not currently on any chain. The caller roots it. `next_marker` is null;
-    /// a non-null link truncates the other chain.
+    /// not currently on any chain, and not collected during this call.
+    /// `next_marker` is null; a non-null link truncates the other chain.
     pub(crate) unsafe fn chain_splice_at_head(
         &self,
         marker: *mut neovm_value::tagged::header::MarkerObj,

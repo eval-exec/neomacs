@@ -9,6 +9,26 @@
 
 use super::*;
 
+/// Clears the minibuffer field-borrow flag when the restore split ends,
+/// including when `body` unwinds.
+#[cfg(any(test, feature = "test-support"))]
+struct MinibufferFieldBorrowGuard<'a>(&'a std::cell::Cell<bool>);
+
+#[cfg(any(test, feature = "test-support"))]
+impl<'a> MinibufferFieldBorrowGuard<'a> {
+    fn enter(flag: &'a std::cell::Cell<bool>) -> Self {
+        flag.set(true);
+        Self(flag)
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl Drop for MinibufferFieldBorrowGuard<'_> {
+    fn drop(&mut self) {
+        self.0.set(false);
+    }
+}
+
 impl Context {
     #[doc(hidden)]
     pub fn set_interpreted_closure_filter_fn(&mut self, filter_fn: Option<Value>) {
@@ -1243,6 +1263,33 @@ impl Context {
         &mut Option<neovm_edit::emacs_core::display_metrics::WindowId>,
     ) {
         (
+            &mut self.frames,
+            &mut self.edit.buffers,
+            &mut self.minibuffer_selected_window,
+            &mut self.active_minibuffer_window,
+        )
+    }
+
+    /// Same split as [`Self::frame_manager_buffers_and_minibuffer_selection_mut`],
+    /// passed to `body` so the borrows end when `body` returns.
+    ///
+    /// Test builds record those borrows on the minibuffer manager for the
+    /// duration of `body`, including unwind. A minibuffer mode hook reads
+    /// that flag and must not run while it is set. The flag is a `Cell` on
+    /// the manager, not a thread-local.
+    #[doc(hidden)]
+    pub fn with_frame_buffers_and_minibuffer_selection_mut<R>(
+        &mut self,
+        body: impl FnOnce(
+            &mut FrameManager,
+            &mut BufferManager,
+            &mut Option<neovm_edit::emacs_core::display_metrics::WindowId>,
+            &mut Option<neovm_edit::emacs_core::display_metrics::WindowId>,
+        ) -> R,
+    ) -> R {
+        #[cfg(any(test, feature = "test-support"))]
+        let _guard = MinibufferFieldBorrowGuard::enter(&self.minibuffers.field_borrows_live);
+        body(
             &mut self.frames,
             &mut self.edit.buffers,
             &mut self.minibuffer_selected_window,

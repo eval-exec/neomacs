@@ -64,8 +64,8 @@ fn assert_live_delete(prepared: UndoRecording, committed: UndoRecording) {
             anchor(buffers.get(id).unwrap(), pos),
             insertion_type,
         );
-        // SAFETY: `create_marker_at_anchor` just chained this node, and
-        // `markers` retains its Value on the next line.
+        // SAFETY: the pointer is the live node just returned. Nothing collects
+        // before `MarkerRef::new` returns. The chain is weak and is not a root.
         let marker_ref = unsafe { neovm_edit::buffer::MarkerRef::new(marker_ptr) };
         ids.push(marker_ref);
         markers.push(buffers.marker_value(marker_ref).unwrap());
@@ -90,8 +90,8 @@ fn assert_live_delete(prepared: UndoRecording, committed: UndoRecording) {
     buffers.remove_marker(ids[2]);
     let anchor = anchor(buffers.get(id).unwrap(), 3);
     let late_ptr = buffers.create_marker_at_anchor(id, anchor, InsertionType::Before);
-    // SAFETY: `create_marker_at_anchor` just chained this node, and
-    // `markers` retains its Value on the next line.
+    // SAFETY: the pointer is the live node just returned. Nothing collects
+    // before `MarkerRef::new` returns. The chain is weak and is not a root.
     markers.push(
         buffers
             .marker_value(unsafe { neovm_edit::buffer::MarkerRef::new(late_ptr) })

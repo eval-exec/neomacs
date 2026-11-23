@@ -2593,8 +2593,8 @@ fn manager_create_and_query_marker() {
     // Insert some text so there is room for a marker.
     mgr.insert_into_buffer(id, "abcdef").expect("insert text");
 
-    // SAFETY: `create_marker_at_emacs_byte_pos` just chained this node.
-    // The manager roots it for the rest of the test.
+    // SAFETY: the pointer is the live node just returned. Nothing collects
+    // before `MarkerRef::new` returns. The chain is weak and is not a root.
     let mid = unsafe {
         neovm_edit::buffer::MarkerRef::new(mgr.create_marker_at_emacs_byte_pos(
             id,
@@ -2615,8 +2615,8 @@ fn manager_marker_clamped_to_buffer_len() {
     let mut mgr = BufferManager::new();
     let id = mgr.create_buffer("m");
     // Buffer is empty (len = 0), marker at 100 should be clamped.
-    // SAFETY: `create_marker_at_emacs_byte_pos` just chained this node.
-    // The manager roots it for the rest of the test.
+    // SAFETY: the pointer is the live node just returned. Nothing collects
+    // before `MarkerRef::new` returns. The chain is weak and is not a root.
     let mid = unsafe {
         neovm_edit::buffer::MarkerRef::new(mgr.create_marker_at_emacs_byte_pos(
             id,
