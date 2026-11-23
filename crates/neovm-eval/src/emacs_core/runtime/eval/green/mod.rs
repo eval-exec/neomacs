@@ -252,6 +252,12 @@ impl Context {
         owner.ensure_owner_slab();
         owner.setup_thread_locals();
         owner.republish_owner_mirrors();
+        // A3: Context::drop calls green_teardown, which hands off every
+        // other thread when the seat is Main and aborts if that Main has
+        // no receiver. An E6-P owner is not that seat.
+        if owner.green_key() == Some(ThreadKey::Main) {
+            panic!("an E6-P owner Context must not hold the Main Green seat");
+        }
         owner
     }
 
