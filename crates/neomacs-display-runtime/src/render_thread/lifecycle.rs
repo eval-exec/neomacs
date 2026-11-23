@@ -234,6 +234,7 @@ impl RenderApp {
                         window.clone(),
                         descriptor,
                         proxy,
+                        neomacs_display_protocol::frame_time::observe_platform_now(),
                     ) {
                         Ok(pending) => {
                             self.gpu_startup = Some(pending);
@@ -268,6 +269,7 @@ impl RenderApp {
         self.gpu_startup
             .as_ref()
             .and_then(|pending| pending.watch_deadline())
+            .map(neomacs_display_protocol::frame_time::EventTime::into_instant)
     }
 
     pub(super) fn handle_about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
@@ -300,7 +302,7 @@ impl RenderApp {
             return;
         }
         if let Some(pending) = self.gpu_startup.take() {
-            match pending.poll(&event_loop.create_proxy()) {
+            match pending.poll(&event_loop.create_proxy(), now) {
                 Ok(super::gpu_startup::GpuAttemptPoll::Pending(pending)) => {
                     self.startup_adapter_choice = pending.adapter_choice().clone();
                     self.gpu_startup = Some(pending)

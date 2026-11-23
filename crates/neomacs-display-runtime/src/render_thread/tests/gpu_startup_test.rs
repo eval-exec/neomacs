@@ -1,5 +1,6 @@
 use super::*;
-use std::time::{Duration, Instant};
+use neomacs_display_protocol::frame_time::observe_platform_now;
+use std::time::Duration;
 use winit::{
     event::{Ime, Modifiers, MouseScrollDelta, TouchPhase},
     keyboard::ModifiersState,
@@ -531,17 +532,17 @@ fn any_scope_keeps_discrete_and_integrated() {
 
 #[test]
 fn startup_watch_arms_a_deadline_until_the_empty_poll_warns() {
-    let started = Instant::now();
+    let started = observe_platform_now();
     let phase = StartupWatchPhase::Enumeration;
     assert_eq!(
         watch_deadline_for(started, false),
-        Some(started + Duration::from_secs(10))
+        Some(started.plus(Duration::from_secs(10)))
     );
     assert!(watch_deadline_for(started, true).is_none());
     let early = drive_startup_watch(
         started,
         false,
-        started + Duration::from_millis(9_900),
+        started.plus(Duration::from_millis(9_900)),
         StartupWorkerPoll::Empty,
         &phase,
     );
@@ -552,7 +553,7 @@ fn startup_watch_arms_a_deadline_until_the_empty_poll_warns() {
     let due = drive_startup_watch(
         started,
         false,
-        started + Duration::from_secs(10),
+        started.plus(Duration::from_secs(10)),
         StartupWorkerPoll::Empty,
         &phase,
     );
@@ -566,7 +567,7 @@ fn startup_watch_arms_a_deadline_until_the_empty_poll_warns() {
     let again = drive_startup_watch(
         started,
         true,
-        started + Duration::from_secs(30),
+        started.plus(Duration::from_secs(30)),
         StartupWorkerPoll::Empty,
         &phase,
     );
@@ -576,7 +577,7 @@ fn startup_watch_arms_a_deadline_until_the_empty_poll_warns() {
 
 #[test]
 fn finished_startup_does_not_warn_that_it_is_still_running() {
-    let started = Instant::now();
+    let started = observe_platform_now();
     let phase = StartupWatchPhase::Device {
         name: "Quadro P620".to_string(),
         driver: "NVK".to_string(),
@@ -584,7 +585,7 @@ fn finished_startup_does_not_warn_that_it_is_still_running() {
     let step = drive_startup_watch(
         started,
         false,
-        started + Duration::from_secs(65),
+        started.plus(Duration::from_secs(65)),
         StartupWorkerPoll::Finished,
         &phase,
     );

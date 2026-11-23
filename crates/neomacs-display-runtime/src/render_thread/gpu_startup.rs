@@ -1,12 +1,9 @@
 //! Driver discovery and device acquisition without worker-owned native surfaces.
 
 use crossbeam_channel::{Receiver, Sender, TryRecvError};
+use neomacs_display_protocol::frame_time::EventTime;
 use raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
-use std::{
-    collections::VecDeque,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{collections::VecDeque, sync::Arc, time::Duration};
 use winit::{
     event::WindowEvent,
     event_loop::EventLoopProxy,
@@ -146,10 +143,11 @@ impl PendingGpuAttempt {
         window: Arc<dyn Window>,
         descriptor: wgpu::InstanceDescriptor,
         proxy: EventLoopProxy,
+        started: EventTime,
     ) -> Result<Self, String> {
         let input = StartupInputReplay::new(window.id());
         Ok(Self {
-            gpu: PendingGpu::start(window, descriptor, proxy)?,
+            gpu: PendingGpu::start(window, descriptor, proxy, started)?,
             input,
         })
     }
@@ -167,15 +165,19 @@ impl PendingGpuAttempt {
         let _ = self.input.defer_input(event);
     }
 
-    pub(super) fn poll(self, proxy: &EventLoopProxy) -> Result<GpuAttemptPoll, GpuStartupError> {
+    pub(super) fn poll(
+        self,
+        proxy: &EventLoopProxy,
+        now: EventTime,
+    ) -> Result<GpuAttemptPoll, GpuStartupError> {
         let Self { gpu, input } = self;
-        match gpu.poll(proxy)? {
+        match gpu.poll(proxy, now)? {
             GpuPoll::Pending(gpu) => Ok(GpuAttemptPoll::Pending(Self { gpu, input })),
             GpuPoll::Ready { gpu, choice } => Ok(GpuAttemptPoll::Ready { gpu, input, choice }),
         }
     }
 
-    pub(super) fn watch_deadline(&self) -> Option<Instant> {
+    pub(super) fn watch_deadline(&self) -> Option<EventTime> {
         self.gpu.watch_deadline()
     }
 
@@ -194,7 +196,7 @@ pub(super) enum PendingGpu {
         reply: Reply<(wgpu::Instance, Vec<wgpu::Adapter>)>,
         choice: StartupAdapterChoice,
         /// One 10s budget from [`PendingGpu::start`], shared with the device phase.
-        watch_started: Instant,
+        watch_started: EventTime,
         watch_warned: bool,
     },
     Device {
@@ -205,7 +207,7 @@ pub(super) enum PendingGpu {
         adapter: wgpu::Adapter,
         choice: StartupAdapterChoice,
         reply: Reply<(wgpu::Device, wgpu::Queue)>,
-        watch_started: Instant,
+        watch_started: EventTime,
         watch_warned: bool,
     },
 }
@@ -223,6 +225,7 @@ impl PendingGpu {
         window: Arc<dyn Window>,
         descriptor: wgpu::InstanceDescriptor,
         proxy: EventLoopProxy,
+        started: EventTime,
     ) -> Result<Self, String> {
         let reply = spawn("gpu-adapters", proxy, move || {
             Ok(open_startup_instance(descriptor))
@@ -231,7 +234,7 @@ impl PendingGpu {
             window,
             reply,
             choice: StartupAdapterChoice::Ranked,
-            watch_started: Instant::now(),
+            watch_started: started,
             watch_warned: false,
         })
     }
@@ -245,7 +248,7 @@ impl PendingGpu {
     }
 
     /// `Some(start + 10s)` until the one startup warning has been sent.
-    pub(super) fn watch_deadline(&self) -> Option<Instant> {
+    pub(super) fn watch_deadline(&self) -> Option<EventTime> {
         let (started, warned) = match self {
             Self::SurfaceSize { .. } => return None,
             Self::Adapters {
@@ -269,7 +272,11 @@ impl PendingGpu {
         }
     }
 
-    pub(super) fn poll(self, proxy: &EventLoopProxy) -> Result<GpuPoll, GpuStartupError> {
+    pub(super) fn poll(
+        self,
+        proxy: &EventLoopProxy,
+        now: EventTime,
+    ) -> Result<GpuPoll, GpuStartupError> {
         match self {
             Self::SurfaceSize { prepared, choice } => Ok(Self::when_sized(prepared, choice)),
             Self::Adapters {
@@ -285,7 +292,7 @@ impl PendingGpu {
                         let step = drive_startup_watch(
                             watch_started,
                             watch_warned,
-                            Instant::now(),
+                            now,
                             StartupWorkerPoll::Empty,
                             &StartupWatchPhase::Enumeration,
                         );
@@ -376,7 +383,7 @@ impl PendingGpu {
                         let step = drive_startup_watch(
                             watch_started,
                             watch_warned,
-                            Instant::now(),
+                            now,
                             StartupWorkerPoll::Empty,
                             &StartupWatchPhase::Device {
                                 name: info.name,
@@ -429,7 +436,7 @@ impl PendingGpu {
         adapters: Vec<wgpu::Adapter>,
         adapter: wgpu::Adapter,
         mut choice: StartupAdapterChoice,
-        watch_started: Instant,
+        watch_started: EventTime,
         watch_warned: bool,
         error: String,
     ) -> Result<GpuPoll, GpuStartupError> {
@@ -1090,16 +1097,16 @@ pub(super) enum StartupWorkerPoll {
 pub(super) struct StartupWatchStep {
     pub warned: bool,
     pub warning: Option<String>,
-    /// `WaitUntil` this instant while the warning has not been sent.
-    pub deadline: Option<Instant>,
+    /// `WaitUntil` this moment while the warning has not been sent.
+    pub deadline: Option<EventTime>,
 }
 
 /// Warn only while the worker is still empty. A finished worker is not
 /// "still running". Arm `start + 10s` until that warning has been sent.
 pub(super) fn drive_startup_watch(
-    started: Instant,
+    started: EventTime,
     already_warned: bool,
-    now: Instant,
+    now: EventTime,
     worker: StartupWorkerPoll,
     phase: &StartupWatchPhase,
 ) -> StartupWatchStep {
@@ -1110,7 +1117,7 @@ pub(super) fn drive_startup_watch(
             deadline: None,
         };
     }
-    let elapsed = now.saturating_duration_since(started);
+    let elapsed = now.saturating_since(started);
     let warning = startup_watch_warning(elapsed, already_warned, phase);
     let warned = already_warned || warning.is_some();
     StartupWatchStep {
@@ -1120,12 +1127,12 @@ pub(super) fn drive_startup_watch(
     }
 }
 
-/// Instant `watch_deadline` waits until. One formula for the event loop and the row.
-pub(super) fn watch_deadline_for(started: Instant, warned: bool) -> Option<Instant> {
+/// Moment `watch_deadline` waits until. One formula for the event loop and the row.
+pub(super) fn watch_deadline_for(started: EventTime, warned: bool) -> Option<EventTime> {
     if warned {
         None
     } else {
-        Some(started + Duration::from_secs(10))
+        Some(started.plus(Duration::from_secs(10)))
     }
 }
 
