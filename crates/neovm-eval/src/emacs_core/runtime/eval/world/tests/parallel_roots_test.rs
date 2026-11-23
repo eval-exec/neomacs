@@ -197,12 +197,96 @@ fn a5_admission_admits_a_weak_hash_fixture_before_any_mutator_activation() {
     );
 }
 
+/// E3.2: a native payload `supported` admits is swept by a real stopped
+/// major. The fixture stays out of `lexenv`: capture freezes private roots,
+/// so a lexenv root would keep the object live for the whole era and the
+/// sweep would never detach it. Admission still sees it, because the
+/// preflight walks the object catalog.
+///
+/// The batch is read after `collect_stopped` returns and before
+/// `stopped.complete()`. The drain runs inside `collect_stopped`, while
+/// AllStopped is still held. A drain moved to era finish would leave a
+/// record here.
+fn assert_unreachable_native_fixture_is_admitted_and_drained(
+    context: &mut Context,
+    make: impl FnOnce(&mut Context) -> TaggedValue,
+) {
+    context.setup_thread_locals();
+    let fixture = make(context);
+    assert!(
+        context.tagged_heap.owns_heap_value_for_test(fixture),
+        "setup retains the native fixture"
+    );
+    let keeper = context.issue_green_baton().unwrap();
+    let expected = keeper.parallel_heap_identity();
+    let frozen = context.capture_parallel_legacy_roots(&keeper).unwrap();
+    assert!(
+        context.tagged_heap.owns_heap_value_for_test(fixture),
+        "the fixture is still live at admission, so the stopped sweep is what reclaims it"
+    );
+    let heap: *mut neovm_value::tagged::gc::TaggedHeap = context.tagged_heap.heap_root().as_ptr();
+    // SAFETY: sole serial Context, no callback/manager loan, private capture
+    // completed before this heap loan, and keeper excludes concurrent mark.
+    let collector = unsafe {
+        (*heap).drain_to_quiescent(|heap| {
+            context.seed_registered_mutator_roots_world_stopped(heap);
+        })
+    }
+    .unwrap();
+    let era = ParallelHeapEra::admit_rooted(collector, keeper, frozen)
+        .expect("an admitted native fixture reaches the era");
+    let mut stopped = era.stop().expect("stopped world");
+    era.collect_stopped(
+        &mut stopped,
+        crate::test_support::authority::baton_collect_parallel_world_roots,
+    )
+    .expect("stopped major admits and sweeps the native fixture");
+    let (batch, retained) = era
+        .with_stopped_heap_for_test(&stopped, |heap| {
+            (
+                heap.pending_native_destroy_count_for_test(),
+                heap.owns_heap_value_for_test(fixture),
+            )
+        })
+        .expect("observe the pending-native batch before the stop completes");
+    assert_eq!(
+        batch, None,
+        "collect_stopped drains the detached fixture before the stop completes"
+    );
+    assert!(
+        !retained,
+        "the unreachable native fixture is detached by the stopped sweep"
+    );
+    stopped.complete().expect("stop completion");
+    let (collector, keeper) = era.finish().expect("admitted rooted era finishes");
+    assert_eq!(collector.heap_identity(), expected);
+    assert_eq!(keeper.parallel_heap_identity(), expected);
+    drop(collector);
+    drop(keeper);
+    assert_eq!(
+        context.tagged_heap.pending_native_destroy_count_for_test(),
+        None,
+        "serial recovery does not resurrect the drained batch"
+    );
+}
+
+#[cfg(not(feature = "gc-memory-telemetry"))]
 #[test]
-fn a5_admission_refuses_native_resource_fixture_even_without_a_finalizer() {
-    unsupported_fixture_refuses_before_registration(|context| {
+fn a5_admission_admits_a_native_resource_fixture_and_the_stopped_major_drains_it() {
+    // No finalizer: admission must not depend on a callback being present.
+    let mut context = collection_fixture_context();
+    assert_unreachable_native_fixture_is_admitted_and_drained(&mut context, |context| {
         context
             .tagged_heap
             .alloc_user_ptr(std::ptr::null_mut(), None)
+    });
+}
+
+#[test]
+fn a5_admission_still_refuses_a_sqlite_resource_fixture() {
+    // SQLite remains refused until its GNU-observable DB-lifecycle row lands.
+    unsupported_fixture_refuses_before_registration(|context| {
+        context.tagged_heap.alloc_sqlite(false, 7)
     });
 }
 
