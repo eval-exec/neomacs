@@ -252,8 +252,12 @@ fn owned_native_progress_fixture() {
             commands_full_tx.send(()).unwrap();
             let native = start_query_rx.recv().unwrap();
             query_started_tx.send(()).unwrap();
+            // This headless fixture has submitted no CPU image jobs, so zero
+            // is the actual admission cutoff when the clear is issued.
             commands
-                .send(RenderCommand::Asset(AssetCommand::ClearImageCache))
+                .send(RenderCommand::Asset(AssetCommand::ClearImageCache {
+                    through: 0,
+                }))
                 .unwrap();
             native.unpark();
             let (ack, wait) = mpsc::sync_channel(1);

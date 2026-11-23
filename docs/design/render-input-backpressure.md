@@ -1,13 +1,62 @@
 # Renderer/input backpressure: wait graph and progress contract
 
-Status: revised design approved by lead #10905. Row 1 progress controls added;
-product fix and the exit regression remain owned by gapsurvey.
-Date: 2026-11-22.
+Status: historical audit approved by lead #10905; original Row 1 controls
+reviewed in #11019. Refreshed after batch 76d without a product change.
+Audit date: 2026-11-22. Refresh date: 2026-11-23.
 Task: N-render-input-backpressure-cycle (lead mail #10804; peer #10807/#10813).
 Source baseline: main `7081390b09baeb46530e5b674a366e7c309d1b5a`.
 Prospective image-cache change: `2641d18d65847be732747992a7758f59030dc456`,
 rebased in the 74c candidate as `06f2bef0be`; its code was also read at
 `203ef106a9`. References below name their baseline explicitly.
+
+## Current state after batch 76d
+
+The old source locations and failure analysis below describe the named
+708/2641/203ef baselines, not an assertion that those defects remain in
+current main. At `d8e450ab5de54be9ab730f6992109a807681b344`, the fix-forward
+stack and the separate startup/caller controls have landed:
+
+- A typed renderer phase lets a pre-GPU query answer locally and lets an
+  exited renderer cancel a wait independently of input consumption. The
+  shared `retire_render_command_obligations` routine and its exit RAII guard
+  retire raw queued replies before native teardown; parked owners also drop
+  their reply obligations.
+- A live-renderer query has its own 10 s overall bound and polls final exit
+  at 10 ms intervals. One shared deadline covers all commands in a single
+  invalidation. Retained FIFO work, file-resolution completion gates and a
+  nonblocking drain on every lookup prevent lost clears, overtaking and
+  stranded completed submissions.
+- `ClearImageCache` carries the decoder admission cutoff captured when the
+  caller issues the clear. Native clear retires entries admitted through
+  that cutoff **or** already admitted by that renderer, before dropping its
+  load lifecycle. A newer evaluator decode whose load command follows the
+  clear survives, while a renderer-originated load cannot become an orphan.
+  The owner supplied real-device and mutation evidence for both boundaries;
+  those runs are separate from this document's headless Row 1 controls.
+- The named Invariant-7 limitation remains: some partial invalidations and
+  post-clear READY loads return the last published total if the renderer
+  cannot publish the replacement accounting. These changes do not establish
+  an authoritative evaluator-owned byte ledger or exact GNU byte parity on
+  every terminal path.
+
+Current coverage and its evidence grades are distinct:
+
+| Row | Landed or refreshed coverage | Scope and recorded evidence |
+|---|---|---|
+| 1 | [Single native-owner progress and detector controls](../../crates/neomacs-display-runtime/src/render_thread/tests/input_backpressure_test.rs) | Both controls passed on the original `abd1eeb2e0` baseline. This refresh updates only the clear's exact zero cutoff: no CPU image submission precedes it. It claims transport/conversion/handler progress, not an upper input-wrapper, OS, GPU or cache-freshness test. Refreshed gate results accompany the lane receipt. |
+| 2 | [Exit cancellation guard](../../crates/neomacs-display-runtime/src/tests/exit_cancellation_test.rs), caller controls and owner accounting rows | Owner-executed guard/accounting evidence is separate from the twelve [caller-policy controls](../../crates/neomacs/src/image_catalog/tests/cache_liveness_test.rs). Their controlled actors do not stand in for actual renderer byte accounting. |
+| 3 | [Startup queue-owner controls](../../crates/neomacs-display-runtime/src/render_thread/tests/startup_cache_obligation_test.rs) and [real startup GUI fixture](../../crates/neomacs-gui-tests/tests/startup_image_cache.rs) | The eighteen caller/runtime controls passed on local Linux at `b2b5b17fc2` and on macmini arm64 at `aa39ef18cf`. The separately attested GNU/Neo startup run was recorded at `04bcc54f1e`; it does not prove first paint or a foreign-GPU failure case. Lead reported the batch-76d full GUI gate, not a new printed oracle receipt in this document. |
+| 4 | Caller cancellation/completion controls and [real cache clear/adoption rows](../../crates/neomacs-renderer-wgpu/src/image_cache/tests/clear_admission_test.rs) | Controlled gate/phase races and owner-executed real-device rows have separate receipts. Deliberately blocked foreign GPU recovery, terminal teardown and presentation remain outside Row 1's executed scope. |
+| 5 | Historical paired accounting/startup observations | No new paired GNU accounting run is supplied by this refresh. Synthetic counters and a headless zero must not be presented as exact-byte, first-paint or presentation evidence. |
+
+The rest of this note preserves the historical reasoning, proposed rows and
+source trace that motivated those fixes. In particular, its older statements
+that startup is a reproduction candidate or that exit fixes are prospective
+belong to those baselines. The ordinary-input bridge still provides no
+demonstrated steady-state evaluator/native capacity cycle. The distinct raw
+shutdown and foreign-work follow-ups at the end remain separate concerns.
+
+## Historical audit at the named source baselines
 
 ## Revised finding and scope
 
