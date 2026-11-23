@@ -24,6 +24,64 @@ use crate::emacs_core::regex_emacs::{
 use crate::emacs_core::regex_emacs::{matcher_entry_count, re_search};
 
 #[test]
+fn split_gap_cached_prefix_selects_storage_once_after_the_first_byte() {
+    use crate::emacs_core::regex_emacs::{Segments, chunk_query_count, segment_byte_query_count};
+
+    let syntax = DefaultSyntaxLookup;
+    for prefix_len in [0, 3, 7, 8] {
+        let expression = format!("{}Z", "a".repeat(prefix_len));
+        let text = format!("{}x", "a".repeat(prefix_len));
+        let text = text.as_bytes();
+        let compiled = regex_compile(&expression, false, false).unwrap();
+        let mut dfa = ExistenceDfa::new(Nfa::build(&compiled).unwrap());
+        let context = ClassContext::of_search(&compiled, dfa.nfa(), &syntax).unwrap();
+        dfa.classes.sync(context);
+        dfa.begin_search(&compiled, &syntax);
+        assert_eq!(
+            with_first_step(false, || {
+                dfa.anchored_exists(&compiled, text, 0, text.len(), 0, &syntax)
+            }),
+            Exists::No {
+                consumed: prefix_len
+            }
+        );
+        let counters = dfa.counters;
+        let transitions = dfa.trans.clone();
+        for split in 0..=text.len() {
+            let segmented = Segments {
+                left: &text[..split],
+                right: &text[split..],
+            };
+            let before = (segment_byte_query_count(), chunk_query_count());
+            let actual =
+                dfa.cached_prefix_rejection(&compiled, &segmented, 0, text.len(), 0, usize::MAX);
+            assert_eq!(
+                actual,
+                (prefix_len < CACHED_PREFIX_BYTES).then_some(prefix_len)
+            );
+            let byte_queries = segment_byte_query_count() - before.0;
+            let chunk_queries = chunk_query_count() - before.1;
+            assert_eq!(
+                dfa.counters, counters,
+                "cached probes must not publish counters"
+            );
+            assert_eq!(
+                dfa.trans, transitions,
+                "cached probes must not build transitions"
+            );
+            if prefix_len == 0 {
+                assert_eq!((byte_queries, chunk_queries), (1, 0));
+            } else {
+                assert!(
+                    byte_queries + chunk_queries <= 2,
+                    "prefix={prefix_len} split={split}: {byte_queries} individual byte selections + {chunk_queries} chunk selections"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn dfa_overrides_restore_nested_and_unwound_state() {
     let original_mode = DFA_MODE_OVERRIDE.with(std::cell::Cell::get);
     with_dfa_mode(DfaMode::Off, || {

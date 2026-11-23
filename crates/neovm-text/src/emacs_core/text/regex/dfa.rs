@@ -2076,30 +2076,51 @@ impl ExistenceDfa {
             limit = limit.min(self.plain.end);
         }
         let stride = 1u32 << self.stride_shift;
-        let mut d = p;
-        while d < limit {
-            let class = if d == p {
-                class
-            } else {
-                self.classes.byte_class[text.byte(d) as usize]
-            };
-            if class == UNKNOWN_CLASS {
-                return None;
-            }
+        let transition = |row: u32, class: u8| {
             let at = row as usize + class as usize;
             debug_assert!(at < self.trans.len());
             // SAFETY: as in `run`, cached rows have a complete stride and
             // known byte classes are below that stride. This path mutates
             // neither rows nor classes.
-            let next = unsafe { *self.trans.get_unchecked(at) };
-            if next == DEAD {
-                return Some(d - p);
+            unsafe { *self.trans.get_unchecked(at) }
+        };
+        if p >= limit {
+            return None;
+        }
+        // Most cached rejections end at the first transition. Keep those
+        // independent of chunk setup, and reuse the class already read.
+        let next = transition(row, class);
+        if next == DEAD {
+            return Some(0);
+        }
+        if next < stride {
+            return None;
+        }
+        row = next;
+        let mut d = p + 1;
+        if d >= limit {
+            return None;
+        }
+        // Select split storage once for the remaining bounded prefix.
+        // The slices carry bytes only: assertions retain the full virtual
+        // text and all stop/frontier/point/plain-syntax guards above.
+        let (first, second) = text.chunks(d, limit);
+        for chunk in [first, second] {
+            for &byte in chunk {
+                let class = self.classes.byte_class[byte as usize];
+                if class == UNKNOWN_CLASS {
+                    return None;
+                }
+                let next = transition(row, class);
+                if next == DEAD {
+                    return Some(d - p);
+                }
+                if next < stride {
+                    return None;
+                }
+                row = next;
+                d += 1;
             }
-            if next < stride {
-                return None;
-            }
-            row = next;
-            d += 1;
         }
         None
     }

@@ -1478,6 +1478,10 @@ thread_local! {
     /// candidate scan. Unlike matcher entries, this catches repeated setup
     /// when the fastmap rejects every line before entering the matcher.
     static CHUNK_QUERY_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// Actual individual byte selections in split storage. Cached DFA
+    /// prefixes should select the remaining contiguous chunks once.
+    #[cfg(test)]
+    static SEGMENT_BYTE_QUERY_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 #[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -1489,6 +1493,11 @@ pub(crate) fn matcher_entry_count() -> u64 {
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn chunk_query_count() -> u64 {
     CHUNK_QUERY_COUNT.with(|c| c.get())
+}
+
+#[cfg(test)]
+fn segment_byte_query_count() -> u64 {
+    SEGMENT_BYTE_QUERY_COUNT.with(|c| c.get())
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -5442,6 +5451,8 @@ impl Haystack for Segments<'_> {
     }
     #[inline(always)]
     fn byte(&self, i: usize) -> u8 {
+        #[cfg(test)]
+        SEGMENT_BYTE_QUERY_COUNT.with(|c| c.set(c.get() + 1));
         if i < self.left.len() {
             self.left[i]
         } else {
