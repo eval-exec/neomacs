@@ -575,6 +575,17 @@ impl DisplayRowMeasurementMode {
     }
 }
 
+fn realized_selection<'face>(
+    service: Option<&crate::font::metrics::FontMetricsService>,
+    face: &'face DisplayRowFace,
+) -> crate::font::metrics::RealizedFaceFontSelection<'face> {
+    let (frame, face_epoch) = service
+        .map(crate::font::metrics::FontMetricsService::realized_fontset_context)
+        .unwrap_or((0, 0));
+    face.font_selection()
+        .with_fontset(frame, face.face_id.get(), face_epoch)
+}
+
 pub(crate) struct DisplayRowGlyphMeasurer<'a> {
     faces: &'a [DisplayRowFace],
     font_metrics: Option<&'a mut FontMetricsService>,
@@ -601,12 +612,11 @@ impl DisplayTextRunAdvancePolicy for DisplayRowTextRunAdvancePolicy<'_, '_> {
     }
 
     fn shape_span(&mut self, text: &str) -> Vec<crate::font::metrics::ShapedGlyph> {
+        let selection = realized_selection(self.measurer.font_metrics.as_deref(), self.face);
         self.measurer
             .font_metrics
             .as_mut()
-            .map(|font_metrics| {
-                font_metrics.shape_run_for_realized_face(text, self.face.font_selection())
-            })
+            .map(|font_metrics| font_metrics.shape_run_for_realized_face(text, selection))
             .unwrap_or_default()
     }
 }
@@ -673,10 +683,11 @@ impl<'a> DisplayRowGlyphMeasurer<'a> {
         GLYPH_MEASURE_CALLS.with(|calls| calls.set(calls.get() + 1));
         let face_char_width = face.char_width_px(self.fallback_char_width);
         let column_advance = f32::from(columns) * face_char_width;
+        let selection = realized_selection(self.font_metrics.as_deref(), face);
         let measured = self
             .font_metrics
             .as_mut()
-            .map(|service| service.char_width_for_realized_face(ch, face.font_selection()));
+            .map(|service| service.char_width_for_realized_face(ch, selection));
         let minimum = self.mode.minimum_glyph_advance_px(measured, column_advance);
         self.quantization
             .resolve(measured, fallback_advance_px.max(column_advance), minimum)
@@ -727,10 +738,11 @@ impl DisplayGlyphMeasurer for DisplayRowGlyphMeasurer<'_> {
             return None;
         }
         let face = self.face(face_id)?;
+        let selection = realized_selection(self.font_metrics.as_deref(), face);
         let metrics = self
             .font_metrics
             .as_mut()?
-            .vertical_metrics_for_realized_face_char(ch, face.font_selection())?;
+            .vertical_metrics_for_realized_face_char(ch, selection)?;
         let height = metrics.line_height;
         (height > 0.0).then(|| {
             crate::display_row::builder::DisplayRowVerticalMetrics::new(height, metrics.ascent)

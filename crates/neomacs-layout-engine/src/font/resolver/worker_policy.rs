@@ -87,8 +87,37 @@ impl FrozenCharacterPolicies {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn capture(
         requests: &[(&str, char, u16, bool, FontSelectionSize)],
+        max_bytes: usize,
+    ) -> Result<Self, FontPolicyCaptureError> {
+        let stamped: Vec<_> = requests
+            .iter()
+            .copied()
+            .map(|(family, ch, weight, italic, size)| {
+                (
+                    family,
+                    ch,
+                    weight,
+                    italic,
+                    size,
+                    crate::font::fallback_order::FaceFontsetId::default(),
+                )
+            })
+            .collect();
+        Self::capture_for_fontsets(&stamped, max_bytes)
+    }
+
+    pub(crate) fn capture_for_fontsets(
+        requests: &[(
+            &str,
+            char,
+            u16,
+            bool,
+            FontSelectionSize,
+            crate::font::fallback_order::FaceFontsetId,
+        )],
         max_bytes: usize,
     ) -> Result<Self, FontPolicyCaptureError> {
         let generation = FontSelectionRevision::try_from(fontset_generation())
@@ -98,7 +127,7 @@ impl FrozenCharacterPolicies {
             queries: HashMap::default(),
             bytes: std::mem::size_of::<Self>(),
         };
-        for &(family, ch, weight, italic, size) in requests {
+        for &(family, ch, weight, italic, size, fontset) in requests {
             if ch.is_ascii() {
                 continue;
             }
@@ -116,6 +145,7 @@ impl FrozenCharacterPolicies {
                 FontSlant::Normal
             };
             let key = CharCacheKey {
+                fontset,
                 family: family.to_owned(),
                 ch,
                 weight,
@@ -287,6 +317,7 @@ impl FontResolver {
             return super::CharacterResolution::none();
         };
         let order_key = crate::font::fallback_order::FallbackOrderKey {
+            fontset: key.fontset,
             family: key.family.clone(),
             weight: key.weight,
             slant: key.slant,
@@ -297,14 +328,15 @@ impl FontResolver {
         if let Some(cached) = self.cached_character(&key) {
             return cached;
         }
-        let (selected, fallback_winner, fallback_order_gen) =
-            self.resolve_frozen_query(&key, query, &style, &order_key);
+        let (selected, fallback) = self.resolve_frozen_query(&key, query, &style, &order_key);
         let fallback =
-            fallback_winner.map(|winner| crate::font::fallback_order::FallbackAnswerStamp {
-                order_key,
-                winner,
-                order_gen: fallback_order_gen,
-            });
+            fallback.map(
+                |(winner, generation)| crate::font::fallback_order::FallbackAnswerStamp {
+                    order_key,
+                    winner,
+                    generation,
+                },
+            );
         self.store_character(key, fallback.clone(), selected.clone());
         super::CharacterResolution {
             font: selected,
@@ -320,17 +352,20 @@ impl FontResolver {
         query: &FrozenCharacterQuery,
         style: &WorkerFontStyle,
         order_key: &crate::font::fallback_order::FallbackOrderKey,
-    ) -> (Option<PlatformFontMatch>, Option<FontSpecEntry>, u64) {
+    ) -> (
+        Option<PlatformFontMatch>,
+        Option<(FontSpecEntry, crate::font::fallback_order::OrderGeneration)>,
+    ) {
         let prefer_monospace = self.family_prefers_monospace(&key.family);
         let (specific, fallback) = query.chain.rendering_groups();
         for (_, entry) in specific {
             match entry {
-                FontsetRenderingEntry::ExplicitNone => return (None, None, 0),
+                FontsetRenderingEntry::ExplicitNone => return (None, None),
                 FontsetRenderingEntry::Font(spec) => {
                     if let Some(font) =
                         self.open_rendering_entry(key, query, style, &spec, prefer_monospace)
                     {
-                        return (Some(font), None, 0);
+                        return (Some(font), None);
                     }
                 }
             }
@@ -338,14 +373,14 @@ impl FontResolver {
         let ordered = order_fallback_pairs(order_key, fallback);
         for (spec, entry) in ordered {
             match entry {
-                FontsetRenderingEntry::ExplicitNone => return (None, None, 0),
+                FontsetRenderingEntry::ExplicitNone => return (None, None),
                 FontsetRenderingEntry::Font(rendering) => {
                     if let Some(font) =
                         self.open_rendering_entry(key, query, style, &rendering, prefer_monospace)
                     {
-                        let order_gen =
+                        let generation =
                             crate::font::fallback_order::promote_fallback(order_key, &spec);
-                        return (Some(font), Some(spec), order_gen);
+                        return (Some(font), Some((spec, generation)));
                     }
                 }
             }
@@ -360,7 +395,7 @@ impl FontResolver {
             otf: None,
         };
         let font = self.open_rendering_entry(key, query, style, &fallback, prefer_monospace);
-        (font, None, 0)
+        (font, None)
     }
 
     fn open_rendering_entry(

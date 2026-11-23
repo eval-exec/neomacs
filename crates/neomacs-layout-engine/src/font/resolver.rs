@@ -898,6 +898,7 @@ impl FontResolver {
             requested_slant,
             requested_width,
             size,
+            crate::font::fallback_order::FaceFontsetId::default(),
         )
         .font
     }
@@ -910,11 +911,13 @@ impl FontResolver {
         requested_slant: FontSlant,
         requested_width: FontWidth,
         size: FontSelectionSize,
+        fontset: crate::font::fallback_order::FaceFontsetId,
     ) -> CharacterResolution {
         if ch.is_ascii() {
             return CharacterResolution::none();
         }
         let key = CharCacheKey {
+            fontset,
             family: family.to_string(),
             ch,
             weight: requested_weight,
@@ -932,6 +935,7 @@ impl FontResolver {
             return self.resolve_worker_character(key);
         }
         let order_key = crate::font::fallback_order::FallbackOrderKey {
+            fontset,
             family: family.to_owned(),
             weight: requested_weight,
             slant: requested_slant.gnu_numeric(),
@@ -950,7 +954,7 @@ impl FontResolver {
         let (specific, fallback) = rendering_groups_for_char(ch);
         let mut selected = None;
         let mut fallback_winner = None;
-        let mut fallback_order_gen = 0;
+        let mut fallback_generation = None;
         for entry in specific {
             let keep_going = self.consider_fontset_entry(
                 &entry,
@@ -994,8 +998,9 @@ impl FontResolver {
                 if let Some(found) = resolution.take()
                     && let Some(font) = self.finish_character_resolution(Some(found))
                 {
-                    fallback_order_gen =
-                        crate::font::fallback_order::promote_fallback(&order_key, entry);
+                    fallback_generation = Some(crate::font::fallback_order::promote_fallback(
+                        &order_key, entry,
+                    ));
                     selected = Some(font);
                     fallback_winner = Some(entry.clone());
                     break;
@@ -1031,12 +1036,15 @@ impl FontResolver {
                 generation,
             ));
         }
-        let fallback =
-            fallback_winner.map(|winner| crate::font::fallback_order::FallbackAnswerStamp {
-                order_key,
-                winner,
-                order_gen: fallback_order_gen,
-            });
+        let fallback = fallback_winner
+            .zip(fallback_generation)
+            .map(
+                |(winner, generation)| crate::font::fallback_order::FallbackAnswerStamp {
+                    order_key,
+                    winner,
+                    generation,
+                },
+            );
         self.store_character(key, fallback.clone(), selected.clone());
         CharacterResolution {
             font: selected,
@@ -1702,6 +1710,7 @@ impl FontResolver {
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 struct CharCacheKey {
+    fontset: crate::font::fallback_order::FaceFontsetId,
     family: String,
     ch: char,
     weight: u16,

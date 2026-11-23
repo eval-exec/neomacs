@@ -463,6 +463,7 @@ fn normalize_shaped_advances(
 /// font_size is stored as integer centipixels (size * 100) to avoid float key issues.
 #[derive(Debug, Hash, Eq, PartialEq, Clone)]
 struct MetricsCacheKey {
+    fontset: crate::font::fallback_order::FaceFontsetId,
     family: String,
     weight: u16,
     italic: bool,
@@ -489,6 +490,14 @@ struct OrderStamped<T> {
     fallback: Option<crate::font::fallback_order::FallbackAnswerStamp>,
 }
 
+struct CachedCluster {
+    value: Option<(Vec<ResolvedGlyph>, Vec<ResolvedFont>)>,
+    /// Every fallback this cluster actually opened. The representative alone
+    /// is not enough: a bitmap simple-copy can draw a later character from a
+    /// different font, and that stamp has to miss when its front moves.
+    fallbacks: Vec<crate::font::fallback_order::FallbackAnswerStamp>,
+}
+
 fn fallback_stamp_holds(
     stamp: &mut Option<crate::font::fallback_order::FallbackAnswerStamp>,
 ) -> bool {
@@ -496,6 +505,12 @@ fn fallback_stamp_holds(
         None => true,
         Some(stamp) => crate::font::fallback_order::stamp_still_front(stamp),
     }
+}
+
+fn fallback_stamps_hold(stamps: &mut [crate::font::fallback_order::FallbackAnswerStamp]) -> bool {
+    stamps
+        .iter_mut()
+        .all(crate::font::fallback_order::stamp_still_front)
 }
 
 /// One exact, generation-local font selection shared by metadata, layout, and
@@ -654,6 +669,7 @@ impl MetricsCacheKey {
         fontset_generation: u64,
     ) -> Self {
         Self {
+            fontset: crate::font::fallback_order::FaceFontsetId::default(),
             family: family.to_string(),
             weight,
             italic,
@@ -675,6 +691,9 @@ pub struct RealizedFaceFontSelection<'a> {
     weight: u16,
     italic: bool,
     font_size: f32,
+    /// Realized fontset. `new` uses the implicit face so callers that are
+    /// not measuring a frame face keep one shared order.
+    fontset: crate::font::fallback_order::FaceFontsetId,
 }
 
 impl<'a> RealizedFaceFontSelection<'a> {
@@ -684,7 +703,19 @@ impl<'a> RealizedFaceFontSelection<'a> {
             weight,
             italic,
             font_size,
+            fontset: crate::font::fallback_order::FaceFontsetId::default(),
         }
+    }
+
+    /// Name the ASCII face's realized fontset. `frame` keeps two frames'
+    /// face 0 apart. `face_epoch` is `face_change_count` at realization.
+    pub fn with_fontset(mut self, frame: u64, face: u32, face_epoch: u64) -> Self {
+        self.fontset = crate::font::fallback_order::FaceFontsetId {
+            frame,
+            face,
+            face_epoch,
+        };
+        self
     }
 }
 
@@ -923,12 +954,7 @@ pub struct FontMetricsService {
     /// Cache: (face attrs, cluster text) → shaped glyphs with interned font
     /// identities. Same generation contract; clear-on-overflow like
     /// `shaped_run_cache`.
-    // A `type` alias for this cache value would not materially aid readability.
-    #[allow(clippy::type_complexity)]
-    resolved_cluster_cache: HashMap<
-        (RealizedFaceFontCacheKey, String),
-        OrderStamped<Option<(Vec<ResolvedGlyph>, Vec<ResolvedFont>)>>,
-    >,
+    resolved_cluster_cache: HashMap<(RealizedFaceFontCacheKey, String), CachedCluster>,
     /// Cache: complete face selection request → the synthetic family to use when
     /// fontconfig's chosen file differs from cosmic-text's own pick
     /// (`Some`), or `None` when they agree (the common case, no pinning).
@@ -941,6 +967,11 @@ pub struct FontMetricsService {
     /// GNU `face_for_char`'s primary-font-before-fontset rule for characters
     /// classified as `symbol`. This owns numeric ranges, never a Lisp object.
     symbol_font_policy: SymbolFontPolicy,
+    /// Frame and `face_change_count` the measurer copies onto each face.
+    /// The id lives in the cache key, so replacing it leaves the old entries
+    /// unmatched instead of clearing every frame's fontset.
+    realized_fontset_frame: u64,
+    realized_fontset_epoch: u64,
 }
 
 /// Whether primary-font pinning is enabled (default on). Pinning routes the
@@ -1148,12 +1179,36 @@ impl FontMetricsService {
             primary_pin_cache: HashMap::default(),
             primary_match_cache: HashMap::default(),
             symbol_font_policy: SymbolFontPolicy::default(),
+            realized_fontset_frame: 0,
+            realized_fontset_epoch: 0,
         }
     }
 
+    pub(crate) fn realized_fontset_context(&self) -> (u64, u64) {
+        (self.realized_fontset_frame, self.realized_fontset_epoch)
+    }
+
+    pub(crate) fn set_realized_fontset_context(&mut self, frame: u64, face_epoch: u64) {
+        self.realized_fontset_frame = frame;
+        self.realized_fontset_epoch = face_epoch;
+    }
+
+    #[cfg(test)]
     pub(crate) fn capture_worker_font_policy(
         &self,
         requests: &[(&str, char, u16, bool, f32)],
+        max_bytes: usize,
+    ) -> Result<DetachedFontPolicy, crate::font::resolver::FontPolicyCaptureError> {
+        let faced: Vec<_> = requests
+            .iter()
+            .map(|&(family, ch, weight, italic, size)| (family, ch, weight, italic, size, 0))
+            .collect();
+        self.capture_worker_font_policy_for_faces(&faced, max_bytes)
+    }
+
+    pub(crate) fn capture_worker_font_policy_for_faces(
+        &self,
+        requests: &[(&str, char, u16, bool, f32, u32)],
         max_bytes: usize,
     ) -> Result<DetachedFontPolicy, crate::font::resolver::FontPolicyCaptureError> {
         use crate::font::resolver::FontPolicyCaptureError;
@@ -1171,14 +1226,27 @@ impl FontMetricsService {
         let remaining = max_bytes
             .checked_sub(symbol_bytes)
             .ok_or(FontPolicyCaptureError::Budget)?;
+        let (frame, face_epoch) = self.realized_fontset_context();
         let requests: Vec<_> = requests
             .iter()
-            .map(|&(family, ch, weight, italic, size)| {
-                (family, ch, weight, italic, self.selection_size(size))
+            .map(|&(family, ch, weight, italic, size, face)| {
+                (
+                    family,
+                    ch,
+                    weight,
+                    italic,
+                    self.selection_size(size),
+                    crate::font::fallback_order::FaceFontsetId {
+                        frame,
+                        face,
+                        face_epoch,
+                    },
+                )
             })
             .collect();
-        let characters =
-            crate::font::resolver::FrozenCharacterPolicies::capture(&requests, remaining)?;
+        let characters = crate::font::resolver::FrozenCharacterPolicies::capture_for_fontsets(
+            &requests, remaining,
+        )?;
         let bytes = symbol_bytes
             .checked_add(characters.bytes())
             .ok_or(FontPolicyCaptureError::Budget)?;
@@ -1555,12 +1623,14 @@ impl FontMetricsService {
         &self,
         selection: RealizedFaceFontSelection<'_>,
     ) -> RealizedFaceFontCacheKey {
-        self.cache_key(
+        let mut key = self.cache_key(
             selection.family,
             selection.weight,
             selection.italic,
             selection.font_size,
-        )
+        );
+        key.fontset = selection.fontset;
+        key
     }
 
     fn selection_size(&self, font_size: f32) -> crate::font_backend::FontSelectionSize {
@@ -3248,21 +3318,19 @@ impl FontMetricsService {
         let face_key = self.realized_face_font_cache_key(selection);
         let key = (face_key, text.to_string());
         if let Some(cached) = self.resolved_cluster_cache.get_mut(&key)
-            && fallback_stamp_holds(&mut cached.fallback)
+            && fallback_stamps_hold(&mut cached.fallbacks)
         {
             return cached.value.clone();
         }
-        let result = self.resolve_cluster_uncached(text, selection);
-        let fallback = crate::composition::representative_char_for_cluster(text)
-            .and_then(|ch| self.cached_char_fallback(&key.0, ch));
+        let (result, fallbacks) = self.resolve_cluster_uncached(text, selection);
         if self.resolved_cluster_cache.len() >= self.shaped_run_cache_cap {
             self.resolved_cluster_cache.clear();
         }
         self.resolved_cluster_cache.insert(
             key,
-            OrderStamped {
+            CachedCluster {
                 value: result.clone(),
-                fallback,
+                fallbacks,
             },
         );
         result
@@ -3282,7 +3350,10 @@ impl FontMetricsService {
         &mut self,
         text: &str,
         selection: RealizedFaceFontSelection<'_>,
-    ) -> Option<(Vec<ResolvedGlyph>, Vec<ResolvedFont>)> {
+    ) -> (
+        Option<(Vec<ResolvedGlyph>, Vec<ResolvedFont>)>,
+        Vec<crate::font::fallback_order::FallbackAnswerStamp>,
+    ) {
         let representative = crate::composition::representative_char_for_cluster(text);
         let materialized = match representative {
             Some(ch) => self.materialized_font_for_realized_face_char(ch, selection),
@@ -3304,7 +3375,7 @@ impl FontMetricsService {
             && let Some(resolved) =
                 self.resolve_bitmap_simple_copy_cluster(text, primary.clone(), selection)
         {
-            return Some(resolved);
+            return resolved;
         }
 
         // Route the cluster through the same representative-char font
@@ -3314,7 +3385,7 @@ impl FontMetricsService {
         // the face font's digit + combining-keycap parts.
         let shaped = self.shape_run_for_realized_face(text, selection);
         if shaped.is_empty() {
-            return None;
+            return (None, Vec::new());
         }
         let mut fonts: Vec<ResolvedFont> = Vec::new();
         let mut by_fontdb: HashMap<fontdb::ID, ResolvedFontId> = HashMap::default();
@@ -3338,10 +3409,12 @@ impl FontMetricsService {
                         Some((fontdb_id, font)) if fontdb_id == shaped_glyph.font_id => {
                             font.clone()
                         }
-                        _ => self.resolved_font_from_fontdb_id(
-                            shaped_glyph.font_id,
-                            selection.font_size,
-                        )?,
+                        _ => match self
+                            .resolved_font_from_fontdb_id(shaped_glyph.font_id, selection.font_size)
+                        {
+                            Some(font) => font,
+                            None => return (None, Vec::new()),
+                        },
                     };
                     let id = font.id;
                     by_fontdb.insert(shaped_glyph.font_id, id);
@@ -3361,7 +3434,12 @@ impl FontMetricsService {
                 cluster_end: shaped_glyph.cluster_end as u32,
             });
         }
-        Some((glyphs, fonts))
+        let face_key = self.realized_face_font_cache_key(selection);
+        let fallbacks = representative
+            .and_then(|ch| self.cached_char_fallback(&face_key, ch))
+            .into_iter()
+            .collect();
+        (Some((glyphs, fonts)), fallbacks)
     }
 
     fn resolve_bitmap_simple_copy_cluster(
@@ -3369,15 +3447,20 @@ impl FontMetricsService {
         text: &str,
         primary: LayoutFontHandle,
         selection: RealizedFaceFontSelection<'_>,
-    ) -> Option<(Vec<ResolvedGlyph>, Vec<ResolvedFont>)> {
+    ) -> Option<(
+        Option<(Vec<ResolvedGlyph>, Vec<ResolvedFont>)>,
+        Vec<crate::font::fallback_order::FallbackAnswerStamp>,
+    )> {
         let mut pen_x = 0.0;
         let mut glyphs = Vec::with_capacity(text.chars().count());
         let mut fonts = Vec::new();
+        let mut fallbacks = Vec::new();
         for (cluster_start, ch) in text.char_indices() {
             let materialized = if self.materialized_font_has_char(&primary, ch) {
                 primary.clone()
             } else {
-                let (fallback, _) = self.materialize_char_font(ch, selection);
+                let (fallback, stamp) = self.materialize_char_font(ch, selection);
+                fallbacks.extend(stamp);
                 let fallback = fallback?;
                 self.materialized_font_has_char(&fallback, ch)
                     .then_some(fallback)?
@@ -3401,7 +3484,7 @@ impl FontMetricsService {
             }
             pen_x += x_advance;
         }
-        (!glyphs.is_empty()).then_some((glyphs, fonts))
+        (!glyphs.is_empty()).then_some((Some((glyphs, fonts)), fallbacks))
     }
 
     fn simple_copy_glyph_for_char(
@@ -3654,6 +3737,7 @@ impl FontMetricsService {
             requested_slant,
             FontWidth::Normal,
             self.selection_size(selection.font_size),
+            selection.fontset,
         );
         if let Some(matched) = resolution.font {
             let resolved_family = self.resolve_family(matched.family(), matched.file_path());
@@ -4238,20 +4322,24 @@ pub(crate) fn realize_face_font(
     Some(font)
 }
 
-fn protocol_face_font_selection(
-    face: &neomacs_display_protocol::face::Face,
-) -> RealizedFaceFontSelection<'_> {
+fn protocol_face_font_selection<'a>(
+    service: &FontMetricsService,
+    face_id: neomacs_display_protocol::types::FaceId,
+    face: &'a neomacs_display_protocol::face::Face,
+) -> RealizedFaceFontSelection<'a> {
     let primary_family = if face.font_family.is_empty() {
         "monospace"
     } else {
         face.font_family.as_ref()
     };
+    let (frame, face_epoch) = service.realized_fontset_context();
     RealizedFaceFontSelection::new(
         primary_family,
         face.font_weight,
         face.is_italic(),
         face.font_size.max(1.0),
     )
+    .with_fontset(frame, face_id.get(), face_epoch)
 }
 
 /// Stamp per-character fallback fonts for the non-ASCII characters actually
@@ -4334,7 +4422,7 @@ fn realize_frame_char_fonts(
         let Some(face) = state.faces.get(&face_id) else {
             continue;
         };
-        let selection = protocol_face_font_selection(face);
+        let selection = protocol_face_font_selection(svc, face_id, face);
         match svc.select_font_for_realized_face_char(repr, selection) {
             Some(selected) => {
                 let Some(glyph_code) = selected.glyph_code else {
@@ -4376,7 +4464,7 @@ fn realize_frame_char_fonts(
         let Some(face) = state.faces.get(&face_id) else {
             continue;
         };
-        let selection = protocol_face_font_selection(face);
+        let selection = protocol_face_font_selection(svc, face_id, face);
         match svc.resolved_glyphs_for_realized_face_cluster(&text, selection) {
             Some((glyphs, fonts)) => {
                 for font in fonts {

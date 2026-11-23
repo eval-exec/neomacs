@@ -1870,6 +1870,106 @@ fn seen_character_follows_a_later_fallback_move() {
     );
 }
 
+fn fontset_family(
+    resolver: &FontResolver,
+    fontset: crate::font::fallback_order::FaceFontsetId,
+    ch: char,
+) -> String {
+    resolver
+        .resolve_character(
+            "DejaVu Sans",
+            ch,
+            400,
+            FontSlant::Normal,
+            FontWidth::Normal,
+            selection_size(),
+            fontset,
+        )
+        .font
+        .unwrap_or_else(|| panic!("no fallback for {ch}"))
+        .family()
+        .to_string()
+}
+
+#[test]
+fn fallback_order_is_per_realized_fontset() {
+    let _eval = hold_fontset(
+        r#"(progn
+            (set-fontset-font t nil "OnlyC2")
+            (set-fontset-font t nil "CoversBoth" nil 'append))"#,
+    );
+    let resolver = FontResolver::new(Box::new(FallbackGroupBackend));
+    let face = crate::font::fallback_order::FaceFontsetId {
+        frame: 1,
+        face: 1,
+        face_epoch: 1,
+    };
+    assert_eq!(fontset_family(&resolver, face, '検'), "CoversBoth");
+    assert_eq!(
+        fontset_family(&resolver, face, 'リ'),
+        "CoversBoth",
+        "検 moves CoversBoth to the front of this realized fontset"
+    );
+    for other in [
+        crate::font::fallback_order::FaceFontsetId {
+            frame: 1,
+            face: 2,
+            face_epoch: 1,
+        },
+        crate::font::fallback_order::FaceFontsetId {
+            frame: 2,
+            face: 1,
+            face_epoch: 1,
+        },
+        crate::font::fallback_order::FaceFontsetId {
+            frame: 1,
+            face: 1,
+            face_epoch: 2,
+        },
+    ] {
+        assert_eq!(
+            fontset_family(&resolver, other, 'リ'),
+            "OnlyC2",
+            "another face, frame, or face epoch keeps charset order"
+        );
+    }
+}
+
+#[test]
+fn one_fontset_move_does_not_lock_another_fontsets_cached_fallback() {
+    let _eval = hold_fontset(
+        r#"(progn
+            (set-fontset-font t nil "OnlyC2")
+            (set-fontset-font t nil "CoversBoth" nil 'append))"#,
+    );
+    let resolver = FontResolver::new(Box::new(FallbackGroupBackend));
+    let face_a = crate::font::fallback_order::FaceFontsetId {
+        frame: 1,
+        face: 1,
+        face_epoch: 1,
+    };
+    let face_b = crate::font::fallback_order::FaceFontsetId {
+        frame: 1,
+        face: 2,
+        face_epoch: 1,
+    };
+    assert_eq!(fontset_family(&resolver, face_a, 'リ'), "OnlyC2");
+    assert_eq!(fontset_family(&resolver, face_a, 'リ'), "OnlyC2");
+    let warm = crate::font::fallback_order::fallback_order_lock_count();
+    assert_eq!(fontset_family(&resolver, face_b, '検'), "CoversBoth");
+    let moved = crate::font::fallback_order::fallback_order_lock_count();
+    assert!(
+        moved > warm,
+        "the other fontset's first walk takes the order lock"
+    );
+    assert_eq!(fontset_family(&resolver, face_a, 'リ'), "OnlyC2");
+    assert_eq!(
+        crate::font::fallback_order::fallback_order_lock_count(),
+        moved,
+        "a warm fontset keeps its fast path when another fontset moves"
+    );
+}
+
 #[test]
 fn fallback_move_to_front_keeps_the_unmoved_prefix() {
     let _eval = hold_fontset(

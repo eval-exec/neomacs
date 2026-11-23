@@ -2432,6 +2432,11 @@ impl LayoutEngine {
             accepted_frame_navigation_intent,
         ) = 'frame_layout: loop {
             let chrome_remeasured = std::mem::take(&mut chrome_remeasured_next_round);
+            if let Some(service) = self.font_metrics.as_mut() {
+                // GNU frees realized fontsets when `face_change` is set, and
+                // a face id is only unique inside its frame.
+                service.set_realized_fontset_context(frame_id.0, evaluator.face_change_count());
+            }
             // Re-entering this loop means the preceding physical frame walk
             // was rejected. Restore every leaf publication before collecting
             // the next attempt's canonical previous-viewport evidence.

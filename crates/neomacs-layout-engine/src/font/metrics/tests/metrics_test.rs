@@ -302,9 +302,8 @@ fn covered_symbol_uses_and_publishes_the_realized_primary_font() {
     assert_eq!(symbol.font.id, primary.font.id);
     assert_eq!(symbol.resolution, FontResolutionSource::FacePrimary);
 
-    let (_, published_fonts) = svc
-        .resolve_cluster_uncached("▶", selection)
-        .expect("resolved symbol cluster");
+    let (resolved, _) = svc.resolve_cluster_uncached("▶", selection);
+    let (_, published_fonts) = resolved.expect("resolved symbol cluster");
     let published = published_fonts
         .iter()
         .find(|font| font.id == primary.font.id)
@@ -4273,6 +4272,96 @@ impl crate::font_backend::FontBackend for MetricsFallbackBackend {
     }
 }
 
+/// Spleen is the face's bitmap primary. OnlyC2 and CoversBoth are outline
+/// fallbacks, so a later character in a simple-copy cluster can leave the
+/// bitmap while the representative stays on it.
+#[cfg(target_os = "linux")]
+struct BitmapClusterFallbackBackend {
+    spleen: String,
+    only_c2: String,
+    covers_both: String,
+}
+
+#[cfg(target_os = "linux")]
+impl crate::font_backend::FontBackend for BitmapClusterFallbackBackend {
+    fn kind(&self) -> FontBackendKind {
+        FontBackendKind::Fontconfig
+    }
+
+    fn list_families(&self) -> Vec<crate::font_backend::FontFamilyName> {
+        Vec::new()
+    }
+
+    fn resolve_family(&self, family: &str) -> String {
+        family.to_owned()
+    }
+
+    fn family_prefers_monospace(&self, _family: &str) -> bool {
+        false
+    }
+
+    fn list_candidates(
+        &self,
+        query: &crate::font_backend::FontCandidateQuery,
+    ) -> Vec<crate::font_backend::FontCandidate> {
+        let family = query.scope.queried_family();
+        let ch = query.required.single_char();
+        let (file, family, size) = match family {
+            Some("OnlyC2") => {
+                if ch != Some('リ') {
+                    return Vec::new();
+                }
+                (
+                    self.only_c2.as_str(),
+                    "OnlyC2",
+                    crate::font_backend::PlatformFontSize::Scalable,
+                )
+            }
+            Some("CoversBoth") => {
+                if !matches!(ch, Some('検' | 'リ')) {
+                    return Vec::new();
+                }
+                (
+                    self.covers_both.as_str(),
+                    "CoversBoth",
+                    crate::font_backend::PlatformFontSize::Scalable,
+                )
+            }
+            Some(other) => (
+                self.spleen.as_str(),
+                other,
+                crate::font_backend::PlatformFontSize::Unknown,
+            ),
+            None => (
+                self.spleen.as_str(),
+                "Spleen",
+                crate::font_backend::PlatformFontSize::Unknown,
+            ),
+        };
+        vec![crate::font_backend::FontCandidate {
+            matched: platform_file_candidate(
+                ResolvedFontIdentity::from_file(file, 0, None),
+                crate::font_backend::PlatformFontMetadata {
+                    foundry: None,
+                    family: family.to_owned(),
+                    weight: Some(400),
+                    slant: FontSlant::Normal,
+                    width: Some(FontWidth::Normal),
+                    spacing: None,
+                    design_metrics: None,
+                    size,
+                },
+            ),
+        }]
+    }
+
+    fn advance_catalog_generation(&mut self) {}
+
+    fn poll_catalog_change(&mut self) -> crate::font::catalog::FontCatalogChange {
+        crate::font::catalog::FontCatalogChange::Unchanged
+    }
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn materialized_seen_character_follows_a_later_fallback_move() {
@@ -4326,6 +4415,109 @@ fn materialized_seen_character_follows_a_later_fallback_move() {
         "CoversBoth",
         "the cluster cache must follow the same front"
     );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn realized_fontsets_keep_separate_cached_fallback_widths() {
+    // The context has to stay alive: dropping it restores the default fontset.
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    eval.eval_str(
+        r#"(progn
+            (set-fontset-font t nil "OnlyC2")
+            (set-fontset-font t nil "CoversBoth" nil 'append))"#,
+    )
+    .expect("fallback specs");
+    let mut svc = make_svc();
+    svc.font_resolver
+        .replace_backend(Box::new(MetricsFallbackBackend {
+            only_c2: test_font_path(
+                neomacs_test_fonts::plemol_jp_console_nf_regular().to_path_buf(),
+            ),
+            covers_both: test_font_path(neomacs_test_fonts::noto_sans_cjk_variable().to_path_buf()),
+        }));
+    let face = |face: u32, epoch: u64| {
+        RealizedFaceFontSelection::new("DejaVu Sans", 400, false, 16.0).with_fontset(1, face, epoch)
+    };
+    let opened = |svc: &mut FontMetricsService, selection, ch: char| {
+        svc.resolved_font_for_realized_face_char(ch, selection)
+            .unwrap_or_else(|| panic!("materialized font for {ch}"))
+            .family
+    };
+    let first = face(1, 1);
+    assert_eq!(opened(&mut svc, first, 'リ'), "OnlyC2");
+    assert_eq!(svc.char_width_for_realized_face('リ', first), 17.0);
+    let second = face(0, 1);
+    assert_eq!(opened(&mut svc, second, '検'), "CoversBoth");
+    assert_eq!(opened(&mut svc, second, 'リ'), "CoversBoth");
+    assert_eq!(svc.char_width_for_realized_face('リ', second), 16.0);
+    assert_eq!(
+        opened(&mut svc, first, 'リ'),
+        "OnlyC2",
+        "the other face's cached リ stays on the font it opened"
+    );
+    assert_eq!(
+        svc.char_width_for_realized_face('リ', first),
+        17.0,
+        "the other face's cached advance stays on Plemol"
+    );
+    let next_epoch = face(0, 2);
+    assert_eq!(
+        opened(&mut svc, next_epoch, 'リ'),
+        "OnlyC2",
+        "a new face epoch starts again in charset order"
+    );
+    drop(eval);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn bitmap_cluster_records_every_fallback_stamp() {
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    eval.eval_str(
+        r#"(progn
+            (set-fontset-font t nil "OnlyC2")
+            (set-fontset-font t nil "CoversBoth" nil 'append))"#,
+    )
+    .expect("fallback specs");
+    let mut svc = make_svc();
+    svc.font_resolver
+        .replace_backend(Box::new(BitmapClusterFallbackBackend {
+            spleen: test_font_path(neomacs_test_fonts::spleen_2_2_0().bdf()),
+            only_c2: test_font_path(
+                neomacs_test_fonts::plemol_jp_console_nf_regular().to_path_buf(),
+            ),
+            covers_both: test_font_path(neomacs_test_fonts::noto_sans_cjk_variable().to_path_buf()),
+        }));
+    let selection = RealizedFaceFontSelection::new("Spleen", 400, false, 16.0);
+    let later_family = |svc: &mut FontMetricsService| {
+        let (glyphs, fonts) = svc
+            .resolved_glyphs_for_realized_face_cluster("©リ", selection)
+            .expect("©リ bitmap cluster");
+        let glyph = glyphs
+            .iter()
+            .find(|glyph| glyph.cluster_start == 2)
+            .expect("リ starts at the second UTF-8 byte");
+        fonts
+            .iter()
+            .find(|font| font.id == glyph.resolved_font_id)
+            .expect("リ's font")
+            .family
+            .clone()
+    };
+    assert_eq!(later_family(&mut svc), "OnlyC2");
+    assert_eq!(
+        svc.resolved_font_for_realized_face_char('検', selection)
+            .expect("検")
+            .family,
+        "CoversBoth"
+    );
+    assert_eq!(
+        later_family(&mut svc),
+        "CoversBoth",
+        "a later character's fallback stamp must miss after that entry moves"
+    );
+    drop(eval);
 }
 
 #[test]
