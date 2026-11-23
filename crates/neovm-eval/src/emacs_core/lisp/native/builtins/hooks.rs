@@ -10,15 +10,11 @@ use neovm_value::gc_trace::GcTrace;
 // ===========================================================================
 
 pub(crate) fn builtin_run_hooks(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
-    let result = hook_runtime::run_named_hooks(eval, &args)?;
-    let mode = eval.symbol_mode();
-    if args.iter().any(|arg| {
-        arg.as_symbol_name(mode)
-            .is_some_and(|name| name == "window-setup-hook")
-    }) {
-        eval.frame_manager_mut().window_setup_hook_completed = true;
-    }
-    Ok(result)
+    // Allocation is per frame, on that frame's first item-bearing redisplay.
+    // An erroring `window-setup-hook` must not leave the bar unallocated:
+    // GNU packs the bar from `update_frame_tool_bar`, not from this hook's
+    // return value (gtkutil.c:6149-6160).
+    hook_runtime::run_named_hooks(eval, &args)
 }
 
 #[doc(hidden)]

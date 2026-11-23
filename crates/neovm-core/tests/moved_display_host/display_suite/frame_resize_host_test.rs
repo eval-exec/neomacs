@@ -610,10 +610,9 @@ impl ChromeResizeFixture {
         }
         frame.sync_bar_heights_from_parameters();
         // This fixture is a live frame after the first tool-bar allocation.
-        // `FRAME_TOOLBAR_HEIGHT` is already stored (gtkutil.c:5804). The
-        // window-setup-hook case, where that field is still 0, is a separate
-        // row.
-        frame.toolkit_tool_bar_allocated = true;
+        // `FRAME_TOOLBAR_HEIGHT` is already stored (gtkutil.c:5804). Rows that
+        // start before that allocation set `ToolkitToolBar::Unallocated`.
+        frame.toolkit_tool_bar = crate::window::ToolkitToolBar::Allocated;
         // Keep the text allocation fixed across frontend chrome models. GNU
         // NS has a global menu; GTK reserves a menu band in this window.
         let menu_height = frame.menu_bar_height;
@@ -763,15 +762,32 @@ fn allocated_explicit_size_includes_the_tool_bar_under_inhibition() {
 }
 
 #[cfg(target_os = "linux")]
-#[test]
-fn explicit_size_before_tool_bar_allocation_omits_the_bar() {
-    let mut fixture = ChromeResizeFixture::new();
+fn clear_tool_bar_allocation(fixture: &mut ChromeResizeFixture) {
     fixture
         .eval
         .frame_manager_mut()
         .get_mut(fixture.frame_id)
         .unwrap()
-        .toolkit_tool_bar_allocated = false;
+        .toolkit_tool_bar = crate::window::ToolkitToolBar::Unallocated {
+        explicit_size_omitted: false,
+    };
+}
+
+#[cfg(target_os = "linux")]
+fn tool_bar_state(fixture: &ChromeResizeFixture) -> crate::window::ToolkitToolBar {
+    fixture
+        .eval
+        .frame_manager()
+        .get(fixture.frame_id)
+        .unwrap()
+        .toolkit_tool_bar
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn explicit_size_before_tool_bar_allocation_omits_the_bar() {
+    let mut fixture = ChromeResizeFixture::new();
+    clear_tool_bar_allocation(&mut fixture);
     fixture
         .eval
         .eval_str("(setq frame-inhibit-implied-resize t)")
@@ -791,8 +807,164 @@ fn explicit_size_before_tool_bar_allocation_omits_the_bar() {
         (720, 640 + fixture.menu_height)
     );
     fixture.acknowledge(&request);
-    let text_px = 640u32.saturating_sub(toolbar);
-    fixture.assert_geometry(90, (text_px / 16) as i64, text_px as i64);
+    // Layout withholds the band until allocation, so the requested 40 rows
+    // survive the size that left the bar out (gtkutil.c:1181-1182).
+    fixture.assert_geometry(90, 40, 640);
+    assert!(matches!(
+        tool_bar_state(&fixture),
+        crate::window::ToolkitToolBar::Unallocated {
+            explicit_size_omitted: true
+        }
+    ));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn first_tool_bar_allocation_grows_only_when_the_explicit_size_omitted_the_bar() {
+    let mut grow = ChromeResizeFixture::new();
+    clear_tool_bar_allocation(&mut grow);
+    grow.requests.borrow_mut().clear();
+    grow.eval.eval_str("(set-frame-size nil 90 40)").unwrap();
+    let request = grow.requests.borrow()[0].clone();
+    let toolbar = grow
+        .eval
+        .frame_manager()
+        .get(grow.frame_id)
+        .unwrap()
+        .tool_bar_height;
+    assert_eq!(
+        (request.width, request.height),
+        (720, 640 + grow.menu_height)
+    );
+    grow.acknowledge(&request);
+    grow.assert_geometry(90, 40, 640);
+    grow.requests.borrow_mut().clear();
+    // Fixture inhibit is `(tab-bar-lines)`, so tool-bar-lines preserves the grid.
+    crate::emacs_core::frame::note_linux_toolkit_tool_bar_allocation(
+        &mut grow.eval,
+        grow.frame_id,
+        true,
+    );
+    assert_eq!(grow.requests.borrow().len(), 1);
+    let grown = grow.requests.borrow()[0].clone();
+    assert_eq!(
+        (grown.width, grown.height),
+        (720, 640 + toolbar + grow.menu_height)
+    );
+    grow.acknowledge(&grown);
+    grow.assert_geometry(90, 40, 640);
+    assert_eq!(
+        tool_bar_state(&grow),
+        crate::window::ToolkitToolBar::Allocated
+    );
+
+    for policy in ["t", "'(tool-bar-lines)"] {
+        let mut fixture = ChromeResizeFixture::new();
+        clear_tool_bar_allocation(&mut fixture);
+        fixture
+            .eval
+            .eval_str(&format!("(setq frame-inhibit-implied-resize {policy})"))
+            .unwrap();
+        fixture.requests.borrow_mut().clear();
+        fixture.eval.eval_str("(set-frame-size nil 90 40)").unwrap();
+        let request = fixture.requests.borrow()[0].clone();
+        assert_eq!(
+            (request.width, request.height),
+            (720, 640 + fixture.menu_height),
+            "{policy}"
+        );
+        fixture.acknowledge(&request);
+        fixture.assert_geometry(90, 40, 640);
+        fixture.requests.borrow_mut().clear();
+        crate::emacs_core::frame::note_linux_toolkit_tool_bar_allocation(
+            &mut fixture.eval,
+            fixture.frame_id,
+            true,
+        );
+        assert!(
+            fixture.requests.borrow().is_empty(),
+            "{policy}: preserving the allocation sends no request"
+        );
+        let toolbar = fixture
+            .eval
+            .frame_manager()
+            .get(fixture.frame_id)
+            .unwrap()
+            .tool_bar_height;
+        let text_px = 640u32.saturating_sub(toolbar);
+        fixture.assert_geometry(90, (text_px / 16) as i64, text_px as i64);
+        assert_eq!(
+            tool_bar_state(&fixture),
+            crate::window::ToolkitToolBar::Allocated,
+            "{policy}"
+        );
+    }
+
+    let mut marked = ChromeResizeFixture::new();
+    clear_tool_bar_allocation(&mut marked);
+    marked.requests.borrow_mut().clear();
+    crate::emacs_core::frame::note_linux_toolkit_tool_bar_allocation(
+        &mut marked.eval,
+        marked.frame_id,
+        true,
+    );
+    assert!(marked.requests.borrow().is_empty());
+    marked.assert_geometry(100, 35, 560);
+    assert_eq!(
+        tool_bar_state(&marked),
+        crate::window::ToolkitToolBar::Allocated
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn erroring_window_setup_hook_still_allocates_the_tool_bar() {
+    let mut fixture = ChromeResizeFixture::new();
+    clear_tool_bar_allocation(&mut fixture);
+    let signaled = fixture
+        .eval
+        .eval_str(
+            "(condition-case err
+                 (progn
+                   (setq window-setup-hook (list (lambda () (signal 'error (list \"n827\")))))
+                   (run-hooks 'window-setup-hook)
+                   'ran)
+               (error 'signaled))",
+        )
+        .unwrap();
+    assert_eq!(signaled, Value::symbol("signaled"));
+    fixture.requests.borrow_mut().clear();
+    crate::emacs_core::frame::note_linux_toolkit_tool_bar_allocation(
+        &mut fixture.eval,
+        fixture.frame_id,
+        true,
+    );
+    assert!(fixture.requests.borrow().is_empty());
+    fixture.assert_geometry(100, 35, 560);
+    assert_eq!(
+        tool_bar_state(&fixture),
+        crate::window::ToolkitToolBar::Allocated
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn tool_bar_lines_zero_clears_toolkit_allocation() {
+    let mut fixture = ChromeResizeFixture::new();
+    assert_eq!(
+        tool_bar_state(&fixture),
+        crate::window::ToolkitToolBar::Allocated
+    );
+    fixture
+        .eval
+        .eval_str("(modify-frame-parameters nil '((tool-bar-lines . 0)))")
+        .unwrap();
+    assert_eq!(
+        tool_bar_state(&fixture),
+        crate::window::ToolkitToolBar::Unallocated {
+            explicit_size_omitted: false
+        }
+    );
 }
 
 #[cfg(target_os = "linux")]

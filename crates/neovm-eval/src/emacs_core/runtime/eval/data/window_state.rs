@@ -3326,6 +3326,25 @@ pub enum FrameCreationPhase {
     Made,
 }
 
+/// Per-frame toolkit tool bar. Linux uses this for both the explicit-size
+/// request and the pixels layout reserves.
+///
+/// GNU stores the widget height in `FRAME_TOOLBAR_HEIGHT`, which stays 0
+/// until `update_frame_tool_bar` packs items (`gtkutil.c:6149-6160`), and
+/// records that pack in `f->tool_bar_resized` (`gtkutil.c:6158-6160`).
+/// `Unallocated { explicit_size_omitted: true }` is only the gap after an
+/// explicit size left the bar out of this frame's window. Layout withholds
+/// the band in that gap, so `frame-height` stays the requested row count
+/// until the first item-bearing redisplay. A creation window that already
+/// contains the band stays `explicit_size_omitted: false` and still reserves
+/// `tool_bar_height`. `free_frame_tool_bar` (`gtkutil.c:6168-6206`) returns
+/// the frame to `Unallocated { explicit_size_omitted: false }`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToolkitToolBar {
+    Unallocated { explicit_size_omitted: bool },
+    Allocated,
+}
+
 /// A frame (top-level window/screen).
 pub struct Frame {
     /// GNU `f->change_stamp`: the epoch bumped each time the window change
@@ -3446,20 +3465,13 @@ pub struct Frame {
     pub gui_bar_presentation: GuiBarPresentation,
     /// Menu bar height in pixels.
     pub menu_bar_height: u32,
-    /// Tool bar height in pixels. Layout always subtracts this. An explicit
-    /// outer-window request adds it only once `toolkit_tool_bar_allocated`
-    /// is set, matching GNU `FRAME_TOOLBAR_HEIGHT` (0 until the first
-    /// item-bearing `update_frame_tool_bar`).
+    /// Stored tool-bar height in pixels. Layout and Lisp geometry report
+    /// [`Self::reserved_tool_bar_height`], which drops this value on Linux
+    /// only while [`ToolkitToolBar::Unallocated`] records that an explicit
+    /// size left the bar out of the host window.
     pub tool_bar_height: u32,
-    /// GNU `f->tool_bar_resized` after `xg_update_tool_bar_sizes` has stored
-    /// a toolbar height (gtkutil.c:5804, :6160). Linux explicit sizes consult
-    /// this. Other profiles keep the pre-allocation request behavior out of
-    /// this flag.
-    pub toolkit_tool_bar_allocated: bool,
-    /// The last explicit size was sent while the toolkit bar was still
-    /// unallocated, so the host window does not yet include `tool_bar_height`.
-    /// The first allocation applies inhibit 2 from this fact.
-    pub explicit_size_omitted_unallocated_tool_bar: bool,
+    /// Linux toolkit allocation for this frame. See [`ToolkitToolBar`].
+    pub toolkit_tool_bar: ToolkitToolBar,
     /// Compact bar height in pixels.
     pub compact_bar_height: u32,
     /// Tab bar height in pixels.
@@ -3635,9 +3647,6 @@ pub struct FrameManager {
     /// are rare and pay the increment; redisplay can then reject a stale leaf
     /// plan in O(1) after arbitrary Lisp callbacks.
     pub window_topology_generation: u64,
-    /// `window-setup-hook` has returned. GTK's first tool-bar allocation is
-    /// still in the future while that hook applies an explicit size.
-    pub window_setup_hook_completed: bool,
 }
 
 // --- E5-FM-6b snapshot/record impls (stage-4 W2/E5) ---
@@ -4657,7 +4666,6 @@ impl Default for FrameManager {
             next_navigation_intent_generation: std::num::NonZeroU64::MIN,
             pending_content_transition_intents: PendingContentTransitionIntents::default(),
             window_topology_generation: 1,
-            window_setup_hook_completed: false,
         }
     }
 }
@@ -5634,7 +5642,7 @@ impl Frame {
         let base_width = width_inc.saturating_add(self.horizontal_non_text_width().max(0) as u32);
         let base_height = height_inc.saturating_add(
             self.menu_bar_height
-                .saturating_add(self.tool_bar_height)
+                .saturating_add(self.reserved_tool_bar_height())
                 .saturating_add(self.compact_bar_height)
                 .saturating_add(self.tab_bar_height),
         );
@@ -6938,8 +6946,9 @@ impl Frame {
             gui_bar_presentation: GuiBarPresentation::Separate,
             menu_bar_height: 0,
             tool_bar_height: 0,
-            toolkit_tool_bar_allocated: false,
-            explicit_size_omitted_unallocated_tool_bar: false,
+            toolkit_tool_bar: ToolkitToolBar::Unallocated {
+                explicit_size_omitted: false,
+            },
             compact_bar_height: 0,
             tab_bar_height: 0,
             font_pixel_size: 16.0,
@@ -7517,9 +7526,28 @@ impl Frame {
             .unwrap_or(0)
     }
 
+    /// Tool-bar pixels layout, native height, and `tool-bar-size` reserve.
+    ///
+    /// The stored [`Self::tool_bar_height`] stays put so a later allocation
+    /// can grow by it. Linux reports 0 only while an explicit size has left
+    /// that band out of the window, matching `FRAME_TOOLBAR_HEIGHT` == 0
+    /// before the first item-bearing update (`gtkutil.c:1181-1182`).
+    pub fn reserved_tool_bar_height(&self) -> u32 {
+        #[cfg(target_os = "linux")]
+        if matches!(
+            self.toolkit_tool_bar,
+            ToolkitToolBar::Unallocated {
+                explicit_size_omitted: true
+            }
+        ) {
+            return 0;
+        }
+        self.tool_bar_height
+    }
+
     pub fn chrome_top_height(&self) -> f32 {
         self.menu_bar_height
-            .saturating_add(self.tool_bar_height)
+            .saturating_add(self.reserved_tool_bar_height())
             .saturating_add(self.compact_bar_height)
             .saturating_add(self.tab_bar_height) as f32
     }
@@ -7536,7 +7564,7 @@ impl Frame {
     /// replacement for the menu/tool band, so it belongs to the same group.
     pub fn external_bar_height(&self) -> u32 {
         self.menu_bar_height
-            .saturating_add(self.tool_bar_height)
+            .saturating_add(self.reserved_tool_bar_height())
             .saturating_add(self.compact_bar_height)
     }
 
@@ -7621,7 +7649,6 @@ impl FrameManager {
             next_navigation_intent_generation: std::num::NonZeroU64::MIN,
             pending_content_transition_intents: PendingContentTransitionIntents::default(),
             window_topology_generation: 1,
-            window_setup_hook_completed: false,
         }
     }
 

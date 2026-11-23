@@ -151,12 +151,7 @@ fn neomacs_gui_frame_geometry(
     if frame.effective_window_system().is_none() {
         return Ok(None);
     }
-    let external_bar_height = i64::from(
-        frame
-            .menu_bar_height
-            .saturating_add(frame.tool_bar_height)
-            .saturating_add(frame.compact_bar_height),
-    );
+    let external_bar_height = i64::from(frame.external_bar_height());
     let tool_bar_position = frame
         .parameters
         .get(&Value::symbol("tool-bar-position"))
@@ -170,7 +165,7 @@ fn neomacs_gui_frame_geometry(
         top: frame.top_pos,
         external_bar_height,
         menu_bar_height: i64::from(frame.menu_bar_height),
-        tool_bar_height: i64::from(frame.tool_bar_height),
+        tool_bar_height: i64::from(frame.reserved_tool_bar_height()),
         tab_bar_height: i64::from(frame.tab_bar_height),
         internal_border_width: frame.internal_border_width().max(0),
         tool_bar_position,

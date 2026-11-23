@@ -805,6 +805,24 @@ impl DisplayFrameExt for Frame {
                 self.compact_bar_height = self.compact_bar_pixel_height_from_parameters();
             }
         }
+        // GNU `free_frame_tool_bar` zeroes `FRAME_TOOLBAR_*` when the line
+        // count goes to 0 (gtkutil.c:6168-6206). Compact presentation also
+        // stores a 0 height while `tool-bar-lines` stays 1, and that must
+        // not clear an allocation: the next separate presentation still has
+        // the bar. Re-enabling lines leaves the frame unallocated until the
+        // next item-bearing redisplay, so an explicit size in that gap omits
+        // the bar again.
+        #[cfg(target_os = "linux")]
+        if self
+            .known_frame_parameter_int(FrameParam::ToolBarLines)
+            .unwrap_or(0)
+            <= 0
+        {
+            self.toolkit_tool_bar =
+                neovm_eval::emacs_core::eval::data::window_state::ToolkitToolBar::Unallocated {
+                    explicit_size_omitted: false,
+                };
+        }
         self.sync_window_area_bounds();
     }
 

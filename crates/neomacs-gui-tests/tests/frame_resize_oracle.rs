@@ -99,7 +99,8 @@ fn n827_toolbar_height_matches_gnu_frame_lines_and_text_height() {
     assert!(
         actual.menu_height > 0 && gnu.menu_height > 0,
         "menu bar pixels neomacs {} gnu {}",
-        actual.menu_height, gnu.menu_height
+        actual.menu_height,
+        gnu.menu_height
     );
     assert_eq!(
         actual.text_height + actual.tool_height,
@@ -137,6 +138,78 @@ fn n827_after_redisplay_inhibit_tool_bar_lines_keeps_requested_text_height() {
 #[test]
 fn n827_after_redisplay_default_inhibit_keeps_requested_text_height() {
     assert_explicit_size_after_redisplay("default");
+}
+
+/// Window-setup-hook size, sampled after the command loop redisplays.
+/// Default inhibit grows on the first item-bearing redisplay, so the
+/// requested 40 rows and raw `frame-text-height` match GNU.
+#[test]
+fn n827_window_setup_hook_default_inhibit_grows_to_keep_text_height() {
+    let (gnu, actual) = sample_explicit_sizes("n827-hook-default", &[("N827_INHIBIT", "default")]);
+    assert_eq!(
+        (actual.frame.0, actual.frame.1, actual.text_height),
+        (gnu.frame.0, gnu.frame.1, gnu.text_height),
+        "hook default neomacs {actual:?} gnu {gnu:?}"
+    );
+    assert_eq!(actual.frame.1, 40, "neomacs {actual:?} gnu {gnu:?}");
+}
+
+/// `(tool-bar-lines)` at hook time preserves the outer window. Compared
+/// numbers are frame lines plus each editor's text height and tool-bar
+/// pixels, the same contract as inhibit t.
+#[test]
+fn n827_window_setup_hook_tool_bar_lines_keeps_lines_and_text_plus_tool() {
+    let (gnu, actual) = sample_explicit_sizes(
+        "n827-hook-tool-bar-lines",
+        &[("N827_INHIBIT", "tool-bar-lines")],
+    );
+    assert_eq!(
+        (actual.frame.0, actual.frame.1),
+        (gnu.frame.0, gnu.frame.1),
+        "hook tool-bar-lines frame neomacs {actual:?} gnu {gnu:?}"
+    );
+    assert!(
+        actual.tool_height > 0 && gnu.tool_height > 0,
+        "{actual:?} {gnu:?}"
+    );
+    assert_eq!(
+        actual.text_height + actual.tool_height,
+        gnu.text_height + gnu.tool_height,
+        "hook tool-bar-lines text plus tool neomacs {actual:?} gnu {gnu:?}"
+    );
+}
+
+/// Explicit size inside `window-setup-hook`, sampled before the command
+/// loop redisplays. Neither editor has realized the tool bar, so
+/// `frame-height` is 40 and `frame-text-height` matches. Outer pixels are
+/// not the contract: the window may still be unmapped (`xwin` 0).
+#[test]
+fn n827_explicit_size_before_first_redisplay_keeps_requested_rows() {
+    let (gnu, actual) = sample_explicit_sizes(
+        "n827-before-redisplay",
+        &[("N827_WHEN", "before-redisplay")],
+    );
+    assert_eq!(
+        (actual.frame.0, actual.frame.1, actual.text_height),
+        (gnu.frame.0, gnu.frame.1, gnu.text_height),
+        "before redisplay neomacs {actual:?} gnu {gnu:?}"
+    );
+    assert_eq!(actual.frame.1, 40, "neomacs {actual:?} gnu {gnu:?}");
+}
+
+/// `(redisplay)` and `(sit-for 0)` during init allocate the bar before the
+/// hook's explicit size. Inhibit t then includes the bar, so the sampled
+/// frame stays 40 rows and raw text height matches.
+#[test]
+fn n827_init_redisplay_allocates_before_the_explicit_size() {
+    let (gnu, actual) =
+        sample_explicit_sizes("n827-init-redisplay", &[("N827_WHEN", "init-redisplay")]);
+    assert_eq!(
+        (actual.frame.0, actual.frame.1, actual.text_height),
+        (gnu.frame.0, gnu.frame.1, gnu.text_height),
+        "init redisplay neomacs {actual:?} gnu {gnu:?}"
+    );
+    assert_eq!(actual.frame.1, 40, "neomacs {actual:?} gnu {gnu:?}");
 }
 
 fn sample_explicit_sizes(

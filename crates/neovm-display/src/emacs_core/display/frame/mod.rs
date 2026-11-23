@@ -38,6 +38,7 @@ use super::window_cmds::{
 use crate::window::FrameManager;
 use crate::window::{
     FrameDivider, FrameFullscreen, FrameId, FrameParam, FrameParamKey, FrameVisibility,
+    ToolkitToolBar,
 };
 use neovm_edit::buffer::{BufferId, BufferManager};
 use neovm_value::error::Flow;
@@ -767,7 +768,7 @@ fn explicit_outer_includes_tool_bar(
         .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
     #[cfg(target_os = "linux")]
     {
-        Ok(frame.toolkit_tool_bar_allocated)
+        Ok(matches!(frame.toolkit_tool_bar, ToolkitToolBar::Allocated))
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -776,43 +777,56 @@ fn explicit_outer_includes_tool_bar(
     }
 }
 
-/// First Linux tool-bar allocation after `window-setup-hook`.
+/// First Linux tool-bar allocation for one frame.
 ///
-/// GNU packs the bar in `update_frame_tool_bar` and then runs inhibit 2
-/// (`gtkutil.c:6149-6160`, `frame.c:885-905`). Preserving the text grid grows
-/// the window by the bar. Preserving the allocation leaves the outer size
-/// and the text stays shrunk. A startup window that already contains the bar
-/// is only marked allocated.
+/// GNU packs the bar in `update_frame_tool_bar` when that frame has items,
+/// then runs inhibit 2 (`gtkutil.c:6149-6156`, `frame.c:885-905`). The trigger
+/// is this frame's redisplay, not a global `window-setup-hook` flag. An empty
+/// item list does not mark the frame allocated. GNU still sets
+/// `tool_bar_resized` on that update, including a creation-time update with
+/// 0 items (`gtkutil.c:6158-6160`); that creation case is left for a later
+/// attested row. The pixel height is stored only when `n_tool_bar_items`
+/// is non-zero.
+/// Preserving the text grid grows the window by the bar. Preserving the
+/// allocation keeps the outer pixels and the text rows shrink inside them.
+/// A window that already contains the band is only marked allocated.
+///
+/// `text_height` is read while the bar is still withheld, so it is already
+/// the full grid. The grow passes that height with `include_tool_bar` and
+/// does not add `tool_bar_height` a second time.
 pub fn note_linux_toolkit_tool_bar_allocation(
     eval: &mut neovm_eval::emacs_core::eval::Context,
+    fid: FrameId,
     has_tool_bar_items: bool,
 ) {
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (eval, has_tool_bar_items);
+        let _ = (eval, fid, has_tool_bar_items);
     }
     #[cfg(target_os = "linux")]
     {
-        if !has_tool_bar_items || !eval.frame_manager().window_setup_hook_completed {
+        if !has_tool_bar_items {
             return;
         }
-        let Some(fid) = eval
-            .frame_manager()
-            .selected_frame()
-            .filter(|frame| frame.effective_window_system().is_some())
-            .map(|frame| frame.id)
-        else {
-            return;
-        };
-        let Some((omitted, text_width, text_height)) =
+        let Some((omitted, text_width, text_height, outer_width, outer_height)) =
             eval.frame_manager().get(fid).and_then(|frame| {
-                if frame.toolkit_tool_bar_allocated || frame.tool_bar_height == 0 {
+                if frame.effective_window_system().is_none()
+                    || matches!(frame.toolkit_tool_bar, ToolkitToolBar::Allocated)
+                    || frame.tool_bar_height == 0
+                {
                     None
                 } else {
                     Some((
-                        frame.explicit_size_omitted_unallocated_tool_bar,
+                        matches!(
+                            frame.toolkit_tool_bar,
+                            ToolkitToolBar::Unallocated {
+                                explicit_size_omitted: true
+                            }
+                        ),
                         frame_text_width_pixels(frame),
-                        frame_text_height_pixels(frame).saturating_add(frame.tool_bar_height),
+                        frame_text_height_pixels(frame),
+                        frame.width,
+                        frame.height,
                     ))
                 }
             })
@@ -829,25 +843,37 @@ pub fn note_linux_toolkit_tool_bar_allocation(
             }
         };
         if let Some(frame) = eval.frame_manager_mut().get_mut(fid) {
-            frame.toolkit_tool_bar_allocated = true;
-            frame.explicit_size_omitted_unallocated_tool_bar = false;
+            frame.toolkit_tool_bar = ToolkitToolBar::Allocated;
         }
-        if !grow {
+        if grow {
+            let (frames, buffers, display_host) = eval.frame_manager_buffers_and_display_host_mut();
+            if let Err(err) = resize_live_gui_frame(
+                frames,
+                buffers,
+                display_host,
+                fid,
+                text_width,
+                text_height,
+                false,
+                true,
+            ) {
+                tracing::warn!("tool-bar allocation resize failed: {err:?}");
+            }
             return;
         }
-        let (frames, buffers, display_host) = eval.frame_manager_buffers_and_display_host_mut();
-        if let Err(err) = resize_live_gui_frame(
-            frames,
-            buffers,
-            display_host,
-            fid,
-            text_width,
-            text_height,
-            false,
-            true,
-        ) {
-            tracing::warn!("tool-bar allocation resize failed: {err:?}");
+        if !omitted {
+            return;
         }
+        // Inhibit 2 kept the outer window. Reflow so the now-reserved bar
+        // eats text rows. This is not a host request: the pixels already
+        // match the window that omitted the bar.
+        {
+            let (frames, buffers, _) = eval.frame_manager_buffers_and_display_host_mut();
+            if let Some(frame) = frames.get_mut(fid) {
+                frame.resize_pixelwise_with_buffer_constraints(buffers, outer_width, outer_height);
+            }
+        }
+        adjust_frame_glyph_matrices(eval, fid);
     }
 }
 

@@ -4058,9 +4058,31 @@ fn sync_selected_gui_chrome_state(eval: &mut Context) {
             let _ = host.set_gui_frame_geometry_hints(frame_id, hints);
         }
     }
+}
+
+/// Allocate this frame's toolkit tool bar on the redisplay that has items.
+///
+/// GNU's `update_frame_tool_bar` runs per frame (`gtkutil.c:6149`). A global
+/// hook flag on the selected frame would miss every other frame and would
+/// stay clear when `window-setup-hook` signals.
+fn note_redisplayed_linux_tool_bar(eval: &mut Context, frame_id: FrameId) {
+    if throw_on_input_active(eval) {
+        return;
+    }
+    let tool_enabled = eval.frame_manager().get(frame_id).is_some_and(|frame| {
+        frame.effective_window_system().is_some()
+            && frame
+                .known_frame_parameter_int(FrameParam::ToolBarLines)
+                .is_some_and(|lines| lines > 0)
+    });
+    if !tool_enabled {
+        return;
+    }
+    let items = collect_gui_tool_bar_items_for_frame(eval, frame_id);
     neovm_core::emacs_core::frame::note_linux_toolkit_tool_bar_allocation(
         eval,
-        !tool_items.is_empty(),
+        frame_id,
+        !items.is_empty(),
     );
 }
 
@@ -6794,6 +6816,7 @@ fn publish_gui_frame(
         .into_iter()
         .flat_map(|tree| tree.frames_bottom_to_top)
     {
+        note_redisplayed_linux_tool_bar(evaluator, node.frame_id);
         let prepared = frame_layout::layout_frame_display_state(
             evaluator,
             node.frame_id,

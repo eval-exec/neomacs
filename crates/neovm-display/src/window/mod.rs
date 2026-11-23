@@ -703,7 +703,7 @@ impl FrameDivider {
     }
 }
 
-pub use neovm_eval::emacs_core::eval::data::window_state::{Frame, FrameManager};
+pub use neovm_eval::emacs_core::eval::data::window_state::{Frame, FrameManager, ToolkitToolBar};
 
 pub use neovm_eval::emacs_core::eval::data::window_state::FrameCoordinateHit;
 

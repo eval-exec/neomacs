@@ -6132,10 +6132,12 @@ pub(crate) fn frame_realized_lines(frame: &crate::window::Frame) -> i64 {
 
 fn frame_non_text_height_pixels(frame: &crate::window::Frame) -> u32 {
     // GNU frame text size includes the minibuffer window.  Only true frame
-    // chrome lives outside the text area for sizing math here.
+    // chrome lives outside the text area for sizing math here. The tool bar
+    // contributes the reserved height, which is 0 while an explicit size has
+    // left an unallocated bar out of the window.
     frame
         .menu_bar_height
-        .saturating_add(frame.tool_bar_height)
+        .saturating_add(frame.reserved_tool_bar_height())
         .saturating_add(frame.tab_bar_height)
 }
 
@@ -6175,9 +6177,18 @@ pub(crate) fn host_outer_non_text_height_pixels(
     frame: &crate::window::Frame,
     include_tool_bar: bool,
 ) -> u32 {
+    // `frame_non_text_total_height_pixels` already uses the reserved height.
+    // A caller that includes the bar still adds the stored height when the
+    // reserve is 0 (the first allocation grow, and a creation window that
+    // passes `include_tool_bar` while the enum is still unallocated). Subtract
+    // only a reserve that is actually in the total, so a withheld bar cannot
+    // underflow.
+    let reserved = frame.reserved_tool_bar_height();
     let mut height = frame_non_text_total_height_pixels(frame);
-    if !include_tool_bar {
-        height = height.saturating_sub(frame.tool_bar_height);
+    if include_tool_bar {
+        height = height.saturating_add(frame.tool_bar_height.saturating_sub(reserved));
+    } else {
+        height = height.saturating_sub(reserved);
     }
     height
 }
@@ -6187,8 +6198,15 @@ pub(crate) fn note_explicit_tool_bar_omission(
     include_tool_bar: bool,
 ) {
     #[cfg(target_os = "linux")]
-    if !include_tool_bar && !frame.toolkit_tool_bar_allocated {
-        frame.explicit_size_omitted_unallocated_tool_bar = true;
+    if !include_tool_bar
+        && matches!(
+            frame.toolkit_tool_bar,
+            crate::window::ToolkitToolBar::Unallocated { .. }
+        )
+    {
+        frame.toolkit_tool_bar = crate::window::ToolkitToolBar::Unallocated {
+            explicit_size_omitted: true,
+        };
     }
     #[cfg(not(target_os = "linux"))]
     {
