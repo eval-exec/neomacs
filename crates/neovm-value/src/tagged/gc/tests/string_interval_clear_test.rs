@@ -148,8 +148,8 @@ fn emptying_a_string_interval_tree_journals_once() {
     assert!(!has_intervals(value));
 }
 
-/// `set_string_text_properties_table_for_value` write-back of an equal table
-/// is not a mutation.
+/// `set_string_text_properties_table_for_value` eq-identical write-back is
+/// not a mutation. The clone shares the live plist objects.
 #[test]
 fn writing_an_equal_text_property_table_does_not_journal() {
     let value = fresh_string(b"abcd");
@@ -237,5 +237,57 @@ fn changed_remove_of_a_present_property_journals_exactly_once() {
         journal_since_for_test(start).expect("journal window"),
         vec![value.bits()],
         "removing a present property records one collection write"
+    );
+}
+
+/// `set-text-properties` of a non-nil plist installs new conses. It does not
+/// `set_car` an existing cell, so the journal is the string alone.
+#[test]
+fn set_of_a_non_nil_plist_journals_the_string_once() {
+    let value = fresh_string(b"abcd");
+    let start = LispCollectionRevision::current();
+    let len = char_len(value);
+
+    crate::value::mutate_string_text_properties(value, |table| {
+        table.set_properties_for_object_char_len(
+            whole_range(value),
+            crate::value::positions::CharLen::new(len),
+            vec![(TaggedValue::symbol("face"), TaggedValue::symbol("bold"))],
+        );
+    })
+    .expect("string");
+
+    assert_eq!(
+        journal_since_for_test(start).expect("journal window"),
+        vec![value.bits()],
+        "set-text-properties of a non-nil plist journals the string once"
+    );
+}
+
+/// `add-text-properties` of a name the interval does not hold prepends a cons.
+/// That path does not `set_car`, so the journal is the string alone.
+#[test]
+fn add_of_a_new_property_name_journals_the_string_once() {
+    let value = fresh_string(b"abcd");
+    put_face(value, TaggedValue::symbol("bold"));
+    let start = LispCollectionRevision::current();
+    let len = char_len(value);
+    let properties = [(TaggedValue::symbol("display"), TaggedValue::symbol("raise"))];
+
+    let changed = crate::value::mutate_string_text_properties(value, |table| {
+        table.apply_property_plist_for_object_char_len(
+            whole_range(value),
+            crate::value::positions::CharLen::new(len),
+            &properties,
+            crate::value::text_props::PropertyPlistApplication::AddProperties,
+        )
+    })
+    .expect("string");
+
+    assert!(changed, "a new name is added");
+    assert_eq!(
+        journal_since_for_test(start).expect("journal window"),
+        vec![value.bits()],
+        "adding a new property name journals the string once"
     );
 }
