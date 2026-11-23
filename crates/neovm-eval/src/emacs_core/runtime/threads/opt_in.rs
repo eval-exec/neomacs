@@ -77,7 +77,7 @@ pub fn builtin_neomacs_thread_parallel_p(eval: &mut Context, args: Vec<Value>) -
 
 #[cfg(test)]
 mod tests {
-    use super::{admit_parallel, NMutatorEntryError};
+    use super::{NMutatorEntryError, admit_parallel};
     use crate::emacs_core::eval::Context;
     use crate::emacs_core::print::print_value;
 
