@@ -2404,7 +2404,7 @@ pub fn builtin_modify_frame_parameters(
             // inhibit 1 (src/frame.c:5307). Inhibit 1 calls
             // `set_window_size_hook` before returning (src/frame.c:976-995).
             // `frame-inhibit-implied-resize` applies only to inhibit 2-4
-            // (src/frame.c:886-900), so a font change must not leave this
+            // (src/frame.c:885-900), so a font change must not leave this
             // explicit size queued until a later geometry query.
             let (text_width_px, text_height_px) =
                 resize_request.text_pixels(&eval.frame_manager(), fid)?;
@@ -2804,18 +2804,17 @@ pub(crate) fn request_live_gui_frame_resize_and_keep_pending(
     };
 
     let (desired_cols, desired_total_lines) = request.logical_size(frames, fid)?;
-    let (request_id, previous_pending, previous_defer) = {
+    let (request_id, previous_pending) = {
         let frame = frames
             .get_mut(fid)
             .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
         let previous_pending = frame.pending_gui_resize;
-        let previous_defer = frame.defer_next_gui_parameter_resize;
         let request_id = frame.queue_pending_gui_resize(
             desired_cols,
             desired_total_lines,
             Some((total_width_px, total_height_px)),
         );
-        (request_id, previous_pending, previous_defer)
+        (request_id, previous_pending)
     };
     if let Err(message) = host.resize_gui_frame(neovm_eval::emacs_core::eval::GuiFrameHostRequest {
         resize_request_id: Some(request_id),
@@ -2830,7 +2829,6 @@ pub(crate) fn request_live_gui_frame_resize_and_keep_pending(
     }) {
         if let Some(frame) = frames.get_mut(fid) {
             frame.pending_gui_resize = previous_pending;
-            frame.defer_next_gui_parameter_resize = previous_defer;
         }
         return Err(signal("error", vec![Value::string(message)]));
     }

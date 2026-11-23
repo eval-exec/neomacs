@@ -739,12 +739,6 @@ fn sync_live_frame_font_state_rooted(
         || frame.effective_window_system().is_none()
         || eval.display_host.is_none()
     {
-        // The font call set the defer flag and is not sending a resize.
-        // The flag must not outlive this call: a later explicit
-        // width/height is its own `adjust_frame_size` inhibit 1.
-        if let Some(frame) = eval.frame_manager_mut().get_mut(frame_id) {
-            frame.defer_next_gui_parameter_resize = false;
-        }
         return Ok(());
     }
     let policies = (|| -> Result<(ResizePolicy, ResizePolicy, u32, u32), Flow> {
@@ -793,7 +787,6 @@ fn sync_live_frame_font_state_rooted(
             // native hook succeeds. The hook's opened metrics remain installed.
             if let Some(frame) = eval.frame_manager_mut().get_mut(frame_id) {
                 frame.set_known_parameter(FrameParam::Font, old_public_font.unwrap_or(Value::NIL));
-                frame.defer_next_gui_parameter_resize = false;
             }
             return Err(error);
         }
@@ -832,7 +825,6 @@ fn sync_live_frame_font_state_rooted(
         let (frames, buffers) = eval.frame_manager_and_buffers_mut();
         if let Some(frame) = frames.get_mut(frame_id) {
             frame.refresh_geometry_for_changed_font(buffers);
-            frame.defer_next_gui_parameter_resize = false;
         }
         return Ok(());
     }
@@ -967,7 +959,6 @@ fn sync_live_frame_font_state_in_state(
         let is_top_level_gui_frame =
             frame.effective_window_system().is_some() && frame.parent_frame.as_frame_id().is_none();
         if is_top_level_gui_frame {
-            frame.defer_next_gui_parameter_resize();
             geometry_hints = Some(frame.gui_geometry_hints());
         }
     }

@@ -159,10 +159,6 @@ pub trait DisplayFrameExt {
 
     fn face_hash_table(&self) -> Value;
 
-    fn defer_next_gui_parameter_resize(&mut self);
-
-    fn should_defer_gui_parameter_resize(&self) -> bool;
-
     fn queue_pending_gui_resize(
         &mut self,
         width_cols: i64,
@@ -559,14 +555,6 @@ impl DisplayFrameExt for Frame {
         self.face_hash_table
     }
 
-    fn defer_next_gui_parameter_resize(&mut self) {
-        self.defer_next_gui_parameter_resize = true;
-    }
-
-    fn should_defer_gui_parameter_resize(&self) -> bool {
-        self.defer_next_gui_parameter_resize || self.pending_gui_resize.is_some()
-    }
-
     fn queue_pending_gui_resize(
         &mut self,
         width_cols: i64,
@@ -574,7 +562,6 @@ impl DisplayFrameExt for Frame {
         host_target: Option<(u32, u32)>,
     ) -> GuiResizeRequestId {
         let request_id = self.allocate_gui_resize_request_id();
-        self.defer_next_gui_parameter_resize = false;
         self.pending_gui_resize = Some(PendingGuiResize {
             request_id,
             width_cols,
@@ -591,7 +578,6 @@ impl DisplayFrameExt for Frame {
     }
 
     fn clear_pending_gui_resize(&mut self) {
-        self.defer_next_gui_parameter_resize = false;
         self.pending_gui_resize = None;
     }
 
@@ -1361,10 +1347,8 @@ impl DisplayFrameExt for Frame {
     /// outstanding explicit resize intent must remain available to flush/wait.
     fn refresh_geometry_for_changed_font(&mut self, buffers: &BufferManager) {
         let pending = self.pending_gui_resize.take();
-        let defer = self.defer_next_gui_parameter_resize;
         self.resize_pixelwise_with_buffer_constraints(buffers, self.width, self.height);
         self.pending_gui_resize = pending;
-        self.defer_next_gui_parameter_resize = defer;
     }
 
     /// Apply a live physical frame resize while honoring Lisp-visible window

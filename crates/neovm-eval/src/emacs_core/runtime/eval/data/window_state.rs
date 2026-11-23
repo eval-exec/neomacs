@@ -3474,10 +3474,6 @@ pub struct Frame {
     /// `neovm_bridge` uses for them (`font_ascent = char_height`); they display
     /// no images, so the split is unobservable there.
     pub font_ascent: f32,
-    /// One-shot guard used when a live default-font change updates the frame's
-    /// character metrics before GNU would commit the follow-up width/height
-    /// window-system resize.
-    pub defer_next_gui_parameter_resize: bool,
     /// Logical GUI resize requested via frame parameters but not yet committed
     /// to the live host window.
     pub pending_gui_resize: Option<PendingGuiResize>,
@@ -6936,7 +6932,6 @@ impl Frame {
             // equal to `char_height` for every consumer (see `font_ascent`).
             font_ascent: 16.0,
             device_scale_factor: 1.0,
-            defer_next_gui_parameter_resize: false,
             pending_gui_resize: None,
             last_gui_resize_request_id: None,
             presentation_state: FramePresentationState::default(),

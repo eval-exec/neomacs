@@ -56,8 +56,28 @@ fn gnu_width_only_resize_preserves_native_height() {
 /// stays near 65 columns until something flushes a queued resize.
 #[test]
 fn explicit_size_after_font_is_on_the_x_window_before_a_geometry_query() {
+    let (gnu, actual) = sample_explicit_sizes("explicit-size-after-font");
+    // Frame width 120 is true of the pre-fix binary too. The external column
+    // count is what separates a delivered resize from a queued one.
+    assert_eq!(gnu.frame.0, 120, "gnu width {gnu:?}");
+    assert_eq!(actual.frame.0, 120, "neomacs width {actual:?}");
+    assert!(
+        gnu.external_cols() >= 110 && gnu.external_rows() >= 36,
+        "gnu window was not the requested grid before a geometry query: {gnu:?}"
+    );
+    assert!(
+        actual.external_cols() >= 110 && actual.external_rows() >= 36,
+        "neomacs window was not the requested grid before a geometry query: {actual:?}"
+    );
+    assert!(
+        gnu.xwin.0.abs_diff(actual.xwin.0) <= 32,
+        "outer width diverged before a geometry query: neomacs {actual:?} gnu {gnu:?}"
+    );
+}
+
+fn sample_explicit_sizes(artifact_name: &str) -> (ExplicitSize, ExplicitSize) {
     let root = neomacs_infra::workspace_root();
-    let artifacts = root.join("target/neomacs-gui-tests/explicit-size-after-font");
+    let artifacts = root.join("target/neomacs-gui-tests").join(artifact_name);
     let _ = fs::remove_dir_all(&artifacts);
     fs::create_dir_all(&artifacts).unwrap();
     let oracle = neomacs_test_oracle::gnu::gnu_oracle();
@@ -79,20 +99,7 @@ fn explicit_size_after_font_is_on_the_x_window_before_a_geometry_query() {
         &session,
     );
     let actual = observe_explicit_size(&root, &artifacts.join("neo"), neo, &session);
-    assert_eq!(gnu.frame.0, 120, "gnu width {gnu:?}");
-    assert_eq!(actual.frame.0, 120, "neomacs width {actual:?}");
-    assert!(
-        gnu.external_cols() >= 110 && gnu.external_rows() >= 36,
-        "gnu window was not the requested grid before a geometry query: {gnu:?}"
-    );
-    assert!(
-        actual.external_cols() >= 110 && actual.external_rows() >= 36,
-        "neomacs window was not the requested grid before a geometry query: {actual:?}"
-    );
-    assert!(
-        gnu.xwin.0.abs_diff(actual.xwin.0) <= 32,
-        "outer width diverged before a geometry query: neomacs {actual:?} gnu {gnu:?}"
-    );
+    (gnu, actual)
 }
 
 #[derive(Debug)]

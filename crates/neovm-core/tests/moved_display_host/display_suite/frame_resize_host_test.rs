@@ -131,16 +131,20 @@ fn explicit_resize_is_delivered_before_an_inhibited_font_change() {
     eval.eval_str("(internal-set-lisp-face-attribute 'default :font \"Remapped Mono-24\" nil)")
         .unwrap();
     assert_eq!(requests.borrow().len(), 1);
-    // Attested linux-gtk3 oracle (private Xvfb, emacs 31.1 a360712c): a font
-    // height change, then (modify-frame-parameters nil '((width . 80)
-    // (height . 25))), already resized the X window before any Lisp geometry
-    // read. Inhibit 1 delivers that size inside the call (src/frame.c:5307).
+    // UNATTESTED as a GNU X-window measurement. This host fixture checks the
+    // inhibit-1 delivery rule from src/frame.c:5307 and :885-900: the explicit
+    // 80x25 is the second host request, sent before any geometry read.
     eval.eval_str("(modify-frame-parameters nil '((width . 80) (height . 25)))")
         .unwrap();
     assert_eq!(
         requests.borrow().len(),
         2,
         "explicit width/height is delivered without a geometry query"
+    );
+    assert_eq!(
+        (requests.borrow()[1].width, requests.borrow()[1].height),
+        (1312, 800),
+        "80x25 at the opened 16x32 cell, plus 32px of horizontal chrome"
     );
     assert!(
         eval.frame_manager()
@@ -259,10 +263,9 @@ fn asynchronous_rejected_resize_commits_native_grid_before_later_font_change() {
 #[test]
 fn explicit_resize_is_delivered_and_a_native_resize_replaces_it() {
     let mut fixture = ChromeResizeFixture::new();
-    // Attested linux-gtk3 oracle: a same-metric font change, then
-    // (modify-frame-parameters nil '((width . 90) (height . 40))), already
-    // resized the X window (752x749) before any Lisp geometry read. A later
-    // foreign resize to 400x300 was adopted. No unsent 90x40 survived it.
+    // UNATTESTED as a GNU X-window measurement. The host fixture's contract is
+    // the inhibit-1 rule: the 90x40 is delivered immediately, and a later
+    // native allocation replaces it. No unsent 90x40 survives that allocation.
     fixture
         .eval
         .eval_str(r#"(internal-set-lisp-face-attribute 'default :font "Chrome Mono-14" nil)"#)
@@ -317,20 +320,19 @@ fn explicit_resize_is_delivered_and_a_native_resize_replaces_it() {
         .eval
         .eval_str(r#"(internal-set-lisp-face-attribute 'default :font "Remapped Mono-24" nil)"#)
         .unwrap();
-    assert_ne!(
-        requests.borrow().last().unwrap().width,
-        90 * 16,
-        "the later font change scales the adopted native grid, not an unsent 90 columns"
+    let font_request = requests.borrow().last().unwrap().clone();
+    assert_eq!(
+        font_request.width, 1520,
+        "95 adopted columns at the new 16px cell, not an unsent 90"
     );
-    assert!(
-        fixture
-            .eval
-            .frame_manager()
-            .get(fixture.frame_id)
-            .unwrap()
-            .pending_gui_resize
-            .is_none_or(|pending| pending.total_lines != 40 || !pending.is_queued())
-    );
+    let pending = fixture
+        .eval
+        .frame_manager()
+        .get(fixture.frame_id)
+        .unwrap()
+        .pending_gui_resize
+        .map(|pending| (pending.total_lines, pending.is_queued()));
+    assert_eq!(pending, Some((35, false)), "pending after the font change");
 }
 
 #[test]
@@ -826,8 +828,7 @@ fn toolbar_change_follows_a_delivered_explicit_size_after_same_metric_font_chang
         .unwrap();
     assert_eq!(fixture.requests.borrow().len(), 1);
     let explicit = fixture.requests.borrow()[0].clone();
-    assert_eq!(explicit.width, 720);
-    assert!(explicit.height > 640);
+    assert_eq!((explicit.width, explicit.height), (720, 690));
     assert!(
         fixture
             .eval
@@ -843,8 +844,7 @@ fn toolbar_change_follows_a_delivered_explicit_size_after_same_metric_font_chang
         .unwrap();
     assert_eq!(fixture.requests.borrow().len(), 2);
     let toolbar = fixture.requests.borrow()[1].clone();
-    assert_eq!(toolbar.width, 720);
-    assert!(toolbar.height < explicit.height);
+    assert_eq!((toolbar.width, toolbar.height), (720, 656));
     fixture.acknowledge(&toolbar);
     fixture.assert_geometry(90, 40, 640);
 }
