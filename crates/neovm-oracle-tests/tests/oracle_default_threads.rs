@@ -225,6 +225,112 @@ fn e8s_thread_signal_to_worker_pending_at_join_entry() {
     );
 }
 
+/// A signal sent before a thread first runs is deferred, not set aside.
+/// GNU's `post_acquire_global_lock` (src/thread.c:146-154) raises nothing
+/// while the thread has no handlers (`run_thread` acquires at :805 before
+/// :810-815), but the pair stays in `error_symbol`. Every wait loop sees it
+/// and skips its wait (mutex :232-234, condition :457-464, join :1110-1111).
+/// Every later `post_acquire_global_lock` raises it, including an unlock that
+/// releases (:377), a notify (:533) and the sender of a signal to a waiting
+/// thread (:981). A thread that reaches none of these points keeps it pending
+/// for a later join's snapshot (:1134-1141).
+#[test]
+fn e8s_a_signal_before_a_thread_runs_is_raised_at_its_next_delivery_point() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    assert_default_threads_oracle(
+        r##"
+(let* ((held (make-mutex "e8s-held"))
+       (settle (lambda (pred)
+                 (let ((deadline (+ (float-time) 5.0)))
+                   (while (and (not (funcall pred)) (< (float-time) deadline))
+                     (thread-yield)))))
+       (newborn (lambda (body)
+                  (let* ((log nil)
+                         (th (make-thread
+                              (lambda ()
+                                (condition-case err
+                                    (funcall body (lambda (step) (push step log)))
+                                  (error (push (list 'caught (car (cdr err))) log)))
+                                'done)
+                              "e8s-newborn")))
+                    (thread-signal th 'error '("early"))
+                    (funcall settle (lambda () (not (thread-live-p th))))
+                    (list (if (thread-live-p th) 'live 'dead) (nreverse log)))))
+       (waiter-log nil)
+       (waiter nil)
+       (results nil))
+  (mutex-lock held)
+  (push (funcall newborn
+                 (lambda (note)
+                   (let ((m (make-mutex)))
+                     (mutex-lock m) (funcall note 'locked)
+                     (mutex-unlock m) (funcall note 'unlocked)
+                     (thread-yield) (funcall note 'yielded))))
+        results)
+  (push (funcall newborn
+                 (lambda (note)
+                   (let ((m (make-mutex)))
+                     (mutex-lock m) (mutex-lock m) (funcall note 'locked-twice)
+                     (mutex-unlock m) (funcall note 'still-held)
+                     (mutex-unlock m) (funcall note 'released))))
+        results)
+  (push (funcall newborn
+                 (lambda (note)
+                   (let* ((m (make-mutex)) (c (make-condition-variable m)))
+                     (mutex-lock m) (funcall note 'locked)
+                     (condition-notify c) (funcall note 'notified)
+                     (mutex-unlock m) (funcall note 'unlocked))))
+        results)
+  (push (funcall newborn
+                 (lambda (note)
+                   (funcall note 'locking)
+                   (mutex-lock held) (funcall note 'got-it)))
+        results)
+  (push (funcall newborn
+                 (lambda (note)
+                   (let* ((m (make-mutex)) (c (make-condition-variable m)))
+                     (mutex-lock m) (funcall note 'locked)
+                     (condition-wait c) (funcall note 'woke))))
+        results)
+  (setq waiter
+        (make-thread (lambda ()
+                       (condition-case err
+                           (progn (mutex-lock held) (mutex-unlock held)
+                                  (push 'waiter-got-it waiter-log))
+                         (error (push (list 'waiter-caught (car (cdr err)))
+                                      waiter-log))))
+                     "e8s-waiter"))
+  (funcall settle (lambda () (eq (thread--blocker waiter) held)))
+  (push (funcall newborn
+                 (lambda (note)
+                   (funcall note 'joining)
+                   (thread-join waiter) (funcall note 'joined)))
+        results)
+  (push (funcall newborn
+                 (lambda (note)
+                   (funcall note 'sending)
+                   (thread-signal waiter 'error '("to-waiter"))
+                   (funcall note 'sent)))
+        results)
+  (funcall settle (lambda () (not (thread-live-p waiter))))
+  (push waiter-log results)
+  (mutex-unlock held)
+  (let* ((log nil)
+         (th (make-thread (lambda () (push 'ran log) 'done) "e8s-plain")))
+    (thread-signal th 'error '("early"))
+    (funcall settle (lambda () (not (thread-live-p th))))
+    (push (list log
+                (condition-case err (list 'joined (thread-join th))
+                  (error (list 'join-raised (car (cdr err))))))
+          results))
+  (nreverse results))
+"##,
+        expect_test::expect![[
+            r#""OK ((dead (locked (caught \"early\"))) (dead (locked-twice still-held (caught \"early\"))) (dead (locked (caught \"early\"))) (dead (locking (caught \"early\"))) (dead (locked (caught \"early\"))) (dead (joining (caught \"early\"))) (dead (sending (caught \"early\"))) ((waiter-caught \"to-waiter\")) ((ran) (join-raised \"early\")))""#
+        ]],
+    );
+}
+
 #[test]
 fn e8s_thread_yield_in_main_and_worker() {
     return_if_neovm_enable_oracle_proptest_not_set!();
