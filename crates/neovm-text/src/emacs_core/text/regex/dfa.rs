@@ -3183,7 +3183,7 @@ impl<'p> DfaLease<'p> {
     /// Threading: this search holds its mutator-owned slot's checked borrow.
     /// Context maps have already been synchronized by `acquire` or `build`;
     /// the cache lookup reads no Lisp state and calls no syntax lookup.
-    #[inline]
+    #[inline(always)]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn try_inline_first_step_skip<H: Haystack + ?Sized>(
         &mut self,

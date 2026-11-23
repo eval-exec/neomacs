@@ -5393,7 +5393,7 @@ impl Haystack for [u8] {
     fn get(&self, i: usize) -> Option<u8> {
         <[u8]>::get(self, i).copied()
     }
-    #[inline]
+    #[inline(always)]
     fn chunks(&self, start: usize, end: usize) -> (&[u8], &[u8]) {
         #[cfg(any(test, feature = "test-support"))]
         CHUNK_QUERY_COUNT.with(|c| c.set(c.get() + 1));
@@ -5463,7 +5463,7 @@ impl Haystack for Segments<'_> {
     fn get(&self, i: usize) -> Option<u8> {
         (i < self.len()).then(|| self.byte(i))
     }
-    #[inline]
+    #[inline(always)]
     fn chunks(&self, start: usize, end: usize) -> (&[u8], &[u8]) {
         #[cfg(any(test, feature = "test-support"))]
         CHUNK_QUERY_COUNT.with(|c| c.set(c.get() + 1));
