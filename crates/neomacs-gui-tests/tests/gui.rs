@@ -59,6 +59,9 @@ mod composition_retry_folded_buffer;
 #[path = "agent_shell_source.rs"]
 mod agent_shell_source;
 
+#[path = "chrome_source_acceptance.rs"]
+mod chrome_source_acceptance;
+
 #[path = "config_env_boot.rs"]
 mod config_env_boot;
 

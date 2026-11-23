@@ -5909,6 +5909,19 @@ impl crate::emacs_core::eval::Context {
         };
         let window = frame.find_window(window_id)?;
         let buffer_id = window.buffer_id()?;
+        if let Some(observation) = observation
+            && window
+                .display()
+                .and_then(|display| display.redisplay_output())
+                .is_some_and(|output| output.generation.get() != observation.presentation)
+        {
+            // A newer prepared output can be accurate without being visible.
+            // Its source stamp cannot authorize an older renderer-active hit.
+            return None;
+        }
+        if window.gnu_text_hover_is_current(&self.edit.buffers) == Some(false) {
+            return None;
+        }
 
         let pair =
             neovm_edit::emacs_core::textprop::builtin_get_char_property_and_overlay_in_state(

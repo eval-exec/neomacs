@@ -2464,7 +2464,7 @@ fn window_parameters() {
 }
 
 #[test]
-fn layout_freshness_types_late_chrome_cache_writes_separately_from_body_mutations() {
+fn layout_freshness_admits_late_chrome_cache_and_source_writes_after_body() {
     crate::test_utils::init_test_tracing();
     let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let buffer_id = eval
@@ -2511,8 +2511,13 @@ fn layout_freshness_types_late_chrome_cache_writes_separately_from_body_mutation
         .expect("freshness after body mutation");
     assert!(
         !after_chrome_cache
+            .remains_valid_across(&after_body_mutation, WindowLayoutLispBoundary::BufferBody,)
+    );
+    assert!(
+        after_chrome_cache
             .remains_valid_across(&after_body_mutation, WindowLayoutLispBoundary::WindowChrome,)
     );
+    assert_ne!(after_chrome_cache, after_body_mutation);
 }
 
 #[test]

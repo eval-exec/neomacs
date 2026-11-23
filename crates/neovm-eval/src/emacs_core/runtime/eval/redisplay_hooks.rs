@@ -795,6 +795,12 @@ impl Context {
                 || self.gnu_redisplay_hooks.mode_lines != PendingScope::None)
     }
 
+    /// GNU current-matrix query gate: window/buffer changes, independently of
+    /// the mode-line-only flag used by try_cursor_movement.
+    pub fn gnu_current_matrix_change_pending(&self) -> bool {
+        gnu_redisplay_hooks_enabled() && self.gnu_redisplay_hooks.windows != PendingScope::None
+    }
+
     /// True only while the complete GNU transaction owns mini preparation.
     /// A standalone committed-start callback also prevents recursive redisplay,
     /// but it does not own sizing for a later renderer-facing layout attempt.

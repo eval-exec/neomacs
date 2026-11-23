@@ -246,7 +246,16 @@ impl Capture {
     }
     /// Seal original rooted observations after callbacks and row admission.
     /// Unknown/overflowed captures cannot become an empty absence certificate.
-    pub(crate) fn finish(self) -> Option<CursorSourceDependencies> {
+    pub(crate) fn finish(mut self) -> Option<CursorSourceDependencies> {
+        self.seal_completed_body()
+    }
+
+    /// Transfer complete original body observations before entering chrome.
+    /// Later mutations invalidate the returned dependencies without changing
+    /// their read origin. Keep this guard alive until the leaf ends: Drop
+    /// restores the enclosing capture, while chrome itself observes no body
+    /// sources. A consumed or incomplete capture cannot seal another body.
+    pub(crate) fn seal_completed_body(&mut self) -> Option<CursorSourceDependencies> {
         if !self.unchanged() {
             return None;
         }

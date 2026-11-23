@@ -973,7 +973,7 @@ fn hidden_explicit_cursor_reselects_after_string_property_mutation() {
 }
 
 /// A later leaf may mutate an earlier leaf's string without changing its
-/// buffer or overlay ticks. Acceptance must revalidate the whole frame.
+/// buffer or overlay ticks. Keep its completed cursor, then refuse source replay.
 #[test]
 fn hidden_cursor_sources_are_revalidated_after_later_window_callbacks() {
     let (mut eval, frame, _, window) = incr_editing_frame("a\n", 800, 240);
@@ -1001,6 +1001,13 @@ fn hidden_cursor_sources_are_revalidated_after_later_window_callbacks() {
     let mut engine = crate::font::metrics::test_catalog::layout_engine();
     crate::font::metrics::test_catalog::enable_metrics(&mut engine);
     engine.layout_frame_rust(&mut eval, frame);
+    let before = eval
+        .frame_manager()
+        .get(frame)
+        .unwrap()
+        .redisplay_snapshot(window)
+        .unwrap()
+        .clone();
     let hook = eval.eval_str("(list (lambda (_pos) (if neo-frame-mutated nil (progn (setq neo-frame-mutated t) (put-text-property 0 1 'cursor nil neo-frame-string) (put-text-property 1 2 'cursor 1 neo-frame-string)))))").unwrap();
     eval.buffer_manager_mut()
         .get_mut(side)
@@ -1018,6 +1025,41 @@ fn hidden_cursor_sources_are_revalidated_after_later_window_callbacks() {
         .redisplay_snapshot(window)
         .unwrap()
         .clone();
+    let position = |s: &neovm_core::window::WindowDisplaySnapshot| {
+        s.logical_cursor.as_ref().map(|c| (c.x, c.y, c.row, c.col))
+    };
+    assert!(actual.phys_cursor.is_none());
+    // GNU keeps the earlier completed cursor after a later leaf mutates its
+    // string; the next full frame uses the new source. Hidden presentation
+    // changes physical drawing only, not that logical source selection.
+    assert_eq!(position(&actual), position(&before));
+    assert_eq!(
+        actual.logical_cursor_dimensions,
+        before.logical_cursor_dimensions
+    );
+    assert!(
+        !engine
+            .frame_visual_histories
+            .get(frame)
+            .unwrap()
+            .cursor_sources_for(DisplayWindowId::new(window.0 as i64))
+            .unwrap()
+            .unchanged(),
+        "the original source certificate must become stale, never rebased"
+    );
+    engine.layout_frame_rust(&mut eval, frame);
+    let next = eval
+        .frame_manager()
+        .get(frame)
+        .unwrap()
+        .redisplay_snapshot(window)
+        .unwrap()
+        .clone();
+    assert_ne!(
+        position(&actual),
+        position(&next),
+        "future replay must refuse the changed string"
+    );
     let mut fresh = crate::font::metrics::test_catalog::layout_engine();
     crate::font::metrics::test_catalog::enable_metrics(&mut fresh);
     fresh.layout_frame_rust(&mut eval, frame);
@@ -1027,13 +1069,10 @@ fn hidden_cursor_sources_are_revalidated_after_later_window_callbacks() {
         .unwrap()
         .redisplay_snapshot(window)
         .unwrap();
-    let position = |s: &neovm_core::window::WindowDisplaySnapshot| {
-        s.logical_cursor.as_ref().map(|c| (c.x, c.y, c.row, c.col))
-    };
-    assert!(actual.phys_cursor.is_none());
-    assert_eq!(position(&actual), position(expected));
+    assert!(next.phys_cursor.is_none());
+    assert_eq!(position(&next), position(expected));
     assert_eq!(
-        actual.logical_cursor_dimensions,
+        next.logical_cursor_dimensions,
         expected.logical_cursor_dimensions
     );
 }

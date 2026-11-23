@@ -1439,8 +1439,6 @@ impl Context {
             active_minibuffer_window: self.active_minibuffer_window.map(|id| id.0),
             minibuffer_selected_window: self.minibuffer_selected_window.map(|id| id.0),
             face_change_count: self.face_change_count,
-            obarray_function_epoch: self.obarray.function_epoch(),
-            symbol_property_revision: neovm_value::symbol::SymbolPropertyRevision::current(),
             redisplay_generation: self.redisplay_generation,
             frame,
         }

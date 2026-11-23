@@ -516,9 +516,7 @@ fn fixture_matrix(base: i64, n_body: usize) -> RetainedWindowMatrix {
     RetainedWindowMatrix {
         matrix,
         key: fixture_key(base, 0),
-        redisplay_optimizations: Default::default(),
-        // Synthetic fixture: no GNU prevent raise and MODIFF 0.
-        buffer_modiff: 0,
+        gnu_accuracy: None,
         validity: MatrixValidity::Valid,
         display_snapshot: std::sync::Arc::new(WindowDisplaySnapshot {
             point_rows: None,

@@ -90,6 +90,10 @@ mod face_identity;
 #[path = "../../tests/engine_font_selection_test.rs"]
 mod font_selection;
 
+#[path = "active_hover_accuracy_test.rs"]
+mod active_hover_accuracy_test;
+#[path = "exhausted_presentation_test.rs"]
+mod exhausted_presentation_test;
 #[path = "../../tests/engine_line_spacing_test.rs"]
 mod line_spacing;
 #[path = "no_op_chrome_source_test.rs"]

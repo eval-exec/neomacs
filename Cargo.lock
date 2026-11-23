@@ -4033,6 +4033,7 @@ dependencies = [
  "neomacs-font-materializer",
  "neomacs-test-fonts",
  "neovm-core",
+ "neovm-display",
  "neovm-edit",
  "neovm-eval",
  "neovm-value",

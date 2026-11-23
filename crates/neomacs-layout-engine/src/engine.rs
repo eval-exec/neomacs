@@ -419,6 +419,9 @@ fn window_position_publication(
             WindowLayoutWalkPurpose::SynchronousQuery(
                 neovm_core::window::WindowLayoutQueryScope::Position { .. },
             ) => WindowPositionPublication::SynchronousQueryPosition,
+            WindowLayoutWalkPurpose::SynchronousQuery(
+                neovm_core::window::WindowLayoutQueryScope::TextExtent { .. },
+            ) => WindowPositionPublication::SynchronousQueryTextExtent,
             _ => WindowPositionPublication::SynchronousQueryEnd,
         };
     }
@@ -1088,6 +1091,7 @@ enum LeafLayoutAttempt {
         window_end_attempt: Option<neovm_core::window::WindowEndAttempt>,
         /// Attempt-owned geometry; retries cannot publish a candidate.
         snapshot: Option<WindowPresentationSnapshot>,
+        produced_key: Option<RetainedWindowKey>,
     },
     Effect(LayoutEffect),
     /// The attempt unwound and asks the window loop to re-enter with these
@@ -1171,10 +1175,15 @@ impl FrameWindowEndAttempts {
     }
 }
 
+/// Owner and physical inputs of one completed body, retained only until this
+/// frame attempt has crossed every sibling's Lisp callback boundary.
+struct CompletedBodyIdentity {
+    source_buffer: neovm_core::buffer::BufferId,
+    inputs: neovm_core::window::WindowLayoutAttemptFreshness,
+}
+
 /// Callback acknowledgements and producer artifacts of one logical frame attempt.
-///
-/// Chrome/minibuffer convergence may perform several physical row walks. Those
-/// retries must not replay Lisp that the logical redisplay already ran.
+/// Chrome/minibuffer retries must not replay its acknowledged Lisp callbacks.
 #[derive(Default)]
 struct RedisplayLispLedger {
     rows_fontification: rows_fontification::RowsFontificationDemand,
@@ -1188,6 +1197,9 @@ struct RedisplayLispLedger {
         DisplayWindowId,
         crate::cursor_source_dependencies::CursorSourceDependencies,
     >,
+    /// Cleared on physical frame retry; completed siblings retain their owner
+    /// identities until final whole-frame admission, independently of source freshness.
+    completed_body_inputs: rustc_hash::FxHashMap<DisplayWindowId, CompletedBodyIdentity>,
     /// Original source observations commit only with the accepted matrices.
     cursor_sources: rustc_hash::FxHashMap<
         DisplayWindowId,
@@ -1195,16 +1207,14 @@ struct RedisplayLispLedger {
     >,
 }
 
-/// A rejected source projection must not expose its speculative window end.
+/// A rejected body-source projection cannot retain its speculative end.
 fn reject_changed_cursor_sources(
     evaluator: &mut neovm_core::emacs_core::Context,
     window_end_attempt: &mut Option<neovm_core::window::WindowEndAttempt>,
     changed: bool,
 ) -> bool {
-    if changed {
-        if let Some(attempt) = window_end_attempt.take() {
-            evaluator.reject_redisplay_window_end_attempt(attempt);
-        }
+    if changed && let Some(attempt) = window_end_attempt.take() {
+        evaluator.reject_redisplay_window_end_attempt(attempt);
     }
     changed
 }
@@ -2443,6 +2453,7 @@ impl LayoutEngine {
             accepted_window_navigation_intents,
             accepted_frame_navigation_intent,
         ) = 'frame_layout: loop {
+            lisp_ledger.completed_body_inputs.clear();
             let chrome_remeasured = std::mem::take(&mut chrome_remeasured_next_round);
             // Re-entering this loop means the preceding physical frame walk
             // was rejected. Restore every leaf publication before collecting
@@ -3343,6 +3354,7 @@ impl LayoutEngine {
                 // (`None` = the normal visible-range pass). `(0, usize::MAX)`
                 // resolves every span the snapshot captured.
                 let mut automatic_composition_resolve: Option<(usize, usize)> = None;
+                let completed_row_key;
                 let window_layout = loop {
                     // A leaf hook/visibility continuation can re-enter this
                     // loop without visiting the outer transaction restart.
@@ -3422,7 +3434,9 @@ impl LayoutEngine {
                             outcome,
                             window_end_attempt,
                             snapshot,
+                            produced_key,
                         } => {
+                            completed_row_key = produced_key;
                             if accepted {
                                 self.window_snapshots.extend(snapshot);
                             }
@@ -3681,7 +3695,9 @@ impl LayoutEngine {
 
                 retained_keys[window_index] = (
                     DisplayWindowId::new(params.window_id),
-                    RetainedWindowKey::from_params(params, accepted_layout_box, evaluator),
+                    completed_row_key.unwrap_or_else(|| {
+                        RetainedWindowKey::from_params(params, accepted_layout_box, evaluator)
+                    }),
                 );
 
                 if let Some(snapshot) = self
@@ -4071,15 +4087,28 @@ impl LayoutEngine {
                 continue 'frame_layout;
             }
 
-            // A later leaf's Lisp can mutate an earlier leaf's source string
-            // without changing buffer/overlay ticks. Validate the complete
-            // accepted set after the final Lisp-capable boundary, not merely
-            // when each individual leaf finishes.
+            // Later sibling chrome may change an earlier window's buffer
+            // without changing topology. Sources may become stale, but a
+            // completed body cannot be published for a different owner or
+            // physical allocation. Validate every original body identity now.
             if let Some(window_id) = curr_window_infos.keys().copied().find(|window| {
                 lisp_ledger
-                    .cursor_sources
+                    .completed_body_inputs
                     .get(window)
-                    .is_some_and(|sources| !sources.unchanged())
+                    .is_some_and(|body| {
+                        evaluator
+                            .window_layout_attempt_freshness(
+                                frame_id,
+                                neovm_core::window::WindowId(window.get() as u64),
+                                body.source_buffer,
+                            )
+                            .is_none_or(|after| {
+                                !body.inputs.remains_valid_across(
+                                    &after,
+                                    neovm_core::window::WindowLayoutLispBoundary::WindowChrome,
+                                )
+                            })
+                    })
             }) {
                 if !Self::accept_frame_relayout_request(
                     &mut layout_coordinator,
@@ -4568,20 +4597,9 @@ impl LayoutEngine {
                         RetainedWindowMatrix {
                             matrix: entry.matrix.clone(),
                             key: displayed_key,
-                            // The buffer's prevent-optimizations revision at
-                            // this accepted display: its current value now
-                            // consumes every raise up to here, exactly as
-                            // mark_window_display_accurate_1 clears GNU's flag
-                            // (src/xdisp.c:18295-18297).
-                            redisplay_optimizations: evaluator
-                                .prevent_redisplay_optimizations_revision(
-                                    neovm_core::buffer::BufferId(key.buffer_id),
-                                ),
-                            buffer_modiff: evaluator
-                                .buffer_manager()
-                                .get(neovm_core::buffer::BufferId(key.buffer_id))
-                                .map(neovm_core::buffer::Buffer::modified_tick)
-                                .unwrap_or(0),
+                            // Filled from the same accepted post-callback stamp
+                            // as the window's normal redisplay output below.
+                            gnu_accuracy: None,
                             // Every enabled body row now carries real
                             // MATRIX_ROW_START/END_CHARPOS values (empty lines
                             // hold their line's position; the EOB placeholder
@@ -4912,6 +4930,33 @@ impl LayoutEngine {
         } else {
             None
         };
+        // GNU marks current matrices accurate after the last callback. This
+        // does not recapture the source inputs retained with the produced rows.
+        let accepted_accuracy: Vec<_> = self
+            .window_snapshots
+            .iter()
+            .filter_map(|publication| {
+                let WindowPresentationSnapshot::LiveWindow(snapshot) = publication else {
+                    return None;
+                };
+                let window = snapshot.window_id;
+                let buffer = lisp_ledger
+                    .completed_body_inputs
+                    .get(&DisplayWindowId::new(window.0 as i64))
+                    .map(|body| body.source_buffer)
+                    .or_else(|| {
+                        evaluator
+                            .frame_manager()
+                            .get(frame_id)?
+                            .find_window(window)?
+                            .buffer_id()
+                    })?;
+                Some((
+                    window,
+                    evaluator.gnu_window_accuracy(frame_id, window, buffer)?,
+                ))
+            })
+            .collect();
         let snapshots = std::mem::take(&mut self.window_snapshots);
         if let Some(frame) = evaluator.frame_manager_mut().get_mut(frame_id) {
             frame
@@ -4929,6 +4974,29 @@ impl LayoutEngine {
                     .keys()
                     .map(|window| neovm_core::window::WindowId(window.get() as u64)),
             );
+        }
+        for (window, accuracy) in accepted_accuracy {
+            let stamped = evaluator
+                .frame_manager_mut()
+                .get_mut(frame_id)
+                .and_then(|frame| frame.find_window_mut(window))
+                .is_some_and(|window| {
+                    window.set_gnu_redisplay_accuracy(
+                        neovm_core::window::geometry::PresentationId::new(presentation_id),
+                        accuracy,
+                    )
+                });
+            if stamped {
+                if let Some(buffer) = evaluator.buffer_manager().get(accuracy.buffer_id) {
+                    buffer.acknowledge_mode_line_clip();
+                }
+                if let Some(retained) = self
+                    .retained_window_matrices
+                    .get_mut(&DisplayWindowId::new(window.0 as i64))
+                {
+                    retained.gnu_accuracy = Some(accuracy);
+                }
+            }
         }
         frame_window_end_attempts.accept_all();
         log_invalid_face_references(evaluator, &face_resolver.take_invalid_face_references());
@@ -6149,7 +6217,7 @@ impl LayoutEngine {
         // reject it. Keep its sole snapshot local until Completed transfers it
         // to the frame coordinator; all other returns drop the candidate.
         let mut window_snapshot = None;
-        let source_capture = crate::cursor_source_dependencies::Capture::begin(evaluator);
+        let mut source_capture = crate::cursor_source_dependencies::Capture::begin(evaluator);
         let source_window = DisplayWindowId::new(params.window_id);
         lisp_ledger.cursor_sources.remove(&source_window);
         let previous_sources = lisp_ledger
@@ -6514,6 +6582,7 @@ impl LayoutEngine {
                     outcome: WindowLayoutOutcome::Skipped,
                     window_end_attempt: None,
                     snapshot: window_snapshot,
+                    produced_key: None,
                 };
             }
         };
@@ -6742,6 +6811,57 @@ impl LayoutEngine {
         let scroll_replay = if sources_current { scroll_replay } else { None };
         let canonical_source_walk = cursor_only_replay.is_none() && scroll_replay.is_none();
         let unchanged_body_replay = cursor_only_replay.is_some();
+        let produced_freshness = match evaluator
+            .window_display_snapshot_freshness(frame_id, window_id, buf_id)
+        {
+            Some(token) => {
+                crate::buffer_source::render_attempt::ProducedSnapshotIdentity::Live(token)
+            }
+            None if position_publication == WindowPositionPublication::InactiveEchoArea => {
+                crate::buffer_source::render_attempt::ProducedSnapshotIdentity::InactiveEchoArea
+            }
+            None if position_publication
+                == WindowPositionPublication::SynchronousQueryTextExtent =>
+            {
+                // Only the explicit TextExtent scope admits a projected
+                // query source without live-window snapshot identity.
+                crate::buffer_source::render_attempt::ProducedSnapshotIdentity::ProjectedTextExtent
+            }
+            None => {
+                if let Some(attempt) = window_end_attempt.take() {
+                    evaluator.reject_redisplay_window_end_attempt(attempt);
+                }
+                return LeafLayoutAttempt::LogicalInputsChanged;
+            }
+        };
+        let produced_key = RetainedWindowKey::from_params(params, *layout_box, evaluator);
+        let produced_modiff = evaluator
+            .buffer_manager()
+            .get(buf_id)
+            .map(neovm_core::buffer::Buffer::modified_tick)
+            .unwrap_or(0);
+        let source_walk = if canonical_source_walk {
+            crate::buffer_source::render_attempt::BodySourceWalk::Canonical
+        } else if let Some(previous) = previous_sources.clone() {
+            if unchanged_body_replay {
+                crate::buffer_source::render_attempt::BodySourceWalk::Unchanged(previous)
+            } else {
+                crate::buffer_source::render_attempt::BodySourceWalk::Partial(previous)
+            }
+        } else {
+            if let Some(attempt) = window_end_attempt.take() {
+                evaluator.reject_redisplay_window_end_attempt(attempt);
+            }
+            return LeafLayoutAttempt::LogicalInputsChanged;
+        };
+        let body_completion = crate::buffer_source::render_attempt::BodyCompletionRequest::new(
+            &mut source_capture,
+            freshness_after_fontification.as_ref().clone(),
+            produced_key,
+            produced_freshness,
+            produced_modiff,
+            source_walk,
+        );
         let render_outcome = render_request.render_into(
             BufferSourceRenderAttemptContext::from_frame_output_owner(
                 &mut self.frame_output,
@@ -6750,6 +6870,7 @@ impl LayoutEngine {
                 face_services,
                 face_attempt.clone(),
                 &mut window_snapshot,
+                body_completion,
             ),
             &mut self.text_buf,
             remaining_visibility_retries,
@@ -6845,11 +6966,9 @@ impl LayoutEngine {
             }
         }
 
-        // Body and chrome can evaluate arbitrary Lisp after fontification.
-        // Rows are valid only if the complete typed source projection still
-        // equals the one they were produced from. Reject before attaching the
-        // post-callback token to those rows; otherwise stale geometry could be
-        // certified as fresh.
+        // Body evidence was sealed before chrome. Late source mutations do
+        // not discard those completed rows; ownership, physical geometry and
+        // realized resources must still survive the callback boundary.
         let freshness_after_leaf = match &render_outcome {
             BufferSourceRenderAttemptOutcome::Finished {
                 freshness_before_chrome,
@@ -6891,15 +7010,10 @@ impl LayoutEngine {
                     ..
                 },
                 Some(freshness_after_leaf),
-            ) => {
-                freshness_after_fontification.remains_valid_across(
-                    freshness_before_chrome,
-                    neovm_core::window::WindowLayoutLispBoundary::BufferBody,
-                ) && freshness_before_chrome.remains_valid_across(
-                    freshness_after_leaf,
-                    neovm_core::window::WindowLayoutLispBoundary::WindowChrome,
-                )
-            }
+            ) => freshness_before_chrome.remains_valid_across(
+                freshness_after_leaf,
+                neovm_core::window::WindowLayoutLispBoundary::WindowChrome,
+            ),
             (_, Some(freshness_after_leaf)) => {
                 freshness_after_leaf.as_ref() == freshness_after_fontification.as_ref()
             }
@@ -6907,11 +7021,6 @@ impl LayoutEngine {
         };
         if evaluator.frame_manager().window_topology_generation() != topology_generation
             || !lisp_boundaries_remain_valid
-            || !source_capture.unchanged()
-            || (!canonical_source_walk
-                && !previous_sources
-                    .as_ref()
-                    .is_some_and(|sources| sources.unchanged()))
         {
             if let Some(attempt) = window_end_attempt.take() {
                 evaluator.reject_redisplay_window_end_attempt(attempt);
@@ -6955,8 +7064,10 @@ impl LayoutEngine {
         // matrix records it at acceptance, after redisplay's own fontification.
         let window_outdated = match (retained_matrix, buffer_state) {
             (Some(retained), Some(buffer)) => {
-                buffer.modified_tick() != retained.buffer_modiff
-                    || buffer.overlay_modified_tick() != retained.key.overlay_modified_tick
+                retained.gnu_accuracy.as_ref().is_some_and(|accuracy| {
+                    buffer.modified_tick() != accuracy.modified_tick
+                        || buffer.overlay_modified_tick() != accuracy.overlay_modified_tick
+                })
             }
             _ => false,
         };
@@ -6965,8 +7076,10 @@ impl LayoutEngine {
         // A moved body revision -- GNU `force-window-update` -- refuses too.
         let prevent_redisplay_optimizations = retained_matrix.is_some_and(|retained| {
             retained.key.body_redisplay != evaluator.body_redisplay_revision(window_id, buf_id)
-                || retained.redisplay_optimizations
-                    != evaluator.prevent_redisplay_optimizations_revision(buf_id)
+                || retained.gnu_accuracy.as_ref().is_some_and(|accuracy| {
+                    accuracy.redisplay_optimizations
+                        != evaluator.prevent_redisplay_optimizations_revision(buf_id)
+                })
         });
         // GNU reads `clip_changed` only after `reconsider_clip_changes (w)`
         // (src/xdisp.c:20486), which clears it when the window's current
@@ -6978,9 +7091,11 @@ impl LayoutEngine {
                 // The key stores BEGV and ZV as `CharPos0` counts
                 // (neovm_bridge.rs:2029-2031), so compare the same form.
                 let matrix_matches = window_end_valid_at_entry
-                    && retained.key.buffer_id == buf_id.0
-                    && retained.key.buffer_begv == buffer.point_min_char_pos().get() as i64
-                    && retained.key.buffer_size == buffer.point_max_char_pos().get() as i64;
+                    && retained.gnu_accuracy.as_ref().is_some_and(|accuracy| {
+                        accuracy.buffer_id == buf_id
+                            && accuracy.accessible_chars.start() == buffer.point_min_char_pos()
+                            && accuracy.accessible_chars.end() == buffer.point_max_char_pos()
+                    });
                 buffer.mode_line_clip_changed() && !matrix_matches
             }
             (Some(_), None) => false,
@@ -7168,6 +7283,7 @@ impl LayoutEngine {
         }
 
         drop(freshness_after_leaf);
+        let completed_body_key;
         let (redisplay_positions, effective_default_face, line_number_field) = match render_outcome
         {
             BufferSourceRenderAttemptOutcome::GlyphMatrixCapacityExhausted => {
@@ -7205,9 +7321,7 @@ impl LayoutEngine {
                 return LeafLayoutAttempt::LogicalInputsChanged;
             }
             BufferSourceRenderAttemptOutcome::LogicalInputsChanged => {
-                if let Some(attempt) = window_end_attempt.take() {
-                    evaluator.reject_redisplay_window_end_attempt(attempt);
-                }
+                reject_changed_cursor_sources(evaluator, &mut window_end_attempt, true);
                 return LeafLayoutAttempt::LogicalInputsChanged;
             }
             BufferSourceRenderAttemptOutcome::OverlayViewExhausted => {
@@ -7269,6 +7383,7 @@ impl LayoutEngine {
                     },
                     window_end_attempt: None,
                     snapshot: window_snapshot,
+                    produced_key: None,
                 };
             }
             BufferSourceRenderAttemptOutcome::Skipped
@@ -7299,6 +7414,7 @@ impl LayoutEngine {
                     outcome: WindowLayoutOutcome::Skipped,
                     window_end_attempt,
                     snapshot: window_snapshot,
+                    produced_key: None,
                 };
             }
             BufferSourceRenderAttemptOutcome::ReplayMispredicted
@@ -7476,49 +7592,30 @@ impl LayoutEngine {
                 query_row_coverage,
                 query_target_prefix_policy,
                 window_end_record,
-                freshness_before_chrome: _,
+                freshness_before_chrome,
                 chrome_lisp_admission: _,
                 effective_default_face,
                 cursor_only,
                 reused_matrix_rows,
                 line_number_field_width,
             } => {
-                // Only the canonical producer establishes completeness. A
-                // cursor-only walk carries the original certificate, never an
-                // empty observation from skipping the strings. Partial walks
-                // preserve original known domains; newly expanded domains
-                // validate this frame but require a fresh canonical next walk.
-                if reject_changed_cursor_sources(
-                    evaluator,
-                    &mut window_end_attempt,
-                    !source_capture.unchanged()
-                        || (!canonical_source_walk
-                            && !previous_sources
-                                .as_ref()
-                                .is_some_and(|sources| sources.unchanged())),
-                ) {
-                    return LeafLayoutAttempt::LogicalInputsChanged;
+                let body = freshness_before_chrome;
+                if let Some(snapshot) = window_snapshot.as_mut() {
+                    let snapshot = snapshot.display_snapshot_mut();
+                    snapshot.layout_freshness = body.freshness.into_freshness();
+                    snapshot.buffer_modiff = Some(body.buffer_modiff);
                 }
-                let observed = source_capture.finish();
-                let sources = if canonical_source_walk {
-                    observed
-                } else if unchanged_body_replay {
-                    previous_sources
-                } else {
-                    previous_sources
-                        .as_ref()
-                        .and_then(|old| observed.and_then(|fresh| old.after_partial_walk(fresh)))
-                };
-                let Some(sources) = sources else {
-                    // Unknown observations cannot authorize this frame after
-                    // later Lisp callbacks. Use the coordinator's bounded
-                    // retry/abort policy, not a fabricated empty certificate.
-                    if let Some(attempt) = window_end_attempt.take() {
-                        evaluator.reject_redisplay_window_end_attempt(attempt);
-                    }
-                    return LeafLayoutAttempt::LogicalInputsChanged;
-                };
-                lisp_ledger.cursor_sources.insert(source_window, sources);
+                lisp_ledger.completed_body_inputs.insert(
+                    source_window,
+                    CompletedBodyIdentity {
+                        source_buffer: buf_id,
+                        inputs: body.attempt,
+                    },
+                );
+                completed_body_key = Some(body.key);
+                lisp_ledger
+                    .cursor_sources
+                    .insert(source_window, body.sources);
                 if position_publication.is_synchronous_query() {
                     self.query_row_coverage = query_row_coverage;
                     self.query_target_prefix_policy = query_target_prefix_policy;
@@ -7603,6 +7700,7 @@ impl LayoutEngine {
             outcome,
             window_end_attempt,
             snapshot: window_snapshot,
+            produced_key: completed_body_key,
         }
     }
 

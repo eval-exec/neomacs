@@ -385,3 +385,150 @@ fn buffer_text_snapshot_read_allocates_no_intervals() {
     assert_eq!(allocated_interval_count() - before_intervals, 0);
     assert_eq!(text_property_table_clones_for_test() - before_tables, 0);
 }
+
+/// Completing the body transfers its roots and original read origin. Later
+/// chrome writes can invalidate reuse without erasing the completed record.
+#[test]
+fn completed_body_seal_keeps_original_sources_rooted_and_detects_later_mutation() {
+    use neovm_core::emacs_core::value::{mutate_string_text_properties, positions::*};
+
+    let mut context = neovm_core::emacs_core::eval_hook_installers::new_context();
+    context.gc_collect_exact();
+    let allocated = || neovm_core::tagged::gc::with_tagged_heap(|heap| heap.allocated_count());
+    let baseline = allocated();
+    let source = Value::string("completed body source");
+    let setup_roots = context.retain_gc_roots([source]);
+    context.gc_collect_exact();
+    let expected = allocated();
+    let mut capture = Capture::begin(&context);
+    string_properties(
+        source,
+        &StringSourceRootScope::Rooted(context.owned_root_retainer()),
+    );
+    let completed = capture
+        .seal_completed_body()
+        .expect("complete unchanged body");
+    assert!(completed.unchanged());
+    assert!(completed.ordinary_cursor_source_proof().is_some());
+    assert!(
+        capture.seal_completed_body().is_none(),
+        "a body seals only once"
+    );
+    drop(setup_roots);
+    context.gc_collect_exact();
+    assert_eq!(
+        allocated(),
+        expected,
+        "the sealed body owns the original source"
+    );
+    assert_eq!(
+        source.as_lisp_string().unwrap().as_utf8_str(),
+        Some("completed body source")
+    );
+    drop(capture);
+    context.gc_collect_exact();
+    assert_eq!(
+        allocated(),
+        expected,
+        "capture teardown must not release the body's roots"
+    );
+    assert!(
+        completed.unchanged(),
+        "GC alone preserves the original read certificate"
+    );
+    mutate_string_text_properties(source, |properties| {
+        properties.put_property_for_object_char_len(
+            CharRange::new(CharPos0::ZERO, CharPos0::new(1)),
+            CharLen::new(21),
+            Value::symbol("cursor"),
+            Value::fixnum(1),
+        );
+    });
+    context.gc_collect_exact();
+    assert!(
+        !completed.unchanged(),
+        "later chrome cannot refresh the body's read certificate"
+    );
+    assert!(completed.ordinary_cursor_source_proof().is_none());
+    drop(completed);
+    context.gc_collect_exact();
+    assert_eq!(
+        allocated(),
+        baseline,
+        "retiring the body releases all original roots"
+    );
+}
+
+#[test]
+fn completed_body_seal_rejects_body_mutation_and_finish_remains_strict() {
+    let mut context = neovm_core::emacs_core::eval_hook_installers::new_context();
+    for seal_body in [true, false] {
+        let source = context
+            .eval_str("(setq neo-seal-source (copy-sequence \"body\"))")
+            .unwrap();
+        let mut capture = Capture::begin(&context);
+        string_properties(
+            source,
+            &StringSourceRootScope::Rooted(context.owned_root_retainer()),
+        );
+        context
+            .eval_str("(put-text-property 0 1 'cursor 1 neo-seal-source)")
+            .unwrap();
+        if seal_body {
+            assert!(
+                capture.seal_completed_body().is_none(),
+                "body mutations remain rejection causes"
+            );
+        }
+        assert!(
+            capture.finish().is_none(),
+            "strict finish never seals changed observations"
+        );
+    }
+}
+
+#[test]
+fn completed_body_seal_restores_nested_capture_without_merging_source_domains() {
+    let mut context = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let first = context
+        .eval_str("(setq neo-seal-outer (copy-sequence \"outer\"))")
+        .unwrap();
+    let second = context
+        .eval_str("(setq neo-seal-inner (copy-sequence \"inner\"))")
+        .unwrap();
+    let mut outer = Capture::begin(&context);
+    string_properties(
+        first,
+        &StringSourceRootScope::Rooted(context.owned_root_retainer()),
+    );
+    let mut inner = Capture::begin(&context);
+    string_properties(
+        second,
+        &StringSourceRootScope::Rooted(context.owned_root_retainer()),
+    );
+    let inner_sources = inner.seal_completed_body().unwrap();
+    context
+        .eval_str("(put-text-property 0 1 'cursor 1 neo-seal-inner)")
+        .unwrap();
+    context.gc_collect_exact();
+    assert!(!inner_sources.unchanged());
+    drop(inner);
+    assert!(
+        outer.unchanged(),
+        "inner chrome writes do not belong to the outer source domain"
+    );
+    string_properties(
+        first,
+        &StringSourceRootScope::Rooted(context.owned_root_retainer()),
+    );
+    let outer_sources = outer.seal_completed_body().unwrap();
+    drop(outer);
+    assert!(outer_sources.unchanged());
+    context
+        .eval_str("(put-text-property 0 1 'cursor 1 neo-seal-outer)")
+        .unwrap();
+    assert!(
+        !outer_sources.unchanged(),
+        "the restored outer observation retains its origin"
+    );
+}

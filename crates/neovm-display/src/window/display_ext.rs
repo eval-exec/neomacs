@@ -2376,6 +2376,19 @@ impl DisplayFrameManagerExt for FrameManager {
             let Some(buffer) = window.buffer_id().and_then(|id| buffers.get(id)) else {
                 return false;
             };
+            if let Some(accuracy) = window
+                .display()
+                .and_then(|display| display.redisplay_output())
+                .and_then(|output| output.gnu_accuracy)
+            {
+                // GNU accepted post-callback ticks may be current while Neo's
+                // original produced-row inputs and dirty spans remain stale.
+                return !accuracy.source_is_current_for(
+                    buffer.id(),
+                    buffer.modified_tick(),
+                    buffer.overlay_modified_tick(),
+                );
+            }
             if buffer.changed_char_range().is_some() {
                 return true;
             }

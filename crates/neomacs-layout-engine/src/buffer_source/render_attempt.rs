@@ -30,6 +30,120 @@ use neovm_core::emacs_core::xdisp::XdispContextExt;
 use neovm_core::window::display::WindowDisplayContextExt;
 use neovm_core::window::{FrameId, WindowId, WindowPresentationSnapshot};
 
+/// Original source evidence selected by the walk that actually produced rows.
+#[derive(Clone, Debug)]
+pub(crate) enum BodySourceWalk {
+    Canonical,
+    Unchanged(crate::cursor_source_dependencies::CursorSourceDependencies),
+    Partial(crate::cursor_source_dependencies::CursorSourceDependencies),
+}
+
+/// Projected measurements and echo substitution are not live-window rows.
+#[derive(Clone, Debug)]
+pub(crate) enum ProducedSnapshotIdentity {
+    Live(neovm_core::window::WindowDisplaySnapshotFreshness),
+    /// An explicit TextExtent query measures its own source without installing
+    /// it in the live window or granting retained live-position authority.
+    ProjectedTextExtent,
+    InactiveEchoArea,
+}
+impl ProducedSnapshotIdentity {
+    pub(crate) fn into_freshness(
+        self,
+    ) -> Option<neovm_core::window::WindowDisplaySnapshotFreshness> {
+        match self {
+            Self::Live(token) => Some(token),
+            Self::ProjectedTextExtent | Self::InactiveEchoArea => None,
+        }
+    }
+}
+
+/// Body admission ends before GNU's late chrome callbacks. Original row inputs
+/// remain unchanged in this certificate even if chrome makes them stale.
+#[derive(Debug)]
+pub(crate) struct CompletedBodyCertificate {
+    pub(crate) attempt: neovm_core::window::WindowLayoutAttemptFreshness,
+    pub(crate) key: crate::incremental_layout::RetainedWindowKey,
+    pub(crate) freshness: ProducedSnapshotIdentity,
+    pub(crate) buffer_modiff: i64,
+    pub(crate) sources: crate::cursor_source_dependencies::CursorSourceDependencies,
+}
+impl std::ops::Deref for CompletedBodyCertificate {
+    type Target = neovm_core::window::WindowLayoutAttemptFreshness;
+    fn deref(&self) -> &Self::Target {
+        &self.attempt
+    }
+}
+
+pub(crate) struct BodyCompletionRequest<'a> {
+    capture: &'a mut crate::cursor_source_dependencies::Capture,
+    expected: neovm_core::window::WindowLayoutAttemptFreshness,
+    key: crate::incremental_layout::RetainedWindowKey,
+    freshness: ProducedSnapshotIdentity,
+    buffer_modiff: i64,
+    walk: BodySourceWalk,
+}
+impl<'a> BodyCompletionRequest<'a> {
+    pub(crate) fn new(
+        capture: &'a mut crate::cursor_source_dependencies::Capture,
+        expected: neovm_core::window::WindowLayoutAttemptFreshness,
+        key: crate::incremental_layout::RetainedWindowKey,
+        freshness: ProducedSnapshotIdentity,
+        buffer_modiff: i64,
+        walk: BodySourceWalk,
+    ) -> Self {
+        Self {
+            capture,
+            expected,
+            key,
+            freshness,
+            buffer_modiff,
+            walk,
+        }
+    }
+
+    fn reborrow(&mut self) -> BodyCompletionRequest<'_> {
+        BodyCompletionRequest::new(
+            self.capture,
+            self.expected.clone(),
+            self.key.clone(),
+            self.freshness.clone(),
+            self.buffer_modiff,
+            self.walk.clone(),
+        )
+    }
+
+    pub(crate) fn complete(
+        &mut self,
+        attempt: neovm_core::window::WindowLayoutAttemptFreshness,
+    ) -> Option<CompletedBodyCertificate> {
+        if !self.expected.remains_valid_across(
+            &attempt,
+            neovm_core::window::WindowLayoutLispBoundary::BufferBody,
+        ) {
+            return None;
+        }
+        if let BodySourceWalk::Unchanged(old) | BodySourceWalk::Partial(old) = &self.walk
+            && !old.unchanged()
+        {
+            return None;
+        }
+        let observed = self.capture.seal_completed_body()?;
+        let sources = match &self.walk {
+            BodySourceWalk::Canonical => observed,
+            BodySourceWalk::Unchanged(old) => old.clone(),
+            BodySourceWalk::Partial(old) => old.after_partial_walk(observed)?,
+        };
+        Some(CompletedBodyCertificate {
+            attempt,
+            key: self.key.clone(),
+            freshness: self.freshness.clone(),
+            buffer_modiff: self.buffer_modiff,
+            sources,
+        })
+    }
+}
+
 pub(crate) struct BufferSourceOutputState<'emit> {
     output: TextWindowOutputTarget<'emit>,
     evaluator: &'emit mut Context,
@@ -45,6 +159,7 @@ pub(crate) struct BufferSourceRenderAttemptContext<
     face_resolver: &'face FS,
     face_attempt: FrameFaceAttempt,
     window_snapshot: &'a mut Option<WindowPresentationSnapshot>,
+    body_completion: BodyCompletionRequest<'a>,
 }
 
 /// Which live window state may be published by a completed row walk.
@@ -78,6 +193,9 @@ pub(crate) enum WindowPositionPublication {
     /// A GNU `window-end`/`vertical-motion`-style logical query. It walks from
     /// the exact live start and preserves the accepted chrome partition.
     SynchronousQueryEnd,
+    /// A GNU text-extent query may measure a source buffer other than the
+    /// live window's buffer. Its positions belong only to the query result.
+    SynchronousQueryTextExtent,
     /// A GNU `pos-visible-in-window-p` / `posn-at-point` query. Unlike
     /// `window-end`, this path re-evaluates and measures the chrome formats
     /// before laying out the body, exactly as `pos_visible_p` does. A measured
@@ -97,16 +215,19 @@ impl WindowPositionPublication {
             Self::Snapshot
                 | Self::InactiveEchoArea
                 | Self::SynchronousQueryEnd
+                | Self::SynchronousQueryTextExtent
                 | Self::SynchronousQueryPosition
         )
     }
 
-    /// Both query kinds walk the exact live start without publishing redisplay
-    /// positions. Only Position queries additionally remeasure chrome.
+    /// Query walks publish no redisplay positions. Only Position queries
+    /// additionally remeasure chrome.
     pub(crate) const fn is_synchronous_query(self) -> bool {
         matches!(
             self,
-            Self::SynchronousQueryEnd | Self::SynchronousQueryPosition
+            Self::SynchronousQueryEnd
+                | Self::SynchronousQueryTextExtent
+                | Self::SynchronousQueryPosition
         )
     }
 
@@ -158,6 +279,7 @@ impl WindowPositionPublication {
             Self::Snapshot
             | Self::InactiveEchoArea
             | Self::SynchronousQueryEnd
+            | Self::SynchronousQueryTextExtent
             | Self::SynchronousQueryPosition => {}
         }
         None
@@ -182,7 +304,7 @@ pub(crate) enum BufferSourceRenderAttemptOutcome {
     /// chrome anyway so a shrinking row can restore usable body space.
     EmptyBodyChromeMeasured {
         measured: crate::window_layout::WindowChromeMetrics,
-        freshness_before_chrome: neovm_core::window::WindowLayoutAttemptFreshness,
+        freshness_before_chrome: CompletedBodyCertificate,
         chrome_lisp_admission: crate::attempt_freshness::LayoutLispAdmission,
     },
     /// Lisp evaluated by a buffer-owned display source changed the window's
@@ -243,7 +365,7 @@ pub(crate) enum BufferSourceRenderAttemptOutcome {
         window_end_record: neovm_core::window::WindowEndRecord,
         /// Exact canonical inputs after body production and immediately before
         /// GNU's late `display_mode_lines` phase enters Lisp.
-        freshness_before_chrome: neovm_core::window::WindowLayoutAttemptFreshness,
+        freshness_before_chrome: CompletedBodyCertificate,
         /// Proven native chrome can pass the same complete token through the
         /// subsequent snapshot publication. All live formatters remain fresh.
         chrome_lisp_admission: crate::attempt_freshness::LayoutLispAdmission,
@@ -366,6 +488,7 @@ impl<'a, 'face, FS: crate::neovm_bridge::FaceServices>
         face_resolver: &'face FS,
         face_attempt: FrameFaceAttempt,
         window_snapshot: &'a mut Option<WindowPresentationSnapshot>,
+        body_completion: BodyCompletionRequest<'a>,
     ) -> Self {
         Self {
             output: BufferSourceOutputState::from_parts(output, evaluator),
@@ -373,6 +496,7 @@ impl<'a, 'face, FS: crate::neovm_bridge::FaceServices>
             face_resolver,
             face_attempt,
             window_snapshot,
+            body_completion,
         }
     }
 
@@ -383,6 +507,7 @@ impl<'a, 'face, FS: crate::neovm_bridge::FaceServices>
         face_resolver: &'face FS,
         face_attempt: FrameFaceAttempt,
         window_snapshot: &'a mut Option<WindowPresentationSnapshot>,
+        body_completion: BodyCompletionRequest<'a>,
     ) -> Self {
         Self::new(
             frame_output.text_window_output_target(),
@@ -391,6 +516,7 @@ impl<'a, 'face, FS: crate::neovm_bridge::FaceServices>
             face_resolver,
             face_attempt,
             window_snapshot,
+            body_completion,
         )
     }
 
@@ -404,6 +530,7 @@ impl<'a, 'face, FS: crate::neovm_bridge::FaceServices>
             face_resolver: self.face_resolver,
             face_attempt: self.face_attempt.clone(),
             window_snapshot: self.window_snapshot,
+            body_completion: self.body_completion.reborrow(),
         }
     }
 
@@ -434,6 +561,7 @@ impl<'a, 'face, FS: crate::neovm_bridge::FaceServices>
         &'face FS,
         FrameFaceAttempt,
         &'a mut Option<WindowPresentationSnapshot>,
+        BodyCompletionRequest<'a>,
     ) {
         (
             self.output,
@@ -441,6 +569,7 @@ impl<'a, 'face, FS: crate::neovm_bridge::FaceServices>
             self.face_resolver,
             self.face_attempt,
             self.window_snapshot,
+            self.body_completion,
         )
     }
 }
@@ -480,6 +609,7 @@ impl BufferSourceRedisplayPublishRequest {
             WindowPositionPublication::Snapshot
             | WindowPositionPublication::InactiveEchoArea
             | WindowPositionPublication::SynchronousQueryEnd
+            | WindowPositionPublication::SynchronousQueryTextExtent
             | WindowPositionPublication::SynchronousQueryPosition => {}
         }
     }

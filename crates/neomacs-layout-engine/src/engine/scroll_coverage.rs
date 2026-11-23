@@ -965,9 +965,7 @@ impl LayoutEngine {
         let mut retained = RetainedWindowMatrix {
             matrix,
             key: key.clone(),
-            redisplay_optimizations: Default::default(),
-            // Synthetic fixture: no GNU prevent raise and MODIFF 0.
-            buffer_modiff: 0,
+            gnu_accuracy: None,
             validity: retained.validity,
             display_snapshot: std::sync::Arc::new(neovm_core::window::WindowDisplaySnapshot {
                 window_id: window,

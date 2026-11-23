@@ -155,13 +155,15 @@ fn freshness_before_window_chrome(
     evaluator: &neovm_core::emacs_core::Context,
     frame_id: FrameId,
     params: &WindowParams,
-) -> Result<neovm_core::window::WindowLayoutAttemptFreshness, LogicalInputsChanged> {
+    completion: &mut crate::buffer_source::render_attempt::BodyCompletionRequest<'_>,
+) -> Result<crate::buffer_source::render_attempt::CompletedBodyCertificate, LogicalInputsChanged> {
     evaluator
         .window_layout_attempt_freshness(
             frame_id,
             WindowId(params.window_id as u64),
             BufferId(params.buffer_id),
         )
+        .and_then(|attempt| completion.complete(attempt))
         .ok_or(LogicalInputsChanged)
 }
 
@@ -706,7 +708,8 @@ impl BufferSourceOutputSetup {
         request: WindowChromeRowsRenderRequest<'_, '_>,
         params: &WindowParams,
     ) -> BufferSourceRenderAttemptOutcome {
-        let (mut output, font_metrics, face_resolver, mut face_ids, _) = state.into_parts();
+        let (mut output, font_metrics, face_resolver, mut face_ids, _, mut body_completion) =
+            state.into_parts();
         if !self.remeasure_chrome
             || !self.position_publication.remeasures_chrome()
             || neovm_core::emacs_core::xdisp::mode_line_display_active(output.evaluator())
@@ -717,6 +720,7 @@ impl BufferSourceOutputSetup {
             output.evaluator(),
             self.begin_request.frame_id(),
             params,
+            &mut body_completion,
         ) {
             Ok(freshness) => freshness,
             Err(changed) => return changed.into(),
@@ -896,8 +900,14 @@ impl BufferSourceOutputSetup {
     where
         B: LayoutBufferView,
     {
-        let (mut output, font_metrics, face_resolver, mut face_ids, window_snapshot) =
-            state.into_parts();
+        let (
+            mut output,
+            font_metrics,
+            face_resolver,
+            mut face_ids,
+            window_snapshot,
+            mut body_completion,
+        ) = state.into_parts();
         let retry_checkpoint = output.capture_retry_checkpoint();
         let effective_default_face =
             default_face.reserve_effective_face(face_resolver.resolver(), &mut face_ids);
@@ -1261,12 +1271,15 @@ impl BufferSourceOutputSetup {
             // decided in `RetainedWindowMatrix::chrome_reusable_after_cursor_move`,
             // where the dirty flags and the point-stayed-on-this-line
             // precondition live.
-            let freshness_before_chrome =
-                match freshness_before_window_chrome(evaluator, publish_request.frame_id(), params)
-                {
-                    Ok(freshness) => freshness,
-                    Err(changed) => return changed.into(),
-                };
+            let freshness_before_chrome = match freshness_before_window_chrome(
+                evaluator,
+                publish_request.frame_id(),
+                params,
+                &mut body_completion,
+            ) {
+                Ok(freshness) => freshness,
+                Err(changed) => return changed.into(),
+            };
             let (measured_chrome_heights, chrome_lisp_admission) =
                 match render_or_retain_window_chrome(
                     output.reborrow(),
@@ -1900,12 +1913,15 @@ impl BufferSourceOutputSetup {
                 }
                 (chrome, _) => chrome,
             };
-            let freshness_before_chrome =
-                match freshness_before_window_chrome(evaluator, publish_request.frame_id(), params)
-                {
-                    Ok(freshness) => freshness,
-                    Err(changed) => return changed.into(),
-                };
+            let freshness_before_chrome = match freshness_before_window_chrome(
+                evaluator,
+                publish_request.frame_id(),
+                params,
+                &mut body_completion,
+            ) {
+                Ok(freshness) => freshness,
+                Err(changed) => return changed.into(),
+            };
             let (measured_chrome_heights, chrome_lisp_admission) =
                 match render_or_retain_window_chrome(
                     output.reborrow(),
@@ -2207,11 +2223,15 @@ impl BufferSourceOutputSetup {
         } else {
             WindowChromeRowSource::Recompute
         };
-        let freshness_before_chrome =
-            match freshness_before_window_chrome(evaluator, publish_request.frame_id(), params) {
-                Ok(freshness) => freshness,
-                Err(changed) => return changed.into(),
-            };
+        let freshness_before_chrome = match freshness_before_window_chrome(
+            evaluator,
+            publish_request.frame_id(),
+            params,
+            &mut body_completion,
+        ) {
+            Ok(freshness) => freshness,
+            Err(changed) => return changed.into(),
+        };
         let (measured_chrome_heights, chrome_lisp_admission) = match render_or_retain_window_chrome(
             output.reborrow(),
             &mut output_emitter,

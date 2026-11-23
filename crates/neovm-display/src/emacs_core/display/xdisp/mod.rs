@@ -7089,7 +7089,29 @@ pub fn builtin_window_line_height(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: &[Value],
 ) -> EvalResult {
+    expect_args_range("window-line-height", args, 0, 2)?;
+    validate_optional_window_designator(
+        eval,
+        args.get(1),
+        crate::emacs_core::window_cmds::WindowDomain::Live,
+    )?;
     let noninteractive = eval.noninteractive();
+    if !noninteractive {
+        let current = resolve_live_window_identity(&eval.frame_manager(), args.get(1))?.and_then(
+            |(frame, window)| {
+                let buffer = eval
+                    .frame_manager()
+                    .get(frame)?
+                    .find_window(window)?
+                    .buffer_id()?;
+                eval.gnu_current_matrix_snapshot(frame, window, buffer)
+            },
+        );
+        // GNU refuses an outdated current matrix before inspecting LINE.
+        if current.is_none() {
+            return Ok(Value::NIL);
+        }
+    }
     let (frames, buffers) = eval.frame_manager_and_buffers_mut();
     window_line_height_impl(frames, buffers, noninteractive, args)
 }

@@ -597,9 +597,8 @@ pub fn builtin_window_lines_pixel_dimensions(
     // GNU bails when `!w->window_end_valid || windows_or_buffers_changed ||
     // b->clip_changed || b->prevent_redisplay_optimizations_p ||
     // window_outdated (w)` -- redisplay has not run since the last change.
-    // `fresh_window_display_snapshot` is that same gate for retained rows, so
-    // a stale matrix answers nil rather than yesterday's geometry.
-    let Some(snapshot) = eval.fresh_window_display_snapshot(fid, window_id, buffer_id) else {
+    // This gate reads acceptance accuracy, not the original row-reuse token.
+    let Some(snapshot) = eval.gnu_current_matrix_snapshot(fid, window_id, buffer_id) else {
         return Ok(Value::NIL);
     };
     let Some(frame) = eval.frame_manager().get(fid) else {
@@ -3069,12 +3068,12 @@ fn query_window_end(
     }
     if window_end.is_current()
         && eval
-            .fresh_window_display_snapshot(fid, wid, buffer_id)
+            .gnu_current_matrix_snapshot(fid, wid, buffer_id)
             .is_some()
     {
         // GNU Fwindow_end only constructs a stack-local iterator when the
-        // window's accepted end is no longer valid. The full retained-layout
-        // token is Neomacs's authoritative equivalent of GNU's validity bits.
+        // window's accepted end is no longer accurate. The row-production
+        // token remains separate and can already be stale after chrome.
         return Ok(Value::fixnum(stored_end.as_i64()));
     }
 

@@ -13,6 +13,7 @@ use neovm_edit::buffer::{BufferId, BufferManager, LispCharPos1};
 use neovm_eval::emacs_core::eval::data::window_layout_query::{
     LayoutQueryInstallError, WindowLayoutQueryAdapter,
 };
+use neovm_eval::emacs_core::eval::data::window_state::GnuWindowAccuracy;
 use neovm_value::intern::WellKnown;
 use neovm_value::value::Value;
 
@@ -367,6 +368,20 @@ pub trait WindowDisplayContextExt {
     ) -> Option<WindowDisplaySnapshotFreshness>;
 
     fn fresh_window_display_snapshot(
+        &self,
+        frame_id: FrameId,
+        window_id: WindowId,
+        buffer_id: BufferId,
+    ) -> Option<&WindowDisplaySnapshot>;
+
+    fn gnu_window_accuracy(
+        &self,
+        frame_id: FrameId,
+        window_id: WindowId,
+        buffer_id: BufferId,
+    ) -> Option<GnuWindowAccuracy>;
+
+    fn gnu_current_matrix_snapshot(
         &self,
         frame_id: FrameId,
         window_id: WindowId,
@@ -941,6 +956,62 @@ impl WindowDisplayContextExt for neovm_eval::emacs_core::eval::Context {
         })
     }
 
+    /// Capture scalar GNU accuracy at the whole-frame acceptance boundary.
+    /// It contains no source-reuse or current-position geometry certificate.
+    fn gnu_window_accuracy(
+        &self,
+        frame_id: FrameId,
+        window_id: WindowId,
+        buffer_id: BufferId,
+    ) -> Option<GnuWindowAccuracy> {
+        let window = self.frame_manager().get(frame_id)?.find_window(window_id)?;
+        if window.buffer_id() != Some(buffer_id) {
+            return None;
+        }
+        let buffer = self.edit.buffers.get(buffer_id)?;
+        Some(GnuWindowAccuracy {
+            buffer_id,
+            modified_tick: buffer.modified_tick(),
+            overlay_modified_tick: buffer.overlay_modified_tick(),
+            accessible_chars: neovm_edit::buffer::CharRange::new(
+                buffer.point_min_char_pos(),
+                buffer.point_max_char_pos(),
+            ),
+            redisplay_optimizations: self.prevent_redisplay_optimizations_revision(buffer_id),
+        })
+    }
+
+    /// GNU's current-matrix gate uses post-callback accuracy, not the stricter
+    /// inputs from which the rows were produced. Fresh-position queries must
+    /// continue using `fresh_window_display_snapshot` instead.
+    fn gnu_current_matrix_snapshot(
+        &self,
+        frame_id: FrameId,
+        window_id: WindowId,
+        buffer_id: BufferId,
+    ) -> Option<&WindowDisplaySnapshot> {
+        let frame = self.frame_manager().get(frame_id)?;
+        let window = frame.find_window(window_id)?;
+        let snapshot = frame.redisplay_snapshot(window_id)?;
+        let accuracy = window
+            .display()
+            .and_then(|display| display.redisplay_output())
+            .and_then(|output| output.gnu_accuracy);
+        let Some(accuracy) = accuracy else {
+            // Existing synthetic fixtures carry no acceptance stamp. Keep their
+            // established strict/legacy freshness admission, never upgrade it.
+            return self.fresh_window_display_snapshot(frame_id, window_id, buffer_id);
+        };
+        if !window.window_end_valid().unwrap_or(false)
+            || self.gnu_current_matrix_change_pending()
+            || self.edit.buffers.get(buffer_id)?.mode_line_clip_changed()
+            || !accuracy.is_current_for(self.gnu_window_accuracy(frame_id, window_id, buffer_id)?)
+        {
+            return None;
+        }
+        Some(snapshot)
+    }
+
     /// Return retained rows only while every layout input still matches.
     ///
     /// Older snapshots without a full token retain the legacy `buffer_modiff`
@@ -1002,6 +1073,10 @@ mod attempt_freshness_reuse_tests;
 #[cfg(test)]
 #[path = "tests/buffer_layout_projection_test.rs"]
 mod buffer_layout_projection_tests;
+
+#[cfg(test)]
+#[path = "tests/gnu_window_accuracy_test.rs"]
+mod gnu_window_accuracy_tests;
 
 pub(crate) use neovm_eval::emacs_core::eval::data::window_state::{
     current_char_table_layout_revision, effective_horizontal_scroll_bar_enabled,

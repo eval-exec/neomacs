@@ -795,10 +795,48 @@ pub struct WindowCursorSnapshot {
 #[derive(Clone, Debug, PartialEq)]
 pub struct WindowRedisplayOutput {
     pub generation: PresentationId,
+    /// GNU's post-callback accuracy, independent of the original row inputs.
+    /// None retains the legacy synthetic-snapshot admission used by fixtures.
+    pub gnu_accuracy: Option<GnuWindowAccuracy>,
     pub window_end: WindowEndRecord,
     pub visible_span: Option<WindowVisibleBufferSpan>,
     pub logical_cursor: Option<WindowCursorPos>,
     pub phys_cursor: Option<WindowCursorSnapshot>,
+}
+
+/// GNU `last_modified`/`last_overlay_modified` and accepted matrix restriction.
+/// This admits current-matrix queries, never replay of the rows' source data.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GnuWindowAccuracy {
+    pub buffer_id: BufferId,
+    pub modified_tick: i64,
+    pub overlay_modified_tick: i64,
+    pub accessible_chars: neovm_edit::buffer::CharRange,
+    pub redisplay_optimizations: RedisplayOptimizationsRevision,
+}
+
+impl GnuWindowAccuracy {
+    /// GNU `window_outdated` compares source ticks only. Hover and the
+    /// other-window redisplay signal do not use the stronger matrix gate.
+    pub fn source_is_current_for(
+        self,
+        buffer_id: BufferId,
+        modified_tick: i64,
+        overlay_modified_tick: i64,
+    ) -> bool {
+        self.buffer_id == buffer_id
+            && self.modified_tick >= modified_tick
+            && self.overlay_modified_tick >= overlay_modified_tick
+    }
+
+    pub fn is_current_for(self, current: Self) -> bool {
+        self.source_is_current_for(
+            current.buffer_id,
+            current.modified_tick,
+            current.overlay_modified_tick,
+        ) && self.accessible_chars == current.accessible_chars
+            && self.redisplay_optimizations == current.redisplay_optimizations
+    }
 }
 
 impl WindowRedisplayOutput {
@@ -2335,6 +2373,51 @@ impl Window {
             *window_end = WindowEndState::Current(output.window_end());
             display.redisplay_output = Some(output);
         }
+    }
+
+    /// GNU text hover requires a valid end and source ticks, independently of
+    /// clip/prevent-optimization flags (xdisp.c:37105-37112). Unstamped legacy
+    /// fixtures retain their existing caller admission; dead owners refuse.
+    pub fn gnu_text_hover_is_current(&self, buffers: &BufferManager) -> Option<bool> {
+        let accuracy = self.display()?.redisplay_output()?.gnu_accuracy?;
+        let Some(buffer) = self.buffer_id().and_then(|id| buffers.get(id)) else {
+            return Some(false);
+        };
+        Some(
+            self.window_end_valid() == Some(true)
+                && accuracy.source_is_current_for(
+                    buffer.id(),
+                    buffer.modified_tick(),
+                    buffer.overlay_modified_tick(),
+                ),
+        )
+    }
+
+    /// Stamp only the output committed by this exact completed presentation.
+    /// Queries, geometry-only publications and older output cannot gain it.
+    #[doc(hidden)]
+    pub fn set_gnu_redisplay_accuracy(
+        &mut self,
+        generation: PresentationId,
+        accuracy: GnuWindowAccuracy,
+    ) -> bool {
+        let Some(buffer_id) = self.buffer_id() else {
+            return false;
+        };
+        if buffer_id != accuracy.buffer_id {
+            return false;
+        }
+        let Some(output) = self
+            .display_mut()
+            .and_then(|display| display.redisplay_output.as_mut())
+        else {
+            return false;
+        };
+        if output.generation != generation {
+            return false;
+        }
+        output.gnu_accuracy = Some(accuracy);
+        true
     }
 
     /// Return a mutable reference to this leaf window's display state.

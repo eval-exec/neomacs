@@ -121,6 +121,25 @@ fn measure_then_capture_next_leaf(source: ChromeSource) {
     let mut builder = DisplayOutputBuilder::new();
     builder.set_face_attempt(face_attempt.clone());
     let mut snapshot = None;
+    let mut source_capture = crate::cursor_source_dependencies::Capture::begin(&evaluator);
+    let body_completion = crate::buffer_source::render_attempt::BodyCompletionRequest::new(
+        &mut source_capture,
+        evaluator
+            .window_layout_attempt_freshness(frame_id, window_id, buffer_id)
+            .unwrap(),
+        crate::incremental_layout::RetainedWindowKey::from_params(&params, layout_box, &evaluator),
+        crate::buffer_source::render_attempt::ProducedSnapshotIdentity::Live(
+            evaluator
+                .window_display_snapshot_freshness(frame_id, window_id, buffer_id)
+                .unwrap(),
+        ),
+        evaluator
+            .buffer_manager()
+            .get(buffer_id)
+            .unwrap()
+            .modified_tick(),
+        crate::buffer_source::render_attempt::BodySourceWalk::Canonical,
+    );
     let outcome = setup.measure_chrome_for_empty_body(
         BufferSourceRenderAttemptContext::new(
             TextWindowOutputTarget::from_builder(&mut builder),
@@ -129,6 +148,7 @@ fn measure_then_capture_next_leaf(source: ChromeSource) {
             &resolver,
             face_attempt,
             &mut snapshot,
+            body_completion,
         ),
         request,
         &params,
