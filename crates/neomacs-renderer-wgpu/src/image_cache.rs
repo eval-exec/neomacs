@@ -910,6 +910,18 @@ impl ImageCache {
         self.decoder
     }
 
+    /// Move the CPU decoder out and leak the GPU cache.
+    ///
+    /// Device-loss recovery must not drop textures, the sampler, or the
+    /// bind-group layout into a wedged driver. The decoder owns CPU jobs only.
+    pub fn take_decoder_and_leak_gpu(self) -> ImageDecoder {
+        let this = std::mem::ManuallyDrop::new(self);
+        // SAFETY: `this` is not dropped. `decoder` is copied out once and
+        // becomes the returned owner. Every other field, including the wgpu
+        // resources, stays leaked.
+        unsafe { std::ptr::read(&this.decoder) }
+    }
+
     /// Advance the access clock and return a fresh stamp.
     fn next_access_stamp(&self) -> u64 {
         let stamp = self.access_clock.get() + 1;

@@ -27,6 +27,12 @@ pub(super) enum GpuExitDisposition {
     Abandon,
 }
 
+/// Recovery runs only after a device loss. Dropping the lost renderer or the
+/// GPU context waits inside the wedged driver, so recovery always abandons.
+pub(super) fn gpu_recovery_disposition() -> GpuExitDisposition {
+    GpuExitDisposition::Abandon
+}
+
 /// A latched device loss must not drop into the wedged driver on exit.
 pub(super) fn gpu_exit_disposition(device_lost: bool) -> GpuExitDisposition {
     if device_lost {

@@ -409,11 +409,17 @@ impl RenderApp {
         if let Some(renderer) = self.renderer.as_ref() {
             self.pending_video_recovery = renderer.video_recovery_manifests();
         }
+        let disposition = super::device_loss::gpu_recovery_disposition();
         if let Some(renderer) = self.renderer.take() {
             // CPU decoding and pending pixels belong to the image pipeline,
             // whose metadata client outlives this device and its textures.
             debug_assert!(self.comms.image_decoder.is_none());
-            self.comms.image_decoder = Some(renderer.into_image_decoder());
+            self.comms.image_decoder = Some(match disposition {
+                super::device_loss::GpuExitDisposition::Abandon => {
+                    renderer.abandon_keeping_decoder()
+                }
+                super::device_loss::GpuExitDisposition::Release => renderer.into_image_decoder(),
+            });
         }
         self.publish_image_cache_usage();
         #[cfg(feature = "video")]
@@ -432,10 +438,19 @@ impl RenderApp {
         // re-uploads the icons into the new renderer.
         self.toolbar.forget_after_device_loss();
 
-        // Old instance/adapter/device/queue handles. The old per-window
-        // surfaces still hold internal references; they die as they are
-        // replaced below.
-        self.gpu = None;
+        // Old instance/adapter/device/queue handles. A lost device must not
+        // be dropped into the wedged driver. Live release is the other arm
+        // of the same helper. Per-window surfaces are replaced below.
+        match disposition {
+            super::device_loss::GpuExitDisposition::Abandon => {
+                if let Some(gpu) = self.gpu.take() {
+                    std::mem::forget(gpu);
+                }
+            }
+            super::device_loss::GpuExitDisposition::Release => {
+                self.gpu = None;
+            }
+        }
 
         let Some(primary_window) = self
             .frame_windows

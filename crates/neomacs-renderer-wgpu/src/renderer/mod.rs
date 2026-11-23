@@ -379,6 +379,18 @@ impl WgpuRenderer {
         self.caches.image.into_decoder()
     }
 
+    /// Leak this renderer and return the CPU image decoder.
+    ///
+    /// Device-loss recovery must not drop wgpu objects into a wedged driver.
+    pub fn abandon_keeping_decoder(self) -> crate::ImageDecoder {
+        let this = std::mem::ManuallyDrop::new(self);
+        // SAFETY: the renderer is leaked, so its wgpu fields are not dropped.
+        // The image cache is read out once. `take_decoder_and_leak_gpu` moves
+        // the decoder and leaks that cache's GPU objects. The bitwise copy
+        // left inside the leaked renderer is never dropped.
+        unsafe { std::ptr::read(&this.caches.image) }.take_decoder_and_leak_gpu()
+    }
+
     /// Internal helper that creates the renderer with the given device/queue.
     ///
     /// This handles pipeline and buffer creation, and is used by both `new_async`
