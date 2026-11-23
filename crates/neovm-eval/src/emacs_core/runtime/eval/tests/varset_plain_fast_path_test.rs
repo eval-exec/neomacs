@@ -48,9 +48,9 @@ fn run_setq(ev: &mut Context, engine: Engine, sym: Value, value: Value) -> Resul
                 rest: None,
             });
             f.lexical = true;
-            f.ops = ops;
-            f.constants = constants.into();
-            f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+            f.set_ops(ops);
+            f.set_constants(constants.into());
+            f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
             let mut vm = Vm::from_context(ev);
             match vm.execute(&f, vec![value]).kinded() {
                 Ok(_) => Ok(()),

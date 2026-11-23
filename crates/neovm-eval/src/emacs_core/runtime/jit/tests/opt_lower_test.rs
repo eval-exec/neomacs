@@ -39,7 +39,7 @@ fn lower(f: &ByteCodeFunction, osr: Option<usize>) -> CompiledLeaf {
     };
     lower_leaf_full_osr_with_opt(
         f.executable_ops(),
-        &f.constants,
+        f.constants(),
         params.native_arity(),
         f.executable_gnu_byte_offset_map(),
         None,

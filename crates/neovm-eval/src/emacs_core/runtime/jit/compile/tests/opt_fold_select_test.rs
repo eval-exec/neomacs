@@ -166,7 +166,7 @@ fn opt_fold_select_mixed_local_and_incoming_bool_materializes_gnu_boolean() {
             let plan = mixed_select(local_value, local_on_true);
             let leaf = lower_opt_ir_for_test(
                 source.executable_ops(),
-                &source.constants,
+                source.constants(),
                 2,
                 source.executable_gnu_byte_offset_map(),
                 &plan,

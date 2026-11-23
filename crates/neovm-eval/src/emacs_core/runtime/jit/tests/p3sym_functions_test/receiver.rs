@@ -29,7 +29,7 @@ fn current_receiver(
     ctx.setup_thread_locals();
     let run = leaf.call_consts(
         ctx as *mut Context as *mut u8,
-        source.constants.as_ptr(),
+        source.constants().as_ptr(),
         &[],
     );
     let NativeRun::DeoptAt(resume) = run else {
@@ -84,9 +84,9 @@ fn p3sym_c4_compiled_a_current_b_identity_across_owned_era() {
     // A's heap is supplied as a constant, operand or root in B's World.
     let mut source = ByteCodeFunction::new(LambdaParams::simple(vec![]));
     source.lexical = true;
-    source.ops = vec![Op::Constant(0), Op::Call(0), Op::Return];
-    source.constants = vec![Value::from_sym_id(ids[0])].into();
-    source.max_stack = StackDepth::for_test(4);
+    source.set_ops(vec![Op::Constant(0), Op::Call(0), Op::Return]);
+    source.set_constants(vec![Value::from_sym_id(ids[0])].into());
+    source.set_max_stack(StackDepth::for_test(4));
     source.seal_hand_assembled_ops_for_test();
     source.jit_runtime().set_hot_for_test();
     a.setup_thread_locals();
@@ -112,7 +112,7 @@ fn p3sym_c4_compiled_a_current_b_identity_across_owned_era() {
     let reloc_roots = a.retain_gc_roots(leaf.reloc_values().iter().copied());
     let before_a = match leaf.call_consts(
         &mut a as *mut Context as *mut u8,
-        source.constants.as_ptr(),
+        source.constants().as_ptr(),
         &[],
     ) {
         NativeRun::Ok(bits) => printed(bits),
@@ -143,7 +143,7 @@ fn p3sym_c4_compiled_a_current_b_identity_across_owned_era() {
     a.setup_thread_locals();
     let after_a = match leaf.call_consts(
         &mut a as *mut Context as *mut u8,
-        source.constants.as_ptr(),
+        source.constants().as_ptr(),
         &[],
     ) {
         NativeRun::Ok(bits) => printed(bits),

@@ -150,9 +150,9 @@ fn function(ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {
         rest: None,
     });
     function.lexical = true;
-    function.ops = ops;
-    function.constants = constants.into();
-    function.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    function.set_ops(ops);
+    function.set_constants(constants.into());
+    function.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     function.seal_hand_assembled_ops();
     function.jit_runtime().set_hot_for_test();
     function
@@ -695,7 +695,7 @@ fn evict_running_osr_then_collect_and_park(
         .symbol_function("green-evicted-osr-source")
         .unwrap();
     let function = source.get_bytecode_data().unwrap();
-    let literal = function.constants[3];
+    let literal = function.constants()[3];
     let id = function.jit_runtime().compiled_id().unwrap();
     assert_eq!(
         cache::cache_entry_kind_for_test(id),

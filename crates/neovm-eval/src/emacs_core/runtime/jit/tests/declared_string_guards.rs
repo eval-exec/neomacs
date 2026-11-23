@@ -50,7 +50,7 @@ fn array_fn(op: ArrayOp) -> ByteCodeFunction {
         rest: None,
     });
     function.lexical = true;
-    function.ops = match op {
+    function.set_ops(match op {
         ArrayOp::Aset => vec![
             Op::StackRef(2),
             Op::StackRef(2),
@@ -59,8 +59,8 @@ fn array_fn(op: ArrayOp) -> ByteCodeFunction {
             Op::Return,
         ],
         ArrayOp::Aref => vec![Op::StackRef(1), Op::StackRef(1), Op::Aref, Op::Return],
-    };
-    function.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+    });
+    function.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
     function
 }
 

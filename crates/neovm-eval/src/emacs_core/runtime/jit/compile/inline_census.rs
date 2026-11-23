@@ -81,7 +81,7 @@ pub(crate) fn census_callee_verdict(f: &ByteCodeFunction, nargs: usize) -> Resul
     }
     // Same rule as the MIR and v1 fusers: a declared depth that cannot fit
     // at position 0 is a call, not a splice (src/bytecode.c:510-515).
-    if !crate::emacs_core::bytecode::vm::declared_frame_fits(f.max_stack.get()) {
+    if !crate::emacs_core::bytecode::vm::declared_frame_fits(f.max_stack().get()) {
         return Err("frame".into());
     }
     for op in ops {
@@ -151,10 +151,16 @@ pub(crate) fn census_sites(f: &ByteCodeFunction, obarray: Option<&Obarray>) -> V
         return Vec::new();
     };
     let nargs = params.entry_depth();
-    let cfg = analyze_cfg(ops, &f.constants, f.executable_gnu_byte_offset_map(), nargs).ok();
+    let cfg = analyze_cfg(
+        ops,
+        f.constants(),
+        f.executable_gnu_byte_offset_map(),
+        nargs,
+    )
+    .ok();
     let entries = cfg
         .as_ref()
-        .map(|cfg| super::super::compile::spec_tag_entry_states(ops, &f.constants, &cfg.leaders));
+        .map(|cfg| super::super::compile::spec_tag_entry_states(ops, f.constants(), &cfg.leaders));
     let mut tags = vec![Tag::Unknown; nargs];
     let mut rows = Vec::new();
     let mut handlers = 0;
@@ -181,7 +187,7 @@ pub(crate) fn census_sites(f: &ByteCodeFunction, obarray: Option<&Obarray>) -> V
                 .and_then(|i| tags.get(i))
                 .copied()
                 .unwrap_or(Tag::Unknown);
-            let name = constant_name(fun, &f.constants);
+            let name = constant_name(fun, f.constants());
             let (shape, target, target_nargs) = if matches!(op, Op::Apply(_)) {
                 (CensusShape::Apply, Tag::Unknown, 0)
             } else if matches!(name, Some("mapc" | "mapcar")) && count == 2 {
@@ -211,10 +217,10 @@ pub(crate) fn census_sites(f: &ByteCodeFunction, obarray: Option<&Obarray>) -> V
                 };
                 (shape, fun, count)
             };
-            let callee = resolve_target(target, &f.constants, obarray);
+            let callee = resolve_target(target, f.constants(), obarray);
             let replay = match (shape, callee) {
                 (CensusShape::Constant, Some(callee)) => {
-                    site_verdict(callee, target_nargs, f.constants.len()).map(|_| ())
+                    site_verdict(callee, target_nargs, f.constants().len()).map(|_| ())
                 }
                 _ => Err("shape".into()),
             };

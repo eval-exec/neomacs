@@ -1905,7 +1905,7 @@ impl TaggedHeap {
         size_of::<ByteCodeObj>()
             .saturating_add(data.resident_ops_capacity().saturating_mul(size_of::<Op>()))
             .saturating_add(
-                data.constants
+                data.constants()
                     .owned_capacity()
                     .saturating_mul(size_of::<TaggedValue>()),
             )
@@ -2094,14 +2094,14 @@ impl TaggedHeap {
         };
         stats = stats.add(PayloadLayout {
             logical_bytes: data
-                .constants
+                .constants()
                 .len()
                 .saturating_mul(size_of::<TaggedValue>()),
             capacity_bytes: data
-                .constants
+                .constants()
                 .owned_capacity()
                 .saturating_mul(size_of::<TaggedValue>()),
-            owned: data.constants.owned_capacity() > 0,
+            owned: data.constants().owned_capacity() > 0,
             mapped: false,
         });
         if let Some(params) = data.params.named() {

@@ -31,9 +31,9 @@ fn function(constant: Value) -> crate::emacs_core::bytecode::ByteCodeFunction {
         optional: Vec::new(),
         rest: None,
     });
-    function.ops = vec![Op::Constant(0), Op::Return];
-    function.constants = vec![constant].into();
-    function.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    function.set_ops(vec![Op::Constant(0), Op::Return]);
+    function.set_constants(vec![constant].into());
+    function.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     function
 }
 

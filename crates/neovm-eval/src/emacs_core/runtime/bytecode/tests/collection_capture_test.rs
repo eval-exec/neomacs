@@ -26,13 +26,13 @@ fn interpreter_collection_opcodes_keep_capture_dependencies() {
                 optional: Vec::new(),
                 rest: None,
             });
-            code.constants = vec![list, Value::fixnum(2)].into();
-            code.ops = if matches!(op, Op::Nth | Op::Nthcdr) {
+            code.set_constants(vec![list, Value::fixnum(2)].into());
+            code.set_ops(if matches!(op, Op::Nth | Op::Nthcdr) {
                 vec![Op::Constant(1), Op::Constant(0), op.clone(), Op::Return]
             } else {
                 vec![Op::Constant(0), op.clone(), Op::Return]
-            };
-            code.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(2);
+            });
+            code.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(2));
             let mut vm = Vm::from_context(&mut eval);
             #[cfg(feature = "jit")]
             vm.force_interpreter_only_for_test();

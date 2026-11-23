@@ -509,7 +509,7 @@ fn constant_symbols(function: Value) -> Vec<Value> {
     let mut stack: Vec<Value> = function
         .get_bytecode_data()
         .expect("byte-code")
-        .constants
+        .constants()
         .iter()
         .copied()
         .collect();
@@ -520,7 +520,7 @@ fn constant_symbols(function: Value) -> Vec<Value> {
             stack.push(value.cons_car());
             stack.push(value.cons_cdr());
         } else if let Some(code) = value.get_bytecode_data() {
-            stack.extend(code.constants.iter().copied());
+            stack.extend(code.constants().iter().copied());
         } else if let Some(items) = value.as_vector_data() {
             stack.extend(items.iter().copied());
         }

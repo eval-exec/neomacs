@@ -298,7 +298,7 @@ pub(crate) const BYTECODE_OBJ_DATA_OFFSET: usize =
 /// reads it at every entry, src/bytecode.c:496-516). The stored value is a
 /// `StackDepth`, a `#[repr(transparent)] usize`.
 pub(crate) const BYTECODE_MAX_STACK_OFFSET: usize =
-    BYTECODE_OBJ_DATA_OFFSET + offset_of!(crate::emacs_core::bytecode::ByteCodeFunction, max_stack);
+    BYTECODE_OBJ_DATA_OFFSET + crate::emacs_core::bytecode::ByteCodeFunction::offset_of_max_stack();
 
 /// From the untagged address of a byte-code object, the one word of its
 /// `runtime: Option<Runtime>` (the tiering handle every `make-closure`
@@ -339,7 +339,7 @@ pub(crate) fn runtime_patched_prefix_address(runtime: &crate::emacs_core::jit::R
 pub(crate) fn bytecode_constants_offsets() -> Option<(usize, usize)> {
     let (ptr, len) = neovm_value::tagged::header::LispValueVec::jit_slice_offsets()?;
     let base = BYTECODE_OBJ_DATA_OFFSET
-        + offset_of!(crate::emacs_core::bytecode::ByteCodeFunction, constants);
+        + crate::emacs_core::bytecode::ByteCodeFunction::offset_of_constants();
     Some((base + ptr, base + len))
 }
 

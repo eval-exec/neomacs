@@ -4,8 +4,8 @@ use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 fn admission_function(argdesc: i64, max_stack: usize, bytes: Vec<u8>) -> ByteCodeFunction {
     let params = FunctionParams::try_from(Value::fixnum(argdesc)).unwrap();
     let mut func = ByteCodeFunction::new(params);
-    func.max_stack = StackDepth::for_test(max_stack);
-    func.constants = vec![Value::fixnum(42)].into();
+    func.set_max_stack(StackDepth::for_test(max_stack));
+    func.set_constants(vec![Value::fixnum(42)].into());
     func.gnu_bytecode_bytes = Some(neovm_value::tagged::header::LispByteVec::owned(bytes));
     func.defer_gnu_decode();
     assert!(func.lazy_gnu_code().is_some());
@@ -117,7 +117,7 @@ fn bytecode_lazy_iterative_admission_restarts_when_decode_is_reinstalled() {
     // Shape changes are finalized before reinstalling the GNU decode cell.
     func.params = FunctionParams::try_from(Value::fixnum((2 << 8) | 1)).unwrap();
     func.arglist = Value::fixnum((2 << 8) | 1);
-    func.max_stack = StackDepth::for_test(3);
+    func.set_max_stack(StackDepth::for_test(3));
     func.restore_gnu_decode_policy().unwrap();
     let restored = func.lazy_gnu_code().as_ref().unwrap().clone();
     assert!(!std::sync::Arc::ptr_eq(&old, &restored));
@@ -196,15 +196,15 @@ fn bytecode_lazy_iterative_admission_preserves_shared_layout_and_eager_fallback(
         lazy_gnu_code: Option<std::sync::Arc<LazyGnuCode>>,
     }
     assert_eq!(
-        std::mem::offset_of!(ByteCodeFunction, ops),
+        ByteCodeFunction::offset_of_ops(),
         std::mem::offset_of!(OriginalFunction, ops)
     );
     assert_eq!(
-        std::mem::offset_of!(ByteCodeFunction, constants),
+        ByteCodeFunction::offset_of_constants(),
         std::mem::offset_of!(OriginalFunction, constants)
     );
     assert_eq!(
-        std::mem::offset_of!(ByteCodeFunction, max_stack),
+        ByteCodeFunction::offset_of_max_stack(),
         std::mem::offset_of!(OriginalFunction, max_stack)
     );
     assert_eq!(

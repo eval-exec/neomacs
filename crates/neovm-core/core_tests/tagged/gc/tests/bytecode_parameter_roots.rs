@@ -85,7 +85,7 @@ fn independent_parameter_child_survives(collection: Collection) {
     // Both assignments are safe public Rust API, performed BEFORE publish.
     // Neither child is rooted directly: the function is their sole owner.
     function.arglist = observable_arglist;
-    function.ops = vec![Op::Nil, Op::Return];
+    function.set_ops(vec![Op::Nil, Op::Return]);
     let owner = heap.alloc_bytecode(function);
     roots.keep(owner);
     collect(&mut heap, owner, collection);

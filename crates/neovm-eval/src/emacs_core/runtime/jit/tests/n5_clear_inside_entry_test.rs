@@ -28,9 +28,9 @@ fn probe(_ctx: &mut Context) -> EvalResult {
 fn bytecode(ops: Vec<Op>, constants: Vec<Value>) -> Value {
     let mut source = ByteCodeFunction::new(LambdaParams::simple(Vec::new()));
     source.lexical = true;
-    source.ops = ops;
-    source.constants = constants.into();
-    source.max_stack = StackDepth::for_test(8);
+    source.set_ops(ops);
+    source.set_constants(constants.into());
+    source.set_max_stack(StackDepth::for_test(8));
     source.seal_hand_assembled_ops();
     source
         .jit_runtime()

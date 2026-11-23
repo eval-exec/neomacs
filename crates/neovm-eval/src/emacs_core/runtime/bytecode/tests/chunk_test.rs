@@ -8,7 +8,7 @@ fn constant_dedup() {
     let i1 = func.add_constant(Value::fixnum(42));
     let i2 = func.add_constant(Value::fixnum(42));
     assert_eq!(i1, i2);
-    assert_eq!(func.constants.len(), 1);
+    assert_eq!(func.constants().len(), 1);
 }
 
 #[test]
@@ -20,7 +20,7 @@ fn symbol_dedup() {
     let i3 = func.add_symbol("y");
     assert_eq!(i1, i2);
     assert_ne!(i1, i3);
-    assert_eq!(func.constants.len(), 2);
+    assert_eq!(func.constants().len(), 2);
 }
 
 #[test]
@@ -32,7 +32,7 @@ fn patch_jump() {
     func.emit(Op::Return);
     let target = func.current_offset();
     func.patch_jump(0, target);
-    assert_eq!(func.ops[0], Op::GotoIfNil(3));
+    assert_eq!(func.ops()[0], Op::GotoIfNil(3));
 }
 
 #[test]
@@ -58,7 +58,7 @@ fn gnu_ir_is_decoded_only_on_first_access() {
     let (ops, offset_map) =
         super::super::decode::decode_gnu_bytecode_with_offset_map(&raw, &mut constants).unwrap();
     let mut func = ByteCodeFunction::new(LambdaParams::simple(vec![]));
-    func.ops = ops.clone();
+    func.set_ops(ops.clone());
     func.gnu_byte_offset_map = Some(offset_map);
     func.gnu_bytecode_bytes = Some(neovm_value::tagged::header::LispByteVec::owned(raw));
 
@@ -80,7 +80,7 @@ fn gnu_ir_is_decoded_only_on_first_access() {
 fn cloning_deferred_gnu_code_shares_the_decoded_ir() {
     let raw = vec![135]; // return
     let mut func = ByteCodeFunction::new(LambdaParams::simple(vec![]));
-    func.ops = vec![Op::Return];
+    func.set_ops(vec![Op::Return]);
     func.gnu_byte_offset_map = Some(Vec::new());
     func.gnu_bytecode_bytes = Some(neovm_value::tagged::header::LispByteVec::owned(raw));
     func.defer_gnu_decode();

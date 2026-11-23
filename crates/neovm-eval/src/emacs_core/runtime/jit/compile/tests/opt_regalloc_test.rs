@@ -129,12 +129,12 @@ fn actual_plan(f: &ByteCodeFunction) -> crate::emacs_core::jit::opt::ir::Func {
     };
     let cfg = analyze_cfg(
         f.executable_ops(),
-        &f.constants,
+        f.constants(),
         None,
         params.native_arity(),
     )
     .unwrap();
-    opt_backend::build_plan(f.executable_ops(), &f.constants, &cfg, params, 0, None).unwrap()
+    opt_backend::build_plan(f.executable_ops(), f.constants(), &cfg, params, 0, None).unwrap()
 }
 
 fn compile_requested(
@@ -184,14 +184,17 @@ fn assert_native_parity(ctx: &mut Context, f: &ByteCodeFunction, leaf: &Compiled
             vm.force_interpreter_only_for_test();
             vm.execute(f, args.to_vec()).expect("Tier0 joined call")
         };
-        let actual =
-            match leaf.call_consts(ctx as *mut Context as *mut u8, f.constants.as_ptr(), &args) {
-                NativeRun::Ok(bits) => unsafe {
-                    /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
-                    Value::from_bits(bits)
-                },
-                other => panic!("the allocator-selected leaf must stay native: {other:?}"),
-            };
+        let actual = match leaf.call_consts(
+            ctx as *mut Context as *mut u8,
+            f.constants().as_ptr(),
+            &args,
+        ) {
+            NativeRun::Ok(bits) => unsafe {
+                /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                Value::from_bits(bits)
+            },
+            other => panic!("the allocator-selected leaf must stay native: {other:?}"),
+        };
         assert_eq!(actual, expected, "both joined call edges retain GNU values");
     }
     crate::emacs_core::eval::restore_scratch_gc_roots(saved);
@@ -202,7 +205,7 @@ fn opt_full_request_uses_full_allocator_for_actual_feedback_plan() {
     let _settings = Settings::enter();
     let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let f = joined_call();
-    assert!(body_is_call_heavy(f.executable_ops(), &f.constants));
+    assert!(body_is_call_heavy(f.executable_ops(), f.constants()));
     let plan = actual_plan(&f);
     assert!(
         plan.blocks
@@ -235,7 +238,7 @@ fn opt_full_request_keeps_fast_without_simultaneous_join_parameters() {
     ];
     let mut observed = Vec::new();
     for (name, f) in fixtures {
-        assert!(body_is_call_heavy(f.executable_ops(), &f.constants));
+        assert!(body_is_call_heavy(f.executable_ops(), f.constants()));
         let plan = actual_plan(&f);
         let widths: Vec<_> = plan
             .blocks
@@ -273,7 +276,7 @@ fn opt_full_request_keeps_fast_for_separate_single_parameter_joins() {
     let _settings = Settings::enter();
     let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let f = separate_single_parameter_joins();
-    assert!(body_is_call_heavy(f.executable_ops(), &f.constants));
+    assert!(body_is_call_heavy(f.executable_ops(), f.constants()));
     let plan = actual_plan(&f);
     let widths: Vec<_> = plan
         .blocks

@@ -178,13 +178,15 @@ fn predicate_branches_resume_type_deopt_without_repeating_effects() {
             rest: None,
         });
         f.lexical = true;
-        f.constants = vec![
-            Value::symbol("predicate-branch-effects"),
-            Value::make_int(111),
-            Value::make_int(222),
-        ]
-        .into();
-        f.ops = vec![
+        f.set_constants(
+            vec![
+                Value::symbol("predicate-branch-effects"),
+                Value::make_int(111),
+                Value::make_int(222),
+            ]
+            .into(),
+        );
+        f.set_ops(vec![
             Op::VarRef(0),
             Op::Add1,
             Op::VarSet(0),
@@ -194,14 +196,14 @@ fn predicate_branches_resume_type_deopt_without_repeating_effects() {
             branch(on_nil, else_pop, 9),
             Op::Constant(1),
             Op::Return,
-        ];
+        ]);
         if !else_pop {
-            f.ops.push(Op::Constant(2));
+            f.ops_mut().push(Op::Constant(2));
         }
-        f.ops.push(Op::Return);
-        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+        f.ops_mut().push(Op::Return);
+        f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
         f.seal_hand_assembled_ops();
-        let leaf = lower_leaf_full(&f.ops, &f.constants, 2, None, Some(&ctx.obarray), 0).unwrap();
+        let leaf = lower_leaf_full(f.ops(), f.constants(), 2, None, Some(&ctx.obarray), 0).unwrap();
         for (a, b, yes) in [
             (Value::make_float(0.5), Value::make_int(1), true),
             (Value::make_int(1), Value::make_float(0.5), false),

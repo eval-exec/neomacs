@@ -1512,7 +1512,7 @@ fn call_for_jit_from_native(
     args_ptr: *const i64,
     nargs: usize,
 ) -> neovm_value::error::EvalResult {
-    stack_call_from_native(ctx, target, args_ptr, nargs, |vm, args_start| {
+    stack_call_from_native(ctx, target, args_ptr, nargs, |vm, args_start| unsafe {
         vm.call_for_jit_stack(target, args_start, nargs)
     })
 }
@@ -1586,7 +1586,7 @@ fn charge_unstamped_spec_frame(
     callee: Value,
 ) -> Option<usize> {
     let bc = callee.bytecode_data_if_materialized()?;
-    crate::emacs_core::bytecode::vm::charge_bytecode_frame(ctx, bc.max_stack.get())
+    crate::emacs_core::bytecode::vm::charge_bytecode_frame(ctx, bc.max_stack().get())
 }
 
 macro_rules! spec_call_body {
@@ -1640,7 +1640,7 @@ macro_rules! spec_call_body {
                 if let Some(bc) = callee.bytecode_data_if_materialized() {
                     debug_assert_eq!(
                         leaf.frame_bytes,
-                        crate::emacs_core::bytecode::vm::bytecode_frame_bytes(bc.max_stack.get())
+                        crate::emacs_core::bytecode::vm::bytecode_frame_bytes(bc.max_stack().get())
                     );
                 }
                 crate::emacs_core::bytecode::vm::charge_bytecode_frame_bytes(
@@ -2951,7 +2951,7 @@ fn call_stack_builtin_from_native(
         /* SAFETY: JIT constant-pool word */
         Value::from_bits(unsafe { *args_ptr.add(i) } as usize)
     }));
-    let res = ctx.call_spec_subr_from_bc_stack(sym_id, target, args_start, nargs);
+    let res = unsafe { ctx.call_spec_subr_from_bc_stack(sym_id, target, args_start, nargs) };
     ctx.bc_buf.truncate(args_start);
     let status = match res {
         Ok(value) => {
@@ -3358,7 +3358,7 @@ pub(crate) unsafe extern "C" fn neovm_jit_arith_generic(
         if nargs == 2 {
             ctx.bc_buf.push(operands[1]);
         }
-        let res = Vm::call_arith_builtin_slow_on_context(ctx, kind, args_start, nargs);
+        let res = unsafe { Vm::call_arith_builtin_slow_on_context(ctx, kind, args_start, nargs) };
         ctx.bc_buf.truncate(args_start);
         // Value first: an `unwrap_or_else` on the `Option<EvalResult>` copied
         // it 16 bytes wide over the callee's narrow stores.
@@ -3606,7 +3606,7 @@ pub(crate) unsafe extern "C" fn neovm_jit_cbsym_spec(
         let res = if inline_kind == crate::emacs_core::eval::InlineSubrKind::Direct {
             Vm::call_fixed_builtin_direct(ctx, Some(function), sym_id, args_start, nargs)
         } else {
-            Vm::call_inline_builtin_from_stack(ctx, function, args_start, nargs)
+            unsafe { Vm::call_inline_builtin_from_stack(ctx, function, args_start, nargs) }
         };
         ctx.bc_buf.truncate(args_start);
         let status = match res {

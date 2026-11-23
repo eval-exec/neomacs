@@ -41,9 +41,9 @@ fn source(ops: Vec<Op>, constants: Vec<LispValue>, arity: usize) -> ByteCodeFunc
         rest: None,
     });
     source.lexical = true;
-    source.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(32);
-    source.ops = ops;
-    source.constants = constants.into();
+    source.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(32));
+    source.set_ops(ops);
+    source.set_constants(constants.into());
     source
 }
 fn plan(source: &ByteCodeFunction) -> Func {
@@ -57,13 +57,13 @@ fn plan(source: &ByteCodeFunction) -> Func {
     };
     let cfg = crate::emacs_core::jit::compile::analyze_cfg(
         source.executable_ops(),
-        &source.constants,
+        source.constants(),
         source.executable_gnu_byte_offset_map(),
         params.native_arity(),
     )
     .unwrap();
     let constants = source
-        .constants
+        .constants()
         .iter()
         .copied()
         .map(ValueBits::from_value)

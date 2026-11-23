@@ -196,13 +196,13 @@ fn load_fixture(ctx: &mut Context, roots: &Roots) -> Fixture {
             .get_bytecode_data()
             .expect("real GNU byte-code object");
         assert_eq!(source.arglist, Value::make_int(spec.descriptor));
-        assert_eq!(source.max_stack.get(), spec.max_stack as usize);
+        assert_eq!(source.max_stack().get(), spec.max_stack as usize);
         assert_eq!(
             source.gnu_bytecode_bytes.as_ref().unwrap().as_slice(),
             spec.bytes
         );
-        assert_eq!(source.constants.len(), spec.constants.len());
-        for (actual, &expected) in source.constants.iter().zip(spec.constants) {
+        assert_eq!(source.constants().len(), spec.constants.len());
+        for (actual, &expected) in source.constants().iter().zip(spec.constants) {
             assert_eq!(
                 actual.bits(),
                 constant_value(expected, objects).bits(),
@@ -440,7 +440,7 @@ fn native_ok(ctx: &mut Context, value: Value, leaf: &CompiledLeaf, args: &[Value
 }
 
 fn check_float_identities(ctx: &mut Context, fixture: Fixture, roots: &Roots, leaf: &CompiledLeaf) {
-    let seed = source(fixture.float()).constants[0];
+    let seed = source(fixture.float()).constants()[0];
     let zero_a = native_ok(ctx, fixture.float(), leaf, &[Value::make_int(0)]);
     roots.add(&[zero_a]);
     let zero_b = native_ok(ctx, fixture.float(), leaf, &[Value::make_int(0)]);
@@ -666,7 +666,7 @@ fn opt_sink_allocation_fixture_load_preserves_frozen_gnu_graph_and_answers() {
         assert_eq!(float_bits(actual), expected);
     }
     let zero = tier0(&mut ctx, fixture.float(), &[Value::make_int(0)]);
-    assert_eq!(zero.bits(), source(fixture.float()).constants[0].bits());
+    assert_eq!(zero.bits(), source(fixture.float()).constants()[0].bits());
     let dt = Value::make_float(0.01);
     roots.add(&[dt]);
     for &(steps, _, _) in &oracle::NBODY_ANSWERS {

@@ -37,7 +37,9 @@ pub trait TaggedValueBytecodeExt {
 
     fn is_bytecode_object_of(self, f: &super::ByteCodeFunction) -> bool;
 
-    fn bytecode_data_typechecked_by_caller(self) -> &'static super::ByteCodeFunction;
+    /// # Safety
+    /// `self` must be a byte-code object. Debug builds check the veclike type.
+    unsafe fn bytecode_data_typechecked_by_caller(self) -> &'static super::ByteCodeFunction;
 
     #[cfg(feature = "jit")]
     unsafe fn bytecode_data_materialized_by_caller(self) -> &'static super::ByteCodeFunction;
@@ -155,9 +157,12 @@ impl TaggedValueBytecodeExt for TaggedValue {
     /// branch to a cold materializer) lands: the caller's type proof does not
     /// exempt it from materialization, only from re-classification.
     ///
-    /// SAFETY contract (checked in debug): `self` must be a ByteCode value.
+    /// # Safety
+    /// `self` must be a ByteCode value. Debug builds check the veclike type.
+    /// The caller's type proof does not exempt a lazy pdump stub from
+    /// materialization.
     #[inline(always)]
-    fn bytecode_data_typechecked_by_caller(self) -> &'static super::ByteCodeFunction {
+    unsafe fn bytecode_data_typechecked_by_caller(self) -> &'static super::ByteCodeFunction {
         debug_assert_eq!(self.veclike_type(), Some(VecLikeType::ByteCode));
         #[cfg(any(test, feature = "test-support"))]
         neovm_value::value::note_bytecode_data_access();
@@ -414,10 +419,26 @@ impl TaggedValueBytecodeSlotCreationExt for TaggedValue {
             },
             ByteCodeSlotObject::Constants => match bc.env {
                 Some(env) => return env,
-                None => Value::vector(bc.constants.as_slice().to_vec()),
+                None => Value::vector(bc.constants().as_slice().to_vec()),
             },
         };
         mutate::install_bytecode_slot_object(self, slot, object);
         object
+    }
+}
+
+#[cfg(test)]
+mod typechecked_projection_tests {
+    use super::TaggedValueBytecodeExt;
+    use neovm_value::value::Value;
+
+    /// The projection is `unsafe` because a non-byte-code value is a bad
+    /// read. Debug builds still reject it. Release builds do not run this
+    /// test: the unchecked load would be undefined.
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic]
+    fn typechecked_bytecode_projection_rejects_a_fixnum() {
+        let _ = unsafe { Value::fixnum(0).bytecode_data_typechecked_by_caller() };
     }
 }

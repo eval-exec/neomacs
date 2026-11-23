@@ -28,9 +28,9 @@ fn lexical_fn(nargs: u32, ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFuncti
         rest: None,
     });
     f.lexical = true;
-    f.ops = ops;
-    f.constants = constants.into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+    f.set_ops(ops);
+    f.set_constants(constants.into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
     f.seal_hand_assembled_ops();
     f.jit_runtime()
         .set_reopt_level_for_test(ReoptLevel::BaselineOnly);
@@ -59,9 +59,9 @@ fn adder(k: i64) -> ByteCodeFunction {
 /// An instance of `proto` with its constant 0 replaced (one source).
 fn instance(proto: &ByteCodeFunction, k: i64) -> Value {
     let mut f = proto.clone();
-    let mut consts: Vec<Value> = f.constants.iter().copied().collect();
+    let mut consts: Vec<Value> = f.constants().iter().copied().collect();
     consts[0] = Value::make_int(k);
-    f.constants = consts.into();
+    f.set_constants(consts.into());
     Value::make_bytecode(f)
 }
 
@@ -90,7 +90,7 @@ fn arm(ev: &mut Context, proto: &ByteCodeFunction) {
 fn record(caller: &ByteCodeFunction, pc: usize, target: Value) {
     caller
         .jit_runtime()
-        .call_sites_for(caller.executable_ops(), &caller.constants)
+        .call_sites_for(caller.executable_ops(), caller.constants())
         .site_at(pc)
         .expect("a non-constant site")
         .observe(target);
@@ -412,9 +412,9 @@ fn with_direct_calls_an_inexact_callee_keeps_the_shim() {
             rest: None,
         });
         f.lexical = true;
-        f.ops = vec![Op::StackRef(1), Op::Return];
-        f.constants = vec![Value::make_int(0)].into();
-        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(4);
+        f.set_ops(vec![Op::StackRef(1), Op::Return]);
+        f.set_constants(vec![Value::make_int(0)].into());
+        f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(4));
         f.seal_hand_assembled_ops();
         f.jit_runtime()
             .set_reopt_level_for_test(ReoptLevel::BaselineOnly);

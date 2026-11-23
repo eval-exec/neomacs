@@ -78,7 +78,7 @@ fn tier0(ctx: &mut Context, f: &ByteCodeFunction, args: &[Value]) -> Value {
 }
 
 fn native(ctx: &mut Context, leaf: &CompiledLeaf, f: &ByteCodeFunction, args: &[Value]) -> Value {
-    match leaf.call_consts(ctx as *mut Context as *mut u8, f.constants.as_ptr(), args) {
+    match leaf.call_consts(ctx as *mut Context as *mut u8, f.constants().as_ptr(), args) {
         NativeRun::Ok(bits) => unsafe {
             /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
             Value::from_bits(bits)
@@ -129,7 +129,7 @@ fn opt_admits_patched_prefix_for_two_instances_of_one_source() {
     let leaf = compile(&ctx, &proto);
     for captured in [Value::make_int(7), Value::make_int(41)] {
         let mut instance = proto.clone();
-        instance.constants.ensure_owned()[0] = captured;
+        instance.constants_mut().ensure_owned()[0] = captured;
         for arg in [Value::make_int(-3), Value::make_int(19)] {
             let expected = tier0(&mut ctx, &instance, &[arg]);
             assert_eq!(native(&mut ctx, &leaf, &instance, &[arg]), expected);
@@ -203,7 +203,7 @@ fn opt_admits_float_sites_preserving_signed_zero_and_object_identity() {
         let f = function(ops, vec![], 2);
         for &pc in pcs {
             f.jit_runtime()
-                .record_numeric(pc, f.ops.len(), NumericFeedback::Float);
+                .record_numeric(pc, f.ops().len(), NumericFeedback::Float);
         }
         f
     };

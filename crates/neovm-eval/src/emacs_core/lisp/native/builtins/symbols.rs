@@ -5924,7 +5924,7 @@ fn adopt_make_byte_code_slot_objects(function: Value, code: Value, constants: Va
     if bc.gnu_bytecode_bytes.is_some() {
         install_bytecode_slot_object(function, ByteCodeSlotObject::Code, code);
     }
-    let pool = bc.constants.as_slice();
+    let pool = bc.constants().as_slice();
     if bc.env.is_none()
         && constants.as_vector_data().is_some_and(|items| {
             items.len() == pool.len() && items.iter().zip(pool).all(|(a, b)| a.bits() == b.bits())
@@ -6247,7 +6247,7 @@ fn build_byte_code_function(
     match timing {
         GnuDecodeTiming::Deferred => {
             bc.defer_gnu_decode();
-            if !bc.ops.is_empty() {
+            if !bc.ops().is_empty() {
                 // Eager decode policy kept the instructions resident; prove
                 // them now that every shape field is final. (The lazy path
                 // proves at decode.)
@@ -6473,7 +6473,7 @@ pub fn builtin_make_closure(args: &[Value]) -> EvalResult {
     // GNU .elc: a fresh constant vector (GNU copies it per call too — the
     // captured prefix is per instance), built in one pass: the captured
     // values, then the prototype's tail.
-    let proto_constants = proto.constants.as_slice();
+    let proto_constants = proto.constants().as_slice();
     if closure_vars.len() > proto_constants.len() {
         return Err(signal(
             "error",
@@ -6573,14 +6573,14 @@ fn make_closure_by_clone(
     closure_vars: &[Value],
 ) -> EvalResult {
     let mut new_bc = proto.clone();
-    if closure_vars.len() > new_bc.constants.len() {
+    if closure_vars.len() > new_bc.constants().len() {
         return Err(signal(
             "error",
             vec![Value::string("Closure vars do not fit in constvec")],
         ));
     }
     for (i, var) in closure_vars.iter().enumerate() {
-        new_bc.constants[i] = *var;
+        new_bc.constants_mut()[i] = *var;
     }
     #[cfg(feature = "jit")]
     if let Some(id) = new_bc.jit_runtime().note_patched_prefix(closure_vars.len()) {

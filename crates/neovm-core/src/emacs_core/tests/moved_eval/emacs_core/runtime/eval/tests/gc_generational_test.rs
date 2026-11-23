@@ -179,8 +179,8 @@ fn compiled_old_cons_stores_remember_young_children_each_cycle() {
             rest: None,
         });
         function.lexical = true;
-        function.ops = vec![Op::StackRef(1), Op::StackRef(1), op, Op::Return];
-        function.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+        function.set_ops(vec![Op::StackRef(1), Op::StackRef(1), op, Op::Return]);
+        function.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
         let leaf = compile_bytecode_function(&function).expect("cons store compiles");
         let child_roots = context.save_specpdl_roots();
         let child = Value::cons(Value::fixnum(71 + index as i64), Value::NIL);

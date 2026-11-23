@@ -71,13 +71,13 @@ fn plan(f: &ByteCodeFunction) -> ir::Func {
         .required();
     let cfg = analyze_cfg(
         f.executable_ops(),
-        &f.constants,
+        f.constants(),
         f.executable_gnu_byte_offset_map(),
         arity,
     )
     .unwrap();
     let constants = f
-        .constants
+        .constants()
         .iter()
         .copied()
         .map(ir::ValueBits::from_value)
@@ -101,7 +101,7 @@ fn lower(f: &ByteCodeFunction, plan: &ir::Func) -> CompiledLeaf {
     plan.verify().expect("the changed IR verifies");
     let leaf = lower_opt_ir_for_test(
         f.executable_ops(),
-        &f.constants,
+        f.constants(),
         f.params
             .stack_shape()
             .expect("fixture stack parameters")
@@ -710,7 +710,7 @@ fn opt_ir_lower_guard_uses_its_frame_after_a_heap_effect() {
     };
     assert_eq!(frame.pc, 4);
     assert_eq!(frame.stack.as_slice(), &args);
-    assert_eq!(pair.cons_car(), f.constants[0]);
+    assert_eq!(pair.cons_car(), f.constants()[0]);
 }
 
 #[test]
@@ -808,7 +808,7 @@ fn opt_ir_lower_rejects_an_unimplemented_typed_opcode() {
     let index = opaque(&changed, &Op::Cons);
     changed.insts[index].op = ir::Opcode::AllocCons;
     changed.verify().unwrap();
-    let result = lower_opt_ir_for_test(f.executable_ops(), &f.constants, 0, None, &changed);
+    let result = lower_opt_ir_for_test(f.executable_ops(), f.constants(), 0, None, &changed);
     assert!(matches!(result, Err(CompileError::UnsupportedOp(_))));
 
     // Bool is a valid IR representation and a materializable framestate
@@ -848,7 +848,7 @@ fn opt_ir_lower_rejects_an_unimplemented_typed_opcode() {
     frame.stack[0] = flag;
     changed.insts[cons].frame = Some(changed.intern_frame(frame));
     changed.verify().expect("Bool framestates verify");
-    let result = lower_opt_ir_for_test(f.executable_ops(), &f.constants, 0, None, &changed);
+    let result = lower_opt_ir_for_test(f.executable_ops(), f.constants(), 0, None, &changed);
     assert!(matches!(
         result,
         Err(CompileError::UnsupportedOp("opt-emit:frame-representation"))
@@ -883,7 +883,7 @@ fn opt_ir_lower_rejects_an_unimplemented_typed_opcode() {
     let position = block.insts.iter().position(|id| *id == inst).unwrap();
     block.insts.insert(position + 1, guard);
     changed.verify().expect("Bool guards verify");
-    let result = lower_opt_ir_for_test(f.executable_ops(), &f.constants, 0, None, &changed);
+    let result = lower_opt_ir_for_test(f.executable_ops(), f.constants(), 0, None, &changed);
     assert!(matches!(
         result,
         Err(CompileError::UnsupportedOp("opt-emit:guard-representation"))
@@ -975,7 +975,7 @@ fn countdown() -> ByteCodeFunction {
 fn assert_terminal_poll_target(f: &ByteCodeFunction, plan: &ir::Func, clif: &str) {
     let cfg = analyze_cfg(
         f.executable_ops(),
-        &f.constants,
+        f.constants(),
         f.executable_gnu_byte_offset_map(),
         f.params
             .stack_shape()

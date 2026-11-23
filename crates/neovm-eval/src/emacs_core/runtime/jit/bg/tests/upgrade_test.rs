@@ -71,7 +71,7 @@ fn current(f: &ByteCodeFunction) -> &'static CompiledLeaf {
 }
 
 fn request(ctx: &mut Context, f: &ByteCodeFunction) -> &'static CompiledLeaf {
-    let answer = f.constants[0].bits();
+    let answer = f.constants()[0].bits();
     assert_eq!(run(ctx, f), Some(answer));
     let old = current(f);
     assert_eq!(old.regalloc, RegallocChoice::Fast);

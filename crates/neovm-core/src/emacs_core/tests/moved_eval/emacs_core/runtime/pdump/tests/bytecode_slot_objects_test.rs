@@ -44,17 +44,17 @@ fn bytecode_slot_objects_round_trip_with_their_identity() {
     eval(&mut ctx, "(defvar psi-fresh #[0 \"\\300\\207\" [42] 1])");
     // Decoded instructions (no GNU byte string): the descriptor path.
     let mut decoded = ByteCodeFunction::new(LambdaParams::simple(Vec::new()));
-    decoded.ops = vec![Op::Constant(0), Op::Return];
-    decoded.constants = vec![Value::fixnum(7)].into();
-    decoded.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(1);
+    decoded.set_ops(vec![Op::Constant(0), Op::Return]);
+    decoded.set_constants(vec![Value::fixnum(7)].into());
+    decoded.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(1));
     neovm_eval::test_support::authority::seal_hand_assembled_ops_for_test(&mut decoded);
     ctx.obarray_mut()
         .set_symbol_value("psi-decoded", Value::make_bytecode(decoded));
     eval(&mut ctx, "(defvar psi-decoded-consts (aref psi-decoded 2))");
     let mut decoded_fresh = ByteCodeFunction::new(LambdaParams::simple(Vec::new()));
-    decoded_fresh.ops = vec![Op::Constant(0), Op::Return];
-    decoded_fresh.constants = vec![Value::fixnum(8)].into();
-    decoded_fresh.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(1);
+    decoded_fresh.set_ops(vec![Op::Constant(0), Op::Return]);
+    decoded_fresh.set_constants(vec![Value::fixnum(8)].into());
+    decoded_fresh.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(1));
     neovm_eval::test_support::authority::seal_hand_assembled_ops_for_test(&mut decoded_fresh);
     ctx.obarray_mut()
         .set_symbol_value("psi-decoded-fresh", Value::make_bytecode(decoded_fresh));

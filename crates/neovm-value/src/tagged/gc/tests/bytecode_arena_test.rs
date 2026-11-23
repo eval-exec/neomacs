@@ -42,8 +42,8 @@ fn run_concurrent_cycle(heap: &mut TaggedHeap, roots: &[TaggedValue]) {
 /// the object's only heap children are its constants (GC-exact tests).
 fn bytecode_fn(constants: Vec<TaggedValue>, n_ops: usize, payload: usize) -> ByteCodeFunction {
     let mut f = ByteCodeFunction::new(LambdaParams::simple(vec![]));
-    f.constants = constants.into();
-    f.ops = vec![Op::Nil; n_ops];
+    f.set_constants(constants.into());
+    f.set_ops(vec![Op::Nil; n_ops]);
     if payload > 0 {
         f.gnu_bytecode_bytes = Some(crate::tagged::header::LispByteVec::owned(vec![
             0xAA;
@@ -60,7 +60,7 @@ fn bc_ptr(v: TaggedValue) -> *const u8 {
 /// Read constant `i` of a live bytecode value (payload-intact probe).
 fn bc_constant(v: TaggedValue, i: usize) -> TaggedValue {
     let obj = unsafe { &*(v.as_veclike_ptr().unwrap() as *const ByteCodeObj) };
-    obj.data.constants[i]
+    obj.data.constants()[i]
 }
 
 /// (a) PAGE-SPAN ORACLE EXACTNESS for the 448B stride: owned for a live
@@ -1019,7 +1019,7 @@ fn bytecode_survivors_tenure_and_full_pages_retire_body(verify: bool) {
     let carrier = bytecodes[3];
     assert!(
         crate::tagged::mutate::with_bytecode_data_mut_for_test(carrier, |data| {
-            data.constants[0] = young;
+            data.constants_mut()[0] = young;
         })
         .is_some()
     );
@@ -1212,7 +1212,7 @@ fn bytecode_constants_test_seam_fires_write_barrier_body(verify: bool) {
     let young = heap.alloc_cons(TaggedValue::fixnum(4_242), TaggedValue::fixnum(0));
     assert!(
         crate::tagged::mutate::with_bytecode_data_mut_for_test(b, |data| {
-            data.constants[0] = young;
+            data.constants_mut()[0] = young;
         })
         .is_some()
     );
@@ -1342,7 +1342,7 @@ fn full_prototype_fn(constants: Vec<TaggedValue>) -> ByteCodeFunction {
     .into();
     f.arglist = TaggedValue::fixnum(0x0181);
     f.lexical = true;
-    f.max_stack = crate::tagged::bytecode::function_slots::StackDepth::for_test(11);
+    f.set_max_stack(crate::tagged::bytecode::function_slots::StackDepth::for_test(11));
     f.ops_sealed = true;
     f.stack_verified = true;
     f.gnu_byte_offset_map = Some(vec![GnuByteOffsetMapEntry::new(0, 0)]);
@@ -1380,7 +1380,7 @@ fn bytecode_instance_reads_back_as_the_prototype_with_its_own_pool() {
         heap.alloc_bytecode_instance(p, LispValueVec::owned(pool.clone()), TaggedValue::NIL);
     let instance_bytes = heap.bytes_since_gc() - before;
     let mut clone = p.clone();
-    clone.constants = LispValueVec::owned(pool.clone());
+    clone.set_constants(LispValueVec::owned(pool.clone()));
     let before = heap.bytes_since_gc();
     let cloned = heap.alloc_bytecode(clone);
     assert_eq!(instance_bytes, heap.bytes_since_gc() - before);
@@ -1399,16 +1399,16 @@ fn bytecode_instance_reads_back_as_the_prototype_with_its_own_pool() {
     });
 
     let i = bc_data(instance);
-    assert_eq!(i.constants.as_slice(), pool.as_slice());
+    assert_eq!(i.constants().as_slice(), pool.as_slice());
     assert_ne!(
-        i.constants.as_slice().as_ptr(),
-        p.constants.as_slice().as_ptr()
+        i.constants().as_slice().as_ptr(),
+        p.constants().as_slice().as_ptr()
     );
     assert_eq!(i.source_id, p.source_id);
-    assert_eq!(i.ops, p.ops);
+    assert_eq!(i.ops(), p.ops());
     assert_eq!(i.ops_sealed, p.ops_sealed);
     assert_eq!(i.stack_verified, p.stack_verified);
-    assert_eq!(i.max_stack, p.max_stack);
+    assert_eq!(i.max_stack(), p.max_stack());
     assert_eq!(i.params, p.params);
     assert_eq!(i.arglist, p.arglist);
     assert_eq!(i.lexical, p.lexical);
@@ -1440,7 +1440,7 @@ fn bytecode_instance_reads_back_as_the_prototype_with_its_own_pool() {
     heap.collect_exact(std::iter::once(instance));
     assert!(!heap.bytecode_arena.owns(bc_ptr(proto)));
     let i = bc_data(instance);
-    assert_eq!(i.constants.as_slice(), pool.as_slice());
+    assert_eq!(i.constants().as_slice(), pool.as_slice());
     assert_eq!(i.gnu_bytecode_bytes.as_deref().unwrap(), &[0xAA; 48][..]);
     assert_eq!(i.docstring.as_ref().unwrap().as_bytes(), b"Instance doc.");
     heap.assert_object_arenas_coherent();

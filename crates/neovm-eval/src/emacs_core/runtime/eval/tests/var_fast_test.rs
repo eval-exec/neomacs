@@ -185,9 +185,9 @@ fn run(ev: &mut Context, engine: Engine, prog: &Prog, var: &str, args: &[Value])
                 rest: None,
             });
             f.lexical = true;
-            f.ops = prog.ops.clone();
-            f.constants = constants.into();
-            f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+            f.set_ops(prog.ops.clone());
+            f.set_constants(constants.into());
+            f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
             let mut vm = Vm::from_context(ev);
             match vm.execute(&f, args.to_vec()) {
                 Ok(v) => print_value(&v),

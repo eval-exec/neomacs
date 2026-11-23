@@ -84,9 +84,9 @@ fn bcall_fn(callee: &'static str, nargs: usize) -> ByteCodeFunction {
     }
     ops.push(Op::Call(nargs as u16));
     ops.push(Op::Return);
-    f.ops = ops;
-    f.constants = vec![Value::from_sym_id(intern(callee))].into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_ops(ops);
+    f.set_constants(vec![Value::from_sym_id(intern(callee))].into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     f
 }
 
@@ -94,12 +94,12 @@ fn bcall_fn(callee: &'static str, nargs: usize) -> ByteCodeFunction {
 fn arith_fn(op: Op, nargs: usize) -> ByteCodeFunction {
     let mut f = ByteCodeFunction::new(params(nargs));
     f.lexical = true;
-    f.ops = if nargs == 2 {
+    f.set_ops(if nargs == 2 {
         vec![Op::StackRef(1), Op::StackRef(1), op, Op::Return]
     } else {
         vec![Op::StackRef(0), op, Op::Return]
-    };
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+    });
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
     f
 }
 
@@ -160,12 +160,12 @@ fn inline_builtin_results_and_frameless_signal() {
     install_frame_probe(&mut eval, "char-after");
     let mut f = ByteCodeFunction::new(params(1));
     f.lexical = true;
-    f.ops = vec![
+    f.set_ops(vec![
         Op::StackRef(0),
         Op::CallBuiltinSym(intern("char-after"), 1),
         Op::Return,
-    ];
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(4);
+    ]);
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(4));
     assert_eq!(
         run(&mut eval, &f, vec![Value::fixnum(1)]).unwrap(),
         Value::fixnum(i64::from(b'a'))
@@ -229,9 +229,11 @@ fn spec_subr_stack_results_arity_and_signal_frame() {
         let before = eval.specpdl.len();
         let args_start = eval.bc_buf.len();
         eval.bc_buf.extend_from_slice(args);
-        let result = Vm::from_context(eval)
-            .call_spec_subr_stack(car, subr, args_start, args.len())
-            .map(rooted);
+        // SAFETY: `extend_from_slice` just staged `args` at `args_start`.
+        let result = unsafe {
+            Vm::from_context(eval).call_spec_subr_stack(car, subr, args_start, args.len())
+        }
+        .map(rooted);
         eval.bc_buf.truncate(args_start);
         assert_eq!(eval.specpdl.len(), before, "balanced specpdl");
         result
@@ -314,7 +316,7 @@ fn jit_arith_generic_results_and_frameless_signal() {
     install_frame_probe(&mut eval, "*");
     let f = arith_fn(Op::Mul, 2);
     f.jit_runtime()
-        .record_numeric(2, f.ops.len(), NumericFeedback::Other);
+        .record_numeric(2, f.ops().len(), NumericFeedback::Other);
     let leaf = compile_bytecode_function(&f).expect("compiles");
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     let big = rooted(eval.eval_str("(expt 7 60)").unwrap());

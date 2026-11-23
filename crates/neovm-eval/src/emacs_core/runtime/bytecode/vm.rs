@@ -668,9 +668,9 @@ fn trace_invalid_bytecode_site(
         stack_len,
         frame_base,
         frame_limit,
-        max_stack = func.max_stack.get(),
+        max_stack = func.max_stack().get(),
         ops_len = ops.len(),
-        constants_len = func.constants.len(),
+        constants_len = func.constants().len(),
         lexical = func.lexical,
         "Invalid byte-code"
     );
@@ -1308,7 +1308,7 @@ impl InterpreterFrame {
     #[inline(always)]
     #[doc(hidden)]
     pub fn frame_limit(&self) -> usize {
-        self.frame_base + self.function.code().max_stack.get()
+        self.frame_base + self.function.code().max_stack().get()
     }
 
     #[inline(always)]
@@ -2010,9 +2010,9 @@ impl ResolvedByteCodeCallee {
     #[inline(always)]
     #[doc(hidden)]
     pub fn code(&self) -> &ByteCodeFunction {
-        // Type proven at mint; the chokepoint-resident projection carries the
-        // (future) stub-materialization check without re-classifying.
-        self.0.bytecode_data_typechecked_by_caller()
+        // SAFETY: the constructors of this token prove `self.0` is a
+        // byte-code object. The projection still materializes a pdump stub.
+        unsafe { self.0.bytecode_data_typechecked_by_caller() }
     }
 }
 
@@ -3220,6 +3220,25 @@ impl<'a> Vm<'a> {
         result
     }
 
+    /// Rewrite a cursor that a callee truncated below `frame_base`.
+    ///
+    /// The missing slots were initialized before the truncate, and the frame
+    /// reservation kept `bc_buf` capacity at least that large, so filling them
+    /// with nil is in-bounds. The values themselves are gone; the fill only
+    /// stops `depth!` from wrapping on the next fetch.
+    #[cold]
+    #[inline(never)]
+    fn pad_bytecode_frame_base(&mut self, cursor: &mut StackCursor, frame_base: usize) {
+        if self.ctx.bc_buf.capacity() < frame_base {
+            return;
+        }
+        while cursor.len < frame_base {
+            // SAFETY: capacity >= frame_base > len, and every index below
+            // frame_base was initialized before the underflow. Value is Copy.
+            unsafe { cursor.push_unchecked(Value::NIL) };
+        }
+    }
+
     #[doc(hidden)]
     pub fn with_frame_roots<T>(
         &mut self,
@@ -3393,7 +3412,7 @@ impl<'a> Vm<'a> {
         // restore the caller's position on every exit (normal return,
         // signal, throw); a contained panic restores it from the
         // module-boundary snapshot.
-        let Some(saved_position) = charge_bytecode_frame(self.ctx, func.max_stack.get()) else {
+        let Some(saved_position) = charge_bytecode_frame(self.ctx, func.max_stack().get()) else {
             return Err(self.bytecode_stack_overflow());
         };
         // Flattened native-stack probe: the common shallow call pays two
@@ -3502,7 +3521,7 @@ impl<'a> Vm<'a> {
                 if let Some(child) = func.params.heap_child() {
                     vm.push_dynamic_vm_root(child);
                 }
-                for value in func.constants.iter().copied() {
+                for value in func.constants().iter().copied() {
                     vm.push_dynamic_vm_root(value);
                 }
                 vm.run_frame(func, args_start, nargs, func_value)
@@ -3572,6 +3591,11 @@ impl<'a> Vm<'a> {
         condition_stack_base: usize,
         osr_tried: bool,
     ) -> EvalResult {
+        // The driver fetches `ops[start_pc]` and seeds `stack` with no
+        // further check. Reject both before this frame mutates `bc_buf`.
+        if start_pc >= func.executable_ops().len() || stack.len() > func.max_stack().get() {
+            return Err(invalid_bytecode_flow());
+        }
         let frame_base = self.ctx.bc_buf.len();
         // Native (JIT) catch/condition-case handlers transferred from the deopted
         // frame recorded their `stack_len` frame-RELATIVE (a native frame keeps no
@@ -3585,7 +3609,7 @@ impl<'a> Vm<'a> {
             base: frame_base,
             fun: func_value,
         });
-        let frame_limit = match frame_base.checked_add(func.max_stack.get()) {
+        let frame_limit = match frame_base.checked_add(func.max_stack().get()) {
             Some(limit) => limit,
             None => {
                 return self.cleanup_bytecode_frame(
@@ -3735,7 +3759,7 @@ impl<'a> Vm<'a> {
         let n_optional = nonrest.saturating_sub(n_required);
         let has_rest = shape.is_some_and(|shape| shape.rest().is_present());
 
-        let frame_limit = match frame_base.checked_add(func.max_stack.get()) {
+        let frame_limit = match frame_base.checked_add(func.max_stack().get()) {
             Some(limit) => limit,
             None => {
                 return self.cleanup_bytecode_frame(
@@ -3781,7 +3805,7 @@ impl<'a> Vm<'a> {
             // the same bound the old per-push checks enforced, folded into one
             // comparison (the error path truncates any partial seed anyway).
             let seed_slots = shape.and_then(|shape| shape.entry_depth().ok());
-            if seed_slots.is_none_or(|slots| slots > func.max_stack.get()) {
+            if seed_slots.is_none_or(|slots| slots > func.max_stack().get()) {
                 self.ctx.bc_buf.truncate(frame_base);
                 self.ctx.bc_frames.pop();
                 return Err(invalid_bytecode_flow());
@@ -4162,11 +4186,11 @@ impl<'a> Vm<'a> {
             && (!has_named_params || params_on_stack)
             && required <= nargs
             && nargs <= nonrest
-            && nonrest <= func.max_stack.get()
+            && nonrest <= func.max_stack().get()
             // The in-place installer grows the operand stack infallibly, as
             // it always has; deeper frames take `run_frame`, whose fallible
             // reservation reports failure as a Lisp error.
-            && func.max_stack <= super::StackDepth::ITERATIVE_FRAME_LIMIT
+            && func.max_stack() <= super::StackDepth::ITERATIVE_FRAME_LIMIT
             // Sealed-dispatch safety gate for iterative callees, the twin of
             // the entry gate in `run_loop`: only `seal_ops`-normalized code
             // may enter the unchecked-fetch driver. Evaluated at (cacheable)
@@ -4232,7 +4256,7 @@ impl<'a> Vm<'a> {
         let frame_base = cursor.len;
         debug_assert!(args_start + nargs <= frame_base);
         let frame_limit = frame_base
-            .checked_add(func.max_stack.get())
+            .checked_add(func.max_stack().get())
             .expect("iterative frame limit prevalidated");
 
         #[cfg(test)]
@@ -4353,7 +4377,7 @@ impl<'a> Vm<'a> {
             Some(position) => position,
             None => {
                 // The subtraction cannot drift in a LIFO chain.
-                let frame_cost = bytecode_frame_bytes(frame.function.code().max_stack.get());
+                let frame_cost = bytecode_frame_bytes(frame.function.code().max_stack().get());
                 debug_assert!(own_position >= frame_cost);
                 own_position - frame_cost
             }
@@ -4648,15 +4672,17 @@ impl<'a> Vm<'a> {
                     }
                 }
             }
-            ResolvedStackCallTarget::Builtin { callee } => {
-                InterpreterStackCall::Complete(Self::call_resolved_builtin_from_stack_args(
+            ResolvedStackCallTarget::Builtin { callee } => InterpreterStackCall::Complete(unsafe {
+                Self::call_resolved_builtin_from_stack_args(
                     self.ctx, func_val, args_start, nargs, callee,
-                ))
-            }
+                )
+            }),
             ResolvedStackCallTarget::BuiltinLeaf { callee, leaf } => {
-                InterpreterStackCall::Complete(Self::call_builtin_leaf_from_stack_args(
-                    self.ctx, func_val, args_start, nargs, callee, leaf,
-                ))
+                InterpreterStackCall::Complete(unsafe {
+                    Self::call_builtin_leaf_from_stack_args(
+                        self.ctx, func_val, args_start, nargs, callee, leaf,
+                    )
+                })
             }
             ResolvedStackCallTarget::Generic => {
                 let bt_base = self.ctx.specpdl.len();
@@ -4793,7 +4819,7 @@ impl<'a> Vm<'a> {
         if handlers == 0
             && spec_base == entry_spec_depth
             && cond_base == self.ctx.condition_stack_len()
-            && stack.len() <= func.max_stack.get()
+            && stack.len() <= func.max_stack().get()
         {
             bind_stack.clear();
             bind_stack.extend_from_slice(&binds);
@@ -5055,9 +5081,20 @@ impl<'a> Vm<'a> {
                 .publish(self)
             };
         }
-        macro_rules! rejoin_phase {
+        // Rejoin reacquires the cursor. It must not name `frame_base`: this
+        // macro is outside the `'frame` loop, and a return already truncated
+        // the operand stack below the frame that just exited. The same-frame
+        // backstop is `rejoin_phase_checked!`, defined after `frame_base` is
+        // bound. `resume_flow!` uses the raw rejoin so a signal does not
+        // re-enter `invalid_bytecode!`.
+        macro_rules! rejoin_phase_raw {
             () => {
                 (cursor, phase) = published.rejoin(self).into_parts()
+            };
+        }
+        macro_rules! rejoin_phase {
+            () => {
+                rejoin_phase_raw!();
             };
         }
         'frame: loop {
@@ -5093,8 +5130,8 @@ impl<'a> Vm<'a> {
             // The constant pool stays a per-activation derivation: it is one
             // match on the storage kind, where the instruction stream costs a
             // lazy-decode probe.
-            let constants: &[Value] = func.constants.as_slice();
-            let frame_limit = frame_base + func.max_stack.get();
+            let constants: &[Value] = func.constants().as_slice();
+            let frame_limit = frame_base + func.max_stack().get();
             let ops_len = ops.len();
             let ops_ptr = ops.as_ptr();
             let mut pc_local = callers.active().pc();
@@ -5177,11 +5214,11 @@ impl<'a> Vm<'a> {
                         $flow,
                     ) {
                         ResumeFlowOutcome::ResumeOp => {
-                            rejoin_phase!();
+                            rejoin_phase_raw!();
                             continue;
                         }
                         ResumeFlowOutcome::ResumeFrame => {
-                            rejoin_phase!();
+                            rejoin_phase_raw!();
                             continue 'frame;
                         }
                         ResumeFlowOutcome::Exit(result) => {
@@ -5310,7 +5347,7 @@ impl<'a> Vm<'a> {
                 ($expr:expr) => {{
                     publish_phase!();
                     let result = $expr;
-                    rejoin_phase!();
+                    rejoin_phase_checked!();
                     match result {
                         Ok(value) => value,
                         Err(flow) => {
@@ -5340,7 +5377,7 @@ impl<'a> Vm<'a> {
                         publish_phase!();
                         match self.ctx.maybe_quit() {
                             Ok(()) => {
-                                rejoin_phase!();
+                                rejoin_phase_checked!();
                             }
                             Err(flow) => resume_flow!(flow),
                         }
@@ -5408,7 +5445,7 @@ impl<'a> Vm<'a> {
                                         // is current. Interpret on from `pc`; retry
                                         // only after an invalidation.
                                         osr_tried = retry == OsrRetry::Latch;
-                                        rejoin_phase!();
+                                        rejoin_phase_checked!();
                                         pc_local = pc;
                                     }
                                     OsrOutcome::Returned(value) => {
@@ -5449,10 +5486,77 @@ impl<'a> Vm<'a> {
                 }};
             }
 
+            // Checked driver only. `!VERIFIED` folds away in the verified
+            // monomorph, so a proven body keeps the saturating pop it had.
+            // The compare is the one BYTE_CODE_SAFE frame test: `n` operands
+            // must sit in this frame, not in the caller's prefix of `bc_buf`.
+            macro_rules! unverified_frame_operands {
+                ($need:expr, $reason:expr) => {{
+                    let need = $need;
+                    if !VERIFIED && (cursor.len < frame_base || depth!(frame_base) < need) {
+                        invalid_bytecode!($reason);
+                    }
+                }};
+            }
+
+            // Same-frame rejoin only. A `'frame` continue reloads `frame_base`
+            // at the loop header, which has its own short-stack backstop; using
+            // this frame's base there would treat a normal return as underflow.
+            // `bc_buf.len()` is the cursor length just reacquired. Pad the
+            // initialized prefix and signal: the caller's values are gone, but
+            // the next fetch must not read below the frame.
+            macro_rules! rejoin_phase_checked {
+                () => {{
+                    rejoin_phase!();
+                    if cursor.len < frame_base {
+                        self.pad_bytecode_frame_base(&mut cursor, frame_base);
+                        invalid_bytecode!("frame-base-rejoin");
+                    }
+                }};
+            }
+
             debug_assert!(
                 matches!(ops.last(), Some(Op::Return)),
                 "unchecked dispatch requires seal_ops-normalized bytecode"
             );
+            // Once per frame, not per opcode. A `continue 'frame` after a
+            // short rejoin lands here with the new frame's base.
+            if cursor.len < frame_base {
+                self.pad_bytecode_frame_base(&mut cursor, frame_base);
+                let invalid_pc = pc_local.saturating_sub(1);
+                let stack_len = cursor.len;
+                publish_phase!();
+                trace_invalid_bytecode_site(
+                    func,
+                    "frame-base-rejoin",
+                    invalid_pc,
+                    frame_base,
+                    frame_limit,
+                    stack_len,
+                    ops.get(invalid_pc),
+                );
+                match self.resume_flow_out_of_line(
+                    &mut pc_local,
+                    osr_tried,
+                    quitcounter,
+                    driver_quitcounter,
+                    aux_stack,
+                    callers,
+                    invalid_bytecode_flow(),
+                ) {
+                    ResumeFlowOutcome::ResumeOp => {
+                        rejoin_phase_raw!();
+                    }
+                    ResumeFlowOutcome::ResumeFrame => {
+                        rejoin_phase_raw!();
+                        continue 'frame;
+                    }
+                    ResumeFlowOutcome::Exit(result) => {
+                        published.finish();
+                        return result;
+                    }
+                }
+            }
             loop {
                 // SAFETY: GNU's FETCH is `*pc++` with no bound check; the
                 // decode-time `seal_ops` invariant makes the same fetch sound
@@ -5475,7 +5579,7 @@ impl<'a> Vm<'a> {
                     if let Some(result) = self.resumed_chain_probe(callers, aux_stack) {
                         return result;
                     }
-                    rejoin_phase!();
+                    rejoin_phase_checked!();
                 }
                 let op = unsafe { &*ops_ptr.add(pc_local) };
                 pc_local += 1;
@@ -5781,6 +5885,8 @@ impl<'a> Vm<'a> {
                             let func_val = unsafe { *stk!().get_unchecked(args_start - 1) };
                             (args_start, args_start - 1, func_val)
                         } else {
+                            // Call consumes the function plus n arguments.
+                            unverified_frame_operands!(n + 1, "call-underflow");
                             let args_start = len.saturating_sub(n);
                             let func_val = if args_start > 0 {
                                 stk!()[args_start - 1]
@@ -5901,7 +6007,7 @@ impl<'a> Vm<'a> {
                             // cold handler is shared by every tier and lives
                             // out of line, so this arm stays small.
                             let Some(bc_position_after) =
-                                charge_frame_position(bc_position, callee_code.max_stack.get())
+                                charge_frame_position(bc_position, callee_code.max_stack().get())
                             else {
                                 // The reject signals: publish the still-active
                                 // caller's position before the signal can run
@@ -5973,7 +6079,7 @@ impl<'a> Vm<'a> {
                                     // nonlocal-flow machinery.
                                     let Some(bc_position_after) = charge_frame_position(
                                         bc_position,
-                                        callee.code().max_stack.get(),
+                                        callee.code().max_stack().get(),
                                     ) else {
                                         // The reject signals: publish the
                                         // caller's position before it runs.
@@ -5987,7 +6093,7 @@ impl<'a> Vm<'a> {
                                     // was published for that escape, so rearm
                                     // it and take the same live-cursor
                                     // installation as the cached fast path.
-                                    rejoin_phase!();
+                                    rejoin_phase_checked!();
                                     callers
                                         .active_mut()
                                         .save_execution_state(pc_local, osr_tried);
@@ -6013,7 +6119,7 @@ impl<'a> Vm<'a> {
                                     self.leave_bytecode_call_depth();
                                     match result {
                                         Ok(value) => {
-                                            rejoin_phase!();
+                                            rejoin_phase_checked!();
                                             value
                                         }
                                         Err(flow) => resume_flow!(flow),
@@ -6032,12 +6138,14 @@ impl<'a> Vm<'a> {
                         // poll above only publishes on its own slow path).
                         release_bytecode_frame(self.ctx, bc_position);
                         if n == 0 {
+                            unverified_frame_operands!(1, "apply-underflow");
                             let stack_after_call = stk!().len().saturating_sub(1);
                             let func_val = stk!().last().copied().unwrap_or(Value::NIL);
                             let result = vm_try!(self.call_function(func_val, LispArgVec::new()));
                             stk!().truncate(stack_after_call);
                             stk_push!(result);
                         } else {
+                            unverified_frame_operands!(n + 1, "apply-underflow");
                             let args_start = stk!().len().saturating_sub(n);
                             let stack_after_call = args_start.saturating_sub(1);
                             let func_val = if args_start > 0 {
@@ -6235,7 +6343,7 @@ impl<'a> Vm<'a> {
                         ctx.eval_sub(progn_form)
                     });
                         self.ctx.restore_vm_roots(root_scope);
-                        rejoin_phase!();
+                        rejoin_phase_checked!();
 
                         match body_result {
                             Ok(result) => {
@@ -6850,6 +6958,7 @@ impl<'a> Vm<'a> {
                     }
                     Op::List(n) => {
                         let n = *n as usize;
+                        unverified_frame_operands!(n, "list-underflow");
                         let start = stk!().len().saturating_sub(n);
                         // GNU bytecode.c:BlistN keeps operands on the bytecode
                         // stack and calls Flist(n, &TOP).  Keep the same stack
@@ -6907,6 +7016,7 @@ impl<'a> Vm<'a> {
                         stk!().pop();
                     }
                     Op::Nconc => {
+                        unverified_frame_operands!(2, "nconc-underflow");
                         let start = stk!().len().saturating_sub(2);
                         let result =
                             vm_try_pure!(builtins::builtin_nconc_slice_values(&stk!()[start..]));
@@ -7018,6 +7128,7 @@ impl<'a> Vm<'a> {
                     // -- String operations --
                     Op::Concat(n) => {
                         let n = *n as usize;
+                        unverified_frame_operands!(n, "concat-underflow");
                         let start = stk!().len().saturating_sub(n);
                         // GNU bytecode.c:BconcatN passes the stack slice directly
                         // to Fconcat instead of materializing an argument vector.
@@ -7026,6 +7137,7 @@ impl<'a> Vm<'a> {
                         stk_push!(result);
                     }
                     Op::Substring => {
+                        unverified_frame_operands!(3, "substring-underflow");
                         let start = stk!().len().saturating_sub(3);
                         let result =
                             vm_try_pure!(builtins::builtin_substring_slice(&stk!()[start..]));
@@ -7066,6 +7178,7 @@ impl<'a> Vm<'a> {
                         // GNU bytecode.c:Baset runs Faset directly, regardless
                         // of advice or the symbol's function cell. The primitive
                         // may allocate or signal, but cannot run Lisp or collect.
+                        unverified_frame_operands!(3, "aset-underflow");
                         let start = stk!().len().saturating_sub(3);
                         let result = vm_try_pure!(builtins::builtin_aset_args_in_vm_context_slot(
                             &self.ctx,
@@ -7228,6 +7341,7 @@ impl<'a> Vm<'a> {
                         #[cfg(feature = "vm-profile")]
                         vm_profile::bump_entry(name_id, vm_profile::ENTRY_CALLBUILTIN);
                         let n = *n as usize;
+                        unverified_frame_operands!(n, "call-builtin-underflow");
                         let args_start = stk!().len().saturating_sub(n);
                         // This is the internal representation of a primitive
                         // opcode, never a Bcall specialization. GNU calls the
@@ -7244,9 +7358,9 @@ impl<'a> Vm<'a> {
                         {
                             publish_primitive_position(self.ctx, bc_position);
                         }
-                        let result = vm_try!(
+                        let result = vm_try!(unsafe {
                             self.dispatch_vm_builtin_by_id_from_stack(func, name_id, args_start, n)
-                        );
+                        });
                         stk!().truncate(args_start);
                         stk_push!(result);
                         poll_quit!(bc_position);
@@ -7258,6 +7372,7 @@ impl<'a> Vm<'a> {
                         #[cfg(feature = "vm-profile")]
                         vm_profile::bump_entry(*sym, vm_profile::ENTRY_CALLBUILTINSYM);
                         let n = *n as usize;
+                        unverified_frame_operands!(n, "call-builtin-underflow");
                         let args_start = stk!().len().saturating_sub(n);
                         // GNU runs the inline opcodes as dedicated cases; the
                         // registration-time kind picks the matching shape here
@@ -7297,7 +7412,9 @@ impl<'a> Vm<'a> {
                                 {
                                     publish_primitive_position(self.ctx, bc_position);
                                 }
-                                vm_try!(self.dispatch_call_builtin_sym(func, *sym, args_start, n))
+                                vm_try!(unsafe {
+                                    self.dispatch_call_builtin_sym(func, *sym, args_start, n)
+                                })
                             }
                         };
                         stk!().truncate(args_start);
@@ -8123,7 +8240,7 @@ impl<'a> Vm<'a> {
         self.ctx.bc_buf.extend_from_slice(&spread);
         let total = nargs - 1 + spread.len();
         // No added bytecode-call depth guard or direct-builtin fast path.
-        self.call_function_from_stack_args(func_val, args_start, total, false)
+        unsafe { self.call_function_from_stack_args(func_val, args_start, total, false) }
     }
 
     /// One bytecode-level `apply` with the interpreter's `Op::Apply` semantics:
@@ -8164,7 +8281,11 @@ impl<'a> Vm<'a> {
     /// The caller polls `maybe_quit` first (GNU `bytecode.c:Bcall` order).
     #[cfg(feature = "jit")]
     #[doc(hidden)]
-    pub fn call_for_jit_stack(
+    /// # Safety
+    /// `bc_buf[args_start..args_start + nargs]` is in range. An empty
+    /// span (`nargs == 0`) requires `args_start <= bc_buf.len()` and no
+    /// overflow. The caller staged that span.
+    pub unsafe fn call_for_jit_stack(
         &mut self,
         func_val: Value,
         args_start: usize,
@@ -8185,7 +8306,7 @@ impl<'a> Vm<'a> {
         // interpreter's Op::Call), so the generic seam no longer resolves
         // twice and pays an extra layer per call (17K generic calls per org
         // font-lock op).
-        let result = self.with_bytecode_call_depth(|vm| {
+        let result = self.with_bytecode_call_depth(|vm| unsafe {
             vm.call_function_from_stack_args(func_val, args_start, nargs, true)
         })?;
         Ok(result)
@@ -8226,20 +8347,26 @@ impl<'a> Vm<'a> {
     /// they are pure result-equal shortcuts anyway).
     #[cfg(feature = "jit")]
     #[doc(hidden)]
-    pub fn call_spec_subr_stack(
+    /// # Safety
+    /// `bc_buf[args_start..args_start + nargs]` is in range. An empty
+    /// span (`nargs == 0`) requires `args_start <= bc_buf.len()` and no
+    /// overflow. The caller staged that span.
+    pub unsafe fn call_spec_subr_stack(
         &mut self,
         sym_id: SymId,
         subr_value: Value,
         args_start: usize,
         nargs: usize,
     ) -> EvalResult {
-        self.call_spec_subr_stack_with_frame(
-            sym_id,
-            subr_value,
-            Value::from_sym_id(sym_id),
-            args_start,
-            nargs,
-        )
+        unsafe {
+            self.call_spec_subr_stack_with_frame(
+                sym_id,
+                subr_value,
+                Value::from_sym_id(sym_id),
+                args_start,
+                nargs,
+            )
+        }
     }
 
     /// [`call_spec_subr_stack`](Self::call_spec_subr_stack) with an explicit
@@ -8250,7 +8377,11 @@ impl<'a> Vm<'a> {
     /// `mapbacktrace` sees `#<subr insert>` identically compiled vs interp
     /// (`jit_cbsym_spec_insert_backtrace_shows_subr_frame_like_interp`).
     #[doc(hidden)]
-    pub fn call_spec_subr_stack_with_frame(
+    /// # Safety
+    /// `bc_buf[args_start..args_start + nargs]` is in range. An empty
+    /// span (`nargs == 0`) requires `args_start <= bc_buf.len()` and no
+    /// overflow. The caller staged that span.
+    pub unsafe fn call_spec_subr_stack_with_frame(
         &mut self,
         sym_id: SymId,
         subr_value: Value,
@@ -8295,9 +8426,11 @@ impl<'a> Vm<'a> {
                 ))
             } else {
                 match entry.function {
-                    Some(function) => Vm::dispatch_builtin_subr_from_stack_args_unchecked(
-                        vm.ctx, function, args_start, nargs,
-                    ),
+                    Some(function) => unsafe {
+                        Vm::dispatch_builtin_subr_from_stack_args_unchecked(
+                            vm.ctx, function, args_start, nargs,
+                        )
+                    },
                     None => Err(signal(LispCondition::VoidFunction, vec![func_val])),
                 }
             };
@@ -9019,7 +9152,11 @@ impl<'a> Vm<'a> {
 
     #[inline(never)]
     #[doc(hidden)]
-    pub fn call_function_from_stack_args(
+    /// # Safety
+    /// `bc_buf[args_start..args_start + nargs]` is in range. An empty
+    /// span (`nargs == 0`) requires `args_start <= bc_buf.len()` and no
+    /// overflow. The caller staged that span.
+    pub unsafe fn call_function_from_stack_args(
         &mut self,
         func_val: Value,
         args_start: usize,
@@ -9029,14 +9166,18 @@ impl<'a> Vm<'a> {
         if allow_direct_builtin_subr {
             match self.resolve_stack_call_target(func_val) {
                 ResolvedStackCallTarget::Builtin { callee } => {
-                    return Self::call_resolved_builtin_from_stack_args(
-                        self.ctx, func_val, args_start, nargs, callee,
-                    );
+                    return unsafe {
+                        Self::call_resolved_builtin_from_stack_args(
+                            self.ctx, func_val, args_start, nargs, callee,
+                        )
+                    };
                 }
                 ResolvedStackCallTarget::BuiltinLeaf { callee, leaf } => {
-                    return Self::call_builtin_leaf_from_stack_args(
-                        self.ctx, func_val, args_start, nargs, callee, leaf,
-                    );
+                    return unsafe {
+                        Self::call_builtin_leaf_from_stack_args(
+                            self.ctx, func_val, args_start, nargs, callee, leaf,
+                        )
+                    };
                 }
                 ResolvedStackCallTarget::ByteCode { callee } => {
                     return self.call_bytecode_from_stack_args(
@@ -9183,7 +9324,11 @@ impl<'a> Vm<'a> {
     /// takes the full Vm path.
     /// Mirrors the spec shim's stage-2 ctx-level dispatch precedent.
     #[doc(hidden)]
-    pub fn call_builtin_symbol_for_jit(
+    /// # Safety
+    /// `bc_buf[args_start..args_start + nargs]` is in range. An empty
+    /// span (`nargs == 0`) requires `args_start <= bc_buf.len()` and no
+    /// overflow. The caller staged that span.
+    pub unsafe fn call_builtin_symbol_for_jit(
         ctx: &mut crate::emacs_core::eval::Context,
         func_val: Value,
         args_start: usize,
@@ -9224,15 +9369,20 @@ impl<'a> Vm<'a> {
                 ))));
             }
         }
-        let result =
-            Self::call_resolved_builtin_from_stack_args(ctx, func_val, args_start, nargs, callee);
+        let result = unsafe {
+            Self::call_resolved_builtin_from_stack_args(ctx, func_val, args_start, nargs, callee)
+        };
         ctx.depth -= 1;
         Some(result)
     }
 
     #[inline(never)]
     #[doc(hidden)]
-    pub(crate) fn call_resolved_builtin_from_stack_args(
+    /// # Safety
+    /// `bc_buf[args_start..args_start + nargs]` is in range. An empty
+    /// span (`nargs == 0`) requires `args_start <= bc_buf.len()` and no
+    /// overflow. The caller staged that span.
+    pub(crate) unsafe fn call_resolved_builtin_from_stack_args(
         ctx: &mut crate::emacs_core::eval::Context,
         func_val: Value,
         args_start: usize,
@@ -9252,9 +9402,11 @@ impl<'a> Vm<'a> {
                 // all registered as slice builtins; skip the four symbol compares for
                 // every fixed-arity call.
                 if matches!(function, Some(SubrFn::ManySlice(_)))
-                    && let Some(value) = Self::try_dispatch_builtin_subr_fast_value_from_stack_args(
-                        ctx, sym_id, args_start, nargs,
-                    )
+                    && let Some(value) = unsafe {
+                        Self::try_dispatch_builtin_subr_fast_value_from_stack_args(
+                            ctx, sym_id, args_start, nargs,
+                        )
+                    }
                 {
                     return match ctx.pop_fast_bytecode_backtrace_frame(backtrace) {
                         crate::emacs_core::eval::FastBytecodePop::Popped => Ok(value),
@@ -9266,9 +9418,11 @@ impl<'a> Vm<'a> {
                     };
                 }
                 match function {
-                    Some(function) => Self::dispatch_builtin_subr_from_stack_args_unchecked(
-                        ctx, function, args_start, nargs,
-                    ),
+                    Some(function) => unsafe {
+                        Self::dispatch_builtin_subr_from_stack_args_unchecked(
+                            ctx, function, args_start, nargs,
+                        )
+                    },
                     None => Err(signal(
                         LispCondition::VoidFunction,
                         vec![Value::from_sym_id(sym_id)],
@@ -9341,12 +9495,14 @@ impl<'a> Vm<'a> {
             Some(Err(flow)) => Err(flow),
             // These are static subrs, so this is unreachable in practice; take
             // the traced path rather than invent a dispatch for it.
-            None => self.call_function_from_stack_args(
-                <Value as SubrValueExt>::subr_from_sym_id(kind.builtin_id()),
-                args_start,
-                nargs,
-                true,
-            ),
+            None => unsafe {
+                self.call_function_from_stack_args(
+                    <Value as SubrValueExt>::subr_from_sym_id(kind.builtin_id()),
+                    args_start,
+                    nargs,
+                    true,
+                )
+            },
         }
     }
 
@@ -9396,7 +9552,7 @@ impl<'a> Vm<'a> {
         {
             return Some(Ok(value));
         }
-        Self::call_arith_builtin_slow_on_context(ctx, kind, args_start, nargs)
+        unsafe { Self::call_arith_builtin_slow_on_context(ctx, kind, args_start, nargs) }
     }
 
     /// The full builtin for `kind` on the `nargs` operands at
@@ -9405,7 +9561,11 @@ impl<'a> Vm<'a> {
     /// resolve.
     #[inline(never)]
     #[doc(hidden)]
-    pub fn call_arith_builtin_slow_on_context(
+    /// # Safety
+    /// `bc_buf[args_start..args_start + nargs]` is in range. An empty
+    /// span (`nargs == 0`) requires `args_start <= bc_buf.len()` and no
+    /// overflow. The caller staged that span.
+    pub unsafe fn call_arith_builtin_slow_on_context(
         ctx: &mut crate::emacs_core::eval::Context,
         kind: ArithGenericKind,
         args_start: usize,
@@ -9421,9 +9581,11 @@ impl<'a> Vm<'a> {
             )));
         }
         if matches!(function, Some(SubrFn::ManySlice(_)))
-            && let Some(value) = Self::try_dispatch_builtin_subr_fast_value_from_stack_args(
-                ctx, sym_id, args_start, nargs,
-            )
+            && let Some(value) = unsafe {
+                Self::try_dispatch_builtin_subr_fast_value_from_stack_args(
+                    ctx, sym_id, args_start, nargs,
+                )
+            }
         {
             return Some(Ok(value));
         }
@@ -9434,9 +9596,11 @@ impl<'a> Vm<'a> {
         // (a tag store and a value store, no wide copy of the builtin's
         // result); a signal goes to the cold hook dispatch.
         Some(
-            match Self::dispatch_builtin_subr_from_stack_args_unchecked(
-                ctx, function, args_start, nargs,
-            ) {
+            match unsafe {
+                Self::dispatch_builtin_subr_from_stack_args_unchecked(
+                    ctx, function, args_start, nargs,
+                )
+            } {
                 Ok(value) => Ok(value),
                 Err(flow) => ctx.dispatch_signal_flow_cold(flow),
             },
@@ -9461,30 +9625,46 @@ impl<'a> Vm<'a> {
 
     #[inline]
     #[doc(hidden)]
-    pub fn try_dispatch_builtin_subr_fast_value_from_stack_args(
+    /// # Safety
+    /// `bc_buf[args_start..args_start + nargs]` is in range. An empty
+    /// span (`nargs == 0`) requires `args_start <= bc_buf.len()` and no
+    /// overflow. The caller staged that span.
+    pub unsafe fn try_dispatch_builtin_subr_fast_value_from_stack_args(
         ctx: &crate::emacs_core::eval::Context,
         sym_id: SymId,
         args_start: usize,
         nargs: usize,
     ) -> Option<Value> {
         if sym_id == plus_sym_id() {
-            return Self::try_fast_fixnum_add_value_from_stack_args(ctx, args_start, nargs);
+            return unsafe {
+                Self::try_fast_fixnum_add_value_from_stack_args(ctx, args_start, nargs)
+            };
         }
         if sym_id == logand_sym_id() {
-            return Self::try_fast_fixnum_logand_value_from_stack_args(ctx, args_start, nargs);
+            return unsafe {
+                Self::try_fast_fixnum_logand_value_from_stack_args(ctx, args_start, nargs)
+            };
         }
         if sym_id == logior_sym_id() {
-            return Self::try_fast_fixnum_logior_value_from_stack_args(ctx, args_start, nargs);
+            return unsafe {
+                Self::try_fast_fixnum_logior_value_from_stack_args(ctx, args_start, nargs)
+            };
         }
         if sym_id == logxor_sym_id() {
-            return Self::try_fast_fixnum_logxor_value_from_stack_args(ctx, args_start, nargs);
+            return unsafe {
+                Self::try_fast_fixnum_logxor_value_from_stack_args(ctx, args_start, nargs)
+            };
         }
         None
     }
 
     #[inline]
     #[doc(hidden)]
-    pub fn try_fast_fixnum_add_value_from_stack_args(
+    /// # Safety
+    /// `bc_buf[args_start..args_start + nargs]` is in range. An empty
+    /// span (`nargs == 0`) requires `args_start <= bc_buf.len()` and no
+    /// overflow. The caller staged that span.
+    pub unsafe fn try_fast_fixnum_add_value_from_stack_args(
         ctx: &crate::emacs_core::eval::Context,
         args_start: usize,
         nargs: usize,
@@ -9529,7 +9709,11 @@ impl<'a> Vm<'a> {
 
     #[inline]
     #[doc(hidden)]
-    pub fn try_fast_fixnum_logand_value_from_stack_args(
+    /// # Safety
+    /// `bc_buf[args_start..args_start + nargs]` is in range. An empty
+    /// span (`nargs == 0`) requires `args_start <= bc_buf.len()` and no
+    /// overflow. The caller staged that span.
+    pub unsafe fn try_fast_fixnum_logand_value_from_stack_args(
         ctx: &crate::emacs_core::eval::Context,
         args_start: usize,
         nargs: usize,
@@ -9549,7 +9733,11 @@ impl<'a> Vm<'a> {
 
     #[inline]
     #[doc(hidden)]
-    pub fn try_fast_fixnum_logior_value_from_stack_args(
+    /// # Safety
+    /// `bc_buf[args_start..args_start + nargs]` is in range. An empty
+    /// span (`nargs == 0`) requires `args_start <= bc_buf.len()` and no
+    /// overflow. The caller staged that span.
+    pub unsafe fn try_fast_fixnum_logior_value_from_stack_args(
         ctx: &crate::emacs_core::eval::Context,
         args_start: usize,
         nargs: usize,
@@ -9569,7 +9757,11 @@ impl<'a> Vm<'a> {
 
     #[inline]
     #[doc(hidden)]
-    pub fn try_fast_fixnum_logxor_value_from_stack_args(
+    /// # Safety
+    /// `bc_buf[args_start..args_start + nargs]` is in range. An empty
+    /// span (`nargs == 0`) requires `args_start <= bc_buf.len()` and no
+    /// overflow. The caller staged that span.
+    pub unsafe fn try_fast_fixnum_logxor_value_from_stack_args(
         ctx: &crate::emacs_core::eval::Context,
         args_start: usize,
         nargs: usize,
@@ -9595,7 +9787,11 @@ impl<'a> Vm<'a> {
     /// the builtin's result 16 bytes wide right after its narrow tag and
     /// value stores, a store-forwarding stall per builtin call.
     #[doc(hidden)]
-    pub fn dispatch_builtin_subr_from_stack_args_unchecked(
+    /// # Safety
+    /// `bc_buf[args_start..args_start + nargs]` is in range. An empty
+    /// span (`nargs == 0`) requires `args_start <= bc_buf.len()` and no
+    /// overflow. The caller staged that span.
+    pub unsafe fn dispatch_builtin_subr_from_stack_args_unchecked(
         ctx: &mut crate::emacs_core::eval::Context,
         func: SubrFn,
         args_start: usize,
@@ -10265,7 +10461,11 @@ impl<'a> Vm<'a> {
     /// Primitive opcodes can be frequent, so this boundary is not cold.
     #[inline(never)]
     #[doc(hidden)]
-    pub fn dispatch_vm_builtin_by_id_from_stack(
+    /// # Safety
+    /// `bc_buf[args_start..args_start + nargs]` is in range. An empty
+    /// span (`nargs == 0`) requires `args_start <= bc_buf.len()` and no
+    /// overflow. The caller staged that span.
+    pub unsafe fn dispatch_vm_builtin_by_id_from_stack(
         &mut self,
         func: &ByteCodeFunction,
         sym: SymId,
@@ -10273,7 +10473,7 @@ impl<'a> Vm<'a> {
         nargs: usize,
     ) -> EvalResult {
         if let Some(function) = Self::inline_builtin_function(sym) {
-            return self.call_inline_builtin(function, args_start, nargs);
+            return unsafe { self.call_inline_builtin(function, args_start, nargs) };
         }
         let args: LispArgVec = self.ctx.bc_buf[args_start..args_start + nargs]
             .iter()
@@ -10292,7 +10492,11 @@ impl<'a> Vm<'a> {
     /// the caller truncates and pushes the result.
     #[inline(never)]
     #[doc(hidden)]
-    pub fn dispatch_call_builtin_sym(
+    /// # Safety
+    /// `bc_buf[args_start..args_start + nargs]` is in range. An empty
+    /// span (`nargs == 0`) requires `args_start <= bc_buf.len()` and no
+    /// overflow. The caller staged that span.
+    pub unsafe fn dispatch_call_builtin_sym(
         &mut self,
         func: &ByteCodeFunction,
         sym: SymId,
@@ -10306,9 +10510,9 @@ impl<'a> Vm<'a> {
         // routing these through the function cell would make neomacs MORE
         // advisable than GNU, breaking parity.
         if let Some(function) = Self::inline_builtin_function(sym) {
-            return self.call_inline_builtin(function, args_start, nargs);
+            return unsafe { self.call_inline_builtin(function, args_start, nargs) };
         }
-        self.dispatch_vm_builtin_by_id_from_stack(func, sym, args_start, nargs)
+        unsafe { self.dispatch_vm_builtin_by_id_from_stack(func, sym, args_start, nargs) }
     }
 
     /// The Rust primitive a GNU inline opcode calls directly (bytecode.c
@@ -10427,7 +10631,11 @@ impl<'a> Vm<'a> {
         }
     }
     #[doc(hidden)]
-    pub fn call_inline_builtin_from_stack(
+    /// # Safety
+    /// `bc_buf[args_start..args_start + nargs]` is in range. An empty
+    /// span (`nargs == 0`) requires `args_start <= bc_buf.len()` and no
+    /// overflow. The caller staged that span.
+    pub unsafe fn call_inline_builtin_from_stack(
         ctx: &mut crate::emacs_core::eval::Context,
         function: SubrFn,
         args_start: usize,
@@ -10436,22 +10644,26 @@ impl<'a> Vm<'a> {
         #[cfg(test)]
         INLINE_BUILTIN_DIRECT_COUNT.with(|count| count.set(count.get() + 1));
         // Value first (see `dispatch_builtin_subr_from_stack_args_unchecked`).
-        match Self::dispatch_builtin_subr_from_stack_args_unchecked(
-            ctx, function, args_start, nargs,
-        ) {
+        match unsafe {
+            Self::dispatch_builtin_subr_from_stack_args_unchecked(ctx, function, args_start, nargs)
+        } {
             Ok(value) => Ok(value),
             Err(flow) => ctx.dispatch_signal_flow_cold(flow),
         }
     }
 
     #[doc(hidden)]
-    pub fn call_inline_builtin(
+    /// # Safety
+    /// `bc_buf[args_start..args_start + nargs]` is in range. An empty
+    /// span (`nargs == 0`) requires `args_start <= bc_buf.len()` and no
+    /// overflow. The caller staged that span.
+    pub unsafe fn call_inline_builtin(
         &mut self,
         function: SubrFn,
         args_start: usize,
         nargs: usize,
     ) -> EvalResult {
-        Self::call_inline_builtin_from_stack(self.ctx, function, args_start, nargs)
+        unsafe { Self::call_inline_builtin_from_stack(self.ctx, function, args_start, nargs) }
     }
 
     #[doc(hidden)]
@@ -11002,7 +11214,11 @@ impl crate::emacs_core::eval::Context {
     /// armed, a callee that is not a builtin subr) take the `Vm` path.
     #[cfg(feature = "jit")]
     #[doc(hidden)]
-    pub fn call_spec_subr_from_bc_stack(
+    /// # Safety
+    /// `bc_buf[args_start..args_start + nargs]` is in range. An empty
+    /// span (`nargs == 0`) requires `args_start <= bc_buf.len()` and no
+    /// overflow. The caller staged that span.
+    pub unsafe fn call_spec_subr_from_bc_stack(
         &mut self,
         sym_id: SymId,
         subr_value: Value,
@@ -11013,8 +11229,10 @@ impl crate::emacs_core::eval::Context {
             .map(|(_, entry)| entry)
             .filter(|entry| entry.dispatch_kind == SubrDispatchKind::Builtin);
         let (Some(entry), false) = (entry, self.debug_on_next_call_is_armed()) else {
-            return Vm::from_context(self)
-                .call_spec_subr_stack(sym_id, subr_value, args_start, nargs);
+            // SAFETY: this function's caller staged `bc_buf[args_start..args_start + nargs]`.
+            return unsafe {
+                Vm::from_context(self).call_spec_subr_stack(sym_id, subr_value, args_start, nargs)
+            };
         };
         self.depth += 1;
         if self.depth > self.max_depth
@@ -11033,9 +11251,11 @@ impl crate::emacs_core::eval::Context {
             ))
         } else {
             match entry.function {
-                Some(function) => Vm::dispatch_builtin_subr_from_stack_args_unchecked(
-                    self, function, args_start, nargs,
-                ),
+                Some(function) => unsafe {
+                    Vm::dispatch_builtin_subr_from_stack_args_unchecked(
+                        self, function, args_start, nargs,
+                    )
+                },
                 None => Err(signal(LispCondition::VoidFunction, vec![func_val])),
             }
         };

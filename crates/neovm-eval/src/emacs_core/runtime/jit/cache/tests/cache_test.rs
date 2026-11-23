@@ -12,9 +12,9 @@ fn nullary_fn(ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {
         optional: Vec::new(),
         rest: None,
     });
-    f.ops = ops;
-    f.constants = constants.into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_ops(ops);
+    f.set_constants(constants.into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     f
 }
 
@@ -296,10 +296,10 @@ fn length_body_is_tier_b_profitable_and_not_call_heavy() {
         vec![Value::string("abc")],
     );
     assert!(matches!(
-        compile::calls::named_builtin_call(&f.ops[1]).map(|call| call.kind),
+        compile::calls::named_builtin_call(&f.ops()[1]).map(|call| call.kind),
         Some(compile::SpecCalleeKind::CbsymTierB)
     ));
-    assert!(!compile::body_is_call_heavy(&f.ops, &f.constants));
+    assert!(!compile::body_is_call_heavy(f.ops(), f.constants()));
     let leaf = compile::compile_bytecode_function_with(&f, Some(&ev.obarray))
         .expect("the original length body passes the enforced profitability gate");
     assert!(!leaf.profit_gate_bypassed);
@@ -542,8 +542,8 @@ fn runs_with_args_and_rejects_arity_mismatch() {
         rest: None,
     });
     f.lexical = true;
-    f.ops = vec![Op::StackRef(1), Op::StackRef(1), Op::Add, Op::Return];
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_ops(vec![Op::StackRef(1), Op::StackRef(1), Op::Add, Op::Return]);
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     // Correct arity -> native result.
     assert_eq!(
         crate::emacs_core::jit::test_support::run_compiled(
@@ -577,9 +577,9 @@ fn unary_add_one() -> ByteCodeFunction {
         rest: None,
     });
     f.lexical = true;
-    f.ops = vec![Op::StackRef(0), Op::Constant(0), Op::Add, Op::Return];
-    f.constants = vec![Value::make_int(1)].into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_ops(vec![Op::StackRef(0), Op::Constant(0), Op::Add, Op::Return]);
+    f.set_constants(vec![Value::make_int(1)].into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     f
 }
 
@@ -897,9 +897,9 @@ fn lexical_fn(ops: Vec<Op>, constants: Vec<Value>, arity: usize) -> ByteCodeFunc
         rest: None,
     });
     f.lexical = true;
-    f.ops = ops;
-    f.constants = constants.into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_ops(ops);
+    f.set_constants(constants.into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     f.seal_hand_assembled_ops();
     f
 }

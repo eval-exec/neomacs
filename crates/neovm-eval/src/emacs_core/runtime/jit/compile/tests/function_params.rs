@@ -7,8 +7,8 @@ fn constant_function(arglist: Value) -> ByteCodeFunction {
     let mut function = ByteCodeFunction::new(
         FunctionParams::try_from(arglist).expect("accepted GNU parameter slot"),
     );
-    function.max_stack = StackDepth::for_test(4);
-    function.ops = vec![Op::Nil, Op::Return];
+    function.set_max_stack(StackDepth::for_test(4));
+    function.set_ops(vec![Op::Nil, Op::Return]);
     function
 }
 
@@ -52,7 +52,7 @@ fn jit_declines_huge_entry_shape_before_proportional_allocation() {
     for descriptor in [1_i64 << 36, 1_i64 << 40] {
         let mut function = constant_function(Value::fixnum(descriptor));
         function.lexical = true;
-        function.max_stack = StackDepth::for_test(1);
+        function.set_max_stack(StackDepth::for_test(1));
         let error = compile_bytecode_function(&function).expect_err("entry exceeds declared depth");
         assert!(matches!(error, CompileError::TakesArguments));
     }

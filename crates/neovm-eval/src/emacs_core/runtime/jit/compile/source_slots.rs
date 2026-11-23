@@ -367,7 +367,8 @@ pub(crate) unsafe extern "C" fn neovm_jit_call_source_spec(
     // The guard proved a byte-code object (the type check is debug-only);
     // a pdump stub, whose identity word 0 never passes the guard anyway,
     // would be materialized here.
-    let bc = callee.bytecode_data_typechecked_by_caller();
+    // SAFETY: the site guard proved `callee` is a byte-code object.
+    let bc = unsafe { callee.bytecode_data_typechecked_by_caller() };
     let rt = bc.jit_runtime();
     // The source's armed leaf, as `cache::armed_leaf_for_native_call` finds
     // it, deciding everything before the heat moves: a declined call runs
@@ -398,7 +399,7 @@ pub(crate) unsafe extern "C" fn neovm_jit_call_source_spec(
     // charge comes before the heat moves: a call the budget rejects must
     // not count as a fast-path run for tiering.
     let Some(saved_budget) =
-        crate::emacs_core::bytecode::vm::charge_bytecode_frame(ctx_ref, bc.max_stack.get())
+        crate::emacs_core::bytecode::vm::charge_bytecode_frame(ctx_ref, bc.max_stack().get())
     else {
         return source_slot_declined();
     };

@@ -262,7 +262,7 @@ fn collect_constant_symbols(constant: Value, out: &mut Vec<SymId>, budget: &mut 
             }
             ValueKind::Veclike(VecLikeType::ByteCode) => {
                 if let Some(code) = value.get_bytecode_data() {
-                    stack.extend(code.constants.iter().copied());
+                    stack.extend(code.constants().iter().copied());
                 }
             }
             ValueKind::Veclike(VecLikeType::Vector) => {
@@ -307,7 +307,7 @@ impl Context {
             seen.insert(id);
             let mut budget = 1 << 16;
             let code = cell.get_bytecode_data().expect("checked above");
-            for constant in code.constants.iter().copied() {
+            for constant in code.constants().iter().copied() {
                 collect_constant_symbols(constant, &mut constant_symbols, &mut budget);
             }
         }
@@ -328,7 +328,7 @@ impl Context {
         }
         let cconv = cells[0].1.get_bytecode_data().expect("trusted byte-code");
         let empty_env = cconv
-            .constants
+            .constants()
             .iter()
             .copied()
             .find(|c| c.is_cons() && c.cons_car().is_t() && c.cons_cdr().is_nil())

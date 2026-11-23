@@ -1026,3 +1026,36 @@ fn prepare_thread_symbol_caches_reserves_the_symbol_span_with_headroom() {
         );
     });
 }
+
+/// A raw-byte symbol name is cached by `resolve_sym_lisp_string` without a
+/// UTF-8 check, and `is_canonical_id` marks the same id canonical. The next
+/// `resolve_sym` must not hand that cache entry out as `&str`.
+#[test]
+fn resolve_sym_raw_byte_name_is_not_a_str() {
+    crate::test_utils::init_test_tracing();
+    let name = unibyte_name(&[0xFF, 0xFE, 0x80]);
+    let id = intern_lisp_string(&name);
+    assert!(is_canonical_id(id), "the interned name is canonical");
+    let stored = resolve_sym_lisp_string(id);
+    assert!(
+        stored.as_utf8_str().is_none(),
+        "setup must keep a non-UTF-8 name, got {:?}",
+        stored.as_bytes()
+    );
+    // Formatted `panic!` payloads are not `String` once the hook has rendered
+    // them. Capture the hook text, which is the slow-path message.
+    let captured = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let slot = std::sync::Arc::clone(&captured);
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        *slot.lock().unwrap() = info.to_string();
+    }));
+    let outcome = std::panic::catch_unwind(|| resolve_sym(id));
+    std::panic::set_hook(previous);
+    let msg = captured.lock().unwrap().clone();
+    assert!(outcome.is_err(), "raw-byte symbol name was exposed as str");
+    assert!(
+        msg.contains("is not valid UTF-8"),
+        "unchecked cache path still builds a str from a raw-byte name: {msg}"
+    );
+}

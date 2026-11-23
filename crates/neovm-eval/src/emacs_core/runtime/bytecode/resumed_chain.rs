@@ -448,7 +448,8 @@ impl<'a> Vm<'a> {
             } else {
                 &inlined[i - 1].frame
             };
-            if frame.stack.len() > code.max_stack.get() || frame.pc >= code.executable_ops().len() {
+            if frame.stack.len() > code.max_stack().get() || frame.pc >= code.executable_ops().len()
+            {
                 return None;
             }
         }
@@ -498,7 +499,7 @@ impl<'a> Vm<'a> {
             fun: frame.function,
         });
         // Validated: frame_base + max_stack bounds the frame.
-        let frame_limit = frame_base + code.max_stack.get();
+        let frame_limit = frame_base + code.max_stack().get();
         if self.ctx.bc_buf.capacity() < frame_limit {
             if let Err(error) = self
                 .ctx

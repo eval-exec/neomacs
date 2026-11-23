@@ -91,8 +91,8 @@ fn fixnum_comparison_deopt_resumes_after_effect_without_replaying_it() {
         rest: None,
     });
     f.lexical = true;
-    f.constants = vec![Value::symbol("fixnum-comparison-effects")].into();
-    f.ops = vec![
+    f.set_constants(vec![Value::symbol("fixnum-comparison-effects")].into());
+    f.set_ops(vec![
         Op::VarRef(0),
         Op::Add1,
         Op::VarSet(0),
@@ -100,10 +100,10 @@ fn fixnum_comparison_deopt_resumes_after_effect_without_replaying_it() {
         Op::StackRef(1),
         Op::Lss,
         Op::Return,
-    ];
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+    ]);
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
     f.seal_hand_assembled_ops();
-    let leaf = lower_leaf_full(&f.ops, &f.constants, 2, None, Some(&ctx.obarray), 0).unwrap();
+    let leaf = lower_leaf_full(f.ops(), f.constants(), 2, None, Some(&ctx.obarray), 0).unwrap();
     for (args, want) in [
         ([Value::make_float(0.5), Value::make_int(1)], Value::T),
         ([Value::make_int(1), Value::make_float(0.5)], Value::NIL),

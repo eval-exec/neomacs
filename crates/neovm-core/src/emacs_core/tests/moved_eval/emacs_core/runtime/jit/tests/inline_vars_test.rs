@@ -122,9 +122,9 @@ fn interpret(ev: &mut Context, prog: &Prog, var: &str, args: &[Value]) -> String
         rest: None,
     });
     f.lexical = true;
-    f.ops = prog.ops.clone();
-    f.constants = constants(var).into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+    f.set_ops(prog.ops.clone());
+    f.set_constants(constants(var).into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
     seal_hand_assembled_ops_for_test(&mut f);
     let mut vm = Vm::from_context(ev);
     match vm.execute(&f, args.to_vec()) {
@@ -768,14 +768,16 @@ fn binding_sum(nested: bool) -> ByteCodeFunction {
         rest: None,
     });
     f.lexical = true;
-    f.constants = vec![
-        Value::make_int(0),
-        Value::make_int(3),
-        Value::symbol("osr-bound"),
-        Value::make_int(7),
-    ]
-    .into();
-    f.ops = vec![
+    f.set_constants(
+        vec![
+            Value::make_int(0),
+            Value::make_int(3),
+            Value::symbol("osr-bound"),
+            Value::make_int(7),
+        ]
+        .into(),
+    );
+    f.set_ops(vec![
         Op::Constant(1),
         Op::VarBind(2),
         Op::Constant(0),
@@ -784,14 +786,14 @@ fn binding_sum(nested: bool) -> ByteCodeFunction {
         Op::StackRef(3),
         Op::Lss,
         Op::GotoIfNil(0),
-    ];
+    ]);
     if nested {
-        f.ops.extend([Op::Constant(3), Op::VarBind(2)]);
+        f.ops_mut().extend([Op::Constant(3), Op::VarBind(2)]);
     }
-    f.ops
+    f.ops_mut()
         .extend([Op::StackRef(1), Op::VarRef(2), Op::Add, Op::StackSet(2)]);
     if nested {
-        f.ops.extend([
+        f.ops_mut().extend([
             Op::Unbind(1),
             Op::StackRef(1),
             Op::VarRef(2),
@@ -799,11 +801,12 @@ fn binding_sum(nested: bool) -> ByteCodeFunction {
             Op::StackSet(2),
         ]);
     }
-    f.ops
+    f.ops_mut()
         .extend([Op::StackRef(0), Op::Add1, Op::StackSet(1), Op::Goto(4)]);
-    f.ops[7] = Op::GotoIfNil(f.ops.len() as u32);
-    f.ops.extend([Op::StackRef(1), Op::Unbind(1), Op::Return]);
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.ops_mut()[7] = Op::GotoIfNil(f.ops().len() as u32);
+    f.ops_mut()
+        .extend([Op::StackRef(1), Op::Unbind(1), Op::Return]);
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     f
 }
 

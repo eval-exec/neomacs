@@ -41,9 +41,9 @@ impl Drop for Knobs {
 fn lexical(ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {
     let mut f = ByteCodeFunction::new(LambdaParams::simple(vec![intern("hof-regalloc-arg")]));
     f.lexical = true;
-    f.ops = ops;
-    f.constants = constants.into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_ops(ops);
+    f.set_constants(constants.into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     f.seal_hand_assembled_ops_for_test();
     f.jit_runtime().set_hot_for_test();
     f
@@ -83,7 +83,7 @@ fn fused(f: &ByteCodeFunction) -> Rc<inline::FusedBody> {
     Rc::new(
         fuse_calls_v2(
             f.executable_ops(),
-            &f.constants,
+            f.constants(),
             None,
             1,
             &vec![NumericFeedback::FixnumOnly; f.executable_ops().len()],
@@ -127,7 +127,7 @@ fn inline_hof_regalloc_off_keeps_the_source_allocator() {
     let _knobs = Knobs::enter(Inline2Mode::Off);
     let ctx = Context::new(crate::test_utils::unit_runtime());
     let f = caller(false);
-    assert!(for_admitted_hof(None, f.executable_ops(), &f.constants).is_none());
+    assert!(for_admitted_hof(None, f.executable_ops(), f.constants()).is_none());
     let leaf = compile(&f, &ctx);
     assert_eq!(
         leaf.regalloc,
@@ -154,7 +154,7 @@ fn inline_hof_regalloc_unadmitted_callback_keeps_the_source_allocator() {
     assert!(
         fuse_calls_v2(
             f.executable_ops(),
-            &f.constants,
+            f.constants(),
             None,
             1,
             &vec![NumericFeedback::FixnumOnly; f.executable_ops().len()],
@@ -212,7 +212,7 @@ fn inline_hof_regalloc_admitted_native_loop_uses_full_and_keeps_source_metadata(
     let ctx = Context::new(crate::test_utils::unit_runtime());
     let f = caller(false);
     assert!(!compile::has_back_edge(f.executable_ops()));
-    assert!(body_is_call_heavy(f.executable_ops(), &f.constants));
+    assert!(body_is_call_heavy(f.executable_ops(), f.constants()));
     let body = fused(&f);
     assert!(body.admitted_hof_at(6).is_some());
     {

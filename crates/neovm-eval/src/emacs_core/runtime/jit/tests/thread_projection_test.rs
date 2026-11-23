@@ -61,9 +61,9 @@ fn function(name: &str) -> ByteCodeFunction {
         rest: None,
     });
     f.lexical = true;
-    f.ops = OPS.to_vec();
-    f.constants = vec![Value::from_sym_id(intern(name))].into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(4);
+    f.set_ops(OPS.to_vec());
+    f.set_constants(vec![Value::from_sym_id(intern(name))].into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(4));
     f
 }
 
@@ -185,8 +185,8 @@ fn write_constants(name: &str) -> [Value; 3] {
 
 fn write_function(name: &str) -> ByteCodeFunction {
     let mut f = function(name);
-    f.ops = WRITE_OPS.to_vec();
-    f.constants = write_constants(name).to_vec().into();
+    f.set_ops(WRITE_OPS.to_vec());
+    f.set_constants(write_constants(name).to_vec().into());
     f
 }
 

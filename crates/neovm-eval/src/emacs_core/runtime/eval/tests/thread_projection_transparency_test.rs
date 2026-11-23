@@ -198,7 +198,7 @@ fn bytecode_script(name: &str) -> ByteCodeFunction {
         rest: None,
     });
     f.lexical = true;
-    f.ops = vec![
+    f.set_ops(vec![
         Op::Constant(1),
         Op::VarBind(0),
         Op::Constant(2),
@@ -208,14 +208,16 @@ fn bytecode_script(name: &str) -> ByteCodeFunction {
         Op::VarRef(0),
         Op::List(2),
         Op::Return,
-    ];
-    f.constants = vec![
-        Value::from_sym_id(intern(name)),
-        Value::fixnum(50),
-        Value::fixnum(51),
-    ]
-    .into();
-    f.max_stack = StackDepth::for_test(4);
+    ]);
+    f.set_constants(
+        vec![
+            Value::from_sym_id(intern(name)),
+            Value::fixnum(50),
+            Value::fixnum(51),
+        ]
+        .into(),
+    );
+    f.set_max_stack(StackDepth::for_test(4));
     f
 }
 

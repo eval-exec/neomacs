@@ -56,7 +56,7 @@ fn reader() -> ByteCodeFunction {
         rest: None,
     });
     f.lexical = true;
-    f.ops = vec![Op::VarRef(0), Op::Return];
+    f.set_ops(vec![Op::VarRef(0), Op::Return]);
     f
 }
 
@@ -64,8 +64,8 @@ fn reader() -> ByteCodeFunction {
 /// `lookup_var_id`): the printed value or the signal's symbol.
 fn vm_read(ev: &mut Context, name: &'static str) -> String {
     let mut f = reader();
-    f.constants = vec![Value::from_sym_id(intern(name))].into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(4);
+    f.set_constants(vec![Value::from_sym_id(intern(name))].into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(4));
     let mut vm = Vm::from_context(ev);
     match vm.execute(&f, vec![]) {
         Ok(value) => print_value(&value),

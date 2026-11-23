@@ -318,9 +318,9 @@ fn assert_aot_matches_interp_and_jit(ops: &[Op], constants: &[Value], nargs: usi
         rest: None,
     });
     f.lexical = true;
-    f.ops = ops.to_vec();
-    f.constants = constants.to_vec().into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_ops(ops.to_vec());
+    f.set_constants(constants.to_vec().into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
 
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     // For a 1-arg body sweep `args`; otherwise call once with the first
@@ -785,9 +785,9 @@ fn aot_reloc_const_is_gc_rooted_via_compiled_walk() {
         rest: None,
     });
     f.lexical = true;
-    f.ops = ops.clone();
-    f.constants = constants.clone().into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_ops(ops.clone());
+    f.set_constants(constants.clone().into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
 
     // Drive try_run_compiled so the AOT leaf is cached.
     let id = f.jit_runtime().compiled_id_or_assign();
@@ -897,9 +897,9 @@ fn aot_hit_serves_without_jitting_through_cache() {
         rest: None,
     });
     f.lexical = true;
-    f.ops = ops.clone();
-    f.constants = constants.clone().into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_ops(ops.clone());
+    f.set_constants(constants.clone().into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
 
     let id = f.jit_runtime().compiled_id_or_assign();
     // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
@@ -946,9 +946,9 @@ fn r2_enumerate_loadup_leaves_finds_d0_candidates() {
         rest: None,
     });
     a.lexical = true;
-    a.ops = vec![Op::Constant(0), Op::Add, Op::Return];
-    a.constants = vec![Value::make_int(5)].into();
-    a.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    a.set_ops(vec![Op::Constant(0), Op::Add, Op::Return]);
+    a.set_constants(vec![Value::make_int(5)].into());
+    a.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     let a_id = neovm_value::intern::intern("r2-cand-add5");
     ev.obarray
         .set_symbol_function_id(a_id, Value::make_bytecode(a));
@@ -963,8 +963,8 @@ fn r2_enumerate_loadup_leaves_finds_d0_candidates() {
         rest: None,
     });
     b.lexical = true;
-    b.ops = vec![Op::StackRef(0), Op::Return];
-    b.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    b.set_ops(vec![Op::StackRef(0), Op::Return]);
+    b.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     let b_id = neovm_value::intern::intern("r2-noncand-optional");
     ev.obarray
         .set_symbol_function_id(b_id, Value::make_bytecode(b));
@@ -1080,9 +1080,9 @@ fn r2_prepopulate_native_from_call_1_and_survives_gc() {
         rest: None,
     });
     a.lexical = true;
-    a.ops = ops.clone();
-    a.constants = constants.clone().into();
-    a.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    a.set_ops(ops.clone());
+    a.set_constants(constants.clone().into());
+    a.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     let sym = neovm_value::intern::intern("r2-prepop-add5");
     ev.obarray
         .set_symbol_function_id(sym, Value::make_bytecode(a));
@@ -1175,9 +1175,9 @@ fn r2_prepopulate_skips_on_preload_miss() {
         rest: None,
     });
     a.lexical = true;
-    a.ops = vec![Op::Constant(0), Op::Add, Op::Return];
-    a.constants = vec![Value::make_int(5)].into();
-    a.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    a.set_ops(vec![Op::Constant(0), Op::Add, Op::Return]);
+    a.set_constants(vec![Value::make_int(5)].into());
+    a.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     let sym = neovm_value::intern::intern("r2-prepop-miss-add5");
     ev.obarray
         .set_symbol_function_id(sym, Value::make_bytecode(a));
@@ -1240,9 +1240,9 @@ fn r2_prepopulate_never_overwrites_existing_jit_leaf() {
         rest: None,
     });
     a.lexical = true;
-    a.ops = vec![Op::Constant(0), Op::Add, Op::Return];
-    a.constants = vec![Value::make_int(5)].into();
-    a.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    a.set_ops(vec![Op::Constant(0), Op::Add, Op::Return]);
+    a.set_constants(vec![Value::make_int(5)].into());
+    a.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     let sym = neovm_value::intern::intern("r2-prepop-nooverwrite-add5");
     ev.obarray
         .set_symbol_function_id(sym, Value::make_bytecode(a));
@@ -1318,9 +1318,9 @@ fn r2_prepopulate_never_overwrites_existing_jit_leaf() {
                 rest: None,
             });
             b.lexical = true;
-            b.ops = vec![Op::Constant(0), Op::Sub, Op::Return];
-            b.constants = vec![Value::make_int(1)].into();
-            b.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+            b.set_ops(vec![Op::Constant(0), Op::Sub, Op::Return]);
+            b.set_constants(vec![Value::make_int(1)].into());
+            b.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
             b
         }),
     );
@@ -1447,9 +1447,9 @@ fn build_and_link_preload_writes_v2_prekey_manifest() {
             rest: None,
         });
         f.lexical = true;
-        f.ops = ops;
-        f.constants = consts.into();
-        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+        f.set_ops(ops);
+        f.set_constants(consts.into());
+        f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
         f.seal_hand_assembled_ops();
         f
     };
@@ -1586,9 +1586,9 @@ fn prepopulate_manifest_prefilter_skips_nonmember_without_hashing() {
             rest: None,
         });
         f.lexical = true;
-        f.ops = ops;
-        f.constants = consts.into();
-        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+        f.set_ops(ops);
+        f.set_constants(consts.into());
+        f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
         f.seal_hand_assembled_ops();
         f
     };
@@ -1730,9 +1730,9 @@ fn prepopulate_prekey_mismatch_fails_closed_to_hash_path() {
         rest: None,
     });
     f.lexical = true;
-    f.ops = ops.clone();
-    f.constants = consts.clone().into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_ops(ops.clone());
+    f.set_constants(consts.clone().into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     let sym = neovm_value::intern::intern("pf-fc-add5");
     ev.obarray
         .set_symbol_function_id(sym, Value::make_bytecode(f));
@@ -1804,9 +1804,14 @@ fn pgo_pred_body(callee: &str) -> crate::emacs_core::bytecode::ByteCodeFunction 
         rest: None,
     });
     f.lexical = true;
-    f.ops = vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return];
-    f.constants = vec![Value::symbol(intern(callee))].into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_ops(vec![
+        Op::Constant(0),
+        Op::StackRef(1),
+        Op::Call(1),
+        Op::Return,
+    ]);
+    f.set_constants(vec![Value::symbol(intern(callee))].into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     f
 }
 
@@ -1853,10 +1858,10 @@ fn pgo_runtime_emit_is_byte_identical_across_sessions_and_default_off() {
     pgo_alias(&mut c2, "pgo-eq-callee", "recordp");
 
     let f = pgo_pred_body("pgo-eq-callee");
-    let (o1, h1) = compile_leaf_to_object(&f.ops, &f.constants, 1, Some(&c1.obarray))
+    let (o1, h1) = compile_leaf_to_object(f.ops(), f.constants(), 1, Some(&c1.obarray))
         .expect("emit1 ok")
         .expect("emit1 some");
-    let (o2, h2) = compile_leaf_to_object(&f.ops, &f.constants, 1, Some(&c2.obarray))
+    let (o2, h2) = compile_leaf_to_object(f.ops(), f.constants(), 1, Some(&c2.obarray))
         .expect("emit2 ok")
         .expect("emit2 some");
     assert_eq!(h1, h2, "content hash must be session-independent");

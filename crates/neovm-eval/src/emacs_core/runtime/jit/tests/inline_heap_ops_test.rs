@@ -23,9 +23,9 @@ fn lexical_fn(nargs: u32, ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFuncti
         rest: None,
     });
     f.lexical = true;
-    f.ops = ops;
-    f.constants = constants.into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+    f.set_ops(ops);
+    f.set_constants(constants.into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
     f
 }
 
@@ -345,7 +345,7 @@ fn opt_cons_store_proofs_keep_deopt_and_barrier_paths() {
     let lower = |f: &ByteCodeFunction| {
         lower_leaf_full_osr_with_opt(
             f.executable_ops(),
-            &f.constants,
+            f.constants(),
             2,
             f.executable_gnu_byte_offset_map(),
             None,
@@ -1419,7 +1419,7 @@ fn float_boxes_are_inline_and_counted_once() {
             vec![],
         );
         f.seal_hand_assembled_ops();
-        f.jit_runtime().record_numeric(2, f.ops.len(), NF::Float);
+        f.jit_runtime().record_numeric(2, f.ops().len(), NF::Float);
         force_flonum_mode_for_test(Some(mode));
         let emitted = allocs_emitted();
         let leaf = compile_bytecode_function(&f).expect("compiles");

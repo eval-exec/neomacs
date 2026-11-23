@@ -22,9 +22,9 @@ fn source(ops: Vec<Op>, constants: Vec<Value>, arity: usize) -> ByteCodeFunction
         rest: None,
     });
     function.lexical = true;
-    function.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(64);
-    function.ops = ops;
-    function.constants = constants.into();
+    function.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(64));
+    function.set_ops(ops);
+    function.set_constants(constants.into());
     function
 }
 
@@ -39,13 +39,13 @@ fn plan(function: &ByteCodeFunction, prefix: usize) -> Func {
     };
     let cfg = crate::emacs_core::jit::compile::analyze_cfg(
         function.executable_ops(),
-        &function.constants,
+        function.constants(),
         function.executable_gnu_byte_offset_map(),
         params.native_arity(),
     )
     .expect("source CFG");
     let constants = function
-        .constants
+        .constants()
         .iter()
         .copied()
         .map(ValueBits::from_value)
@@ -457,7 +457,7 @@ fn opt_fold_gnu_dhry_proc3_alias_join_remains_verifiable() {
     )
     .expect("GNU fixture decodes");
     let mut function = source(ops, constants, 1);
-    function.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+    function.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
     function.gnu_byte_offset_map = Some(offsets);
     function.gnu_bytecode_bytes = Some(neovm_value::tagged::header::LispByteVec::owned(raw));
     // Installing GNU bytes must use the canonical decode publication path.

@@ -167,9 +167,9 @@ fn bytecode(ops: Vec<Op>, constants: Vec<Value>, arity: FixtureArity) -> ByteCod
     };
     let mut function = ByteCodeFunction::new(LambdaParams::simple(required));
     function.lexical = true;
-    function.ops = ops;
-    function.constants = constants.into();
-    function.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    function.set_ops(ops);
+    function.set_constants(constants.into());
+    function.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     function.seal_hand_assembled_ops();
     // Call-bearing fixtures enter through the compiled policy rather than the
     // ordinary cold dispatcher. A separate scoped override bypasses their
@@ -1440,7 +1440,7 @@ fn throughput_worker(context: &mut Context) -> EvalResult {
     let function = context.obarray.symbol_function("tgt-loop").unwrap();
     let helper = context.obarray.symbol_function("tgt-helper").unwrap();
     assert_eq!(
-        function.get_bytecode_data().unwrap().constants[3],
+        function.get_bytecode_data().unwrap().constants()[3],
         helper,
         "the call names the bytecode object, bypassing named-function spec slots"
     );

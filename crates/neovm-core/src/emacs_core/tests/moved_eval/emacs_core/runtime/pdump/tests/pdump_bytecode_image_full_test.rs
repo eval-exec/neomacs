@@ -167,10 +167,10 @@ fn lazy_stub_survives_gc_and_materializes_on_first_call() {
         optional: vec![neovm_value::intern::intern("pdump-lazy-b")],
         rest: Some(neovm_value::intern::intern("pdump-lazy-c")),
     });
-    function.ops = vec![Op::Constant(0), Op::Return];
-    function.constants = vec![secret_hash].into();
+    function.set_ops(vec![Op::Constant(0), Op::Return]);
+    function.set_constants(vec![secret_hash].into());
     function.extra_slots = vec![extra_hash];
-    function.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+    function.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
     function.lexical = true;
     function.docstring = Some(neovm_value::heap_types::LispString::from_unibyte(
         b"Lazy stub docstring.".to_vec(),

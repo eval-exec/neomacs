@@ -20,9 +20,9 @@ fn function(ops: Vec<Op>, constants: Vec<Value>, arity: usize) -> ByteCodeFuncti
         rest: None,
     });
     f.lexical = true;
-    f.ops = ops;
-    f.constants = constants.into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_ops(ops);
+    f.set_constants(constants.into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     f
 }
 

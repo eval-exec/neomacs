@@ -837,9 +837,9 @@ pub(crate) fn baked_stub_template(extras_len: usize) -> Box<[u8]> {
         // stack_verified, max_stack, arglist = Value::NIL = 0, lexical) and
         // the pointer-niched Nones (runtime, lazy_gnu_code: None = null
         // word) stay at the template's zeros.
-        addr_of_mut!((*p).ops).write(Vec::new());
+        ByteCodeFunction::ops_ptr(p).write(Vec::new());
         ByteCodeFunction::ops_sealed_ptr(p).write(true);
-        addr_of_mut!((*p).constants).write(Vec::new().into());
+        ByteCodeFunction::constants_ptr(p).write(Vec::new().into());
         // SAFETY: FunctionParams has repr(C, u8), with first variant
         // Stack's tag equal to zero; ArgTemplate is repr(transparent) i64.
         // All-zero bytes therefore represent the concrete Stack(0) variant.
@@ -877,9 +877,9 @@ pub(crate) fn baked_stub_template(extras_len: usize) -> Box<[u8]> {
         );
         assert_eq!(stub.source_id(), 0);
         assert!(!stub.stack_verified());
-        assert!(stub.constants.as_slice().is_empty());
+        assert!(stub.constants().as_slice().is_empty());
         assert_eq!(
-            stub.max_stack,
+            stub.max_stack(),
             crate::emacs_core::bytecode::StackDepth::ZERO
         );
         assert!(

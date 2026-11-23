@@ -25,13 +25,13 @@ fn prepared(source: &ByteCodeFunction, prefix: usize) -> Func {
         .required();
     let cfg = analyze_cfg(
         source.executable_ops(),
-        &source.constants,
+        source.constants(),
         source.executable_gnu_byte_offset_map(),
         arity,
     )
     .unwrap();
     let pool = source
-        .constants
+        .constants()
         .iter()
         .copied()
         .map(ValueBits::from_value)
@@ -52,7 +52,7 @@ fn prepared(source: &ByteCodeFunction, prefix: usize) -> Func {
 }
 fn hints(source: &ByteCodeFunction, prefix: usize) -> ArrayAdmission {
     let constant_types = source
-        .constants
+        .constants()
         .iter()
         .enumerate()
         .skip(prefix)

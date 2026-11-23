@@ -1099,7 +1099,7 @@ impl TaggedHeap {
                     self.mark_or_push_child(child, "bytecode-parameter-arglist");
                 }
                 // Trace constants vector
-                for val in &data.constants {
+                for val in data.constants() {
                     self.mark_or_push_child(*val, "bytecode-constant");
                 }
                 // Trace captured lexical environment

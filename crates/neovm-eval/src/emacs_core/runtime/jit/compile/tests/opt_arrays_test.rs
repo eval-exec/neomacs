@@ -86,13 +86,13 @@ fn plan_prefix(f: &ByteCodeFunction, prefix: usize) -> ir::Func {
         .required();
     let cfg = analyze_cfg(
         f.executable_ops(),
-        &f.constants,
+        f.constants(),
         f.executable_gnu_byte_offset_map(),
         arity,
     )
     .unwrap();
     let constants = f
-        .constants
+        .constants()
         .iter()
         .copied()
         .map(ir::ValueBits::from_value)
@@ -115,7 +115,7 @@ fn lower(f: &ByteCodeFunction, ir: &ir::Func) -> CompiledLeaf {
     ir.verify().unwrap();
     let leaf = lower_opt_ir_for_test(
         f.executable_ops(),
-        &f.constants,
+        f.constants(),
         f.params
             .stack_shape()
             .expect("fixture stack parameters")
@@ -134,7 +134,7 @@ fn tier0(ctx: &mut Context, f: &ByteCodeFunction, args: &[Value]) -> Result<Valu
 }
 fn native(ctx: &mut Context, f: &ByteCodeFunction, leaf: &CompiledLeaf, args: &[Value]) -> Value {
     let NativeRun::Ok(bits) =
-        leaf.call_consts(ctx as *mut Context as *mut u8, f.constants.as_ptr(), args)
+        leaf.call_consts(ctx as *mut Context as *mut u8, f.constants().as_ptr(), args)
     else {
         panic!("successful source array case must finish NativeRun::Ok")
     };
@@ -157,7 +157,7 @@ fn parity(
         ctx,
         eval::Inputs {
             args,
-            prefix: &f.constants[..ir.dynamic_prefix],
+            prefix: &f.constants()[..ir.dynamic_prefix],
             ..Default::default()
         },
     )
@@ -210,7 +210,7 @@ fn candidate(
     let _scope = super::snapshot::publish_numeric_feedback_with_arrays(f);
     let hints = super::array_snapshot::admission(
         f.executable_ops().len(),
-        &f.constants,
+        f.constants(),
         before.dynamic_prefix,
     );
     let mut after = before.clone();
@@ -758,7 +758,7 @@ fn opt_range_native_array_singleton_shape_guard_preserves_exact_word_identity() 
     // missing native opcode/layout/frame failure cannot make this test pass.
     let selected = match lower_opt_ir_for_test(
         source.executable_ops(),
-        &source.constants,
+        source.constants(),
         1,
         source.executable_gnu_byte_offset_map(),
         &after,
@@ -774,7 +774,7 @@ fn opt_range_native_array_singleton_shape_guard_preserves_exact_word_identity() 
     );
     let NativeRun::DeoptAt(native_exit) = selected.call_consts(
         &mut ctx as *mut Context as *mut u8,
-        source.constants.as_ptr(),
+        source.constants().as_ptr(),
         &[distinct_array],
     ) else {
         panic!("native shape guard accepted a different vector under exact singleton TypeSet")

@@ -9,12 +9,12 @@ fn callback(car: bool) -> Value {
     let mut code =
         ByteCodeFunction::new(LambdaParams::simple(vec![intern("capture-callback-arg")]));
     code.lexical = true;
-    code.ops = vec![Op::StackRef(0)];
+    code.set_ops(vec![Op::StackRef(0)]);
     if car {
-        code.ops.push(Op::Car);
+        code.ops_mut().push(Op::Car);
     }
-    code.ops.push(Op::Return);
-    code.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+    code.ops_mut().push(Op::Return);
+    code.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
     Value::make_bytecode(code)
 }
 

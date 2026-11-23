@@ -84,8 +84,8 @@ fn store_function(op: Op) -> ByteCodeFunction {
         rest: None,
     });
     function.lexical = true;
-    function.ops = vec![Op::StackRef(1), Op::StackRef(1), op, Op::Return];
-    function.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+    function.set_ops(vec![Op::StackRef(1), Op::StackRef(1), op, Op::Return]);
+    function.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
     function
 }
 
@@ -580,14 +580,14 @@ fn opt_store_leaf(ops: Vec<Op>) -> (CompiledLeaf, String) {
     let _restore = Restore;
     force_opt_for_test(Some(OptMode::Opt), Some(OptAdmit::ALL));
     let mut function = store_function(Op::Setcar);
-    function.ops = ops;
+    function.set_ops(ops);
     function.seal_hand_assembled_ops();
     let mut leaf = None;
     let clif = captured_clif(|| {
         leaf = Some(
             lower_leaf_full_osr_with_opt(
                 function.executable_ops(),
-                &function.constants,
+                function.constants(),
                 2,
                 function.executable_gnu_byte_offset_map(),
                 None,

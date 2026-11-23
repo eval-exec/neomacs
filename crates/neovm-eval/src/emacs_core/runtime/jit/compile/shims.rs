@@ -70,8 +70,15 @@ pub(crate) unsafe extern "C" fn neovm_jit_gc_push_many(ptr: *const i64, count: i
 }
 
 /// Pop the scratch roots back to a saved depth.
+///
+/// # Safety
+/// `saved` is a depth this thread obtained from [`neovm_jit_gc_save`] and has
+/// not already restored past. Every root pushed after that depth belongs to
+/// the caller that is now finished with it. A smaller depth drops roots an
+/// outer frame still needs, and a later collection can free values the
+/// generated code still holds.
 #[unsafe(no_mangle)]
-pub(crate) extern "C" fn neovm_jit_gc_restore(saved: i64) {
+pub(crate) unsafe extern "C" fn neovm_jit_gc_restore(saved: i64) {
     restore_scratch_gc_roots(saved as usize);
 }
 
@@ -836,7 +843,7 @@ fn neovm_jit_call_general(
             });
             if func_val.is_bare_symbol()
                 && let Some(res) =
-                    Vm::call_builtin_symbol_for_jit(ctx_ref, func_val, args_start, nargs)
+                    unsafe { Vm::call_builtin_symbol_for_jit(ctx_ref, func_val, args_start, nargs) }
             {
                 ctx_ref.bc_buf.truncate(args_start);
                 return jit_call_status(res, out);
@@ -852,7 +859,7 @@ fn neovm_jit_call_general(
             // already rooted on bc_buf.
             push_scratch_gc_root(func_val);
             let mut vm = Vm::from_context(ctx_ref);
-            let res = vm.call_for_jit_stack(func_val, args_start, nargs);
+            let res = unsafe { vm.call_for_jit_stack(func_val, args_start, nargs) };
             vm.bc_buf_truncate(args_start);
             restore_scratch_gc_roots(saved);
             return jit_call_status(res, out);
@@ -886,7 +893,7 @@ fn neovm_jit_call_general(
                 core::slice::from_raw_parts(args_ptr as *const Value, nargs)
             });
             let mut vm = Vm::from_context(ctx);
-            let res = vm.call_for_jit_stack(func_val, args_start, nargs);
+            let res = unsafe { vm.call_for_jit_stack(func_val, args_start, nargs) };
             vm.bc_buf_truncate(args_start);
             jit_call_status(res, out)
         }

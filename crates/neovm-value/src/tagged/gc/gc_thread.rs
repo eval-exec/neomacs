@@ -1067,7 +1067,7 @@ fn concurrent_try_mark_owned_with_symbols<
                 if let Some(child) = data.params.heap_child() {
                     logs.queue_child::<SYMBOLS>(child, gray);
                 }
-                for &c in &data.constants {
+                for &c in data.constants() {
                     logs.queue_child::<SYMBOLS>(c, gray);
                 }
                 if let Some(env) = data.env {

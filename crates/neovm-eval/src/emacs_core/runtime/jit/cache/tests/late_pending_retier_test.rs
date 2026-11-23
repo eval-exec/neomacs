@@ -211,9 +211,9 @@ impl Drop for Fixture {
 
 fn instance(proto: &ByteCodeFunction, captured: i64) -> Value {
     let mut f = proto.clone();
-    let mut constants: Vec<Value> = f.constants.iter().copied().collect();
+    let mut constants: Vec<Value> = f.constants().iter().copied().collect();
     constants[0] = Value::make_int(captured);
-    f.constants = constants.into();
+    f.set_constants(constants.into());
     Value::make_bytecode(f)
 }
 

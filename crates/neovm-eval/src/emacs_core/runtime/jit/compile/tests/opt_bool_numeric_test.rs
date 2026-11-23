@@ -367,14 +367,14 @@ fn cold_source(op: Op, wrong_on_right: bool) -> ByteCodeFunction {
 fn assert_complete_cold_frame(source: &ByteCodeFunction) {
     let cfg = analyze_cfg(
         source.executable_ops(),
-        &source.constants,
+        source.constants(),
         source.executable_gnu_byte_offset_map(),
         4,
     )
     .expect("cold CFG");
     let plan = opt_backend::build_plan(
         source.executable_ops(),
-        &source.constants,
+        source.constants(),
         &cfg,
         ir::ParamShape {
             required: 4,

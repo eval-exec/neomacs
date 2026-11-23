@@ -16,15 +16,15 @@ fn p3sym_c5_vm_readers_and_function_caches_survive_intern_relocation() {
     ctx.obarray.set_symbol_function_id(symbol, old);
     let mut reader = ByteCodeFunction::new(LambdaParams::simple(vec![]));
     reader.lexical = true;
-    reader.ops = vec![Op::VarRef(0), Op::Return];
-    reader.constants = vec![Value::from_sym_id(global)].into();
-    reader.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(4);
+    reader.set_ops(vec![Op::VarRef(0), Op::Return]);
+    reader.set_constants(vec![Value::from_sym_id(global)].into());
+    reader.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(4));
     let reader = Value::make_bytecode(reader);
     let mut caller = ByteCodeFunction::new(LambdaParams::simple(vec![]));
     caller.lexical = true;
-    caller.ops = vec![Op::Constant(0), Op::Call(0), Op::Return];
-    caller.constants = vec![Value::from_sym_id(symbol)].into();
-    caller.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(4);
+    caller.set_ops(vec![Op::Constant(0), Op::Call(0), Op::Return]);
+    caller.set_constants(vec![Value::from_sym_id(symbol)].into());
+    caller.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(4));
     let caller = Value::make_bytecode(caller);
     let _roots = ctx.retain_gc_roots([old, reader, caller]);
     let expected: Vec<_> = include_str!(

@@ -3138,11 +3138,11 @@ pub(crate) fn dump_bytecode(
     DumpByteCodeFunction {
         instructions,
         constants: bc
-            .constants
+            .constants()
             .iter()
             .map(|value| encoder.dump_value(value))
             .collect(),
-        max_stack: bc.max_stack.get() as u64,
+        max_stack: bc.max_stack().get() as u64,
         params: match &bc.params {
             FunctionParams::Stack(template) => DumpFunctionParams::Stack(template.raw()),
             FunctionParams::Dynamic(_) => DumpFunctionParams::Dynamic,

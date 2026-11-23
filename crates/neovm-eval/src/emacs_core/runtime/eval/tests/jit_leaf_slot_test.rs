@@ -49,9 +49,9 @@ fn bc_with(
         rest: rest.then_some(unsafe { SymId::from_raw(nonrest + 1) }),
     });
     f.lexical = true;
-    f.ops = ops;
-    f.constants = constants.into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_ops(ops);
+    f.set_constants(constants.into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     if hot {
         f.jit_runtime().set_hot_for_test();
     }

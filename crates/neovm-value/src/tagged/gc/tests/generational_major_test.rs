@@ -142,8 +142,8 @@ fn assert_header_at_rest(heap: &TaggedHeap, value: TaggedValue) {
 
 fn bytecode(constants: Vec<TaggedValue>) -> ByteCodeFunction {
     let mut function = ByteCodeFunction::new(LambdaParams::simple(vec![]));
-    function.constants = constants.into();
-    function.ops = vec![Op::Nil];
+    function.set_constants(constants.into());
+    function.set_ops(vec![Op::Nil]);
     function.gnu_bytecode_bytes = Some(LispByteVec::owned(vec![0xAA; 32]));
     function
 }

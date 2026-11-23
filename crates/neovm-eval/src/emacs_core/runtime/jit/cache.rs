@@ -850,7 +850,7 @@ fn compile_osr_leaf_timed(
     let optional = params.optional();
     let native_arity = params.entry_depth();
     let offset_map = func.executable_gnu_byte_offset_map();
-    let cfg = match super::compile::analyze_cfg(ops, &func.constants, offset_map, native_arity) {
+    let cfg = match super::compile::analyze_cfg(ops, func.constants(), offset_map, native_arity) {
         Ok(cfg) => cfg,
         Err(e) => {
             if dbg {
@@ -879,7 +879,7 @@ fn compile_osr_leaf_timed(
     let _regalloc = RegallocScope::enter(super::compile::regalloc_for(
         RegallocPolicy::Full,
         ops,
-        &func.constants,
+        func.constants(),
     ));
     // Same feedback the tier-up compile sees: without it every Float site
     // read FixnumOnly and an OSR'd float loop deopted straight back.
@@ -899,14 +899,14 @@ fn compile_osr_leaf_timed(
         let masked;
         let constants: &[Value] = if prefix > 0 {
             masked = func
-                .constants
+                .constants()
                 .iter()
                 .enumerate()
                 .map(|(i, &value)| if i < prefix { Value::NIL } else { value })
                 .collect::<Vec<_>>();
             &masked
         } else {
-            func.constants.as_ref()
+            func.constants().as_ref()
         };
         let feedback = (0..ops.len())
             .map(super::compile::active_numeric_feedback)
@@ -933,7 +933,7 @@ fn compile_osr_leaf_timed(
     let (ops, constants, offset_map) =
         fused
             .as_ref()
-            .map_or((ops, func.constants.as_ref(), offset_map), |body| {
+            .map_or((ops, func.constants().as_ref(), offset_map), |body| {
                 (
                     body.ops.as_slice(),
                     body.constants.as_slice(),
@@ -3136,7 +3136,7 @@ pub(crate) unsafe fn try_run_compiled(
         });
         if dbg == Some(id) {
             let consts: Vec<String> = func
-                .constants
+                .constants()
                 .iter()
                 .map(crate::emacs_core::print::print_value)
                 .collect();
@@ -3302,8 +3302,9 @@ pub(crate) unsafe fn try_run_compiled(
                 {
                     // AOT leaves never inline → no inline deps to register. Their
                     // reloc consts are rooted via the COMPILED walk (R1c-8).
-                    leaf.frame_bytes =
-                        crate::emacs_core::bytecode::vm::bytecode_frame_bytes(func.max_stack.get());
+                    leaf.frame_bytes = crate::emacs_core::bytecode::vm::bytecode_frame_bytes(
+                        func.max_stack().get(),
+                    );
                     leaf.obs.id = id;
                     super::aot::retier::prepare(&mut leaf, func.jit_runtime());
                     stats::record_aot_load(func.executable_ops().len());
@@ -3668,11 +3669,11 @@ pub(crate) fn current_leaf_of(obs: &super::compile::LeafObs) -> Option<Rc<Compil
 #[inline(always)]
 fn cached_frame_bytes(leaf: &CompiledLeaf, func: &ByteCodeFunction) -> usize {
     match leaf.frame_bytes {
-        0 => crate::emacs_core::bytecode::vm::bytecode_frame_bytes(func.max_stack.get()),
+        0 => crate::emacs_core::bytecode::vm::bytecode_frame_bytes(func.max_stack().get()),
         cached => {
             debug_assert_eq!(
                 cached,
-                crate::emacs_core::bytecode::vm::bytecode_frame_bytes(func.max_stack.get()),
+                crate::emacs_core::bytecode::vm::bytecode_frame_bytes(func.max_stack().get()),
                 "cached frame_bytes diverged from the live function"
             );
             cached

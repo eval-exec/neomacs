@@ -17,9 +17,9 @@ fn lexical(required: usize, ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunc
         rest: None,
     });
     f.lexical = true;
-    f.ops = ops;
-    f.constants = constants.into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(32);
+    f.set_ops(ops);
+    f.set_constants(constants.into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(32));
     f.seal_hand_assembled_ops_for_test();
     f.jit_runtime().set_hot_for_test();
     f
@@ -101,8 +101,8 @@ fn inline_v2_side_tables_preserve_the_legacy_splice() {
         vec![Value::make_int(9)],
     ));
     let feedback = vec![NumericFeedback::FixnumOnly; f.executable_ops().len()];
-    let old = fuse_calls(f.executable_ops(), &f.constants, None, 1, &feedback).unwrap();
-    let new = fuse_calls_v2(f.executable_ops(), &f.constants, None, 1, &feedback).unwrap();
+    let old = fuse_calls(f.executable_ops(), f.constants(), None, 1, &feedback).unwrap();
+    let new = fuse_calls_v2(f.executable_ops(), f.constants(), None, 1, &feedback).unwrap();
     assert!(!old.is_v2());
     assert!(new.is_v2());
     assert_eq!(old.ops, new.ops);
@@ -163,11 +163,11 @@ fn inline_v2_refuses_legacy_mir_and_resumes_inner_chain() {
         panic!("expected inner chain deopt: {run:?}")
     };
     assert_eq!(resume.pc, 2);
-    assert_eq!(resume.stack, vec![arg, f.constants[0], arg]);
+    assert_eq!(resume.stack, vec![arg, f.constants()[0], arg]);
     assert!(resume.chain.is_some());
     let frames = &resume.inlined.as_ref().expect("chain readback").frames;
     assert_eq!(frames.len(), 1);
-    assert_eq!(frames[0].function, f.constants[0]);
+    assert_eq!(frames[0].function, f.constants()[0]);
     assert_eq!(frames[0].pc, 1);
     assert_eq!(frames[0].stack, vec![arg, arg]);
 }
@@ -210,7 +210,7 @@ fn inline_v2_off_clif_matches_the_legacy_fuser_corpus() {
         lowering::force_clif_dump_for_test(Some(legacy_path.to_string_lossy().into_owned()));
         let feedback = vec![NumericFeedback::FixnumOnly; f.executable_ops().len()];
         let body = std::rc::Rc::new(
-            fuse_calls(f.executable_ops(), &f.constants, None, 1, &feedback).unwrap(),
+            fuse_calls(f.executable_ops(), f.constants(), None, 1, &feedback).unwrap(),
         );
         let _scope = FusedScope::enter(body.clone());
         let _feedback = compile::publish_numeric_feedback_vec(body.feedback.clone());

@@ -83,13 +83,13 @@ fn load(ctx: &mut Context, roots: &Roots) {
         roots.add(&[value]);
         let source = value.get_bytecode_data().unwrap();
         assert_eq!(source.arglist, Value::make_int(spec.descriptor));
-        assert_eq!(source.max_stack.get(), spec.max_stack as usize);
+        assert_eq!(source.max_stack().get(), spec.max_stack as usize);
         assert_eq!(
             source.gnu_bytecode_bytes.as_ref().unwrap().as_slice(),
             spec.bytes
         );
-        assert_eq!(source.constants.len(), spec.constants.len());
-        for (&actual, &expected) in source.constants.iter().zip(spec.constants) {
+        assert_eq!(source.constants().len(), spec.constants.len());
+        for (&actual, &expected) in source.constants().iter().zip(spec.constants) {
             match expected {
                 oracle::Constant::Integer(n) => assert_eq!(actual, Value::make_int(n)),
                 oracle::Constant::Float(bits) => assert_eq!(number(actual), Number::Float(bits)),
@@ -122,13 +122,13 @@ fn original_plan(source: &ByteCodeFunction) -> ir::Func {
         .required();
     let cfg = analyze_cfg(
         ops,
-        &source.constants,
+        source.constants(),
         source.executable_gnu_byte_offset_map(),
         arity,
     )
     .unwrap();
     let consts = source
-        .constants
+        .constants()
         .iter()
         .copied()
         .map(ir::ValueBits::from_value)
@@ -177,7 +177,7 @@ fn prepared_with_reps(source: &ByteCodeFunction, sink: bool, reps: bool) -> ir::
         .required();
     let cfg = analyze_cfg(
         ops,
-        &source.constants,
+        source.constants(),
         source.executable_gnu_byte_offset_map(),
         arity,
     )
@@ -185,7 +185,7 @@ fn prepared_with_reps(source: &ByteCodeFunction, sink: bool, reps: bool) -> ir::
     let build_plan = || {
         opt_backend::build_plan(
             ops,
-            &source.constants,
+            source.constants(),
             &cfg,
             ir::ParamShape {
                 required: arity,
@@ -228,7 +228,7 @@ fn lower(source: &ByteCodeFunction, plan: &ir::Func, roots: &Roots) -> CompiledL
     let _snapshot = publish_numeric_feedback(source);
     let leaf = lower_opt_ir_for_test(
         source.executable_ops(),
-        &source.constants,
+        source.constants(),
         source
             .params
             .stack_shape()

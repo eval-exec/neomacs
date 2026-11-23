@@ -257,13 +257,13 @@ fn install_native_select_leaf(context: &mut Context) {
     let mut function =
         crate::emacs_core::bytecode::ByteCodeFunction::new(LambdaParams::simple(Vec::new()));
     function.lexical = true;
-    function.ops = vec![
+    function.set_ops(vec![
         crate::emacs_core::bytecode::Op::Constant(0),
         crate::emacs_core::bytecode::Op::Call(0),
         crate::emacs_core::bytecode::Op::Return,
-    ];
-    function.constants = vec![Value::symbol("f5-native-select-wait")].into();
-    function.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    ]);
+    function.set_constants(vec![Value::symbol("f5-native-select-wait")].into());
+    function.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     seal_hand_assembled_ops_for_test(&mut function);
     jit_mark_hot_for_test(&function);
     let symbol = neovm_value::intern::intern("f5-native-select-leaf");

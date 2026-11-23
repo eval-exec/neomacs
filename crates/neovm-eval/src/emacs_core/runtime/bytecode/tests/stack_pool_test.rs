@@ -132,13 +132,13 @@ fn stack_return_reuses_storage_after_an_unhandled_signal() {
             crate::test_utils::unit_runtime(),
         );
         let mut failing = ByteCodeFunction::new(LambdaParams::simple(vec![]));
-        failing.constants = vec![Value::symbol("vm-stack-return-undefined-function")].into();
-        failing.ops = vec![Op::Constant(0), Op::Call(0), Op::Return];
-        failing.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(1);
+        failing.set_constants(vec![Value::symbol("vm-stack-return-undefined-function")].into());
+        failing.set_ops(vec![Op::Constant(0), Op::Call(0), Op::Return]);
+        failing.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(1));
         let mut succeeding = ByteCodeFunction::new(LambdaParams::simple(vec![]));
-        succeeding.constants = vec![Value::fixnum(42)].into();
-        succeeding.ops = vec![Op::Constant(0), Op::Return];
-        succeeding.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(1);
+        succeeding.set_constants(vec![Value::fixnum(42)].into());
+        succeeding.set_ops(vec![Op::Constant(0), Op::Return]);
+        succeeding.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(1));
 
         let mut vm = Vm::from_context(&mut context);
         #[cfg(feature = "jit")]

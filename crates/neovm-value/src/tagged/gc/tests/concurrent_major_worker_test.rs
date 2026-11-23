@@ -309,7 +309,7 @@ fn generational_worker_born_black_bytecode_does_not_read_its_value_children() {
     let child = roots.keep(heap.alloc_cons(TaggedValue::fixnum(1), TaggedValue::fixnum(2)));
     let key = symbol("u34-worker-unpublished-bc-child");
     let mut function = ByteCodeFunction::new(LambdaParams::simple(vec![]));
-    function.constants = vec![child, key].into();
+    function.set_constants(vec![child, key].into());
     function.arglist = key;
     let value = roots.keep(heap.alloc_bytecode(function));
     heap.close_alloc_regions();
@@ -403,7 +403,7 @@ fn generational_worker_bytecode_routes_each_symbol_field_and_keeps_legacy_heap_f
             .collect();
         let mut function = ByteCodeFunction::new(LambdaParams::simple(vec![]));
         function.arglist = symbols[0];
-        function.constants = vec![symbols[1], child, TaggedValue::fixnum(7), symbols[0]].into();
+        function.set_constants(vec![symbols[1], child, TaggedValue::fixnum(7), symbols[0]].into());
         function.env = Some(symbols[2]);
         function.doc_form = Some(symbols[3]);
         function.interactive = Some(symbols[4]);

@@ -12,9 +12,9 @@ fn function(ops: Vec<Op>) -> ByteCodeFunction {
         rest: None,
     });
     f.lexical = true;
-    f.ops = ops;
-    f.constants = vec![Value::make_int(1)].into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(4);
+    f.set_ops(ops);
+    f.set_constants(vec![Value::make_int(1)].into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(4));
     f.seal_hand_assembled_ops();
     f
 }

@@ -27,9 +27,9 @@ fn lexical_fn(required: u32, ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFun
         rest: None,
     });
     f.lexical = true;
-    f.ops = ops;
-    f.constants = constants.into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_ops(ops);
+    f.set_constants(constants.into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     f
 }
 
@@ -118,12 +118,12 @@ fn a_fused_body_runs_as_the_call_did() {
             Op::Return,
         ]);
         let caller = lexical_fn(1, ops, vec![callee_value, Value::symbol("tail")]);
-        let feedback = vec![NumericFeedback::FixnumOnly; caller.ops.len()];
-        let fused = fuse_calls(&caller.ops, &caller.constants, None, 1, &feedback)
+        let feedback = vec![NumericFeedback::FixnumOnly; caller.ops().len()];
+        let fused = fuse_calls(caller.ops(), caller.constants(), None, 1, &feedback)
             .unwrap_or_else(|| panic!("{name}: the call must fuse"));
         assert_eq!(fused.regions.len(), 1, "{name}: one region");
         let mut fused_fn = lexical_fn(1, fused.ops.clone(), fused.constants.clone());
-        fused_fn.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(32);
+        fused_fn.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(32));
         for arg in [Value::make_int(5), Value::make_int(40), Value::make_int(-7)] {
             let want = interp(&mut ev, &caller, vec![arg]);
             let got = interp(&mut ev, &fused_fn, vec![arg]);
@@ -258,15 +258,15 @@ fn a_deopt_after_a_spliced_region_resumes_the_original_body() {
     let caller_value = Value::make_bytecode(caller);
     crate::emacs_core::eval::push_scratch_gc_root(caller_value);
     let fused = fuse_calls(
-        &interp_only.ops,
-        &interp_only.constants,
+        interp_only.ops(),
+        interp_only.constants(),
         None,
         2,
-        &vec![NumericFeedback::FixnumOnly; interp_only.ops.len()],
+        &vec![NumericFeedback::FixnumOnly; interp_only.ops().len()],
     )
     .expect("the call must fuse");
     assert!(
-        fused.ops.len() > interp_only.ops.len(),
+        fused.ops.len() > interp_only.ops().len(),
         "the splice has to shift the caller's tail for this test to mean anything"
     );
     crate::emacs_core::jit::compile::compile_bytecode_function_with(
@@ -323,11 +323,11 @@ fn a_spliced_region_rechecks_the_callee_it_speculated_on() {
     );
     caller.jit_runtime().set_hot_for_test();
     let fused = fuse_calls(
-        &caller.ops,
-        &caller.constants,
+        caller.ops(),
+        caller.constants(),
         None,
         1,
-        &vec![NumericFeedback::FixnumOnly; caller.ops.len()],
+        &vec![NumericFeedback::FixnumOnly; caller.ops().len()],
     )
     .expect("the call must fuse");
     assert_eq!(
@@ -372,8 +372,8 @@ fn an_inadmissible_shape_is_left_as_a_call() {
         ops.extend(caller_extra);
         ops.push(Op::Return);
         let caller = lexical_fn(1, ops, vec![callee_value, Value::symbol("tail")]);
-        let feedback = vec![NumericFeedback::FixnumOnly; caller.ops.len()];
-        fuse_calls(&caller.ops, &caller.constants, None, 1, &feedback).is_some()
+        let feedback = vec![NumericFeedback::FixnumOnly; caller.ops().len()];
+        fuse_calls(caller.ops(), caller.constants(), None, 1, &feedback).is_some()
     };
     // The control: an admissible callee in a plain caller does fuse, so the
     // rejections below are attributable to the rule under test.
@@ -442,8 +442,8 @@ fn a_splice_that_would_overflow_the_constant_pool_is_left_as_a_call() {
             vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return],
             pool,
         );
-        let feedback = vec![NumericFeedback::FixnumOnly; caller.ops.len()];
-        fuse_calls(&caller.ops, &caller.constants, None, 1, &feedback)
+        let feedback = vec![NumericFeedback::FixnumOnly; caller.ops().len()];
+        fuse_calls(caller.ops(), caller.constants(), None, 1, &feedback)
     };
     let control = fuses_with_pool(100).expect("control: a small pool fuses");
     assert!(
@@ -501,11 +501,11 @@ fn a_caller_handler_catches_in_the_original_body_after_a_deopt() {
     );
     caller.jit_runtime().set_hot_for_test();
     let fused = fuse_calls(
-        &caller.ops,
-        &caller.constants,
+        caller.ops(),
+        caller.constants(),
         None,
         2,
-        &vec![NumericFeedback::FixnumOnly; caller.ops.len()],
+        &vec![NumericFeedback::FixnumOnly; caller.ops().len()],
     )
     .expect("a caller that installs a handler fuses");
     assert!(
@@ -737,7 +737,7 @@ fn classic_fuser_header_scan_keeps_unused_pdump_bytecode_lazy() {
     // Positive control: the same rooted object really can materialize through
     // the production accessor, rather than being a forged or empty stub.
     assert_eq!(
-        unused.get_bytecode_data().unwrap().constants[0],
+        unused.get_bytecode_data().unwrap().constants()[0],
         Value::make_int(42)
     );
     assert!(unused.bytecode_data_if_materialized().is_some());

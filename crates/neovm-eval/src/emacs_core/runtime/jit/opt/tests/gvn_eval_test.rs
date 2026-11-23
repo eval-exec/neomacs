@@ -113,9 +113,9 @@ fn bytecode(ops: Vec<Op>, constants: Vec<LispValue>, arity: usize) -> ByteCodeFu
         rest: None,
     });
     source.lexical = true;
-    source.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(128);
-    source.ops = ops;
-    source.constants = constants.into();
+    source.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(128));
+    source.set_ops(ops);
+    source.set_constants(constants.into());
     source
 }
 
@@ -130,13 +130,13 @@ fn plan(source: &ByteCodeFunction, cons_args: &[usize]) -> Func {
     };
     let cfg = crate::emacs_core::jit::compile::analyze_cfg(
         source.executable_ops(),
-        &source.constants,
+        source.constants(),
         source.executable_gnu_byte_offset_map(),
         params.native_arity(),
     )
     .expect("source CFG");
     let constants = source
-        .constants
+        .constants()
         .iter()
         .copied()
         .map(ValueBits::from_value)
@@ -217,7 +217,7 @@ fn reference(ctx: &mut Context, func: &Func, args: &[LispValue]) -> (LispValue, 
 
 fn tier0(ctx: &mut Context, source: &ByteCodeFunction, args: &[LispValue]) -> LispValue {
     let _roots = Roots::new(args);
-    let _constants = Roots::new(&source.constants);
+    let _constants = Roots::new(source.constants());
     let mut vm = Vm::from_context(ctx);
     vm.force_interpreter_only_for_test();
     vm.execute(source, args.to_vec())
@@ -1322,7 +1322,7 @@ fn list_guard_tier0(
     args: &[LispValue],
 ) -> Result<Vec<LispValue>, (neovm_value::intern::SymId, Vec<String>, Option<String>)> {
     let _args = Roots::new(args);
-    let _constants = Roots::new(&source.constants);
+    let _constants = Roots::new(source.constants());
     let mut vm = Vm::from_context(ctx);
     vm.force_interpreter_only_for_test();
     match vm.execute(source, args.to_vec()) {
@@ -1341,7 +1341,7 @@ fn list_guard_reference(
     Option<super::eval::Snapshot>,
 ) {
     let _args = Roots::new(args);
-    let _constants = Roots::new(&source.constants);
+    let _constants = Roots::new(source.constants());
     let run = match evaluate(
         func,
         ctx,

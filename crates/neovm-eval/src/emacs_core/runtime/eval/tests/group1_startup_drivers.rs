@@ -93,9 +93,14 @@ pub(crate) fn mapcar_debug_entry_obs_for_test(
     fn bytecode(target: Value) -> Value {
         let mut code = ByteCodeFunction::new(LambdaParams::simple(vec![intern("mapact-item")]));
         code.lexical = true;
-        code.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
-        code.constants = vec![target].into();
-        code.ops = vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return];
+        code.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
+        code.set_constants(vec![target].into());
+        code.set_ops(vec![
+            Op::Constant(0),
+            Op::StackRef(1),
+            Op::Call(1),
+            Op::Return,
+        ]);
         code.jit_runtime().set_hot_for_test();
         Value::make_bytecode(code)
     }
@@ -235,13 +240,13 @@ pub(crate) fn sink_only_materialize_at_aset_for_test(
         .expect("sink pass selected");
     let cfg = compile::analyze_cfg(
         source.executable_ops(),
-        &source.constants,
+        source.constants(),
         source.executable_gnu_byte_offset_map(),
         source.params.fixed_arity().unwrap(),
     )
     .expect("exact sink repro CFG");
     let constants = source
-        .constants
+        .constants()
         .iter()
         .copied()
         .map(ir::ValueBits::from_value)
@@ -336,9 +341,9 @@ pub(crate) fn inline_hof_mapcar_backtrace_obs_for_test(
             rest: None,
         });
         f.lexical = true;
-        f.ops = ops;
-        f.constants = constants.into();
-        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(24);
+        f.set_ops(ops);
+        f.set_constants(constants.into());
+        f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(24));
         ByteCodeFunctionExt::seal_hand_assembled_ops(&mut f);
         f.jit_runtime().set_hot_for_test();
         f
@@ -432,13 +437,13 @@ pub(crate) fn opt_switch_hoist_call_mutation_for_test(ctx: &mut Context) -> (boo
         .required();
     let cfg = compile::analyze_cfg(
         data.executable_ops(),
-        &data.constants,
+        data.constants(),
         data.executable_gnu_byte_offset_map(),
         arity,
     )
     .unwrap();
     let constants = data
-        .constants
+        .constants()
         .iter()
         .copied()
         .map(ir::ValueBits::from_value)
@@ -471,7 +476,7 @@ pub(crate) fn opt_switch_hoist_call_mutation_for_test(ctx: &mut Context) -> (boo
         .expect("manual typed IR verifies before native lowering");
     let leaf = compile::lower_opt_ir_for_test(
         data.executable_ops(),
-        &data.constants,
+        data.constants(),
         arity,
         data.executable_gnu_byte_offset_map(),
         &plan,
@@ -548,7 +553,7 @@ pub(crate) fn lists48_osr_aset_advice_obs_for_test(
         rest: None,
     });
     source.lexical = true;
-    source.ops = vec![
+    source.set_ops(vec![
         Op::Constant(0),
         Op::StackRef(0),
         Op::StackRef(2),
@@ -570,9 +575,9 @@ pub(crate) fn lists48_osr_aset_advice_obs_for_test(
         Op::Pop,
         Op::StackRef(2),
         Op::Return,
-    ];
-    source.constants = vec![Value::make_int(0)].into();
-    source.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(24);
+    ]);
+    source.set_constants(vec![Value::make_int(0)].into());
+    source.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(24));
     ByteCodeFunctionExt::seal_hand_assembled_ops(&mut source);
     source.jit_runtime().set_hot_for_test();
     let op_len = source.executable_ops().len();

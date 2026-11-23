@@ -2671,15 +2671,11 @@ fn thread_local_record_interned_str(s: &'static str, id: SymId) {
 
 #[inline]
 fn thread_local_resolve(id: SymId) -> Option<&'static str> {
-    thread_local_resolve_lisp_string(id).map(|name| {
-        // `resolve_sym` validates a name via `as_utf8_str` BEFORE
-        // `thread_local_record_name` admits it, and symbol names are
-        // immutable — re-running full UTF-8 validation on every cache hit
-        // was the hottest single cost of symbol resolution (275M Ir of
-        // `from_utf8` on a 300k-iteration string workload).
-        debug_assert!(name.as_utf8_str().is_some());
-        unsafe { std::str::from_utf8_unchecked(name.as_bytes()) }
-    })
+    // `resolve_sym` records a name only after `as_utf8_str` succeeds, but
+    // `resolve_sym_lisp_string` records the same slot with no UTF-8 check.
+    // A raw-byte hit must miss here so `resolve_sym` takes the slow path
+    // and panics, instead of building a `&str` over those bytes.
+    thread_local_resolve_lisp_string(id).and_then(|name| name.as_utf8_str())
 }
 
 #[inline]

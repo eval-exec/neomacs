@@ -184,9 +184,9 @@ fn opaque_initial_bytecode(value: TaggedValue) -> bool {
             && f.arglist.is_nil()
             && f.ops_sealed()
             && f.stack_verified()
-            && f.ops.as_slice() == [Op::Constant(0), Op::Return]
-            && f.constants.len() == 1
-            && f.constants
+            && f.ops().as_slice() == [Op::Constant(0), Op::Return]
+            && f.constants().len() == 1
+            && f.constants()
                 .first()
                 .is_some_and(|answer| answer.is_nil() || answer.is_t() || answer.is_fixnum())
             && f.env.is_none()

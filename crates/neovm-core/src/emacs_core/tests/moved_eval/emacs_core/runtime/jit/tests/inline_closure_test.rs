@@ -28,9 +28,9 @@ fn lexical(required: usize, ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunc
         rest: None,
     });
     f.lexical = true;
-    f.ops = ops;
-    f.constants = constants.into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(32);
+    f.set_ops(ops);
+    f.set_constants(constants.into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(32));
     seal_hand_assembled_ops_for_test(&mut f);
     jit_mark_hot_for_test(&f);
     f

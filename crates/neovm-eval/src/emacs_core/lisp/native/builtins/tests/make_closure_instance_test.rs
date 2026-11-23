@@ -66,20 +66,22 @@ fn make_closure_is_reachable_through_funcall_apply_and_bytecode() {
         rest: None,
     });
     caller.lexical = true;
-    caller.constants = vec![
-        Value::symbol("make-closure"),
-        proto,
-        Value::symbol("by-bytecode"),
-    ]
-    .into();
-    caller.ops = vec![
+    caller.set_constants(
+        vec![
+            Value::symbol("make-closure"),
+            proto,
+            Value::symbol("by-bytecode"),
+        ]
+        .into(),
+    );
+    caller.set_ops(vec![
         Op::Constant(0),
         Op::Constant(1),
         Op::Constant(2),
         Op::Call(2),
         Op::Return,
-    ];
-    caller.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(3);
+    ]);
+    caller.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(3));
     caller.seal_hand_assembled_ops();
     let closure = {
         let mut vm = crate::emacs_core::bytecode::Vm::from_context(&mut ctx);
@@ -131,7 +133,7 @@ fn make_closure_instance_patches_the_prefix_and_keeps_every_other_slot() {
         "(make-byte-code 0 \"\\300\\301\\302E\\207\" [V0 V1 mci-tail] 3 \
          \"Doc.\" \"p\" 'mci-x1 'mci-x2)",
     );
-    let before: Vec<Value> = data(proto).constants.to_vec();
+    let before: Vec<Value> = data(proto).constants().to_vec();
     let a = make_closure(proto, &[Value::fixnum(1), Value::symbol("one")]);
     let b = make_closure(proto, &[Value::fixnum(2), Value::symbol("two")]);
 
@@ -141,20 +143,20 @@ fn make_closure_instance_patches_the_prefix_and_keeps_every_other_slot() {
     ] {
         let (p, i) = (data(proto), data(instance));
         assert_eq!(
-            i.constants.as_slice(),
+            i.constants().as_slice(),
             &[first, second, Value::symbol("mci-tail")]
         );
         // A fresh object with a fresh constant vector.
         assert_ne!(instance.bits(), proto.bits());
         assert_ne!(
-            i.constants.as_slice().as_ptr(),
-            p.constants.as_slice().as_ptr()
+            i.constants().as_slice().as_ptr(),
+            p.constants().as_slice().as_ptr()
         );
         // Every other slot is the prototype's.
         assert_eq!(i.source_id(), p.source_id());
         assert_eq!(i.arglist, p.arglist);
         assert_eq!(i.lexical, p.lexical);
-        assert_eq!(i.max_stack, p.max_stack);
+        assert_eq!(i.max_stack(), p.max_stack());
         assert_eq!(i.params, p.params);
         assert_eq!(i.env, p.env);
         assert_eq!(
@@ -183,7 +185,7 @@ fn make_closure_instance_patches_the_prefix_and_keeps_every_other_slot() {
     }
     assert_ne!(a.bits(), b.bits());
     // The prototype is untouched.
-    assert_eq!(data(proto).constants.to_vec(), before);
+    assert_eq!(data(proto).constants().to_vec(), before);
     #[cfg(feature = "jit")]
     assert_eq!(data(proto).jit_runtime().patched_prefix(), 2);
 
@@ -228,15 +230,15 @@ fn make_closure_widening_the_prefix_is_monotone() {
     #[cfg(feature = "jit")]
     assert_eq!(data(proto).jit_runtime().patched_prefix(), 3);
     assert_eq!(
-        data(narrow).constants.as_slice(),
+        data(narrow).constants().as_slice(),
         &[Value::fixnum(9), Value::symbol("V1"), Value::symbol("V2")]
     );
     // No captures at all: a fresh copy of the prototype.
     let bare = make_closure(proto, &[]);
     assert_ne!(bare.bits(), proto.bits());
     assert_eq!(
-        data(bare).constants.as_slice(),
-        data(proto).constants.as_slice()
+        data(bare).constants().as_slice(),
+        data(proto).constants().as_slice()
     );
 }
 
@@ -275,20 +277,22 @@ fn make_closure_copies_a_mapped_prototype_pool() {
         rest: None,
     });
     f.lexical = true;
-    f.ops = vec![Op::Constant(0), Op::Return];
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(1);
+    f.set_ops(vec![Op::Constant(0), Op::Return]);
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(1));
     // SAFETY: `image` is leaked, so it outlives the function, and nothing
     // writes through a mapped pool.
-    f.constants = unsafe { neovm_value::tagged::header::LispValueVec::mapped(image.as_ptr(), 3) };
+    f.set_constants(unsafe {
+        neovm_value::tagged::header::LispValueVec::mapped(image.as_ptr(), 3)
+    });
     f.seal_hand_assembled_ops();
     let proto = Value::make_bytecode(f);
     crate::emacs_core::eval::push_scratch_gc_root(proto);
-    assert!(!data(proto).constants.is_owned());
+    assert!(!data(proto).constants().is_owned());
     let instance = make_closure(proto, &[Value::fixnum(5)]);
     let i = data(instance);
-    assert!(i.constants.is_owned());
+    assert!(i.constants().is_owned());
     assert_eq!(
-        i.constants.as_slice(),
+        i.constants().as_slice(),
         &[
             Value::fixnum(5),
             Value::symbol("mci-mapped-1"),
@@ -296,7 +300,7 @@ fn make_closure_copies_a_mapped_prototype_pool() {
         ]
     );
     assert_eq!(image[0], Value::symbol("V0"));
-    assert!(!data(proto).constants.is_owned());
+    assert!(!data(proto).constants().is_owned());
 }
 
 /// A NeoVM-compiled closure (captured environment, no GNU constants
@@ -311,9 +315,9 @@ fn make_closure_on_an_environment_closure_rebinds_the_environment() {
         rest: None,
     });
     f.lexical = true;
-    f.ops = vec![Op::Nil, Op::Return];
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(1);
-    f.constants = vec![Value::symbol("mci-k")].into();
+    f.set_ops(vec![Op::Nil, Op::Return]);
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(1));
+    f.set_constants(vec![Value::symbol("mci-k")].into());
     f.env = Some(env);
     f.seal_hand_assembled_ops();
     let proto = Value::make_bytecode(f);
@@ -325,7 +329,7 @@ fn make_closure_on_an_environment_closure_rebinds_the_environment() {
         eval(&mut ctx, "mci-env"),
         eval(&mut ctx, "'((mci-a . 10) (mci-b . 2))")
     );
-    assert_eq!(i.constants.as_slice(), &[Value::symbol("mci-k")]);
+    assert_eq!(i.constants().as_slice(), &[Value::symbol("mci-k")]);
     assert_eq!(data(proto).env, Some(env));
 }
 
@@ -375,7 +379,7 @@ fn make_closure_by_clone_and_in_place_build_the_same_instance() {
         let (i, p) = (data(v), data(proto));
         assert_ne!(v.bits(), proto.bits());
         assert_eq!(
-            i.constants.as_slice(),
+            i.constants().as_slice(),
             &[
                 Value::fixnum(1),
                 Value::symbol("one"),

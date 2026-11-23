@@ -32,9 +32,9 @@ impl Drop for Knobs {
 fn lexical(ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {
     let mut f = ByteCodeFunction::new(LambdaParams::simple(vec![intern("osr-hof-regalloc-arg")]));
     f.lexical = true;
-    f.ops = ops;
-    f.constants = constants.into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_ops(ops);
+    f.set_constants(constants.into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     f.seal_hand_assembled_ops_for_test();
     f.jit_runtime().set_hot_for_test();
     f
@@ -77,7 +77,7 @@ fn osr_hof_regalloc_admitted_native_loop_uses_full() {
     let f = caller(false);
     assert!(compile::body_is_call_heavy(
         f.executable_ops(),
-        &f.constants
+        f.constants()
     ));
     let id = f.jit_runtime().compiled_id_or_assign();
     let entry = compile_osr_leaf(&ctx.obarray, &f, 0, id, None).unwrap();
@@ -97,7 +97,7 @@ fn osr_hof_regalloc_remaining_calls_keep_source_policy() {
     let _knobs = Knobs::enter();
     let ctx = Context::new(crate::test_utils::unit_runtime());
     let f = caller(true);
-    let expected = compile::regalloc_for(RegallocPolicy::Full, f.executable_ops(), &f.constants);
+    let expected = compile::regalloc_for(RegallocPolicy::Full, f.executable_ops(), f.constants());
     let id = f.jit_runtime().compiled_id_or_assign();
     let entry = compile_osr_leaf(&ctx.obarray, &f, 0, id, None).unwrap();
     assert_eq!(entry.leaf.regalloc, expected);

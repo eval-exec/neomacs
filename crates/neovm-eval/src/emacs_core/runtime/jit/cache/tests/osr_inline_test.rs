@@ -36,9 +36,9 @@ fn function(ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {
         "osr-inline-arg",
     )]));
     f.lexical = true;
-    f.ops = ops;
-    f.constants = constants.into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_ops(ops);
+    f.set_constants(constants.into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     f.seal_hand_assembled_ops_for_test();
     f.jit_runtime().set_hot_for_test();
     f
@@ -219,7 +219,7 @@ fn baseline_with_dependencies(
 ) -> Rc<CompiledLeaf> {
     let mut leaf = compile::lower_leaf_full(
         physical.executable_ops(),
-        &physical.constants,
+        physical.constants(),
         1,
         physical.executable_gnu_byte_offset_map(),
         Some(&ctx.obarray),

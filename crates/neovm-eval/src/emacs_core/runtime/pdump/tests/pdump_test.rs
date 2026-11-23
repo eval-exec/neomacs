@@ -50,7 +50,7 @@ fn file_pdump_object_descriptors_stay_sparse() {
 #[test]
 fn dumped_gnu_bytecode_does_not_duplicate_derived_instructions() {
     let mut function = ByteCodeFunction::new(LambdaParams::simple(Vec::new()));
-    function.ops = vec![Op::Nil, Op::Return];
+    function.set_ops(vec![Op::Nil, Op::Return]);
     function.gnu_byte_offset_map = Some(vec![
         GnuByteOffsetMapEntry::new(0, 0),
         GnuByteOffsetMapEntry::new(1, 1),
@@ -331,7 +331,7 @@ fn baked_stub_template_is_deterministic_and_reads_back_as_stub() {
         let stub = slot.assume_init_ref();
         assert!(stub.is_pdump_stub());
         assert_eq!(stub.closure_slot_count, 0x1234);
-        assert!(stub.ops.is_empty());
+        assert!(stub.ops().is_empty());
         // No drop: every field owns nothing (MaybeUninit never drops).
     }
 }

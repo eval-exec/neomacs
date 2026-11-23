@@ -223,7 +223,7 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
     #[cfg(feature = "jit")]
     #[inline(always)]
     fn jit_constant_base(&self) -> *const neovm_value::value::Value {
-        self.constants.as_ptr()
+        self.constants().as_ptr()
     }
     /// Release already-validated GNU decoded IR until it is first needed.
     /// The original byte string remains the single source of truth.
@@ -235,7 +235,7 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
             self.gnu_bytecode_bytes.is_some(),
             "deferred GNU decode requires original bytecode bytes"
         );
-        self.ops = Vec::new();
+        self.set_ops(Vec::new());
         self.reset_to_deferred_gnu();
         self.gnu_byte_offset_map = None;
     }
@@ -328,8 +328,8 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
         };
         let range = if !shape.rest().is_present()
             && (nonrest == 0 || params_on_stack)
-            && nonrest <= self.max_stack.get()
-            && self.max_stack <= StackDepth::ITERATIVE_FRAME_LIMIT
+            && nonrest <= self.max_stack().get()
+            && self.max_stack() <= StackDepth::ITERATIVE_FRAME_LIMIT
             && self.executes_sealed_ops()
             && self.executes_verified_ops()
         {
@@ -365,9 +365,9 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
                 decode_lazy_gnu_code(
                     lazy,
                     raw_bytes,
-                    self.constants.len(),
-                    || (self.verifier_entry_depth(), self.constants.as_slice()),
-                    self.max_stack.get(),
+                    self.constants().len(),
+                    || (self.verifier_entry_depth(), self.constants().as_slice()),
+                    self.max_stack().get(),
                 )
                 .stack_verified()
             }
@@ -404,7 +404,7 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
     /// (params/lexical/arglist/env/max_stack) has its final value.
     fn refresh_stack_verification(&mut self) {
         let stack_verified = self.verifier_entry_depth().is_some_and(|depth| {
-            super::decode::verify_stack_effects(&self.ops, depth, self.max_stack.get())
+            super::decode::verify_stack_effects(self.ops(), depth, self.max_stack().get())
         });
         unsafe { self.set_stack_verified(stack_verified) };
     }
@@ -418,10 +418,12 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
         if self.executes_sealed_ops() || self.gnu_bytecode_bytes.is_some() {
             return;
         }
-        self.ops = super::decode::seal_ops(std::mem::take(&mut self.ops), self.constants.len());
+        let constants_len = self.constants().len();
+        let ops = super::decode::seal_ops(std::mem::take(self.ops_mut()), constants_len);
+        self.set_ops(ops);
         unsafe { self.mark_ops_sealed() };
         let stack_verified = self.verifier_entry_depth().is_some_and(|depth| {
-            super::decode::verify_stack_effects(&self.ops, depth, self.max_stack.get())
+            super::decode::verify_stack_effects(self.ops(), depth, self.max_stack().get())
         });
         unsafe { self.set_stack_verified(stack_verified) };
     }
@@ -440,27 +442,35 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
     /// invalid empty eager function.
     fn restore_gnu_decode_policy(&mut self) -> Result<(), super::decode::DecodeError> {
         self.clear_lazy_gnu_code();
+        // Hold the original bytes in a local. The decoder also needs a
+        // mutable constant pool, and that borrow covers the whole function.
         let raw_bytes = self
             .gnu_bytecode_bytes
-            .as_deref()
+            .take()
             .expect("restored GNU bytecode requires original bytes");
-        if eager_gnu_bytecode() {
-            let (ops, byte_offset_map) = super::decode::decode_gnu_bytecode_with_offset_map(
-                raw_bytes,
-                &mut self.constants.ensure_owned(),
-            )?;
-            self.ops = ops;
-            unsafe { self.mark_ops_sealed() };
-            let stack_verified = self.verifier_entry_depth().is_some_and(|depth| {
-                super::decode::verify_stack_effects(&self.ops, depth, self.max_stack.get())
-            });
-            unsafe { self.set_stack_verified(stack_verified) };
-            self.gnu_byte_offset_map = Some(byte_offset_map);
+        let decoded = if eager_gnu_bytecode() {
+            super::decode::decode_gnu_bytecode_with_offset_map(
+                raw_bytes.as_slice(),
+                &mut self.constants_mut().ensure_owned(),
+            )
+            .map(Some)
         } else {
-            self.ops.clear();
+            Ok(None)
+        };
+        self.gnu_bytecode_bytes = Some(raw_bytes);
+        let Some((ops, byte_offset_map)) = decoded? else {
+            self.ops_mut().clear();
             self.reset_to_deferred_gnu();
             self.gnu_byte_offset_map = None;
-        }
+            return Ok(());
+        };
+        self.set_ops(ops);
+        unsafe { self.mark_ops_sealed() };
+        let stack_verified = self.verifier_entry_depth().is_some_and(|depth| {
+            super::decode::verify_stack_effects(self.ops(), depth, self.max_stack().get())
+        });
+        unsafe { self.set_stack_verified(stack_verified) };
+        self.gnu_byte_offset_map = Some(byte_offset_map);
         Ok(())
     }
     /// Executable instructions, decoding a cold GNU byte string on first use.
@@ -478,15 +488,15 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
                         decode_lazy_gnu_code(
                             lazy,
                             raw_bytes,
-                            self.constants.len(),
-                            || (self.verifier_entry_depth(), self.constants.as_slice()),
-                            self.max_stack.get(),
+                            self.constants().len(),
+                            || (self.verifier_entry_depth(), self.constants().as_slice()),
+                            self.max_stack().get(),
                         )
                     }
                 };
                 decoded.ops()
             }
-            None => &self.ops,
+            None => self.ops(),
         }
     }
     /// GNU byte offsets corresponding to [`Self::executable_ops`].
@@ -504,9 +514,9 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
                         decode_lazy_gnu_code(
                             lazy,
                             raw_bytes,
-                            self.constants.len(),
-                            || (self.verifier_entry_depth(), self.constants.as_slice()),
-                            self.max_stack.get(),
+                            self.constants().len(),
+                            || (self.verifier_entry_depth(), self.constants().as_slice()),
+                            self.max_stack().get(),
                         )
                     }
                 };
@@ -523,14 +533,14 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
         out.push_str(&format!(
             "bytecode function ({} ops, {} constants, stack {})\n",
             ops.len(),
-            self.constants.len(),
-            self.max_stack
+            self.constants().len(),
+            self.max_stack()
         ));
 
         out.push_str("constants:\n");
         // Same GNU `prin1` (print-escape-newlines t) the code lines use,
         // never the value layer's `<Value>` Display placeholder.
-        for (i, c) in self.constants.iter().enumerate() {
+        for (i, c) in self.constants().iter().enumerate() {
             out.push_str(&format!(
                 "  {}: {}\n",
                 i,
@@ -545,7 +555,7 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
             out.push_str(&format!(
                 "  {:4}: {}\n",
                 i,
-                op.disasm_in(&self.constants, ops.get(i + 1))
+                op.disasm_in(self.constants(), ops.get(i + 1))
             ));
         }
         out

@@ -28,9 +28,9 @@ mod bg {
 fn function(ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {
     let mut source = ByteCodeFunction::new(LambdaParams::simple(Vec::new()));
     source.lexical = true;
-    source.ops = ops;
-    source.constants = constants.into();
-    source.max_stack = StackDepth::for_test(16);
+    source.set_ops(ops);
+    source.set_constants(constants.into());
+    source.set_max_stack(StackDepth::for_test(16));
     source.seal_hand_assembled_ops();
     source
         .jit_runtime()

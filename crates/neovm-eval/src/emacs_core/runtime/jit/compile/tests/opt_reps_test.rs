@@ -70,13 +70,13 @@ fn plan(source: &ByteCodeFunction) -> ir::Func {
         .required();
     let cfg = analyze_cfg(
         source.executable_ops(),
-        &source.constants,
+        source.constants(),
         source.executable_gnu_byte_offset_map(),
         arity,
     )
     .unwrap();
     let constants = source
-        .constants
+        .constants()
         .iter()
         .copied()
         .map(ir::ValueBits::from_value)
@@ -101,7 +101,7 @@ fn lower(source: &ByteCodeFunction, plan: &ir::Func) -> CompiledLeaf {
         .expect("manual typed IR verifies before native lowering");
     let leaf = lower_opt_ir_for_test(
         source.executable_ops(),
-        &source.constants,
+        source.constants(),
         source
             .params
             .stack_shape()

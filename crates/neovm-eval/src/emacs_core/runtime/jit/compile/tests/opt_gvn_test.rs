@@ -119,13 +119,13 @@ fn prepared(source: &ByteCodeFunction) -> ir::Func {
         .required();
     let cfg = analyze_cfg(
         source.executable_ops(),
-        &source.constants,
+        source.constants(),
         source.executable_gnu_byte_offset_map(),
         arity,
     )
     .unwrap();
     let consts = source
-        .constants
+        .constants()
         .iter()
         .copied()
         .map(ir::ValueBits::from_value)
@@ -153,7 +153,7 @@ fn lower(source: &ByteCodeFunction, plan: &ir::Func) -> CompiledLeaf {
     plan.verify().expect("GVN native input verifies");
     let leaf = lower_opt_ir_for_test(
         source.executable_ops(),
-        &source.constants,
+        source.constants(),
         source
             .params
             .stack_shape()
@@ -686,7 +686,7 @@ fn opt_gvn_native_eliminated_load_alias_roots_heap_only_across_gc() {
             Op::Pop,
             Op::Return,
         ],
-        source.constants.to_vec(),
+        source.constants().to_vec(),
         0,
     );
     let expected = print_value(&tier0(&mut ctx, &oracle, &[]).unwrap());

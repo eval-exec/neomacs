@@ -58,9 +58,9 @@ fn unary(ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {
         rest: None,
     });
     f.lexical = true;
-    f.ops = ops;
-    f.constants = constants.into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+    f.set_ops(ops);
+    f.set_constants(constants.into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
     f.seal_hand_assembled_ops();
     f
 }
@@ -132,10 +132,10 @@ impl Fixture {
 
         let mut ctx = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
         let (body, answer) = build(&mut ctx);
-        let hash = aot::leaf_content_hash(body.executable_ops(), &body.constants, 1)
+        let hash = aot::leaf_content_hash(body.executable_ops(), body.constants(), 1)
             .expect("hashable AOT member");
         let ops = Box::leak(body.executable_ops().to_vec().into_boxed_slice());
-        let constants = Box::leak(body.constants.to_vec().into_boxed_slice());
+        let constants = Box::leak(body.constants().to_vec().into_boxed_slice());
         let (object, built) = aot::build_preload_object(
             &[aot::LoadupLeaf {
                 name: MEMBER.into(),
@@ -527,7 +527,7 @@ fn aot_retier_call_glue_preserves_native_admission_with_the_profit_gate_on() {
         });
         assert!(compile::body_is_call_heavy(
             f.data().executable_ops(),
-            &f.data().constants,
+            f.data().constants(),
         ));
         compile::force_profit_gate_for_test(true);
         f.run();

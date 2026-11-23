@@ -30,7 +30,7 @@ fn corpus_under(mode: BgMode) -> (Vec<String>, Vec<String>) {
                 assert!(
                     cache::resolve_compiled_leaf_ptr(ctx, &f).is_some(),
                     "{mode:?}: every corpus body compiles: {:?}",
-                    f.ops
+                    f.ops()
                 );
             }
         })

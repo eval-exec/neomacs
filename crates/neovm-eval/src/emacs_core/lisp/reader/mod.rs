@@ -1172,7 +1172,7 @@ pub(crate) fn walk_member_symbols(value: Value, mut on_symbol: impl FnMut(Value)
                     if let Some(env) = bytecode.env {
                         stack.push(env);
                     }
-                    for constant in bytecode.constants.iter().rev() {
+                    for constant in bytecode.constants().iter().rev() {
                         stack.push(*constant);
                     }
                     stack.push(bytecode.arglist);

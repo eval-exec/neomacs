@@ -183,7 +183,7 @@ fn opt_sink_cold_direct_slot_demand_keeps_complete_alias_frame_without_constant_
     for leaf in [&baseline, &selected] {
         let NativeRun::DeoptAt(exit) = leaf.call_consts(
             &mut ctx as *mut Context as *mut u8,
-            source.constants.as_ptr(),
+            source.constants().as_ptr(),
             &bad,
         ) else {
             panic!("wrong third operand must recover original Add pc5");

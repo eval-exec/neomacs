@@ -337,7 +337,7 @@ impl DirectSite {
         rt.direct_sites.set(rt.direct_sites.get() + 1);
         Some(DirectSite {
             expected,
-            frame_bytes: crate::emacs_core::bytecode::vm::bytecode_frame_bytes(bc.max_stack.get())
+            frame_bytes: crate::emacs_core::bytecode::vm::bytecode_frame_bytes(bc.max_stack().get())
                 as u64,
             nargs,
             callee,

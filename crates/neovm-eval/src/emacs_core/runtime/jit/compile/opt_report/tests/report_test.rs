@@ -262,7 +262,7 @@ fn opt_report_counts_normal_osr_refusal_and_transient_native_construction() {
     cache::clear_with_serial_receipt().expect("serial jit grace"); // Also count an OSR leaf no longer retained at exit.
     let refused = lower_leaf_full_osr_with_opt(
         oversized.executable_ops(),
-        &oversized.constants,
+        oversized.constants(),
         2,
         oversized.executable_gnu_byte_offset_map(),
         None,
@@ -309,7 +309,7 @@ fn opt_report_row_budget_preserves_all_refused_attempts() {
     for _ in 0..ROW_CAP + 3 {
         let refusal = opt_backend::lower_selected_requested(
             f.executable_ops(),
-            &f.constants,
+            f.constants(),
             0,
             None,
             None,

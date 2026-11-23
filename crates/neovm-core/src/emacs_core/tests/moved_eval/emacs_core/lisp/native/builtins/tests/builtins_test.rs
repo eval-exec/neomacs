@@ -1017,7 +1017,7 @@ fn make_byte_code_preserves_ordinary_vectors() {
         None,
     )
     .unwrap();
-    let converted = function.get_bytecode_data().unwrap().constants[0];
+    let converted = function.get_bytecode_data().unwrap().constants()[0];
     assert_eq!(converted, closure_vec);
     assert!(
         converted.is_vector(),
@@ -1045,7 +1045,7 @@ fn make_byte_code_preserves_cperl_key_vector_shape() {
         None,
     )
     .unwrap();
-    let converted = function.get_bytecode_data().unwrap().constants[0];
+    let converted = function.get_bytecode_data().unwrap().constants()[0];
     assert_eq!(converted, key_vec);
     assert!(
         converted.is_vector(),
@@ -9139,9 +9139,13 @@ fn pure_dispatch_make_placeholder_cluster_matches_compat_contracts() {
         .get_bytecode_data()
         .expect("make-byte-code should produce bytecode data");
     // GNU Fmake_byte_code stores each supplied constant unchanged.
-    assert!(bc.constants[0].is_cons(), "the constant remains list data");
+    assert!(
+        bc.constants()[0].is_cons(),
+        "the constant remains list data"
+    );
     assert_eq!(
-        bc.constants[0], hash_literal,
+        bc.constants()[0],
+        hash_literal,
         "constant identity is preserved"
     );
 

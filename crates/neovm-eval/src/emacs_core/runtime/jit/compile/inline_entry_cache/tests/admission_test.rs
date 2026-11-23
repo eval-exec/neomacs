@@ -33,8 +33,8 @@ fn step() -> Value {
         rest: None,
     });
     f.lexical = true;
-    f.ops = vec![Op::StackRef(0), Op::Sub1, Op::Return];
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+    f.set_ops(vec![Op::StackRef(0), Op::Sub1, Op::Return]);
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
     f.seal_hand_assembled_ops_for_test();
     f.jit_runtime().set_hot_for_test();
     Value::make_bytecode(f)

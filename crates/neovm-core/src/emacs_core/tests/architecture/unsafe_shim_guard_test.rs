@@ -784,3 +784,34 @@ fn unsafe_shims_do_not_rebuild_values_from_safe_words() {
         offenders.join("\n")
     );
 }
+
+/// `neovm_jit_gc_restore` truncates the scratch-root stack to a caller-supplied
+/// depth. Safe Rust can pass a smaller depth while an outer frame still needs
+/// those roots; a later collection then frees values generated code holds.
+#[test]
+fn gc_restore_shim_is_an_unsafe_extern() {
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../neovm-eval/src/emacs_core/runtime/jit/compile/shims.rs");
+    let src = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+    assert!(
+        src.contains("unsafe extern \"C\" fn neovm_jit_gc_restore"),
+        "neovm_jit_gc_restore must be `unsafe extern \"C\"`: it drops scratch roots from an untrusted depth"
+    );
+    let start = src
+        .find("fn neovm_jit_gc_restore")
+        .expect("gc_restore declaration");
+    let doc = src[..start]
+        .lines()
+        .rev()
+        .take(12)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        doc.contains("# Safety"),
+        "neovm_jit_gc_restore needs a Safety contract for the saved depth, immediately above the function; saw:\n{doc}"
+    );
+}

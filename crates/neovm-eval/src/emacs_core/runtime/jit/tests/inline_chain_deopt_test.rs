@@ -18,9 +18,9 @@ fn function(arity: usize, ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFuncti
         rest: None,
     });
     f.lexical = true;
-    f.ops = ops;
-    f.constants = constants.into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_ops(ops);
+    f.set_constants(constants.into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     f.seal_hand_assembled_ops();
     f
 }
@@ -191,7 +191,7 @@ fn inline_chain_deopt_native_flonum_spill_boxes_aliases_once() {
     for pc in [2, 5] {
         f.jit_runtime().record_numeric(
             pc,
-            f.ops.len(),
+            f.ops().len(),
             crate::emacs_core::jit::NumericFeedback::Float,
         );
     }

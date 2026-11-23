@@ -55,9 +55,9 @@ impl Drop for Knobs {
 fn function(ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {
     let mut function = ByteCodeFunction::new(LambdaParams::simple(vec![intern("hof-capture-arg")]));
     function.lexical = true;
-    function.ops = ops;
-    function.constants = constants.into();
-    function.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    function.set_ops(ops);
+    function.set_constants(constants.into());
+    function.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     function.seal_hand_assembled_ops_for_test();
     function.jit_runtime().set_hot_for_test();
     function
@@ -161,7 +161,7 @@ fn inline_hof_captures_noncons_declines_without_an_early_branch_error() {
         };
         let fused = fuse(
             source.executable_ops(),
-            &source.constants,
+            source.constants(),
             None,
             1,
             &vec![
@@ -285,7 +285,7 @@ fn assert_hof_admitted(source: &ByteCodeFunction) {
     };
     let Some(fused) = fuse(
         source.executable_ops(),
-        &source.constants,
+        source.constants(),
         None,
         1,
         &vec![crate::emacs_core::jit::NumericFeedback::FixnumOnly; source.executable_ops().len()],

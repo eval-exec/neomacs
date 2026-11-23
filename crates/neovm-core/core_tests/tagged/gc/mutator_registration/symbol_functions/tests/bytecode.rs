@@ -9,9 +9,9 @@ use crate::value::LambdaParams;
 fn constant_function() -> ByteCodeFunction {
     let mut function = ByteCodeFunction::new(LambdaParams::simple(vec![]));
     function.lexical = true;
-    function.ops = vec![Op::Constant(0), Op::Return];
-    function.constants = vec![Value::fixnum(73)].into();
-    function.max_stack = StackDepth::for_test(4);
+    function.set_ops(vec![Op::Constant(0), Op::Return]);
+    function.set_constants(vec![Value::fixnum(73)].into());
+    function.set_max_stack(StackDepth::for_test(4));
     function
 }
 fn constant_bytecode() -> Value {
@@ -247,12 +247,14 @@ fn p3sym_c4_initial_bytecode_shape_and_materialization_fence() {
                         "interactive" => function.interactive = Some(Value::T),
                         "environment" => function.env = Some(Value::T),
                         "heap-constant" => {
-                            function.constants = vec![Value::cons(Value::T, Value::NIL)].into()
+                            function.set_constants(vec![Value::cons(Value::T, Value::NIL)].into())
                         }
-                        "nonconstant" => {
-                            function.ops =
-                                vec![Op::Constant(0), Op::Constant(0), Op::Cons, Op::Return]
-                        }
+                        "nonconstant" => function.set_ops(vec![
+                            Op::Constant(0),
+                            Op::Constant(0),
+                            Op::Cons,
+                            Op::Return,
+                        ]),
                         "arity" => {
                             let parameter = crate::intern::intern("p3sym-c4-bytecode-argument");
                             function.params = LambdaParams::simple(vec![parameter]).into();

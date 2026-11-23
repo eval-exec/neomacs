@@ -4409,7 +4409,7 @@ fn collect_value_symbol_names(
             }
             if let Some(bytecode) = value.get_bytecode_data() {
                 collect_value_symbol_names(bytecode.arglist, symbol_names, seen);
-                for constant in bytecode.constants.iter().copied() {
+                for constant in bytecode.constants().iter().copied() {
                     collect_value_symbol_names(constant, symbol_names, seen);
                 }
                 if let Some(env) = bytecode.env {

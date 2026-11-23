@@ -348,7 +348,7 @@ impl RuntimeFeedbackExt for Runtime {
         callee: Value,
         arg0: Value,
     ) {
-        let sites = self.call_sites_for(func.executable_ops(), &func.constants);
+        let sites = self.call_sites_for(func.executable_ops(), func.constants());
         if let Some(site) = sites.site_at(pc) {
             site.observe(site.target_of(callee, arg0));
         }

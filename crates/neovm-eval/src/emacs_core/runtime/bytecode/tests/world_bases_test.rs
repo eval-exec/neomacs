@@ -10,10 +10,12 @@ use neovm_edit::buffer::BufferManager;
 
 fn function(ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {
     let mut function = ByteCodeFunction::new(LambdaParams::simple(vec![]));
-    function.ops = ops;
-    function.constants = constants.into();
-    function.max_stack = super::super::function_slots::StackDepth::try_from(16usize)
-        .expect("valid fixture stack depth");
+    function.set_ops(ops);
+    function.set_constants(constants.into());
+    function.set_max_stack(
+        super::super::function_slots::StackDepth::try_from(16usize)
+            .expect("valid fixture stack depth"),
+    );
     function
 }
 

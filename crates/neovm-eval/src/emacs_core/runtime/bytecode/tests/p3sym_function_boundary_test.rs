@@ -11,9 +11,9 @@ mod intern_growth;
 fn constant(answer: i64) -> Value {
     let mut f = ByteCodeFunction::new(LambdaParams::simple(vec![]));
     f.lexical = true;
-    f.ops = vec![Op::Constant(0), Op::Return];
-    f.constants = vec![Value::fixnum(answer)].into();
-    f.max_stack = super::super::function_slots::StackDepth::for_test(4);
+    f.set_ops(vec![Op::Constant(0), Op::Return]);
+    f.set_constants(vec![Value::fixnum(answer)].into());
+    f.set_max_stack(super::super::function_slots::StackDepth::for_test(4));
     Value::make_bytecode(f)
 }
 fn fixture() -> (Context, [SymId; 2], Value, Value, Value) {
@@ -33,9 +33,9 @@ fn fixture() -> (Context, [SymId; 2], Value, Value, Value) {
     let new = Value::list(vec![Value::symbol("lambda"), Value::NIL, Value::fixnum(97)]);
     let mut caller = ByteCodeFunction::new(LambdaParams::simple(vec![]));
     caller.lexical = true;
-    caller.ops = vec![Op::Constant(0), Op::Call(0), Op::Return];
-    caller.constants = vec![Value::from_sym_id(ids[0])].into();
-    caller.max_stack = super::super::function_slots::StackDepth::for_test(4);
+    caller.set_ops(vec![Op::Constant(0), Op::Call(0), Op::Return]);
+    caller.set_constants(vec![Value::from_sym_id(ids[0])].into());
+    caller.set_max_stack(super::super::function_slots::StackDepth::for_test(4));
     (ctx, ids, old, new, Value::make_bytecode(caller))
 }
 fn call(ctx: &mut Context, caller: Value) -> EvalResult {

@@ -87,9 +87,9 @@ fn bytecode(ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {
     let mut function =
         ByteCodeFunction::new(LambdaParams::simple(vec![intern("g2-inline-argument")]));
     function.lexical = true;
-    function.ops = ops;
-    function.constants = constants.into();
-    function.max_stack = StackDepth::for_test(32);
+    function.set_ops(ops);
+    function.set_constants(constants.into());
+    function.set_max_stack(StackDepth::for_test(32));
     function.seal_hand_assembled_ops_for_test();
     function.jit_runtime().set_hot_for_test();
     function

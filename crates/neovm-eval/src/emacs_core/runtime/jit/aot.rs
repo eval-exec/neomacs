@@ -150,7 +150,11 @@ pub(crate) const ABI_TAG: u32 = compute_abi_tag();
 // AOT leaf's emitted direct-call charge adds the frame cost and compares
 // against the constant limit, so stale sidecars with the subtract/borrow
 // shape must be refused.
-const ABI_TAG_VERSION: u32 = 53;
+// v54: car/cdr and plain vector/string slots bake ConsCell, VectorObj,
+// RecordObj, StringObj, VecLikeHeader, and GcHeader layouts, plus the
+// cons/string/veclike tags. Those words are mixed below so a stale
+// NEOVM_AOT_DIR unit is not served after a heap-layout change.
+const ABI_TAG_VERSION: u32 = 54;
 
 /// Format version of the AOT descriptor spec-section + the runtime spec ABI
 /// (`SpecSlot`/`spec_expected` sidecar bases, the loader re-classify+arm protocol).
@@ -315,6 +319,26 @@ const fn compute_abi_tag() -> u32 {
     mix_u64!(SPEC_ENCODING_VERSION as u64);
     mix_u64!(core::mem::size_of::<super::compile::SpecSlot>() as u64);
     mix_u64!(super::compile::SpecCalleeKind::DISC_COUNT as u64);
+    // Heap layouts baked by lower_car_cdr and emit_plain_slot_address.
+    // jit_layout.rs admits AOT only for plain constants that this salt covers.
+    mix_u64!(super::compile::jit_layout::CONS_CAR_OFFSET as u64);
+    mix_u64!(super::compile::jit_layout::CONS_CDR_OFFSET as u64);
+    mix_u64!(neovm_value::tagged::value::TAG_MASK as u64);
+    mix_u64!(neovm_value::tagged::value::TAG_CONS as u64);
+    mix_u64!(neovm_value::tagged::value::TAG_STRING as u64);
+    mix_u64!(neovm_value::tagged::value::TAG_VECLIKE as u64);
+    mix_u64!(core::mem::offset_of!(neovm_value::tagged::header::VectorObj, data) as u64);
+    mix_u64!(core::mem::offset_of!(neovm_value::tagged::header::RecordObj, data) as u64);
+    mix_u64!(core::mem::offset_of!(neovm_value::tagged::header::StringObj, data) as u64);
+    mix_u64!(core::mem::offset_of!(neovm_value::tagged::header::VecLikeHeader, type_tag) as u64);
+    mix_u64!(core::mem::size_of::<neovm_value::tagged::header::GcHeader>() as u64);
+    mix_u64!(core::mem::offset_of!(neovm_value::tagged::header::GcHeader, marked) as u64);
+    mix_u64!(core::mem::offset_of!(neovm_value::tagged::header::GcHeader, kind) as u64);
+    mix_u64!(core::mem::offset_of!(neovm_value::tagged::header::GcHeader, tenured) as u64);
+    mix_u64!(core::mem::offset_of!(neovm_value::tagged::header::GcHeader, remembered) as u64);
+    mix_u64!(core::mem::offset_of!(neovm_value::tagged::header::GcHeader, flags) as u64);
+    mix_u64!(core::mem::offset_of!(neovm_value::tagged::header::GcHeader, generation) as u64);
+    mix_u64!(core::mem::offset_of!(neovm_value::tagged::header::GcHeader, next) as u64);
     h
 }
 
@@ -2256,13 +2280,13 @@ pub(crate) fn enumerate_loadup_leaves(
             continue;
         };
         let ops = bc.executable_ops();
-        if d0_filter && !is_d0_aot_candidate(ops, &bc.constants, arity, Some(&ctx.obarray)) {
+        if d0_filter && !is_d0_aot_candidate(ops, bc.constants(), arity, Some(&ctx.obarray)) {
             continue;
         }
         out.push(LoadupLeaf {
             name: name.to_string(),
             ops,
-            constants: &bc.constants,
+            constants: bc.constants(),
             arity,
         });
     }
@@ -2322,10 +2346,12 @@ fn testkit_mir_cons_reconstruction_case(
         rest: None,
     });
     f.lexical = true;
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::try_from(16usize)
-        .expect("testkit stack depth is representable");
-    f.constants = vec![Value::symbol("aot-rebuild-effect")].into();
-    f.ops = vec![
+    f.set_max_stack(
+        crate::emacs_core::bytecode::StackDepth::try_from(16usize)
+            .expect("testkit stack depth is representable"),
+    );
+    f.set_constants(vec![Value::symbol("aot-rebuild-effect")].into());
+    f.set_ops(vec![
         Op::Constant(0),
         Op::Call(0),
         Op::Pop,
@@ -2341,12 +2367,12 @@ fn testkit_mir_cons_reconstruction_case(
         Op::Pop,
         Op::Car,
         Op::Return,
-    ];
+    ]);
     if singleton {
-        f.ops.splice(5..7, [Op::List(1)]);
+        f.ops_mut().splice(5..7, [Op::List(1)]);
     }
     f.seal_hand_assembled_ops();
-    let m = mir::build_mir(&f.ops, &f.constants, None, 2).unwrap();
+    let m = mir::build_mir(f.ops(), f.constants(), None, 2).unwrap();
     assert_eq!(
         super::compile::plan_mir_leaf(&m)
             .cons_repl
@@ -2355,7 +2381,7 @@ fn testkit_mir_cons_reconstruction_case(
             .count(),
         1
     );
-    let (obj, hash) = compile_leaf_to_object(&f.ops, &f.constants, 2, None)
+    let (obj, hash) = compile_leaf_to_object(f.ops(), f.constants(), 2, None)
         .unwrap()
         .unwrap();
     let path = dir.join(if singleton {
@@ -2461,10 +2487,12 @@ pub fn testkit_call_bearing_selftest(
             rest: None,
         });
         f.lexical = true;
-        f.ops = ops;
-        f.constants = constants.into();
-        f.max_stack = crate::emacs_core::bytecode::StackDepth::try_from(32usize)
-            .expect("testkit stack depth is representable");
+        f.set_ops(ops);
+        f.set_constants(constants.into());
+        f.set_max_stack(
+            crate::emacs_core::bytecode::StackDepth::try_from(32usize)
+                .expect("testkit stack depth is representable"),
+        );
         f.seal_hand_assembled_ops();
         f
     };
@@ -2642,10 +2670,12 @@ pub fn testkit_baseline_aot_selftest(
             rest: None,
         });
         f.lexical = true;
-        f.ops = ops.clone();
-        f.constants = constants.clone().into();
-        f.max_stack = crate::emacs_core::bytecode::StackDepth::try_from(16usize)
-            .expect("testkit stack depth is representable");
+        f.set_ops(ops.clone());
+        f.set_constants(constants.clone().into());
+        f.set_max_stack(
+            crate::emacs_core::bytecode::StackDepth::try_from(16usize)
+                .expect("testkit stack depth is representable"),
+        );
         f.seal_hand_assembled_ops();
         f
     };
@@ -2799,10 +2829,12 @@ pub fn testkit_baseline_deep_rawslot_deopt_selftest(
             rest: None,
         });
         f.lexical = true;
-        f.ops = ops.clone();
-        f.constants = constants.clone().into();
-        f.max_stack = crate::emacs_core::bytecode::StackDepth::try_from(16usize)
-            .expect("testkit stack depth is representable");
+        f.set_ops(ops.clone());
+        f.set_constants(constants.clone().into());
+        f.set_max_stack(
+            crate::emacs_core::bytecode::StackDepth::try_from(16usize)
+                .expect("testkit stack depth is representable"),
+        );
         f.seal_hand_assembled_ops();
         f
     };
@@ -2956,10 +2988,12 @@ pub fn testkit_callbuiltinsym_aot_selftest(
             rest: None,
         });
         f.lexical = true;
-        f.ops = ops.clone();
-        f.constants = constants.clone().into();
-        f.max_stack = crate::emacs_core::bytecode::StackDepth::try_from(16usize)
-            .expect("testkit stack depth is representable");
+        f.set_ops(ops.clone());
+        f.set_constants(constants.clone().into());
+        f.set_max_stack(
+            crate::emacs_core::bytecode::StackDepth::try_from(16usize)
+                .expect("testkit stack depth is representable"),
+        );
         f.seal_hand_assembled_ops();
         f
     };
@@ -3095,10 +3129,12 @@ fn cbsym_aot_serve_and_check(
             rest: None,
         });
         f.lexical = true;
-        f.ops = ops.to_vec();
-        f.constants = constants.to_vec().into();
-        f.max_stack = crate::emacs_core::bytecode::StackDepth::try_from(16usize)
-            .expect("testkit stack depth is representable");
+        f.set_ops(ops.to_vec());
+        f.set_constants(constants.to_vec().into());
+        f.set_max_stack(
+            crate::emacs_core::bytecode::StackDepth::try_from(16usize)
+                .expect("testkit stack depth is representable"),
+        );
         f.seal_hand_assembled_ops();
         f
     };
@@ -3393,10 +3429,12 @@ pub fn testkit_baseline_op_symbol_reloc_selftest(
                 rest: None,
             });
             f.lexical = true;
-            f.ops = b.ops.clone();
-            f.constants = b.constants.clone().into();
-            f.max_stack = crate::emacs_core::bytecode::StackDepth::try_from(16usize)
-                .expect("testkit stack depth is representable");
+            f.set_ops(b.ops.clone());
+            f.set_constants(b.constants.clone().into());
+            f.set_max_stack(
+                crate::emacs_core::bytecode::StackDepth::try_from(16usize)
+                    .expect("testkit stack depth is representable"),
+            );
             f.seal_hand_assembled_ops();
             f
         };
@@ -3582,10 +3620,12 @@ pub fn testkit_spec_aot_selftest(
             rest: None,
         });
         f.lexical = true;
-        f.ops = ops;
-        f.constants = vec![Value::symbol(intern(alias_name))].into();
-        f.max_stack = crate::emacs_core::bytecode::StackDepth::try_from(16usize)
-            .expect("testkit stack depth is representable");
+        f.set_ops(ops);
+        f.set_constants(vec![Value::symbol(intern(alias_name))].into());
+        f.set_max_stack(
+            crate::emacs_core::bytecode::StackDepth::try_from(16usize)
+                .expect("testkit stack depth is representable"),
+        );
         f.seal_hand_assembled_ops();
         f
     };
@@ -3658,10 +3698,14 @@ pub fn testkit_spec_aot_selftest(
         let mut emit_ctx = Context::new(hooks);
         alias(&mut emit_ctx, c.alias, c.builtin)?;
         let f = mk_fn(c.alias, c.arity, &c.pushes);
-        let (obj, content_hash) =
-            build_baseline_object_for_leaf(&f.ops, &f.constants, c.arity, Some(&emit_ctx.obarray))
-                .map_err(|e| format!("{}: emit err {e}", c.label))?
-                .ok_or_else(|| format!("{}: emit produced no object (not spec-baked?)", c.label))?;
+        let (obj, content_hash) = build_baseline_object_for_leaf(
+            f.ops(),
+            f.constants(),
+            c.arity,
+            Some(&emit_ctx.obarray),
+        )
+        .map_err(|e| format!("{}: emit err {e}", c.label))?
+        .ok_or_else(|| format!("{}: emit produced no object (not spec-baked?)", c.label))?;
         let so_path = dir.join(format!("{content_hash:032x}_{ABI_TAG:08x}.so"));
         link_object_to_so(&obj, &so_path).map_err(|e| format!("{}: link err {e}", c.label))?;
     }
@@ -3671,7 +3715,7 @@ pub fn testkit_spec_aot_selftest(
         alias(&mut emit_ctx, "aot-spec-crux", "recordp")?;
         let f = mk_fn("aot-spec-crux", 1, &[Op::StackRef(1)]);
         let (obj, content_hash) =
-            build_baseline_object_for_leaf(&f.ops, &f.constants, 1, Some(&emit_ctx.obarray))
+            build_baseline_object_for_leaf(f.ops(), f.constants(), 1, Some(&emit_ctx.obarray))
                 .map_err(|e| format!("crux: emit err {e}"))?
                 .ok_or("crux: emit produced no object")?;
         let so_path = dir.join(format!("{content_hash:032x}_{ABI_TAG:08x}.so"));
@@ -3967,10 +4011,12 @@ pub fn testkit_pgo_roundtrip_selftest(
             rest: None,
         });
         f.lexical = true;
-        f.ops = ops;
-        f.constants = vec![Value::symbol(intern(alias_name))].into();
-        f.max_stack = crate::emacs_core::bytecode::StackDepth::try_from(16usize)
-            .expect("testkit stack depth is representable");
+        f.set_ops(ops);
+        f.set_constants(vec![Value::symbol(intern(alias_name))].into());
+        f.set_max_stack(
+            crate::emacs_core::bytecode::StackDepth::try_from(16usize)
+                .expect("testkit stack depth is representable"),
+        );
         f.seal_hand_assembled_ops();
         f
     };
@@ -3983,7 +4029,7 @@ pub fn testkit_pgo_roundtrip_selftest(
         alias(&mut emit_ctx, "aot-pgo-pred", "recordp")?;
         let f = mk_fn("aot-pgo-pred", 1, &[Op::StackRef(1)]);
         let (obj, content_hash) =
-            compile_leaf_to_object(&f.ops, &f.constants, 1, Some(&emit_ctx.obarray))
+            compile_leaf_to_object(f.ops(), f.constants(), 1, Some(&emit_ctx.obarray))
                 .map_err(|e| format!("pgo-roundtrip: emit err {e}"))?
                 .ok_or(
                     "pgo-roundtrip: compile_leaf_to_object produced no object \
@@ -4101,10 +4147,17 @@ pub fn testkit_pgo_drain_selftest(
             rest: None,
         });
         f.lexical = true;
-        f.ops = vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return];
-        f.constants = vec![Value::symbol(intern(callee))].into();
-        f.max_stack = crate::emacs_core::bytecode::StackDepth::try_from(16usize)
-            .expect("testkit stack depth is representable");
+        f.set_ops(vec![
+            Op::Constant(0),
+            Op::StackRef(1),
+            Op::Call(1),
+            Op::Return,
+        ]);
+        f.set_constants(vec![Value::symbol(intern(callee))].into());
+        f.set_max_stack(
+            crate::emacs_core::bytecode::StackDepth::try_from(16usize)
+                .expect("testkit stack depth is representable"),
+        );
         f.seal_hand_assembled_ops();
         f
     };
@@ -4134,7 +4187,7 @@ pub fn testkit_pgo_drain_selftest(
         return Err(format!("drain emitted {n} .so(s), expected 1"));
     }
     // Correct unit-index name.
-    let hash = leaf_content_hash(&bc.ops, &bc.constants, 1).ok_or("content hash None")?;
+    let hash = leaf_content_hash(bc.ops(), bc.constants(), 1).ok_or("content hash None")?;
     let expected = dir.join(format!("{hash:032x}_{ABI_TAG:08x}.so"));
     if !expected.exists() {
         return Err(format!(
@@ -4265,10 +4318,17 @@ fn ev_alias_and_build(
         rest: None,
     });
     f.lexical = true;
-    f.ops = vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return];
-    f.constants = vec![Value::symbol(intern("pgo-off-callee"))].into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::try_from(16usize)
-        .expect("testkit stack depth is representable");
+    f.set_ops(vec![
+        Op::Constant(0),
+        Op::StackRef(1),
+        Op::Call(1),
+        Op::Return,
+    ]);
+    f.set_constants(vec![Value::symbol(intern("pgo-off-callee"))].into());
+    f.set_max_stack(
+        crate::emacs_core::bytecode::StackDepth::try_from(16usize)
+            .expect("testkit stack depth is representable"),
+    );
     c.obarray
         .set_symbol_function("pgo-off-fn", Value::make_bytecode(f));
     c.obarray
@@ -4714,14 +4774,14 @@ pub(crate) fn try_load_leaf_for(
     let stashed = rt.compiled_id().and_then(prewarm_hash_for);
     if stashed.is_some()
         && !rt.is_aot_prewarmed()
-        && !jit_would_compile_now(func.executable_ops(), &func.constants, bypass_profit_gate)
+        && !jit_would_compile_now(func.executable_ops(), func.constants(), bypass_profit_gate)
     {
         return None;
     }
     let arity = JitParamShape::try_from(func).ok()?.fixed_arity()?;
     try_load_leaf(
         func.executable_ops(),
-        &func.constants,
+        func.constants(),
         arity,
         stashed,
         obarray,
@@ -5244,7 +5304,7 @@ pub fn prepopulate_aot_from_preload(ctx: &crate::emacs_core::eval::Context) -> P
             stats.missed += 1;
             continue;
         }
-        let Some(content_hash) = leaf_content_hash(ops, &bc.constants, arity) else {
+        let Some(content_hash) = leaf_content_hash(ops, bc.constants(), arity) else {
             continue;
         };
         stats.candidates += 1;
@@ -5271,7 +5331,7 @@ pub fn prepopulate_aot_from_preload(ctx: &crate::emacs_core::eval::Context) -> P
             arity,
             // The pool travels to the leaf build below (the descriptor recipe
             // resolves + verifies against it — no build_mir at load anymore).
-            constants: bc.constants.as_slice().to_vec(),
+            constants: bc.constants().as_slice().to_vec(),
         });
     }
 
@@ -5465,7 +5525,7 @@ pub(crate) fn drain_aot_pgo_to_dir(
             continue;
         }
         let ops = bc.executable_ops();
-        let Some(content_hash) = leaf_content_hash(ops, &bc.constants, arity) else {
+        let Some(content_hash) = leaf_content_hash(ops, bc.constants(), arity) else {
             continue; // non-canonical / non-recipe-able → skip (fail-closed).
         };
         cands.push((bc.jit_runtime().heat(), content_hash, bc, arity));
@@ -5483,7 +5543,7 @@ pub(crate) fn drain_aot_pgo_to_dir(
             continue;
         }
         let ops = bc.executable_ops();
-        match compile_leaf_to_object(ops, &bc.constants, arity, Some(&ctx.obarray)) {
+        match compile_leaf_to_object(ops, bc.constants(), arity, Some(&ctx.obarray)) {
             Ok(Some((obj, h))) => {
                 // content_hash == h by construction (both are leaf_content_hash of the
                 // same body); place under the OBJECT's own hash so the filename the

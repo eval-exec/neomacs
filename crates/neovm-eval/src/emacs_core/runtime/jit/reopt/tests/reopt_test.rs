@@ -30,9 +30,9 @@ fn function(ops: Vec<Op>, constants: Vec<Value>, arity: usize) -> ByteCodeFuncti
         rest: None,
     });
     f.lexical = true;
-    f.ops = ops;
-    f.constants = constants.into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_ops(ops);
+    f.set_constants(constants.into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     f.seal_hand_assembled_ops();
     f
 }
@@ -583,7 +583,7 @@ fn ceiling_interpreter_refuses_entry_and_osr_compiles() {
     );
     lp.jit_runtime()
         .set_reopt_level_for_test(ReoptLevel::Speculative);
-    let lp2 = function(lp.ops.clone(), vec![Value::make_int(0)], 1);
+    let lp2 = function(lp.ops().clone(), vec![Value::make_int(0)], 1);
     // The refusal above remains a production probe; await only this admitted
     // positive control, without transferring before its original observation.
     crate::emacs_core::jit::test_support::prepare_osr(ctx, &lp2, 1);
@@ -648,7 +648,7 @@ fn no_inline_bit_skips_the_fuser() {
     assert_eq!(census("fused"), fused0 + 1, "not spliced again");
     assert_eq!(census("reject:reopt"), rej0 + 1);
     // `NoInline` bars every site.
-    let g = function(f.ops.clone(), vec![callee], 1);
+    let g = function(f.ops().clone(), vec![callee], 1);
     g.jit_runtime()
         .set_reopt_level_for_test(ReoptLevel::NoInline);
     compile_bytecode_function_with(&g, Some(&ev.obarray)).expect("compiles");

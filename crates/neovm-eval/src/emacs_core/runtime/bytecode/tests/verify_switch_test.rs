@@ -213,8 +213,8 @@ fn switch_needs_its_two_operands() {
 fn deferred_gnu_function_with_a_switch_is_verified_and_resolves_through_its_proof() {
     crate::test_utils::init_test_tracing();
     let mut func = ByteCodeFunction::new(LambdaParams::simple(vec![]));
-    func.constants = pool(jump_table(&[("vsw-foo", Value::fixnum(8))])).into();
-    func.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(2);
+    func.set_constants(pool(jump_table(&[("vsw-foo", Value::fixnum(8))])).into());
+    func.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(2));
     func.gnu_bytecode_bytes = Some(neovm_value::tagged::header::LispByteVec::owned(
         SWITCH_BYTES.to_vec(),
     ));
@@ -255,8 +255,8 @@ fn switches_at_different_depths_keep_the_checked_driver() {
     ];
     assert_eq!(verify(&bytes, &constants, 3), None);
     let mut func = ByteCodeFunction::new(LambdaParams::simple(vec![]));
-    func.constants = constants.into();
-    func.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(3);
+    func.set_constants(constants.into());
+    func.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(3));
     func.gnu_bytecode_bytes = Some(neovm_value::tagged::header::LispByteVec::owned(
         bytes.to_vec(),
     ));
@@ -307,8 +307,8 @@ fn switches_sharing_targets_share_one_pre_resolved_entry() {
 fn pre_resolved_switch_hit_uses_the_fixed_proof_depth() {
     crate::test_utils::init_test_tracing();
     let mut func = ByteCodeFunction::new(LambdaParams::simple(vec![]));
-    func.constants = pool(jump_table(&[("vsw-foo", Value::fixnum(8))])).into();
-    func.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(2);
+    func.set_constants(pool(jump_table(&[("vsw-foo", Value::fixnum(8))])).into());
+    func.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(2));
     func.gnu_bytecode_bytes = Some(neovm_value::tagged::header::LispByteVec::owned(
         SWITCH_BYTES.to_vec(),
     ));

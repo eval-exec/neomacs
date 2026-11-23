@@ -70,6 +70,7 @@ never	emacs_core/runtime/bytecode/vm.rs	Vm::op_point	run_loop
 never	emacs_core/runtime/bytecode/vm.rs	Vm::op_point_max	run_loop
 never	emacs_core/runtime/bytecode/vm.rs	Vm::op_point_min	run_loop
 never	emacs_core/runtime/bytecode/vm.rs	Vm::osr_transfer	run_loop
+never	emacs_core/runtime/bytecode/vm.rs	Vm::pad_bytecode_frame_base	run_loop	# #[cold] #[inline(never)]: an invalid-bytecode rejoin pads a truncated frame and must stay out of the driver
 never	emacs_core/runtime/bytecode/vm.rs	Vm::reject_bytecode_frame_for_budget	run_loop	# #[cold] #[inline(never)]: the bytecode-stack-overflow reject is a cold exit, never inlined into run_loop
 never	emacs_core/runtime/bytecode/vm.rs	Vm::resolve_stack_call_target	run_loop
 never	emacs_core/runtime/bytecode/vm.rs	Vm::resume_flow_out_of_line	run_loop

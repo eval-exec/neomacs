@@ -37,7 +37,7 @@ fn named_let() -> ByteCodeFunction {
         rest: None,
     });
     f.lexical = true;
-    f.ops = vec![
+    f.set_ops(vec![
         Op::Constant(0),     // 0: acc = 0          [n acc]
         Op::StackRef(1),     // 1: header: n        [n acc n]
         Op::Constant(0),     // 2
@@ -52,11 +52,11 @@ fn named_let() -> ByteCodeFunction {
         Op::Add1,            // 11
         Op::StackSet(1),     // 12: acc = acc+1     [n acc]
         Op::Goto(1),         // 13: back edge
-    ];
-    f.constants = vec![Value::make_int(0)].into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+    ]);
+    f.set_constants(vec![Value::make_int(0)].into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
     seal_hand_assembled_ops_for_test(&mut f);
-    assert_eq!(f.ops.last(), Some(&Op::Return), "sealed: trailing Return");
+    assert_eq!(f.ops().last(), Some(&Op::Return), "sealed: trailing Return");
     f
 }
 
@@ -192,7 +192,7 @@ fn jit_mir_reach_dead_fibn_named_let_from_the_byte_compiler() {
     let map = executable_gnu_byte_offset_map_for_test(f);
     assert!(
         matches!(
-            mir::build_mir(&ops, &f.constants, map.as_deref(), 1),
+            mir::build_mir(&ops, f.constants(), map.as_deref(), 1),
             Err(CompileError::UnsupportedOp("mir-unreachable-block"))
         ),
         "the named-let tail: {ops:?}"

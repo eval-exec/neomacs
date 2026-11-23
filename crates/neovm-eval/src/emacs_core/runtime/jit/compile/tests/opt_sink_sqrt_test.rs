@@ -108,7 +108,7 @@ fn native_ok(
     args: &[Value],
 ) -> Value {
     let NativeRun::Ok(bits) =
-        leaf.call_consts(ctx as *mut Context as *mut u8, f.constants.as_ptr(), args)
+        leaf.call_consts(ctx as *mut Context as *mut u8, f.constants().as_ptr(), args)
     else {
         panic!("actual native positive case")
     };
@@ -127,14 +127,14 @@ fn cold(
     cell.set_car(Value::fixnum(0));
     let NativeRun::DeoptAt(exit) = leaf.call_consts(
         ctx as *mut Context as *mut u8,
-        f.constants.as_ptr(),
+        f.constants().as_ptr(),
         &[cell, argument],
     ) else {
         panic!("selected sqrt must replay the original Call under this guard")
     };
     assert_eq!(cell.cons_car(), Value::fixnum(1), "visible effect ran once");
     assert_eq!(exit.pc, 8);
-    assert_eq!(exit.stack, vec![cell, argument, f.constants[0], argument]);
+    assert_eq!(exit.stack, vec![cell, argument, f.constants()[0], argument]);
     assert_eq!(exit.handlers, 0);
     exit
 }
@@ -426,13 +426,13 @@ fn opt_sink_sqrt_native_epoch_guard_is_fresh_after_an_earlier_callback() {
     cell.set_car(Value::fixnum(0));
     let NativeRun::DeoptAt(exit) = selected.call_consts(
         &mut ctx as *mut Context as *mut u8,
-        f.constants.as_ptr(),
+        f.constants().as_ptr(),
         &args,
     ) else {
         panic!("per-call current epoch must observe callback rewrite")
     };
     assert_eq!(exit.pc, 11);
-    assert_eq!(exit.stack, vec![cell, x, callback, f.constants[0], x]);
+    assert_eq!(exit.stack, vec![cell, x, callback, f.constants()[0], x]);
     assert_eq!(cell.cons_car(), Value::fixnum(1));
     assert_eq!(
         print_value(&resume(&mut ctx, &f, &exit).unwrap()),
@@ -478,7 +478,7 @@ fn opt_sink_sqrt_native_equal_epoch_context_and_same_pointer_rewrite_replay_curr
     assert_ne!(owner.obarray.generation(), other.obarray.generation());
     assert_eq!(
         Value::from_sym_id(intern("sqrt")).bits(),
-        f.constants[0].bits()
+        f.constants()[0].bits()
     );
     assert_eq!(
         owner.obarray.function_epoch(),

@@ -24,14 +24,18 @@ fn context() -> Context {
 fn bytecode(target: Option<Value>) -> Value {
     let mut code = ByteCodeFunction::new(LambdaParams::simple(vec![intern("symcallee-item")]));
     code.lexical = true;
-    code.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
-    code.ops = match target {
-        Some(target) => {
-            code.constants = vec![target].into();
-            vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return]
-        }
-        None => vec![Op::StackRef(0), Op::Return],
-    };
+    code.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
+    if let Some(target) = target {
+        code.set_constants(vec![target].into());
+        code.set_ops(vec![
+            Op::Constant(0),
+            Op::StackRef(1),
+            Op::Call(1),
+            Op::Return,
+        ]);
+    } else {
+        code.set_ops(vec![Op::StackRef(0), Op::Return]);
+    }
     Value::make_bytecode(code)
 }
 

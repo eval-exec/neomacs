@@ -58,9 +58,9 @@ fn source(ops: Vec<Op>, constants: Vec<LispValue>, arity: usize) -> ByteCodeFunc
         rest: None,
     });
     source.lexical = true;
-    source.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(32);
-    source.ops = ops;
-    source.constants = constants.into();
+    source.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(32));
+    source.set_ops(ops);
+    source.set_constants(constants.into());
     source.seal_hand_assembled_ops_for_test();
     assert_eq!(
         source.executable_ops(),
@@ -82,8 +82,8 @@ fn frozen_loop_add() -> ByteCodeFunction {
     });
     source.lexical = true;
     source.arglist = LispValue::fixnum(771);
-    source.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
-    source.constants = vec![LispValue::fixnum(0)].into();
+    source.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
+    source.set_constants(vec![LispValue::fixnum(0)].into());
     source.gnu_bytecode_bytes = Some(neovm_value::tagged::header::LispByteVec::copy_from_slice(
         &[
             2, 137, 192, 137, 4, 87, 131, 21, 0, 2, 5, 92, 137, 178, 4, 178, 2, 84, 130, 3, 0, 2,
@@ -108,13 +108,13 @@ fn plan(source: &ByteCodeFunction) -> Func {
     };
     let cfg = crate::emacs_core::jit::compile::analyze_cfg(
         source.executable_ops(),
-        &source.constants,
+        source.constants(),
         source.executable_gnu_byte_offset_map(),
         params.native_arity(),
     )
     .expect("actual source CFG must be valid before selection");
     let constants = source
-        .constants
+        .constants()
         .iter()
         .copied()
         .map(ValueBits::from_value)
@@ -135,7 +135,7 @@ fn plan(source: &ByteCodeFunction) -> Func {
 }
 
 fn tier0(ctx: &mut Context, source: &ByteCodeFunction, args: &[LispValue]) -> LispValue {
-    let _roots = Roots::new(&source.constants);
+    let _roots = Roots::new(source.constants());
     let mut vm = Vm::from_context(ctx);
     vm.force_interpreter_only_for_test();
     vm.execute(source, args.to_vec())
@@ -353,7 +353,7 @@ fn nested_cons_mutation_baseline(
         vec![LispValue::fixnum(11), LispValue::NIL, LispValue::fixnum(23)],
         0,
     );
-    roots.add(&source.constants);
+    roots.add(source.constants());
     let func = plan(&source);
     let vm_answer = tier0(ctx, &source, &[]);
     roots.add(&[vm_answer]);
@@ -999,7 +999,7 @@ fn opt_sink_recipe_copied_numeric_view_is_complete_and_point_local() {
     // Float literals. Successful results cannot be bignums; expose precisely
     // that independent source fact before adding a test-only pure view.
     assert_eq!(original.dynamic_prefix, 0);
-    assert!(source.constants.iter().all(|value| value.is_float()));
+    assert!(source.constants().iter().all(|value| value.is_float()));
     for owner in owners {
         let ValueDef::Inst(producer) = original.values[owner.index()].def else {
             unreachable!()
@@ -1257,7 +1257,7 @@ fn dominating_partial_baseline(ctx: &mut Context, roots: &Roots) -> (Func, Block
         ],
         1,
     );
-    roots.add(&source.constants);
+    roots.add(source.constants());
     let original = plan(&source);
     original.verify().unwrap();
     for flag in [LispValue::T, LispValue::NIL] {

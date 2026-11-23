@@ -75,7 +75,7 @@ pub(crate) unsafe extern "C" fn neovm_jit_direct_framed(
                 let ctx_ref = unsafe { &mut *(ctx as *mut Context) };
                 match crate::emacs_core::bytecode::vm::charge_bytecode_frame(
                     ctx_ref,
-                    bc.max_stack.get(),
+                    bc.max_stack().get(),
                 ) {
                     Some(saved_budget) => saved_budget,
                     None => {

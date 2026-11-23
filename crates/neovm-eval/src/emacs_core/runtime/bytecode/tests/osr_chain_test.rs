@@ -16,9 +16,9 @@ fn code(nargs: usize, ops: Vec<Op>, constants: Vec<Value>) -> Value {
             .collect(),
     ));
     code.lexical = true;
-    code.ops = ops;
-    code.constants = constants.into();
-    code.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    code.set_ops(ops);
+    code.set_constants(constants.into());
+    code.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     code.seal_hand_assembled_ops_for_test();
     Value::make_bytecode(code)
 }

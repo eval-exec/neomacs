@@ -112,9 +112,11 @@ fn t1(ctx: &Context, f: &ByteCodeFunction) -> CompiledLeaf {
     .expect("ordinary Aref T1 lowers before observer evidence")
 }
 fn native(ctx: &mut Context, f: &ByteCodeFunction, leaf: &CompiledLeaf, arg: Value) -> String {
-    let NativeRun::Ok(bits) =
-        leaf.call_consts(ctx as *mut Context as *mut u8, f.constants.as_ptr(), &[arg])
-    else {
+    let NativeRun::Ok(bits) = leaf.call_consts(
+        ctx as *mut Context as *mut u8,
+        f.constants().as_ptr(),
+        &[arg],
+    ) else {
         panic!("recording preserves baseline native Aref success")
     };
     print_value(&unsafe {
@@ -469,7 +471,7 @@ fn opt_array_snapshot_keeps_fused_caller_mapping_and_owned_worker_masks() {
     let body = std::rc::Rc::new(
         crate::emacs_core::jit::inline::fuse_calls(
             f.executable_ops(),
-            &f.constants,
+            f.constants(),
             f.executable_gnu_byte_offset_map(),
             1,
             &feedback,

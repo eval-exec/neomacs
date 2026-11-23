@@ -91,7 +91,7 @@ fn transitive_bare_symbol_cycle(claims: bool, generational: bool, ancestor: Symb
         SymbolAncestor::Cons => heap.alloc_cons(symbol, TaggedValue::NIL),
         SymbolAncestor::Bytecode => {
             let mut function = ByteCodeFunction::new(LambdaParams::simple(vec![]));
-            function.constants = vec![symbol].into();
+            function.set_constants(vec![symbol].into());
             heap.alloc_bytecode(function)
         }
         SymbolAncestor::Vector => heap.alloc_vector(vec![symbol]),

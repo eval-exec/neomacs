@@ -4194,7 +4194,7 @@ pub fn mir_build_copy_for_test(
         .stack_shape()
         .expect("fixture stack parameters")
         .required();
-    let constants: Vec<neovm_value::value::Value> = function.constants.iter().copied().collect();
+    let constants: Vec<neovm_value::value::Value> = function.constants().iter().copied().collect();
     let verdict = |offset_map| match crate::emacs_core::jit::mir::build_mir(
         ops, &constants, offset_map, arity,
     ) {
@@ -4315,7 +4315,7 @@ pub(crate) mod jit_fixture {
             }
             let function = value.get_bytecode_data().expect("fixture bytecode");
             for constant in function
-                .constants
+                .constants()
                 .iter()
                 .copied()
                 .filter(|v| v.is_bytecode())

@@ -8,16 +8,16 @@ use crate::tagged::mutate::LispCollectionRevision;
 fn bytecode_getter_capture_keeps_identity_and_first_read_revision() {
     crate::test_utils::init_test_tracing();
     let mut code = ByteCodeFunction::new(LambdaParams::simple(vec![]));
-    code.ops = vec![Op::Constant(0), Op::Return];
-    code.constants = vec![Value::fixnum(41)].into();
-    code.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(1);
+    code.set_ops(vec![Op::Constant(0), Op::Return]);
+    code.set_constants(vec![Value::fixnum(41)].into());
+    code.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(1));
     let function = Value::make_bytecode(code);
     let accesses = bytecode_data_access_count();
     let (constant, reads) = capture(|| {
         function
             .get_bytecode_data()
             .expect("a normal bytecode getter projects its data")
-            .constants[0]
+            .constants()[0]
     });
     assert_eq!(constant, Value::fixnum(41));
     assert_eq!(bytecode_data_access_count(), accesses + 1);
@@ -34,9 +34,9 @@ fn bytecode_getter_capture_keeps_identity_and_first_read_revision() {
     assert!(!reads.unchanged(), "the bytecode identity was observed");
 
     let (_, reads) = capture(|| {
-        let first = function.get_bytecode_data().expect("bytecode").constants[0];
+        let first = function.get_bytecode_data().expect("bytecode").constants()[0];
         LispCollectionRevision::changed(function);
-        let second = function.get_bytecode_data().expect("bytecode").constants[0];
+        let second = function.get_bytecode_data().expect("bytecode").constants()[0];
         assert_eq!(first, second);
     });
     assert!(

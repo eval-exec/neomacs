@@ -56,9 +56,9 @@ fn function(ops: Vec<Op>, constants: Vec<Value>, arity: usize) -> ByteCodeFuncti
         rest: None,
     });
     f.lexical = true;
-    f.ops = ops;
-    f.constants = constants.into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_ops(ops);
+    f.set_constants(constants.into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     f.seal_hand_assembled_ops();
     f
 }
@@ -361,7 +361,7 @@ fn stale_leaf_deopt_unlinks_but_does_not_evict_successor() {
     let old_leaf = unsafe { &*old };
     slot.arm_leaf(
         old,
-        p.callee().constants.as_ptr(),
+        p.callee().constants().as_ptr(),
         false,
         !old_leaf.direct_call_eligible(),
         old_leaf.entry_shape == crate::emacs_core::jit::compile::EntryShape::RawRegister,

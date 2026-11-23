@@ -54,7 +54,7 @@ fn opt_sink_numeric_fresh_cold_materialization_keeps_exact_point_aliases_without
     let expected = tier0(&mut ctx, &f, &bad);
     let NativeRun::DeoptAt(exit) = selected.call_consts(
         &mut ctx as *mut Context as *mut u8,
-        f.constants.as_ptr(),
+        f.constants().as_ptr(),
         &bad,
     ) else {
         panic!("wrong right operand must leave at its exact original Add");

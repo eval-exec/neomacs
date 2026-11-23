@@ -59,9 +59,9 @@ fn function(arity: usize, ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFuncti
         rest: None,
     });
     f.lexical = true;
-    f.ops = ops;
-    f.constants = constants.into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(24);
+    f.set_ops(ops);
+    f.set_constants(constants.into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(24));
     f.seal_hand_assembled_ops_for_test();
     f.jit_runtime().set_hot_for_test();
     f
@@ -365,7 +365,7 @@ fn inline_hof_runtime_native_mapc_mapcar_preserve_allocation_deltas() {
                     Value::memory_use_counts_snapshot()[i] - before[i]
                 });
                 let before = Value::memory_use_counts_snapshot();
-                let reference = ctx.apply2(f.constants[0], callback, sequence).unwrap();
+                let reference = ctx.apply2(f.constants()[0], callback, sequence).unwrap();
                 let reference_delta = std::array::from_fn::<_, 7, _>(|i| {
                     Value::memory_use_counts_snapshot()[i] - before[i]
                 });
@@ -771,7 +771,7 @@ fn inline_hof_runtime_native_deopt_at_each_element_preserves_committed_capture_o
                         .jit_runtime()
                         .set_cold_for_test();
                     let before = Value::memory_use_counts_snapshot();
-                    let reference = ctx.apply2(f.constants[0], callback, sequence).unwrap();
+                    let reference = ctx.apply2(f.constants()[0], callback, sequence).unwrap();
                     let reference_delta = std::array::from_fn::<_, 7, _>(|i| {
                         Value::memory_use_counts_snapshot()[i] - before[i]
                     });
@@ -861,7 +861,7 @@ fn inline_hof_runtime_nonlist_or_invalid_list_keeps_builtin_protocol() {
         if let Ok(value) = native.as_ref() {
             ctx.push_vm_frame_root(*value);
         }
-        let reference = ctx.apply2(f.constants[0], callback, sequence);
+        let reference = ctx.apply2(f.constants()[0], callback, sequence);
         match (native.kinded(), reference.kinded()) {
             (Ok(native), Ok(reference)) => {
                 assert_eq!(print_value(&native), print_value(&reference))

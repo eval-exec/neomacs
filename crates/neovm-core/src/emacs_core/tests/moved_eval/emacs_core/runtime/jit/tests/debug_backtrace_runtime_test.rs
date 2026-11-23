@@ -33,9 +33,9 @@ fn lambda_stack(
         rest: None,
     });
     f.lexical = true;
-    f.ops = ops;
-    f.constants = constants.into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(max_stack);
+    f.set_ops(ops);
+    f.set_constants(constants.into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(max_stack));
     f.seal_hand_assembled_ops();
     if hot {
         f.jit_runtime().set_hot_for_test();

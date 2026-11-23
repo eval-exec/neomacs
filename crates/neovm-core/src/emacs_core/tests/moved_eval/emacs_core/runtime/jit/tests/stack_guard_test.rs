@@ -224,9 +224,9 @@ fn only_bodies_that_can_reenter_lisp_are_guarded() {
             rest: None,
         });
         f.lexical = true;
-        f.ops = ops;
-        f.constants = constants.into();
-        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+        f.set_ops(ops);
+        f.set_constants(constants.into());
+        f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
         f
     };
     // (lambda (x) (1+ x))
@@ -254,7 +254,7 @@ fn only_bodies_that_can_reenter_lisp_are_guarded() {
             "{what}: guarded exactly when the body can re-enter Lisp"
         );
     }
-    assert!(!body_may_reenter_lisp_for_test(&pure.ops));
+    assert!(!body_may_reenter_lisp_for_test(pure.ops()));
 }
 
 /// T11 under the register leaf ABI (`reg_abi`, S2.1a): a body with no `out`

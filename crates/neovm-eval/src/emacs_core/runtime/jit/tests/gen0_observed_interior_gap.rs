@@ -343,7 +343,7 @@ fn gen0_native_two_store_leaf_closes_only_the_first_read_owner() {
         rest: None,
     });
     function.lexical = true;
-    function.ops = vec![
+    function.set_ops(vec![
         Op::StackRef(2), // [exact range value exact]
         Op::StackRef(1), // [exact range value exact value]
         Op::Setcar,
@@ -352,8 +352,8 @@ fn gen0_native_two_store_leaf_closes_only_the_first_read_owner() {
         Op::StackRef(1), // [exact range value range value]
         Op::Setcdr,
         Op::Return,
-    ];
-    function.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+    ]);
+    function.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
     let leaf = compile_bytecode_function(&function).expect("both explicit stores compile together");
     let revision = LispCollectionRevision::current();
     assert_eq!(

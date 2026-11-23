@@ -17,12 +17,12 @@ fn function() -> crate::emacs_core::bytecode::ByteCodeFunction {
         optional: Vec::new(),
         rest: None,
     });
-    function.ops = vec![
+    function.set_ops(vec![
         crate::emacs_core::bytecode::opcode::Op::Constant(0),
         crate::emacs_core::bytecode::opcode::Op::Return,
-    ];
-    function.constants = vec![Value::fixnum(73)].into();
-    function.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    ]);
+    function.set_constants(vec![Value::fixnum(73)].into());
+    function.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     function
 }
 

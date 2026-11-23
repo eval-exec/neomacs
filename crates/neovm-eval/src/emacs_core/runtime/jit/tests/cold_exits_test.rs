@@ -29,9 +29,9 @@ fn function(ops: Vec<Op>, constants: Vec<Value>, arity: usize) -> ByteCodeFuncti
         rest: None,
     });
     f.lexical = true;
-    f.ops = ops;
-    f.constants = constants.into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_ops(ops);
+    f.set_constants(constants.into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     f.seal_hand_assembled_ops();
     f
 }
@@ -132,8 +132,8 @@ fn compile(ev: &Context, path: Path, f: &ByteCodeFunction) {
     match path {
         Path::Baseline => {
             lower_leaf_full(
-                &f.ops,
-                &f.constants,
+                f.ops(),
+                f.constants(),
                 f.params
                     .stack_shape()
                     .expect("fixture stack parameters")
@@ -383,8 +383,8 @@ fn cold_exits_run_the_corpus_unchanged() {
     let run = |ev: &mut Context, mode: ColdExitsMode, f: &ByteCodeFunction, args: &[Value]| {
         force_cold_exits_for_test(Some(mode));
         let leaf = lower_leaf_full(
-            &f.ops,
-            &f.constants,
+            f.ops(),
+            f.constants(),
             f.params
                 .stack_shape()
                 .expect("fixture stack parameters")

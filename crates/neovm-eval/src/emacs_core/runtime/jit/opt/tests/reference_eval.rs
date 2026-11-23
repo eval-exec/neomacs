@@ -1114,22 +1114,26 @@ fn evaluate_opaque(
         rest: None,
     });
     function.lexical = true;
-    function.constants = constants
-        .iter()
-        .map(|bits| bits.to_value())
-        .collect::<Vec<_>>()
-        .into();
-    function.max_stack = crate::emacs_core::bytecode::StackDepth::try_from(
-        args.len()
-            .checked_add(8)
-            .ok_or_else(|| invalid("operator stack too large"))?,
-    )
-    .map_err(|_| invalid("operator stack too large"))?;
-    function.ops.push(op.clone());
+    function.set_constants(
+        constants
+            .iter()
+            .map(|bits| bits.to_value())
+            .collect::<Vec<_>>()
+            .into(),
+    );
+    function.set_max_stack(
+        crate::emacs_core::bytecode::StackDepth::try_from(
+            args.len()
+                .checked_add(8)
+                .ok_or_else(|| invalid("operator stack too large"))?,
+        )
+        .map_err(|_| invalid("operator stack too large"))?,
+    );
+    function.ops_mut().push(op.clone());
     if !has_result {
-        function.ops.push(Op::Nil);
+        function.ops_mut().push(Op::Nil);
     }
-    function.ops.push(Op::Return);
+    function.ops_mut().push(Op::Return);
     let mut vm = Vm::from_context(ctx);
     vm.force_interpreter_only_for_test();
     vm.execute(&function, args.to_vec())

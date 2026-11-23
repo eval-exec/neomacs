@@ -223,7 +223,7 @@ fn opt_profit_primitive_lists_original_call_survives_real_fusion_and_uses_one_le
     let source = calling_list_loop();
     assert!(!super::super::body_is_call_heavy(
         source.executable_ops(),
-        &source.constants
+        source.constants()
     ));
     assert!(body_admitted(
         OptProfitMode::Lists,
@@ -234,7 +234,7 @@ fn opt_profit_primitive_lists_original_call_survives_real_fusion_and_uses_one_le
     let feedback = vec![NumericFeedback::FixnumOnly; source.executable_ops().len()];
     let fused = inline::fuse_calls(
         source.executable_ops(),
-        &source.constants,
+        source.constants(),
         source.executable_gnu_byte_offset_map(),
         2,
         &feedback,

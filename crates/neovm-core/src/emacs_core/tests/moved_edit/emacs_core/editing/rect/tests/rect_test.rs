@@ -383,7 +383,7 @@ fn yank_rectangle_loaded_function_is_simple_bytecode_call() {
     if let Some(bytecode) = function.get_bytecode_data() {
         assert_eq!(
             bytecode
-                .constants
+                .constants()
                 .iter()
                 .map(|v| v.as_bare_symbol_name())
                 .collect::<Vec<_>>(),

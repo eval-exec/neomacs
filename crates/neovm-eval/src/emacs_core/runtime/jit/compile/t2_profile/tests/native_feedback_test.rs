@@ -110,7 +110,7 @@ fn tier2_native_use_observes_a_stable_window_transition_and_reopens() {
         let f = function(vec![Op::StackRef(0), Op::Call(0), Op::Return], vec![], 1);
         let site = f
             .jit_runtime()
-            .call_sites_for(f.executable_ops(), &f.constants)
+            .call_sites_for(f.executable_ops(), f.constants())
             .site_at(1)
             .expect("dynamic call");
         site.observe(a);
@@ -186,7 +186,7 @@ fn tier2_native_use_source_guard_miss_widens_the_stable_snapshot() {
     let f = function(vec![Op::StackRef(0), Op::Call(0), Op::Return], vec![], 1);
     let site = f
         .jit_runtime()
-        .call_sites_for(f.executable_ops(), &f.constants)
+        .call_sites_for(f.executable_ops(), f.constants())
         .site_at(1)
         .expect("dynamic call");
     site.observe(a);
@@ -236,7 +236,7 @@ fn tier2_native_use_apply_keeps_tail_spreading_and_leaf_window() {
     );
     let site = f
         .jit_runtime()
-        .call_sites_for(f.executable_ops(), &f.constants)
+        .call_sites_for(f.executable_ops(), f.constants())
         .site_at(2)
         .expect("apply target");
     site.observe(a);
@@ -272,7 +272,7 @@ fn tier2_native_use_static_mapping_records_callback_in_its_leaf_window() {
     );
     let site = f
         .jit_runtime()
-        .call_sites_for(f.executable_ops(), &f.constants)
+        .call_sites_for(f.executable_ops(), f.constants())
         .site_at(3)
         .expect("mapping callback");
     site.observe(a);
@@ -328,7 +328,7 @@ fn tier2_native_use_off_osr_and_upgrade_leave_native_recording_absent() {
     );
     let site = f
         .jit_runtime()
-        .call_sites_for(f.executable_ops(), &f.constants)
+        .call_sites_for(f.executable_ops(), f.constants())
         .site_at(7)
         .expect("loop callback");
     site.observe(a);
@@ -404,7 +404,7 @@ fn tier2_native_use_fix_preserves_record_and_census_site_windows() {
         let f = function(vec![Op::StackRef(0), Op::Call(0), Op::Return], vec![], 1);
         let site = f
             .jit_runtime()
-            .call_sites_for(f.executable_ops(), &f.constants)
+            .call_sites_for(f.executable_ops(), f.constants())
             .site_at(1)
             .expect("dynamic call");
         site.observe(a);
@@ -438,7 +438,7 @@ fn tier2_native_use_imports_helpers_only_with_actual_t1_emission() {
     let source = function(vec![Op::StackRef(0), Op::Call(0), Op::Return], vec![], 1);
     source
         .jit_runtime()
-        .call_sites_for(source.executable_ops(), &source.constants);
+        .call_sites_for(source.executable_ops(), source.constants());
     let _source = CallSourceScope::enter(Some(source.jit_runtime().share_state()), true);
     let _holds = FeedbackHolds::enter();
     // Even a nested T1 BuildScope must not turn an OSR/Plain/T2 RtCtx into

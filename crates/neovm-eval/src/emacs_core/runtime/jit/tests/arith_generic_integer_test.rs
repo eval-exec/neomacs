@@ -27,15 +27,15 @@ fn generic_site(op: Op, nargs: usize) -> ByteCodeFunction {
         rest: None,
     });
     f.lexical = true;
-    f.ops = if nargs == 2 {
+    f.set_ops(if nargs == 2 {
         vec![Op::StackRef(1), Op::StackRef(1), op, Op::Return]
     } else {
         vec![Op::StackRef(0), op, Op::Return]
-    };
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
-    let pc = f.ops.len() - 2;
+    });
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
+    let pc = f.ops().len() - 2;
     f.jit_runtime()
-        .record_numeric(pc, f.ops.len(), NumericFeedback::Other);
+        .record_numeric(pc, f.ops().len(), NumericFeedback::Other);
     f
 }
 

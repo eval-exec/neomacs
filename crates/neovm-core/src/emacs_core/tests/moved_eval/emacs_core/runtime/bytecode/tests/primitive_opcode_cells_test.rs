@@ -289,23 +289,25 @@ fn run_cases_with_constant_pool(
             let mut f = ByteCodeFunction::new(source.params.clone());
             f.lexical = source.lexical;
             f.arglist = source.arglist;
-            f.max_stack = source.max_stack;
-            let mut constants = source.constants.to_vec();
+            f.set_max_stack(source.max_stack());
+            let mut constants = source.constants().to_vec();
             let mut replaced = false;
-            f.ops = ops_of(source)
-                .iter()
-                .map(|op| match *op {
-                    Op::CallBuiltinSym(symbol, arity) => {
-                        let index = u16::try_from(constants.len()).unwrap();
-                        constants.push(Value::from_sym_id(symbol));
-                        replaced = true;
-                        Op::CallBuiltin(index, arity)
-                    }
-                    _ => op.clone(),
-                })
-                .collect();
+            f.set_ops(
+                ops_of(source)
+                    .iter()
+                    .map(|op| match *op {
+                        Op::CallBuiltinSym(symbol, arity) => {
+                            let index = u16::try_from(constants.len()).unwrap();
+                            constants.push(Value::from_sym_id(symbol));
+                            replaced = true;
+                            Op::CallBuiltin(index, arity)
+                        }
+                        _ => op.clone(),
+                    })
+                    .collect(),
+            );
             assert!(replaced, "constant-pool primitive adapter was installed");
-            f.constants = constants.into();
+            f.set_constants(constants.into());
             neovm_eval::test_support::authority::seal_hand_assembled_ops_for_test(&mut f);
             adapted.insert(f)
         } else {

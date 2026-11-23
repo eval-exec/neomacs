@@ -101,7 +101,7 @@ fn float_births(heap: &TaggedHeap) -> Vec<usize> {
 
 fn bytecode() -> ByteCodeFunction {
     let mut function = ByteCodeFunction::new(LambdaParams::simple(vec![]));
-    function.ops = vec![Op::Nil];
+    function.set_ops(vec![Op::Nil]);
     function
 }
 

@@ -14,9 +14,9 @@ fn source(tag: i64) -> ByteCodeFunction {
         optional: Vec::new(),
         rest: None,
     });
-    f.ops = vec![Op::Constant(0), Op::Return];
-    f.constants = vec![Value::make_int(tag)].into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(1);
+    f.set_ops(vec![Op::Constant(0), Op::Return]);
+    f.set_constants(vec![Value::make_int(tag)].into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(1));
     f
 }
 

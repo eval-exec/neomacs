@@ -14,9 +14,9 @@ fn function(ops: Vec<Op>, constants: Vec<Value>, arity: usize) -> ByteCodeFuncti
         rest: None,
     });
     f.lexical = true;
-    f.ops = ops;
-    f.constants = constants.into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_ops(ops);
+    f.set_constants(constants.into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     f.seal_hand_assembled_ops();
     f
 }
@@ -322,7 +322,7 @@ fn mir_inline_keeps_a_callees_non_fixnum_feedback_on_the_native_call_path() {
         );
         callee
             .jit_runtime()
-            .record_numeric(2, callee.ops.len(), feedback);
+            .record_numeric(2, callee.ops().len(), feedback);
         ev.obarray.set_symbol_function_id(
             sym.as_bare_symbol_id().unwrap(),
             Value::make_bytecode(callee),

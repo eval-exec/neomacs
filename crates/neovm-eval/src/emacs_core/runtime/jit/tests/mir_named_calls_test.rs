@@ -12,9 +12,9 @@ fn function(ops: Vec<Op>, constants: Vec<Value>, arity: usize) -> ByteCodeFuncti
         rest: None,
     });
     f.lexical = true;
-    f.ops = ops;
-    f.constants = constants.into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_ops(ops);
+    f.set_constants(constants.into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     f
 }
 
@@ -27,7 +27,7 @@ fn mir_named_reads_follow_buffer_state_and_ignore_function_redefinition() {
         vec![],
         0,
     );
-    let m = mir::build_mir(&f.ops, &f.constants, None, 0).unwrap();
+    let m = mir::build_mir(f.ops(), f.constants(), None, 0).unwrap();
     let leaf = lower_mir_pure(&m).unwrap();
     ev.eval_str("(insert \"abc\") (goto-char 2)").unwrap();
     let ctx = &mut ev as *mut Context as *mut u8;
@@ -63,7 +63,7 @@ fn mir_named_calls_signal_with_the_same_payload_as_the_interpreter() {
             Op::Return,
         ]);
         let f = function(ops, args, 0);
-        let m = mir::build_mir(&f.ops, &f.constants, None, 0).unwrap();
+        let m = mir::build_mir(f.ops(), f.constants(), None, 0).unwrap();
         let leaf = lower_mir_pure(&m).unwrap();
         assert_eq!(
             leaf.call(&mut ev as *mut Context as *mut u8, &[]),

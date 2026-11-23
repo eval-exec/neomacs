@@ -40,8 +40,8 @@ fn lister(required: u32, optional: u32, rest: bool, hot: bool) -> ByteCodeFuncti
     let mut ops: Vec<Op> = (0..n).map(|_| Op::StackRef((n - 1) as u16)).collect();
     ops.push(Op::List(n as u16));
     ops.push(Op::Return);
-    f.ops = ops;
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_ops(ops);
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     if hot {
         f.jit_runtime().set_hot_for_test();
     }
@@ -130,8 +130,8 @@ fn apply1_unwinds_its_frame_on_a_signal() {
         rest: None,
     });
     f.lexical = true;
-    f.ops = vec![Op::StackRef(0), Op::Car, Op::Return];
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+    f.set_ops(vec![Op::StackRef(0), Op::Car, Op::Return]);
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
     f.jit_runtime().set_hot_for_test();
     let func = Value::make_bytecode(f);
     ev.push_vm_frame_root(func);

@@ -36,9 +36,9 @@ fn lambda_stack(
         rest: None,
     });
     f.lexical = true;
-    f.ops = ops;
-    f.constants = constants.into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(max_stack);
+    f.set_ops(ops);
+    f.set_constants(constants.into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(max_stack));
     f.seal_hand_assembled_ops();
     if hot {
         f.jit_runtime().set_hot_for_test();
@@ -514,9 +514,14 @@ fn a_subr_spec_site_under_compiler_overrides_takes_the_generic_call() {
         rest: None,
     });
     f.lexical = true;
-    f.ops = vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return];
-    f.constants = vec![Value::symbol("symbol-name")].into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+    f.set_ops(vec![
+        Op::Constant(0),
+        Op::StackRef(1),
+        Op::Call(1),
+        Op::Return,
+    ]);
+    f.set_constants(vec![Value::symbol("symbol-name")].into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
     f.seal_hand_assembled_ops();
     let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("compiles");
     let arg = Value::symbol("zzz");
@@ -661,7 +666,7 @@ impl Drop for SpecShimPolicy {
 
 fn declared_frame_bytes(fun: Value) -> usize {
     crate::emacs_core::bytecode::vm::bytecode_frame_bytes(
-        fun.get_bytecode_data().expect("bytecode").max_stack.get(),
+        fun.get_bytecode_data().expect("bytecode").max_stack().get(),
     )
 }
 

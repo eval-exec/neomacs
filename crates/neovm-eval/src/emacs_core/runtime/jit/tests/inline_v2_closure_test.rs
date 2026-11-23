@@ -19,9 +19,9 @@ fn lexical(required: usize, ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunc
         rest: None,
     });
     f.lexical = true;
-    f.ops = ops;
-    f.constants = constants.into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_ops(ops);
+    f.set_constants(constants.into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     f.seal_hand_assembled_ops_for_test();
     f.jit_runtime().set_hot_for_test();
     f
@@ -55,7 +55,7 @@ fn fuse(f: &ByteCodeFunction, mode: Inline2Mode) -> Option<FusedBody> {
     compile::force_inline2_for_test(Some(mode));
     let fused = fuse_calls_v2(
         f.executable_ops(),
-        &f.constants,
+        f.constants(),
         None,
         f.params
             .stack_shape()
@@ -82,7 +82,7 @@ fn inline_v2_in_unit_closure_retains_object_and_dynamic_prefix_contract() {
         fused.v2.as_ref().unwrap().region_kind.as_ref(),
         &[RegionKind::Closure {
             prefix: 1,
-            const_base: f.constants.len(),
+            const_base: f.constants().len(),
         }]
     );
     assert_eq!(
@@ -92,7 +92,7 @@ fn inline_v2_in_unit_closure_retains_object_and_dynamic_prefix_contract() {
     );
     assert_eq!(
         fused.ops[region.start + 1],
-        Op::Constant(f.constants.len() as u16),
+        Op::Constant(f.constants().len() as u16),
         "emission recognizes the rebased prefix Constant"
     );
     assert_eq!(fused.constants[1], proto, "prototype remains rooted");
@@ -166,7 +166,7 @@ fn inline_v2_closure_uses_the_widest_known_source_prefix() {
         fused.v2.as_ref().unwrap().region_kind[0],
         RegionKind::Closure {
             prefix: 2,
-            const_base: f.constants.len(),
+            const_base: f.constants().len(),
         }
     );
 }
