@@ -950,6 +950,7 @@ impl FontResolver {
         let (specific, fallback) = rendering_groups_for_char(ch);
         let mut selected = None;
         let mut fallback_winner = None;
+        let mut fallback_order_gen = 0;
         for entry in specific {
             let keep_going = self.consider_fontset_entry(
                 &entry,
@@ -993,7 +994,8 @@ impl FontResolver {
                 if let Some(found) = resolution.take()
                     && let Some(font) = self.finish_character_resolution(Some(found))
                 {
-                    crate::font::fallback_order::promote_fallback(&order_key, entry);
+                    fallback_order_gen =
+                        crate::font::fallback_order::promote_fallback(&order_key, entry);
                     selected = Some(font);
                     fallback_winner = Some(entry.clone());
                     break;
@@ -1029,8 +1031,12 @@ impl FontResolver {
                 generation,
             ));
         }
-        let fallback = fallback_winner
-            .map(|winner| crate::font::fallback_order::FallbackAnswerStamp { order_key, winner });
+        let fallback =
+            fallback_winner.map(|winner| crate::font::fallback_order::FallbackAnswerStamp {
+                order_key,
+                winner,
+                order_gen: fallback_order_gen,
+            });
         self.store_character(key, fallback.clone(), selected.clone());
         CharacterResolution {
             font: selected,
@@ -1665,17 +1671,18 @@ impl CharacterResolution {
 impl FontResolver {
     /// `None` is a miss. `Some` is a hit, including a cached absence.
     ///
-    /// The front check runs while `char_cache` is held and then takes
-    /// `FALLBACK_ORDERS`. Callers must not hold `FALLBACK_ORDERS` here.
+    /// A generation match takes no order lock. A mismatch checks the front
+    /// while `char_cache` is held and then takes `FALLBACK_ORDERS`. Callers
+    /// must not hold `FALLBACK_ORDERS` here.
     fn cached_character(
         &self,
         key: &CharCacheKey,
-        order_key: &crate::font::fallback_order::FallbackOrderKey,
+        _order_key: &crate::font::fallback_order::FallbackOrderKey,
     ) -> Option<CharacterResolution> {
-        let cache = self.char_cache.lock().ok()?;
-        let cached = cache.get(key)?;
-        if let Some(stamp) = &cached.fallback
-            && !crate::font::fallback_order::fallback_front_is(order_key, &stamp.winner)
+        let mut cache = self.char_cache.lock().ok()?;
+        let cached = cache.get_mut(key)?;
+        if let Some(stamp) = cached.fallback.as_mut()
+            && !crate::font::fallback_order::stamp_still_front(stamp)
         {
             return None;
         }

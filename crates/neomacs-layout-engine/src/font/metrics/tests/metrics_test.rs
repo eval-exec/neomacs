@@ -218,7 +218,13 @@ fn symbol_font_policy_tracks_the_live_char_script_table_and_invalidates_char_cac
 
     let selection = RealizedFaceFontSelection::new("monospace", 400, false, 13.0);
     let cache_key = svc.realized_face_font_cache_key(selection);
-    svc.char_cache.insert((cache_key, '▶'), 13.0);
+    svc.char_cache.insert(
+        (cache_key, '▶'),
+        OrderStamped {
+            value: 13.0,
+            fallback: None,
+        },
+    );
 
     eval.eval_str(
         "(let ((unrelated (make-char-table 'neomacs-unrelated nil)))
@@ -4202,11 +4208,12 @@ fn glyph_vertical_metrics_match_canonical_font_selection_across_cache_changes() 
     }
 }
 
-/// Two faces of the pinned CJK collection. The family string is the fontset
-/// spec; the face index keeps the interned identities distinct.
+/// Two fixtures whose U+30EA advances differ. The family string is the
+/// fontset spec. Plemol's リ is wider than one em; Noto Sans CJK's リ is one em.
 #[cfg(target_os = "linux")]
 struct MetricsFallbackBackend {
-    file: String,
+    only_c2: String,
+    covers_both: String,
 }
 
 #[cfg(target_os = "linux")]
@@ -4237,14 +4244,14 @@ impl crate::font_backend::FontBackend for MetricsFallbackBackend {
         let Some(family) = query.scope.queried_family() else {
             return Vec::new();
         };
-        let face_index = match family {
-            "OnlyC2" if ch == 'リ' => 0,
-            "CoversBoth" if matches!(ch, '検' | 'リ') => 1,
+        let (file, face_index) = match family {
+            "OnlyC2" if ch == 'リ' => (self.only_c2.as_str(), 0),
+            "CoversBoth" if matches!(ch, '検' | 'リ') => (self.covers_both.as_str(), 0),
             _ => return Vec::new(),
         };
         vec![crate::font_backend::FontCandidate {
             matched: platform_file_candidate(
-                ResolvedFontIdentity::from_file(&self.file, face_index, None),
+                ResolvedFontIdentity::from_file(file, face_index, None),
                 crate::font_backend::PlatformFontMetadata {
                     foundry: None,
                     family: family.to_owned(),
@@ -4279,7 +4286,10 @@ fn materialized_seen_character_follows_a_later_fallback_move() {
     let mut svc = make_svc();
     svc.font_resolver
         .replace_backend(Box::new(MetricsFallbackBackend {
-            file: test_font_path(neomacs_test_fonts::noto_sans_cjk_variable().to_path_buf()),
+            only_c2: test_font_path(
+                neomacs_test_fonts::plemol_jp_console_nf_regular().to_path_buf(),
+            ),
+            covers_both: test_font_path(neomacs_test_fonts::noto_sans_cjk_variable().to_path_buf()),
         }));
     let selection = RealizedFaceFontSelection::new("DejaVu Sans", 400, false, 16.0);
     let family = |svc: &mut FontMetricsService, ch| {
@@ -4297,12 +4307,19 @@ fn materialized_seen_character_follows_a_later_fallback_move() {
             .family
     };
     assert_eq!(family(&mut svc, 'リ'), "OnlyC2");
+    let only_c2_advance = svc.char_width_for_realized_face('リ', selection);
     assert_eq!(cluster(&mut svc, "リ"), "OnlyC2");
     assert_eq!(family(&mut svc, '検'), "CoversBoth");
     assert_eq!(
         family(&mut svc, 'リ'),
         "CoversBoth",
         "layout's character cache must follow the fallback that moved to the front"
+    );
+    assert_eq!(only_c2_advance, 17.0, "Plemol リ at 16px");
+    let covers_both_advance = svc.char_width_for_realized_face('リ', selection);
+    assert_eq!(
+        covers_both_advance, 16.0,
+        "Noto Sans CJK リ at 16px must replace the cached Plemol advance"
     );
     assert_eq!(
         cluster(&mut svc, "リ"),

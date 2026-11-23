@@ -5,14 +5,17 @@
 //! `set-fontset-font` frees every realized fontset, so a new
 //! `fontset_generation` starts again in charset order. The layout
 //! resolver and the worker share one slot. A cached fallback answer
-//! stays valid only while its winning entry is still the front, so a
-//! clear cannot revive it by restarting a counter. The fontconfig
-//! walker uses `size: None` because it has no pixel size and must not
-//! reorder a layout face.
+//! stays valid only while its winning entry is still the front. A
+//! monotonic generation, bumped under the order lock on every front
+//! change and every clear, lets a hit skip that lock when nothing has
+//! moved. The generation never restarts, so a clear cannot revive a
+//! stored answer. The fontconfig walker uses `size: None` because it
+//! has no pixel size and must not reorder a layout face.
 
 use crate::font_backend::FontSelectionSize;
 use neovm_core::emacs_core::fontset::FontSpecEntry;
 use rustc_hash::FxHashMap as HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -30,6 +33,20 @@ pub(crate) struct FallbackOrderKey {
 pub(crate) struct FallbackAnswerStamp {
     pub(crate) order_key: FallbackOrderKey,
     pub(crate) winner: FontSpecEntry,
+    /// `ORDER_GENERATION` observed under the order lock while `winner` was
+    /// the front. A later load that still equals this value needs no lock.
+    pub(crate) order_gen: u64,
+}
+
+/// Bumped only while `FALLBACK_ORDERS` is held, and never reset.
+static ORDER_GENERATION: AtomicU64 = AtomicU64::new(1);
+
+fn bump_order_generation() {
+    ORDER_GENERATION.fetch_add(1, Ordering::Release);
+}
+
+fn order_generation() -> u64 {
+    ORDER_GENERATION.load(Ordering::Acquire)
 }
 
 #[derive(Default)]
@@ -51,10 +68,11 @@ fn lock() -> std::sync::MutexGuard<'static, HashMap<FallbackOrderKey, FallbackGr
 
 pub(crate) fn clear_fallback_orders() {
     if let Some(orders) = FALLBACK_ORDERS.get() {
-        orders
+        let mut orders = orders
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clear();
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        orders.clear();
+        bump_order_generation();
     }
 }
 
@@ -67,15 +85,35 @@ pub(crate) fn fallback_front_is(key: &FallbackOrderKey, winner: &FontSpecEntry) 
     lock().get(key).and_then(|group| group.entries.first()) == Some(winner)
 }
 
+/// Fast path when `stamp.order_gen` is still current. A mismatch takes the
+/// order lock, accepts the answer only if `winner` is still the front, and
+/// refreshes the stored generation from that same critical section.
+pub(crate) fn stamp_still_front(stamp: &mut FallbackAnswerStamp) -> bool {
+    if stamp.order_gen == order_generation() {
+        return true;
+    }
+    let orders = lock();
+    let front_ok = orders
+        .get(&stamp.order_key)
+        .and_then(|group| group.entries.first())
+        == Some(&stamp.winner);
+    if !front_ok {
+        return false;
+    }
+    stamp.order_gen = order_generation();
+    true
+}
+
 /// Charset order, with fallbacks already found for this face moved forward.
 pub(crate) fn order_fallback_group(
     key: &FallbackOrderKey,
     base: Vec<FontSpecEntry>,
 ) -> Vec<FontSpecEntry> {
     let mut orders = lock();
-    let group = orders.entry(key.clone()).or_insert_with(|| FallbackGroup {
-        entries: base.clone(),
-    });
+    let previous_front = orders
+        .get(key)
+        .and_then(|group| group.entries.first().cloned());
+    let group = orders.entry(key.clone()).or_default();
     let mut ordered = Vec::with_capacity(base.len());
     for entry in &group.entries {
         if base.contains(entry) && !ordered.contains(entry) {
@@ -88,20 +126,31 @@ pub(crate) fn order_fallback_group(
         }
     }
     group.entries.clone_from(&ordered);
+    if group.entries.first() != previous_front.as_ref() {
+        bump_order_generation();
+    }
     ordered
 }
 
 /// Move `found` to index 0. Already-front is a no-op, matching GNU's
 /// `found_index > 0` guard.
-pub(crate) fn promote_fallback(key: &FallbackOrderKey, found: &FontSpecEntry) {
+pub(crate) fn promote_fallback(key: &FallbackOrderKey, found: &FontSpecEntry) -> u64 {
     let mut orders = lock();
     let group = orders.entry(key.clone()).or_default();
-    match group.entries.iter().position(|entry| entry == found) {
-        Some(0) => {}
+    let changed = match group.entries.iter().position(|entry| entry == found) {
+        Some(0) => false,
         Some(index) => {
             let entry = group.entries.remove(index);
             group.entries.insert(0, entry);
+            true
         }
-        None => group.entries.insert(0, found.clone()),
+        None => {
+            group.entries.insert(0, found.clone());
+            true
+        }
+    };
+    if changed {
+        bump_order_generation();
     }
+    order_generation()
 }
