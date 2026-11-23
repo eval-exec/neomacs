@@ -1079,6 +1079,161 @@ fn toolbar_creation_geometry_ignores_ordinary_inhibition_but_honors_force() {
     }
 }
 
+/// `make-frame` under `frame-inhibit-implied-resize` t.
+///
+/// GNU's creation-time `update_frame_tool_bar` runs with no items, so
+/// `FRAME_TOOLBAR_HEIGHT` is still 0 when the window is sized
+/// (`gtkutil.c:1680-1681`, `:6149-6160`, `:1181-1182`). The outer height is
+/// the text plus the menu bar. After `after-make-frame`, the first
+/// item-bearing update is inhibited (`frame.c:204-209`) and the text shrinks
+/// by the packed bar. Attested on the pinned linux-gtk3 oracle: a 120x40
+/// frame returns `toolh=0`, `menuh=28`, `textpx=680`, `outer` height 708;
+/// after redisplay under t, `toolh=41`, `textpx=639`, outer height stays 708.
+#[cfg(target_os = "linux")]
+#[test]
+fn make_frame_under_t_omits_the_tool_bar_until_its_redisplay() {
+    let mut fixture = ChromeResizeFixture::new();
+    fixture.requests.borrow_mut().clear();
+    let created = fixture
+        .eval
+        .eval_str(
+            r#"(progn
+                (setq frame-inhibit-implied-resize t)
+                (setq n827-made (x-create-frame
+                  '((width . 90) (height . 40)
+                    (menu-bar-lines . 1) (tool-bar-lines . 1)
+                    (vertical-scroll-bars . nil)
+                    (horizontal-scroll-bars . nil)
+                    (left-fringe . 0) (right-fringe . 0)
+                    (internal-border-width . 0)
+                    (tab-bar-lines . 0))))
+                n827-made)"#,
+        )
+        .expect("make a frame under inhibit t");
+    let fid = crate::window::FrameId(created.as_frame_id().expect("new frame"));
+    let (menu, tool, outer) = {
+        let frame = fixture.eval.frame_manager().get(fid).unwrap();
+        assert!(frame.tool_bar_height > 0, "the frame still knows its bar");
+        assert_eq!(
+            frame.reserved_tool_bar_height(),
+            0,
+            "the creation window does not reserve the unpacked bar"
+        );
+        assert_eq!(
+            frame.toolkit_tool_bar,
+            crate::window::ToolkitToolBar::Unallocated {
+                explicit_size_omitted: true
+            }
+        );
+        (frame.menu_bar_height, frame.tool_bar_height, frame.height)
+    };
+    assert_eq!(menu, 16, "one menu row at the fixture's 16px line");
+    assert_eq!(
+        outer,
+        640 + menu,
+        "outer is 40 lines plus the menu, not the tool bar"
+    );
+    assert_eq!(
+        fixture
+            .eval
+            .eval_str("(frame-text-height n827-made)")
+            .unwrap()
+            .as_int(),
+        Some(640)
+    );
+    assert!(
+        fixture.requests.borrow().is_empty(),
+        "creation sizes the window once; it does not send a later resize"
+    );
+
+    fixture
+        .eval
+        .eval_str("(frame-after-make-frame n827-made t)")
+        .unwrap();
+    crate::emacs_core::frame::note_linux_toolkit_tool_bar_allocation(&mut fixture.eval, fid, true);
+    assert!(
+        fixture.requests.borrow().is_empty(),
+        "inhibit t keeps the outer window when the bar packs"
+    );
+    assert_eq!(fixture.eval.frame_manager().get(fid).unwrap().height, outer);
+    assert_eq!(
+        fixture
+            .eval
+            .eval_str("(frame-text-height n827-made)")
+            .unwrap()
+            .as_int(),
+        Some(640 - i64::from(tool))
+    );
+    assert_eq!(
+        fixture
+            .eval
+            .frame_manager()
+            .get(fid)
+            .unwrap()
+            .toolkit_tool_bar,
+        crate::window::ToolkitToolBar::Allocated
+    );
+}
+
+/// The same creation window under nil grows on the first packed bar.
+///
+/// Attested beside the t row: after redisplay, outer height goes 708 → 749
+/// and `textpx` stays 680.
+#[cfg(target_os = "linux")]
+#[test]
+fn make_frame_under_nil_grows_when_the_tool_bar_packs() {
+    let mut fixture = ChromeResizeFixture::new();
+    fixture.requests.borrow_mut().clear();
+    let created = fixture
+        .eval
+        .eval_str(
+            r#"(progn
+                (setq frame-inhibit-implied-resize nil)
+                (setq n827-made (x-create-frame
+                  '((width . 90) (height . 40)
+                    (menu-bar-lines . 1) (tool-bar-lines . 1)
+                    (vertical-scroll-bars . nil)
+                    (horizontal-scroll-bars . nil)
+                    (left-fringe . 0) (right-fringe . 0)
+                    (internal-border-width . 0)
+                    (tab-bar-lines . 0))))
+                n827-made)"#,
+        )
+        .expect("make a frame under inhibit nil");
+    let fid = crate::window::FrameId(created.as_frame_id().expect("new frame"));
+    let (menu, tool, outer) = {
+        let frame = fixture.eval.frame_manager().get(fid).unwrap();
+        (frame.menu_bar_height, frame.tool_bar_height, frame.height)
+    };
+    assert_eq!(outer, 640 + menu);
+    assert_eq!(
+        fixture
+            .eval
+            .eval_str("(frame-text-height n827-made)")
+            .unwrap()
+            .as_int(),
+        Some(640)
+    );
+    fixture
+        .eval
+        .eval_str("(frame-after-make-frame n827-made t)")
+        .unwrap();
+    fixture.requests.borrow_mut().clear();
+    crate::emacs_core::frame::note_linux_toolkit_tool_bar_allocation(&mut fixture.eval, fid, true);
+    assert_eq!(fixture.requests.borrow().len(), 1);
+    let grown = fixture.requests.borrow()[0].clone();
+    assert_eq!((grown.width, grown.height), (720, outer + tool));
+    assert_eq!(
+        fixture
+            .eval
+            .eval_str("(frame-text-height n827-made)")
+            .unwrap()
+            .as_int(),
+        Some(640),
+        "the grow keeps the requested text"
+    );
+}
+
 #[test]
 fn toolbar_noop_is_silent_and_same_alist_explicit_size_wins_once() {
     for parameters in [

@@ -8450,6 +8450,9 @@ pub(crate) fn x_create_frame_impl(
         // Resolve text dimensions after installing effective chrome and the
         // child's opened font. The provisional inherited metrics above cannot
         // size an explicit child font or account for its fringes/scrollbars.
+        // An explicit size omits the tool bar: the creation-time update has
+        // no items, so `FRAME_TOOLBAR_HEIGHT` is still 0
+        // (`gtkutil.c:1680-1681`, `:6149-6160`, `:1181-1182`).
         let frame = frames.get(fid).expect("new child frame exists");
         let width = parsed.width.map_or_else(
             || frame_text_width_pixels_in_state(frames, fid),
@@ -8459,6 +8462,7 @@ pub(crate) fn x_create_frame_impl(
             || frame_text_height_pixels(frame),
             |size| frame_size_param_to_pixels(size, frame.char_height),
         );
+        let include_tool_bar = parsed.height.is_none();
         resize_live_gui_frame(
             frames,
             buffers,
@@ -8467,8 +8471,30 @@ pub(crate) fn x_create_frame_impl(
             width,
             height,
             false,
-            true,
+            include_tool_bar,
         )?;
+    } else if initial_text_size.is_none() && parsed.height.is_some() {
+        // A later top-level `make-frame` with an explicit height. The pixel
+        // box above is the requested text size, and sync reserved the menu
+        // and tool bars inside it. GNU's creation window adds the menu bar
+        // and leaves the tool bar out: the creation-time update has no items
+        // (`gtkutil.c:1680-1681`, `:6149-6160`, `:1181-1182`). Inhibition
+        // then decides whether the first packed bar grows that window
+        // (`frame.c:204-209`). Width stays the box already chosen; side
+        // chrome is not added again here. The opening frame keeps its path.
+        #[cfg(target_os = "linux")]
+        {
+            let frame = frames.get_mut(fid).expect("new graphical frame exists");
+            let menu = frame.menu_bar_height;
+            let tool = frame.tool_bar_height;
+            if menu > 0 || tool > 0 {
+                // Keep the requested column and line parameters. A pixel
+                // resize would recompute them from the box minus side chrome.
+                note_explicit_tool_bar_omission(frame, false);
+                frame.height = frame.height.saturating_add(menu);
+                frame.sync_window_area_bounds();
+            }
+        }
     }
     // Identity, opened default font, chrome and owned mini geometry are final.
     adjust_frame_glyph_matrices_in_state(frames, buffers, fid);

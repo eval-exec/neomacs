@@ -4188,7 +4188,17 @@ fn x_create_frame_realizes_the_gui_frame_make_frame_delegates_to() {
         .expect("created opening frame");
     assert_eq!(frame.effective_window_system(), Some(Value::symbol("neo")));
     assert_eq!(frame.width, 800);
-    assert_eq!(frame.height, 500);
+    // Linux adds the menu bar outside the 500px text box and leaves the
+    // still-empty tool bar out (gtkutil.c:1181-1182). Other ports keep the
+    // text box as the realized window.
+    let expected_height = if cfg!(target_os = "linux") {
+        500 + frame.menu_bar_height
+    } else {
+        500
+    };
+    assert_eq!(frame.height, expected_height);
+    #[cfg(target_os = "linux")]
+    assert_eq!(frame.reserved_tool_bar_height(), 0);
     assert_eq!(
         ev.frame_manager()
             .selected_frame()
@@ -4201,7 +4211,7 @@ fn x_create_frame_realizes_the_gui_frame_make_frame_delegates_to() {
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].frame_id, created_id);
     assert_eq!(requests[0].width, 800);
-    assert_eq!(requests[0].height, 500);
+    assert_eq!(requests[0].height, expected_height);
 }
 
 #[test]
