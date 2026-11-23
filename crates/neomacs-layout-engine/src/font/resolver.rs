@@ -218,7 +218,7 @@ pub struct FontResolver {
         >,
     >,
     primary_cache: Mutex<HashMap<PrimaryCacheKey, Option<PlatformFontMatch>>>,
-    char_cache: Mutex<HashMap<CharCacheKey, Option<PlatformFontMatch>>>,
+    char_cache: Mutex<HashMap<CharCacheKey, CachedCharResolution>>,
     exact_cache: Mutex<HashMap<ResolvedFontIdentity, Option<PlatformFontMatch>>>,
     /// Fonts already opened for one face and font-def, in open order.
     ///
@@ -227,12 +227,6 @@ pub struct FontResolver {
     /// font spec, not the character, so a later character covered by an
     /// opened fallback does not get a new equal-score pick.
     opened_fallbacks: Mutex<HashMap<OpenedFallbackKey, Vec<PlatformFontMatch>>>,
-    /// Fallback specs in the order the next character tries them.
-    ///
-    /// GNU moves the found fallback object to the front of the fallback
-    /// group (`src/fontset.c`, the `found:` label) and leaves the
-    /// character-specific group in charset order. Empty means "no move yet".
-    fallback_order: Mutex<Vec<FontSpecEntry>>,
 }
 
 impl FontResolver {
@@ -249,7 +243,6 @@ impl FontResolver {
             char_cache: Mutex::new(HashMap::default()),
             exact_cache: Mutex::new(HashMap::default()),
             opened_fallbacks: Mutex::new(HashMap::default()),
-            fallback_order: Mutex::new(Vec::new()),
         }
     }
 
@@ -918,10 +911,16 @@ impl FontResolver {
         if self.worker_policy.is_some() {
             return self.resolve_worker_character(key);
         }
-        if let Ok(cache) = self.char_cache.lock()
-            && let Some(cached) = cache.get(&key)
-        {
-            return cached.clone();
+        let order_key = crate::font::fallback_order::FallbackOrderKey {
+            family: family.to_owned(),
+            weight: requested_weight,
+            slant: requested_slant.gnu_numeric(),
+            width: requested_width.gnu_numeric(),
+            size: Some(size),
+            fontset_generation: key.fontset_generation,
+        };
+        if let Some(cached) = self.cached_character(&key, &order_key) {
+            return cached;
         }
 
         let generation = key.fontset_generation;
@@ -929,7 +928,8 @@ impl FontResolver {
         let mut resolution = None;
         let mut allow_generic_fallback = true;
         let (specific, fallback) = rendering_groups_for_char(ch);
-        let fallback = self.ordered_fallback_group(fallback);
+        let mut selected = None;
+        let mut from_fallback = false;
         for entry in specific {
             let keep_going = self.consider_fontset_entry(
                 &entry,
@@ -944,13 +944,20 @@ impl FontResolver {
                 &mut allow_generic_fallback,
                 &mut resolution,
             );
-            if !keep_going || resolution.is_some() {
+            if let Some(found) = resolution.take()
+                && let Some(font) = self.finish_character_resolution(Some(found))
+            {
+                selected = Some(font);
+                break;
+            }
+            if !keep_going {
                 break;
             }
         }
-        if resolution.is_none() && allow_generic_fallback {
+        if selected.is_none() && allow_generic_fallback {
+            let fallback = crate::font::fallback_order::order_fallback_group(&order_key, fallback);
             for entry in &fallback {
-                if !self.consider_fontset_entry(
+                let keep_going = self.consider_fontset_entry(
                     entry,
                     family,
                     ch,
@@ -962,17 +969,22 @@ impl FontResolver {
                     generation,
                     &mut allow_generic_fallback,
                     &mut resolution,
-                ) {
+                );
+                if let Some(found) = resolution.take()
+                    && let Some(font) = self.finish_character_resolution(Some(found))
+                {
+                    crate::font::fallback_order::promote_fallback(&order_key, entry);
+                    selected = Some(font);
+                    from_fallback = true;
                     break;
                 }
-                if resolution.is_some() {
-                    self.promote_fallback(entry);
+                if !keep_going {
                     break;
                 }
             }
         }
 
-        if resolution.is_none() && allow_generic_fallback {
+        if selected.is_none() && allow_generic_fallback {
             let policy = CapturedCharacterPolicy::capture(
                 family,
                 ch,
@@ -991,12 +1003,14 @@ impl FontResolver {
                     definition: None,
                 },
             );
-            resolution = self.resolve_spec(policy, prefer_monospace, generation);
+            selected = self.finish_character_resolution(self.resolve_spec(
+                policy,
+                prefer_monospace,
+                generation,
+            ));
         }
-        let selected = self.finish_character_resolution(resolution);
-        if let Ok(mut cache) = self.char_cache.lock() {
-            cache.insert(key, selected.clone());
-        }
+        let epoch = from_fallback.then(|| crate::font::fallback_order::fallback_epoch(&order_key));
+        self.store_character(key, epoch, selected.clone());
         selected
     }
 
@@ -1045,44 +1059,6 @@ impl FontResolver {
                 selected
             }
             None => None,
-        }
-    }
-
-    /// Charset order, with any fallback already found moved to the front.
-    fn ordered_fallback_group(&self, base: Vec<FontSpecEntry>) -> Vec<FontSpecEntry> {
-        let Ok(mut stored) = self.fallback_order.lock() else {
-            return base;
-        };
-        if stored.is_empty() {
-            *stored = base.clone();
-            return base;
-        }
-        let mut ordered = Vec::with_capacity(base.len());
-        for entry in stored.iter() {
-            if base.contains(entry) && !ordered.contains(entry) {
-                ordered.push(entry.clone());
-            }
-        }
-        for entry in &base {
-            if !ordered.contains(entry) {
-                ordered.push(entry.clone());
-            }
-        }
-        *stored = ordered.clone();
-        ordered
-    }
-
-    /// GNU's `found:` label: the fallback that covered this character is tried
-    /// first for the next one. The character-specific group is not reordered.
-    fn promote_fallback(&self, found: &FontSpecEntry) {
-        let Ok(mut stored) = self.fallback_order.lock() else {
-            return;
-        };
-        if let Some(index) = stored.iter().position(|entry| entry == found) {
-            let entry = stored.remove(index);
-            stored.insert(0, entry);
-        } else {
-            stored.insert(0, found.clone());
         }
     }
 
@@ -1282,10 +1258,7 @@ impl FontResolver {
             .get_mut()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clear();
-        self.fallback_order
-            .get_mut()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clear();
+        crate::font::fallback_order::clear_fallback_orders();
         self.capability_cache
             .get_mut()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -1507,10 +1480,7 @@ impl FontResolver {
             .get_mut()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clear();
-        self.fallback_order
-            .get_mut()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clear();
+        crate::font::fallback_order::clear_fallback_orders();
         self.capability_cache
             .get_mut()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -1644,6 +1614,41 @@ struct PrimaryCacheKey {
     slant: u16,
     width: u16,
     size: FontSelectionSize,
+}
+
+/// A cached character answer. Fallback-group hits record the face's order
+/// epoch; any other answer stays valid when that order moves.
+struct CachedCharResolution {
+    epoch: Option<u64>,
+    font: Option<PlatformFontMatch>,
+}
+
+impl FontResolver {
+    fn cached_character(
+        &self,
+        key: &CharCacheKey,
+        order_key: &crate::font::fallback_order::FallbackOrderKey,
+    ) -> Option<Option<PlatformFontMatch>> {
+        let cache = self.char_cache.lock().ok()?;
+        let cached = cache.get(key)?;
+        match cached.epoch {
+            Some(stored) if stored != crate::font::fallback_order::fallback_epoch(order_key) => {
+                None
+            }
+            _ => Some(cached.font.clone()),
+        }
+    }
+
+    fn store_character(
+        &self,
+        key: CharCacheKey,
+        epoch: Option<u64>,
+        font: Option<PlatformFontMatch>,
+    ) {
+        if let Ok(mut cache) = self.char_cache.lock() {
+            cache.insert(key, CachedCharResolution { epoch, font });
+        }
+    }
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]

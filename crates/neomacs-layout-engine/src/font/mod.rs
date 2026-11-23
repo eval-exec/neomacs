@@ -1,6 +1,7 @@
 //! Font selection, metrics, and probing (moved from flat font_* files).
 
 pub mod catalog;
+mod fallback_order;
 pub mod font_match;
 #[cfg(target_os = "linux")]
 pub mod fontconfig;

@@ -1705,7 +1705,15 @@ impl FontBackend for FallbackGroupBackend {
         };
         let covers = match family {
             "OnlyC2" => ch == 'リ',
-            "CoversBoth" => ch == '検' || ch == 'リ',
+            "CoversBoth" => matches!(ch, '検' | 'リ' | 'ア' | 'ピ'),
+            "SpecA" | "SpecB" => matches!(ch, 'ア' | 'イ'),
+            "SpecC" => ch == 'ウ',
+            "CoversSecondOnly" => ch == 'ピ',
+            // Listed for 検, then `finalize_match` refuses it. リ is covered
+            // by the spec that should be tried only after that refusal.
+            "FailsFinalize" => ch == '検',
+            "AfterFail" => matches!(ch, '検' | 'リ'),
+            "Between" => ch == 'リ',
             _ => false,
         };
         if covers {
@@ -1731,6 +1739,34 @@ impl FontBackend for FallbackGroupBackend {
     fn poll_catalog_change(&mut self) -> crate::font::catalog::FontCatalogChange {
         crate::font::catalog::FontCatalogChange::Unchanged
     }
+
+    fn finalize_match(&self, matched: PlatformFontCandidate) -> Option<PlatformFontMatch> {
+        if matched.metadata.family == "FailsFinalize" {
+            return None;
+        }
+        matched.into_file_match()
+    }
+}
+
+fn hold_fontset(script: &str) -> neovm_core::Context {
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    eval.eval_str(script).expect("fontset script");
+    eval
+}
+
+fn fallback_family(resolver: &FontResolver, ch: char, weight: u16) -> String {
+    resolver
+        .resolve_for_char(
+            "DejaVu Sans",
+            ch,
+            weight,
+            FontSlant::Normal,
+            FontWidth::Normal,
+            selection_size(),
+        )
+        .unwrap_or_else(|| panic!("no fallback for {ch}"))
+        .family()
+        .to_string()
 }
 
 #[test]
@@ -1770,6 +1806,144 @@ fn fallback_group_tries_the_last_found_font_first() {
         kana.family()
     );
     drop(eval);
+}
+
+#[test]
+fn fallback_order_is_per_face() {
+    let _eval = hold_fontset(
+        r#"(progn
+            (set-fontset-font t nil "OnlyC2")
+            (set-fontset-font t nil "CoversBoth" nil 'append))"#,
+    );
+    let resolver = FontResolver::new(Box::new(FallbackGroupBackend));
+    assert_eq!(fallback_family(&resolver, '検', 400), "CoversBoth");
+    assert_eq!(
+        fallback_family(&resolver, 'リ', 700),
+        "OnlyC2",
+        "a heavier face keeps charset order; weight 400's promotion is not its order"
+    );
+}
+
+#[test]
+fn set_fontset_font_resets_the_fallback_order() {
+    let mut eval = hold_fontset(
+        r#"(progn
+            (set-fontset-font t nil "OnlyC2")
+            (set-fontset-font t nil "CoversBoth" nil 'append))"#,
+    );
+    let resolver = FontResolver::new(Box::new(FallbackGroupBackend));
+    assert_eq!(fallback_family(&resolver, '検', 400), "CoversBoth");
+    eval.eval_str(r#"(set-fontset-font t nil "Unused" nil 'append)"#)
+        .expect("generation bump");
+    assert_eq!(
+        fallback_family(&resolver, 'リ', 400),
+        "OnlyC2",
+        "set-fontset-font frees the realized order and the new generation starts at charset order"
+    );
+}
+
+#[test]
+fn seen_character_follows_a_later_fallback_move() {
+    let _eval = hold_fontset(
+        r#"(progn
+            (set-fontset-font t nil "OnlyC2")
+            (set-fontset-font t nil "CoversBoth" nil 'append))"#,
+    );
+    let resolver = FontResolver::new(Box::new(FallbackGroupBackend));
+    assert_eq!(fallback_family(&resolver, 'リ', 400), "OnlyC2");
+    assert_eq!(fallback_family(&resolver, '検', 400), "CoversBoth");
+    assert_eq!(
+        fallback_family(&resolver, 'リ', 400),
+        "CoversBoth",
+        "a character resolved before the move follows the new front"
+    );
+}
+
+#[test]
+fn fallback_move_to_front_keeps_the_unmoved_prefix() {
+    let _eval = hold_fontset(
+        r#"(progn
+            (set-fontset-font t nil "SpecA")
+            (set-fontset-font t nil "SpecB" nil 'append)
+            (set-fontset-font t nil "SpecC" nil 'append))"#,
+    );
+    let resolver = FontResolver::new(Box::new(FallbackGroupBackend));
+    assert_eq!(fallback_family(&resolver, 'ウ', 400), "SpecC");
+    assert_eq!(
+        fallback_family(&resolver, 'ア', 400),
+        "SpecA",
+        "moving SpecC to the front keeps SpecA ahead of SpecB (memmove, not a swap)"
+    );
+}
+
+#[test]
+fn specific_group_keeps_charset_order_after_a_later_entry_matches() {
+    let _eval = hold_fontset(
+        r#"(progn
+            (set-fontset-font t '(#x30A2 . #x30D4) "CoversSecondOnly")
+            (set-fontset-font t '(#x30A2 . #x30D4) "CoversBoth" nil 'append))"#,
+    );
+    let resolver = FontResolver::new(Box::new(FallbackGroupBackend));
+    assert_eq!(fallback_family(&resolver, 'ア', 400), "CoversBoth");
+    assert_eq!(
+        fallback_family(&resolver, 'ピ', 400),
+        "CoversSecondOnly",
+        "the character-specific group stays in charset order"
+    );
+}
+
+#[test]
+fn failed_open_does_not_move_the_fallback_and_tries_the_next() {
+    let _eval = hold_fontset(
+        r#"(progn
+            (set-fontset-font t nil "FailsFinalize")
+            (set-fontset-font t nil "Between" nil 'append)
+            (set-fontset-font t nil "AfterFail" nil 'append))"#,
+    );
+    let resolver = FontResolver::new(Box::new(FallbackGroupBackend));
+    assert_eq!(
+        fallback_family(&resolver, '検', 400),
+        "AfterFail",
+        "a failed open is skipped and does not end the fallback group"
+    );
+    assert_eq!(
+        fallback_family(&resolver, 'リ', 400),
+        "AfterFail",
+        "only the opened font moves to the front, so リ does not land on Between"
+    );
+}
+
+#[test]
+fn worker_and_main_pick_the_same_fallback_after_different_first_characters() {
+    let _eval = hold_fontset(
+        r#"(progn
+            (set-fontset-font t nil "OnlyC2")
+            (set-fontset-font t nil "CoversBoth" nil 'append))"#,
+    );
+    let policies = FrozenCharacterPolicies::capture(
+        &[
+            ("DejaVu Sans", '検', 400, false, selection_size()),
+            ("DejaVu Sans", 'リ', 400, false, selection_size()),
+        ],
+        64 * 1024,
+    )
+    .expect("frozen fontset");
+    let main = FontResolver::new(Box::new(FallbackGroupBackend));
+    let mut worker = FontResolver::new(Box::new(FallbackGroupBackend));
+    worker.install_worker_policy(Arc::new(policies));
+
+    assert_eq!(fallback_family(&main, 'リ', 400), "OnlyC2");
+    assert_eq!(fallback_family(&worker, '検', 400), "CoversBoth");
+    assert_eq!(
+        fallback_family(&worker, 'リ', 400),
+        "CoversBoth",
+        "the worker applies the same move-to-front as the live walk"
+    );
+    assert_eq!(
+        fallback_family(&main, 'リ', 400),
+        "CoversBoth",
+        "the worker's promotion is the order the next main resolution uses"
+    );
 }
 
 #[test]

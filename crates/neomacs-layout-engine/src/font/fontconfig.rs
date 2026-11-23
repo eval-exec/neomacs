@@ -23,7 +23,7 @@ use fontconfig_sys::constants::{
 };
 use neomacs_display_protocol::font::FontVariationCoord;
 use neovm_core::emacs_core::fontset::{
-    FontSpecEntry, StoredFontSpec, fontset_generation, matching_entries_for_char,
+    FontSpecEntry, StoredFontSpec, fontset_generation, rendering_groups_for_char,
 };
 use neovm_core::emacs_core::intern::{intern, resolve_sym};
 use neovm_core::face::{FontSlant, FontWeight, FontWidth};
@@ -62,7 +62,13 @@ struct FontconfigCaches {
     aliases: Option<HashMap<String, String>>,
     spacing: HashMap<String, Option<i32>>,
     subpixel_order: Option<FontconfigSubpixelOrder>,
-    char_matches: HashMap<CharMatchCacheKey, Option<FontMatch>>,
+    char_matches: HashMap<CharMatchCacheKey, CachedCharMatch>,
+}
+
+/// A character answer plus the fallback-order epoch it was computed under.
+struct CachedCharMatch {
+    epoch: u64,
+    font: Option<FontMatch>,
 }
 
 static FC_CACHES: OnceLock<Mutex<FontconfigCaches>> = OnceLock::new();
@@ -389,33 +395,74 @@ pub fn match_font_for_char(
         return None;
     }
 
+    let generation = fontset_generation();
+    let order_key = char_fallback_order_key(family, requested_weight, italic, generation);
     let key = CharMatchCacheKey {
         family: family.to_string(),
         codepoint: ch as u32,
         prefer_monospace,
         requested_weight,
         italic,
-        fontset_generation: fontset_generation(),
+        fontset_generation: generation,
     };
+    let epoch = crate::font::fallback_order::fallback_epoch(&order_key);
     if let Some(cached) = fontconfig_caches()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .char_matches
         .get(&key)
+        && cached.epoch == epoch
     {
-        return cached.clone();
+        return cached.font.clone();
     }
 
-    let matched =
-        match_font_for_char_uncached(family, ch, prefer_monospace, requested_weight, italic);
+    let matched = match_font_for_char_uncached(
+        family,
+        ch,
+        prefer_monospace,
+        requested_weight,
+        italic,
+        &order_key,
+    );
+    let epoch = crate::font::fallback_order::fallback_epoch(&order_key);
 
     fontconfig_caches()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .char_matches
-        .insert(key, matched.clone());
+        .insert(
+            key,
+            CachedCharMatch {
+                epoch,
+                font: matched.clone(),
+            },
+        );
 
     matched
+}
+
+/// The fontconfig walker has no pixel size. `size: None` keeps its permutation
+/// off the layout resolver's face key. Width is normal because this walker
+/// does not take a width.
+fn char_fallback_order_key(
+    family: &str,
+    weight: u16,
+    italic: bool,
+    fontset_generation: u64,
+) -> crate::font::fallback_order::FallbackOrderKey {
+    crate::font::fallback_order::FallbackOrderKey {
+        family: family.to_owned(),
+        weight,
+        slant: if italic {
+            FontSlant::Italic
+        } else {
+            FontSlant::Normal
+        }
+        .gnu_numeric(),
+        width: FontWidth::Normal.gnu_numeric(),
+        size: None,
+        fontset_generation,
+    }
 }
 
 pub fn find_font_for_spec(
@@ -527,35 +574,35 @@ fn match_font_for_char_uncached(
     prefer_monospace: bool,
     requested_weight: u16,
     italic: bool,
+    order_key: &crate::font::fallback_order::FallbackOrderKey,
 ) -> Option<FontMatch> {
-    for entry in matching_entries_for_char(ch) {
-        match entry {
-            FontSpecEntry::ExplicitNone => {
-                tracing::debug!(
-                    "fontconfig: U+{:04X} hit explicit nil fontset entry",
-                    ch as u32
-                );
-                return None;
+    let (specific, fallback) = rendering_groups_for_char(ch);
+    for entry in specific {
+        if let Some(matched) = match_one_fontset_entry(
+            family,
+            ch,
+            prefer_monospace,
+            requested_weight,
+            italic,
+            &entry,
+        ) {
+            return matched;
+        }
+    }
+    let fallback = crate::font::fallback_order::order_fallback_group(order_key, fallback);
+    for entry in &fallback {
+        if let Some(matched) = match_one_fontset_entry(
+            family,
+            ch,
+            prefer_monospace,
+            requested_weight,
+            italic,
+            entry,
+        ) {
+            if matched.is_some() {
+                crate::font::fallback_order::promote_fallback(order_key, entry);
             }
-            FontSpecEntry::Font(spec) => {
-                if let Some(matched) = match_font_from_spec(
-                    family,
-                    ch,
-                    prefer_monospace,
-                    requested_weight,
-                    italic,
-                    &spec,
-                ) {
-                    tracing::debug!(
-                        "fontconfig: fontset matched U+{:04X} req_family={} spec={:?} -> {:?}",
-                        ch as u32,
-                        family,
-                        spec,
-                        matched
-                    );
-                    return Some(matched);
-                }
-            }
+            return matched;
         }
     }
 
@@ -586,6 +633,41 @@ fn match_font_for_char_uncached(
         );
     }
     matched
+}
+
+/// `None` continues the walk. `Some(None)` is an explicit nil spec, which
+/// stops the group. `Some(Some(_))` is a realized font.
+fn match_one_fontset_entry(
+    family: &str,
+    ch: char,
+    prefer_monospace: bool,
+    requested_weight: u16,
+    italic: bool,
+    entry: &FontSpecEntry,
+) -> Option<Option<FontMatch>> {
+    match entry {
+        FontSpecEntry::ExplicitNone => {
+            tracing::debug!(
+                "fontconfig: U+{:04X} hit explicit nil fontset entry",
+                ch as u32
+            );
+            Some(None)
+        }
+        FontSpecEntry::Font(spec) => {
+            match_font_from_spec(family, ch, prefer_monospace, requested_weight, italic, spec).map(
+                |matched| {
+                    tracing::debug!(
+                        "fontconfig: fontset matched U+{:04X} req_family={} spec={:?} -> {:?}",
+                        ch as u32,
+                        family,
+                        spec,
+                        matched
+                    );
+                    Some(matched)
+                },
+            )
+        }
+    }
 }
 
 fn match_font_from_spec(
