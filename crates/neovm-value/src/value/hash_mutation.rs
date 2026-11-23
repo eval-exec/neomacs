@@ -184,8 +184,17 @@ impl HashTableStorage {
         symbols_with_pos_enabled: bool,
         mut report: impl FnMut(usize),
     ) -> Result<(), Flow> {
-        let Some((hash, slot)) = self.try_entry_by_value(key, test, symbols_with_pos_enabled)?
-        else {
+        // Identity lookup cannot signal. Keep it in this removal extent;
+        // only the structural comparison needs the fallible lookup result.
+        let found = match test {
+            HashTableTest::Eq | HashTableTest::Eql => {
+                self.identity_entry_by_value(key, test, symbols_with_pos_enabled)
+            }
+            HashTableTest::Equal => {
+                self.equal_entry_by_value(key, equal_value_hash(key), symbols_with_pos_enabled)?
+            }
+        };
+        let Some((hash, slot)) = found else {
             return Ok(());
         };
         let index_before = self.index.capacity();
