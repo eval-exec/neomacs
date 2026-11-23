@@ -676,10 +676,11 @@ fn treesit_search_subtree_set_included_ranges_inside_predicate_stays_current() {
     );
 }
 
-/// Same contract as row 13, but the ranges slot actually changes, so
-/// `treesit-parser-set-included-ranges` reaches `ts_tree_edit` while the
-/// walk clone is alive. GNU still returns a live pair that is not outdated:
-/// the parser timestamp moves only on reparse (`src/treesit.c:1941`).
+/// Attested on Emacs 31.1 `a360712c9d`: `("pair" nil)`.
+///
+/// Row 13b. The ranges slot changes, so `treesit-parser-set-included-ranges`
+/// reaches `ts_tree_edit` while the walk clone is alive. Regression guard:
+/// the closure is the single `edit_tree` and the plan-only sync.
 #[test]
 fn treesit_search_subtree_changed_included_ranges_inside_predicate_stays_current() {
     let (mut eval, parser) = eval_with_json_parser(r#"{"a": 1, "b": 2}"#);
@@ -709,6 +710,55 @@ fn treesit_search_subtree_changed_included_ranges_inside_predicate_stays_current
     );
     assert!(
         builtin_treesit_node_check(&mut eval, vec![found, Value::symbol("outdated")])
+            .expect("outdated")
+            .is_nil()
+    );
+}
+
+/// Attested on Emacs 31.1 `a360712c9d`: `("pair" 10 16 nil)`.
+///
+/// Row 15. The predicate saves each pair, then inserts two spaces at
+/// point-min, and the search returns nil. The saved node is the second
+/// pair, published before that in-walk edit. Reading it after the walk
+/// drops the clone. The unit runtime has no `when`, so the body is `if`.
+#[test]
+fn treesit_search_subtree_saved_pair_keeps_stale_positions_after_point_min_insert() {
+    let (mut eval, parser) = eval_with_json_parser(r#"{"a": 1, "b": 2}"#);
+    let root = builtin_treesit_parser_root_node(&mut eval, vec![parser]).expect("root");
+    eval.eval_str(
+        "(progn \
+           (setq neomacs--treesit-saved nil) \
+           (defalias 'neomacs--treesit-save-pair-p \
+             (lambda (n) \
+               (if (equal (treesit-node-type n) \"pair\") \
+                   (progn \
+                     (setq neomacs--treesit-saved n) \
+                     (goto-char (point-min)) \
+                     (insert \"  \"))) \
+               nil)))",
+    )
+    .expect("save predicate");
+    let found = builtin_treesit_search_subtree(
+        &mut eval,
+        vec![root, Value::symbol("neomacs--treesit-save-pair-p")],
+    )
+    .expect("no signal");
+    assert!(found.is_nil());
+    let saved = eval.eval_str("neomacs--treesit-saved").expect("saved pair");
+    assert_eq!(
+        builtin_treesit_node_type(&mut eval, vec![saved]).expect("type"),
+        Value::string("pair")
+    );
+    assert_eq!(
+        builtin_treesit_node_start(&mut eval, vec![saved]).expect("stale start"),
+        Value::fixnum(10)
+    );
+    assert_eq!(
+        builtin_treesit_node_end(&mut eval, vec![saved]).expect("stale end"),
+        Value::fixnum(16)
+    );
+    assert!(
+        builtin_treesit_node_check(&mut eval, vec![saved, Value::symbol("outdated")])
             .expect("outdated")
             .is_nil()
     );
