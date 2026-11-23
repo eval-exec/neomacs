@@ -735,6 +735,10 @@ impl OwnedSourceBackendClosed {
 mod bootstrap;
 mod keeper_service;
 
+/// The live-era fixture the bootstrap rows and the E5.2 rows share.
+#[cfg(test)]
+pub(in crate::emacs_core::eval::parallel_entry) use bootstrap::era_fixture;
+
 #[cfg(test)]
 #[path = "tests/owned_source_jit_compiler_test.rs"]
 mod jit_compiler_tests;
