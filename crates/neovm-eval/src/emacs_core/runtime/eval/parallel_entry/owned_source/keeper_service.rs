@@ -93,6 +93,14 @@ impl<'service, 'heap> KeeperEra<'service, 'heap> {
         self.era.register(owner, root_capacity)
     }
 
+    /// Wake parked owners with `Poisoned`. A panicking keeper drop guard
+    /// calls this so `thread::scope` joins instead of waiting out the
+    /// nextest kill. A dropped `AllStopped` publishes the same word.
+    #[cfg(test)]
+    pub(crate) fn poison_for_test(&self) {
+        self.era.poison_for_test();
+    }
+
     /// Queue one serial request on this era. The product ring is L6.7.
     #[cfg(test)]
     pub(crate) fn enqueue_serial_for_test(

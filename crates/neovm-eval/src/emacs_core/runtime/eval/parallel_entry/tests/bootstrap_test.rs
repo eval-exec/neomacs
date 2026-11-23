@@ -385,7 +385,7 @@ fn pentry_l62_keeper_era_control_persists_across_two_stops() {
 #[test]
 fn pentry_l62_live_lend_refuses_a_stale_owner_a_wrong_generation_and_a_second_stop() {
     use super::super::super::keeper_custody::StoppedKeeper;
-    use super::super::keeper_service::keeper_serve;
+    use super::super::keeper_service::{KeeperEra, keeper_serve};
     use neovm_value::tagged::gc::heap_transfer::with_stop_scope;
     use neovm_value::tagged::gc::{MutatorPermit, RegistrationError, RendezvousError};
     use std::num::NonZeroU64;
@@ -450,6 +450,21 @@ fn pentry_l62_live_lend_refuses_a_stale_owner_a_wrong_generation_and_a_second_st
         }
     }
 
+    // Dropped while the keeper thread panics. Poison wakes `wait_request`
+    // with `Poisoned` before `thread::scope` joins, so a keeper panic is a
+    // red result instead of a 600s hang. Mirrors the restricted-lisp
+    // `PanicFlag` (poison on `thread::panicking`).
+    struct KeeperPanicGuard<'a, 'service, 'heap> {
+        keeper: &'a KeeperEra<'service, 'heap>,
+    }
+    impl Drop for KeeperPanicGuard<'_, '_, '_> {
+        fn drop(&mut self) {
+            if std::thread::panicking() {
+                self.keeper.poison_for_test();
+            }
+        }
+    }
+
     let Some(mut source) = ready() else {
         return;
     };
@@ -478,6 +493,10 @@ fn pentry_l62_live_lend_refuses_a_stale_owner_a_wrong_generation_and_a_second_st
             let stop_returned = Arc::new(AtomicBool::new(false));
             let checker_flag = Arc::clone(&stop_returned);
             std::thread::scope(|scope| {
+                // Inside the scope: its destructor runs before `thread::scope`
+                // joins. A guard outside the scope would poison only after
+                // the join, which is the hang.
+                let _panic_guard = KeeperPanicGuard { keeper };
                 scope.spawn(move || {
                     let mut owner = activate(stale_permit, heap, STALE_OWNER);
                     let stale = retry_native("publish stale", || owner.publish_native_owner(&[]));
@@ -493,9 +512,18 @@ fn pentry_l62_live_lend_refuses_a_stale_owner_a_wrong_generation_and_a_second_st
                     ready_tx
                         .send(())
                         .expect("the owner is running and about to wait");
-                    let epoch = owner
-                        .wait_request()
-                        .expect("the product wait observes the keeper stop");
+                    let waited = std::time::Instant::now();
+                    let epoch = match owner.wait_request_for(Duration::from_secs(30)) {
+                        Ok(epoch) => epoch,
+                        Err(RendezvousError::Busy)
+                            if waited.elapsed() >= Duration::from_secs(30) =>
+                        {
+                            panic!("owner wait exceeded 30s");
+                        }
+                        Err(reason) => {
+                            panic!("the product wait observes the keeper stop: {reason:?}")
+                        }
+                    };
                     pre_tx
                         .send(())
                         .expect("the worker is between the wait and the publish");
@@ -505,7 +533,9 @@ fn pentry_l62_live_lend_refuses_a_stale_owner_a_wrong_generation_and_a_second_st
                     ack_tx
                         .send((epoch, superseded, current))
                         .expect("send the stop ack");
-                    let _ = release_rx.recv();
+                    release_rx
+                        .recv_timeout(Duration::from_secs(30))
+                        .expect("the keeper releases the owner");
                     retire(owner);
                 });
                 scope.spawn(move || {
@@ -520,9 +550,9 @@ fn pentry_l62_live_lend_refuses_a_stale_owner_a_wrong_generation_and_a_second_st
                 });
                 let stale = stale_rx.recv().expect("stale owner published");
                 ready_rx.recv().expect("current owner is waiting");
-                let queued = keeper
-                    .enqueue_serial_for_test(current_key, SERIAL_GENERATION)
-                    .expect("queue one serial request ahead of the stop");
+                let queued = retry_native("queue one serial request ahead of the stop", || {
+                    keeper.enqueue_serial_for_test(current_key, SERIAL_GENERATION)
+                });
                 let mut stopped = keeper
                     .stop()
                     .expect("the keeper stop waits for the native publish");

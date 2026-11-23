@@ -197,4 +197,35 @@ impl Registry {
             }
         }
     }
+
+    /// Same wake as [`Self::wait`]. A timeout returns the guard so the caller
+    /// can recheck its predicate; it does not poison. Test rows use this to
+    /// bound a parked owner. Production waits stay on [`Self::wait`].
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn wait_timeout<'a>(
+        &'a self,
+        guard: RegistryGuard<'a>,
+        timeout: std::time::Duration,
+    ) -> Result<RegistryGuard<'a>, RegistrationError> {
+        debug_assert!(std::ptr::eq(self, guard.registry));
+        if self.park.poisoned.load(Ordering::Acquire) {
+            return Err(RegistrationError::Poisoned);
+        }
+        match self.park.wake.wait_timeout(guard.take_for_wait(), timeout) {
+            Ok((guard, _)) => {
+                let guard = RegistryGuard::new(self, guard);
+                if self.park.poisoned.load(Ordering::Acquire) {
+                    Err(RegistrationError::Poisoned)
+                } else {
+                    Ok(guard)
+                }
+            }
+            Err(error) => {
+                let (guard, _timed) = error.into_inner();
+                let _guard = RegistryGuard::new(self, guard);
+                self.poison();
+                Err(RegistrationError::Poisoned)
+            }
+        }
+    }
 }

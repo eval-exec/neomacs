@@ -440,6 +440,20 @@ pub(super) fn wait<'a>(
     wait_after_poison_check(registry, gate)
 }
 
+/// Bounded form of [`wait`]. A timeout is `Busy` only after the caller's
+/// own deadline; this helper returns the guard either way so the predicate
+/// runs again. Poison still refuses.
+#[cfg(any(test, feature = "test-support"))]
+pub(super) fn wait_timeout<'a>(
+    registry: &'a Registry,
+    gate: RegistryGuard<'a>,
+    timeout: std::time::Duration,
+) -> Result<RegistryGuard<'a>, RendezvousError> {
+    let gate = registry.wait_timeout(gate, timeout)?;
+    gate.rendezvous.live()?;
+    Ok(gate)
+}
+
 // Separated to force poison after a caller's predicate check in regressions.
 fn wait_after_poison_check<'a>(
     registry: &'a Registry,

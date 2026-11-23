@@ -102,6 +102,50 @@ impl<'era> Mutator<'era> {
             gate = wait(self.registry, gate)?;
         }
     }
+
+    /// [`Self::wait_request`] with a deadline. Expiry is `Busy`. A real stop
+    /// still returns the epoch, and a panic poison still returns `Poisoned`.
+    /// Production parking stays on the unbounded wait.
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn wait_request_for(
+        &self,
+        budget: std::time::Duration,
+    ) -> Result<NonZeroU64, RendezvousError> {
+        self.check_thread()?;
+        let _park = self.registry.park_ticket();
+        let mut gate = self.registry.lock()?;
+        let deadline = std::time::Instant::now() + budget;
+        loop {
+            let e = entry_state(&self.entry)?;
+            if !matches!(e.rendezvous.mode, Mode::Running | Mode::StartingStopped)
+                || (e.rendezvous.mode == Mode::StartingStopped
+                    && self.thread == self.registry.keeper_thread
+                    && matches!(
+                        gate.rendezvous.phase,
+                        Phase::Stopping(_) | Phase::Tracing(_)
+                    ))
+            {
+                return Err(RendezvousError::Busy);
+            }
+            if let Phase::Stopping(epoch) = gate.rendezvous.phase {
+                if gate.rendezvous.frozen.contains(&self.entry.key)
+                    && e.rendezvous.mode == Mode::Running
+                {
+                    if self.registry.request_epoch.load(Ordering::Acquire) != epoch.get() {
+                        return Err(RendezvousError::Publication);
+                    }
+                    return Ok(epoch);
+                }
+            }
+            drop(e);
+            if std::time::Instant::now() >= deadline {
+                return Err(RendezvousError::Busy);
+            }
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            gate = wait_timeout(self.registry, gate, left)?;
+        }
+    }
     /// A stale/duplicate ACK is a refusal, never a count toward another epoch.
     pub fn acknowledge(
         &mut self,

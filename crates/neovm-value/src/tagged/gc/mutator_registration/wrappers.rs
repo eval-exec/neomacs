@@ -598,6 +598,15 @@ impl<'heap, K: EraKeeper> ParallelHeapEra<'heap, K> {
         ))
     }
 
+    /// Park poison, the same word a dropped stop proof publishes. The
+    /// live-lend keeper calls this from a panic drop guard so a parked
+    /// owner returns `Poisoned` and the scoped join finishes.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn poison_for_test(&self) {
+        self.core.registry().poison();
+    }
+
     /// Queue one serial request ahead of a live stop. Not the product ring.
     /// L6.7 owns that enqueue. The generation is stored and is not a
     /// publication check.
