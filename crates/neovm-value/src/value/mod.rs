@@ -408,11 +408,12 @@ pub fn set_string_text_properties_table_for_value(value: Value, table: TextPrope
         .as_lisp_string()
         .map(|string| string.schars())
         .unwrap_or(0);
-    if TextPropertyTable::equal_including_property_values(
-        string_text_props(value),
-        Some(&table),
-        len,
-    ) {
+    // Skip only an `eq` plist spine with the same boundaries. `equal` values
+    // still replace the conses `text-properties-at` returns. A string with no
+    // table must not pay for that comparison.
+    if let Some(existing) = string_text_props(value)
+        && existing.same_eq_plist_boundaries(&table, len)
+    {
         return;
     }
     if mutate::with_string_text_props_mut(value, |props| {

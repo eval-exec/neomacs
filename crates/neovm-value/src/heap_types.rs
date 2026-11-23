@@ -161,6 +161,8 @@ pub enum LispStringStorageKind {
 // table can hold mutator-local Values. Collector access to the atomic interval
 // pointer word is admitted separately; it never dereferences that table.
 static_assertions::assert_not_impl_any!(LispString: Send, Sync);
+// Plist `Value`s are thread-confined, so the table stays `!Send` and `!Sync`
+// even though its journal mark is a plain enum rather than a `Cell`.
 static_assertions::assert_not_impl_any!(TextPropertyTable: Send, Sync);
 
 /// Whether the declared count has a decoded-payload proof.

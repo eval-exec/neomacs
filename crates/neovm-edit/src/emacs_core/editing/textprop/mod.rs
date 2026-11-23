@@ -2876,9 +2876,8 @@ pub fn builtin_set_text_properties<H: EditHost>(host: &mut H, args: Vec<Value>) 
         let (edit, _vars) = host.edit_and_vars();
         buffer_property_range_for_args(&edit.buffers, &args, 3)?.and_then(|(buf_id, byte_range)| {
             let buf = edit.buffers.get(buf_id)?;
-            (!pairs_for_probe.is_empty()
-                || buf.text_props_range_has_any_interval_in_emacs_byte_range(byte_range))
-            .then_some((buf_id, byte_range))
+            (!pairs_for_probe.is_empty() || buf.text_props_tree_present())
+                .then_some((buf_id, byte_range))
         })
     };
     match change {
@@ -2925,11 +2924,11 @@ pub fn builtin_set_text_properties_in_buffers(
             return Ok(Value::NIL);
         };
         // GNU `set_text_properties` returns nil without `modify_text_properties`
-        // when PROPERTIES is nil and the range has no interval
-        // (`src/textprop.c`, emacs-31.1).
-        if pairs.is_empty()
-            && !buf.text_props_range_has_any_interval_in_emacs_byte_range(byte_range)
-        {
+        // when PROPERTIES is nil and `validate_interval_range` is null
+        // (`src/textprop.c`, emacs-31.1). Null means no interval tree, an
+        // empty range, or no accessible text. A tree anywhere, including an
+        // all-nil one, still modifies. Empty ranges already returned above.
+        if pairs.is_empty() && !buf.text_props_tree_present() {
             return Ok(Value::NIL);
         }
         byte_range

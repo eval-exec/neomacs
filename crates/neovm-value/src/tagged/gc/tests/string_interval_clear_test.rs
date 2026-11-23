@@ -167,3 +167,75 @@ fn writing_an_equal_text_property_table_does_not_journal() {
     );
     assert!(has_intervals(value));
 }
+
+/// A copied plist spine is `equal` to the live one and not `eq`. Writing it
+/// back must install the new conses. `compose-string` does not reach this
+/// skip: its second put `set_car`s the shared value cell before write-back.
+#[test]
+fn write_back_of_an_equal_plist_spine_installs_the_new_conses() {
+    let value = fresh_string(b"abcd");
+    put_face(value, TaggedValue::symbol("bold"));
+    let before = crate::value::get_string_text_properties_table_for_value(value)
+        .expect("table")
+        .interval_plist_at_char_pos(crate::value::positions::CharPos0::ZERO)
+        .expect("plist");
+    let copied = crate::value::get_string_text_properties_table_for_value(value)
+        .expect("table")
+        .copy_interval_plist_spines();
+
+    crate::value::set_string_text_properties_table_for_value(value, copied);
+
+    let after = crate::value::get_string_text_properties_table_for_value(value)
+        .expect("table")
+        .interval_plist_at_char_pos(crate::value::positions::CharPos0::ZERO)
+        .expect("plist");
+    assert!(
+        !crate::value::eq_value(&before, &after),
+        "an equal plist spine must replace the previous cons"
+    );
+}
+
+/// A put that changes the property value journals the string once.
+///
+/// Replacing the value uses `set_car` on the existing plist value cell, so
+/// that cons records its own write first. The string must still appear once.
+#[test]
+fn changed_put_of_a_different_value_journals_exactly_once() {
+    let value = fresh_string(b"abcd");
+    put_face(value, TaggedValue::symbol("bold"));
+    let value_cell = crate::value::get_string_text_properties_table_for_value(value)
+        .expect("table")
+        .interval_plist_at_char_pos(crate::value::positions::CharPos0::ZERO)
+        .expect("plist")
+        .cons_cdr();
+    let start = LispCollectionRevision::current();
+
+    put_face(value, TaggedValue::symbol("italic"));
+
+    assert_eq!(
+        journal_since_for_test(start).expect("journal window"),
+        vec![value_cell.bits(), value.bits()],
+        "changing a property value journals the plist cell and the string once each"
+    );
+}
+
+/// A remove that strips a present name records one collection write.
+#[test]
+fn changed_remove_of_a_present_property_journals_exactly_once() {
+    let value = fresh_string(b"abcd");
+    put_face(value, TaggedValue::symbol("bold"));
+    let start = LispCollectionRevision::current();
+    let names = [TaggedValue::symbol("face")];
+
+    let removed = crate::value::mutate_string_text_properties(value, |table| {
+        table.remove_properties_in_char_range(whole_range(value), &names)
+    })
+    .expect("string");
+
+    assert!(removed, "face was on the string");
+    assert_eq!(
+        journal_since_for_test(start).expect("journal window"),
+        vec![value.bits()],
+        "removing a present property records one collection write"
+    );
+}

@@ -12,7 +12,6 @@
 //! | `NEOMACS_WATCHED_PROP_DEMAND` | `on` | `off`; `on`/`1`/`true`/`yes` | Advance bounded watched-property scans only after another interval is needed; generic cursors remain eager. |
 
 use crate::intern::SymId;
-use std::cell::Cell;
 use std::collections::HashMap;
 use std::sync::{
     Arc,
@@ -2841,6 +2840,14 @@ impl TextPropertyReadView {
 /// The backing store is a GNU-shaped augmented interval tree.  Callers still
 /// use absolute character positions; internally node starts are derived from
 /// subtree lengths.
+/// See `TextPropertyTable::journal_mark`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum JournalMark {
+    Fresh,
+    Armed,
+    Dirty,
+}
+
 #[derive(Debug)]
 pub struct TextPropertyTable {
     pub(crate) intervals: IntervalTree,
@@ -2860,9 +2867,17 @@ pub struct TextPropertyTable {
     /// memos on it (together with the buffer content epoch) so a property
     /// change invalidates them. Monotonic, wraps never (u64).
     pub(crate) mutation_tick: u64,
-    /// String collection-journal sentinel. `0` is a fresh table, `1` is armed
-    /// around a closure, `2` means property contents changed. Not a Lisp root.
-    journal_mark: Cell<u8>,
+    /// String collection-journal state. Not a Lisp root.
+    ///
+    /// `Fresh` is a new or wholesale-replaced table. `Armed` means
+    /// `with_string_text_props_mut` entered the closure. `Dirty` means a
+    /// mutator changed property contents. Fresh and Dirty both count as
+    /// changed, because replacing the table installs a Fresh one that must
+    /// journal. Armed means the closure ran and did not dirty.
+    ///
+    /// A future `&mut self` mutator that forgets `mark_journal_dirty` silently
+    /// drops that journal and leaves a stale collection capture.
+    journal_mark: JournalMark,
     /// Bumped only by mutations that can change `syntax-table`/`category`
     /// presence or values: exact for by-name put/remove, conservative for
     /// bulk plist replacement, and NOT bumped by pure position adjusts
@@ -3071,7 +3086,7 @@ impl Clone for TextPropertyTable {
             mutation_tick: self.mutation_tick,
             // A copy is a new table. Resetting the sentinel makes a wholesale
             // replacement inside an armed closure visible to the journal.
-            journal_mark: Cell::new(0),
+            journal_mark: JournalMark::Fresh,
             syntax_prop_tick: self.syntax_prop_tick,
             syntax_prop_any: std::sync::atomic::AtomicU64::new(
                 self.syntax_prop_any.load(Ordering::Relaxed),
@@ -3171,7 +3186,7 @@ impl TextPropertyTable {
             interval_tree_present: false,
             property_names: ConservativePropertyNames::default(),
             mutation_tick: 0,
-            journal_mark: Cell::new(0),
+            journal_mark: JournalMark::Fresh,
             syntax_prop_tick: 0,
             syntax_prop_any: std::sync::atomic::AtomicU64::new(0),
             syntax_prop_ranges: std::sync::Mutex::new((0, Vec::new())),
@@ -3227,18 +3242,18 @@ impl TextPropertyTable {
     }
 
     /// Armed by `with_string_text_props_mut` before the closure runs.
-    pub(crate) fn arm_journal_mark(&self) {
-        self.journal_mark.set(1);
+    pub(crate) fn arm_journal_mark(&mut self) {
+        self.journal_mark = JournalMark::Armed;
     }
 
-    /// Property contents changed. A no-op put or remove leaves the sentinel armed.
-    pub(crate) fn mark_journal_dirty(&self) {
-        self.journal_mark.set(2);
+    /// Property contents changed. A no-op put or remove leaves the mark armed.
+    pub(crate) fn mark_journal_dirty(&mut self) {
+        self.journal_mark = JournalMark::Dirty;
     }
 
     /// The closure replaced the table or changed property contents.
     pub(crate) fn journal_mark_changed(&self) -> bool {
-        self.journal_mark.get() != 1
+        self.journal_mark != JournalMark::Armed
     }
 
     /// Current syntax-relevant mutation tick — see the field doc.
@@ -3383,7 +3398,7 @@ impl TextPropertyTable {
             interval_tree_present,
             property_names,
             mutation_tick: 0,
-            journal_mark: Cell::new(0),
+            journal_mark: JournalMark::Fresh,
             syntax_prop_tick: 0,
             syntax_prop_any: std::sync::atomic::AtomicU64::new(0),
             syntax_prop_ranges: std::sync::Mutex::new((0, Vec::new())),
@@ -3407,7 +3422,7 @@ impl TextPropertyTable {
             interval_tree_present,
             property_names,
             mutation_tick: 0,
-            journal_mark: Cell::new(0),
+            journal_mark: JournalMark::Fresh,
             syntax_prop_tick: 0,
             syntax_prop_any: std::sync::atomic::AtomicU64::new(0),
             syntax_prop_ranges: std::sync::Mutex::new((0, Vec::new())),
@@ -5281,6 +5296,39 @@ impl TextPropertyTable {
             .unwrap_or(end);
         let next_start = self.intervals.first_start_after(pos).unwrap_or(end);
         containing_end.min(next_start).min(end)
+    }
+
+    /// True when `other` has the same boundaries and `eq` plist objects.
+    ///
+    /// `equal` property values are not enough: write-back must install a new
+    /// plist spine. A missing interval on either side is a difference.
+    pub(crate) fn same_eq_plist_boundaries(&self, other: &Self, len: usize) -> bool {
+        if len == 0 {
+            return false;
+        }
+        let end = CharPos0::new(len);
+        let mut pos = CharPos0::ZERO;
+        while pos.get() < len {
+            match (
+                self.interval_plist_at_char_pos(pos),
+                other.interval_plist_at_char_pos(pos),
+            ) {
+                (None, None) => {}
+                (Some(left), Some(right)) if eq_value(&left, &right) => {}
+                _ => return false,
+            }
+            let left_next = self.next_interval_boundary_after(pos, end);
+            let right_next = other.next_interval_boundary_after(pos, end);
+            if left_next != right_next {
+                return false;
+            }
+            let next = left_next.max(pos.add_len(CharLen::new(1)));
+            if next.get() <= pos.get() {
+                return false;
+            }
+            pos = next;
+        }
+        true
     }
 
     /// Compare string text-property intervals the way GNU

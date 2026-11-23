@@ -3713,6 +3713,68 @@ fn set_text_properties_nil_on_a_propertyless_buffer_is_gnu_nil() {
     );
 }
 
+/// Attested by review on Emacs 31.1 `a360712c9d`: a tree anywhere in the
+/// buffer, even outside the range, makes `set-text-properties` of nil return
+/// t, advance the modified tick by one, and run `after-change-functions`.
+/// GNU `validate_interval_range` (`src/textprop.c`) is null only when the
+/// buffer has no interval tree, the range is empty, or the accessible text
+/// is empty.
+#[test]
+fn set_text_properties_nil_on_a_tree_elsewhere_records_the_change() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::test_utils::new_context();
+    let got = eval
+        .eval_str(
+            r#"(prin1-to-string (progn
+  (insert "hello")
+  (put-text-property 1 2 'face 'bold)
+  (setq hook-log nil)
+  (setq after-change-functions
+        (list (lambda (beg end old-len)
+                (setq hook-log (list (list beg end old-len))))))
+  (let ((tick (buffer-modified-tick)))
+    (list (set-text-properties 3 5 nil)
+          (- (buffer-modified-tick) tick)
+          hook-log))))"#,
+        )
+        .expect("tree-elsewhere set-text-properties");
+    assert_eq!(
+        got.as_utf8_str(),
+        Some("(t 1 ((3 5 2)))"),
+        "a tree outside the range still modifies and runs after-change"
+    );
+}
+
+/// The interval tree stays after its last property is removed. The attested
+/// return is `(t 1)`. After-change uses the same unchanged-extent rule as the
+/// attested `(3 5 2)`, so a 1..5 clear reports `(1 5 4)`.
+#[test]
+fn set_text_properties_nil_on_an_emptied_tree_records_the_change() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::test_utils::new_context();
+    let got = eval
+        .eval_str(
+            r#"(prin1-to-string (progn
+  (insert "hello")
+  (put-text-property 1 2 'face 'bold)
+  (remove-text-properties 1 2 '(face nil))
+  (setq hook-log nil)
+  (setq after-change-functions
+        (list (lambda (beg end old-len)
+                (setq hook-log (list (list beg end old-len))))))
+  (let ((tick (buffer-modified-tick)))
+    (list (set-text-properties 1 5 nil)
+          (- (buffer-modified-tick) tick)
+          hook-log))))"#,
+        )
+        .expect("emptied-tree set-text-properties");
+    assert_eq!(
+        got.as_utf8_str(),
+        Some("(t 1 ((1 5 4)))"),
+        "an emptied interval tree still modifies and runs after-change"
+    );
+}
+
 /// Helper: create an evaluator with a buffer containing the given text.
 fn eval_with_text(text: &str) -> Context {
     let mut eval = crate::test_utils::new_context();
