@@ -853,10 +853,9 @@ fn tier_h_exact_inventory_tracks_current_boxes_and_ordinary_old_owners() {
     for generational in [false, true] {
         // This image-shaped fixture is owned outside the heap and must outlive
         // its mapped registry. It has no ordinary-Box ownership membership.
-        let mut mapped = Box::new(HashTableObj {
-            header: VecLikeHeader::new(VecLikeType::HashTable),
-            table: worker_hash_table(TaggedValue::fixnum(2000)),
-        });
+        let mut mapped = Box::new(HashTableObj::new(worker_hash_table(TaggedValue::fixnum(
+            2000,
+        ))));
         let mut heap = heap(generational);
         let mapped_address = &mut mapped.header as *mut VecLikeHeader as usize;
         // SAFETY: this complete image-shaped Box outlives the heap registry.

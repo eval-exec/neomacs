@@ -218,10 +218,19 @@ impl<'a, 'era> KeeperTableScope<'a, 'era> {
     }
 
     /// Copied current authority word of the recorded table.
+    ///
+    /// `enter` already validated the object. A fresh keeper lease would CAS
+    /// the word to WRITER and then report that bit, hiding both a quiescent
+    /// word and a probe installed by [`Self::hold_authority_word_for_test`].
     pub fn authority_word(&self) -> u64 {
         let table = self.table.expect("enter a table before reading its word");
-        let lease = super::KeeperTableMut::enter(self.stopped, table).expect("keeper lease");
-        lease.authority_word().load(Ordering::Acquire)
+        let ptr = table
+            .gc_veclike_ptr()
+            .expect("rooted table")
+            .cast::<crate::tagged::header::HashTableObj>();
+        // SAFETY: `enter` validated this rooted hash table. The load does
+        // not admit a lease, so a probe word stays observable.
+        unsafe { (*ptr).authority.load(Ordering::Acquire) }
     }
 
     /// Inspect the recorded table through the installed collector-tables
@@ -258,6 +267,10 @@ impl<'a, 'era> KeeperTableScope<'a, 'era> {
         let table = self.table.expect("enter a table before holding its word");
         let lease = super::KeeperTableMut::enter(self.stopped, table).expect("keeper lease");
         let word: *const AtomicU64 = lease.authority_word();
+        // The lease's own WRITER would make the probe CAS fail. Drop it
+        // first: `writer_exit` restores the quiescent word, then the CAS
+        // installs the probe.
+        drop(lease);
         // SAFETY: the rooted table of the stopped heap outlives the scope;
         // the returned guard is tied to &self, so only further &self reads on
         // this scope (not enter) can run while the probe word is installed.

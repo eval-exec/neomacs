@@ -80,10 +80,7 @@ fn image_hash_pacing_counts_owned_backing_before_and_after_promotion() {
             let runtime = heap.alloc_hash_table(table(256));
             let image = heap.alloc_hash_table(table(256));
             assert_eq!(heap.note_image_object(image), ImageStamp::Stamped);
-            let mapped = Box::into_raw(Box::new(HashTableObj {
-                header: VecLikeHeader::new(VecLikeType::HashTable),
-                table: table(256),
-            }));
+            let mapped = Box::into_raw(Box::new(HashTableObj::new(table(256))));
             // SAFETY: initialized stable fixture storage remains allocated
             // until after the heap has dropped its mapped registries.
             let mapped_value = unsafe {

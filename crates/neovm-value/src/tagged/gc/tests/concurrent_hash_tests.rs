@@ -5,7 +5,6 @@ use super::super::{TaggedHeap, clear_tagged_heap_if_installed, knobs, set_tagged
 use super::*;
 use crate::intern::make_uninterned_symbol;
 use crate::tagged::header::ImageResident;
-use crate::tagged::header::VecLikeHeader;
 use crate::value::{HashKey, HashTableTest, HashTableWeakness, LispHashTable};
 use std::cell::UnsafeCell;
 use std::sync::{Arc, Barrier};
@@ -23,10 +22,7 @@ fn table_with_entries(count: usize) -> LispHashTable {
 }
 
 fn boxed_table(table: LispHashTable) -> Box<HashTableObj> {
-    Box::new(HashTableObj {
-        header: VecLikeHeader::new(VecLikeType::HashTable),
-        table,
-    })
+    Box::new(HashTableObj::new(table))
 }
 
 /// The Rev R2 nesting count: 0 outside any user test, one per in-flight

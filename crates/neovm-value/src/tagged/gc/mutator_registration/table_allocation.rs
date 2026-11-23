@@ -5,7 +5,7 @@
 use super::super::MemoryUseCountSlot;
 use super::super::mark_word::MarkWord;
 use super::{OwnerRootSlot, RegistrationError, RunAccess, TableRef};
-use crate::tagged::header::{HashTableObj, VecLikeHeader, VecLikeType};
+use crate::tagged::header::HashTableObj;
 use crate::tagged::value::TaggedValue;
 use crate::value::{HashTableTest, LispHashTable};
 
@@ -91,10 +91,7 @@ impl RunAccess<'_, '_> {
         hot.bytes_since_gc
             .checked_add(bytes)
             .ok_or(RegistrationError::Capacity)?;
-        let object = Box::new(HashTableObj {
-            header: VecLikeHeader::new(VecLikeType::HashTable),
-            table,
-        });
+        let object = Box::new(HashTableObj::new(table));
         let value: TaggedValue = self
             .owner
             .registry

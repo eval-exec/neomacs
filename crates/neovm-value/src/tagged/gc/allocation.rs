@@ -277,10 +277,7 @@ impl TaggedHeap {
     /// Allocate a hash table.
     pub fn alloc_hash_table(&mut self, table: crate::value::LispHashTable) -> TaggedValue {
         self.add_memory_use_count(MemoryUseCountSlot::VectorCells, 1);
-        let obj = Box::new(HashTableObj {
-            header: VecLikeHeader::new(VecLikeType::HashTable),
-            table,
-        });
+        let obj = Box::new(HashTableObj::new(table));
         let ptr = Box::into_raw(obj);
         self.link_veclike(ptr as *mut VecLikeHeader);
         self.current_mutator_gc_mut().allocated_count += 1;

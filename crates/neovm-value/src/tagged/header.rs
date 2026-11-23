@@ -18,7 +18,7 @@ use malachite::integer::Integer;
 use neovm_display_identity::{VideoId, WebViewId};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use std::cell::UnsafeCell;
-use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
 mod atomic_value;
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -1749,10 +1749,42 @@ pub(crate) struct TerminalObj {
 }
 
 /// Heap-allocated hash table.
+///
+/// `authority` and `test_depth` are table-level metadata, not payload.
+/// An edit that replaces `table` must leave both of them in place: the
+/// writer bit and the user-test nesting count belong to this object.
 #[repr(C)]
 pub struct HashTableObj {
     pub header: VecLikeHeader,
     pub table: crate::value::LispHashTable,
+    /// Proof 2 sealed authority. Bit 63 is the WRITER hold; the low 47 bits
+    /// count sealed readers. Zero on every fresh object. Only the sealed
+    /// lease types change it.
+    pub(crate) authority: AtomicU64,
+    /// User-test nesting count. Zero means no owner is inside a user test
+    /// or hash function on this table. Every in-flight activation counts.
+    pub test_depth: AtomicU8,
+}
+
+impl HashTableObj {
+    /// A new object. The payload may be a clone; the word and the depth
+    /// always start at zero, so a copy never inherits another object's
+    /// in-flight writer, readers, or user-test count.
+    pub fn new(table: crate::value::LispHashTable) -> Self {
+        Self {
+            header: VecLikeHeader::new(VecLikeType::HashTable),
+            table,
+            authority: AtomicU64::new(0),
+            test_depth: AtomicU8::new(0),
+        }
+    }
+
+    /// Relaxed load of the sealed authority word.
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn authority_word(&self) -> u64 {
+        self.authority.load(Ordering::Relaxed)
+    }
 }
 
 /// Heap-allocated obarray.

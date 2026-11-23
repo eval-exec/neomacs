@@ -741,14 +741,11 @@ pub fn builtin_copy_hash_table(args: Vec<Value>) -> EvalResult {
     expect_args("copy-hash-table", &args, 1)?;
     match args[0].kind() {
         ValueKind::Veclike(VecLikeType::HashTable) => {
-            let mut new_table = args[0].as_hash_table().unwrap().clone();
-            if hash_test_parity_enabled() {
-                // GNU copies entries and test functions, but a running test's
-                // logical immutability belongs only to its original table:
-                // the copy's nesting count starts at zero even when the
-                // source is mid-test (Rev R2).
-                new_table.test_depth = std::sync::atomic::AtomicU8::new(0);
-            }
+            let new_table = args[0].as_hash_table().unwrap().clone();
+            // GNU copies entries and test functions, but a running test's
+            // logical immutability belongs only to its original table. The
+            // nesting count lives on the object, and `alloc_hash_table`
+            // starts the copy at zero even when the source is mid-test.
             Ok(with_tagged_heap(|h| h.alloc_hash_table(new_table)))
         }
         _ => Err(signal(

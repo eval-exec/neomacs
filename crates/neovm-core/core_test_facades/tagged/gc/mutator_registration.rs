@@ -153,6 +153,12 @@ mod mutator_registration_era_tests;
 #[path = "../../../core_tests/tagged/gc/mutator_registration/keeper_table_scope_tests.rs"]
 mod keeper_table_scope_tests;
 
+/// A8/A9 soundness rows: a nested keeper lease refuses Busy, and replacing
+/// the hash-table payload inside an edit keeps the writer bit and the depth.
+#[cfg(all(test, not(feature = "gc-memory-telemetry")))]
+#[path = "../../../core_tests/tagged/gc/mutator_registration/table_authority_soundness_tests.rs"]
+mod table_authority_soundness_tests;
+
 /// Admission-probe re-home out of the value lib test. The shell admits the
 /// symbol era; the body and its assertions stay in value.
 #[cfg(all(test, not(feature = "gc-memory-telemetry")))]

@@ -8,6 +8,7 @@ use super::super::*;
 use super::image::{CollectionHistory, CollectionWork, ResponsePacing};
 use super::rendezvous::entry_state;
 use super::*;
+use crate::tagged::header::HashTableObj;
 
 #[cfg(all(
     any(test, feature = "test-support"),
@@ -188,16 +189,20 @@ fn supported(heap: &TaggedHeap) -> Result<(), CollectionError> {
                     // refuses a table the stopped sweep cannot own: unhydrated
                     // storage, an active table authority, or a permanent
                     // image-resident shell.
-                    let (weakness, eligible) =
-                        heap.collector_tables()
-                            .inspect(ptr.cast_mut().cast(), |ht| {
-                                (
-                                    ht.weakness,
-                                    ht.data.pending_entries().is_none()
-                                        && ht.test_depth.load(Ordering::Acquire) == 0
-                                        && ht.data.authority.load(Ordering::Acquire) == 0,
-                                )
-                            });
+                    // Depth and the authority word are object metadata. Read
+                    // them before inspect: a stopped visit's keeper lease
+                    // CASes the word to WRITER, so an in-callback load would
+                    // see the lease's own bit.
+                    let object = ptr.cast::<HashTableObj>();
+                    let (depth, authority) = (
+                        (*object).test_depth.load(Ordering::Acquire),
+                        (*object).authority.load(Ordering::Acquire),
+                    );
+                    let (weakness, pending_clear) = heap.collector_tables().inspect(
+                        ptr.cast_mut().cast(),
+                        |ht| (ht.weakness, ht.data.pending_entries().is_none()),
+                    );
+                    let eligible = pending_clear && depth == 0 && authority == 0;
                     let admitted =
                         (*header).flags.boxed() && !(*header).generation.permanent() && eligible;
                     if weakness.is_some() && !admitted {

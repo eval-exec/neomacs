@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::tagged::gc::ProofEra;
-use crate::tagged::header::{HashTableObj, ImageResident, VecLikeHeader, VecLikeType};
+use crate::tagged::header::{HashTableObj, ImageResident};
 use crate::value::{HashTableTest, HashTableWeakness, LispHashTable};
 
 /// Real World root walk for the stopped case. The core shell passes the baton
@@ -111,14 +111,14 @@ fn pending_active_test_and_storage_authority_body<K: EraKeeper>(
     // SAFETY: this test is the sole serial keeper, with a rooted live shell;
     // it deliberately constructs refused states without entering any owner.
     unsafe {
-        (*ptr).table.test_depth.store(1, Ordering::Release);
+        (*ptr).test_depth.store(1, Ordering::Release);
         assert!(WeakSweepPermit::mint(heap, keeper, &[table]).is_err());
-        (*ptr).table.test_depth.store(0, Ordering::Release);
+        (*ptr).test_depth.store(0, Ordering::Release);
         for word in [1, super::super::table_authority::WRITER] {
-            (*ptr).table.data.authority.store(word, Ordering::Release);
+            (*ptr).authority.store(word, Ordering::Release);
             assert!(WeakSweepPermit::mint(heap, keeper, &[table]).is_err());
         }
-        (*ptr).table.data.authority.store(0, Ordering::Release);
+        (*ptr).authority.store(0, Ordering::Release);
         (*ptr).table.set_pending_dump_entries(Vec::new());
         assert!(WeakSweepPermit::mint(heap, keeper, &[table]).is_err());
         assert!(
@@ -151,16 +151,13 @@ fn permanent_mapped_and_callback_payloads_body<K: EraKeeper>(
         header.tenured = tenured;
     }
     // A decoded image owns its shell, not this heap's owned-object catalog.
-    let mapped = Box::new(HashTableObj {
-        header: VecLikeHeader::new(VecLikeType::HashTable),
-        table: LispHashTable::new_with_options(
-            HashTableTest::Eq,
-            4,
-            Some(HashTableWeakness::Key),
-            1.5,
-            0.8,
-        ),
-    });
+    let mapped = Box::new(HashTableObj::new(LispHashTable::new_with_options(
+        HashTableTest::Eq,
+        4,
+        Some(HashTableWeakness::Key),
+        1.5,
+        0.8,
+    )));
     let mapped_ptr = std::ptr::from_ref(&*mapped).cast_mut();
     let mapped_value = unsafe { TaggedValue::from_veclike_ptr(mapped_ptr.cast()) };
     assert!(WeakSweepPermit::mint(heap, keeper, &[mapped_value]).is_err());
@@ -188,8 +185,12 @@ fn stopped_fence_refuses_before_mutation_and_recovers_body<K: EraKeeper>(
         .unwrap();
     let lease = KeeperTableMut::enter(&stopped, table).unwrap();
     let authority = std::ptr::from_ref(lease.authority_word());
-    let depth = std::ptr::from_ref(&lease.guarded_table().test_depth);
     drop(lease);
+    // Depth is object metadata. Capture it after the lease drops so the
+    // pointer is not tied to the keeper's WRITER hold.
+    let depth = unsafe {
+        std::ptr::from_ref(&(*table.as_veclike_ptr().unwrap().cast::<HashTableObj>()).test_depth)
+    };
     for word in [1, super::super::table_authority::WRITER] {
         // SAFETY: fault injection into the rooted shell while the actual
         // stop remains held; no storage borrow or owner exists here.

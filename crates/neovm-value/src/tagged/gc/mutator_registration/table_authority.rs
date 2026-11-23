@@ -1,9 +1,11 @@
 //! Proof 2 sealed authority for shared hash tables (design §2.1/§2.2/§2.3).
 //!
-//! Three lease types are the only callers of the authority word appended to
-//! [`HashTableStorage`]: a reader capability minted from a live run access,
-//! a writer capability likewise, and the collector's stop-all license minted
-//! from [`AllStopped`]. No production Sim/Green path constructs them; the
+//! Three lease types are the only callers of the authority word on
+//! [`HashTableObj`]: a reader capability minted from a live run access, a
+//! writer capability likewise, and the collector's stop-all license minted
+//! from [`AllStopped`]. The word and the user-test depth sit on the object,
+//! not in the payload, so replacing the payload cannot clear either one.
+//! No production Sim/Green path constructs the leases; the
 //! proof executor (stage B3+) is their consumer. The word protocol matches
 //! the B1 loom model exactly: readers CAS-increment the low-bit count and
 //! never serialise with each other, a writer takes bit 63 with one
@@ -34,17 +36,19 @@ fn owner_gc_ptr(owner: &mut Mutator<'_>) -> *mut MutatorGcState {
         .local
         .as_deref_mut()
         .map_or(std::ptr::null_mut(), |state| {
-            // SAFETY: `state` is a `&mut OwnerGcState` (the Box deref), so
-            // `hot` is initialized and the borrow excludes every other
-            // access for its duration.
+            // SAFETY: the caller passes the owner from the lease's `'a`
+            // `RunAccess` borrow. That `'a` borrow is the validity proof:
+            // it keeps this box alive and immovable for the whole lease.
             unsafe { addr_of_mut!(state.hot) }
         })
 }
 
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use super::authority_word::WRITER;
+#[cfg(test)]
+pub(crate) use super::authority_word::quiescent;
 pub(crate) use super::authority_word::{
-    quiescent, reader_enter, reader_exit, writer_enter, writer_exit,
+    reader_enter, reader_exit, try_writer_enter, writer_enter, writer_exit,
 };
 
 /// The shell configuration a reader may observe (B3 op bodies): the
@@ -74,7 +78,7 @@ impl UserTestHold {
     fn take(table: *mut HashTableObj) -> Result<Self, RegistrationError> {
         // SAFETY: the pointer came from a lease mint, which validated the
         // object; the byte is table-level metadata, not storage contents.
-        let depth = unsafe { &(*table).table.test_depth };
+        let depth = unsafe { &(*table).test_depth };
         let was = depth.fetch_add(1, Ordering::AcqRel);
         if was == u8::MAX {
             // Design §3.1: the count saturates defensively and a saturating
@@ -94,11 +98,8 @@ impl Drop for UserTestHold {
     fn drop(&mut self) {
         // SAFETY: pairs with the enter at mint; unwind-safe by being the Drop.
         unsafe {
-            (*self.table)
-                .table
-                .test_depth
-                .fetch_sub(1, Ordering::Release)
-        };
+            (*self.table).test_depth.fetch_sub(1, Ordering::Release);
+        }
     }
 }
 
@@ -177,9 +178,10 @@ pub struct TableMut<'access> {
 /// The collector's stop-all writer license (design §2.2).
 ///
 /// Minted only from [`AllStopped`]: every owner is stopped, so the word
-/// must already be quiescent and the license edits without taking WRITER.
-/// This is the "other threads cannot reach it any other way" clause for
-/// the keeper's weak sweeps and pending-entry handling.
+/// must already be quiescent. Enter CASes that quiescent word to WRITER and
+/// Drop runs `writer_exit`, so a second lease on the same table returns
+/// [`RegistrationError::Busy`] instead of nesting. The `&AllStopped` borrow
+/// stays shared: collector visits reborrow it.
 pub struct KeeperTableMut<'stop> {
     table: *mut HashTableObj,
     value: TaggedValue,
@@ -198,7 +200,7 @@ macro_rules! impl_sealed_table_access {
             fn authority_word(&self) -> &AtomicU64 {
                 // SAFETY: the mint validated the object and the lease keeps
                 // the table alive (rooted value; stop-all for the keeper).
-                unsafe { &(*self.table).table.data.authority }
+                unsafe { &(*self.table).authority }
             }
 
             #[inline]
@@ -223,32 +225,53 @@ impl Drop for TableRef<'_> {
         // checks the pairing). A dropped reader lease can never leave WRITER
         // set — readers never hold that bit.
         // SAFETY: the count was taken at mint; this pairs with it.
-        let word = unsafe { &(*self.table).table.data.authority };
+        let word = unsafe { &(*self.table).authority };
         reader_exit(word);
     }
 }
 
-impl<'access> TableRef<'access> {
-    /// Mint a reader lease. The run access proves a registered owner on
-    /// this thread; the table value must be one the owner has rooted (B2
-    /// tests hold it on their own stack; the B3 executor passes slot
-    /// homes). Pending dump entries are hydrated here, before any word is
-    /// taken, matching `as_hash_table`'s first-access contract.
-    pub fn enter(
-        access: &mut RunAccess<'_, 'access>,
+/// Pairs `writer_enter` / `writer_exit` around the reader-mint hydrate
+/// window only. A panic still releases WRITER. This is not a lease.
+struct WriterHold(*const AtomicU64);
+
+impl Drop for WriterHold {
+    #[inline]
+    fn drop(&mut self) {
+        // SAFETY: the pointer is the object's authority word, and
+        // `writer_enter` succeeded for this window.
+        unsafe { writer_exit(&*self.0) }
+    }
+}
+
+impl TableRef<'_> {
+    /// Mint a reader lease. The borrow of the run access is the lease
+    /// lifetime, so `cons`, a safepoint, and `finish` are excluded while it
+    /// lives. The borrow is shared: two readers from one run stay legal.
+    /// Pending dump entries are hydrated under WRITER, then the reader
+    /// count is taken. Already-hydrated tables skip the writer CAS.
+    pub fn enter<'a>(
+        access: &'a RunAccess<'_, '_>,
         table: TaggedValue,
-    ) -> Result<Self, RegistrationError> {
+    ) -> Result<TableRef<'a>, RegistrationError> {
         access.owner.check_thread()?;
         let ptr = table_object(table)?;
-        // SAFETY: the mint validated the object; hydration is a one-time
-        // serial-world edit performed before any reader counts exist.
+        // SAFETY: the mint validated the object. Hydration rebuilds the
+        // index, so it runs under WRITER, never under the reader count.
+        // The recheck after the CAS keeps two racers from hydrating twice.
+        // `WriterHold` releases the bit if hydration panics.
         unsafe {
             if (*ptr).table.needs_hydration() {
-                (*ptr).table.hydrate_pending();
+                let word = std::ptr::addr_of!((*ptr).authority);
+                writer_enter(&*word);
+                let hold = WriterHold(word);
+                if (*ptr).table.needs_hydration() {
+                    (*ptr).table.hydrate_pending();
+                }
+                drop(hold);
             }
-            reader_enter(&(*ptr).table.data.authority);
+            reader_enter(&(*ptr).authority);
         }
-        Ok(Self {
+        Ok(TableRef {
             table: ptr,
             value: table,
             _access: PhantomData,
@@ -281,10 +304,7 @@ impl<'access> TableRef<'access> {
         if source.weakness.is_some() {
             return Err(RegistrationError::Publication);
         }
-        let table = source.clone();
-        table.test_depth.store(0, Ordering::Relaxed);
-        debug_assert!(quiescent(&table.data.authority));
-        Ok(table)
+        Ok(source.clone())
     }
 
     /// The shell configuration a sealed read may observe (B3): the test and
@@ -302,7 +322,9 @@ impl<'access> TableRef<'access> {
     /// check): nonzero means some owner is inside this table's test or hash
     /// function and a mutation must refuse.
     pub(crate) fn user_test_depth(&self) -> u8 {
-        self.guarded_table().test_depth.load(Ordering::Acquire)
+        // SAFETY: the lease keeps the object alive; the byte is metadata
+        // beside the payload, not a storage field.
+        unsafe { (*self.table).test_depth.load(Ordering::Acquire) }
     }
 
     /// Take the §3.1 nesting count for one callback window. The hold owns
@@ -320,30 +342,30 @@ impl Drop for TableMut<'_> {
         // SAFETY: WRITER was taken at mint; the edit is done or unwound —
         // either way the Rust-side edit section has ended and the word
         // returns to quiescent.
-        let word = unsafe { &(*self.table).table.data.authority };
+        let word = unsafe { &(*self.table).authority };
         writer_exit(word);
     }
 }
 
-impl<'access> TableMut<'access> {
-    /// Mint a writer lease. Borrows the run access exclusively for the
-    /// lease's lifetime: one writer per owner, and never alongside that
-    /// owner's own reader lease (the drain would wait on itself).
-    pub fn enter(
-        access: &mut RunAccess<'_, 'access>,
+impl TableMut<'_> {
+    /// Mint a writer lease. The exclusive borrow of the run access is the
+    /// lease lifetime: `cons`, a safepoint, and `finish` are excluded while
+    /// it lives, and it cannot overlap this owner's reader lease.
+    pub fn enter<'a>(
+        access: &'a mut RunAccess<'_, '_>,
         table: TaggedValue,
-    ) -> Result<Self, RegistrationError> {
+    ) -> Result<TableMut<'a>, RegistrationError> {
         access.owner.check_thread()?;
         let ptr = table_object(table)?;
-        // The exclusive `_access` borrow outlives the lease, so the owner's
-        // boxed GC state cannot move while this raw pointer is held.
+        // The `'a` borrow of `access` is the validity proof for `owner_gc`:
+        // the owner's box cannot move while this lease lives.
         let owner_gc = owner_gc_ptr(access.owner);
         // SAFETY: the mint validated the object; hydration happens inside
         // the serial edit body itself, under WRITER.
         unsafe {
-            writer_enter(&(*ptr).table.data.authority);
+            writer_enter(&(*ptr).authority);
         }
-        Ok(Self {
+        Ok(TableMut {
             table: ptr,
             value: table,
             owner_gc,
@@ -356,7 +378,8 @@ impl<'access> TableMut<'access> {
     /// table's nesting count is nonzero and the edit must refuse instead.
     /// Read it before `edit`, mirroring where the serial builtins check.
     pub(crate) fn user_test_mutation_refused(&self) -> bool {
-        self.guarded_table().test_depth.load(Ordering::Acquire) != 0
+        // SAFETY: the lease keeps the object alive; the byte is metadata.
+        unsafe { (*self.table).test_depth.load(Ordering::Acquire) != 0 }
     }
 
     /// One Rust-side edit under WRITER: the drain has already happened at
@@ -389,10 +412,10 @@ impl<'access> TableMut<'access> {
                 let result = f(ht);
                 let grown = ht.data.sealed_storage_bytes().saturating_sub(before);
                 if grown > 0 && !owner_gc.is_null() {
-                    // SAFETY: mint computed this pointer from the owner's
-                    // boxed GC state under the exclusive `_access` borrow,
-                    // which keeps the box alive and immovable for the
-                    // lease's lifetime.
+                    // SAFETY: the lease's `'a` borrow is the validity proof
+                    // for this pointer. Mint took it from the owner's boxed
+                    // GC state under that borrow, which keeps the box alive
+                    // and immovable for the lease's lifetime.
                     (*owner_gc).bytes_since_gc += grown;
                 }
                 result
@@ -405,28 +428,33 @@ impl<'access> TableMut<'access> {
 impl Drop for KeeperTableMut<'_> {
     #[inline]
     fn drop(&mut self) {
-        // The keeper never takes the word, so there is nothing to release;
-        // the Drop exists to mark the license scoped and must_use-like.
+        // SAFETY: enter's CAS took WRITER; this pairs with it on every
+        // return path, including unwind. A nested enter sees Busy until
+        // this store restores the quiescent word.
+        let word = unsafe { &(*self.table).authority };
+        writer_exit(word);
     }
 }
 
-impl<'stop> KeeperTableMut<'stop> {
-    /// Mint the keeper license. At stop-all no owner can run, so the word
-    /// must already be quiescent — that assertion IS the safety argument
-    /// for editing without the word protocol.
-    pub fn enter(
+impl KeeperTableMut<'_> {
+    /// Mint the keeper license. One CAS from a quiescent word to WRITER.
+    /// A nested lease on the same table returns [`RegistrationError::Busy`]
+    /// and does not touch the payload. The stop borrow stays shared.
+    pub fn enter<'stop>(
         _stopped: &'stop AllStopped<'_>,
         table: TaggedValue,
-    ) -> Result<Self, RegistrationError> {
+    ) -> Result<KeeperTableMut<'stop>, RegistrationError> {
         let ptr = table_object(table)?;
-        // SAFETY: the mint validated the object.
-        let word = unsafe { &(*ptr).table.data.authority };
-        if !quiescent(word) {
-            // A retained owner lease is a broken stop invariant. Refuse before
-            // touching payload storage in release builds as well as debug.
+        // SAFETY: the mint validated the object. `try_writer_enter` is one
+        // CAS, not a spin: the collector's `expect` must not wait on itself.
+        let word = unsafe { &(*ptr).authority };
+        if !try_writer_enter(word) {
+            // A retained owner lease, or a keeper lease already held on
+            // this table, is a broken stop invariant. Refuse before
+            // touching payload storage.
             return Err(RegistrationError::Busy);
         }
-        Ok(Self {
+        Ok(KeeperTableMut {
             table: ptr,
             value: table,
             _stop: PhantomData,
@@ -455,8 +483,8 @@ impl<'stop> KeeperTableMut<'stop> {
         unsafe { f(&mut (*self.table).table) }
     }
 
-    /// One keeper edit without the word protocol: stop-all proves no
-    /// sealed reader or writer can exist. Same serial body as [`TableMut`].
+    /// One keeper edit. Enter already holds WRITER for the lease lifetime.
+    /// Same serial body as [`TableMut`].
     pub fn edit<R>(&mut self, f: impl FnOnce(&mut LispHashTable) -> R) -> R {
         // SAFETY: every owner is stopped; the serial single-editor
         // assumption holds without taking the word.

@@ -8,8 +8,10 @@ pub use neovm_value::error::{
 };
 use neovm_value::hashtab::hash_key_to_visible_value;
 use neovm_value::heap_registry::{HeapRegistryHandle, HeapRegistrySlot};
+use neovm_value::tagged::header::HashTableObj;
 use neovm_value::tagged::value::SymbolMode;
 use neovm_value::value::{HashProbe, HashTableMakeKeyword, ValueKind, VecLikeType};
+use std::sync::atomic::Ordering;
 
 /// Canonical production/unit descriptor; retain the original Core closure and metadata.
 #[doc(hidden)]
@@ -1013,14 +1015,39 @@ pub(crate) fn hash_table_has_user_test(table: Value) -> bool {
         .is_some_and(|ht| table_user_defined_test(ht).is_some())
 }
 
+/// The user-test nesting count lives on the hash-table object, not the
+/// payload. This load does not hydrate and does not bump `switch_epoch`.
+fn user_test_depth(table: Value) -> Option<u8> {
+    if !table.is_hash_table() {
+        return None;
+    }
+    let object = table.as_veclike_ptr()? as *const HashTableObj;
+    // SAFETY: `is_hash_table` checked the tag; the byte is object metadata.
+    Some(unsafe { (*object).test_depth.load(Ordering::Acquire) })
+}
+
+/// Direct store of the object byte. The non-parity path must not go through
+/// `with_hash_table_mut`: that choke point bumps `switch_epoch`.
+fn set_user_test_depth(table: Value, depth: u8) {
+    if !table.is_hash_table() {
+        return;
+    }
+    let Some(header) = table.as_veclike_ptr() else {
+        return;
+    };
+    // SAFETY: same tag check as `user_test_depth`.
+    unsafe {
+        (*(header as *mut HashTableObj))
+            .test_depth
+            .store(depth, Ordering::Release)
+    };
+}
+
 fn check_mutable_hash_table(table: Value) -> Result<(), Flow> {
     // Rev R2: the nesting count replaces the bool; GNU's table-level rule
     // carries over — any owner's mutation signals while any owner is inside
     // a user test or hash function on this table (depth > 0).
-    if table
-        .as_hash_table()
-        .is_some_and(|ht| ht.test_depth.load(std::sync::atomic::Ordering::Acquire) != 0)
-    {
+    if user_test_depth(table).is_some_and(|depth| depth != 0) {
         return Err(signal(
             "error",
             vec![Value::string("hash table test modifies table"), table],
@@ -1040,18 +1067,13 @@ fn hash_table_user_defined_call(
             eval.apply(function, args)
         });
     }
-    if table
-        .as_hash_table()
-        .is_some_and(|ht| ht.test_depth.load(std::sync::atomic::Ordering::Acquire) != 0)
-    {
+    if user_test_depth(table).is_some_and(|depth| depth != 0) {
         return eval.apply(function, args);
     }
 
-    let _ = table
-        .with_hash_table_mut(|ht| ht.test_depth.store(1, std::sync::atomic::Ordering::Release));
+    set_user_test_depth(table, 1);
     let result = eval.apply(function, args);
-    let _ = table
-        .with_hash_table_mut(|ht| ht.test_depth.store(0, std::sync::atomic::Ordering::Release));
+    set_user_test_depth(table, 0);
     result
 }
 

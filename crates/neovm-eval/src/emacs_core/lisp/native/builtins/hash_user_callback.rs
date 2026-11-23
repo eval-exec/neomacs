@@ -116,7 +116,7 @@ pub(crate) fn with_user_test_guard<T>(
     // remain live across Lisp. The initialized metadata does not need the
     // table's pending key hydration.
     let depth =
-        unsafe { NonNull::new_unchecked(std::ptr::addr_of_mut!((*table_object).table.test_depth)) };
+        unsafe { NonNull::new_unchecked(std::ptr::addr_of_mut!((*table_object).test_depth)) };
     // Every activation counts, atomically (Rev R2): two owners in user tests
     // on one shared table nest instead of racing one bool byte.
     let previous = unsafe { (*depth.as_ptr()).fetch_add(1, Ordering::AcqRel) };

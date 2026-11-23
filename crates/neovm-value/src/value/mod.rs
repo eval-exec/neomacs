@@ -797,20 +797,16 @@ impl LambdaData {
 
 /// Hash table with configurable test function.
 ///
-/// `test_depth` (proof 2 Rev R2) is the atomic nesting count that replaced
-/// GNU's `mutable` bool: zero means "no owner is inside a user test or hash
-/// function on this table", and every in-flight activation counts, so two
-/// owners' tests nest to 2 and any owner's mutation signals while the count
-/// is nonzero. It sits in the bool's exact field position (1 byte, alignment
-/// 1, `data` still last), so no downstream offset moves. `Clone` copies the
-/// byte and copy-hash-table resets it to zero explicitly.
+/// The user-test nesting count and the sealed authority word are metadata
+/// on [`crate::tagged::header::HashTableObj`], beside this payload. Replacing
+/// a `LispHashTable` inside an edit must not clear either one. `Clone`
+/// copies contents only; a new object starts its own word and depth at zero.
 #[derive(Debug)]
 pub struct LispHashTable {
     pub test: HashTableTest,
     pub test_name: Option<SymId>,
     pub user_cmp_function: Option<Value>,
     pub user_hash_function: Option<Value>,
-    pub test_depth: std::sync::atomic::AtomicU8,
     pub size: i64,
     pub weakness: Option<HashTableWeakness>,
     pub rehash_size: f64,
@@ -825,9 +821,6 @@ impl Clone for LispHashTable {
             test_name: self.test_name,
             user_cmp_function: self.user_cmp_function,
             user_hash_function: self.user_hash_function,
-            test_depth: std::sync::atomic::AtomicU8::new(
-                self.test_depth.load(std::sync::atomic::Ordering::Relaxed),
-            ),
             size: self.size,
             weakness: self.weakness,
             rehash_size: self.rehash_size,
@@ -872,8 +865,8 @@ impl HashTableStorageCapacities {
 /// the original Lisp key and value. See [`hash_index`] for how an `equal`
 /// table finds a key.
 ///
-/// `Clone` is manual: the proof-2 authority word at the end is zeroed on
-/// every copy rather than copied (see the field's comment).
+/// The sealed authority word is not stored here. It lives on the hash-table
+/// object, so cloning or replacing this storage cannot clear a live writer.
 #[derive(Debug, Default)]
 pub struct HashTableStorage {
     index: HashIndex,
@@ -930,16 +923,6 @@ pub struct HashTableStorage {
     pub(crate) switch_epoch: u64,
     #[cfg(not(feature = "test-support"))]
     pub(crate) switch_epoch: u64,
-    /// Proof 2 sealed authority (design §2.1), appended AFTER `switch_epoch`
-    /// so every existing field offset — in particular the JIT-read
-    /// `SWITCH_EPOCH_OFFSET` — is unchanged. Bit 63 is the WRITER hold
-    /// (taken by one uncontended CAS from a fully quiescent word, which
-    /// drains every in-flight sealed reader); the low 47 bits count sealed
-    /// readers walking storage under the read count. Zero on every fresh,
-    /// copied, dumped and restored table: a new table object never inherits
-    /// another's in-flight state. Only the sealed lease types
-    /// (`table_authority.rs`) touch this word.
-    pub(crate) authority: std::sync::atomic::AtomicU64,
 }
 
 impl Clone for HashTableStorage {
@@ -953,9 +936,6 @@ impl Clone for HashTableStorage {
             pending: self.pending.clone(),
             switch_plan: self.switch_plan.clone(),
             switch_epoch: self.switch_epoch,
-            // A copy starts quiescent: it is never mid-drain and never
-            // carries another table object's readers or writer.
-            authority: std::sync::atomic::AtomicU64::new(0),
         }
     }
 }
@@ -1013,14 +993,6 @@ fn vec_storage_bytes<T>(values: &Vec<T>) -> usize {
 }
 
 impl HashTableStorage {
-    /// Relaxed load of the sealed authority word. The atomic stays private
-    /// so a caller cannot store through this route.
-    #[cfg(any(test, feature = "test-support"))]
-    #[doc(hidden)]
-    pub fn authority_word(&self) -> u64 {
-        self.authority.load(std::sync::atomic::Ordering::Relaxed)
-    }
-
     fn try_with_capacity(
         capacity: crate::alloc::HashTableSize,
     ) -> Result<Self, crate::error::Flow> {
@@ -1052,7 +1024,6 @@ impl HashTableStorage {
             pending: None,
             switch_plan: switch_plan::SwitchPlanCache::default(),
             switch_epoch: 0,
-            authority: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -2471,7 +2442,6 @@ impl LispHashTable {
             test_name: None,
             user_cmp_function: None,
             user_hash_function: None,
-            test_depth: std::sync::atomic::AtomicU8::new(0),
             size,
             weakness,
             rehash_size,
