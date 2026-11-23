@@ -213,33 +213,35 @@ static_assertions::assert_not_impl_any!(ParkedTurn<'static, (), AssertedTicket, 
 mod tests {
     use super::OwnerSerialState;
     use std::cell::Cell;
+    use std::rc::Rc;
 
-    thread_local! {
-        static BUILT: Cell<usize> = const { Cell::new(0) };
-    }
-
-    /// A stand-in Context that counts its constructions.
+    /// A stand-in Context that counts its constructions in the test's own
+    /// counter.
     struct Counted {
         writes: Vec<&'static str>,
     }
 
     impl Counted {
-        fn new() -> Self {
-            BUILT.with(|built| built.set(built.get() + 1));
+        fn new(built: &Rc<Cell<usize>>) -> Self {
+            built.set(built.get() + 1);
             Self { writes: Vec::new() }
         }
     }
 
     type State = OwnerSerialState<Counted, (u64, &'static str)>;
 
+    fn owner_seven_counted(built: &Rc<Cell<usize>>) -> State {
+        OwnerSerialState::new(7, Box::new(Counted::new(built)))
+    }
+
     fn owner_seven() -> State {
-        OwnerSerialState::new(7, Box::new(Counted::new()))
+        owner_seven_counted(&Rc::new(Cell::new(0)))
     }
 
     #[test]
     fn e51_two_turns_of_one_owner_reuse_the_dormant_context() {
-        let before = BUILT.with(Cell::get);
-        let mut state = owner_seven();
+        let built = Rc::new(Cell::new(0));
+        let mut state = owner_seven_counted(&built);
         let mut first = state.begin((7, "ticket-1")).ok().expect("own ticket");
         first.with_world(|context| context.writes.push("first"));
         assert_eq!(first.end(), (7, "ticket-1"));
@@ -250,7 +252,7 @@ mod tests {
         });
         assert_eq!(second.end(), (7, "ticket-2"));
         assert_eq!(seen, ["first", "second"]);
-        assert_eq!(BUILT.with(Cell::get) - before, 1, "one construction");
+        assert_eq!(built.get(), 1, "one construction");
     }
 
     #[test]
