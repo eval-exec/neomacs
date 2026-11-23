@@ -525,6 +525,7 @@ fn done_value<O: SealedOps, P: OwnerPoll>(
         StepOutcome::Done { pending, .. } => engine.take(pending).expect("done root"),
         StepOutcome::Escaped(request) => panic!("escaped {:?}", request.class),
         StepOutcome::Signaled(flow) => panic!("signaled {}", signal_key(&flow).0),
+        StepOutcome::VoidVariable { .. } => panic!("void variable"),
         StepOutcome::MissingCore { name } => panic!("missing core {name}"),
         StepOutcome::Suspended { .. } => panic!("suspended"),
         StepOutcome::Fault(_) => panic!("fault"),
@@ -1057,6 +1058,7 @@ fn every_scalar_primitive_matches_serial_eval_on_the_sample_matrix() {
                     Err(signal_key(&flow))
                 }
                 StepOutcome::Escaped(request) => panic!("{name} escaped {:?}", request.class),
+                StepOutcome::VoidVariable { .. } => panic!("{name} produced a void variable"),
                 StepOutcome::MissingCore { .. } => panic!("{name} has no shared core"),
                 StepOutcome::Suspended { .. } => panic!("{name} suspended"),
                 StepOutcome::Fault(_) => panic!("{name} faulted"),
@@ -1973,6 +1975,27 @@ fn engine_reads_a_bound_plain_symbol() {
         stepper.slots().canonical_reads(),
         0,
         "an owner-bound read never touches canonical storage"
+    );
+    assert_clear(&stepper);
+}
+
+#[test]
+fn engine_owner_void_symbol_yields_a_typed_void_variable_outcome() {
+    let mut ctx = context();
+    let sym = Value::symbol("pentry_plain_void");
+    let id = symbol_id(&sym, SymbolMode::Bare).expect("interned test symbol");
+    let mut stepper = engine(TestSlots::bound_with_admission(
+        Value::UNBOUND,
+        PlainAdmission::mint(id, TlsIndex::VOID),
+    ));
+    let outcome = stepper.start(&mut ctx, body(&[sym]), wide());
+    match outcome {
+        StepOutcome::VoidVariable { symbol } => assert_eq!(symbol, sym),
+        _other => panic!("a local void Plain binding must be a typed void-variable outcome"),
+    }
+    assert!(
+        stepper.escape_handler().requests.is_empty(),
+        "a void variable is a signal, not an unsupported-form escape"
     );
     assert_clear(&stepper);
 }

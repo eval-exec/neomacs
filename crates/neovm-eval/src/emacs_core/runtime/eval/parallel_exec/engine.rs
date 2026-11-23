@@ -220,6 +220,15 @@ pub(crate) enum StepOutcome {
     },
     /// The serial core signaled. This is not an escape and not a substitute value.
     Signaled(Flow),
+    /// A bare Plain symbol whose owner slot is a local void binding.
+    ///
+    /// GNU's bare-symbol evaluation reaches `Fsymbol_value`, which signals
+    /// `void-variable` with the symbol as its only datum (`eval.c:2584-2592`,
+    /// `data.c:1645-1657`). This is a typed outcome, not an unsupported-form
+    /// escape; the caller raises the signal.
+    VoidVariable {
+        symbol: Value,
+    },
     Fault(EngineFault),
 }
 
@@ -619,8 +628,9 @@ where
     }
 
     /// A bare symbol is a Plain variable read through the composed rule. A
-    /// refused admission or a local void binding is one serial escape; a
-    /// missing symbol id cannot name an admitted variable.
+    /// refused admission is one serial escape; a local void binding is a
+    /// typed void-variable outcome; a missing symbol id cannot name an
+    /// admitted variable.
     fn eval_plain_symbol(&mut self, form: Value) -> FormStep {
         let Some(sym) = symbol_id(&form, SymbolMode::Bare) else {
             return FormStep::Stop(self.record(EscapeClass::UnsupportedForm, form));
@@ -635,7 +645,7 @@ where
                 FormStep::Value(value)
             }
             Ok(EffectiveRead::OwnerVoid) => {
-                FormStep::Stop(self.record(EscapeClass::UnsupportedForm, form))
+                FormStep::Stop(StepOutcome::VoidVariable { symbol: form })
             }
             Err(PlainStop::Escape(request)) => FormStep::Stop(StepOutcome::Escaped(request)),
             Err(PlainStop::Poll(error)) => {
@@ -768,8 +778,8 @@ where
     }
 
     /// `Done` and `Suspended` already published their state. An escape keeps
-    /// the top frame. A signal, a missing core, or a fault drops every frame
-    /// and root this run pushed.
+    /// the top frame. A signal, a void variable, a missing core, or a fault
+    /// drops every frame and root this run pushed.
     fn settle(&mut self, outcome: StepOutcome) -> StepOutcome {
         match &outcome {
             StepOutcome::Done { .. } | StepOutcome::Suspended { .. } => {}
@@ -782,7 +792,10 @@ where
                 }
             }
             StepOutcome::Fault(EngineFault::Busy | EngineFault::Poisoned) => {}
-            StepOutcome::MissingCore { .. } | StepOutcome::Signaled(_) | StepOutcome::Fault(_) => {
+            StepOutcome::MissingCore { .. }
+            | StepOutcome::VoidVariable { .. }
+            | StepOutcome::Signaled(_)
+            | StepOutcome::Fault(_) => {
                 if let Err(fault) = self.unwind_to_idle() {
                     return StepOutcome::Fault(fault);
                 }

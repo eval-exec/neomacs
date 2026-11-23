@@ -17,6 +17,7 @@ struct TestSlots {
     canonical_reads: Cell<usize>,
     canonical_writes: Cell<usize>,
     admission: PlainAdmission,
+    canonical_bound: bool,
 }
 
 impl TestSlots {
@@ -29,6 +30,7 @@ impl TestSlots {
             canonical_reads: Cell::new(0),
             canonical_writes: Cell::new(0),
             admission: PlainAdmission::refuse(PlainRefusal::NotPlain),
+            canonical_bound: true,
         }
     }
 
@@ -91,7 +93,7 @@ impl PlainAccess for TestSlots {
     }
 
     fn canonical_bound(&self, _sym: neovm_value::intern::SymId) -> bool {
-        true
+        self.canonical_bound
     }
 }
 
@@ -457,4 +459,11 @@ fn composed_bound_treats_void_as_unbound() {
     let slots = TestSlots::access(bound(1), Value::fixnum(1), mint(sym));
     assert!(effective_plain_bound(&slots, &key));
     assert!(effective_plain_default_bound(&slots, &key));
+
+    // No owner binding and no canonical binding: both composed bound
+    // questions are false (GNU `default-boundp` on a void Plain variable).
+    let mut slots = TestSlots::access(SlotState::NoBinding, Value::NIL, mint(sym));
+    slots.canonical_bound = false;
+    assert!(!effective_plain_bound(&slots, &key));
+    assert!(!effective_plain_default_bound(&slots, &key));
 }
