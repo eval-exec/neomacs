@@ -5,8 +5,8 @@ use neomacs_display_protocol::frame_glyphs::WindowInfo;
 use neomacs_display_protocol::{PresentationId, PresentedHitQuery};
 use neovm_core::buffer::LispCharPos1;
 use neovm_core::window::{
-    DisplayPointRole, DisplayPointRow, DisplayPointRows, DisplayPointSnapshot,
-    DisplayRowSnapshot, PresentedBodyRowSnapshot, WindowId,
+    DisplayPointRole, DisplayPointRow, DisplayPointRows, DisplayPointSnapshot, DisplayRowSnapshot,
+    PresentedBodyRowSnapshot, WindowId,
 };
 
 fn point(pos: i64, row: i64, column: i64, x: i64, height: i64) -> DisplayPointSnapshot {
@@ -86,13 +86,13 @@ fn indices(
     .seal(&mut state)
     .expect("seal visible interaction geometry");
     let lazy = state.presented_hit_index;
-    assert!(lazy.text_deferred(), "composition must select the lazy source");
-    let eager = PresentedHitIndex::from_parts(
-        lazy.presentation(),
-        lazy.regions().to_vec(),
-        expected,
-    )
-    .unwrap();
+    assert!(
+        lazy.text_deferred(),
+        "composition must select the lazy source"
+    );
+    let eager =
+        PresentedHitIndex::from_parts(lazy.presentation(), lazy.regions().to_vec(), expected)
+            .unwrap();
     (lazy, eager)
 }
 
@@ -123,7 +123,10 @@ fn body_row(row: i64) -> PresentedBodyRowSnapshot {
 #[test]
 fn visible_duplicate_rows_preserve_eager_column_precedence() {
     let (lazy, eager) = indices(
-        vec![descriptor(point(1, 0, 20, 0, 1)), descriptor(point(1, 0, 10, 0, 1))],
+        vec![
+            descriptor(point(1, 0, 20, 0, 1)),
+            descriptor(point(1, 0, 10, 0, 1)),
+        ],
         vec![body_row(0)],
         Vec::new(),
         neomacs_display_protocol::Rect::new(0.0, 0.0, 10.0, 1.0),
@@ -137,7 +140,10 @@ fn visible_duplicate_rows_preserve_eager_column_precedence() {
 #[test]
 fn visible_unordered_rows_preserve_eager_overlap_precedence() {
     let (lazy, eager) = indices(
-        vec![descriptor(point(1, 1, 1, 0, 1)), descriptor(point(1, 0, 1, 0, 20))],
+        vec![
+            descriptor(point(1, 1, 1, 0, 1)),
+            descriptor(point(1, 0, 1, 0, 20)),
+        ],
         vec![body_row(0), body_row(1)],
         Vec::new(),
         neomacs_display_protocol::Rect::new(0.0, 0.0, 10.0, 20.0),
@@ -161,7 +167,10 @@ fn visible_unordered_rows_preserve_eager_fallback_position() {
         })
         .to_vec();
     let (lazy, eager) = indices(
-        vec![descriptor(point(20, 1, 20, 5, 1)), descriptor(point(1, 0, 1, 5, 1))],
+        vec![
+            descriptor(point(20, 1, 20, 5, 1)),
+            descriptor(point(1, 0, 1, 5, 1)),
+        ],
         vec![body_row(0), body_row(1)],
         rows,
         neomacs_display_protocol::Rect::new(0.0, 0.0, 10.0, 11.0),

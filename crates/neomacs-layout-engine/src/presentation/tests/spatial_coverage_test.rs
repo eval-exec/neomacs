@@ -224,10 +224,11 @@ fn duplicate_or_unordered_point_rows_retain_eager_legacy_order() {
             point_rows.rows.swap(0, 1);
         }
         let expected = super::body_text_positions(window(), &ambiguous, body).unwrap();
-        let source = source(Arc::new(ambiguous.clone()), body);
-        assert_eq!(
-            source.validate_region(window(), body_rect(body), 65_536),
-            Unsupported
+        assert!(
+            super::row_text::RowWindowText::new(window(), Arc::new(ambiguous.clone()), body)
+                .unwrap()
+                .is_none(),
+            "ambiguous descriptors cannot become a direct row source"
         );
         let index = index(Arc::new(ambiguous), body);
         assert!(

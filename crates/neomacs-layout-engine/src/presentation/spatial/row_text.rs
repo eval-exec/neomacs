@@ -115,8 +115,9 @@ pub(super) fn has_unique_ordered_point_rows(snapshot: &WindowDisplaySnapshot) ->
 }
 
 impl RowWindowText {
-    /// Construction visits row descriptors only. Flat legacy/synthetic
-    /// snapshots return `None`, retaining the old frame materializer.
+    /// Construction visits row descriptors only. Flat or ambiguously ordered
+    /// snapshots return `None`, retaining the complete frame materializer.
+    /// Every constructed source has unique, ordered output-row descriptors.
     pub(super) fn new(
         window: DisplayWindowId,
         snapshot: Arc<WindowDisplaySnapshot>,
@@ -183,6 +184,12 @@ impl RowWindowText {
                 });
             }
         }
+        // Preserve the global geometry/body-owner checks above even when the
+        // descriptor ordering requires the complete materializer. Direct
+        // glyph precedence and fallback row lookup both need this invariant.
+        if !has_unique_ordered_point_rows(&snapshot) {
+            return Ok(None);
+        }
         rows.sort_by(|a, b| a.top.total_cmp(&b.top));
         let mut bottom = f32::NEG_INFINITY;
         for row in &mut rows {
@@ -204,10 +211,9 @@ impl RowWindowText {
         max_positions: usize,
     ) -> neomacs_display_protocol::PresentedTextRegionValidation {
         use neomacs_display_protocol::PresentedTextRegionValidation::{Unsupported, Validated};
-        if window != self.window
-            || bounds.raw() != self.text_body
-            || !has_unique_ordered_point_rows(&self.snapshot)
-        {
+        // Descriptor order was established at construction and the shared
+        // snapshot cannot change; admission need not check it a second time.
+        if window != self.window || bounds.raw() != self.text_body {
             return Unsupported;
         }
         // Integer cells clipped to small integral pixel bounds have exact
