@@ -637,8 +637,23 @@ pub fn pin_string_immovable(value: TaggedValue) -> bool {
 }
 
 /// Remove properties without changing the string's byte backing.
+///
+/// A string with no interval tree returns false and does not journal.
+/// GNU `set_text_properties` returns `Qnil` before `set_string_intervals`
+/// in that case (`src/textprop.c`, emacs-31.1). The absent tree is not a
+/// mutation; journaling it advances `LispCollectionRevision` on the
+/// canonical empty string.
 #[inline]
 pub fn clear_string_intervals(value: TaggedValue) -> bool {
+    if value.is_string() {
+        let ptr = (value.bits() & !TAG_MASK) as *const StringObj;
+        // SAFETY: `is_string` means this word addresses a live `StringObj`.
+        // The load is atomic and records no collection read, so a string that
+        // does have intervals keeps the journal-before-read order below.
+        if unsafe { !(*ptr).data.has_intervals() } {
+            return false;
+        }
+    }
     LispCollectionRevision::changed(value);
     let Some(ptr) = value.as_string_ptr() else {
         return false;

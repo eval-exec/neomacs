@@ -277,7 +277,9 @@ fn string_gc_typed_byte_edits_charge_only_materialization_and_restore_shape() {
             assert_eq!(heap.bytes_since_gc_exact() - before, allocated);
             let charged = heap.bytes_since_gc_exact();
             with_string_bytes_mut(value, |bytes| bytes.fill(b'a')).unwrap();
-            assert!(clear_string_intervals(value));
+            // No intervals: GNU `set_text_properties` returns nil and does not
+            // touch the string. The charge check below is the pacing claim.
+            assert!(!clear_string_intervals(value));
             assert!(pin_string_immovable(value));
             assert_eq!(heap.bytes_since_gc_exact(), charged);
             assert!(value.as_lisp_string().unwrap().is_immovable());

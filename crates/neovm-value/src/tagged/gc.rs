@@ -2352,6 +2352,10 @@ mod pacer_tests;
 #[path = "gc/tests/string_pacing_census_test.rs"]
 mod string_pacing_census_tests;
 
+#[cfg(test)]
+#[path = "gc/tests/string_interval_clear_test.rs"]
+mod string_interval_clear_tests;
+
 #[cfg(any(test, feature = "test-support"))]
 #[path = "gc/tests/ownership_test.rs"]
 mod ownership_tests;
