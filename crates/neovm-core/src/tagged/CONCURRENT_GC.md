@@ -511,6 +511,19 @@ guard outlives the debug mutation-closure guard. The unrestricted string helper
 and its identity observer are gated behind test support; production string
 mutation is available only through the typed operations.
 
+The typed Value accessor completes the existing charged read-access hydration
+before constructing a scoped, table-bound `HydratedHashTable` witness. Its safe
+mutation entry shares revision/type/write-barrier preparation and the verified
+loan, with no pending-callback arm. Generic and sealed callers retain their
+pending entry. The unmetered verified extent constructs no optional charge
+object; the metered extent still drops its charge after the debug loan guard.
+Removal uses the single canonical free-list push. Only actual free-list growth
+invokes the cold net-byte calculation, reconstructing the pre-erase index/free
+capacities with the unchanged slot capacity and original saturation rules.
+Rust's [`Vec` allocation guarantees](https://doc.rust-lang.org/std/vec/struct.Vec.html#guarantees)
+define the push's spare-capacity behavior; the caller observes its result rather
+than adding another admission check or an unchecked push.
+
 The typed constructor adapter and the index clear adapter keep their forwarding
 bodies available for inlining. An opaque constructor closure adds an environment
 and result ABI to every typed write; an opaque index clear hides its field effects

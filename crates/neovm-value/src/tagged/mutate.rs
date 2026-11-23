@@ -8,8 +8,8 @@ use crate::heap_types::LispString;
 use crate::heap_types::{LispMarker, OverlayData};
 #[cfg(any(test, feature = "test-support"))]
 use crate::tagged::bytecode::chunk::ByteCodeFunction;
-use crate::value::LispHashTable;
 use crate::value::text_props::TextPropertyTable;
+use crate::value::{HydratedHashTable, LispHashTable};
 
 use super::collection_reads::{StoreState, WriteProjection, record_projected_write_in_store};
 #[cfg(any(test, feature = "test-support"))]
@@ -759,13 +759,7 @@ unsafe fn with_hash_table_mut_inactive_impl<const METERED: bool, R>(
     value: TaggedValue,
     f: impl FnOnce(&mut LispHashTable) -> R,
 ) -> Option<R> {
-    debug_assert!(!super::gc::concurrent_hash_mutation_active());
-    LispCollectionRevision::changed(value);
-    if value.veclike_type()? != VecLikeType::HashTable {
-        return None;
-    }
-    note_heap_write(value, HeapWriteKind::HashTableData);
-    let ptr = value.as_veclike_ptr().unwrap() as *mut HashTableObj;
+    let ptr = prepare_hash_table_mut_inactive(value)?;
     // SAFETY: validation established this initialized table; the serialized
     // barrier enumerates pending entries directly and does not hydrate them.
     if unsafe { (*ptr).table.needs_hydration() } {
@@ -776,6 +770,39 @@ unsafe fn with_hash_table_mut_inactive_impl<const METERED: bool, R>(
     // SAFETY: the validated table is hydrated, and the caller retains serial
     // access until the callback's borrow and its accounting guard have ended.
     Some(unsafe { with_verified_hash_table_mut::<METERED, R>(ptr, f) })
+}
+
+/// Typed writers have already completed the charged read-access hydration.
+/// Keeping that fact in the entry contract avoids preparing a pending-table
+/// callback environment on every already-hydrated edit.
+///
+/// The witness is constructed only inside the existing inactive typed Value
+/// accessor, after hydration and before any callback, GC or owner transition.
+#[inline]
+pub(crate) fn with_hydrated_hash_table_mut_inactive<R>(
+    hydrated: HydratedHashTable<'_>,
+    f: impl FnOnce(&mut LispHashTable) -> R,
+) -> Option<R> {
+    let ptr = prepare_hash_table_mut_inactive(hydrated.into_value())?;
+    // SAFETY: validation established the initialized table; the witness
+    // establishes hydration in the uninterrupted inactive typed extent.
+    debug_assert!(!unsafe { (*ptr).table.needs_hydration() });
+    // SAFETY: the typed capability reports its own growth and cannot replace
+    // the table. Its payload borrow ends before the serialized extent ends.
+    Some(unsafe { with_verified_hash_table_mut::<false, R>(ptr, f) })
+}
+
+/// Keep revision and write-barrier ordering shared by both serial entries.
+///
+#[inline(always)]
+fn prepare_hash_table_mut_inactive(value: TaggedValue) -> Option<*mut HashTableObj> {
+    debug_assert!(!super::gc::concurrent_hash_mutation_active());
+    LispCollectionRevision::changed(value);
+    if value.veclike_type()? != VecLikeType::HashTable {
+        return None;
+    }
+    note_heap_write(value, HeapWriteKind::HashTableData);
+    Some(value.as_veclike_ptr().unwrap() as *mut HashTableObj)
 }
 
 #[cold]
@@ -822,20 +849,31 @@ unsafe fn with_verified_hash_table_mut<const METERED: bool, R>(
     // equal one compiled against this object.
     let epoch = unsafe { (*ptr).table.data.switch_epoch.wrapping_add(1) };
     unsafe { (*ptr).table.data.switch_epoch = epoch };
-    // Declare this before the debug closure guard: reverse-drop must end the
-    // mutation extent before allocation accounting reads the payload again.
-    let _storage_charge = if METERED {
+    // Both concrete extents use the same payload loan. Expanding its lexical
+    // scope keeps the debug guard inside the metered charge's drop scope,
+    // without constructing an Option<charge> in the unmetered extent.
+    macro_rules! payload_loan {
+        () => {{
+            #[cfg(any(test, debug_assertions, feature = "test-support"))]
+            let _guard = HeapMutClosureGuard::enter();
+            // SAFETY: the caller retains the verified hydrated payload loan.
+            let result = f(unsafe { &mut (*ptr).table });
+            // SAFETY: the loan ended above; restore this table's write epoch.
+            unsafe { (*ptr).table.data.switch_epoch = epoch };
+            result
+        }};
+    }
+    if METERED {
+        // Declare this before the debug closure guard in the payload loan:
+        // reverse-drop must end that extent before accounting reads it again.
         // SAFETY: all non-payload bookkeeping is complete; the callback may
         // replace this table, but its borrow cannot outlive the guard.
-        Some(unsafe { super::gc::SerialHashTableStorageCharge::new(ptr) })
+        let _storage_charge = unsafe { super::gc::SerialHashTableStorageCharge::new(ptr) };
+        payload_loan!()
     } else {
-        None
-    };
-    #[cfg(any(test, debug_assertions, feature = "test-support"))]
-    let _guard = HeapMutClosureGuard::enter();
-    let result = f(unsafe { &mut (*ptr).table });
-    unsafe { (*ptr).table.data.switch_epoch = epoch };
-    result
+        // The unmetered extent has no charge object, including on unwind.
+        payload_loan!()
+    }
 }
 
 /// Keep the snapshot, mutation lease and unwind/drop paths in the active clone.

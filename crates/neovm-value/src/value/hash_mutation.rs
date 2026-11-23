@@ -22,6 +22,65 @@ pub struct HashTableWrite<'a> {
 
 static_assertions::assert_not_impl_any!(HashTableWrite<'static>: Send, Sync, Clone, Copy);
 
+/// A table identity whose read-access hydration has completed. Only the
+/// existing inactive typed Value accessor can construct this private module's
+/// witness, and it consumes the witness before invoking the typed callback.
+/// The marker ties the copied handle to that accessor and forbids thread transfer;
+/// the accessor's existing contract supplies inactive-owner exclusion.
+pub(crate) struct HydratedHashTable<'a> {
+    value: Value,
+    _scope: PhantomData<(&'a Value, Rc<()>)>,
+}
+
+static_assertions::assert_not_impl_any!(HydratedHashTable<'static>: Send, Sync, Clone, Copy);
+
+impl<'a> HydratedHashTable<'a> {
+    #[inline]
+    fn for_serial_write(value: &'a Value) -> Option<Self> {
+        value.as_hash_table()?;
+        Some(Self {
+            value: *value,
+            _scope: PhantomData,
+        })
+    }
+
+    #[inline]
+    pub(crate) fn into_value(self) -> Value {
+        self.value
+    }
+}
+
+impl Value {
+    /// Edit through operations that report positive net backing growth.
+    /// Unlike the unrestricted mutation closure, this capability cannot
+    /// replace the table or expose its storage, so overwrites need no census.
+    ///
+    /// # Safety
+    /// Tier-H must remain inactive until return. The closure must not invoke
+    /// Lisp or collect, and the mode decision must not span a GC safepoint.
+    /// The installed serialized owner must stay live and unchanged throughout
+    /// the closure: no heap installation change or owner retirement is allowed.
+    #[inline]
+    #[doc(hidden)]
+    pub unsafe fn with_hash_table_write_inactive<R>(
+        self,
+        f: impl FnOnce(&mut HashTableWrite<'_>) -> R,
+    ) -> Option<R> {
+        // The existing cold accessor charges lazy hydration before any
+        // mutable payload loan. No witness or constructor escapes this module;
+        // the callback receives only the typed write capability below.
+        let hydrated = HydratedHashTable::for_serial_write(&self)?;
+        mutate::with_hydrated_hash_table_mut_inactive(
+            hydrated,
+            // Keep the constructor forwarding in the payload loan. An
+            // opaque closure ABI spills its environment and result even
+            // when the inner mutation body has already been inlined.
+            #[inline(always)]
+            |table| f(&mut HashTableWrite::new(table)),
+        )
+    }
+}
+
 impl<'a> HashTableWrite<'a> {
     pub(super) fn new(table: &'a mut LispHashTable) -> Self {
         Self {
@@ -66,25 +125,18 @@ impl<'a> HashTableWrite<'a> {
         Ok(())
     }
 
-    /// Preserve the original removal seam while the free-list push cannot
-    /// allocate. Only a full free list needs the cold net-growth meter.
+    /// The canonical free-list push owns its capacity check. Observe actual
+    /// growth afterward rather than prechecking and repeating the push check.
     /// Retain the underlying removal operation's original inline placement.
     #[inline(always)]
     pub fn remove(&mut self, key: Value, symbols_with_pos_enabled: bool) -> Result<(), Flow> {
         let test = self.table.test;
-        if self.table.data.free_slots.len() < self.table.data.free_slots.capacity() {
-            self.table
-                .data
-                .try_remove_by_value(key, test, symbols_with_pos_enabled)
-                .map(|_| ())
-        } else {
-            self.table.data.remove_by_value_with_growth(
-                key,
-                test,
-                symbols_with_pos_enabled,
-                charge_growth,
-            )
-        }
+        self.table.data.remove_by_value_with_growth(
+            key,
+            test,
+            symbols_with_pos_enabled,
+            charge_growth,
+        )
     }
 }
 
@@ -121,12 +173,10 @@ impl HashTableStorage {
         self.remove_slot(slot)
     }
 
-    /// Only a full reusable-slot Vec can allocate during removal. Probe
-    /// once and leave a miss unmetered. For a found entry, measure before
-    /// unlinking: hashbrown's usable index capacity may fall on erase, and
-    /// the serial contract charges the positive net materialized delta.
-    #[cold]
-    #[inline(never)]
+    /// The canonical removal owns the only free-list push and its capacity
+    /// check. A miss stays unmetered. Preserve the pre-erase index capacity:
+    /// tombstones may lower it, offsetting a growing free-list allocation.
+    #[inline]
     fn remove_by_value_with_growth(
         &mut self,
         key: Value,
@@ -138,13 +188,36 @@ impl HashTableStorage {
         else {
             return Ok(());
         };
-        let before = self.materialized_storage_bytes();
+        let index_before = self.index.capacity();
+        let free_before = self.free_slots.capacity();
         self.remove_found(hash, slot);
+        if self.free_slots.capacity() > free_before {
+            self.charge_removal_growth(index_before, free_before, &mut report);
+        }
+        Ok(())
+    }
+
+    /// Removal cannot change slot capacity. Reconstruct the original whole
+    /// materialized-domain snapshot only after the free-list actually grows,
+    /// retaining the same saturating byte calculation and index-loss offset.
+    #[cold]
+    #[inline(never)]
+    fn charge_removal_growth(
+        &self,
+        index_before: usize,
+        free_before: usize,
+        report: &mut impl FnMut(usize),
+    ) {
+        let before = HashTableStorageCapacities {
+            index: index_before,
+            slots: self.slots.capacity(),
+            free_slots: free_before,
+        }
+        .materialized_bytes();
         let grown = self.materialized_storage_bytes().saturating_sub(before);
         if grown != 0 {
             report(grown);
         }
-        Ok(())
     }
 
     /// With a no-op reporter this is also the detached/sealed allocation

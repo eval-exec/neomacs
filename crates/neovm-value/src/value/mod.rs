@@ -67,6 +67,7 @@ pub mod flow_vocab;
 mod hash_mutation;
 #[doc(hidden)]
 pub use hash_mutation::HashTableWrite;
+pub(crate) use hash_mutation::HydratedHashTable;
 #[doc(hidden)]
 pub mod jit_runtime;
 pub mod positions;
@@ -4064,38 +4065,6 @@ impl TaggedValue {
         // Generic mutation meters the verified payload; sealed/typed owners
         // retain the shared unmetered body and their own allocation reporters.
         unsafe { mutate::with_hash_table_mut_inactive_metered(self, f) }
-    }
-
-    /// Edit through operations that report positive net backing growth.
-    /// Unlike the unrestricted mutation closure, this capability cannot
-    /// replace the table or expose its storage, so overwrites need no census.
-    ///
-    /// # Safety
-    /// Tier-H must remain inactive until return. The closure must not invoke
-    /// Lisp or collect, and the mode decision must not span a GC safepoint.
-    /// The installed serialized owner must stay live and unchanged throughout
-    /// the closure: no heap installation change or owner retirement is allowed.
-    #[inline]
-    #[doc(hidden)]
-    pub unsafe fn with_hash_table_write_inactive<R>(
-        self,
-        f: impl FnOnce(&mut HashTableWrite<'_>) -> R,
-    ) -> Option<R> {
-        // The existing cold accessor charges lazy hydration before any
-        // mutable payload loan. Its shared reference ends at this statement.
-        self.as_hash_table()?;
-        // SAFETY: the caller retains the inactive serial mutation contract;
-        // the private body supplies the ordinary barriers and revision writes.
-        unsafe {
-            mutate::with_hash_table_mut_inactive(
-                self,
-                // Keep the constructor forwarding in the payload loan. An
-                // opaque closure ABI spills its environment and result even
-                // when the inner mutation body has already been inlined.
-                #[inline(always)]
-                |table| f(&mut HashTableWrite::new(table)),
-            )
-        }
     }
 
     /// Active mutation accessor for a caller that has already dispatched.
