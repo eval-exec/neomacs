@@ -158,12 +158,9 @@ fn a_site_holds_its_sources_weakly_and_releases_them() {
     let live = Arc::new(RuntimeState::new());
     let dead = Arc::new(RuntimeState::new());
     let s = site();
-    // SAFETY: this fresh site's source slots are null. Each word is
-    // Weak::into_raw of a live downgrade, and no concurrent reader runs.
-    unsafe {
-        s.install_source(0, Arc::downgrade(&live));
-        s.install_source(1, Arc::downgrade(&dead));
-    }
+    assert_eq!(s.claim_source(&live), SourceClaim::Published(0));
+    assert_eq!(s.claim_source(&dead), SourceClaim::Published(1));
+    assert_eq!(s.claim_source(&live), SourceClaim::Held(0));
     s.state_word().store((2 << 3) | TAG_POLY, Ordering::Relaxed);
     drop(dead);
     assert_eq!(sources_of(&s), vec![Arc::as_ptr(&live)]);
@@ -228,6 +225,57 @@ fn a_stale_recorder_joins_the_word_it_lost_to() {
     s.observe(g);
     s.transition(one, target_key(h), h);
     assert_eq!(sources_of(&s).len(), 3, "f, g and h");
+}
+
+/// Recorders on POLY threads seat distinct sources in one fresh site while
+/// a compile thread reads it, each recorder dropping its own strong hold
+/// when done. No observation is lost (the word counts every source) and no
+/// published slot is released (the site still holds each source's Weak).
+/// ThreadSanitizer checks the slot and word handoff.
+#[cfg(feature = "jit")]
+#[test]
+fn concurrent_recorders_lose_no_source_and_release_none() {
+    for _ in 0..64 {
+        let s = site();
+        let sources: Vec<Arc<RuntimeState>> =
+            (0..POLY).map(|_| Arc::new(RuntimeState::new())).collect();
+        let start = std::sync::Barrier::new(POLY + 1);
+        let recording = std::sync::atomic::AtomicUsize::new(POLY);
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                start.wait();
+                while recording.load(Ordering::Acquire) != 0 {
+                    let _ = s.target();
+                }
+            });
+            for source in &sources {
+                let (s, start, recording) = (&s, &start, &recording);
+                let source = Arc::clone(source);
+                scope.spawn(move || {
+                    // Only the one-source word holds a key, and every
+                    // recorder here is a source, so any 8-aligned word works.
+                    let key = Arc::as_ptr(&source) as u64 | TAG_SOURCE;
+                    start.wait();
+                    let seen = seat_source(s, key, Some(&source));
+                    advance(s, STATE_UNINIT, seen);
+                    drop(source);
+                    recording.fetch_sub(1, Ordering::Release);
+                });
+            }
+        });
+        assert_eq!(
+            s.state_word().load(Ordering::Acquire),
+            ((POLY as u64) << 3) | TAG_POLY
+        );
+        let mut held = sources_of(&s);
+        let mut want: Vec<*const RuntimeState> = sources.iter().map(Arc::as_ptr).collect();
+        held.sort();
+        want.sort();
+        assert_eq!(held, want);
+        for source in &sources {
+            assert_eq!(Arc::weak_count(source), 1, "the site's Weak");
+        }
+    }
 }
 
 /// A counted transition after the window is late; before it, it is not.
