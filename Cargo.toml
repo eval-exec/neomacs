@@ -364,7 +364,7 @@ objc2-metal = "0.3.2"
 windows = "0.62.2"
 windows-core = "0.62.2"
 webview2-com = "0.39.1"
-url = "2"
+url = "2.5.9"
 
 # Terminal emulation
 rio-vt = "0.5.29"
