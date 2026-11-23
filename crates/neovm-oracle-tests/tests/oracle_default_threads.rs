@@ -585,6 +585,55 @@ fn e8s_condition_wait_interrupted_by_thread_signal() {
     );
 }
 
+/// E6-P.1 follow-up: a thread the feature-detected opt-in creator makes is an
+/// ordinary thread object for the mutex, condition, signal and last-error
+/// APIs. GNU takes `make-thread`; Neomacs takes the extension, which is
+/// Baton-serial until an N-mutator admission exists. A condition wait
+/// interrupted by `thread-signal` matches GNU only under Green, so the row
+/// lives in the Green group.
+#[test]
+fn e6p1_an_opt_in_thread_object_takes_signals_mutexes_and_last_error() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    assert_green_default_threads_oracle(
+        r##"
+(let* ((creator (if (fboundp 'neomacs-make-parallel-thread)
+                    #'neomacs-make-parallel-thread
+                  #'make-thread))
+       (m (make-mutex "e6p1-m")) (c (make-condition-variable m)) (ready nil)
+       (th (funcall creator
+                    (lambda ()
+                      (mutex-lock m) (mutex-lock m)
+                      (setq ready t)
+                      (let ((e (condition-case err
+                                   (let ((rounds 0))
+                                     (while (< rounds 200000)
+                                       (setq rounds (1+ rounds))
+                                       (condition-wait c))
+                                     'not-signalled)
+                                 (error err))))
+                        (mutex-unlock m) (mutex-unlock m)
+                        (list (if (eq e 'not-signalled) e (car (cdr e)))
+                              'recursion-restored)))
+                    "e6p1-condition-signal")))
+  (let ((deadline (+ (float-time) 5.0)))
+    (while (and (not ready) (< (float-time) deadline)) (thread-yield)))
+  (mutex-lock m)
+  (thread-signal th 'error '("wake-opt-in"))
+  (mutex-unlock m)
+  (let* ((joined (list (condition-case e (thread-join th)
+                         (error (list 'join-raised (car (cdr e)))))
+                       (thread-join th)))
+         (dier (funcall creator (lambda () (signal 'wrong-type-argument '(e6p1-dies))))))
+    (thread-join dier)
+    (list ready joined (thread-last-error t) (thread-last-error)
+          (mutex-name m) (thread-name th))))
+"##,
+        expect_test::expect![[
+            r#""OK (t ((join-raised \"wake-opt-in\") (\"wake-opt-in\" recursion-restored)) (wrong-type-argument e6p1-dies) nil \"e6p1-m\" \"e6p1-condition-signal\")""#
+        ]],
+    );
+}
+
 #[test]
 fn e8s_thread_signal_to_a_join_waiter_ends_the_join() {
     return_if_neovm_enable_oracle_proptest_not_set!();
