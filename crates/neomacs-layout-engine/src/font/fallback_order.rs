@@ -124,6 +124,44 @@ pub(crate) fn clear_fallback_orders() {
     }
 }
 
+/// Drop groups whose fontset matches `drop_fontset`. Each dropped group is
+/// bumped first, the same way [`clear_fallback_orders`] retires stamps.
+pub(crate) fn prune_fallback_orders(drop_fontset: &impl Fn(&FaceFontsetId) -> bool) {
+    if FALLBACK_ORDERS.get().is_none() {
+        return;
+    }
+    let mut orders = lock();
+    orders.retain(|key, group| {
+        if drop_fontset(&key.fontset) {
+            bump(group);
+            false
+        } else {
+            true
+        }
+    });
+}
+
+#[cfg(test)]
+fn fallback_orders_matching(keep: impl Fn(&FaceFontsetId) -> bool) -> usize {
+    let Some(orders) = FALLBACK_ORDERS.get() else {
+        return 0;
+    };
+    let orders = orders
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    orders.keys().filter(|key| keep(&key.fontset)).count()
+}
+
+#[cfg(test)]
+pub(crate) fn fallback_order_group_count() -> usize {
+    fallback_orders_matching(|_| true)
+}
+
+#[cfg(test)]
+pub(crate) fn fallback_order_groups_for_frame(frame: u64) -> usize {
+    fallback_orders_matching(|fontset| fontset.frame == frame)
+}
+
 /// Fast path when this fontset's generation is still current. A mismatch
 /// takes the order lock, accepts the answer only if `winner` is still the
 /// front, and rebinds the stamp to that live group's generation.

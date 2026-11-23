@@ -1189,8 +1189,47 @@ impl FontMetricsService {
     }
 
     pub(crate) fn set_realized_fontset_context(&mut self, frame: u64, face_epoch: u64) {
+        let epoch_changed = self.realized_fontset_epoch != face_epoch;
         self.realized_fontset_frame = frame;
         self.realized_fontset_epoch = face_epoch;
+        if epoch_changed {
+            // GNU frees realized fontsets on `face_change`. The implicit
+            // frame 0 fontset is the test and `font-at` default, not a
+            // retired face, so it stays.
+            self.drop_realized_fontsets(&|fontset| {
+                fontset.frame != 0 && fontset.face_epoch != face_epoch
+            });
+        }
+    }
+
+    /// Drop one deleted frame's fontset groups and this service's copies.
+    pub(crate) fn prune_dead_frame_fontsets(&mut self, live: impl Fn(u64) -> bool) {
+        self.drop_realized_fontsets(&|fontset| fontset.frame != 0 && !live(fontset.frame));
+    }
+
+    fn drop_realized_fontsets(
+        &mut self,
+        drop_fontset: &impl Fn(&crate::font::fallback_order::FaceFontsetId) -> bool,
+    ) {
+        self.char_cache
+            .retain(|(key, _), _| !drop_fontset(&key.fontset));
+        self.resolved_char_font_cache
+            .retain(|(key, _), _| !drop_fontset(&key.fontset));
+        self.text_extents_cache
+            .retain(|(_, key), _| !drop_fontset(&key.fontset));
+        self.resolved_cluster_cache
+            .retain(|(key, _), _| !drop_fontset(&key.fontset));
+        self.font_resolver.prune_realized_fontsets(drop_fontset);
+        crate::font::fallback_order::prune_fallback_orders(drop_fontset);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn realized_fontset_cache_len(&self) -> usize {
+        self.char_cache.len()
+            + self.resolved_char_font_cache.len()
+            + self.text_extents_cache.len()
+            + self.resolved_cluster_cache.len()
+            + self.font_resolver.realized_fontset_cache_len()
     }
 
     #[cfg(test)]
@@ -3455,6 +3494,13 @@ impl FontMetricsService {
         let mut glyphs = Vec::with_capacity(text.chars().count());
         let mut fonts = Vec::new();
         let mut fallbacks = Vec::new();
+        let face_key = self.realized_face_font_cache_key(selection);
+        if let Some(representative) = crate::composition::representative_char_for_cluster(text) {
+            // The representative may itself be a bitmap fallback. Characters
+            // the bitmap covers never call `materialize_char_font`, so this
+            // stamp is the only record that the cluster followed that front.
+            fallbacks.extend(self.cached_char_fallback(&face_key, representative));
+        }
         for (cluster_start, ch) in text.char_indices() {
             let materialized = if self.materialized_font_has_char(&primary, ch) {
                 primary.clone()

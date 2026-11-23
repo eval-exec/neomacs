@@ -606,6 +606,9 @@ impl PreparedViewports {
         fonts.font_pixel_size = state.font_pixel_size;
         fonts.faces = attempt.faces();
         fonts.window_matrices.push(content.clone());
+        if let Some(service) = metrics.as_mut() {
+            service.set_realized_fontset_context(frame.0, arena.face_epoch().get());
+        }
         crate::font::metrics::realize_frame_fonts(&mut fonts, metrics);
         let pointer_source =
             crate::presentation::pointer::window_pointer_source_map(&fonts).ok()?;

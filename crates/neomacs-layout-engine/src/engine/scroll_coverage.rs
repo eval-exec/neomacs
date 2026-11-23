@@ -411,6 +411,14 @@ impl LayoutEngine {
             .retain_live_frames(|frame| evaluator.frame_manager().get(frame).is_some());
         self.retained_by_frame
             .retain(|frame, _| evaluator.frame_manager().get(*frame).is_some());
+        if let Some(service) = self.font_metrics.as_mut() {
+            service.prune_dead_frame_fontsets(|frame| {
+                evaluator
+                    .frame_manager()
+                    .get(neovm_core::window::FrameId(frame))
+                    .is_some()
+            });
+        }
         if self
             .retained_frame
             .is_some_and(|frame| evaluator.frame_manager().get(frame).is_none())
@@ -1194,6 +1202,14 @@ impl LayoutEngine {
         let base_id = stable_face_id_for_resolved(&mut capture.attempt, resolver.default_face());
         if self.font_metrics.is_none() {
             return Err(RowProgramError::Unsupported);
+        }
+        let epoch = self
+            .frame_face_arenas
+            .get(&frame)
+            .map(|arena| arena.face_epoch().get())
+            .unwrap_or_else(|| evaluator.face_change_count());
+        if let Some(service) = self.font_metrics.as_mut() {
+            service.set_realized_fontset_context(frame.0, epoch);
         }
         let default_face = DisplayRowFaceRealizer::new(&mut self.font_metrics).realize_face(
             base_id,

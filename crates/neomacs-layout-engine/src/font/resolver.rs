@@ -1307,6 +1307,24 @@ impl FontResolver {
             .clear();
     }
 
+    /// Drop per-character answers for realized fontsets that `drop_fontset`
+    /// names. Opened fonts and the ASCII primary cache stay: they are not
+    /// keyed by a face epoch.
+    pub(crate) fn prune_realized_fontsets(
+        &mut self,
+        drop_fontset: &impl Fn(&crate::font::fallback_order::FaceFontsetId) -> bool,
+    ) {
+        self.char_cache
+            .get_mut()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .retain(|key, _| !drop_fontset(&key.fontset));
+    }
+
+    #[cfg(test)]
+    pub(crate) fn realized_fontset_cache_len(&self) -> usize {
+        self.char_cache.lock().map(|cache| cache.len()).unwrap_or(0)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn resolve_from_spec(
         &self,

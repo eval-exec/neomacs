@@ -62,6 +62,16 @@ struct MeasurementRevision {
     face_epoch: u64,
 }
 
+impl MeasurementRevision {
+    /// Catalog, fontset generation, and scale rebuild the worker service.
+    /// Frame and face epoch are installed as context on every prepare, so a
+    /// frame switch must not construct a fresh service: that service's first
+    /// Unicode install clears the process-wide fallback orders.
+    fn rebuild_key(self) -> (FontCatalogGeneration, u64, u32) {
+        (self.catalog, self.fontset, self.scale_bits)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct FontMeasurementSnapshot {
     revision: MeasurementRevision,
@@ -413,6 +423,13 @@ pub(crate) struct WorkerFontMeasurements {
     cache_rebuilds: usize,
 }
 
+#[cfg(test)]
+impl WorkerFontMeasurements {
+    pub(crate) fn cache_rebuilds(&self) -> usize {
+        self.cache_rebuilds
+    }
+}
+
 impl WorkerFontMeasurements {
     pub(crate) fn prepare(
         &mut self,
@@ -444,7 +461,8 @@ impl WorkerFontMeasurements {
             .is_some_and(|service| service.test_catalog() != snapshot.catalog);
         #[cfg(not(test))]
         let catalog_changed = false;
-        if self.revision != Some(snapshot.revision)
+        if self.revision.map(MeasurementRevision::rebuild_key)
+            != Some(snapshot.revision.rebuild_key())
             || catalog_changed
             || self.faces.len() + new_faces.len() > MAX_CACHED_FACES
             || self.service.as_ref().is_none_or(|service| {

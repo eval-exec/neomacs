@@ -125,6 +125,9 @@ mod edit_sync_prove_first_engine_test;
 mod face_overlay_replay_test;
 #[path = "issue_828_mode_line_pixel_test.rs"]
 mod issue_828_mode_line_pixel_test;
+
+#[path = "fontset_context_test.rs"]
+mod fontset_context_test;
 #[path = "../../tests/engine_layout_validity_test.rs"]
 mod layout_validity;
 #[path = "lazy_text_hit_test.rs"]

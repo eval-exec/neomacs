@@ -4520,6 +4520,368 @@ fn bitmap_cluster_records_every_fallback_stamp() {
     drop(eval);
 }
 
+/// The face primary has no U+00A9. BitmapFb is a BDF fallback that does, and
+/// Later is an outline font that also does, so a move has to change the
+/// cluster's font. The representative stamp is the only thing that can
+/// invalidate the bitmap cluster: the bitmap covers the representative, so
+/// the per-character loop never records it.
+#[cfg(target_os = "linux")]
+struct BitmapRepresentativeBackend {
+    symbols: String,
+    spleen: String,
+    later: String,
+}
+
+#[cfg(target_os = "linux")]
+impl crate::font_backend::FontBackend for BitmapRepresentativeBackend {
+    fn kind(&self) -> FontBackendKind {
+        FontBackendKind::Fontconfig
+    }
+
+    fn list_families(&self) -> Vec<crate::font_backend::FontFamilyName> {
+        Vec::new()
+    }
+
+    fn resolve_family(&self, family: &str) -> String {
+        family.to_owned()
+    }
+
+    fn family_prefers_monospace(&self, _family: &str) -> bool {
+        false
+    }
+
+    fn list_candidates(
+        &self,
+        query: &crate::font_backend::FontCandidateQuery,
+    ) -> Vec<crate::font_backend::FontCandidate> {
+        let family = query.scope.queried_family();
+        let ch = query.required.single_char();
+        let (file, family, size) = match family {
+            Some("BitmapFb") => {
+                if ch != Some('©') {
+                    return Vec::new();
+                }
+                (
+                    self.spleen.as_str(),
+                    "BitmapFb",
+                    crate::font_backend::PlatformFontSize::Unknown,
+                )
+            }
+            Some("Later") => {
+                if !matches!(ch, Some('©') | Some('検')) {
+                    return Vec::new();
+                }
+                (
+                    self.later.as_str(),
+                    "Later",
+                    crate::font_backend::PlatformFontSize::Scalable,
+                )
+            }
+            Some(name) => (
+                self.symbols.as_str(),
+                name,
+                crate::font_backend::PlatformFontSize::Scalable,
+            ),
+            None => return Vec::new(),
+        };
+        vec![crate::font_backend::FontCandidate {
+            matched: platform_file_candidate(
+                ResolvedFontIdentity::from_file(file, 0, None),
+                crate::font_backend::PlatformFontMetadata {
+                    foundry: None,
+                    family: family.to_owned(),
+                    weight: Some(400),
+                    slant: FontSlant::Normal,
+                    width: Some(FontWidth::Normal),
+                    spacing: None,
+                    design_metrics: None,
+                    size,
+                },
+            ),
+        }]
+    }
+
+    fn advance_catalog_generation(&mut self) {}
+
+    fn poll_catalog_change(&mut self) -> crate::font::catalog::FontCatalogChange {
+        crate::font::catalog::FontCatalogChange::Unchanged
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn bitmap_representative_follows_a_fallback_move() {
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    eval.eval_str(
+        r#"(progn
+            (set-fontset-font t nil "BitmapFb")
+            (set-fontset-font t nil "Later" nil 'append))"#,
+    )
+    .expect("bitmap fallback specs");
+    let mut svc = make_svc();
+    svc.font_resolver
+        .replace_backend(Box::new(BitmapRepresentativeBackend {
+            symbols: test_font_path(neomacs_test_fonts::symbols_nerd_mono_3_4_0().to_path_buf()),
+            spleen: test_font_path(neomacs_test_fonts::spleen_2_2_0().bdf()),
+            later: test_font_path(neomacs_test_fonts::noto_sans_cjk_variable().to_path_buf()),
+        }));
+    let selection = RealizedFaceFontSelection::new("Symbols Nerd Font Mono", 400, false, 16.0);
+    let cluster_family = |svc: &mut FontMetricsService| {
+        let (glyphs, fonts) = svc
+            .resolved_glyphs_for_realized_face_cluster("©", selection)
+            .expect("© bitmap cluster");
+        let glyph = glyphs.first().expect("© glyph");
+        fonts
+            .iter()
+            .find(|font| font.id == glyph.resolved_font_id)
+            .expect("© font")
+            .family
+            .clone()
+    };
+    assert_eq!(cluster_family(&mut svc), "BitmapFb");
+    assert_eq!(
+        svc.resolved_font_for_realized_face_char('検', selection)
+            .expect("検")
+            .family,
+        "Later"
+    );
+    assert_eq!(
+        cluster_family(&mut svc),
+        "Later",
+        "a bitmap representative's fallback stamp must miss after that entry moves"
+    );
+    drop(eval);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn face_epoch_prunes_stale_fontset_entries() {
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    eval.eval_str(
+        r#"(progn
+            (set-fontset-font t nil "OnlyC2")
+            (set-fontset-font t nil "CoversBoth" nil 'append))"#,
+    )
+    .expect("fallback specs");
+    let mut svc = make_svc();
+    svc.font_resolver
+        .replace_backend(Box::new(MetricsFallbackBackend {
+            only_c2: test_font_path(
+                neomacs_test_fonts::plemol_jp_console_nf_regular().to_path_buf(),
+            ),
+            covers_both: test_font_path(neomacs_test_fonts::noto_sans_cjk_variable().to_path_buf()),
+        }));
+    let selection = |frame: u64, epoch: u64| {
+        RealizedFaceFontSelection::new("DejaVu Sans", 400, false, 16.0)
+            .with_fontset(frame, 1, epoch)
+    };
+    svc.set_realized_fontset_context(4, 1);
+    assert_eq!(
+        svc.resolved_font_for_realized_face_char('リ', selection(4, 1))
+            .expect("リ")
+            .family,
+        "OnlyC2"
+    );
+    let one_epoch_groups = crate::font::fallback_order::fallback_order_group_count();
+    let one_epoch_caches = svc.realized_fontset_cache_len();
+    assert!(one_epoch_groups > 0);
+    assert!(one_epoch_caches > 0);
+    for epoch in 2..=8 {
+        svc.set_realized_fontset_context(4, epoch);
+        assert_eq!(
+            crate::font::fallback_order::fallback_order_groups_for_frame(4),
+            0,
+            "epoch {epoch} drops the previous face's groups"
+        );
+        assert_eq!(
+            svc.resolved_font_for_realized_face_char('リ', selection(4, epoch))
+                .expect("リ")
+                .family,
+            "OnlyC2"
+        );
+        assert!(
+            crate::font::fallback_order::fallback_order_group_count() <= one_epoch_groups,
+            "ten face changes must not keep every epoch"
+        );
+        assert!(svc.realized_fontset_cache_len() <= one_epoch_caches);
+    }
+    let frame_a = crate::font::fallback_order::fallback_order_groups_for_frame(4);
+    assert_eq!(
+        svc.resolved_font_for_realized_face_char('検', selection(5, 8))
+            .expect("検")
+            .family,
+        "CoversBoth"
+    );
+    let frame_b = crate::font::fallback_order::fallback_order_groups_for_frame(5);
+    assert!(frame_b > 0);
+    svc.set_realized_fontset_context(5, 8);
+    assert_eq!(
+        crate::font::fallback_order::fallback_order_groups_for_frame(4),
+        frame_a,
+        "a frame switch at the same epoch keeps both frames"
+    );
+    svc.prune_dead_frame_fontsets(|frame| frame != 4);
+    assert_eq!(
+        crate::font::fallback_order::fallback_order_groups_for_frame(4),
+        0
+    );
+    assert_eq!(
+        crate::font::fallback_order::fallback_order_groups_for_frame(5),
+        frame_b,
+        "deleting frame 4 leaves frame 5's group"
+    );
+    drop(eval);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn two_faces_in_one_frame_publish_different_fallback_fonts() {
+    use neomacs_display_protocol::face::Face;
+    use neomacs_display_protocol::glyph_matrix::{
+        FrameDisplayState, Glyph, GlyphArea, GlyphMatrix, WindowMatrixEntry,
+    };
+    use neomacs_display_protocol::types::Rect;
+
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    eval.eval_str(
+        r#"(progn
+            (set-fontset-font t nil "OnlyC2")
+            (set-fontset-font t nil "CoversBoth" nil 'append))"#,
+    )
+    .expect("fallback specs");
+    let mut svc = make_svc();
+    svc.font_resolver
+        .replace_backend(Box::new(MetricsFallbackBackend {
+            only_c2: test_font_path(
+                neomacs_test_fonts::plemol_jp_console_nf_regular().to_path_buf(),
+            ),
+            covers_both: test_font_path(neomacs_test_fonts::noto_sans_cjk_variable().to_path_buf()),
+        }));
+    svc.set_realized_fontset_context(9, 1);
+    let moved =
+        RealizedFaceFontSelection::new("DejaVu Sans", 400, false, 16.0).with_fontset(9, 1, 1);
+    assert_eq!(
+        svc.resolved_font_for_realized_face_char('検', moved)
+            .expect("検")
+            .family,
+        "CoversBoth"
+    );
+
+    let mut state = FrameDisplayState::new(20, 1, 8.0, 16.0);
+    for id in [1u32, 2] {
+        let mut face = Face::new(FaceId::new(id));
+        face.font_family = std::sync::Arc::from("DejaVu Sans");
+        face.font_size = 16.0;
+        face.font_weight = 400;
+        state.faces.insert(FaceId::new(id), face);
+    }
+    let mut matrix = GlyphMatrix::new(1, 20);
+    neomacs_display_protocol::glyph_matrix::MatrixRow::make_mut(&mut matrix.rows[0]).enabled = true;
+    for (column, face) in [1u32, 2].into_iter().enumerate() {
+        neomacs_display_protocol::glyph_matrix::MatrixRow::make_mut(&mut matrix.rows[0]).glyphs
+            [GlyphArea::Text as usize]
+            .push(Glyph::char('リ', FaceId::new(face), column));
+    }
+    state.window_matrices.push(WindowMatrixEntry {
+        window_id: neomacs_display_protocol::types::DisplayWindowId::new(1),
+        matrix,
+        pixel_bounds: Rect::new(0.0, 0.0, 160.0, 16.0),
+        text_pixel_bounds: Rect::new(0.0, 0.0, 160.0, 16.0),
+        text_clip_bounds: None,
+        selected: true,
+    });
+    let mut service = Some(svc);
+    realize_frame_fonts(&mut state, &mut service);
+    let family = |face: u32| {
+        let fonts = state
+            .char_fonts
+            .get(&FaceId::new(face))
+            .unwrap_or_else(|| panic!("face {face}"));
+        let glyph = fonts.get(&'リ').unwrap_or_else(|| panic!("face {face} リ"));
+        state.fonts[&glyph.resolved_font_id].family.clone()
+    };
+    assert_eq!(family(1), "CoversBoth");
+    assert_eq!(family(2), "OnlyC2");
+    drop(eval);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn worker_frame_switch_keeps_the_main_fallback_order() {
+    use crate::display_item::{
+        DisplayItem, DisplayItemKind, DisplayTextRun, RenderFaceRef, SourceSpan,
+    };
+    use crate::display_row::face_state::DisplayRowFace;
+    use crate::row_layout::font_measurement::{FontMeasurementSnapshot, WorkerFontMeasurements};
+
+    // The worker service is rebuilt from this catalog, so the primary receipt
+    // has to be that catalog's DejaVu Sans. A stand-in backend would fail the
+    // receipt check and never reach the order map.
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let mut main = make_svc();
+    assert!(
+        main.synchronize_symbol_font_policy(true, None).changed(),
+        "the worker must absorb a symbol policy that is not the default"
+    );
+    let mut face = DisplayRowFace::from_resolved(
+        FaceId::new(1),
+        &crate::neovm_bridge::ResolvedFace::default(),
+    );
+    face.font_family = std::sync::Arc::from("DejaVu Sans");
+    face.font_weight = 400;
+    face.font_size = 16.0;
+    let faces = [face];
+    let items = [DisplayItem::new(
+        SourceSpan::synthetic(1, 0, 1),
+        RenderFaceRef::FaceId(faces[0].face_id),
+        DisplayItemKind::TextRun(DisplayTextRun::independent("検")),
+    )];
+    let mut worker = WorkerFontMeasurements::default();
+    main.set_realized_fontset_context(11, 1);
+    let frame_a = FontMeasurementSnapshot::capture(&faces, &mut main, &items).expect("frame A");
+    worker
+        .prepare(&frame_a, &faces, &|| false)
+        .expect("worker absorbs the symbol policy");
+    let moved = crate::font::fallback_order::FallbackOrderKey {
+        fontset: crate::font::fallback_order::FaceFontsetId {
+            frame: 11,
+            face: 1,
+            face_epoch: 1,
+        },
+        family: "DejaVu Sans".to_string(),
+        weight: 400,
+        slant: 0,
+        width: 100,
+        size: None,
+        fontset_generation: 1,
+    };
+    crate::font::fallback_order::promote_fallback(
+        &moved,
+        &neovm_core::emacs_core::fontset::FontSpecEntry::ExplicitNone,
+    );
+    assert_eq!(
+        crate::font::fallback_order::fallback_order_groups_for_frame(11),
+        1,
+        "the move under test is planted after the worker's first install"
+    );
+    main.set_realized_fontset_context(22, 1);
+    let frame_b = FontMeasurementSnapshot::capture(&faces, &mut main, &items).expect("frame B");
+    worker
+        .prepare(&frame_b, &faces, &|| false)
+        .expect("frame B reuses the worker service");
+    assert_eq!(
+        worker.cache_rebuilds(),
+        1,
+        "a frame switch is context, not a service rebuild"
+    );
+    assert_eq!(
+        crate::font::fallback_order::fallback_order_groups_for_frame(11),
+        1,
+        "frame B's prepare must not clear frame A's moved front"
+    );
+    drop(eval);
+}
+
 #[test]
 fn ascii_worker_policy_keeps_unicode_font_caches_warm() {
     let source = crate::font::metrics::test_catalog::metrics_service();
