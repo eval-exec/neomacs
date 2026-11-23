@@ -265,10 +265,13 @@ mod completion;
 mod layout;
 mod mailbox;
 mod manager;
+mod opt_in;
 mod release_point;
 
 use completion::SimCompletion;
 pub(crate) use completion::{CompletingThread, CompletionExit, RetiredCompletion};
+#[doc(hidden)]
+pub use opt_in::{builtin_neomacs_make_parallel_thread, builtin_neomacs_thread_parallel_p};
 #[doc(hidden)]
 pub use release_point::SimReleasePoint;
 

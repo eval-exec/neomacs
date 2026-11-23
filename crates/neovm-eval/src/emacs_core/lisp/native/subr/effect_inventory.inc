@@ -764,6 +764,8 @@ pub(super) static INVENTORY: &[InventoryEntry] = &[
     InventoryEntry { kind: CatalogKind::Primitive, name: "recursion-depth", source: "src/emacs_core/runtime/eval/subrs.rs", authority: Authority::World, class: ParallelClass::World, variant: None, target: None },
     InventoryEntry { kind: CatalogKind::Primitive, name: "kill-emacs", source: "src/emacs_core/runtime/eval/subrs.rs", authority: Authority::World, class: ParallelClass::World, variant: None, target: None },
     InventoryEntry { kind: CatalogKind::Primitive, name: "make-thread", source: "src/emacs_core/runtime/eval/subrs.rs", authority: Authority::World, class: ParallelClass::World, variant: None, target: None },
+    InventoryEntry { kind: CatalogKind::Primitive, name: "neomacs-make-parallel-thread", source: "src/emacs_core/runtime/eval/subrs.rs", authority: Authority::World, class: ParallelClass::World, variant: None, target: None },
+    InventoryEntry { kind: CatalogKind::Primitive, name: "neomacs-thread-parallel-p", source: "src/emacs_core/runtime/eval/subrs.rs", authority: Authority::World, class: ParallelClass::World, variant: None, target: None },
     InventoryEntry { kind: CatalogKind::Primitive, name: "thread-join", source: "src/emacs_core/runtime/eval/subrs.rs", authority: Authority::World, class: ParallelClass::World, variant: None, target: None },
     InventoryEntry { kind: CatalogKind::Primitive, name: "thread-yield", source: "src/emacs_core/runtime/eval/subrs.rs", authority: Authority::World, class: ParallelClass::World, variant: None, target: None },
     InventoryEntry { kind: CatalogKind::Primitive, name: "thread-name", source: "src/emacs_core/runtime/eval/subrs.rs", authority: Authority::World, class: ParallelClass::World, variant: None, target: None },

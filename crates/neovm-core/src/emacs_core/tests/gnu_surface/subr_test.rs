@@ -357,6 +357,10 @@ const DECLARED_HERE_AND_NOT_BY_THE_REFERENCE_GNU: &[DeclaredHere] = &[
         why: WhyThisBuildDeclaresIt::PortOwnPrimitiveInThePortsOwnNamespace,
     },
     DeclaredHere {
+        name: "neomacs-make-parallel-thread",
+        why: WhyThisBuildDeclaresIt::PortOwnPrimitiveInThePortsOwnNamespace,
+    },
+    DeclaredHere {
         name: "neomacs-mouse-absolute-pixel-position",
         why: WhyThisBuildDeclaresIt::PortOwnPrimitiveInThePortsOwnNamespace,
     },
@@ -434,6 +438,10 @@ const DECLARED_HERE_AND_NOT_BY_THE_REFERENCE_GNU: &[DeclaredHere] = &[
     },
     DeclaredHere {
         name: "neomacs-terminal-write",
+        why: WhyThisBuildDeclaresIt::PortOwnPrimitiveInThePortsOwnNamespace,
+    },
+    DeclaredHere {
+        name: "neomacs-thread-parallel-p",
         why: WhyThisBuildDeclaresIt::PortOwnPrimitiveInThePortsOwnNamespace,
     },
     DeclaredHere {

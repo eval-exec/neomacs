@@ -913,6 +913,16 @@ crate::emacs_core::subr::define_subrs! {
         SubrArity::new(1, Some(3)),
     )),
     crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "neomacs-make-parallel-thread",
+        NativeFn::ContextVec(crate::emacs_core::threads::builtin_neomacs_make_parallel_thread),
+        SubrArity::new(1, Some(3)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "neomacs-thread-parallel-p",
+        NativeFn::ContextVec(crate::emacs_core::threads::builtin_neomacs_thread_parallel_p),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "thread-join",
         NativeFn::ContextVec(crate::emacs_core::threads::builtin_thread_join),
         SubrArity::new(1, Some(1)),
