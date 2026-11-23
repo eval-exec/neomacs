@@ -286,6 +286,117 @@ fn pentry_l61_keeper_service_admits_and_finishes_its_own_era() {
 }
 
 #[test]
+fn pentry_l62_real_thread_stop_and_resume_on_the_service_thread() {
+    use super::super::keeper_service::keeper_serve;
+    use neovm_value::tagged::gc::RendezvousError;
+    let Some(mut source) = ready() else {
+        return;
+    };
+    let private = Value::string("l62-keeper-stop-private-root");
+    source.lexenv = private;
+    let (shell, start) = close(source).prepare_era().unwrap();
+    let main_id = std::thread::current().id();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let service = std::thread::spawn(move || {
+        let service_id = std::thread::current().id();
+        let outcome = keeper_serve(start, |keeper| {
+            // The stop is the real rendezvous stop with no other owner
+            // registered: the keeper itself requests it on its own service
+            // thread. A Busy phase transition is retried (the value crate's
+            // serial histories do the same); any other refusal fails the row.
+            let mut stopped = None;
+            for _ in 0..1024 {
+                match keeper.stop() {
+                    Ok(stopped_now) => {
+                        stopped = Some(stopped_now);
+                        break;
+                    }
+                    Err(RendezvousError::Busy) => std::thread::yield_now(),
+                    Err(reason) => panic!("keeper stop refused: {reason:?}"),
+                }
+            }
+            let mut stopped = stopped.expect("keeper stop made progress");
+            assert!(stopped.epoch().get() > 0, "the real stop has an epoch");
+            // A stopped epoch completes only after its trace callback; this
+            // control-only slice traces nothing (L6.5 runs the collection
+            // here).
+            stopped
+                .trace(|_stopped, _proof| Ok(()))
+                .expect("control trace");
+            stopped.complete().expect("resume the stopped epoch");
+        });
+        match outcome {
+            Ok((end, ())) => tx.send((service_id, Ok(end))).expect("send keeper end"),
+            Err(failure) => tx
+                .send((service_id, Err(failure.notice())))
+                .expect("send keeper notice"),
+        }
+    });
+    let (service_id, outcome) = rx.recv().expect("keeper outcome");
+    service.join().expect("keeper service thread");
+    assert_ne!(
+        service_id, main_id,
+        "the stop and resume run on the dedicated service OS thread"
+    );
+    let end = outcome.unwrap_or_else(|notice| panic!("keeper stop refused: {notice:?}"));
+    assert!(!neovm_value::tagged::gc::tagged_heap_is_installed());
+    let returned = shell.accept_return(end).unwrap();
+    finish_fixture(returned, private);
+}
+
+#[test]
+fn pentry_l62_keeper_era_control_persists_across_two_stops() {
+    use super::super::keeper_service::keeper_serve;
+    use neovm_value::tagged::gc::RendezvousError;
+    let Some(mut source) = ready() else {
+        return;
+    };
+    let private = Value::string("l62-keeper-two-stops-private-root");
+    source.lexenv = private;
+    let (shell, start) = close(source).prepare_era().unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let service = std::thread::spawn(move || {
+        let outcome = keeper_serve(start, |keeper| {
+            let mut last_epoch = 0;
+            for _round in 0..2 {
+                let mut stopped = None;
+                for _ in 0..1024 {
+                    match keeper.stop() {
+                        Ok(stopped_now) => {
+                            stopped = Some(stopped_now);
+                            break;
+                        }
+                        Err(RendezvousError::Busy) => std::thread::yield_now(),
+                        Err(reason) => panic!("keeper stop refused: {reason:?}"),
+                    }
+                }
+                let mut stopped = stopped.expect("keeper stop made progress");
+                let epoch = stopped.epoch().get();
+                assert!(
+                    epoch > last_epoch,
+                    "each stop has its own later epoch ({epoch} after {last_epoch})"
+                );
+                last_epoch = epoch;
+                stopped
+                    .trace(|_stopped, _proof| Ok(()))
+                    .expect("control trace");
+                stopped.complete().expect("resume the stopped epoch");
+            }
+        });
+        match outcome {
+            Ok((end, ())) => tx.send(Ok(end)).expect("send keeper end"),
+            Err(failure) => tx.send(Err(failure.notice())).expect("send keeper notice"),
+        }
+    });
+    let outcome = rx.recv().expect("keeper outcome");
+    service.join().expect("keeper service thread");
+    let end = outcome.unwrap_or_else(|notice| panic!("keeper stops refused: {notice:?}"));
+    assert!(!neovm_value::tagged::gc::tagged_heap_is_installed());
+    let returned = shell.accept_return(end).unwrap();
+    finish_fixture(returned, private);
+}
+
+#[test]
 fn pentry_l61_keeper_service_refuses_a_poisoned_start_with_a_notice() {
     use super::super::keeper_service::{KeeperStartNotice, keeper_start};
     use neovm_value::tagged::gc::heap_transfer::ScopedEraError;

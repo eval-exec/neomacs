@@ -8,10 +8,11 @@
 
 use super::super::super::world::{Baton, PreparedHeapTransferProductionEra};
 use super::bootstrap::{PreparedEraStart, ReturnedEraEnd};
-use neovm_value::tagged::gc::ParallelHeapEra;
 use neovm_value::tagged::gc::heap_transfer::{
-    RetainedTransferFailure, ScopedEraError, ScopedEraFailure, TransferError,
+    HeapTransferCompletion, RetainedTransferFailure, ScopedEraError, ScopedEraFailure,
+    TransferError,
 };
+use neovm_value::tagged::gc::{AllStopped, ParallelHeapEra, RendezvousError};
 use std::marker::PhantomData;
 use std::rc::Rc;
 use std::thread::ThreadId;
@@ -41,15 +42,23 @@ static_assertions::assert_not_impl_any!(KeeperThreadToken: Send, Sync, Clone, Co
 /// crosses the thread or outlives that era.
 pub(crate) struct KeeperEra<'service, 'heap> {
     _token: KeeperThreadToken,
-    _era: &'service ParallelHeapEra<'heap, Baton>,
+    era: &'service ParallelHeapEra<'heap, Baton>,
 }
 
 impl<'service, 'heap> KeeperEra<'service, 'heap> {
     fn new(era: &'service ParallelHeapEra<'heap, Baton>) -> Self {
         Self {
             _token: KeeperThreadToken::mint(),
-            _era: era,
+            era,
         }
+    }
+
+    /// The real value-side stop requested on the keeper's own service thread.
+    ///
+    /// `AllStopped` proves every mutator is stopped. The keeper completes the
+    /// epoch before this borrow ends; a dropped proof poisons it.
+    pub(crate) fn stop(&self) -> Result<AllStopped<'_>, RendezvousError> {
+        self.era.stop()
     }
 }
 
@@ -97,6 +106,26 @@ static_assertions::assert_impl_all!(KeeperStartNotice: Send);
 ///
 /// L6.1 admits and finishes one local era; L6.2/L6.7 replace the body with the
 /// stop/queue/lend loop. No production spawner exists yet.
+/// Run one keeper service body on this thread's admitted era.
+///
+/// The body owns the keeper's collector/control for the whole admitted era,
+/// including a real stop and its completion. The completion bound keeps a
+/// Lisp word, a collector loan, or a local borrow from leaving the era.
+pub(crate) fn keeper_serve<R: HeapTransferCompletion>(
+    prepared: PreparedEraStart,
+    body: impl for<'service, 'heap> FnOnce(&KeeperEra<'service, 'heap>) -> R,
+) -> Result<(ReturnedEraEnd, R), KeeperStartFailure> {
+    let transfer = prepared.into_heap_transfer();
+    let (transfer, result) = transfer
+        .with_production_era(|era| {
+            let keeper = KeeperEra::new(era);
+            body(&keeper)
+        })
+        .map_err(KeeperStartFailure::Scoped)?;
+    let end = ReturnedEraEnd::from_transfer(transfer).map_err(KeeperStartFailure::Return)?;
+    Ok((end, result))
+}
+
 #[cfg_attr(
     not(test),
     expect(
@@ -107,14 +136,5 @@ static_assertions::assert_impl_all!(KeeperStartNotice: Send);
 pub(crate) fn keeper_start(
     prepared: PreparedEraStart,
 ) -> Result<ReturnedEraEnd, KeeperStartFailure> {
-    let transfer = prepared.into_heap_transfer();
-    let (transfer, ()) = transfer
-        .with_production_era(|era| {
-            // The token is minted on the calling service thread and dropped
-            // before the era finishes, so no keeper state outlives it. The
-            // service-thread identity itself is asserted by the keeper test.
-            let _keeper = KeeperEra::new(era);
-        })
-        .map_err(KeeperStartFailure::Scoped)?;
-    ReturnedEraEnd::from_transfer(transfer).map_err(KeeperStartFailure::Return)
+    keeper_serve(prepared, |_| ()).map(|(end, ())| end)
 }
