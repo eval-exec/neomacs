@@ -78,11 +78,56 @@ fn indent_bars_stipple_follows_the_frame_origin() {
     );
     let surface_scale = f64::from(pixels.width()) / state["frame_width"].as_f64().unwrap();
     // Column 0 of the bitmap is lit at frame x where x % font_width == 0.
+    // The attested GNU capture (width 8, text left 5) is x=8,16,...,192.
+    // Glyph-local tiling would light text_left + k*width (5,13,21,...).
+    // A doubled bar still has the right first column, so require the whole set.
     let remainder = text_left % font_width;
     let expected = text_left + (font_width - remainder) % font_width;
-    let painted = f64::from(painted_columns[0]) / surface_scale;
-    assert!(
-        (painted - expected as f64).abs() < 0.75,
-        "frame-origin column {painted} should be {expected} (text_left={text_left}, width={font_width}); painted {painted_columns:?}"
+    let bars = logical_bars(&painted_columns, surface_scale);
+    assert_eq!(
+        bars.len(),
+        24,
+        "expected one bar per space, got {bars:?} from {painted_columns:?}"
     );
+    for k in 0..24usize {
+        let want = (expected + (k as u64) * font_width) as f64;
+        let got = bars[k];
+        assert!(
+            (got - want).abs() < 0.75,
+            "bar {k} at {got} should be {want} (text_left={text_left}, width={font_width})"
+        );
+        let ghost = (text_left + (k as u64) * font_width) as f64;
+        if (ghost - want).abs() > 1.0 {
+            assert!(
+                bars.iter().all(|bar| (bar - ghost).abs() >= 0.75),
+                "glyph-local column {ghost} is painted: {bars:?}"
+            );
+        }
+    }
+}
+
+/// One logical bar per run of device columns, at the run's left edge.
+fn logical_bars(painted: &[u32], scale: f64) -> Vec<f64> {
+    let mut bars = Vec::new();
+    let mut index = 0;
+    while index < painted.len() {
+        let start = painted[index];
+        let mut end = start;
+        index += 1;
+        while index < painted.len() && painted[index] == end + 1 {
+            let width = f64::from(painted[index] - start + 1) / scale;
+            if width > 1.25 {
+                break;
+            }
+            end = painted[index];
+            index += 1;
+        }
+        let logical_width = f64::from(end - start + 1) / scale;
+        assert!(
+            logical_width < 1.25,
+            "stipple bar at device x={start} is {logical_width} logical px wide"
+        );
+        bars.push(f64::from(start) / scale);
+    }
+    bars
 }

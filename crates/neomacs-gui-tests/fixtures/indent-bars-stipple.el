@@ -18,10 +18,12 @@
         ;; Bit 0 of the first byte is the leftmost pixel. A wide font is
         ;; more than one byte; the fill-column fixture's trailing 1 would
         ;; light a later pixel and miss this column.
+        ;; Height 2, only row 0 set, so the y phase is not a 1-row tautology.
         (let* ((w (window-font-width))
                (nbytes (/ (+ w 7) 8))
-               (stipple `(,w 1 ,(apply #'unibyte-string
-                                       (cons 1 (make-list (1- nbytes) 0))))))
+               (row0 (cons 1 (make-list (1- nbytes) 0)))
+               (row1 (make-list nbytes 0))
+               (stipple `(,w 2 ,(apply #'unibyte-string (append row0 row1)))))
           (dotimes (_ 16)
             (insert (propertize (make-string 24 ?\s)
                                 'face `(:foreground "#ed1731"

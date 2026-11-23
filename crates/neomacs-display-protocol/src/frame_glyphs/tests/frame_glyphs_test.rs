@@ -63,6 +63,41 @@ fn stipple_row_phase_follows_the_frame_y() {
 }
 
 #[test]
+fn stipple_negative_coordinates_use_euclidean_phase() {
+    // Height 4, only row 0 set. x=-6 covers frame columns -6..4, so the
+    // only multiple of 8 is column 0. y=-2 covers rows -2..2, so the only
+    // multiple of 4 is row 0.
+    let pattern = StipplePattern {
+        width: 8,
+        height: 4,
+        bits: vec![0x01, 0x00, 0x00, 0x00],
+    };
+    assert_eq!(
+        pattern.covered_runs(-6.0, -2.0, 10.0, 4.0),
+        vec![(0.0, 0.0, 1.0, 1.0)]
+    );
+}
+
+#[test]
+fn stipple_fractional_origin_covers_the_frame_column() {
+    let pattern = StipplePattern {
+        width: 8,
+        height: 1,
+        bits: vec![0x01],
+    };
+    let runs = pattern.covered_runs(10.6, 4.25, 8.0, 1.0);
+    assert_eq!(runs.len(), 1, "{runs:?}");
+    let (qx, qy, qw, qh) = runs[0];
+    assert!((qy - 4.25).abs() < 1e-5, "{qy}");
+    assert!((qh - 1.0).abs() < 1e-5, "{qh}");
+    // Frame column 16 is the lit bit. The quad must cover part of [16, 17).
+    assert!(
+        qx < 17.0 && qx + qw > 16.0,
+        "quad {qx}+{qw} misses frame column 16"
+    );
+}
+
+#[test]
 fn frame_default_resolved_font_is_one_coherent_binding_lookup() {
     use crate::font::{
         FontFileAsset, FontOutlineAsset, FontReplay, FontSlantKind, ResolvedFont,
