@@ -3,7 +3,15 @@
 mod serial_turn;
 use serial_turn::*;
 
-fn reach(state: &OwnerSerialState<i32>) -> &i32 {
+struct Ticket;
+impl TicketOwner for Ticket {
+    type Owner = u8;
+    fn owner(&self) -> u8 {
+        0
+    }
+}
+
+fn reach(state: &OwnerSerialState<i32, Ticket>) -> &i32 {
     &state.dormant.context
 }
 fn main() {}

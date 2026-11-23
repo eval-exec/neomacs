@@ -3,9 +3,10 @@
 //! Every negative path-includes the real `serial_turn.rs`. Where one line
 //! decides a contract, its control copies the real source with exactly that
 //! line changed, and the same fixture body then type-checks. The move-only
-//! negatives (a turn used after `end` or `park`, `park` inside `with_world`)
-//! and the private dormant Context have no one-line control: they rest on
-//! `self` consumption and field privacy, which rustc reports directly.
+//! negatives (a turn used after `end` or `park`, `park` inside `with_world`),
+//! the private dormant Context and the fixed ticket type have no one-line
+//! control: they rest on `self` consumption, field privacy and the state's
+//! type parameter, which rustc reports directly.
 
 #[test]
 #[cfg(feature = "contract-fixtures")]
@@ -47,6 +48,18 @@ fn e51_turn_compile_contracts() {
             Source::ThreadBounds,
             "impl<T: Send> ThreadTransfer<T> {",
             "impl<T> ThreadTransfer<T> {",
+        ),
+        (
+            "serial_turn_not_sync",
+            Source::ThreadBounds,
+            "impl<T: Sync> ThreadSharing<T> {",
+            "impl<T> ThreadSharing<T> {",
+        ),
+        (
+            "owner_serial_state_not_sync",
+            Source::ThreadBounds,
+            "impl<T: Sync> ThreadSharing<T> {",
+            "impl<T> ThreadSharing<T> {",
         ),
     ];
     for (name, source, before, after) in mutations {

@@ -3,8 +3,19 @@
 mod serial_turn;
 use serial_turn::*;
 
-fn after_park(mut state: OwnerSerialState<i32>) {
-    let mut turn = state.begin(());
+struct Ticket;
+impl TicketOwner for Ticket {
+    type Owner = u8;
+    fn owner(&self) -> u8 {
+        0
+    }
+}
+
+fn after_park(mut state: OwnerSerialState<i32, Ticket>) {
+    let mut turn = match state.begin(Ticket) {
+        Ok(turn) => turn,
+        Err(_) => return,
+    };
     let (_parked, _ticket) = turn.park("mutex");
     turn.with_world(|world| *world += 1);
 }

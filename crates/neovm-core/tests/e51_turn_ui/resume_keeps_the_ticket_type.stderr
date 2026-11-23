@@ -1,0 +1,20 @@
+error[E0308]: mismatched types
+  --> tests/e51_turn_ui/resume_keeps_the_ticket_type.rs:28:27
+   |
+28 |     let _ = parked.resume(OtherTicket);
+   |                    ------ ^^^^^^^^^^^ expected `Ticket`, found `OtherTicket`
+   |                    |
+   |                    arguments to this method are incorrect
+   |
+help: the return type of this call is `OtherTicket` due to the type of the argument passed
+  --> tests/e51_turn_ui/resume_keeps_the_ticket_type.rs:28:13
+   |
+28 |     let _ = parked.resume(OtherTicket);
+   |             ^^^^^^^^^^^^^^-----------^
+   |                           |
+   |                           this argument influences the return type of `resume`
+note: method defined here
+  --> tests/e51_turn_ui/../../../neovm-eval/src/emacs_core/runtime/eval/parallel_entry/serial_turn.rs
+   |
+   |     pub(crate) fn resume(self, local: L) -> Result<SerialTurn<'turn, C, L>, (Self, L)> {
+   |                   ^^^^^^       --------

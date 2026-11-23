@@ -1,4 +1,4 @@
-//! Keep the first diagnostic in fixture code, without rust-src excerpts.
+//! Send/Sync test bounds. The goldens of their negatives name $RUST/alloc (Rc), so they need rust-src.
 #![allow(dead_code)]
 use std::marker::PhantomData;
 
