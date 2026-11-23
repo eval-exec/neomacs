@@ -1586,16 +1586,26 @@ impl<'a> LoadDecoder<'a> {
 
     /// Restore-time twin of `mutate::install_bytecode_slot_object`: the
     /// object is not yet user-observable (pre-publish), so no barrier.
+    ///
+    /// Returns false when `value` is not a bytecode object. The cast is
+    /// unreachable for any other veclike type.
     #[doc(hidden)]
     pub fn install_restored_bytecode_slot_object(
         value: Value,
         slot: ByteCodeSlotObject,
         object: Value,
-    ) {
-        let ptr = value.as_veclike_ptr().unwrap() as *const ByteCodeObj;
-        // SAFETY: `install_restored_bytecode_data` proved a live byte-code
-        // object; the slot words are atomics.
+    ) -> bool {
+        if value.veclike_type() != Some(VecLikeType::ByteCode) {
+            return false;
+        }
+        let Some(header) = value.as_veclike_ptr() else {
+            return false;
+        };
+        let ptr = header as *const ByteCodeObj;
+        // SAFETY: the type test established a live byte-code object. The
+        // slot words are atomics. This runs before the object is published.
         unsafe { (*ptr).slot_objects.set(slot, object) };
+        true
     }
 
     #[doc(hidden)]
@@ -2471,7 +2481,12 @@ impl<'a> LoadDecoder<'a> {
                 ] {
                     if let Some(object) = object {
                         let object = self.load_value(&object);
-                        Self::install_restored_bytecode_slot_object(value, slot, object);
+                        if !Self::install_restored_bytecode_slot_object(value, slot, object) {
+                            return Err(DumpError::ImageFormatError(
+                                "pdump bytecode slot object resolved to a non-bytecode object"
+                                    .into(),
+                            ));
+                        }
                     }
                 }
             }
@@ -2961,6 +2976,9 @@ pub(crate) unsafe fn materialize_bytecode_from_extras_at(value: Value) -> ByteCo
 #[cold]
 #[inline(never)]
 pub(crate) fn materialize_and_publish_stub(value: Value) {
+    if value.veclike_type() != Some(VecLikeType::ByteCode) {
+        return;
+    }
     let ptr = value
         .as_veclike_ptr()
         .expect("stub materialization requires a bytecode object")

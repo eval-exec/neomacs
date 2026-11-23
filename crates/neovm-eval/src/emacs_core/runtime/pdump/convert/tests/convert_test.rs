@@ -1,5 +1,43 @@
 use super::*;
 
+/// A fixnum or a vector is not a bytecode object. The helper must refuse
+/// before it casts the header to `ByteCodeObj` and writes a slot word.
+#[test]
+fn install_restored_bytecode_slot_object_rejects_a_non_bytecode_value() {
+    crate::test_utils::init_test_tracing();
+    assert!(
+        !LoadDecoder::install_restored_bytecode_slot_object(
+            Value::fixnum(3),
+            ByteCodeSlotObject::Code,
+            Value::fixnum(1),
+        ),
+        "a fixnum is not a bytecode object"
+    );
+    let vector = Value::make_vector(vec![Value::fixnum(9), Value::fixnum(8)]);
+    let before = vector.as_vector_data().expect("vector slots")[0];
+    assert!(
+        !LoadDecoder::install_restored_bytecode_slot_object(
+            vector,
+            ByteCodeSlotObject::Code,
+            Value::fixnum(1),
+        ),
+        "a vector is not a bytecode object"
+    );
+    assert_eq!(vector.as_vector_data().expect("vector slots")[0], before);
+}
+
+/// Same hole on the stub publish path: a non-bytecode value returns
+/// before any `ByteCodeObj` read, and a vector's slots stay unchanged.
+#[test]
+fn materialize_and_publish_stub_refuses_a_non_bytecode_value() {
+    crate::test_utils::init_test_tracing();
+    materialize_and_publish_stub(Value::fixnum(3));
+    let vector = Value::make_vector(vec![Value::fixnum(9), Value::fixnum(8)]);
+    let before = vector.as_vector_data().expect("vector slots")[0];
+    materialize_and_publish_stub(vector);
+    assert_eq!(vector.as_vector_data().expect("vector slots")[0], before);
+}
+
 #[test]
 #[should_panic(expected = "pdump: tree-sitter node objects are not portable")]
 fn dump_value_rejects_runtime_treesit_nodes() {
