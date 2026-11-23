@@ -108,6 +108,14 @@ impl RenderApp {
             &self.render_policy,
             &mut self.device_lost,
         );
+        // A lost device abandons this frame. The same event-loop turn's
+        // about_to_wait observes the latch and rebuilds the GPU stack.
+        if renderer.take_frame_device_lost() {
+            self.device_lost.mark_lost_now();
+            #[cfg(feature = "video")]
+            renderer.cancel_video_surface_render();
+            return SubmissionResult::SurfaceLost;
+        }
         let RenderedFrameSurface {
             output,
             frame,

@@ -1600,6 +1600,7 @@ fn composite_matches_full_render() {
             &vc,
             mapping_for(&frame, W, H).surface(),
         ))
+        .expect("live device draw parameters")
         .blit_retained(&bg);
     h.renderer
         .render_cursor_only(&vc, &frame, mapping_for(&frame, W, H), true, None, None);
@@ -1659,6 +1660,7 @@ fn popup_redraw_preserves_unchanged_main_frame_pixels() {
         );
         h.renderer
             .begin_draw(target)
+            .expect("live device draw parameters")
             .blit_retained(&retained_bind_group);
         read_tex(&h.renderer, &h.target)
     };
@@ -1711,6 +1713,7 @@ fn popup_redraw_preserves_unchanged_main_frame_pixels() {
                 &popup_view,
                 surface,
             ))
+            .expect("live device draw parameters")
             .paint_menu(&paint, &mut popup_atlas);
     }
     let after = draw(&mut h);
@@ -1779,6 +1782,7 @@ fn retained_static_reused_across_cursor_colors() {
             &vr,
             mapping_for(&frame_a, W, H).surface(),
         ))
+        .expect("live device draw parameters")
         .blit_retained(&bg);
     h.renderer
         .render_cursor_only(&vr, &frame_a, mapping_for(&frame_a, W, H), true, None, None);
@@ -1790,6 +1794,7 @@ fn retained_static_reused_across_cursor_colors() {
             &vb,
             mapping_for(&frame_b, W, H).surface(),
         ))
+        .expect("live device draw parameters")
         .blit_retained(&bg);
     h.renderer
         .render_cursor_only(&vb, &frame_b, mapping_for(&frame_b, W, H), true, None, None);
@@ -1945,6 +1950,7 @@ fn assert_filled_box_composite_matches_full_render(animated: Option<AnimatedCurs
             &vc,
             mapping_for(&frame, W, H).surface(),
         ))
+        .expect("live device draw parameters")
         .blit_retained(&bg);
     // Match the runtime sequence exactly: render_cursor_only draws the box
     // (cursor_bg) unscissored, then the scissored cell redraw adds box + char.

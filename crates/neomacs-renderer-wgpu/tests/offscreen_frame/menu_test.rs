@@ -35,6 +35,7 @@ fn popup_menu_disabled_submenu_dims_its_arrow() {
             .begin_draw(neomacs_renderer_wgpu::renderer::RenderTarget::new(
                 &h.view, surface,
             ))
+            .expect("live device draw parameters")
             .paint_menu(
                 &MenuPanelPaint {
                     panel: &panel,
@@ -101,6 +102,7 @@ fn popup_menu_toggle_and_radio_states_have_distinct_indicator_pixels() {
             .begin_draw(neomacs_renderer_wgpu::renderer::RenderTarget::new(
                 &h.view, surface,
             ))
+            .expect("live device draw parameters")
             .paint_menu(
                 &MenuPanelPaint {
                     panel: &panel,
@@ -196,6 +198,7 @@ fn popup_initial_cjk_spacing_matches_real_font_and_leaves_shortcut_gap() {
         .begin_draw(neomacs_renderer_wgpu::renderer::RenderTarget::new(
             &h.view, surface,
         ))
+        .expect("live device draw parameters")
         .paint_menu(
             &MenuPanelPaint {
                 panel: &panel,

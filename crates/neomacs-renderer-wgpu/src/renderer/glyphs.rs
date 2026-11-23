@@ -1586,7 +1586,9 @@ impl WgpuRenderer {
             );
         }
 
-        let (logical_w, logical_h, draw) = self.prepare_frame_uniforms(mapping);
+        let Ok((logical_w, logical_h, draw)) = self.prepare_frame_uniforms(mapping) else {
+            return;
+        };
         if trace_face_debug_enabled() {
             tracing::info!(
                 "face-debug call={} milestone=after_prepare_uniforms logical=({:.1},{:.1})",
@@ -1826,7 +1828,9 @@ impl WgpuRenderer {
         debug_assert_eq!(mapping.presentation(), frame_glyphs.presentation_id);
         debug_assert_eq!(mapping.content_logical_size().width(), frame_glyphs.width);
         debug_assert_eq!(mapping.content_logical_size().height(), frame_glyphs.height);
-        let (logical_w, logical_h, draw) = self.prepare_frame_uniforms(mapping);
+        let Ok((logical_w, logical_h, draw)) = self.prepare_frame_uniforms(mapping) else {
+            return;
+        };
         let params = FrameParams {
             frame_glyphs,
             pointer_override: super::pointer_override::PointerOverrideResolver::new(
@@ -2027,7 +2031,7 @@ impl WgpuRenderer {
     fn prepare_frame_uniforms(
         &mut self,
         mapping: neomacs_display_protocol::PresentMapping,
-    ) -> (f32, f32, super::draw::DrawParameters) {
+    ) -> Result<(f32, f32, super::draw::DrawParameters), super::draw::DeviceLost> {
         // The swapchain is the destination and the immutable glyph presentation
         // is the source. Their sizes deliberately advance on different clocks.
         // Projection therefore follows the resolved mapping's live-surface
@@ -2047,8 +2051,8 @@ impl WgpuRenderer {
             _pivot_padding: 0.0,
             content_pivot: [0.0; 2],
         };
-        let draw = self.parameters(uniforms.screen_size, uniforms.time);
-        (logical_w, logical_h, draw)
+        let draw = self.parameters(uniforms.screen_size, uniforms.time)?;
+        Ok((logical_w, logical_h, draw))
     }
 
     fn face_has_rounded_box(faces: &FrameFaceMap, face_id: FaceId) -> bool {

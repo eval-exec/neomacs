@@ -4,15 +4,13 @@ use std::num::NonZeroU64;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use neomacs_display_protocol::types::VideoId;
-use wgpu::util::DeviceExt;
-
 use crate::color::VideoColorTransform;
 use crate::system::VideoWake;
 use crate::{
     BiPlanarVideoFormat, VideoColorimetry, VideoFrameFormat, VideoGeometry, VideoSampleKind,
     VideoSamplingTransform,
 };
+use neomacs_display_protocol::types::VideoId;
 
 /// Linux DRM render-node identity shared by the Vulkan compositor and the
 /// decoder selected inside GStreamer. A DMA-BUF path is only called direct
@@ -438,13 +436,12 @@ impl GpuVideoContext {
         geometry: VideoGeometry,
     ) -> Result<PreparedBiPlanarTexture, String> {
         let color = VideoColorTransform::new(format, colorimetry, geometry);
-        let color_buffer = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Neomacs video color transform"),
-                contents: bytemuck::bytes_of(&color),
-                usage: wgpu::BufferUsages::UNIFORM,
-            });
+        let color_buffer = create_mapped_uniform(
+            &self.device,
+            "Neomacs video color transform",
+            bytemuck::bytes_of(&color),
+        )
+        .map_err(|_| "device lost while creating the video color transform".to_string())?;
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Neomacs bi-planar video bind group"),
             layout: &self.sampling.bi_planar_bind_group_layout,
@@ -783,6 +780,29 @@ impl GpuVideoFrame {
             release.record(encoder);
         }
     }
+}
+
+/// Uniform snapshot with no `COPY_DST`. A lost device returns the map error
+/// instead of panicking inside `create_buffer_init`.
+fn create_mapped_uniform(
+    device: &wgpu::Device,
+    label: &'static str,
+    contents: &[u8],
+) -> Result<wgpu::Buffer, wgpu::MapRangeError> {
+    let unpadded = contents.len() as wgpu::BufferAddress;
+    let align = wgpu::COPY_BUFFER_ALIGNMENT;
+    let padded = ((unpadded + align - 1) & !(align - 1)).max(align);
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some(label),
+        size: padded,
+        usage: wgpu::BufferUsages::UNIFORM,
+        mapped_at_creation: true,
+    });
+    let mut mapped = buffer.get_mapped_range_mut(..)?;
+    mapped.slice(..contents.len()).copy_from_slice(contents);
+    drop(mapped);
+    buffer.unmap();
+    Ok(buffer)
 }
 
 /// One prepared video sampling operation. Native leases and raw frame objects

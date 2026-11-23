@@ -183,7 +183,7 @@ impl WgpuRenderer {
         content_scale: f32,
         content_pivot: [f32; 2],
     ) {
-        let draw = self.parameters_for(
+        let Ok(draw) = self.parameters_for(
             [
                 surface_width as f32 / self.scale_factor,
                 surface_height as f32 / self.scale_factor,
@@ -192,7 +192,9 @@ impl WgpuRenderer {
             content_alpha,
             content_scale,
             content_pivot,
-        );
+        ) else {
+            return;
+        };
         self.arenas.glyph.begin_frame();
         self.arenas.coverage.begin_frame();
 

@@ -54,7 +54,9 @@ impl WgpuRenderer {
             _pivot_padding: 0.0,
             content_pivot: [0.0; 2],
         };
-        let draw = self.parameters(uniforms.screen_size, uniforms.time);
+        let Ok(draw) = self.parameters(uniforms.screen_size, uniforms.time) else {
+            return;
+        };
 
         let (tx, ty, tw, th) = tooltip.bounds;
 

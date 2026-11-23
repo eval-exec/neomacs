@@ -412,7 +412,10 @@ impl WgpuRenderer {
                 multiview_mask: None,
             });
             pass.set_pipeline(&self.pipelines.glyph);
-            pass.set_bind_group(0, self.frame_parameters().binding(), &[]);
+            let Ok(frame_params) = self.frame_parameters() else {
+                return;
+            };
+            pass.set_bind_group(0, frame_params.binding(), &[]);
             pass.set_vertex_buffer(0, buffer.buffer_slice());
 
             let mut vert_idx = 0u32;
@@ -470,7 +473,9 @@ impl WgpuRenderer {
             _pivot_padding: 0.0,
             content_pivot: [0.0; 2],
         };
-        let draw = self.parameters(uniforms.screen_size, uniforms.time);
+        let Ok(draw) = self.parameters(uniforms.screen_size, uniforms.time) else {
+            return;
+        };
 
         let tb_h = titlebar_height;
         let btn_w = 46.0_f32;
@@ -757,7 +762,9 @@ impl WgpuRenderer {
             _pivot_padding: 0.0,
             content_pivot: [0.0; 2],
         };
-        let draw = self.parameters(uniforms.screen_size, uniforms.time);
+        let Ok(draw) = self.parameters(uniforms.screen_size, uniforms.time) else {
+            return;
+        };
 
         let mut rect_vertices: Vec<RectVertex> = Vec::new();
         let indicator_width = 3.0_f32;
@@ -897,7 +904,9 @@ impl WgpuRenderer {
             _pivot_padding: 0.0,
             content_pivot: [0.0; 2],
         };
-        let draw = self.parameters(uniforms.screen_size, uniforms.time);
+        let Ok(draw) = self.parameters(uniforms.screen_size, uniforms.time) else {
+            return;
+        };
 
         let font_size_bits = 0.0_f32.to_bits();
         // A preedit update is one replaceable Unicode text run.  Shape it as
@@ -1022,7 +1031,9 @@ impl WgpuRenderer {
             _pivot_padding: 0.0,
             content_pivot: [0.0; 2],
         };
-        let draw = self.parameters(uniforms.screen_size, uniforms.time);
+        let Ok(draw) = self.parameters(uniforms.screen_size, uniforms.time) else {
+            return;
+        };
 
         // Filled rounded rect covering the whole frame with alpha=1 inside, 0 outside.
         // border_width=0 triggers filled mode in the shader.
@@ -1116,7 +1127,9 @@ impl WgpuRenderer {
         frame_glyphs: &FrameGlyphBuffer,
         glyph_atlas: &mut WgpuGlyphAtlas,
     ) {
-        let draw = self.frame_parameters();
+        let Ok(draw) = self.frame_parameters() else {
+            return;
+        };
         if !self.effects.breadcrumb.enabled {
             return;
         }
@@ -1421,7 +1434,9 @@ impl WgpuRenderer {
         glyph_atlas: &mut WgpuGlyphAtlas,
         wpm: f32,
     ) {
-        let draw = self.frame_parameters();
+        let Ok(draw) = self.frame_parameters() else {
+            return;
+        };
         // Find the selected window (non-minibuffer)
         let selected = frame_glyphs
             .window_infos
@@ -1549,7 +1564,9 @@ impl WgpuRenderer {
             _pivot_padding: 0.0,
             content_pivot: [0.0; 2],
         };
-        let draw = self.parameters(uniforms.screen_size, uniforms.time);
+        let Ok(draw) = self.parameters(uniforms.screen_size, uniforms.time) else {
+            return;
+        };
 
         let char_width = glyph_atlas.default_char_width();
         let line_height = glyph_atlas.default_line_height();
@@ -1659,7 +1676,9 @@ impl WgpuRenderer {
             _pivot_padding: 0.0,
             content_pivot: [0.0; 2],
         };
-        let draw = self.parameters(uniforms.screen_size, uniforms.time);
+        let Ok(draw) = self.parameters(uniforms.screen_size, uniforms.time) else {
+            return;
+        };
 
         // Semi-transparent white overlay in linear space
         let flash_color = Color::new(1.0, 1.0, 1.0, alpha).srgb_to_linear();
@@ -1736,7 +1755,9 @@ impl WgpuRenderer {
             _pivot_padding: 0.0,
             content_pivot: [0.0; 2],
         };
-        let draw = self.parameters(uniforms.screen_size, uniforms.time);
+        let Ok(draw) = self.parameters(uniforms.screen_size, uniforms.time) else {
+            return;
+        };
 
         let bg_color = Color::new(bg.0, bg.1, bg.2, 1.0).srgb_to_linear();
 
@@ -1899,7 +1920,9 @@ impl WgpuRenderer {
             _pivot_padding: 0.0,
             content_pivot: [0.0; 2],
         };
-        let draw = self.parameters(uniforms.screen_size, uniforms.time);
+        let Ok(draw) = self.parameters(uniforms.screen_size, uniforms.time) else {
+            return;
+        };
 
         let bg_color = Color::new(menu_bg.0, menu_bg.1, menu_bg.2, 1.0).srgb_to_linear();
         let pad = padding as f32;
@@ -2205,7 +2228,9 @@ impl WgpuRenderer {
             _pivot_padding: 0.0,
             content_pivot: [0.0; 2],
         };
-        let draw = self.parameters(uniforms.screen_size, uniforms.time);
+        let Ok(draw) = self.parameters(uniforms.screen_size, uniforms.time) else {
+            return;
+        };
 
         let bg_color = Color::new(bg.0, bg.1, bg.2, 1.0).srgb_to_linear();
         let pad = padding as f32;

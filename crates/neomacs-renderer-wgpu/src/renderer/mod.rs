@@ -2,8 +2,6 @@
 
 use std::sync::Arc;
 
-use wgpu::util::DeviceExt;
-
 use neomacs_display_protocol::face::BoxVerticalEdges;
 use neomacs_display_protocol::frame_glyphs::{FringeBitmapData, StipplePattern};
 use neomacs_display_protocol::scene::{Scene, SceneCursorStyle};
@@ -27,7 +25,7 @@ mod cursor_presentation;
 mod deform;
 mod draw;
 mod dynamic_buffer;
-pub use draw::DrawContext;
+pub use draw::{DeviceLost, DrawContext};
 mod paint;
 mod target;
 pub use target::{NativeContentPlacement, NativePlacementError, RenderTarget, SnapshotRegion};
@@ -1596,14 +1594,17 @@ impl WgpuRenderer {
             return;
         }
 
-        // Create vertex buffer
-        let vertex_buffer = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Rect Vertex Buffer"),
-                contents: bytemuck::cast_slice(&vertices),
-                usage: wgpu::BufferUsages::VERTEX,
-            });
+        // Create vertex buffer. No COPY_DST: this buffer is the frame's vertex
+        // snapshot, and a lost device must abandon the frame instead of panicking.
+        let Ok(vertex_buffer) = draw::create_initialized_buffer(
+            &self.device,
+            "Rect Vertex Buffer",
+            bytemuck::cast_slice(&vertices),
+            wgpu::BufferUsages::VERTEX,
+        ) else {
+            self.draw_parameters.mark_lost();
+            return;
+        };
 
         // Create command encoder and render pass
         let mut encoder = self
@@ -1636,7 +1637,10 @@ impl WgpuRenderer {
             });
 
             render_pass.set_pipeline(&self.pipelines.rect);
-            render_pass.set_bind_group(0, self.frame_parameters().binding(), &[]);
+            let Ok(frame_params) = self.frame_parameters() else {
+                return;
+            };
+            render_pass.set_bind_group(0, frame_params.binding(), &[]);
             render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
             render_pass.draw(0..vertices.len() as u32, 0..1);
         }
@@ -2098,7 +2102,11 @@ impl WgpuRenderer {
         self.caches.image.sampler()
     }
 
-    fn parameters(&self, size: [f32; 2], time: f32) -> draw::DrawParameters {
+    fn parameters(
+        &self,
+        size: [f32; 2],
+        time: f32,
+    ) -> Result<draw::DrawParameters, draw::DeviceLost> {
         self.parameters_with_alpha(size, time, 1.0)
     }
 
@@ -2109,7 +2117,12 @@ impl WgpuRenderer {
     /// background, border, shadow and glyphs alike -- by one value, and
     /// carrying that in the shared uniform snapshot is what keeps the
     /// multiply out of every vertex builder.
-    fn parameters_with_alpha(&self, size: [f32; 2], time: f32, alpha: f32) -> draw::DrawParameters {
+    fn parameters_with_alpha(
+        &self,
+        size: [f32; 2],
+        time: f32,
+        alpha: f32,
+    ) -> Result<draw::DrawParameters, draw::DeviceLost> {
         self.parameters_for(size, time, alpha, 1.0, [0.0; 2])
     }
 
@@ -2122,12 +2135,16 @@ impl WgpuRenderer {
         alpha: f32,
         scale: f32,
         pivot: [f32; 2],
-    ) -> draw::DrawParameters {
+    ) -> Result<draw::DrawParameters, draw::DeviceLost> {
         self.draw_parameters
             .get(&self.device, size, time, alpha, scale, pivot)
     }
 
-    fn frame_parameters(&self) -> draw::DrawParameters {
+    pub fn take_frame_device_lost(&self) -> bool {
+        self.draw_parameters.take_lost()
+    }
+
+    fn frame_parameters(&self) -> Result<draw::DrawParameters, draw::DeviceLost> {
         let time = self
             .frame_sample
             .since_at_presentation(self.ambient.render_start_time)

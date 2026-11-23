@@ -85,12 +85,14 @@ pub(super) fn render_frame_root_glyphs(
             raster.destination,
         )
         .expect("crop was validated before drawing the base");
-        renderer
-            .begin_draw(neomacs_renderer_wgpu::renderer::RenderTarget::new(
+        if let Ok(mut draw) =
+            renderer.begin_draw(neomacs_renderer_wgpu::renderer::RenderTarget::new(
                 surface_view,
                 present_mapping.surface(),
             ))
-            .blit_snapshot_region(region);
+        {
+            draw.blit_snapshot_region(region);
+        }
         frame_stats::count(&frame_stats::SCROLL_RASTER_BLITS);
         tracing::debug!(target: "neomacs_display_runtime::retained_scroll", "composited retained scroll raster");
     }

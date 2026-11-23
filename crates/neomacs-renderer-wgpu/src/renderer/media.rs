@@ -645,6 +645,10 @@ impl WgpuRenderer {
         self.reconcile_media_budget();
         let sources = self.caches.surface.external_channel_sources();
         #[cfg(feature = "video")]
+        let Ok(frame_params) = self.frame_parameters() else {
+            return;
+        };
+        #[cfg(feature = "video")]
         let video_views = self.caches.video.prepare_channel_views(
             sources.iter().filter_map(|source| match source {
                 SurfaceChannelSource::Video(id) => {
@@ -655,7 +659,7 @@ impl WgpuRenderer {
             &self.device,
             &self.queue,
             &self.pipelines.bi_planar_video_copy,
-            self.frame_parameters().binding(),
+            frame_params.binding(),
         );
         let mut external = std::collections::HashMap::new();
         for source in sources {

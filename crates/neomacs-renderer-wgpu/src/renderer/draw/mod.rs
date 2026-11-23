@@ -1,7 +1,8 @@
 //! Drawing parameters are immutable resources, never renderer-global GPU state.
 
 mod parameters;
-pub(super) use parameters::{DrawParameterCache, DrawParameters};
+pub use parameters::DeviceLost;
+pub(super) use parameters::{DrawParameterCache, DrawParameters, create_initialized_buffer};
 
 use super::{WgpuRenderer, target::RenderTarget};
 
@@ -31,15 +32,20 @@ impl WgpuRenderer {
         opacity: f32,
     ) {
         background.a *= opacity;
-        let mut draw = self.begin_draw(placement.target);
+        let Ok(mut draw) = self.begin_draw(placement.target) else {
+            return;
+        };
         let size = draw.target.surface.logical_size();
-        draw.parameters = draw.renderer.parameters_for(
+        let Ok(parameters) = draw.renderer.parameters_for(
             [size.width(), size.height()],
             0.0,
             opacity,
             1.0,
             [0.0; 2],
-        );
+        ) else {
+            return;
+        };
+        draw.parameters = parameters;
         draw.renderer.paint_blit(
             draw.target,
             &draw.parameters,
@@ -48,19 +54,22 @@ impl WgpuRenderer {
         );
     }
 
-    pub fn begin_draw<'r, 't>(&'r mut self, target: RenderTarget<'t>) -> DrawContext<'r, 't> {
+    pub fn begin_draw<'r, 't>(
+        &'r mut self,
+        target: RenderTarget<'t>,
+    ) -> Result<DrawContext<'r, 't>, DeviceLost> {
         assert_eq!(
             target.view.texture().format(),
             self.surface_format,
             "draw target must match the renderer's pipeline format"
         );
         let size = target.surface.logical_size();
-        let parameters = self.parameters([size.width(), size.height()], 0.0);
-        DrawContext {
+        let parameters = self.parameters([size.width(), size.height()], 0.0)?;
+        Ok(DrawContext {
             renderer: self,
             target,
             parameters,
-        }
+        })
     }
 }
 
