@@ -308,7 +308,10 @@ pub fn set_compiled_cons_cdr(cell: TaggedValue, value: TaggedValue) -> bool {
     let (lo, hi) = super::collection_reads::compiled_observation_window();
     let observed = lo <= address && address < hi && is_observed(cell.bits());
     if !observed {
-        super::gc::neovm_jit_unobserved_collection_owner(cell.bits() as i64);
+        // SAFETY: `cell` passed the cons check above and is a live word this mutator owns.
+        unsafe {
+            super::gc::neovm_jit_unobserved_collection_owner(cell.bits() as i64);
+        }
     }
     with_store_state(|store| {
         if observed {

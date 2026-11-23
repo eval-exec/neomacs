@@ -27,9 +27,13 @@ pub(crate) extern "C" fn neovm_jit_gc_save() -> i64 {
 /// them anyway — and avoids the thread-local push for the many symbol/fixnum
 /// operands the JIT roots before calls. `gc_restore` truncates to the saved
 /// depth, so a variable push count is fine.
+///
+/// # Safety
+/// `bits` is a live `Value` word owned by the calling mutator. Rebuilding a
+/// value from any other word and reading its header is undefined behavior.
 #[unsafe(no_mangle)]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
-pub(crate) extern "C" fn neovm_jit_gc_push(bits: i64) {
+pub(crate) unsafe extern "C" fn neovm_jit_gc_push(bits: i64) {
     let v = unsafe {
         /* SAFETY: JIT constant-pool word */
         Value::from_bits(bits as usize)
@@ -73,8 +77,13 @@ pub(crate) extern "C" fn neovm_jit_gc_restore(saved: i64) {
 
 /// Allocate `(cons car cdr)`. Roots car+cdr across the allocation itself; the
 /// caller roots any *other* live values first.
+///
+/// # Safety
+/// `car` and `cdr` are live `Value` words owned by the calling mutator.
+/// Rebuilding a value from any other word and reading its header is
+/// undefined behavior.
 #[unsafe(no_mangle)]
-pub extern "C" fn neovm_jit_cons(car: i64, cdr: i64) -> i64 {
+pub(crate) unsafe extern "C" fn neovm_jit_cons(car: i64, cdr: i64) -> i64 {
     // No rooting: `Value::cons` is pure allocation (`alloc_cons` — free-list
     // pop or block bump, allocate-black under a concurrent cycle) and never
     // reaches a GC safe point, so nothing can collect while `car`/`cdr` are

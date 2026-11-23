@@ -243,9 +243,13 @@ impl TaggedHeap {
     /// Like the interpreter's setter, it journals and observes the projected
     /// owner. This touches only the mutator's Rust bookkeeping: no Lisp
     /// allocation, callback, collection or safe point can run here.
+    ///
+    /// # Safety
+    /// `bits` is a live `Value` word owned by the calling mutator. Rebuilding a
+    /// value from any other word and reading its header is undefined behavior.
     #[cfg(feature = "jit")]
     #[doc(hidden)]
-    pub extern "C" fn record_compiled_collection_write(bits: usize) {
+    pub unsafe extern "C" fn record_compiled_collection_write(bits: usize) {
         use super::super::collection_reads::{WriteProjection, record_projected_write};
         let owner = unsafe {
             /* SAFETY: value-internal construction from a real Value */
@@ -557,11 +561,16 @@ pub(crate) fn publish_collection_observation_window(observed: CompiledObservatio
 /// local interval. This performs Rust bookkeeping only: no Lisp allocation,
 /// callback, collection or safe point. Another mutator's shared mark alone
 /// does not create a dependency in this mutator's private certificate journal.
+///
+/// # Safety
+/// `owner_bits` is a live `Value` word owned by the calling mutator.
+/// Rebuilding a value from any other word and reading its header is
+/// undefined behavior.
 #[cfg(feature = "jit")]
 #[cold]
 #[inline(never)]
 #[doc(hidden)]
-pub extern "C" fn neovm_jit_unobserved_collection_owner(owner_bits: i64) -> i8 {
+pub unsafe extern "C" fn neovm_jit_unobserved_collection_owner(owner_bits: i64) -> i8 {
     use super::super::collection_reads::{CompiledJournalMode, compiled_journal_mode};
     let bits = owner_bits as usize;
     let owner = unsafe {

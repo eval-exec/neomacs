@@ -128,7 +128,8 @@ fn active(
         callback.bits() as i64,
         sequence.bits() as i64,
     ];
-    let len = neovm_jit_hof_length(sequence.bits() as i64);
+    // SAFETY: `sequence` is a live Value word this test mutator owns.
+    let len = unsafe { neovm_jit_hof_length(sequence.bits() as i64) };
     // SAFETY: the test frame supplies the live `ctx` and argument words; the shim contract holds.
     let bt = unsafe {
         neovm_jit_hof_start(
@@ -306,7 +307,11 @@ fn inline_hof_runtime_length_declines_invalid_lists_without_allocation() {
         (at_bound, HOF_LIST_PREFLIGHT_MAX),
         (long, -1),
     ] {
-        assert_eq!(neovm_jit_hof_length(sequence.bits() as i64), expected);
+        // SAFETY: `sequence` is a live Value word this test mutator owns.
+        assert_eq!(
+            unsafe { neovm_jit_hof_length(sequence.bits() as i64) },
+            expected
+        );
     }
     assert_eq!(Value::memory_use_counts_snapshot(), before);
 }
@@ -956,7 +961,8 @@ fn inline_hof_runtime_collection_capture_declines_native_loop_and_records_mappin
             let mut last_reads = None;
             for attempt in 0..3 {
                 let (result, reads) = capture(|| {
-                    assert_eq!(neovm_jit_hof_length(sequence.bits() as i64), -1);
+                    // SAFETY: `sequence` is a live Value word this test mutator owns.
+                    assert_eq!(unsafe { neovm_jit_hof_length(sequence.bits() as i64) }, -1);
                     let NativeRun::DeoptAt(resume) =
                         leaf.call(&mut ctx as *mut Context as *mut u8, &[sequence])
                     else {

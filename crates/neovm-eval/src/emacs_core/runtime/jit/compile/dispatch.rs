@@ -918,7 +918,10 @@ fn compiled_cons_store(cell: Value, value: Value, cdr: bool) -> bool {
     };
     if !observed {
         // Refine the native gap before entering the shared mutation body.
-        neovm_value::tagged::gc::neovm_jit_unobserved_collection_owner(cell.bits() as i64);
+        // SAFETY: `cell` passed the cons check above and is a live word this mutator owns.
+        unsafe {
+            neovm_value::tagged::gc::neovm_jit_unobserved_collection_owner(cell.bits() as i64);
+        }
     }
     neovm_value::tagged::gc::with_store_state(|store| {
         if observed {
@@ -3861,8 +3864,13 @@ unsafe fn cbsym_read_contained(
 /// Compiled bodies have no local handlers (handler opcodes bail), so a throw
 /// always propagates out — exactly the interpreter's `resume_nonlocal` once no
 /// local handler matches. Context-free.
+///
+/// # Safety
+/// `tag` and `value` are live `Value` words owned by the calling mutator.
+/// Rebuilding a value from any other word and reading its header is
+/// undefined behavior.
 #[unsafe(no_mangle)]
-pub(crate) extern "C" fn neovm_jit_throw(tag: i64, value: i64) {
+pub(crate) unsafe extern "C" fn neovm_jit_throw(tag: i64, value: i64) {
     jit_shim_contain!(no_ctx, (), {
         stash_pending_flow(Flow::throw(
             unsafe {
@@ -3905,8 +3913,12 @@ pub(crate) unsafe extern "C" fn neovm_jit_throw_with_symbols(ctx: *mut u8, tag: 
 /// Slow path for `integerp` when the value isn't a fixnum: bignums are
 /// veclikes, so delegate to the value layer's own predicate. Context-free,
 /// pure, never allocates or signals.
+///
+/// # Safety
+/// `v` is a live `Value` word owned by the calling mutator. Rebuilding a
+/// value from any other word and reading its header is undefined behavior.
 #[unsafe(no_mangle)]
-pub(crate) extern "C" fn neovm_jit_integerp_slow(v: i64) -> i64 {
+pub(crate) unsafe extern "C" fn neovm_jit_integerp_slow(v: i64) -> i64 {
     let v = unsafe {
         /* SAFETY: JIT constant-pool word */
         Value::from_bits(v as usize)
@@ -3920,8 +3932,12 @@ pub(crate) extern "C" fn neovm_jit_integerp_slow(v: i64) -> i64 {
 
 /// Slow path for `numberp` when the value isn't a fixnum (floats, bignums).
 /// Context-free, pure, never allocates or signals.
+///
+/// # Safety
+/// `v` is a live `Value` word owned by the calling mutator. Rebuilding a
+/// value from any other word and reading its header is undefined behavior.
 #[unsafe(no_mangle)]
-pub(crate) extern "C" fn neovm_jit_numberp_slow(v: i64) -> i64 {
+pub(crate) unsafe extern "C" fn neovm_jit_numberp_slow(v: i64) -> i64 {
     let v = unsafe {
         /* SAFETY: JIT constant-pool word */
         Value::from_bits(v as usize)

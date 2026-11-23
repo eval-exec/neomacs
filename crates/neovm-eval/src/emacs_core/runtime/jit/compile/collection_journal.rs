@@ -9,8 +9,12 @@
 /// sites have already proved a live string and all store guards, and call
 /// before changing its contents. String bytes need no GC write barrier, but
 /// require the same revision and pointer observation as the string setter.
+///
+/// # Safety
+/// `bits` is a live `Value` word owned by the calling mutator. Rebuilding a
+/// value from any other word and reading its header is undefined behavior.
 #[unsafe(no_mangle)]
-pub(crate) extern "C" fn neovm_jit_string_collection_write(bits: i64) {
+pub(crate) unsafe extern "C" fn neovm_jit_string_collection_write(bits: i64) {
     let owner = unsafe {
         /* SAFETY: JIT constant-pool word */
         neovm_value::tagged::value::TaggedValue::from_bits(bits as usize)

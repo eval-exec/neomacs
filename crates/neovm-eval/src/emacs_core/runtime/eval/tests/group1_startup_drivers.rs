@@ -355,6 +355,7 @@ pub(crate) fn inline_hof_mapcar_backtrace_obs_for_test(
         callback.bits() as i64,
         sequence.bits() as i64,
     ];
+    // SAFETY: `sequence` is a live Value word this mutator owns.
     let len = unsafe { neovm_jit_hof_length(sequence.bits() as i64) };
     // SAFETY: this frame supplies the live `ctx` and argument words; the shim contract holds.
     let bt = unsafe {
