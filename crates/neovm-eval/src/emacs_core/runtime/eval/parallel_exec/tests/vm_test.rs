@@ -8,7 +8,7 @@ use super::super::owner_bindings::{
 use super::dispatch::{admits_owner_local, opcode_slot};
 use super::effective::{
     EraId, OwnerSlots, OwnerSlotsMut, PlainAccess, PlainAdmission, PlainRefusal, ShapeGeneration,
-    effective_plain_unbind, take_top_binding,
+    restore_taken_binding, take_top_binding,
 };
 use super::engine::{CoreOutcome, EngineFault, RecordStack, apply_one};
 use super::frames::{
@@ -275,15 +275,18 @@ impl VmEscape for RecordingEscape {
             };
             log.push(format!("escape {:?}{why}", request.op));
         }
-        // The serial side's half of a `PlainUnbind` hand-off: the binding is
-        // undone through the slow path, which is the bare restore plus the
-        // notification. The notification is the serial VM's (`set_internal`
-        // runs the watcher); the restore is what the owner would see.
-        if let EscapeWhy::PlainUnbind { symbol, record } = &request.why {
+        // The serial side's half of a `PlainUnbind` hand-off, in GNU's
+        // order: the record leaves the slab (`do_one_unbind` decrements
+        // first, eval.c:3946-3955), then the watcher's Lisp runs - the
+        // script says whether it signaled - then the outer value is stored
+        // (`set_internal`, data.c:1697-1715). A signal skips the store; the
+        // inner value stays.
+        let mut taken = None;
+        if let EscapeWhy::PlainUnbind { record, .. } = &request.why {
             if self.handoff_undoes {
                 // A take the slab refuses (the record is not its top) leaves
                 // the record live; the walk's post-escape check decides.
-                let _ = effective_plain_unbind(plain, SlotRecord::new(*symbol, *record));
+                taken = plain.pop_binding(*record);
             }
         } else if self.pushes_foreign_record {
             self.pushes_foreign_record = false;
@@ -298,7 +301,8 @@ impl VmEscape for RecordingEscape {
         self.lifos.push(lifos(arena));
         let index = self.requests.len();
         self.requests.push(request.clone());
-        self.script
+        let completion = self
+            .script
             .get_mut(index)
             .and_then(Option::take)
             .unwrap_or_else(|| {
@@ -308,7 +312,13 @@ impl VmEscape for RecordingEscape {
                     }
                 }
                 EscapeCompletion::fall_through(&request.op)
-            })
+            });
+        if let Some(taken) = taken {
+            if !matches!(completion.stack, EscapeStack::Flow(_)) {
+                restore_taken_binding(plain, taken);
+            }
+        }
+        completion
     }
 }
 
@@ -717,9 +727,9 @@ impl HarnessPlain {
             .expect("the entry names a live slab record")
     }
 
-    /// The slab's top record.
+    /// The slab's top record (the slab's own O(1) read, as the trait's).
     fn top_record(&self) -> Option<OwnerRecordId> {
-        self.slab.live_records().last().map(|(id, _)| id)
+        self.slab.top_record_id()
     }
 
     /// The slab's live records, outermost first, as (symbol, kind, undo).
@@ -4196,13 +4206,14 @@ fn vm_unbind_walks_a_record_a_serial_run_pushes_in_addition_to_n() {
 
 #[test]
 fn vm_a_signalling_plain_unbind_hand_off_leaves_no_entry_and_takes_the_record_first() {
-    // O2: the serial side takes the slab record BEFORE any Lisp runs (the
-    // slow path does, owner_bindings.rs:1298-1304), and GNU decrements the
-    // specpdl before `do_one_unbind` (eval.c:3940-3954). So when the
-    // hand-off's own Lisp signals - a watcher's `unlet` form throws - the
-    // binding is already undone and the entry already gone: the run ends
-    // Signaled, nothing is retried, and a second start finds no stale
-    // binding. Red under a pop-after walk: the entry would still be there.
+    // O2: GNU runs an unbind take, notify, store. `do_one_unbind` takes the
+    // entry off the specpdl first (eval.c:3946-3955); `set_internal` then
+    // notifies the watchers with `Qunlet` (data.c:1697-1708) and stores the
+    // outer value only after (data.c:1715). So when the watcher's Lisp
+    // signals, the record and the executor's entry are already gone and the
+    // INNER value stays in place - the store never ran. The run ends
+    // Signaled and nothing is retried. Red under a pop-after walk: the
+    // entry would still be there.
     let mut ctx = context();
     let x = plain_sym("pvm-watched-signals");
     let (xs, one) = (Value::from_sym_id(x), Value::fixnum(1));
@@ -4235,8 +4246,8 @@ fn vm_a_signalling_plain_unbind_hand_off_leaves_no_entry_and_takes_the_record_fi
     );
     assert_eq!(
         log_shared.entries(),
-        vec!["slot <- 1", "escape Unbind(1) [plain]", "slot <- none"],
-        "the serial side took the record and restored before its Lisp signaled"
+        vec!["slot <- 1", "escape Unbind(1) [plain]"],
+        "the record left the slab; the watcher signaled before the store"
     );
     let escape = engine.escape_handler();
     assert_eq!(escape.requests.len(), 1);
@@ -4247,7 +4258,16 @@ fn vm_a_signalling_plain_unbind_hand_off_leaves_no_entry_and_takes_the_record_fi
     );
     assert!(
         engine.plain_handler().live_records().is_empty(),
-        "no stale binding survives the signal"
+        "the record is gone from the slab"
+    );
+    assert_eq!(
+        plain_state(
+            &engine
+                .plain_handler()
+                .slot_state(TlsIndex::VOID, Channel::Default)
+        ),
+        "1",
+        "the inner value stays: GNU stores the outer value only after the watcher"
     );
 }
 
@@ -4305,7 +4325,7 @@ fn vm_a_plain_hand_off_under_a_record_the_executor_never_saw_faults_before_the_e
     // serial side had been asked).
     let mut ctx = context();
     let x = plain_sym("pvm-watched-under-foreign");
-    let (xs, one, two) = (Value::from_sym_id(x), Value::fixnum(1), Value::fixnum(2));
+    let (xs, one) = (Value::from_sym_id(x), Value::fixnum(1));
     let ops = plain_program(vec![
         Op::Constant(1),
         Op::VarBind(0),
@@ -4329,7 +4349,7 @@ fn vm_a_plain_hand_off_under_a_record_the_executor_never_saw_faults_before_the_e
         .pushing_foreign_record(),
         plain,
     );
-    let outcome = engine.run(&mut ctx, program_with(&ops, &vec![xs, one, two]));
+    let outcome = engine.run(&mut ctx, program_with(&ops, &vec![xs, one]));
     assert!(
         matches!(
             fault_of(outcome),

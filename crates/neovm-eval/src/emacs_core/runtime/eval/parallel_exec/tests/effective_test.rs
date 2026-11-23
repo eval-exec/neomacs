@@ -77,9 +77,9 @@ impl TestSlots {
             .expect("the entry names a live slab record")
     }
 
-    /// The slab's top record.
+    /// The slab's top record (the slab's own O(1) read, as the trait's).
     fn top_record(&self) -> Option<OwnerRecordId> {
-        self.records.live_records().last().map(|(id, _)| id)
+        self.records.top_record_id()
     }
 
     /// The slab's live records, outermost first.

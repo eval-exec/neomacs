@@ -633,6 +633,27 @@ pub(crate) fn effective_plain_unbind<A: PlainAccess + ?Sized>(
     record: SlotRecord,
 ) -> Result<(), RecordMismatch> {
     let taken = access.pop_binding(record.record).ok_or(RecordMismatch)?;
+    restore_taken_binding(access, taken);
+    Ok(())
+}
+
+/// The store half of an unbind, for a record already taken off the slab:
+/// the owner-local form of `discard_owner_binding`'s four arms
+/// (owner_bindings.rs:1504-1516).
+///
+/// GNU runs an unbind in three steps, and a watched symbol makes the order
+/// visible: `do_one_unbind` takes the entry off the specpdl first
+/// (eval.c:3946-3955), `set_internal` then notifies the watchers with
+/// `Qunlet` (data.c:1697-1708), and only then stores the outer value
+/// (`SET_SYMBOL_VAL`, data.c:1715). A watcher that signals skips the store:
+/// the inner value stays in place (owner_bindings.rs:1265-1272 says the
+/// same). The owner-local restore runs take and store back to back because
+/// nothing runs between them; a hand-off with a watcher runs them around
+/// the watcher's Lisp, and that is G1's order.
+pub(crate) fn restore_taken_binding<A: PlainAccess + ?Sized>(
+    access: &mut A,
+    taken: OwnerBindingRecord,
+) {
     match taken.undo {
         UndoTarget::Retired => {}
         UndoTarget::Previous(outer) => {
@@ -646,7 +667,6 @@ pub(crate) fn effective_plain_unbind<A: PlainAccess + ?Sized>(
             access.canonical_write(taken.sym, saved.get());
         }
     }
-    Ok(())
 }
 
 /// What the stepper's walk does with one owner binding entry (N-v2-
