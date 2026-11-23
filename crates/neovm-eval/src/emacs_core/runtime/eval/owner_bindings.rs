@@ -708,13 +708,6 @@ impl OwnerSlab {
     /// A record below the top, or one already taken, leaves the stack as it
     /// was. [`Self::take_record`] of a record below the top takes it and
     /// leaves a hole, so the top check has to happen first.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the plain unbind calls this once that caller lands; the unit test covers it"
-        )
-    )]
     pub(crate) fn take_top_record(&mut self, id: OwnerRecordId) -> Option<OwnerBindingRecord> {
         let top = self.top_record_id()?;
         (top == id).then(|| self.take_record(id)).flatten()

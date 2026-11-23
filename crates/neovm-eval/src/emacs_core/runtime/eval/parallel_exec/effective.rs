@@ -460,12 +460,15 @@ pub(crate) trait PlainAccess: OwnerSlotsMut {
 /// The slab half of [`PlainAccess::pop_binding`] over a slab the implementor
 /// holds: the top record when it is `id`. `OwnerSlab::take_record` alone does
 /// not do: of a record below the top it takes that record and leaves a hole.
+///
+/// [`OwnerSlab::take_top_record`] is the slab's own form of the same rule, with
+/// an O(1) read of the top; this is the free function the composed unbind and
+/// the harness doubles call.
 pub(crate) fn take_top_binding(
     slab: &mut OwnerSlab,
     id: OwnerRecordId,
 ) -> Option<OwnerBindingRecord> {
-    let top = slab.live_records().last().map(|(top, _)| top)?;
-    (top == id).then(|| slab.take_record(id)).flatten()
+    slab.take_top_record(id)
 }
 
 /// An executor record did not name the slab's top record: nothing was taken.
