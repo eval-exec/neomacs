@@ -972,6 +972,10 @@ pub struct FontMetricsService {
     /// unmatched instead of clearing every frame's fontset.
     realized_fontset_frame: u64,
     realized_fontset_epoch: u64,
+    /// Highest epoch this service has installed. Local caches prune on this
+    /// mark. The process-wide high-water gates only the shared order map,
+    /// because main records an epoch before the worker sees the snapshot.
+    max_fontset_epoch: u64,
     /// Frames this service has measured. Frame deletion checks the set
     /// before walking the character caches.
     keyed_frames: rustc_hash::FxHashSet<u64>,
@@ -1005,6 +1009,39 @@ fn gstring_text_is_rtl(text: &str) -> bool {
 impl Default for FontMetricsService {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+fn process_symbol_policy_changed(policy: &SymbolFontPolicy) -> bool {
+    static APPLIED: std::sync::OnceLock<std::sync::Mutex<SymbolFontPolicy>> =
+        std::sync::OnceLock::new();
+    let applied = APPLIED.get_or_init(|| std::sync::Mutex::new(SymbolFontPolicy::default()));
+    let mut guard = applied
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if *guard == *policy {
+        false
+    } else {
+        *guard = policy.clone();
+        true
+    }
+}
+
+fn process_render_options_changed(
+    options: Option<neomacs_display_protocol::DesktopFontRenderOptions>,
+) -> bool {
+    static APPLIED: std::sync::OnceLock<
+        std::sync::Mutex<Option<neomacs_display_protocol::DesktopFontRenderOptions>>,
+    > = std::sync::OnceLock::new();
+    let applied = APPLIED.get_or_init(|| std::sync::Mutex::new(None));
+    let mut guard = applied
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if *guard == options {
+        false
+    } else {
+        *guard = options;
+        true
     }
 }
 
@@ -1184,6 +1221,7 @@ impl FontMetricsService {
             symbol_font_policy: SymbolFontPolicy::default(),
             realized_fontset_frame: 0,
             realized_fontset_epoch: 0,
+            max_fontset_epoch: 0,
             keyed_frames: rustc_hash::FxHashSet::default(),
         }
     }
@@ -1198,10 +1236,19 @@ impl FontMetricsService {
         if frame != 0 {
             self.keyed_frames.insert(frame);
         }
-        // A stale epoch installs context and leaves the newer groups. Only
-        // a new high-water mark drops strictly older epochs.
+        // Local caches follow this service's own mark. Main advances the
+        // process mark before a worker snapshot exists, so the worker would
+        // otherwise keep every epoch forever.
+        if face_epoch > self.max_fontset_epoch {
+            self.max_fontset_epoch = face_epoch;
+            self.drop_local_fontsets(&|fontset| {
+                fontset.frame != 0 && fontset.face_epoch < face_epoch
+            });
+        }
+        // Shared orders move only when the process mark advances. A stale
+        // context must not drop a newer epoch's group.
         if crate::font::fallback_order::note_fontset_epoch(face_epoch) {
-            self.drop_realized_fontsets(&|fontset| {
+            crate::font::fallback_order::prune_fallback_orders(&|fontset| {
                 fontset.frame != 0 && fontset.face_epoch < face_epoch
             });
         }
@@ -1224,7 +1271,7 @@ impl FontMetricsService {
         self.drop_realized_fontsets(&|fontset| fontset.frame != 0 && !live(fontset.frame));
     }
 
-    fn drop_realized_fontsets(
+    fn drop_local_fontsets(
         &mut self,
         drop_fontset: &impl Fn(&crate::font::fallback_order::FaceFontsetId) -> bool,
     ) {
@@ -1237,7 +1284,42 @@ impl FontMetricsService {
         self.resolved_cluster_cache
             .retain(|(key, _), _| !drop_fontset(&key.fontset));
         self.font_resolver.prune_realized_fontsets(drop_fontset);
+    }
+
+    fn drop_realized_fontsets(
+        &mut self,
+        drop_fontset: &impl Fn(&crate::font::fallback_order::FaceFontsetId) -> bool,
+    ) {
+        self.drop_local_fontsets(drop_fontset);
         crate::font::fallback_order::prune_fallback_orders(drop_fontset);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn entries_at_face_epoch(&self, epoch: u64) -> usize {
+        let at = |fontset: &crate::font::fallback_order::FaceFontsetId| {
+            fontset.frame != 0 && fontset.face_epoch == epoch
+        };
+        let chars = self
+            .char_cache
+            .iter()
+            .filter(|((key, _), _)| at(&key.fontset))
+            .count();
+        let resolved = self
+            .resolved_char_font_cache
+            .iter()
+            .filter(|((key, _), _)| at(&key.fontset))
+            .count();
+        let extents = self
+            .text_extents_cache
+            .iter()
+            .filter(|((_, key), _)| at(&key.fontset))
+            .count();
+        let clusters = self
+            .resolved_cluster_cache
+            .iter()
+            .filter(|((key, _), _)| at(&key.fontset))
+            .count();
+        chars + resolved + extents + clusters + self.font_resolver.entries_at_face_epoch(epoch)
     }
 
     #[cfg(test)]
@@ -1354,7 +1436,13 @@ impl FontMetricsService {
         let options = identity.font_render_options();
         if self.desktop_font_render_options != options {
             self.desktop_font_render_options = options;
-            self.clear_caches();
+            // A second service adopting render options the process already
+            // applied must not wipe every frame's fallback order.
+            if process_render_options_changed(options) {
+                self.clear_caches();
+            } else {
+                self.clear_local_caches();
+            }
             self.font_instances.invalidate_catalog_records();
         }
         self.display_identity = Some(identity);
@@ -1477,7 +1565,14 @@ impl FontMetricsService {
         if !selection_changed {
             return SymbolFontPolicyUpdate::Unchanged;
         }
-        self.clear_caches();
+        // The font-at host is a second service. Its first sync adopts the
+        // policy main already applied, so only a process-wide change drops
+        // the shared fallback orders.
+        if process_symbol_policy_changed(&self.symbol_font_policy) {
+            self.clear_caches();
+        } else {
+            self.clear_local_caches();
+        }
         SymbolFontPolicyUpdate::Changed
     }
 

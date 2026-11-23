@@ -1352,6 +1352,19 @@ impl FontResolver {
         self.char_cache.lock().map(|cache| cache.len()).unwrap_or(0)
     }
 
+    #[cfg(test)]
+    pub(crate) fn entries_at_face_epoch(&self, epoch: u64) -> usize {
+        let at = |fontset: &crate::font::fallback_order::FaceFontsetId| {
+            fontset.frame != 0 && fontset.face_epoch == epoch
+        };
+        let chars = self
+            .char_cache
+            .lock()
+            .map(|cache| cache.keys().filter(|key| at(&key.fontset)).count())
+            .unwrap_or(0);
+        chars
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn resolve_from_spec(
         &self,

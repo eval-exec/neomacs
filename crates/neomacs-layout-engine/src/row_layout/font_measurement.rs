@@ -428,6 +428,13 @@ impl WorkerFontMeasurements {
     pub(crate) fn cache_rebuilds(&self) -> usize {
         self.cache_rebuilds
     }
+
+    pub(crate) fn entries_at_face_epoch(&self, epoch: u64) -> usize {
+        self.service
+            .as_ref()
+            .map(|service| service.entries_at_face_epoch(epoch))
+            .unwrap_or(0)
+    }
 }
 
 impl WorkerFontMeasurements {

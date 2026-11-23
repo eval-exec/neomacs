@@ -4982,6 +4982,153 @@ fn worker_epoch_churn_past_the_query_cap_keeps_the_moved_front() {
     drop(eval);
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn worker_epoch_advance_prunes_its_own_fontset_caches() {
+    use crate::display_item::{
+        DisplayItem, DisplayItemKind, DisplayTextRun, RenderFaceRef, SourceSpan,
+    };
+    use crate::display_row::face_state::DisplayRowFace;
+    use crate::row_layout::font_measurement::{FontMeasurementSnapshot, WorkerFontMeasurements};
+
+    // Main records the epoch before the worker exists. The worker's snapshot
+    // therefore never advances the process mark, and its own caches still
+    // have to drop the epoch it just left.
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let mut main = make_svc();
+    assert!(main.synchronize_symbol_font_policy(true, None).changed());
+    let mut face = DisplayRowFace::from_resolved(
+        FaceId::new(1),
+        &crate::neovm_bridge::ResolvedFace::default(),
+    );
+    face.font_family = std::sync::Arc::from("DejaVu Sans");
+    face.font_weight = 400;
+    face.font_size = 16.0;
+    let faces = [face];
+    let items = [DisplayItem::new(
+        SourceSpan::synthetic(1, 0, 1),
+        RenderFaceRef::FaceId(faces[0].face_id),
+        DisplayItemKind::TextRun(DisplayTextRun::independent("検")),
+    )];
+    let mut worker = WorkerFontMeasurements::default();
+
+    fn measure(
+        worker: &mut WorkerFontMeasurements,
+        snapshot: &FontMeasurementSnapshot,
+        faces: &[DisplayRowFace],
+    ) {
+        let service = worker
+            .prepare(snapshot, faces, &|| false)
+            .expect("worker prepare");
+        let (frame, epoch) = service.realized_fontset_context();
+        let face = &faces[0];
+        let selection = crate::font::metrics::RealizedFaceFontSelection::new(
+            face.font_family.as_ref(),
+            face.font_weight,
+            face.italic,
+            face.font_size.max(1.0),
+        )
+        .with_fontset(frame, face.face_id.get(), epoch);
+        let _ = service.resolved_font_for_realized_face_char('検', selection);
+    }
+
+    main.set_realized_fontset_context(11, 1);
+    let epoch_one =
+        FontMeasurementSnapshot::capture(&faces, &mut main, &items).expect("epoch 1 snapshot");
+    measure(&mut worker, &epoch_one, &faces);
+    let filled = worker.entries_at_face_epoch(1);
+    assert!(
+        filled > 0,
+        "epoch 1 must leave a worker cache entry before the next epoch can prove a prune"
+    );
+    main.set_realized_fontset_context(11, 2);
+    let epoch_two =
+        FontMeasurementSnapshot::capture(&faces, &mut main, &items).expect("epoch 2 snapshot");
+    measure(&mut worker, &epoch_two, &faces);
+    assert_eq!(
+        worker.cache_rebuilds(),
+        1,
+        "the epoch change is context, not a service rebuild"
+    );
+    assert_eq!(
+        worker.entries_at_face_epoch(1),
+        0,
+        "the worker must drop its own epoch 1 fontset caches when main already recorded epoch 2"
+    );
+    drop(eval);
+}
+
+#[test]
+fn second_service_adopts_symbol_policy_without_clearing_orders() {
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let mut main = make_svc();
+    assert!(main.synchronize_symbol_font_policy(true, None).changed());
+    crate::font::fallback_order::promote_fallback(
+        &crate::font::fallback_order::FallbackOrderKey {
+            fontset: crate::font::fallback_order::FaceFontsetId {
+                frame: 31,
+                face: 1,
+                face_epoch: 1,
+            },
+            family: "Probe".to_string(),
+            weight: 400,
+            slant: 0,
+            width: 100,
+            size: None,
+            fontset_generation: 1,
+        },
+        &neovm_core::emacs_core::fontset::FontSpecEntry::ExplicitNone,
+    );
+    assert_eq!(
+        crate::font::fallback_order::fallback_order_groups_for_frame(31),
+        1
+    );
+    let mut font_at = make_svc();
+    assert!(font_at.synchronize_symbol_font_policy(true, None).changed());
+    assert_eq!(
+        crate::font::fallback_order::fallback_order_groups_for_frame(31),
+        1,
+        "a second service adopting the same symbol policy must not clear fallback orders"
+    );
+    drop(eval);
+}
+
+#[test]
+fn second_service_display_identity_keeps_the_moved_front() {
+    use neomacs_display_protocol::GraphicalBackend;
+
+    let display = GraphicalDisplayIdentity::anonymous_connection(GraphicalBackend::Wayland);
+    let mut main = make_svc();
+    main.set_display_identity(display.clone());
+    crate::font::fallback_order::promote_fallback(
+        &crate::font::fallback_order::FallbackOrderKey {
+            fontset: crate::font::fallback_order::FaceFontsetId {
+                frame: 32,
+                face: 1,
+                face_epoch: 1,
+            },
+            family: "Probe".to_string(),
+            weight: 400,
+            slant: 0,
+            width: 100,
+            size: None,
+            fontset_generation: 1,
+        },
+        &neovm_core::emacs_core::fontset::FontSpecEntry::ExplicitNone,
+    );
+    assert_eq!(
+        crate::font::fallback_order::fallback_order_groups_for_frame(32),
+        1
+    );
+    let mut font_at = make_svc();
+    font_at.set_display_identity(display);
+    assert_eq!(
+        crate::font::fallback_order::fallback_order_groups_for_frame(32),
+        1,
+        "a second service binding the same render options must not clear fallback orders"
+    );
+}
+
 #[test]
 fn ascii_worker_policy_keeps_unicode_font_caches_warm() {
     let source = crate::font::metrics::test_catalog::metrics_service();
