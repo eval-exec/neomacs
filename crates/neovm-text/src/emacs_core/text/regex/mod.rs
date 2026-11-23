@@ -3460,10 +3460,9 @@ fn with_buffer_emacs_bytes_for_search<R>(
 /// origin [`EmacsBytePos`] they are relative to, so callers can publish them
 /// without knowing which storage path ran.
 ///
-/// When the accessible region has no gap inside it (or the backend is
-/// chunked), this falls back to the bounded single slice around the search
-/// window: that slice is one piece, so its contiguity request cannot move a
-/// gap.
+/// A bounded window whose assertion context fits one physical half borrows
+/// that slice directly. Otherwise the full gap halves preserve the context;
+/// a backend without either borrow uses the bounded copy fallback.
 fn re_search_buffer_regexp<S: SyntaxLookup>(
     buf: &Buffer,
     compiled: &CompiledPattern,
@@ -3473,6 +3472,30 @@ fn re_search_buffer_regexp<S: SyntaxLookup>(
     forward: bool,
     syntax_at: impl Fn(EmacsBytePos) -> S,
 ) -> Option<(EmacsBytePos, MatchRegisters)> {
+    let (slice_from, slice_to) = if forward {
+        (start, limit)
+    } else {
+        (limit, start)
+    };
+    let search_range = forward_search_slice_range(buf, accessible, slice_from, slice_to);
+    let region_start = search_range.start();
+    let slice_start = start.get() - region_start.get();
+    let slice_limit = limit.get() - region_start.get();
+    // Include assertion context before selecting storage. A failed borrow
+    // leaves the gap untouched and falls through to the full two-half view.
+    if let Some(found) = buf.with_contiguous_emacs_byte_range(search_range, |text| {
+        let syntax = syntax_at(region_start);
+        regex_emacs::re_search(
+            compiled,
+            text,
+            slice_start,
+            slice_limit as isize - slice_start as isize,
+            &syntax,
+            slice_start,
+        )
+    }) {
+        return found.map(|(_pos, regs)| (region_start, regs));
+    }
     let start_rel = start.get() - accessible.start().get();
     let range_signed = limit.get() as isize - start.get() as isize;
     if let Some(found) = with_gap_halves(buf, accessible, |left, right| {
@@ -3489,15 +3512,6 @@ fn re_search_buffer_regexp<S: SyntaxLookup>(
     }) {
         return found.map(|(_pos, regs)| (accessible.start(), regs));
     }
-    let (slice_from, slice_to) = if forward {
-        (start, limit)
-    } else {
-        (limit, start)
-    };
-    let search_range = forward_search_slice_range(buf, accessible, slice_from, slice_to);
-    let region_start = search_range.start();
-    let slice_start = start.get() - region_start.get();
-    let slice_limit = limit.get() - region_start.get();
     let syntax = syntax_at(region_start);
     with_buffer_emacs_bytes_for_search(buf, search_range, |text| {
         regex_emacs::re_search(
@@ -3522,6 +3536,22 @@ fn re_match_buffer_regexp<S: SyntaxLookup>(
     point_pos: EmacsBytePos,
     syntax_at: impl Fn(EmacsBytePos) -> S,
 ) -> Option<(EmacsBytePos, MatchRegisters)> {
+    let region_start = forward_search_slice_start(buf, accessible, point_pos);
+    let slice_start = point_pos.get() - region_start.get();
+    let slice_range = EmacsByteRange::new(region_start, accessible.end());
+    if let Some(found) = buf.with_contiguous_emacs_byte_range(slice_range, |text| {
+        let syntax = syntax_at(region_start);
+        regex_emacs::re_match(
+            compiled,
+            text,
+            slice_start,
+            text.len(),
+            &syntax,
+            slice_start,
+        )
+    }) {
+        return found.map(|(_end, regs)| (region_start, regs));
+    }
     let start_rel = point_pos.get() - accessible.start().get();
     let stop_rel = accessible.end().get() - accessible.start().get();
     if let Some(found) = with_gap_halves(buf, accessible, |left, right| {
@@ -3532,9 +3562,6 @@ fn re_match_buffer_regexp<S: SyntaxLookup>(
     }) {
         return found.map(|(_end, regs)| (accessible.start(), regs));
     }
-    let region_start = forward_search_slice_start(buf, accessible, point_pos);
-    let slice_start = point_pos.get() - region_start.get();
-    let slice_range = EmacsByteRange::new(region_start, accessible.end());
     let syntax = syntax_at(region_start);
     with_buffer_emacs_bytes_for_search(buf, slice_range, |text| {
         regex_emacs::re_match(
@@ -3549,33 +3576,16 @@ fn re_match_buffer_regexp<S: SyntaxLookup>(
     .map(|(_end, regs)| (region_start, regs))
 }
 
-/// Where a forward search's slice begins, so that an edit loop stops moving
-/// the gap across the buffer.
+/// The previous complete character needed by assertions at START.
 ///
-/// The buffer regex paths now reach this only through their single-slice
-/// fallback: a gap inside the accessible region is read as two chunks in
-/// place ([`re_search_buffer_regexp`]), so the region arriving here is one
-/// piece and the gap-moving arm below is unreachable for gap backends.  It
-/// remains meaningful for a chunked backend, whose window lookup fails and
-/// which has no gap to move.
+/// The caller first tries the existing contiguous context window, then the
+/// two gap halves. Inspecting context must never move the gap: when the
+/// preceding character belongs to the other half, the caller keeps the full
+/// segmented view. GNU `re_search_2` similarly retains the actual accessible
+/// edges and the character before each candidate (`regex-emacs.c:3662`).
 ///
-/// The amortization the comment above assumes breaks down as soon as the
-/// search shares the buffer with edits: every edit parks the gap at the edit
-/// point, so the next search moves it out of the accessible region and the
-/// next edit moves it back. A 4,000-replacement loop over 176K of text made
-/// 8,015 gap moves and spent 42% of its instructions in `memcpy'; GNU, whose
-/// `re_search_2' reads the two gap halves in place, moves the gap none.
-///
-/// A forward search reads only [START, region end), and after an edit the gap
-/// sits at START -- so that stretch is already one piece. Starting the slice
-/// there needs one thing from before it: the character preceding START, which
-/// `^', `\b' and `\<' consult. Asking for contiguity from THAT character
-/// instead of from the region start moves the gap over one character rather
-/// than over half the buffer.
-///
-/// Position 0 of the returned slice is the region start exactly when the
-/// slice begins there, which is the only case where `\`' may match, and a
-/// forward search never looks left of the character this keeps.
+/// A nonzero window origin keeps that previous character before every
+/// candidate, so a local offset zero cannot masquerade as GNU's BEGV.
 fn forward_search_slice_start(
     buf: &Buffer,
     accessible: EmacsByteRange,
@@ -3616,11 +3626,11 @@ fn forward_search_slice_start(
         return region_start;
     }
     let context = EmacsByteRange::new(context_start, accessible.end());
-    if buf.try_make_emacs_byte_range_contiguous(context) {
+    if buf.has_contiguous_emacs_byte_range(context) {
         context_start
     } else {
-        // A chunked backend (rope, piece tree) lends no window; the caller
-        // copies the whole region, as it did before.
+        // Context crosses storage chunks. Keep the accessible origin so
+        // the caller uses the full segmented view or the copy fallback.
         region_start
     }
 }

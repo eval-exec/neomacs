@@ -1680,6 +1680,147 @@ fn regexp_search_reads_both_gap_halves_without_moving_the_gap() {
     assert_eq!(buf.gap_position_lisp(), gap);
 }
 
+/// A complete search window in one gap half must use contiguous engine
+/// storage. Counters cover actual segmented engine entries, while captures
+/// and a straddling control prevent a vacuous fast path or a moved gap.
+#[test]
+fn regexp_one_half_context_uses_contiguous_engine_storage() {
+    crate::test_utils::init_test_tracing();
+    let mut buf = literal_gap_test_buffer("xaabY__xaabY");
+    park_gap_at_keeping_point(&mut buf, 6);
+    let gap = buf.gap_position_lisp();
+    let pattern = regex_emacs::regex_compile(r"\(aa\)b", false, false).unwrap();
+    let accessible = buf.accessible_emacs_byte_region().range();
+    let mut segmented = 0;
+    for (start, limit, forward, expected) in [
+        (1, 4, true, (1, 4)),
+        (4, 1, false, (1, 4)),
+        (8, 11, true, (8, 11)),
+        (11, 8, false, (8, 11)),
+    ] {
+        let before = regex_emacs::segment_engine_entry_count();
+        let (origin, registers) = super::re_search_buffer_regexp(
+            &buf,
+            &pattern,
+            accessible,
+            EmacsBytePos::new(start),
+            EmacsBytePos::new(limit),
+            forward,
+            |_| DefaultSyntaxLookup,
+        )
+        .expect("the one-half regexp matches");
+        segmented += regex_emacs::segment_engine_entry_count() - before;
+        assert_eq!(
+            (
+                origin.get() + registers.start[0] as usize,
+                origin.get() + registers.end[0] as usize
+            ),
+            expected
+        );
+        assert_eq!(
+            (
+                origin.get() + registers.start[1] as usize,
+                origin.get() + registers.end[1] as usize
+            ),
+            (expected.0, expected.0 + 2)
+        );
+        assert_eq!(buf.gap_position_lisp(), gap);
+    }
+    let before = regex_emacs::segment_engine_entry_count();
+    let (origin, registers) =
+        super::re_match_buffer_regexp(&buf, &pattern, accessible, EmacsBytePos::new(8), |_| {
+            DefaultSyntaxLookup
+        })
+        .expect("looking-at uses the right half through the actual buffer end");
+    segmented += regex_emacs::segment_engine_entry_count() - before;
+    assert_eq!(
+        (
+            origin.get() + registers.start[0] as usize,
+            origin.get() + registers.end[0] as usize
+        ),
+        (8, 11)
+    );
+    assert_eq!(buf.gap_position_lisp(), gap);
+
+    let before = regex_emacs::segment_engine_entry_count();
+    let crossing = regex_emacs::regex_compile(r"Y_+x", false, false).unwrap();
+    let (origin, registers) = super::re_search_buffer_regexp(
+        &buf,
+        &crossing,
+        accessible,
+        EmacsBytePos::ZERO,
+        buf.total_emacs_byte_end_pos(),
+        true,
+        |_| DefaultSyntaxLookup,
+    )
+    .expect("the control match crosses the gap");
+    assert_eq!(
+        (
+            origin.get() + registers.start[0] as usize,
+            origin.get() + registers.end[0] as usize
+        ),
+        (4, 8)
+    );
+    assert!(
+        regex_emacs::segment_engine_entry_count() > before,
+        "the straddling control must exercise the real segmented engine"
+    );
+    assert_eq!(buf.gap_position_lisp(), gap);
+    assert_eq!(segmented, 0, "one-half windows paid segmented engine setup");
+}
+
+#[test]
+fn regexp_one_half_context_preserves_gap_edge_assertions() {
+    crate::test_utils::init_test_tracing();
+    for (text, start, bound, line_start, gaps) in [
+        ("xaY", 1, 2, false, vec![0, 1, 2, 3]),
+        ("\naY", 1, 2, true, vec![0, 1, 2, 3]),
+        ("éaY", 2, 3, false, vec![0, 2, 3, 4]),
+    ] {
+        for gap in gaps {
+            let mut buf = literal_gap_test_buffer(text);
+            park_gap_at_keeping_point(&mut buf, gap);
+            let parked = buf.gap_position_lisp();
+            let accessible = buf.accessible_emacs_byte_region().range();
+            for (expression, matches) in [
+                (r"\(a\)\B", true),
+                (r"a\b", false),
+                (r"a\'", false),
+                (r"a$", false),
+                (r"\`a", false),
+                (r"^a", line_start),
+                (r"\=a", true),
+            ] {
+                let pattern = regex_emacs::regex_compile(expression, false, false).unwrap();
+                let found = super::re_search_buffer_regexp(
+                    &buf,
+                    &pattern,
+                    accessible,
+                    EmacsBytePos::new(start),
+                    EmacsBytePos::new(bound),
+                    true,
+                    |_| DefaultSyntaxLookup,
+                );
+                assert_eq!(found.is_some(), matches, "{text:?} {expression} gap={gap}");
+                if let Some((origin, registers)) = found {
+                    assert_eq!(
+                        (
+                            origin.get() + registers.start[0] as usize,
+                            origin.get() + registers.end[0] as usize
+                        ),
+                        (start, bound)
+                    );
+                }
+                assert_eq!(
+                    buf.gap_position_lisp(),
+                    parked,
+                    "{text:?} {expression} gap={gap}"
+                );
+            }
+        }
+    }
+}
+
 /// Font-lock shape: edit, search from before the edit so the gap lies inside
 /// the span, repeat. The literal and engine paths must both read the two gap
 /// halves in place: no bytes copied and the gap stays at the edit.

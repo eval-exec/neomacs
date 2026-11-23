@@ -1478,6 +1478,11 @@ thread_local! {
     /// candidate scan. Unlike matcher entries, this catches repeated setup
     /// when the fastmap rejects every line before entering the matcher.
     static CHUNK_QUERY_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// Actual entry into a two-segment search or anchored matcher. Kept at
+    /// those engine boundaries so contiguous buffer requests can assert that
+    /// they do not pay split-storage setup; straddling controls exercise it.
+    #[cfg(test)]
+    static SEGMENT_ENGINE_ENTRY_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     /// Actual individual byte selections in split storage. Cached DFA
     /// prefixes should select the remaining contiguous chunks once.
     #[cfg(test)]
@@ -1493,6 +1498,11 @@ pub(crate) fn matcher_entry_count() -> u64 {
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn chunk_query_count() -> u64 {
     CHUNK_QUERY_COUNT.with(|c| c.get())
+}
+
+#[cfg(test)]
+pub(crate) fn segment_engine_entry_count() -> u64 {
+    SEGMENT_ENGINE_ENTRY_COUNT.with(|count| count.get())
 }
 
 #[cfg(test)]
@@ -11048,6 +11058,8 @@ pub(crate) fn re_search_segments(
     syntax: &dyn SyntaxLookup,
     point: usize,
 ) -> Option<(usize, MatchRegisters)> {
+    #[cfg(test)]
+    SEGMENT_ENGINE_ENTRY_COUNT.with(|count| count.set(count.get() + 1));
     re_search_haystack(
         pattern,
         &Segments { left, right },
@@ -11074,6 +11086,8 @@ pub(crate) fn re_match_segments(
     syntax: &dyn SyntaxLookup,
     point: usize,
 ) -> Option<(usize, MatchRegisters)> {
+    #[cfg(test)]
+    SEGMENT_ENGINE_ENTRY_COUNT.with(|count| count.set(count.get() + 1));
     let text = Segments { left, right };
     clear_matcher_overflow();
     let mut lease = MatchScratchLease::take();
