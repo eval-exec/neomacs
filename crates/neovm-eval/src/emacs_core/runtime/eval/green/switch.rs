@@ -816,7 +816,6 @@ impl Context {
         // while this one is parked: its current buffer and its errors.
         let current = self.edit.buffers.current_buffer_id();
         self.threads.set_thread_current_buffer(key.id(), current);
-        self.restore_deferred_error(&baton, key);
         if let Some(runtime) = baton.green_runtime().as_ref() {
             runtime.outgoing_constant_error.set(
                 self.failed_constant_owner_binding(true)
@@ -1333,13 +1332,9 @@ impl Context {
         {
             return self.green_wait(Wait::Runnable);
         }
-        // A newborn's signal was deferred until it installed handlers.
-        // Its first yield delivers it even when every peer is blocked.
-        let deferred =
-            self.with_green_runtime(|runtime| runtime.deferred_errors.borrow_mut().remove(&key));
-        if let Some((symbol, data)) = deferred {
-            self.threads.restore_thread_error(key.id(), symbol, data);
-        }
+        // GNU's yield reacquires the lock even when no peer runs
+        // (src/thread.c:724-732), and that `post_acquire_global_lock` raises
+        // a pending error, such as one signalled before this thread ran.
         self.green_raise_pending_signal(key)
     }
 
@@ -1401,18 +1396,6 @@ impl Context {
     pub(crate) fn green_release_seat(&mut self) {
         if let Some(slab) = self.owner.slab_mut() {
             drop(slab.take_green_seat());
-        }
-    }
-
-    /// KEY's error held since its start is pending again
-    /// (`GreenRuntime::deferred_errors`).
-    pub(crate) fn restore_deferred_error(&mut self, baton: &Baton, key: ThreadKey) {
-        let deferred = baton
-            .green_runtime()
-            .as_ref()
-            .and_then(|runtime| runtime.deferred_errors.borrow_mut().remove(&key));
-        if let Some((symbol, data)) = deferred {
-            self.threads.restore_thread_error(key.id(), symbol, data);
         }
     }
 
@@ -1830,15 +1813,16 @@ pub(super) fn run_carrier_job(
         owner.restore_current_buffer_if_live(buffer);
     }
     owner.threads.start_thread(key.id());
-    // GNU raises an error signalled into a thread that has not run yet at
-    // its first switch, once it has handlers.
-    let deferred = owner.threads.take_thread_error(key.id());
-    let function = baton.green_runtime().as_ref().and_then(|runtime| {
-        if let Some(error) = deferred {
-            runtime.deferred_errors.borrow_mut().insert(key, error);
-        }
-        runtime.pending_starts.borrow_mut().remove(&key)
-    });
+    // An error signalled into this thread before it ran stays pending: GNU's
+    // first acquire comes before the thread has handlers, so
+    // `post_acquire_global_lock` (src/thread.c:146-154) does not raise it
+    // there, but leaves it in `error_symbol`. Nothing raises before the
+    // function runs. Inside it, every wait sees the pending error and every
+    // delivery point raises it.
+    let function = baton
+        .green_runtime()
+        .as_ref()
+        .and_then(|runtime| runtime.pending_starts.borrow_mut().remove(&key));
     owner.take_green_seat(
         key,
         Arc::clone(&control),
@@ -1885,7 +1869,6 @@ pub(super) fn run_carrier_job(
         .baton
         .take()
         .expect("a finishing thread holds the Baton");
-    owner.restore_deferred_error(&baton, key);
     if let Some(runtime) = baton.green_runtime().as_ref() {
         // GNU clears prev_thread when a thread exits: no outgoing unbind.
         runtime.outgoing_constant_error.set(None);

@@ -76,13 +76,6 @@ pub(crate) struct GreenRuntime {
     /// `set-standard-case-table` sets it here, and each thread installs it
     /// as it resumes.
     pub(super) standard_case_table: std::cell::Cell<Option<neovm_value::value::Value>>,
-    /// An error signalled into a thread before it first ran, as
-    /// `(SYMBOL, DATA)`: held from its start to its first switch, as GNU
-    /// `post_acquire_global_lock` raises nothing while a thread has no
-    /// handlers.
-    pub(super) deferred_errors: std::cell::RefCell<
-        rustc_hash::FxHashMap<ThreadKey, (neovm_value::value::Value, neovm_value::value::Value)>,
-    >,
 }
 
 impl std::fmt::Debug for GreenRuntime {
@@ -130,10 +123,6 @@ impl GreenRuntime {
         }
         if let Some(state) = self.owner_carried.borrow().as_ref() {
             state.trace_roots(visit);
-        }
-        for (symbol, data) in self.deferred_errors.borrow().values() {
-            visit(*symbol);
-            visit(*data);
         }
     }
 }
@@ -222,7 +211,6 @@ impl Context {
             owner_carried: Default::default(),
             standard_case_table: std::cell::Cell::new(self.cached_standard_case_table),
             outgoing_constant_error: std::cell::Cell::new(None),
-            deferred_errors: Default::default(),
             carriers: carrier::CarrierPool::new(),
         }));
         Ok(baton)

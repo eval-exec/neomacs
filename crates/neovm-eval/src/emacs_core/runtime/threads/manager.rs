@@ -412,6 +412,12 @@ impl ThreadManager {
         self.get_thread(native)?.native().blocked_wait()
     }
 
+    /// Whether NATIVE waits on a GNU `wait_condvar`, which `thread-signal`
+    /// interrupts (src/thread.c:1029-1030).
+    pub(crate) fn blocked_wait_ends_on_signal(&self, native: u64) -> bool {
+        signal_wakes_blocked_wait(self.blocked_wait(native))
+    }
+
     #[doc(hidden)]
     pub fn thread_is_woken(&self, native: u64) -> bool {
         self.get_thread(native)
@@ -672,15 +678,6 @@ impl ThreadManager {
                 std::mem::replace(thread.error_data_mut(), Value::NIL),
             ))
         })?
-    }
-
-    pub(crate) fn restore_thread_error(&mut self, native: u64, symbol: Value, data: Value) {
-        self.update_thread(native, |thread| {
-            if thread.error_symbol().is_nil() {
-                *thread.error_symbol_mut() = symbol;
-                *thread.error_data_mut() = data;
-            }
-        });
     }
 
     #[doc(hidden)]

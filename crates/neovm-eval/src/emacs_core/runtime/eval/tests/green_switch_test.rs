@@ -566,6 +566,53 @@ fn a_signal_into_a_thread_that_has_not_run_waits_for_its_first_switch() {
     );
 }
 
+/// The error stays pending until it is raised. A wait skips itself
+/// (GNU thread.c:232-234, :457-464), and an unlock that releases raises it
+/// (:377). Holding it apart left these waits parked with nothing to wake them.
+#[test]
+fn a_signal_into_a_thread_that_has_not_run_ends_its_first_wait_or_release() {
+    let mut ev = green();
+    assert_eq!(
+        eval(
+            &mut ev,
+            "(progn
+               (setq tgn-held (make-mutex) tgn-results nil)
+               (mutex-lock tgn-held)
+               (setq tgn-bodies
+                     (list
+                      (lambda ()
+                        (let ((m (make-mutex)))
+                          (mutex-lock m) (setq tgn-log (cons 'locked tgn-log))
+                          (mutex-unlock m) (setq tgn-log (cons 'unlocked tgn-log))
+                          (thread-yield) (setq tgn-log (cons 'yielded tgn-log))))
+                      (lambda ()
+                        (setq tgn-log (cons 'locking tgn-log))
+                        (mutex-lock tgn-held) (setq tgn-log (cons 'got-it tgn-log)))
+                      (lambda ()
+                        (let* ((m (make-mutex)) (c (make-condition-variable m)))
+                          (mutex-lock m) (setq tgn-log (cons 'locked tgn-log))
+                          (condition-wait c) (setq tgn-log (cons 'woke tgn-log))))))
+               (while tgn-bodies
+                 (setq tgn-log nil tgn-body (car tgn-bodies) tgn-bodies (cdr tgn-bodies))
+                 (let ((th (make-thread
+                            (lambda ()
+                              (condition-case e (funcall tgn-body)
+                                (error (setq tgn-log
+                                             (cons (list 'caught (car (cdr e))) tgn-log))))))))
+                   (thread-signal th 'error '(\"n\"))
+                   (let ((turns 200))
+                     (while (and (thread-live-p th) (> turns 0))
+                       (thread-yield)
+                       (setq turns (1- turns))))
+                   (setq tgn-results
+                         (cons (list (thread-live-p th) (reverse tgn-log)) tgn-results))))
+               (mutex-unlock tgn-held)
+               (nreverse tgn-results))"
+        ),
+        "((nil (locked (caught \"n\"))) (nil (locking (caught \"n\"))) (nil (locked (caught \"n\"))))"
+    );
+}
+
 #[test]
 fn thread_join_re_raises_a_signal_pending_when_it_began() {
     let mut ev = green();

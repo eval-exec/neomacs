@@ -57,11 +57,15 @@ impl Context {
         let key = ThreadKey::from_id(id);
         let control = self.green_control();
         if !control.exited(key) {
+            let joiner = self.green_current_id();
+            // GNU `thread_join_callback` (src/thread.c:1110-1115) waits only
+            // while this thread has no pending error, then its
+            // `post_acquire_global_lock` raises one, ahead of the snapshot.
             self.green_blocked_on(args[0], |ctx| {
-                while !control.exited(key) {
+                while !control.exited(key) && !ctx.threads.has_pending_thread_signal(joiner) {
                     ctx.green_wait(Wait::Join(key))?;
                 }
-                Ok(())
+                ctx.green_raise_pending_signal(ThreadKey::from_id(joiner))
             })?;
         }
         self.threads.join_thread_for_value(args[0]);
@@ -102,6 +106,11 @@ impl Context {
             Some(Wait::Join(_) | Wait::Mutex(_) | Wait::Condition(_))
         ) {
             control.wake(key);
+            // GNU's `thread_signal_callback` ends with the sender's own
+            // `post_acquire_global_lock` (src/thread.c:974-982).
+            if let Some(sender) = self.green_key() {
+                self.green_raise_pending_signal(sender)?;
+            }
         }
         Ok(Value::NIL)
     }
@@ -153,6 +162,11 @@ impl Context {
             MutexRelease::Released => {
                 self.green_control()
                     .wake_waiting_for(Wait::Mutex(MutexId::new(mutex.native_key())));
+                // GNU `mutex_unlock_callback` (src/thread.c:372-378) runs
+                // `post_acquire_global_lock` after a release.
+                if let Some(key) = self.green_key() {
+                    self.green_raise_pending_signal(key)?;
+                }
             }
             MutexRelease::NotOwner => {
                 return Err(signal(
@@ -192,6 +206,11 @@ impl Context {
                     condition.native_key(),
                 )));
             }
+        }
+        // GNU `condition_notify_callback` ends with
+        // `post_acquire_global_lock` (src/thread.c:533).
+        if let Some(key) = self.green_key() {
+            self.green_raise_pending_signal(key)?;
         }
         Ok(Value::NIL)
     }
