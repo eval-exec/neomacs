@@ -3152,6 +3152,59 @@ fn builtin_set_charset_priority_with_symbols(args: Vec<Value>, mode: SymbolMode)
     Ok(Value::NIL)
 }
 
+/// `(sort-charsets CHARSETS)` -- sort CHARSETS by charset priority, in place,
+/// and return it.
+///
+/// GNU `Fsort_charsets` (charset.c:2254): `list_length` rejects an improper or
+/// circular list before any element is looked at, then every element must be
+/// a charset (`CHECK_CHARSET_GET_ATTR`). A charset ranks by where its id
+/// stands in `Vcharset_ordered_list`, which is `priority_identities` here, so
+/// an alias ranks with its target. The sorted elements are stored back into
+/// the conses of CHARSETS.
+#[doc(hidden)]
+pub fn builtin_sort_charsets_in_state<H: TextHost>(eval: &mut H, args: Vec<Value>) -> EvalResult {
+    expect_args("sort-charsets", &args, 1)?;
+    let charsets = args[0];
+    let mode = eval.symbol_mode();
+    let items = neovm_value::list_scan::collect_proper_list_items(charsets)?;
+    let mut ranked = CHARSET_REGISTRY.with(|slot| {
+        let registry = slot.borrow();
+        items
+            .into_iter()
+            .map(|item| {
+                let name = item
+                    .as_symbol_id(mode)
+                    .filter(|&name| registry.contains_symbol(name))
+                    .ok_or_else(|| {
+                        signal(
+                            LispCondition::WrongTypeArgument,
+                            vec![Value::symbol("charsetp"), item],
+                        )
+                    })?;
+                let identity = registry.resolve_name(name);
+                // GNU's list holds every defined charset. A charset that is
+                // only preseeded here, and not defined yet, ranks last.
+                let rank = registry
+                    .priority_identities
+                    .iter()
+                    .position(|&id| id == identity)
+                    .unwrap_or(usize::MAX);
+                Ok((rank, item))
+            })
+            .collect::<Result<Vec<_>, Flow>>()
+    })?;
+    // GNU sorts with `qsort`, which C does not require to be stable. The
+    // oracle keeps names that tie (an alias and its target) in their input
+    // order, as this stable sort does.
+    ranked.sort_by_key(|&(rank, _)| rank);
+    let mut tail = charsets;
+    for (_, item) in ranked {
+        tail.set_car(item);
+        tail = tail.cons_cdr();
+    }
+    Ok(charsets)
+}
+
 /// Classify a character code into the name of the highest-priority charset
 /// that contains it, mirroring GNU's `CHAR_CHARSET` for the default priority
 /// order.  Used by both `char-charset` and `split-char`.

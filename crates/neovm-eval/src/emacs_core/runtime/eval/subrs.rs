@@ -3678,7 +3678,7 @@ crate::emacs_core::subr::define_subrs! {
     )),
     crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "sort-charsets",
-        NativeFn::ContextVec(|_ctx, args| builtin_sort_charsets(args)),
+        NativeFn::ContextVec(neovm_text::emacs_core::charset::builtin_sort_charsets_in_state),
         SubrArity::new(1, Some(1)),
     )),
     crate::emacs_core::subr::world_subr!(SubrSpec::new(

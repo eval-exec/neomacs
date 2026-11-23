@@ -7840,6 +7840,56 @@ fn pure_dispatch_sort_subr_placeholder_cluster_matches_compat_contracts() {
 }
 
 #[test]
+fn sort_charsets_sorts_by_charset_priority_in_place() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::test_utils::new_context();
+
+    // GNU `Fsort_charsets` (charset.c): each charset ranks by where its id
+    // stands in `Vcharset_ordered_list`, so an alias ties with its target and
+    // keeps its input order. The sorted names go back into the same conses.
+    let rendered = format_eval_result(&eval.eval_str(
+        r#"(let* ((l (list 'unicode 'ascii 'eight-bit))
+                  (second (cdr l))
+                  (sorted (sort-charsets l)))
+             (list sorted (eq sorted l) (eq (cdr l) second)
+                   (sort-charsets nil)
+                   (sort-charsets (list 'unicode 'ascii 'unicode))
+                   (sort-charsets (list 'unicode 'ucs 'ascii))
+                   (sort-charsets (list 'ucs 'unicode 'ascii))))"#,
+    ));
+    assert_eq!(
+        rendered,
+        "OK ((ascii unicode eight-bit) t t nil (ascii unicode unicode) (ascii unicode ucs) (ascii ucs unicode))"
+    );
+
+    // `list_length` checks the whole list before any element is checked
+    // against `charsetp`, and a failed call leaves the list as it was.
+    let rendered = format_eval_result(&eval.eval_str(
+        r#"(let ((circular (list 'ascii 'unicode))
+                 (bad (list 'unicode 'ascii 'foo)))
+             (setcdr (cdr circular) circular)
+             (list (condition-case e (sort-charsets 'ascii) (error e))
+                   (condition-case e (sort-charsets (cons 'foo 'bar)) (error e))
+                   (condition-case e (sort-charsets (list 'ascii 'foo)) (error e))
+                   (condition-case e (sort-charsets (list 1)) (error e))
+                   (car (condition-case e (sort-charsets circular) (error e)))
+                   (condition-case nil (sort-charsets bad) (error bad))))"#,
+    ));
+    assert_eq!(
+        rendered,
+        "OK ((wrong-type-argument listp ascii) (wrong-type-argument listp bar) (wrong-type-argument charsetp foo) (wrong-type-argument charsetp 1) circular-list (unicode ascii foo))"
+    );
+
+    // The order follows `set-charset-priority`.
+    let rendered = format_eval_result(&eval.eval_str(
+        r#"(progn
+             (set-charset-priority 'eight-bit 'unicode)
+             (sort-charsets (list 'ascii 'emacs 'ucs 'eight-bit)))"#,
+    ));
+    assert_eq!(rendered, "OK (eight-bit ucs ascii emacs)");
+}
+
+#[test]
 fn pure_dispatch_tty_tool_bar_placeholder_cluster_matches_compat_contracts() {
     crate::test_utils::init_test_tracing();
     let thread_blocker = dispatch_builtin_pure("thread--blocker", vec![Value::NIL])

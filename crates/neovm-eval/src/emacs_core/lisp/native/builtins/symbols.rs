@@ -3516,12 +3516,6 @@ pub fn builtin_set_minibuffer_window(
 }
 
 #[doc(hidden)]
-pub fn builtin_sort_charsets(args: Vec<Value>) -> EvalResult {
-    expect_args("sort-charsets", &args, 1)?;
-    Ok(Value::NIL)
-}
-
-#[doc(hidden)]
 pub fn builtin_string_distance(args: Vec<Value>) -> EvalResult {
     expect_args_range("string-distance", &args, 2, 3)?;
     let s1 = args[0].as_lisp_string().ok_or_else(|| {
