@@ -171,6 +171,65 @@ fn a_site_holds_its_sources_weakly_and_releases_them() {
     assert!(matches!(s.target(), CallTarget::Mega), "every source died");
 }
 
+/// Two recorders that loaded the same word both transition, as two
+/// parallel owners running one body will. The second must neither replace
+/// nor release the source the first published: the site ends polymorphic
+/// with both, and the first source's `Weak` is still the site's. Releasing
+/// it while a compile thread borrows the slot is the FEEDBACK-UAF.
+#[cfg(feature = "jit")]
+#[test]
+fn a_stale_second_recorder_keeps_the_first_published_source() {
+    let _harness = crate::test_utils::unit_harness();
+    let s = site();
+    let a = Value::make_bytecode(source(1));
+    let b = Value::make_bytecode(source(2));
+    let a_state = a.get_bytecode_data().unwrap().jit_runtime().share_state();
+    let b_ptr = b.get_bytecode_data().unwrap().jit_runtime().state_ptr();
+    // Both recorders loaded the uninitialized word before either moved it.
+    s.transition(STATE_UNINIT, target_key(a), a);
+    s.transition(STATE_UNINIT, target_key(b), b);
+    assert_eq!(sources_of(&s), vec![Arc::as_ptr(&a_state), b_ptr]);
+    assert_eq!(
+        Arc::weak_count(&a_state),
+        1,
+        "the site still holds the first source"
+    );
+}
+
+/// A recorder whose word is stale joins its observation into the word it
+/// lost to and never overwrites it: the lattice only moves up.
+#[cfg(feature = "jit")]
+#[test]
+fn a_stale_recorder_joins_the_word_it_lost_to() {
+    let _harness = crate::test_utils::unit_harness();
+    let f = Value::make_bytecode(source(1));
+    let sym = Value::symbol("feedback-test-stale");
+    // A symbol, then a stale source, and the reverse: two kinds are Mega.
+    for (first, second) in [(sym, f), (f, sym)] {
+        let s = site();
+        s.transition(STATE_UNINIT, target_key(first), first);
+        s.transition(STATE_UNINIT, target_key(second), second);
+        assert!(
+            matches!(s.target(), CallTarget::Mega),
+            "{first:?} then a stale {second:?}"
+        );
+    }
+    // The same symbol twice stays monomorphic.
+    let s = site();
+    s.transition(STATE_UNINIT, target_key(sym), sym);
+    s.transition(STATE_UNINIT, target_key(sym), sym);
+    assert!(matches!(s.target(), CallTarget::Sym(id) if Some(id) == sym.as_bare_symbol_id()));
+    // A third source recorded against the one-source word keeps the second.
+    let s = site();
+    let g = Value::make_bytecode(source(2));
+    let h = Value::make_bytecode(source(3));
+    s.observe(f);
+    let one = s.state_word().load(Ordering::Relaxed);
+    s.observe(g);
+    s.transition(one, target_key(h), h);
+    assert_eq!(sources_of(&s).len(), 3, "f, g and h");
+}
+
 /// A counted transition after the window is late; before it, it is not.
 #[test]
 fn transitions_after_the_window_count_as_late() {
