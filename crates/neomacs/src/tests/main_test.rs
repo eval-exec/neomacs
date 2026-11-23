@@ -1708,13 +1708,15 @@ fn synchronous_window_end_fontification_message_reenters_geometry_preparation() 
     })
     .expect("wrap the canonical query without replacing its geometry");
 
+    // This bare Context has no subr.el macros. Use the primitive expansion
+    // of `unless` so a missing macro cannot abort the callback before message.
     eval.eval_str(
         r#"(progn
              (setq qf-once nil qf-calls 0 qf-message 'not-called qf-query-error nil)
              (set (make-local-variable 'fontification-functions)
                   (list (lambda (_start)
                           (setq qf-calls (1+ qf-calls))
-                          (unless qf-once
+                          (if qf-once nil
                             (setq qf-once t)
                             (put-text-property (point-min) (point-max) 'fontified t)
                             (let ((inhibit-redisplay nil))
