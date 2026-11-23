@@ -200,7 +200,7 @@ pub mod pipe_exit_test_support {
     use super::ChildOutputReader;
     use std::collections::VecDeque;
     use std::io::{self, Read};
-    use std::os::fd::{AsRawFd, RawFd};
+    use std::os::fd::{AsFd, AsRawFd, RawFd};
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -262,6 +262,12 @@ pub mod pipe_exit_test_support {
     impl AsRawFd for PipeReader {
         fn as_raw_fd(&self) -> RawFd {
             self.reader.as_raw_fd()
+        }
+    }
+
+    impl AsFd for PipeReader {
+        fn as_fd(&self) -> std::os::fd::BorrowedFd<'_> {
+            self.reader.as_fd()
         }
     }
 }
@@ -1078,12 +1084,22 @@ impl Device {
         if !state.posted {
             return;
         }
-        // SAFETY: `overlapped` is the exact block the pending read used; the
-        // Box target stays put while the kernel processes the cancel.
+        let handle = self.handle.as_raw_handle();
+        // SAFETY: `overlapped` is the exact block the pending read used, and
+        // the Box target stays put through this call. `CancelIoEx` returns
+        // before the kernel has finished with that block. `GetOverlappedResult`
+        // with bWait TRUE collects the completion, including
+        // `ERROR_OPERATION_ABORTED`, before `posted` is cleared and before
+        // Drop frees the block. GNU collects a serial overlapped read the same
+        // way (`src/w32.c` `_sys_read_ahead`, `GetOverlappedResult(..., TRUE)`).
         unsafe {
-            windows_sys::Win32::System::IO::CancelIoEx(
-                self.handle.as_raw_handle(),
+            windows_sys::Win32::System::IO::CancelIoEx(handle, &raw const state.overlapped);
+            let mut transferred = 0u32;
+            let _completed = windows_sys::Win32::System::IO::GetOverlappedResult(
+                handle,
                 &raw const state.overlapped,
+                &raw mut transferred,
+                1,
             );
         }
         state.posted = false;
@@ -1563,6 +1579,18 @@ impl std::os::fd::AsRawFd for ChildOutputReader {
             Self::Shared(pipe) => pipe.as_raw_fd(),
             #[cfg(any(test, feature = "test-support"))]
             Self::Injected(pipe) => pipe.as_raw_fd(),
+        }
+    }
+}
+
+#[cfg(unix)]
+impl std::os::fd::AsFd for ChildOutputReader {
+    fn as_fd(&self) -> std::os::fd::BorrowedFd<'_> {
+        match self {
+            Self::Stdout(stdout) => stdout.as_fd(),
+            Self::Shared(pipe) => pipe.as_fd(),
+            #[cfg(any(test, feature = "test-support"))]
+            Self::Injected(pipe) => pipe.as_fd(),
         }
     }
 }
@@ -3903,3 +3931,35 @@ impl std::fmt::Debug for ChildOwnership {
 #[cfg(test)]
 #[path = "tests/process_wait_backend_test.rs"]
 mod process_wait_backend_tests;
+
+#[cfg(test)]
+mod serial_cancel_order {
+    /// `CancelIoEx` returns before the kernel has finished writing the
+    /// overlapped block. Clearing `posted` (and then dropping the `Box` that
+    /// holds it) without `GetOverlappedResult(..., TRUE)` is a use after free.
+    #[test]
+    fn cancel_serial_read_ahead_collects_completion_before_clearing_posted() {
+        let src = include_str!("process_state.rs");
+        let start = src
+            .find("fn cancel_serial_read_ahead(")
+            .expect("cancel_serial_read_ahead");
+        let clear_rel = src[start..]
+            .find("posted = false")
+            .expect("posted is cleared");
+        let before_clear = &src[start..start + clear_rel];
+        assert!(
+            before_clear.contains("CancelIoEx"),
+            "cancel must request cancellation"
+        );
+        let wait_rel = before_clear.find("GetOverlappedResult").unwrap_or_else(|| {
+            panic!(
+                "CancelIoEx does not wait; the overlapped block can be freed while the kernel still writes it"
+            )
+        });
+        let wait_call = &before_clear[wait_rel..];
+        assert!(
+            wait_call.lines().any(|line| line.trim() == "1,"),
+            "GetOverlappedResult bWait must be TRUE before posted is cleared: {wait_call}"
+        );
+    }
+}

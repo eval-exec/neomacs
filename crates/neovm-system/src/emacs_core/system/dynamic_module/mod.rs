@@ -1226,19 +1226,38 @@ unsafe extern "C" fn module_copy_string_contents(
     })
 }
 
+fn module_input_bytes<'a>(ptr: *const u8, len: isize) -> Result<&'a [u8], ()> {
+    if len < 0 {
+        return Err(());
+    }
+    // GNU `module_make_string` / `module_make_unibyte_string` return the empty
+    // string when `len == 0` and do not read `str` (emacs-module.c). A null
+    // pointer with length 0 is that case; `from_raw_parts(null, 0)` is UB.
+    if len == 0 {
+        return Ok(&[]);
+    }
+    if ptr.is_null() {
+        return Err(());
+    }
+    // SAFETY: `len > 0` and `ptr` is non-null. The module caller guarantees
+    // `ptr` addresses `len` initialized bytes for this call, as GNU requires
+    // before `make_unibyte_string` / `module_decode_utf_8`.
+    Ok(unsafe { std::slice::from_raw_parts(ptr, len as usize) })
+}
+
 unsafe extern "C" fn module_make_string(
     env: *mut emacs_env,
     str: *const std::ffi::c_char,
     len: isize,
 ) -> emacs_value {
     module_guard(env, std::ptr::null_mut(), || {
-        if !module_function_begin(env) || len < 0 {
+        if !module_function_begin(env) {
             return std::ptr::null_mut();
         }
-        if len > 0 && str.is_null() {
-            return std::ptr::null_mut();
-        }
-        let bytes = unsafe { std::slice::from_raw_parts(str as *const u8, len as usize) };
+        let bytes = match module_input_bytes(str as *const u8, len) {
+            Ok(bytes) => bytes,
+            Err(()) => return std::ptr::null_mut(),
+        };
         let s = match std::str::from_utf8(bytes) {
             Ok(s) => s,
             Err(_) => {
@@ -1270,13 +1289,13 @@ unsafe extern "C" fn module_make_unibyte_string(
     len: isize,
 ) -> emacs_value {
     module_guard(env, std::ptr::null_mut(), || {
-        if !module_function_begin(env) || len < 0 {
+        if !module_function_begin(env) {
             return std::ptr::null_mut();
         }
-        if len > 0 && str.is_null() {
-            return std::ptr::null_mut();
-        }
-        let bytes = unsafe { std::slice::from_raw_parts(str as *const u8, len as usize) };
+        let bytes = match module_input_bytes(str as *const u8, len) {
+            Ok(bytes) => bytes,
+            Err(()) => return std::ptr::null_mut(),
+        };
         let val = neovm_value::tagged::gc::with_tagged_heap(|h| {
             h.alloc_string(neovm_value::heap_types::LispString::from_unibyte(
                 bytes.to_vec(),
@@ -2438,4 +2457,20 @@ pub fn carrier_tls_fingerprint(h: &mut u64) {
         dynamic_module_registry_heap_identity().unwrap_or(0) as u64,
     );
     neovm_value::tls_fingerprint::mix(h, MODULE_CTX.with(|slot| slot.get() as usize as u64));
+}
+
+#[cfg(test)]
+mod module_string_tests {
+    use super::module_input_bytes;
+
+    #[test]
+    fn module_make_string_null_zero_is_empty_without_reading_the_pointer() {
+        let bytes = module_input_bytes(std::ptr::null(), 0).expect("empty string");
+        assert!(bytes.is_empty());
+    }
+
+    #[test]
+    fn module_make_string_null_nonzero_is_rejected() {
+        assert!(module_input_bytes(std::ptr::null(), 4).is_err());
+    }
 }

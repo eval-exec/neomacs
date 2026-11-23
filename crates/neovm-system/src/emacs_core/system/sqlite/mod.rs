@@ -529,6 +529,10 @@ pub mod enabled {
         }
     }
 
+    fn sqlite_bind_nbytes(len: usize) -> Result<i32, Flow> {
+        i32::try_from(len).map_err(|_| sqlite_err("SQLite bind length exceeds INT_MAX"))
+    }
+
     fn bind_values(
         connection: &Connection,
         stmt: *mut ffi::sqlite3_stmt,
@@ -551,7 +555,7 @@ pub mod enabled {
                         stmt,
                         index,
                         bytes.as_ptr().cast(),
-                        bytes.len() as i32,
+                        sqlite_bind_nbytes(bytes.len())?,
                         ffi::SQLITE_TRANSIENT(),
                     )
                 },
@@ -560,7 +564,7 @@ pub mod enabled {
                         stmt,
                         index,
                         bytes.as_ptr().cast(),
-                        bytes.len() as i32,
+                        sqlite_bind_nbytes(bytes.len())?,
                         ffi::SQLITE_TRANSIENT(),
                     )
                 },
@@ -1071,6 +1075,28 @@ pub mod enabled {
         };
 
         Ok(Value::bool_val(loaded))
+    }
+
+    #[cfg(test)]
+    mod bind_length_tests {
+        use super::sqlite_bind_nbytes;
+
+        #[test]
+        fn sqlite_bind_nbytes_rejects_lengths_that_do_not_fit_in_i32() {
+            // `sqlite_err` builds a Lisp string, which needs the test heap.
+            crate::test_utils::init_test_tracing();
+            let too_big = (i32::MAX as usize).saturating_add(1);
+            sqlite_bind_nbytes(too_big).expect_err("a bind length above i32::MAX must signal");
+        }
+
+        #[test]
+        fn sqlite_bind_nbytes_accepts_lengths_that_fit_in_i32() {
+            assert_eq!(sqlite_bind_nbytes(0).expect("empty"), 0);
+            assert_eq!(
+                sqlite_bind_nbytes(i32::MAX as usize).expect("max"),
+                i32::MAX
+            );
+        }
     }
 }
 

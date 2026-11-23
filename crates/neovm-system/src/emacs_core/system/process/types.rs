@@ -3998,19 +3998,19 @@ pub trait SystemProcessExt {
     #[cfg(unix)]
     fn register_readable_raw_fd(
         poller: &polling::Poller,
-        fd: std::os::unix::io::RawFd,
+        fd: std::os::unix::io::BorrowedFd<'_>,
         id: ProcessId,
     ) -> Result<(), String>;
     #[cfg(unix)]
     fn register_writable_raw_fd(
         poller: &polling::Poller,
-        fd: std::os::unix::io::RawFd,
+        fd: std::os::unix::io::BorrowedFd<'_>,
         id: ProcessId,
     ) -> Result<(), String>;
     #[cfg(unix)]
     fn modify_raw_fd_interest(
         poller: &polling::Poller,
-        fd: std::os::unix::io::RawFd,
+        fd: std::os::unix::io::BorrowedFd<'_>,
         event: polling::Event,
     ) -> Result<(), String>;
     #[cfg(unix)]
@@ -4452,34 +4452,28 @@ impl SystemProcessExt for ProcessManager {
     #[cfg(unix)]
     fn register_readable_raw_fd(
         poller: &polling::Poller,
-        fd: std::os::unix::io::RawFd,
+        fd: std::os::unix::io::BorrowedFd<'_>,
         id: ProcessId,
     ) -> Result<(), String> {
-        // SAFETY: `fd` is borrowed from a process-owned descriptor that
-        // remains alive until `unregister_process_poll_sources` removes it
-        // from the poller.
-        let borrowed = unsafe { std::os::unix::io::BorrowedFd::borrow_raw(fd) };
-        Self::register_readable_source(poller, &borrowed, id)
+        Self::register_readable_source(poller, &fd, id)
     }
 
     #[cfg(unix)]
     fn register_writable_raw_fd(
         poller: &polling::Poller,
-        fd: std::os::unix::io::RawFd,
+        fd: std::os::unix::io::BorrowedFd<'_>,
         id: ProcessId,
     ) -> Result<(), String> {
-        let borrowed = unsafe { std::os::unix::io::BorrowedFd::borrow_raw(fd) };
-        Self::register_writable_source(poller, &borrowed, id)
+        Self::register_writable_source(poller, &fd, id)
     }
 
     #[cfg(unix)]
     fn modify_raw_fd_interest(
         poller: &polling::Poller,
-        fd: std::os::unix::io::RawFd,
+        fd: std::os::unix::io::BorrowedFd<'_>,
         event: polling::Event,
     ) -> Result<(), String> {
-        let borrowed = unsafe { std::os::unix::io::BorrowedFd::borrow_raw(fd) };
-        Self::modify_poll_source(poller, borrowed, event)
+        Self::modify_poll_source(poller, fd, event)
     }
 
     #[cfg(unix)]
@@ -4488,12 +4482,9 @@ impl SystemProcessExt for ProcessManager {
         stdout: &ChildOutputReader,
         id: ProcessId,
     ) {
-        use std::os::unix::io::AsRawFd;
-        let fd = stdout.as_raw_fd();
-        // Set non-blocking before registering.
-        let _ = sys::set_fd_nonblocking(fd);
-        // Use process id as the event key so we know which process is ready.
-        let _ = Self::register_readable_raw_fd(poller, fd, id);
+        use std::os::unix::io::{AsFd, AsRawFd};
+        let _ = sys::set_fd_nonblocking(stdout.as_raw_fd());
+        let _ = Self::register_readable_raw_fd(poller, stdout.as_fd(), id);
     }
 
     #[cfg(not(unix))]
@@ -4612,15 +4603,17 @@ impl SystemProcessExt for ProcessManager {
             .as_ref()
             .and_then(|master| master.as_raw_fd())
         {
+            // SAFETY: `proc.live_io.pty_master` owns this descriptor for the
+            // poller call. `MasterPty` exposes it only as a raw fd.
+            let borrowed = unsafe { std::os::unix::io::BorrowedFd::borrow_raw(master) };
             match event {
                 Some(event) => {
-                    if Self::modify_raw_fd_interest(poller, master, event).is_err() {
-                        let _ = Self::register_readable_raw_fd(poller, master, id);
-                        let _ = Self::modify_raw_fd_interest(poller, master, event);
+                    if Self::modify_raw_fd_interest(poller, borrowed, event).is_err() {
+                        let _ = Self::register_readable_raw_fd(poller, borrowed, id);
+                        let _ = Self::modify_raw_fd_interest(poller, borrowed, event);
                     }
                 }
                 None => {
-                    let borrowed = unsafe { std::os::unix::io::BorrowedFd::borrow_raw(master) };
                     let _ = poller.delete(borrowed);
                 }
             }
@@ -4633,10 +4626,9 @@ impl SystemProcessExt for ProcessManager {
         stdin: &std::fs::File,
         id: ProcessId,
     ) {
-        use std::os::unix::io::AsRawFd;
-        let fd = stdin.as_raw_fd();
-        let _ = sys::set_fd_nonblocking(fd);
-        let _ = Self::register_writable_raw_fd(poller, fd, id);
+        use std::os::unix::io::{AsFd, AsRawFd};
+        let _ = sys::set_fd_nonblocking(stdin.as_raw_fd());
+        let _ = Self::register_writable_raw_fd(poller, stdin.as_fd(), id);
     }
 
     #[cfg(not(unix))]
@@ -5326,7 +5318,10 @@ impl SystemProcessExt for ProcessManager {
                 .is_none_or(process_filter_accepts_output)
                 && let Some(poller) = stderr_transfer.wait_backend.poller()
             {
-                let _ = Self::register_readable_raw_fd(poller, master_fd, id);
+                // SAFETY: `pty_pair.master` owns this descriptor until it is
+                // stored on the process below.
+                let borrowed = unsafe { std::os::unix::io::BorrowedFd::borrow_raw(master_fd) };
+                let _ = Self::register_readable_raw_fd(poller, borrowed, id);
             }
         }
 
@@ -9467,5 +9462,19 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
         }
         outcome.record_serviced();
         Ok(outcome)
+    }
+}
+
+#[cfg(all(test, unix))]
+mod borrowed_fd_tests {
+    use super::{ProcessManager, SystemProcessExt};
+    use std::os::fd::AsFd;
+
+    #[test]
+    fn register_readable_raw_fd_borrows_a_live_pipe() {
+        let (reader, _writer) = std::io::pipe().expect("pipe");
+        let poller = polling::Poller::new().expect("poller");
+        ProcessManager::register_readable_raw_fd(&poller, reader.as_fd(), 1)
+            .expect("a live pipe end registers");
     }
 }
