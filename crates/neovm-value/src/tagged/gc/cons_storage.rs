@@ -512,6 +512,12 @@ impl ConsCatalog {
         if heap.heap_identity() != self.heap {
             return Err(RegistrationError::WrongHeap);
         }
+        // Detaching the allocator below replaces it with an empty heap-side
+        // placeholder. Keep outstanding reserve obligations on the heap until
+        // their books explicitly return every block.
+        if heap.has_owner_cons_reserves() {
+            return Err(RegistrationError::Busy);
+        }
         let mut gate = self.lock()?;
         if gate.is_some() {
             return Err(RegistrationError::Busy);

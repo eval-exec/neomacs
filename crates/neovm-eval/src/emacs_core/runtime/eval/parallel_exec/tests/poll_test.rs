@@ -1,12 +1,12 @@
 //! Product polls: Continue on an admissible phase word, Resumed only after restore.
 
-use super::frames::{FrameArena, OwnerScanJoin, ReserveRefill, RootGroup};
+use super::frames::{FrameArena, OwnerScanJoin, RootGroup};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::eval::world::WorldProofEra;
 use crate::emacs_core::eval::world::poll::PollOutcome;
 use crate::emacs_core::eval::world::poll::{
-    poll_interp_back_edge, poll_interp_call_entry, poll_serial_request, poll_vm_back_edge,
-    poll_vm_call,
+    poll_interp_back_edge, poll_interp_call_entry, poll_region_refill, poll_serial_request,
+    poll_vm_back_edge, poll_vm_call,
 };
 use crate::emacs_core::eval::world::serial_gate::{
     SerialEndError, SerialTicket, end_serial_for_test, lend_serial_for_test, serial_gc_for_test,
@@ -14,8 +14,8 @@ use crate::emacs_core::eval::world::serial_gate::{
 };
 use neovm_value::tagged::gc::mutator_registration::a8_probes;
 use neovm_value::tagged::gc::{
-    AllStopped, HeapIdentity, MeasuredInterval, Mutator, MutatorPermit, OwnerEraReserve,
-    RegistrationError, Rendezvous, RendezvousError, Request,
+    AllStopped, ClosedConsReserve, HeapIdentity, MeasuredInterval, Mutator, MutatorPermit,
+    OwnerEraReserve, RegistrationError, Rendezvous, RendezvousError, Request, ReserveError,
 };
 use neovm_value::tagged::header::ConsCell;
 use neovm_value::tagged::transport::SharedRoot;
@@ -375,7 +375,8 @@ fn poll_region_refill_on_reserve_miss_then_grant() {
         let permit = era.register(OWNER, 0).expect("register");
         let heap_id = era.heap_identity();
         let rendezvous = era.rendezvous();
-        let (ptr_tx, ptr_rx) = mpsc::channel();
+        let (keeper_tx, keeper_rx) = mpsc::channel::<ClosedConsReserve>();
+        let (owner_tx, owner_rx) = mpsc::channel::<ClosedConsReserve>();
         let (carved_tx, carved_rx) = mpsc::channel();
         let (go_tx, go_rx) = mpsc::channel::<()>();
         let mut carved_bits = 0usize;
@@ -384,71 +385,85 @@ fn poll_region_refill_on_reserve_miss_then_grant() {
                 let mut owner = activate(permit, heap_id, OWNER);
                 let mut arena = FrameArena::new(1);
                 let mut reserve = OwnerEraReserve::new();
-                let reserve_ptr = &mut reserve as *mut OwnerEraReserve as usize;
-                ptr_tx.send(reserve_ptr).expect("reserve pointer");
-                let heap = heap_mut(heap_addr);
+                // Complete the failed carve and end its mutable book borrow
+                // before publication, owned handoff, and parking.
+                assert_eq!(
+                    arena.carve_granted_cons(heap_mut(heap_addr), &mut reserve),
+                    Err(ReserveError::ReserveMiss)
+                );
                 arena
-                    .carve_granted_cons(
-                        heap,
-                        &mut reserve,
-                        Some(ReserveRefill {
-                            owner: &mut owner,
-                            rendezvous,
-                        }),
-                    )
+                    .close_granted_reserve(heap_mut(heap_addr), &mut reserve)
+                    .expect("close the missed book");
+                keeper_tx
+                    .send(reserve.into_closed().expect("closed refill book"))
+                    .expect("hand the book to the keeper");
+                let outcome = poll_region_refill(&mut owner, rendezvous, || {
+                    let mut batch = Vec::new();
+                    arena.publish_scan(heap_mut(heap_addr), &mut batch)?;
+                    Ok(batch)
+                })
+                .expect("refill poll");
+                assert!(matches!(outcome, PollOutcome::Resumed { .. }));
+                // Ownership returns after the stopped grant. No active book
+                // borrow, reference, or raw book designator crossed the park.
+                let mut reserve = recv(&owner_rx).into_active();
+                arena
+                    .carve_granted_cons(heap_mut(heap_addr), &mut reserve)
                     .expect("refill carve");
                 let addr = arena.take_cons_cell().expect("carved cell");
                 let kept = cons_at(addr);
-                arena.close_granted_reserve(heap, &mut reserve);
+                arena
+                    .close_granted_reserve(heap_mut(heap_addr), &mut reserve)
+                    .expect("close the carved book");
                 arena
                     .roots_mut()
                     .push(RootGroup::Misc, kept)
                     .expect("root the new cons");
+                keeper_tx
+                    .send(reserve.into_closed().expect("closed return book"))
+                    .expect("hand the book back for return");
                 carved_tx.send(kept.bits()).expect("carved bits");
                 recv(&go_rx);
                 // Publish the new cons and park so the keeper's collection
                 // traces it before the following ownership check.
                 let outcome = poll_interp_back_edge(&mut owner, || {
                     let mut batch = Vec::new();
-                    arena.publish_scan(heap, &mut batch)?;
+                    arena.publish_scan(heap_mut(heap_addr), &mut batch)?;
                     Ok(batch)
                 })
                 .expect("publish the carved cons");
                 assert!(matches!(outcome, PollOutcome::Resumed { .. }));
                 retire(owner);
             });
-            let reserve_ptr = recv(&ptr_rx) as *mut OwnerEraReserve;
+            let book = recv(&keeper_rx);
             let stopped = retry("stop", || stop_for_test(&era));
             let mut ticket = lend(&era, stopped);
             collect(&mut ticket);
             // Mint after the sweep so the new block is not this cycle's garbage.
+            let mut reserve = book.into_active();
             {
                 let heap = heap_mut(heap_addr);
-                // SAFETY: the executor is inside `restore_wait` until `end`.
-                // It does not touch the reserve again until this grant returns
-                // and the epoch completes.
-                let reserve = unsafe { &mut *reserve_ptr };
                 heap.close_alloc_regions();
                 reserve
-                    .grant_at_stop(heap, true, MeasuredInterval::zero())
+                    .grant_at_stop(ticket.stopped_proof(), heap, true, MeasuredInterval::zero())
                     .expect("grant at the stop");
             }
+            owner_tx
+                .send(reserve.into_closed().expect("closed granted book"))
+                .expect("return book ownership to the executor");
             end_epoch(ticket);
             carved_bits = recv(&carved_rx);
+            let mut reserve = recv(&keeper_rx).into_active();
             request_stop(rendezvous);
             go_tx.send(()).expect("publish the carved cons");
             let stopped = retry("reach", || stop_for_test(&era));
             let mut ticket = lend(&era, stopped);
-            // The executor is inside `restore_wait`. Return the uncarved tail,
-            // then drop the post-image cons charge so `restore_legacy` accepts
-            // the shell. The block and the published root stay.
+            // The keeper owns the closed book while the executor is parked.
+            // Return the uncarved tail before restoring the actual image.
             {
                 let heap = heap_mut(heap_addr);
-                // SAFETY: the executor does not touch this reserve again until
-                // the epoch completes. `reserve_ptr` is the reserve it sent.
-                let reserve = unsafe { &mut *reserve_ptr };
                 reserve
-                    .return_unused_before_sweep(heap)
+                    .return_unused_before_sweep(ticket.stopped_proof(), heap)
                     .expect("return before the survival sweep");
                 heap.clear_inter_collection_cons_charge_for_test();
             }

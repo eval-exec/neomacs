@@ -33,7 +33,8 @@ impl CollectorQuiescence {
     pub(super) fn check(heap: &mut TaggedHeap) -> Result<Self, CollectorQuiescenceError> {
         // Do not mint stopped SATB access while a worker can still read this
         // epoch, or mutate any collector/young state before admission succeeds.
-        if heap.concurrent_mark_running
+        if heap.has_owner_cons_reserves()
+            || heap.concurrent_mark_running
             || heap.mark_in_progress
             || heap.generational.major_in_progress
             || heap.sweep_in_progress
@@ -469,6 +470,9 @@ impl TaggedHeap {
     }
 
     fn check_concurrent_capture(&self) -> Result<(), ConcurrentMarkAdmissionError> {
+        if self.has_owner_cons_reserves() {
+            return Err(ConcurrentMarkAdmissionError::CollectorBusy);
+        }
         if self.facade_mark_is_excluded() {
             return Err(ConcurrentMarkAdmissionError::Excluded(self.heap_identity()));
         }
@@ -498,6 +502,11 @@ impl TaggedHeap {
         &mut self,
         reseed: impl FnOnce(&mut TaggedHeap),
     ) -> Result<QuiescentCollector<'_>, CollectorQuiescenceError> {
+        // A closed or forgotten reserve still owns whole blocks. Refuse
+        // before joining, callbacks, or any collector/transport mutation.
+        if self.has_owner_cons_reserves() {
+            return Err(CollectorQuiescenceError::CollectorBusy);
+        }
         // Refuse before joining a marker, invoking root reseeding, draining
         // SATB or changing any collector state. Parking does not return an
         // owned young payload; this owner-confined all-owner counter is O(1).

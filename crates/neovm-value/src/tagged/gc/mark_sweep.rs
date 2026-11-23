@@ -61,6 +61,7 @@ impl TaggedHeap {
     /// The heap must be exclusively borrowed and quiescent: the call asserts
     /// that no concurrent marker is running and starts a major cycle.
     pub(crate) unsafe fn begin_collection(&mut self) {
+        self.assert_no_owner_cons_reserves();
         self.generational.cycle = generational::GenerationCycle::Major;
         self.begin_collection_with(false);
     }
@@ -69,6 +70,7 @@ impl TaggedHeap {
     /// (`begin_stw_collection`) called it: only that entry pre-marks the
     /// image for a first partition cycle (`premark_mapped_image`).
     pub(super) fn begin_collection_with(&mut self, stw_entry: bool) {
+        self.assert_no_owner_cons_reserves();
         assert!(
             !self.concurrent_mark_running,
             "collection requires an explicit successful marker finish"
@@ -1727,6 +1729,7 @@ impl TaggedHeap {
 
     #[doc(hidden)]
     pub fn complete_collection(&mut self) {
+        self.assert_no_owner_cons_reserves();
         assert!(
             !self.concurrent_mark_running,
             "sweeping requires an explicit successful marker finish"
@@ -2159,6 +2162,7 @@ impl TaggedHeap {
         bytes_before: usize,
         t0: std::time::Instant,
     ) {
+        self.assert_no_owner_cons_reserves();
         // The generation census reads the final marks before the sweep (no-op
         // unless `NEOVM_GC_CENSUS`).
         if self.census.is_some() {

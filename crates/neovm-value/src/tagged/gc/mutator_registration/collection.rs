@@ -480,6 +480,22 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
         >,
     ) -> Result<CollectionReport, CollectionError> {
         self.check_collection(stopped)?;
+        // A closed, exhausted or forgotten reserve still owns whole blocks.
+        // Refuse before root readers, World callbacks or image transfer; the
+        // same stop must remain usable to return the book and retry.
+        {
+            let mut collector = self
+                .collector
+                .try_borrow_mut()
+                .map_err(|_| RendezvousError::Busy)?;
+            let heap = collector
+                .as_mut()
+                .ok_or(RendezvousError::Publication)?
+                .registration_heap_mut();
+            if heap.has_owner_cons_reserves() {
+                return Err(RendezvousError::Busy);
+            }
+        }
         let registry = self.registry();
         let (keys, entries) = {
             let gate = registry.lock()?;

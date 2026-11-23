@@ -16,7 +16,7 @@ use crate::emacs_core::eval::Context;
 use crate::emacs_core::eval::world::{ParallelHeapEraWorldCollectExt, WorldProofEra};
 use neovm_value::tagged::gc::{
     AllStopped, HeapIdentity, MeasuredInterval, Mutator, MutatorKey, MutatorPermit,
-    OwnerEraReserve, RegistrationError, RendezvousError, Request,
+    OwnerEraReserve, RegistrationError, RendezvousError, Request, TaggedHeap,
 };
 use neovm_value::tagged::header::ConsCell;
 use neovm_value::tagged::transport::SharedRoot;
@@ -464,26 +464,24 @@ fn probe_bits(addr: usize) -> usize {
     unsafe { Value::from_cons_ptr(cell).bits() }
 }
 
-fn publish_two_owner_grants(context: &mut Context) -> GrantedPair {
-    context.set_gc_stress_for_test(false);
-    context.tagged_heap.set_gc_threshold(usize::MAX);
-    context.tagged_heap.close_alloc_regions();
+fn publish_two_owner_grants(heap: &mut TaggedHeap, stopped: &AllStopped<'_>) -> GrantedPair {
+    heap.close_alloc_regions();
 
     let mut reserve_a = OwnerEraReserve::new();
     let mut reserve_b = OwnerEraReserve::new();
     let mut arena_a = FrameArena::new(1);
     let mut arena_b = FrameArena::new(1);
     reserve_a
-        .grant_at_stop(&mut context.tagged_heap, true, MeasuredInterval::zero())
+        .grant_at_stop(stopped, heap, true, MeasuredInterval::zero())
         .expect("owner A grant");
     reserve_b
-        .grant_at_stop(&mut context.tagged_heap, true, MeasuredInterval::zero())
+        .grant_at_stop(stopped, heap, true, MeasuredInterval::zero())
         .expect("owner B grant");
     arena_a
-        .carve_granted_cons(&mut context.tagged_heap, &mut reserve_a, None)
+        .carve_granted_cons(heap, &mut reserve_a)
         .expect("carve A");
     arena_b
-        .carve_granted_cons(&mut context.tagged_heap, &mut reserve_b, None)
+        .carve_granted_cons(heap, &mut reserve_b)
         .expect("carve B");
     let addr_a = arena_a.take_cons_cell().expect("cell A");
     let addr_b = arena_b.take_cons_cell().expect("cell B");
@@ -495,40 +493,36 @@ fn publish_two_owner_grants(context: &mut Context) -> GrantedPair {
     // An open book is not a stop publication, so this collection is not entered.
     let mut refused = Vec::new();
     assert_eq!(
-        arena_a.publish_scan(&context.tagged_heap, &mut refused),
+        arena_a.publish_scan(heap, &mut refused),
         Err(RendezvousError::Publication)
     );
     assert!(refused.is_empty(), "an open book must not publish a root");
     assert_eq!(
-        arena_b.publish_scan(&context.tagged_heap, &mut refused),
+        arena_b.publish_scan(heap, &mut refused),
         Err(RendezvousError::Publication)
     );
     assert!(refused.is_empty());
 
-    arena_a.close_granted_reserve(&mut context.tagged_heap, &mut reserve_a);
-    arena_b.close_granted_reserve(&mut context.tagged_heap, &mut reserve_b);
+    arena_a
+        .close_granted_reserve(heap, &mut reserve_a)
+        .expect("close A before return");
+    arena_b
+        .close_granted_reserve(heap, &mut reserve_b)
+        .expect("close B before return");
     reserve_a
-        .return_unused_before_sweep(&mut context.tagged_heap)
+        .return_unused_before_sweep(stopped, heap)
         .expect("return A before the sweep");
     reserve_b
-        .return_unused_before_sweep(&mut context.tagged_heap)
+        .return_unused_before_sweep(stopped, heap)
         .expect("return B before the sweep");
     assert!(!reserve_a.holds_reserve());
     assert!(!reserve_b.holds_reserve());
-    assert!(context.tagged_heap.owns_heap_value_for_test(kept));
-    assert!(context.tagged_heap.owns_heap_value_for_test(control));
-    assert!(
-        !context
-            .tagged_heap
-            .owns_heap_value_for_test(value_bits(kept_tail))
-    );
-    assert!(
-        !context
-            .tagged_heap
-            .owns_heap_value_for_test(value_bits(control_tail))
-    );
-    assert_eq!(context.tagged_heap.jit_cons_window_for_test(), (0, 0));
-    assert_eq!(context.tagged_heap.jit_float_window_for_test(), (0, 0));
+    assert!(heap.owns_heap_value_for_test(kept));
+    assert!(heap.owns_heap_value_for_test(control));
+    assert!(!heap.owns_heap_value_for_test(value_bits(kept_tail)));
+    assert!(!heap.owns_heap_value_for_test(value_bits(control_tail)));
+    assert_eq!(heap.jit_cons_window_for_test(), (0, 0));
+    assert_eq!(heap.jit_float_window_for_test(), (0, 0));
 
     arena_a
         .roots_mut()
@@ -536,9 +530,14 @@ fn publish_two_owner_grants(context: &mut Context) -> GrantedPair {
         .expect("joined root");
     let mut scratch = Vec::new();
     arena_a
-        .publish_scan(&context.tagged_heap, &mut scratch)
+        .publish_scan(heap, &mut scratch)
         .expect("closed book publishes");
     assert_eq!(scratch.len(), 1);
+
+    // These post-image grants have been returned, so only their scalar
+    // pacing charge remains on the shell. The next epoch restores the actual
+    // legacy image; no worker or young log owns an outstanding reservation.
+    heap.clear_inter_collection_cons_charge_for_test();
 
     GrantedPair {
         scratch,
@@ -557,57 +556,89 @@ fn value_bits(bits: usize) -> Value {
 
 #[test]
 fn two_owner_regions_keep_only_the_joined_scan_and_refuse_an_open_book() {
-    Context::with_test_collection_era(publish_two_owner_grants, |era, mut roots| {
-        let heap = era.heap_identity();
-        let rendezvous = era.rendezvous();
-        let permit = era.register(OWNER, 0).expect("register the owner");
-        let (tx, rx) = mpsc::channel();
-        let scratch = std::mem::take(&mut roots.scratch);
-        thread::scope(|scope| {
-            scope.spawn(move || {
-                let mut owner = activate(permit, heap);
-                let published = publish_and_ack(&mut owner, rendezvous, scratch);
-                tx.send(published).expect("owner acknowledged");
-                restore(&mut owner);
-                retire(owner);
+    Context::with_test_collection_era(
+        |context| {
+            context.set_gc_stress_for_test(false);
+            context.tagged_heap.set_gc_threshold(usize::MAX);
+            context.tagged_heap.close_alloc_regions();
+            // SAFETY: setup holds the sole serial Context, before admission.
+            // Post-image cons grants must not append to the detached legacy
+            // young log. The stopped fixture exercises major collection.
+            unsafe {
+                neovm_value::test_support::authority::set_generational_enabled_for_test(
+                    &mut context.tagged_heap,
+                    false,
+                );
+            }
+            context.tagged_heap.heap_root().as_ptr() as usize
+        },
+        |era, heap_addr| {
+            // Grant only under the real first AllStopped capability. Sweep first,
+            // then initialize and return both reserves before ending this epoch.
+            let stopped = stop(&era);
+            let mut ticket = super::poll_tests::lend(&era, stopped);
+            super::poll_tests::collect(&mut ticket);
+            // SAFETY: the address names this fixture's suspended Context heap.
+            // No participant has activated, and its stopped collector call above
+            // has ended. This borrow ends before the stopped epoch completes.
+            let mut roots = unsafe {
+                publish_two_owner_grants(
+                    &mut *(heap_addr as *mut TaggedHeap),
+                    ticket.stopped_proof(),
+                )
+            };
+            super::poll_tests::end_epoch(ticket);
+            let heap = era.heap_identity();
+            let rendezvous = era.rendezvous();
+            let permit = era.register(OWNER, 0).expect("register the owner");
+            let (tx, rx) = mpsc::channel();
+            let scratch = std::mem::take(&mut roots.scratch);
+            thread::scope(|scope| {
+                scope.spawn(move || {
+                    let mut owner = activate(permit, heap);
+                    let published = publish_and_ack(&mut owner, rendezvous, scratch);
+                    tx.send(published).expect("owner acknowledged");
+                    restore(&mut owner);
+                    retire(owner);
+                });
+                let published = rx
+                    .recv_timeout(ADMISSION_DEADLINE)
+                    .expect("owner reaches the acknowledgement");
+                let mut stopped = stop(&era);
+                assert!(
+                    owns(&era, &stopped, roots.kept),
+                    "the handed cons was reclaimed before the stop"
+                );
+                assert!(
+                    owns(&era, &stopped, roots.control),
+                    "the control was reclaimed before the stop"
+                );
+                assert!(!owns(&era, &stopped, roots.kept_tail));
+                assert!(!owns(&era, &stopped, roots.control_tail));
+                let report = retry_busy("collect", || {
+                    ParallelHeapEraWorldCollectExt::collect_stopped(&era, &mut stopped)
+                });
+                assert!(report.major);
+                assert!(
+                    owns(&era, &stopped, roots.kept),
+                    "the joined scan lost owner A's handed cons"
+                );
+                assert!(
+                    !owns(&era, &stopped, roots.control),
+                    "owner B's cons survived without a root"
+                );
+                assert!(
+                    !owns(&era, &stopped, roots.kept_tail),
+                    "the unhanded tail was treated as a live root"
+                );
+                assert!(!owns(&era, &stopped, roots.control_tail));
+                let reader = reader_words(&stopped, published.key);
+                assert_eq!(reader, published.words);
+                assert!(reader.contains(&roots.kept));
+                assert!(!reader.contains(&roots.control));
+                stopped.complete().expect("complete");
             });
-            let published = rx
-                .recv_timeout(ADMISSION_DEADLINE)
-                .expect("owner reaches the acknowledgement");
-            let mut stopped = stop(&era);
-            assert!(
-                owns(&era, &stopped, roots.kept),
-                "the handed cons was reclaimed before the stop"
-            );
-            assert!(
-                owns(&era, &stopped, roots.control),
-                "the control was reclaimed before the stop"
-            );
-            assert!(!owns(&era, &stopped, roots.kept_tail));
-            assert!(!owns(&era, &stopped, roots.control_tail));
-            let report = retry_busy("collect", || {
-                ParallelHeapEraWorldCollectExt::collect_stopped(&era, &mut stopped)
-            });
-            assert!(report.major);
-            assert!(
-                owns(&era, &stopped, roots.kept),
-                "the joined scan lost owner A's handed cons"
-            );
-            assert!(
-                !owns(&era, &stopped, roots.control),
-                "owner B's cons survived without a root"
-            );
-            assert!(
-                !owns(&era, &stopped, roots.kept_tail),
-                "the unhanded tail was treated as a live root"
-            );
-            assert!(!owns(&era, &stopped, roots.control_tail));
-            let reader = reader_words(&stopped, published.key);
-            assert_eq!(reader, published.words);
-            assert!(reader.contains(&roots.kept));
-            assert!(!reader.contains(&roots.control));
-            stopped.complete().expect("complete");
-        });
-        finish(era);
-    });
+            finish(era);
+        },
+    );
 }

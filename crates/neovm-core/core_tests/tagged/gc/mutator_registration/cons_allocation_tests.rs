@@ -55,6 +55,25 @@ fn numeric_roots_era_impl(body: &mut dyn for<'e> FnMut(ProofEra<'e, Baton>, Root
     );
 }
 
+fn owner_reserve_gen1_roots_era_impl(
+    body: &mut dyn for<'e> FnMut(ProofEra<'e, Baton>, RootsFixture),
+) {
+    Context::with_test_collection_era(
+        |context| {
+            // SAFETY: setup owns the serial Context before era admission,
+            // with no marker, worker, or foreign heap loan.
+            unsafe {
+                neovm_value::test_support::authority::set_generational_enabled_for_test(
+                    context.tagged_heap_mut(),
+                    true,
+                );
+            }
+            roots(context)
+        },
+        |era, input| body(era, input),
+    );
+}
+
 fn empty_outer_era_impl(_flag: i64, body: &mut dyn for<'e> FnMut(ProofEra<'e, Baton>)) {
     Context::with_test_collection_era(|_| (), |era, ()| body(era));
 }
@@ -116,6 +135,8 @@ fn run(case: ConsAllocationCase) {
     let mut roots_era: fn(&mut dyn for<'e> FnMut(ProofEra<'e, Baton>, RootsFixture)) =
         if case == ConsAllocationCase::NumericStorageTransfersIntoEraAndRoundTripsAtStops {
             numeric_roots_era_impl
+        } else if case == ConsAllocationCase::OwnerConsReserveAnOldStoreKeepsTheOwnerConsAndTheUnrootedConsIsReclaimed {
+            owner_reserve_gen1_roots_era_impl
         } else {
             roots_era_impl
         };
@@ -170,6 +191,18 @@ shells! {
     fully_dead_numeric_retained_pages_refreeze_with_full_capacity => FullyDeadNumericRetainedPagesRefreezeWithFullCapacity,
     numeric_exhaustion_requests_are_once_per_owner_class_and_generation => NumericExhaustionRequestsAreOncePerOwnerClassAndGeneration,
     numeric_request_epoch_does_not_repeat_after_an_unobserved_pool => NumericRequestEpochDoesNotRepeatAfterAnUnobservedPool,
+    owner_cons_reserve_refuses_use_after_heap_drop => OwnerConsReserveRefusesUseAfterHeapDrop,
+    owner_cons_reserve_grants_only_cons_storage => OwnerConsReserveGrantsOnlyConsStorage,
+    owner_cons_reserve_refuses_sweep_until_explicit_return => OwnerConsReserveRefusesSweepUntilExplicitReturn,
+    owner_cons_reserve_refuses_foreign_book_without_mutation => OwnerConsReserveRefusesForeignBookWithoutMutation,
+    owner_cons_reserve_refuses_every_foreign_heap_operation => OwnerConsReserveRefusesEveryForeignHeapOperation,
+    owner_cons_reserve_drop_and_forget_keep_collection_excluded => OwnerConsReserveDropAndForgetKeepCollectionExcluded,
+    owner_cons_reserve_two_idle_stops_hold_no_reserve => OwnerConsReserveTwoIdleStopsHoldNoReserve,
+    owner_cons_reserve_pacing_charges_carved_cells_and_subtracts_the_open_tail => OwnerConsReservePacingChargesCarvedCellsAndSubtractsTheOpenTail,
+    owner_cons_reserve_the_cap_is_a_reserve_miss => OwnerConsReserveTheCapIsAReserveMiss,
+    owner_cons_reserve_two_owners_carve_disjoint_runs_without_moving_the_heap_window => OwnerConsReserveTwoOwnersCarveDisjointRunsWithoutMovingTheHeapWindow,
+    owner_cons_reserve_a_moved_block_tail_is_not_rewound => OwnerConsReserveAMovedBlockTailIsNotRewound,
+    owner_cons_reserve_an_old_store_keeps_the_owner_cons_and_the_unrooted_cons_is_reclaimed => OwnerConsReserveAnOldStoreKeepsTheOwnerConsAndTheUnrootedConsIsReclaimed,
 }
 
 #[test]

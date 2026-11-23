@@ -77,10 +77,13 @@ impl Drop for TaggedHeap {
         if self.concurrent_mark_running
             || self.facade_mark_is_excluded()
             || self._satb_layout_reserve.has_outstanding_young_loans()
+            || self.has_owner_cons_reserves()
         {
             // A rejected consuming shutdown still reaches this Drop. Young
             // loans may outlive the owner even without an active marker or
-            // facade, so retain every backing instead of freeing it here.
+            // facade. An owner reserve's closed or forgotten book likewise
+            // retains its blocks until explicit return, so retain every
+            // backing instead of freeing it here.
             self.abandon_concurrent_mark();
             // The collector may still be running the abandoned job: detach
             // it rather than wait.

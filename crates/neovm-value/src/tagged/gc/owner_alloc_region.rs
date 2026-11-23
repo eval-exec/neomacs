@@ -109,14 +109,30 @@ impl OwnerAllocRegion {
         }
     }
 
-    /// The cons book alone. A float run may stay open.
-    pub(in crate::tagged::gc) fn cons_book_closed(&self) -> bool {
-        matches!(self.cons, ConsRegionSource::Closed)
-    }
-
-    /// The float book alone. A cons run may stay open.
-    pub(in crate::tagged::gc) fn float_book_closed(&self) -> bool {
-        matches!(self.float, FloatRegionSource::Closed)
+    /// Read-only close preflight for one cons reserve's exact carved range.
+    /// The source, limit and cursor must all belong to that run; no other
+    /// class may be closed or refunded by a cons-only book.
+    pub(in crate::tagged::gc) fn matches_granted_cons(
+        &self,
+        first: usize,
+        cells: usize,
+        block: usize,
+    ) -> bool {
+        let Some(limit) = cells
+            .checked_mul(size_of::<ConsCell>())
+            .and_then(|bytes| first.checked_add(bytes))
+        else {
+            return false;
+        };
+        let current = self.cons_cur.get();
+        matches!(self.cons, ConsRegionSource::BlockTail { block: actual } if actual == block)
+            && self.cons_lim.get() == limit
+            && first <= current
+            && current <= limit
+            && (current - first).is_multiple_of(size_of::<ConsCell>())
+            && matches!(self.float, FloatRegionSource::Closed)
+            && self.float_cur.get() == 0
+            && self.float_lim.get() == 0
     }
 
     /// Both books closed and both cursor pairs zero.

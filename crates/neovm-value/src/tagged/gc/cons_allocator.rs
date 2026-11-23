@@ -60,6 +60,32 @@ impl std::ops::Deref for ConsAllocatorOwner {
 }
 
 impl ConsAllocatorOwner {
+    /// Credit one whole stopped-owner block. The granting caller checks the
+    /// complete grant's capacity before minting any block.
+    pub(super) fn credit_owner_reserved_block(&mut self) {
+        let allocator = self
+            .0
+            .as_deref_mut()
+            .expect("allocator owner is initialized");
+        allocator.owner_reserved_blocks = allocator
+            .owner_reserved_blocks
+            .checked_add(1)
+            .expect("owner reserve grant checked block-count capacity");
+    }
+
+    /// Discharge only a successfully returned whole-book obligation.
+    /// Closing or exhausting a run does not return its backing block.
+    pub(super) fn return_owner_reserved_blocks(&mut self, blocks: usize) {
+        let allocator = self
+            .0
+            .as_deref_mut()
+            .expect("allocator owner is initialized");
+        allocator.owner_reserved_blocks = allocator
+            .owner_reserved_blocks
+            .checked_sub(blocks)
+            .expect("owner reserve return checked the outstanding block count");
+    }
+
     /// # Safety
     /// Same stopped-world storage contract as ConsAllocator::stopped_world.
     pub(super) unsafe fn stopped_world(&mut self) -> ConsStopAll<'_> {
@@ -961,14 +987,20 @@ enum AllocatorAccessMode {
 
 /// Confined owner. Only its mutex-only facade can cross threads.
 #[derive(Debug)]
+#[repr(C)]
 pub(super) struct ConsAllocator {
     storage: AllocatorStorage,
+    /// Whole blocks retained by stopped-owner reserve books. Only stopped
+    /// grant/return writes this count through the exclusive heap owner. It
+    /// stays outside the mutex so Drop can retain storage without locking.
+    owner_reserved_blocks: usize,
     _confined: std::marker::PhantomData<std::cell::Cell<()>>,
 }
 impl ConsAllocator {
     pub(super) fn new(identity: HeapIdentity) -> Self {
         Self {
             storage: AllocatorStorage::Sole(AllocatorState::new(identity)),
+            owner_reserved_blocks: 0,
             _confined: std::marker::PhantomData,
         }
     }
@@ -985,6 +1017,11 @@ pub(super) struct SharedConsAllocator<'a> {
 static_assertions::assert_impl_all!(SharedConsAllocator<'_>: Send, Sync);
 
 impl ConsAllocator {
+    #[inline]
+    pub(super) fn owner_reserved_blocks(&self) -> usize {
+        self.owner_reserved_blocks
+    }
+
     #[inline]
     pub(super) fn threads_admitted(&self) -> bool {
         matches!(self.storage, AllocatorStorage::Admitted(_))

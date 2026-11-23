@@ -15,8 +15,7 @@
 use super::super::owner_bindings::OwnerRecordId;
 use neovm_value::intern::SymId;
 use neovm_value::tagged::gc::{
-    Mutator, OwnerAllocRegion, OwnerEraReserve, OwnerRegionRefund, PollOutcome, Rendezvous,
-    RendezvousError, ReserveError, TaggedHeap,
+    OwnerAllocRegion, OwnerEraReserve, OwnerRegionRefund, RendezvousError, ReserveError, TaggedHeap,
 };
 use neovm_value::tagged::transport::SharedRoot;
 use neovm_value::value::Value;
@@ -1058,21 +1057,6 @@ pub(crate) struct FrameArena {
 
 static_assertions::assert_not_impl_any!(FrameArena: Send, Sync);
 
-/// Owner that parks when a carve misses. Absent on the success path.
-#[doc(hidden)]
-pub struct ReserveRefill<'a, 'era> {
-    pub owner: &'a mut Mutator<'era>,
-    pub rendezvous: Rendezvous<'era>,
-}
-
-/// A carve miss that parked can fail in the rendezvous, not only the reserve.
-#[derive(Debug)]
-#[doc(hidden)]
-pub enum CarveGrantError {
-    Reserve(ReserveError),
-    Rendezvous(RendezvousError),
-}
-
 impl FrameArena {
     #[doc(hidden)]
     pub fn new(depth_limit: u32) -> Self {
@@ -1431,54 +1415,16 @@ impl FrameArena {
 
     /// Carve the next cons run of `reserve` into this arena's book.
     ///
-    /// `publish_scan` refuses the book while the run is open. The reserve
-    /// holds the blocks; this arena holds only the cursors. A [`ReserveError::ReserveMiss`]
-    /// with `refill` publishes the complete scan and parks on `poll_region_refill`,
-    /// then carves once more. Other reserve errors stay errors. `None` leaves
-    /// the miss as [`ReserveError::ReserveMiss`].
+    /// A miss returns before the caller publishes and parks. The caller can
+    /// then transfer the closed reserve by value, without retaining a mutable
+    /// borrow of the active book across the refill rendezvous.
     #[doc(hidden)]
     pub fn carve_granted_cons(
         &mut self,
         heap: &mut TaggedHeap,
         reserve: &mut OwnerEraReserve,
-        refill: Option<ReserveRefill<'_, '_>>,
-    ) -> Result<(), CarveGrantError> {
-        match reserve.carve_cons(heap, &mut self.region) {
-            Ok(()) => Ok(()),
-            Err(ReserveError::ReserveMiss) => self.refill_on_miss(heap, reserve, refill),
-            Err(error) => Err(CarveGrantError::Reserve(error)),
-        }
-    }
-
-    #[cold]
-    #[inline(never)]
-    fn refill_on_miss(
-        &mut self,
-        heap: &mut TaggedHeap,
-        reserve: &mut OwnerEraReserve,
-        refill: Option<ReserveRefill<'_, '_>>,
-    ) -> Result<(), CarveGrantError> {
-        let Some(ReserveRefill { owner, rendezvous }) = refill else {
-            return Err(CarveGrantError::Reserve(ReserveError::ReserveMiss));
-        };
-        let outcome =
-            crate::emacs_core::eval::world::poll::poll_region_refill(owner, rendezvous, || {
-                let mut batch = Vec::new();
-                self.publish_scan(heap, &mut batch)?;
-                Ok(batch)
-            })
-            .map_err(CarveGrantError::Rendezvous)?;
-        match outcome {
-            PollOutcome::Resumed { .. } => {}
-            // The keeper does not park. A requested stop without a restore is
-            // not a refilled region.
-            PollOutcome::Continue => {
-                return Err(CarveGrantError::Rendezvous(RendezvousError::Busy));
-            }
-        }
-        reserve
-            .carve_cons(heap, &mut self.region)
-            .map_err(CarveGrantError::Reserve)
+    ) -> Result<(), ReserveError> {
+        reserve.carve_cons(heap, &mut self.region)
     }
 
     /// Close this book and apply the reserve's refund.
@@ -1490,7 +1436,7 @@ impl FrameArena {
         &mut self,
         heap: &mut TaggedHeap,
         reserve: &mut OwnerEraReserve,
-    ) -> OwnerRegionRefund {
+    ) -> Result<OwnerRegionRefund, ReserveError> {
         reserve.close_for_stop(heap, &mut self.region)
     }
 

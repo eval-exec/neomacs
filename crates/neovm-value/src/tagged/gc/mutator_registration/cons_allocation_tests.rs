@@ -19,6 +19,8 @@ use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
 
+mod owner_reserve_cases;
+
 // Serial histories have no competing actor that could make admission Busy.
 // Any refusal must fail immediately rather than disappear inside a retry.
 fn activate<'era>(permit: MutatorPermit<'era>, heap: HeapIdentity, id: u64) -> Mutator<'era> {
@@ -204,6 +206,18 @@ pub enum ConsAllocationCase {
     FullyDeadNumericRetainedPagesRefreezeWithFullCapacity,
     NumericExhaustionRequestsAreOncePerOwnerClassAndGeneration,
     NumericRequestEpochDoesNotRepeatAfterAnUnobservedPool,
+    OwnerConsReserveRefusesUseAfterHeapDrop,
+    OwnerConsReserveGrantsOnlyConsStorage,
+    OwnerConsReserveRefusesSweepUntilExplicitReturn,
+    OwnerConsReserveRefusesForeignBookWithoutMutation,
+    OwnerConsReserveRefusesEveryForeignHeapOperation,
+    OwnerConsReserveDropAndForgetKeepCollectionExcluded,
+    OwnerConsReserveTwoIdleStopsHoldNoReserve,
+    OwnerConsReservePacingChargesCarvedCellsAndSubtractsTheOpenTail,
+    OwnerConsReserveTheCapIsAReserveMiss,
+    OwnerConsReserveTwoOwnersCarveDisjointRunsWithoutMovingTheHeapWindow,
+    OwnerConsReserveAMovedBlockTailIsNotRewound,
+    OwnerConsReserveAnOldStoreKeepsTheOwnerConsAndTheUnrootedConsIsReclaimed,
 }
 
 impl ConsAllocationCase {
@@ -233,6 +247,18 @@ impl ConsAllocationCase {
         Self::FullyDeadNumericRetainedPagesRefreezeWithFullCapacity,
         Self::NumericExhaustionRequestsAreOncePerOwnerClassAndGeneration,
         Self::NumericRequestEpochDoesNotRepeatAfterAnUnobservedPool,
+        Self::OwnerConsReserveRefusesUseAfterHeapDrop,
+        Self::OwnerConsReserveGrantsOnlyConsStorage,
+        Self::OwnerConsReserveRefusesSweepUntilExplicitReturn,
+        Self::OwnerConsReserveRefusesForeignBookWithoutMutation,
+        Self::OwnerConsReserveRefusesEveryForeignHeapOperation,
+        Self::OwnerConsReserveDropAndForgetKeepCollectionExcluded,
+        Self::OwnerConsReserveTwoIdleStopsHoldNoReserve,
+        Self::OwnerConsReservePacingChargesCarvedCellsAndSubtractsTheOpenTail,
+        Self::OwnerConsReserveTheCapIsAReserveMiss,
+        Self::OwnerConsReserveTwoOwnersCarveDisjointRunsWithoutMovingTheHeapWindow,
+        Self::OwnerConsReserveAMovedBlockTailIsNotRewound,
+        Self::OwnerConsReserveAnOldStoreKeepsTheOwnerConsAndTheUnrootedConsIsReclaimed,
     ];
 }
 
@@ -378,6 +404,32 @@ pub(crate) fn run_cons_allocation_test<K, W>(
         }
         ConsAllocationCase::NumericRequestEpochDoesNotRepeatAfterAnUnobservedPool => {
             numeric_request_epoch_does_not_repeat_after_an_unobserved_pool(roots_era, world_roots);
+        }
+        ConsAllocationCase::OwnerConsReserveRefusesUseAfterHeapDrop => {
+            owner_reserve_cases::owner_cons_reserve_refuses_use_after_heap_drop(roots_era);
+        }
+        ConsAllocationCase::OwnerConsReserveRefusesEveryForeignHeapOperation => {
+            owner_reserve_cases::owner_cons_reserve_refuses_every_foreign_heap_operation(roots_era, roots_nested_era);
+        }
+        ConsAllocationCase::OwnerConsReserveDropAndForgetKeepCollectionExcluded => {
+            owner_reserve_cases::owner_cons_reserve_drop_and_forget_keep_collection_excluded(roots_era, world_roots);
+        }
+        ConsAllocationCase::OwnerConsReserveRefusesForeignBookWithoutMutation => {
+            owner_reserve_cases::owner_cons_reserve_refuses_foreign_book_without_mutation(roots_era);
+        }
+        ConsAllocationCase::OwnerConsReserveRefusesSweepUntilExplicitReturn => {
+            owner_reserve_cases::owner_cons_reserve_refuses_sweep_until_explicit_return(roots_era, world_roots);
+        }
+        ConsAllocationCase::OwnerConsReserveGrantsOnlyConsStorage => {
+            owner_reserve_cases::owner_cons_reserve_grants_only_cons_storage(roots_era);
+        }
+        ConsAllocationCase::OwnerConsReserveTwoIdleStopsHoldNoReserve
+        | ConsAllocationCase::OwnerConsReservePacingChargesCarvedCellsAndSubtractsTheOpenTail
+        | ConsAllocationCase::OwnerConsReserveTheCapIsAReserveMiss
+        | ConsAllocationCase::OwnerConsReserveTwoOwnersCarveDisjointRunsWithoutMovingTheHeapWindow
+        | ConsAllocationCase::OwnerConsReserveAMovedBlockTailIsNotRewound
+        | ConsAllocationCase::OwnerConsReserveAnOldStoreKeepsTheOwnerConsAndTheUnrootedConsIsReclaimed => {
+            owner_reserve_cases::owner_cons_reserve_existing_cons_case(case, roots_era, world_roots);
         }
     }
 }
