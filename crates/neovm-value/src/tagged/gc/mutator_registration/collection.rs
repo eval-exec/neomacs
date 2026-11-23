@@ -112,6 +112,13 @@ pub struct CollectionReport {
     pub major: bool,
     pub roots: usize,
     pub frozen_owners: usize,
+    /// Root words the keeper read from every frozen owner's published batch.
+    ///
+    /// This isolates the joined-scan contribution from legacy, World, image
+    /// and shared-root transport sources in `roots`, so a two-owner join can
+    /// assert that BOTH batches were traced even when a dropped `SharedRoot`
+    /// would otherwise keep an object alive for one collection.
+    pub frozen_root_words: usize,
     pub cycle: usize,
     /// Last completed collectible-heap census, excluding immortal image rows.
     pub live_bytes: usize,
@@ -523,7 +530,8 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
             facade_mark::CollectorQuiescence::check(heap).map_err(|_| RendezvousError::Busy)?;
             crate::tagged::transport::collect_shared_root_gc_roots(heap, &mut roots);
         }
-        let root_count = roots.len() + words.len();
+        let frozen_root_words = words.len();
+        let root_count = roots.len() + frozen_root_words;
         #[cfg(any(test, feature = "test-support"))]
         super::a8_probes::mark(super::a8_probes::ROOT_CENSUS_DONE, stopped.epoch().get(), 0);
         let traced = stopped.trace(|guard, proof| {
@@ -542,8 +550,15 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
                 |heap| {
                     let job = StoppedCollectorJob::new(heap, proof, guard, registry, kind)?;
                     let mut images = ImageSession::take(registry, &entries, &keys)?;
-                    let report =
-                        job.run(&mut images, roots, words, heads, root_count, keys.len())?;
+                    let report = job.run(
+                        &mut images,
+                        roots,
+                        words,
+                        heads,
+                        root_count,
+                        keys.len(),
+                        frozen_root_words,
+                    )?;
                     // Restore publications before releasing the table bridge.
                     images.restore()?;
                     Ok(report)
@@ -618,6 +633,7 @@ impl<'heap, 'stop, 'era> StoppedCollectorJob<'heap, 'stop, 'era> {
         heads: Vec<*mut *mut MarkerObj>,
         root_count: usize,
         frozen_owners: usize,
+        frozen_root_words: usize,
     ) -> Result<CollectionReport, CollectionError> {
         let epoch = self.epoch;
         let heap = self.heap;
@@ -750,6 +766,7 @@ impl<'heap, 'stop, 'era> StoppedCollectorJob<'heap, 'stop, 'era> {
             },
             roots: root_count + image_words,
             frozen_owners,
+            frozen_root_words,
             cycle: heap.gc_collections(),
             live_bytes: heap.live_bytes(),
             allocated_count,

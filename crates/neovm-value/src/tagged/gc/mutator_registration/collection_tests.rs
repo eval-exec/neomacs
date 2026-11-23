@@ -346,6 +346,15 @@ fn two_requesters_collect_transitive_world_private_and_image_roots<K, W>(
             assert!(report.major);
             assert_eq!(report.epoch, first.1.get());
             assert_eq!(report.frozen_owners, 2);
+            // S2 two-owner join: each owner ACKs one root word. The keeper must
+            // read BOTH frozen batches. This counter isolates the joined-scan
+            // contribution, so a keeper that traces only the first key is red
+            // even though a dropped SharedRoot's transport cell could keep the
+            // object alive for one collection.
+            assert_eq!(
+                report.frozen_root_words, 2,
+                "the keeper must join both owners' published batches"
+            );
             for words in observations.iter().chain([&world, &legacy]) {
                 assert_owned(&era, &stopped, words, true);
             }
