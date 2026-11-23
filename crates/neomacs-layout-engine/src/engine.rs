@@ -6543,7 +6543,13 @@ impl LayoutEngine {
                 .unwrap_or(0);
             let composition_char_width_bits = params.char_width.to_bits();
             let composition_window = DisplayWindowId::new(params.window_id);
-            if let Some(previous) = self.retained_composition_advances.get(&composition_window) {
+            // The rejection dump costs a cache lookup even when nobody is
+            // listening; only build it when this target is enabled.
+            if tracing::enabled!(
+                target: "neomacs_layout_engine::composition_resolver",
+                tracing::Level::DEBUG
+            ) && let Some(previous) = self.retained_composition_advances.get(&composition_window)
+            {
                 tracing::debug!(
                     target: "neomacs_layout_engine::composition_resolver",
                     previous = ?(

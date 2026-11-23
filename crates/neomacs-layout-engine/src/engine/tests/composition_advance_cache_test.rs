@@ -173,6 +173,21 @@ fn retained_composition_advances_reject_each_moved_input() {
             cache.overlay_modified_tick,
             cache.face_change_count,
             cache.display_var_change_count,
+            neovm_core::window::BodyRedisplayRevision::new(24, 29, 31),
+            cache.fontset_generation,
+            cache.window_parameters_generation,
+            bits,
+        ),
+        "a force-window-update for all windows must reject the retained advances"
+    );
+    assert!(
+        !current(
+            &cache,
+            buffer,
+            cache.buffer_modiff,
+            cache.overlay_modified_tick,
+            cache.face_change_count,
+            cache.display_var_change_count,
             body,
             cache.fontset_generation + 1,
             cache.window_parameters_generation,
