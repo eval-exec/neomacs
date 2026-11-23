@@ -236,11 +236,8 @@ fn assert_unreachable_native_fixture_is_admitted_and_drained(
     let era = ParallelHeapEra::admit_rooted(collector, keeper, frozen)
         .expect("an admitted native fixture reaches the era");
     let mut stopped = era.stop().expect("stopped world");
-    era.collect_stopped(
-        &mut stopped,
-        Baton::collect_parallel_world_roots,
-    )
-    .expect("stopped major admits and sweeps the native fixture");
+    era.collect_stopped(&mut stopped, Baton::collect_parallel_world_roots)
+        .expect("stopped major admits and sweeps the native fixture");
     let (batch, retained) = era
         .with_stopped_heap_for_test(&stopped, |heap| {
             (
