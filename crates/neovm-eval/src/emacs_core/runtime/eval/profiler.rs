@@ -384,13 +384,7 @@ impl Context {
             .specpdl
             .iter()
             .rev()
-            .filter_map(|binding| match binding {
-                SpecBinding::Backtrace { function, .. }
-                | SpecBinding::Backtrace1 { function, .. }
-                | SpecBinding::Backtrace2 { function, .. }
-                | SpecBinding::BacktraceNative { function, .. } => Some(*function),
-                _ => None,
-            })
+            .filter_map(SpecBinding::backtrace_function)
             .take(depth)
             .collect();
         let allocated_bytes = self.tagged_heap.total_allocated_bytes();

@@ -820,13 +820,7 @@ impl Context {
             .iter()
             .rev()
             .take(max_scan)
-            .find_map(|entry| match entry {
-                SpecBinding::Backtrace { function, .. }
-                | SpecBinding::Backtrace1 { function, .. }
-                | SpecBinding::Backtrace2 { function, .. }
-                | SpecBinding::BacktraceNative { function, .. } => Some(*function),
-                _ => None,
-            })
+            .find_map(SpecBinding::backtrace_function)
     }
 
     /// The function of the innermost backtrace frame within `max_scan`
@@ -846,14 +840,13 @@ impl Context {
             .iter()
             .rev()
             .take(max_scan)
-            .filter_map(|entry| match entry {
-                SpecBinding::Backtrace { function, args, .. } => {
-                    Some((*function, args.is_unevalled()))
-                }
-                SpecBinding::Backtrace1 { function, .. }
-                | SpecBinding::Backtrace2 { function, .. }
-                | SpecBinding::BacktraceNative { function, .. } => Some((*function, false)),
-                _ => None,
+            .filter_map(|entry| {
+                let function = entry.backtrace_function()?;
+                let unevalled = matches!(
+                    entry,
+                    SpecBinding::Backtrace { args, .. } if args.is_unevalled()
+                );
+                Some((function, unevalled))
             })
             .find(|&(function, _)| keep(function))
             .and_then(|(function, unevalled)| (!unevalled).then_some(function))

@@ -147,16 +147,6 @@ fn yield_native(context: &mut Context) -> EvalResult {
     handoff(context)
 }
 
-fn frame_function(entry: &SpecBinding) -> Option<Value> {
-    match entry {
-        SpecBinding::Backtrace { function, .. }
-        | SpecBinding::Backtrace1 { function, .. }
-        | SpecBinding::Backtrace2 { function, .. }
-        | SpecBinding::BacktraceNative { function, .. } => Some(*function),
-        _ => None,
-    }
-}
-
 fn signal_hook(context: &mut Context, symbol: Value, _data: Value) -> EvalResult {
     assert_eq!(symbol, Value::symbol("wrong-type-argument"));
     assert_eq!(
@@ -169,7 +159,7 @@ fn signal_hook(context: &mut Context, symbol: Value, _data: Value) -> EvalResult
         context
             .specpdl
             .iter()
-            .filter_map(frame_function)
+            .filter_map(SpecBinding::backtrace_function)
             .any(|function| function == callee),
         "the inlined callee is already a real backtrace frame"
     );

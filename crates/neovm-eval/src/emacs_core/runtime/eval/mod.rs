@@ -1397,6 +1397,33 @@ impl SavedRestrictionUnwind {
 }
 
 impl SpecBinding {
+    /// Read a logical frame's function without copying or reading its arguments.
+    /// Keep this exhaustive so a new physical frame cannot disappear from
+    /// profiler samples or caller queries until its function is accounted for.
+    #[inline]
+    #[doc(hidden)]
+    pub fn backtrace_function(&self) -> Option<Value> {
+        match self {
+            Self::Backtrace { function, .. }
+            | Self::Backtrace1 { function, .. }
+            | Self::Backtrace2 { function, .. }
+            | Self::BacktraceNative { function, .. } => Some(*function),
+            Self::Let { .. }
+            | Self::LetLocal { .. }
+            | Self::LetDefault { .. }
+            | Self::LexicalEnv { .. }
+            | Self::GcRoot { .. }
+            | Self::UnwindProtect { .. }
+            | Self::SaveExcursion { .. }
+            | Self::SaveCurrentBuffer { .. }
+            | Self::SaveRestriction { .. }
+            | Self::LoadsInProgress { .. }
+            | Self::RequireStack { .. }
+            | Self::NativeUnwind { .. }
+            | Self::Nop => None,
+        }
+    }
+
     #[doc(hidden)]
     pub fn save_restriction(state: neovm_edit::buffer::SavedRestrictionState) -> Self {
         Self::SaveRestriction {

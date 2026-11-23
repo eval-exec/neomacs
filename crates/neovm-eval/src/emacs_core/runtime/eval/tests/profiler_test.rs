@@ -1,6 +1,33 @@
 use super::*;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodePolicyExt;
 
+#[cfg(feature = "jit")]
+#[test]
+fn backtrace_function_queries_preserve_unevalled_matching_boundary() {
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
+    let base = ctx.specpdl.len();
+    let outer = Value::symbol("backtrace-evaluated-outer");
+    let inner = Value::symbol("backtrace-unevalled-inner");
+    ctx.push_backtrace_frame(outer, &[]);
+    ctx.push_unevalled_backtrace_frame(inner, Value::NIL);
+    ctx.push_specpdl_root(Value::T);
+
+    assert_eq!(ctx.innermost_backtrace_function(3), Some(inner));
+    // A matching caller still evaluating its arguments blocks credit to
+    // an outer matching caller; it must not be filtered out before find.
+    assert_eq!(ctx.innermost_backtrace_function_where(3, |_| true), None);
+    assert_eq!(
+        ctx.innermost_backtrace_function_where(3, |function| function == outer),
+        Some(outer)
+    );
+    // max_scan counts specpdl entries, including the interspersed GC root.
+    assert_eq!(
+        ctx.innermost_backtrace_function_where(2, |function| function == outer),
+        None
+    );
+    ctx.unbind_to(base);
+}
+
 fn sample_mixed_backtrace_frames(depth: usize) -> Vec<Option<String>> {
     let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let base = ctx.specpdl.len();
