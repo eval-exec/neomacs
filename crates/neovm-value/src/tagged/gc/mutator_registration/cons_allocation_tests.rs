@@ -6,6 +6,7 @@
 use super::*;
 use crate::tagged::gc::ProofEra as ParallelHeapEra;
 use crate::tagged::gc::TaggedHeap;
+use crate::tagged::gc::arena_pages::{ObjectArena, PagedObject};
 use crate::tagged::gc::card_table::ChunkSlot;
 use crate::tagged::gc::chunk_map::{ChunkClass, ChunkEntry};
 use crate::tagged::gc::cons_allocator::ConsBlockBase;
@@ -188,6 +189,7 @@ pub enum ConsAllocationCase {
     ForeignStopCannotReturnOrResumeAConsCatalog,
     ConsResultSurvivesFromPublishedHeadThenReclaimsAfterSerialRestore,
     PartialConsGrantRefundsOwnerAndGlobalCreditsThenMergesHistoryOnce,
+    NumericStorageTransfersIntoEraAndRoundTripsAtStops,
 }
 
 impl ConsAllocationCase {
@@ -203,6 +205,7 @@ impl ConsAllocationCase {
         Self::ForeignStopCannotReturnOrResumeAConsCatalog,
         Self::ConsResultSurvivesFromPublishedHeadThenReclaimsAfterSerialRestore,
         Self::PartialConsGrantRefundsOwnerAndGlobalCreditsThenMergesHistoryOnce,
+        Self::NumericStorageTransfersIntoEraAndRoundTripsAtStops,
     ];
 }
 
@@ -298,8 +301,187 @@ pub(crate) fn run_cons_allocation_test<K, W>(
                 world_roots,
             );
         }
+        ConsAllocationCase::NumericStorageTransfersIntoEraAndRoundTripsAtStops => {
+            numeric_storage_transfers_into_era_and_round_trips_at_stops(roots_era, world_roots);
+        }
     }
 }
+
+#[derive(Debug, PartialEq, Eq)]
+struct NumericArenaShape {
+    pages: Vec<(usize, usize, usize)>,
+    page_index: Vec<(usize, usize)>,
+    spare_storage: Vec<usize>,
+}
+
+fn numeric_arena_shape<T: PagedObject>(arena: &ObjectArena<T>) -> NumericArenaShape {
+    let mut page_index = arena
+        .page_index_by_base
+        .iter()
+        .map(|(&base, &index)| (base, index))
+        .collect::<Vec<_>>();
+    page_index.sort_unstable();
+    NumericArenaShape {
+        pages: arena
+            .pages
+            .iter()
+            .map(|page| (page.base_addr(), page.next_index, page.allocated))
+            .collect(),
+        page_index,
+        spare_storage: arena
+            .spare_storage
+            .iter()
+            .map(|&ptr| ptr as usize)
+            .collect(),
+    }
+}
+
+fn check_numeric_arena_placeholder<T: PagedObject>(arena: &ObjectArena<T>, class: &str) {
+    assert!(
+        arena.pages.is_empty(),
+        "{class} pages stayed in the serial shell"
+    );
+    assert_eq!(
+        arena.pages.capacity(),
+        0,
+        "{class} page descriptor allocation stayed behind"
+    );
+    assert!(
+        arena.page_index_by_base.is_empty(),
+        "{class} page index stayed in the serial shell"
+    );
+    assert_eq!(
+        arena.page_index_by_base.capacity(),
+        0,
+        "{class} page index allocation stayed behind"
+    );
+    assert!(
+        arena.spare_storage.is_empty(),
+        "{class} spare storage stayed in the serial shell"
+    );
+    assert_eq!(
+        arena.spare_storage.capacity(),
+        0,
+        "{class} spare descriptor allocation stayed behind"
+    );
+}
+
+fn check_numeric_roots(heap: &TaggedHeap, roots: &[SharedRoot; 2]) {
+    let float = roots[0].materialize(heap).unwrap().value();
+    let bignum = roots[1].materialize(heap).unwrap().value();
+    assert!(heap.owns_heap_value_for_test(float));
+    assert!(heap.owns_heap_value_for_test(bignum));
+    assert_eq!(float.as_float(), Some(17.25));
+    assert_eq!(
+        bignum.as_bignum().unwrap().to_string(),
+        "9223372036854775807"
+    );
+}
+
+fn numeric_storage_transfers_into_era_and_round_trips_at_stops<K, W>(
+    roots_era: &mut dyn FnMut(&mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>, RootsFixture)),
+    world_roots: W,
+) where
+    K: EraKeeper + std::fmt::Debug,
+    W: Copy
+        + for<'k, 's, 'e, 'o> Fn(
+            &'k K,
+            &'s mut AllStopped<'e>,
+            &'o mut Vec<Value>,
+        ) -> Result<
+            Vec<*mut *mut crate::tagged::header::MarkerObj>,
+            RendezvousError,
+        >,
+{
+    roots_era(&mut |era, (numbers, nil)| {
+        let (heap_designator, initial_shape) = {
+            let mut collector = era.core.collector.borrow_mut();
+            let heap = collector.as_mut().unwrap().registration_heap_mut();
+            check_numeric_roots(heap, &numbers);
+            (
+                heap as *mut TaggedHeap,
+                (
+                    numeric_arena_shape(&heap.float_arena),
+                    numeric_arena_shape(&heap.bignum_arena),
+                ),
+            )
+        };
+        assert!(!initial_shape.0.pages.is_empty());
+        assert!(!initial_shape.1.pages.is_empty());
+        era.start_cons_storage().unwrap();
+        // SAFETY: the original collector loan is suspended, and no owner has
+        // activated. There are no readers, runs, or marker workers. This reads
+        // only the two inert numeric shell fields through the saved designator;
+        // it never mints a reference to the whole suspended heap or its storage.
+        unsafe {
+            check_numeric_arena_placeholder(
+                &*std::ptr::addr_of!((*heap_designator).float_arena),
+                "float",
+            );
+            check_numeric_arena_placeholder(
+                &*std::ptr::addr_of!((*heap_designator).bignum_arena),
+                "bignum",
+            );
+        }
+
+        let mut owner_a = activate(era.register(1730, 0).unwrap(), era.heap_identity(), 1730);
+        let mut owner_b = activate(era.register(1731, 0).unwrap(), era.heap_identity(), 1731);
+        owner_a.enter_native(&[numbers[0].clone(), nil]).unwrap();
+        owner_b
+            .enter_native(std::slice::from_ref(&numbers[1]))
+            .unwrap();
+        let mut stopped = era.stop().unwrap();
+        era.return_cons_storage(&stopped).unwrap();
+        era.with_stopped_heap_for_test(&stopped, |heap| {
+            check_numeric_roots(heap, &numbers);
+            assert_eq!(numeric_arena_shape(&heap.float_arena), initial_shape.0);
+            assert_eq!(numeric_arena_shape(&heap.bignum_arena), initial_shape.1);
+        })
+        .unwrap();
+        era.collect_stopped(&mut stopped, world_roots).unwrap();
+        let collected_shape = era
+            .with_stopped_heap_for_test(&stopped, |heap| {
+                check_numeric_roots(heap, &numbers);
+                (
+                    numeric_arena_shape(&heap.float_arena),
+                    numeric_arena_shape(&heap.bignum_arena),
+                )
+            })
+            .unwrap();
+        era.resume_cons_storage(&stopped).unwrap();
+        complete(stopped);
+        owner_a.leave_native().unwrap();
+        owner_b.leave_native().unwrap();
+
+        owner_a
+            .enter_native(std::slice::from_ref(&numbers[0]))
+            .unwrap();
+        owner_b
+            .enter_native(std::slice::from_ref(&numbers[1]))
+            .unwrap();
+        let mut stopped = era.stop().unwrap();
+        era.return_cons_storage(&stopped).unwrap();
+        era.with_stopped_heap_for_test(&stopped, |heap| {
+            check_numeric_roots(heap, &numbers);
+            assert_eq!(numeric_arena_shape(&heap.float_arena), collected_shape.0);
+            assert_eq!(numeric_arena_shape(&heap.bignum_arena), collected_shape.1);
+        })
+        .unwrap();
+        era.collect_stopped(&mut stopped, world_roots).unwrap();
+        era.with_stopped_heap_for_test(&stopped, |heap| check_numeric_roots(heap, &numbers))
+            .unwrap();
+        complete(stopped);
+        owner_a.leave_native().unwrap();
+        owner_b.leave_native().unwrap();
+        retire(owner_a);
+        retire(owner_b);
+        drop(numbers);
+        let (collector, keeper) = era.finish().unwrap();
+        drop(collector);
+        drop(keeper);
+    });
+}
+
 fn two_owner_cons_allocator_stress<K, W>(
     roots_era: &mut dyn FnMut(&mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>, RootsFixture)),
     world_roots: W,

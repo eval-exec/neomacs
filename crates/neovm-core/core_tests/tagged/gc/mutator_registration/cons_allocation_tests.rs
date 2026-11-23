@@ -34,6 +34,27 @@ fn roots_era_impl(body: &mut dyn for<'e> FnMut(ProofEra<'e, Baton>, RootsFixture
     Context::with_test_collection_era(roots, |era, input| body(era, input));
 }
 
+fn numeric_roots_era_impl(body: &mut dyn for<'e> FnMut(ProofEra<'e, Baton>, RootsFixture)) {
+    Context::with_test_collection_era(
+        |context| {
+            let float = Value::make_float(17.25);
+            // SAFETY: serial setup owns this initialized float. Root it before
+            // allocating the other numeric fixture object.
+            let float = unsafe { SharedRoot::new(context.tagged_heap(), float) };
+            let bignum = Value::make_int(i64::MAX);
+            // SAFETY: serial setup owns this initialized bignum on this heap.
+            // Both roots are installed before the era is admitted.
+            unsafe {
+                (
+                    [float, SharedRoot::new(context.tagged_heap(), bignum)],
+                    SharedRoot::new(context.tagged_heap(), Value::NIL),
+                )
+            }
+        },
+        |era, input| body(era, input),
+    );
+}
+
 fn empty_outer_era_impl(_flag: i64, body: &mut dyn for<'e> FnMut(ProofEra<'e, Baton>)) {
     Context::with_test_collection_era(|_| (), |era, ()| body(era));
 }
@@ -92,7 +113,12 @@ fn partial_era_then_impl(
 }
 
 fn run(case: ConsAllocationCase) {
-    let mut roots_era = roots_era_impl;
+    let mut roots_era: fn(&mut dyn for<'e> FnMut(ProofEra<'e, Baton>, RootsFixture)) =
+        if case == ConsAllocationCase::NumericStorageTransfersIntoEraAndRoundTripsAtStops {
+            numeric_roots_era_impl
+        } else {
+            roots_era_impl
+        };
     let mut empty_outer_era = empty_outer_era_impl;
     let mut roots_nested_era = roots_nested_era_impl;
     let mut roots_era_then_words = roots_era_then_words_impl;
@@ -130,6 +156,7 @@ shells! {
     return_cons_storage_preserves_busy_stop_validation_for_retry => ReturnConsStoragePreservesBusyStopValidationForRetry,
     forgotten_open_cons_run_refuses_publication_native_and_finish_without_waiting => ForgottenOpenConsRunRefusesPublicationNativeAndFinishWithoutWaiting,
     partial_cons_grant_refunds_owner_and_global_credits_then_merges_history_once => PartialConsGrantRefundsOwnerAndGlobalCreditsThenMergesHistoryOnce,
+    numeric_storage_transfers_into_era_and_round_trips_at_stops => NumericStorageTransfersIntoEraAndRoundTripsAtStops,
 }
 
 #[test]

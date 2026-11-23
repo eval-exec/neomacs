@@ -1,7 +1,9 @@
 //! Cold cons catalog ownership for admitted mutators.
 //!
 //! The serial heap is an inert shell while this catalog owns its cons spine
-//! and residual-Box list/catalog (the latter admits hash-table shells only).
+//! and residual-Box list/catalog (the latter admits hash-table shells only),
+//! together with the complete float and bignum arenas. Numeric storage stays
+//! behind the catalog gate until its stopped restoration.
 //! Only disjoint raw cell grants leave the gate: neither a heap reference nor
 //! a vector/header reference is retained by a running owner. Collection first
 //! closes every region and restores the spine under stopped authority.
@@ -22,6 +24,9 @@ use std::ptr::NonNull;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
+
+mod numeric_storage;
+use numeric_storage::NumericStorage;
 
 const MAX_GRANT: usize = 128;
 
@@ -233,6 +238,7 @@ impl Drop for OwnedConsTail {
 static_assertions::assert_not_impl_any!(OwnedConsTail: Send, Sync, Clone, Copy);
 
 struct CatalogState {
+    numeric: NumericStorage,
     allocator: ConsAllocatorOwner,
     blocks: Vec<ConsBlock>,
     by_base: FxHashMap<usize, usize>,
@@ -260,6 +266,9 @@ struct CatalogState {
 // The raw residual-Box list also moves as owned storage; only unpublished
 // headers are changed, under the same gate. No heap/Box reference is retained.
 // Storage is never freed until stopped restoration or is retained on failure.
+// Complete numeric arenas move as owned page allocations under this same
+// mutex. Their integer limb buffers have no Lisp children. No numeric grant,
+// arena descriptor reference, or mutable payload loan leaves the gate.
 unsafe impl Send for CatalogState {}
 
 /// Era-local catalog identity. This is not a cloneable heap facade.
@@ -481,8 +490,8 @@ impl ConsCatalog {
     /// The caller owns this exact quiescent serial heap, has stopped every
     /// participant with all regions closed, excludes marker launches/reentry,
     /// and suspends the whole-heap loan before any owner runs. While installed
-    /// no other code may read/write the heap's inert cons, boxed-list or
-    /// non-cons address-set placeholder fields.
+    /// no other code may read/write the heap's inert cons, boxed-list,
+    /// non-cons address-set, float-arena or bignum-arena placeholder fields.
     #[cold]
     #[inline(never)]
     pub(super) unsafe fn install(&self, heap: &mut TaggedHeap) -> Result<(), RegistrationError> {
@@ -514,6 +523,7 @@ impl ConsCatalog {
         let placeholder =
             (&*heap.cons_allocator as *const super::cons_allocator::ConsAllocator) as usize;
         let state = CatalogState {
+            numeric: NumericStorage::detach(heap),
             allocator,
             blocks: std::mem::take(&mut heap.cons_blocks),
             by_base: std::mem::take(&mut heap.cons_block_index_by_base),
@@ -558,6 +568,7 @@ impl ConsCatalog {
             _ => false,
         };
         if placeholder != state.placeholder
+            || !state.numeric.placeholders_intact(heap)
             || !heap.cons_blocks.is_empty()
             || heap.cons_blocks.capacity() != 0
             || !heap.cons_block_index_by_base.is_empty()
@@ -578,6 +589,7 @@ impl ConsCatalog {
         }
         let state = gate.take().expect("validated installed catalog");
         self.installed.store(false, Ordering::Release);
+        state.numeric.restore(heap);
         heap.cons_allocator = state.allocator;
         heap.cons_blocks = state.blocks;
         heap.cons_block_index_by_base = state.by_base;

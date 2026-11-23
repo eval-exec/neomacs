@@ -732,6 +732,34 @@ pub(super) struct ObjectArena<T: PagedObject> {
 }
 
 impl<T: PagedObject> ObjectArena<T> {
+    /// A storage-free replacement with the same ownership-map identity.
+    /// Used only while the stopped era transfers this entire arena.
+    #[cold]
+    pub(super) fn empty_for_transfer(&self) -> Self {
+        Self::new(self.chunk_map.clone())
+    }
+
+    /// The inert shell must remain pristine until its original arena returns.
+    /// Empty lengths alone would miss retained descriptor allocations or a
+    /// changed partial chain, spare history, or ownership map.
+    #[cold]
+    pub(super) fn is_transfer_placeholder_for(&self, original: &Self) -> bool {
+        let same_map = match (&self.chunk_map, &original.chunk_map) {
+            (None, None) => true,
+            (Some(a), Some(b)) => std::sync::Arc::ptr_eq(a, b),
+            _ => false,
+        };
+        self.pages.is_empty()
+            && self.pages.capacity() == 0
+            && self.page_index_by_base.is_empty()
+            && self.page_index_by_base.capacity() == 0
+            && self.spare_storage.is_empty()
+            && self.spare_storage.capacity() == 0
+            && self.spare_unused_floor == 0
+            && self.partial_head == PAGE_NONE
+            && same_map
+    }
+
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn new(chunk_map: Option<std::sync::Arc<ChunkMap>>) -> Self {
         Self {

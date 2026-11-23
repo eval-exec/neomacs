@@ -1,4 +1,4 @@
-//! Inert keeper capability while the real cons catalog is outside the heap.
+//! Inert keeper capability while cons and numeric storage are outside the heap.
 use super::*;
 use std::ptr::NonNull;
 
@@ -36,9 +36,9 @@ impl<'heap> SuspendedConsCollector<'heap> {
     /// The keeper has blocked every new run through the registry transition,
     /// verified zero existing run/region loans under stop-all (or before any
     /// activation), and retains original heap/World backing. No storage or
-    /// field borrow derived from the old collector survives. The catalog is
-    /// reunited before any heap walk; the new collector is suspended again
-    /// before admitting another storage run.
+    /// field borrow derived from the old collector survives. Cons storage and
+    /// the float/bignum arenas are reunited before any heap walk; the new
+    /// collector is suspended again before admitting another storage run.
     #[cold]
     #[inline(never)]
     pub(in crate::tagged::gc) unsafe fn resume(self) -> QuiescentCollector<'heap> {
