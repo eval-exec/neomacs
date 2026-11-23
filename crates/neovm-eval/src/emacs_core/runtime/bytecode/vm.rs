@@ -5122,8 +5122,9 @@ impl<'a> Vm<'a> {
         // `verify_stack_effects` proof; everything else runs the checked
         // instance with today's exact behavior. Chosen once per driver entry.
         // The checked monomorph is a separate cold function. Inlining both
-        // into `run_loop` spilled the verified fetch's ops pointer and jump
-        // table (a reload per opcode). The verified driver stays inlined here.
+        // into `run_loop` was one spill of the verified fetch; after the
+        // split the fetch still reloads the ops pointer and rematerializes
+        // the jump table. The verified driver stays inlined here.
         let result = if trust_stack_proof && entry_func.executes_verified_ops() {
             self.run_interpreter_driver::<true>(&mut callers, &mut aux_stack, &mut quitcounter)
         } else {
@@ -5243,7 +5244,11 @@ impl<'a> Vm<'a> {
             // match on the storage kind, where the instruction stream costs a
             // lazy-decode probe.
             let constants: &[Value] = func.constants().as_slice();
-            let frame_limit = frame_base + func.max_stack().get();
+            // Do not keep `frame_base + max_stack` live across the opcode
+            // loop. The verified proof already rejects a push past max_stack,
+            // and the checked driver recomputes the limit only on the cold
+            // invalid path. A loop-carried limit was a live value at every
+            // dispatch, beside the ops pointer and the jump table.
             let ops_len = ops.len();
             let ops_ptr = ops.as_ptr();
             let mut pc_local = callers.active().pc();
@@ -5405,12 +5410,13 @@ impl<'a> Vm<'a> {
             macro_rules! ensure_stack_push_capacity {
                 () => {{
                     debug_assert!(
-                        !VERIFIED || cursor.len < frame_limit,
+                        !VERIFIED || cursor.len < frame_base + func.max_stack().get(),
                         "verified bytecode exceeded its proven max_stack"
                     );
-                    if !VERIFIED && cursor.len >= frame_limit {
+                    if !VERIFIED && cursor.len >= frame_base + func.max_stack().get() {
                         let invalid_pc = pc_local.saturating_sub(1);
                         let stack_len = cursor.len;
+                        let frame_limit = frame_base + func.max_stack().get();
                         publish_phase!();
                         trace_invalid_bytecode_site(
                             func,
@@ -5586,6 +5592,8 @@ impl<'a> Vm<'a> {
                 ($reason:expr) => {{
                     let invalid_pc = pc_local.saturating_sub(1);
                     let stack_len = cursor.len;
+                    // Recomputed here so the hot dispatch does not carry it.
+                    let frame_limit = frame_base + func.max_stack().get();
                     publish_phase!();
                     trace_invalid_bytecode_site(
                         func,
@@ -5645,6 +5653,7 @@ impl<'a> Vm<'a> {
                 self.drop_underflowed_frame_handlers(aux_stack);
                 let invalid_pc = pc_local.saturating_sub(1);
                 let stack_len = cursor.len;
+                let frame_limit = frame_base + func.max_stack().get();
                 publish_phase!();
                 trace_invalid_bytecode_site(
                     func,
@@ -5747,8 +5756,10 @@ impl<'a> Vm<'a> {
 
                             let offset = 1 + *n as usize;
                             let len = stk!().len();
-                            if (VERIFIED || cursor.len >= frame_base)
-                                && offset <= depth!(frame_base)
+                            // Same predicate as `Op::StackRef`: a proved body
+                            // already has `offset <= depth` at this pc.
+                            if VERIFIED
+                                || (cursor.len >= frame_base && offset <= depth!(frame_base))
                             {
                                 let value = unsafe { *stk!().get_unchecked(len - offset) };
                                 stk_push!(value);
@@ -5781,14 +5792,14 @@ impl<'a> Vm<'a> {
                                 (next0, next1, next2)
                             {
                                 let len = cursor.len;
-                                if cursor.len <= frame_base {
+                                if !VERIFIED && cursor.len <= frame_base {
                                     invalid_bytecode!("dup-lss-gotoifnil-empty-stack");
                                 }
                                 debug_assert!(
-                                    !VERIFIED || len < frame_limit,
+                                    !VERIFIED || len < frame_base + func.max_stack().get(),
                                     "verified bytecode exceeded its proven max_stack"
                                 );
-                                if !VERIFIED && len >= frame_limit {
+                                if !VERIFIED && len >= frame_base + func.max_stack().get() {
                                     invalid_bytecode!("dup-lss-gotoifnil-stack-at-frame-limit");
                                 }
 
@@ -5797,11 +5808,15 @@ impl<'a> Vm<'a> {
                                 let offset = 1 + *stack_ref as usize;
 
                                 debug_assert!(
-                                    !VERIFIED || after_dup_len < frame_limit,
+                                    !VERIFIED
+                                        || after_dup_len < frame_base + func.max_stack().get(),
                                     "verified bytecode exceeded its proven max_stack"
                                 );
-                                if offset > after_dup_len
-                                    || (!VERIFIED && after_dup_len >= frame_limit)
+                                // The proof covers this StackRef's depth. The
+                                // checked driver keeps the range test.
+                                if !VERIFIED
+                                    && (offset > after_dup_len
+                                        || after_dup_len >= frame_base + func.max_stack().get())
                                 {
                                     // SAFETY: len < frame_limit checked above.
                                     unsafe { cursor.push_unchecked(top) };
@@ -5826,7 +5841,7 @@ impl<'a> Vm<'a> {
                             }
                         }
 
-                        if cursor.len > frame_base {
+                        if VERIFIED || cursor.len > frame_base {
                             let top = unsafe { *stk!().get_unchecked(stk!().len() - 1) };
                             stk_push!(top);
                         } else {
@@ -5900,11 +5915,13 @@ impl<'a> Vm<'a> {
                             continue;
                         }
                         let len = stk!().len();
-                        if (!VERIFIED && cursor.len < frame_base) || n > depth!(frame_base) {
+                        // Proved bodies already have `n` (and `n + 1` when
+                        // preserving TOS) operands in this frame.
+                        if !VERIFIED && (cursor.len < frame_base || n > depth!(frame_base)) {
                             invalid_bytecode!("discard-n-out-of-range");
                         }
                         if preserve_tos {
-                            if (!VERIFIED && cursor.len < frame_base) || n >= depth!(frame_base) {
+                            if !VERIFIED && (cursor.len < frame_base || n >= depth!(frame_base)) {
                                 invalid_bytecode!("discard-n-preserve-tos-out-of-range");
                             }
                             let top = unsafe { *cursor.get_unchecked(len - 1) };
@@ -6498,7 +6515,7 @@ impl<'a> Vm<'a> {
                     Op::Add => {
                         let fallback = {
                             let len = cursor.len;
-                            if (!VERIFIED && cursor.len < frame_base) || depth!(frame_base) < 2 {
+                            if !VERIFIED && (cursor.len < frame_base || depth!(frame_base) < 2) {
                                 invalid_bytecode!("add-stack-underflow");
                             }
                             let b = unsafe { *cursor.get_unchecked(len - 1) };
@@ -6706,7 +6723,7 @@ impl<'a> Vm<'a> {
                     Op::Add1 => {
                         let fallback = {
                             let len = cursor.len;
-                            if cursor.len <= frame_base {
+                            if !VERIFIED && cursor.len <= frame_base {
                                 invalid_bytecode!("add1-empty-stack");
                             }
                             let top = unsafe { *cursor.get_unchecked(len - 1) };
@@ -6869,7 +6886,7 @@ impl<'a> Vm<'a> {
                     Op::Lss => {
                         let fallback = {
                             let len = cursor.len;
-                            if (!VERIFIED && cursor.len < frame_base) || depth!(frame_base) < 2 {
+                            if !VERIFIED && (cursor.len < frame_base || depth!(frame_base) < 2) {
                                 invalid_bytecode!("lss-stack-underflow");
                             }
                             let b = unsafe { *cursor.get_unchecked(len - 1) };
