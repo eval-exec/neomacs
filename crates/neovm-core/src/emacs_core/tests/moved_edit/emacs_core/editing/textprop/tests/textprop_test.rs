@@ -3775,6 +3775,70 @@ fn set_text_properties_nil_on_an_emptied_tree_records_the_change() {
     );
 }
 
+/// Attested on Emacs 31.1 `a360712c9d`: after the last string property is
+/// removed, GNU keeps `string_intervals`. Whole-string `set-text-properties`
+/// of nil then returns t and clears that tree (`src/textprop.c`).
+#[test]
+fn set_text_properties_nil_on_an_emptied_string_clears_the_kept_tree() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::test_utils::new_context();
+    let got = eval
+        .eval_str(
+            r#"(prin1-to-string
+  (let ((s (copy-sequence "abcd")))
+    (put-text-property 0 4 'face 'bold s)
+    (remove-text-properties 0 4 '(face nil) s)
+    (list (set-text-properties 0 4 nil s) (object-intervals s))))"#,
+        )
+        .expect("string-emptied-whole");
+    assert_eq!(
+        got.as_utf8_str(),
+        Some("(t nil)"),
+        "a kept string interval tree makes a whole-string nil set return t"
+    );
+}
+
+/// The same kept tree, asked to set nil on a subrange, splits into nil
+/// intervals. Attested `(t ((0 1 nil) (1 2 nil) (2 4 nil)))`.
+#[test]
+fn set_text_properties_nil_on_an_emptied_string_subrange_splits_the_tree() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::test_utils::new_context();
+    let got = eval
+        .eval_str(
+            r#"(prin1-to-string
+  (let ((s (copy-sequence "abcd")))
+    (put-text-property 0 4 'face 'bold s)
+    (remove-text-properties 0 4 '(face nil) s)
+    (list (set-text-properties 1 2 nil s) (object-intervals s))))"#,
+        )
+        .expect("string-emptied-sub");
+    assert_eq!(
+        got.as_utf8_str(),
+        Some("(t ((0 1 nil) (1 2 nil) (2 4 nil)))"),
+        "a subrange nil set splits the interval tree the removal kept"
+    );
+}
+
+/// A string that never had an interval tree still returns nil. Attested.
+#[test]
+fn set_text_properties_nil_on_a_string_with_no_tree_stays_nil() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::test_utils::new_context();
+    let got = eval
+        .eval_str(
+            r#"(prin1-to-string
+  (let ((s (copy-sequence "abcd")))
+    (set-text-properties 1 2 nil s)))"#,
+        )
+        .expect("string-none-sub");
+    assert_eq!(
+        got.as_utf8_str(),
+        Some("nil"),
+        "a string that never had intervals returns nil"
+    );
+}
+
 /// Helper: create an evaluator with a buffer containing the given text.
 fn eval_with_text(text: &str) -> Context {
     let mut eval = crate::test_utils::new_context();
