@@ -3358,7 +3358,7 @@ pub(crate) unsafe extern "C" fn neovm_jit_arith_generic(
         if nargs == 2 {
             ctx.bc_buf.push(operands[1]);
         }
-        let res = unsafe { Vm::call_arith_builtin_slow_on_context(ctx, kind, args_start, nargs) };
+        let res = /* SAFETY: this site just pushed nargs operand words at bc_buf[args_start..]. */ unsafe { Vm::call_arith_builtin_slow_on_context(ctx, kind, args_start, nargs) };
         ctx.bc_buf.truncate(args_start);
         // Value first: an `unwrap_or_else` on the `Option<EvalResult>` copied
         // it 16 bytes wide over the callee's narrow stores.

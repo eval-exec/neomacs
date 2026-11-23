@@ -19,7 +19,7 @@ use neovm_value::value::{LambdaParams, Value};
 
 fn function(ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {
     let mut source = ByteCodeFunction::new(LambdaParams::simple(Vec::new()));
-    source.lexical = true;
+    source.set_lexical(true);
     source.set_ops(ops);
     source.set_constants(constants.into());
     source.set_max_stack(StackDepth::for_test(16));
@@ -36,7 +36,7 @@ fn redefine_logand(context: &mut Context) -> EvalResult {
         neovm_value::intern::intern("green-release-a"),
         neovm_value::intern::intern("green-release-b"),
     ]));
-    replacement.lexical = true;
+    replacement.set_lexical(true);
     replacement.set_ops(vec![Op::Constant(0), Op::Return]);
     replacement.set_constants(vec![Value::fixnum(37)].into());
     replacement.set_max_stack(StackDepth::for_test(16));

@@ -23,7 +23,7 @@ fn context() -> Context {
 /// `(lambda (x) x)`, or `(lambda (x) (funcall TARGET x))`, as byte-code.
 fn bytecode(target: Option<Value>) -> Value {
     let mut code = ByteCodeFunction::new(LambdaParams::simple(vec![intern("symcallee-item")]));
-    code.lexical = true;
+    code.set_lexical(true);
     code.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
     if let Some(target) = target {
         code.set_constants(vec![target].into());

@@ -77,7 +77,7 @@ fn params(n: usize) -> LambdaParams {
 /// `(lambda (a1..an) (CALLEE a1..an))` through `Op::Call` (GNU `Bcall`).
 fn bcall_fn(callee: &'static str, nargs: usize) -> ByteCodeFunction {
     let mut f = ByteCodeFunction::new(params(nargs));
-    f.lexical = true;
+    f.set_lexical(true);
     let mut ops = vec![Op::Constant(0)];
     for _ in 0..nargs {
         ops.push(Op::StackRef(nargs as u16));
@@ -93,7 +93,7 @@ fn bcall_fn(callee: &'static str, nargs: usize) -> ByteCodeFunction {
 /// `(lambda (a [b]) (OP a [b]))` for an arithmetic opcode.
 fn arith_fn(op: Op, nargs: usize) -> ByteCodeFunction {
     let mut f = ByteCodeFunction::new(params(nargs));
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(if nargs == 2 {
         vec![Op::StackRef(1), Op::StackRef(1), op, Op::Return]
     } else {
@@ -159,7 +159,7 @@ fn inline_builtin_results_and_frameless_signal() {
     eval.eval_str("(insert \"abc\")").unwrap();
     install_frame_probe(&mut eval, "char-after");
     let mut f = ByteCodeFunction::new(params(1));
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(vec![
         Op::StackRef(0),
         Op::CallBuiltinSym(intern("char-after"), 1),

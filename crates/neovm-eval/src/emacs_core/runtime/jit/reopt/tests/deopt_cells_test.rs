@@ -182,7 +182,7 @@ fn note_deopt_prefers_the_stored_cause() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(vec![Op::Constant(0), Op::Constant(1), Op::Max, Op::Return]);
     f.set_constants(vec![Value::make_float(1.5), Value::make_int(7)].into());
     f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(4));

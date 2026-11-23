@@ -4739,7 +4739,7 @@ fn serial_bytecode(ctx: &mut Context, ops: &[Op], constants: &[Value]) -> EvalRe
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(ops.to_vec());
     f.set_constants(constants.to_vec().into());
     f.set_max_stack(StackDepth::for_test(8));

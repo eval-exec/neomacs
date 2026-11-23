@@ -92,7 +92,7 @@ pub(crate) fn mapcar_debug_entry_obs_for_test(
     }
     fn bytecode(target: Value) -> Value {
         let mut code = ByteCodeFunction::new(LambdaParams::simple(vec![intern("mapact-item")]));
-        code.lexical = true;
+        code.set_lexical(true);
         code.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
         code.set_constants(vec![target].into());
         code.set_ops(vec![
@@ -242,7 +242,7 @@ pub(crate) fn sink_only_materialize_at_aset_for_test(
         source.executable_ops(),
         source.constants(),
         source.executable_gnu_byte_offset_map(),
-        source.params.fixed_arity().unwrap(),
+        source.params().fixed_arity().unwrap(),
     )
     .expect("exact sink repro CFG");
     let constants = source
@@ -256,7 +256,7 @@ pub(crate) fn sink_only_materialize_at_aset_for_test(
         constants: &constants,
         cfg: &cfg,
         params: ir::ParamShape {
-            required: source.params.fixed_arity().unwrap(),
+            required: source.params().fixed_arity().unwrap(),
             ..Default::default()
         },
         dynamic_prefix: 0,
@@ -340,7 +340,7 @@ pub(crate) fn inline_hof_mapcar_backtrace_obs_for_test(
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(ops);
         f.set_constants(constants.into());
         f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(24));
@@ -431,7 +431,7 @@ pub(crate) fn opt_switch_hoist_call_mutation_for_test(ctx: &mut Context) -> (boo
     push_scratch_gc_roots(&[f]);
     let data = f.get_bytecode_data().unwrap();
     let arity = data
-        .params
+        .params()
         .stack_shape()
         .expect("fixture stack parameters")
         .required();
@@ -552,7 +552,7 @@ pub(crate) fn lists48_osr_aset_advice_obs_for_test(
         optional: Vec::new(),
         rest: None,
     });
-    source.lexical = true;
+    source.set_lexical(true);
     source.set_ops(vec![
         Op::Constant(0),
         Op::StackRef(0),

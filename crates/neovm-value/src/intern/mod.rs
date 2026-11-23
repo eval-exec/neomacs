@@ -2444,6 +2444,10 @@ struct SymbolCacheEntry {
     /// `&str` on a hit avoids paying for a 16-byte fat pointer in every dense
     /// cache entry.
     name: Option<&'static LispString>,
+    /// `Some(true)` only after `as_utf8_str` accepted `name`. The hit path
+    /// then rebuilds `&str` without scanning. `Some(false)` is a raw-byte
+    /// name: `thread_local_resolve` misses and `resolve_sym` panics.
+    utf8: Option<bool>,
     /// `NameId(u32::MAX)` is reserved globally and doubles as the cache-miss
     /// sentinel, avoiding the padding of `Option<NameId>`.
     name_id: u32,
@@ -2455,6 +2459,7 @@ impl Default for SymbolCacheEntry {
     fn default() -> Self {
         Self {
             name: None,
+            utf8: None,
             name_id: SYMBOL_NAME_CACHE_MISSING,
             canonical: None,
             keyword: None,
@@ -2671,11 +2676,21 @@ fn thread_local_record_interned_str(s: &'static str, id: SymId) {
 
 #[inline]
 fn thread_local_resolve(id: SymId) -> Option<&'static str> {
-    // `resolve_sym` records a name only after `as_utf8_str` succeeds, but
-    // `resolve_sym_lisp_string` records the same slot with no UTF-8 check.
-    // A raw-byte hit must miss here so `resolve_sym` takes the slow path
-    // and panics, instead of building a `&str` over those bytes.
-    thread_local_resolve_lisp_string(id).and_then(|name| name.as_utf8_str())
+    // Record time stores whether the interned bytes are UTF-8. A hit then
+    // rebuilds `&str` with no scan. A raw-byte name is `Some(false)` and
+    // misses, so `resolve_sym` takes the slow path and panics.
+    let name = SYMBOL_CACHE.with(|cache| {
+        let cache = cache.borrow();
+        let entry = cache.get(id.0 as usize)?;
+        match (entry.name, entry.utf8) {
+            (Some(name), Some(true)) => Some(name),
+            _ => None,
+        }
+    })?;
+    // SAFETY: `utf8` is `Some(true)` only after `LispString::as_utf8_str`
+    // accepted these bytes. An interned name is immutable for the process
+    // lifetime, so the scan is not repeated on the hit path.
+    Some(unsafe { std::str::from_utf8_unchecked(name.as_bytes()) })
 }
 
 #[inline]
@@ -2688,6 +2703,7 @@ fn thread_local_resolve_lisp_string(id: SymId) -> Option<&'static LispString> {
 
 #[inline]
 fn thread_local_record_name(id: SymId, name: &'static LispString) {
+    let utf8 = name.as_utf8_str().is_some();
     SYMBOL_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
         let idx = id.0 as usize;
@@ -2695,6 +2711,7 @@ fn thread_local_record_name(id: SymId, name: &'static LispString) {
             cache.resize(idx + 1, SymbolCacheEntry::default());
         }
         cache[idx].name = Some(name);
+        cache[idx].utf8 = Some(utf8);
     });
 }
 

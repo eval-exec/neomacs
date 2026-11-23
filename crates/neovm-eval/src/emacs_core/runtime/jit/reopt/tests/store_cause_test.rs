@@ -20,7 +20,7 @@ fn assert_store_semantic(store: Op) {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(vec![Op::Constant(0), Op::Constant(1), store, Op::Return]);
     f.set_constants(vec![cell, Value::make_int(1)].into());
     f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(4));

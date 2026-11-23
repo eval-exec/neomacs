@@ -303,8 +303,8 @@ fn deferred_bytecode_resolves_at_termination_body(verify: bool) {
     let c_extra = heap.alloc_cons(TaggedValue::fixnum(1_005), TaggedValue::fixnum(0));
     let full = {
         let mut f = bytecode_fn(vec![TaggedValue::fixnum(0)], 4, 16);
-        f.arglist = c_arg;
-        f.env = Some(c_env);
+        f.set_arglist(c_arg);
+        f.set_env(Some(c_env));
         f.doc_form = Some(c_doc);
         f.interactive = Some(c_int);
         f.extra_slots = vec![c_extra];
@@ -1334,14 +1334,16 @@ fn bc_data(v: TaggedValue) -> &'static ByteCodeFunction {
 /// each one was written.
 fn full_prototype_fn(constants: Vec<TaggedValue>) -> ByteCodeFunction {
     let mut f = bytecode_fn(constants, 6, 48);
-    f.params = LambdaParams {
-        required: vec![crate::intern::intern("bia-a")],
-        optional: vec![crate::intern::intern("bia-b")],
-        rest: Some(crate::intern::intern("bia-r")),
-    }
-    .into();
-    f.arglist = TaggedValue::fixnum(0x0181);
-    f.lexical = true;
+    f.set_params(
+        LambdaParams {
+            required: vec![crate::intern::intern("bia-a")],
+            optional: vec![crate::intern::intern("bia-b")],
+            rest: Some(crate::intern::intern("bia-r")),
+        }
+        .into(),
+    );
+    f.set_arglist(TaggedValue::fixnum(0x0181));
+    f.set_lexical(true);
     f.set_max_stack(crate::tagged::bytecode::function_slots::StackDepth::for_test(11));
     f.ops_sealed = true;
     f.stack_verified = true;
@@ -1409,10 +1411,10 @@ fn bytecode_instance_reads_back_as_the_prototype_with_its_own_pool() {
     assert_eq!(i.ops_sealed, p.ops_sealed);
     assert_eq!(i.stack_verified, p.stack_verified);
     assert_eq!(i.max_stack(), p.max_stack());
-    assert_eq!(i.params, p.params);
-    assert_eq!(i.arglist, p.arglist);
-    assert_eq!(i.lexical, p.lexical);
-    assert_eq!(i.env, p.env);
+    assert_eq!(i.params(), p.params());
+    assert_eq!(i.arglist(), p.arglist());
+    assert_eq!(i.lexical(), p.lexical());
+    assert_eq!(i.env(), p.env());
     assert_eq!(i.gnu_byte_offset_map, p.gnu_byte_offset_map);
     assert!(
         i.gnu_bytecode_bytes

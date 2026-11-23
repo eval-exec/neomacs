@@ -237,6 +237,113 @@ pub(crate) struct SwitchTables<'a> {
     pub(crate) offset_map: Option<&'a [GnuByteOffsetMapEntry]>,
 }
 
+/// Minimum operand count for one instruction.
+///
+/// This is the `min` half of the fall-through table in
+/// [`verify_stack_effects_with_tables`]. The unverified driver checks it at
+/// fetch. `Return` is 0: an empty frame returns nil and must not pop the
+/// caller. `Throw` is 2 even though it does not fall through.
+pub(crate) fn opcode_min_operands(op: &Op) -> usize {
+    match op {
+        Op::Constant(_)
+        | Op::Nil
+        | Op::True
+        | Op::VarRef(_)
+        | Op::MakeClosure(_)
+        | Op::Goto(_)
+        | Op::Return
+        | Op::TrapOutOfRangeConstant(_)
+        | Op::Unbind(_)
+        | Op::PopHandler
+        | Op::SaveCurrentBuffer
+        | Op::SaveExcursion
+        | Op::SaveRestriction
+        | Op::PushConditionCase(_) => 0,
+        Op::Dup
+        | Op::Pop
+        | Op::VarSet(_)
+        | Op::VarBind(_)
+        | Op::UnwindProtectPop
+        | Op::Add1
+        | Op::Sub1
+        | Op::Negate
+        | Op::Car
+        | Op::Cdr
+        | Op::CarSafe
+        | Op::CdrSafe
+        | Op::Length
+        | Op::Symbolp
+        | Op::Consp
+        | Op::Stringp
+        | Op::Listp
+        | Op::Integerp
+        | Op::Numberp
+        | Op::Null
+        | Op::Not
+        | Op::Nreverse
+        | Op::SymbolValue
+        | Op::SymbolFunction
+        | Op::SaveWindowExcursion
+        | Op::GotoIfNil(_)
+        | Op::GotoIfNotNil(_)
+        | Op::GotoIfNilElsePop(_)
+        | Op::GotoIfNotNilElsePop(_)
+        | Op::PushCatch(_)
+        | Op::PushConditionCaseRaw(_) => 1,
+        Op::StackRef(n) | Op::StackSet(n) => *n as usize + 1,
+        Op::DiscardN(raw) => {
+            let n = (*raw & 0x7F) as usize;
+            if n == 0 {
+                0
+            } else if *raw & 0x80 != 0 {
+                n + 1
+            } else {
+                n
+            }
+        }
+        Op::Call(n) => *n as usize + 1,
+        Op::Apply(n) => {
+            let n = *n as usize;
+            if n == 0 { 1 } else { n + 1 }
+        }
+        Op::CallBuiltin(_, n) | Op::CallBuiltinSym(_, n) => *n as usize,
+        Op::List(n) | Op::Concat(n) => *n as usize,
+        Op::Add
+        | Op::Sub
+        | Op::Mul
+        | Op::Div
+        | Op::Rem
+        | Op::Eqlsign
+        | Op::Gtr
+        | Op::Lss
+        | Op::Leq
+        | Op::Geq
+        | Op::Max
+        | Op::Min
+        | Op::Cons
+        | Op::Nth
+        | Op::Nthcdr
+        | Op::Setcar
+        | Op::Setcdr
+        | Op::Elt
+        | Op::Nconc
+        | Op::Member
+        | Op::Memq
+        | Op::Assq
+        | Op::Eq
+        | Op::Equal
+        | Op::StringEqual
+        | Op::StringLessp
+        | Op::Aref
+        | Op::Set
+        | Op::Fset
+        | Op::Get
+        | Op::Switch
+        | Op::Throw => 2,
+        Op::Aset | Op::Put | Op::Substring => 3,
+    }
+}
+
 /// Statically prove a sealed instruction stream's operand-stack behavior.
 ///
 /// GNU trusts the compiler's declared `max_stack` blindly (`PUSH` is an
@@ -408,7 +515,15 @@ pub(crate) fn verify_stack_effects_with_tables(
                 switch_depth = Some(depth - 2);
                 (2, -2)
             }
-            Op::Return | Op::Throw | Op::TrapOutOfRangeConstant(_) => continue,
+            Op::Return | Op::Throw | Op::TrapOutOfRangeConstant(_) => {
+                // Terminal ops do not fall through. Throw still consumes two
+                // operands; accepting it at a shallower depth would certify a
+                // body the verified driver then pops below the frame.
+                if depth < opcode_min_operands(&ops[pc]) {
+                    return None;
+                }
+                continue;
+            }
             // In-place unary rewrites.
             Op::Add1
             | Op::Sub1
@@ -499,6 +614,7 @@ pub(crate) fn verify_stack_effects_with_tables(
                 (0, 0)
             }
         };
+        debug_assert_eq!(min, opcode_min_operands(&ops[pc]));
         if depth < min {
             return None;
         }

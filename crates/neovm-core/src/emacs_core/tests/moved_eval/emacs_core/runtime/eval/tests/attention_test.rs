@@ -53,7 +53,7 @@ fn bytecode_varset(var: &str, value: Value) -> Value {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(vec![
         Op::Constant(0),
         Op::VarSet(1),

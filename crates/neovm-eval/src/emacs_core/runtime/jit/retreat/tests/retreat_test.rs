@@ -62,7 +62,7 @@ fn a_precise_deopt_counts_in_the_history_and_outlives_the_leaf() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(vec![Op::StackRef(0), Op::Constant(0), Op::Add, Op::Return]);
     f.set_constants(vec![Value::make_int(1)].into());
     f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(4));

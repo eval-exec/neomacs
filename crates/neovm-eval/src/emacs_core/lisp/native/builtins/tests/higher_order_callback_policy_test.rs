@@ -8,7 +8,7 @@ use neovm_value::value::LambdaParams;
 fn callback(car: bool) -> Value {
     let mut code =
         ByteCodeFunction::new(LambdaParams::simple(vec![intern("capture-callback-arg")]));
-    code.lexical = true;
+    code.set_lexical(true);
     code.set_ops(vec![Op::StackRef(0)]);
     if car {
         code.ops_mut().push(Op::Car);

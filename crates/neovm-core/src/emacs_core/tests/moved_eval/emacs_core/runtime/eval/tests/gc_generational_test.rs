@@ -178,7 +178,7 @@ fn compiled_old_cons_stores_remember_young_children_each_cycle() {
             optional: Vec::new(),
             rest: None,
         });
-        function.lexical = true;
+        function.set_lexical(true);
         function.set_ops(vec![Op::StackRef(1), Op::StackRef(1), op, Op::Return]);
         function.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
         let leaf = compile_bytecode_function(&function).expect("cons store compiles");

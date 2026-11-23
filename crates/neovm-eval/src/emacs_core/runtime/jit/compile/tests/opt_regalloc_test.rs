@@ -110,18 +110,18 @@ fn separate_single_parameter_joins() -> ByteCodeFunction {
 fn actual_plan(f: &ByteCodeFunction) -> crate::emacs_core::jit::opt::ir::Func {
     let params = crate::emacs_core::jit::opt::ir::ParamShape {
         required: f
-            .params
+            .params()
             .stack_shape()
             .expect("fixture stack parameters")
             .required(),
         optional: f
-            .params
+            .params()
             .stack_shape()
             .expect("fixture stack parameters")
             .optional()
             .expect("consistent fixture parameters"),
         has_rest: f
-            .params
+            .params()
             .stack_shape()
             .expect("fixture stack parameters")
             .rest()
@@ -166,11 +166,11 @@ fn assert_native_parity(ctx: &mut Context, f: &ByteCodeFunction, leaf: &Compiled
     crate::emacs_core::eval::push_scratch_gc_root(other_object);
     for condition in [Value::NIL, Value::T] {
         let mut args = vec![condition, object];
-        if f.params
+        if f.params()
             .stack_shape()
             .expect("fixture stack parameters")
             .required()
-            + f.params
+            + f.params()
                 .stack_shape()
                 .expect("fixture stack parameters")
                 .optional()
@@ -360,12 +360,20 @@ fn opt_refused_plan_keeps_the_call_heavy_baseline_allocator() {
     let _settings = Settings::enter();
     let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let mut f = joined_call();
-    let mut params = f.params.named().expect("named fixture parameters").clone();
+    let mut params = f
+        .params()
+        .named()
+        .expect("named fixture parameters")
+        .clone();
     let optional = params.required.pop().unwrap();
-    f.params = params.into();
-    let mut params = f.params.named().expect("named fixture parameters").clone();
+    f.set_params(params.into());
+    let mut params = f
+        .params()
+        .named()
+        .expect("named fixture parameters")
+        .clone();
     params.optional.push(optional);
-    f.params = params.into();
+    f.set_params(params.into());
     force_opt_for_test(Some(OptMode::Opt), Some(OptAdmit::default()));
     let leaf = compile_bytecode_function_requested(
         &f,

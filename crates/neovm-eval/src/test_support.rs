@@ -4190,7 +4190,7 @@ pub fn mir_build_copy_for_test(
     let ops = function.executable_ops();
     let map = function.executable_gnu_byte_offset_map();
     let arity = function
-        .params
+        .params()
         .stack_shape()
         .expect("fixture stack parameters")
         .required();

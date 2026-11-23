@@ -19,7 +19,7 @@ use neovm_value::value::{Value as LispValue, ValueKind, VecLikeType};
 
 fn prepared(source: &ByteCodeFunction, prefix: usize) -> Func {
     let arity = source
-        .params
+        .params()
         .stack_shape()
         .expect("fixture stack parameters")
         .required();

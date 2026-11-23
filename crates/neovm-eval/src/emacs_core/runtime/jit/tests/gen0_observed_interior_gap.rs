@@ -342,7 +342,7 @@ fn gen0_native_two_store_leaf_closes_only_the_first_read_owner() {
         optional: Vec::new(),
         rest: None,
     });
-    function.lexical = true;
+    function.set_lexical(true);
     function.set_ops(vec![
         Op::StackRef(2), // [exact range value exact]
         Op::StackRef(1), // [exact range value exact value]

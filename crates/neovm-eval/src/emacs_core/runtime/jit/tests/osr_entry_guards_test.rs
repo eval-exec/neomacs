@@ -15,7 +15,7 @@ fn effect_before_numeric_loop() -> ByteCodeFunction {
         optional: vec![],
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_constants(
         vec![
             Value::make_int(0),

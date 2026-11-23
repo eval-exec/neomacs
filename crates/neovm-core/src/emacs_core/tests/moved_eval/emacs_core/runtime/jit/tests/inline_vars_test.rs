@@ -121,7 +121,7 @@ fn interpret(ev: &mut Context, prog: &Prog, var: &str, args: &[Value]) -> String
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(prog.ops.clone());
     f.set_constants(constants(var).into());
     f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
@@ -767,7 +767,7 @@ fn binding_sum(nested: bool) -> ByteCodeFunction {
         optional: vec![],
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_constants(
         vec![
             Value::make_int(0),

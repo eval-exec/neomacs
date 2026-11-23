@@ -177,7 +177,7 @@ fn predicate_branches_resume_type_deopt_without_repeating_effects() {
             optional: vec![],
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_constants(
             vec![
                 Value::symbol("predicate-branch-effects"),

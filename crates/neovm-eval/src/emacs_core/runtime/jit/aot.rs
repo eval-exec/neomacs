@@ -2345,7 +2345,7 @@ fn testkit_mir_cons_reconstruction_case(
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_max_stack(
         crate::emacs_core::bytecode::StackDepth::try_from(16usize)
             .expect("testkit stack depth is representable"),
@@ -2486,7 +2486,7 @@ pub fn testkit_call_bearing_selftest(
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(ops);
         f.set_constants(constants.into());
         f.set_max_stack(
@@ -2669,7 +2669,7 @@ pub fn testkit_baseline_aot_selftest(
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(ops.clone());
         f.set_constants(constants.clone().into());
         f.set_max_stack(
@@ -2828,7 +2828,7 @@ pub fn testkit_baseline_deep_rawslot_deopt_selftest(
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(ops.clone());
         f.set_constants(constants.clone().into());
         f.set_max_stack(
@@ -2987,7 +2987,7 @@ pub fn testkit_callbuiltinsym_aot_selftest(
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(ops.clone());
         f.set_constants(constants.clone().into());
         f.set_max_stack(
@@ -3128,7 +3128,7 @@ fn cbsym_aot_serve_and_check(
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(ops.to_vec());
         f.set_constants(constants.to_vec().into());
         f.set_max_stack(
@@ -3428,7 +3428,7 @@ pub fn testkit_baseline_op_symbol_reloc_selftest(
                 optional: Vec::new(),
                 rest: None,
             });
-            f.lexical = true;
+            f.set_lexical(true);
             f.set_ops(b.ops.clone());
             f.set_constants(b.constants.clone().into());
             f.set_max_stack(
@@ -3619,7 +3619,7 @@ pub fn testkit_spec_aot_selftest(
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(ops);
         f.set_constants(vec![Value::symbol(intern(alias_name))].into());
         f.set_max_stack(
@@ -4010,7 +4010,7 @@ pub fn testkit_pgo_roundtrip_selftest(
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(ops);
         f.set_constants(vec![Value::symbol(intern(alias_name))].into());
         f.set_max_stack(
@@ -4146,7 +4146,7 @@ pub fn testkit_pgo_drain_selftest(
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(vec![
             Op::Constant(0),
             Op::StackRef(1),
@@ -4317,7 +4317,7 @@ fn ev_alias_and_build(
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(vec![
         Op::Constant(0),
         Op::StackRef(1),

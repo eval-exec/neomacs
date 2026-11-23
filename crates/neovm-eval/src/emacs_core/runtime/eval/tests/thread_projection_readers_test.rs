@@ -55,7 +55,7 @@ fn reader() -> ByteCodeFunction {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(vec![Op::VarRef(0), Op::Return]);
     f
 }

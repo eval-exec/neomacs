@@ -65,7 +65,7 @@ impl Drop for Roots {
 
 fn plan(f: &ByteCodeFunction) -> ir::Func {
     let arity = f
-        .params
+        .params()
         .stack_shape()
         .expect("fixture stack parameters")
         .required();
@@ -102,7 +102,7 @@ fn lower(f: &ByteCodeFunction, plan: &ir::Func) -> CompiledLeaf {
     let leaf = lower_opt_ir_for_test(
         f.executable_ops(),
         f.constants(),
-        f.params
+        f.params()
             .stack_shape()
             .expect("fixture stack parameters")
             .required(),
@@ -977,7 +977,7 @@ fn assert_terminal_poll_target(f: &ByteCodeFunction, plan: &ir::Func, clif: &str
         f.executable_ops(),
         f.constants(),
         f.executable_gnu_byte_offset_map(),
-        f.params
+        f.params()
             .stack_shape()
             .expect("fixture stack parameters")
             .required(),

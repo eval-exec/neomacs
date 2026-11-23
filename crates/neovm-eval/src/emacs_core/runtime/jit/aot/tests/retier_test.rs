@@ -57,7 +57,7 @@ fn unary(ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(ops);
     f.set_constants(constants.into());
     f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
@@ -362,13 +362,13 @@ fn cached_symbol_calls_reach_request(t2: bool) {
     // MIR pure inliner otherwise removes this tiny symbol call even with the
     // bytecode fuser disabled. StackRef skips the missing optional's nil slot.
     let mut params = caller
-        .params
+        .params()
         .named()
         .expect("named fixture parameters")
         .clone();
     // SAFETY: test placeholder id, never resolved (peer seal N8).
     params.optional.push(unsafe { SymId::from_raw(2) });
-    caller.params = params.into();
+    caller.set_params(params.into());
     let caller = Value::make_bytecode(caller);
     f.ctx
         .obarray
@@ -508,13 +508,13 @@ fn aot_retier_call_glue_preserves_native_admission_with_the_profit_gate_on() {
             // A non-inlinable callee leaves actual call glue at the member's
             // profit gate. The required argument is beneath optional nil.
             let mut params = callee
-                .params
+                .params()
                 .named()
                 .expect("named fixture parameters")
                 .clone();
             // SAFETY: test placeholder id, never resolved (peer seal N8).
             params.optional.push(unsafe { SymId::from_raw(2) });
-            callee.params = params.into();
+            callee.set_params(params.into());
             let callee = Value::make_bytecode(callee);
             ctx.obarray.set_symbol_function_id(callee_name, callee);
             (

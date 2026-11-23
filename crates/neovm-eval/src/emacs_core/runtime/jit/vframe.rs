@@ -293,8 +293,8 @@ impl DeoptChain {
             let code = function
                 .get_bytecode_data()
                 .ok_or(ChainReadError::InvalidCallee)?;
-            let params_on_stack = code.lexical || code.arglist.as_fixnum().is_some();
-            if code.env.is_some()
+            let params_on_stack = code.lexical() || code.arglist().as_fixnum().is_some();
+            if code.env().is_some()
                 || JitParamShape::try_from(code)
                     .ok()
                     .and_then(JitParamShape::fixed_arity)

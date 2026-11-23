@@ -19,7 +19,7 @@ pub(crate) fn function(ops: Vec<Op>, constants: Vec<Value>, arity: usize) -> Byt
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(ops);
     f.set_constants(constants.into());
     f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
@@ -767,10 +767,14 @@ fn optional_add1() -> ByteCodeFunction {
         vec![Value::make_int(1)],
         1,
     );
-    let mut params = f.params.named().expect("named fixture parameters").clone();
+    let mut params = f
+        .params()
+        .named()
+        .expect("named fixture parameters")
+        .clone();
     // SAFETY: test placeholder id, never resolved (peer seal N8).
     params.optional = vec![unsafe { SymId::from_raw(9) }];
-    f.params = params.into();
+    f.set_params(params.into());
     f
 }
 
@@ -820,13 +824,13 @@ fn jit_pipeline_leaf_records_its_mir_verdict() {
     );
     let mut rest = optional_add1();
     let mut params = rest
-        .params
+        .params()
         .named()
         .expect("named fixture parameters")
         .clone();
     // SAFETY: test placeholder id, never resolved (peer seal N8).
     params.rest = Some(unsafe { SymId::from_raw(10) });
-    rest.params = params.into();
+    rest.set_params(params.into());
     assert_eq!(
         verdict(&rest),
         ("baseline", Some("gate_rest+gate_opt".to_string())),

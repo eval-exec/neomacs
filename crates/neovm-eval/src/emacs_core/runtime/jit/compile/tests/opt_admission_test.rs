@@ -94,17 +94,29 @@ fn opt_admits_optional_and_rest_with_gnu_argument_seeding() {
     // GNU bytecode.c pushes non-rest arguments, nil-pads missing optionals,
     // and allocates the extra arguments' list in the final parameter slot.
     let mut f = function(vec![Op::List(3), Op::Return], vec![], 3);
-    let mut params = f.params.named().expect("named fixture parameters").clone();
+    let mut params = f
+        .params()
+        .named()
+        .expect("named fixture parameters")
+        .clone();
     params.required.truncate(1);
-    f.params = params.into();
-    let mut params = f.params.named().expect("named fixture parameters").clone();
+    f.set_params(params.into());
+    let mut params = f
+        .params()
+        .named()
+        .expect("named fixture parameters")
+        .clone();
     // SAFETY: test placeholder id, never resolved (peer seal N8).
     params.optional = vec![unsafe { SymId::from_raw(2) }];
-    f.params = params.into();
-    let mut params = f.params.named().expect("named fixture parameters").clone();
+    f.set_params(params.into());
+    let mut params = f
+        .params()
+        .named()
+        .expect("named fixture parameters")
+        .clone();
     // SAFETY: test placeholder id, never resolved (peer seal N8).
     params.rest = Some(unsafe { SymId::from_raw(3) });
-    f.params = params.into();
+    f.set_params(params.into());
     let leaf = compile(&ctx, &f);
     assert_eq!(leaf.required, 1);
     assert!(leaf.has_rest);

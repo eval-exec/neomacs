@@ -383,7 +383,7 @@ fn jit_final_report_collects_named_leaves_from_a_context() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(vec![
         Op::Constant(0),
         Op::StackRef(1),

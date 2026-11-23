@@ -86,7 +86,7 @@ fn fixture(action: impl FnOnce(&mut Context)) {
 fn bytecode(ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {
     let mut function =
         ByteCodeFunction::new(LambdaParams::simple(vec![intern("g2-inline-argument")]));
-    function.lexical = true;
+    function.set_lexical(true);
     function.set_ops(ops);
     function.set_constants(constants.into());
     function.set_max_stack(StackDepth::for_test(32));

@@ -16,7 +16,7 @@ fn constant_function(arglist: Value) -> ByteCodeFunction {
 fn jit_rejects_unrepresentable_and_inconsistent_stack_shapes() {
     for descriptor in [-1, 1, 383] {
         let mut function = constant_function(Value::fixnum(descriptor));
-        function.lexical = true;
+        function.set_lexical(true);
         let error = compile_bytecode_function(&function).expect_err("no valid native shape");
         assert!(
             matches!(error, CompileError::TakesArguments),
@@ -28,7 +28,7 @@ fn jit_rejects_unrepresentable_and_inconsistent_stack_shapes() {
 #[test]
 fn jit_preserves_dynamic_nil_as_a_zero_argument_function() {
     let function = constant_function(Value::NIL);
-    assert_eq!(function.params.fixed_arity(), Some(0));
+    assert_eq!(function.params().fixed_arity(), Some(0));
     let leaf = compile_bytecode_function(&function).expect("dynamic nil has no named bindings");
     assert_eq!(leaf.call_for_test(&[]), Some(Value::NIL.bits()));
 }
@@ -41,7 +41,7 @@ fn jit_declines_dynamic_named_binding_even_with_lexical_metadata() {
         Value::NIL,
     );
     let mut function = constant_function(arglist);
-    function.lexical = true;
+    function.set_lexical(true);
     let error =
         compile_bytecode_function(&function).expect_err("dynamic names need invocation binding");
     assert!(matches!(error, CompileError::TakesArguments));
@@ -51,7 +51,7 @@ fn jit_declines_dynamic_named_binding_even_with_lexical_metadata() {
 fn jit_declines_huge_entry_shape_before_proportional_allocation() {
     for descriptor in [1_i64 << 36, 1_i64 << 40] {
         let mut function = constant_function(Value::fixnum(descriptor));
-        function.lexical = true;
+        function.set_lexical(true);
         function.set_max_stack(StackDepth::for_test(1));
         let error = compile_bytecode_function(&function).expect_err("entry exceeds declared depth");
         assert!(matches!(error, CompileError::TakesArguments));

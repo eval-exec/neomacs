@@ -48,7 +48,7 @@ fn bc_with(
         // SAFETY: test placeholder id, never resolved (peer seal N8).
         rest: rest.then_some(unsafe { SymId::from_raw(nonrest + 1) }),
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(ops);
     f.set_constants(constants.into());
     f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));

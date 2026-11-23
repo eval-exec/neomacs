@@ -223,7 +223,7 @@ fn only_bodies_that_can_reenter_lisp_are_guarded() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(ops);
         f.set_constants(constants.into());
         f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));

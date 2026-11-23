@@ -9288,9 +9288,9 @@ fn make_byte_code_preserves_gnu_arg_slot_zero() {
     let lexical_bc = lexical
         .get_bytecode_data()
         .expect("make-byte-code should produce bytecode data");
-    assert_eq!(lexical_bc.arglist, lexical_arg_descriptor);
+    assert_eq!(lexical_bc.arglist(), lexical_arg_descriptor);
     assert!(
-        lexical_bc.lexical,
+        lexical_bc.lexical(),
         "GNU integer arg descriptors are lexical byte-code frames"
     );
 
@@ -9314,11 +9314,11 @@ fn make_byte_code_preserves_gnu_arg_slot_zero() {
         .get_bytecode_data()
         .expect("make-byte-code should produce bytecode data");
     assert!(
-        !dynamic_bc.lexical,
+        !dynamic_bc.lexical(),
         "GNU list arglists are old dynamically-bound byte-code frames"
     );
     assert_eq!(
-        neovm_value::value::list_to_vec(&dynamic_bc.arglist)
+        neovm_value::value::list_to_vec(&dynamic_bc.arglist())
             .expect("arg slot should stay a proper list"),
         vec![
             Value::symbol("arg0"),

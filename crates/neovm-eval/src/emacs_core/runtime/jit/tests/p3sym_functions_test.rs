@@ -35,7 +35,7 @@ impl Drop for Profit {
 
 fn function(ops: Vec<Op>, constants: Vec<Value>) -> Value {
     let mut f = ByteCodeFunction::new(LambdaParams::simple(vec![]));
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(ops);
     f.set_constants(constants.into());
     f.set_max_stack(StackDepth::for_test(4));

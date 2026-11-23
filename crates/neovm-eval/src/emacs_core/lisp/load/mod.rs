@@ -4408,11 +4408,11 @@ fn collect_value_symbol_names(
                 return;
             }
             if let Some(bytecode) = value.get_bytecode_data() {
-                collect_value_symbol_names(bytecode.arglist, symbol_names, seen);
+                collect_value_symbol_names(bytecode.arglist(), symbol_names, seen);
                 for constant in bytecode.constants().iter().copied() {
                     collect_value_symbol_names(constant, symbol_names, seen);
                 }
-                if let Some(env) = bytecode.env {
+                if let Some(env) = bytecode.env() {
                     collect_value_symbol_names(env, symbol_names, seen);
                 }
                 if let Some(doc_form) = bytecode.doc_form {

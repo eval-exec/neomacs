@@ -183,7 +183,7 @@ fn arithmetic_opcodes_answer_integer_operands_directly() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(vec![
             Op::StackRef(1),
             Op::StackRef(1),
@@ -234,7 +234,7 @@ fn division_opcode_preserves_fixnum_boundaries_and_slow_conditions() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(vec![Op::StackRef(1), Op::StackRef(1), Op::Div, Op::Return]);
     f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
     for (lhs, rhs) in cases {

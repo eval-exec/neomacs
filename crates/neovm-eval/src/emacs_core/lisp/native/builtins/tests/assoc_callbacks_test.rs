@@ -175,7 +175,7 @@ fn assoc_callbacks_resolve_and_call_named_bytecode() {
         optional: vec![],
         rest: None,
     });
-    bytecode.lexical = true;
+    bytecode.set_lexical(true);
     bytecode.set_ops(vec![
         Op::StackRef(1),
         Op::StackRef(1),

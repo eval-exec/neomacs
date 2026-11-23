@@ -8,7 +8,7 @@ use crate::value::LambdaParams;
 
 fn constant_function() -> ByteCodeFunction {
     let mut function = ByteCodeFunction::new(LambdaParams::simple(vec![]));
-    function.lexical = true;
+    function.set_lexical(true);
     function.set_ops(vec![Op::Constant(0), Op::Return]);
     function.set_constants(vec![Value::fixnum(73)].into());
     function.set_max_stack(StackDepth::for_test(4));
@@ -245,7 +245,7 @@ fn p3sym_c4_initial_bytecode_shape_and_materialization_fence() {
                     let mut function = constant_function();
                     match excluded {
                         "interactive" => function.interactive = Some(Value::T),
-                        "environment" => function.env = Some(Value::T),
+                        "environment" => function.set_env(Some(Value::T)),
                         "heap-constant" => {
                             function.set_constants(vec![Value::cons(Value::T, Value::NIL)].into())
                         }
@@ -257,8 +257,8 @@ fn p3sym_c4_initial_bytecode_shape_and_materialization_fence() {
                         ]),
                         "arity" => {
                             let parameter = crate::intern::intern("p3sym-c4-bytecode-argument");
-                            function.params = LambdaParams::simple(vec![parameter]).into();
-                            function.arglist = Value::list(vec![Value::from_sym_id(parameter)]);
+                            function.set_params(LambdaParams::simple(vec![parameter]).into());
+                            function.set_arglist(Value::list(vec![Value::from_sym_id(parameter)]));
                         }
                         "documentation" => function.doc_form = Some(Value::T),
                         "extra-slot" => function.extra_slots.push(Value::T),

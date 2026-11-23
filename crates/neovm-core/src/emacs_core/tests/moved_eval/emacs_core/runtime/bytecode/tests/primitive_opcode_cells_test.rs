@@ -286,9 +286,9 @@ fn run_cases_with_constant_pool(
             // CallBuiltin is the older constants-index primitive adapter.
             // It is not emitted by today's GNU decoder, so exercise it with
             // the exact decoded opcode body and an equivalent symbol pool.
-            let mut f = ByteCodeFunction::new(source.params.clone());
-            f.lexical = source.lexical;
-            f.arglist = source.arglist;
+            let mut f = ByteCodeFunction::new(source.params().clone());
+            f.set_lexical(source.lexical());
+            f.set_arglist(source.arglist());
             f.set_max_stack(source.max_stack());
             let mut constants = source.constants().to_vec();
             let mut replaced = false;

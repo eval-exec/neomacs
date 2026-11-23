@@ -50,7 +50,7 @@ impl Drop for Knobs {
 
 fn function(ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {
     let mut function = ByteCodeFunction::new(LambdaParams::simple(vec![intern("hof-header-arg")]));
-    function.lexical = true;
+    function.set_lexical(true);
     function.set_ops(ops);
     function.set_constants(constants.into());
     function.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));

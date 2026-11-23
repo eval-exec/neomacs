@@ -415,7 +415,7 @@ fn tiny_function() -> Value {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(vec![Op::Constant(0), Op::Return]);
     f.set_constants(vec![Value::fixnum(41), Value::fixnum(42)].into());
     f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(1));

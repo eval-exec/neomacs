@@ -302,10 +302,10 @@ fn site_verdict(
 /// back by `NEOVM_JIT_COMPILE_STATS=1`, so each names ONE rule: whichever
 /// dominates a real workload is the rule worth relaxing next.
 fn inlinable_verdict(callee: &ByteCodeFunction, nargs: usize) -> Result<(), String> {
-    if !callee.lexical {
+    if !callee.lexical() {
         return Err("dynamic".into());
     }
-    if callee.env.is_some() {
+    if callee.env().is_some() {
         return Err("env".into());
     }
     let arity = JitParamShape::try_from(callee)

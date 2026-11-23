@@ -55,7 +55,7 @@ fn lexical_fn(nargs: u32, ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFuncti
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(ops);
     f.set_constants(constants.into());
     f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
@@ -256,7 +256,7 @@ fn tier2_spec_reached_leaf_upgrades_and_serves_the_work() {
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     // Not lexical, so the MIR tier's pure inliner leaves the call a call.
     let mut callee = seven();
-    callee.lexical = false;
+    callee.set_lexical(false);
     let callee = Value::make_bytecode(callee);
     let callee_sym = intern("neovm--t2-x7-callee");
     ev.obarray.set_symbol_function_id(callee_sym, callee);

@@ -317,7 +317,7 @@ fn assert_aot_matches_interp_and_jit(ops: &[Op], constants: &[Value], nargs: usi
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(ops.to_vec());
     f.set_constants(constants.to_vec().into());
     f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
@@ -784,7 +784,7 @@ fn aot_reloc_const_is_gc_rooted_via_compiled_walk() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(ops.clone());
     f.set_constants(constants.clone().into());
     f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
@@ -896,7 +896,7 @@ fn aot_hit_serves_without_jitting_through_cache() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(ops.clone());
     f.set_constants(constants.clone().into());
     f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
@@ -945,7 +945,7 @@ fn r2_enumerate_loadup_leaves_finds_d0_candidates() {
         optional: Vec::new(),
         rest: None,
     });
-    a.lexical = true;
+    a.set_lexical(true);
     a.set_ops(vec![Op::Constant(0), Op::Add, Op::Return]);
     a.set_constants(vec![Value::make_int(5)].into());
     a.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
@@ -962,7 +962,7 @@ fn r2_enumerate_loadup_leaves_finds_d0_candidates() {
         optional: vec![unsafe { SymId::from_raw(2) }],
         rest: None,
     });
-    b.lexical = true;
+    b.set_lexical(true);
     b.set_ops(vec![Op::StackRef(0), Op::Return]);
     b.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     let b_id = neovm_value::intern::intern("r2-noncand-optional");
@@ -1079,7 +1079,7 @@ fn r2_prepopulate_native_from_call_1_and_survives_gc() {
         optional: Vec::new(),
         rest: None,
     });
-    a.lexical = true;
+    a.set_lexical(true);
     a.set_ops(ops.clone());
     a.set_constants(constants.clone().into());
     a.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
@@ -1174,7 +1174,7 @@ fn r2_prepopulate_skips_on_preload_miss() {
         optional: Vec::new(),
         rest: None,
     });
-    a.lexical = true;
+    a.set_lexical(true);
     a.set_ops(vec![Op::Constant(0), Op::Add, Op::Return]);
     a.set_constants(vec![Value::make_int(5)].into());
     a.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
@@ -1239,7 +1239,7 @@ fn r2_prepopulate_never_overwrites_existing_jit_leaf() {
         optional: Vec::new(),
         rest: None,
     });
-    a.lexical = true;
+    a.set_lexical(true);
     a.set_ops(vec![Op::Constant(0), Op::Add, Op::Return]);
     a.set_constants(vec![Value::make_int(5)].into());
     a.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
@@ -1317,7 +1317,7 @@ fn r2_prepopulate_never_overwrites_existing_jit_leaf() {
                 optional: Vec::new(),
                 rest: None,
             });
-            b.lexical = true;
+            b.set_lexical(true);
             b.set_ops(vec![Op::Constant(0), Op::Sub, Op::Return]);
             b.set_constants(vec![Value::make_int(1)].into());
             b.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
@@ -1446,7 +1446,7 @@ fn build_and_link_preload_writes_v2_prekey_manifest() {
             optional,
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(ops);
         f.set_constants(consts.into());
         f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
@@ -1585,7 +1585,7 @@ fn prepopulate_manifest_prefilter_skips_nonmember_without_hashing() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(ops);
         f.set_constants(consts.into());
         f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
@@ -1729,7 +1729,7 @@ fn prepopulate_prekey_mismatch_fails_closed_to_hash_path() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(ops.clone());
     f.set_constants(consts.clone().into());
     f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
@@ -1803,7 +1803,7 @@ fn pgo_pred_body(callee: &str) -> crate::emacs_core::bytecode::ByteCodeFunction 
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(vec![
         Op::Constant(0),
         Op::StackRef(1),

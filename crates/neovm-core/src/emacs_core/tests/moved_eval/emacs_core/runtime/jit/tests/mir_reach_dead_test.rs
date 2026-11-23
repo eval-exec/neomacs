@@ -36,7 +36,7 @@ fn named_let() -> ByteCodeFunction {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(vec![
         Op::Constant(0),     // 0: acc = 0          [n acc]
         Op::StackRef(1),     // 1: header: n        [n acc n]

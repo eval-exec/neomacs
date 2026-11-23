@@ -11,7 +11,7 @@ fn function(ops: Vec<Op>) -> ByteCodeFunction {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(ops);
     f.set_constants(vec![Value::make_int(1)].into());
     f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(4));

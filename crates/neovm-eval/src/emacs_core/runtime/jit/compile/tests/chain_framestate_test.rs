@@ -21,7 +21,7 @@ fn body() -> FusedBody {
         optional: vec![],
         rest: None,
     });
-    callee.lexical = true;
+    callee.set_lexical(true);
     callee.set_ops(vec![Op::StackRef(0), Op::Return]);
     callee.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
     callee.seal_hand_assembled_ops_for_test();

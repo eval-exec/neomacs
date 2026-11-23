@@ -83,7 +83,7 @@ fn p3sym_c4_compiled_a_current_b_identity_across_owned_era() {
     // This host-owned source contains only an immediate symbol. No value from
     // A's heap is supplied as a constant, operand or root in B's World.
     let mut source = ByteCodeFunction::new(LambdaParams::simple(vec![]));
-    source.lexical = true;
+    source.set_lexical(true);
     source.set_ops(vec![Op::Constant(0), Op::Call(0), Op::Return]);
     source.set_constants(vec![Value::from_sym_id(ids[0])].into());
     source.set_max_stack(StackDepth::for_test(4));

@@ -22,7 +22,7 @@ impl TryFrom<&ByteCodeFunction> for JitParamShape {
     #[inline]
     fn try_from(function: &ByteCodeFunction) -> Result<Self, Self::Error> {
         let shape = function
-            .params
+            .params()
             .stack_shape()
             .ok_or(CompileError::TakesArguments)?;
         let optional = shape.optional().ok_or(CompileError::TakesArguments)?;

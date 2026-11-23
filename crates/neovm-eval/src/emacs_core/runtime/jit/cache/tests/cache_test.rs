@@ -130,7 +130,7 @@ fn retier_unlinks_the_fast_leaf_from_callers_spec_slots() {
         vec![Op::Constant(0), Op::Call(0), Op::Return],
         vec![Value::from_sym_id(callee_sym)],
     );
-    caller.lexical = true;
+    caller.set_lexical(true);
     let caller = Value::make_bytecode(caller);
     crate::emacs_core::eval::push_scratch_gc_root(callee);
     crate::emacs_core::eval::push_scratch_gc_root(caller);
@@ -541,7 +541,7 @@ fn runs_with_args_and_rejects_arity_mismatch() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(vec![Op::StackRef(1), Op::StackRef(1), Op::Add, Op::Return]);
     f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     // Correct arity -> native result.
@@ -576,7 +576,7 @@ fn unary_add_one() -> ByteCodeFunction {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(vec![Op::StackRef(0), Op::Constant(0), Op::Add, Op::Return]);
     f.set_constants(vec![Value::make_int(1)].into());
     f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
@@ -896,7 +896,7 @@ fn lexical_fn(ops: Vec<Op>, constants: Vec<Value>, arity: usize) -> ByteCodeFunc
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(ops);
     f.set_constants(constants.into());
     f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));

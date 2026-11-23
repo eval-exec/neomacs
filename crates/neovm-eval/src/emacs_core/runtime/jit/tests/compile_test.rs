@@ -510,7 +510,7 @@ fn jit_matches_interpreter_on_if_branch() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(ops.to_vec());
         f.set_constants(constants.to_vec().into());
         f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
@@ -629,7 +629,7 @@ fn compiles_countdown_loop_matches_interpreter() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(ops.to_vec());
         f.set_constants(constants.to_vec().into());
         f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
@@ -684,7 +684,7 @@ fn mir_merge_phi_matches_interpreter() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(ops.to_vec());
         f.set_constants(constants.to_vec().into());
         f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
@@ -774,7 +774,7 @@ fn mir_probe_a_emits_one_tag_guard_per_iteration() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(ops.to_vec());
         f.set_constants(constants.to_vec().into());
         f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
@@ -871,7 +871,7 @@ fn mir_rooting_skip_on_an_inferred_fixnum_param_across_an_allocating_call() {
         optional: Vec::new(),
         rest: None,
     });
-    sq.lexical = true;
+    sq.set_lexical(true);
     sq.set_ops(vec![Op::Dup, Op::Mul, Op::Return]);
     sq.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     ev.obarray
@@ -882,7 +882,7 @@ fn mir_rooting_skip_on_an_inferred_fixnum_param_across_an_allocating_call() {
         optional: Vec::new(),
         rest: None,
     });
-    g.lexical = true;
+    g.set_lexical(true);
     // (lambda (y) (garbage-collect) (make-list 4096 0)): an exact collection,
     // then a reallocation that reuses any freed cell.
     g.set_ops(vec![
@@ -913,7 +913,7 @@ fn mir_rooting_skip_on_an_inferred_fixnum_param_across_an_allocating_call() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(vec![
         Op::StackRef(0),  // 0: c               [c c]
         Op::GotoIfNil(4), // 1                  [c]
@@ -1027,7 +1027,7 @@ fn mir_multi_phi_merge_matches_interpreter() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(ops.to_vec());
         f.set_constants(constants.to_vec().into());
         f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
@@ -1115,7 +1115,7 @@ fn inlined_callee_redefinition_rejits() {
             optional: Vec::new(),
             rest: None,
         });
-        c.lexical = true;
+        c.set_lexical(true);
         c.set_ops(ops);
         c.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
         Value::make_bytecode(c)
@@ -1128,7 +1128,7 @@ fn inlined_callee_redefinition_rejits() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(vec![
         Op::Constant(0),
         Op::StackRef(1),
@@ -1182,7 +1182,7 @@ fn mir_call_lowering_runs_a_non_inlined_call() {
         optional: Vec::new(),
         rest: None,
     });
-    c.lexical = true;
+    c.set_lexical(true);
     c.set_ops(vec![Op::StackRef(0), Op::Return]);
     c.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     ev.obarray
@@ -1239,7 +1239,7 @@ fn inline_plus_residual_call_keeps_shared_speculation_in_mir() {
         optional: Vec::new(),
         rest: None,
     });
-    sq.lexical = true;
+    sq.set_lexical(true);
     sq.set_ops(vec![Op::Dup, Op::Mul, Op::Return]);
     sq.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     ev.obarray
@@ -1250,7 +1250,7 @@ fn inline_plus_residual_call_keeps_shared_speculation_in_mir() {
         optional: Vec::new(),
         rest: None,
     });
-    g.lexical = true;
+    g.set_lexical(true);
     // (if y (1+ y) 0) — two basic blocks, so callee_inlinable refuses it.
     g.set_ops(vec![
         Op::StackRef(0),
@@ -1271,7 +1271,7 @@ fn inline_plus_residual_call_keeps_shared_speculation_in_mir() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(vec![
         Op::Constant(0), // g
         Op::Constant(1), // sq
@@ -1328,7 +1328,7 @@ fn precise_eviction_only_evicts_inlined_dependents() {
             optional: Vec::new(),
             rest: None,
         });
-        bf.lexical = true;
+        bf.set_lexical(true);
         bf.set_ops(ops);
         bf.set_constants(consts.into());
         bf.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
@@ -1472,7 +1472,7 @@ fn a_compiled_loop_polls_quit_whichever_tier_compiles_it() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(ops);
     f.set_constants(vec![Value::make_int(0)].into());
     f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
@@ -1554,7 +1554,7 @@ fn mir_conditional_loops_preserve_poll_cadence_and_quit() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_constants(vec![Value::make_int(0)].into());
         f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(4));
         if else_pop {
@@ -1613,7 +1613,7 @@ fn mir_loop_keeps_native_list_alive_across_exact_gc() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_constants(vec![Value::make_int(0)].into());
     f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(4));
     // (lambda (n) (let (l) (while (> n 0) (setq l (cons n l) n (1- n))) l))
@@ -1675,7 +1675,7 @@ fn mir_loop_overflow_after_a_poll_deopts_at_the_current_iteration() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_constants(vec![Value::make_int(0)].into());
     f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(4));
     f.set_ops(vec![
@@ -1736,7 +1736,7 @@ fn mir_loop_does_not_keep_an_inlined_callee_across_a_gc_hook() {
         optional: Vec::new(),
         rest: None,
     });
-    callee.lexical = true;
+    callee.set_lexical(true);
     callee.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(2));
     callee.set_ops(vec![Op::StackRef(0), Op::Sub1, Op::Return]);
     ev.obarray.set_symbol_function_id(
@@ -1749,7 +1749,7 @@ fn mir_loop_does_not_keep_an_inlined_callee_across_a_gc_hook() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(3));
     f.set_constants(vec![Value::make_int(0), step].into());
     f.set_ops(vec![
@@ -1849,7 +1849,7 @@ fn backedge_polls_quit_like_the_interpreter() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(ops.to_vec());
     f.set_constants(constants.to_vec().into());
     f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
@@ -2272,7 +2272,7 @@ fn arith_intrinsic_bitops_jit_match_interp_and_deopt() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(ops);
         f.set_constants(vec![Value::from_sym_id(intern(op_name))].into());
         f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
@@ -2394,7 +2394,7 @@ fn arith_intrinsic_inline_level_b_matches_interp() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(ops);
         f.set_constants(vec![Value::from_sym_id(intern(op_name))].into());
         f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
@@ -2534,7 +2534,7 @@ fn osr_transfers_hot_loop_and_matches_interpreter() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(vec![
             Op::Constant(0), // acc = 0
             Op::Constant(0), // i = 0
@@ -2613,7 +2613,7 @@ fn osr_precise_deopt_resumes_without_replaying_iterations() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(vec![
             Op::Constant(0), // i = 0            [start n i]
             Op::StackRef(2), // x = start        [start n i x]
@@ -2823,7 +2823,7 @@ fn mir_pure_lowering_matches_interpreter() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(ops.clone());
         f.set_constants(constants.clone().into());
         f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(32));
@@ -2928,7 +2928,7 @@ fn mir_hoists_the_root_window_across_shim_sites() {
         optional: Vec::new(),
         rest: None,
     });
-    churn.lexical = true;
+    churn.set_lexical(true);
     churn.set_ops(vec![
         Op::Constant(0), // 'garbage-collect
         Op::Call(0),     // exact collection
@@ -3093,7 +3093,7 @@ fn baseline_tier_a_fallback_stores_do_not_leak_into_the_next_site() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(vec![
         Op::StackRef(1),                        // a        [a n a]
         Op::Dup,                                //          [a n a a]
@@ -3138,7 +3138,7 @@ fn baseline_reg_args_fallback_stores_do_not_leak_into_the_next_site() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(vec![
         Op::StackRef(1), // a                 [a n a]
         Op::Dup,         //                   [a n a a]
@@ -3188,7 +3188,7 @@ fn baseline_fallback_meet_keeps_only_the_slots_both_paths_agree_on() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(vec![
         Op::Constant(0),                        // [a b v]
         Op::VarSet(0),                          // residual [a b]: stores a, b
@@ -3250,7 +3250,7 @@ fn baseline_handler_dispatch_blocks_do_not_trust_the_block_end_store_record() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(vec![
         Op::StackRef(0),                        // 0: a              [a a]
         Op::Dup,                                // 1                 [a a a]
@@ -3698,7 +3698,7 @@ fn tier_gate_sends_a_loop_with_a_shim_op_to_the_baseline() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(loop_ops.clone());
     f.set_constants(vec![Value::make_int(0)].into());
     f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
@@ -3739,7 +3739,7 @@ fn tier_gate_sends_a_loop_with_a_shim_op_to_the_baseline() {
         optional: Vec::new(),
         rest: None,
     });
-    h.lexical = true;
+    h.set_lexical(true);
     h.set_ops(self_loop.clone());
     h.set_constants(vec![Value::make_int(0)].into());
     h.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
@@ -3761,7 +3761,7 @@ fn tier_gate_sends_a_loop_with_a_shim_op_to_the_baseline() {
         optional: Vec::new(),
         rest: None,
     });
-    g.lexical = true;
+    g.set_lexical(true);
     g.set_ops(vec![Op::StackRef(0), Op::Length, Op::Return]);
     g.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     let leaf = compile_bytecode_function_with(&g, Some(&ev.obarray)).expect("compiles");
@@ -3800,7 +3800,7 @@ fn mir_inline_call_revalidates_after_fset_and_allows_state_reads() {
             optional: Vec::new(),
             rest: None,
         });
-        b.lexical = true;
+        b.set_lexical(true);
         b.set_ops(vec![Op::StackRef(0), op, Op::Return]);
         b.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
         Value::make_bytecode(b)
@@ -3814,7 +3814,7 @@ fn mir_inline_call_revalidates_after_fset_and_allows_state_reads() {
         optional: Vec::new(),
         rest: None,
     });
-    bar.lexical = true;
+    bar.set_lexical(true);
     bar.set_ops(vec![
         Op::Constant(0), // 'f           [x new f]
         Op::StackRef(1), // new          [x new f new]
@@ -3852,7 +3852,7 @@ fn mir_inline_call_revalidates_after_fset_and_allows_state_reads() {
         optional: Vec::new(),
         rest: None,
     });
-    baz.lexical = true;
+    baz.set_lexical(true);
     baz.set_ops(vec![
         Op::VarRef(1),   // v            [x v]
         Op::Pop,         //              [x]
@@ -4090,7 +4090,7 @@ fn mir_adapter_inlined_predicate_reads_its_own_operand() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(vec![Op::StackRef(1), Op::Integerp, Op::Return]);
     f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     ev.obarray
@@ -4101,7 +4101,7 @@ fn mir_adapter_inlined_predicate_reads_its_own_operand() {
         optional: Vec::new(),
         rest: None,
     });
-    g.lexical = true;
+    g.set_lexical(true);
     // (lambda (s) (f s 5))
     g.set_ops(vec![
         Op::Constant(0),
@@ -4520,7 +4520,7 @@ fn cross_block_call_function(sym_val: Value) -> ByteCodeFunction {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(cross_block_call_ops().to_vec());
     f.set_constants(vec![sym_val, Value::make_int(5), Value::make_int(7)].into());
     f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
@@ -4583,7 +4583,7 @@ fn a_missed_callee_check_does_not_elide_the_speculated_path_stores() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(vec![
         Op::Constant(3),   // v             [a b v]
         Op::VarSet(3),     // stores [a b]  [a b]
@@ -4832,7 +4832,7 @@ fn a_switch_carries_known_fixnum_slots_to_its_arms() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(ops.to_vec());
     f.set_constants(constants.to_vec().into());
     f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
@@ -5197,7 +5197,7 @@ fn compiles_varbind_unbind_with_full_unwind_semantics() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(ops.to_vec());
         f.set_constants(consts.to_vec().into());
         f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
@@ -5684,7 +5684,7 @@ fn harness_with_inc_callee(name: &str) -> (crate::emacs_core::eval::Context, Val
         optional: Vec::new(),
         rest: None,
     });
-    callee.lexical = true;
+    callee.set_lexical(true);
     callee.set_ops(vec![Op::StackRef(0), Op::Add1, Op::Return]);
     callee.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     ev.obarray
@@ -5774,7 +5774,7 @@ fn guard_after_call_deopts_without_replaying_the_call() {
         optional: Vec::new(),
         rest: None,
     });
-    callee.lexical = true;
+    callee.set_lexical(true);
     callee.set_ops(vec![
         Op::Constant(0), // CELL
         Op::Constant(0), // CELL
@@ -5805,7 +5805,7 @@ fn guard_after_call_deopts_without_replaying_the_call() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(ops.clone());
     f.set_constants(constants.clone().into());
     f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
@@ -6037,7 +6037,7 @@ fn compiles_apply_with_leading_args() {
         optional: Vec::new(),
         rest: None,
     });
-    callee.lexical = true;
+    callee.set_lexical(true);
     callee.set_ops(vec![Op::StackRef(1), Op::StackRef(1), Op::Add, Op::Return]);
     callee.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     ev.obarray
@@ -6071,12 +6071,16 @@ fn bails_on_missing_return() {
 #[test]
 fn bails_on_argument_taking_function() {
     let mut f = nullary();
-    let mut params = f.params.named().expect("named fixture parameters").clone();
+    let mut params = f
+        .params()
+        .named()
+        .expect("named fixture parameters")
+        .clone();
     // SAFETY: test placeholder id, never resolved (peer seal N8).
     params
         .required
         .push(unsafe { neovm_value::intern::SymId::from_raw(1) });
-    f.params = params.into();
+    f.set_params(params.into());
     f.set_ops(vec![Op::Nil, Op::Return]);
     let err = compile_bytecode_function(&f).unwrap_err();
     assert!(matches!(err, CompileError::TakesArguments));
@@ -6146,7 +6150,7 @@ fn compile_bytecode_function_accepts_required_args_when_lexical() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(4));
     f.set_ops(vec![Op::StackRef(1), Op::StackRef(1), Op::Add, Op::Return]);
     let leaf = compile_bytecode_function(&f).unwrap();
@@ -6168,7 +6172,7 @@ fn compile_bytecode_function_bails_on_dynamic_params() {
         optional: Vec::new(),
         rest: None,
     });
-    dynp.lexical = false;
+    dynp.set_lexical(false);
     dynp.set_ops(vec![Op::StackRef(0), Op::Return]);
     assert!(!params_on_stack(&dynp));
     assert!(matches!(
@@ -6188,7 +6192,7 @@ fn compiles_optional_params_with_nil_padding() {
         optional: vec![unsafe { neovm_value::intern::SymId::from_raw(2) }],
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(vec![Op::StackRef(0), Op::Return]); // top of frame = b
     f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     let leaf = compile_bytecode_function(&f).unwrap();
@@ -6219,7 +6223,7 @@ fn compiles_rest_param_as_list() {
         // SAFETY: test placeholder id, never resolved (peer seal N8).
         rest: Some(unsafe { neovm_value::intern::SymId::from_raw(1) }),
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(vec![Op::StackRef(0), Op::Return]);
     f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     let leaf = compile_bytecode_function(&f).unwrap();
@@ -6382,7 +6386,7 @@ fn jit_matches_interpreter_with_args() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(ops.to_vec());
     f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     let want = {
@@ -6440,7 +6444,7 @@ fn jit_bench_countdown_loop() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(ops.to_vec());
     f.set_constants(constants.to_vec().into());
     f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
@@ -6490,7 +6494,7 @@ fn jit_bench_mir_loops_against_baseline() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_constants(vec![Value::make_int(0), Value::make_int(3), Value::make_int(7)].into());
         f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
         f.ops_mut().push(Op::Constant(0)); // [n acc]
@@ -6673,7 +6677,7 @@ fn fuzz_straightline_bodies_match_interpreter() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(ops.clone());
         f.set_constants(constants.clone().into());
         f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(64));
@@ -6942,7 +6946,7 @@ fn fuzz_varset_bodies_match_interpreter_state() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(ops.clone());
         f.set_constants(constants.clone().into());
         f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(64));
@@ -7433,7 +7437,7 @@ fn contained_shim_panic_restores_boundary_state() {
         optional: Vec::new(),
         rest: None,
     });
-    mid.lexical = true;
+    mid.set_lexical(true);
     mid.set_ops(vec![
         Op::Constant(1), // 5
         Op::VarBind(0),  // bind jit-t5-dynvar := 5 (leaked by the panic)
@@ -7516,7 +7520,7 @@ fn a_panic_contained_in_a_direct_callee_is_healed_by_the_caller() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(ops);
         f.set_constants(constants.into());
         f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
@@ -7632,7 +7636,7 @@ fn a_panic_contained_on_the_spec_fast_path_is_healed_by_the_caller() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(ops);
         f.set_constants(constants.into());
         f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
@@ -7814,7 +7818,7 @@ fn contained_shim_panic_with_leaked_callee_handler_still_matches_leaf_handler() 
         optional: Vec::new(),
         rest: None,
     });
-    mid.lexical = true;
+    mid.set_lexical(true);
     mid.set_ops(vec![
         Op::PushConditionCase(6),
         Op::Constant(0), // 'neovm--internal-panic
@@ -8017,7 +8021,7 @@ fn parked_panic_survives_leaf_exit_cleanup_running_compiled_code() {
         optional: Vec::new(),
         rest: None,
     });
-    cleanup.lexical = true;
+    cleanup.set_lexical(true);
     cleanup.set_ops(vec![
         Op::PushConditionCase(7),
         Op::Constant(0), // 'signal
@@ -8137,7 +8141,7 @@ fn wide_arg_call_panic_releases_backtrace_args_cleanly() {
         optional: Vec::new(),
         rest: None,
     });
-    mid.lexical = true;
+    mid.set_lexical(true);
     mid.set_ops(vec![
         Op::Constant(0), // 'neovm--internal-panic
         Op::Constant(1), // "wide-boom"
@@ -8263,7 +8267,7 @@ fn a_body_that_calls_itself_is_classified_by_identity() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(ops);
         f.set_constants(vec![callee].into());
         f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
@@ -8413,7 +8417,7 @@ fn entry_compiles_pick_the_allocator_by_shape_and_request() {
     ]);
     lp.set_constants(vec![Value::make_int(0)].into());
     lp.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
-    lp.lexical = true;
+    lp.set_lexical(true);
     let leaf = compile_bytecode_function_with(&lp, None).expect("loop body compiles");
     assert_eq!(leaf.regalloc, RegallocChoice::Full);
 }
@@ -8465,15 +8469,19 @@ fn a_pure_body_with_a_float_feedback_site_is_rejected_from_the_mir_tier() {
     // (lambda (a b) (+ a b)) — pure, required-only: MIR-eligible.
     fn adder() -> ByteCodeFunction {
         let mut f = nullary();
-        f.lexical = true;
-        let mut params = f.params.named().expect("named fixture parameters").clone();
+        f.set_lexical(true);
+        let mut params = f
+            .params()
+            .named()
+            .expect("named fixture parameters")
+            .clone();
         params.required = vec![
             // SAFETY: test placeholder id, never resolved (peer seal N8).
             unsafe { neovm_value::intern::SymId::from_raw(1) },
             // SAFETY: test placeholder id, never resolved (peer seal N8).
             unsafe { neovm_value::intern::SymId::from_raw(2) },
         ];
-        f.params = params.into();
+        f.set_params(params.into());
         f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(4));
         f.set_ops(vec![Op::StackRef(1), Op::StackRef(1), Op::Add, Op::Return]);
         f
@@ -8579,15 +8587,19 @@ fn a_pure_body_with_a_float_feedback_site_is_rejected_from_the_mir_tier() {
 fn a_float_site_compare_breaks_a_double_tie_on_exact_integers_like_gnu() {
     fn cmp_fn(op: Op) -> ByteCodeFunction {
         let mut f = nullary();
-        f.lexical = true;
-        let mut params = f.params.named().expect("named fixture parameters").clone();
+        f.set_lexical(true);
+        let mut params = f
+            .params()
+            .named()
+            .expect("named fixture parameters")
+            .clone();
         params.required = vec![
             // SAFETY: test placeholder id, never resolved (peer seal N8).
             unsafe { neovm_value::intern::SymId::from_raw(1) },
             // SAFETY: test placeholder id, never resolved (peer seal N8).
             unsafe { neovm_value::intern::SymId::from_raw(2) },
         ];
-        f.params = params.into();
+        f.set_params(params.into());
         f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(4));
         f.set_ops(vec![Op::StackRef(1), Op::StackRef(1), op, Op::Return]);
         f
@@ -8673,8 +8685,12 @@ fn generic_arith_fn(
     feedback: crate::emacs_core::jit::NumericFeedback,
 ) -> ByteCodeFunction {
     let mut f = nullary();
-    f.lexical = true;
-    let mut params = f.params.named().expect("named fixture parameters").clone();
+    f.set_lexical(true);
+    let mut params = f
+        .params()
+        .named()
+        .expect("named fixture parameters")
+        .clone();
     params.required = (1..=nargs as u32)
         .map(|id| {
             // SAFETY: fixture ids are packed into bytecode descriptors and compared,
@@ -8682,7 +8698,7 @@ fn generic_arith_fn(
             unsafe { neovm_value::intern::SymId::from_raw(id) }
         })
         .collect();
-    f.params = params.into();
+    f.set_params(params.into());
     f.set_ops(if nargs == 2 {
         vec![Op::StackRef(1), Op::StackRef(1), op, Op::Return]
     } else {
@@ -8823,8 +8839,12 @@ fn a_generic_site_result_is_not_a_known_fixnum_across_a_block_edge() {
     use crate::emacs_core::eval::Context;
     use crate::emacs_core::jit::NumericFeedback as NF;
     let mut f = nullary();
-    f.lexical = true;
-    let mut params = f.params.named().expect("named fixture parameters").clone();
+    f.set_lexical(true);
+    let mut params = f
+        .params()
+        .named()
+        .expect("named fixture parameters")
+        .clone();
     params.required = (1..=3)
         .map(|id| {
             // SAFETY: fixture ids are packed into bytecode descriptors and compared,
@@ -8832,7 +8852,7 @@ fn a_generic_site_result_is_not_a_known_fixnum_across_a_block_edge() {
             unsafe { neovm_value::intern::SymId::from_raw(id) }
         })
         .collect();
-    f.params = params.into();
+    f.set_params(params.into());
     f.set_ops(vec![
         Op::StackRef(2),  // 0: a        [a b c a]
         Op::StackRef(2),  // 1: b        [a b c a b]
@@ -8913,8 +8933,12 @@ fn a_generic_arith_signal_is_caught_by_a_leaf_local_handler() {
     use crate::emacs_core::eval::Context;
     use crate::emacs_core::jit::NumericFeedback as NF;
     let mut f = nullary();
-    f.lexical = true;
-    let mut params = f.params.named().expect("named fixture parameters").clone();
+    f.set_lexical(true);
+    let mut params = f
+        .params()
+        .named()
+        .expect("named fixture parameters")
+        .clone();
     params.required = (1..=2)
         .map(|id| {
             // SAFETY: fixture ids are packed into bytecode descriptors and compared,
@@ -8922,7 +8946,7 @@ fn a_generic_arith_signal_is_caught_by_a_leaf_local_handler() {
             unsafe { neovm_value::intern::SymId::from_raw(id) }
         })
         .collect();
-    f.params = params.into();
+    f.set_params(params.into());
     f.set_ops(vec![
         Op::PushConditionCase(6), // 0
         Op::StackRef(1),          // 1 a
@@ -8974,8 +8998,12 @@ fn generic_arith_fallbacks_keep_the_residual_rooted() {
     use crate::emacs_core::eval::Context;
     use crate::emacs_core::jit::NumericFeedback as NF;
     let mut f = nullary();
-    f.lexical = true;
-    let mut params = f.params.named().expect("named fixture parameters").clone();
+    f.set_lexical(true);
+    let mut params = f
+        .params()
+        .named()
+        .expect("named fixture parameters")
+        .clone();
     params.required = (1..=2)
         .map(|id| {
             // SAFETY: fixture ids are packed into bytecode descriptors and compared,
@@ -8983,7 +9011,7 @@ fn generic_arith_fallbacks_keep_the_residual_rooted() {
             unsafe { neovm_value::intern::SymId::from_raw(id) }
         })
         .collect();
-    f.params = params.into();
+    f.set_params(params.into());
     f.set_ops(vec![
         Op::Constant(0), // [a b 1]
         Op::Constant(1), // [a b 1 2]
@@ -9037,8 +9065,12 @@ fn a_generic_arith_signal_hook_that_collects_keeps_the_residual_alive() {
     use crate::emacs_core::eval::Context;
     use crate::emacs_core::jit::NumericFeedback as NF;
     let mut f = nullary();
-    f.lexical = true;
-    let mut params = f.params.named().expect("named fixture parameters").clone();
+    f.set_lexical(true);
+    let mut params = f
+        .params()
+        .named()
+        .expect("named fixture parameters")
+        .clone();
     params.required = (1..=2)
         .map(|id| {
             // SAFETY: fixture ids are packed into bytecode descriptors and compared,
@@ -9046,7 +9078,7 @@ fn a_generic_arith_signal_hook_that_collects_keeps_the_residual_alive() {
             unsafe { neovm_value::intern::SymId::from_raw(id) }
         })
         .collect();
-    f.params = params.into();
+    f.set_params(params.into());
     f.set_ops(vec![
         Op::Constant(0),          // 0  [a b 1]
         Op::Constant(1),          // 1  [a b 1 2]
@@ -9176,7 +9208,7 @@ fn a_record_type_of_site_answers_inline() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(vec![
             Op::Constant(0),
             Op::Constant(1),
@@ -9383,7 +9415,7 @@ fn fboundp_call_sites_answer_as_the_builtin_on_the_fast_path() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(vec![
         Op::Constant(0),
         Op::StackRef(1),
@@ -9525,7 +9557,7 @@ fn fboundp_sites_use_the_dedicated_shim() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(vec![
             Op::Constant(0),
             Op::StackRef(1),
@@ -9679,7 +9711,7 @@ fn autoload_do_load_call_sites_answer_as_the_builtin_on_the_fast_path() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         let mut ops = vec![Op::Constant(0), Op::StackRef(1)];
         if nargs >= 2 {
             ops.push(Op::Constant(1));
@@ -9761,7 +9793,7 @@ fn autoload_do_load_call_sites_answer_as_the_builtin_on_the_fast_path() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(vec![
         Op::Constant(0),
         Op::StackRef(1),
@@ -9823,7 +9855,7 @@ fn type_tag_predicate_sites_answer_inline() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(vec![
             Op::Constant(0),
             Op::StackRef(1),
@@ -10015,7 +10047,7 @@ fn autoload_do_load_sites_answer_non_autoload_inline() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(vec![
         Op::Constant(0),
         Op::StackRef(1),
@@ -10197,7 +10229,7 @@ fn type_of_call_sites_answer_as_the_builtin_on_the_fast_path() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(vec![
             Op::Constant(0),
             Op::StackRef(1),
@@ -10303,7 +10335,7 @@ fn an_unrelated_redefinition_keeps_an_inlining_leaf_compiled() {
             optional: Vec::new(),
             rest: None,
         });
-        bf.lexical = true;
+        bf.set_lexical(true);
         bf.set_ops(ops);
         bf.set_constants(consts.into());
         bf.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
@@ -10384,7 +10416,7 @@ fn refsetting_the_same_function_and_repeated_redefinitions_stop_recompiling() {
             optional: Vec::new(),
             rest: None,
         });
-        bf.lexical = true;
+        bf.set_lexical(true);
         bf.set_ops(ops);
         bf.set_constants(consts.into());
         bf.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
@@ -10499,7 +10531,7 @@ fn subr_spec_screened_entry_cache_engages_and_a_rewrite_invalidates_it() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(vec![
         Op::Constant(0),
         Op::StackRef(1),

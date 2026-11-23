@@ -27,7 +27,7 @@ fn lexical_fn(nargs: u32, ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFuncti
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(ops);
     f.set_constants(constants.into());
     f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
@@ -411,7 +411,7 @@ fn with_direct_calls_an_inexact_callee_keeps_the_shim() {
             optional: vec![unsafe { SymId::from_raw(2) }],
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(vec![Op::StackRef(1), Op::Return]);
         f.set_constants(vec![Value::make_int(0)].into());
         f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(4));

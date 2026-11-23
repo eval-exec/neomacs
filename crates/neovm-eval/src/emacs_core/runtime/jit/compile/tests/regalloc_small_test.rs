@@ -93,14 +93,18 @@ fn regalloc_small_selection_covers_baseline_and_mir() {
         let mut f = ByteCodeFunction::new(LambdaParams::simple(vec![neovm_value::intern::intern(
             "regalloc-small-arg",
         )]));
-        f.lexical = true;
+        f.set_lexical(true);
         if baseline {
             // An optional argument keeps this body out of the MIR tier.
-            let mut params = f.params.named().expect("named fixture parameters").clone();
+            let mut params = f
+                .params()
+                .named()
+                .expect("named fixture parameters")
+                .clone();
             params
                 .optional
                 .push(neovm_value::intern::intern("regalloc-small-optional"));
-            f.params = params.into();
+            f.set_params(params.into());
         }
         f.set_ops(vec![
             Op::StackRef(u16::from(baseline)),

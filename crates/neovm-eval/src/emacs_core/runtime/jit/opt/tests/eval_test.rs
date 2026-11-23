@@ -22,7 +22,7 @@ fn function(ops: &[Op], constants: &[Value], shape: ParamShape) -> ByteCodeFunct
             .collect(),
         rest: shape.has_rest.then(|| intern("opt-reference-rest")),
     });
-    function.lexical = true;
+    function.set_lexical(true);
     function.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(128));
     function.set_ops(ops.to_vec());
     function.set_constants(constants.to_vec().into());
@@ -31,7 +31,7 @@ fn function(ops: &[Op], constants: &[Value], shape: ParamShape) -> ByteCodeFunct
 
 fn ir(function: &ByteCodeFunction, prefix: usize) -> Func {
     let shape = function
-        .params
+        .params()
         .stack_shape()
         .expect("fixture stack parameters");
     let shape = ParamShape {

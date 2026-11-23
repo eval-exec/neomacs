@@ -256,7 +256,7 @@ fn install_native_select_leaf(context: &mut Context) {
     context.register_subr(SubrSpec::fixed0("f5-jit-witness", native_witness));
     let mut function =
         crate::emacs_core::bytecode::ByteCodeFunction::new(LambdaParams::simple(Vec::new()));
-    function.lexical = true;
+    function.set_lexical(true);
     function.set_ops(vec![
         crate::emacs_core::bytecode::Op::Constant(0),
         crate::emacs_core::bytecode::Op::Call(0),

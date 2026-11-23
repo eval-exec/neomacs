@@ -113,7 +113,7 @@ impl Program {
 
 fn prepared(source: &ByteCodeFunction) -> ir::Func {
     let arity = source
-        .params
+        .params()
         .stack_shape()
         .expect("fixture stack parameters")
         .required();
@@ -155,7 +155,7 @@ fn lower(source: &ByteCodeFunction, plan: &ir::Func) -> CompiledLeaf {
         source.executable_ops(),
         source.constants(),
         source
-            .params
+            .params()
             .stack_shape()
             .expect("fixture stack parameters")
             .required(),

@@ -149,7 +149,7 @@ fn opt_osr_evidence_actual_negative_and_baseline_entries_do_not_qualify() {
     let _settings = Settings::enter();
     let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let mut refused = list_loop();
-    refused.lexical = false;
+    refused.set_lexical(false);
     let values = snapshot(pair());
     prepare(&mut ctx, &values);
     assert!(matches!(

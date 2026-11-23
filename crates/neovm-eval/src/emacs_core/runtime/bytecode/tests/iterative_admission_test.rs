@@ -47,7 +47,7 @@ fn bytecode_lazy_iterative_admission_decodes_real_gnu_code_and_keeps_arity_bound
 fn bytecode_lazy_iterative_admission_checks_each_clones_environment() {
     let proto = admission_function(0, 1, vec![192, 135]);
     let mut captured = proto.clone();
-    captured.env = Some(Value::NIL);
+    captured.set_env(Some(Value::NIL));
     assert!(std::sync::Arc::ptr_eq(
         proto.lazy_gnu_code().as_ref().unwrap(),
         captured.lazy_gnu_code().as_ref().unwrap()
@@ -115,8 +115,8 @@ fn bytecode_lazy_iterative_admission_restarts_when_decode_is_reinstalled() {
     assert_eq!(func.lazy_iterative_admission(0), Some(true));
     let old = func.lazy_gnu_code().as_ref().unwrap().clone();
     // Shape changes are finalized before reinstalling the GNU decode cell.
-    func.params = FunctionParams::try_from(Value::fixnum((2 << 8) | 1)).unwrap();
-    func.arglist = Value::fixnum((2 << 8) | 1);
+    func.set_params(FunctionParams::try_from(Value::fixnum((2 << 8) | 1)).unwrap());
+    func.set_arglist(Value::fixnum((2 << 8) | 1));
     func.set_max_stack(StackDepth::for_test(3));
     func.restore_gnu_decode_policy().unwrap();
     let restored = func.lazy_gnu_code().as_ref().unwrap().clone();
@@ -208,19 +208,19 @@ fn bytecode_lazy_iterative_admission_preserves_shared_layout_and_eager_fallback(
         std::mem::offset_of!(OriginalFunction, max_stack)
     );
     assert_eq!(
-        std::mem::offset_of!(ByteCodeFunction, params),
+        ByteCodeFunction::offset_of_params(),
         std::mem::offset_of!(OriginalFunction, params)
     );
     assert_eq!(
-        std::mem::offset_of!(ByteCodeFunction, arglist),
+        ByteCodeFunction::offset_of_arglist(),
         std::mem::offset_of!(OriginalFunction, arglist)
     );
     assert_eq!(
-        std::mem::offset_of!(ByteCodeFunction, lexical),
+        ByteCodeFunction::offset_of_lexical(),
         std::mem::offset_of!(OriginalFunction, lexical)
     );
     assert_eq!(
-        std::mem::offset_of!(ByteCodeFunction, env),
+        ByteCodeFunction::offset_of_env(),
         std::mem::offset_of!(OriginalFunction, env)
     );
     assert_eq!(
@@ -285,7 +285,7 @@ fn bytecode_the_admission_peek_answers_like_the_probe_without_writing() {
     // A captured clone is refused without touching the shared cell.
     let fresh = admission_function(0, 1, vec![192, 135]);
     let mut captured = fresh.clone();
-    captured.env = Some(Value::NIL);
+    captured.set_env(Some(Value::NIL));
     assert_eq!(
         captured.peek_lazy_iterative_admission(0),
         LazyAdmissionPeek::Known(false)

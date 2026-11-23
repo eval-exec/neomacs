@@ -2448,7 +2448,7 @@ fn with_bytecode_literal_slots<R>(value: &Value, f: impl FnOnce(&[Value]) -> R) 
         return Some(f(items));
     }
 
-    let arglist = bc.arglist;
+    let arglist = bc.arglist();
     crate::emacs_core::eval::push_scratch_gc_root(arglist);
 
     // Slots 1 and 2: the objects Lisp already holds when `aref` created
@@ -2466,7 +2466,7 @@ fn with_bytecode_literal_slots<R>(value: &Value, f: impl FnOnce(&[Value]) -> R) 
     };
     crate::emacs_core::eval::push_scratch_gc_root(code);
 
-    let constants = if let Some(env) = bc.env {
+    let constants = if let Some(env) = bc.env() {
         env
     } else if let Some(constants) =
         value.bytecode_slot_object_if_created(ByteCodeSlotObject::Constants)

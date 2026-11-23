@@ -31,7 +31,7 @@ impl Drop for Knobs {
 
 fn lexical(ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {
     let mut f = ByteCodeFunction::new(LambdaParams::simple(vec![intern("osr-hof-regalloc-arg")]));
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(ops);
     f.set_constants(constants.into());
     f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));

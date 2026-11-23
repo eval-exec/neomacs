@@ -60,7 +60,7 @@ fn function(name: &str) -> ByteCodeFunction {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(OPS.to_vec());
     f.set_constants(vec![Value::from_sym_id(intern(name))].into());
     f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(4));

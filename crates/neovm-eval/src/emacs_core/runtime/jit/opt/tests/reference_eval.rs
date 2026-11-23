@@ -1113,7 +1113,7 @@ fn evaluate_opaque(
         optional: Vec::new(),
         rest: None,
     });
-    function.lexical = true;
+    function.set_lexical(true);
     function.set_constants(
         constants
             .iter()

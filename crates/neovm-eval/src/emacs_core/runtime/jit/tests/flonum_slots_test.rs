@@ -33,7 +33,7 @@ fn float_fn(
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(ops);
     f.set_constants(constants.into());
     f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
@@ -862,7 +862,7 @@ fn a_fused_region_entry_boxes_flonums_before_its_framestate() {
         optional: Vec::new(),
         rest: None,
     });
-    callee.lexical = true;
+    callee.set_lexical(true);
     callee.set_ops(vec![Op::StackRef(0), Op::Return]);
     callee.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(4));
     callee.jit_runtime().set_hot_for_test();

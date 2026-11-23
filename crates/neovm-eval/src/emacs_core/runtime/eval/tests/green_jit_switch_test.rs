@@ -166,7 +166,7 @@ fn bytecode(ops: Vec<Op>, constants: Vec<Value>, arity: FixtureArity) -> ByteCod
         FixtureArity::Unary => vec![neovm_value::intern::intern("f5-jit-arg")],
     };
     let mut function = ByteCodeFunction::new(LambdaParams::simple(required));
-    function.lexical = true;
+    function.set_lexical(true);
     function.set_ops(ops);
     function.set_constants(constants.into());
     function.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));

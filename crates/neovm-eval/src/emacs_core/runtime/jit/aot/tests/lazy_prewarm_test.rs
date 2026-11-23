@@ -29,7 +29,7 @@ impl Member {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(self.ops.clone());
         f.set_constants(self.constants.clone().into());
         f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
@@ -343,7 +343,7 @@ fn leaves_hash(ctx: &Context, name: &str) -> u128 {
     leaf_content_hash(
         bc.executable_ops(),
         bc.constants(),
-        bc.params
+        bc.params()
             .stack_shape()
             .expect("fixture stack parameters")
             .required(),

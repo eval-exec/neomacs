@@ -250,17 +250,33 @@ pub struct ByteCodeFunction {
     /// `stack_verified`. `Clone` and the make-closure image copy both.
     max_stack: StackDepth,
     /// Parameter specification.
-    pub params: FunctionParams,
+    ///
+    /// Private. [`Self::set_params`] clears the execution certificate.
+    /// Entry depth depends on this value. `Clone` and the make-closure
+    /// image copy it and keep the certificate.
+    params: FunctionParams,
     /// Original GNU byte-code slot 0 value.
     ///
     /// Lexical byte-code uses an integer arg descriptor here, while old-style
     /// dynamic byte-code uses an arglist.  Bytecomp's inliner distinguishes
     /// those cases through `(aref fn 0)`, so this must round-trip exactly.
-    pub arglist: Value,
+    ///
+    /// Private. [`Self::set_arglist`] clears the execution certificate.
+    /// A fixnum arglist selects params-on-stack entry depth.
+    arglist: Value,
     /// Whether the function was compiled with lexical binding enabled.
-    pub lexical: bool,
+    ///
+    /// Private. [`Self::set_lexical`] clears the execution certificate.
+    /// Lexical binding changes verifier entry depth.
+    lexical: bool,
     /// For closures: captured lexical environment as a cons alist.
-    pub env: Option<Value>,
+    ///
+    /// Private. [`Self::set_env`] clears the execution certificate.
+    /// A present environment changes verifier entry depth. The make-closure
+    /// image writes this place directly and keeps the certificate: lexical
+    /// prototypes already have params on the stack, so the captured env does
+    /// not change entry depth.
+    env: Option<Value>,
     /// GNU `.elc` bytecode stores branch targets as byte offsets.
     /// Decoded runtime uses instruction indices, so GNU-decoded functions
     /// retain a sorted byte-offset -> instruction-index table for `switch`.
@@ -341,6 +357,30 @@ impl ByteCodeFunction {
     #[doc(hidden)]
     pub const fn offset_of_max_stack() -> usize {
         std::mem::offset_of!(Self, max_stack)
+    }
+
+    /// Layout pin. The field is private; the certificate accessors own it.
+    #[doc(hidden)]
+    pub const fn offset_of_params() -> usize {
+        std::mem::offset_of!(Self, params)
+    }
+
+    /// Layout pin. The field is private; the certificate accessors own it.
+    #[doc(hidden)]
+    pub const fn offset_of_arglist() -> usize {
+        std::mem::offset_of!(Self, arglist)
+    }
+
+    /// Layout pin. The field is private; the certificate accessors own it.
+    #[doc(hidden)]
+    pub const fn offset_of_lexical() -> usize {
+        std::mem::offset_of!(Self, lexical)
+    }
+
+    /// Layout pin. The field is private; the certificate accessors own it.
+    #[doc(hidden)]
+    pub const fn offset_of_env() -> usize {
+        std::mem::offset_of!(Self, env)
     }
 }
 
@@ -845,6 +885,58 @@ impl ByteCodeFunction {
         self.max_stack = max_stack;
     }
 
+    /// Parameter specification. Entry depth reads this through the getter.
+    #[inline(always)]
+    pub fn params(&self) -> &FunctionParams {
+        &self.params
+    }
+
+    /// Replace the parameter specification and drop the execution certificate.
+    #[inline]
+    pub fn set_params(&mut self, params: FunctionParams) {
+        self.clear_execution_certificate();
+        self.params = params;
+    }
+
+    /// GNU byte-code slot 0. `Value` is `Copy`.
+    #[inline(always)]
+    pub fn arglist(&self) -> Value {
+        self.arglist
+    }
+
+    /// Replace slot 0 and drop the execution certificate.
+    #[inline]
+    pub fn set_arglist(&mut self, arglist: Value) {
+        self.clear_execution_certificate();
+        self.arglist = arglist;
+    }
+
+    /// Whether this function was compiled with lexical binding.
+    #[inline(always)]
+    pub fn lexical(&self) -> bool {
+        self.lexical
+    }
+
+    /// Replace the lexical-binding flag and drop the execution certificate.
+    #[inline]
+    pub fn set_lexical(&mut self, lexical: bool) {
+        self.clear_execution_certificate();
+        self.lexical = lexical;
+    }
+
+    /// Captured lexical environment, if this value is a closure.
+    #[inline(always)]
+    pub fn env(&self) -> Option<Value> {
+        self.env
+    }
+
+    /// Replace the captured environment and drop the execution certificate.
+    #[inline]
+    pub fn set_env(&mut self, env: Option<Value>) {
+        self.clear_execution_certificate();
+        self.env = env;
+    }
+
     #[inline]
     #[doc(hidden)]
     pub fn lazy_gnu_code(&self) -> &Option<std::sync::Arc<LazyGnuCode>> {
@@ -894,6 +986,25 @@ impl ByteCodeFunction {
     pub unsafe fn constants_ptr(this: *mut Self) -> *mut crate::tagged::header::LispValueVec {
         // SAFETY: the caller guarantees the place.
         unsafe { &raw mut (*this).constants }
+    }
+    /// Place of `params` for the pdump stub initializer. Writing the place
+    /// does not clear the execution certificate: there is no `&mut self`.
+    ///
+    /// # Safety
+    /// `this` is aligned for `ByteCodeFunction` and the `params` place is valid to write.
+    #[doc(hidden)]
+    pub unsafe fn params_ptr(this: *mut Self) -> *mut FunctionParams {
+        // SAFETY: the caller guarantees the place.
+        unsafe { &raw mut (*this).params }
+    }
+    /// Place of `env`. Same contract as [`Self::params_ptr`].
+    ///
+    /// # Safety
+    /// `this` is aligned for `ByteCodeFunction` and the `env` place is valid to write.
+    #[doc(hidden)]
+    pub unsafe fn env_ptr(this: *mut Self) -> *mut Option<Value> {
+        // SAFETY: the caller guarantees the place.
+        unsafe { &raw mut (*this).env }
     }
     #[cfg(feature = "jit")]
     #[inline]
@@ -1031,7 +1142,10 @@ impl ByteCodeFunction {
     /// [`ByteCodeInstanceImage::write`], not copied from the prototype.
     /// The destructure is exhaustive: a new field fails here until the image
     /// carries it.
-    #[inline(never)]
+    /// Inlined so the image struct can dissolve into `make-closure` instead
+    /// of a forced out-of-line temporary. The field clones stay: the closure
+    /// owns its own instruction vector.
+    #[inline]
     pub(crate) fn instance_image(&self) -> ByteCodeInstanceImage {
         debug_assert!(
             !self.is_pdump_stub(),

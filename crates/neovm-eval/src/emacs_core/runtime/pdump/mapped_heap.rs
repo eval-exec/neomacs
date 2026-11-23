@@ -847,13 +847,13 @@ pub(crate) fn baked_stub_template(extras_len: usize) -> Box<[u8]> {
         // never interpreted. Writing bytes keeps inactive payload and padding
         // deterministic without forming a transient invalid enum reference.
         std::ptr::write_bytes(
-            addr_of_mut!((*p).params).cast::<u8>(),
+            ByteCodeFunction::params_ptr(p).cast::<u8>(),
             0,
             std::mem::size_of::<crate::emacs_core::bytecode::FunctionParams>(),
         );
         addr_of_mut!((*p).closure_slot_count).write(extras_len);
         addr_of_mut!((*p).extra_slots).write(Vec::new());
-        write_canonical_none(addr_of_mut!((*p).env), None, Option::is_none);
+        write_canonical_none(ByteCodeFunction::env_ptr(p), None, Option::is_none);
         write_canonical_none(
             addr_of_mut!((*p).gnu_byte_offset_map),
             None,
@@ -883,11 +883,11 @@ pub(crate) fn baked_stub_template(extras_len: usize) -> Box<[u8]> {
             crate::emacs_core::bytecode::StackDepth::ZERO
         );
         assert!(
-            matches!(stub.params, crate::emacs_core::bytecode::FunctionParams::Stack(template) if template.raw() == 0)
+            matches!(stub.params(), crate::emacs_core::bytecode::FunctionParams::Stack(template) if template.raw() == 0)
         );
-        assert_eq!(stub.arglist.bits(), neovm_value::value::Value::NIL.bits());
-        assert!(!stub.lexical);
-        assert!(stub.env.is_none());
+        assert_eq!(stub.arglist().bits(), neovm_value::value::Value::NIL.bits());
+        assert!(!stub.lexical());
+        assert!(stub.env().is_none());
         assert!(stub.gnu_byte_offset_map.is_none());
         assert!(stub.gnu_bytecode_bytes.is_none());
         assert!(stub.docstring.is_none());

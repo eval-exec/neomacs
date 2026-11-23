@@ -80,7 +80,7 @@ fn plan(f: &ByteCodeFunction) -> ir::Func {
 }
 fn plan_prefix(f: &ByteCodeFunction, prefix: usize) -> ir::Func {
     let arity = f
-        .params
+        .params()
         .stack_shape()
         .expect("fixture stack parameters")
         .required();
@@ -116,7 +116,7 @@ fn lower(f: &ByteCodeFunction, ir: &ir::Func) -> CompiledLeaf {
     let leaf = lower_opt_ir_for_test(
         f.executable_ops(),
         f.constants(),
-        f.params
+        f.params()
             .stack_shape()
             .expect("fixture stack parameters")
             .required(),

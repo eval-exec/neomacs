@@ -15,7 +15,7 @@ fn code(nargs: usize, ops: Vec<Op>, constants: Vec<Value>) -> Value {
             .map(|n| intern(&format!("osr-chain-arg-{n}")))
             .collect(),
     ));
-    code.lexical = true;
+    code.set_lexical(true);
     code.set_ops(ops);
     code.set_constants(constants.into());
     code.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
@@ -100,6 +100,7 @@ fn osr_chain_in_place_returns_the_call_result_without_running_the_physical_tail(
         &mut pc,
         &mut HandlerStack::new(),
         &mut BindStack::new(),
+        true,
         true,
     );
     let result = vm.cleanup_bytecode_frame(result, 0, 0, 1).unwrap();
@@ -326,6 +327,7 @@ fn osr_chain_in_place_error_is_offered_to_the_existing_physical_handler() {
         &mut handlers,
         &mut binds,
         true,
+        true,
     );
     assert_eq!(
         vm.cleanup_bytecode_frame(result, 0, 0, 0).unwrap(),
@@ -462,6 +464,7 @@ fn osr_hof_chain_in_place_resumes_the_current_callback_and_mapping_once() {
         &mut pc,
         &mut HandlerStack::new(),
         &mut BindStack::new(),
+        true,
         true,
     );
     assert_eq!(vm.cleanup_bytecode_frame(result, 0, 0, 0).unwrap(), mapped);

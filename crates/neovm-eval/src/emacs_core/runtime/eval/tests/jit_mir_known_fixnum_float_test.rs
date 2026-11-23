@@ -43,7 +43,7 @@ fn probe() -> ByteCodeFunction {
     ];
     let ops = decode_gnu_bytecode(&bytes, &mut constants).expect("GNU bytecode decodes");
     let mut f = ByteCodeFunction::new(parse_arglist_descriptor(514));
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(ops);
     f.set_constants(constants.into());
     f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(7));

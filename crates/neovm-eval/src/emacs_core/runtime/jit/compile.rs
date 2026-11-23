@@ -254,9 +254,9 @@ fn materialize_spec_slot(
 /// interpreter's `params_on_stack` in `vm.rs` `run_frame`. Dynamic-binding
 /// bytecode binds params via `varref` instead and is not supported here.
 fn params_on_stack(f: &ByteCodeFunction) -> bool {
-    f.lexical
-        || f.env.is_some()
-        || matches!(f.arglist.kind(), neovm_value::value::ValueKind::Fixnum(_))
+    f.lexical()
+        || f.env().is_some()
+        || matches!(f.arglist().kind(), neovm_value::value::ValueKind::Fixnum(_))
 }
 
 /// Compile a [`ByteCodeFunction`] whose parameters live on the operand stack
@@ -1132,7 +1132,7 @@ fn resolve_inline_callee(ob: &Obarray, sym: Value) -> Option<mir::MirFunction> {
     // install, which is only otherwise safe because lexenv-reading ops lower to
     // Opaque and `callee_inlinable` rejects them — keep the safety local here too.
     let arity = JitParamShape::try_from(bc).ok()?.fixed_arity()?;
-    if !bc.lexical || bc.env.is_some() {
+    if !bc.lexical() || bc.env().is_some() {
         return None;
     }
     // A patched source's leading constants are per-instance; inlining would

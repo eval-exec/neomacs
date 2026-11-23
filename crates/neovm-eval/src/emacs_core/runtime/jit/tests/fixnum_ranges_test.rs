@@ -16,7 +16,7 @@ fn function(arity: usize, constants: Vec<Value>, ops: Vec<Op>) -> ByteCodeFuncti
         optional: vec![],
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_constants(constants.into());
     f.set_ops(ops);
     f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));

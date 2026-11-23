@@ -59,7 +59,7 @@ pub(crate) struct CensusSite {
 /// budgets. An executing callback need not be rejected for its pre-call
 /// heat. The compiler-site probe adds that separate cold-target verdict.
 pub(crate) fn census_callee_verdict(f: &ByteCodeFunction, nargs: usize) -> Result<(), String> {
-    if f.env.is_some() {
+    if f.env().is_some() {
         return Err("env".into());
     }
     let arity = JitParamShape::try_from(f)
@@ -69,7 +69,7 @@ pub(crate) fn census_callee_verdict(f: &ByteCodeFunction, nargs: usize) -> Resul
     if arity != nargs {
         return Err("arity".into());
     }
-    if nargs > 0 && !f.lexical && !matches!(f.arglist.kind(), ValueKind::Fixnum(_)) {
+    if nargs > 0 && !f.lexical() && !matches!(f.arglist().kind(), ValueKind::Fixnum(_)) {
         return Err("dynamic-params".into());
     }
     if !f.executes_sealed_ops() || !f.executes_verified_ops() {

@@ -46,7 +46,7 @@ fn lower(f: &ByteCodeFunction, params: Option<ParamShape>) -> (CompiledLeaf, Str
             opt_backend::lower_best(
                 f.executable_ops(),
                 f.constants(),
-                f.params
+                f.params()
                     .stack_shape()
                     .expect("fixture stack parameters")
                     .required(),

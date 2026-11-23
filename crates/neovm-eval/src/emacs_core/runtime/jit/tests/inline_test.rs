@@ -26,7 +26,7 @@ fn lexical_fn(required: u32, ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFun
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(ops);
     f.set_constants(constants.into());
     f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
@@ -98,7 +98,7 @@ fn a_fused_body_runs_as_the_call_did() {
     for (name, callee) in cases {
         callee.jit_runtime().set_hot_for_test();
         let nargs = callee
-            .params
+            .params()
             .stack_shape()
             .expect("fixture stack parameters")
             .required();

@@ -90,7 +90,7 @@ fn fixnum_comparison_deopt_resumes_after_effect_without_replaying_it() {
         optional: vec![],
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_constants(vec![Value::symbol("fixnum-comparison-effects")].into());
     f.set_ops(vec![
         Op::VarRef(0),

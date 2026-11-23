@@ -843,7 +843,10 @@ fn neovm_jit_call_general(
             });
             if func_val.is_bare_symbol()
                 && let Some(res) =
-                    unsafe { Vm::call_builtin_symbol_for_jit(ctx_ref, func_val, args_start, nargs) }
+                    /* SAFETY: this shim just staged nargs words at bc_buf[args_start..]. */
+                    unsafe {
+                        Vm::call_builtin_symbol_for_jit(ctx_ref, func_val, args_start, nargs)
+                    }
             {
                 ctx_ref.bc_buf.truncate(args_start);
                 return jit_call_status(res, out);
@@ -859,7 +862,7 @@ fn neovm_jit_call_general(
             // already rooted on bc_buf.
             push_scratch_gc_root(func_val);
             let mut vm = Vm::from_context(ctx_ref);
-            let res = unsafe { vm.call_for_jit_stack(func_val, args_start, nargs) };
+            let res = /* SAFETY: this shim just staged nargs words at bc_buf[args_start..]. */ unsafe { vm.call_for_jit_stack(func_val, args_start, nargs) };
             vm.bc_buf_truncate(args_start);
             restore_scratch_gc_roots(saved);
             return jit_call_status(res, out);
@@ -893,7 +896,7 @@ fn neovm_jit_call_general(
                 core::slice::from_raw_parts(args_ptr as *const Value, nargs)
             });
             let mut vm = Vm::from_context(ctx);
-            let res = unsafe { vm.call_for_jit_stack(func_val, args_start, nargs) };
+            let res = /* SAFETY: this shim just staged nargs words at bc_buf[args_start..]. */ unsafe { vm.call_for_jit_stack(func_val, args_start, nargs) };
             vm.bc_buf_truncate(args_start);
             jit_call_status(res, out)
         }

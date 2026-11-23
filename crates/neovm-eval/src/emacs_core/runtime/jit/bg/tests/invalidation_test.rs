@@ -49,7 +49,7 @@ fn bytecode(arity: u32, ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(ops);
     f.set_constants(constants.into());
     f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
@@ -109,7 +109,7 @@ fn call(ctx: *mut Context, f: &ByteCodeFunction, x: i64) -> Option<i64> {
 /// tiering state), pinned to Tier 0.
 fn interpreted(ev: &mut Context, f: &ByteCodeFunction, x: i64) -> i64 {
     let twin = bytecode(
-        f.params
+        f.params()
             .stack_shape()
             .expect("fixture stack parameters")
             .required() as u32,

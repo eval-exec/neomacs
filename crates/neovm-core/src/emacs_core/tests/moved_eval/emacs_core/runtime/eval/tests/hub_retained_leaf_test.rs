@@ -37,7 +37,7 @@ fn with_entry(
         neovm_eval::test_support::authority::enter_test_mode_for_test(jit::BgMode::Sync);
     let mut context = crate::test_utils::new_context();
     let mut source = ByteCodeFunction::new(LambdaParams::simple(Vec::new()));
-    source.lexical = true;
+    source.set_lexical(true);
     source.set_ops(vec![Op::Constant(0), Op::Return]);
     source.set_constants(vec![Value::fixnum(7)].into());
     source.set_max_stack(StackDepth::for_test(1));
@@ -150,7 +150,7 @@ fn hub_osr_callback_retains_its_leaf_across_eviction_and_cache_clear() {
             ByteCodeFunction::new(LambdaParams::simple(vec![neovm_value::intern::intern(
                 "hub-osr-counter",
             )]));
-        source.lexical = true;
+        source.set_lexical(true);
         source.set_ops(vec![
             Op::StackRef(0),
             Op::Constant(0),

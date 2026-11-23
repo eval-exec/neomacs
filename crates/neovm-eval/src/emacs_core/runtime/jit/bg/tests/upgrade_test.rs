@@ -52,7 +52,7 @@ fn done() {
 
 fn constant(value: Value) -> ByteCodeFunction {
     let mut f = function(vec![Op::Constant(0), Op::Return], vec![value], 0);
-    f.lexical = false; // Isolate Fast -> Full jobs from Feedback/MIR policy.
+    f.set_lexical(false); // Isolate Fast -> Full jobs from Feedback/MIR policy.
     f.jit_runtime().set_hot_for_test();
     f
 }

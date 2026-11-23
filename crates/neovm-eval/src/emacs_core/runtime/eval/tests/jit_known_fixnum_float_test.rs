@@ -54,7 +54,7 @@ fn probe() -> ByteCodeFunction {
     ];
     let ops = decode_gnu_bytecode(&bytes, &mut constants).expect("GNU bytecode decodes");
     let mut f = ByteCodeFunction::new(parse_arglist_descriptor(770));
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(ops);
     f.set_constants(constants.into());
     f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
@@ -146,8 +146,8 @@ fn an_osr_entered_float_loop_is_compiled_with_its_numeric_feedback() {
     let mut constants = vec![one, zero, Value::make_int(0), Value::NIL, multiplier];
     let ops = decode_gnu_bytecode(&bytes, &mut constants).expect("GNU bytecode decodes");
     let mut f = ByteCodeFunction::new(parse_arglist_descriptor(257));
-    ev.push_specpdl_root(f.arglist);
-    f.lexical = true;
+    ev.push_specpdl_root(f.arglist());
+    f.set_lexical(true);
     f.set_ops(ops);
     f.set_constants(constants.into());
     f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(7));

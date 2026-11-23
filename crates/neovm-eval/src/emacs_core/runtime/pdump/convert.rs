@@ -3143,14 +3143,14 @@ pub(crate) fn dump_bytecode(
             .map(|value| encoder.dump_value(value))
             .collect(),
         max_stack: bc.max_stack().get() as u64,
-        params: match &bc.params {
+        params: match bc.params() {
             FunctionParams::Stack(template) => DumpFunctionParams::Stack(template.raw()),
             FunctionParams::Dynamic(_) => DumpFunctionParams::Dynamic,
             FunctionParams::Named(params) => DumpFunctionParams::Named(dump_lambda_params(params)),
         },
-        arglist: Some(encoder.dump_value(&bc.arglist)),
-        lexical: bc.lexical,
-        env: encoder.dump_opt_value(&bc.env),
+        arglist: Some(encoder.dump_value(&bc.arglist())),
+        lexical: bc.lexical(),
+        env: encoder.dump_opt_value(&bc.env()),
         docstring: bc.docstring.as_ref().map(dump_lisp_string),
         doc_form: encoder.dump_opt_value(&bc.doc_form),
         interactive: encoder.dump_opt_value(&bc.interactive),

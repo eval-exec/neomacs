@@ -197,7 +197,7 @@ fn bytecode_script(name: &str) -> ByteCodeFunction {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(vec![
         Op::Constant(1),
         Op::VarBind(0),

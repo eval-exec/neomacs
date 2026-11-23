@@ -16747,7 +16747,7 @@ fn jit_tierup_executes_through_funcall_seam() {
         optional: Vec::new(),
         rest: None,
     });
-    addf.lexical = true;
+    addf.set_lexical(true);
     addf.set_ops(vec![Op::StackRef(1), Op::StackRef(1), Op::Add, Op::Return]);
     addf.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     jit_mark_hot_for_test(&addf);
@@ -16789,7 +16789,7 @@ fn jit_cons_through_funcall_seam() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(vec![Op::StackRef(1), Op::StackRef(1), Op::Cons, Op::Return]);
     f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     jit_mark_hot_for_test(&f);
@@ -16824,7 +16824,7 @@ fn jit_call_through_funcall_seam() {
         optional: Vec::new(),
         rest: None,
     });
-    dbl.lexical = true;
+    dbl.set_lexical(true);
     dbl.set_ops(vec![Op::StackRef(0), Op::Constant(0), Op::Mul, Op::Return]);
     dbl.set_constants(vec![Value::make_int(2)].into());
     dbl.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
@@ -16844,7 +16844,7 @@ fn jit_call_through_funcall_seam() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(vec![
             Op::Constant(0), // 'jit-e2e-double
             Op::StackRef(1), // x
@@ -16900,7 +16900,7 @@ fn jit_call_through_funcall_seam() {
         optional: Vec::new(),
         rest: None,
     });
-    callee.lexical = true;
+    callee.set_lexical(true);
     callee.set_ops(vec![Op::StackRef(0), Op::Constant(0), Op::Mul, Op::Return]);
     callee.set_constants(vec![Value::make_int(3)].into());
     callee.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
@@ -16918,7 +16918,7 @@ fn jit_call_through_funcall_seam() {
         optional: Vec::new(),
         rest: None,
     });
-    nested.lexical = true;
+    nested.set_lexical(true);
     nested.set_ops(vec![
         Op::Constant(0), // 'jit-e2e-triple-hot
         Op::StackRef(1), // x
@@ -16942,7 +16942,7 @@ fn jit_call_through_funcall_seam() {
         optional: Vec::new(),
         rest: None,
     });
-    sig.lexical = true;
+    sig.set_lexical(true);
     sig.set_ops(vec![Op::Constant(0), Op::Call(0), Op::Return]);
     sig.set_constants(vec![Value::symbol("jit-e2e-no-such-function")].into());
     sig.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
@@ -16980,7 +16980,7 @@ fn jit_handlers_through_funcall_seam() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(ops);
         f.set_constants(consts.into());
         f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
@@ -17231,7 +17231,7 @@ fn jit_switch_through_funcall_seam() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(vec![
             Op::StackRef(0), // 0: [x x]
             Op::Constant(0), // 1: [x x table]
@@ -17297,7 +17297,7 @@ fn jit_named_builtins_through_funcall_seam() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(ops);
         f.set_constants(consts.into());
         f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
@@ -17394,7 +17394,7 @@ fn jit_save_window_excursion_through_funcall_seam() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(vec![Op::Constant(0), Op::SaveWindowExcursion, Op::Return]);
         f.set_constants(vec![body].into());
         f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
@@ -17420,7 +17420,7 @@ fn jit_save_window_excursion_through_funcall_seam() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(vec![Op::Constant(0), Op::SaveWindowExcursion, Op::Return]);
         f.set_constants(vec![bad_body].into());
         f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
@@ -17463,7 +17463,7 @@ fn jit_direct_call_speculation_tracks_redefinition() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         // Two blocks so the JIT inliner (single-block callees only) leaves this a
         // SPEC call — `(if x (* x k) (* x k))`, same value, two basic blocks.
         f.set_ops(vec![
@@ -17497,7 +17497,7 @@ fn jit_direct_call_speculation_tracks_redefinition() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(vec![
             Op::Constant(0),
             Op::StackRef(1),
@@ -17590,7 +17590,7 @@ fn jit_direct_call_speculation_mid_execution_redefinition() {
         optional: Vec::new(),
         rest: None,
     });
-    h2.lexical = true;
+    h2.set_lexical(true);
     h2.set_ops(vec![Op::Constant(0), Op::Return]);
     h2.set_constants(vec![Value::make_int(2)].into());
     h2.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
@@ -17601,7 +17601,7 @@ fn jit_direct_call_speculation_mid_execution_redefinition() {
         optional: Vec::new(),
         rest: None,
     });
-    h1.lexical = true;
+    h1.set_lexical(true);
     h1.set_ops(vec![
         Op::Constant(0), // 'fset
         Op::Constant(1), // 'jit-spec-h
@@ -17624,7 +17624,7 @@ fn jit_direct_call_speculation_mid_execution_redefinition() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(vec![
             Op::Constant(0),
             Op::Call(0),
@@ -17660,7 +17660,7 @@ fn jit_direct_call_speculation_mid_execution_redefinition() {
         optional: Vec::new(),
         rest: None,
     });
-    h1b.lexical = true;
+    h1b.set_lexical(true);
     h1b.set_ops(vec![
         Op::Constant(0),
         Op::Constant(1),
@@ -17696,7 +17696,7 @@ fn jit_subr_spec_caller(name: &str, nargs: usize, hot: bool) -> Value {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     let mut ops = vec![Op::Constant(0)];
     // After pushing the callee, every remaining arg sits `nargs` below the top.
     for _ in 0..nargs {
@@ -18975,7 +18975,7 @@ fn jit_cbsym_spec_caller(name: &str, nargs: usize, hot: bool) -> Value {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     let mut ops = Vec::new();
     // Push a1..aK: each `StackRef(nargs-1)` walks the arg window as the pushes
     // shift it (no callee constant — CallBuiltinSym carries the SymId).
@@ -19151,7 +19151,7 @@ fn jit_cbsym_buffer_loop_tiers_with_profit_gate_on() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(vec![
             Op::StackRef(0),                                                      // 0  [n n]
             Op::Constant(0),                                                      // 1  [n n 0]
@@ -19347,7 +19347,7 @@ fn jit_cbsym_spec_adds_no_eval_depth_level() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(vec![
             Op::VarRef(0), // 0  [d]        (const0 = cbsym-depth)
             Op::Add1,      // 1  [d+1]
@@ -19703,7 +19703,7 @@ fn jit_fib_and_loops_compile_under_precise_deopt() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(vec![
             Op::StackRef(0),  // 0  [n n]
             Op::Constant(0),  // 1  [n n 2]
@@ -19763,7 +19763,7 @@ fn jit_fib_and_loops_compile_under_precise_deopt() {
         optional: Vec::new(),
         rest: None,
     });
-    ident.lexical = true;
+    ident.set_lexical(true);
     ident.set_ops(vec![Op::StackRef(0), Op::Return]);
     ident.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     ev.obarray_mut()
@@ -19775,7 +19775,7 @@ fn jit_fib_and_loops_compile_under_precise_deopt() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(vec![
             Op::StackRef(0),   // 0  [n n]      <- loop head (backedge target)
             Op::Constant(0),   // 1  [n n 0]
@@ -19828,7 +19828,7 @@ fn jit_native_to_native_optional_callee_pure_and_marshaled() {
         optional: vec![unsafe { neovm_value::intern::SymId::from_raw(2) }],
         rest: None,
     });
-    callee.lexical = true;
+    callee.set_lexical(true);
     callee.set_ops(vec![
         Op::StackRef(0),  // 0: b           [a b b]
         Op::GotoIfNil(6), // 1:             [a b]
@@ -19859,7 +19859,7 @@ fn jit_native_to_native_optional_callee_pure_and_marshaled() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(vec![
             Op::Constant(0), // 'jit-n2n-opt
             Op::StackRef(2), // a
@@ -19882,7 +19882,7 @@ fn jit_native_to_native_optional_callee_pure_and_marshaled() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(vec![
             Op::Constant(0),
             Op::StackRef(1),
@@ -19955,7 +19955,7 @@ fn jit_v3_fast_path_engages_and_tracks_redefinition() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         // Two blocks so the JIT inliner (single-block callees only) leaves this a
         // SPEC call — `(if x (* x k) (* x k))`, same value, two basic blocks.
         f.set_ops(vec![
@@ -19987,7 +19987,7 @@ fn jit_v3_fast_path_engages_and_tracks_redefinition() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(vec![
             Op::Constant(0),
             Op::StackRef(1),
@@ -20062,7 +20062,7 @@ fn a_spec_slot_drops_its_leaf_when_the_callee_slot_is_recycled() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         // Two blocks (`(if x (* x k) (* x k))`) so the caller speculates the
         // call instead of inlining the body.
         f.set_ops(vec![
@@ -20092,7 +20092,7 @@ fn a_spec_slot_drops_its_leaf_when_the_callee_slot_is_recycled() {
         optional: Vec::new(),
         rest: None,
     });
-    caller.lexical = true;
+    caller.set_lexical(true);
     caller.set_ops(vec![
         Op::Constant(0),
         Op::StackRef(1),
@@ -20180,7 +20180,7 @@ fn spec_call_fast_path_keeps_the_reference_protocol_on_its_exits() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(ops);
         f.set_constants(constants.into());
         f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
@@ -20479,7 +20479,7 @@ fn optional_arity_callees_take_the_spec_fast_path() {
     let mut ev = crate::test_utils::new_context();
     let make = |params: LambdaParams, hot: bool, ops: Vec<Op>, constants: Vec<Value>| -> Value {
         let mut f = ByteCodeFunction::new(params);
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(ops);
         f.set_constants(constants.into());
         f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
@@ -20582,7 +20582,7 @@ fn jit_bench_fib_value(sym_name: &str, tier: BenchTier) -> Value {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(vec![
         Op::StackRef(0),
         Op::Constant(0),
@@ -20629,7 +20629,7 @@ fn jit_bench_loop_value(tier: BenchTier) -> Value {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(vec![
         Op::Constant(0),
         Op::StackRef(1),
@@ -20681,7 +20681,7 @@ fn jit_bench_big_body_value(tier: BenchTier) -> Value {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
 
     let mut ops = Vec::new();
     ops.push(Op::Constant(0)); // acc = 0; stack [n, acc]
@@ -20897,7 +20897,7 @@ fn jit_bench_call_bound_caller(tier: BenchTier) -> Value {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     // (lambda (n) (while (> n 0) (cbleaf n)(cbleaf n)(cbleaf n)(cbleaf n)
     //                            (setq n (1- n))) n)  ; slot0 = n
     f.set_ops(vec![
@@ -20956,7 +20956,7 @@ fn jit_bench_call_bound_loop() {
         optional: Vec::new(),
         rest: None,
     });
-    leaf.lexical = true;
+    leaf.set_lexical(true);
     // (lambda (x) (if x x x)) — multi-block so the caller CANNOT inline it (which
     // would DCE the discarded calls and defeat the call-bound measurement). Returns
     // x for the non-nil fixnum args this bench passes.
@@ -21010,7 +21010,7 @@ fn jit_bench_builtin_bound_caller(tier: BenchTier) -> Value {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     let abs = intern("abs");
     // (lambda (n) (while (> n 0) (abs n)(abs n)(abs n)(abs n) (setq n (1- n))) n)
     f.set_ops(vec![
@@ -21140,7 +21140,7 @@ fn aot_bench_compute_loop() {
         optional: Vec::new(),
         rest: None,
     });
-    aot_fn.lexical = true;
+    aot_fn.set_lexical(true);
     aot_fn.set_ops(ops.clone());
     aot_fn.set_constants(constants.clone().into());
     aot_fn.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
@@ -21276,7 +21276,7 @@ fn jit_bench_call_heavy_fontlock_reweight() {
     let bc = fn_val
         .get_bytecode_data()
         .expect("scan must be byte-compiled to a bytecode object");
-    let arity = bc.params.fixed_arity().expect("fixed test arity");
+    let arity = bc.params().fixed_arity().expect("fixed test arity");
 
     // Shape report: op histogram (documents that this really is call-heavy).
     let (mut n_call, mut n_cbsym, mut n_arith) = (0usize, 0usize, 0usize);
@@ -21426,7 +21426,7 @@ fn jit_bench_spec_call_dispatch_upper_bound() {
     let bc = fn_val
         .get_bytecode_data()
         .expect("microloop must be byte-compiled");
-    let arity = bc.params.fixed_arity().expect("fixed test arity");
+    let arity = bc.params().fixed_arity().expect("fixed test arity");
     assert!(
         compile::has_op_call_spec_sites(
             &crate::emacs_core::bytecode::executable_ops_for_test(bc),
@@ -21584,7 +21584,7 @@ fn aot_bench_real_algorithm() {
         optional: Vec::new(),
         rest: None,
     });
-    aot_fn.lexical = true;
+    aot_fn.set_lexical(true);
     aot_fn.set_ops(ops.clone());
     aot_fn.set_constants(constants.clone().into());
     aot_fn.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
@@ -21598,7 +21598,7 @@ fn aot_bench_real_algorithm() {
         optional: Vec::new(),
         rest: None,
     });
-    cold_f.lexical = true;
+    cold_f.set_lexical(true);
     cold_f.set_ops(ops.clone());
     cold_f.set_constants(constants.clone().into());
     cold_f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
@@ -22076,7 +22076,7 @@ fn vm_bench_call_loop_caller(callee_designator: Value) -> Value {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(vec![
         Op::Constant(0),   // acc = 0                  -> [n, acc]
         Op::StackRef(1),   // loop: push n             -> [n, acc, n]
@@ -22163,7 +22163,7 @@ fn vm_bench_call_dispatch_closure_sym_vs_val() {
         optional: Vec::new(),
         rest: None,
     });
-    callee.lexical = true;
+    callee.set_lexical(true);
     callee.set_ops(vec![Op::Add1, Op::Return]);
     callee.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(4));
     let callee_val = Value::make_bytecode(callee);
@@ -22210,7 +22210,7 @@ fn vm_bench_varref_loop_caller(var_sym: Value) -> Value {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(vec![
         Op::Constant(0),   // acc = 0                  -> [n, acc]
         Op::StackRef(1),   // loop: push n             -> [n, acc, n]
@@ -22300,7 +22300,7 @@ fn varref_reader_fn(sym: Value) -> Value {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(vec![Op::VarRef(1), Op::Return]);
     f.set_constants(vec![Value::NIL, sym].into());
     f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(4));
@@ -22487,7 +22487,7 @@ fn jit_bench_cbsym_value(tier: BenchTier) -> Value {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(vec![
         Op::StackRef(0),                                              // 0  [n n]  <- head
         Op::Constant(0),                                              // 1  [n n 0]
@@ -22559,7 +22559,7 @@ fn jit_bench_cbsym_goto_value(tier: BenchTier) -> Value {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(vec![
         Op::StackRef(0),                                                 // 0  [n n]  <- head
         Op::Constant(0),                                                 // 1  [n n 0]
@@ -22623,7 +22623,7 @@ fn jit_bench_subr_value(tier: BenchTier) -> Value {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(vec![
         Op::StackRef(0),   // 0  [n n]      <- loop head
         Op::Constant(0),   // 1  [n n 0]
@@ -22698,7 +22698,7 @@ fn jit_bench_many_value(tier: BenchTier) -> Value {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(vec![
         Op::StackRef(0),   // 0  [n n]        <- loop head
         Op::Constant(0),   // 1  [n n 0]
@@ -22791,7 +22791,7 @@ fn jit_bench_pred_value(tier: BenchTier) -> Value {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(vec![
         Op::StackRef(0),   // 0  [n n]      <- loop head
         Op::Constant(0),   // 1  [n n 0]
@@ -22863,7 +22863,7 @@ fn jit_bench_cons_value(tier: BenchTier) -> Value {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     // (lambda (n) (while (> n 0) (cons n n) (setq n (1- n))) n)
     f.set_ops(vec![
         Op::StackRef(0),   // 0  [n n]      <- loop head
@@ -28028,7 +28028,7 @@ fn jit_closure_prototype(
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(ops);
     f.set_constants(consts.into());
     f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
@@ -28749,7 +28749,7 @@ fn a_speculated_call_caches_a_bit_op_inlining_callee_and_sees_its_redefinition()
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(ops);
         f.set_constants(constants.into());
         f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
@@ -28859,7 +28859,7 @@ fn native_calls_marshal_optional_and_rest_arguments() {
             // SAFETY: test placeholder id, never resolved (peer seal N8).
             rest: rest.then_some(unsafe { SymId::from_raw(200) }),
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(vec![Op::List(slots as u16), Op::Return]);
         f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(
             usize::try_from(slots + 1).expect("test frame fits host"),
@@ -28883,7 +28883,7 @@ fn native_calls_marshal_optional_and_rest_arguments() {
         optional: Vec::new(),
         rest: None,
     });
-    caller.lexical = true;
+    caller.set_lexical(true);
     caller.set_ops(vec![
         Op::Constant(0),
         Op::StackRef(2),
@@ -28983,7 +28983,7 @@ fn jit_apply_enters_a_compiled_callee_natively() {
             // SAFETY: test placeholder id, never resolved (peer seal N8).
             rest: rest.then_some(unsafe { SymId::from_raw(20) }),
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(ops);
         f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
         jit_mark_hot_for_test(&f);
@@ -29025,7 +29025,7 @@ fn jit_apply_enters_a_compiled_callee_natively() {
         optional: Vec::new(),
         rest: None,
     });
-    caller.lexical = true;
+    caller.set_lexical(true);
     caller.set_ops(vec![
         Op::Constant(0),
         Op::StackRef(2),
@@ -29959,7 +29959,7 @@ fn jit_guarded_bcall_leaf_site_calls_through_the_function_cell() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_ops(vec![
             Op::Constant(0),
             Op::Nil,

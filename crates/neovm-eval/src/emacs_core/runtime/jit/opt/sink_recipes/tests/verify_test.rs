@@ -57,7 +57,7 @@ fn source(ops: Vec<Op>, constants: Vec<LispValue>, arity: usize) -> ByteCodeFunc
         optional: Vec::new(),
         rest: None,
     });
-    source.lexical = true;
+    source.set_lexical(true);
     source.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(32));
     source.set_ops(ops);
     source.set_constants(constants.into());
@@ -80,8 +80,8 @@ fn frozen_loop_add() -> ByteCodeFunction {
         optional: Vec::new(),
         rest: None,
     });
-    source.lexical = true;
-    source.arglist = LispValue::fixnum(771);
+    source.set_lexical(true);
+    source.set_arglist(LispValue::fixnum(771));
     source.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
     source.set_constants(vec![LispValue::fixnum(0)].into());
     source.gnu_bytecode_bytes = Some(neovm_value::tagged::header::LispByteVec::copy_from_slice(
@@ -100,7 +100,7 @@ fn frozen_loop_add() -> ByteCodeFunction {
 fn plan(source: &ByteCodeFunction) -> Func {
     let params = ParamShape {
         required: source
-            .params
+            .params()
             .stack_shape()
             .expect("fixture stack parameters")
             .required(),

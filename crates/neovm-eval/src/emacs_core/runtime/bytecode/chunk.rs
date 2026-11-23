@@ -244,17 +244,17 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
     /// seed `nonrest` slots plus one `&rest` list slot; pure dynamic-binding
     /// functions enter with an empty operand stack.
     fn verifier_entry_depth(&self) -> Option<usize> {
-        let params_on_stack = match &self.params {
+        let params_on_stack = match self.params() {
             FunctionParams::Stack(_) => true,
             FunctionParams::Dynamic(_) => false,
             FunctionParams::Named(_) => {
-                self.lexical
-                    || self.env.is_some()
-                    || matches!(self.arglist.kind(), ValueKind::Fixnum(_))
+                self.lexical()
+                    || self.env().is_some()
+                    || matches!(self.arglist().kind(), ValueKind::Fixnum(_))
             }
         };
         if params_on_stack {
-            self.params.stack_shape()?.entry_depth().ok()
+            self.params().stack_shape()?.entry_depth().ok()
         } else {
             Some(0)
         }
@@ -284,13 +284,13 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
         let Some(lazy) = self.lazy_gnu_code().as_ref() else {
             return LazyAdmissionPeek::Eager;
         };
-        if self.env.is_some() {
+        if self.env().is_some() {
             return LazyAdmissionPeek::Known(false);
         }
         if let Some(range) = lazy.iterative_admission() {
             return LazyAdmissionPeek::Known((*range).is_some_and(|range| range.accepts(nargs)));
         }
-        match self.params.stack_shape() {
+        match self.params().stack_shape() {
             Some(shape) if shape.required() <= nargs && nargs <= shape.nonrest() => {
                 LazyAdmissionPeek::Unknown
             }
@@ -307,8 +307,8 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
             .lazy_gnu_code()
             .as_ref()
             .expect("lazy admission initialization needs GNU metadata");
-        debug_assert!(self.env.is_none());
-        let Some(shape) = self.params.stack_shape() else {
+        debug_assert!(self.env().is_none());
+        let Some(shape) = self.params().stack_shape() else {
             return false;
         };
         let required = shape.required();
@@ -319,11 +319,11 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
         if nargs < required || nargs > nonrest {
             return false;
         }
-        let params_on_stack = match &self.params {
+        let params_on_stack = match self.params() {
             FunctionParams::Stack(_) => true,
             FunctionParams::Dynamic(_) => false,
             FunctionParams::Named(_) => {
-                self.lexical || matches!(self.arglist.kind(), ValueKind::Fixnum(_))
+                self.lexical() || matches!(self.arglist().kind(), ValueKind::Fixnum(_))
             }
         };
         let range = if !shape.rest().is_present()

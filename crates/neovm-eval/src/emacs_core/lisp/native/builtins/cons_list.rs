@@ -108,7 +108,7 @@ pub(crate) fn bytecode_closure_slot(value: &Value, idx: usize) -> Option<Value> 
         return None;
     }
     Some(match idx {
-        neovm_value::tagged::header::CLOSURE_ARGLIST => bc.arglist,
+        neovm_value::tagged::header::CLOSURE_ARGLIST => bc.arglist(),
         neovm_value::tagged::header::CLOSURE_STACK_DEPTH => bc.max_stack().value(),
         neovm_value::tagged::header::CLOSURE_DOC_STRING => bc
             .doc_form

@@ -32,7 +32,7 @@ fn step() -> Value {
         optional: vec![],
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(vec![Op::StackRef(0), Op::Sub1, Op::Return]);
     f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
     f.seal_hand_assembled_ops_for_test();

@@ -41,7 +41,7 @@ fn lexical(ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {
         optional: vec![],
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(ops);
     f.set_constants(constants.into());
     f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));

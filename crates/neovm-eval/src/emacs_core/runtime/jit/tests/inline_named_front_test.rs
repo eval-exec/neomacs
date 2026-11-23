@@ -14,7 +14,7 @@ fn function(ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {
         optional: vec![],
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(ops);
     f.set_constants(constants.into());
     f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(32));
@@ -117,14 +117,14 @@ fn named_front_requires_matching_required_arity() {
     let symbol = Value::symbol("named-front-arity");
     let mut callee = function(vec![Op::StackRef(0), Op::Return], vec![]);
     let mut params = callee
-        .params
+        .params()
         .named()
         .expect("named fixture parameters")
         .clone();
     params
         .optional
         .push(neovm_value::intern::intern("named-front-extra"));
-    callee.params = params.into();
+    callee.set_params(params.into());
     ev.obarray.set_symbol_function_id(
         symbol.as_bare_symbol_id().unwrap(),
         Value::make_bytecode(callee),

@@ -79,7 +79,7 @@ fn source() -> ByteCodeFunction {
 
 /// Exercise the same representation pipeline as a production Opt leaf.
 fn plan_entry(source: &ByteCodeFunction, osr_pc: Option<usize>) -> ir::Func {
-    let arity = source.params.stack_shape().unwrap().required();
+    let arity = source.params().stack_shape().unwrap().required();
     let cfg = analyze_cfg(
         source.executable_ops(),
         source.constants(),
@@ -355,16 +355,18 @@ fn opt_switch_hoist_symbols_with_pos_miss_still_uses_lookup() {
     let mut f = source();
     // Replace the key constant with an argument, keeping a rooted static table.
     f.ops_mut()[5] = Op::StackRef(2);
-    f.params = neovm_value::value::LambdaParams {
-        required: vec![
-            neovm_value::intern::intern("swp-key"),
-            neovm_value::intern::intern("swp-n"),
-            neovm_value::intern::intern("swp-acc"),
-        ],
-        optional: vec![],
-        rest: None,
-    }
-    .into();
+    f.set_params(
+        neovm_value::value::LambdaParams {
+            required: vec![
+                neovm_value::intern::intern("swp-key"),
+                neovm_value::intern::intern("swp-n"),
+                neovm_value::intern::intern("swp-acc"),
+            ],
+            optional: vec![],
+            rest: None,
+        }
+        .into(),
+    );
     f.seal_hand_assembled_ops();
     let key = ctx
         .tagged_heap

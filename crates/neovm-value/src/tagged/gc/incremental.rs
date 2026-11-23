@@ -1094,8 +1094,8 @@ impl TaggedHeap {
                     }
                     return;
                 }
-                self.mark_or_push_child(data.arglist, "bytecode-arglist");
-                if let Some(child) = data.params.heap_child() {
+                self.mark_or_push_child(data.arglist(), "bytecode-arglist");
+                if let Some(child) = data.params().heap_child() {
                     self.mark_or_push_child(child, "bytecode-parameter-arglist");
                 }
                 // Trace constants vector
@@ -1103,7 +1103,7 @@ impl TaggedHeap {
                     self.mark_or_push_child(*val, "bytecode-constant");
                 }
                 // Trace captured lexical environment
-                if let Some(env) = data.env {
+                if let Some(env) = data.env() {
                     self.mark_or_push_child(env, "bytecode-env");
                 }
                 // Trace doc_form (can be a Value)

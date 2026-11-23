@@ -171,7 +171,7 @@ fn lazy_stub_survives_gc_and_materializes_on_first_call() {
     function.set_constants(vec![secret_hash].into());
     function.extra_slots = vec![extra_hash];
     function.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
-    function.lexical = true;
+    function.set_lexical(true);
     function.docstring = Some(neovm_value::heap_types::LispString::from_unibyte(
         b"Lazy stub docstring.".to_vec(),
     ));
@@ -247,12 +247,12 @@ fn lazy_stub_survives_gc_and_materializes_on_first_call() {
             .bytecode_data_if_materialized()
             .expect("the call must have materialized the stub");
         assert_eq!(
-            neovm_value::intern::resolve_sym(data.params.named().unwrap().required[0]),
+            neovm_value::intern::resolve_sym(data.params().named().unwrap().required[0]),
             "pdump-lazy-a",
             "param symbols must resolve after the fallback-path id rewrite"
         );
         assert_eq!(
-            data.params
+            data.params()
                 .named()
                 .unwrap()
                 .rest

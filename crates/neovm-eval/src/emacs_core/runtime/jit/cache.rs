@@ -835,11 +835,11 @@ fn compile_osr_leaf_timed(
         }
         return None;
     }
-    if !func.lexical || osr_body_has_unsupported_state(func) {
+    if !func.lexical() || osr_body_has_unsupported_state(func) {
         if dbg {
             eprintln!(
                 "OSR_DEBUG reject pre: lexical={} dynstate={}",
-                func.lexical,
+                func.lexical(),
                 osr_body_has_unsupported_state(func)
             );
         }

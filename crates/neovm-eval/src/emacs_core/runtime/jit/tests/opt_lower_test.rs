@@ -31,7 +31,7 @@ impl Drop for Settings {
     }
 }
 fn lower(f: &ByteCodeFunction, osr: Option<usize>) -> CompiledLeaf {
-    let shape = f.params.stack_shape().expect("fixture stack parameters");
+    let shape = f.params().stack_shape().expect("fixture stack parameters");
     let params = ParamShape {
         required: shape.required(),
         optional: shape.optional().expect("consistent fixture parameters"),

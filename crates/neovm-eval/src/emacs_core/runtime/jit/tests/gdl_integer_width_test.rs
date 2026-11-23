@@ -17,7 +17,7 @@ fn gdl_integer_width_native_signal_roots_operands_through_collecting_hook() {
         optional: Vec::new(),
         rest: None,
     });
-    function.lexical = true;
+    function.set_lexical(true);
     // Consume the entry operands themselves, leaving no residual stack that
     // could accidentally keep them alive for the register-operand root guard.
     function.set_ops(vec![Op::Mul, Op::Return]);

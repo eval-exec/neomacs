@@ -184,7 +184,7 @@ fn run(ev: &mut Context, engine: Engine, prog: &Prog, var: &str, args: &[Value])
                 optional: Vec::new(),
                 rest: None,
             });
-            f.lexical = true;
+            f.set_lexical(true);
             f.set_ops(prog.ops.clone());
             f.set_constants(constants.into());
             f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));

@@ -15,7 +15,7 @@ fn binding_sum(nested: bool) -> ByteCodeFunction {
         optional: vec![],
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_constants(
         vec![
             Value::make_int(0),
@@ -143,7 +143,7 @@ fn osr_binding_entry_rejects_wrong_snapshot_without_mutating_either_stack() {
             ineligible.ops_mut().insert(at, Op::SaveExcursion);
             ineligible.ops_mut().insert(at + 1, Op::Unbind(1));
         } else {
-            ineligible.lexical = false;
+            ineligible.set_lexical(false);
         }
         ineligible.seal_hand_assembled_ops();
         assert!(
@@ -173,7 +173,7 @@ fn osr_binding_deopt_adopts_new_inner_binding_without_replaying_effects() {
             optional: vec![],
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_constants(
             vec![
                 Value::make_int(0),
@@ -438,7 +438,7 @@ fn osr_binding_transfer_from_iterative_child_preserves_callers_binding() {
         optional: vec![],
         rest: None,
     });
-    caller.lexical = true;
+    caller.set_lexical(true);
     caller.set_constants(
         vec![
             child,

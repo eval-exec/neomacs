@@ -75,7 +75,7 @@ fn transfer(op: &Op, constants: &[Value], tags: &mut Vec<Tag>) {
                 && let Some(proto) = constants
                     .get(*template as usize)
                     .and_then(|v| v.get_bytecode_data())
-                && proto.env.is_none()
+                && proto.env().is_none()
                 && n - 1 <= proto.constants().len()
             {
                 Tag::Closure {

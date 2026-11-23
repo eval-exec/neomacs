@@ -10,7 +10,7 @@ mod intern_growth;
 
 fn constant(answer: i64) -> Value {
     let mut f = ByteCodeFunction::new(LambdaParams::simple(vec![]));
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(vec![Op::Constant(0), Op::Return]);
     f.set_constants(vec![Value::fixnum(answer)].into());
     f.set_max_stack(super::super::function_slots::StackDepth::for_test(4));
@@ -32,7 +32,7 @@ fn fixture() -> (Context, [SymId; 2], Value, Value, Value) {
     ctx.obarray.set_symbol_function_id(ids[1], constant(73));
     let new = Value::list(vec![Value::symbol("lambda"), Value::NIL, Value::fixnum(97)]);
     let mut caller = ByteCodeFunction::new(LambdaParams::simple(vec![]));
-    caller.lexical = true;
+    caller.set_lexical(true);
     caller.set_ops(vec![Op::Constant(0), Op::Call(0), Op::Return]);
     caller.set_constants(vec![Value::from_sym_id(ids[0])].into());
     caller.set_max_stack(super::super::function_slots::StackDepth::for_test(4));

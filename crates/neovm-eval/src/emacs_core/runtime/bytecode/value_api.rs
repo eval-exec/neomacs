@@ -249,7 +249,7 @@ impl TaggedValueBytecodeExt for TaggedValue {
                 crate::emacs_core::pdump::stub_params_required_only(ptr, data.closure_slot_count)
             });
         }
-        Some(data.params.fixed_arity().is_some())
+        Some(data.params().fixed_arity().is_some())
     }
 
     /// The required-parameter count of a byte-code function that takes only
@@ -266,7 +266,7 @@ impl TaggedValueBytecodeExt for TaggedValue {
                 crate::emacs_core::pdump::stub_required_only_arity(ptr, data.closure_slot_count)
             };
         }
-        data.params.fixed_arity()
+        data.params().fixed_arity()
     }
 
     fn bytecode_interactive_probe(self) -> Option<BytecodeInteractiveProbe> {
@@ -417,7 +417,7 @@ impl TaggedValueBytecodeSlotCreationExt for TaggedValue {
                 }
                 None => return Value::NIL,
             },
-            ByteCodeSlotObject::Constants => match bc.env {
+            ByteCodeSlotObject::Constants => match bc.env() {
                 Some(env) => return env,
                 None => Value::vector(bc.constants().as_slice().to_vec()),
             },

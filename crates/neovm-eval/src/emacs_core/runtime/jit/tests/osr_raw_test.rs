@@ -10,7 +10,7 @@ fn raw_loop(ops: Vec<Op>) -> ByteCodeFunction {
         optional: vec![],
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_constants(vec![Value::make_int(0), Value::make_int(3), Value::make_int(99)].into());
     f.set_ops(ops);
     f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
@@ -120,7 +120,7 @@ fn osr_raw_switch_backedges_root_heap_payloads_and_preserve_quit_cadence() {
         optional: vec![],
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_constants(
         vec![
             Value::make_int(0),
@@ -208,7 +208,7 @@ fn osr_raw_overflow_retags_the_snapshot_and_resumes_without_replaying_effects() 
         optional: vec![],
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_constants(vec![Value::make_int(0), Value::symbol("osr-raw-effects")].into());
     f.set_ops(vec![
         Op::Constant(0),
@@ -298,7 +298,7 @@ fn osr_raw_varref_preserves_loop_slots_on_inline_and_fallback_reads() {
             optional: vec![],
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         f.set_constants(
             vec![
                 Value::make_int(0),
@@ -366,7 +366,7 @@ fn osr_raw_varref_type_change_retags_live_slots_for_precise_resume() {
         optional: vec![],
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_constants(
         vec![
             Value::make_int(0),

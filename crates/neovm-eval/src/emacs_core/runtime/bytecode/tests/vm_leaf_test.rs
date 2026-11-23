@@ -21,7 +21,7 @@ fn bcall_fn(callee: &'static str, nargs: usize) -> ByteCodeFunction {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     let mut ops = vec![Op::Constant(0)];
     for _ in 0..nargs {
         ops.push(Op::StackRef(nargs as u16));
@@ -280,7 +280,7 @@ fn a_leaf_signal_is_caught_in_the_calling_body() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     let mut ops = vec![
         Op::PushConditionCase(0),
         Op::Constant(1),

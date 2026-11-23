@@ -195,7 +195,7 @@ fn vm_unverified_listn_signals_without_popping_caller_slots() {
         Op::Return,
     ]);
     caller.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(4));
-    caller.lexical = false;
+    caller.set_lexical(false);
 
     let result = {
         let mut vm = new_vm(&mut eval);
@@ -230,7 +230,7 @@ fn assert_sealed_underflow_preserves_caller(op: Op) {
     });
     bad.set_ops(vec![op.clone(), Op::Return]);
     bad.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(1));
-    bad.lexical = false;
+    bad.set_lexical(false);
     bad.seal_hand_assembled_ops_for_test();
     assert!(
         !bad.stack_verified(),
@@ -258,7 +258,7 @@ fn assert_sealed_underflow_preserves_caller(op: Op) {
         Op::Return,
     ]);
     caller.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(4));
-    caller.lexical = false;
+    caller.set_lexical(false);
 
     let result = {
         let mut vm = new_vm(&mut eval);
@@ -291,7 +291,7 @@ fn resumed_frame_rejects_a_stack_deeper_than_max_stack() {
     });
     func.set_ops(vec![Op::Return]);
     func.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(1));
-    func.lexical = false;
+    func.set_lexical(false);
     func.seal_hand_assembled_ops_for_test();
     let func_value = Value::make_bytecode(func.clone());
     let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
@@ -341,7 +341,7 @@ fn vm_unverified_nary_pops_do_not_consume_caller_slots() {
         let name = bad.add_symbol("ignore");
         bad.set_ops(vec![Op::CallBuiltin(name, 255), Op::Return]);
         bad.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(1));
-        bad.lexical = false;
+        bad.set_lexical(false);
         bad.seal_hand_assembled_ops_for_test();
         assert!(!bad.stack_verified());
         Value::make_bytecode(bad)
@@ -368,7 +368,7 @@ fn vm_unverified_nary_pops_do_not_consume_caller_slots() {
             Op::Return,
         ]);
         caller.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(4));
-        caller.lexical = false;
+        caller.set_lexical(false);
         let result = {
             let mut vm = new_vm(&mut eval);
             vm.execute(&caller, vec![])
@@ -389,6 +389,187 @@ fn vm_unverified_nary_pops_do_not_consume_caller_slots() {
     ] {
         assert_sealed_underflow_preserves_caller(op);
     }
+}
+
+/// Cons then StackSet2 65535, called under a live caller slot.
+///
+/// `(make-byte-code 0 (unibyte-string 66 179 255 255 135) [] 0)` is Bcons,
+/// Bstack_set2 65535, Breturn. The checked driver must signal before Cons
+/// reads below the frame and before StackSet writes there.
+#[test]
+fn vm_unverified_cons_stack_set_does_not_write_caller_slots() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
+    let bad = eval
+        .eval_str("(make-byte-code 0 (unibyte-string 66 179 255 255 135) [] 0)")
+        .expect("make-byte-code accepts cons then stack-set2");
+    let bad_code = bad
+        .get_bytecode_data()
+        .expect("make-byte-code returns a bytecode object");
+    assert!(
+        !bad_code.stack_verified(),
+        "cons at depth 0 must stay on the checked driver"
+    );
+
+    let mut caller = ByteCodeFunction::new(LambdaParams {
+        required: vec![],
+        optional: vec![],
+        rest: None,
+    });
+    let keep_idx = caller.add_constant(Value::fixnum(4242));
+    let bad_idx = caller.add_constant(bad);
+    caller.set_ops(vec![
+        Op::Constant(keep_idx),
+        Op::PushConditionCase(6),
+        Op::Constant(bad_idx),
+        Op::Call(0),
+        Op::Pop,
+        Op::Return,
+        Op::StackRef(1),
+        Op::List(2),
+        Op::Return,
+    ]);
+    caller.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(4));
+    caller.set_lexical(false);
+
+    let result = {
+        let mut vm = new_vm(&mut eval);
+        vm.execute(&caller, vec![])
+    };
+    let value = result.expect("cons underflow is a caught invalid-bytecode error");
+    assert_eq!(
+        value.cons_cdr().cons_car(),
+        Value::fixnum(4242),
+        "caller slot must survive cons/stack-set, got {}",
+        crate::emacs_core::print::print_value(&value)
+    );
+    assert_eq!(
+        value.cons_car().cons_cdr().cons_car().as_utf8_str(),
+        Some("Invalid byte-code")
+    );
+
+    assert_sealed_underflow_preserves_caller(Op::Cons);
+    let mut hand = ByteCodeFunction::new(LambdaParams {
+        required: vec![],
+        optional: vec![],
+        rest: None,
+    });
+    hand.set_ops(vec![Op::Cons, Op::StackRef(65535), Op::Return]);
+    hand.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(1));
+    hand.set_lexical(false);
+    hand.seal_hand_assembled_ops_for_test();
+    assert!(!hand.stack_verified());
+    let hand = Value::make_bytecode(hand);
+    let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
+    let mut caller = ByteCodeFunction::new(LambdaParams {
+        required: vec![],
+        optional: vec![],
+        rest: None,
+    });
+    let keep_idx = caller.add_constant(Value::fixnum(4242));
+    let bad_idx = caller.add_constant(hand);
+    caller.set_ops(vec![
+        Op::Constant(keep_idx),
+        Op::PushConditionCase(6),
+        Op::Constant(bad_idx),
+        Op::Call(0),
+        Op::Pop,
+        Op::Return,
+        Op::StackRef(1),
+        Op::List(2),
+        Op::Return,
+    ]);
+    caller.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(4));
+    caller.set_lexical(false);
+    let result = {
+        let mut vm = new_vm(&mut eval);
+        vm.execute(&caller, vec![])
+    };
+    let value = result.expect("cons then stack-ref underflow is caught");
+    assert_eq!(value.cons_cdr().cons_car(), Value::fixnum(4242));
+}
+
+/// A verified body resumed with fewer slots than the proof at `start_pc`
+/// must not read the caller's slot through the verified driver.
+#[test]
+fn resumed_short_stack_does_not_read_below_frame_base() {
+    crate::test_utils::init_test_tracing();
+    let mut func = ByteCodeFunction::new(LambdaParams {
+        required: vec![],
+        optional: vec![],
+        rest: None,
+    });
+    let idx = func.add_constant(Value::fixnum(1));
+    func.set_ops(vec![Op::Constant(idx), Op::StackRef(0), Op::Return]);
+    func.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(2));
+    func.set_lexical(false);
+    func.seal_hand_assembled_ops_for_test();
+    assert!(
+        func.stack_verified(),
+        "constant then stack-ref is a proven body"
+    );
+    let func_value = Value::make_bytecode(func.clone());
+    let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
+    let mut vm = new_vm(&mut eval);
+    vm.ctx.bc_buf.push(Value::fixnum(4242));
+    vm.ctx
+        .specpdl
+        .push(crate::emacs_core::eval::SpecBinding::LexicalEnv {
+            old_lexenv: Value::NIL,
+        });
+    let short = vm.run_resumed_frame(&func, func_value, 1, &[], 0, &[], 0, 0);
+    assert_eq!(
+        vm.ctx.bc_buf.as_slice(),
+        &[Value::fixnum(4242)],
+        "a short resume must not consume the caller slot"
+    );
+    assert!(
+        vm.ctx.specpdl.is_empty(),
+        "a rejected or unwound resume must drop the frame's dynamic binds"
+    );
+    let Err(flow) = short else {
+        panic!("short verified resume must be invalid byte-code, got {short:?}");
+    };
+    let rendered = crate::emacs_core::format_eval_result(&Err(map_flow(flow)));
+    assert!(
+        rendered.contains("Invalid byte-code"),
+        "short resume: {rendered}"
+    );
+}
+
+/// Rejecting a resume past `ops.len()` still unwinds binds installed for
+/// that native frame.
+#[test]
+fn resumed_frame_reject_unwinds_dynamic_binds() {
+    crate::test_utils::init_test_tracing();
+    let mut func = ByteCodeFunction::new(LambdaParams {
+        required: vec![],
+        optional: vec![],
+        rest: None,
+    });
+    func.set_ops(vec![Op::Return]);
+    func.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(1));
+    func.set_lexical(false);
+    func.seal_hand_assembled_ops_for_test();
+    let func_value = Value::make_bytecode(func.clone());
+    let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
+    let mut vm = new_vm(&mut eval);
+    vm.ctx
+        .specpdl
+        .push(crate::emacs_core::eval::SpecBinding::LexicalEnv {
+            old_lexenv: Value::NIL,
+        });
+    let past_pc = vm.run_resumed_frame(&func, func_value, func.ops().len(), &[], 0, &[], 0, 0);
+    assert!(
+        vm.ctx.specpdl.is_empty(),
+        "past-pc reject must unwind the native frame's binds"
+    );
+    assert_eq!(vm.ctx.bc_buf.len(), 0);
+    let Err(flow) = past_pc else {
+        panic!("past-pc resume must be invalid byte-code, got {past_pc:?}");
+    };
+    let rendered = crate::emacs_core::format_eval_result(&Err(map_flow(flow)));
+    assert!(rendered.contains("Invalid byte-code"), "{rendered}");
 }
 
 #[test]
@@ -430,7 +611,7 @@ fn vm_dynamic_bytecode_args_do_not_occupy_bytecode_stack_like_gnu() {
         Op::Return,
     ]);
     func.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(3));
-    func.lexical = false;
+    func.set_lexical(false);
 
     let result = {
         let mut vm = new_vm(&mut eval);
@@ -1129,7 +1310,7 @@ fn vm_records_call_targets_of_non_constant_call_sites() {
         optional: vec![],
         rest: None,
     });
-    caller.lexical = true;
+    caller.set_lexical(true);
     let callee_idx = caller.add_constant(Value::from_sym_id(callee_sym));
     let arg_idx = caller.add_constant(Value::fixnum(1));
     caller.set_ops(vec![
@@ -1200,7 +1381,7 @@ fn vm_records_one_source_for_instances_of_a_closure() {
         optional: vec![],
         rest: None,
     });
-    caller.lexical = true;
+    caller.set_lexical(true);
     caller.set_ops(vec![Op::StackRef(0), Op::Call(0), Op::Return]);
     caller.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(2));
     caller.seal_hand_assembled_ops_for_test();
@@ -1615,7 +1796,7 @@ fn vm_symbol_bytecode_call_resolves_live_function_cell_once() {
         optional: vec![],
         rest: None,
     });
-    callee.lexical = true;
+    callee.set_lexical(true);
     callee.set_ops(vec![Op::StackRef(0), Op::Return]);
     callee.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(2));
     eval.obarray
@@ -1662,7 +1843,7 @@ fn vm_adjacent_stack_transfer_pairs_each_use_one_dispatch() {
         optional: vec![],
         rest: None,
     });
-    callee.lexical = true;
+    callee.set_lexical(true);
     callee.set_ops(vec![Op::StackRef(0), Op::Return]);
     callee.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(2));
     eval.obarray
@@ -1673,7 +1854,7 @@ fn vm_adjacent_stack_transfer_pairs_each_use_one_dispatch() {
         optional: vec![],
         rest: None,
     });
-    caller.lexical = true;
+    caller.set_lexical(true);
     let callee_idx = caller.add_constant(Value::from_sym_id(callee_symbol));
     caller.set_ops(vec![
         Op::Constant(callee_idx),
@@ -1708,7 +1889,7 @@ fn vm_stackref_return_pair_uses_one_dispatch() {
         optional: vec![],
         rest: None,
     });
-    function.lexical = true;
+    function.set_lexical(true);
     function.set_ops(vec![Op::StackRef(0), Op::Return]);
     function.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(2));
 
@@ -1735,7 +1916,7 @@ fn vm_stackref_return_fusion_preserves_frame_limit_validation() {
         optional: vec![],
         rest: None,
     });
-    function.lexical = true;
+    function.set_lexical(true);
     function.set_ops(vec![Op::StackRef(0), Op::Return]);
     function.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(1));
 
@@ -1758,7 +1939,7 @@ fn vm_bytecode_callee_preserves_string_argument_identity() {
         optional: vec![],
         rest: None,
     });
-    callee.lexical = true;
+    callee.set_lexical(true);
     callee.set_ops(vec![Op::StackRef(0), Op::Return]);
     callee.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(2));
     eval.obarray
@@ -1770,7 +1951,7 @@ fn vm_bytecode_callee_preserves_string_argument_identity() {
         optional: vec![],
         rest: None,
     });
-    caller.lexical = true;
+    caller.set_lexical(true);
     let callee_idx = caller.add_constant(Value::from_sym_id(callee_symbol));
     let argument_idx = caller.add_constant(argument);
     caller.set_ops(vec![
@@ -1796,7 +1977,7 @@ fn string_call_retaining_argument(callee: Value, string: Value, item: Value) -> 
         optional: vec![],
         rest: None,
     });
-    caller.lexical = true;
+    caller.set_lexical(true);
     let callee = caller.add_constant(callee);
     let string = caller.add_constant(string);
     let item = caller.add_constant(item);
@@ -3044,7 +3225,7 @@ fn vm_switch_branches_using_hash_table_jump_table() {
 /// 8 answers 20, byte offset 12 answers 30.
 fn switch_on_arg(table: Value) -> ByteCodeFunction {
     let mut func = ByteCodeFunction::new(LambdaParams::simple(vec![intern("vm-switch-x")]));
-    func.lexical = true;
+    func.set_lexical(true);
     // Seal-shaped by construction (trailing Return, in-bounds targets and
     // constants); left unverified so it runs in the checked driver, which
     // is the only one `Switch` gets.
@@ -4258,7 +4439,7 @@ fn vm_completion_builtins_use_shared_runtime_entry() {
         Op::Return,
     ]);
     func.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(4));
-    func.lexical = false;
+    func.set_lexical(false);
     func.seal_hand_assembled_ops_for_test();
     assert!(
         func.executes_verified_ops(),
@@ -7107,7 +7288,7 @@ fn second_bytecode_call_to_a_builtin_resolves_from_the_context_cache() {
         Op::Return,
     ]);
     func.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(2));
-    func.lexical = true;
+    func.set_lexical(true);
     let run = |eval: &mut Context| {
         let mut vm = new_vm(eval);
         vm.execute(&func, vec![]).expect("symbol-name via Bcall")
@@ -7143,7 +7324,7 @@ fn compiler_function_overrides_change_bumps_the_function_epoch() {
         Op::Return,
     ]);
     func.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(2));
-    func.lexical = true;
+    func.set_lexical(true);
     let run = |eval: &mut Context| {
         let mut vm = new_vm(eval);
         vm.execute(&func, vec![]).expect("symbol-name via Bcall")
@@ -7184,7 +7365,7 @@ mod frame_bindings;
 /// offset 5 answers 20, byte offset 7 answers 30.
 fn deferred_switch_on_arg(table: Value) -> ByteCodeFunction {
     let mut func = ByteCodeFunction::new(LambdaParams::simple(vec![intern("vm-vsw-x")]));
-    func.lexical = true;
+    func.set_lexical(true);
     func.set_constants(
         vec![
             table,

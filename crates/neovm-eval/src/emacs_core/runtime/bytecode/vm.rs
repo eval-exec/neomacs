@@ -671,7 +671,7 @@ fn trace_invalid_bytecode_site(
         max_stack = func.max_stack().get(),
         ops_len = ops.len(),
         constants_len = func.constants().len(),
-        lexical = func.lexical,
+        lexical = func.lexical(),
         "Invalid byte-code"
     );
 }
@@ -3239,6 +3239,20 @@ impl<'a> Vm<'a> {
         }
     }
 
+    /// Drop this frame's handlers so an underflow backstop cannot resume
+    /// inside the frame whose prefix was just padded with nil.
+    #[cold]
+    #[inline(never)]
+    fn drop_underflowed_frame_handlers(
+        &mut self,
+        callers: &InterpreterCallerStack,
+        aux_stack: &mut InterpreterFrameAuxStack,
+    ) {
+        let base = callers.active().cleanup.condition_stack_base();
+        self.ctx.truncate_condition_stack(base);
+        aux_stack.current_mut().handlers.clear();
+    }
+
     #[doc(hidden)]
     pub fn with_frame_roots<T>(
         &mut self,
@@ -3517,8 +3531,8 @@ impl<'a> Vm<'a> {
                 // Manual chunks have no heap function owner. Keep both
                 // parameter fields alive after the invocation cursor ends:
                 // safe Rust callers may assign arglist independently.
-                vm.push_dynamic_vm_root(func.arglist);
-                if let Some(child) = func.params.heap_child() {
+                vm.push_dynamic_vm_root(func.arglist());
+                if let Some(child) = func.params().heap_child() {
                     vm.push_dynamic_vm_root(child);
                 }
                 for value in func.constants().iter().copied() {
@@ -3591,11 +3605,9 @@ impl<'a> Vm<'a> {
         condition_stack_base: usize,
         osr_tried: bool,
     ) -> EvalResult {
-        // The driver fetches `ops[start_pc]` and seeds `stack` with no
-        // further check. Reject both before this frame mutates `bc_buf`.
-        if start_pc >= func.executable_ops().len() || stack.len() > func.max_stack().get() {
-            return Err(invalid_bytecode_flow());
-        }
+        // Install the frame before rejecting. An early `Err` used to skip
+        // `cleanup_bytecode_frame`, so the native frame's handlers stayed
+        // frame-relative and its dynamic binds were not unwound.
         let frame_base = self.ctx.bc_buf.len();
         // Native (JIT) catch/condition-case handlers transferred from the deopted
         // frame recorded their `stack_len` frame-RELATIVE (a native frame keeps no
@@ -3609,6 +3621,14 @@ impl<'a> Vm<'a> {
             base: frame_base,
             fun: func_value,
         });
+        if start_pc >= func.executable_ops().len() || stack.len() > func.max_stack().get() {
+            return self.cleanup_bytecode_frame(
+                Err(invalid_bytecode_flow()),
+                condition_stack_base,
+                specpdl_base,
+                frame_base,
+            );
+        }
         let frame_limit = match frame_base.checked_add(func.max_stack().get()) {
             Some(limit) => limit,
             None => {
@@ -3651,6 +3671,7 @@ impl<'a> Vm<'a> {
             &mut handlers,
             &mut bind_stack,
             osr_tried,
+            false,
         );
         self.cleanup_bytecode_frame(result, condition_stack_base, specpdl_base, frame_base)
     }
@@ -3689,16 +3710,16 @@ impl<'a> Vm<'a> {
         let mut bind_stack = BindStack::new();
 
         use super::FunctionParams;
-        let params_on_stack = match &func.params {
+        let params_on_stack = match func.params() {
             FunctionParams::Stack(_) => true,
             FunctionParams::Dynamic(_) => false,
             FunctionParams::Named(_) => {
-                func.lexical
-                    || func.env.is_some()
-                    || matches!(func.arglist.kind(), ValueKind::Fixnum(_))
+                func.lexical()
+                    || func.env().is_some()
+                    || matches!(func.arglist().kind(), ValueKind::Fixnum(_))
             }
         };
-        let shape = match &func.params {
+        let shape = match func.params() {
             // GNU checks the exact signed descriptor before converting its
             // nonrest bound into any host stack/allocation count.
             FunctionParams::Stack(template) => match template.call_shape(nargs) {
@@ -3726,7 +3747,7 @@ impl<'a> Vm<'a> {
                 None
             }
             FunctionParams::Named(_) => {
-                let Some(shape) = func.params.stack_shape() else {
+                let Some(shape) = func.params().stack_shape() else {
                     return self.cleanup_bytecode_frame(
                         Err(invalid_bytecode_flow()),
                         condition_stack_base,
@@ -3875,7 +3896,7 @@ impl<'a> Vm<'a> {
                 use crate::emacs_core::eval::SpecBinding;
                 #[cfg(debug_assertions)]
                 let entry_lexenv = self.ctx.lexenv;
-                if let Some(env) = func.env {
+                if let Some(env) = func.env() {
                     // Push BEFORE assigning: the entry keeps the caller's
                     // lexenv alist GC-traced while ctx.lexenv points at the
                     // closure env.
@@ -3891,9 +3912,10 @@ impl<'a> Vm<'a> {
                     &mut handlers,
                     &mut bind_stack,
                     false,
+                    true,
                 );
                 #[cfg(debug_assertions)]
-                if func.env.is_none() {
+                if func.env().is_none() {
                     debug_assert!(
                         lexenv_tail_reachable(self.ctx.lexenv, entry_lexenv),
                         "env-less bytecode frame changed ctx.lexenv beyond defvar markers"
@@ -3914,7 +3936,7 @@ impl<'a> Vm<'a> {
             // bytecode stack slots. The caller's arg span stays live on
             // bc_buf through every specbind (variable watchers can run
             // arbitrary Lisp that captures backtraces reading it).
-            let FunctionParams::Named(named_params) = &func.params else {
+            let FunctionParams::Named(named_params) = func.params() else {
                 return self.cleanup_bytecode_frame(
                     Err(invalid_bytecode_flow()),
                     condition_stack_base,
@@ -3979,6 +4001,7 @@ impl<'a> Vm<'a> {
                 &mut handlers,
                 &mut bind_stack,
                 false,
+                true,
             );
             return self.cleanup_bytecode_frame(
                 result,
@@ -3998,7 +4021,7 @@ impl<'a> Vm<'a> {
         let entry_lexenv = self.ctx.lexenv;
         {
             use crate::emacs_core::eval::SpecBinding;
-            if let Some(env) = func.env {
+            if let Some(env) = func.env() {
                 // Push BEFORE assigning (see the params_on_stack branch).
                 let old_lexenv = self.ctx.lexenv;
                 self.ctx
@@ -4014,9 +4037,10 @@ impl<'a> Vm<'a> {
             &mut handlers,
             &mut bind_stack,
             false,
+            true,
         );
         #[cfg(debug_assertions)]
-        if func.env.is_none() {
+        if func.env().is_none() {
             debug_assert!(
                 lexenv_tail_reachable(self.ctx.lexenv, entry_lexenv),
                 "env-less bytecode frame changed ctx.lexenv beyond defvar markers"
@@ -4167,21 +4191,21 @@ impl<'a> Vm<'a> {
         func: &ByteCodeFunction,
         nargs: usize,
     ) -> bool {
-        let Some(shape) = func.params.stack_shape() else {
+        let Some(shape) = func.params().stack_shape() else {
             return false;
         };
         let required = shape.required();
         let nonrest = shape.nonrest();
         let has_named_params = nonrest > 0;
-        let params_on_stack = match &func.params {
+        let params_on_stack = match func.params() {
             super::FunctionParams::Stack(_) => true,
             super::FunctionParams::Dynamic(_) => false,
             super::FunctionParams::Named(_) => {
-                func.lexical || matches!(func.arglist.kind(), ValueKind::Fixnum(_))
+                func.lexical() || matches!(func.arglist().kind(), ValueKind::Fixnum(_))
             }
         };
 
-        func.env.is_none()
+        func.env().is_none()
             && !shape.rest().is_present()
             && (!has_named_params || params_on_stack)
             && required <= nargs
@@ -4273,7 +4297,7 @@ impl<'a> Vm<'a> {
         }
 
         let nonrest = func
-            .params
+            .params()
             .stack_shape()
             .expect("iterative parameter shape prevalidated")
             .nonrest();
@@ -4672,17 +4696,23 @@ impl<'a> Vm<'a> {
                     }
                 }
             }
-            ResolvedStackCallTarget::Builtin { callee } => InterpreterStackCall::Complete(unsafe {
-                Self::call_resolved_builtin_from_stack_args(
-                    self.ctx, func_val, args_start, nargs, callee,
-                )
-            }),
-            ResolvedStackCallTarget::BuiltinLeaf { callee, leaf } => {
-                InterpreterStackCall::Complete(unsafe {
-                    Self::call_builtin_leaf_from_stack_args(
-                        self.ctx, func_val, args_start, nargs, callee, leaf,
+            ResolvedStackCallTarget::Builtin { callee } => InterpreterStackCall::Complete(
+                /* SAFETY: bc_buf[args_start..args_start + nargs] is the staged span this call passes on. */
+                unsafe {
+                    Self::call_resolved_builtin_from_stack_args(
+                        self.ctx, func_val, args_start, nargs, callee,
                     )
-                })
+                },
+            ),
+            ResolvedStackCallTarget::BuiltinLeaf { callee, leaf } => {
+                InterpreterStackCall::Complete(
+                    /* SAFETY: bc_buf[args_start..args_start + nargs] is the staged span this call passes on. */
+                    unsafe {
+                        Self::call_builtin_leaf_from_stack_args(
+                            self.ctx, func_val, args_start, nargs, callee, leaf,
+                        )
+                    },
+                )
             }
             ResolvedStackCallTarget::Generic => {
                 let bt_base = self.ctx.specpdl.len();
@@ -4978,6 +5008,10 @@ impl<'a> Vm<'a> {
         handlers: &mut HandlerStack,
         bind_stack: &mut BindStack,
         #[cfg_attr(not(feature = "jit"), allow(unused_variables))] entry_osr_tried: bool,
+        // Resume passes false. A stack shorter than the proof at `start_pc`
+        // must not enter the verified driver: StackRef and StackSet there
+        // index below `frame_base` with no check.
+        trust_stack_proof: bool,
     ) -> EvalResult {
         #[cfg(test)]
         let _run_loop_depth = RunLoopDepthGuard::enter();
@@ -5029,7 +5063,7 @@ impl<'a> Vm<'a> {
         // drops the per-push capacity guard on the strength of the decode-time
         // `verify_stack_effects` proof; everything else runs the checked
         // instance with today's exact behavior. Chosen once per driver entry.
-        let result = if entry_func.executes_verified_ops() {
+        let result = if trust_stack_proof && entry_func.executes_verified_ops() {
             self.run_interpreter_driver::<true>(&mut callers, &mut aux_stack, &mut quitcounter)
         } else {
             self.run_interpreter_driver::<false>(&mut callers, &mut aux_stack, &mut quitcounter)
@@ -5508,8 +5542,11 @@ impl<'a> Vm<'a> {
             macro_rules! rejoin_phase_checked {
                 () => {{
                     rejoin_phase!();
-                    if cursor.len < frame_base {
+                    // Verified bodies never truncate below the frame. Gating
+                    // the compare keeps that monomorph from paying for it.
+                    if !VERIFIED && cursor.len < frame_base {
                         self.pad_bytecode_frame_base(&mut cursor, frame_base);
+                        self.drop_underflowed_frame_handlers(callers, aux_stack);
                         invalid_bytecode!("frame-base-rejoin");
                     }
                 }};
@@ -5520,9 +5557,12 @@ impl<'a> Vm<'a> {
                 "unchecked dispatch requires seal_ops-normalized bytecode"
             );
             // Once per frame, not per opcode. A `continue 'frame` after a
-            // short rejoin lands here with the new frame's base.
-            if cursor.len < frame_base {
+            // short rejoin lands here with the new frame's base. The verified
+            // monomorph does not pay for the compare: a proven body cannot
+            // arrive here below `frame_base`.
+            if !VERIFIED && cursor.len < frame_base {
                 self.pad_bytecode_frame_base(&mut cursor, frame_base);
+                self.drop_underflowed_frame_handlers(callers, aux_stack);
                 let invalid_pc = pc_local.saturating_sub(1);
                 let stack_len = cursor.len;
                 publish_phase!();
@@ -5544,10 +5584,9 @@ impl<'a> Vm<'a> {
                     callers,
                     invalid_bytecode_flow(),
                 ) {
-                    ResumeFlowOutcome::ResumeOp => {
-                        rejoin_phase_raw!();
-                    }
-                    ResumeFlowOutcome::ResumeFrame => {
+                    // Handlers in this frame were dropped. A same-frame
+                    // resume would run on the nil prefix.
+                    ResumeFlowOutcome::ResumeOp | ResumeFlowOutcome::ResumeFrame => {
                         rejoin_phase_raw!();
                         continue 'frame;
                     }
@@ -5583,6 +5622,15 @@ impl<'a> Vm<'a> {
                 }
                 let op = unsafe { &*ops_ptr.add(pc_local) };
                 pc_local += 1;
+                // BYTE_CODE_SAFE's per-opcode `valid_sp`, for the checked
+                // driver only. `!VERIFIED` folds the test out of the proven
+                // monomorph. The count is decode's `(min, net)` table.
+                if !VERIFIED {
+                    let need = super::decode::opcode_min_operands(op);
+                    if cursor.len < frame_base || depth!(frame_base) < need {
+                        invalid_bytecode!("frame-depth");
+                    }
+                }
                 #[cfg(test)]
                 OPCODE_DISPATCH_COUNT.with(|count| count.set(count.get() + 1));
                 #[cfg(feature = "vm-profile")]
@@ -5619,7 +5667,9 @@ impl<'a> Vm<'a> {
 
                             let offset = 1 + *n as usize;
                             let len = stk!().len();
-                            if offset <= depth!(frame_base) {
+                            if (VERIFIED || cursor.len >= frame_base)
+                                && offset <= depth!(frame_base)
+                            {
                                 let value = unsafe { *stk!().get_unchecked(len - offset) };
                                 stk_push!(value);
                             } else {
@@ -5637,7 +5687,7 @@ impl<'a> Vm<'a> {
                             !VERIFIED || depth!(frame_base) > 0,
                             "verified bytecode underflowed its proven stack depth"
                         );
-                        if !VERIFIED && depth!(frame_base) == 0 {
+                        if !VERIFIED && cursor.len <= frame_base {
                             invalid_bytecode!("pop-empty-stack");
                         }
                         stk!().pop();
@@ -5651,7 +5701,7 @@ impl<'a> Vm<'a> {
                                 (next0, next1, next2)
                             {
                                 let len = cursor.len;
-                                if depth!(frame_base) == 0 {
+                                if cursor.len <= frame_base {
                                     invalid_bytecode!("dup-lss-gotoifnil-empty-stack");
                                 }
                                 debug_assert!(
@@ -5696,7 +5746,7 @@ impl<'a> Vm<'a> {
                             }
                         }
 
-                        if depth!(frame_base) > 0 {
+                        if cursor.len > frame_base {
                             let top = unsafe { *stk!().get_unchecked(stk!().len() - 1) };
                             stk_push!(top);
                         } else {
@@ -5710,7 +5760,7 @@ impl<'a> Vm<'a> {
                             !VERIFIED || offset <= depth!(frame_base),
                             "verified bytecode underflowed its proven stack depth"
                         );
-                        if VERIFIED || offset <= depth!(frame_base) {
+                        if VERIFIED || (cursor.len >= frame_base && offset <= depth!(frame_base)) {
                             // Valid bytecode references an existing stack slot.
                             // Keep the hot path to one explicit check and avoid
                             // the slice indexer's second bounds check.
@@ -5746,7 +5796,7 @@ impl<'a> Vm<'a> {
                             !VERIFIED || depth!(frame_base) > *n as usize,
                             "verified bytecode underflowed its proven stack depth"
                         );
-                        if !VERIFIED && depth!(frame_base) == 0 {
+                        if !VERIFIED && cursor.len <= frame_base {
                             invalid_bytecode!("stack-set-empty-stack");
                         }
                         let n = *n as usize;
@@ -5754,7 +5804,7 @@ impl<'a> Vm<'a> {
                             stk!().pop();
                             continue;
                         }
-                        if VERIFIED || n < depth!(frame_base) {
+                        if VERIFIED || (cursor.len >= frame_base && n < depth!(frame_base)) {
                             let val = unsafe { *cursor.get_unchecked(len - 1) };
                             let idx = len - 1 - n;
                             unsafe { *cursor.get_unchecked_mut(idx) = val };
@@ -5770,11 +5820,11 @@ impl<'a> Vm<'a> {
                             continue;
                         }
                         let len = stk!().len();
-                        if n > depth!(frame_base) {
+                        if (!VERIFIED && cursor.len < frame_base) || n > depth!(frame_base) {
                             invalid_bytecode!("discard-n-out-of-range");
                         }
                         if preserve_tos {
-                            if n >= depth!(frame_base) {
+                            if (!VERIFIED && cursor.len < frame_base) || n >= depth!(frame_base) {
                                 invalid_bytecode!("discard-n-preserve-tos-out-of-range");
                             }
                             let top = unsafe { *cursor.get_unchecked(len - 1) };
@@ -6173,7 +6223,7 @@ impl<'a> Vm<'a> {
                             !VERIFIED || depth!(frame_base) > 0,
                             "verified bytecode underflowed its proven stack depth"
                         );
-                        if !VERIFIED && depth!(frame_base) == 0 {
+                        if !VERIFIED && cursor.len <= frame_base {
                             invalid_bytecode!("goto-if-nil-empty-stack");
                         }
                         let val = unsafe { *cursor.get_unchecked(len - 1) };
@@ -6188,7 +6238,7 @@ impl<'a> Vm<'a> {
                             !VERIFIED || depth!(frame_base) > 0,
                             "verified bytecode underflowed its proven stack depth"
                         );
-                        if !VERIFIED && depth!(frame_base) == 0 {
+                        if !VERIFIED && cursor.len <= frame_base {
                             invalid_bytecode!("goto-if-not-nil-empty-stack");
                         }
                         let val = unsafe { *cursor.get_unchecked(len - 1) };
@@ -6203,7 +6253,7 @@ impl<'a> Vm<'a> {
                             !VERIFIED || depth!(frame_base) > 0,
                             "verified bytecode underflowed its proven stack depth"
                         );
-                        if !VERIFIED && depth!(frame_base) == 0 {
+                        if !VERIFIED && cursor.len <= frame_base {
                             invalid_bytecode!("goto-if-nil-else-pop-empty-stack");
                         }
                         if unsafe { cursor.get_unchecked(len - 1) }.is_nil() {
@@ -6218,7 +6268,7 @@ impl<'a> Vm<'a> {
                             !VERIFIED || depth!(frame_base) > 0,
                             "verified bytecode underflowed its proven stack depth"
                         );
-                        if !VERIFIED && depth!(frame_base) == 0 {
+                        if !VERIFIED && cursor.len <= frame_base {
                             invalid_bytecode!("goto-if-not-nil-else-pop-empty-stack");
                         }
                         if unsafe { cursor.get_unchecked(len - 1) }.is_truthy() {
@@ -6261,7 +6311,13 @@ impl<'a> Vm<'a> {
                         }
                     }
                     Op::Return => {
-                        let result = stk!().pop().unwrap_or(Value::NIL);
+                        // An empty frame returns nil. `pop` counts from the
+                        // buffer base, so it must not run at `frame_base`.
+                        let result = if cursor.len > frame_base {
+                            stk!().pop().unwrap_or(Value::NIL)
+                        } else {
+                            Value::NIL
+                        };
                         return_value!(result);
                     }
                     Op::SaveCurrentBuffer => {
@@ -6362,7 +6418,7 @@ impl<'a> Vm<'a> {
                     Op::Add => {
                         let fallback = {
                             let len = cursor.len;
-                            if depth!(frame_base) < 2 {
+                            if (!VERIFIED && cursor.len < frame_base) || depth!(frame_base) < 2 {
                                 invalid_bytecode!("add-stack-underflow");
                             }
                             let b = unsafe { *cursor.get_unchecked(len - 1) };
@@ -6570,7 +6626,7 @@ impl<'a> Vm<'a> {
                     Op::Add1 => {
                         let fallback = {
                             let len = cursor.len;
-                            if depth!(frame_base) == 0 {
+                            if cursor.len <= frame_base {
                                 invalid_bytecode!("add1-empty-stack");
                             }
                             let top = unsafe { *cursor.get_unchecked(len - 1) };
@@ -6733,7 +6789,7 @@ impl<'a> Vm<'a> {
                     Op::Lss => {
                         let fallback = {
                             let len = cursor.len;
-                            if depth!(frame_base) < 2 {
+                            if (!VERIFIED && cursor.len < frame_base) || depth!(frame_base) < 2 {
                                 invalid_bytecode!("lss-stack-underflow");
                             }
                             let b = unsafe { *cursor.get_unchecked(len - 1) };
@@ -7328,7 +7384,16 @@ impl<'a> Vm<'a> {
                         let val = constants[*idx as usize];
                         if let Some(bc_data) = val.get_bytecode_data() {
                             let mut closure = bc_data.clone();
-                            closure.env = Some(self.ctx.lexenv);
+                            // The ops bytes are unchanged. set_env drops the
+                            // certificate because entry depth can change;
+                            // restore the seal and recompute the proof.
+                            let keep_seal = closure.ops_sealed();
+                            closure.set_env(Some(self.ctx.lexenv));
+                            if keep_seal {
+                                /* SAFETY: ops bytes are unchanged. seal_ops already succeeded on this function, and clone copied those ops. set_env only cleared the flag. */
+                                unsafe { closure.mark_ops_sealed() };
+                                closure.refresh_stack_verification();
+                            }
                             stk_push!(Value::make_bytecode(closure));
                         } else {
                             stk_push!(val);
@@ -7358,9 +7423,14 @@ impl<'a> Vm<'a> {
                         {
                             publish_primitive_position(self.ctx, bc_position);
                         }
-                        let result = vm_try!(unsafe {
-                            self.dispatch_vm_builtin_by_id_from_stack(func, name_id, args_start, n)
-                        });
+                        let result = vm_try!(
+                            /* SAFETY: bc_buf[args_start..args_start + n] is the staged span this call passes on. */
+                            unsafe {
+                                self.dispatch_vm_builtin_by_id_from_stack(
+                                    func, name_id, args_start, n,
+                                )
+                            }
+                        );
                         stk!().truncate(args_start);
                         stk_push!(result);
                         poll_quit!(bc_position);
@@ -7412,9 +7482,12 @@ impl<'a> Vm<'a> {
                                 {
                                     publish_primitive_position(self.ctx, bc_position);
                                 }
-                                vm_try!(unsafe {
-                                    self.dispatch_call_builtin_sym(func, *sym, args_start, n)
-                                })
+                                vm_try!(
+                                    /* SAFETY: bc_buf[args_start..args_start + n] is the staged span this call passes on. */
+                                    unsafe {
+                                        self.dispatch_call_builtin_sym(func, *sym, args_start, n)
+                                    }
+                                )
                             }
                         };
                         stk!().truncate(args_start);
@@ -8240,6 +8313,7 @@ impl<'a> Vm<'a> {
         self.ctx.bc_buf.extend_from_slice(&spread);
         let total = nargs - 1 + spread.len();
         // No added bytecode-call depth guard or direct-builtin fast path.
+        /* SAFETY: bc_buf[args_start..args_start + total] is the staged span this call passes on. */
         unsafe { self.call_function_from_stack_args(func_val, args_start, total, false) }
     }
 
@@ -8306,7 +8380,7 @@ impl<'a> Vm<'a> {
         // interpreter's Op::Call), so the generic seam no longer resolves
         // twice and pays an extra layer per call (17K generic calls per org
         // font-lock op).
-        let result = self.with_bytecode_call_depth(|vm| unsafe {
+        let result = self.with_bytecode_call_depth(|vm| /* SAFETY: bc_buf[args_start..args_start + nargs] is the staged span this call passes on. */ unsafe {
             vm.call_function_from_stack_args(func_val, args_start, nargs, true)
         })?;
         Ok(result)
@@ -8358,6 +8432,7 @@ impl<'a> Vm<'a> {
         args_start: usize,
         nargs: usize,
     ) -> EvalResult {
+        /* SAFETY: bc_buf[args_start..args_start + nargs] is the staged span this call passes on. */
         unsafe {
             self.call_spec_subr_stack_with_frame(
                 sym_id,
@@ -8426,7 +8501,7 @@ impl<'a> Vm<'a> {
                 ))
             } else {
                 match entry.function {
-                    Some(function) => unsafe {
+                    Some(function) => /* SAFETY: bc_buf[args_start..args_start + nargs] is the staged span this call passes on. */ unsafe {
                         Vm::dispatch_builtin_subr_from_stack_args_unchecked(
                             vm.ctx, function, args_start, nargs,
                         )
@@ -9166,14 +9241,14 @@ impl<'a> Vm<'a> {
         if allow_direct_builtin_subr {
             match self.resolve_stack_call_target(func_val) {
                 ResolvedStackCallTarget::Builtin { callee } => {
-                    return unsafe {
+                    return /* SAFETY: bc_buf[args_start..args_start + nargs] is the staged span this call passes on. */ unsafe {
                         Self::call_resolved_builtin_from_stack_args(
                             self.ctx, func_val, args_start, nargs, callee,
                         )
                     };
                 }
                 ResolvedStackCallTarget::BuiltinLeaf { callee, leaf } => {
-                    return unsafe {
+                    return /* SAFETY: bc_buf[args_start..args_start + nargs] is the staged span this call passes on. */ unsafe {
                         Self::call_builtin_leaf_from_stack_args(
                             self.ctx, func_val, args_start, nargs, callee, leaf,
                         )
@@ -9369,7 +9444,7 @@ impl<'a> Vm<'a> {
                 ))));
             }
         }
-        let result = unsafe {
+        let result = /* SAFETY: bc_buf[args_start..args_start + nargs] is the staged span this call passes on. */ unsafe {
             Self::call_resolved_builtin_from_stack_args(ctx, func_val, args_start, nargs, callee)
         };
         ctx.depth -= 1;
@@ -9391,44 +9466,49 @@ impl<'a> Vm<'a> {
     ) -> EvalResult {
         let (sym_id, function, min_args, max_args) = callee.dispatch_parts();
         let backtrace = ctx.push_backtrace_frame_from_bc_stack(func_val, args_start, nargs);
-        let result =
-            if nargs < min_args as usize || max_args.is_some_and(|max| nargs > max as usize) {
-                Err(signal(
-                    LispCondition::WrongNumberOfArguments,
-                    vec![callee.wrong_arity_value(), Value::fixnum(nargs as i64)],
-                ))
-            } else {
-                // The fixnum fast paths exist only for `+`/`logand`/`logior`/`logxor`,
-                // all registered as slice builtins; skip the four symbol compares for
-                // every fixed-arity call.
-                if matches!(function, Some(SubrFn::ManySlice(_)))
-                    && let Some(value) = unsafe {
+        let result = if nargs < min_args as usize
+            || max_args.is_some_and(|max| nargs > max as usize)
+        {
+            Err(signal(
+                LispCondition::WrongNumberOfArguments,
+                vec![callee.wrong_arity_value(), Value::fixnum(nargs as i64)],
+            ))
+        } else {
+            // The fixnum fast paths exist only for `+`/`logand`/`logior`/`logxor`,
+            // all registered as slice builtins; skip the four symbol compares for
+            // every fixed-arity call.
+            if matches!(function, Some(SubrFn::ManySlice(_)))
+                && let Some(value) =
+                    /* SAFETY: bc_buf[args_start..args_start + nargs] is the staged span this call passes on. */
+                    unsafe {
                         Self::try_dispatch_builtin_subr_fast_value_from_stack_args(
                             ctx, sym_id, args_start, nargs,
                         )
                     }
-                {
-                    return match ctx.pop_fast_bytecode_backtrace_frame(backtrace) {
-                        crate::emacs_core::eval::FastBytecodePop::Popped => Ok(value),
-                        // GNU's exit debugger replaces the value it is shown
-                        // (`src/bytecode.c:825-828`).
-                        crate::emacs_core::eval::FastBytecodePop::OwesDebugOnExit(frame) => {
-                            ctx.pop_bytecode_backtrace_token_with_result(frame, Ok(value))
-                        }
-                    };
-                }
-                match function {
-                    Some(function) => unsafe {
-                        Self::dispatch_builtin_subr_from_stack_args_unchecked(
-                            ctx, function, args_start, nargs,
-                        )
-                    },
-                    None => Err(signal(
-                        LispCondition::VoidFunction,
-                        vec![Value::from_sym_id(sym_id)],
-                    )),
-                }
-            };
+            {
+                return match ctx.pop_fast_bytecode_backtrace_frame(backtrace) {
+                    crate::emacs_core::eval::FastBytecodePop::Popped => Ok(value),
+                    // GNU's exit debugger replaces the value it is shown
+                    // (`src/bytecode.c:825-828`).
+                    crate::emacs_core::eval::FastBytecodePop::OwesDebugOnExit(frame) => {
+                        ctx.pop_bytecode_backtrace_token_with_result(frame, Ok(value))
+                    }
+                };
+            }
+            match function {
+                Some(function) =>
+                /* SAFETY: bc_buf[args_start..args_start + nargs] is the staged span this call passes on. */
+                unsafe {
+                    Self::dispatch_builtin_subr_from_stack_args_unchecked(
+                        ctx, function, args_start, nargs,
+                    )
+                },
+                None => Err(signal(
+                    LispCondition::VoidFunction,
+                    vec![Value::from_sym_id(sym_id)],
+                )),
+            }
+        };
         ctx.finish_traced_builtin_call(backtrace, result)
     }
 
@@ -9495,7 +9575,9 @@ impl<'a> Vm<'a> {
             Some(Err(flow)) => Err(flow),
             // These are static subrs, so this is unreachable in practice; take
             // the traced path rather than invent a dispatch for it.
-            None => unsafe {
+            None =>
+            /* SAFETY: bc_buf[args_start..args_start + nargs] is the staged span this call passes on. */
+            unsafe {
                 self.call_function_from_stack_args(
                     <Value as SubrValueExt>::subr_from_sym_id(kind.builtin_id()),
                     args_start,
@@ -9552,6 +9634,7 @@ impl<'a> Vm<'a> {
         {
             return Some(Ok(value));
         }
+        /* SAFETY: bc_buf[args_start..args_start + nargs] is the staged span this call passes on. */
         unsafe { Self::call_arith_builtin_slow_on_context(ctx, kind, args_start, nargs) }
     }
 
@@ -9581,11 +9664,13 @@ impl<'a> Vm<'a> {
             )));
         }
         if matches!(function, Some(SubrFn::ManySlice(_)))
-            && let Some(value) = unsafe {
-                Self::try_dispatch_builtin_subr_fast_value_from_stack_args(
-                    ctx, sym_id, args_start, nargs,
-                )
-            }
+            && let Some(value) =
+                /* SAFETY: bc_buf[args_start..args_start + nargs] is the staged span this call passes on. */
+                unsafe {
+                    Self::try_dispatch_builtin_subr_fast_value_from_stack_args(
+                        ctx, sym_id, args_start, nargs,
+                    )
+                }
         {
             return Some(Ok(value));
         }
@@ -9596,7 +9681,7 @@ impl<'a> Vm<'a> {
         // (a tag store and a value store, no wide copy of the builtin's
         // result); a signal goes to the cold hook dispatch.
         Some(
-            match unsafe {
+            match /* SAFETY: bc_buf[args_start..args_start + nargs] is the staged span this call passes on. */ unsafe {
                 Self::dispatch_builtin_subr_from_stack_args_unchecked(
                     ctx, function, args_start, nargs,
                 )
@@ -9636,22 +9721,22 @@ impl<'a> Vm<'a> {
         nargs: usize,
     ) -> Option<Value> {
         if sym_id == plus_sym_id() {
-            return unsafe {
+            return /* SAFETY: bc_buf[args_start..args_start + nargs] is the staged span this call passes on. */ unsafe {
                 Self::try_fast_fixnum_add_value_from_stack_args(ctx, args_start, nargs)
             };
         }
         if sym_id == logand_sym_id() {
-            return unsafe {
+            return /* SAFETY: bc_buf[args_start..args_start + nargs] is the staged span this call passes on. */ unsafe {
                 Self::try_fast_fixnum_logand_value_from_stack_args(ctx, args_start, nargs)
             };
         }
         if sym_id == logior_sym_id() {
-            return unsafe {
+            return /* SAFETY: bc_buf[args_start..args_start + nargs] is the staged span this call passes on. */ unsafe {
                 Self::try_fast_fixnum_logior_value_from_stack_args(ctx, args_start, nargs)
             };
         }
         if sym_id == logxor_sym_id() {
-            return unsafe {
+            return /* SAFETY: bc_buf[args_start..args_start + nargs] is the staged span this call passes on. */ unsafe {
                 Self::try_fast_fixnum_logxor_value_from_stack_args(ctx, args_start, nargs)
             };
         }
@@ -10473,7 +10558,7 @@ impl<'a> Vm<'a> {
         nargs: usize,
     ) -> EvalResult {
         if let Some(function) = Self::inline_builtin_function(sym) {
-            return unsafe { self.call_inline_builtin(function, args_start, nargs) };
+            return /* SAFETY: bc_buf[args_start..args_start + nargs] is the staged span this call passes on. */ unsafe { self.call_inline_builtin(function, args_start, nargs) };
         }
         let args: LispArgVec = self.ctx.bc_buf[args_start..args_start + nargs]
             .iter()
@@ -10510,8 +10595,9 @@ impl<'a> Vm<'a> {
         // routing these through the function cell would make neomacs MORE
         // advisable than GNU, breaking parity.
         if let Some(function) = Self::inline_builtin_function(sym) {
-            return unsafe { self.call_inline_builtin(function, args_start, nargs) };
+            return /* SAFETY: bc_buf[args_start..args_start + nargs] is the staged span this call passes on. */ unsafe { self.call_inline_builtin(function, args_start, nargs) };
         }
+        /* SAFETY: bc_buf[args_start..args_start + nargs] is the staged span this call passes on. */
         unsafe { self.dispatch_vm_builtin_by_id_from_stack(func, sym, args_start, nargs) }
     }
 
@@ -10644,7 +10730,7 @@ impl<'a> Vm<'a> {
         #[cfg(test)]
         INLINE_BUILTIN_DIRECT_COUNT.with(|count| count.set(count.get() + 1));
         // Value first (see `dispatch_builtin_subr_from_stack_args_unchecked`).
-        match unsafe {
+        match /* SAFETY: bc_buf[args_start..args_start + nargs] is the staged span this call passes on. */ unsafe {
             Self::dispatch_builtin_subr_from_stack_args_unchecked(ctx, function, args_start, nargs)
         } {
             Ok(value) => Ok(value),
@@ -10663,6 +10749,7 @@ impl<'a> Vm<'a> {
         args_start: usize,
         nargs: usize,
     ) -> EvalResult {
+        /* SAFETY: bc_buf[args_start..args_start + nargs] is the staged span this call passes on. */
         unsafe { Self::call_inline_builtin_from_stack(self.ctx, function, args_start, nargs) }
     }
 
@@ -11251,7 +11338,9 @@ impl crate::emacs_core::eval::Context {
             ))
         } else {
             match entry.function {
-                Some(function) => unsafe {
+                Some(function) =>
+                /* SAFETY: bc_buf[args_start..args_start + nargs] is the staged span this call passes on. */
+                unsafe {
                     Vm::dispatch_builtin_subr_from_stack_args_unchecked(
                         self, function, args_start, nargs,
                     )

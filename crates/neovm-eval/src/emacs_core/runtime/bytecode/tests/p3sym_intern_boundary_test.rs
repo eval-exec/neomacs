@@ -15,13 +15,13 @@ fn p3sym_c5_vm_readers_and_function_caches_survive_intern_relocation() {
     let old = constant(73);
     ctx.obarray.set_symbol_function_id(symbol, old);
     let mut reader = ByteCodeFunction::new(LambdaParams::simple(vec![]));
-    reader.lexical = true;
+    reader.set_lexical(true);
     reader.set_ops(vec![Op::VarRef(0), Op::Return]);
     reader.set_constants(vec![Value::from_sym_id(global)].into());
     reader.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(4));
     let reader = Value::make_bytecode(reader);
     let mut caller = ByteCodeFunction::new(LambdaParams::simple(vec![]));
-    caller.lexical = true;
+    caller.set_lexical(true);
     caller.set_ops(vec![Op::Constant(0), Op::Call(0), Op::Return]);
     caller.set_constants(vec![Value::from_sym_id(symbol)].into());
     caller.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(4));

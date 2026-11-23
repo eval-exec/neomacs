@@ -28,7 +28,7 @@ fn function(ops: Vec<Op>, constants: Vec<Value>, arity: usize) -> ByteCodeFuncti
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(ops);
     f.set_constants(constants.into());
     f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
@@ -134,7 +134,7 @@ fn compile(ev: &Context, path: Path, f: &ByteCodeFunction) {
             lower_leaf_full(
                 f.ops(),
                 f.constants(),
-                f.params
+                f.params()
                     .stack_shape()
                     .expect("fixture stack parameters")
                     .required(),
@@ -385,7 +385,7 @@ fn cold_exits_run_the_corpus_unchanged() {
         let leaf = lower_leaf_full(
             f.ops(),
             f.constants(),
-            f.params
+            f.params()
                 .stack_shape()
                 .expect("fixture stack parameters")
                 .required(),
@@ -420,7 +420,7 @@ fn cold_exits_run_the_corpus_unchanged() {
             // A float operand deopts at the first guard, in both.
             let args = vec![
                 arg;
-                f.params
+                f.params()
                     .stack_shape()
                     .expect("fixture stack parameters")
                     .required()

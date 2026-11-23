@@ -40,7 +40,7 @@ fn source(ops: Vec<Op>, constants: Vec<LispValue>, arity: usize) -> ByteCodeFunc
         optional: vec![],
         rest: None,
     });
-    source.lexical = true;
+    source.set_lexical(true);
     source.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(32));
     source.set_ops(ops);
     source.set_constants(constants.into());
@@ -49,7 +49,7 @@ fn source(ops: Vec<Op>, constants: Vec<LispValue>, arity: usize) -> ByteCodeFunc
 fn plan(source: &ByteCodeFunction) -> Func {
     let params = ParamShape {
         required: source
-            .params
+            .params()
             .stack_shape()
             .expect("fixture stack parameters")
             .required(),

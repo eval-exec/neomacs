@@ -1909,7 +1909,7 @@ impl TaggedHeap {
                     .owned_capacity()
                     .saturating_mul(size_of::<TaggedValue>()),
             )
-            .saturating_add(data.params.named().map_or(0, |params| {
+            .saturating_add(data.params().named().map_or(0, |params| {
                 params
                     .required
                     .capacity()
@@ -2104,7 +2104,7 @@ impl TaggedHeap {
             owned: data.constants().owned_capacity() > 0,
             mapped: false,
         });
-        if let Some(params) = data.params.named() {
+        if let Some(params) = data.params().named() {
             stats = stats.add(Self::lambda_params_payload_layout(params));
         }
         if let Some(offsets) = data.resident_gnu_byte_offset_map() {

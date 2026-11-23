@@ -1063,14 +1063,14 @@ fn concurrent_try_mark_owned_with_symbols<
                     !data.is_pdump_stub(),
                     "arena bytecode must never be a lazy pdump stub"
                 );
-                logs.queue_child::<SYMBOLS>(data.arglist, gray);
-                if let Some(child) = data.params.heap_child() {
+                logs.queue_child::<SYMBOLS>(data.arglist(), gray);
+                if let Some(child) = data.params().heap_child() {
                     logs.queue_child::<SYMBOLS>(child, gray);
                 }
                 for &c in data.constants() {
                     logs.queue_child::<SYMBOLS>(c, gray);
                 }
-                if let Some(env) = data.env {
+                if let Some(env) = data.env() {
                     logs.queue_child::<SYMBOLS>(env, gray);
                 }
                 if let Some(doc_form) = data.doc_form {

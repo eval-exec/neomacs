@@ -65,7 +65,7 @@ fn make_closure_is_reachable_through_funcall_apply_and_bytecode() {
         optional: Vec::new(),
         rest: None,
     });
-    caller.lexical = true;
+    caller.set_lexical(true);
     caller.set_constants(
         vec![
             Value::symbol("make-closure"),
@@ -154,11 +154,11 @@ fn make_closure_instance_patches_the_prefix_and_keeps_every_other_slot() {
         );
         // Every other slot is the prototype's.
         assert_eq!(i.source_id(), p.source_id());
-        assert_eq!(i.arglist, p.arglist);
-        assert_eq!(i.lexical, p.lexical);
+        assert_eq!(i.arglist(), p.arglist());
+        assert_eq!(i.lexical(), p.lexical());
         assert_eq!(i.max_stack(), p.max_stack());
-        assert_eq!(i.params, p.params);
-        assert_eq!(i.env, p.env);
+        assert_eq!(i.params(), p.params());
+        assert_eq!(i.env(), p.env());
         assert_eq!(
             i.gnu_bytecode_bytes.as_deref(),
             p.gnu_bytecode_bytes.as_deref()
@@ -276,7 +276,7 @@ fn make_closure_copies_a_mapped_prototype_pool() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(vec![Op::Constant(0), Op::Return]);
     f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(1));
     // SAFETY: `image` is leaked, so it outlives the function, and nothing
@@ -314,23 +314,23 @@ fn make_closure_on_an_environment_closure_rebinds_the_environment() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(vec![Op::Nil, Op::Return]);
     f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(1));
     f.set_constants(vec![Value::symbol("mci-k")].into());
-    f.env = Some(env);
+    f.set_env(Some(env));
     f.seal_hand_assembled_ops();
     let proto = Value::make_bytecode(f);
     crate::emacs_core::eval::push_scratch_gc_root(proto);
     let instance = make_closure(proto, &[Value::fixnum(10)]);
     let i = data(instance);
-    ctx.set_variable("mci-env", i.env.expect("environment"));
+    ctx.set_variable("mci-env", i.env().expect("environment"));
     assert_eq!(
         eval(&mut ctx, "mci-env"),
         eval(&mut ctx, "'((mci-a . 10) (mci-b . 2))")
     );
     assert_eq!(i.constants().as_slice(), &[Value::symbol("mci-k")]);
-    assert_eq!(data(proto).env, Some(env));
+    assert_eq!(data(proto).env(), Some(env));
 }
 
 /// Instances share the prototype's bytecode string storage instead of

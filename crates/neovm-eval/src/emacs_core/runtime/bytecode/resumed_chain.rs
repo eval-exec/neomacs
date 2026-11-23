@@ -531,6 +531,7 @@ impl<'a> Vm<'a> {
                 &mut handlers,
                 &mut bind_stack,
                 false,
+                false,
             ),
             ChainFrameEntry::Raise(flow) => {
                 match self.resume_nonlocal(code, &mut pc, &mut handlers, &mut bind_stack, flow) {
@@ -540,6 +541,7 @@ impl<'a> Vm<'a> {
                         &mut pc,
                         &mut handlers,
                         &mut bind_stack,
+                        false,
                         false,
                     ),
                     Err(flow) => Err(flow),

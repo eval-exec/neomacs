@@ -49,7 +49,7 @@ fn array_fn(op: ArrayOp) -> ByteCodeFunction {
         optional: Vec::new(),
         rest: None,
     });
-    function.lexical = true;
+    function.set_lexical(true);
     function.set_ops(match op {
         ArrayOp::Aset => vec![
             Op::StackRef(2),

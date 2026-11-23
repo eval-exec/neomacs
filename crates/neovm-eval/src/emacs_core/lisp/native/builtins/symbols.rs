@@ -5925,7 +5925,7 @@ fn adopt_make_byte_code_slot_objects(function: Value, code: Value, constants: Va
         install_bytecode_slot_object(function, ByteCodeSlotObject::Code, code);
     }
     let pool = bc.constants().as_slice();
-    if bc.env.is_none()
+    if bc.env().is_none()
         && constants.as_vector_data().is_some_and(|items| {
             items.len() == pool.len() && items.iter().zip(pool).all(|(a, b)| a.bits() == b.bits())
         })
@@ -6457,10 +6457,18 @@ pub fn builtin_make_closure(args: &[Value]) -> EvalResult {
         )
     })?;
 
-    if let Some(env_val) = proto.env {
+    if let Some(env_val) = proto.env() {
         // NeoVM-compiled: replace first N values in env alist
         let mut new_bc = proto.clone();
-        new_bc.env = Some(replace_env_alist_values(env_val, closure_vars));
+        // Ops bytes are unchanged. set_env drops the certificate; restore
+        // the seal and recompute the stack proof for the new alist.
+        let keep_seal = new_bc.ops_sealed();
+        new_bc.set_env(Some(replace_env_alist_values(env_val, closure_vars)));
+        if keep_seal {
+            /* SAFETY: ops bytes are unchanged. seal_ops already succeeded on this function, and clone copied those ops. set_env only cleared the flag. */
+            unsafe { new_bc.mark_ops_sealed() };
+            new_bc.refresh_stack_verification();
+        }
         return Ok(share_prototype_code(
             *prototype,
             Value::make_bytecode(new_bc),

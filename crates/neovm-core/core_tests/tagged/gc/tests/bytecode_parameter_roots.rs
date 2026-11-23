@@ -84,7 +84,7 @@ fn independent_parameter_child_survives(collection: Collection) {
     let mut function = ByteCodeFunction::new(FunctionParams::try_from(parameter_list).unwrap());
     // Both assignments are safe public Rust API, performed BEFORE publish.
     // Neither child is rooted directly: the function is their sole owner.
-    function.arglist = observable_arglist;
+    function.set_arglist(observable_arglist);
     function.set_ops(vec![Op::Nil, Op::Return]);
     let owner = heap.alloc_bytecode(function);
     roots.keep(owner);

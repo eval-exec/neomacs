@@ -30,7 +30,7 @@ fn two_calls(tail: bool) -> ByteCodeFunction {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     f.set_ops(vec![
         Op::Constant(0), // h1          [l h1]
         Op::StackRef(1), // l           [l h1 l]
