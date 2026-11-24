@@ -89,6 +89,20 @@ impl fmt::Debug for AllStoppedFailure<'_> {
     }
 }
 
+/// Every published root batch, current or retained, has no reader left.
+fn readers_finished(entries: &[Arc<MutatorEntry>]) -> Result<(), RendezvousError> {
+    for entry in entries {
+        let state = entry_state(entry)?;
+        if let Some(roots) = &state.roots {
+            roots.validate_no_readers().map_err(RendezvousError::from)?;
+        }
+        for roots in &state.retained_roots {
+            roots.validate_no_readers().map_err(RendezvousError::from)?;
+        }
+    }
+    Ok(())
+}
+
 impl<K: EraKeeper> EraCore<'_, K> {
     pub(crate) fn try_stop(&self) -> Result<Option<AllStopped<'_>>, RendezvousError> {
         let registry = self.registry();
@@ -223,15 +237,10 @@ impl<'era> AllStopped<'era> {
         body: impl FnOnce(&Registry, &RegistryState) -> Result<R, RendezvousError>,
     ) -> Result<R, RendezvousError> {
         keeper(self.registry)?;
-        let gate = match self.registry.lock() {
-            Err(RegistrationError::Busy) => {
-                #[cfg(any(test, feature = "test-support"))]
-                super::super::test_fences::note_gate_contention();
-                self.registry.lock_blocking()
-            }
-            acquired => acquired,
-        }
-        .map_err(registration_error)?;
+        let gate = self
+            .registry
+            .lock_for_keeper()
+            .map_err(registration_error)?;
         self.validate(&gate)?;
         body(self.registry, &gate)
     }
@@ -275,7 +284,10 @@ impl<'era> AllStopped<'era> {
             return Err(RendezvousError::Publication);
         }
         {
-            let gate = self.registry.lock().map_err(registration_error)?;
+            let gate = self
+                .registry
+                .lock_for_keeper()
+                .map_err(registration_error)?;
             self.validate(&gate)?;
         }
         // A callback may have already changed the image. Error or unwind is
@@ -399,12 +411,21 @@ impl<'era> AllStopped<'era> {
         Ok(result)
     }
 
+    /// `complete` consumes the stop, and its only failure exit drops it,
+    /// which poisons the era. So a brief holder must not become a failure
+    /// here. The gate is the keeper's waiting acquisition. The reader scan
+    /// stays outside the gate (root-table locks never overlap it), and an
+    /// owner holds its entry only for a moment under the gate, so a `Busy`
+    /// in the scan is retried: nothing has changed yet.
     fn prepare_complete(&mut self) -> Result<(), RendezvousError> {
         if !self.traced {
             return Err(RendezvousError::Publication);
         }
         let entries = {
-            let gate = self.registry.lock().map_err(registration_error)?;
+            let gate = self
+                .registry
+                .lock_for_keeper()
+                .map_err(registration_error)?;
             self.validate(&gate)?;
             let mut entries = Vec::new();
             entries
@@ -413,16 +434,27 @@ impl<'era> AllStopped<'era> {
             entries.extend(gate.entries.iter().cloned());
             entries
         };
-        for entry in entries {
-            let state = entry_state(&entry)?;
-            if let Some(roots) = &state.roots {
-                roots.validate_no_readers().map_err(RendezvousError::from)?;
-            }
-            for roots in &state.retained_roots {
-                roots.validate_no_readers().map_err(RendezvousError::from)?;
+        #[cfg(any(test, feature = "test-support"))]
+        if let Some(hook) = super::super::test_fences::take_reader_scan_hook_for_test() {
+            hook();
+        }
+        loop {
+            match readers_finished(&entries) {
+                Err(RendezvousError::Busy) => {
+                    #[cfg(any(test, feature = "test-support"))]
+                    super::super::test_fences::note_gate_contention();
+                    std::thread::yield_now();
+                }
+                scanned => break scanned?,
             }
         }
-        let mut gate = self.registry.lock().map_err(registration_error)?;
+        // With the gate held, no owner holds an entry lock (owners take them
+        // only under the gate), so the entry locks below cannot meet `Busy`,
+        // the failure that poisons once the control commit has opened.
+        let mut gate = self
+            .registry
+            .lock_for_keeper()
+            .map_err(registration_error)?;
         self.validate(&gate)?;
         let owners = membership(&gate)?;
         // This may still refuse capacity/counter exhaustion. Do not move or

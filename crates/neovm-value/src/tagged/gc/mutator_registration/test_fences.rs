@@ -63,6 +63,26 @@ pub(crate) fn gate_contention_for_test() -> u64 {
     GATE_CONTENTION.load(std::sync::atomic::Ordering::Acquire)
 }
 
+#[cfg(any(test, feature = "test-support"))]
+std::thread_local! {
+    /// One-shot hook for the instant the keeper's `complete` starts its
+    /// reader scan, outside the gate. A row uses it to have an owner hold
+    /// its entry exactly there.
+    static READER_SCAN_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Install the hook on the keeper thread. The next `complete` runs it once.
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn install_reader_scan_hook_for_test(hook: Box<dyn FnOnce()>) {
+    READER_SCAN_HOOK.with(|slot| *slot.borrow_mut() = Some(hook));
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn take_reader_scan_hook_for_test() -> Option<Box<dyn FnOnce()>> {
+    READER_SCAN_HOOK.with(|slot| slot.borrow_mut().take())
+}
+
 /// One-shot hook for the instant `prepare_restore` holds the registry gate,
 /// before the condvar wait. The `Mutator` field stays cfg(test) inside this
 /// crate so a test-support build does not put `dyn FnOnce` on `Mutator`.

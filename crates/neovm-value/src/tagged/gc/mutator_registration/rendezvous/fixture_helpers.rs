@@ -62,6 +62,9 @@ pub enum RootedRendezvousCase {
     StopAndUnrestoredOwnerRefuseInsteadOfWaitingForThemselves,
     NativeReceiptOutlastsAGateHolderAfterTheCommit,
     StoppedKeeperWaitsOutABriefGateHolder,
+    KeeperTraceWaitsOutABriefGateHolder,
+    KeeperCompleteWaitsOutABriefGateHolder,
+    KeeperCompleteRetriesAnEntryHeldThroughTheReaderScan,
 }
 
 impl RootedRendezvousCase {
@@ -103,6 +106,9 @@ impl RootedRendezvousCase {
         Self::StopAndUnrestoredOwnerRefuseInsteadOfWaitingForThemselves,
         Self::NativeReceiptOutlastsAGateHolderAfterTheCommit,
         Self::StoppedKeeperWaitsOutABriefGateHolder,
+        Self::KeeperTraceWaitsOutABriefGateHolder,
+        Self::KeeperCompleteWaitsOutABriefGateHolder,
+        Self::KeeperCompleteRetriesAnEntryHeldThroughTheReaderScan,
     ];
 }
 

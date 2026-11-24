@@ -126,6 +126,23 @@ impl Registry {
         }
     }
 
+    /// The stopped keeper's acquisition. At its call sites the keeper holds
+    /// no other guard, and no gate holder waits on the keeper (every wait
+    /// under the gate is the condvar wait that releases it), so this waits
+    /// out a brief holder instead of refusing `Busy`. Its callers consume a
+    /// stop or a receipt, and a transient refusal would drop it.
+    /// Same-thread re-entry still refuses `Busy`.
+    pub(super) fn lock_for_keeper(&self) -> Result<RegistryGuard<'_>, RegistrationError> {
+        match self.lock() {
+            Err(RegistrationError::Busy) => {
+                #[cfg(any(test, feature = "test-support"))]
+                super::test_fences::note_gate_contention();
+                self.lock_blocking()
+            }
+            acquired => acquired,
+        }
+    }
+
     pub(super) fn lock(&self) -> Result<RegistryGuard<'_>, RegistrationError> {
         if self.park.poisoned.load(Ordering::Acquire) {
             return Err(RegistrationError::Poisoned);

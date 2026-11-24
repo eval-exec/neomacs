@@ -126,6 +126,9 @@ shells! {
     stop_and_unrestored_owner_refuse_instead_of_waiting_for_themselves => StopAndUnrestoredOwnerRefuseInsteadOfWaitingForThemselves,
     native_receipt_outlasts_a_gate_holder_after_the_commit => NativeReceiptOutlastsAGateHolderAfterTheCommit,
     stopped_keeper_waits_out_a_brief_gate_holder => StoppedKeeperWaitsOutABriefGateHolder,
+    keeper_trace_waits_out_a_brief_gate_holder => KeeperTraceWaitsOutABriefGateHolder,
+    keeper_complete_waits_out_a_brief_gate_holder => KeeperCompleteWaitsOutABriefGateHolder,
+    keeper_complete_retries_an_entry_held_through_the_reader_scan => KeeperCompleteRetriesAnEntryHeldThroughTheReaderScan,
 }
 
 #[test]
