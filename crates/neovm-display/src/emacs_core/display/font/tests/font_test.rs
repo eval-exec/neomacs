@@ -367,6 +367,8 @@ struct FontAtDisplayHost {
     matched: Option<ResolvedFontMatch>,
     metrics: Option<FontPxProbeResult>,
     capability: Option<FontOtfCapability>,
+    /// When set, only this character resolves. `None` keeps the `好` host.
+    match_char: Option<u32>,
 }
 
 impl DisplayHost for FontAtDisplayHost {
@@ -382,7 +384,10 @@ impl DisplayHost for FontAtDisplayHost {
         &mut self,
         request: FontResolveRequest,
     ) -> Result<Option<ResolvedFontMatch>, String> {
-        if request.character == neovm_value::emacs_char::EmacsChar::from_char('好') {
+        let wanted = self.match_char.unwrap_or(u32::from('好'));
+        if request.character
+            == neovm_value::emacs_char::EmacsChar::from_code(wanted).expect("test character")
+        {
             Ok(self.matched.clone())
         } else {
             Ok(None)
@@ -1801,6 +1806,61 @@ fn internal_char_font_uses_the_default_face_after_a_face_attribute_change() {
     );
 }
 
+#[test]
+fn internal_char_font_reuses_one_font_object_for_a_realized_face() {
+    // GNU `Finternal_char_font` returns the realized face's font
+    // (`XSETFONT` of `face->font`, src/font.c:4815-4824). Repeated
+    // nil-position calls for one character are `eq` while the face is
+    // unchanged, and the OTF capability list is built once for that font.
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    ensure_selected_gui_frame(&mut eval);
+    let glyph = 0x24B;
+    eval.set_display_host(Box::new(FontAtDisplayHost {
+        matched: Some(resolved_font_match(
+            "Noto Sans Mono CJK SC",
+            Some("NotoSansMonoCJKsc-Regular.otf"),
+            Some("NotoSansMonoCJKsc-Regular"),
+            Some(glyph),
+            FontPxProbeResult {
+                pixel_size: 15,
+                height: 16,
+                ascent: 12,
+                descent: 4,
+                max_width: 9,
+                space_width: 8,
+                average_width: 8,
+            },
+            Some(FontOtfCapability {
+                gsub: vec![("DFLT".into(), vec![(None, vec!["liga".into()])])],
+                gpos: Vec::new(),
+            }),
+        )),
+        match_char: Some(0x2026),
+        ..Default::default()
+    }));
+    reset_opened_font_otf_builds();
+    const CALLS: u64 = 8;
+    let mut fonts = Vec::with_capacity(CALLS as usize);
+    for _ in 0..CALLS {
+        let result =
+            internal_char_font(&mut eval, vec![Value::NIL, Value::fixnum(0x2026)]).unwrap();
+        assert_eq!(result.cons_cdr(), Value::fixnum(i64::from(glyph)));
+        fonts.push(result.cons_car());
+    }
+    let builds = opened_font_otf_builds();
+    assert!(
+        builds <= 1,
+        "{CALLS} nil-position internal-char-font calls built the OTF capability list {builds} times"
+    );
+    for font in fonts.iter().skip(1) {
+        assert!(
+            neovm_value::value::eq_value(&fonts[0], font),
+            "realized font object must stay eq across nil-position calls"
+        );
+    }
+}
+
 // -----------------------------------------------------------------------
 // Face builtins
 // -----------------------------------------------------------------------
@@ -1910,6 +1970,7 @@ fn query_font_uses_stored_metrics_when_file_probe_is_unavailable() {
         // unavailable. `query-font` must read the opened object, not retry it.
         metrics: None,
         capability: None,
+        match_char: None,
     }));
     eval.edit
         .buffers
@@ -2000,6 +2061,7 @@ fn query_font_uses_opened_object_metrics_without_a_font_file() {
             average_width: 10,
         }),
         capability: None,
+        match_char: None,
     }));
     eval.edit
         .buffers

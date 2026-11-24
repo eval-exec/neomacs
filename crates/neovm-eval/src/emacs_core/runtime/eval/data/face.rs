@@ -2423,6 +2423,11 @@ pub struct FrameFaceRealizationCache {
     /// An unknown writer (no face name) sets `definitions_all_dirty` instead.
     pub dirty_definitions: rustc_hash::FxHashSet<Box<str>>,
     pub definitions_all_dirty: bool,
+    /// Lisp font objects already built for this realization, keyed by the
+    /// opened font's stable identity. GNU stores that object on the realized
+    /// face (`face->font`) and returns it from `internal-char-font`. A new
+    /// realization drops the map, so a face change builds the next object once.
+    pub opened_font_objects: rustc_hash::FxHashMap<String, Value>,
 }
 
 // --- K2: face realization lifecycle flag (stage-4) ---
@@ -2518,5 +2523,6 @@ impl GcTrace for FrameFaceRealizationCache {
                 realized.trace_roots(roots);
             }
         }
+        roots.extend(self.opened_font_objects.values().copied());
     }
 }

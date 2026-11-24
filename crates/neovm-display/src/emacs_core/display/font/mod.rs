@@ -4132,7 +4132,34 @@ fn otf_capability_lisp(eval: &mut neovm_eval::emacs_core::eval::Context, file: &
         .unwrap_or(Value::NIL)
 }
 
+#[cfg(any(test, feature = "test-support"))]
+thread_local! {
+    static OPENED_FONT_OTF_BUILDS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(any(test, feature = "test-support"))]
+fn note_opened_font_otf_build() {
+    OPENED_FONT_OTF_BUILDS.with(|count| {
+        count.set(count.get().saturating_add(1));
+    });
+}
+
+#[cfg(not(any(test, feature = "test-support")))]
+#[inline(always)]
+fn note_opened_font_otf_build() {}
+
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn reset_opened_font_otf_builds() {
+    OPENED_FONT_OTF_BUILDS.with(|count| count.set(0));
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn opened_font_otf_builds() -> u64 {
+    OPENED_FONT_OTF_BUILDS.with(|count| count.get())
+}
+
 fn otf_capability_to_lisp(caps: &neovm_eval::emacs_core::eval::FontOtfCapability) -> Value {
+    note_opened_font_otf_build();
     Value::cons(
         Value::symbol("opentype"),
         Value::cons(otf_side_to_lisp(&caps.gsub), otf_side_to_lisp(&caps.gpos)),
@@ -4493,11 +4520,51 @@ pub(crate) fn internal_char_font(
     let Some(glyph_code) = matched.glyph_code else {
         return Ok(Value::NIL);
     };
-    let font_object = opened_font_from_resolved_match(&face, &matched);
+    let font_object = realized_face_font_object(eval, frame_id, &face, &matched);
     Ok(Value::cons(
         font_object,
         Value::fixnum(i64::from(glyph_code)),
     ))
+}
+
+/// The Lisp font object for this realization, built once per opened font.
+///
+/// GNU returns `face->font` (`src/font.c` `Finternal_char_font`). A later
+/// call with the same realized font is `eq` to the first. Face realization
+/// clears the map, so the next face change builds one new object.
+fn realized_face_font_object(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    frame_id: FrameId,
+    face: &RuntimeFace,
+    matched: &neovm_eval::emacs_core::eval::ResolvedFontMatch,
+) -> Value {
+    let key = realized_font_object_key(matched);
+    if let Some(existing) = eval
+        .frame_manager()
+        .get(frame_id)
+        .and_then(|frame| frame.face_realization.opened_font_objects.get(&key))
+        .copied()
+    {
+        return existing;
+    }
+    let font_object = opened_font_from_resolved_match(face, matched);
+    if let Some(frame) = eval.frame_manager_mut().get_mut(frame_id) {
+        frame
+            .face_realization
+            .opened_font_objects
+            .insert(key, font_object);
+    }
+    font_object
+}
+
+fn realized_font_object_key(matched: &neovm_eval::emacs_core::eval::ResolvedFontMatch) -> String {
+    let font = &matched.font;
+    format!(
+        "{}@{}:{}",
+        font.resolved.identity.stable_key,
+        font.metrics.pixel_size,
+        font.resolved.family
+    )
 }
 
 /// GNU Ffont_info has distinct opening semantics for these four inputs.
