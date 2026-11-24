@@ -9,7 +9,7 @@
 
 pub(crate) use super::driver_core::LendDrop;
 use super::driver_core::{
-    self, Attempt, Batch, BatchVisitor, CustodyRefused, KeeperOps, Refusal, Settle,
+    self, Attempt, Batch, BatchVisitor, CustodyRefused, Head, KeeperOps, Refusal, Settle,
 };
 use super::keeper_custody::{
     KeeperReadyRequest, RestoredKeeper, ReturnedSerialTicket, StoppedKeeper,
@@ -18,6 +18,7 @@ use super::owned_source::KeeperEra;
 use super::serial_park::{Grant, KeeperPort, LendGuard, PortRefusal};
 use super::serial_ticket::{ReceiveReason, SerialLendHeld, StoppedSerialTicket};
 use super::sync::mpsc;
+use super::world_turn::{WorldReturned, WorldTurn, WorldTurnIdentity};
 use neovm_value::tagged::gc::heap_transfer::{PublishedOwner, with_stop_scope};
 use neovm_value::tagged::gc::{
     AllStopped, Mutator, MutatorKey, RendezvousError, RingClient, SerialGrant, StopAttempt,
@@ -26,15 +27,18 @@ use neovm_value::tagged::gc::{
 use std::num::NonZeroU64;
 use std::time::Duration;
 
-/// Owner -> keeper.
+/// Owner or Baton group -> keeper.
 pub(crate) type KeeperMsg = driver_core::KeeperMsg<
     PublishedOwner,
     ReturnedSerialTicket,
     StoppedSerialTicket,
     ReceiveReason,
+    WorldReturned,
 >;
 /// Keeper -> one owner.
 pub(crate) type GrantMsg = driver_core::GrantMsg<StoppedSerialTicket>;
+/// Keeper -> the Baton group (L6.7b b3).
+pub(crate) type GroupMsg = driver_core::GroupMsg<WorldTurn>;
 /// A proven invariant break.
 pub(crate) type Breach = driver_core::Breach<ReceiveReason, RendezvousError>;
 /// Why the driver stopped serving.
@@ -57,6 +61,8 @@ impl<'k, 'service, 'heap> KeeperOps for &'k KeeperEra<'service, 'heap> {
     type Ticket = StoppedSerialTicket;
     type Returned = ReturnedSerialTicket;
     type Reason = ReceiveReason;
+    type WorldTurn = WorldTurn;
+    type WorldReturned = WorldReturned;
     type Error = RendezvousError;
     type Stopped = AllStopped<'k>;
     type Pending = StopPending;
@@ -86,6 +92,14 @@ impl<'k, 'service, 'heap> KeeperOps for &'k KeeperEra<'service, 'heap> {
 
     fn cancel(self, key: MutatorKey) -> Result<(), RendezvousError> {
         self.cancel_serial(key)
+    }
+
+    fn enqueue_group(self) -> Result<(), RendezvousError> {
+        self.enqueue_baton_group()
+    }
+
+    fn cancel_group(self) -> Result<(), RendezvousError> {
+        self.cancel_baton_group()
     }
 
     fn stop_within(
@@ -137,22 +151,28 @@ enum Between<'s, 'era> {
     Restored(RestoredKeeper<'s, 'era>),
 }
 
+/// The keeper while the Baton group's World turn is out: the stop stays
+/// here (nothing is exported), with the identity of the one turn it cut.
+struct WorldLendHeld<'s, 'era> {
+    keeper: Between<'s, 'era>,
+    cut: WorldTurnIdentity,
+}
+
 impl<'s, 'k, 'service, 'heap> Batch<&'k KeeperEra<'service, 'heap>> for Between<'s, 'k> {
     type Ready = KeeperReadyRequest<'s>;
     type Grant = SerialGrant;
     type Held = SerialLendHeld<'s, 'k>;
+    type WorldHeld = WorldLendHeld<'s, 'k>;
 
-    fn head(&self) -> Result<Option<MutatorKey>, RendezvousError> {
+    fn head(&self) -> Result<Option<Head<MutatorKey>>, RendezvousError> {
         let head = match self {
             Between::Fresh(keeper) => keeper.serial_head()?,
             Between::Restored(keeper) => keeper.serial_head()?,
         };
-        head.map(|client| match client {
-            RingClient::Owner { key, .. } => Ok(key),
-            // No product path enqueues the group yet; b3.2 routes its turn.
-            RingClient::BatonGroup => Err(RendezvousError::Identity),
-        })
-        .transpose()
+        Ok(head.map(|client| match client {
+            RingClient::Owner { key, .. } => Head::Owner(key),
+            RingClient::BatonGroup => Head::BatonGroup,
+        }))
     }
 
     fn ready(&self, receipt: PublishedOwner) -> Result<KeeperReadyRequest<'s>, RendezvousError> {
@@ -169,6 +189,13 @@ impl<'s, 'k, 'service, 'heap> Batch<&'k KeeperEra<'service, 'heap>> for Between<
         match self {
             Between::Fresh(keeper) => keeper.grant_for(ready),
             Between::Restored(keeper) => keeper.grant_for(ready),
+        }
+    }
+
+    fn grant_group(&mut self) -> Result<Option<SerialGrant>, RendezvousError> {
+        match self {
+            Between::Fresh(keeper) => keeper.grant_group(),
+            Between::Restored(keeper) => keeper.grant_group(),
         }
     }
 
@@ -198,6 +225,32 @@ impl<'s, 'k, 'service, 'heap> Batch<&'k KeeperEra<'service, 'heap>> for Between<
             .map_err(|_| Settle::NotTheTicketCut)?;
         restored.retire(grant).map_err(Settle::Retire)?;
         Ok(Between::Restored(restored))
+    }
+
+    fn lend_world(self) -> Result<(WorldTurn, WorldLendHeld<'s, 'k>), CustodyRefused> {
+        let cut = match &self {
+            Between::Fresh(keeper) => keeper.world_identity(),
+            Between::Restored(keeper) => keeper.world_identity(),
+        };
+        Ok((WorldTurn::cut(cut), WorldLendHeld { keeper: self, cut }))
+    }
+
+    fn settle_world(
+        held: WorldLendHeld<'s, 'k>,
+        returned: WorldReturned,
+        grant: SerialGrant,
+    ) -> Result<Self, Settle<RendezvousError>> {
+        if returned.identity() != held.cut {
+            // `held` drops the stop with the breach the driver reports.
+            return Err(Settle::NotTheTicketCut);
+        }
+        let mut keeper = held.keeper;
+        match &mut keeper {
+            Between::Fresh(stopped) => stopped.retire(grant),
+            Between::Restored(restored) => restored.retire(grant),
+        }
+        .map_err(Settle::Retire)?;
+        Ok(keeper)
     }
 
     fn complete(self) -> Result<(), RendezvousError> {
@@ -367,6 +420,84 @@ impl KeeperPort for ChannelPort<'_> {
             ticket,
             reason,
         });
+    }
+}
+
+/// The Baton group's guard over its World turn (K7 for the group). Armed
+/// from the lend until the turn goes back. `Send`: it travels with the turn
+/// between Baton threads, so an unwind on any of them reports the lost turn
+/// instead of leaving the keeper waiting.
+#[must_use = "give the World turn back through the group port"]
+pub(crate) struct WorldLend {
+    inbox: mpsc::Sender<KeeperMsg>,
+    armed: bool,
+}
+
+static_assertions::assert_impl_all!(WorldLend: Send);
+
+impl Drop for WorldLend {
+    fn drop(&mut self) {
+        if self.armed {
+            let cause = if std::thread::panicking() {
+                LendDrop::Unwound
+            } else {
+                LendDrop::Leaked
+            };
+            let _ = self.inbox.send(KeeperMsg::GroupAbandon { cause });
+        }
+    }
+}
+
+/// The Baton group's side of the keeper protocol (L6.7b b3): one request
+/// for the whole group, the World turn it is lent, and the guard over it.
+/// The group's runner (pentry's seat) activates the World host under the
+/// turn.
+pub(crate) struct GroupPort {
+    inbox: mpsc::Sender<KeeperMsg>,
+    world: mpsc::Receiver<GroupMsg>,
+}
+
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "pentry's World seat (L6.7b b3) is the caller")
+)]
+impl GroupPort {
+    pub(crate) fn new(inbox: mpsc::Sender<KeeperMsg>, world: mpsc::Receiver<GroupMsg>) -> Self {
+        Self { inbox, world }
+    }
+
+    /// Ask for the World and wait for it. The era being poisoned, or the
+    /// keeper being gone, refuses with `Poisoned`.
+    pub(crate) fn request_world(
+        &mut self,
+    ) -> Result<(WorldTurn, NonZeroU64, WorldLend), PortRefusal> {
+        if self.inbox.send(KeeperMsg::BatonRequest).is_err() {
+            return Err(PortRefusal::Poisoned);
+        }
+        match self.world.recv() {
+            Ok(driver_core::GroupMsg::World { turn, epoch }) => Ok((
+                turn,
+                epoch,
+                WorldLend {
+                    inbox: self.inbox.clone(),
+                    armed: true,
+                },
+            )),
+            Ok(driver_core::GroupMsg::Poisoned) | Err(mpsc::RecvError) => {
+                Err(PortRefusal::Poisoned)
+            }
+        }
+    }
+
+    /// End the group's interval: the turn goes back and its guard disarms.
+    pub(crate) fn give_back(&mut self, mut lend: WorldLend, returned: WorldReturned) {
+        lend.armed = false;
+        let _ = self.inbox.send(KeeperMsg::WorldReturn { returned });
+    }
+
+    /// The group leaves the era.
+    pub(crate) fn exit(self) {
+        let _ = self.inbox.send(KeeperMsg::GroupExit);
     }
 }
 

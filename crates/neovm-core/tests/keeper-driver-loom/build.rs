@@ -56,13 +56,18 @@ fn main() {
         "            let _ = self.send(owner, GrantMsg::Poisoned);",
         "            let _ = owner;",
     );
+    let silent = mutate(
+        &silent,
+        "            let _ = enrolled.grants.try_send(GrantMsg::Poisoned);",
+        "            let _ = enrolled;",
+    );
     write(
         &out,
         "driver_core_silent_poison.rs",
         &mutate(
             &silent,
-            "            let _ = enrolled.grants.try_send(GrantMsg::Poisoned);",
-            "            let _ = enrolled;",
+            "            let _ = group.grants.try_send(GroupMsg::Poisoned);",
+            "            let _ = group;",
         ),
     );
 

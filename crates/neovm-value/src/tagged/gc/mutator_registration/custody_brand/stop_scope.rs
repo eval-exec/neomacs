@@ -64,12 +64,15 @@ impl<'s, 'era> StoppedInterval<'s, 'era> {
             .with_stopped_gate(|registry, gate| owner.validate_current(registry, gate))
     }
 
-    pub(super) fn heap_identity(&self) -> crate::tagged::gc::HeapIdentity {
+    /// The heap this stop is over.
+    #[doc(hidden)]
+    pub fn heap_identity(&self) -> crate::tagged::gc::HeapIdentity {
         self.stopped.heap_identity()
     }
 
     /// Stop epoch recorded on the proof. Not a loan and not a new stop.
-    pub(super) fn epoch(&self) -> std::num::NonZeroU64 {
+    #[doc(hidden)]
+    pub fn epoch(&self) -> std::num::NonZeroU64 {
         self.stopped.epoch()
     }
 

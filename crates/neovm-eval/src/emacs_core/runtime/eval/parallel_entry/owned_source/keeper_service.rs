@@ -108,6 +108,16 @@ impl<'service, 'heap> KeeperEra<'service, 'heap> {
         self.era.cancel_serial(owner)
     }
 
+    /// L6.7b b3: commit the Baton group's one request at the ring's tail.
+    pub(crate) fn enqueue_baton_group(&self) -> Result<(), RendezvousError> {
+        self.era.enqueue_baton_group()
+    }
+
+    /// L6.7b b3: cancel the Baton group's queued request.
+    pub(crate) fn cancel_baton_group(&self) -> Result<(), RendezvousError> {
+        self.era.cancel_baton_group()
+    }
+
     /// L6.7 K7: poison the era on a proven invariant break.
     pub(crate) fn poison_era(&self) -> Result<(), RendezvousError> {
         self.era.poison_era()

@@ -7,6 +7,7 @@
 //! burden.
 #![forbid(unsafe_code)]
 
+use super::world_turn::WorldTurnIdentity;
 use neovm_value::tagged::gc::heap_transfer::{
     PublishedOwner, StopScope, StoppedInterval, UnenteredReservation,
 };
@@ -174,6 +175,25 @@ impl<'s, 'era> StoppedKeeper<'s, 'era> {
             .grant_serial_head(|key, queued| key.owner() == owner && queued == generation)
     }
 
+    /// L6.7b b3: grant a Baton-group head under this stop. The group has
+    /// no publication to check.
+    pub(crate) fn grant_group(&mut self) -> Result<Option<SerialGrant>, RendezvousError> {
+        self.interval.grant_baton_group()
+    }
+
+    /// Retire the grant whose turn came back, exactly once.
+    pub(crate) fn retire(&mut self, grant: SerialGrant) -> Result<(), RendezvousError> {
+        self.interval.retire_serial_grant(grant)
+    }
+
+    /// The facts a World turn cut under this stop carries.
+    pub(crate) fn world_identity(&self) -> WorldTurnIdentity {
+        WorldTurnIdentity {
+            heap: self.interval.heap_identity(),
+            epoch: self.interval.epoch(),
+        }
+    }
+
     /// Finish the traced stop with nothing lent.
     pub(crate) fn complete_traced(self) -> Result<(), AllStoppedFailure<'era>> {
         self.interval.complete_traced()
@@ -278,6 +298,20 @@ impl<'s, 'era> RestoredKeeper<'s, 'era> {
     /// Retire the grant whose ticket came back, exactly once.
     pub(crate) fn retire(&mut self, grant: SerialGrant) -> Result<(), RendezvousError> {
         self.export.reservation.retire_serial_grant(grant)
+    }
+
+    /// L6.7b b3: grant a Baton-group head, as on
+    /// [`StoppedKeeper::grant_group`]. The previous ticket is back.
+    pub(crate) fn grant_group(&mut self) -> Result<Option<SerialGrant>, RendezvousError> {
+        self.export.reservation.grant_baton_group()
+    }
+
+    /// The facts a World turn cut under this stop carries.
+    pub(crate) fn world_identity(&self) -> WorldTurnIdentity {
+        WorldTurnIdentity {
+            heap: self.export.reservation.heap_identity(),
+            epoch: self.export.reservation.epoch(),
+        }
     }
 
     pub fn lend_next(

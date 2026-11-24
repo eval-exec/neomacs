@@ -131,3 +131,39 @@ fn a_slow_owner_delays_the_turn_and_poisons_nothing() {
 fn negative_a_pending_stop_that_poisons_is_caught() {
     pending_poisons::a_slow_owner_delays_the_turn_and_poisons_nothing();
 }
+
+/// L10 (L6.7b b3).
+#[test]
+fn a_group_and_an_owner_alternate_in_commit_order() {
+    real::a_group_and_an_owner_alternate_in_commit_order();
+}
+
+#[test]
+#[should_panic(expected = "grants follow commit order")]
+fn negative_a_lifo_ring_breaks_commit_order_across_kinds() {
+    lifo::a_group_and_an_owner_alternate_in_commit_order();
+}
+
+/// L11.
+#[test]
+fn an_abandoned_world_turn_poisons_the_owners() {
+    real::an_abandoned_world_turn_poisons_the_owners();
+}
+
+#[test]
+#[should_panic(expected = "the queued owner reads Poisoned")]
+fn negative_a_silent_poison_after_a_group_abandon() {
+    silent_poison::an_abandoned_world_turn_poisons_the_owners();
+}
+
+/// L12.
+#[test]
+fn an_abandoned_lend_poisons_the_queued_group() {
+    real::an_abandoned_lend_poisons_the_queued_group();
+}
+
+#[test]
+#[should_panic(expected = "the queued group reads Poisoned")]
+fn negative_a_silent_poison_leaves_the_group_uninformed() {
+    silent_poison::an_abandoned_lend_poisons_the_queued_group();
+}

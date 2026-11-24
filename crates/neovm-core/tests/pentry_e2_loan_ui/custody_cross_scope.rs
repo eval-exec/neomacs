@@ -26,3 +26,12 @@ mod serial_ticket {
         }
     }
 }
+
+// Compile-only neighbour: the World turn's identity, which the custody cuts
+// for the Baton group (L6.7b b3).
+mod world_turn {
+    pub(crate) struct WorldTurnIdentity {
+        pub heap: neovm_value::tagged::gc::HeapIdentity,
+        pub epoch: std::num::NonZeroU64,
+    }
+}

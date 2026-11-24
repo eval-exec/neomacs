@@ -15,3 +15,4 @@ pub(crate) mod source_jit_cache;
 pub(crate) mod source_jit_compiler;
 mod sync;
 mod text_caches;
+pub(crate) mod world_turn;

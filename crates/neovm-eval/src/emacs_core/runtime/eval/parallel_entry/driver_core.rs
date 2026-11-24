@@ -7,6 +7,11 @@
 //! requests queued when that stop began; later requests wait for the next
 //! stop, so parallel owners run between stops.
 //!
+//! The Baton group (main and every Baton thread) is one more client of the
+//! same ring (L6.7b). Its head is lent the World instead of a ticket, on the
+//! group's own channel; the keeper keeps its stop while the World is out, so
+//! no parallel owner runs during the group's interval.
+//!
 //! Only a proven invariant break poisons the era: an owner whose lend guard
 //! dropped armed (a Rust unwind or a leaked turn), a message that cannot
 //! belong to the protocol, or a keeper whose stop waits on its own guard
@@ -51,6 +56,15 @@ pub(crate) enum Refusal {
     Other,
 }
 
+/// The ring head as the driver routes it (L6.7b b3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Head<K> {
+    /// A parallel owner: lend its serial ticket.
+    Owner(K),
+    /// The Baton group: lend it the World.
+    BatonGroup,
+}
+
 /// The era and the keeper's custody as the driver uses them.
 pub(crate) trait KeeperOps: Copy {
     type Key: Copy + Eq + Debug;
@@ -62,6 +76,10 @@ pub(crate) trait KeeperOps: Copy {
     type Returned;
     /// Why an owner refused a ticket.
     type Reason: Copy + Debug + Eq;
+    /// The Baton group's turn at the World (L6.7b).
+    type WorldTurn;
+    /// A World turn that came back.
+    type WorldReturned;
     type Error: Copy + Debug + Eq;
     /// The keeper's stop.
     type Stopped;
@@ -74,6 +92,10 @@ pub(crate) trait KeeperOps: Copy {
     fn generation(receipt: &Self::Receipt) -> NonZeroU64;
     fn enqueue(self, key: Self::Key, generation: NonZeroU64) -> Result<(), Self::Error>;
     fn cancel(self, key: Self::Key) -> Result<(), Self::Error>;
+    /// Commit the Baton group's one request at the ring's tail.
+    fn enqueue_group(self) -> Result<(), Self::Error>;
+    /// Cancel the Baton group's queued request.
+    fn cancel_group(self) -> Result<(), Self::Error>;
     fn stop_within(
         self,
         bound: Duration,
@@ -101,11 +123,15 @@ pub(crate) trait Batch<O: KeeperOps>: Sized {
     type Grant;
     /// The custody a lent ticket comes back to.
     type Held;
+    /// The custody a lent World turn comes back to.
+    type WorldHeld;
 
-    /// The ring head's owner.
-    fn head(&self) -> Result<Option<O::Key>, O::Error>;
+    /// The ring head's client.
+    fn head(&self) -> Result<Option<Head<O::Key>>, O::Error>;
     fn ready(&self, receipt: O::Receipt) -> Result<Self::Ready, O::Error>;
     fn grant_for(&mut self, ready: &Self::Ready) -> Result<Option<Self::Grant>, O::Error>;
+    /// Grant a Baton-group head: the group has no publication to check.
+    fn grant_group(&mut self) -> Result<Option<Self::Grant>, O::Error>;
     /// Lend READY's turn: cut its ticket. `Err` means custody refused a lend
     /// it had validated.
     fn lend(self, ready: Self::Ready) -> Result<(O::Ticket, Self::Held), CustodyRefused>;
@@ -113,6 +139,15 @@ pub(crate) trait Batch<O: KeeperOps>: Sized {
     fn settle(
         held: Self::Held,
         returned: O::Returned,
+        grant: Self::Grant,
+    ) -> Result<Self, Settle<O::Error>>;
+    /// Lend the World to the Baton group: cut its turn. Nothing is exported;
+    /// the keeper keeps the stop while the turn is out.
+    fn lend_world(self) -> Result<(O::WorldTurn, Self::WorldHeld), CustodyRefused>;
+    /// The World turn came back: accept it and retire its grant.
+    fn settle_world(
+        held: Self::WorldHeld,
+        returned: O::WorldReturned,
         grant: Self::Grant,
     ) -> Result<Self, Settle<O::Error>>;
     fn complete(self) -> Result<(), O::Error>;
@@ -137,9 +172,9 @@ pub(crate) enum Settle<E> {
     Retire(E),
 }
 
-/// Owner -> keeper. One inbox, so each owner's messages arrive in the order
-/// its port sent them.
-pub(crate) enum KeeperMsg<Receipt, Returned, Ticket, Reason> {
+/// Owner or Baton group -> keeper. One inbox, so each sender's messages
+/// arrive in the order it sent them.
+pub(crate) enum KeeperMsg<Receipt, Returned, Ticket, Reason, WorldReturned> {
     /// The owner published `receipt` and asks for a serial turn.
     Request { owner: u64, receipt: Receipt },
     /// The lent ticket came back.
@@ -154,6 +189,15 @@ pub(crate) enum KeeperMsg<Receipt, Returned, Ticket, Reason> {
     Abandon { owner: u64, cause: LendDrop },
     /// The owner finished; it requests nothing more.
     Exit { owner: u64 },
+    /// The Baton group asks for the World (L6.7b). One request stands for
+    /// the whole group however many of its threads woke.
+    BatonRequest,
+    /// The group's World turn came back.
+    WorldReturn { returned: WorldReturned },
+    /// The group's lend guard dropped armed: the World turn is lost.
+    GroupAbandon { cause: LendDrop },
+    /// The group left the era; it requests nothing more.
+    GroupExit,
 }
 
 /// Keeper -> one owner.
@@ -162,6 +206,15 @@ pub(crate) enum GrantMsg<Ticket> {
     Grant { ticket: Ticket, epoch: NonZeroU64 },
     /// The request's publication is no longer current: publish again.
     Republish,
+    /// The era is poisoned.
+    Poisoned,
+}
+
+/// Keeper -> the Baton group, on the group's own channel: an owner can never
+/// receive a World turn, nor the group an owner's ticket.
+pub(crate) enum GroupMsg<WorldTurn> {
+    /// The World, lent in the stop of `epoch`.
+    World { turn: WorldTurn, epoch: NonZeroU64 },
     /// The era is poisoned.
     Poisoned,
 }
@@ -211,6 +264,12 @@ pub(crate) enum Breach<Reason, Error> {
     Rendezvous(Error),
     /// The keeper's custody refused a lend it validated.
     Custody,
+    /// The Baton group's lend guard dropped armed.
+    GroupAbandoned { cause: LendDrop },
+    /// A Baton-group message the protocol does not allow at this point.
+    GroupUnexpected { message: &'static str },
+    /// The group's channel closed while its World turn was cut for it.
+    GroupUnreachable,
 }
 
 pub(crate) type MsgOf<O> = KeeperMsg<
@@ -218,14 +277,29 @@ pub(crate) type MsgOf<O> = KeeperMsg<
     <O as KeeperOps>::Returned,
     <O as KeeperOps>::Ticket,
     <O as KeeperOps>::Reason,
+    <O as KeeperOps>::WorldReturned,
 >;
 pub(crate) type GrantOf<O> = GrantMsg<<O as KeeperOps>::Ticket>;
+pub(crate) type GroupOf<O> = GroupMsg<<O as KeeperOps>::WorldTurn>;
 pub(crate) type BreachOf<O> = Breach<<O as KeeperOps>::Reason, <O as KeeperOps>::Error>;
 pub(crate) type EndOf<O> = DriverEnd<<O as KeeperOps>::Reason, <O as KeeperOps>::Error>;
 
 struct Enrolled<O: KeeperOps> {
     key: O::Key,
     grants: mpsc::SyncSender<GrantOf<O>>,
+}
+
+/// The Baton group's seat at the keeper.
+struct Group<O: KeeperOps> {
+    grants: mpsc::SyncSender<GroupOf<O>>,
+    request: GroupRequest,
+}
+
+/// Whether the group's one request is in the ring.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GroupRequest {
+    None,
+    Queued,
 }
 
 /// Called after each pending stop attempt, once the keeper has served its
@@ -241,6 +315,8 @@ pub(crate) struct Driver<'o, O: KeeperOps> {
     owners: BTreeMap<u64, Enrolled<O>>,
     /// The receipt each queued request was committed under.
     queued: BTreeMap<u64, O::Receipt>,
+    /// The Baton group, once enrolled (L6.7b).
+    group: Option<Group<O>>,
     /// One stop attempt's bound.
     stop_bound: Duration,
     /// How long a refused stop may stay `Busy` before the keeper warns, or,
@@ -260,6 +336,7 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
             inbox,
             owners: BTreeMap::new(),
             queued: BTreeMap::new(),
+            group: None,
             stop_bound: CONTENTION_BOUND,
             contention_bound: CONTENTION_BOUND,
             pending_observer: None,
@@ -292,11 +369,29 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
         self.owners.insert(owner, Enrolled { key, grants });
     }
 
+    /// Enroll the Baton group before it can request. `grants` is the group's
+    /// own one-slot channel.
+    pub(crate) fn enroll_group(&mut self, grants: mpsc::SyncSender<GroupOf<O>>) {
+        self.group = Some(Group {
+            grants,
+            request: GroupRequest::None,
+        });
+    }
+
+    /// Requests in the ring: queued owners, and the group's if it has one.
+    fn queued_len(&self) -> usize {
+        let group = self
+            .group
+            .as_ref()
+            .is_some_and(|group| group.request == GroupRequest::Queued);
+        self.queued.len() + usize::from(group)
+    }
+
     /// Serve until every owner has exited, or until a proven invariant
     /// break poisons the era.
     pub(crate) fn run(mut self) -> EndOf<O> {
         loop {
-            if self.queued.is_empty() {
+            if self.queued_len() == 0 {
                 match self.inbox.recv() {
                     Ok(message) => {
                         if let Err(breach) = self.between_stops(message) {
@@ -311,7 +406,7 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
                     return self.poison(breach);
                 }
             }
-            if !self.queued.is_empty()
+            if self.queued_len() != 0
                 && let Err(breach) = self.serve_stop()
             {
                 return self.poison(breach);
@@ -344,6 +439,58 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
                 Err(Breach::Refused { owner, reason })
             }
             KeeperMsg::Abandon { owner, cause } => Err(Breach::Abandoned { owner, cause }),
+            KeeperMsg::BatonRequest => self.commit_group(),
+            KeeperMsg::GroupExit => self.group_exit(),
+            KeeperMsg::WorldReturn { .. } => Err(Breach::GroupUnexpected {
+                message: "a returned World with no turn out",
+            }),
+            KeeperMsg::GroupAbandon { cause } => Err(Breach::GroupAbandoned { cause }),
+        }
+    }
+
+    /// Commit the group's one request at the ring's tail.
+    fn commit_group(&mut self) -> Result<(), BreachOf<O>> {
+        let Some(group) = &self.group else {
+            return Err(Breach::GroupUnexpected {
+                message: "a request from a group the keeper did not enroll",
+            });
+        };
+        if group.request == GroupRequest::Queued {
+            return Err(Breach::GroupUnexpected {
+                message: "a second group request while one is queued",
+            });
+        }
+        let ops = self.ops;
+        retry_busy::<O, _>(|| ops.enqueue_group()).map_err(Breach::Rendezvous)?;
+        if let Some(group) = &mut self.group {
+            group.request = GroupRequest::Queued;
+        }
+        Ok(())
+    }
+
+    /// The group left: cancel its queued request, if any.
+    fn group_exit(&mut self) -> Result<(), BreachOf<O>> {
+        match self.group.take() {
+            None => Err(Breach::GroupUnexpected {
+                message: "an exit from a group the keeper did not enroll",
+            }),
+            Some(group) if group.request == GroupRequest::Queued => {
+                let ops = self.ops;
+                retry_busy::<O, _>(|| ops.cancel_group()).map_err(Breach::Rendezvous)
+            }
+            Some(_) => Ok(()),
+        }
+    }
+
+    /// Send MESSAGE to the group. A closed channel hands it back: the group
+    /// is gone.
+    fn send_group(&self, message: GroupOf<O>) -> Result<(), GroupOf<O>> {
+        match &self.group {
+            Some(group) => group
+                .grants
+                .send(message)
+                .map_err(|mpsc::SendError(message)| message),
+            None => Err(message),
         }
     }
 
@@ -402,7 +549,7 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
                     while let Ok(message) = self.inbox.try_recv() {
                         self.between_stops(message)?;
                     }
-                    let queued = self.queued.len();
+                    let queued = self.queued_len();
                     if let Some(observe) = &mut self.pending_observer {
                         observe(&pending, queued);
                     }
@@ -459,54 +606,161 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
             let Some(head) = batch.head().map_err(Breach::Rendezvous)? else {
                 break;
             };
-            let owner = O::owner(head);
-            let Some(receipt) = self.queued.remove(&owner) else {
-                return Err(Breach::Unexpected {
-                    owner,
-                    message: "a ring entry with no committed request",
-                });
+            let step = match head {
+                Head::Owner(key) => self.serve_owner(batch, key, epoch)?,
+                Head::BatonGroup => self.serve_group(batch, epoch)?,
             };
-            let ready = match batch.ready(receipt) {
-                Ok(ready) => ready,
-                // The owner published again after its request, so the
-                // receipt is superseded. Send it back to publish and requeue
-                // at the tail. FIFO is not skipped, so this stop lends
-                // nothing more. Any other refusal is a breach.
-                Err(error) if O::refusal(error) == Refusal::Superseded => {
-                    let ops = self.ops;
-                    retry_busy::<O, _>(|| ops.cancel(head)).map_err(Breach::Rendezvous)?;
-                    if self.send(owner, GrantMsg::Republish).is_err() {
-                        // Gone while only queued: like an exit.
-                        self.owners.remove(&owner);
-                    }
-                    break;
+            batch = match step {
+                Step::Next(batch) => batch,
+                Step::End(batch) => return batch.complete().map_err(Breach::Rendezvous),
+            };
+        }
+        batch.complete().map_err(Breach::Rendezvous)
+    }
+
+    /// Lend an owner head its ticket and settle its return.
+    fn serve_owner<B: Batch<O>>(
+        &mut self,
+        mut batch: B,
+        head: O::Key,
+        epoch: NonZeroU64,
+    ) -> Result<Step<B>, BreachOf<O>> {
+        let owner = O::owner(head);
+        let Some(receipt) = self.queued.remove(&owner) else {
+            return Err(Breach::Unexpected {
+                owner,
+                message: "a ring entry with no committed request",
+            });
+        };
+        let ready = match batch.ready(receipt) {
+            Ok(ready) => ready,
+            // The owner published again after its request, so the receipt is
+            // superseded. Send it back to publish and requeue at the tail.
+            // FIFO is not skipped, so this stop lends nothing more. Any other
+            // refusal is a breach.
+            Err(error) if O::refusal(error) == Refusal::Superseded => {
+                let ops = self.ops;
+                retry_busy::<O, _>(|| ops.cancel(head)).map_err(Breach::Rendezvous)?;
+                if self.send(owner, GrantMsg::Republish).is_err() {
+                    // Gone while only queued: like an exit.
+                    self.owners.remove(&owner);
                 }
-                Err(error) => return Err(Breach::Rendezvous(error)),
-            };
-            let Some(grant) = batch.grant_for(&ready).map_err(Breach::Rendezvous)? else {
-                return Err(Breach::Unexpected {
-                    owner,
-                    message: "a ready head the ring did not grant",
-                });
-            };
-            let (ticket, held) = batch
-                .lend(ready)
-                .map_err(|CustodyRefused| Breach::Custody)?;
-            if self.send(owner, GrantMsg::Grant { ticket, epoch }).is_err() {
-                // The bounced message drops the ticket, and `held` drops the
-                // stop with the breach.
-                return Err(Breach::Unreachable { owner });
+                return Ok(Step::End(batch));
             }
-            let returned = self.await_return(owner)?;
-            batch = B::settle(held, returned, grant).map_err(|settle| match settle {
+            Err(error) => return Err(Breach::Rendezvous(error)),
+        };
+        let Some(grant) = batch.grant_for(&ready).map_err(Breach::Rendezvous)? else {
+            return Err(Breach::Unexpected {
+                owner,
+                message: "a ready head the ring did not grant",
+            });
+        };
+        let (ticket, held) = batch
+            .lend(ready)
+            .map_err(|CustodyRefused| Breach::Custody)?;
+        if self.send(owner, GrantMsg::Grant { ticket, epoch }).is_err() {
+            // The bounced message drops the ticket, and `held` drops the
+            // stop with the breach.
+            return Err(Breach::Unreachable { owner });
+        }
+        let returned = self.await_return(owner)?;
+        B::settle(held, returned, grant)
+            .map(Step::Next)
+            .map_err(|settle| match settle {
                 Settle::NotTheTicketCut => Breach::Unexpected {
                     owner,
                     message: "a returned ticket that is not the one cut",
                 },
                 Settle::Retire(error) => Breach::Rendezvous(error),
-            })?;
+            })
+    }
+
+    /// Lend a Baton-group head the World and settle its return (L6.7b b3).
+    /// The keeper keeps the stop while the turn is out, so no parallel owner
+    /// runs during the group's interval (K3).
+    fn serve_group<B: Batch<O>>(
+        &mut self,
+        mut batch: B,
+        epoch: NonZeroU64,
+    ) -> Result<Step<B>, BreachOf<O>> {
+        match &mut self.group {
+            Some(group) if group.request == GroupRequest::Queued => {
+                group.request = GroupRequest::None;
+            }
+            _ => {
+                return Err(Breach::GroupUnexpected {
+                    message: "a group ring entry with no committed request",
+                });
+            }
         }
-        batch.complete().map_err(Breach::Rendezvous)
+        let Some(grant) = batch.grant_group().map_err(Breach::Rendezvous)? else {
+            return Err(Breach::GroupUnexpected {
+                message: "a group head the ring did not grant",
+            });
+        };
+        let (turn, held) = batch
+            .lend_world()
+            .map_err(|CustodyRefused| Breach::Custody)?;
+        if self.send_group(GroupMsg::World { turn, epoch }).is_err() {
+            // The bounced message drops the turn, and `held` drops the stop
+            // with the breach.
+            return Err(Breach::GroupUnreachable);
+        }
+        let returned = self.await_world()?;
+        B::settle_world(held, returned, grant)
+            .map(Step::Next)
+            .map_err(|settle| match settle {
+                Settle::NotTheTicketCut => Breach::GroupUnexpected {
+                    message: "a returned World turn that is not the one cut",
+                },
+                Settle::Retire(error) => Breach::Rendezvous(error),
+            })
+    }
+
+    /// Wait for the group's World turn. Owners' requests and exits are
+    /// committed as they come; anything else is a breach.
+    fn await_world(&mut self) -> Result<O::WorldReturned, BreachOf<O>> {
+        loop {
+            let message = self
+                .inbox
+                .recv()
+                .map_err(|mpsc::RecvError| Breach::Disconnected)?;
+            match message {
+                KeeperMsg::WorldReturn { returned } => return Ok(returned),
+                KeeperMsg::GroupAbandon { cause } => {
+                    return Err(Breach::GroupAbandoned { cause });
+                }
+                KeeperMsg::BatonRequest => {
+                    return Err(Breach::GroupUnexpected {
+                        message: "a request while its own turn is out",
+                    });
+                }
+                KeeperMsg::GroupExit => {
+                    return Err(Breach::GroupUnexpected {
+                        message: "an exit while its turn is out",
+                    });
+                }
+                KeeperMsg::Request { owner, receipt } => self.commit(owner, receipt)?,
+                KeeperMsg::Exit { owner } => self.exit(owner)?,
+                KeeperMsg::GiveBack { owner, .. } => {
+                    return Err(Breach::Unexpected {
+                        owner,
+                        message: "a returned ticket from an owner with no lend",
+                    });
+                }
+                KeeperMsg::Refuse {
+                    owner,
+                    ticket,
+                    reason,
+                } => {
+                    drop(ticket);
+                    return Err(Breach::Refused { owner, reason });
+                }
+                KeeperMsg::Abandon { owner, cause } => {
+                    return Err(Breach::Abandoned { owner, cause });
+                }
+            }
+        }
     }
 
     /// Wait for `owner`'s ticket. Other owners' requests and exits are
@@ -553,6 +807,18 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
                     drop(ticket);
                     return Err(Breach::Refused { owner, reason });
                 }
+                // The group holds no turn while an owner's ticket is out:
+                // it may request or leave, and nothing else.
+                KeeperMsg::BatonRequest => self.commit_group()?,
+                KeeperMsg::GroupExit => self.group_exit()?,
+                KeeperMsg::WorldReturn { .. } => {
+                    return Err(Breach::GroupUnexpected {
+                        message: "a returned World with no turn out",
+                    });
+                }
+                KeeperMsg::GroupAbandon { cause } => {
+                    return Err(Breach::GroupAbandoned { cause });
+                }
             }
         }
     }
@@ -569,8 +835,20 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
         for enrolled in self.owners.values() {
             let _ = enrolled.grants.try_send(GrantMsg::Poisoned);
         }
+        if let Some(group) = &self.group {
+            let _ = group.grants.try_send(GroupMsg::Poisoned);
+        }
         DriverEnd::Poisoned(breach)
     }
+}
+
+/// What one served head leaves the batch with.
+enum Step<B> {
+    /// The turn came back: serve the next head.
+    Next(B),
+    /// An owner was sent back to publish: FIFO is not skipped, so this stop
+    /// lends nothing more.
+    End(B),
 }
 
 /// The batch of one stop, run inside the custody `with_batch` binds.

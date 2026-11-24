@@ -5,7 +5,7 @@
 use self::control::{Mode, Request, RequestId, RingClient, SerialClient, State as Ring};
 use self::driver_core::{
     Attempt, Batch, BatchVisitor, Breach, BreachOf, CustodyRefused, Driver, DriverEnd, GrantMsg,
-    KeeperMsg, KeeperOps, LendDrop, Refusal, Settle,
+    GroupMsg, Head, KeeperMsg, KeeperOps, LendDrop, Refusal, Settle,
 };
 use crate::sync::{Signal, mpsc};
 use crate::{MutatorKey, RendezvousError};
@@ -25,6 +25,10 @@ fn key(owner: u64) -> MutatorKey {
 fn generation() -> NonZeroU64 {
     NonZeroU64::new(1).unwrap()
 }
+
+/// The Baton group's id in the era's commit and grant records; owners are
+/// 1 and up.
+const GROUP: u64 = 0;
 
 /// What the era records: the product ring, the members' modes, the commit
 /// order and the grant order.
@@ -98,6 +102,17 @@ pub struct Lent<'a> {
     ticket: Ticket,
 }
 
+/// The Baton group's World turn: it comes back as itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WorldTurn {
+    epoch: NonZeroU64,
+}
+
+pub struct WorldLent<'a> {
+    era: &'a ModelEra,
+    cut: WorldTurn,
+}
+
 #[derive(Clone, Copy)]
 pub struct Era<'a>(&'a ModelEra);
 
@@ -107,6 +122,8 @@ impl<'a> KeeperOps for Era<'a> {
     type Ticket = Ticket;
     type Returned = Ticket;
     type Reason = ();
+    type WorldTurn = WorldTurn;
+    type WorldReturned = WorldTurn;
     type Error = RendezvousError;
     type Stopped = Stop<'a>;
     type Pending = Vec<MutatorKey>;
@@ -141,6 +158,22 @@ impl<'a> KeeperOps for Era<'a> {
             .unwrap()
             .ring
             .cancel_queued(SerialClient::Owner(key))
+    }
+
+    fn enqueue_group(self) -> Result<(), RendezvousError> {
+        let mut model = self.0.model.lock().unwrap();
+        model.ring.enqueue_baton_group()?;
+        model.commits.push(GROUP);
+        Ok(())
+    }
+
+    fn cancel_group(self) -> Result<(), RendezvousError> {
+        self.0
+            .model
+            .lock()
+            .unwrap()
+            .ring
+            .cancel_queued(SerialClient::BatonGroup)
     }
 
     /// Request the stop. When the members are not all stopped yet, wait for
@@ -209,18 +242,64 @@ impl<'a> Batch<Era<'a>> for ModelBatch<'a> {
     type Ready = Receipt;
     type Grant = RequestId;
     type Held = Lent<'a>;
+    type WorldHeld = WorldLent<'a>;
 
-    fn head(&self) -> Result<Option<MutatorKey>, RendezvousError> {
+    fn head(&self) -> Result<Option<Head<MutatorKey>>, RendezvousError> {
         let model = self.era.model.lock().unwrap();
-        model
+        Ok(model
             .ring
             .ring_head_entry()
             .map(|entry| match entry.client() {
-                RingClient::Owner { key, .. } => Ok(key),
-                // No Baton group in this model.
-                RingClient::BatonGroup => Err(RendezvousError::Identity),
-            })
-            .transpose()
+                RingClient::Owner { key, .. } => Head::Owner(key),
+                RingClient::BatonGroup => Head::BatonGroup,
+            }))
+    }
+
+    fn grant_group(&mut self) -> Result<Option<RequestId>, RendezvousError> {
+        self.era
+            .model
+            .lock()
+            .unwrap()
+            .ring
+            .grant_head_in_stop(self.epoch, |entry| entry.client() == RingClient::BatonGroup)
+    }
+
+    fn lend_world(self) -> Result<(WorldTurn, WorldLent<'a>), CustodyRefused> {
+        let turn = WorldTurn { epoch: self.epoch };
+        self.era
+            .model
+            .lock()
+            .unwrap()
+            .grants
+            .push((GROUP, self.epoch));
+        Ok((
+            turn,
+            WorldLent {
+                era: self.era,
+                cut: turn,
+            },
+        ))
+    }
+
+    fn settle_world(
+        held: WorldLent<'a>,
+        returned: WorldTurn,
+        grant: RequestId,
+    ) -> Result<Self, Settle<RendezvousError>> {
+        if returned != held.cut {
+            return Err(Settle::NotTheTicketCut);
+        }
+        held.era
+            .model
+            .lock()
+            .unwrap()
+            .ring
+            .retire_serial(grant)
+            .map_err(Settle::Retire)?;
+        Ok(ModelBatch {
+            era: held.era,
+            epoch: held.cut.epoch,
+        })
     }
 
     fn ready(&self, receipt: Receipt) -> Result<Receipt, RendezvousError> {
@@ -287,8 +366,9 @@ impl<'a> Batch<Era<'a>> for ModelBatch<'a> {
     }
 }
 
-type Msg = KeeperMsg<Receipt, Ticket, Ticket, ()>;
+type Msg = KeeperMsg<Receipt, Ticket, Ticket, (), WorldTurn>;
 type Grant = GrantMsg<Ticket>;
+type World = GroupMsg<WorldTurn>;
 
 /// What an owner saw when it waited for its grant.
 #[derive(Debug, PartialEq, Eq)]
@@ -359,6 +439,47 @@ fn requester(
         Err(_) => Seen::Disconnected,
     };
     let _ = inbox.send(KeeperMsg::Exit { owner });
+    seen
+}
+
+/// The Baton group's runner, the shape of the seat's request: ask once,
+/// wait for the World, hold it alone, end the interval, leave the era.
+fn group_runner(
+    inbox: mpsc::Sender<Msg>,
+    world: mpsc::Receiver<World>,
+    in_turn: Arc<AtomicUsize>,
+    on_world: OnGrant,
+    holding: Option<mpsc::Sender<()>>,
+) -> Seen {
+    let _ = inbox.send(KeeperMsg::BatonRequest);
+    let seen = match world.recv() {
+        Ok(GroupMsg::World { turn, epoch }) => {
+            // One turn out at a time across owners and the group (K3).
+            assert_eq!(
+                in_turn.fetch_add(1, Ordering::SeqCst),
+                0,
+                "two serial turns at once"
+            );
+            if let Some(holding) = &holding {
+                let _ = holding.send(());
+            }
+            in_turn.fetch_sub(1, Ordering::SeqCst);
+            match on_world {
+                OnGrant::GiveBack => {
+                    let _ = inbox.send(KeeperMsg::WorldReturn { returned: turn });
+                }
+                OnGrant::Abandon => {
+                    let _ = inbox.send(KeeperMsg::GroupAbandon {
+                        cause: LendDrop::Unwound,
+                    });
+                }
+            }
+            Seen::Granted(epoch)
+        }
+        Ok(GroupMsg::Poisoned) => Seen::Poisoned,
+        Err(_) => Seen::Disconnected,
+    };
+    let _ = inbox.send(KeeperMsg::GroupExit);
     seen
 }
 
@@ -530,5 +651,153 @@ pub fn a_slow_owner_delays_the_turn_and_poisons_nothing() {
         slow.join().unwrap();
         assert_eq!(end, DriverEnd::Drained, "a slow owner poisons nothing");
         assert!(matches!(requesting.join().unwrap(), Seen::Granted(_)));
+    });
+}
+
+/// L10 (L6.7b b3). The Baton group and an owner each request once. Each is
+/// lent its turn in commit order across the two kinds, and one turn is out
+/// at a time: the World turn excludes an owner's ticket.
+pub fn a_group_and_an_owner_alternate_in_commit_order() {
+    model(|| {
+        let era = ModelEra::new(&[(1, Mode::NativeStopped)]);
+        let (inbox, inbox_rx) = mpsc::channel();
+        let mut driver = Driver::new(Era(&era), inbox_rx);
+        let in_turn = Arc::new(AtomicUsize::new(0));
+        let (grants_tx, grants) = mpsc::sync_channel(1);
+        driver.enroll(1, key(1), grants_tx);
+        let (world_tx, world) = mpsc::sync_channel(1);
+        driver.enroll_group(world_tx);
+        let owner = {
+            let inbox = inbox.clone();
+            let in_turn = in_turn.clone();
+            loom::thread::spawn(move || {
+                requester(1, inbox, grants, in_turn, OnGrant::GiveBack, None)
+            })
+        };
+        let group = {
+            let inbox = inbox.clone();
+            let in_turn = in_turn.clone();
+            loom::thread::spawn(move || {
+                group_runner(inbox, world, in_turn, OnGrant::GiveBack, None)
+            })
+        };
+        drop(inbox);
+        let end = driver.run();
+        let owner = owner.join().unwrap();
+        let group = group.join().unwrap();
+        assert_eq!(end, DriverEnd::Drained);
+        assert!(matches!(owner, Seen::Granted(_)), "the owner: {owner:?}");
+        assert!(matches!(group, Seen::Granted(_)), "the group: {group:?}");
+        let model = era.model.lock().unwrap();
+        let granted: Vec<u64> = model.grants.iter().map(|(client, _)| *client).collect();
+        assert_eq!(granted, model.commits, "grants follow commit order");
+    });
+}
+
+/// L11 (K7 for the group). The group's lend guard drops armed while it
+/// holds the World. The keeper poisons, and the owner, enrolled and
+/// requesting, reads Poisoned.
+pub fn an_abandoned_world_turn_poisons_the_owners() {
+    model(|| {
+        let era = ModelEra::new(&[(1, Mode::NativeStopped)]);
+        let (inbox, inbox_rx) = mpsc::channel();
+        let mut driver = Driver::new(Era(&era), inbox_rx);
+        let in_turn = Arc::new(AtomicUsize::new(0));
+        let (grants_tx, grants) = mpsc::sync_channel(1);
+        driver.enroll(1, key(1), grants_tx);
+        let (world_tx, world) = mpsc::sync_channel(1);
+        driver.enroll_group(world_tx);
+        let (holding_tx, holding) = mpsc::channel::<()>();
+        let group = {
+            let inbox = inbox.clone();
+            let in_turn = in_turn.clone();
+            loom::thread::spawn(move || {
+                group_runner(inbox, world, in_turn, OnGrant::Abandon, Some(holding_tx))
+            })
+        };
+        let owner = {
+            let inbox = inbox.clone();
+            let in_turn = in_turn.clone();
+            loom::thread::spawn(move || {
+                // The owner asks only once the group holds the World.
+                let _ = holding.recv();
+                requester(1, inbox, grants, in_turn, OnGrant::GiveBack, None)
+            })
+        };
+        drop(inbox);
+        let end = driver.run();
+        assert_eq!(
+            group.join().unwrap(),
+            Seen::Granted(NonZeroU64::new(1).unwrap())
+        );
+        assert_eq!(
+            end,
+            DriverEnd::Poisoned(Breach::GroupAbandoned {
+                cause: LendDrop::Unwound,
+            })
+        );
+        assert_eq!(
+            owner.join().unwrap(),
+            Seen::Poisoned,
+            "the queued owner reads Poisoned"
+        );
+    });
+}
+
+/// L12. An owner's lend guard drops armed while the group's request is
+/// queued behind it. The keeper poisons, and the group reads Poisoned on its
+/// own channel.
+pub fn an_abandoned_lend_poisons_the_queued_group() {
+    model(|| {
+        let era = ModelEra::new(&[(1, Mode::NativeStopped)]);
+        let (inbox, inbox_rx) = mpsc::channel();
+        let mut driver = Driver::new(Era(&era), inbox_rx);
+        let in_turn = Arc::new(AtomicUsize::new(0));
+        let (grants_tx, grants) = mpsc::sync_channel(1);
+        driver.enroll(1, key(1), grants_tx);
+        let (world_tx, world) = mpsc::sync_channel(1);
+        driver.enroll_group(world_tx);
+        let (holding_tx, holding) = mpsc::channel::<()>();
+        let owner = {
+            let inbox = inbox.clone();
+            let in_turn = in_turn.clone();
+            loom::thread::spawn(move || {
+                requester(
+                    1,
+                    inbox,
+                    grants,
+                    in_turn,
+                    OnGrant::Abandon,
+                    Some(holding_tx),
+                )
+            })
+        };
+        let group = {
+            let inbox = inbox.clone();
+            let in_turn = in_turn.clone();
+            loom::thread::spawn(move || {
+                // The group asks only once the owner holds its ticket.
+                let _ = holding.recv();
+                group_runner(inbox, world, in_turn, OnGrant::GiveBack, None)
+            })
+        };
+        drop(inbox);
+        let end = driver.run();
+        assert_eq!(
+            owner.join().unwrap(),
+            Seen::Granted(NonZeroU64::new(1).unwrap())
+        );
+        assert_eq!(
+            end,
+            DriverEnd::Poisoned(Breach::Abandoned {
+                owner: 1,
+                cause: LendDrop::Unwound,
+            })
+        );
+        assert_eq!(
+            group.join().unwrap(),
+            Seen::Poisoned,
+            "the queued group reads Poisoned"
+        );
     });
 }

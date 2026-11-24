@@ -1652,3 +1652,183 @@ fn l67a_a_receipt_from_an_owner_no_longer_native_is_a_breach() {
     );
     assert!(told, "A learns the era is poisoned");
 }
+
+use super::super::keeper_driver::GroupPort;
+use super::super::world_turn::WorldReturned;
+
+/// A running owner the Baton-group rows watch.
+const R: u64 = 7206;
+
+/// Enroll the Baton group with the driver; its port crosses to the runner.
+fn enroll_group(driver: &mut Driver<'_, '_, '_>, inbox: &mpsc::Sender<KeeperMsg>) -> GroupPort {
+    let (world_tx, world) = mpsc::sync_channel(1);
+    driver.enroll_group(world_tx);
+    GroupPort::new(inbox.clone(), world)
+}
+
+/// L6.7b b3. The Baton group and an owner are both lent through the
+/// keeper's own stops, each in ring order. The group asks while O holds its
+/// ticket, so its request is committed after the stop began and is served
+/// in the next stop (K4). Both leave and the driver drains.
+#[test]
+fn l67b_the_group_and_an_owner_take_turns_in_ring_order() {
+    with_live_era("l67b-alternate", |era| {
+        let (inbox, inbox_rx) = mpsc::channel();
+        let mut driver = Driver::new(era, inbox_rx);
+        let o = enroll_driver(era, &mut driver, &inbox, O);
+        let mut group = enroll_group(&mut driver, &inbox);
+        drop(inbox);
+        let (holding_tx, holding) = mpsc::channel::<()>();
+        std::thread::scope(|scope| {
+            let _panic_guard = KeeperPanicGuard { keeper: era };
+            let owner = scope.spawn(move || {
+                o.run(|state, home, port| {
+                    let (grant, lend) = port.request_turn().ok().expect("O is granted");
+                    let epoch = grant.epoch;
+                    let mut turn = begin_turn(state, home, (grant, lend), port, standalone)
+                        .ok()
+                        .expect("O's grant begins");
+                    holding_tx.send(()).expect("tell the group");
+                    let seen = turn.with_world(|ev| eval(ev, "(setq sp-live 51)"));
+                    turn.end(port).ok().expect("O's host detaches");
+                    (epoch, seen)
+                })
+            });
+            let runner = scope.spawn(move || {
+                holding.recv_timeout(BOUND).expect("O holds its ticket");
+                let (turn, epoch, lend) = group
+                    .request_world()
+                    .ok()
+                    .expect("the group is lent the World");
+                let cut = turn.identity();
+                group.give_back(lend, WorldReturned::from_end(turn));
+                group.exit();
+                (epoch, cut)
+            });
+            assert_eq!(driver.run(), DriverEnd::Drained);
+            let (owner_epoch, seen) = owner.join().expect("O");
+            let (group_epoch, cut) = runner.join().expect("the group");
+            assert_eq!(seen, "51");
+            assert_eq!(
+                cut.epoch, group_epoch,
+                "the turn names the stop it was cut in"
+            );
+            assert_eq!(cut.heap, era.heap_identity());
+            assert!(
+                group_epoch > owner_epoch,
+                "the group, committed during O's lend, is served in a later stop \
+                 ({owner_epoch} then {group_epoch})"
+            );
+        });
+    });
+}
+
+/// L6.7b b3 exclusion (K3). While the group holds the World, the keeper
+/// holds its stop, so a running parallel owner makes no progress. Its
+/// counter advances before the group asks and again after the turn comes
+/// back, so the probe can see progress.
+#[test]
+fn l67b_no_parallel_owner_runs_while_the_group_holds_the_world() {
+    with_live_era("l67b-exclusion", |era| {
+        let (inbox, inbox_rx) = mpsc::channel();
+        let mut driver = Driver::new(era, inbox_rx);
+        let peer = era.register(R, 0).expect("register the running owner");
+        let heap = era.heap_identity();
+        let mut group = enroll_group(&mut driver, &inbox);
+        drop(inbox);
+        let progress = AtomicU64::new(0);
+        let done = AtomicBool::new(false);
+        std::thread::scope(|scope| {
+            let _panic_guard = KeeperPanicGuard { keeper: era };
+            let (progress, done) = (&progress, &done);
+            scope.spawn(move || run_peer(activate(peer, heap, R), progress, done));
+            let runner = scope.spawn(move || {
+                let advanced = |from: u64| {
+                    let start = Instant::now();
+                    while progress.load(Ordering::Acquire) <= from {
+                        assert!(start.elapsed() < BOUND, "the running owner advances");
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                };
+                advanced(0);
+                let (turn, _epoch, lend) = group
+                    .request_world()
+                    .ok()
+                    .expect("the group is lent the World");
+                let before = progress.load(Ordering::Acquire);
+                std::thread::sleep(Duration::from_millis(30));
+                let during = progress.load(Ordering::Acquire);
+                group.give_back(lend, WorldReturned::from_end(turn));
+                advanced(during);
+                done.store(true, Ordering::Release);
+                group.exit();
+                (before, during)
+            });
+            assert_eq!(driver.run(), DriverEnd::Drained);
+            let (before, during) = runner.join().expect("the group");
+            assert_eq!(
+                before, during,
+                "no parallel owner ran while the group held the World"
+            );
+        });
+    });
+}
+
+/// L6.7b b3 (K7 for the group). A Baton thread unwinds while the group
+/// holds the World. The guard reports the lost turn, the driver poisons the
+/// era, and an owner's request is answered `Poisoned`.
+#[test]
+fn l67b_a_panic_in_a_group_interval_poisons() {
+    let (end, answer) = with_poisoned_era("l67b-unwind", |era| {
+        let (inbox, inbox_rx) = mpsc::channel();
+        let mut driver = Driver::new(era, inbox_rx);
+        let b = enroll_driver(era, &mut driver, &inbox, B);
+        let mut group = enroll_group(&mut driver, &inbox);
+        drop(inbox);
+        let (idle_tx, idle_rx) = mpsc::channel::<()>();
+        let (holding_tx, holding_rx) = mpsc::channel::<()>();
+        std::thread::scope(|scope| {
+            let unwinding = scope.spawn(move || {
+                // The group asks only once B is NativeStopped and cannot
+                // hold the group's stop open.
+                idle_rx.recv_timeout(BOUND).expect("B is idle");
+                let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let (_turn, _epoch, _lend) = group
+                        .request_world()
+                        .ok()
+                        .expect("the group is lent the World");
+                    holding_tx.send(()).expect("tell B");
+                    panic!("an invariant break inside the group's interval");
+                }));
+                assert!(caught.is_err(), "the interval unwound");
+                group.exit();
+            });
+            let queued = scope.spawn(move || {
+                let (_state, _home, mut port) = b.start();
+                port.publish_idle().expect("B publishes");
+                idle_tx.send(()).expect("tell the group");
+                holding_rx
+                    .recv_timeout(BOUND)
+                    .expect("the group holds the World");
+                let answer = port.request_turn().map(|_granted| ());
+                drop(port.exit());
+                answer
+            });
+            let end = driver.run();
+            unwinding.join().expect("the group's thread");
+            let answer = queued.join().expect("B's thread");
+            (end, answer)
+        })
+    });
+    assert_eq!(
+        end,
+        DriverEnd::Poisoned(Breach::GroupAbandoned {
+            cause: LendDrop::Unwound,
+        })
+    );
+    assert_eq!(
+        answer,
+        Err(PortRefusal::Poisoned),
+        "B learns the era is poisoned"
+    );
+}
