@@ -2094,13 +2094,14 @@ fn probe_leaf(
             }
         },
         // Any string: the `equal` key is its bytes plus SCHARS, so there is
-        // nothing to validate.
+        // nothing to validate. `Value::DEAD` carries the string tag over a
+        // null pointer and falls back to identity, matching `to_equal_key`.
         ValueKind::String => match test {
             HashTableTest::Equal => {
+                let Some(string) = value.as_lisp_string() else {
+                    return identity(hasher);
+                };
                 23u8.hash(&mut hasher);
-                let string = value
-                    .as_lisp_string()
-                    .expect("a String value carries a LispString payload");
                 hash_char_array(string.as_bytes(), &mut hasher);
                 string.schars().hash(&mut hasher);
             }
@@ -3130,8 +3131,7 @@ impl TaggedValue {
     pub fn make_cons(car: Value, cdr: Value) -> Self {
         // Keep the expensive corruption diagnostic out of release allocation hot paths.
         #[cfg(debug_assertions)]
-        if car.is_string() {
-            let ptr = car.as_string_ptr().unwrap();
+        if let Some(ptr) = car.as_string_ptr() {
             let hdr = unsafe { &(*ptr).header };
             if !matches!(hdr.kind, crate::tagged::header::HeapObjectKind::String) {
                 // Check if the address is actually a VecLike — dump its type_tag

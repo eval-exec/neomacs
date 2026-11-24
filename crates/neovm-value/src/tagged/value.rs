@@ -903,15 +903,23 @@ impl TaggedValue {
         (self.0 & !TAG_MASK) as *const ConsCell
     }
 
-    /// Extract raw string object pointer. Returns None if not a string.
+    /// Extract raw string object pointer.
+    ///
+    /// Returns `None` when this is not a string, and when the string tag sits
+    /// on a null pointer. That bit pattern is GNU's free-list poison
+    /// ([`Self::DEAD`]); it is not a live object, so this does not observe it
+    /// and does not hand the null out for a later dereference.
     #[inline(always)]
     pub fn as_string_ptr(self) -> Option<*const StringObj> {
-        if self.is_string() {
-            super::collection_reads::observe(self);
-            Some((self.0 & !TAG_MASK) as *const StringObj)
-        } else {
-            None
+        if !self.is_string() {
+            return None;
         }
+        let ptr = (self.0 & !TAG_MASK) as *const StringObj;
+        if ptr.is_null() {
+            return None;
+        }
+        super::collection_reads::observe(self);
+        Some(ptr)
     }
 
     /// Extract raw float object pointer. Returns None if not a float.
@@ -1272,44 +1280,44 @@ impl TaggedValue {
 
     // -- String extraction --
 
-    /// Get the string content as UTF-8 `&str`. Returns `None` if not a string
-    /// **or** if the bytes are not valid UTF-8 (e.g. raw-byte Emacs encoding).
+    /// Get the string content as UTF-8 `&str`. Returns `None` if not a string,
+    /// if the tag is the null free-list poison, **or** if the bytes are not
+    /// valid UTF-8 (e.g. raw-byte Emacs encoding).
     ///
     /// Prefer `as_bytes()` / `equal_value` for byte-level equality — two
     /// different non-UTF-8 strings both return `None`, so comparing
     /// `as_utf8_str()` values with `==` will silently treat them as equal.
     pub fn as_utf8_str(self) -> Option<&'static str> {
-        if self.is_string() {
-            let ptr = self.as_string_ptr().unwrap();
-            // Safety: the string object is alive (caller must ensure no GC).
-            // Lifetime is extended to 'static — same pattern as old Value::as_str.
-            unsafe {
-                let header = &(*ptr).header;
-                if !matches!(header.kind, super::header::HeapObjectKind::String) {
-                    panic!(
-                        "BUG: StringObj header.kind = {:?} (expected String) — \
+        let Some(ptr) = self.as_string_ptr() else {
+            return None;
+        };
+        // Safety: `as_string_ptr` refused a non-string and the null poison.
+        // The string object is alive (caller must ensure no GC).
+        // Lifetime is extended to 'static — same pattern as old Value::as_str.
+        unsafe {
+            let header = &(*ptr).header;
+            if !matches!(header.kind, super::header::HeapObjectKind::String) {
+                panic!(
+                    "BUG: StringObj header.kind = {:?} (expected String) — \
                          possible use-after-free. Tagged value = {:#x}, ptr = {:?}",
-                        header.kind, self.0, ptr,
-                    );
-                }
-                // The kind check above cannot see a slot reclaimed and handed
-                // back to the SAME class arena, which is the common case for
-                // strings. GNU's free marker can (DIVERGENCES.md 163):
-                // `sweep_strings` nulls `s->u.s.data` "so that we know it's
-                // free" (src/alloc.c:1878-1882).
-                if (*ptr).data.is_reclaimed() {
-                    panic!(
-                        "use-after-free: borrowed a string object the collector has \
+                    header.kind, self.0, ptr,
+                );
+            }
+            // The kind check above cannot see a slot reclaimed and handed
+            // back to the SAME class arena, which is the common case for
+            // strings. GNU's free marker can (DIVERGENCES.md 163):
+            // `sweep_strings` nulls `s->u.s.data` "so that we know it's
+            // free" (src/alloc.c:1878-1882).
+            if (*ptr).data.is_reclaimed() {
+                panic!(
+                    "use-after-free: borrowed a string object the collector has \
                          reclaimed (StringObj at {ptr:?} carries GNU sweep_strings' \
                          null-data free marker). Tagged value = {:#x}. See \
                          `Value::as_lisp_string` and DIVERGENCES.md 163.",
-                        self.0,
-                    );
-                }
-                (*ptr).data.as_utf8_str()
+                    self.0,
+                );
             }
-        } else {
-            None
+            (*ptr).data.as_utf8_str()
         }
     }
 
