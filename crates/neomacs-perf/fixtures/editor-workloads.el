@@ -307,6 +307,71 @@ the point of keeping both."
              section)
      "| Name | Value |\n|------+-------|\n| alpha | 1 |\n\n")))
 
+(defconst neomacs-perf-workload--cjk-chars
+  "検索表示確認日本語漢字平仮名片中韓越文列幅計測フォールバック顔変更脈動再描画行末面外折返段落選択候補強調注釈境界線圏層厚"
+  "Sixty distinct CJK characters the pulse row displays.")
+
+(defconst neomacs-perf-workload--pulse-colors
+  '("#5b0000" "#6b1100" "#7b2200" "#8b3300" "#9b4400"
+    "#ab5500" "#bb6600" "#cb7700" "#db8800" "#eb9900")
+  "One background per `pulse-iterations' step.
+`pulse-tick' writes a new color each iteration. This row does those
+writes without the timer delay.")
+
+(defun neomacs-perf-workload--insert-cjk-buffer ()
+  "Insert twenty lines of the fixed CJK sample."
+  (dotimes (_ 20)
+    (insert neomacs-perf-workload--cjk-chars "\n")))
+
+(defun neomacs-perf-workload--cjk-distinct-count ()
+  "Count characters at or above U+3000 in the current buffer."
+  (let ((seen (make-hash-table :test 'eq)))
+    (save-excursion
+      (goto-char (point-min))
+      (while (not (eobp))
+        (let ((ch (char-after)))
+          (when (and ch (>= ch #x3000))
+            (puthash ch t seen)))
+        (forward-char 1)))
+    (hash-table-count seen)))
+
+(defvar neomacs-perf-workload--redisplay-count 0
+  "Redisplays the CJK pulse performed. Other workloads leave this 0.")
+
+(defvar neomacs-perf-workload--cjk-displayed nil
+  "Non-nil when every CJK pulse redisplay showed a CJK character.")
+
+(defun neomacs-perf-workload--pulse-face-steps ()
+  "Apply one xref pulse and redisplay after every face write.
+
+`lisp/pulse.el' does the writes from `pulse-tick' on a timer
+(`pulse-delay'). The delay is a UI pause, so this row applies the same
+face writes synchronously, calls `redisplay' after each one, and returns
+how many landed. It refuses a `pulse-iterations' other than 10. A
+redisplay that does not show the CJK line is an error."
+  (require 'pulse)
+  (unless (eq pulse-iterations 10)
+    (error "cjk-font-lock-pulse expects pulse-iterations 10, got %s"
+           pulse-iterations))
+  (unless (= (length neomacs-perf-workload--pulse-colors) pulse-iterations)
+    (error "pulse color list must have one entry per pulse-iterations"))
+  (let ((steps 0))
+    (dotimes (i pulse-iterations)
+      (set-face-background 'pulse-highlight-face
+                           (nth i neomacs-perf-workload--pulse-colors))
+      (redisplay t)
+      (setq neomacs-perf-workload--redisplay-count
+            (1+ neomacs-perf-workload--redisplay-count))
+      (unless (pos-visible-in-window-p (point-min))
+        (error "cjk-font-lock-pulse redisplay did not display the CJK line"))
+      (let ((ch (char-after (point-min))))
+        (unless (and ch (>= ch #x3000))
+          (error "cjk-font-lock-pulse window is not showing a CJK character, saw %s"
+                 ch)))
+      (setq steps (1+ steps)))
+    (setq neomacs-perf-workload--cjk-displayed t)
+    steps))
+
 (defun neomacs-perf-workload--prepare-buffer (scenario)
   (cond
    ((equal scenario "startup")
@@ -324,6 +389,25 @@ the point of keeping both."
     (setq neomacs-perf-workload--lsp-payload
           (neomacs-perf-workload--lsp-message 120))
     (fundamental-mode))
+   ((equal scenario "cjk-font-lock-pulse")
+    ;; `with-temp-buffer' names this buffer " *temp*". font-core turns
+    ;; font-lock off for a space-prefixed name. A visible name keeps it on
+    ;; once the session is a GUI frame rather than --batch.
+    (rename-buffer "cjk-font-lock-pulse" t)
+    (neomacs-perf-workload--insert-cjk-buffer)
+    (text-mode)
+    ;; Face every character so font-lock, not only the pulse face, covers
+    ;; the CJK run. The shared `font-lock-ensure' below this cond realizes it.
+    (font-lock-add-keywords nil '(("." 0 font-lock-string-face)) 'set)
+    (font-lock-mode 1)
+    (unless font-lock-mode
+      (error "cjk-font-lock-pulse left font-lock-mode off"))
+    (pop-to-buffer (current-buffer))
+    (goto-char (point-min))
+    (let ((distinct (neomacs-perf-workload--cjk-distinct-count)))
+      (unless (>= distinct 60)
+        (error "cjk-font-lock-pulse buffer has %s distinct CJK characters, need 60"
+               distinct))))
    ((equal scenario "org-editing")
     (require 'org)
     (dotimes (section 150)
@@ -350,7 +434,9 @@ the point of keeping both."
         (indent-us 0) (regex-us 0) (latencies nil)
         (mode-us 0) (fontify-us 0) (replace-us 0) (undo-redo-us 0)
         (isearch-us 0) (buffer-switch-us 0) (how-many-us 0) (motion-us 0)
-        (bookkeeping-us 0))
+        (bookkeeping-us 0) (face-changes 0) (distinct-cjk 0)
+        (neomacs-perf-workload--redisplay-count 0)
+        (neomacs-perf-workload--cjk-displayed nil))
     (dotimes (_ iterations)
       ;; The snapshot and the restore below are the HARNESS's own work, not
       ;; the workload's, and they sit inside the window `elapsed-us' and
@@ -502,6 +588,16 @@ the point of keeping both."
           ("regex-search"
            (setq regex-us (+ regex-us (neomacs-perf-workload--time
                                        #'neomacs-perf-workload--regex-phase))))
+          ("cjk-font-lock-pulse"
+           (setq distinct-cjk (neomacs-perf-workload--cjk-distinct-count))
+           (setq fontify-us
+                 (+ fontify-us
+                    (neomacs-perf-workload--time
+                     (lambda ()
+                       (setq face-changes
+                             (+ face-changes
+                                (neomacs-perf-workload--pulse-face-steps)))
+                       (font-lock-ensure (point-min) (point-max)))))))
           (_ (error "unknown editor workload %S" scenario)))
         (let ((book-started (float-time)))
           (neomacs-perf-workload--restore text saved-point)
@@ -522,7 +618,11 @@ the point of keeping both."
       (isearch . ,isearch-us)
       (buffer-switch . ,buffer-switch-us)
       (how-many . ,how-many-us)
-      (motion . ,motion-us))))
+      (motion . ,motion-us)
+      (face-changes . ,face-changes)
+      (distinct-cjk . ,distinct-cjk)
+      (redisplays . ,neomacs-perf-workload--redisplay-count)
+      (cjk-displayed . ,neomacs-perf-workload--cjk-displayed))))
 
 (defun neomacs-perf-workload--lsp-message (count)
   "Build one `textDocument/publishDiagnostics' plist with COUNT diagnostics.
@@ -594,6 +694,10 @@ Both engines run the same code here, so the number is comparable."
         (buffer_switch_phase_us . ,(alist-get 'buffer-switch phases))
         (how_many_phase_us . ,(alist-get 'how-many phases))
         (motion_phase_us . ,(alist-get 'motion phases))
+        (face_change_count . ,(or (alist-get 'face-changes phases) 0))
+        (distinct_cjk . ,(or (alist-get 'distinct-cjk phases) 0))
+        (redisplay_count . ,(or (alist-get 'redisplays phases) 0))
+        (cjk_displayed . ,(if (alist-get 'cjk-displayed phases) t :json-false))
         ;; What the harness spent on its own snapshot/restore inside the
         ;; timed window, so a reader can tell the workload from the scaffold.
         (harness_bookkeeping_us . ,(alist-get 'bookkeeping phases))

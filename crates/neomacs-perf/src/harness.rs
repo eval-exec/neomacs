@@ -669,7 +669,8 @@ impl PerfHarness {
             | ScenarioId::LargeFileEditing
             | ScenarioId::Indentation
             | ScenarioId::LspJsonRpc
-            | ScenarioId::RegexSearch => {
+            | ScenarioId::RegexSearch
+            | ScenarioId::CjkFontLockPulse => {
                 scenarios::editor_workload::prepare(&self.workspace_root, request, run_directory)
             }
             ScenarioId::OrgJournalOpen | ScenarioId::OrgJournalOpenCompiled => {
@@ -1865,7 +1866,10 @@ fn parse_scenario_result(
         | ScenarioId::LargeFileEditing
         | ScenarioId::Indentation
         | ScenarioId::LspJsonRpc
-        | ScenarioId::RegexSearch => serde_json::from_str(raw).map(ScenarioResult::EditorWorkload),
+        | ScenarioId::RegexSearch
+        | ScenarioId::CjkFontLockPulse => {
+            serde_json::from_str(raw).map(ScenarioResult::EditorWorkload)
+        }
         ScenarioId::OrgJournalOpen | ScenarioId::OrgJournalOpenCompiled => {
             serde_json::from_str(raw).map(ScenarioResult::OrgJournalOpen)
         }

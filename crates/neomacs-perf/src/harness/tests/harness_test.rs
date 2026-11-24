@@ -1566,6 +1566,142 @@ fn scrolling_row_validates_phases_checksums_and_restoration() {
     }
 }
 
+#[test]
+fn cjk_font_lock_pulse_requires_font_lock_and_ten_face_writes_per_iteration() {
+    let workspace_tmp = crate::workspace_root().join("tmp");
+    fs::create_dir_all(&workspace_tmp).expect("create workspace-local test scratch root");
+    let scratch = tempfile::Builder::new()
+        .prefix("neomacs-perf-cjk-pulse-")
+        .tempdir_in(&workspace_tmp)
+        .expect("create workspace-local test directory");
+    let iterations = 2u32;
+    let request = RunRequest::new(
+        ScenarioId::CjkFontLockPulse,
+        "/unused/editor",
+        NonZeroU32::new(iterations).expect("non-zero literal"),
+    );
+    let face_changes =
+        u64::from(iterations) * super::scenarios::editor_workload::CJK_PULSE_FACE_STEPS;
+    let raw_result = format!(
+        r#"{{
+      "schema_version": 1,
+      "scenario": "cjk-font-lock-pulse",
+      "status": "ok",
+      "iterations": {iterations},
+      "elapsed_us": 100,
+      "elapsed_wall_us": 120,
+      "operation_count": {iterations},
+      "initial_checksum": "same",
+      "final_checksum": "same",
+      "point_restored": true,
+      "expected_major_mode": "text-mode",
+      "actual_major_mode": "text-mode",
+      "type_phase_us": 0,
+      "comment_phase_us": 0,
+      "kill_yank_phase_us": 0,
+      "indent_phase_us": 0,
+      "regex_phase_us": 0,
+      "latency_samples_us": [],
+      "mode_phase_us": 0,
+      "fontify_phase_us": 40,
+      "replace_phase_us": 0,
+      "undo_redo_phase_us": 0,
+      "isearch_phase_us": 0,
+      "buffer_switch_phase_us": 0,
+      "how_many_phase_us": 0,
+      "motion_phase_us": 0,
+      "face_change_count": {face_changes},
+      "distinct_cjk": 60,
+      "redisplay_count": {face_changes},
+      "cjk_displayed": true,
+      "error": null
+    }}"#
+    );
+
+    let report = PerfHarness::new(scratch.path())
+        .record_fixture_result(&request, &raw_result)
+        .expect("persist cjk pulse result");
+    assert!(
+        matches!(report.artifact.verdict, RunVerdict::Valid { .. }),
+        "a font-locked pulse of {face_changes} face writes was rejected: {:?}",
+        report.artifact.verdict
+    );
+
+    let missing_pulse = raw_result.replace(
+        &format!("\"face_change_count\": {face_changes}"),
+        "\"face_change_count\": 0",
+    );
+    let scratch_missing = tempfile::Builder::new()
+        .prefix("neomacs-perf-cjk-pulse-missing-")
+        .tempdir_in(&workspace_tmp)
+        .expect("create workspace-local test directory");
+    let report = PerfHarness::new(scratch_missing.path())
+        .record_fixture_result(&request, &missing_pulse)
+        .expect("persist cjk pulse result");
+    match report.artifact.verdict {
+        RunVerdict::CorrectnessMismatch { mismatches } => assert!(
+            mismatches
+                .iter()
+                .any(|mismatch| mismatch.invariant == "pulse-face-changes")
+        ),
+        verdict => panic!("a pulse that wrote no faces was accepted: {verdict:?}"),
+    }
+
+    let short_buffer = raw_result.replace("\"distinct_cjk\": 60", "\"distinct_cjk\": 8");
+    let scratch_short = tempfile::Builder::new()
+        .prefix("neomacs-perf-cjk-pulse-short-")
+        .tempdir_in(&workspace_tmp)
+        .expect("create workspace-local test directory");
+    let report = PerfHarness::new(scratch_short.path())
+        .record_fixture_result(&request, &short_buffer)
+        .expect("persist cjk pulse result");
+    match report.artifact.verdict {
+        RunVerdict::CorrectnessMismatch { mismatches } => assert!(
+            mismatches
+                .iter()
+                .any(|mismatch| mismatch.invariant == "distinct-cjk")
+        ),
+        verdict => panic!("a short CJK buffer was accepted: {verdict:?}"),
+    }
+
+    let hidden = raw_result.replace("\"cjk_displayed\": true", "\"cjk_displayed\": false");
+    let scratch_hidden = tempfile::Builder::new()
+        .prefix("neomacs-perf-cjk-pulse-hidden-")
+        .tempdir_in(&workspace_tmp)
+        .expect("create workspace-local test directory");
+    let report = PerfHarness::new(scratch_hidden.path())
+        .record_fixture_result(&request, &hidden)
+        .expect("persist cjk pulse result");
+    match report.artifact.verdict {
+        RunVerdict::CorrectnessMismatch { mismatches } => assert!(
+            mismatches
+                .iter()
+                .any(|mismatch| mismatch.invariant == "cjk-displayed")
+        ),
+        verdict => panic!("a pulse that never displayed CJK was accepted: {verdict:?}"),
+    }
+
+    let no_redisplay = raw_result.replace(
+        &format!("\"redisplay_count\": {face_changes}"),
+        "\"redisplay_count\": 0",
+    );
+    let scratch_noredisplay = tempfile::Builder::new()
+        .prefix("neomacs-perf-cjk-pulse-noredisplay-")
+        .tempdir_in(&workspace_tmp)
+        .expect("create workspace-local test directory");
+    let report = PerfHarness::new(scratch_noredisplay.path())
+        .record_fixture_result(&request, &no_redisplay)
+        .expect("persist cjk pulse result");
+    match report.artifact.verdict {
+        RunVerdict::CorrectnessMismatch { mismatches } => assert!(
+            mismatches
+                .iter()
+                .any(|mismatch| mismatch.invariant == "pulse-redisplays")
+        ),
+        verdict => panic!("a pulse that never redisplayed was accepted: {verdict:?}"),
+    }
+}
+
 #[cfg(test)]
 #[path = "gc_window_test.rs"]
 mod gc_window_test;

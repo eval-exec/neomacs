@@ -493,6 +493,23 @@ an interpreter-core micro-workload inside the whole-editor harness: it is
 useful for attributing VM call/return regressions, but it does not represent
 redisplay, package, or interactive editing performance.
 
+## `cjk-font-lock-pulse`
+
+A GUI frame shows a font-locked buffer of sixty distinct CJK characters.
+Each iteration applies `pulse-iterations` calls to `set-face-background`
+(10, the default in `lisp/pulse.el`) and calls `redisplay` after each
+write, so layout sees the face change. `pulse-tick` does those writes
+from a timer; this row applies them synchronously and forces the
+redisplay in the timed lambda. The run is rejected unless font-lock time
+is positive, the buffer still has at least sixty distinct CJK characters,
+the face-write count and the redisplay count are each iterations times
+10, and `pos-visible-in-window-p` showed a CJK character after every
+redisplay.
+
+This row is not in the standard suite. It has no measured baseline, and
+an unmeasured row would move the board's geometric mean. It does not
+report a fallback-key count.
+
 ## Adding a workload
 
 Add a `ScenarioId` and `ScenarioSpec` (including the scenario-owned iteration

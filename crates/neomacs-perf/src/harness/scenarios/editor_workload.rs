@@ -1,6 +1,9 @@
 //! The shared editor-workload scenario family: one elisp fixture
-//! (`fixtures/editor-workloads.el`) driving the nine catalogued workloads
+//! (`fixtures/editor-workloads.el`) driving the catalogued workloads
 //! over deterministic sources, with per-scenario phase invariants.
+//!
+//! `cjk-font-lock-pulse` lives here and stays out of `STANDARD_SCENARIOS`
+//! until it has a measured baseline.
 //!
 //! Fixture-only measurement controls (read once before the selected workload):
 //!
@@ -33,6 +36,13 @@ mod package_loading;
 pub(crate) use package_loading::scenario_load_suffixes;
 mod magit_repository;
 use magit_repository::prepare_magit_repository;
+
+/// One xref pulse is `pulse-iterations` face writes. `lisp/pulse.el`
+/// defaults that to 10. The CJK row redisplays once per write.
+pub(crate) const CJK_PULSE_FACE_STEPS: u64 = 10;
+/// Distinct CJK characters the fixture must show. The row stays outside
+/// the standard suite until it has a measured baseline.
+pub(crate) const CJK_DISTINCT_MINIMUM: u64 = 60;
 
 pub(crate) fn prepare(
     workspace_root: &Path,
@@ -197,6 +207,10 @@ pub(crate) struct EditorWorkloadResult {
     how_many_phase_us: u64,
     motion_phase_us: u64,
     harness_bookkeeping_us: u64,
+    face_change_count: u64,
+    distinct_cjk: u64,
+    redisplay_count: u64,
+    cjk_displayed: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -253,6 +267,18 @@ struct EditorWorkloadResultWire {
     /// this family do not report it.
     #[serde(default)]
     harness_bookkeeping_us: u64,
+    /// Face writes from the CJK pulse row. Other workloads leave this at 0.
+    #[serde(default)]
+    face_change_count: u64,
+    /// Distinct CJK characters in the prepared buffer. Other workloads leave 0.
+    #[serde(default)]
+    distinct_cjk: u64,
+    /// Redisplays inside the CJK pulse. Other workloads leave this at 0.
+    #[serde(default)]
+    redisplay_count: u64,
+    /// True when each CJK redisplay showed a character at or above U+3000.
+    #[serde(default)]
+    cjk_displayed: bool,
     #[serde(deserialize_with = "deserialize_optional_error", rename = "error")]
     error: Option<String>,
 }
@@ -302,6 +328,10 @@ impl TryFrom<EditorWorkloadResultWire> for EditorWorkloadResult {
             how_many_phase_us: wire.how_many_phase_us,
             motion_phase_us: wire.motion_phase_us,
             harness_bookkeeping_us: wire.harness_bookkeeping_us,
+            face_change_count: wire.face_change_count,
+            distinct_cjk: wire.distinct_cjk,
+            redisplay_count: wire.redisplay_count,
+            cjk_displayed: wire.cjk_displayed,
         })
     }
 }
@@ -452,6 +482,41 @@ pub(crate) fn validate_editor_workload_result(
         ScenarioId::Startup | ScenarioId::GuiInputLatency => {}
         ScenarioId::LspJsonRpc => {
             require_positive_phase(&mut mismatches, "regex-phase-time", result.regex_phase_us);
+        }
+        ScenarioId::CjkFontLockPulse => {
+            require_positive_phase(
+                &mut mismatches,
+                "fontify-phase-time",
+                result.fontify_phase_us,
+            );
+            let expected_faces = u64::from(request.iterations.get()) * CJK_PULSE_FACE_STEPS;
+            mismatch(
+                &mut mismatches,
+                "pulse-face-changes",
+                expected_faces,
+                result.face_change_count,
+            );
+            if result.distinct_cjk < CJK_DISTINCT_MINIMUM {
+                mismatches.push(CorrectnessMismatch {
+                    invariant: "distinct-cjk".to_string(),
+                    expected: format!("at least {CJK_DISTINCT_MINIMUM}"),
+                    actual: result.distinct_cjk.to_string(),
+                });
+            }
+            let expected_redisplays = u64::from(request.iterations.get()) * CJK_PULSE_FACE_STEPS;
+            mismatch(
+                &mut mismatches,
+                "pulse-redisplays",
+                expected_redisplays,
+                result.redisplay_count,
+            );
+            if !result.cjk_displayed {
+                mismatches.push(CorrectnessMismatch {
+                    invariant: "cjk-displayed".to_string(),
+                    expected: "true".to_string(),
+                    actual: "false".to_string(),
+                });
+            }
         }
         ScenarioId::OrgJournalOpen | ScenarioId::OrgJournalOpenCompiled => {
             unreachable!("org-journal-open has a dedicated result validator")

@@ -205,6 +205,17 @@ pub enum ScenarioId {
     /// this row necessarily pays from contaminating the steady-state
     /// number. One operation is one scroll command.
     Scrolling,
+    /// Font-locked CJK buffer on a GUI frame, then one pulse of face writes.
+    ///
+    /// Each step writes `pulse-highlight-face`'s background and calls
+    /// `redisplay`, so layout sees the face change. `lisp/pulse.el` does
+    /// those writes from a timer (`pulse-iterations`, default 10). The
+    /// fixture shows sixty distinct CJK characters and rejects a run whose
+    /// window does not display that line. This row has not been timed.
+    ///
+    /// Deliberately absent from `STANDARD_SCENARIOS`. It has no measured
+    /// baseline, and an unmeasured row would move the board's geometric mean.
+    CjkFontLockPulse,
 }
 
 impl ScenarioId {
@@ -778,6 +789,17 @@ const SCENARIOS: &[ScenarioSpec] = &[
         primary_metric: MetricName::PerOperationWallTime,
         cross_editor_parity_metrics: &[],
     },
+    ScenarioSpec {
+        id: ScenarioId::CjkFontLockPulse,
+        description: "GUI redisplay of a font-locked CJK buffer after each pulse face-background write",
+        default_frontend: Frontend::Gui {
+            width: 1200,
+            height: 800,
+        },
+        default_iterations: NonZeroU32::new(5).expect("non-zero scenario default"),
+        primary_metric: MetricName::PerOperationWallTime,
+        cross_editor_parity_metrics: &[],
+    },
 ];
 
 pub fn scenarios() -> &'static [ScenarioSpec] {
@@ -847,6 +869,7 @@ pub const fn scenario(id: ScenarioId) -> &'static ScenarioSpec {
         ScenarioId::OrgEditingHeavy => &SCENARIOS[17],
         ScenarioId::MxTabCompletionSteady => &SCENARIOS[52],
         ScenarioId::Scrolling => &SCENARIOS[53],
+        ScenarioId::CjkFontLockPulse => &SCENARIOS[54],
     }
 }
 
