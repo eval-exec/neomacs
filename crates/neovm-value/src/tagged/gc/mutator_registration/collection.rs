@@ -480,9 +480,9 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
         >,
     ) -> Result<CollectionReport, CollectionError> {
         self.check_collection(stopped)?;
-        // A closed, exhausted or forgotten reserve still owns whole blocks.
-        // Refuse before root readers, World callbacks or image transfer; the
-        // same stop must remain usable to return the book and retry.
+        // Return every leased book before root readers, World callbacks, or
+        // image transfer. A poisoned allocator cannot return; that refusal
+        // stays Busy and this same stop can retry.
         {
             let mut collector = self
                 .collector
@@ -492,6 +492,7 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
                 .as_mut()
                 .ok_or(RendezvousError::Publication)?
                 .registration_heap_mut();
+            heap.return_leased_owner_cons_reserves();
             if heap.has_owner_cons_reserves() {
                 return Err(RendezvousError::Busy);
             }

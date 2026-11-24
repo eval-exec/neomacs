@@ -218,6 +218,7 @@ pub enum ConsAllocationCase {
     OwnerConsReserveTwoOwnersCarveDisjointRunsWithoutMovingTheHeapWindow,
     OwnerConsReserveAMovedBlockTailIsNotRewound,
     OwnerConsReserveAnOldStoreKeepsTheOwnerConsAndTheUnrootedConsIsReclaimed,
+    OwnerConsReserveMainGcReturnsTheBookThenCollects,
 }
 
 impl ConsAllocationCase {
@@ -259,6 +260,7 @@ impl ConsAllocationCase {
         Self::OwnerConsReserveTwoOwnersCarveDisjointRunsWithoutMovingTheHeapWindow,
         Self::OwnerConsReserveAMovedBlockTailIsNotRewound,
         Self::OwnerConsReserveAnOldStoreKeepsTheOwnerConsAndTheUnrootedConsIsReclaimed,
+        Self::OwnerConsReserveMainGcReturnsTheBookThenCollects,
     ];
 }
 
@@ -419,6 +421,12 @@ pub(crate) fn run_cons_allocation_test<K, W>(
         }
         ConsAllocationCase::OwnerConsReserveRefusesSweepUntilExplicitReturn => {
             owner_reserve_cases::owner_cons_reserve_refuses_sweep_until_explicit_return(roots_era, world_roots);
+        }
+        ConsAllocationCase::OwnerConsReserveMainGcReturnsTheBookThenCollects => {
+            owner_reserve_cases::owner_cons_reserve_main_gc_returns_the_book_then_collects(
+                roots_era,
+                world_roots,
+            );
         }
         ConsAllocationCase::OwnerConsReserveGrantsOnlyConsStorage => {
             owner_reserve_cases::owner_cons_reserve_grants_only_cons_storage(roots_era);

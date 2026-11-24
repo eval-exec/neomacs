@@ -33,7 +33,7 @@ pub(in crate::tagged::gc) fn two_idle_stops_hold_no_reserve(
     owner
         .grant_at_stop(stopped, heap, true, MeasuredInterval::zero())
         .expect("floor grant");
-    let block = owner.cons[0].block_index;
+    let block = super::lock_blocks(owner.cons.as_ref().unwrap())[0].block_index;
     let blocks = heap.cons_blocks.len();
     assert_eq!(owner.cons_blocks_held(), 1);
     assert_eq!(heap.bytes_since_gc(), bytes);
@@ -46,7 +46,10 @@ pub(in crate::tagged::gc) fn two_idle_stops_hold_no_reserve(
         .grant_at_stop(stopped, heap, true, MeasuredInterval::zero())
         .expect("second floor grant");
     assert_eq!(owner.cons_blocks_held(), 1);
-    assert_eq!(owner.cons[0].block_index, block);
+    assert_eq!(
+        super::lock_blocks(owner.cons.as_ref().unwrap())[0].block_index,
+        block
+    );
     assert_eq!(
         heap.cons_blocks.len(),
         blocks,
@@ -68,7 +71,7 @@ pub(in crate::tagged::gc) fn pacing_charges_carved_cells_and_subtracts_the_open_
     owner
         .grant_at_stop(stopped, heap, true, MeasuredInterval::zero())
         .unwrap();
-    let block = owner.cons[0].block_index;
+    let block = super::lock_blocks(owner.cons.as_ref().unwrap())[0].block_index;
     assert_eq!(heap.bytes_since_gc(), bytes, "reservation is not charged");
     assert_eq!(young_blocks(heap), young + 1);
     owner.carve_cons(heap, &mut region).unwrap();
@@ -180,10 +183,10 @@ pub(in crate::tagged::gc) fn a_moved_block_tail_is_not_rewound(
     owner
         .grant_at_stop(stopped, heap, true, MeasuredInterval::zero())
         .unwrap();
-    let block = owner.cons[0].block_index;
+    let block = super::lock_blocks(owner.cons.as_ref().unwrap())[0].block_index;
     // Model an extended tail, preserving the original release refusal check.
     heap.cons_blocks[block].next_index = CONS_BLOCK_SIZE as u16;
-    owner.cons[0].limit = CONS_BLOCK_SIZE - 1;
+    super::lock_blocks(owner.cons.as_ref().unwrap())[0].limit = CONS_BLOCK_SIZE - 1;
     owner.return_unused_before_sweep(stopped, heap).unwrap();
     assert_eq!(heap.cons_blocks[block].next_index, CONS_BLOCK_SIZE as u16);
 }

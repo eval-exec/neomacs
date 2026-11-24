@@ -94,6 +94,18 @@ pub(super) fn owner_cons_reserve_refuses_use_after_heap_drop<K>(
         Err(ReserveError::WrongHeap),
         "a reserve cannot install a run after its granting heap has dropped"
     );
+    // The granting heap is gone. Drop must not follow its ranges. Debug builds
+    // are loud about the nonempty book and leave the lease unreclaimed.
+    #[cfg(debug_assertions)]
+    {
+        let dropped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(reserve)));
+        assert!(
+            dropped.is_err(),
+            "dropping a nonempty book is loud in debug"
+        );
+    }
+    #[cfg(not(debug_assertions))]
+    drop(reserve);
 }
 
 pub(super) fn owner_cons_reserve_grants_only_cons_storage<K>(
@@ -484,18 +496,15 @@ pub(super) fn owner_cons_reserve_refuses_sweep_until_explicit_return<K, W>(
         drop(collector);
         drop(keeper);
         assert!(
-            refused,
-            "a collector must refuse a still-reserved whole block"
+            !refused && result.is_ok(),
+            "the session returns the reserved block and then collects"
         );
+        assert!(!reserve.holds_reserve());
         assert_eq!(
-            calls_before_return, 0,
-            "refusal precedes the World callback"
+            calls_before_return, 1,
+            "the return happens before the World callback, inside the session"
         );
-        assert_eq!(
-            world_calls.get(),
-            1,
-            "only the successful retry visits the World"
-        );
+        assert_eq!(world_calls.get(), 1);
     });
 }
 
@@ -652,6 +661,10 @@ pub(super) fn owner_cons_reserve_refuses_every_foreign_heap_operation<K>(
     });
 }
 
+/// Abandoning a nonempty book leaves the lease outstanding. The fallible
+/// session stays `Busy` until the ordinary collector entry returns that lease
+/// and then collects. Dropping the book is loud in debug and does not itself
+/// discharge the count.
 pub(super) fn owner_cons_reserve_drop_and_forget_keep_collection_excluded<K, W>(
     roots_era: &mut dyn FnMut(&mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>, RootsFixture)),
     world_roots: W,
@@ -673,12 +686,14 @@ pub(super) fn owner_cons_reserve_drop_and_forget_keep_collection_excluded<K, W>(
         DropClosed,
         ForgetActive,
         ForgetClosed,
+        PanicWhileHolding,
     }
     for abandon in [
         Abandon::DropActive,
         Abandon::DropClosed,
         Abandon::ForgetActive,
         Abandon::ForgetClosed,
+        Abandon::PanicWhileHolding,
     ] {
         roots_era(&mut |era, _inputs| {
             era.start_cons_storage().unwrap();
@@ -690,10 +705,47 @@ pub(super) fn owner_cons_reserve_drop_and_forget_keep_collection_excluded<K, W>(
                     .unwrap();
             });
             match abandon {
-                Abandon::DropActive => drop(book),
-                Abandon::DropClosed => drop(book.into_closed().unwrap()),
+                Abandon::DropActive => {
+                    let dropped =
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(book)));
+                    #[cfg(debug_assertions)]
+                    assert!(
+                        dropped.is_err(),
+                        "{abandon:?}: dropping a nonempty book is loud"
+                    );
+                    #[cfg(not(debug_assertions))]
+                    assert!(
+                        dropped.is_ok(),
+                        "{abandon:?}: release drop leaves the lease"
+                    );
+                }
+                Abandon::DropClosed => {
+                    let dropped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        drop(book.into_closed().unwrap())
+                    }));
+                    #[cfg(debug_assertions)]
+                    assert!(
+                        dropped.is_err(),
+                        "{abandon:?}: dropping a nonempty book is loud"
+                    );
+                    #[cfg(not(debug_assertions))]
+                    assert!(
+                        dropped.is_ok(),
+                        "{abandon:?}: release drop leaves the lease"
+                    );
+                }
                 Abandon::ForgetActive => std::mem::forget(book),
                 Abandon::ForgetClosed => std::mem::forget(book.into_closed().unwrap()),
+                Abandon::PanicWhileHolding => {
+                    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        let _hold = book;
+                        panic!("owner panicked while holding a cons reserve");
+                    }));
+                    assert!(
+                        panicked.is_err(),
+                        "{abandon:?}: the owner panic must surface"
+                    );
+                }
             }
             assert!(
                 matches!(
@@ -707,28 +759,28 @@ pub(super) fn owner_cons_reserve_drop_and_forget_keep_collection_excluded<K, W>(
                 Err(crate::tagged::gc::MarkFinishError::OwnerReserveHeld(heap)) if heap == era.heap_identity())
             );
             let world_calls = std::cell::Cell::new(0);
-            assert!(matches!(
+            assert!(
                 era.collect_stopped(&mut stopped, |keeper, guard, roots| {
                     world_calls.set(world_calls.get() + 1);
                     world_roots(keeper, guard, roots)
-                }),
-                Err(RendezvousError::Busy)
-            ));
-            assert_eq!(world_calls.get(), 0);
-            stopped.trace(|_, _| Ok(())).unwrap();
+                })
+                .is_ok(),
+                "{abandon:?}: the next collection returns the abandoned lease and then collects"
+            );
+            assert_eq!(world_calls.get(), 1);
+            with_stopped_legacy_heap(&era, &stopped, |heap| {
+                assert!(
+                    !heap.has_owner_cons_reserves(),
+                    "{abandon:?}: the lease table discharged the abandoned book"
+                );
+            });
             complete(stopped);
-            // Initial/idle admission has no AllStopped argument. It must use
-            // the same refusal after excluding slices, without poisoning the
-            // next stop or borrowing the whole heap before that exclusion.
             assert!(
-                matches!(era.start_cons_storage(), Err(RegistrationError::Busy)),
-                "{abandon:?}: idle catalog admission cannot hide a forgotten obligation"
+                era.start_cons_storage().is_ok(),
+                "{abandon:?}: admission proceeds once the lease is back"
             );
             let mut stopped = era.stop().unwrap();
-            assert!(
-                matches!(era.shutdown_admission_stopped_for_test(&stopped).unwrap(),
-                Err(crate::tagged::gc::MarkFinishError::OwnerReserveHeld(heap)) if heap == era.heap_identity())
-            );
+            era.return_cons_storage(&stopped).unwrap();
             stopped.trace(|_, _| Ok(())).unwrap();
             complete(stopped);
             let (collector, keeper) = era.finish().unwrap();
@@ -736,4 +788,54 @@ pub(super) fn owner_cons_reserve_drop_and_forget_keep_collection_excluded<K, W>(
             drop(keeper);
         });
     }
+}
+
+/// L6.5 row. An admitted era holds a cons reserve and the collection session
+/// runs. It returns that book and then collects. It does not reach
+/// `assert_no_owner_cons_reserves`.
+pub(super) fn owner_cons_reserve_main_gc_returns_the_book_then_collects<K, W>(
+    roots_era: &mut dyn FnMut(&mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>, RootsFixture)),
+    world_roots: W,
+) where
+    K: EraKeeper + std::fmt::Debug,
+    W: Copy
+        + for<'k, 's, 'e, 'o> Fn(
+            &'k K,
+            &'s mut AllStopped<'e>,
+            &'o mut Vec<Value>,
+        ) -> Result<
+            Vec<*mut *mut crate::tagged::header::MarkerObj>,
+            RendezvousError,
+        >,
+{
+    roots_era(&mut |era, _inputs| {
+        era.start_cons_storage().unwrap();
+        let mut stopped = era.stop().unwrap();
+        era.return_cons_storage(&stopped).unwrap();
+        let mut reserve = OwnerEraReserve::new();
+        with_stopped_legacy_heap(&era, &stopped, |heap| {
+            reserve
+                .grant_at_stop(&stopped, heap, true, MeasuredInterval::zero())
+                .unwrap();
+        });
+        assert!(reserve.holds_reserve());
+        assert!(
+            era.collect_stopped(&mut stopped, world_roots).is_ok(),
+            "the session returns the outstanding book and then collects"
+        );
+        assert!(
+            !reserve.holds_reserve(),
+            "the keeper return cleared the live book"
+        );
+        with_stopped_legacy_heap(&era, &stopped, |heap| {
+            assert!(
+                !heap.has_owner_cons_reserves(),
+                "the ordinary entry left no owner cons reserve"
+            );
+        });
+        complete(stopped);
+        let (collector, keeper) = era.finish().unwrap();
+        drop(collector);
+        drop(keeper);
+    });
 }

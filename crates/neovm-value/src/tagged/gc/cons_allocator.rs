@@ -18,7 +18,7 @@ use super::young_registry::{
 use super::*;
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 use typed_index_collections::TiVec;
 
 /// Canonical old-owner classification at a region carve. This snapshot may
@@ -85,6 +85,48 @@ impl ConsAllocatorOwner {
             .owner_reserved_blocks
             .checked_sub(blocks)
             .expect("owner reserve return checked the outstanding block count");
+    }
+
+    /// Mint the lease-table key for one grant. The book and the table share it.
+    #[cfg_attr(not(any(test, feature = "test-support")), allow(dead_code))]
+    pub(super) fn mint_owner_cons_key(&mut self) -> u64 {
+        let allocator = self
+            .0
+            .as_deref_mut()
+            .expect("allocator owner is initialized");
+        let key = allocator.next_owner_cons_key;
+        allocator.next_owner_cons_key = key
+            .checked_add(1)
+            .expect("owner cons lease key space exhausted");
+        key
+    }
+
+    /// Publish a lease the stopped keeper can walk after the book is gone.
+    #[cfg_attr(not(any(test, feature = "test-support")), allow(dead_code))]
+    pub(super) fn insert_owner_cons_lease(&mut self, lease: Arc<OwnerConsLease>) {
+        let allocator = self
+            .0
+            .as_deref_mut()
+            .expect("allocator owner is initialized");
+        allocator.owner_cons_leases.push(lease);
+    }
+
+    pub(super) fn remove_owner_cons_lease(&mut self, owner_key: u64) {
+        let allocator = self
+            .0
+            .as_deref_mut()
+            .expect("allocator owner is initialized");
+        allocator
+            .owner_cons_leases
+            .retain(|lease| lease.owner_key != owner_key);
+    }
+
+    pub(super) fn take_owner_cons_leases(&mut self) -> Vec<Arc<OwnerConsLease>> {
+        let allocator = self
+            .0
+            .as_deref_mut()
+            .expect("allocator owner is initialized");
+        std::mem::take(&mut allocator.owner_cons_leases)
     }
 
     /// # Safety
@@ -986,10 +1028,37 @@ enum AllocatorAccessMode {
     Admitted,
 }
 
+/// One whole cons block recorded in an owner lease.
+///
+/// The range lives in the lease, not only in the book, so a stopped keeper
+/// can return it after the book is dropped or forgotten.
+#[derive(Debug)]
+pub(super) struct OwnerConsRange {
+    pub(super) block_index: usize,
+    pub(super) base: usize,
+    pub(super) origin: usize,
+    /// Exclusive end index. The block's `next_index` at grant.
+    pub(super) limit: usize,
+    /// Next cell index the owner may carve.
+    pub(super) carve_at: usize,
+}
+
+/// Cons blocks one owner holds, shared by the book and the heap lease table.
+///
+/// `owner_key` is the table key minted at grant. It is the stand-in for the
+/// owner's registration until a production grant supplies that id.
+#[derive(Debug)]
+pub(super) struct OwnerConsLease {
+    pub(super) owner_key: u64,
+    /// `Mutex` so the closed book stays `Sync`. The stop protocol is the real
+    /// exclusion: the keeper runs only while the owner is stopped.
+    pub(super) blocks: Mutex<Vec<OwnerConsRange>>,
+}
+
 /// Confined owner. Only its mutex-only facade can cross threads.
 /// C layout keeps the existing allocator storage at offset zero when the
 /// cold reserve count is appended. The owner remains boxed, so this count
-/// does not grow the inline heap layout.
+/// and the lease table do not grow the inline heap layout.
 #[derive(Debug)]
 #[repr(C)]
 pub(super) struct ConsAllocator {
@@ -998,6 +1067,10 @@ pub(super) struct ConsAllocator {
     /// grant/return writes this count through the exclusive heap owner. It
     /// stays outside the mutex so Drop can retain storage without locking.
     owner_reserved_blocks: usize,
+    next_owner_cons_key: u64,
+    /// Leases keyed by [`OwnerConsLease::owner_key`]. The book holds the same
+    /// `Arc`, so a keeper return is visible to a book that is still alive.
+    owner_cons_leases: Vec<Arc<OwnerConsLease>>,
     _confined: std::marker::PhantomData<std::cell::Cell<()>>,
 }
 impl ConsAllocator {
@@ -1005,6 +1078,8 @@ impl ConsAllocator {
         Self {
             storage: AllocatorStorage::Sole(AllocatorState::new(identity)),
             owner_reserved_blocks: 0,
+            next_owner_cons_key: 0,
+            owner_cons_leases: Vec::new(),
             _confined: std::marker::PhantomData,
         }
     }

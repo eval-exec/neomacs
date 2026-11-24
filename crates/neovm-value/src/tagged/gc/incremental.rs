@@ -107,7 +107,7 @@ impl TaggedHeap {
     /// Marking is complete here; the barrier is dropped.
     #[doc(hidden)]
     pub fn incremental_finish(&mut self, bytes_before: usize, _pause_t0: std::time::Instant) {
-        self.assert_no_owner_cons_reserves();
+        self.discharge_owner_cons_leases_for_collection();
         assert!(
             !self.concurrent_mark_running,
             "sweep publication requires an explicit successful marker finish"
@@ -307,7 +307,7 @@ impl TaggedHeap {
     /// block never reclaims a live new cell.
     #[doc(hidden)]
     pub fn incremental_sweep_slice(&mut self, budget: usize) -> bool {
-        self.assert_no_owner_cons_reserves();
+        self.discharge_owner_cons_leases_for_collection();
         assert!(
             !self.concurrent_mark_running,
             "sweeping requires an explicit successful marker finish"
@@ -508,7 +508,7 @@ impl TaggedHeap {
     /// the next mark / a stop-the-world collection can begin).
     #[doc(hidden)]
     pub fn finish_incremental_sweep_now(&mut self) {
-        self.assert_no_owner_cons_reserves();
+        self.discharge_owner_cons_leases_for_collection();
         while self.sweep_in_progress {
             self.incremental_sweep_slice(usize::MAX);
         }

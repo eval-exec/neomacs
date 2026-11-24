@@ -26,11 +26,15 @@
 //! let _ = OwnerEraReserve { cons: Vec::new() };
 //! ```
 
+use super::super::cons_allocator::{OwnerConsLease, OwnerConsRange};
 use super::super::*;
 use super::{CONS_REGION_MAX_CELLS, ConsRegionSource};
 use crate::tagged::gc::mutator_registration::{AllStopped, RendezvousError};
 use std::marker::PhantomData;
 use std::mem::size_of;
+use std::sync::Arc;
+
+type ReservedCons = OwnerConsRange;
 
 /// Cons blocks one owner may hold from a single stop.
 ///
@@ -126,18 +130,6 @@ pub fn uncapped_units(measured: u64, unit: u64) -> usize {
 }
 
 #[derive(Debug)]
-struct ReservedCons {
-    block_index: usize,
-    base: usize,
-    /// Address of cell 0 of this block.
-    origin: usize,
-    /// Exclusive end index. The block's `next_index` at grant.
-    limit: usize,
-    /// Next cell index the owner may carve.
-    carve_at: usize,
-}
-
-#[derive(Debug)]
 struct OpenCons {
     slot: usize,
     start: usize,
@@ -150,10 +142,15 @@ struct OpenCons {
 /// `OwnerEraReserve::new` is empty. Blocks enter only through
 /// `grant_at_stop` in test-support builds. Fields are private, so another crate cannot
 /// build a grant from raw addresses.
+///
+/// The ranges live in a lease the heap table also holds. Dropping a nonempty
+/// book is loud in debug and does not discharge the lease: a stopped keeper
+/// still returns it.
+#[must_use = "return the cons reserve before the sweep, or the stopped keeper reclaims the lease"]
 #[derive(Debug)]
 pub struct OwnerEraReserve {
     heap: Option<HeapIdentity>,
-    cons: Vec<ReservedCons>,
+    cons: Option<Arc<OwnerConsLease>>,
     open_cons: Option<OpenCons>,
     _thread: PhantomData<*const ()>,
 }
@@ -164,10 +161,11 @@ static_assertions::assert_not_impl_any!(OwnerEraReserve: Send, Sync);
 /// whole reserve; it exposes neither a cursor nor a reference into the heap.
 /// The active book stays confined to its worker. This closed form may travel
 /// by value to the keeper while that worker publishes and parks.
+#[must_use = "return the cons reserve before the sweep, or the stopped keeper reclaims the lease"]
 #[derive(Debug)]
 pub struct ClosedConsReserve {
     heap: Option<HeapIdentity>,
-    cons: Vec<ReservedCons>,
+    cons: Option<Arc<OwnerConsLease>>,
 }
 
 static_assertions::assert_impl_all!(ClosedConsReserve: Send, Sync);
@@ -176,12 +174,19 @@ static_assertions::assert_not_impl_any!(ClosedConsReserve: Clone, Copy);
 impl ClosedConsReserve {
     /// Resume exclusive cursor ownership after receiving the book by value.
     pub fn into_active(self) -> OwnerEraReserve {
+        let mut carried = self;
         OwnerEraReserve {
-            heap: self.heap,
-            cons: self.cons,
+            heap: carried.heap.take(),
+            cons: carried.cons.take(),
             open_cons: None,
             _thread: PhantomData,
         }
+    }
+}
+
+impl Drop for ClosedConsReserve {
+    fn drop(&mut self) {
+        panic_if_nonempty_book(self.cons.as_deref());
     }
 }
 
@@ -189,7 +194,7 @@ impl OwnerEraReserve {
     pub const fn new() -> Self {
         Self {
             heap: None,
-            cons: Vec::new(),
+            cons: None,
             open_cons: None,
             _thread: PhantomData,
         }
@@ -201,18 +206,22 @@ impl OwnerEraReserve {
         if self.open_cons.is_some() {
             return Err((ReserveError::RegionOpen, self));
         }
+        let mut carried = self;
         Ok(ClosedConsReserve {
-            heap: self.heap,
-            cons: self.cons,
+            heap: carried.heap.take(),
+            cons: carried.cons.take(),
         })
     }
 
     pub fn cons_blocks_held(&self) -> usize {
-        self.cons.len()
+        self.cons
+            .as_ref()
+            .map(|lease| lock_blocks(lease).len())
+            .unwrap_or(0)
     }
 
     pub fn holds_reserve(&self) -> bool {
-        !self.cons.is_empty()
+        self.cons_blocks_held() != 0
     }
 
     /// Bytes of the open cons run not yet handed out.
@@ -274,16 +283,23 @@ impl OwnerEraReserve {
             .owner_reserved_blocks()
             .checked_add(cons_blocks)
             .ok_or(ReserveError::Capacity)?;
-        self.cons
+        let lease = Arc::new(OwnerConsLease {
+            owner_key: heap.cons_allocator.mint_owner_cons_key(),
+            blocks: std::sync::Mutex::new(Vec::new()),
+        });
+        lock_blocks(&lease)
             .try_reserve(cons_blocks)
             .map_err(|_| ReserveError::Capacity)?;
         self.heap = Some(heap.heap_identity());
+        self.cons = Some(Arc::clone(&lease));
+        heap.cons_allocator
+            .insert_owner_cons_lease(Arc::clone(&lease));
         for _ in 0..cons_blocks {
             let block = mint_cons_block(heap);
             // Capacity and counter overflow were checked before minting. Credit
             // each completed block before the infallible push publishes it.
             heap.cons_allocator.credit_owner_reserved_block();
-            self.cons.push(block);
+            lock_blocks(&lease).push(block);
         }
         Ok(GrantOutcome {
             cons_blocks,
@@ -310,18 +326,27 @@ impl OwnerEraReserve {
         if heap.cons_allocator.is_poisoned() {
             return Err(ReserveError::CollectorBusy);
         }
-        let count = self.cons.len();
+        let Some(lease) = self.cons.as_ref() else {
+            return Ok(());
+        };
+        let count = lock_blocks(lease).len();
+        if count == 0 {
+            // The keeper already returned this lease.
+            return Ok(());
+        }
         if heap.cons_allocator.owner_reserved_blocks() < count {
             return Err(ReserveError::InvalidReserve);
         }
         // An unexpected unwind loses the closed range book and keeps the heap
         // obligation, so neither a later sweep nor a repeated return can free
         // or return a partially discharged range twice.
-        let cons = std::mem::take(&mut self.cons);
-        for block in cons {
-            return_cons_block(heap, &block);
+        let cons = take_blocks(lease);
+        let owner_key = lease.owner_key;
+        for block in &cons {
+            return_cons_block(heap, block);
         }
         heap.cons_allocator.return_owner_reserved_blocks(count);
+        heap.cons_allocator.remove_owner_cons_lease(owner_key);
         Ok(())
     }
 
@@ -336,10 +361,9 @@ impl OwnerEraReserve {
             return Err(ReserveError::RegionOpen);
         }
         let want = heap.region_budget(size_of::<ConsCell>(), CONS_REGION_MAX_CELLS);
-        let Some((slot, addr, n, block_index)) = self.take_cons_run(want) else {
+        let Some((slot, addr, n, block_index, start)) = self.take_cons_run(want) else {
             return Err(ReserveError::ReserveMiss);
         };
-        let start = self.cons[slot].carve_at - n;
         region.install_granted_cons(addr, n, ConsRegionSource::BlockTail { block: block_index });
         heap.charge_conses(n);
         self.open_cons = Some(OpenCons {
@@ -375,12 +399,14 @@ impl OwnerEraReserve {
         // book's open record and the supplied region untouched.
         match self.open_cons.as_ref() {
             Some(open) => {
-                let block = self
-                    .cons
-                    .get(open.slot)
-                    .ok_or(ReserveError::InvalidReserve)?;
+                let lease = self.cons.as_ref().ok_or(ReserveError::InvalidReserve)?;
+                let blocks = lock_blocks(lease);
+                let block = blocks.get(open.slot).ok_or(ReserveError::InvalidReserve)?;
                 let first = block.origin + open.start * size_of::<ConsCell>();
-                if !region.matches_granted_cons(first, open.len, block.block_index) {
+                let block_index = block.block_index;
+                let matched = region.matches_granted_cons(first, open.len, block_index);
+                drop(blocks);
+                if !matched {
                     return Err(ReserveError::ForeignBook);
                 }
             }
@@ -392,20 +418,22 @@ impl OwnerEraReserve {
         Ok(refund)
     }
 
-    fn take_cons_run(&mut self, want: usize) -> Option<(usize, usize, usize, usize)> {
-        let slot = self
-            .cons
+    fn take_cons_run(&mut self, want: usize) -> Option<(usize, usize, usize, usize, usize)> {
+        let lease = self.cons.as_ref()?;
+        let mut blocks = lock_blocks(lease);
+        let slot = blocks
             .iter()
             .position(|block| block.carve_at < block.limit)?;
-        let block = &mut self.cons[slot];
+        let block = &mut blocks[slot];
         let n = want.min(block.limit - block.carve_at);
         if n == 0 {
             return None;
         }
         let addr = block.origin + block.carve_at * size_of::<ConsCell>();
         let block_index = block.block_index;
+        let start = block.carve_at;
         block.carve_at += n;
-        Some((slot, addr, n, block_index))
+        Some((slot, addr, n, block_index, start))
     }
 
     fn apply_cons_refund(&mut self, heap: &mut TaggedHeap, refund: ConsTailRefund) {
@@ -424,7 +452,40 @@ impl OwnerEraReserve {
             heap.refund_conses(unused);
         }
         let handed = open.len - unused;
-        self.cons[open.slot].carve_at = open.start + handed;
+        let Some(lease) = self.cons.as_ref() else {
+            return;
+        };
+        lock_blocks(lease)[open.slot].carve_at = open.start + handed;
+    }
+}
+
+impl Drop for OwnerEraReserve {
+    fn drop(&mut self) {
+        panic_if_nonempty_book(self.cons.as_deref());
+    }
+}
+
+fn lock_blocks(lease: &OwnerConsLease) -> std::sync::MutexGuard<'_, Vec<ReservedCons>> {
+    lease
+        .blocks
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+}
+
+fn take_blocks(lease: &OwnerConsLease) -> Vec<ReservedCons> {
+    std::mem::take(&mut *lock_blocks(lease))
+}
+
+/// Loud in debug when a nonempty book is dropped outside an unwind. The lease
+/// stays in the heap table either way, so the keeper can still return it.
+fn panic_if_nonempty_book(lease: Option<&OwnerConsLease>) {
+    #[cfg(debug_assertions)]
+    if lease.is_some_and(|lease| !lock_blocks(lease).is_empty()) && !std::thread::panicking() {
+        panic!("dropped a nonempty owner cons reserve");
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        let _ = lease;
     }
 }
 
@@ -534,7 +595,8 @@ pub(in crate::tagged::gc) mod tests;
 impl TaggedHeap {
     /// Cold lease predicate. The count lives outside the allocator mutex so
     /// Drop can retain backing storage without locking or relying on a book's
-    /// destructor. Only an explicit stopped return discharges whole blocks.
+    /// destructor. A stopped return, including the keeper's lease-table walk,
+    /// is what discharges whole blocks.
     pub(in crate::tagged::gc) fn has_owner_cons_reserves(&self) -> bool {
         self.cons_allocator.owner_reserved_blocks() != 0
     }
@@ -546,5 +608,35 @@ impl TaggedHeap {
             !self.has_owner_cons_reserves(),
             "collection requires explicit return of every owner cons reserve"
         );
+    }
+
+    /// Ordinary infallible entry: return every leased book, then keep the
+    /// assert as the backstop the routed path does not hit.
+    ///
+    /// The fallible session walks the same table before it collects. A
+    /// poisoned allocator leaves the count outstanding and that session
+    /// stays Busy, so the same stop can retry. This walk is what makes a
+    /// forgotten or abandoned book recoverable.
+    pub(in crate::tagged::gc) fn discharge_owner_cons_leases_for_collection(&mut self) {
+        self.return_leased_owner_cons_reserves();
+        self.assert_no_owner_cons_reserves();
+    }
+
+    pub(in crate::tagged::gc) fn return_leased_owner_cons_reserves(&mut self) {
+        if !self.has_owner_cons_reserves() || self.cons_allocator.is_poisoned() {
+            return;
+        }
+        let leases = self.cons_allocator.take_owner_cons_leases();
+        let mut count = 0usize;
+        for lease in &leases {
+            let blocks = take_blocks(lease);
+            count += blocks.len();
+            for block in &blocks {
+                return_cons_block(self, block);
+            }
+        }
+        if count > 0 {
+            self.cons_allocator.return_owner_reserved_blocks(count);
+        }
     }
 }
