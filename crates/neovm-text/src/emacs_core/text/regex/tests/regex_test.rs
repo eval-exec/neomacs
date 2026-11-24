@@ -1841,6 +1841,7 @@ fn regexp_one_half_dense_scan_enters_contiguous_engine_without_batch_setup() {
                     work.calls > 0 && work.batch_prepares > 0 && work.batch_checks > 0,
                     "crossing must exercise the real generic preparation and probes: {work:?}"
                 );
+                let crossing_skip_with = work.skip_with_entries;
                 assert_eq!(control.gap_position_lisp(), parked);
 
                 let text = format!("{miss} ## {miss}");
@@ -1880,6 +1881,14 @@ fn regexp_one_half_dense_scan_enters_contiguous_engine_without_batch_setup() {
                         assert_eq!(work.contiguous_search_entries, 1, "{work:?}");
                         assert_eq!(regex_emacs::segment_engine_entry_count(), segments_before);
                         assert!(
+                            work.contiguous_cache_entries >= 256,
+                            "one-half candidates must hit the contiguous cache: {work:?}"
+                        );
+                        assert_eq!(
+                            work.skip_with_entries, 0,
+                            "a one-half window must not enter skip_with: {work:?}"
+                        );
+                        assert!(
                             work.calls >= 256 && work.rejected >= 256,
                             "the slice must execute warmed prefix rejections: {work:?}"
                         );
@@ -1891,6 +1900,10 @@ fn regexp_one_half_dense_scan_enters_contiguous_engine_without_batch_setup() {
                         );
                     }
                 }
+                assert_eq!(
+                    crossing_skip_with, 0,
+                    "a real split must reach the haystack without the skip_with closure: {crossing_skip_with}"
+                );
             })
         })
     });

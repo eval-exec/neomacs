@@ -1528,6 +1528,12 @@ pub(crate) struct PrefixStorageProbe {
     pub(crate) batch_prepares: u64,
     batch_advances: u64,
     pub(crate) contiguous_search_entries: u64,
+    /// Entries into the monomorphic slice cache. One-half scans hit this
+    /// path; a real gap split does not.
+    pub(crate) contiguous_cache_entries: u64,
+    /// Entries into `try_inline_first_step_skip_with`. The segmented
+    /// candidate probe must stay at zero: that wrapper is the closure ABI.
+    pub(crate) skip_with_entries: u64,
 }
 #[cfg(test)]
 impl PrefixStorageProbe {
@@ -1547,6 +1553,9 @@ impl PrefixStorageProbe {
             batch_advances: self.batch_advances - before.batch_advances,
             contiguous_search_entries: self.contiguous_search_entries
                 - before.contiguous_search_entries,
+            contiguous_cache_entries: self.contiguous_cache_entries
+                - before.contiguous_cache_entries,
+            skip_with_entries: self.skip_with_entries - before.skip_with_entries,
         }
     }
 }
@@ -1558,7 +1567,8 @@ thread_local! {
             segment_bytes: 0, segment_gets: 0, segment_chunks: 0, selections: 0,
             rejected: 0, undecided: 0, rejected_bytes: 0,
             batch_checks: 0, batch_prepares: 0, batch_advances: 0,
-            contiguous_search_entries: 0 })
+            contiguous_search_entries: 0, contiguous_cache_entries: 0,
+            skip_with_entries: 0 })
     };
 }
 #[cfg(test)]
@@ -1600,6 +1610,22 @@ fn note_prefix_batch(event: PrefixBatchEvent) {
             PrefixBatchEvent::Prepare => counts.batch_prepares += 1,
             PrefixBatchEvent::Advance => counts.batch_advances += 1,
         }
+        slot.set(counts);
+    });
+}
+#[cfg(test)]
+fn note_contiguous_cache_entry() {
+    PREFIX_STORAGE_PROBE.with(|slot| {
+        let mut counts = slot.get();
+        counts.contiguous_cache_entries += 1;
+        slot.set(counts);
+    });
+}
+#[cfg(test)]
+fn note_skip_with_entry() {
+    PREFIX_STORAGE_PROBE.with(|slot| {
+        let mut counts = slot.get();
+        counts.skip_with_entries += 1;
         slot.set(counts);
     });
 }

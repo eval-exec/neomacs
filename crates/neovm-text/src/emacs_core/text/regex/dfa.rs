@@ -2029,6 +2029,8 @@ impl ExistenceDfa {
         overflow_free_span: usize,
     ) -> Option<usize> {
         #[cfg(test)]
+        super::note_contiguous_cache_entry();
+        #[cfg(test)]
         let mut storage_probe = super::PrefixProbeGuard::enter();
         // Establish memory safety first. The remaining guards apply only
         // once an existing DEAD entry could actually reject this candidate.
@@ -3416,6 +3418,9 @@ impl<'p> DfaLease<'p> {
     /// Skip one bounded cached rejection without entering `candidate`.
     /// The caller selected this path with `inline_first_step_enabled`.
     ///
+    /// The cache call is direct. A closure around it was an outlined frame
+    /// on every gap-crossing candidate.
+    ///
     /// Threading: this search holds its mutator-owned slot's checked borrow.
     /// Context maps have already been synchronized by `acquire` or `build`;
     /// the cache lookup reads no Lisp state and calls no syntax lookup.
@@ -3429,13 +3434,38 @@ impl<'p> DfaLease<'p> {
         stop: usize,
         point: usize,
     ) -> bool {
-        self.try_inline_first_step_skip_with(|dfa, span| {
-            dfa.cached_prefix_rejection(pattern, text, pos, stop, point, span)
-        })
+        debug_assert_eq!(self.mode, DfaMode::On);
+        let DfaSlot::Live(live) = &mut *self.slot else {
+            return false;
+        };
+        // Leave state clearing, retirement, and a possible overflow to the
+        // outlined path. Its original ordering and accounting stay intact.
+        if live.dfa.gave_up.is_some()
+            || live.dfa.memory > MEMORY_CAP
+            || live.overflow_free_span == 0
+        {
+            return false;
+        }
+        let Some(consumed) = live.dfa.cached_prefix_rejection(
+            pattern,
+            text,
+            pos,
+            stop,
+            point,
+            live.overflow_free_span,
+        ) else {
+            return false;
+        };
+        live.dfa.counters.no += 1;
+        live.dfa.counters.bytes += consumed as u64;
+        live.note(Exists::No { consumed });
+        self.skipped += 1;
+        true
     }
 
     /// The scanner selected this physical reader once for the whole band.
     /// Assertions and the DFA's limits retain complete-input coordinates.
+    /// The cache call is direct, with no closure wrapper around it.
     #[inline(always)]
     #[allow(clippy::too_many_arguments)]
     pub(super) fn try_inline_first_step_skip_slice(
@@ -3447,22 +3477,38 @@ impl<'p> DfaLease<'p> {
         stop: usize,
         point: usize,
     ) -> bool {
-        self.try_inline_first_step_skip_with(|dfa, span| {
-            dfa.cached_prefix_rejection_with_readers(
-                pattern,
-                text_len,
-                |at| input.byte(at),
-                |start, end| (input.tail(start, end), &[]),
-                pos,
-                stop,
-                point,
-                span,
-            )
-        })
+        debug_assert_eq!(self.mode, DfaMode::On);
+        let DfaSlot::Live(live) = &mut *self.slot else {
+            return false;
+        };
+        if live.dfa.gave_up.is_some()
+            || live.dfa.memory > MEMORY_CAP
+            || live.overflow_free_span == 0
+        {
+            return false;
+        }
+        let Some(consumed) = live.dfa.cached_prefix_rejection_with_readers(
+            pattern,
+            text_len,
+            |at| input.byte(at),
+            |start, end| (input.tail(start, end), &[]),
+            pos,
+            stop,
+            point,
+            live.overflow_free_span,
+        ) else {
+            return false;
+        };
+        live.dfa.counters.no += 1;
+        live.dfa.counters.bytes += consumed as u64;
+        live.note(Exists::No { consumed });
+        self.skipped += 1;
+        true
     }
 
     /// Preparing storage is deferred until the slot is live and the same
     /// memory, give-up and overflow guards permit a cached probe.
+    /// The cache call is direct, with no closure wrapper around it.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn try_inline_first_step_skip_prepared<'a, H: Haystack + ?Sized>(
         &mut self,
@@ -3474,8 +3520,19 @@ impl<'p> DfaLease<'p> {
         point: usize,
         prepare: impl FnOnce() -> Option<PrefixSlice<'a>>,
     ) -> bool {
-        self.try_inline_first_step_skip_with(|dfa, span| match prepare() {
-            Some(input) => dfa.cached_prefix_rejection_with_readers(
+        debug_assert_eq!(self.mode, DfaMode::On);
+        let DfaSlot::Live(live) = &mut *self.slot else {
+            return false;
+        };
+        if live.dfa.gave_up.is_some()
+            || live.dfa.memory > MEMORY_CAP
+            || live.overflow_free_span == 0
+        {
+            return false;
+        }
+        let span = live.overflow_free_span;
+        let consumed = match prepare() {
+            Some(input) => live.dfa.cached_prefix_rejection_with_readers(
                 pattern,
                 text_len,
                 |at| input.byte(at),
@@ -3485,14 +3542,34 @@ impl<'p> DfaLease<'p> {
                 point,
                 span,
             ),
-            None => dfa.cached_prefix_rejection(pattern, text, pos, stop, point, span),
-        })
+            None => live
+                .dfa
+                .cached_prefix_rejection(pattern, text, pos, stop, point, span),
+        };
+        let Some(consumed) = consumed else {
+            return false;
+        };
+        live.dfa.counters.no += 1;
+        live.dfa.counters.bytes += consumed as u64;
+        live.note(Exists::No { consumed });
+        self.skipped += 1;
+        true
     }
 
+    /// One entry of the old closure wrapper. Product searches do not call
+    /// this. The test counter sits on the entry so a zero from a search is
+    /// a path that did not enter it.
+    #[cfg(test)]
+    pub(super) fn enter_skip_with_for_probe(&mut self) -> bool {
+        self.try_inline_first_step_skip_with(|_dfa, _span| None)
+    }
+
+    #[cfg(test)]
     fn try_inline_first_step_skip_with(
         &mut self,
         probe: impl FnOnce(&ExistenceDfa, usize) -> Option<usize>,
     ) -> bool {
+        super::note_skip_with_entry();
         debug_assert_eq!(self.mode, DfaMode::On);
         let DfaSlot::Live(live) = &mut *self.slot else {
             return false;
