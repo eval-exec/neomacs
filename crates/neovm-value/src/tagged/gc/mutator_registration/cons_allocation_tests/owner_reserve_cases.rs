@@ -1008,3 +1008,84 @@ pub(super) fn owner_cons_reserve_poisoned_allocator_is_publication<K, W>(
         drop(keeper);
     });
 }
+
+/// The session, not an explicit return, gives a partly carved block back.
+/// The rooted handed cell stays, the unhanded tail is rewound, and the next
+/// allocation is a different cell.
+pub(super) fn owner_cons_reserve_session_return_keeps_handed_cell_and_reclaims_tail<K, W>(
+    roots_era: &mut dyn FnMut(&mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>, RootsFixture)),
+    world_roots: W,
+) where
+    K: EraKeeper + std::fmt::Debug,
+    W: Copy
+        + for<'k, 's, 'e, 'o> Fn(
+            &'k K,
+            &'s mut AllStopped<'e>,
+            &'o mut Vec<Value>,
+        ) -> Result<
+            Vec<*mut *mut crate::tagged::header::MarkerObj>,
+            RendezvousError,
+        >,
+{
+    use crate::tagged::transport::SharedRoot;
+
+    roots_era(&mut |era, _inputs| {
+        era.start_cons_storage().unwrap();
+        let mut stopped = era.stop().unwrap();
+        era.return_cons_storage(&stopped).unwrap();
+        // The book must stay alive until the session empties the lease.
+        // Dropping it at the end of the heap closure panics in debug while
+        // the range is still outstanding.
+        let mut reserve = OwnerEraReserve::new();
+        let (root, block_index, handed_addr) = with_stopped_legacy_heap(&era, &stopped, |heap| {
+            let mut region = OwnerAllocRegion::new();
+            reserve
+                .grant_at_stop(&stopped, heap, true, MeasuredInterval::zero())
+                .unwrap();
+            reserve.carve_cons(heap, &mut region).unwrap();
+            let handed_addr = region.take_cons_cell().unwrap();
+            let handed = reserve_tests::handed_cons(handed_addr);
+            // SAFETY: `handed_addr` is the cell just taken from this run.
+            unsafe {
+                (*(handed_addr as *mut ConsCell)).set_car(Value::fixnum(1701));
+            }
+            reserve.note_cons_taken(1);
+            assert!(reserve.open_cons_tail_bytes() > 0, "a tail remains");
+            let block_index = reserve.first_leased_block_for_test();
+            reserve.close_for_stop(heap, &mut region).unwrap();
+            // The session returns the lease. This row does not.
+            let root = unsafe { SharedRoot::new(heap, handed) };
+            (root, block_index, handed_addr)
+        });
+        assert!(
+            reserve.holds_reserve(),
+            "close leaves the lease for the session"
+        );
+        assert!(
+            era.collect_stopped(&mut stopped, world_roots).is_ok(),
+            "the session returns the closed lease and then collects"
+        );
+        assert!(
+            !reserve.holds_reserve(),
+            "the session emptied the lease before this book drops"
+        );
+        with_stopped_legacy_heap(&era, &stopped, |heap| {
+            let value = root.materialize(heap).unwrap().value();
+            assert_eq!(value.cons_car(), Value::fixnum(1701));
+            assert_eq!(
+                heap.cons_blocks[block_index].next_index, 1,
+                "the unhanded tail was rewound to the handed cell"
+            );
+            let fresh = heap.alloc_cons(Value::NIL, Value::NIL);
+            assert_ne!(
+                fresh.as_cons_ptr().map(|cell| cell as usize),
+                Some(handed_addr),
+                "the next allocation must not hand out the surviving cell"
+            );
+        });
+        complete(stopped);
+        let (collector, keeper) = era.finish().unwrap();
+        drop(collector);
+        drop(keeper);
+    });
+}

@@ -224,6 +224,13 @@ impl OwnerEraReserve {
         self.cons_blocks_held() != 0
     }
 
+    /// Block index of the first leased range. The session return empties the
+    /// lease, so a post-state row records this before that return.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(in crate::tagged::gc) fn first_leased_block_for_test(&self) -> usize {
+        lock_blocks(self.cons.as_ref().expect("a lease is held"))[0].block_index
+    }
+
     /// Bytes of the open cons run not yet handed out.
     ///
     /// Pacing (`bytes_since_gc`) keeps the whole carved run. This is the
