@@ -55,7 +55,9 @@ pub(crate) fn position_buffer_rows(
         else {
             return Err(RowProgramError::Unsupported);
         };
-        if buffer_id != end_buffer || end <= start {
+        let allow_zero_buffer_advance =
+            matches!(computed.end_kind, ComputedRowEnd::OverlayContinuation(_));
+        if buffer_id != end_buffer || end < start || (end == start && !allow_zero_buffer_advance) {
             return Err(RowProgramError::Unsupported);
         }
         let row_index = (text_row_base + index) as i64;
@@ -115,6 +117,12 @@ pub(crate) fn position_buffer_rows(
                 ));
             }
             ComputedRowEnd::Continuation => {}
+            ComputedRowEnd::OverlayContinuation(kind) => {
+                geometry.note_overlay_string_row_end(
+                    LispCharPos1::from_one_based_usize(end.get() + 1),
+                    kind,
+                );
+            }
             ComputedRowEnd::Truncated { .. } => {
                 geometry.note_truncated_end(LispCharPos1::from_one_based_usize(end.get()));
             }
@@ -129,7 +137,7 @@ pub(crate) fn position_buffer_rows(
         computed.row.start_charpos = start.get();
         computed.row.end_charpos = match computed.end_kind {
             ComputedRowEnd::Newline => end.get() - 1,
-            ComputedRowEnd::Continuation => end.get(),
+            ComputedRowEnd::Continuation | ComputedRowEnd::OverlayContinuation(_) => end.get(),
             ComputedRowEnd::Truncated { visible_end } => visible_end,
         };
         crate::display_row::finalizer::GlyphRowFinalizationContext::new(
@@ -144,7 +152,10 @@ pub(crate) fn position_buffer_rows(
         if let Some(fringe) = &computed.fringe {
             fringe.decorate_row(
                 &mut computed.row,
-                computed.end_kind == ComputedRowEnd::Continuation,
+                matches!(
+                    computed.end_kind,
+                    ComputedRowEnd::Continuation | ComputedRowEnd::OverlayContinuation(_)
+                ),
                 computed.continuation,
                 matches!(computed.end_kind, ComputedRowEnd::Truncated { .. }),
             );

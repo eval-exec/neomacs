@@ -1472,7 +1472,9 @@ impl BufferSourceInvisibleTextSkip {
             position.col(),
         );
 
+        let skip_end = self.skip_to.max(0) as usize;
         let Some(request) = self.ellipsis_append_request(position, ellipsis_text) else {
+            source_render.advance_current_row_source_end(skip_end);
             return InvisibleEllipsisRowPlacement::Settled;
         };
         // GNU `display_line` restores the iterator before an element that draws
@@ -1481,14 +1483,18 @@ impl BufferSourceInvisibleTextSkip {
         // dot here and drop the rest. Move the whole marker when this row
         // already holds other glyphs. An empty row that cannot hold it still
         // keeps that partial overflow instead of wrapping forever.
-        place_invisible_ellipsis(
+        let placement = place_invisible_ellipsis(
             render_context,
             row_geometry,
             source_render,
             row_progress,
             request,
-            Some(self.skip_to.max(0) as usize),
-        )
+            Some(skip_end),
+        );
+        if placement == InvisibleEllipsisRowPlacement::Settled {
+            source_render.advance_current_row_source_end(skip_end);
+        }
+        placement
     }
 }
 

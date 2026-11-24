@@ -942,3 +942,76 @@ fn zero_fit_invisible_ellipsis_continues_on_the_next_row() {
         "the continued ellipsis keeps its display-vector anchor"
     );
 }
+
+#[test]
+fn clipped_overlay_string_splits_mid_string_preserving_buffer_anchor() {
+    use neomacs_display_protocol::glyph_matrix::{GlyphArea, GlyphProvenance, GlyphType};
+
+    let face = FaceId::new(1);
+    let faces = vec![DisplayRowFace::from_resolved(
+        face,
+        &ResolvedFace::default(),
+    )];
+    let buffer_id = neovm_core::buffer::BufferId(1);
+    let buf_pos = |pos: usize| {
+        DisplaySourcePosition::buffer(
+            buffer_id,
+            neovm_core::buffer::CharPos0::new(pos),
+            neovm_core::buffer::EmacsBytePos::new(pos),
+        )
+    };
+    let str_pos = |pos: usize| DisplaySourcePosition::lisp_string(9, pos, pos);
+    let mut geometry = geometry(64.0);
+    geometry.character_wrap = true;
+    let mut measurer = DisplayRowGlyphMeasurer::new(&faces, None, 8.0);
+    let program = RowProgram::capture(
+        geometry,
+        [
+            DisplayItem::new(
+                SourceSpan::new(buf_pos(0), buf_pos(4)),
+                RenderFaceRef::FaceId(face),
+                DisplayItemKind::TextRun(DisplayTextRun::independent("abcd")),
+            ),
+            DisplayItem::new(
+                SourceSpan::new(str_pos(0), str_pos(10)),
+                RenderFaceRef::FaceId(face),
+                DisplayItemKind::TextRun(DisplayTextRun::independent("edge-after")),
+            ),
+            DisplayItem::new(
+                SourceSpan::new(buf_pos(4), buf_pos(5)),
+                RenderFaceRef::FaceId(face),
+                DisplayItemKind::RowBreak(DisplayRowBreak {
+                    line_height: DisplayLineHeightPolicy::Default,
+                    line_spacing: DisplayLineSpacingPolicy::Inherit,
+                }),
+            ),
+        ],
+        faces.clone(),
+        &mut measurer,
+        limits(),
+    )
+    .expect("capture overlay string wrap program")
+    .with_overlay_string_kinds(vec![(1, crate::display_origin::OverlayStringKind::After)]);
+    let rows = program
+        .compute_visual_rows(4, || false)
+        .expect("clipped overlay string splits across visual rows");
+    let chars = |row: &ComputedRow| -> String {
+        row.row.glyphs[GlyphArea::Text.index()]
+            .iter()
+            .filter(|glyph| !glyph.padding)
+            .filter(|glyph| glyph.provenance != GlyphProvenance::line_end())
+            .filter_map(|glyph| match glyph.glyph_type {
+                GlyphType::Char { ch } => Some(ch),
+                _ => None,
+            })
+            .collect()
+    };
+    assert_eq!(chars(&rows[0]), "abcdedge");
+    assert_eq!(
+        rows[0].end_kind,
+        ComputedRowEnd::OverlayContinuation(crate::display_origin::OverlayStringKind::After)
+    );
+    assert_eq!(chars(&rows[1]), "-after");
+    assert_eq!(rows[0].source.end, buf_pos(4));
+    assert_eq!(rows[1].source.start, buf_pos(4));
+}

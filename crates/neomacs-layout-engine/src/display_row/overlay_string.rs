@@ -697,10 +697,10 @@ impl<'a> OverlayStringRowBreakRenderContext<'a> {
             }
             OverlayStringRowContinuation::Buffer(context) => context,
         };
-        let position = state.progress.row_position();
         state
             .progress
             .continue_after_visual_row(Px(self.row_context.content_x()));
+        let next_row_position = DisplayRowPosition::new(self.row_context.content_x(), 0);
         let plan = DisplayRowOverflowTransitionPlan::visual_wrap(
             VisualWrapBreak::MidElement,
             TextRowTransitionStatePolicy::visual_wrap(),
@@ -722,7 +722,7 @@ impl<'a> OverlayStringRowBreakRenderContext<'a> {
         .emit_overflow_then_row_start(
             plan,
             self.anchor_charpos,
-            position,
+            next_row_position,
             context.carryover.render_state(true),
             &mut column,
         );

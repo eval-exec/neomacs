@@ -306,13 +306,17 @@ impl ScrollCoverage {
         }
         let needed_matrix_rows = admission.row_base + rows.len();
         if admission.retained.matrix.rows.len() < needed_matrix_rows {
-            admission.retained.matrix.rows.resize_with(needed_matrix_rows, || {
-                let mut row = neomacs_display_protocol::glyph_matrix::GlyphRow::new(
-                    neomacs_display_protocol::frame_glyphs::GlyphRowRole::Text,
-                );
-                row.enabled = false;
-                neomacs_display_protocol::glyph_matrix::MatrixRow::new(row)
-            });
+            admission
+                .retained
+                .matrix
+                .rows
+                .resize_with(needed_matrix_rows, || {
+                    let mut row = neomacs_display_protocol::glyph_matrix::GlyphRow::new(
+                        neomacs_display_protocol::frame_glyphs::GlyphRowRole::Text,
+                    );
+                    row.enabled = false;
+                    neomacs_display_protocol::glyph_matrix::MatrixRow::new(row)
+                });
         }
         let body = position_buffer_rows(
             rows,
@@ -1494,7 +1498,8 @@ impl LayoutEngine {
         capture.programs.push(
             program
                 .with_trailing_text_continuation(captured.trailing_text_continues)
-                .with_buffer_source_start(captured.source_start),
+                .with_buffer_source_start(captured.source_start)
+                .with_overlay_string_kinds(captured.overlay_string_kinds),
         );
         Ok(())
     }

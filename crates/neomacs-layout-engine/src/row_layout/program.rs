@@ -122,10 +122,13 @@ enum Operation {
     },
 }
 
+fn is_invisible_ellipsis(source: &DisplaySourcePosition) -> bool {
+    matches!(source, DisplaySourcePosition::Synthetic { source_id, .. }
+        if source_id.get() == crate::display_row::source_append::SyntheticTextMarker::InvisibleEllipsis.source_id())
+}
+
 fn preserves_buffer_anchor(source: &DisplaySourcePosition) -> bool {
-    matches!(source, DisplaySourcePosition::LispString { .. })
-        || matches!(source, DisplaySourcePosition::Synthetic { source_id, .. }
-            if source_id.get() == crate::display_row::source_append::SyntheticTextMarker::InvisibleEllipsis.source_id())
+    matches!(source, DisplaySourcePosition::LispString { .. }) || is_invisible_ellipsis(source)
 }
 
 impl Operation {
@@ -391,6 +394,7 @@ enum ResumedRunFonts<'a> {
 pub(crate) struct RowProgram {
     trailing_text_continues: bool,
     buffer_source_start: Option<DisplaySourcePosition>,
+    overlay_string_kinds: Vec<(usize, crate::display_origin::OverlayStringKind)>,
     geometry: RowProgramGeometry,
     fonts: ProgramFonts,
     operations: Vec<(Operation, DisplayTextRunMeasurement)>,
@@ -407,6 +411,7 @@ pub(crate) struct RowProgram {
 pub(crate) enum ComputedRowEnd {
     Newline,
     Continuation,
+    OverlayContinuation(crate::display_origin::OverlayStringKind),
     Truncated { visible_end: usize },
 }
 
@@ -600,6 +605,7 @@ impl RowProgram {
         Ok(Self {
             trailing_text_continues: false,
             buffer_source_start: None,
+            overlay_string_kinds: Vec::new(),
             geometry,
             fonts: match deferred_fonts {
                 Some(snapshot) => ProgramFonts::Deferred(snapshot),
@@ -614,6 +620,14 @@ impl RowProgram {
 
     pub(crate) fn with_buffer_source_start(mut self, start: DisplaySourcePosition) -> Self {
         self.buffer_source_start = Some(start);
+        self
+    }
+
+    pub(crate) fn with_overlay_string_kinds(
+        mut self,
+        kinds: Vec<(usize, crate::display_origin::OverlayStringKind)>,
+    ) -> Self {
+        self.overlay_string_kinds = kinds;
         self
     }
 
@@ -957,7 +971,7 @@ impl RowProgram {
                 crate::display_row::render_item::DisplayRowRenderItem::from_source_item(item);
             let can_split = can_wrap
                 && matches!(render_item.source_item().kind, DisplayItemKind::TextRun(_))
-                && !preserves_buffer_anchor(&render_item.source_item().span.start);
+                && !is_invisible_ellipsis(&render_item.source_item().span.start);
             let checkpoint = DisplayRowGlyphCheckpoint::capture(&row);
             let previous_slots = slots.len();
             let insertion = matches!(
@@ -965,6 +979,7 @@ impl RowProgram {
                 DisplaySourcePosition::LispString { .. }
             );
             if insertion
+                && operation_offset == 0
                 && operation_index.checked_sub(1).is_none_or(|previous| {
                     !matches!(
                         operations[previous].0.span.start,
@@ -1188,14 +1203,12 @@ impl RowProgram {
                 // that drew past the right edge and keeps only that element's
                 // already-committed glyphs (src/xdisp.c:26433-26466,
                 // `row->used[TEXT_AREA] = n_glyphs_before + i`). An invisible
-                // ellipsis is one program operation: `preserves_buffer_anchor`
-                // holds the buffer position at the preceding text, so resuming
-                // after a partial glyph prefix would advance that anchor.
-                // Drop every glyph this operation added and produce it whole
-                // on the next row. An empty row that cannot hold it still
-                // overflows. A splittable buffer run keeps the `can_split` guard.
+                // ellipsis is one atomic synthetic marker: drop every glyph it
+                // added and produce it whole on the next row. A pushed overlay
+                // `LispString` wraps mid-string like GNU WINDOW_WRAP while
+                // keeping its unconsumed buffer anchor.
                 let deferred_whole = previous_slots > 0
-                    && preserves_buffer_anchor(&render_item.source_item().span.start);
+                    && is_invisible_ellipsis(&render_item.source_item().span.start);
                 if !deferred_whole && (!can_split || slots.is_empty()) {
                     return Err(RowProgramError::Overflow);
                 }
@@ -1216,64 +1229,80 @@ impl RowProgram {
                     position = position_before_item;
                 }
                 let mut wrap_extend = active_extend;
-                let (next_index, next_offset) = if !deferred_whole && word_wrap.has_candidate() {
-                    let candidate = word_wrap.candidate();
-                    wrap_extend = candidate.row_extend();
-                    let boundary = candidate.source_position().charpos();
-                    let replay_insertions = match candidate.source_cursor() {
-                        DisplaySourceResumeCursor::BeforeOverlayStrings(_) => true,
-                        DisplaySourceResumeCursor::AfterOverlayStrings(_) => false,
+                let (next_index, next_offset) =
+                    if !deferred_whole && !insertion && word_wrap.has_candidate() {
+                        let candidate = word_wrap.candidate();
+                        wrap_extend = candidate.row_extend();
+                        let boundary = candidate.source_position().charpos();
+                        let replay_insertions = match candidate.source_cursor() {
+                            DisplaySourceResumeCursor::BeforeOverlayStrings(_) => true,
+                            DisplaySourceResumeCursor::AfterOverlayStrings(_) => false,
+                        };
+                        let (index, offset) = operations
+                            .iter()
+                            .enumerate()
+                            .find_map(|(index, (item, _))| {
+                                if replay_insertions
+                                    && matches!(
+                                        item.span.start,
+                                        DisplaySourcePosition::LispString { .. }
+                                    )
+                                    && let DisplaySourcePosition::Buffer { char_pos, .. } =
+                                        buffer_anchors[index]
+                                    && char_pos.get() as i64 == boundary
+                                {
+                                    return Some((index, 0));
+                                }
+                                let (
+                                    DisplaySourcePosition::Buffer {
+                                        char_pos: start, ..
+                                    },
+                                    DisplaySourcePosition::Buffer { char_pos: end, .. },
+                                ) = (&item.span.start, &item.span.end)
+                                else {
+                                    return None;
+                                };
+                                ((start.get() as i64) <= boundary && boundary < end.get() as i64)
+                                    .then_some((index, (boundary - start.get() as i64) as usize))
+                            })
+                            .ok_or(RowProgramError::Unsupported)?;
+                        if candidate.display_point_count() == 0 {
+                            return Err(RowProgramError::Overflow);
+                        }
+                        candidate.glyph_checkpoint().restore(&mut row);
+                        slots.truncate(candidate.display_point_count());
+                        slot_heights.truncate(candidate.display_point_count());
+                        position = candidate.row_position();
+                        (index, offset)
+                    } else {
+                        (
+                            operation_index,
+                            if deferred_whole {
+                                operation_offset
+                            } else {
+                                operation_offset + progress.slots().len()
+                            },
+                        )
                     };
-                    let (index, offset) = operations
-                        .iter()
-                        .enumerate()
-                        .find_map(|(index, (item, _))| {
-                            if replay_insertions
-                                && matches!(
-                                    item.span.start,
-                                    DisplaySourcePosition::LispString { .. }
-                                )
-                                && let DisplaySourcePosition::Buffer { char_pos, .. } =
-                                    buffer_anchors[index]
-                                && char_pos.get() as i64 == boundary
-                            {
-                                return Some((index, 0));
-                            }
-                            let (
-                                DisplaySourcePosition::Buffer {
-                                    char_pos: start, ..
-                                },
-                                DisplaySourcePosition::Buffer { char_pos: end, .. },
-                            ) = (&item.span.start, &item.span.end)
-                            else {
-                                return None;
-                            };
-                            ((start.get() as i64) <= boundary && boundary < end.get() as i64)
-                                .then_some((index, (boundary - start.get() as i64) as usize))
-                        })
-                        .ok_or(RowProgramError::Unsupported)?;
-                    if candidate.display_point_count() == 0 {
-                        return Err(RowProgramError::Overflow);
-                    }
-                    candidate.glyph_checkpoint().restore(&mut row);
-                    slots.truncate(candidate.display_point_count());
-                    slot_heights.truncate(candidate.display_point_count());
-                    position = candidate.row_position();
-                    (index, offset)
+                let next_source = if preserves_buffer_anchor(&operations[next_index].0.span.start) {
+                    buffer_anchors[next_index].clone()
                 } else {
-                    (
-                        operation_index,
-                        if deferred_whole {
-                            operation_offset
-                        } else {
-                            operation_offset + progress.slots().len()
-                        },
+                    buffer_anchors[next_index].advanced_by(
+                        next_offset,
+                        text_byte_offset(&operations[next_index].0, next_offset)?,
                     )
                 };
-                let next_source = buffer_anchors[next_index].advanced_by(
-                    next_offset,
-                    text_byte_offset(&operations[next_index].0, next_offset)?,
-                );
+                let end_kind = if insertion {
+                    self.overlay_string_kinds
+                        .iter()
+                        .find_map(|(index, kind)| (*index == operation_index).then_some(*kind))
+                        .map_or(
+                            ComputedRowEnd::Continuation,
+                            ComputedRowEnd::OverlayContinuation,
+                        )
+                } else {
+                    ComputedRowEnd::Continuation
+                };
                 row.continued = true;
                 continuation::extend_background(
                     &mut row,
@@ -1302,7 +1331,7 @@ impl RowProgram {
                         next_source.clone(),
                     ),
                     end: self.geometry.local_position(position),
-                    end_kind: ComputedRowEnd::Continuation,
+                    end_kind,
                     fringe: self.geometry.fringe.clone(),
                     continuation: !rows.is_empty(),
                     terminator_width,

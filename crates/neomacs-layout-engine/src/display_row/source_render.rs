@@ -485,6 +485,18 @@ impl DisplayCurrentRowMutation for DisplayRowGlyphCheckpointRestoreMutation {
     }
 }
 
+struct AdvanceRowSourceEnd {
+    source_end: usize,
+}
+
+impl DisplayCurrentRowMutation for AdvanceRowSourceEnd {
+    type Output = ();
+
+    fn apply(self, row: &mut GlyphRow) -> Self::Output {
+        row.end_charpos = row.end_charpos.max(self.source_end);
+    }
+}
+
 impl<S, P> DisplayCurrentRowMutation
     for DisplayRowCurrentSourceStepMutation<'_, '_, '_, '_, '_, S, P>
 where
@@ -2051,6 +2063,15 @@ impl<'a, FS: crate::neovm_bridge::FaceServices> TextRowSourceRenderState<'a, FS>
     ) {
         self.output_render
             .restore_current_row_glyph_checkpoint(checkpoint, Some(source_end));
+    }
+
+    /// Advance the current row's `end_charpos` to at least `source_end` (for a
+    /// skipped invisible span whose synthetic ellipsis or elision adds no
+    /// buffer-sourced glyph, matching GNU `display_line`'s `row->end = it->current`).
+    pub(crate) fn advance_current_row_source_end(&mut self, source_end: usize) {
+        self.output_render
+            .current_row_output()
+            .apply_current_row_mutation(AdvanceRowSourceEnd { source_end });
     }
 
     pub(crate) fn restore_word_wrap_checkpoint(

@@ -19,6 +19,7 @@ use neovm_core::emacs_core::Value;
 
 pub(crate) struct CapturedPhysicalLine {
     pub items: Vec<DisplayItem>,
+    pub overlay_string_kinds: Vec<(usize, crate::display_origin::OverlayStringKind)>,
     pub roots: Vec<Value>,
     pub source_start: crate::display_item::DisplaySourcePosition,
     pub faces: Vec<PendingDisplaySourceFace>,
@@ -254,6 +255,7 @@ pub(crate) fn capture_source_fragment<B: LayoutBufferView>(
     );
     let mut position = DisplaySourceTextPosition::new(0, start.get() as i64);
     let mut items: Vec<DisplayItem> = Vec::new();
+    let mut overlay_string_kinds = Vec::new();
     let mut faces = Vec::new();
     let source_start =
         crate::display_item::DisplaySourcePosition::buffer(buffer_id, start, start_byte);
@@ -281,6 +283,7 @@ pub(crate) fn capture_source_fragment<B: LayoutBufferView>(
             };
             if chars == 0 {
                 items.pop();
+                overlay_string_kinds.retain(|(index, _)| *index < items.len());
             } else {
                 run.text = run.text[..bytes].into();
                 last.span.end = last.span.start.advanced_by(chars, bytes);
@@ -298,6 +301,7 @@ pub(crate) fn capture_source_fragment<B: LayoutBufferView>(
             let end = *end;
             return Ok(CapturedPhysicalLine {
                 items,
+                overlay_string_kinds,
                 roots,
                 source_start,
                 faces,
@@ -340,6 +344,7 @@ pub(crate) fn capture_source_fragment<B: LayoutBufferView>(
                     context,
                     face_ids,
                     &mut items,
+                    &mut overlay_string_kinds,
                     &mut faces,
                     &mut roots,
                     max_chars,
@@ -414,6 +419,7 @@ pub(crate) fn capture_source_fragment<B: LayoutBufferView>(
         if complete {
             return Ok(CapturedPhysicalLine {
                 items,
+                overlay_string_kinds,
                 roots,
                 source_start,
                 faces,
@@ -439,6 +445,7 @@ pub(crate) fn capture_source_fragment<B: LayoutBufferView>(
     }
     Ok(CapturedPhysicalLine {
         items,
+        overlay_string_kinds,
         roots,
         source_start,
         faces,

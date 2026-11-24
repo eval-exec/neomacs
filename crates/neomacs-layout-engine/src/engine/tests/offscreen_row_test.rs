@@ -2736,6 +2736,26 @@ fn worker_prepares_bounded_invisible_spans_and_ellipses() {
 }
 
 #[test]
+fn worker_splits_clipped_overlay_after_string_after_invisible_ellipsis() {
+    for prefix in [34, 38, 42, 46, 50, 54] {
+        let line = format!("{}hidden{}tail words\n", "W".repeat(prefix), " ".repeat(2));
+        let start = 120 * line.len() + 1;
+        let setup = format!(
+            r#"(progn (setq word-wrap nil buffer-invisibility-spec '((worker-hidden . t)))
+            (let ((p {start})) (while (< p {})
+                (let ((o (make-overlay (+ p {prefix}) (+ p {}))))
+                    (overlay-put o 'invisible 'worker-hidden)
+                    (overlay-put o 'after-string "edge-after-long-string"))
+                (setq p (+ p {})))))"#,
+            start + 12 * line.len(),
+            prefix + 6,
+            line.len()
+        );
+        first_visit_with_setup_and_gc(None, &line, None, 0, 2, Some(&setup), false);
+    }
+}
+
+#[test]
 fn worker_invisible_spans_preserve_wrapping_faces_and_boundary_strings() {
     for overlay in [false, true] {
         for wrap in ["nil", "t"] {

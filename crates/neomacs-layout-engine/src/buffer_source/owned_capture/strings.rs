@@ -62,6 +62,7 @@ pub(super) fn capture_insertions<B: LayoutBufferView>(
     context: BufferSourceFaceResolutionContext<'_, B>,
     face_ids: &mut FrameFaceAttempt,
     items: &mut Vec<DisplayItem>,
+    overlay_string_kinds: &mut Vec<(usize, OverlayStringKind)>,
     faces: &mut Vec<PendingDisplaySourceFace>,
     roots: &mut Vec<Value>,
     max_chars: usize,
@@ -130,6 +131,7 @@ pub(super) fn capture_insertions<B: LayoutBufferView>(
             string_roots.clone(),
         )
         .ok_or(RowProgramError::Unsupported)?;
+        let start_index = items.len();
         append_source(
             context,
             &base,
@@ -140,6 +142,9 @@ pub(super) fn capture_insertions<B: LayoutBufferView>(
             max_items,
             cancelled,
         )?;
+        for item_index in start_index..items.len() {
+            overlay_string_kinds.push((item_index, kind));
+        }
     }
     Ok(())
 }
