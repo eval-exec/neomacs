@@ -412,6 +412,20 @@ macro_rules! eval_absent_layer_slots {
                 absent_layer_panic("ABSENT-LAYER display::terminal.frame_terminal");
             }
 
+            pub(crate) fn terminal_suspend_emacs(_ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+                neovm_value::error::expect_args_range("suspend-emacs", &args, 0, 1)?;
+                if let Some(&stuff) = args.first()
+                    && !stuff.is_nil()
+                    && !stuff.is_string()
+                {
+                    return Err(neovm_value::error::signal(
+                        neovm_value::error::LispCondition::WrongTypeArgument,
+                        vec![Value::symbol("stringp"), stuff],
+                    ));
+                }
+                Ok(Value::NIL)
+            }
+
             pub(crate) fn terminal_print_handle(_value: &Value) -> Option<String> {
                 // F-2: None is the exact answer only while the terminal
                 // registry is empty; a record can exist (ensure_terminal(7)),

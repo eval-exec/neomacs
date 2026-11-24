@@ -542,6 +542,9 @@ pub fn install_tty_redisplay_callback_with_popup_redraw(
         {
             return;
         }
+        if !tty_init::is_primary_tty_active() {
+            return;
+        }
         if let Some(size) = tty_init::query_terminal_size_cells_with(&terminal_size_query) {
             let cols = u32::from(size.columns()) as usize;
             let rows = u32::from(size.rows()) as usize;

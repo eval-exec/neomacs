@@ -78,7 +78,7 @@ impl Session {
         )
     }
 
-    fn enter(&mut self) -> io::Result<()> {
+    fn enter(&mut self, set_strings: &[u8]) -> io::Result<()> {
         if self.active {
             return Ok(());
         }
@@ -92,6 +92,9 @@ impl Session {
             self.active = true;
             self.console()
                 .write_char_buffer(super::super::tty_init::tty_enter_sequence())?;
+            if !set_strings.is_empty() {
+                self.console().write_char_buffer(set_strings)?;
+            }
         } else {
             let alternate = ScreenBuffer::create()?;
             // Disable automatic wrapping: writing the bottom-right cell must
@@ -104,10 +107,13 @@ impl Session {
         Ok(())
     }
 
-    fn leave(&mut self) -> io::Result<()> {
+    fn leave(&mut self, reset_strings: &[u8]) -> io::Result<()> {
         let output = (|| {
             if self.active {
                 if self.vt {
+                    if !reset_strings.is_empty() {
+                        self.console().write_char_buffer(reset_strings)?;
+                    }
                     self.console()
                         .write_char_buffer(super::super::tty_init::tty_leave_sequence())?;
                 } else {
@@ -149,7 +155,7 @@ impl Session {
 }
 impl Drop for Session {
     fn drop(&mut self) {
-        let _ = self.leave();
+        let _ = self.leave(&[]);
     }
 }
 
@@ -168,18 +174,18 @@ pub(crate) fn attributes() -> TtyAttributeCapabilities {
     }
     caps
 }
-pub(crate) fn enter() -> io::Result<()> {
+pub(crate) fn enter_with(set_strings: &[u8]) -> io::Result<()> {
     with_session(|session| {
-        if let Err(error) = session.enter() {
-            let _ = session.leave();
+        if let Err(error) = session.enter(set_strings) {
+            let _ = session.leave(&[]);
             Err(error)
         } else {
             Ok(())
         }
     })
 }
-pub(crate) fn leave() -> io::Result<()> {
-    with_session(Session::leave)
+pub(crate) fn leave_with(reset_strings: &[u8]) -> io::Result<()> {
+    with_session(|session| session.leave(reset_strings))
 }
 
 pub(crate) fn render(rif: &mut TtyRif) -> io::Result<()> {

@@ -3713,7 +3713,7 @@ crate::emacs_core::subr::define_subrs! {
     )),
     crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "suspend-emacs",
-        NativeFn::ContextVec(|_ctx, args| builtin_suspend_emacs(args)),
+        NativeFn::ContextVec(builtin_suspend_emacs),
         SubrArity::new(0, Some(1)),
     ))
     .placeholder(NoEvalPlaceholder::Nil)

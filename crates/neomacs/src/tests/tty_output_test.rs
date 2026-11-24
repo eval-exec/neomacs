@@ -292,6 +292,44 @@ fn missing_terminal_description_is_an_initialization_error() {
     assert!(Capabilities::load("neo-certainly-no-such-terminal-363").is_err());
 }
 
+#[test]
+fn mode_strings_respect_gnu_order_and_bypass_padding() {
+    let mut database = Database(
+        [
+            ("cm", b"\x1b[%i%d;%dH".as_slice()),
+            ("ti", b"ENTER"),
+            ("ks", b"KEYS"),
+            ("vi", b"HIDE"),
+            ("cl", b"CLEAR"),
+            ("ei", b"NOINS"),
+            ("me", b"SGR0"),
+            ("ke", b"NORMAL"),
+            ("ve", b"SHOW"),
+            ("te", b"LEAVE"),
+        ]
+        .into(),
+    );
+    let caps = Capabilities::from_database(&mut database, "").unwrap();
+    // Literal `$<10/>` in mode strings must be emitted verbatim (GNU `fwrite`,
+    // never `tputs`), with `tty-mode-reset-strings` first on leave and
+    // `tty-mode-set-strings` last on enter.
+    let reset = b"<RESET-A>$<10/><RESET-B>";
+    let leave = caps.leave_with(reset);
+    assert!(leave.padded.is_empty());
+    assert_eq!(
+        leave.bytes,
+        b"<RESET-A>$<10/><RESET-B>NOINSSGR0\x1b[?2004lNORMALSHOWLEAVE"
+    );
+
+    let set = b"<SET-A>$<10/><SET-B>";
+    let enter = caps.enter_with(24, set);
+    assert!(enter.padded.is_empty());
+    assert_eq!(
+        enter.bytes,
+        b"ENTERKEYSHIDECLEAR\x1b[?2004h<SET-A>$<10/><SET-B>"
+    );
+}
+
 #[cfg(test)]
 #[path = "tty_output_program_test.rs"]
 mod numeric_program_tests;

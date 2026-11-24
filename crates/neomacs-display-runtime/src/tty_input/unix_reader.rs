@@ -342,6 +342,7 @@ impl<P: PrimaryTtyPublisher> InputDelivery for PrimaryDelivery<P> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Lifecycle {
     Running,
+    Suspended,
     StopAndDrain,
     ShutdownDiscard,
 }
@@ -358,6 +359,7 @@ enum ReadState {
     PollInput { deadline: Instant },
     ReadReady,
     Delay { deadline: Instant },
+    Paused,
     Stopped,
 }
 
@@ -454,7 +456,9 @@ impl<S: InputDelivery> Reader<S> {
     }
 
     fn observe_owner_stop(&mut self) {
-        if self.lifecycle == Lifecycle::Running && self.stop.load(Ordering::Acquire) {
+        if matches!(self.lifecycle, Lifecycle::Running | Lifecycle::Suspended)
+            && self.stop.load(Ordering::Acquire)
+        {
             self.lifecycle = Lifecycle::StopAndDrain;
             #[cfg(test)]
             self.checkpoint(ReaderTestCheckpoint::OwnerStopObserved);
@@ -485,6 +489,20 @@ impl<S: InputDelivery> Reader<S> {
                 | Err(TryRecvError::Disconnected) => {
                     self.shutdown();
                     return true;
+                }
+                Ok(RenderCommand::Lifecycle(LifecycleCommand::SuspendTty)) => {
+                    if self.lifecycle == Lifecycle::Running {
+                        self.lifecycle = Lifecycle::Suspended;
+                        self.read_state = ReadState::Paused;
+                    }
+                    progressed = true;
+                }
+                Ok(RenderCommand::Lifecycle(LifecycleCommand::ResumeTty)) => {
+                    if self.lifecycle == Lifecycle::Suspended {
+                        self.lifecycle = Lifecycle::Running;
+                        self.read_state = ReadState::QuerySize;
+                    }
+                    progressed = true;
                 }
                 Ok(_) => progressed = true,
                 Err(TryRecvError::Empty) => {}
@@ -618,6 +636,16 @@ impl<S: InputDelivery> Reader<S> {
                 self.read_state = ReadState::QuerySize;
                 true
             }
+            ReadState::Paused => {
+                if self.lifecycle != Lifecycle::Suspended {
+                    self.read_state = ReadState::Stopped;
+                    #[cfg(test)]
+                    self.checkpoint(ReaderTestCheckpoint::AcquisitionStopped);
+                    true
+                } else {
+                    false
+                }
+            }
             ReadState::PollInput { .. } | ReadState::Delay { .. } | ReadState::Stopped => false,
         }
     }
@@ -627,7 +655,7 @@ impl<S: InputDelivery> Reader<S> {
         let acquisition_deadline = match self.read_state {
             ReadState::PollInput { deadline } | ReadState::Delay { deadline } => deadline,
             ReadState::QuerySize | ReadState::ReadReady => return,
-            ReadState::Stopped => now + TTY_READER_POLL_INTERVAL,
+            ReadState::Paused | ReadState::Stopped => now + TTY_READER_POLL_INTERVAL,
         };
         // Command observation is bounded even while acquisition has a100ms
         // error delay. A held head still defers command service as before.

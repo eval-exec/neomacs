@@ -175,6 +175,7 @@ static CANONICAL_LIFECYCLE_HOOKS: LifecycleHooks = LifecycleHooks::new(
         crate::emacs_core::terminal::pure::terminal_handle_value,
         crate::emacs_core::terminal::pure::delete_terminal_noelisp_owned,
         crate::emacs_core::terminal::pure::builtin_frame_terminal,
+        crate::emacs_core::terminal::pure::builtin_suspend_emacs,
         crate::emacs_core::terminal::pure::print_terminal_handle,
         configure_window_system_runtime,
         terminal_park_carrier_tls,

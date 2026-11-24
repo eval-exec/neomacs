@@ -31,9 +31,18 @@ pub trait EmergencyEscapeOps {
 }
 
 pub trait TerminalHost {
-    fn suspend_tty(&mut self) -> Result<(), String>;
-    fn resume_tty(&mut self) -> Result<(), String>;
-    fn delete_terminal(&mut self) -> Result<(), String> {
+    fn suspend_tty(&mut self, reset_strings: &[u8]) -> Result<(), String>;
+    fn resume_tty(&mut self, set_strings: &[u8]) -> Result<(), String>;
+    fn delete_terminal(&mut self, _reset_strings: &[u8]) -> Result<(), String> {
+        Ok(())
+    }
+    /// Stop the process and yield the controlling TTY to its superior
+    /// (GNU `sys_suspend`, `src/sysdep.c:629`).
+    ///
+    /// Only the primary interactive TTY host stops the process; test and
+    /// secondary hosts leave this as a no-op so unit tests never send
+    /// `SIGTSTP` to the test runner.
+    fn sys_suspend(&mut self) -> Result<(), String> {
         Ok(())
     }
     /// GNU `Fsend_string_to_terminal`'s `fwrite`+`fflush` on the terminal's

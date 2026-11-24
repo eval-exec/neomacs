@@ -189,6 +189,8 @@ mod tty_color_index;
 mod tty_input;
 #[path = "tty_menu_grid_oracle.rs"]
 mod tty_menu_grid_oracle;
+#[path = "tty_mode_strings.rs"]
+mod tty_mode_strings;
 
 // N1 (peer 6385): the probe row after an overlay tick makes a window
 // outdated for GNU's matrix-reuse predicate.

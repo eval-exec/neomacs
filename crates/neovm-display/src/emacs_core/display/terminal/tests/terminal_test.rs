@@ -69,15 +69,15 @@ impl TtyFrameHostFactory for DeferredRedisplayFactory {
 }
 
 impl TerminalHost for FailingDeleteTerminalHost {
-    fn suspend_tty(&mut self) -> Result<(), String> {
+    fn suspend_tty(&mut self, _reset_strings: &[u8]) -> Result<(), String> {
         Ok(())
     }
 
-    fn resume_tty(&mut self) -> Result<(), String> {
+    fn resume_tty(&mut self, _set_strings: &[u8]) -> Result<(), String> {
         Ok(())
     }
 
-    fn delete_terminal(&mut self) -> Result<(), String> {
+    fn delete_terminal(&mut self, _reset_strings: &[u8]) -> Result<(), String> {
         Err("terminal already disappeared".to_string())
     }
 }
@@ -1046,15 +1046,15 @@ fn make_terminal_frame_on_a_secondary_terminal_reads_that_terminals_winsize() {
 struct ReportingWinsizeHost;
 
 impl TerminalHost for ReportingWinsizeHost {
-    fn suspend_tty(&mut self) -> Result<(), String> {
+    fn suspend_tty(&mut self, _reset_strings: &[u8]) -> Result<(), String> {
         Ok(())
     }
 
-    fn resume_tty(&mut self) -> Result<(), String> {
+    fn resume_tty(&mut self, _set_strings: &[u8]) -> Result<(), String> {
         Ok(())
     }
 
-    fn delete_terminal(&mut self) -> Result<(), String> {
+    fn delete_terminal(&mut self, _reset_strings: &[u8]) -> Result<(), String> {
         Ok(())
     }
 
@@ -1437,11 +1437,11 @@ struct EmergencyEscapeProbeHost {
 }
 
 impl TerminalHost for EmergencyEscapeProbeHost {
-    fn suspend_tty(&mut self) -> Result<(), String> {
+    fn suspend_tty(&mut self, _reset_strings: &[u8]) -> Result<(), String> {
         Ok(())
     }
 
-    fn resume_tty(&mut self) -> Result<(), String> {
+    fn resume_tty(&mut self, _set_strings: &[u8]) -> Result<(), String> {
         Ok(())
     }
 
@@ -1576,6 +1576,98 @@ fn suspended_or_non_tty_terminal_falls_back_to_force_quit_count() {
     assert!(batch_eval.inhibit_quit.is_nil());
 
     reset_terminal_host();
+}
+
+#[test]
+fn tty_mode_strings_forwarded_on_suspend_resume_suspend_emacs_and_delete() {
+    crate::test_utils::init_test_tracing();
+    reset_terminal_thread_locals();
+
+    struct ModeRecordingHost {
+        events: Rc<RefCell<Vec<(&'static str, Vec<u8>)>>>,
+    }
+    impl TerminalHost for ModeRecordingHost {
+        fn suspend_tty(&mut self, reset_strings: &[u8]) -> Result<(), String> {
+            self.events
+                .borrow_mut()
+                .push(("suspend", reset_strings.to_vec()));
+            Ok(())
+        }
+        fn resume_tty(&mut self, set_strings: &[u8]) -> Result<(), String> {
+            self.events
+                .borrow_mut()
+                .push(("resume", set_strings.to_vec()));
+            Ok(())
+        }
+        fn delete_terminal(&mut self, reset_strings: &[u8]) -> Result<(), String> {
+            self.events
+                .borrow_mut()
+                .push(("delete", reset_strings.to_vec()));
+            Ok(())
+        }
+        fn sys_suspend(&mut self) -> Result<(), String> {
+            self.events.borrow_mut().push(("sys_suspend", Vec::new()));
+            Ok(())
+        }
+    }
+
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    configure_terminal_runtime(TerminalRuntimeConfig::interactive(
+        Some("xterm-256color".to_string()),
+        neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities::full_with_color_cells(
+            256,
+        ),
+    ));
+    let events = Rc::new(RefCell::new(Vec::new()));
+    set_terminal_host(Box::new(ModeRecordingHost {
+        events: Rc::clone(&events),
+    }));
+
+    // Mix strings, non-strings, and improper list tail; GNU walks car-to-cdr,
+    // emits only STRINGP elements verbatim, and stops on non-cons tails.
+    let reset_list = Value::cons(
+        Value::string("<R1>"),
+        Value::cons(
+            Value::fixnum(42),
+            Value::cons(Value::string("<R2>"), Value::string("tail-ignored")),
+        ),
+    );
+    let set_list = Value::list(vec![
+        Value::string("<S1>"),
+        Value::NIL,
+        Value::string("<S2>"),
+    ]);
+    builtin_set_terminal_parameter(
+        &mut eval,
+        vec![
+            Value::NIL,
+            Value::symbol("tty-mode-reset-strings"),
+            reset_list,
+        ],
+    )
+    .unwrap();
+    builtin_set_terminal_parameter(
+        &mut eval,
+        vec![Value::NIL, Value::symbol("tty-mode-set-strings"), set_list],
+    )
+    .unwrap();
+
+    builtin_suspend_tty(&mut eval, vec![]).unwrap();
+    builtin_resume_tty(&mut eval, vec![]).unwrap();
+    builtin_suspend_emacs(&mut eval, vec![]).unwrap();
+    builtin_delete_terminal(&mut eval, vec![Value::NIL, Value::T]).unwrap();
+
+    assert_eq!(
+        events.borrow().as_slice(),
+        &[
+            ("suspend", b"<R1><R2>".to_vec()),
+            ("resume", b"<S1><S2>".to_vec()),
+            ("suspend", b"<R1><R2>".to_vec()),
+            ("sys_suspend", Vec::new()),
+            ("resume", b"<S1><S2>".to_vec()),
+            ("delete", b"<R1><R2>".to_vec()),
+        ]
+    );
 }
 
 #[path = "gc_heap_ownership_test.rs"]

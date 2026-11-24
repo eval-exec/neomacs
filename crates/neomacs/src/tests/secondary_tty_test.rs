@@ -255,8 +255,8 @@ fn padded_secondary_terminal_renders_and_resumes_with_its_attached_device() {
             &session.device.capabilities,
         )
         .expect("padded secondary render must use the attached device snapshot");
-        session.suspend().unwrap();
-        session.resume().unwrap();
+        session.suspend(&[]).unwrap();
+        session.resume(&[]).unwrap();
     }
 }
 
@@ -339,13 +339,13 @@ fn secondary_tty_restores_implicit_input_baud_alias_and_erase_character() {
     assert_eq!(device.erase_char, 8);
     pty.assert_modes(&raw);
     for _ in 0..2 {
-        device.suspend().expect("suspend implicit-baud TTY");
+        device.suspend(&[]).expect("suspend implicit-baud TTY");
         pty.assert_modes(&original);
-        device.suspend().expect("suspend already suspended TTY");
+        device.suspend(&[]).expect("suspend already suspended TTY");
         pty.assert_modes(&original);
-        device.resume().expect("resume implicit-baud TTY");
+        device.resume(&[]).expect("resume implicit-baud TTY");
         pty.assert_modes(&raw);
-        device.resume().expect("resume already active TTY");
+        device.resume(&[]).expect("resume already active TTY");
         pty.assert_modes(&raw);
     }
     drop(device);
@@ -370,9 +370,9 @@ fn secondary_tty_restores_distinct_input_and_output_speeds() {
     raw.make_raw();
     let mut device = pty.open_device();
     pty.assert_modes(&raw);
-    device.suspend().expect("suspend distinct-speed TTY");
+    device.suspend(&[]).expect("suspend distinct-speed TTY");
     pty.assert_modes(&original);
-    device.resume().expect("resume distinct-speed TTY");
+    device.resume(&[]).expect("resume distinct-speed TTY");
     pty.assert_modes(&raw);
     drop(device);
     pty.assert_modes(&original);
@@ -408,7 +408,10 @@ fn secondary_tty_restores_modes_even_when_leaving_screen_fails() {
         .read(true)
         .open(&pty.path)
         .expect("open read-only PTY descriptor");
-    assert!(device.suspend().is_err(), "screen leave must fail to write");
+    assert!(
+        device.suspend(&[]).is_err(),
+        "screen leave must fail to write"
+    );
     pty.assert_modes(&original);
     drop(device);
     pty.assert_modes(&original);

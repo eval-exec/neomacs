@@ -200,22 +200,33 @@ impl DisplayHost for TtyPopupDisplayHost {
 }
 
 impl neovm_core::emacs_core::terminal::pure::TerminalHost for TtyTerminalHost {
-    fn suspend_tty(&mut self) -> Result<(), String> {
+    fn suspend_tty(&mut self, reset_strings: &[u8]) -> Result<(), String> {
         self.cmd_tx
             .send(RenderCommand::Lifecycle(LifecycleCommand::SuspendTty))
-            .map_err(|err| format!("failed to suspend tty frontend: {err}"))
+            .map_err(|err| format!("failed to suspend tty frontend: {err}"))?;
+        super::tty_init::tty_suspend_terminal(reset_strings)
     }
 
-    fn resume_tty(&mut self) -> Result<(), String> {
+    fn resume_tty(&mut self, set_strings: &[u8]) -> Result<(), String> {
+        super::tty_init::tty_resume_terminal(set_strings)?;
+        self.force_full_redraw
+            .store(true, std::sync::atomic::Ordering::Release);
         self.cmd_tx
             .send(RenderCommand::Lifecycle(LifecycleCommand::ResumeTty))
             .map_err(|err| format!("failed to resume tty frontend: {err}"))
     }
 
-    fn delete_terminal(&mut self) -> Result<(), String> {
+    fn delete_terminal(&mut self, reset_strings: &[u8]) -> Result<(), String> {
         self.cmd_tx
             .send(RenderCommand::Lifecycle(LifecycleCommand::Shutdown))
-            .map_err(|err| format!("failed to delete tty terminal frontend: {err}"))
+            .map_err(|err| format!("failed to delete tty terminal frontend: {err}"))?;
+        super::tty_init::tty_shutdown_terminal_with(reset_strings);
+        Ok(())
+    }
+
+    fn sys_suspend(&mut self) -> Result<(), String> {
+        super::tty_init::tty_sys_suspend();
+        Ok(())
     }
 
     // GNU writes `tty->output' directly (src/dispnew.c:6838-6843); here that

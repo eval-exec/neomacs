@@ -125,7 +125,7 @@ fn with_terminal_manager<R>(f: impl FnOnce(&RefCell<TerminalManager>) -> R) -> R
 }
 
 pub(crate) const TERMINAL_NAME: &str = "initial_terminal";
-pub(crate) use neovm_eval::emacs_core::eval::protocol::tty_host::TERMINAL_ID;
+pub use neovm_eval::emacs_core::eval::protocol::tty_host::TERMINAL_ID;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TerminalRuntime {
@@ -1146,6 +1146,40 @@ fn terminal_params_for_id(id: u64) -> Vec<(Value, Value)> {
     })
 }
 
+/// Collect raw bytes from a terminal parameter list (`tty-mode-reset-strings`
+/// or `tty-mode-set-strings`), matching GNU `tty_send_additional_strings`
+/// (`src/term.c:169-199`).
+///
+/// Walks the parameter value as a cons list in car-to-cdr order, appending raw
+/// string bytes verbatim and ignoring non-string elements or improper tails.
+/// Never signals or quits, and guards against circular lists.
+pub fn terminal_mode_strings_bytes(terminal_id: u64, param_name: &'static str) -> Vec<u8> {
+    let key = Value::symbol(param_name);
+    let value = lookup_terminal_parameter_value(&terminal_params_for_id(terminal_id), &key);
+    collect_mode_strings_bytes(value)
+}
+
+fn collect_mode_strings_bytes(mut list: Value) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    let mut slow = list;
+    let mut advance_slow = false;
+    while list.is_cons() {
+        let car = list.cons_car();
+        if let Some(lisp_str) = car.as_lisp_string() {
+            bytes.extend_from_slice(lisp_str.as_bytes());
+        }
+        list = list.cons_cdr();
+        if advance_slow {
+            slow = slow.cons_cdr();
+            if list == slow {
+                break;
+            }
+        }
+        advance_slow = !advance_slow;
+    }
+    bytes
+}
+
 fn update_terminal_param(id: u64, key: Value, value: Value) -> Value {
     terminal_handle_for_id(id);
     TERMINAL_LISP_STATE.with(|slot| {
@@ -1730,7 +1764,8 @@ pub fn builtin_suspend_tty(
     let hook_sym =
         neovm_eval::emacs_core::hook_runtime::hook_symbol_by_name(eval, "suspend-tty-functions");
     let _ = neovm_eval::emacs_core::hook_runtime::run_named_hook(eval, hook_sym, &[terminal])?;
-    with_terminal_host_for_id(terminal_id, |host| host.suspend_tty())?;
+    let reset_strings = terminal_mode_strings_bytes(terminal_id, "tty-mode-reset-strings");
+    with_terminal_host_for_id(terminal_id, |host| host.suspend_tty(&reset_strings))?;
     with_terminal_manager(|slot| {
         let mut manager = slot.borrow_mut();
         if let Some(terminal) = manager.get_mut(terminal_id) {
@@ -1769,7 +1804,8 @@ pub fn builtin_resume_tty(
         return Ok(Value::NIL);
     }
 
-    with_terminal_host_for_id(terminal_id, |host| host.resume_tty())?;
+    let set_strings = terminal_mode_strings_bytes(terminal_id, "tty-mode-set-strings");
+    with_terminal_host_for_id(terminal_id, |host| host.resume_tty(&set_strings))?;
     with_terminal_manager(|slot| {
         let mut manager = slot.borrow_mut();
         if let Some(terminal) = manager.get_mut(terminal_id) {
@@ -1784,6 +1820,78 @@ pub fn builtin_resume_tty(
     let hook_sym =
         neovm_eval::emacs_core::hook_runtime::hook_symbol_by_name(eval, "resume-tty-functions");
     let _ = neovm_eval::emacs_core::hook_runtime::run_named_hook(eval, hook_sym, &[terminal])?;
+    Ok(Value::NIL)
+}
+
+/// `(suspend-emacs &optional STUFFSTRING)` -> nil.
+///
+/// Mirrors GNU `Fsuspend_emacs` (`src/keyboard.c:12427-12476`): validates
+/// `stuffstring` and single-TTY preconditions, runs `suspend-hook`, resets
+/// active TTY modes (including `tty-mode-reset-strings`), suspends the
+/// process via the terminal host, re-initializes active TTY modes (including
+/// `tty-mode-set-strings`), invalidates redisplay, and runs
+/// `suspend-resume-hook`.
+#[doc(hidden)]
+pub fn builtin_suspend_emacs(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args_range("suspend-emacs", &args, 0, 1)?;
+    let active_tty_count = with_terminal_manager(|slot| {
+        slot.borrow()
+            .live_terminals()
+            .filter(|t| t.output_method == TerminalOutputMethod::Termcap && t.is_active())
+            .count()
+    });
+    if active_tty_count > 1 {
+        return Err(signal(
+            "error",
+            vec![Value::string(
+                "There are other tty frames open; close them before suspending Emacs",
+            )],
+        ));
+    }
+    if let Some(&stuff) = args.first()
+        && !stuff.is_nil()
+        && !stuff.is_string()
+    {
+        return Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("stringp"), stuff],
+        ));
+    }
+
+    let suspend_hook =
+        neovm_eval::emacs_core::hook_runtime::hook_symbol_by_name(eval, "suspend-hook");
+    let _ = neovm_eval::emacs_core::hook_runtime::run_named_hook(eval, suspend_hook, &[])?;
+
+    let active_hosted_tty = with_terminal_manager(|slot| {
+        slot.borrow()
+            .live_terminals()
+            .find(|t| {
+                t.output_method == TerminalOutputMethod::Termcap
+                    && t.is_active()
+                    && t.host.is_some()
+            })
+            .map(|t| t.id)
+    });
+    if let Some(terminal_id) = active_hosted_tty {
+        let reset_strings = terminal_mode_strings_bytes(terminal_id, "tty-mode-reset-strings");
+        with_terminal_host_for_id(terminal_id, |host| host.suspend_tty(&reset_strings))?;
+        let suspend_result = with_terminal_host_for_id(terminal_id, |host| host.sys_suspend());
+        // Mirror GNU's `record_unwind_protect_void (init_all_sys_modes)`:
+        // always restore TTY modes after `sys_suspend` returns.
+        let set_strings = terminal_mode_strings_bytes(terminal_id, "tty-mode-set-strings");
+        let resume_result =
+            with_terminal_host_for_id(terminal_id, |host| host.resume_tty(&set_strings));
+        suspend_result?;
+        resume_result?;
+        eval.invalidate_redisplay();
+    }
+
+    let resume_hook =
+        neovm_eval::emacs_core::hook_runtime::hook_symbol_by_name(eval, "suspend-resume-hook");
+    let _ = neovm_eval::emacs_core::hook_runtime::run_named_hook(eval, resume_hook, &[])?;
     Ok(Value::NIL)
 }
 
@@ -1817,6 +1925,7 @@ pub(crate) fn delete_terminal_owned(
     } else {
         eval.queue_pending_safe_hook("delete-terminal-functions", &[terminal]);
     }
+    let reset_strings = terminal_mode_strings_bytes(terminal_id, "tty-mode-reset-strings");
     let host_delete = with_terminal_manager(|slot| {
         let mut manager = slot.borrow_mut();
         let Some(host) = manager
@@ -1825,7 +1934,7 @@ pub(crate) fn delete_terminal_owned(
         else {
             return Ok(());
         };
-        host.delete_terminal()
+        host.delete_terminal(&reset_strings)
     });
     if let Err(message) = host_delete {
         if mode.ignore_host_delete_errors() {

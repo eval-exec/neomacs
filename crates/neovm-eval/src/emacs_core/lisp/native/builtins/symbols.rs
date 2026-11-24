@@ -2565,9 +2565,8 @@ pub fn builtin_redisplay(
 }
 
 #[doc(hidden)]
-pub fn builtin_suspend_emacs(args: Vec<Value>) -> EvalResult {
-    expect_args_range("suspend-emacs", &args, 0, 1)?;
-    Ok(Value::NIL)
+pub fn builtin_suspend_emacs(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    super::eval::lifecycle::suspend_emacs(eval, args)
 }
 
 #[doc(hidden)]

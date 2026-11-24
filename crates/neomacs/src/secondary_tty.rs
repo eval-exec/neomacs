@@ -28,6 +28,12 @@ impl SecondaryTtyRegistry {
     /// Restore every attached client's terminal before daemon exit or exec.
     /// Drop sessions outside the registry lock: their readers must be joined.
     pub fn close_all(&self) {
+        self.close_all_with(|_| Vec::new());
+    }
+
+    /// Restore every attached client's terminal, emitting each terminal's
+    /// `tty-mode-reset-strings` before closing it.
+    pub fn close_all_with(&self, mut reset_strings_for: impl FnMut(u64) -> Vec<u8>) {
         let sessions = {
             let mut registry = self
                 .sessions
@@ -35,7 +41,17 @@ impl SecondaryTtyRegistry {
                 .expect("secondary TTY registry poisoned");
             std::mem::take(&mut *registry)
         };
-        drop(sessions);
+        #[cfg(unix)]
+        for (terminal_id, mut session) in sessions {
+            let reset_strings = reset_strings_for(terminal_id);
+            let _ = session.suspend(&reset_strings);
+            drop(session);
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = &mut reset_strings_for;
+            drop(sessions);
+        }
     }
 
     pub fn render_selected(&self, eval: &mut neovm_core::emacs_core::Context) -> bool {
@@ -117,7 +133,7 @@ impl SecondaryTtyRegistry {
     }
 
     #[cfg(unix)]
-    fn suspend(&self, terminal_id: u64) -> Result<(), String> {
+    fn suspend(&self, terminal_id: u64, reset_strings: &[u8]) -> Result<(), String> {
         let mut sessions = self
             .sessions
             .lock()
@@ -125,16 +141,16 @@ impl SecondaryTtyRegistry {
         sessions
             .get_mut(&terminal_id)
             .ok_or_else(|| "TTY terminal host unavailable".to_string())?
-            .suspend()
+            .suspend(reset_strings)
     }
 
     #[cfg(not(unix))]
-    fn suspend(&self, _terminal_id: u64) -> Result<(), String> {
+    fn suspend(&self, _terminal_id: u64, _reset_strings: &[u8]) -> Result<(), String> {
         Err("additional text terminals are not supported on this platform".to_string())
     }
 
     #[cfg(unix)]
-    fn resume(&self, terminal_id: u64) -> Result<(), String> {
+    fn resume(&self, terminal_id: u64, set_strings: &[u8]) -> Result<(), String> {
         let mut sessions = self
             .sessions
             .lock()
@@ -142,11 +158,11 @@ impl SecondaryTtyRegistry {
         sessions
             .get_mut(&terminal_id)
             .ok_or_else(|| "TTY terminal host unavailable".to_string())?
-            .resume()
+            .resume(set_strings)
     }
 
     #[cfg(not(unix))]
-    fn resume(&self, _terminal_id: u64) -> Result<(), String> {
+    fn resume(&self, _terminal_id: u64, _set_strings: &[u8]) -> Result<(), String> {
         Err("additional text terminals are not supported on this platform".to_string())
     }
 
@@ -182,15 +198,23 @@ impl SecondaryTtyRegistry {
         None
     }
 
-    fn remove(&self, terminal_id: u64) -> Result<(), String> {
+    fn remove(&self, terminal_id: u64, reset_strings: &[u8]) -> Result<(), String> {
         let session = self
             .sessions
             .lock()
             .map_err(|_| "secondary TTY registry poisoned".to_string())?
             .remove(&terminal_id);
-        session
-            .map(drop)
-            .ok_or_else(|| "TTY terminal host unavailable".to_string())
+        match session {
+            Some(mut session) => {
+                #[cfg(unix)]
+                let _ = session.suspend(reset_strings);
+                #[cfg(not(unix))]
+                let _ = reset_strings;
+                drop(session);
+                Ok(())
+            }
+            None => Err("TTY terminal host unavailable".to_string()),
+        }
     }
 }
 
@@ -281,16 +305,16 @@ struct SecondaryTtyHost {
 }
 
 impl TerminalHost for SecondaryTtyHost {
-    fn suspend_tty(&mut self) -> Result<(), String> {
-        self.registry.suspend(self.terminal_id)
+    fn suspend_tty(&mut self, reset_strings: &[u8]) -> Result<(), String> {
+        self.registry.suspend(self.terminal_id, reset_strings)
     }
 
-    fn resume_tty(&mut self) -> Result<(), String> {
-        self.registry.resume(self.terminal_id)
+    fn resume_tty(&mut self, set_strings: &[u8]) -> Result<(), String> {
+        self.registry.resume(self.terminal_id, set_strings)
     }
 
-    fn delete_terminal(&mut self) -> Result<(), String> {
-        self.registry.remove(self.terminal_id)
+    fn delete_terminal(&mut self, reset_strings: &[u8]) -> Result<(), String> {
+        self.registry.remove(self.terminal_id, reset_strings)
     }
 
     fn write_bytes(&mut self, bytes: &[u8]) -> Result<(), String> {
@@ -373,15 +397,25 @@ impl TtyDevice {
         self.active
     }
 
-    fn suspend(&mut self) -> Result<(), String> {
+    fn suspend(&mut self, reset_strings: &[u8]) -> Result<(), String> {
+        use std::os::fd::AsRawFd;
+
         if !self.active {
             return Ok(());
         }
         let leave_result = self
             .capabilities
-            .leave()
+            .leave_with(reset_strings)
             .write_to(&mut self.file, &self.capabilities)
             .map_err(|error| format!("cannot suspend TTY renderer: {error}"));
+        loop {
+            // SAFETY: `self.file` owns a live TTY descriptor.
+            let rc = unsafe { libc::tcdrain(self.file.as_raw_fd()) };
+            if rc == 0 || std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted
+            {
+                break;
+            }
+        }
         let restore_result = rustix::termios::tcsetattr(
             &self.file,
             rustix::termios::OptionalActions::Now,
@@ -392,7 +426,7 @@ impl TtyDevice {
         leave_result.and(restore_result)
     }
 
-    fn resume(&mut self) -> Result<(), String> {
+    fn resume(&mut self, set_strings: &[u8]) -> Result<(), String> {
         use std::os::fd::AsRawFd;
 
         if self.active {
@@ -403,10 +437,10 @@ impl TtyDevice {
         let height = query_size(self.file.as_raw_fd()).map_or(24, |size| size.rows() as usize);
         if let Err(error) = self
             .capabilities
-            .enter(height)
+            .enter_with(height, set_strings)
             .write_to(&mut self.file, &self.capabilities)
         {
-            let _ = self.suspend();
+            let _ = self.suspend(&[]);
             return Err(format!("cannot resume TTY renderer: {error}"));
         }
         Ok(())
@@ -416,7 +450,7 @@ impl TtyDevice {
 #[cfg(unix)]
 impl Drop for TtyDevice {
     fn drop(&mut self) {
-        let _ = self.suspend();
+        let _ = self.suspend(&[]);
     }
 }
 
@@ -503,16 +537,16 @@ impl SecondaryTtySession {
         ))
     }
 
-    fn suspend(&mut self) -> Result<(), String> {
+    fn suspend(&mut self, reset_strings: &[u8]) -> Result<(), String> {
         self.paused.store(true, Ordering::Release);
-        self.device.suspend()
+        self.device.suspend(reset_strings)
     }
 
-    fn resume(&mut self) -> Result<(), String> {
+    fn resume(&mut self, set_strings: &[u8]) -> Result<(), String> {
         if self.device.is_active() {
             return Ok(());
         }
-        self.device.resume()?;
+        self.device.resume(set_strings)?;
         self.rif.force_redraw();
         self.paused.store(false, Ordering::Release);
         Ok(())

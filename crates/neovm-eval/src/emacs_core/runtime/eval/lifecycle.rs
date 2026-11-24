@@ -250,6 +250,7 @@ pub struct TerminalHooks {
     handle_value: fn() -> Value,
     delete_noelisp: fn(&mut Context, u64) -> EvalResult,
     frame_terminal: fn(&mut Context, Vec<Value>) -> EvalResult,
+    suspend_emacs: fn(&mut Context, Vec<Value>) -> EvalResult,
     print_handle: fn(&Value) -> Option<String>,
     configure_window_system_runtime: fn(neomacs_display_protocol::GraphicalDisplayIdentity),
     park_carrier_tls: fn(),
@@ -268,10 +269,12 @@ pub struct TerminalHooks {
 
 impl TerminalHooks {
     /// Build the terminal-registry group.
+    #[allow(clippy::too_many_arguments)]
     pub const fn new(
         handle_value: fn() -> Value,
         delete_noelisp: fn(&mut Context, u64) -> EvalResult,
         frame_terminal: fn(&mut Context, Vec<Value>) -> EvalResult,
+        suspend_emacs: fn(&mut Context, Vec<Value>) -> EvalResult,
         print_handle: fn(&Value) -> Option<String>,
         configure_window_system_runtime: fn(neomacs_display_protocol::GraphicalDisplayIdentity),
         park_carrier_tls: fn(),
@@ -290,6 +293,7 @@ impl TerminalHooks {
             handle_value,
             delete_noelisp,
             frame_terminal,
+            suspend_emacs,
             print_handle,
             configure_window_system_runtime,
             park_carrier_tls,
@@ -672,6 +676,11 @@ impl TerminalHooks {
     #[doc(hidden)]
     pub fn frame_terminal(&self) -> fn(&mut Context, Vec<Value>) -> EvalResult {
         self.frame_terminal
+    }
+
+    #[doc(hidden)]
+    pub fn suspend_emacs(&self) -> fn(&mut Context, Vec<Value>) -> EvalResult {
+        self.suspend_emacs
     }
 
     #[doc(hidden)]
@@ -1200,6 +1209,12 @@ pub fn delete_terminal_noelisp_owned(
         let _ = ctx.shutdown_with_hooks(shutdown_if_last);
     }
     (lifecycle_hooks().terminal().delete_noelisp())(ctx, terminal_id)
+}
+
+/// Suspend Emacs and reset/re-initialize active TTY modes through the display
+/// terminal owner (GNU `Fsuspend_emacs`, `src/keyboard.c:12427`).
+pub(crate) fn suspend_emacs(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+    (lifecycle_hooks().terminal().suspend_emacs())(ctx, args)
 }
 
 /// Capture a window configuration through the core `current-window-configuration`

@@ -287,6 +287,12 @@ impl Capabilities {
     }
 
     pub(crate) fn enter(&self, height: usize) -> Output {
+        self.enter_with(height, &[])
+    }
+
+    /// Enter terminal modes and send `tty-mode-set-strings` last as raw bytes,
+    /// matching GNU `tty_set_terminal_modes` (`src/term.c:201-225`).
+    pub(crate) fn enter_with(&self, height: usize, set_strings: &[u8]) -> Output {
         let mut output = Output::default();
         for name in ["ti", "ks", "vi", "cl"] {
             output.control(self.control(name), if name == "cl" { height } else { 1 });
@@ -294,16 +300,25 @@ impl Capabilities {
         if self.ansi {
             output.extend_from_slice(b"\x1b[?2004h");
         }
+        output.extend_from_slice(set_strings);
         output
     }
 
+    #[cfg(test)]
     pub(crate) fn leave(&self) -> Output {
+        self.leave_with(&[])
+    }
+
+    /// Send `tty-mode-reset-strings` first as raw bytes, then reset terminal
+    /// modes, matching GNU `tty_reset_terminal_modes` (`src/term.c:230-247`).
+    pub(crate) fn leave_with(&self, reset_strings: &[u8]) -> Output {
         let mut output = Output::default();
+        output.extend_from_slice(reset_strings);
         self.reset_modes(&mut output);
         if self.ansi {
             output.extend_from_slice(b"\x1b[?2004l");
         }
-        for name in ["ve", "ke", "te"] {
+        for name in ["ke", "ve", "te"] {
             self.append(&mut output, name);
         }
         output

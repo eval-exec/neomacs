@@ -504,6 +504,76 @@ pub(crate) fn tty_leave_sequence() -> &'static [u8] {
     b"\x1b[0m\x1b[?25h\x1b[?2004l\x1b[?1l\x1b>\x1b[?1049l"
 }
 
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PrimaryTtyState {
+    Uninitialized = 0,
+    Active = 1,
+    Suspended = 2,
+}
+
+static PRIMARY_TTY_STATE: std::sync::atomic::AtomicU8 =
+    std::sync::atomic::AtomicU8::new(PrimaryTtyState::Uninitialized as u8);
+
+fn primary_tty_state() -> PrimaryTtyState {
+    match PRIMARY_TTY_STATE.load(std::sync::atomic::Ordering::Acquire) {
+        1 => PrimaryTtyState::Active,
+        2 => PrimaryTtyState::Suspended,
+        _ => PrimaryTtyState::Uninitialized,
+    }
+}
+
+/// Whether the primary interactive TTY is currently active (entered and not suspended).
+pub fn is_primary_tty_active() -> bool {
+    primary_tty_state() == PrimaryTtyState::Active
+}
+
+#[cfg(unix)]
+fn drain_stdout_tty() {
+    // GNU `reset_sys_modes` (`src/sysdep.c:1536`) drains buffered output before
+    // restoring termios so escape sequences are not lost on mode change.
+    loop {
+        // SAFETY: `STDOUT_FILENO` is a valid process descriptor; `tcdrain`
+        // blocks until output is transmitted or fails with EINTR/ENOTTY.
+        let rc = unsafe { libc::tcdrain(libc::STDOUT_FILENO) };
+        if rc == 0 || std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted {
+            break;
+        }
+    }
+}
+
+fn write_primary_enter(set_strings: &[u8]) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        super::tty_output::windows::enter_with(set_strings)
+    }
+    #[cfg(not(windows))]
+    {
+        super::tty_output::primary()
+            .map_err(std::io::Error::other)
+            .and_then(|caps| {
+                let mut stdout = std::io::stdout();
+                let (_, height) = query_terminal_size_cells().unwrap_or((80, 24));
+                caps.enter_with(height as usize, set_strings)
+                    .write_to(&mut stdout, caps)
+            })
+    }
+}
+
+fn write_primary_leave(reset_strings: &[u8]) {
+    #[cfg(windows)]
+    if let Err(error) = super::tty_output::windows::leave_with(reset_strings) {
+        tracing::warn!(%error, "could not restore console output");
+    }
+    #[cfg(not(windows))]
+    if let Ok(caps) = super::tty_output::primary() {
+        let mut stdout = std::io::stdout();
+        let _ = caps.leave_with(reset_strings).write_to(&mut stdout, caps);
+        #[cfg(unix)]
+        drain_stdout_tty();
+    }
+}
+
 /// Set up the terminal for the TtyRif direct-rendering path:
 /// raw mode, alternate screen buffer, GNU input modes, hidden cursor.
 pub fn tty_init_terminal() -> Result<(), String> {
@@ -522,17 +592,11 @@ pub fn tty_init_terminal() -> Result<(), String> {
     );
 
     crossterm::terminal::enable_raw_mode().map_err(|error| error.to_string())?;
-    #[cfg(windows)]
-    let result = super::tty_output::windows::enter();
-    #[cfg(not(windows))]
-    let result = super::tty_output::primary()
-        .map_err(std::io::Error::other)
-        .and_then(|caps| {
-            let mut stdout = std::io::stdout();
-            let (_, height) = query_terminal_size_cells().unwrap_or((80, 24));
-            caps.enter(height as usize).write_to(&mut stdout, caps)
-        });
-    if let Err(error) = result {
+    PRIMARY_TTY_STATE.store(
+        PrimaryTtyState::Active as u8,
+        std::sync::atomic::Ordering::Release,
+    );
+    if let Err(error) = write_primary_enter(&[]) {
         tty_shutdown_terminal();
         return Err(format!("could not initialize TTY output: {error}"));
     }
@@ -540,18 +604,86 @@ pub fn tty_init_terminal() -> Result<(), String> {
     Ok(())
 }
 
+/// Temporarily restore the primary TTY for `suspend-tty` / `suspend-emacs`,
+/// emitting `tty-mode-reset-strings` first as in GNU `tty_reset_terminal_modes`.
+pub fn tty_suspend_terminal(reset_strings: &[u8]) -> Result<(), String> {
+    if PRIMARY_TTY_STATE
+        .compare_exchange(
+            PrimaryTtyState::Active as u8,
+            PrimaryTtyState::Suspended as u8,
+            std::sync::atomic::Ordering::AcqRel,
+            std::sync::atomic::Ordering::Acquire,
+        )
+        .is_err()
+    {
+        return Ok(());
+    }
+    write_primary_leave(reset_strings);
+    if let Err(e) = crossterm::terminal::disable_raw_mode() {
+        tracing::warn!("tty_suspend_terminal: disable_raw_mode failed: {}", e);
+    }
+    Ok(())
+}
+
+/// Re-enter raw mode and terminal modes for `resume-tty` / `suspend-emacs`
+/// resume, emitting `tty-mode-set-strings` last as in GNU `tty_set_terminal_modes`.
+pub fn tty_resume_terminal(set_strings: &[u8]) -> Result<(), String> {
+    if PRIMARY_TTY_STATE
+        .compare_exchange(
+            PrimaryTtyState::Suspended as u8,
+            PrimaryTtyState::Active as u8,
+            std::sync::atomic::Ordering::AcqRel,
+            std::sync::atomic::Ordering::Acquire,
+        )
+        .is_err()
+    {
+        return Ok(());
+    }
+    if let Err(error) = crossterm::terminal::enable_raw_mode() {
+        PRIMARY_TTY_STATE.store(
+            PrimaryTtyState::Suspended as u8,
+            std::sync::atomic::Ordering::Release,
+        );
+        return Err(format!("could not re-enable TTY raw mode: {error}"));
+    }
+    if let Err(error) = write_primary_enter(set_strings) {
+        let _ = tty_suspend_terminal(&[]);
+        return Err(format!("could not resume TTY output: {error}"));
+    }
+    Ok(())
+}
+
+/// Stop the process group with `SIGTSTP` when the primary interactive TTY has
+/// just been suspended (GNU `sys_suspend`, `src/sysdep.c:629`).
+pub fn tty_sys_suspend() {
+    if primary_tty_state() != PrimaryTtyState::Suspended {
+        return;
+    }
+    #[cfg(unix)]
+    // SAFETY: `kill(0, SIGTSTP)` sends SIGTSTP to the caller's process group,
+    // matching GNU `sys_suspend` (`src/sysdep.c:633`).
+    unsafe {
+        libc::kill(0, libc::SIGTSTP);
+    }
+}
+
 /// Restore the terminal to its original state: show cursor, leave alt screen,
 /// reset SGR, disable raw mode.
 pub fn tty_shutdown_terminal() {
-    #[cfg(windows)]
-    if let Err(error) = super::tty_output::windows::leave() {
-        tracing::warn!(%error, "could not restore console output");
+    tty_shutdown_terminal_with(&[]);
+}
+
+/// Restore the primary TTY on exit or `delete-terminal`, emitting
+/// `tty-mode-reset-strings` first when the terminal is still active.
+pub fn tty_shutdown_terminal_with(reset_strings: &[u8]) {
+    let previous = PRIMARY_TTY_STATE.swap(
+        PrimaryTtyState::Uninitialized as u8,
+        std::sync::atomic::Ordering::AcqRel,
+    );
+    if previous != PrimaryTtyState::Active as u8 {
+        return;
     }
-    #[cfg(not(windows))]
-    if let Ok(caps) = super::tty_output::primary() {
-        let mut stdout = std::io::stdout();
-        let _ = caps.leave().write_to(&mut stdout, caps);
-    }
+    write_primary_leave(reset_strings);
 
     // Restore raw mode
     if let Err(e) = crossterm::terminal::disable_raw_mode() {

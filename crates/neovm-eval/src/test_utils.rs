@@ -666,6 +666,7 @@ mod unit_runtime {
             s::terminal_handle_value,
             unit_terminal_delete_noelisp,
             s::terminal_frame_terminal,
+            s::terminal_suspend_emacs,
             s::terminal_print_handle,
             s::terminal_configure_window_system_runtime,
             s::terminal_park_carrier_tls,

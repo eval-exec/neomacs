@@ -5137,7 +5137,7 @@ fn tty_terminal_host_delete_terminal_sends_shutdown() {
     let (cmd_tx, cmd_rx) = neomacs_display_runtime::thread_comm::RenderCommandSender::unbounded();
     let mut host = TtyTerminalHost::new(cmd_tx);
 
-    host.delete_terminal()
+    host.delete_terminal(&[])
         .expect("delete terminal should succeed");
 
     match cmd_rx

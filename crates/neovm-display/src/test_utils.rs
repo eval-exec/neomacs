@@ -1225,6 +1225,7 @@ mod unit_runtime {
             crate::emacs_core::terminal::pure::terminal_handle_value,
             crate::emacs_core::terminal::pure::delete_terminal_noelisp_owned,
             crate::emacs_core::terminal::pure::builtin_frame_terminal,
+            crate::emacs_core::terminal::pure::builtin_suspend_emacs,
             crate::emacs_core::terminal::pure::print_terminal_handle,
             configure_window_system_runtime,
             terminal_park_carrier_tls,
@@ -3010,17 +3011,17 @@ pub mod terminal_test_upper_layer_helpers {
         pub(crate) log: Rc<RefCell<Vec<&'static str>>>,
     }
     impl TerminalHost for RecordingTerminalHost {
-        fn suspend_tty(&mut self) -> Result<(), String> {
+        fn suspend_tty(&mut self, _reset_strings: &[u8]) -> Result<(), String> {
             self.log.borrow_mut().push("suspend");
             Ok(())
         }
 
-        fn resume_tty(&mut self) -> Result<(), String> {
+        fn resume_tty(&mut self, _set_strings: &[u8]) -> Result<(), String> {
             self.log.borrow_mut().push("resume");
             Ok(())
         }
 
-        fn delete_terminal(&mut self) -> Result<(), String> {
+        fn delete_terminal(&mut self, _reset_strings: &[u8]) -> Result<(), String> {
             self.log.borrow_mut().push("delete");
             Ok(())
         }

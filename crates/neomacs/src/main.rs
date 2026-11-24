@@ -5692,12 +5692,22 @@ pub unsafe fn run(mode: RuntimeMode) {
 
     // 11. Shutdown
     tracing::info!("Shutting down...");
+    let primary_reset_strings = neovm_core::emacs_core::terminal::pure::terminal_mode_strings_bytes(
+        neovm_core::emacs_core::terminal::pure::TERMINAL_ID,
+        "tty-mode-reset-strings",
+    );
+    daemon_tty_cleanup.close_all_with(|terminal_id| {
+        neovm_core::emacs_core::terminal::pure::terminal_mode_strings_bytes(
+            terminal_id,
+            "tty-mode-reset-strings",
+        )
+    });
     let _ = emacs_comms.cmd_tx.try_send(
         neomacs_display_runtime::thread_comm::RenderCommand::Lifecycle(LifecycleCommand::Shutdown),
     );
     frontend.join();
     if tty_init::should_enable_live_tty_io(&startup) {
-        tty_init::tty_shutdown_terminal();
+        tty_init::tty_shutdown_terminal_with(&primary_reset_strings);
     }
     log_clean_process_exit(process_started_at, &process_args);
 
