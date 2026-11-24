@@ -88,6 +88,12 @@ impl<'service, 'heap> KeeperEra<'service, 'heap> {
         self.era.stop_within(budget)
     }
 
+    /// The registry gate's current holder, for the driver's contention
+    /// warning.
+    pub(crate) fn gate_holder(&self) -> Option<NonZeroU64> {
+        self.era.gate_holder()
+    }
+
     /// L6.7 K4: commit one serial request at the ring's tail.
     pub(crate) fn enqueue_serial(
         &self,

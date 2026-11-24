@@ -21,11 +21,10 @@ use super::owned_source::KeeperEra;
 use super::serial_park::{Grant, KeeperPort, LendGuard, PortRefusal};
 use super::serial_ticket::{ReceiveReason, StoppedSerialTicket};
 use super::sync::mpsc;
-#[cfg(test)]
-use neovm_value::tagged::gc::StopPending;
 use neovm_value::tagged::gc::heap_transfer::{PublishedOwner, with_stop_scope};
 use neovm_value::tagged::gc::{
     AllStopped, AllStoppedFailure, Mutator, MutatorKey, RendezvousError, SerialGrant, StopAttempt,
+    StopPending,
 };
 use std::collections::HashMap;
 use std::num::NonZeroU64;
@@ -102,6 +101,9 @@ pub(crate) enum Breach {
     Refused { owner: u64, reason: ReceiveReason },
     /// A message from an owner the keeper did not enroll.
     UnknownOwner { owner: u64 },
+    /// The owner's grant channel closed while a ticket was cut for it: the
+    /// owner is gone and the ticket is lost, as with an abandoned lend.
+    Unreachable { owner: u64 },
     /// Every sender is gone while a ticket is out.
     Disconnected,
     /// A refusal the driver cannot recover from.
@@ -170,14 +172,9 @@ impl<'s, 'era> Between<'s, 'era> {
     }
 }
 
-/// A test's view of one pending stop attempt: what it waited on, and how
-/// many requests were committed once the keeper had served its inbox.
-#[cfg(test)]
-#[derive(Debug)]
-pub(crate) struct PendingNotice {
-    pub(crate) pending: StopPending,
-    pub(crate) queued: usize,
-}
+/// Called after each pending stop attempt, once the keeper has served its
+/// inbox, with what the attempt waited on and how many requests are queued.
+type PendingObserver<'k> = Box<dyn FnMut(&StopPending, usize) + 'k>;
 
 /// The keeper side of L6.7a.
 pub(crate) struct Driver<'k, 'service, 'heap> {
@@ -188,8 +185,7 @@ pub(crate) struct Driver<'k, 'service, 'heap> {
     queued: HashMap<u64, PublishedOwner>,
     /// One stop attempt's bound.
     stop_bound: Duration,
-    #[cfg(test)]
-    pending_notices: Option<mpsc::Sender<PendingNotice>>,
+    pending_observer: Option<PendingObserver<'k>>,
 }
 
 #[cfg_attr(
@@ -207,21 +203,20 @@ impl<'k, 'service, 'heap> Driver<'k, 'service, 'heap> {
             owners: HashMap::new(),
             queued: HashMap::new(),
             stop_bound: CONTENTION_BOUND,
-            #[cfg(test)]
-            pending_notices: None,
+            pending_observer: None,
         }
     }
 
-    /// Shorten each stop attempt to BOUND and report every pending attempt
-    /// to NOTICES.
+    /// Shorten each stop attempt to BOUND and hand every pending attempt to
+    /// OBSERVER. The driver's loop is the same with or without one.
     #[cfg(test)]
     pub(crate) fn observe_pending(
         mut self,
         bound: Duration,
-        notices: mpsc::Sender<PendingNotice>,
+        observer: impl FnMut(&StopPending, usize) + 'k,
     ) -> Self {
         self.stop_bound = bound;
-        self.pending_notices = Some(notices);
+        self.pending_observer = Some(Box::new(observer));
         self
     }
 
@@ -316,11 +311,15 @@ impl<'k, 'service, 'heap> Driver<'k, 'service, 'heap> {
         Ok(())
     }
 
-    fn send(&self, owner: u64, message: GrantMsg) {
-        // A closed channel means that owner is gone; its exit or its lend
-        // guard tells the keeper what that means.
-        if let Some(enrolled) = self.owners.get(&owner) {
-            let _ = enrolled.grants.send(message);
+    /// Send MESSAGE to OWNER. A closed grant channel hands it back: that
+    /// owner is gone.
+    fn send(&self, owner: u64, message: GrantMsg) -> Result<(), GrantMsg> {
+        match self.owners.get(&owner) {
+            Some(enrolled) => enrolled
+                .grants
+                .send(message)
+                .map_err(|mpsc::SendError(message)| message),
+            None => Err(message),
         }
     }
 
@@ -330,11 +329,12 @@ impl<'k, 'service, 'heap> Driver<'k, 'service, 'heap> {
     /// inbox holds, and continues the same epoch. As with GNU's global lock,
     /// a slow owner delays the turn and poisons nothing.
     fn take_stop(&mut self) -> Result<AllStopped<'k>, Breach> {
-        let (era, bound) = (self.era, self.stop_bound);
+        let mut contended: Option<Backoff> = None;
         loop {
-            match retry_contended(|| era.stop_within(bound)) {
+            match self.era.stop_within(self.stop_bound) {
                 Ok(StopAttempt::Stopped(stopped)) => return Ok(stopped),
                 Ok(StopAttempt::Pending(pending)) => {
+                    contended = None;
                     tracing::warn!(
                         epoch = ?pending.epoch(),
                         waiting_on = ?pending.waiting_on(),
@@ -343,16 +343,24 @@ impl<'k, 'service, 'heap> Driver<'k, 'service, 'heap> {
                     while let Ok(message) = self.inbox.try_recv() {
                         self.between_stops(message)?;
                     }
-                    #[cfg(test)]
-                    if let Some(notices) = &self.pending_notices {
-                        let _ = notices.send(PendingNotice {
-                            pending,
-                            queued: self.queued.len(),
-                        });
+                    let queued = self.queued.len();
+                    if let Some(observe) = &mut self.pending_observer {
+                        observe(&pending, queued);
                     }
                 }
-                // Includes a gate held past the contention bound: a holder
-                // is brief by construction, so that is an invariant break.
+                // A gate holder is brief by construction. Back off rather
+                // than spin, and name the holder if the hold lasts.
+                Err(RendezvousError::Busy) => {
+                    let backoff = contended.get_or_insert_with(Backoff::new);
+                    backoff.wait();
+                    if backoff.warning_due() {
+                        tracing::warn!(
+                            holder = ?self.era.gate_holder(),
+                            waited = ?backoff.waited(),
+                            "keeper stop: the registry gate stays held"
+                        );
+                    }
+                }
                 Err(reason) => return Err(Breach::Rendezvous(reason)),
             }
         }
@@ -389,13 +397,18 @@ impl<'k, 'service, 'heap> Driver<'k, 'service, 'heap> {
                 };
                 let request = match between.ready_request(receipt) {
                     Ok(request) => request,
-                    Err(RendezvousError::Publication) => {
-                        // The owner published again after its request: send
-                        // it back to publish and requeue at the tail. FIFO is
-                        // not skipped, so this stop lends nothing more.
+                    // The receipt is not the owner's current publication:
+                    // it published again after its request (Generation), or
+                    // holds no publication now (Publication). Send it back
+                    // to publish and requeue at the tail. FIFO is not
+                    // skipped, so this stop lends nothing more.
+                    Err(RendezvousError::Generation | RendezvousError::Publication) => {
                         retry_contended(|| self.era.cancel_serial(head))
                             .map_err(Breach::Rendezvous)?;
-                        self.send(owner, GrantMsg::Republish);
+                        if self.send(owner, GrantMsg::Republish).is_err() {
+                            // Gone while only queued: like an exit.
+                            self.owners.remove(&owner);
+                        }
                         break;
                     }
                     Err(reason) => return Err(Breach::Rendezvous(reason)),
@@ -408,7 +421,11 @@ impl<'k, 'service, 'heap> Driver<'k, 'service, 'heap> {
                 };
                 let lent = between.lend(request)?;
                 let (ticket, held) = StoppedSerialTicket::from_lend(lent);
-                self.send(owner, GrantMsg::Grant { ticket, epoch });
+                if self.send(owner, GrantMsg::Grant { ticket, epoch }).is_err() {
+                    // The bounced message drops the ticket, and `held`
+                    // drops the stop with the breach.
+                    return Err(Breach::Unreachable { owner });
+                }
                 let returned = self.await_return(owner)?;
                 let mut restored =
                     held.accept_return(returned)
@@ -477,12 +494,10 @@ impl<'k, 'service, 'heap> Driver<'k, 'service, 'heap> {
     /// poisoned it when the breach came from inside one.
     fn poison(mut self, breach: Breach) -> DriverEnd {
         let _ = self.era.poison_era();
-        // Retire every queued entry (allowed after poison) and tell its owner.
+        // The ring dies with the era (a poisoned gate refuses every ring
+        // call), so queued owners are only told.
         for (owner, _receipt) in std::mem::take(&mut self.queued) {
-            if let Some(enrolled) = self.owners.get(&owner) {
-                let _ = self.era.cancel_serial(enrolled.key);
-            }
-            self.send(owner, GrantMsg::Poisoned);
+            let _ = self.send(owner, GrantMsg::Poisoned);
         }
         for enrolled in self.owners.values() {
             let _ = enrolled.grants.try_send(GrantMsg::Poisoned);
@@ -491,17 +506,58 @@ impl<'k, 'service, 'heap> Driver<'k, 'service, 'heap> {
     }
 }
 
+/// Waits on a contended registry gate (lead #13966 LOW-1). The first waits
+/// only yield; later ones sleep, doubling up to a millisecond, so a long
+/// hold never spins.
+struct Backoff {
+    attempts: u32,
+    start: Instant,
+    next_warning: Duration,
+}
+
+impl Backoff {
+    /// Waits that only yield before the sleeps start.
+    const YIELDS: u32 = 64;
+
+    fn new() -> Self {
+        Self {
+            attempts: 0,
+            start: Instant::now(),
+            next_warning: CONTENTION_BOUND,
+        }
+    }
+
+    fn wait(&mut self) {
+        self.attempts = self.attempts.saturating_add(1);
+        match self.attempts.checked_sub(Self::YIELDS) {
+            None | Some(0) => std::thread::yield_now(),
+            Some(extra) => std::thread::sleep(Duration::from_micros(1 << extra.min(10))),
+        }
+    }
+
+    fn waited(&self) -> Duration {
+        self.start.elapsed()
+    }
+
+    /// True once per [`CONTENTION_BOUND`] of waiting.
+    fn warning_due(&mut self) -> bool {
+        let due = self.waited() >= self.next_warning;
+        if due {
+            self.next_warning += CONTENTION_BOUND;
+        }
+        due
+    }
+}
+
 /// Retry a contended gate until [`CONTENTION_BOUND`]; any other result,
 /// and `Busy` past the bound, passes through.
 fn retry_contended<T>(
     mut attempt: impl FnMut() -> Result<T, RendezvousError>,
 ) -> Result<T, RendezvousError> {
-    let start = Instant::now();
+    let mut backoff = Backoff::new();
     loop {
         match attempt() {
-            Err(RendezvousError::Busy) if start.elapsed() < CONTENTION_BOUND => {
-                std::thread::yield_now();
-            }
+            Err(RendezvousError::Busy) if backoff.waited() < CONTENTION_BOUND => backoff.wait(),
             other => return other,
         }
     }

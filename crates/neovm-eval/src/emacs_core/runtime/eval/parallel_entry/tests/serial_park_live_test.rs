@@ -19,7 +19,7 @@ use crate::emacs_core::print::print_value;
 use neovm_value::intern::intern;
 use neovm_value::tagged::gc::heap_transfer::{PublishedOwner, with_stop_scope};
 use neovm_value::tagged::gc::{
-    AllStopped, AllStoppedFailure, Mutator, MutatorKey, MutatorPermit, RendezvousError,
+    AllStopped, AllStoppedFailure, Mutator, MutatorKey, MutatorPermit, RendezvousError, StopPending,
 };
 use neovm_value::value::Value;
 use std::collections::HashMap;
@@ -394,6 +394,27 @@ fn with_live_era(
     finish_fixture(returned, private);
 }
 
+/// Run BODY as the keeper of a fresh era that BODY leaves poisoned, and
+/// return what it reports. The era's refused finish is the expected end.
+fn with_poisoned_era<R: Send + 'static>(
+    label: &'static str,
+    body: impl for<'k, 'service, 'heap> FnOnce(&'k KeeperEra<'service, 'heap>) -> R + Send + 'static,
+) -> Option<R> {
+    let mut source = ready()?;
+    source.lexenv = Value::string(label);
+    let (_shell, start) = close(source).prepare_era().unwrap();
+    let (tx, rx) = mpsc::channel();
+    let service = std::thread::spawn(move || {
+        let outcome = keeper_serve(start, |era| {
+            tx.send(body(era)).expect("send the outcome");
+        });
+        drop(outcome);
+    });
+    let report = rx.recv().expect("the keeper outcome");
+    service.join().expect("keeper service thread");
+    Some(report)
+}
+
 /// A running owner that counts its own progress and acks every stop.
 fn run_peer(mut owner: Mutator<'_>, progress: &AtomicU64, done: &AtomicBool) {
     while !done.load(Ordering::Acquire) {
@@ -739,17 +760,22 @@ struct DriverKit<'era> {
     grants: mpsc::Receiver<GrantMsg>,
 }
 
+/// OWNER's standalone Context, kept dormant.
+fn dormant_state(owner: u64) -> State {
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
+    eval(
+        &mut ev,
+        "(progn (defvar sp-live 0) (setq sp-live 1) (defvar sp-bound nil))",
+    );
+    OwnerSerialState::new(owner, Box::new(ev))
+        .ok()
+        .expect("a freshly built Context detaches")
+}
+
 impl<'era> DriverKit<'era> {
     /// The owner's standalone Context, kept dormant, and its product port.
     fn start(self) -> (State, SerialHome, ChannelPort<'era>) {
-        let mut ev = Context::new(crate::test_utils::unit_runtime());
-        eval(
-            &mut ev,
-            "(progn (defvar sp-live 0) (setq sp-live 1) (defvar sp-bound nil))",
-        );
-        let state = OwnerSerialState::new(self.home.owner, Box::new(ev))
-            .ok()
-            .expect("a freshly built Context detaches");
+        let state = dormant_state(self.home.owner);
         let port = ChannelPort::new(
             self.home.owner,
             activate(self.permit, self.home.heap, self.home.owner),
@@ -1003,8 +1029,12 @@ fn l67a_a_slow_owner_delays_the_stop_and_poisons_nothing() {
     with_live_era("l67a-slow", |era| {
         let (inbox, inbox_rx) = mpsc::channel();
         let (notices_tx, notices) = mpsc::channel();
-        let mut driver =
-            Driver::new(era, inbox_rx).observe_pending(Duration::from_millis(5), notices_tx);
+        let mut driver = Driver::new(era, inbox_rx).observe_pending(
+            Duration::from_millis(5),
+            move |pending: &StopPending, queued| {
+                let _ = notices_tx.send((pending.clone(), queued));
+            },
+        );
         let a = enroll_driver(era, &mut driver, &inbox, O);
         let d = enroll_driver(era, &mut driver, &inbox, B);
         let slow = era.register(L, 0).expect("register the slow owner");
@@ -1061,15 +1091,15 @@ fn l67a_a_slow_owner_delays_the_stop_and_poisons_nothing() {
             let conductor = scope.spawn(move || {
                 let mut first_pending = None;
                 loop {
-                    let notice = notices
+                    let (pending, queued) = notices
                         .recv_timeout(BOUND)
                         .expect("a pending stop attempt is reported");
-                    if notice.queued == 1 && first_pending.is_none() {
-                        first_pending = Some(notice.pending.clone());
+                    if queued == 1 && first_pending.is_none() {
+                        first_pending = Some(pending);
                         d_go_tx.send(()).expect("tell D");
-                    } else if notice.queued == 2 {
+                    } else if queued == 2 {
                         l_go_tx.send(()).expect("tell L");
-                        return (first_pending, notice.pending);
+                        return (first_pending, pending);
                     }
                 }
             });
@@ -1099,4 +1129,459 @@ fn l67a_a_slow_owner_delays_the_stop_and_poisons_nothing() {
             assert_eq!((a_seen.as_str(), d_seen.as_str()), ("41", "42"));
         });
     });
+}
+
+const C: u64 = 7205;
+
+/// A grant record: which owner, in which stop.
+type Order = std::sync::Mutex<Vec<(u64, NonZeroU64)>>;
+
+impl<'era> DriverKit<'era> {
+    /// The owner's dormant Context, its activated mutator and its two
+    /// channels, for a row that speaks the driver's protocol by hand.
+    fn start_raw(self) -> (State, SerialHome, RawOwner<'era>, mpsc::Receiver<GrantMsg>) {
+        let state = dormant_state(self.home.owner);
+        let raw = RawOwner {
+            owner: self.home.owner,
+            mutator: activate(self.permit, self.home.heap, self.home.owner),
+            inbox: self.inbox,
+        };
+        (state, self.home, raw, self.grants)
+    }
+}
+
+/// An owner driven by hand, for what a ChannelPort never sends: a stale
+/// receipt, an exit while lent, a request from an owner whose grant
+/// channel is closed.
+struct RawOwner<'era> {
+    owner: u64,
+    mutator: Mutator<'era>,
+    inbox: mpsc::Sender<KeeperMsg>,
+}
+
+impl RawOwner<'_> {
+    fn publish(&mut self) -> PublishedOwner {
+        retry_native("publish", || self.mutator.publish_native_owner(&[]))
+    }
+
+    fn leave(&mut self) {
+        retry_native("leave native", || self.mutator.leave_native().map(|_| ()));
+    }
+
+    fn request(&self, receipt: PublishedOwner) {
+        self.inbox
+            .send(KeeperMsg::Request {
+                owner: self.owner,
+                receipt,
+            })
+            .expect("the keeper is serving");
+    }
+
+    fn port(&self) -> RawPort {
+        RawPort {
+            owner: self.owner,
+            inbox: self.inbox.clone(),
+        }
+    }
+}
+
+/// The port a raw owner's granted turn ends through.
+struct RawPort {
+    owner: u64,
+    inbox: mpsc::Sender<KeeperMsg>,
+}
+
+impl KeeperPort for RawPort {
+    type LendGuard = ();
+
+    fn give_back(&mut self, returned: ReturnedSerialTicket) {
+        self.inbox
+            .send(KeeperMsg::GiveBack {
+                owner: self.owner,
+                returned,
+            })
+            .expect("the keeper takes the ticket back");
+    }
+
+    fn request_turn(&mut self) -> Result<(Grant, ()), PortRefusal> {
+        panic!("a raw owner requests by hand")
+    }
+
+    fn refuse(&mut self, ticket: StoppedSerialTicket, reason: ReceiveReason) {
+        let _ = self.inbox.send(KeeperMsg::Refuse {
+            owner: self.owner,
+            ticket,
+            reason,
+        });
+    }
+}
+
+/// Run FORM in the turn GRANT lends and hand the ticket back.
+fn raw_turn(state: &mut State, home: SerialHome, port: &mut RawPort, grant: Grant, form: &str) {
+    let mut turn = begin_turn(state, home, (grant, ()), port, standalone)
+        .ok()
+        .expect("the raw grant begins");
+    turn.with_world(|ev| eval(ev, form));
+    turn.end(port).ok().expect("the host detaches");
+}
+
+/// A running owner that does not poll until GO, then stops for the standing
+/// stop, runs again and retires. Returns the epoch it stopped in.
+fn lagging_owner(
+    permit: MutatorPermit<'_>,
+    heap: neovm_value::tagged::gc::HeapIdentity,
+    owner: u64,
+    running: mpsc::Sender<()>,
+    go: mpsc::Receiver<()>,
+) -> NonZeroU64 {
+    let mut mutator = activate(permit, heap, owner);
+    running.send(()).expect("the slow owner runs");
+    go.recv_timeout(BOUND).expect("the slow owner may poll");
+    let epoch = retry_native("see the stop", || mutator.wait_request());
+    retry_native("stop", || mutator.publish_native_owner(&[]).map(|_| ()));
+    retry_native("run again", || mutator.leave_native().map(|_| ()));
+    retire(mutator);
+    epoch
+}
+
+/// Report running, wait for GO, request on the product port, record the
+/// grant in ORDER, run FORM, end, and exit.
+fn requester<'era>(
+    kit: DriverKit<'era>,
+    running: mpsc::Sender<()>,
+    go: mpsc::Receiver<()>,
+    order: &Order,
+    form: &str,
+) {
+    kit.run(|state, home, port| {
+        running.send(()).expect("the requester runs");
+        go.recv_timeout(BOUND).expect("the requester may ask");
+        let (grant, lend) = port.request_turn().ok().expect("the request is granted");
+        order.lock().expect("order").push((home.owner, grant.epoch));
+        let mut turn = begin_turn(state, home, (grant, lend), port, standalone)
+            .ok()
+            .expect("the grant begins");
+        turn.with_world(|ev| eval(ev, form));
+        turn.end(port).ok().expect("the host detaches");
+    });
+}
+
+/// D-1 + K4 (lead #13966 C2). O, B and C are committed in that order while
+/// the stop waits on L, and are lent in that order in one stop. L's own
+/// request reaches the keeper's inbox only after that stop is taken: it is
+/// outside the stop's snapshot and is lent in the next stop.
+#[test]
+fn l67a_driver_serves_its_snapshot_in_order_and_a_later_request_next_stop() {
+    with_live_era("l67a-fifo", |era| {
+        let (inbox, inbox_rx) = mpsc::channel();
+        let (relay_tx, relay_rx) = mpsc::channel::<KeeperMsg>();
+        let (notices_tx, notices) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let mut held = false;
+        let mut driver = Driver::new(era, inbox_rx).observe_pending(
+            Duration::from_millis(5),
+            move |_pending: &StopPending, queued| {
+                let _ = notices_tx.send(queued);
+                // Once the three are committed, hold the keeper here until
+                // L's request is in its inbox.
+                if queued == 3 && !held {
+                    held = true;
+                    release_rx
+                        .recv_timeout(BOUND)
+                        .expect("L's request is through");
+                }
+            },
+        );
+        let kits = [O, B, C, L].map(|owner| enroll_driver(era, &mut driver, &relay_tx, owner));
+        drop(relay_tx);
+        let order = Order::default();
+        let (running_tx, running) = mpsc::channel::<()>();
+        let (go, gates): (Vec<_>, Vec<_>) = (0..4).map(|_| mpsc::channel::<()>()).unzip();
+        let (relayed_tx, relayed) = mpsc::channel::<()>();
+        std::thread::scope(|scope| {
+            let _panic_guard = KeeperPanicGuard { keeper: era };
+            // Forward every message in order; say when L's request is through.
+            scope.spawn(move || {
+                for message in relay_rx {
+                    let from_l = matches!(message, KeeperMsg::Request { owner: L, .. });
+                    if inbox.send(message).is_err() {
+                        break;
+                    }
+                    if from_l {
+                        let _ = relayed_tx.send(());
+                    }
+                }
+            });
+            let order = &order;
+            for ((kit, gate), form) in kits.into_iter().zip(gates).zip([
+                "(setq sp-live 51)",
+                "(setq sp-live 52)",
+                "(setq sp-live 53)",
+                "(setq sp-live 54)",
+            ]) {
+                let running = running_tx.clone();
+                scope.spawn(move || requester(kit, running, gate, order, form));
+            }
+            drop(running_tx);
+            scope.spawn(move || {
+                for _ in 0..4 {
+                    running.recv_timeout(BOUND).expect("every owner runs");
+                }
+                go[0].send(()).expect("O asks");
+                let mut next = 1;
+                while next < 4 {
+                    let queued = notices.recv_timeout(BOUND).expect("a pending attempt");
+                    if queued == next {
+                        go[next].send(()).expect("the next owner asks");
+                        next += 1;
+                    }
+                }
+                relayed.recv_timeout(BOUND).expect("L's request is relayed");
+                release_tx.send(()).expect("release the keeper");
+            });
+            assert_eq!(driver.run(), DriverEnd::Drained);
+        });
+        let order = order.into_inner().expect("order");
+        let owners: Vec<u64> = order.iter().map(|(owner, _)| *owner).collect();
+        assert_eq!(owners, [O, B, C, L], "ring order is grant order");
+        let first = order[0].1;
+        assert!(
+            order[..3].iter().all(|(_, epoch)| *epoch == first),
+            "O, B and C share one stop: {order:?}"
+        );
+        assert!(order[3].1 > first, "L waits for the next stop: {order:?}");
+    });
+}
+
+/// D-3. A's queued receipt is stale when its stop comes: the keeper sends A
+/// back to publish, retires its entry and lends nothing more in that stop,
+/// so B, queued behind it, is not skipped ahead. B is lent in the next
+/// stop, and A's fresh request after it.
+#[test]
+fn l67a_an_unready_head_is_sent_back_without_skipping_the_ring() {
+    with_live_era("l67a-unready", |era| {
+        let (inbox, inbox_rx) = mpsc::channel();
+        let (notices_tx, notices) = mpsc::channel();
+        let mut driver = Driver::new(era, inbox_rx).observe_pending(
+            Duration::from_millis(5),
+            move |_pending: &StopPending, queued| {
+                let _ = notices_tx.send(queued);
+            },
+        );
+        let a = enroll_driver(era, &mut driver, &inbox, O);
+        let b = enroll_driver(era, &mut driver, &inbox, B);
+        let slow = era.register(L, 0).expect("register the slow owner");
+        let heap = era.heap_identity();
+        drop(inbox);
+        let order = Order::default();
+        let (running_tx, running) = mpsc::channel::<()>();
+        let (b_go_tx, b_go) = mpsc::channel::<()>();
+        let (l_go_tx, l_go) = mpsc::channel::<()>();
+        std::thread::scope(|scope| {
+            let _panic_guard = KeeperPanicGuard { keeper: era };
+            let l_running = running_tx.clone();
+            let lagging = scope.spawn(move || lagging_owner(slow, heap, L, l_running, l_go));
+            let b_running = running_tx.clone();
+            let order = &order;
+            scope.spawn(move || requester(b, b_running, b_go, order, "(setq sp-live 62)"));
+            drop(running_tx);
+            let first = scope.spawn(move || {
+                for _ in 0..2 {
+                    running.recv_timeout(BOUND).expect("B and L run");
+                }
+                let (mut state, home, mut raw, grants) = a.start_raw();
+                // A requests under a receipt it then replaces.
+                let stale = raw.publish();
+                raw.leave();
+                let fresh = raw.publish();
+                raw.request(stale);
+                let sent_back = matches!(grants.recv_timeout(BOUND), Ok(GrantMsg::Republish));
+                let (_, generation, _) = fresh.serial_facts();
+                raw.request(fresh);
+                let Ok(GrantMsg::Grant { ticket, epoch }) = grants.recv_timeout(BOUND) else {
+                    panic!("A's fresh request is granted");
+                };
+                order.lock().expect("order").push((O, epoch));
+                let mut port = raw.port();
+                raw_turn(
+                    &mut state,
+                    home,
+                    &mut port,
+                    Grant {
+                        ticket,
+                        generation,
+                        epoch,
+                    },
+                    "(setq sp-live 61)",
+                );
+                raw.inbox
+                    .send(KeeperMsg::Exit { owner: O })
+                    .expect("A exits");
+                retire(raw.mutator);
+                sent_back
+            });
+            scope.spawn(move || {
+                let mut b_asked = false;
+                loop {
+                    let queued = notices.recv_timeout(BOUND).expect("a pending attempt");
+                    if queued == 1 && !b_asked {
+                        b_asked = true;
+                        b_go_tx.send(()).expect("B asks");
+                    } else if queued == 2 {
+                        l_go_tx.send(()).expect("L polls");
+                        return;
+                    }
+                }
+            });
+            assert_eq!(driver.run(), DriverEnd::Drained);
+            let stop_one = lagging.join().expect("L");
+            assert!(first.join().expect("A"), "A is told to publish again");
+            let order = order.lock().expect("order").clone();
+            let owners: Vec<u64> = order.iter().map(|(owner, _)| *owner).collect();
+            assert_eq!(owners, [B, O], "B keeps its place ahead of A's new request");
+            assert!(
+                order[0].1 > stop_one,
+                "B is not lent in the stop that sent A back: {order:?}, {stop_one}"
+            );
+            assert!(order[1].1 >= order[0].1, "{order:?}");
+        });
+    });
+}
+
+/// D-6 (queued). A requests and exits before its stop is taken: the keeper
+/// cancels the request once, the stop lends nothing, and A's grant channel
+/// closes with nothing sent.
+#[test]
+fn l67a_an_exit_while_queued_cancels_the_request() {
+    with_live_era("l67a-exit-queued", |era| {
+        let (inbox, inbox_rx) = mpsc::channel();
+        let (notices_tx, notices) = mpsc::channel();
+        let mut driver = Driver::new(era, inbox_rx).observe_pending(
+            Duration::from_millis(5),
+            move |_pending: &StopPending, queued| {
+                let _ = notices_tx.send(queued);
+            },
+        );
+        let a = enroll_driver(era, &mut driver, &inbox, O);
+        let slow = era.register(L, 0).expect("register the slow owner");
+        let heap = era.heap_identity();
+        drop(inbox);
+        let (running_tx, running) = mpsc::channel::<()>();
+        let (exit_tx, exit_rx) = mpsc::channel::<()>();
+        let (l_go_tx, l_go) = mpsc::channel::<()>();
+        std::thread::scope(|scope| {
+            let _panic_guard = KeeperPanicGuard { keeper: era };
+            scope.spawn(move || lagging_owner(slow, heap, L, running_tx, l_go));
+            let queued_owner = scope.spawn(move || {
+                running.recv_timeout(BOUND).expect("L runs");
+                let (_state, _home, mut raw, grants) = a.start_raw();
+                let receipt = raw.publish();
+                raw.request(receipt);
+                exit_rx.recv_timeout(BOUND).expect("A may exit");
+                raw.inbox
+                    .send(KeeperMsg::Exit { owner: O })
+                    .expect("A exits");
+                let RawOwner { mutator, inbox, .. } = raw;
+                drop(inbox);
+                retire(mutator);
+                matches!(
+                    grants.recv_timeout(BOUND),
+                    Err(mpsc::RecvTimeoutError::Disconnected)
+                )
+            });
+            scope.spawn(move || {
+                let mut exited = false;
+                loop {
+                    let queued = notices.recv_timeout(BOUND).expect("a pending attempt");
+                    if queued == 1 && !exited {
+                        exited = true;
+                        exit_tx.send(()).expect("tell A");
+                    } else if queued == 0 && exited {
+                        l_go_tx.send(()).expect("L polls");
+                        return;
+                    }
+                }
+            });
+            assert_eq!(driver.run(), DriverEnd::Drained);
+            assert!(
+                queued_owner.join().expect("A"),
+                "A's channel closed with nothing sent"
+            );
+        });
+    });
+}
+
+/// D-6 (lent). An exit while the owner holds the ticket is a protocol
+/// break: the ticket is lost, so the keeper poisons.
+#[test]
+fn l67a_an_exit_while_lent_poisons() {
+    let Some((end, told)) = with_poisoned_era("l67a-exit-lent", |era| {
+        let (inbox, inbox_rx) = mpsc::channel();
+        let mut driver = Driver::new(era, inbox_rx);
+        let a = enroll_driver(era, &mut driver, &inbox, O);
+        drop(inbox);
+        std::thread::scope(|scope| {
+            let lent = scope.spawn(move || {
+                let (_state, _home, mut raw, grants) = a.start_raw();
+                let receipt = raw.publish();
+                raw.request(receipt);
+                let Ok(GrantMsg::Grant { ticket, .. }) = grants.recv_timeout(BOUND) else {
+                    panic!("A is granted");
+                };
+                raw.inbox
+                    .send(KeeperMsg::Exit { owner: O })
+                    .expect("A exits holding the ticket");
+                let told = matches!(grants.recv_timeout(BOUND), Ok(GrantMsg::Poisoned));
+                drop(ticket);
+                drop(raw);
+                told
+            });
+            let end = driver.run();
+            (end, lent.join().expect("A"))
+        })
+    }) else {
+        return;
+    };
+    assert_eq!(
+        end,
+        DriverEnd::Poisoned(Breach::Unexpected {
+            owner: O,
+            message: "an exit while its ticket is out",
+        })
+    );
+    assert!(told, "A learns the era is poisoned");
+}
+
+/// LOW-3 (lead #13966). A's grant channel is closed when its ticket is cut:
+/// the grant bounces, the ticket is lost, and the keeper poisons instead of
+/// waiting for a ticket that cannot come back.
+#[test]
+fn l67a_a_grant_to_a_gone_owner_poisons_without_waiting() {
+    let Some(end) = with_poisoned_era("l67a-gone", |era| {
+        let (inbox, inbox_rx) = mpsc::channel();
+        let mut driver = Driver::new(era, inbox_rx);
+        let a = enroll_driver(era, &mut driver, &inbox, O);
+        drop(inbox);
+        let (done_tx, done) = mpsc::channel::<()>();
+        std::thread::scope(|scope| {
+            scope.spawn(move || {
+                let (_state, _home, mut raw, grants) = a.start_raw();
+                drop(grants);
+                let receipt = raw.publish();
+                raw.request(receipt);
+                let RawOwner { mutator, inbox, .. } = raw;
+                // No sender is left, so the old keeper would read a
+                // disconnect rather than hang.
+                drop(inbox);
+                done.recv_timeout(BOUND).expect("the keeper is done");
+                drop(mutator);
+            });
+            let end = driver.run();
+            done_tx.send(()).expect("tell A");
+            end
+        })
+    }) else {
+        return;
+    };
+    assert_eq!(end, DriverEnd::Poisoned(Breach::Unreachable { owner: O }));
 }
