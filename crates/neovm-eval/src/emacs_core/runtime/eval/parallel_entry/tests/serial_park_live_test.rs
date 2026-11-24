@@ -2130,3 +2130,156 @@ fn l67b_a_group_collection_runs_first_and_the_group_resumes_next() {
         complete_retrying("verify stop", stopped.complete());
     });
 }
+
+// ---------------------------------------------------------------------------
+// The stop-cost rows (PLAN-L6-AMEND K3; lead #14000 QB2/QB3). Measurement
+// rows: each also asserts that every turn ran. Test-driver parameters, never
+// a product knob:
+// - `L6_STOP_PEERS`: running parallel owners that must meet every stop
+//   (default 1; the ruled points are 1 and 4).
+// - `L6_STOP_ITERS`: turns, intervals or collections per row (default 20).
+// Each row prints one `l6_stop_cost=` line with the timed section's elapsed
+// nanoseconds; timing runs are local, off the shared hosts.
+// ---------------------------------------------------------------------------
+
+fn stop_cost_param(name: &str, default: usize) -> usize {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(default)
+}
+
+/// Which client the stop-cost row drives through the keeper.
+#[derive(Clone, Copy)]
+enum StopCostRow {
+    /// A parallel owner's serial turns, one stop each.
+    OwnerTurns,
+    /// Baton-group World intervals, one stop each.
+    GroupIntervals,
+    /// Baton-initiated collections: two stops each (QB3).
+    GroupCollections,
+}
+
+impl StopCostRow {
+    fn name(self) -> &'static str {
+        match self {
+            StopCostRow::OwnerTurns => "owner_turns",
+            StopCostRow::GroupIntervals => "group_intervals",
+            StopCostRow::GroupCollections => "group_collections",
+        }
+    }
+}
+
+/// Drive ITERS of ROW through the product driver while PEERS running
+/// owners meet every stop, and report the timed section.
+fn stop_cost(row: StopCostRow) {
+    let peers = stop_cost_param("L6_STOP_PEERS", 1);
+    let iters = stop_cost_param("L6_STOP_ITERS", 20);
+    with_live_era("l6-stop-cost", move |era| {
+        let (inbox, inbox_rx) = mpsc::channel();
+        let mut driver = Driver::new(era, inbox_rx);
+        let o = enroll_driver(era, &mut driver, &inbox, O);
+        let mut group = enroll_group(&mut driver, &inbox);
+        let heap = era.heap_identity();
+        let permits: Vec<_> = (0..peers)
+            .map(|index| {
+                let owner = 7300 + index as u64;
+                (
+                    owner,
+                    era.register(owner, 0).expect("register a running peer"),
+                )
+            })
+            .collect();
+        drop(inbox);
+        let progress = AtomicU64::new(0);
+        let done = AtomicBool::new(false);
+        let (ready_tx, ready) = mpsc::channel::<()>();
+        std::thread::scope(|scope| {
+            let _panic_guard = KeeperPanicGuard { keeper: era };
+            let (progress, done) = (&progress, &done);
+            for (owner, permit) in permits {
+                let ready_tx = ready_tx.clone();
+                scope.spawn(move || {
+                    let mutator = activate(permit, heap, owner);
+                    ready_tx.send(()).expect("the peer runs");
+                    run_peer(mutator, progress, done)
+                });
+            }
+            drop(ready_tx);
+            let runner = scope.spawn(move || {
+                // Every peer is a running member before the first stop.
+                for _ in 0..peers {
+                    ready.recv_timeout(BOUND).expect("the peers run");
+                }
+                let mut ran = 0;
+                let start = Instant::now();
+                match row {
+                    StopCostRow::OwnerTurns => {
+                        group.exit();
+                        o.run(|state, home, port| {
+                            for _ in 0..iters {
+                                let turn = driver_turn(state, home, port, "(setq sp-live 1)");
+                                turn.end(port).ok().expect("the host detaches");
+                                ran += 1;
+                            }
+                        });
+                    }
+                    StopCostRow::GroupIntervals => {
+                        o.run(|_state, _home, _port| ());
+                        for _ in 0..iters {
+                            let (turn, _epoch, lend) = group
+                                .request_world()
+                                .ok()
+                                .expect("the group is lent the World");
+                            group.give_back(lend, WorldReturned::from_end(turn));
+                            ran += 1;
+                        }
+                        group.exit();
+                    }
+                    StopCostRow::GroupCollections => {
+                        o.run(|_state, _home, _port| ());
+                        let (mut turn, _epoch, mut lend) = group
+                            .request_world()
+                            .ok()
+                            .expect("the group is lent the World");
+                        for _ in 0..iters {
+                            (turn, _, lend) = group
+                                .collect(lend, WorldReturned::from_end(turn), None)
+                                .ok()
+                                .expect("the group resumes after its collection");
+                            ran += 1;
+                        }
+                        group.give_back(lend, WorldReturned::from_end(turn));
+                        group.exit();
+                    }
+                }
+                (ran, start.elapsed())
+            });
+            assert_eq!(driver.run(), DriverEnd::Drained);
+            done.store(true, Ordering::Release);
+            let (ran, elapsed) = runner.join().expect("the stop-cost runner");
+            assert_eq!(ran, iters, "every turn ran");
+            eprintln!(
+                "l6_stop_cost={} peers={peers} iters={iters} elapsed_ns={} per_iter_ns={}",
+                row.name(),
+                elapsed.as_nanos(),
+                elapsed.as_nanos() / iters.max(1) as u128
+            );
+        });
+    });
+}
+
+#[test]
+fn l6_stop_cost_owner_turns() {
+    stop_cost(StopCostRow::OwnerTurns);
+}
+
+#[test]
+fn l6_stop_cost_group_intervals() {
+    stop_cost(StopCostRow::GroupIntervals);
+}
+
+#[test]
+fn l6_stop_cost_group_collections() {
+    stop_cost(StopCostRow::GroupCollections);
+}
