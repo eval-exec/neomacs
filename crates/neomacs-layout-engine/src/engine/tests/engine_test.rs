@@ -5766,6 +5766,349 @@ fn layout_frame_rust_list_wrapped_left_fringe_spec_draws_in_fringe_not_inline() 
     );
 }
 
+/// Face state shared by the #834 fringe-bitmap rows. GNU's `fringe` face has
+/// a background of its own (`grey95` on a light background, lisp/faces.el),
+/// the default face is black on white, and three probe faces set one
+/// attribute each. `c834-bmp-override` carries a `set-fringe-bitmap-face` face.
+const FRINGE_FACE_SETUP: &str = r##"(progn
+  (internal-make-lisp-face 'fringe)
+  (internal-set-lisp-face-attribute 'fringe :background "#f2f2f2" (selected-frame))
+  (internal-set-lisp-face-attribute 'default :foreground "#000000" (selected-frame))
+  (internal-set-lisp-face-attribute 'default :background "#ffffff" (selected-frame))
+  (internal-make-lisp-face 'c834-fg-only)
+  (internal-set-lisp-face-attribute 'c834-fg-only :foreground "#ff0000" (selected-frame))
+  (internal-make-lisp-face 'c834-override)
+  (internal-set-lisp-face-attribute 'c834-override :foreground "#0000ff" (selected-frame))
+  (internal-make-lisp-face 'c834-row-face)
+  (internal-set-lisp-face-attribute 'c834-row-face :foreground "#00ff00" (selected-frame))
+  (define-fringe-bitmap 'c834-bmp [255 255 255] nil nil 'center)
+  (define-fringe-bitmap 'c834-bmp-override [255 255 255] nil nil 'center)
+  (set-fringe-bitmap-face 'c834-bmp-override 'c834-override))"##;
+
+/// One buffer line of a #834 fringe row.
+struct FringeLine {
+    text: &'static str,
+    /// The `display` property that requests the fringe bitmap.
+    spec: &'static str,
+    /// A face for the line's own text.
+    face: Option<&'static str>,
+    /// Put SPEC on the line's first character (a text property) instead of on
+    /// a zero-width overlay's before-string.
+    on_text: bool,
+}
+
+impl FringeLine {
+    const fn overlay(text: &'static str, spec: &'static str) -> Self {
+        Self {
+            text,
+            spec,
+            face: None,
+            on_text: false,
+        }
+    }
+
+    const fn with_face(mut self, face: &'static str) -> Self {
+        self.face = Some(face);
+        self
+    }
+
+    const fn on_text(mut self) -> Self {
+        self.on_text = true;
+        self
+    }
+}
+
+/// Lay out one buffer line per [`FringeLine`] on a window-system frame and
+/// return, in row order, the fringe side, the registry index and the fg/bg
+/// colors of every USER fringe bitmap the frame materializes (standard
+/// indicator bitmaps such as the empty-line `~` are left out).
+///
+/// Unless `on_text` is set, a line is headed by the overlay diff-hl uses: a
+/// zero-width overlay whose before-string is one space carrying SPEC as its
+/// `display` property.
+fn fringe_bitmap_paint(setup: &str, lines: &[FringeLine]) -> Vec<(FringeSide, u16, Color, Color)> {
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let buf_id = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("c834-fringe-face", 640, 200, buf_id);
+    // A window-system frame, so the fringes have width.
+    if let Some(frame) = eval.frame_manager_mut().get_mut(frame_id) {
+        frame.set_window_system(Some(Value::symbol("neo")));
+    }
+    assert!(eval.frame_manager_mut().select_frame(frame_id));
+    let selected_window_id = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
+    eval.eval_str(setup).expect("fringe face setup");
+
+    let (insert, mark): (String, String) = {
+        let mut insert = String::new();
+        let mut mark = String::from("(progn (goto-char (point-min))");
+        let mut start = 1usize;
+        for line in lines {
+            insert.push_str(line.text);
+            insert.push('\n');
+            if line.on_text {
+                mark.push_str(&format!(
+                    "(put-text-property {start} {} 'display '{})",
+                    start + 1,
+                    line.spec
+                ));
+            } else {
+                mark.push_str(&format!(
+                    "(let ((p (point))) (overlay-put (make-overlay p p) 'before-string \
+                     (propertize \" \" 'display '{}))) (forward-line 1)",
+                    line.spec
+                ));
+            }
+            if let Some(face) = line.face {
+                mark.push_str(&format!(
+                    "(put-text-property {start} {} 'face '{face})",
+                    start + line.text.chars().count()
+                ));
+            }
+            start += line.text.chars().count() + 1;
+        }
+        mark.push(')');
+        (insert, mark)
+    };
+    {
+        let buf = eval.buffer_manager_mut().get_mut(buf_id).expect("buffer");
+        buf.insert(&insert);
+        buf.goto_emacs_byte_pos(EmacsBytePos::new(0));
+    }
+    eval.eval_str(&mark).expect("fringe specs");
+    let first_user_index = eval
+        .eval_str("(get 'c834-bmp 'fringe)")
+        .expect("fringe bitmap index property")
+        .as_fixnum()
+        .expect("fringe index") as u16;
+
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    engine.layout_frame_rust(&mut eval, frame_id);
+
+    let state = engine
+        .last_frame_display_state
+        .as_ref()
+        .expect("display state");
+    let target_window_id =
+        neomacs_display_protocol::types::DisplayWindowId::new(selected_window_id.0 as i64);
+    let mut paint = Vec::new();
+    state.for_each_glyph(|glyph| {
+        if let FrameGlyph::FringeBitmap {
+            window_id,
+            side,
+            bitmap_index,
+            face_id,
+            ..
+        } = glyph
+            && window_id == target_window_id
+            && bitmap_index >= first_user_index
+            && let Some(face) = state.faces.get(&face_id)
+        {
+            paint.push((side, bitmap_index, face.foreground, face.background));
+        }
+    });
+    paint
+}
+
+use neomacs_display_protocol::frame_glyphs::FringeSide;
+
+const RED: Color = Color::rgb(1.0, 0.0, 0.0);
+const BLUE: Color = Color::rgb(0.0, 0.0, 1.0);
+const BLACK: Color = Color::rgb(0.0, 0.0, 0.0);
+/// `grey95`, the `fringe` face background on a light background.
+fn grey95() -> Color {
+    Color::from_pixel(0x00F2F2F2)
+}
+
+fn assert_fringe_paint(
+    paint: &[(FringeSide, u16, Color, Color)],
+    expected: &[(FringeSide, Color, Color)],
+) {
+    let actual: Vec<(FringeSide, Color, Color)> = paint
+        .iter()
+        .map(|(side, _, fg, bg)| (*side, *fg, *bg))
+        .collect();
+    assert_eq!(
+        actual, expected,
+        "fringe bitmap (side, foreground, background) diverged from GNU"
+    );
+}
+
+/// Issue #834, GNU `handle_single_display_spec` (src/xdisp.c): a FACE in a
+/// `(left-fringe BITMAP FACE)` spec is looked up with
+/// `lookup_derived_face (FACE, FRINGE_FACE_ID)`, i.e. merged OVER the `fringe`
+/// face. A face that sets only `:foreground` therefore keeps the fringe
+/// background instead of the default face's.
+#[test]
+fn fringe_bitmap_spec_face_merges_over_the_fringe_face() {
+    let paint = fringe_bitmap_paint(
+        FRINGE_FACE_SETUP,
+        &[FringeLine::overlay(
+            "spec face, foreground only",
+            "((left-fringe c834-bmp c834-fg-only))",
+        )],
+    );
+    assert_fringe_paint(&paint, &[(FringeSide::Left, RED, grey95())]);
+}
+
+/// Issue #834, GNU `draw_fringe_bitmap_1` (src/fringe.c): with no FACE in the
+/// spec the row keeps the default face id and the bitmap is painted with the
+/// `fringe` face -- never with the face of the text beside it.
+#[test]
+fn fringe_bitmap_without_spec_face_uses_the_fringe_face_not_the_row_face() {
+    let paint = fringe_bitmap_paint(
+        FRINGE_FACE_SETUP,
+        &[
+            FringeLine::overlay("no spec face", "((left-fringe c834-bmp))")
+                .with_face("c834-row-face"),
+        ],
+    );
+    assert_fringe_paint(&paint, &[(FringeSide::Left, BLACK, grey95())]);
+}
+
+/// Issue #834, GNU `handle_single_display_spec`: a FACE written in the display
+/// spec resolves to a real face id, and `draw_fringe_bitmap_1` consults the
+/// bitmap's `set-fringe-bitmap-face` face ONLY when that id is the default
+/// one. The override never displaces a spec FACE.
+#[test]
+fn fringe_bitmap_spec_face_wins_over_set_fringe_bitmap_face() {
+    let paint = fringe_bitmap_paint(
+        FRINGE_FACE_SETUP,
+        &[FringeLine::overlay(
+            "spec face over an overridden bitmap",
+            "((left-fringe c834-bmp-override c834-fg-only))",
+        )],
+    );
+    assert_fringe_paint(&paint, &[(FringeSide::Left, RED, grey95())]);
+}
+
+/// Issue #834, GNU `draw_fringe_bitmap_1`: with no FACE in the spec, the
+/// bitmap's `set-fringe-bitmap-face` face applies, merged over `fringe`
+/// (`lookup_derived_face (face, FRINGE_FACE_ID, 0)`).
+#[test]
+fn fringe_bitmap_set_fringe_bitmap_face_merges_over_the_fringe_face() {
+    let paint = fringe_bitmap_paint(
+        FRINGE_FACE_SETUP,
+        &[FringeLine::overlay(
+            "override face only",
+            "((left-fringe c834-bmp-override))",
+        )],
+    );
+    assert_fringe_paint(&paint, &[(FringeSide::Left, BLUE, grey95())]);
+}
+
+/// Issue #834, GNU `handle_single_display_spec`: `lookup_derived_face` with
+/// `signal_p` false yields -1 for a name that is no face, so an unknown FACE
+/// leaves the row on the default face id and the bitmap falls back to its
+/// `set-fringe-bitmap-face` override (if any) or the `fringe` face.
+#[test]
+fn fringe_bitmap_unknown_spec_face_falls_back_to_the_fringe_face() {
+    let paint = fringe_bitmap_paint(
+        FRINGE_FACE_SETUP,
+        &[
+            FringeLine::overlay(
+                "no such face, no override",
+                "((left-fringe c834-bmp no-such-face-c834))",
+            ),
+            FringeLine::overlay(
+                "no such face, with override",
+                "((left-fringe c834-bmp-override no-such-face-c834))",
+            ),
+        ],
+    );
+    assert_fringe_paint(
+        &paint,
+        &[
+            (FringeSide::Left, BLACK, grey95()),
+            (FringeSide::Left, BLUE, grey95()),
+        ],
+    );
+}
+
+/// Issue #834, GNU `handle_single_display_spec` (src/xdisp.c:6409-6421):
+/// `(left-fringe nil)` is still a fringe display spec — it draws no bitmap
+/// and consumes its covered character instead of leaving an inline space.
+#[test]
+fn fringe_bitmap_nil_bitmap_spec_consumes_covered_space_without_shift() {
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let buf_id = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    {
+        let buf = eval.buffer_manager_mut().get_mut(buf_id).expect("buffer");
+        buf.insert("M\n");
+        buf.goto_emacs_byte_pos(EmacsBytePos::new(0));
+    }
+    eval.eval_str(
+        r#"(progn
+  (goto-char (point-min))
+  (let ((p (point)))
+    (overlay-put (make-overlay p p) 'before-string
+                 (propertize " " 'display '((left-fringe nil))))))"#,
+    )
+    .expect("nil fringe bitmap spec");
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("c834-nil-bmp", 48, 200, buf_id);
+    if let Some(frame) = eval.frame_manager_mut().get_mut(frame_id) {
+        frame.set_window_system(Some(Value::symbol("neo")));
+    }
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    engine.layout_frame_rust(&mut eval, frame_id);
+
+    let state = engine
+        .last_frame_display_state
+        .as_ref()
+        .expect("display state");
+    let row = &state.window_matrices[0].matrix.rows[0];
+    assert!(row.left_fringe_bitmap.is_none());
+    let first_char = row.glyphs[GlyphArea::Text.index()]
+        .iter()
+        .find_map(|g| match &g.glyph_type {
+            GlyphType::Char { ch } => Some(*ch),
+            _ => None,
+        });
+    assert_eq!(first_char, Some('M'));
+}
+
+/// Issue #834: the right fringe takes the same face rule.
+#[test]
+fn fringe_bitmap_right_fringe_spec_face_merges_over_the_fringe_face() {
+    let paint = fringe_bitmap_paint(
+        FRINGE_FACE_SETUP,
+        &[FringeLine::overlay(
+            "right fringe",
+            "((right-fringe c834-bmp c834-fg-only))",
+        )],
+    );
+    assert_fringe_paint(&paint, &[(FringeSide::Right, RED, grey95())]);
+}
+
+/// Issue #834: the text-property path (the `display` property on a buffer
+/// character, not on an overlay string) resolves the face the same way.
+#[test]
+fn fringe_bitmap_text_property_spec_face_merges_over_the_fringe_face() {
+    let paint = fringe_bitmap_paint(
+        FRINGE_FACE_SETUP,
+        &[
+            FringeLine::overlay(" x on the text", "((left-fringe c834-bmp c834-fg-only))")
+                .on_text(),
+        ],
+    );
+    assert_fringe_paint(&paint, &[(FringeSide::Left, RED, grey95())]);
+}
+
 #[test]
 fn layout_frame_rust_lays_out_line_numbers() {
     let text = "abc\ndef\nghi\n";

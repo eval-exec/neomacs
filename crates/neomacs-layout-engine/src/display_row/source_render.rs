@@ -1598,7 +1598,7 @@ impl<'a, FS: crate::neovm_bridge::FaceServices> TextRowSourceRenderState<'a, FS>
     ) {
         match emission {
             DisplayNonTextAreaEmission::Fringe(layout) => {
-                self.record_fringe_bitmap_layout(&layout, face_ids, fallback_face_id);
+                self.record_fringe_bitmap_layout(&layout, face_ids);
             }
             DisplayNonTextAreaEmission::Margin(margin) => {
                 self.render_margin_emission(margin, face_scope, frame, face_ids, structural_order);
@@ -1900,27 +1900,20 @@ impl<'a, FS: crate::neovm_bridge::FaceServices> TextRowSourceRenderState<'a, FS>
         &mut self,
         descriptor: &DisplayPropertyReplacementDescriptor,
         face_ids: &mut FrameFaceAttempt,
-        active_face_state: &DisplayRowActiveFaceState,
     ) {
         if let Some(DisplayReplacementProperty::Fringe(layout)) =
             descriptor.classification().replacement()
         {
-            let layout = *layout;
-            self.record_fringe_bitmap_layout(&layout, face_ids, active_face_state.face_id());
+            self.record_fringe_bitmap_layout(layout, face_ids);
         }
     }
 
     /// Record a parsed fringe layout (from any source path) on the current row.
-    /// `fallback_face_id` is the row's active face, used only when neither a
-    /// `set-fringe-bitmap-face` override nor the spec's FACE resolves.
-    ///
-    /// Resolution honors GNU's `set-fringe-bitmap-face` override: the face name
-    /// stored on the registry entry wins over the spec's FACE argument.
+    /// The bitmap paints with the face [`Self::resolve_fringe_face_id`] picks.
     pub(crate) fn record_fringe_bitmap_layout(
         &mut self,
         layout: &crate::display_spec::DisplayFringeLayout,
         face_ids: &mut FrameFaceAttempt,
-        fallback_face_id: FaceId,
     ) {
         let layout = *layout;
 
@@ -1940,14 +1933,8 @@ impl<'a, FS: crate::neovm_bridge::FaceServices> TextRowSourceRenderState<'a, FS>
                 None => return,
             };
 
-        // The face id: prefer the `set-fringe-bitmap-face` override, then the
-        // spec's FACE, then the row's active face.
-        let face_id = self.resolve_fringe_face_id(
-            registry_face_name.as_deref(),
-            layout.face,
-            face_ids,
-            fallback_face_id,
-        );
+        let face_id =
+            self.resolve_fringe_face_id(registry_face_name.as_deref(), layout.face, face_ids);
 
         let info = FringeBitmapInfo {
             bitmap_index,
@@ -1959,28 +1946,52 @@ impl<'a, FS: crate::neovm_bridge::FaceServices> TextRowSourceRenderState<'a, FS>
             .apply_current_row_mutation(SetRowFringeBitmapMutation { side, info });
     }
 
-    /// Resolve the face id used for a fringe bitmap. `override_name` is the
-    /// `set-fringe-bitmap-face` registry override (highest priority); `spec_face`
-    /// is the FACE from the display spec; the active row face is the fallback.
+    /// The face one fringe bitmap paints with, GNU's rule for both the FACE of
+    /// a `(left-fringe BITMAP FACE)` display spec and the bitmap's
+    /// `set-fringe-bitmap-face` face.
+    ///
+    /// `handle_single_display_spec` (src/xdisp.c) records a FACE from the spec
+    /// as `lookup_derived_face (FACE, FRINGE_FACE_ID)`: the face merged OVER
+    /// the `fringe` face, so a face that sets only `:foreground` keeps the
+    /// fringe background. A missing FACE, or one that names no face (that
+    /// lookup returns -1 without signalling), leaves the row on the default
+    /// face id; `draw_fringe_bitmap_1` (src/fringe.c) substitutes a face only
+    /// then: the bitmap's `set-fringe-bitmap-face` face, likewise merged over
+    /// `fringe`, or plain `fringe` when the bitmap has none. The override
+    /// therefore never displaces a FACE written in the display spec, and the
+    /// text beside the bitmap never lends it a face.
     fn resolve_fringe_face_id(
         &mut self,
         override_name: Option<&str>,
         spec_face: Option<Value>,
         face_ids: &mut FrameFaceAttempt,
-        fallback_face_id: FaceId,
     ) -> FaceId {
-        if let Some(name) = override_name {
-            let resolved = self.faces.resolve_named_face(name);
-            return self.intern_and_install_face(face_ids, &resolved);
+        let fringe = self.resolve_fixed_face(neovm_core::emacs_core::intern::WellKnown::Fringe);
+        let mut resolved = None;
+        if let Some(face_value) = spec_face {
+            resolved = self.resolve_derived_face_over(&fringe, &face_value);
         }
-        if let Some(face_value) = spec_face
-            && let Some(resolved) = self
-                .faces
-                .resolve_face_value_over(&self.faces.default_face(), &face_value)
+        if resolved.is_none()
+            && let Some(name) = override_name
         {
-            return self.intern_and_install_face(face_ids, &resolved);
+            let sym = Value::from_sym_id(neovm_core::emacs_core::intern::intern(name));
+            resolved = self.resolve_derived_face_over(&fringe, &sym);
         }
-        fallback_face_id
+        let resolved = resolved.unwrap_or(fringe);
+        self.intern_and_install_face(face_ids, &resolved)
+    }
+
+    /// Merge a named face over a base resolved face and realize it for
+    /// display. `None` when the value names no defined or remapped face, like
+    /// GNU's `lookup_derived_face` with `signal_p` false, which yields -1.
+    pub(crate) fn resolve_derived_face_over(
+        &mut self,
+        base: &ResolvedFace,
+        face_value: &Value,
+    ) -> Option<ResolvedFace> {
+        let mut face = self.faces.resolve_derived_face_over(base, face_value)?;
+        self.realize_face_for_display(&mut face);
+        Some(face)
     }
 
     pub(crate) fn output_emitter(&mut self) -> &mut WindowOutputEmitter {

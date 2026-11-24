@@ -309,11 +309,13 @@ pub enum FrameGlyph {
     /// Fringe bitmap drawn in a window's left or right fringe column. The
     /// monochrome bits live once per frame in
     /// [`FrameGlyphBuffer::fringe_bitmaps`], keyed by `bitmap_index`; the
-    /// renderer expands them to foreground quads in the fringe column. GNU draws
-    /// these via `rif->draw_fringe_bitmap`.
+    /// renderer paints them with the face's foreground over its background.
+    /// GNU draws these via `rif->draw_fringe_bitmap`.
     FringeBitmap {
         window_id: DisplayWindowId,
         row_role: GlyphRowRole,
+        /// The band the row shows in: for a buffer-text row the window's text
+        /// area, so a row partly scrolled under a header line is clipped.
         clip_rect: Option<Rect>,
         /// Frame-absolute X of the fringe column's left edge.
         x: f32,
@@ -329,6 +331,8 @@ pub enum FrameGlyph {
         face_id: FaceId,
         /// Which fringe this bitmap belongs to.
         side: FringeSide,
+        /// The row's own bitmap, or an overlay painted on top of it.
+        kind: FringeBitmapKind,
     },
 
     /// Window background
@@ -797,6 +801,18 @@ pub struct WindowCursor {
 pub enum FringeSide {
     Left,
     Right,
+}
+
+/// Which of GNU's two fringe-bitmap draws a [`FrameGlyph::FringeBitmap`] is:
+/// `draw_fringe_bitmap_1`'s `overlay` argument (src/fringe.c).
+///
+/// A row's own bitmap covers its fringe strip with its face's background and
+/// paints its set bits in the face's foreground. An overlay, the overlay
+/// arrow, paints its set bits only, over whatever the row's bitmap left.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum FringeBitmapKind {
+    RowBitmap,
+    Overlay,
 }
 
 /// Resolved fringe-bitmap data embedded once per frame in
@@ -2171,6 +2187,7 @@ impl FrameGlyphBuffer {
         bitmap_index: u16,
         face_id: FaceId,
         side: FringeSide,
+        kind: FringeBitmapKind,
     ) {
         self.glyphs.push(FrameGlyph::FringeBitmap {
             window_id: self.current_window_id,
@@ -2183,6 +2200,7 @@ impl FrameGlyphBuffer {
             bitmap_index,
             face_id,
             side,
+            kind,
         });
     }
 

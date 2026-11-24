@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use neomacs_display_protocol::face::BoxVerticalEdges;
-use neomacs_display_protocol::frame_glyphs::{FringeBitmapData, StipplePattern};
+use neomacs_display_protocol::frame_glyphs::StipplePattern;
 use neomacs_display_protocol::scene::{Scene, SceneCursorStyle};
 use neomacs_display_protocol::types::Color;
 
@@ -32,6 +32,7 @@ pub use target::{NativeContentPlacement, NativePlacementError, RenderTarget, Sna
 mod effect_common;
 mod effects_state;
 mod frame_pass;
+mod fringe_paint;
 mod full_frame_texture;
 pub use full_frame_texture::FullFrameTexture;
 mod fx_state;
@@ -1724,121 +1725,23 @@ impl WgpuRenderer {
         }
     }
 
-    /// Render a monochrome fringe bitmap into a window's fringe column.
-    ///
-    /// Reuses the stipple bits-to-quads technique (no texture/atlas): each set
-    /// bit becomes a `scale`-sized foreground quad, with horizontal runs merged.
-    /// `scale` is one logical pixel (`1.0`); the logical→physical projection in
-    /// the rect pipeline then scales it by the device pixel ratio, so arrows are
-    /// full-size on hidpi without any per-bit `* scale_factor`.
-    ///
-    /// Bits are MSB-aligned `u16` (column `b` of row `r` is set when
-    /// `(bits[r] >> (15 - b)) & 1 == 1`). `column_x`/`row_y` are the fringe
-    /// column's top-left in logical (offset-applied) frame coordinates; the
-    /// bitmap is centered horizontally and aligned vertically per `align`
-    /// (0 = center, 1 = top, 2 = bottom).
-    #[allow(clippy::too_many_arguments)]
+    /// Paint a fringe bitmap into a window's fringe column the way GNU's
+    /// `draw_fringe_bitmap_1` and `x_draw_fringe_bitmap` do: the rectangles of
+    /// [`fringe_bitmap_rects`] as quads (no texture or atlas; horizontal runs
+    /// of set bits are merged). `scale` is one logical pixel (`1.0`); the
+    /// logical→physical projection in the rect pipeline then scales each quad
+    /// by the device pixel ratio, so bitmaps are full-size on hidpi without any
+    /// per-bit `* scale_factor`.
     fn render_fringe_bitmap(
         &self,
         vertices: &mut Vec<RectVertex>,
-        column_x: f32,
-        row_y: f32,
-        column_width: f32,
-        row_height: f32,
-        fg: &Color,
-        bitmap: &FringeBitmapData,
+        place: fringe_paint::FringeBitmapPlace<'_>,
+        foreground: Color,
+        background: Color,
     ) {
-        if bitmap.width == 0 || bitmap.height == 0 || bitmap.bits.is_empty() {
-            return;
-        }
-        let scale = 1.0_f32;
-        let bmp_w = bitmap.width as f32 * scale;
-        let period = bitmap.period as usize;
-        // A periodic bitmap (e.g. `empty-line`, period 3) tiles its `period`-row
-        // motif down the FULL row height — GNU `draw_fringe_bitmap_1` keys the
-        // start row off the row's frame y (`p.dh = p.y % period`) so the dashed
-        // pattern stays on a single global grid across every empty row, then
-        // draws `height - dh` rows clipped to the row.  A non-periodic bitmap is
-        // a fixed-height glyph aligned within the row.
-        let bmp_h = if period > 0 {
-            row_height
-        } else {
-            bitmap.height as f32 * scale
-        };
-
-        // Horizontal: center the bitmap in the fringe column (GNU left-justifies
-        // standard bitmaps, but centering reads well for magit's narrow arrows
-        // and never clips when width <= column_width).
-        let x_off = ((column_width - bmp_w) * 0.5).max(0.0);
-        // Vertical alignment within the row. Periodic bitmaps always tile from
-        // the row top (GNU stores them ALIGN_BITMAP_TOP); the phase below keeps
-        // them aligned to the global grid.
-        let y_off = if period > 0 {
-            0.0
-        } else {
-            match bitmap.align {
-                1 => 0.0,                                   // TOP
-                2 => (row_height - bmp_h).max(0.0),         // BOTTOM
-                _ => ((row_height - bmp_h) * 0.5).max(0.0), // CENTER
-            }
-        };
-        let origin_x = column_x + x_off;
-        let origin_y = row_y + y_off;
-
-        // GNU's per-row phase: `dh = y % period`. We key off the row's logical
-        // frame y so consecutive empty rows continue the same dotted grid.
-        let phase = if period > 0 {
-            (row_y.max(0.0).round() as i64).rem_euclid(period as i64) as usize
-        } else {
-            0
-        };
-
-        let width_bits = bitmap.width.min(16) as u32;
-        let bitmap_rows = bitmap.bits.len();
-        // Number of device rows to draw: clipped to the row height, and never
-        // past the stored bitmap (a non-periodic bitmap draws its own height).
-        let device_rows = if period > 0 {
-            bmp_h.max(0.0).round() as usize
-        } else {
-            bitmap_rows
-        };
-        for dr in 0..device_rows {
-            let py = origin_y + dr as f32 * scale;
-            if py >= row_y + row_height {
-                break;
-            }
-            // Which stored bitmap row to sample. Periodic bitmaps wrap modulo
-            // `period`, phase-shifted so the grid is continuous across rows; a
-            // non-periodic bitmap maps device row -> bitmap row 1:1.
-            let bitmap_row = if period > 0 {
-                (phase + dr) % period
-            } else {
-                dr
-            };
-            let Some(&row_bits) = bitmap.bits.get(bitmap_row) else {
-                continue;
-            };
-            let mut b = 0u32;
-            while b < width_bits {
-                let set = (row_bits >> (15 - b)) & 1 != 0;
-                if !set {
-                    b += 1;
-                    continue;
-                }
-                let run_start = b;
-                b += 1;
-                while b < width_bits && (row_bits >> (15 - b)) & 1 != 0 {
-                    b += 1;
-                }
-                let run_len = (b - run_start) as f32;
-                self.add_rect(
-                    vertices,
-                    origin_x + run_start as f32 * scale,
-                    py,
-                    run_len * scale,
-                    scale,
-                    fg,
-                );
+        for rect in fringe_paint::fringe_bitmap_rects(place) {
+            if let Some(color) = fringe_paint::fringe_ink_color(rect.ink, foreground, background) {
+                self.add_rect(vertices, rect.x, rect.y, rect.width, rect.height, &color);
             }
         }
     }

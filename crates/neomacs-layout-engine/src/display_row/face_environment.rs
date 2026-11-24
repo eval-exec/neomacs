@@ -105,6 +105,17 @@ impl<'a, FS: crate::neovm_bridge::FaceServices> WindowFaces<'a, FS> {
             .resolver()
             .resolve_remapped_face_value_over(self.remapping, base, face_value)
     }
+
+    pub(crate) fn resolve_derived_face_over(
+        self,
+        base: &ResolvedFace,
+        face_value: &Value,
+    ) -> Option<ResolvedFace> {
+        self.frame
+            .resolver
+            .resolver()
+            .resolve_remapped_derived_face_over(self.remapping, base, face_value)
+    }
 }
 
 impl<FS: crate::neovm_bridge::FaceServices> Copy for FrameFaces<'_, FS> {}

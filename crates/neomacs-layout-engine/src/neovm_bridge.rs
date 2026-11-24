@@ -6737,6 +6737,37 @@ impl FaceResolver {
         })
     }
 
+    /// GNU `lookup_derived_face (w, f, symbol, base_face_id, false)` (xfaces.c):
+    /// resolve a named face (symbol or string) merged over `base`, returning
+    /// `None` without recording a diagnostic when `val` does not name a defined
+    /// or remapped face.
+    pub(crate) fn resolve_remapped_derived_face_over(
+        &self,
+        remapping: BufferFaceRemapping,
+        base: &ResolvedFace,
+        val: &Value,
+    ) -> Option<ResolvedFace> {
+        let name = Self::face_name_from_value(val)?;
+        if name == "nil" {
+            return None;
+        }
+        let remapped = Self::buffer_face_remapping_specs(remapping, name).is_some();
+        if !remapped && (name == "default" || self.face_table.get(name).is_none()) {
+            return None;
+        }
+        let mut remap_stack = Vec::new();
+        self.resolve_buffer_named_face_overlay_spec_inner(
+            remapping,
+            name,
+            &mut remap_stack,
+            0,
+            FaceReferenceDiagnostics::Suppress,
+        )
+        .map(|contribution| {
+            self.apply_specified_face_over(base, &contribution.face, contribution.identity.as_ref())
+        })
+    }
+
     /// Resolve NAME in a captured displayed-window face environment.
     ///
     /// Keeping this operation beside the remapping interpreter prevents

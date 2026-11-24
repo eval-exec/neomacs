@@ -391,11 +391,9 @@ impl<'a, 'face> BufferDisplayPropertyTextReplacementRenderRequest<'a, 'face> {
         // Attach the fringe bitmap (if this is a `(left-fringe …)` spec) to the
         // current row BEFORE rendering the empty inline replacement. The text
         // area still shows nothing; only the fringe column gains the bitmap.
-        state.source_render.record_fringe_bitmap_for_descriptor(
-            descriptor,
-            state.face_ids,
-            self.active_face_state,
-        );
+        state
+            .source_render
+            .record_fringe_bitmap_for_descriptor(descriptor, state.face_ids);
         let append_request = state
             .source_render
             .resolve_display_property_replacement_row_request(

@@ -17,7 +17,7 @@ use super::face::{BoxVerticalEdges, FaceAttributes, UnderlineStyle};
 use super::frame_chrome::{FrameChrome, FrameChromeContent, PresentationId};
 use super::frame_glyphs::{
     ContentTransitionHint, CursorStyle, DisplaySlotId, FrameGlyph, FrameGlyphBuffer,
-    FringeBitmapData, FringeSide, GlyphRowRole, MaterializedFaceData, PhysCursor,
+    FringeBitmapData, FringeBitmapKind, FringeSide, GlyphRowRole, MaterializedFaceData, PhysCursor,
     PresentedWindowGeometry, WindowCursor, WindowInfo,
 };
 use super::image::{ImageMargins, ImageOpaqueBackground, ImageSourceRect, RetainedImageSet};
@@ -3240,11 +3240,13 @@ impl FrameDisplayState {
                         bitmap_index: info.bitmap_index,
                         face_id: info.face_id,
                         side: FringeSide::Left,
+                        kind: FringeBitmapKind::RowBitmap,
                     });
                 }
                 // GNU draws the overlay arrow over the left fringe after the
                 // row's own left bitmap, never instead of it (`src/fringe.c`
-                // `draw_fringe_bitmap`).
+                // `draw_fringe_bitmap`), and as an overlay: set bits only, no
+                // background (`draw_fringe_bitmap_1` with `overlay` set).
                 if let Some(info) = glyph_row.overlay_arrow_bitmap {
                     push(FrameGlyph::FringeBitmap {
                         window_id,
@@ -3257,6 +3259,7 @@ impl FrameDisplayState {
                         bitmap_index: info.bitmap_index,
                         face_id: info.face_id,
                         side: FringeSide::Left,
+                        kind: FringeBitmapKind::Overlay,
                     });
                 }
                 if let Some(info) = glyph_row.right_fringe_bitmap {
@@ -3271,6 +3274,7 @@ impl FrameDisplayState {
                         bitmap_index: info.bitmap_index,
                         face_id: info.face_id,
                         side: FringeSide::Right,
+                        kind: FringeBitmapKind::RowBitmap,
                     });
                 }
             }

@@ -344,15 +344,19 @@ impl WgpuRenderer {
         }
 
         // --- Fringe bitmaps (own fringe column, drawn with the non-overlay
-        // backgrounds so they sit below text — magit section fold arrows). ---
+        // backgrounds so they sit below text): a row's bitmap in its face's
+        // colours, overlay arrows as set bits only. ---
         for glyph in &frame_glyphs.glyphs {
             if let FrameGlyph::FringeBitmap {
                 x,
                 y,
                 width,
                 height,
+                clip_rect,
                 bitmap_index,
                 face_id,
+                side,
+                kind,
                 ..
             } = glyph
             {
@@ -362,12 +366,19 @@ impl WgpuRenderer {
                 let face = frame_glyphs.resolved_face(*face_id);
                 self.render_fringe_bitmap(
                     &mut foreground_rect_vertices,
-                    *x,
-                    *y,
-                    *width,
-                    *height,
-                    &face.fg,
-                    bitmap,
+                    super::fringe_paint::fringe_place(
+                        *x,
+                        *y,
+                        *width,
+                        *height,
+                        *clip_rect,
+                        (0.0, 0.0),
+                        bitmap,
+                        *side,
+                        *kind,
+                    ),
+                    face.fg,
+                    face.bg,
                 );
             }
         }

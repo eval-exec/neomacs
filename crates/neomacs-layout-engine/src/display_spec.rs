@@ -447,7 +447,8 @@ pub(crate) enum DisplayFringeSide {
 /// Parsed `(left-fringe BITMAP FACE)` / `(right-fringe BITMAP FACE)` display
 /// spec. The bitmap is kept as the raw symbol `Value` (resolved to a registry
 /// index later, where the evaluator is available); FACE is the optional face
-/// symbol the spec requests (a `set-fringe-bitmap-face` override wins over it).
+/// symbol the spec requests (a resolved spec FACE wins over
+/// `set-fringe-bitmap-face`, matching GNU `xdisp.c` / `fringe.c`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct DisplayFringeLayout {
     pub(crate) bitmap: Value,
@@ -467,11 +468,11 @@ pub(crate) fn parse_display_fringe_layout(value: &Value) -> Option<DisplayFringe
         _ => return None,
     };
     let items = list_to_vec(value)?;
-    // items[0] = head, items[1] = BITMAP, items[2] = optional FACE.
+    // items[0] = head, items[1] = BITMAP, items[2] = optional FACE. A present
+    // BITMAP that names no bitmap (nil, a non-symbol, an undefined symbol) is
+    // still a fringe spec: GNU's `handle_single_display_spec` finds no bitmap,
+    // returns 1, and the text carrying the property is replaced by nothing.
     let bitmap = *items.get(1)?;
-    if bitmap.is_nil() {
-        return None;
-    }
     let face = items.get(2).copied().filter(|face| !face.is_nil());
     Some(DisplayFringeLayout { bitmap, side, face })
 }
