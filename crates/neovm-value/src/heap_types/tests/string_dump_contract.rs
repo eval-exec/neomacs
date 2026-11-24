@@ -1,6 +1,6 @@
 //! A dump's physical byte count must be validated before owning its payload.
 
-use neovm_value::heap_types::LispString;
+use crate::heap_types::LispString;
 use std::mem::ManuallyDrop;
 
 #[test]

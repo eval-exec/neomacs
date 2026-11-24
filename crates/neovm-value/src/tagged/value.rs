@@ -1502,6 +1502,14 @@ impl fmt::Debug for TaggedValue {
 #[path = "value/tests/fixnum_boundary.rs"]
 mod fixnum_boundary_tests;
 
+#[cfg(test)]
+#[path = "value/tests/cons_accessor_contract.rs"]
+mod cons_accessor_contract;
+
+#[cfg(test)]
+#[path = "value/tests/dead_string_tag.rs"]
+mod dead_string_tag;
+
 /// Carrier park: drop subr-object caches (they hold heap Values).
 #[doc(hidden)]
 pub fn reset_carrier_tls() {

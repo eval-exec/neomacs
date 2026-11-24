@@ -1040,3 +1040,7 @@ fn ensure_decimal_point(mut s: String) -> String {
     }
     s
 }
+
+#[cfg(test)]
+#[path = "strings_core/tests/base64_alphabet.rs"]
+mod base64_alphabet;

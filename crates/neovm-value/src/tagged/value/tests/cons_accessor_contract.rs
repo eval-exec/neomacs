@@ -2,7 +2,7 @@
 //! tagged word is not a cons pointer. `black_box` keeps the load alive so
 //! an optimizing build cannot delete the unsound read.
 
-use neovm_value::value::Value;
+use crate::value::Value;
 
 fn refuse_fixnum(read: fn(Value) -> Value) -> Result<(), Box<dyn std::any::Any + Send>> {
     std::panic::catch_unwind(|| {

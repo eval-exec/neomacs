@@ -2140,6 +2140,10 @@ mod character_count_kind_tests;
 #[path = "heap_types/tests/mapped_dump_len.rs"]
 mod mapped_dump_len_tests;
 
+#[cfg(test)]
+#[path = "heap_types/tests/string_dump_contract.rs"]
+mod string_dump_contract;
+
 /// Unique identifier for a process.
 ///
 /// This is identity data only. The process layer owns ID issuance, process

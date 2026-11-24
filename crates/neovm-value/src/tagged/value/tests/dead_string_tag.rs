@@ -1,7 +1,7 @@
 //! GNU's free-list poison is a string tag over a null pointer. Naming it
 //! must not produce a live string borrow.
 
-use neovm_value::value::Value;
+use crate::value::Value;
 use std::hash::{Hash, Hasher};
 
 #[test]

@@ -1,6 +1,6 @@
 //! A caller-supplied base64 alphabet is part of the encoded `String`.
 
-use neovm_value::strings_core::{B64_STD, B64_URL, base64_encode};
+use crate::strings_core::{B64_STD, B64_URL, base64_encode};
 
 #[test]
 fn base64_encode_refuses_a_non_ascii_alphabet() {
