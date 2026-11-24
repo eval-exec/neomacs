@@ -129,6 +129,81 @@ impl ConsAllocatorOwner {
         std::mem::take(&mut allocator.owner_cons_leases)
     }
 
+    /// Make [`ConsAllocator::is_poisoned`] stick.
+    ///
+    /// Sole storage becomes [`AllocatorStorage::Poisoned`] and the state is
+    /// parked. Admitted storage poisons its mutex by panicking while the
+    /// guard is held, the same sticky flag a production lock failure leaves.
+    /// The stopped-legacy heap is admitted, so the publication row uses that
+    /// path. [`Self::clear_storage_poison_for_test`] undoes either one so a
+    /// later return can lock.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn poison_storage_for_test(&mut self) {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        let allocator = self
+            .0
+            .as_deref_mut()
+            .expect("allocator owner is initialized");
+        let admitted = matches!(allocator.storage, AllocatorStorage::Admitted(_));
+        let poisoned = matches!(allocator.storage, AllocatorStorage::Poisoned);
+        if poisoned {
+            panic!("storage is already poisoned");
+        }
+        if admitted {
+            let AllocatorStorage::Admitted(mutex) = &mut allocator.storage else {
+                panic!("admitted storage changed before the poison");
+            };
+            assert!(!mutex.is_poisoned(), "admitted storage is already poisoned");
+            let caught = catch_unwind(AssertUnwindSafe(|| {
+                let _guard = mutex.lock().expect("lock admitted storage to poison it");
+                panic!("poison cons allocator for test");
+            }));
+            assert!(caught.is_err(), "the poison panic must surface");
+            assert!(mutex.is_poisoned(), "admitted storage stays poisoned");
+            return;
+        }
+        assert!(
+            allocator.stashed_sole_for_test.is_none(),
+            "sole storage is already stashed"
+        );
+        let state = match std::mem::replace(&mut allocator.storage, AllocatorStorage::Poisoned) {
+            AllocatorStorage::Sole(state) => state,
+            other => {
+                allocator.storage = other;
+                panic!("sole poison replaced a non-sole discriminant");
+            }
+        };
+        allocator.stashed_sole_for_test = Some(state);
+    }
+
+    /// Undo [`Self::poison_storage_for_test`] so a later return can lock.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn clear_storage_poison_for_test(&mut self) {
+        let allocator = self
+            .0
+            .as_deref_mut()
+            .expect("allocator owner is initialized");
+        if let AllocatorStorage::Admitted(mutex) = &mut allocator.storage {
+            assert!(
+                mutex.is_poisoned(),
+                "clear expected a poisoned admitted mutex"
+            );
+            mutex.clear_poison();
+            assert!(!mutex.is_poisoned(), "admitted poison must clear");
+            return;
+        }
+        let state = allocator
+            .stashed_sole_for_test
+            .take()
+            .expect("no stashed sole storage");
+        let poisoned = matches!(
+            std::mem::replace(&mut allocator.storage, AllocatorStorage::Sole(state)),
+            AllocatorStorage::Poisoned
+        );
+        assert!(poisoned, "restore expected poisoned sole storage");
+    }
+
     /// # Safety
     /// Same stopped-world storage contract as ConsAllocator::stopped_world.
     pub(super) unsafe fn stopped_world(&mut self) -> ConsStopAll<'_> {
@@ -1071,6 +1146,10 @@ pub(super) struct ConsAllocator {
     /// Leases keyed by [`OwnerConsLease::owner_key`]. The book holds the same
     /// `Arc`, so a keeper return is visible to a book that is still alive.
     owner_cons_leases: Vec<Arc<OwnerConsLease>>,
+    /// Sole storage parked while a test forces [`AllocatorStorage::Poisoned`].
+    /// Production poison still replaces the storage in place.
+    #[cfg(any(test, feature = "test-support"))]
+    stashed_sole_for_test: Option<AllocatorState>,
     _confined: std::marker::PhantomData<std::cell::Cell<()>>,
 }
 impl ConsAllocator {
@@ -1080,6 +1159,8 @@ impl ConsAllocator {
             owner_reserved_blocks: 0,
             next_owner_cons_key: 0,
             owner_cons_leases: Vec::new(),
+            #[cfg(any(test, feature = "test-support"))]
+            stashed_sole_for_test: None,
             _confined: std::marker::PhantomData,
         }
     }

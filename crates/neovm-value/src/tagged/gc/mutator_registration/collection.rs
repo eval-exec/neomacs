@@ -481,8 +481,9 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
     ) -> Result<CollectionReport, CollectionError> {
         self.check_collection(stopped)?;
         // Return every leased book before root readers, World callbacks, or
-        // image transfer. A poisoned allocator cannot return; that refusal
-        // stays Busy and this same stop can retry.
+        // image transfer. A poisoned allocator cannot return, and that
+        // poison is permanent, so it is Publication rather than a Busy
+        // the keeper would retry forever.
         {
             let mut collector = self
                 .collector
@@ -494,6 +495,9 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
                 .registration_heap_mut();
             heap.return_leased_owner_cons_reserves();
             if heap.has_owner_cons_reserves() {
+                if heap.cons_allocator.is_poisoned() {
+                    return Err(RendezvousError::Publication);
+                }
                 return Err(RendezvousError::Busy);
             }
         }

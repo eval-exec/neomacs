@@ -615,9 +615,10 @@ impl TaggedHeap {
 
     /// Return every leased range. Only the stopped session calls this.
     ///
-    /// A poisoned allocator leaves the count outstanding. A forgotten or
-    /// abandoned book is recoverable on the next stop while the allocator
-    /// is healthy.
+    /// A poisoned allocator is permanent, so this leaves the count
+    /// outstanding. The session reports `Publication` for that case. A
+    /// forgotten or abandoned book is recoverable on the next stop while
+    /// the allocator is healthy.
     pub(in crate::tagged::gc) fn return_leased_owner_cons_reserves(&mut self) {
         if !self.has_owner_cons_reserves() || self.cons_allocator.is_poisoned() {
             return;

@@ -220,6 +220,7 @@ pub enum ConsAllocationCase {
     OwnerConsReserveAnOldStoreKeepsTheOwnerConsAndTheUnrootedConsIsReclaimed,
     OwnerConsReserveMainGcReturnsTheBookThenCollects,
     OwnerConsReserveOrdinaryGcRefusesALiveLease,
+    OwnerConsReservePoisonedAllocatorIsPublication,
 }
 
 impl ConsAllocationCase {
@@ -263,6 +264,7 @@ impl ConsAllocationCase {
         Self::OwnerConsReserveAnOldStoreKeepsTheOwnerConsAndTheUnrootedConsIsReclaimed,
         Self::OwnerConsReserveMainGcReturnsTheBookThenCollects,
         Self::OwnerConsReserveOrdinaryGcRefusesALiveLease,
+        Self::OwnerConsReservePoisonedAllocatorIsPublication,
     ];
 }
 
@@ -432,6 +434,12 @@ pub(crate) fn run_cons_allocation_test<K, W>(
         }
         ConsAllocationCase::OwnerConsReserveOrdinaryGcRefusesALiveLease => {
             owner_reserve_cases::owner_cons_reserve_ordinary_gc_refuses_a_live_lease(
+                roots_era,
+                world_roots,
+            );
+        }
+        ConsAllocationCase::OwnerConsReservePoisonedAllocatorIsPublication => {
+            owner_reserve_cases::owner_cons_reserve_poisoned_allocator_is_publication(
                 roots_era,
                 world_roots,
             );

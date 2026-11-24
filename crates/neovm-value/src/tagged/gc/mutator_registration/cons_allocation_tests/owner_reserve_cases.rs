@@ -962,3 +962,49 @@ pub(super) fn owner_cons_reserve_ordinary_gc_refuses_a_live_lease<K, W>(
         drop(keeper);
     });
 }
+
+/// A poisoned cons allocator never clears. The session must report that as
+/// `Publication`, the non-transient class, so a Busy retry cannot spin.
+pub(super) fn owner_cons_reserve_poisoned_allocator_is_publication<K, W>(
+    roots_era: &mut dyn FnMut(&mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>, RootsFixture)),
+    world_roots: W,
+) where
+    K: EraKeeper + std::fmt::Debug,
+    W: Copy
+        + for<'k, 's, 'e, 'o> Fn(
+            &'k K,
+            &'s mut AllStopped<'e>,
+            &'o mut Vec<Value>,
+        ) -> Result<
+            Vec<*mut *mut crate::tagged::header::MarkerObj>,
+            RendezvousError,
+        >,
+{
+    roots_era(&mut |era, _inputs| {
+        era.start_cons_storage().unwrap();
+        let mut stopped = era.stop().unwrap();
+        era.return_cons_storage(&stopped).unwrap();
+        let mut reserve = OwnerEraReserve::new();
+        with_stopped_legacy_heap(&era, &stopped, |heap| {
+            reserve
+                .grant_at_stop(&stopped, heap, true, MeasuredInterval::zero())
+                .unwrap();
+            heap.cons_allocator.poison_storage_for_test();
+        });
+        let result = era.collect_stopped(&mut stopped, world_roots);
+        with_stopped_legacy_heap(&era, &stopped, |heap| {
+            heap.cons_allocator.clear_storage_poison_for_test();
+            reserve.return_unused_before_sweep(&stopped, heap).unwrap();
+        });
+        assert_eq!(
+            result.err(),
+            Some(RendezvousError::Publication),
+            "a poisoned allocator is permanent and must not be retried as Busy"
+        );
+        stopped.trace(|_, _| Ok(())).unwrap();
+        complete(stopped);
+        let (collector, keeper) = era.finish().unwrap();
+        drop(collector);
+        drop(keeper);
+    });
+}
