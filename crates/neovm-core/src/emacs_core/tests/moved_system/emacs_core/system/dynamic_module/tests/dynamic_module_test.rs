@@ -71,10 +71,10 @@ fn module_context_guard_restores_previous_on_drop_and_panic() {
 
     assert!(current().is_null());
     {
-        let _outer_guard = ModuleContextGuard::install(outer);
+        let _outer_guard = unsafe { ModuleContextGuard::install(outer) };
         assert_eq!(current(), outer);
         {
-            let _inner_guard = ModuleContextGuard::install(inner);
+            let _inner_guard = unsafe { ModuleContextGuard::install(inner) };
             assert_eq!(current(), inner);
         }
         assert_eq!(
@@ -83,7 +83,7 @@ fn module_context_guard_restores_previous_on_drop_and_panic() {
             "inner drop must restore the outer context"
         );
         let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _guard = ModuleContextGuard::install(inner);
+            let _guard = unsafe { ModuleContextGuard::install(inner) };
             panic!("boom under module context");
         }));
         assert!(panicked.is_err());
@@ -115,7 +115,7 @@ fn module_make_interactive_wraps_specs_like_gnu() {
     unsafe {
         module_make_interactive(env, func, lisp_to_value(env, Value::NIL));
     }
-    let form = value_to_lisp(func)
+    let form = unsafe { value_to_lisp(func) }
         .as_module_function()
         .unwrap()
         .interactive_form;
@@ -124,11 +124,11 @@ fn module_make_interactive_wraps_specs_like_gnu() {
         vec![Value::symbol("interactive")]
     );
 
-    let spec = lisp_to_value(env, Value::string("p"));
+    let spec = unsafe { lisp_to_value(env, Value::string("p")) };
     unsafe {
         module_make_interactive(env, func, spec);
     }
-    let form = value_to_lisp(func)
+    let form = unsafe { value_to_lisp(func) }
         .as_module_function()
         .unwrap()
         .interactive_form;
@@ -145,14 +145,14 @@ fn active_module_environment_values_are_gc_roots() {
     let env = fixture.env_ptr();
     let priv_ptr = fixture.priv_ptr();
     let rooted = Value::string("module-local-root");
-    let _value = lisp_to_value(env, rooted);
+    let _value = unsafe { lisp_to_value(env, rooted) };
     unsafe {
         (*priv_ptr).pending_non_local_exit = emacs_funcall_exit::Signal;
         (*priv_ptr).non_local_exit_symbol = Value::symbol("error");
         (*priv_ptr).non_local_exit_data = Value::list(vec![rooted]);
     }
 
-    let active = ActiveModuleEnv::push(priv_ptr);
+    let active = unsafe { ActiveModuleEnv::push(priv_ptr) };
     let mut roots = Vec::new();
     collect_dynamic_module_gc_roots(
         &mut roots,
@@ -170,9 +170,9 @@ fn module_big_integer_zero_and_null_outputs_match_gnu() {
     let env = fixture.env_ptr();
 
     let zero = unsafe { module_make_big_integer(env, 0, 0, std::ptr::null()) };
-    assert_eq!(value_to_lisp(zero), Value::fixnum(0));
+    assert_eq!(unsafe { value_to_lisp(zero) }, Value::fixnum(0));
 
-    let zero_value = lisp_to_value(env, Value::fixnum(0));
+    let zero_value = unsafe { lisp_to_value(env, Value::fixnum(0)) };
     let ok = unsafe {
         module_extract_big_integer(
             env,
@@ -195,7 +195,7 @@ fn module_extract_big_integer_reports_too_small_buffer() {
     let mut fixture = TestEnv::new();
     let env = fixture.env_ptr();
     let large = Value::make_integer(Integer::from(1u64) << 80u32);
-    let value = lisp_to_value(env, large);
+    let value = unsafe { lisp_to_value(env, large) };
     let mut sign = 0;
     let mut count = 1;
     let mut magnitude = [0_u64; 1];
@@ -282,7 +282,7 @@ fn module_guard_converts_panic_to_pending_error() {
     let mut fixture = TestEnv::new();
     let env = fixture.env_ptr();
 
-    let out = module_guard(env, 17_i64, || panic!("guard-probe-text"));
+    let out = unsafe { module_guard(env, 17_i64, || panic!("guard-probe-text")) };
     assert_eq!(out, 17);
 
     let priv_ = unsafe { &*fixture.priv_ptr() };
@@ -307,7 +307,9 @@ fn module_guard_preserves_earlier_pending_exit() {
         set_pending_signal(env, "wrong-type-argument", Value::NIL);
     }
 
-    module_guard(env, (), || panic!("later panic"));
+    unsafe {
+        module_guard(env, (), || panic!("later panic"));
+    }
 
     let priv_ = unsafe { &*fixture.priv_ptr() };
     assert_eq!(
@@ -328,7 +330,7 @@ fn module_guard_re_raises_on_poisoned_gc_locks_without_ctx() {
     let mut fixture = TestEnv::new();
     let env = fixture.env_ptr();
 
-    let caught = std::panic::catch_unwind(AssertUnwindSafe(|| {
+    let caught = std::panic::catch_unwind(AssertUnwindSafe(|| unsafe {
         module_guard(env, 17_i64, || panic!("guard-poison-flee"))
     }));
     let payload = caught.expect_err("poisoned GC locks must re-raise, not contain");

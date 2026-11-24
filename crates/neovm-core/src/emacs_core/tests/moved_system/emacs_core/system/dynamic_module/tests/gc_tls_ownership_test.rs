@@ -22,7 +22,7 @@ impl Environment {
     }
 
     fn global_ref(&mut self, value: Value) -> GlobalReference {
-        let local = lisp_to_value(&mut *self.env, value);
+        let local = unsafe { lisp_to_value(&mut *self.env, value) };
         let reference = unsafe { module_make_global_ref(&mut *self.env, local) };
         assert!(!reference.is_null());
         GlobalReference(reference)
@@ -64,7 +64,7 @@ fn gc_tls_ownership_module_global_refs_exclude_a_dropped_heap() {
         );
         (value, reference)
     };
-    assert!(value_to_lisp(reference.0).is_nil());
+    assert!(unsafe { value_to_lisp(reference.0) }.is_nil());
     let mut next = crate::emacs_core::eval_hook_installers::new_context();
     assert!(
         !roots_for(&next)
@@ -108,9 +108,11 @@ fn gc_tls_ownership_module_active_environment_excludes_another_live_heap() {
     let mut first = crate::emacs_core::eval_hook_installers::new_context();
     let mut env = Environment::new();
     let value = Value::vector(vec![Value::fixnum(42)]);
-    lisp_to_value(&mut *env.env, value);
+    unsafe {
+        lisp_to_value(&mut *env.env, value);
+    }
     env.private.non_local_exit_data = Value::list(vec![value]);
-    let active = ActiveModuleEnv::push(&mut *env.private);
+    let active = unsafe { ActiveModuleEnv::push(&mut *env.private) };
     assert!(
         roots_for(&first)
             .iter()
@@ -137,9 +139,11 @@ fn gc_tls_ownership_module_overflow_arena_values_are_gc_roots() {
     let mut last = Value::NIL;
     for index in 0..(VALUE_FRAME_SIZE + 1) {
         last = Value::vector(vec![Value::fixnum(index as i64)]);
-        lisp_to_value(&mut *env.env, last);
+        unsafe {
+            lisp_to_value(&mut *env.env, last);
+        }
     }
-    let active = ActiveModuleEnv::push(&mut *env.private);
+    let active = unsafe { ActiveModuleEnv::push(&mut *env.private) };
     assert!(
         roots_for(&ctx)
             .iter()
@@ -167,8 +171,8 @@ fn gc_tls_ownership_module_global_refs_keep_equal_but_distinct_objects() {
         a_ref.0, b_ref.0,
         "module global references collapsed equal but distinct Lisp objects"
     );
-    assert_eq!(value_to_lisp(a_ref.0).bits(), a.bits());
-    assert_eq!(value_to_lisp(b_ref.0).bits(), b.bits());
+    assert_eq!(unsafe { value_to_lisp(a_ref.0) }.bits(), a.bits());
+    assert_eq!(unsafe { value_to_lisp(b_ref.0) }.bits(), b.bits());
     ctx.gc_collect_exact();
     assert_eq!(a.as_vector_data().unwrap()[0], Value::fixnum(42));
     assert_eq!(b.as_vector_data().unwrap()[0], Value::fixnum(42));
@@ -194,7 +198,7 @@ fn gc_tls_ownership_module_global_refs_follow_owner_context_reactivation() {
     first.gc_collect_exact();
     assert_eq!(value.as_vector_data().unwrap()[0], Value::fixnum(42));
     drop(first);
-    assert!(value_to_lisp(reference.0).is_nil());
+    assert!(unsafe { value_to_lisp(reference.0) }.is_nil());
     second.setup_thread_locals();
     second.gc_collect_exact();
     drop(reference);

@@ -535,9 +535,10 @@ pub mod enabled {
 
     fn bind_values(
         connection: &Connection,
-        stmt: *mut ffi::sqlite3_stmt,
+        statement: &PreparedStatement,
         values: &[BindValue],
     ) -> Result<(), Flow> {
+        let stmt = statement.stmt;
         let db = unsafe { connection.handle() };
         unsafe {
             ffi::sqlite3_reset(stmt);
@@ -799,7 +800,7 @@ pub mod enabled {
         let values = collect_bind_values(eval, &args.get(2).copied().unwrap_or(Value::NIL))?;
         let connection = connection_for_db(id)?;
         let statement = prepare_statement(SqliteOperation::Execute, &connection, &sql)?;
-        bind_values(&connection, statement.stmt, &values)?;
+        bind_values(&connection, &statement, &values)?;
 
         let db = unsafe { connection.handle() };
         let ret = unsafe { ffi::sqlite3_step(statement.stmt) };
@@ -831,7 +832,7 @@ pub mod enabled {
         let return_type = args.get(3).and_then(SqliteReturnType::from_value);
         let connection = connection_for_db(id)?;
         let statement = prepare_statement(SqliteOperation::Select, &connection, &sql)?;
-        bind_values(&connection, statement.stmt, &values)?;
+        bind_values(&connection, &statement, &values)?;
 
         if return_type == Some(SqliteReturnType::Set) {
             let stmt_id = alloc_handle_id();

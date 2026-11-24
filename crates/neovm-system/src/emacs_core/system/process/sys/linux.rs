@@ -151,7 +151,9 @@ fn linux_ipv6_addr_to_value(addr: libc::in6_addr) -> Value {
     int_vector(&vals)
 }
 
-fn linux_sockaddr_ipv4(sockaddr: *const libc::sockaddr) -> Option<Value> {
+/// # Safety
+/// `sockaddr` must be null or point to a valid, initialized `libc::sockaddr_in`.
+unsafe fn linux_sockaddr_ipv4(sockaddr: *const libc::sockaddr) -> Option<Value> {
     if sockaddr.is_null() {
         return None;
     }
@@ -159,7 +161,9 @@ fn linux_sockaddr_ipv4(sockaddr: *const libc::sockaddr) -> Option<Value> {
     Some(linux_ipv4_addr_to_value(sockaddr.sin_addr))
 }
 
-fn linux_sockaddr_ipv6(sockaddr: *const libc::sockaddr) -> Option<Value> {
+/// # Safety
+/// `sockaddr` must be null or point to a valid, initialized `libc::sockaddr_in6`.
+unsafe fn linux_sockaddr_ipv6(sockaddr: *const libc::sockaddr) -> Option<Value> {
     if sockaddr.is_null() {
         return None;
     }
@@ -247,18 +251,22 @@ pub(crate) fn interface_snapshot() -> Option<Vec<HostInterfaceEntry>> {
 
         let (family, address, netmask, raw_broadcast) = match family {
             libc::AF_INET => {
-                let address = linux_sockaddr_ipv4(item.ifa_addr)?;
-                let netmask = linux_sockaddr_ipv4(item.ifa_netmask)
+                // SAFETY: `getifaddrs` guarantees `AF_INET` address/netmask/broadcast
+                // pointers are null or valid `sockaddr_in` records while `ifaddrs` lives.
+                let address = unsafe { linux_sockaddr_ipv4(item.ifa_addr) }?;
+                let netmask = unsafe { linux_sockaddr_ipv4(item.ifa_netmask) }
                     .unwrap_or_else(|| zero_network_address(NetworkAddressFamily::Ipv4));
-                let raw_broadcast = linux_sockaddr_ipv4(item.ifa_ifu)
+                let raw_broadcast = unsafe { linux_sockaddr_ipv4(item.ifa_ifu) }
                     .unwrap_or_else(|| zero_network_address(NetworkAddressFamily::Ipv4));
                 (NetworkAddressFamily::Ipv4, address, netmask, raw_broadcast)
             }
             libc::AF_INET6 => {
-                let address = linux_sockaddr_ipv6(item.ifa_addr)?;
-                let netmask = linux_sockaddr_ipv6(item.ifa_netmask)
+                // SAFETY: `getifaddrs` guarantees `AF_INET6` address/netmask/broadcast
+                // pointers are null or valid `sockaddr_in6` records while `ifaddrs` lives.
+                let address = unsafe { linux_sockaddr_ipv6(item.ifa_addr) }?;
+                let netmask = unsafe { linux_sockaddr_ipv6(item.ifa_netmask) }
                     .unwrap_or_else(|| zero_network_address(NetworkAddressFamily::Ipv6));
-                let raw_broadcast = linux_sockaddr_ipv6(item.ifa_ifu)
+                let raw_broadcast = unsafe { linux_sockaddr_ipv6(item.ifa_ifu) }
                     .unwrap_or_else(|| zero_network_address(NetworkAddressFamily::Ipv6));
                 (NetworkAddressFamily::Ipv6, address, netmask, raw_broadcast)
             }
