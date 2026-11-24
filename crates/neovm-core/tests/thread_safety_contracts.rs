@@ -48,6 +48,8 @@ fn thread_safety_compile_contracts() {
 fn obarray_view_swap_compile_contracts() {
     let cases = trybuild::TestCases::new();
     cases.compile_fail("tests/thread_safety_ui/obarray_view_cannot_be_swapped.rs");
+    // E0499: the nest borrows the outer Context for the whole scope.
+    cases.compile_fail("tests/thread_safety_ui/nest_foreign_heap_borrows_the_context.rs");
 }
 
 // The sole-owner eval phase's fixtures sit next to its unit tests, but the

@@ -30,12 +30,21 @@ fn opt_sqrt_binding_equal_owner_clocks_still_read_cell_and_inplace_entry() {
     let second_generation = second.obarray.generation();
     let second_epoch = second.obarray.function_epoch();
     let parked_second = second.park_for_test();
+    let second_root = parked_second.tagged_heap().heap_root();
     let mut first = parked_first.resume_for_test().expect("resume first owner");
     align_real_owner_clocks(&mut first, epoch);
     assert_ne!(first.obarray.generation(), second_generation);
     assert_eq!(first.obarray.function_epoch(), second_epoch);
     assert!(is_actual_sqrt(original));
-    assert!(unsafe { binding_valid(&first, symbol_bits, original.bits() as u64, epoch) });
+    // `binding_valid(&first)` runs while second's heap is installed. A
+    // validator that read the installed owner would miss first's cell.
+    {
+        // SAFETY: `parked_second` owns `second_root` and `first` owns the
+        // displaced root; both outlive `_nest`.
+        let _nest =
+            unsafe { neovm_value::tagged::gc::NestedTaggedHeapInstall::install_bare(second_root) };
+        assert!(unsafe { binding_valid(&first, symbol_bits, original.bits() as u64, epoch) });
+    }
     let parked_first = first.park_for_test();
     let mut second = parked_second
         .resume_for_test()
@@ -61,10 +70,16 @@ fn opt_sqrt_binding_equal_owner_clocks_still_read_cell_and_inplace_entry() {
         first.obarray.symbol_function_id(symbol).unwrap().bits(),
         original.bits()
     );
-    assert!(
-        !unsafe { binding_valid(&first, symbol_bits, original.bits() as u64, epoch) },
-        "same static pointer now holds a different actual A1 function"
-    );
+    {
+        // SAFETY: `parked_second` owns `second_root` and `first` owns the
+        // displaced root; both outlive `_nest`.
+        let _nest =
+            unsafe { neovm_value::tagged::gc::NestedTaggedHeapInstall::install_bare(second_root) };
+        assert!(
+            !unsafe { binding_valid(&first, symbol_bits, original.bits() as u64, epoch) },
+            "same static pointer now holds a different actual A1 function"
+        );
+    }
     let parked_first = first.park_for_test();
     let mut second = parked_second
         .resume_for_test()
@@ -74,9 +89,16 @@ fn opt_sqrt_binding_equal_owner_clocks_still_read_cell_and_inplace_entry() {
         crate::emacs_core::builtins::builtin_sqrt_1,
         FixedMin1::One,
     ));
-    drop(second);
+    let parked_second = second.park_for_test();
     let mut first = parked_first.resume_for_test().expect("resume first owner");
-    assert!(unsafe { binding_valid(&first, symbol_bits, original.bits() as u64, epoch) });
+    {
+        // SAFETY: `parked_second` owns `second_root` and `first` owns the
+        // displaced root; both outlive `_nest`.
+        let _nest =
+            unsafe { neovm_value::tagged::gc::NestedTaggedHeapInstall::install_bare(second_root) };
+        assert!(unsafe { binding_valid(&first, symbol_bits, original.bits() as u64, epoch) });
+    }
+    drop(parked_second);
     first.setup_thread_locals();
 }
 

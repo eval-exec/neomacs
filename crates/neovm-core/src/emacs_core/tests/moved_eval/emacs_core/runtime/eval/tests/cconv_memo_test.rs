@@ -81,15 +81,41 @@ fn stats_mode_builds_the_same_closures_as_off() {
         "(let ((a 1) (b 2)) (lambda () 'nothing))",
         "(let ((a 1)) (lambda (x) \"doc\" (+ a x)))",
     ];
-    let mut off = startup(CconvMemoMode::Off);
-    let off_printed: Vec<String> = forms.iter().map(|form| printed(&mut off, form)).collect();
-    assert_eq!(count(&off, CconvMemoEvent::Call), 0);
-    // Stats startup installs its own heap. The off prints are owned.
-    drop(off);
-    let mut stats = startup(CconvMemoMode::Stats);
-    for (form, expected) in forms.iter().zip(off_printed) {
-        assert_eq!(printed(&mut stats, form), expected, "{form}");
+    // Both contexts stay alive and alternate per form, so a process-global
+    // memo cannot hide by running one mode to completion first. Park empties
+    // the slot; the door then runs on that context's own heap.
+    let off = startup(CconvMemoMode::Off);
+    let mut parked_off = Some(off.park_for_test());
+    let stats = startup(CconvMemoMode::Stats);
+    let mut parked_stats = Some(stats.park_for_test());
+    for form in forms {
+        let mut off = parked_off
+            .take()
+            .unwrap()
+            .resume_for_test()
+            .expect("resume off");
+        let off_printed = printed(&mut off, form);
+        parked_off = Some(off.park_for_test());
+        let mut stats = parked_stats
+            .take()
+            .unwrap()
+            .resume_for_test()
+            .expect("resume stats");
+        assert_eq!(printed(&mut stats, form), off_printed, "{form}");
+        parked_stats = Some(stats.park_for_test());
     }
+    let off = parked_off
+        .take()
+        .unwrap()
+        .resume_for_test()
+        .expect("resume off");
+    assert_eq!(count(&off, CconvMemoEvent::Call), 0);
+    let _parked_off = off.park_for_test();
+    let stats = parked_stats
+        .take()
+        .unwrap()
+        .resume_for_test()
+        .expect("resume stats");
     assert_eq!(count(&stats, CconvMemoEvent::Trim), forms.len() as u64);
 }
 
@@ -1057,24 +1083,58 @@ fn creation_near_the_depth_limit_matches_the_lisp() {
 #[test]
 fn memo_survives_garbage_collection() {
     crate::test_utils::init_test_tracing();
-    let mut eval = startup(CconvMemoMode::On);
     let defun = "(defun cm-gc (v) (let ((a v) (b 2)) (lambda () (list a))))";
+    let eval = startup(CconvMemoMode::On);
+    let mut parked_on = Some(eval.park_for_test());
+    let mut off = startup(CconvMemoMode::Off);
+    eval_ok(&mut off, defun);
+    let mut parked_off = Some(off.park_for_test());
+    let mut eval = parked_on
+        .take()
+        .unwrap()
+        .resume_for_test()
+        .expect("resume on");
     eval_ok(&mut eval, defun);
     let probe = "(let (out) (dotimes (i 20) (push (cm-gc i) out) (garbage-collect)) out)";
     let on_probe = printed(&mut eval, probe);
+    parked_on = Some(eval.park_for_test());
+    let mut off = parked_off
+        .take()
+        .unwrap()
+        .resume_for_test()
+        .expect("resume off");
+    assert_eq!(on_probe, printed(&mut off, probe));
     // Fresh bodies each time (read anew), created and dropped under GC.
+    // On runs first, then off, matching the old both-live interleave.
     let fresh = "(let (out) (dotimes (i 20)
                    (push (funcall (eval (read \"(lambda (v) (let ((a v) (b 2)) (lambda () (list a b))))\") t) i) out)
                    (garbage-collect)) out)";
+    parked_off = Some(off.park_for_test());
+    let mut eval = parked_on
+        .take()
+        .unwrap()
+        .resume_for_test()
+        .expect("resume on");
     let on_fresh = printed(&mut eval, fresh);
-    let served = count(&eval, CconvMemoEvent::Served);
-    // Off-mode startup installs its own heap. The on-mode prints are owned.
-    drop(eval);
-    let mut off = startup(CconvMemoMode::Off);
-    eval_ok(&mut off, defun);
-    assert_eq!(on_probe, printed(&mut off, probe));
+    parked_on = Some(eval.park_for_test());
+    let mut off = parked_off
+        .take()
+        .unwrap()
+        .resume_for_test()
+        .expect("resume off");
     assert_eq!(on_fresh, printed(&mut off, fresh));
-    assert!(served >= 19, "{served}");
+    parked_off = Some(off.park_for_test());
+    let eval = parked_on
+        .take()
+        .unwrap()
+        .resume_for_test()
+        .expect("resume on");
+    assert!(
+        count(&eval, CconvMemoEvent::Served) >= 19,
+        "{}",
+        eval.cconv_memo_report()
+    );
+    drop(parked_off);
 }
 
 /// A collection that completes while the memo observes a Lisp run (here a

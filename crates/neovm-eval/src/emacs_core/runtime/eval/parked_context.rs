@@ -56,6 +56,8 @@ impl Context {
     ///
     /// Drop restores the heap that was installed before the call. A bare heap
     /// with no Context borrow is [`neovm_value::tagged::gc::NestedTaggedHeapInstall::install_bare`].
+    /// The borrow is the trybuild fixture `nest_foreign_heap_borrows_the_context`
+    /// (E0499). nextest does not run doctests.
     ///
     /// # Safety
     ///
@@ -64,14 +66,6 @@ impl Context {
     /// references into `root` during installation. Any displaced previous root
     /// must remain live until the returned scope drops, with no live references
     /// into it during restoration.
-    ///
-    /// ```compile_fail,E0499
-    /// fn outer_is_unusable_inside_the_nest(ctx: &mut neovm_eval::emacs_core::Context) {
-    ///     let root = std::ptr::NonNull::<neovm_value::tagged::gc::TaggedHeap>::dangling();
-    ///     let _scope = unsafe { ctx.nest_foreign_heap_for_test(root) };
-    ///     let _ = ctx.eval_str("1");
-    /// }
-    /// ```
     pub unsafe fn nest_foreign_heap_for_test<'a>(
         &'a mut self,
         root: std::ptr::NonNull<neovm_value::tagged::gc::TaggedHeap>,

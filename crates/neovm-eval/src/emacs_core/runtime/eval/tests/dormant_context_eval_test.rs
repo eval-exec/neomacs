@@ -119,7 +119,7 @@ fn nested_bare_heap_restores_the_context_heap() {
     {
         // SAFETY: `foreign` and `ctx` both outlive `nest` with no live heap
         // references during install or drop.
-        let nest = unsafe { NestedTaggedHeapInstall::install_bare(foreign.root()) };
+        let nest = unsafe { ctx.nest_foreign_heap_for_test(foreign.root()) };
         assert!(tagged_heap_is_current(&foreign));
         assert_ne!(current_tagged_heap_identity(), Some(id));
         drop(nest);
