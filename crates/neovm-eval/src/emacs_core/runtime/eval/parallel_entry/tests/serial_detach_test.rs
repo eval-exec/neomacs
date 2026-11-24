@@ -104,6 +104,77 @@ fn l64_detach_stows_the_world_carriers_and_reattach_returns_them() {
     );
 }
 
+/// (b) (c) (d) on the owner that has a warm carrier. A Sim owner skips the
+/// stow, so the row above is the carrier half and the begin row is the
+/// Sim half. This one runs the same reattach `begin` calls.
+#[test]
+fn l64_green_reattach_installs_the_heap_and_restores_frame_slab_buffer_and_carrier() {
+    let mut ev =
+        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
+    let _baton = ev.start_green_runtime().expect("start the Green runtime");
+    eval(
+        &mut ev,
+        "(progn (defvar sd-global 41) (setq sd-global 42)
+                (put 'sd-error 'error-conditions '(sd-error error))
+                (get-buffer-create \" sd-other\"))",
+    );
+    assert_eq!(eval(&mut ev, OWNER_STATE), "1", "the match starts at 1");
+    assert_eq!(
+        eval(&mut ev, PROBE),
+        OWNER_ANSWER,
+        "the owner state is set before the detach"
+    );
+    let buffer = ev.edit.buffers.current_buffer_id();
+    let buffer_name = eval(&mut ev, "(buffer-name)");
+    let frame = ev.frame_manager().selected;
+    let frame_count = ev.frame_manager().frames.len();
+    let slab = ev.ensure_owner_slab() as *const _ as usize;
+    assert!(buffer.is_some(), "the owner has a current buffer");
+    let detached = detach(&mut ev);
+    assert!(names_no_heap(), "(b) detach takes this owner's heap down");
+    assert_eq!(
+        ev.serial_world_parked_for_test(),
+        Some((true, true)),
+        "(d) detach stows the warm carrier"
+    );
+    reattach(&mut ev, detached);
+    assert_eq!(
+        ev.serial_world_parked_for_test(),
+        Some((false, false)),
+        "(d) reattach restores the warm carrier before the mirrors are read"
+    );
+    assert_eq!(
+        ev.edit.buffers.current_buffer_id(),
+        buffer,
+        "(c) the owner's buffer is back"
+    );
+    assert_eq!(
+        eval(&mut ev, "(buffer-name)"),
+        buffer_name,
+        "(c) the owner's buffer is the one from before the detach"
+    );
+    assert_eq!(
+        ev.frame_manager().selected,
+        frame,
+        "(c) the owner's frame selection is unchanged"
+    );
+    assert_eq!(
+        ev.frame_manager().frames.len(),
+        frame_count,
+        "(c) reattach does not add or drop a frame"
+    );
+    assert_eq!(
+        ev.owner.slab().map(|slab| slab as *const _ as usize),
+        Some(slab),
+        "(c) the owner's slab is back"
+    );
+    assert_eq!(
+        eval(&mut ev, PROBE),
+        OWNER_ANSWER,
+        "(d) the mirrors show this owner again"
+    );
+}
+
 #[test]
 fn l64_detach_leaves_no_heap_on_this_thread_and_reattach_restores_the_turn() {
     let mut ev = owner();
