@@ -24,6 +24,12 @@ pub(crate) enum FrameRelayoutRequest {
     LogicalInputsChanged {
         window_id: DisplayWindowId,
     },
+    /// A finished walk's own fontification changed source inputs that a
+    /// completed body may keep. The frame stays whole. Retry while the budget
+    /// remains; the caller publishes this attempt when the budget is spent.
+    SourceOnlyRetry {
+        window_id: DisplayWindowId,
+    },
     /// A successful native font open changed the display-wide matrix capacity.
     FontCapacityInputsChanged {
         before: u32,

@@ -98,6 +98,8 @@ mod exhausted_presentation_test;
 mod line_spacing;
 #[path = "no_op_chrome_source_test.rs"]
 mod no_op_chrome_source;
+#[path = "sparse_exhaustion_test.rs"]
+mod sparse_exhaustion_test;
 #[path = "../../tests/engine_trailing_whitespace_test.rs"]
 mod trailing_whitespace;
 

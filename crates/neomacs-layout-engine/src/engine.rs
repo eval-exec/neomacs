@@ -1200,6 +1200,9 @@ struct RedisplayLispLedger {
     /// Cleared on physical frame retry; completed siblings retain their owner
     /// identities until final whole-frame admission, independently of source freshness.
     completed_body_inputs: rustc_hash::FxHashMap<DisplayWindowId, CompletedBodyIdentity>,
+    /// First window whose finished walk asked for one source-only frame retry.
+    /// Counted once, after every sibling has been assembled, not once per leaf.
+    source_only_retry: Option<DisplayWindowId>,
     /// Original source observations commit only with the accepted matrices.
     cursor_sources: rustc_hash::FxHashMap<
         DisplayWindowId,
@@ -2444,8 +2447,8 @@ impl LayoutEngine {
         // If so we call grow_mini_window / shrink_mini_window and
         // A typed coordinator gives frame chrome, leaf chrome, and minibuffer
         // allocation one bounded retry policy. Every retry discards the whole
-        // speculative output; only an iteration that requests no relayout can
-        // reach presentation sealing below.
+        // speculative output. A source-only retry is the exception at
+        // exhaustion: that completed attempt reaches sealing below.
         let mut layout_coordinator = FrameLayoutCoordinator::new(MAX_FRAME_LAYOUT_RETRIES);
         // The Lisp objects of the `when` sites a walk records and of the
         // answers carried to a replay stay rooted for the whole logical frame
@@ -2528,6 +2531,7 @@ impl LayoutEngine {
             accepted_frame_navigation_intent,
         ) = 'frame_layout: loop {
             lisp_ledger.completed_body_inputs.clear();
+            lisp_ledger.source_only_retry = None;
             let chrome_remeasured = std::mem::take(&mut chrome_remeasured_next_round);
             // Re-entering this loop means the preceding physical frame walk
             // was rejected. Restore every leaf publication before collecting
@@ -4407,6 +4411,17 @@ impl LayoutEngine {
                     return None;
                 }
                 continue 'frame_layout;
+            }
+
+            // The body rows are already certified. A source-only fontifier
+            // disagreement retries the whole frame while the budget remains.
+            // Spending the budget must not retire this presentation: the
+            // ordinary tail below publishes the attempt just assembled.
+            if let Some(window_id) = lisp_ledger.source_only_retry.take() {
+                let request = FrameRelayoutRequest::SourceOnlyRetry { window_id };
+                if layout_coordinator.request_retry(request).is_ok() {
+                    continue 'frame_layout;
+                }
             }
 
             break (
@@ -7198,6 +7213,12 @@ impl LayoutEngine {
             )),
             _ => None,
         };
+        // Set when this walk's own visible fontification is a source-only
+        // retry. Display-when then compares against that post-hook token, so
+        // the fontifier's admitted source edits are not a second cause.
+        let mut fontification_source_baseline: Option<
+            neovm_core::window::WindowLayoutAttemptFreshness,
+        > = None;
         if let Some((window_end, skip_probe)) = finished_walk {
             // GNU `partial_line_height` (`src/xdisp.c:11630-11661`): when
             // `try_window` ran with TRY_WINDOW_CHECK_MARGINS, it re-walks to
@@ -7285,18 +7306,46 @@ impl LayoutEngine {
                 }
                 // Check freshness once, after the whole plan ran. The property
                 // ticks it changed were produced by the fontification this
-                // attempt itself requested, and the replay re-walks the frame
-                // with the faces it installed.
+                // attempt itself requested.
                 let freshness_after_visible_fontification =
                     evaluator.window_layout_attempt_freshness(frame_id, window_id, buf_id);
                 if requires_replay
                     || freshness_after_visible_fontification.as_ref()
                         != freshness_after_leaf.as_deref()
                 {
-                    if let Some(attempt) = window_end_attempt.take() {
-                        evaluator.reject_redisplay_window_end_attempt(attempt);
+                    let seals_completed_body = matches!(
+                        position_publication,
+                        WindowPositionPublication::Redisplay
+                            | WindowPositionPublication::RedisplayResumedScrollHook
+                            | WindowPositionPublication::RedisplayMiniEobFallback
+                    );
+                    let source_only = match (
+                        freshness_after_leaf.as_ref(),
+                        freshness_after_visible_fontification.as_ref(),
+                    ) {
+                        (Some(before), Some(after)) => before.remains_valid_across(
+                            after,
+                            neovm_core::window::WindowLayoutLispBoundary::WindowChrome,
+                        ),
+                        _ => false,
+                    };
+                    // A finished body may keep its rows across a source edit
+                    // this fontification itself performed. Finish the siblings
+                    // and seal; the frame loop retries, and publishes this
+                    // attempt when the budget is spent. Owner, physical, and
+                    // topology changes stay on the discard path above.
+                    if seals_completed_body && source_only {
+                        fontification_source_baseline = freshness_after_visible_fontification;
+                        if lisp_ledger.source_only_retry.is_none() {
+                            lisp_ledger.source_only_retry =
+                                Some(DisplayWindowId::new(params.window_id));
+                        }
+                    } else {
+                        if let Some(attempt) = window_end_attempt.take() {
+                            evaluator.reject_redisplay_window_end_attempt(attempt);
+                        }
+                        return LeafLayoutAttempt::LogicalInputsChanged;
                     }
-                    return LeafLayoutAttempt::LogicalInputsChanged;
                 }
             }
         }
@@ -7318,12 +7367,15 @@ impl LayoutEngine {
                 display_target,
                 &mut lisp_ledger.display_when,
             );
+            let display_when_baseline = fontification_source_baseline
+                .as_ref()
+                .or(freshness_after_leaf.as_deref());
             if evaluates_lisp
                 && (evaluator.frame_manager().window_topology_generation() != topology_generation
                     || evaluator
                         .window_layout_attempt_freshness(frame_id, window_id, buf_id)
                         .as_ref()
-                        != freshness_after_leaf.as_deref())
+                        != display_when_baseline)
             {
                 if let Some(attempt) = window_end_attempt.take() {
                     evaluator.reject_redisplay_window_end_attempt(attempt);
