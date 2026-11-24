@@ -131,6 +131,7 @@ fn daemon_identity_and_initialization_are_host_owned_and_one_shot() {
         eval.eval_str("(daemonp)").unwrap().as_utf8_str(),
         Some("work")
     );
+    drop(eval);
     let mut unnamed = neovm_core::emacs_core::eval_hook_installers::new_context();
     unnamed.configure_daemon(None, None);
     assert_eq!(unnamed.eval_str("(daemonp)").unwrap(), Value::T);

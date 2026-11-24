@@ -877,6 +877,7 @@ fn first_tool_bar_allocation_grows_only_when_the_explicit_size_omitted_the_bar()
         tool_bar_state(&grow),
         crate::window::ToolkitToolBar::Allocated
     );
+    drop(grow);
 
     for policy in ["t", "'(tool-bar-lines)"] {
         let mut fixture = ChromeResizeFixture::new();

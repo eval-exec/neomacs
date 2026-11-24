@@ -3,7 +3,6 @@ use neomacs_display_protocol::image_diagnostic::ImageDiagnostic;
 use neomacs_display_protocol::{ImageFrameIndex, ImageRealization};
 use neomacs_display_runtime::render_thread::ImageRenderState;
 use neomacs_display_runtime::render_thread::{ImageProbeSource, probe_image_layout};
-use neovm_core::emacs_core::Context;
 use neovm_core::emacs_core::Value;
 use neovm_core::emacs_core::image::image_load_identity;
 use neovm_core::emacs_core::image_catalog::ImageSizeLimit;
@@ -14,10 +13,6 @@ use neovm_core::emacs_core::image_catalog::{
 use neovm_core::emacs_core::value::list_to_vec;
 use std::sync::Arc;
 use std::time::Instant;
-
-thread_local! {
-    static IMAGE_SPEC_TEST_CONTEXT: Context = neovm_core::emacs_core::eval_hook_installers::new_context();
-}
 
 use neomacs_display_protocol::ImageAnimationPolicy;
 
@@ -36,16 +31,14 @@ fn test_catalog(
     )
 }
 
-fn file_request(path: &str) -> ImageResolveRequest {
-    let spec = IMAGE_SPEC_TEST_CONTEXT.with(|_| {
-        Value::list(vec![
-            Value::symbol("image"),
-            Value::keyword(":type"),
-            Value::symbol("png"),
-            Value::keyword(":file"),
-            Value::string(path),
-        ])
-    });
+fn file_request_on_active_heap(path: &str) -> ImageResolveRequest {
+    let spec = Value::list(vec![
+        Value::symbol("image"),
+        Value::keyword(":type"),
+        Value::symbol("png"),
+        Value::keyword(":file"),
+        Value::string(path),
+    ]);
     let items = list_to_vec(&spec).expect("test image spec is a list");
     ImageResolveRequest {
         spec: ImageSpecIdentity::from_lisp_spec(&spec).expect("test image spec"),
@@ -59,6 +52,11 @@ fn file_request(path: &str) -> ImageResolveRequest {
         frame: Default::default(),
         realization: Default::default(),
     }
+}
+
+fn file_request(path: &str) -> ImageResolveRequest {
+    let _ctx = neovm_core::emacs_core::eval_hook_installers::new_context();
+    file_request_on_active_heap(path)
 }
 
 /// These tests exercise scheduling, not the size bound: every lookup here
@@ -212,10 +210,11 @@ fn invalidating_dependency_retires_old_identity_and_next_lookup_reloads() {
 
 #[test]
 fn invalidating_spec_preserves_other_spec_that_uses_same_dependency() {
+    let _ctx = neovm_core::emacs_core::eval_hook_installers::new_context();
     let (cmd_tx, cmd_rx) = neomacs_display_runtime::thread_comm::RenderCommandSender::unbounded();
     let metadata = Arc::new(ImageRenderState::default());
     let catalog = test_catalog(cmd_tx, None, metadata, None);
-    let first = file_request("/tmp/multi-page.png");
+    let first = file_request_on_active_heap("/tmp/multi-page.png");
     let mut second = first.clone();
     let second_spec = Value::list(vec![
         Value::symbol("image"),
@@ -452,7 +451,7 @@ fn pending_geometry_resolves_from_the_header_before_any_pixel_exists() {
         Some(RedisplayWaker::new(redisplay)),
     );
     let fixture = neomacs_infra::workspace_root().join("test/data/image/blank-100x200.png");
-    let mut request = file_request(fixture.to_str().expect("utf8 fixture path"));
+    let mut request = file_request_on_active_heap(fixture.to_str().expect("utf8 fixture path"));
     // 100x200 with only a width clamp: the decoded layout is 50x100, where the
     // pre-header placeholder reserves the clamp square 50x50 instead.
     request.size = ImageSizeSpec::new(AxisSize::AtMost(50), AxisSize::Native);

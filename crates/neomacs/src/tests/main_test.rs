@@ -5455,6 +5455,7 @@ fn batch_tty_mode_leaves_redisplay_callback_unset() {
         eval.redisplay_fn.is_none(),
         "batch tty should not install a live redisplay callback"
     );
+    drop(eval);
 
     let interactive = StartupOptions {
         frontend: FrontendKind::Tty,
