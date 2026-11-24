@@ -75,14 +75,11 @@ impl<'service, 'heap> KeeperEra<'service, 'heap> {
         self.era.stop()
     }
 
+    // The L6.7 driver's methods below carry no `expect(dead_code)`: rustc
+    // counts what an item under that expectation calls as used, so the
+    // driver's own expectation keeps them live in non-test builds.
+
     /// L6.7 K4: commit one serial request at the ring's tail.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the L6.7 driver calls it; no production spawner yet"
-        )
-    )]
     pub(crate) fn enqueue_serial(
         &self,
         owner: MutatorKey,
@@ -92,25 +89,11 @@ impl<'service, 'heap> KeeperEra<'service, 'heap> {
     }
 
     /// L6.7 K6: cancel `owner`'s queued request.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the L6.7 driver calls it; no production spawner yet"
-        )
-    )]
     pub(crate) fn cancel_serial(&self, owner: MutatorKey) -> Result<(), RendezvousError> {
         self.era.cancel_serial(owner)
     }
 
     /// L6.7 K7: poison the era on a proven invariant break.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the L6.7 driver calls it; no production spawner yet"
-        )
-    )]
     pub(crate) fn poison_era(&self) -> Result<(), RendezvousError> {
         self.era.poison_era()
     }

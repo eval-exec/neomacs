@@ -61,17 +61,12 @@ impl StoppedSerialTicket {
         }
     }
 
+    // The L6.7 driver lends and accepts through these two, so they carry
+    // no `expect(dead_code)` (see the note on `KeeperEra`'s driver methods).
     /// Cut the one ticket `lend` can issue.
     ///
     /// `lend` is consumed, so a second ticket cannot be cut from it. The
     /// returned loan still holds the stopped reservation.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "L6.4 is the production caller; the live lend row cuts one ticket"
-        )
-    )]
     pub(crate) fn from_lend<'s, 'era>(
         lend: super::keeper_custody::SuspendedKeeper<'s, 'era>,
     ) -> (Self, SerialLendHeld<'s, 'era>) {
@@ -97,13 +92,6 @@ impl StoppedSerialTicket {
 
 impl<'s, 'era> SerialLendHeld<'s, 'era> {
     /// Hand the still-held lend to the existing return path.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "L6.4 end_serial returns the ticket; the live lend row accepts that return"
-        )
-    )]
     pub(crate) fn accept_return(
         self,
         returned: super::keeper_custody::ReturnedSerialTicket,
