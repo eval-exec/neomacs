@@ -497,3 +497,61 @@ fn ring_grant_in_stop_refuses_after_poison_and_keeps_retire() {
     assert_eq!(state.retire_serial(a), Err(RendezvousError::Identity));
     assert_eq!(state.ring_len(), 0);
 }
+
+/// Owner exit or a sent-back publication cancels a queued entry; a granted
+/// entry is not cancelled (its ticket is out).
+#[test]
+fn ring_cancel_queued_removes_only_a_queued_entry() {
+    let mut state = State::new();
+    let keys = ring_keys();
+    let a = state.enqueue_serial(keys[0], ring_generation()).unwrap();
+    let b = state.enqueue_serial(keys[1], ring_generation()).unwrap();
+    let epoch = requested(&mut state, &running(&keys));
+    state.begin_trace(epoch, &stopped_members(&keys)).unwrap();
+    assert_eq!(state.grant_head_in_stop(epoch, |_| true), Ok(Some(a)));
+    assert_eq!(
+        state.cancel_queued(keys[0]),
+        Err(RendezvousError::Identity),
+        "a granted entry is not cancelled"
+    );
+    state.cancel_queued(keys[1]).unwrap();
+    assert_eq!(state.ring_len(), 1);
+    assert_eq!(
+        state.cancel_queued(keys[1]),
+        Err(RendezvousError::Identity),
+        "a cancel happens once"
+    );
+    assert_eq!(
+        state.cancel_queued(keys[2]),
+        Err(RendezvousError::Identity),
+        "an owner with no entry"
+    );
+    state.retire_serial(a).unwrap();
+    assert_eq!(state.ring_head(), None);
+    let _ = b;
+}
+
+/// A grant must be retired before its stop completes (lead #13911 M1): no
+/// grant outlives the stop that issued it.
+#[test]
+fn ring_complete_refuses_while_a_grant_is_out() {
+    let mut state = State::new();
+    let keys = ring_keys();
+    let a = state.enqueue_serial(keys[0], ring_generation()).unwrap();
+    let epoch = requested(&mut state, &running(&keys));
+    let stopped = stopped_members(&keys);
+    state.begin_trace(epoch, &stopped).unwrap();
+    assert_eq!(state.grant_head_in_stop(epoch, |_| true), Ok(Some(a)));
+    assert_eq!(
+        state.complete(epoch, &stopped),
+        Err(RendezvousError::Publication),
+        "the grant is still out"
+    );
+    assert_eq!(
+        state.phase,
+        Phase::Tracing(epoch),
+        "the refusal changed nothing"
+    );
+    state.retire_serial(a).unwrap();
+    state.complete(epoch, &stopped).unwrap();
+}

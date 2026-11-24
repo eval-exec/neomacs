@@ -48,6 +48,23 @@ impl<'s, 'era> UnenteredReservation<'s, 'era> {
         self.interval.validate_owner(owner)
     }
 
+    /// The serial ring's head under this stop: owner and queued generation.
+    #[doc(hidden)]
+    pub fn serial_head(
+        &self,
+    ) -> Result<
+        Option<(super::super::MutatorKey, std::num::NonZeroU64)>,
+        super::super::RendezvousError,
+    > {
+        self.interval.serial_head()
+    }
+
+    /// Serial requests queued or granted under this stop.
+    #[doc(hidden)]
+    pub fn serial_ring_len(&self) -> Result<usize, super::super::RendezvousError> {
+        self.interval.serial_ring_len()
+    }
+
     /// L6.7 K3: grant the serial ring's head inside this stop. The keeper
     /// driver grants between lends; no lend is out while it decides.
     #[doc(hidden)]

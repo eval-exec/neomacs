@@ -73,6 +73,20 @@ impl<'s, 'era> StoppedInterval<'s, 'era> {
         self.stopped.epoch()
     }
 
+    /// The serial ring's head under this stop: owner and queued generation.
+    #[doc(hidden)]
+    pub fn serial_head(
+        &self,
+    ) -> Result<Option<(super::super::MutatorKey, std::num::NonZeroU64)>, RendezvousError> {
+        self.stopped.serial_head()
+    }
+
+    /// Serial requests queued or granted under this stop.
+    #[doc(hidden)]
+    pub fn serial_ring_len(&self) -> Result<usize, RendezvousError> {
+        self.stopped.serial_ring_len()
+    }
+
     /// L6.7 K3: grant the serial ring's head inside this stop.
     #[doc(hidden)]
     pub fn grant_serial_head(

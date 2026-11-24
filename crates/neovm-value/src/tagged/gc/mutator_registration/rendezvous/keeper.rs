@@ -26,6 +26,11 @@ fn registration_error(error: RegistrationError) -> RendezvousError {
 }
 
 fn keeper(registry: &Registry) -> Result<(), RendezvousError> {
+    keeper_thread(registry)
+}
+
+/// The keeper-thread check, for the rendezvous entry points outside a stop.
+pub(super) fn keeper_thread(registry: &Registry) -> Result<(), RendezvousError> {
     if registry.keeper_thread != std::thread::current().id() {
         return Err(RendezvousError::Registration(
             RegistrationError::WrongThread,
@@ -63,7 +68,18 @@ pub struct AllStopped<'era> {
 #[derive(Debug)]
 pub struct SerialGrant {
     id: super::control::RequestId,
+    owner: MutatorKey,
     _thread: PhantomData<Rc<()>>,
+}
+
+static_assertions::assert_not_impl_any!(SerialGrant: Send, Sync, Clone, Copy);
+
+impl SerialGrant {
+    /// The owner this grant's ticket goes to.
+    #[doc(hidden)]
+    pub fn owner(&self) -> MutatorKey {
+        self.owner
+    }
 }
 
 impl fmt::Debug for AllStopped<'_> {
@@ -346,13 +362,23 @@ impl<'era> AllStopped<'era> {
         Ok(result)
     }
 
+    /// The keeper's stop with nothing to collect (L6.7): run the trace step
+    /// with an empty visit, so serial turns can be granted. The stopped-proof
+    /// type stays crate-private.
+    #[doc(hidden)]
+    pub fn trace_serial(&mut self) -> Result<(), RendezvousError> {
+        self.trace(|_stopped, _proof| Ok(()))
+    }
+
     /// L6.7 K3: grant the serial ring's head inside this stop. Only the
     /// keeper, only after `trace`, and only for this stop's epoch. One
     /// ticket is out at a time and an unready head is never skipped.
     /// `ready` sees
     /// the head's owner key and the publication generation it was queued
-    /// under. The `&mut` borrow keeps `trace` and `complete` out while the
-    /// grant is decided.
+    /// under. It runs under the registry gate, so it must not call back into
+    /// the gate: a refused re-entry would read as an unready head. The `&mut`
+    /// borrow keeps `trace` and `complete` out while the grant is decided,
+    /// and `complete` refuses while the grant is out.
     #[doc(hidden)]
     pub fn grant_serial_head(
         &mut self,
@@ -369,13 +395,35 @@ impl<'era> AllStopped<'era> {
             .lock_for_keeper()
             .map_err(registration_error)?;
         self.validate(&gate)?;
-        let granted = gate
-            .rendezvous
-            .grant_head_in_stop(self.epoch, |entry| ready(entry.owner(), entry.generation()))?;
-        Ok(granted.map(|id| SerialGrant {
+        let mut owner = None;
+        let granted = gate.rendezvous.grant_head_in_stop(self.epoch, |entry| {
+            owner = Some(entry.owner());
+            ready(entry.owner(), entry.generation())
+        })?;
+        Ok(granted.zip(owner).map(|(id, owner)| SerialGrant {
             id,
+            owner,
             _thread: PhantomData,
         }))
+    }
+
+    /// The ring head's owner and the publication generation it was queued
+    /// under, so the keeper can check that owner's receipt before granting.
+    #[doc(hidden)]
+    pub fn serial_head(&self) -> Result<Option<(MutatorKey, NonZeroU64)>, RendezvousError> {
+        self.with_stopped_gate(|_registry, gate| {
+            Ok(gate
+                .rendezvous
+                .ring_head_entry()
+                .map(|entry| (entry.owner(), entry.generation())))
+        })
+    }
+
+    /// Serial requests queued or granted under this stop. The keeper's batch
+    /// bound (L6.7 K4) is this length when the stop began.
+    #[doc(hidden)]
+    pub fn serial_ring_len(&self) -> Result<usize, RendezvousError> {
+        self.with_stopped_gate(|_registry, gate| Ok(gate.rendezvous.ring_len()))
     }
 
     /// Retire a grant after its ticket came back. Consuming the grant makes
@@ -483,7 +531,7 @@ impl<'era> AllStopped<'era> {
         body: impl FnOnce(&PublishedGcImage) -> R,
     ) -> Result<R, RendezvousError> {
         let entry = self.entry(key)?;
-        let mut state = super::keeper_hold(&entry)?;
+        let state = super::keeper_hold(&entry)?;
         let image = state.image.as_ref().ok_or(RendezvousError::Publication)?;
         let mut attempt = CallbackAttempt {
             registry: self.registry,

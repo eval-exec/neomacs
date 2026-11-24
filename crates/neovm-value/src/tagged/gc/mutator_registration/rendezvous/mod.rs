@@ -16,7 +16,6 @@ pub use owner::RootedRetireFailure;
 pub use resume::ResumeGcImage;
 pub use resume::ResumeGcImageFailure;
 
-#[cfg(any(test, feature = "test-support"))]
 use std::num::NonZeroU64;
 
 use super::*;
@@ -418,9 +417,41 @@ pub(super) fn request(registry: &Registry) -> Result<Request, RendezvousError> {
     Ok(request)
 }
 
-/// Queue one serial request on the live registry. L6.7 owns the product
-/// enqueue. `generation` is recorded and is not checked here; a stop refuses
-/// the grant before the keeper's publication `ready` callback.
+/// L6.7 K4: the keeper commits one serial request at the ring's tail.
+/// Commit order is the keeper's receive order. Keeper thread only; the gate
+/// is the keeper's waiting acquisition.
+pub(super) fn enqueue_serial(
+    registry: &Registry,
+    owner: MutatorKey,
+    generation: NonZeroU64,
+) -> Result<(), RendezvousError> {
+    keeper::keeper_thread(registry)?;
+    let mut gate = registry.lock_for_keeper()?;
+    gate.rendezvous
+        .enqueue_serial(owner, generation)
+        .map(|_| ())
+}
+
+/// L6.7 K7: the keeper poisons the era on a proven invariant break (an
+/// owner that unwound or leaked its lend, a message that cannot belong to the
+/// protocol). Parked owners wake with `Poisoned`. Keeper thread only.
+pub(super) fn poison_era(registry: &Registry) -> Result<(), RendezvousError> {
+    keeper::keeper_thread(registry)?;
+    registry.poison();
+    Ok(())
+}
+
+/// L6.7 K6: the keeper cancels `owner`'s queued request. A granted entry
+/// refuses with `Identity`; its grant's retire ends it.
+pub(super) fn cancel_serial(registry: &Registry, owner: MutatorKey) -> Result<(), RendezvousError> {
+    keeper::keeper_thread(registry)?;
+    let mut gate = registry.lock_for_keeper()?;
+    gate.rendezvous.cancel_queued(owner)
+}
+
+/// Test-only: queue one serial request without the keeper-thread check.
+/// The product commit is [`enqueue_serial`]. `generation` is recorded and is
+/// not checked here; the keeper's `ready` callback checks it at the grant.
 #[cfg(any(test, feature = "test-support"))]
 pub(super) fn enqueue_serial_for_test(
     registry: &Registry,

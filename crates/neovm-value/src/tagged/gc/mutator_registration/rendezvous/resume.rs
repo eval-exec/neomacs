@@ -202,8 +202,11 @@ impl<'era> Mutator<'era> {
         }
     }
 
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    pub(crate) fn leave_native(&mut self) -> Result<u64, RendezvousError> {
+    /// Return from a native extent: wait out an active stop, then apply the
+    /// latest image and run again. The parallel owner's port (L6.7) leaves
+    /// native before it publishes for its next serial request.
+    #[doc(hidden)]
+    pub fn leave_native(&mut self) -> Result<u64, RendezvousError> {
         let image = self.begin_restore(true)?;
         let epoch = image.epoch();
         image.apply_wait().map_err(|failure| failure.reason)?;

@@ -624,6 +624,32 @@ impl<'heap, K: EraKeeper> ParallelHeapEra<'heap, K> {
         self.core.registry().poison();
     }
 
+    /// L6.7 K4: the keeper commits one serial request at the ring's tail.
+    /// Keeper thread only. `generation` names the owner's publication; the
+    /// keeper's grant checks it against the receipt it holds.
+    #[doc(hidden)]
+    pub fn enqueue_serial(
+        &self,
+        owner: super::MutatorKey,
+        generation: std::num::NonZeroU64,
+    ) -> Result<(), RendezvousError> {
+        super::rendezvous::enqueue_serial(self.core.registry(), owner, generation)
+    }
+
+    /// L6.7 K7: poison the era on a proven invariant break. Keeper thread
+    /// only; parked owners wake with `Poisoned`.
+    #[doc(hidden)]
+    pub fn poison_era(&self) -> Result<(), RendezvousError> {
+        super::rendezvous::poison_era(self.core.registry())
+    }
+
+    /// L6.7 K6: the keeper cancels `owner`'s queued request. A granted
+    /// request refuses with `Identity`.
+    #[doc(hidden)]
+    pub fn cancel_serial(&self, owner: super::MutatorKey) -> Result<(), RendezvousError> {
+        super::rendezvous::cancel_serial(self.core.registry(), owner)
+    }
+
     /// Queue one serial request ahead of a live stop. Not the product ring.
     /// L6.7 owns that enqueue. The generation is stored and is not a
     /// publication check.

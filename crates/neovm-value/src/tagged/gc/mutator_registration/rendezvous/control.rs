@@ -170,9 +170,12 @@ impl State {
         self.activate(membership).map(Request::Active)
     }
 
-    /// Start a stop epoch. A granted serial turn does not block activation:
-    /// that owner is a frozen stop participant and must ACK/park at its next
-    /// poll; once the phase leaves Idle no new serial grant is issued.
+    /// Start a stop epoch. A parallel owner's grant is issued only inside the
+    /// keeper's own stop and retired before that stop completes (`complete`
+    /// refuses while one is out), so none is out here. The Idle
+    /// `try_grant_head` path, an L6.7b candidate, keeps the old rule: its
+    /// granted owner is a frozen stop participant and must ACK at its next
+    /// poll; once the phase leaves Idle no new Idle grant is issued.
     pub(in crate::tagged::gc) fn activate(
         &mut self,
         membership: Membership<'_>,
@@ -328,6 +331,29 @@ impl State {
         Ok(())
     }
 
+    /// Cancel `owner`'s queued entry (owner exit, or a stale publication the
+    /// keeper sent back). A granted entry is not cancelled here: its ticket
+    /// is out and only the grant's retire ends it.
+    pub(in crate::tagged::gc) fn cancel_queued(
+        &mut self,
+        owner: MutatorKey,
+    ) -> Result<(), RendezvousError> {
+        let Some(index) = self
+            .serial_ring
+            .iter()
+            .position(|entry| entry.owner() == owner && entry.phase() == RingPhase::Queued)
+        else {
+            return Err(RendezvousError::Identity);
+        };
+        self.serial_ring.remove(index);
+        Ok(())
+    }
+
+    /// The head entry's owner and queued publication generation.
+    pub(in crate::tagged::gc) fn ring_head_entry(&self) -> Option<RingEntry> {
+        self.serial_ring.front().copied()
+    }
+
     pub(in crate::tagged::gc) fn ring_head(&self) -> Option<RequestId> {
         self.serial_ring.front().map(|entry| entry.id())
     }
@@ -382,6 +408,11 @@ impl State {
             Phase::Tracing(current) if current == epoch => {}
             Phase::Tracing(_) => return Err(RendezvousError::Publication),
             _ => return Err(RendezvousError::Busy),
+        }
+        // A grant issued under this stop must be retired before it ends, so
+        // no grant outlives its stop (L6.7 K3, lead #13911 M1).
+        if self.ring_head_granted.is_some() {
+            return Err(RendezvousError::Publication);
         }
         if self.active_readers != 0 {
             return Err(RendezvousError::Readers);

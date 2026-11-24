@@ -1188,7 +1188,9 @@ fn keeper_reentering_an_entry_it_holds_refuses_at_once_body<
 }
 
 /// L6.7 K3. The keeper grants the serial head inside its own traced stop:
-/// not before the trace, once per ticket, and the grant retires once.
+/// not before the trace, once per ticket, to the queued owner. The stop does
+/// not complete while the grant is out (lead #13911 M1), and the grant
+/// retires once.
 fn keeper_grants_the_serial_head_only_inside_its_traced_stop_body<
     K: EraKeeper + std::fmt::Debug + 'static,
 >(
@@ -1217,24 +1219,46 @@ fn keeper_grants_the_serial_head_only_inside_its_traced_stop_body<
                     seen = Some((owner, published));
                     true
                 })
-                .unwrap();
+                .unwrap()
+                .expect("the queued head is granted");
+            let granted_owner = grant.owner();
+            let while_out = super::serial_ring_head_for_test(registry);
             let again = stopped
                 .grant_serial_head(|_, _| true)
                 .map(|grant| grant.is_some());
-            let retired = grant.map(|grant| stopped.retire_serial_grant(grant));
+            // The stop refuses to complete while the grant is out.
+            let refused = match stopped.complete() {
+                Ok(()) => panic!("the stop completed with a grant out"),
+                Err(failure) => {
+                    let reason = failure.reason;
+                    stopped = failure.into_stopped();
+                    reason
+                }
+            };
+            let retired = stopped.retire_serial_grant(grant);
             let head_after = super::serial_ring_head_for_test(registry);
             complete(stopped);
             release_tx.send(()).unwrap();
             owner.join().unwrap();
-            assert!(queued > 0);
             assert_eq!(
                 early,
                 Err(RendezvousError::Publication),
                 "no grant before the trace"
             );
             assert_eq!(seen, Some((key, generation)), "ready sees the queued facts");
+            assert_eq!(granted_owner, key, "the grant names the queued owner");
+            assert_eq!(
+                while_out,
+                Ok((1, Some(queued))),
+                "the granted entry stays at the head while its ticket is out"
+            );
             assert_eq!(again, Ok(false), "one ticket out");
-            assert_eq!(retired, Some(Ok(())), "the grant retires once");
+            assert_eq!(
+                refused,
+                RendezvousError::Publication,
+                "no grant outlives its stop"
+            );
+            assert_eq!(retired, Ok(()), "the grant retires once");
             assert_eq!(
                 head_after,
                 Ok((0, None)),
