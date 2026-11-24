@@ -3735,7 +3735,7 @@ fn dump_localized_val(
     // the symbol naming it (or its projection) is alive.
     let (default_val, local_if_set, forwarder) = unsafe {
         let blv = &*blv.as_ptr();
-        let default_val = blv.defcell.get().cons_cdr();
+        let default_val = blv.defcell().cons_cdr();
         (default_val, blv.local_if_set, blv.fwd.map(|fwd| fwd.ty()))
     };
     let default_val = match dynamic_default {

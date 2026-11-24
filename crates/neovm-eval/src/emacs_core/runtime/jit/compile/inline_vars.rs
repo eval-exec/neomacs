@@ -316,11 +316,8 @@ fn with_remembered_defcell(mut site: VarSite) -> VarSite {
     } = site.shape
     {
         // SAFETY: a live BLV record (see `classify`).
-        let defcell = unsafe {
-            (*(blv as *const neovm_value::symbol::LispBufferLocalValue))
-                .defcell
-                .get()
-        };
+        let defcell =
+            unsafe { (*(blv as *const neovm_value::symbol::LispBufferLocalValue)).defcell() };
         let remembered = unsafe {
             neovm_value::tagged::gc::with_tagged_heap(|heap| {
                 heap.remember_mapped_cons_ahead_of_writes(defcell)

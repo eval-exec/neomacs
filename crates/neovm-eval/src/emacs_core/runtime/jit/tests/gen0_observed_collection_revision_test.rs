@@ -283,15 +283,7 @@ fn check_mapped_blv_binding() {
     // the same coherent (SYMBOL . DEFAULT) pair retained explicitly in this
     // image, so the remembered mapped-cell proof is exercised rather than
     // silently testing a newly allocated owner outside the dump window.
-    // Obarray::blv is the public reader of that record. store_atomic takes a
-    // shared cell, so the install does not need a mutable borrow.
-    {
-        let blv = context.obarray().blv(id).expect("localized");
-        if blv.valcell.get() == blv.defcell.get() {
-            blv.valcell.store_atomic(owner);
-        }
-        blv.defcell.store_atomic(owner);
-    }
+    context.obarray.replace_blv_defcell_for_test(id, owner);
     assert!(
         context
             .tagged_heap

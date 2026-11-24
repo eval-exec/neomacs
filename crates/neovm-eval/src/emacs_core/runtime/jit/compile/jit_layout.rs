@@ -243,11 +243,9 @@ pub(crate) const BLV_FWD_OFFSET: usize = offset_of!(neovm_value::symbol::LispBuf
 pub(crate) const BLV_WHERE_BUF_ID_OFFSET: usize =
     offset_of!(neovm_value::symbol::LispBufferLocalValue, where_buf_id);
 /// `(SYMBOL . DEFAULT-VALUE)`.
-pub(crate) const BLV_DEFCELL_OFFSET: usize =
-    offset_of!(neovm_value::symbol::LispBufferLocalValue, defcell);
+pub(crate) const BLV_DEFCELL_OFFSET: usize = neovm_value::symbol::BLV_DEFCELL_OFFSET;
 /// `(SYMBOL . CURRENT-VALUE)`, the loaded cell.
-pub(crate) const BLV_VALCELL_OFFSET: usize =
-    offset_of!(neovm_value::symbol::LispBufferLocalValue, valcell);
+pub(crate) const BLV_VALCELL_OFFSET: usize = neovm_value::symbol::BLV_VALCELL_OFFSET;
 /// The structural epoch the cache was loaded at (a `u64`).
 pub(crate) const BLV_ALIST_EPOCH_OFFSET: usize =
     offset_of!(neovm_value::symbol::LispBufferLocalValue, alist_epoch);

@@ -833,10 +833,7 @@ fn discard_local_binding_does_not_allocate_ambient_buffer_wrapper() {
         .get(buffer)
         .and_then(|buffer| buffer.local_variable_binding_cell(symbol))
         .expect("existing canonical local cell");
-    assert_eq!(
-        owner.obarray().blv(symbol).unwrap().valcell.get(),
-        binding_cell
-    );
+    assert_eq!(owner.obarray().blv(symbol).unwrap().valcell(), binding_cell);
     let mut ambient = crate::test_utils::new_context();
     ambient.setup_thread_locals();
     let before = ambient.tagged_heap().bytes_since_gc_exact();
@@ -865,10 +862,7 @@ fn discard_local_binding_does_not_allocate_ambient_buffer_wrapper() {
         Some(binding_cell),
         "recovery keeps the existing binding cell"
     );
-    assert_eq!(
-        owner.obarray().blv(symbol).unwrap().valcell.get(),
-        binding_cell
-    );
+    assert_eq!(owner.obarray().blv(symbol).unwrap().valcell(), binding_cell);
     assert_eq!(
         owner.visible_variable_value_or_nil_by_id(symbol),
         Value::fixnum(10),
@@ -992,7 +986,7 @@ fn panic_recovery_unbound_localized_builtin_keeps_cells_and_projection() {
     let cells = [boolean, object].map(|symbol| {
         let blv = ctx.obarray().blv(symbol).expect("BLV");
         assert!(blv.fwd.is_some());
-        (blv.defcell.get(), blv.valcell.get())
+        (blv.defcell(), blv.valcell())
     });
     ctx.publish_runtime_binding_write_by_resolved_id(object, Value::NIL);
     let count = ctx.specpdl().len();
@@ -1012,14 +1006,14 @@ fn panic_recovery_unbound_localized_builtin_keeps_cells_and_projection() {
     assert!(outcome.is_err());
     for (symbol, cells) in [boolean, object].into_iter().zip(cells) {
         let blv = ctx.obarray().blv(symbol).expect("retained BLV");
-        assert_eq!((blv.defcell.get(), blv.valcell.get()), cells);
+        assert_eq!((blv.defcell(), blv.valcell()), cells);
         let retained = if symbol == boolean {
             Value::NIL
         } else {
             retained
         };
-        assert_eq!(blv.defcell.get().cons_cdr(), retained);
-        assert_eq!(blv.valcell.get().cons_cdr(), retained);
+        assert_eq!(blv.defcell().cons_cdr(), retained);
+        assert_eq!(blv.valcell().cons_cdr(), retained);
         assert!(blv.fwd.is_some());
     }
     assert!(!bool_fwd.get());

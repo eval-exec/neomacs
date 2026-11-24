@@ -2300,7 +2300,7 @@ pub(super) fn canonical_bufferless_value(projection: &ThreadProjectionDescriptor
         CanonicalArm::Plain => projection.plain_value(),
         // SAFETY: a projection's localized arm names a live record of the
         // obarray's BLV pool; its default cell is only read.
-        CanonicalArm::Localized(blv) => unsafe { (*blv.blv().as_ptr()).defcell.get().cons_cdr() },
+        CanonicalArm::Localized(blv) => unsafe { (*blv.blv().as_ptr()).defcell().cons_cdr() },
         CanonicalArm::Forwarded(builtin) => return builtin.descriptor().load(),
     };
     (!value.is_unbound()).then_some(value)
@@ -2356,7 +2356,7 @@ impl Context {
                 // only the retained forwarder and default cons are copied.
                 let blv = unsafe { &*blv.blv().as_ptr() };
                 let cell = match channel {
-                    Channel::Default => blv.defcell.get(),
+                    Channel::Default => blv.defcell(),
                     Channel::BufferLocal(buffer) => self
                         .edit
                         .buffers

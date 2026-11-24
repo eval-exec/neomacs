@@ -524,7 +524,7 @@ impl Context {
                     .buffers
                     .current_buffer()
                     .and_then(|buffer| buffer.local_variable_binding_cell(resolved))
-                    .unwrap_or(blv.defcell.get())
+                    .unwrap_or(blv.defcell())
                     .cons_cdr()
             } else {
                 self.visible_runtime_variable_value_by_id_resolved(resolved)

@@ -471,7 +471,7 @@ fn projected_localized_generic_view_keeps_cache_hits_lazy() {
         assert_eq!(cache.where_buf_id.get(), buffer_id.0);
         assert!(cache.found.get());
         assert_eq!(
-            Some(cache.valcell.get()),
+            Some(cache.valcell()),
             view.buffer.local_variable_binding_cell(id)
         );
         assert_eq!(
@@ -526,7 +526,7 @@ fn projected_localized_generic_view_keeps_unregistered_cache_locus_nil() {
                 assert!(cache.where_buf.get().is_nil());
                 assert_eq!(cache.where_buf_id.get(), neovm_value::symbol::NO_WHERE_BUF);
                 assert!(!cache.found.get());
-                assert_eq!(cache.valcell.get(), cache.defcell.get());
+                assert_eq!(cache.valcell(), cache.defcell());
                 assert_eq!(
                     cache.alist_epoch.get(),
                     neovm_value::symbol::blv_alist_epoch()
@@ -555,7 +555,7 @@ fn projected_localized_generic_view_keeps_unregistered_cache_locus_nil() {
         assert_eq!(cache.where_buf_id.get(), neovm_value::symbol::NO_WHERE_BUF);
         assert!(cache.found.get());
         assert_eq!(
-            Some(cache.valcell.get()),
+            Some(cache.valcell()),
             view.buffer.local_variable_binding_cell(id)
         );
         assert_eq!(

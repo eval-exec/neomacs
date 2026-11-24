@@ -410,10 +410,10 @@ pub struct LispBufferLocalValue {
     /// `u64` compiled code loads.
     pub where_buf_id: Cell<u64>,
     /// `(SYMBOL . DEFAULT-VALUE)` cons. GNU `defcell`.
-    pub defcell: AtomicTaggedValue,
+    pub(crate) defcell: AtomicTaggedValue,
     /// `(SYMBOL . CURRENT-VALUE)` cons. Equal to `defcell` when no
     /// per-buffer binding is loaded. GNU `valcell`.
-    pub valcell: AtomicTaggedValue,
+    pub(crate) valcell: AtomicTaggedValue,
     /// [`blv_alist_epoch`] value at the last `where_buf`/`valcell`
     /// refresh. The read fast path trusts `valcell` only while this
     /// matches the global epoch AND `where_buf` is the current buffer —
@@ -436,7 +436,39 @@ const _: () = {
 #[doc(hidden)]
 pub const NO_WHERE_BUF: u64 = u64::MAX;
 
+/// Byte offset of [`LispBufferLocalValue`]'s `defcell` word for JIT lowering.
+#[doc(hidden)]
+pub const BLV_DEFCELL_OFFSET: usize = std::mem::offset_of!(LispBufferLocalValue, defcell);
+
+/// Byte offset of [`LispBufferLocalValue`]'s `valcell` word for JIT lowering.
+#[doc(hidden)]
+pub const BLV_VALCELL_OFFSET: usize = std::mem::offset_of!(LispBufferLocalValue, valcell);
+
 impl LispBufferLocalValue {
+    /// Read the `(SYMBOL . DEFAULT-VALUE)` cons (GNU `defcell`).
+    #[inline]
+    pub fn defcell(&self) -> Value {
+        self.defcell.get()
+    }
+
+    /// Read the `(SYMBOL . CURRENT-VALUE)` cons (GNU `valcell`).
+    #[inline]
+    pub fn valcell(&self) -> Value {
+        self.valcell.get()
+    }
+
+    /// Atomically load the `(SYMBOL . DEFAULT-VALUE)` cons.
+    #[inline]
+    pub fn defcell_atomic(&self) -> Value {
+        self.defcell.load_atomic()
+    }
+
+    /// Atomically load the `(SYMBOL . CURRENT-VALUE)` cons.
+    #[inline]
+    pub fn valcell_atomic(&self) -> Value {
+        self.valcell.load_atomic()
+    }
+
     /// Point the cache at `buf` (a buffer, or `Value::NIL` for the global
     /// default): the object for the collector and for `eq` tests, its id
     /// for the read fast path. The one writer of both.
@@ -3057,6 +3089,20 @@ impl Obarray {
         // allocated and self.blvs owns. It stays valid for &self's
         // lifetime because Drop can't run while we hold &self.
         Some(unsafe { &*blv.as_ptr() })
+    }
+
+    /// Test-only: replace a localized symbol's `defcell` (and `valcell` when it
+    /// points at `defcell`) with `owner` under an exclusive `&mut self` borrow.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn replace_blv_defcell_for_test(&mut self, id: SymId, owner: Value) {
+        let blv = self
+            .blv(id)
+            .expect("replace_blv_defcell_for_test requires a localized symbol");
+        if blv.valcell.get() == blv.defcell.get() {
+            blv.valcell.store_atomic(owner);
+        }
+        blv.defcell.store_atomic(owner);
     }
 
     /// Look up a LOCALIZED symbol's value in `target_buf` without
