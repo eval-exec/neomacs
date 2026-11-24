@@ -62,7 +62,10 @@ use face_sources::{FaceTableRoots, RootedFace};
 use neovm_core::buffer::{
     Buffer, CharPos0, CharRange, EmacsByteLen, EmacsBytePos, EmacsByteRange, LispCharPos1,
     buffer::{BufferSlotInfo, lookup_buffer_slot_by_sym_id},
-    overlay::{OverlayList, OverlayPropertyAtPoint, OverlayPropertyFilter},
+    overlay::{
+        OverlayList, OverlayPropertyAtPoint, OverlayPropertyFilter, OverlayPropertyResolver,
+        OverlayRead,
+    },
 };
 use neovm_core::emacs_core::effect_profile::{
     EffectScope, effect_name_from_lisp, effect_operation_from_lisp,
@@ -156,6 +159,147 @@ impl DisplayLineNumbersMode {
             }
             _ => Self::Off,
         }
+    }
+}
+
+/// Overlay view a layout attempt reads. Today's only variant is the captured
+/// list. A later slice can add a live variant without changing callers.
+#[derive(Clone, Copy)]
+pub(crate) enum LayoutOverlays<'a> {
+    Snapshot(&'a OverlayList),
+}
+
+impl<'a> LayoutOverlays<'a> {
+    fn list(self) -> &'a OverlayList {
+        match self {
+            Self::Snapshot(list) => list,
+        }
+    }
+
+    pub(crate) fn is_empty(self) -> bool {
+        self.list().is_empty()
+    }
+    pub(crate) fn may_contain_property(self, property: Value) -> bool {
+        self.list().may_contain_property(property)
+    }
+    pub(crate) fn overlay_plist(self, overlay: Value) -> Option<Value> {
+        self.list().overlay_plist(overlay)
+    }
+    pub(crate) fn overlay_get_named(self, overlay: Value, prop_name: Value) -> Option<Value> {
+        self.list().overlay_get_named(overlay, prop_name)
+    }
+    pub(crate) fn overlay_applies_to_window(self, overlay: Value, window_id: Option<u64>) -> bool {
+        self.list().overlay_applies_to_window(overlay, window_id)
+    }
+    pub(crate) fn overlay_start_emacs_byte_pos(self, overlay: Value) -> Option<EmacsBytePos> {
+        self.list().overlay_start_emacs_byte_pos(overlay)
+    }
+    pub(crate) fn overlay_end_emacs_byte_pos(self, overlay: Value) -> Option<EmacsBytePos> {
+        self.list().overlay_end_emacs_byte_pos(overlay)
+    }
+    pub(crate) fn overlays_at_emacs_byte_pos(self, pos: EmacsBytePos) -> Vec<Value> {
+        self.list().overlays_at_emacs_byte_pos(pos)
+    }
+    pub(crate) fn overlays_in_emacs_byte_range(self, range: EmacsByteRange) -> Vec<Value> {
+        self.list().overlays_in_emacs_byte_range(range)
+    }
+    pub(crate) fn next_boundary_after_emacs_byte_pos(
+        self,
+        pos: EmacsBytePos,
+    ) -> Option<EmacsBytePos> {
+        self.list().next_boundary_after_emacs_byte_pos(pos)
+    }
+    pub(crate) fn highest_priority_overlay_property_value_at_emacs_byte_pos(
+        self,
+        pos: EmacsBytePos,
+        property: Value,
+        window_id: Option<u64>,
+    ) -> Option<Value> {
+        self.list()
+            .highest_priority_overlay_property_value_at_emacs_byte_pos(pos, property, window_id)
+    }
+    pub(crate) fn sort_overlay_ids_by_priority_desc(self, overlay_ids: &mut [Value]) {
+        self.list().sort_overlay_ids_by_priority_desc(overlay_ids)
+    }
+    pub(crate) fn sort_overlay_ids_by_priority_desc_with(
+        self,
+        overlay_ids: &mut [Value],
+        priority_of: &dyn Fn(Value) -> Option<Value>,
+    ) {
+        self.list()
+            .sort_overlay_ids_by_priority_desc_with(overlay_ids, priority_of)
+    }
+    pub(crate) fn iter_overlays_at_emacs_byte_pos(
+        self,
+        pos: EmacsBytePos,
+    ) -> impl Iterator<Item = Value> + 'a {
+        self.list().iter_overlays_at_emacs_byte_pos(pos)
+    }
+    pub(crate) fn iter_overlays_in_accessible_emacs_byte_range(
+        self,
+        range: EmacsByteRange,
+        accessible_end: EmacsBytePos,
+    ) -> impl Iterator<Item = Value> + 'a {
+        self.list()
+            .iter_overlays_in_accessible_emacs_byte_range(range, accessible_end)
+    }
+    pub(crate) fn resolve_overlay_property_at_emacs_byte_pos<R>(
+        self,
+        pos: EmacsBytePos,
+        window_id: Option<u64>,
+        property_value: R,
+    ) -> OverlayPropertyAtPoint<'a, R>
+    where
+        R: OverlayPropertyResolver,
+    {
+        self.list()
+            .resolve_overlay_property_at_emacs_byte_pos(pos, window_id, property_value)
+    }
+}
+
+impl OverlayRead for LayoutOverlays<'_> {
+    fn is_empty(&self) -> bool {
+        LayoutOverlays::is_empty(*self)
+    }
+    fn may_contain_property(&self, property: Value) -> bool {
+        LayoutOverlays::may_contain_property(*self, property)
+    }
+    fn overlay_plist(&self, overlay: Value) -> Option<Value> {
+        LayoutOverlays::overlay_plist(*self, overlay)
+    }
+    fn overlay_get_named(&self, overlay: Value, prop_name: Value) -> Option<Value> {
+        LayoutOverlays::overlay_get_named(*self, overlay, prop_name)
+    }
+    fn overlay_applies_to_window(&self, overlay: Value, window_id: Option<u64>) -> bool {
+        LayoutOverlays::overlay_applies_to_window(*self, overlay, window_id)
+    }
+    fn overlay_start_emacs_byte_pos(&self, overlay: Value) -> Option<EmacsBytePos> {
+        LayoutOverlays::overlay_start_emacs_byte_pos(*self, overlay)
+    }
+    fn overlay_end_emacs_byte_pos(&self, overlay: Value) -> Option<EmacsBytePos> {
+        LayoutOverlays::overlay_end_emacs_byte_pos(*self, overlay)
+    }
+    fn overlays_at_emacs_byte_pos(&self, pos: EmacsBytePos) -> Vec<Value> {
+        LayoutOverlays::overlays_at_emacs_byte_pos(*self, pos)
+    }
+    fn overlays_in_emacs_byte_range(&self, range: EmacsByteRange) -> Vec<Value> {
+        LayoutOverlays::overlays_in_emacs_byte_range(*self, range)
+    }
+    fn next_boundary_after_emacs_byte_pos(&self, pos: EmacsBytePos) -> Option<EmacsBytePos> {
+        LayoutOverlays::next_boundary_after_emacs_byte_pos(*self, pos)
+    }
+    fn highest_priority_overlay_property_value_at_emacs_byte_pos(
+        &self,
+        pos: EmacsBytePos,
+        property: Value,
+        window_id: Option<u64>,
+    ) -> Option<Value> {
+        LayoutOverlays::highest_priority_overlay_property_value_at_emacs_byte_pos(
+            *self, pos, property, window_id,
+        )
+    }
+    fn sort_overlay_ids_by_priority_desc(&self, overlay_ids: &mut [Value]) {
+        LayoutOverlays::sort_overlay_ids_by_priority_desc(*self, overlay_ids)
     }
 }
 
@@ -291,7 +435,7 @@ pub(crate) trait LayoutBufferView {
     /// Start of the run containing `pos` over which `syntax-table`/`category`
     /// are constant in presence and value (backward companion).
     fn layout_previous_syntax_prop_state_run_start_char_pos(&self, pos: CharPos0) -> CharPos0;
-    fn layout_overlays(&self) -> &OverlayList;
+    fn layout_overlays(&self) -> LayoutOverlays<'_>;
     /// Exclusive character end of a window-range overlay view, or `None` for
     /// a whole-buffer view. A walk that consumes at or past it was answered
     /// from a subset and must be retried with the whole buffer.
@@ -608,8 +752,8 @@ impl LayoutBufferView for Buffer {
         self.previous_syntax_prop_state_run_start_at_char_pos(pos)
     }
 
-    fn layout_overlays(&self) -> &OverlayList {
-        self.overlays()
+    fn layout_overlays(&self) -> LayoutOverlays<'_> {
+        LayoutOverlays::Snapshot(self.overlays())
     }
 }
 

@@ -607,7 +607,7 @@ pub(super) fn routed_lisp_string_advance_cols(value: Value) -> Option<usize> {
 /// exactly at `start_byte` still reaches the caller, which the half-open query
 /// alone would drop.
 fn overlays_possibly_intersecting(
-    overlays: &neovm_core::buffer::OverlayList,
+    overlays: crate::neovm_bridge::LayoutOverlays<'_>,
     start_byte: usize,
     end_byte: usize,
 ) -> Vec<Value> {

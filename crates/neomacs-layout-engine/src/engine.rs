@@ -4766,9 +4766,10 @@ impl LayoutEngine {
                 .append(true)
                 .open(stats_path)
             {
+                let overlay_stats = neovm_core::buffer::overlay::take_overlay_layout_stats();
                 let _ = writeln!(
                     f,
-                    "full={} cursor_only={} scroll={} edit={} relaid_body={} relaid_chrome={} reused={} reused_shifted={} reused_chrome={} snapshots={} compose_bytes={} text_cow_copies={} mini_still={} chrome_memo={} prepared={}",
+                    "full={} cursor_only={} scroll={} edit={} relaid_body={} relaid_chrome={} reused={} reused_shifted={} reused_chrome={} snapshots={} compose_bytes={} text_cow_copies={} mini_still={} chrome_memo={} prepared={} {}",
                     s.full_windows,
                     s.cursor_only_windows,
                     s.scroll_windows,
@@ -4784,6 +4785,7 @@ impl LayoutEngine {
                     s.mini_window_still,
                     s.chrome_memo_hits,
                     s.prepared_windows,
+                    neovm_core::buffer::overlay::format_overlay_layout_stats(overlay_stats),
                 );
             }
         }

@@ -217,8 +217,8 @@ impl LayoutBufferView for BorrowedLayoutBuffer<'_> {
         self.buffer.text_props_is_empty()
     }
 
-    fn layout_overlays(&self) -> &OverlayList {
-        self.buffer.overlays()
+    fn layout_overlays(&self) -> super::LayoutOverlays<'_> {
+        super::LayoutOverlays::Snapshot(self.buffer.overlays())
     }
 
     fn layout_display_target(&self) -> crate::display_property::DisplayPropertyTarget {

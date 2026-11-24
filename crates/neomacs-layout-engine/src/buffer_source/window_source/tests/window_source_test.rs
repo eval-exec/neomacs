@@ -580,7 +580,7 @@ impl crate::neovm_bridge::LayoutBufferView for PositionReadCounter<'_> {
         self.buffer
             .layout_previous_syntax_prop_state_run_start_char_pos(pos)
     }
-    fn layout_overlays(&self) -> &neovm_core::buffer::overlay::OverlayList {
+    fn layout_overlays(&self) -> crate::neovm_bridge::LayoutOverlays<'_> {
         self.buffer.layout_overlays()
     }
 }

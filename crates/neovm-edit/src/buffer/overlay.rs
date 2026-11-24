@@ -209,9 +209,105 @@ pub(crate) use neovm_value::heap_types::overlay_storage::instrumentation::{
 #[cfg(test)]
 pub(crate) use neovm_value::test_support::authority::reset_overlay_full_enumeration_visit_count;
 
-#[cfg(test)]
+/// Preserve-precedence overlay copies. Tests always increment this. The
+/// editor binary increments it only while [`overlay_layout_stats_enabled`]
+/// is set, so a stats-off run does not touch the atomic.
 static OVERLAY_SNAPSHOT_COPIES: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
+
+/// Index entries attached to a redisplay overlay view.
+static OVERLAY_VIEW_ENTRIES: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// Overlay values a layout capture passed to the native root lease.
+static OVERLAY_ROOTS_RETAINED: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// Whole-buffer `snapshot` calls that missed the cache and rebuilt.
+static OVERLAY_WHOLE_BUFFER_REBUILDS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// Live overlay records a layout walk visited. Stays zero until the live
+/// view exists; the accepted-frame line still prints it.
+static OVERLAY_LIVE_RECORDS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// One cached bool for `NEOMACS_LAYOUT_STATS_FILE`. Empty and unset stay
+/// off. No thread-local. A later change to the environment does not retarget
+/// the process.
+pub(crate) fn overlay_layout_stats_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("NEOMACS_LAYOUT_STATS_FILE")
+            .ok()
+            .is_some_and(|path| !path.is_empty())
+    })
+}
+
+#[inline]
+fn note_overlay_layout_stat(counter: &std::sync::atomic::AtomicUsize, n: usize) {
+    if n == 0 || !overlay_layout_stats_enabled() {
+        return;
+    }
+    counter.fetch_add(n, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Count of overlay values handed to one layout-capture root lease.
+pub fn note_overlay_roots_retained(n: usize) {
+    note_overlay_layout_stat(&OVERLAY_ROOTS_RETAINED, n);
+}
+
+/// Counters for one stretch of layout work. `take_overlay_layout_stats`
+/// zeros them so each accepted frame's line is that frame's delta.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct OverlayLayoutStats {
+    pub copies: usize,
+    pub view_entries: usize,
+    pub roots: usize,
+    pub rebuilds: usize,
+    pub live_records: usize,
+}
+
+fn load_overlay_layout_stats(take: bool) -> OverlayLayoutStats {
+    let load = |counter: &std::sync::atomic::AtomicUsize| {
+        if take {
+            counter.swap(0, std::sync::atomic::Ordering::Relaxed)
+        } else {
+            counter.load(std::sync::atomic::Ordering::Relaxed)
+        }
+    };
+    OverlayLayoutStats {
+        copies: load(&OVERLAY_SNAPSHOT_COPIES),
+        view_entries: load(&OVERLAY_VIEW_ENTRIES),
+        roots: load(&OVERLAY_ROOTS_RETAINED),
+        rebuilds: load(&OVERLAY_WHOLE_BUFFER_REBUILDS),
+        live_records: load(&OVERLAY_LIVE_RECORDS),
+    }
+}
+
+pub fn overlay_layout_stats() -> OverlayLayoutStats {
+    load_overlay_layout_stats(false)
+}
+
+pub fn take_overlay_layout_stats() -> OverlayLayoutStats {
+    load_overlay_layout_stats(true)
+}
+
+pub fn reset_overlay_layout_stats() {
+    OVERLAY_SNAPSHOT_COPIES.store(0, std::sync::atomic::Ordering::Relaxed);
+    OVERLAY_VIEW_ENTRIES.store(0, std::sync::atomic::Ordering::Relaxed);
+    OVERLAY_ROOTS_RETAINED.store(0, std::sync::atomic::Ordering::Relaxed);
+    OVERLAY_WHOLE_BUFFER_REBUILDS.store(0, std::sync::atomic::Ordering::Relaxed);
+    OVERLAY_LIVE_RECORDS.store(0, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Keys appended to the accepted-frame `NEOMACS_LAYOUT_STATS_FILE` line.
+pub fn format_overlay_layout_stats(stats: OverlayLayoutStats) -> String {
+    format!(
+        "overlay_copies={} overlay_view_entries={} overlay_roots={} overlay_rebuilds={} overlay_live_records={}",
+        stats.copies, stats.view_entries, stats.roots, stats.rebuilds, stats.live_records
+    )
+}
 
 #[cfg(test)]
 pub(crate) fn reset_overlay_snapshot_copy_count() {
@@ -380,6 +476,7 @@ impl OverlayList {
         if let Some(snapshot) = self.snapshot.borrow().as_ref() {
             return snapshot.clone();
         }
+        note_overlay_layout_stat(&OVERLAY_WHOLE_BUFFER_REBUILDS, 1);
         let snapshot = OverlaySnapshot(Rc::new(self.snapshot_clone()));
         *self.snapshot.borrow_mut() = Some(snapshot.clone());
         snapshot
@@ -669,6 +766,12 @@ impl OverlayList {
         memoize: bool,
     ) -> Self {
         let memoize = memoize && matches!(identity, OverlayCloneIdentity::PreservePrecedence);
+        // One cached-bool load for the whole clone. Tests count every
+        // preserve-copy with the env unset; the editor counts only while
+        // layout stats are on. `cfg!(test)` is false in the editor binary,
+        // so a stats-off run does not touch the copy atomic.
+        let count_preserve_copies = matches!(identity, OverlayCloneIdentity::PreservePrecedence)
+            && (cfg!(test) || overlay_layout_stats_enabled());
         let saved_roots = save_scratch_gc_roots();
         let entries: Vec<_> = selected
             .into_iter()
@@ -758,8 +861,7 @@ impl OverlayList {
                         );
                         self.trim_snapshot_copy_memo();
                     }
-                    #[cfg(test)]
-                    if matches!(identity, OverlayCloneIdentity::PreservePrecedence) {
+                    if count_preserve_copies {
                         OVERLAY_SNAPSHOT_COPIES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     }
                     copy
@@ -779,6 +881,9 @@ impl OverlayList {
         };
         let attached = cloned.index.attach_batch(&entries, batch_order);
         debug_assert!(attached, "fresh overlay clone index rejected its batch");
+        if attached && matches!(identity, OverlayCloneIdentity::PreservePrecedence) {
+            note_overlay_layout_stat(&OVERLAY_VIEW_ENTRIES, entries.len());
+        }
         cloned.content_dirty.set(true);
         restore_scratch_gc_roots(saved_roots);
         cloned
@@ -2904,6 +3009,77 @@ impl OverlayModificationHook {
     #[inline]
     pub fn overlay(&self) -> Value {
         self.overlay
+    }
+}
+
+/// Read surface shared by a captured overlay list and a layout overlay view.
+///
+/// Inherent methods on [`OverlayList`] stay the implementation. Layout calls
+/// this trait so a later live view can answer the same questions without
+/// another copy of the call sites.
+pub trait OverlayRead {
+    fn is_empty(&self) -> bool;
+    fn may_contain_property(&self, property: Value) -> bool;
+    fn overlay_plist(&self, overlay: Value) -> Option<Value>;
+    fn overlay_get_named(&self, overlay: Value, prop_name: Value) -> Option<Value>;
+    fn overlay_applies_to_window(&self, overlay: Value, window_id: Option<u64>) -> bool;
+    fn overlay_start_emacs_byte_pos(&self, overlay: Value) -> Option<EmacsBytePos>;
+    fn overlay_end_emacs_byte_pos(&self, overlay: Value) -> Option<EmacsBytePos>;
+    fn overlays_at_emacs_byte_pos(&self, pos: EmacsBytePos) -> Vec<Value>;
+    fn overlays_in_emacs_byte_range(&self, range: EmacsByteRange) -> Vec<Value>;
+    fn next_boundary_after_emacs_byte_pos(&self, pos: EmacsBytePos) -> Option<EmacsBytePos>;
+    fn highest_priority_overlay_property_value_at_emacs_byte_pos(
+        &self,
+        pos: EmacsBytePos,
+        property: Value,
+        window_id: Option<u64>,
+    ) -> Option<Value>;
+    fn sort_overlay_ids_by_priority_desc(&self, overlay_ids: &mut [Value]);
+}
+
+impl OverlayRead for OverlayList {
+    fn is_empty(&self) -> bool {
+        OverlayList::is_empty(self)
+    }
+    fn may_contain_property(&self, property: Value) -> bool {
+        OverlayList::may_contain_property(self, property)
+    }
+    fn overlay_plist(&self, overlay: Value) -> Option<Value> {
+        OverlayList::overlay_plist(self, overlay)
+    }
+    fn overlay_get_named(&self, overlay: Value, prop_name: Value) -> Option<Value> {
+        OverlayList::overlay_get_named(self, overlay, prop_name)
+    }
+    fn overlay_applies_to_window(&self, overlay: Value, window_id: Option<u64>) -> bool {
+        OverlayList::overlay_applies_to_window(self, overlay, window_id)
+    }
+    fn overlay_start_emacs_byte_pos(&self, overlay: Value) -> Option<EmacsBytePos> {
+        OverlayList::overlay_start_emacs_byte_pos(self, overlay)
+    }
+    fn overlay_end_emacs_byte_pos(&self, overlay: Value) -> Option<EmacsBytePos> {
+        OverlayList::overlay_end_emacs_byte_pos(self, overlay)
+    }
+    fn overlays_at_emacs_byte_pos(&self, pos: EmacsBytePos) -> Vec<Value> {
+        OverlayList::overlays_at_emacs_byte_pos(self, pos)
+    }
+    fn overlays_in_emacs_byte_range(&self, range: EmacsByteRange) -> Vec<Value> {
+        OverlayList::overlays_in_emacs_byte_range(self, range)
+    }
+    fn next_boundary_after_emacs_byte_pos(&self, pos: EmacsBytePos) -> Option<EmacsBytePos> {
+        OverlayList::next_boundary_after_emacs_byte_pos(self, pos)
+    }
+    fn highest_priority_overlay_property_value_at_emacs_byte_pos(
+        &self,
+        pos: EmacsBytePos,
+        property: Value,
+        window_id: Option<u64>,
+    ) -> Option<Value> {
+        OverlayList::highest_priority_overlay_property_value_at_emacs_byte_pos(
+            self, pos, property, window_id,
+        )
+    }
+    fn sort_overlay_ids_by_priority_desc(&self, overlay_ids: &mut [Value]) {
+        OverlayList::sort_overlay_ids_by_priority_desc(self, overlay_ids)
     }
 }
 

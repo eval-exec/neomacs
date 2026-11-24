@@ -1916,3 +1916,7 @@ mod window_view;
 #[cfg(test)]
 #[path = "observed_query_budget.rs"]
 mod observed_query_budget;
+
+#[cfg(test)]
+#[path = "layout_stats.rs"]
+mod layout_stats;

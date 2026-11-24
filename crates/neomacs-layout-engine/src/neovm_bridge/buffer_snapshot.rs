@@ -138,8 +138,10 @@ impl LayoutBufferSnapshot {
         // between copying the overlays and registering their native lease.
         // Tracing an overlay header also traces its copied plist spine.
         let overlay_roots = root_retainer.map(|retainer| {
+            let dumped = overlays.dump_overlays();
+            neovm_core::buffer::overlay::note_overlay_roots_retained(dumped.len());
             retainer
-                .retain(overlays.dump_overlays())
+                .retain(dumped)
                 .expect("layout capture requires its live evaluator root registry")
         });
         let text_snapshot = buffer.text_snapshot();
@@ -927,8 +929,8 @@ impl LayoutBufferView for LayoutBufferSnapshot {
             .previous_syntax_prop_state_run_start_at_char_pos(pos)
     }
 
-    fn layout_overlays(&self) -> &OverlayList {
-        &self.overlays
+    fn layout_overlays(&self) -> super::LayoutOverlays<'_> {
+        super::LayoutOverlays::Snapshot(&self.overlays)
     }
 
     fn layout_overlay_view_end_char(&self) -> Option<CharPos0> {
