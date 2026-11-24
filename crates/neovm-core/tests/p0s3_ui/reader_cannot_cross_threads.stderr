@@ -114,6 +114,14 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
           which is required by `RootBatchReader<'static>: Send`
           `*const Atomic<u32>: std::marker::Sync`
           which is required by `RootBatchReader<'static>: Send`
+          `*mut UserPtrObj: std::marker::Sync`
+          which is required by `RootBatchReader<'static>: Send`
+          `*mut c_void: std::marker::Sync`
+          which is required by `RootBatchReader<'static>: Send`
+          `*mut ModuleFunctionObj: std::marker::Sync`
+          which is required by `RootBatchReader<'static>: Send`
+          `*mut SqliteObj: std::marker::Sync`
+          which is required by `RootBatchReader<'static>: Send`
           `NonNull<TaggedHeap>: std::marker::Sync`
           which is required by `RootBatchReader<'static>: Send`
           `Rc<()>: std::marker::Sync`

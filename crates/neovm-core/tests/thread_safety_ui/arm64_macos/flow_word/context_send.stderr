@@ -207,6 +207,8 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `neovm_core::Context: Send`
            `(dyn TtyFrameHostFactory + 'static): Send`
            which is required by `neovm_core::Context: Send`
+           `(dyn FnMut(TaggedValue, u32) -> Option<GlyphTextMetrics> + 'static): Send`
+           which is required by `neovm_core::Context: Send`
            `*const i64: Send`
            which is required by `neovm_core::Context: Send`
            `*const u8: Send`
@@ -222,6 +224,8 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            `Cell<Option<ThreadId>>: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
            `Cell<Option<neovm_core::emacs_core::eval::activation::ActivationAuthority>>: std::marker::Sync`
+           which is required by `neovm_core::Context: Send`
+           `Cell<bool>: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
            `(dyn neovm_value::cold_retained::ColdRetained + 'static): std::marker::Sync`
            which is required by `neovm_core::Context: Send`
@@ -345,6 +349,14 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `neovm_core::Context: Send`
            `NonNull<[Cell<usize>; 8192]>: Send`
            which is required by `neovm_core::Context: Send`
+           `*mut UserPtrObj: Send`
+           which is required by `neovm_core::Context: Send`
+           `*mut c_void: Send`
+           which is required by `neovm_core::Context: Send`
+           `*mut ModuleFunctionObj: Send`
+           which is required by `neovm_core::Context: Send`
+           `*mut SqliteObj: Send`
+           which is required by `neovm_core::Context: Send`
            `NonNull<LispBufferLocalValue>: Send`
            which is required by `neovm_core::Context: Send`
            `NonNull<LispFwd>: Send`
@@ -385,8 +397,6 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `neovm_core::Context: Send`
            `Cell<collection_reads::JournalPolicy>: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `Cell<bool>: std::marker::Sync`
-           which is required by `neovm_core::Context: Send`
            `Cell<neovm_core::tagged::gc::BarrierWindow>: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
            `Rc<collection_reads::store_state::WorldObservations>: Send`
@@ -414,6 +424,14 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            `*const LispSymbol: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
            `*const Atomic<u32>: std::marker::Sync`
+           which is required by `neovm_core::Context: Send`
+           `*mut UserPtrObj: std::marker::Sync`
+           which is required by `neovm_core::Context: Send`
+           `*mut c_void: std::marker::Sync`
+           which is required by `neovm_core::Context: Send`
+           `*mut ModuleFunctionObj: std::marker::Sync`
+           which is required by `neovm_core::Context: Send`
+           `*mut SqliteObj: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
            `Rc<OverlayList>: Send`
            which is required by `neovm_core::Context: Send`

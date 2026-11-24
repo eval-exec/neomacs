@@ -234,6 +234,8 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `neovm_core::Context: std::marker::Sync`
            `Cell<eval::dispatch_class::FormHead>: std::marker::Sync`
            which is required by `neovm_core::Context: std::marker::Sync`
+           `(dyn FnMut(TaggedValue, u32) -> Option<GlyphTextMetrics> + 'static): std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
            `*const i64: std::marker::Sync`
            which is required by `neovm_core::Context: std::marker::Sync`
            `*const u8: std::marker::Sync`
@@ -388,6 +390,14 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `neovm_core::Context: std::marker::Sync`
            `NonNull<[Cell<usize>; 8192]>: Send`
            which is required by `neovm_core::Context: std::marker::Sync`
+           `*mut UserPtrObj: Send`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `*mut c_void: Send`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `*mut ModuleFunctionObj: Send`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `*mut SqliteObj: Send`
+           which is required by `neovm_core::Context: std::marker::Sync`
            `NonNull<LispBufferLocalValue>: Send`
            which is required by `neovm_core::Context: std::marker::Sync`
            `NonNull<LispFwd>: Send`
@@ -447,6 +457,14 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            `*const LispSymbol: std::marker::Sync`
            which is required by `neovm_core::Context: std::marker::Sync`
            `*const Atomic<u32>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `*mut UserPtrObj: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `*mut c_void: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `*mut ModuleFunctionObj: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `*mut SqliteObj: std::marker::Sync`
            which is required by `neovm_core::Context: std::marker::Sync`
            `NonNull<MarkerObj>: Send`
            which is required by `neovm_core::Context: std::marker::Sync`
