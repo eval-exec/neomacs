@@ -3,6 +3,7 @@ use crate::heap_types::LispMarker;
 use crate::intern::{intern, make_uninterned_symbol};
 use crate::value::buffer_vocab::BufferId;
 use malachite::integer::Integer;
+use std::hash::{Hash, Hasher};
 use std::str::FromStr;
 
 /// Helper: set up a temporary heap for tests that use Value constructors.
@@ -637,10 +638,27 @@ fn equal_key_hundred_thousand_list_does_not_overflow() {
         let left = fixnum_list(100_000);
         let right = fixnum_list(100_000);
         assert!(left == right, "a 100k-element list is equal");
-        assert_eq!(
-            left.to_hash_key(&HashTableTest::Equal),
-            right.to_hash_key(&HashTableTest::Equal),
-            "a 100k-element list key builds, compares, and drops"
+        let left_key = left.to_hash_key(&HashTableTest::Equal);
+        let right_key = right.to_hash_key(&HashTableTest::Equal);
+        // `assert!` rather than `assert_eq!`: derived `Debug` still recurses
+        // along the cdr chain, so a failing debug print would overflow.
+        assert!(
+            left_key == right_key,
+            "a 100k-element list key compares equal"
+        );
+        let mut left_hasher = std::collections::hash_map::DefaultHasher::new();
+        let mut right_hasher = std::collections::hash_map::DefaultHasher::new();
+        left_key.hash(&mut left_hasher);
+        right_key.hash(&mut right_hasher);
+        assert!(
+            left_hasher.finish() == right_hasher.finish(),
+            "a 100k-element list key hashes"
+        );
+        let cloned = left_key.clone();
+        assert!(cloned == left_key, "a 100k-element list key clones");
+        assert!(
+            !left_key.contains_truncation(),
+            "an unbounded 100k-element list key is not truncated"
         );
     });
 }

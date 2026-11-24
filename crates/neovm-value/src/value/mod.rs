@@ -2410,28 +2410,18 @@ fn clone_equal_cons_spine(key: &HashKey) -> HashKey {
 
 impl Drop for HashKey {
     fn drop(&mut self) {
-        // A derived drop recurses on both boxes and overflows on a long list
-        // key. Rust also rejects moving those boxes out of a type that
-        // implements `Drop`, so the chain is taken apart by copying the box
-        // pointers and forgetting the shell.
-        if !matches!(self, HashKey::EqualCons(_, _)) {
+        // A proper list is one cdr chain. Walk it by taking each tail out of
+        // its box and leaving `Nil`, then drop that cell normally. The cell's
+        // own `Drop` sees a nil cdr, so it does not follow the chain, and a
+        // 100k-cell key does not recurse one frame per cons. The car drops
+        // with the cell; car nesting stays within the depth cap.
+        let HashKey::EqualCons(_, cdr) = self else {
             return;
-        }
-        let mut node = std::mem::replace(self, HashKey::Nil);
-        while matches!(node, HashKey::EqualCons(_, _)) {
-            let (car, cdr) = if let HashKey::EqualCons(car, cdr) = &mut node {
-                // SAFETY: `node` is `EqualCons`, so both fields are
-                // initialized boxes. `read` copies those two pointers.
-                // `forget` below skips `Drop` on `node`, which would free
-                // the same boxes. `car` is dropped next; the cdr key becomes
-                // the next `node`.
-                unsafe { (std::ptr::read(car), std::ptr::read(cdr)) }
-            } else {
-                break;
-            };
-            std::mem::forget(node);
-            drop(car);
-            node = *cdr;
+        };
+        let mut next = std::mem::replace(cdr.as_mut(), HashKey::Nil);
+        while let HashKey::EqualCons(_, cdr) = &mut next {
+            let rest = std::mem::replace(cdr.as_mut(), HashKey::Nil);
+            next = rest;
         }
     }
 }
