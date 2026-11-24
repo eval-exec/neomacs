@@ -470,6 +470,9 @@ pub(crate) fn validate_editor_workload_result(
         | ScenarioId::MxTabCompletionSteady
         | ScenarioId::Scrolling
         | ScenarioId::BytecodeCallLoop
+        | ScenarioId::WorkerIsolatesLoop
+        | ScenarioId::WorkerIsolatesJson
+        | ScenarioId::WorkerIsolatesBoot
         | ScenarioId::LexicalLoop
         | ScenarioId::DynamicBindingLoop
         | ScenarioId::DynamicVariableReadLoop

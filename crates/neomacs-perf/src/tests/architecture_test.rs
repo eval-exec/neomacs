@@ -88,6 +88,7 @@ fn scenario_module_registry_is_pinned() {
             "search_shape",
             "sustained_native_video",
             "vm_loop",
+            "worker_isolates",
         ],
         "update this pin when registering a scenario family"
     );

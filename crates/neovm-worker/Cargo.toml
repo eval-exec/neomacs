@@ -12,11 +12,12 @@ description = "Worker runtime and scheduler scaffolding for NeoVM"
 # through their enabled defaults.  Kept as features so --no-default-features
 # stays a real no-jit build.
 default = ["jit", "sqlite"]
-jit = ["neovm-core/jit"]
-sqlite = ["neovm-core/sqlite"]
+jit = ["neovm-core/jit", "neovm-eval/jit"]
+sqlite = ["neovm-core/sqlite", "neovm-eval/sqlite"]
 
 [dependencies]
 neovm-core.workspace = true
+neovm-eval = { path = "../neovm-eval", default-features = false }
 neovm-host-abi.workspace = true
 static_assertions.workspace = true
 thiserror.workspace = true

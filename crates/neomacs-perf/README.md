@@ -67,6 +67,9 @@ cargo xtask perf run mx-tab-completion
 cargo xtask perf run mx-tab-completion-steady
 cargo xtask perf run scrolling
 cargo xtask perf run bytecode-call-loop
+cargo xtask perf run worker-isolates-loop
+cargo xtask perf run worker-isolates-json
+cargo xtask perf run worker-isolates-boot
 cargo xtask perf run editing-simulation
 cargo xtask perf run startup
 cargo xtask perf run sustained-editing
@@ -492,6 +495,50 @@ native sampling. Use a smaller `--iterations` value for a smoke test. This is
 an interpreter-core micro-workload inside the whole-editor harness: it is
 useful for attributing VM call/return regressions, but it does not represent
 redisplay, package, or interactive editing performance.
+
+## Worker isolate scenarios
+
+These three batch scenarios require an editor built with
+`--features worker-isolates`. If the worker Lisp entry points are absent, the
+fixture writes a scenario error and the harness publishes a typed
+`correctness-mismatch` verdict with no usable measurements.
+
+Parallel speedup is a wall-time quantity: N owners doing the same work in
+parallel can retire roughly the same summed instructions and cycles as one
+serial owner. For these scenarios only, wall time is the decision metric;
+instruction and cycle counters remain collected when `--hardware-counters` is
+given. Each loop and JSON sample records serial seconds, first and warm
+parallel seconds, the serial/parallel ratio, task count, processor count, pool
+width and per-owner boot max/mean in the linked `scenario-result.json`. The
+ratio is a structural counter: it shows whether the parallel path changed at
+all. Every task result is compared with the serial result before the harness
+accepts that sample. No scenario asserts on elapsed time.
+
+`worker-isolates-loop` runs the same `n = 3,000,000` numeric loop interpreted
+and byte-compiled, for N and 4N tasks. `NEOVM_JIT` is read once at process
+startup, so run the catalogued scenario once per bytecode tier:
+
+```sh
+cargo xtask perf run worker-isolates-loop
+NEOVM_JIT=0 cargo xtask perf run worker-isolates-loop
+```
+
+The default run records bytecode with JIT enabled; the second invocation
+records bytecode with JIT disabled. Both include the interpreted tier.
+`worker-isolates-json` parses a deterministic 4,000-object document (~200 KB)
+20 times per task, serially and across N tasks. `worker-isolates-boot` records
+the first task's cold-pool latency and owner boot max/mean. Pool widths are
+fixed when the process first starts, so collect its 1, 4, and processor-count
+rows in separate editor invocations:
+
+```sh
+NEOMACS_WORKER_THREADS=1 cargo xtask perf run worker-isolates-boot
+NEOMACS_WORKER_THREADS=4 cargo xtask perf run worker-isolates-boot
+cargo xtask perf run worker-isolates-boot
+```
+
+The last invocation uses the pool's available-processor default. `NEOMACS_WORKER_THREADS`
+is forwarded by the harness and recorded in input provenance.
 
 ## Adding a workload
 

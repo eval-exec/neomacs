@@ -205,6 +205,12 @@ pub enum ScenarioId {
     /// this row necessarily pays from contaminating the steady-state
     /// number. One operation is one scroll command.
     Scrolling,
+    /// Pure Lisp computation distributed across owner isolates.
+    WorkerIsolatesLoop,
+    /// JSON parsing dispatched across owner isolates.
+    WorkerIsolatesJson,
+    /// Cold worker pool startup and owner boot measurements.
+    WorkerIsolatesBoot,
 }
 
 impl ScenarioId {
@@ -778,6 +784,30 @@ const SCENARIOS: &[ScenarioSpec] = &[
         primary_metric: MetricName::PerOperationWallTime,
         cross_editor_parity_metrics: &[],
     },
+    ScenarioSpec {
+        id: ScenarioId::WorkerIsolatesLoop,
+        description: "Pure numeric loop on the main isolate and worker owners, with interpreter and bytecode tiers",
+        default_frontend: Frontend::Batch,
+        default_iterations: NonZeroU32::new(1).expect("non-zero scenario default"),
+        primary_metric: MetricName::PerOperationWallTime,
+        cross_editor_parity_metrics: &[],
+    },
+    ScenarioSpec {
+        id: ScenarioId::WorkerIsolatesJson,
+        description: "Deterministic 200 KB JSON parsing on the main isolate and worker owners",
+        default_frontend: Frontend::Batch,
+        default_iterations: NonZeroU32::new(1).expect("non-zero scenario default"),
+        primary_metric: MetricName::PerOperationWallTime,
+        cross_editor_parity_metrics: &[],
+    },
+    ScenarioSpec {
+        id: ScenarioId::WorkerIsolatesBoot,
+        description: "Cold worker isolate pool start and per-owner boot latency",
+        default_frontend: Frontend::Batch,
+        default_iterations: NonZeroU32::new(1).expect("non-zero scenario default"),
+        primary_metric: MetricName::PerOperationWallTime,
+        cross_editor_parity_metrics: &[],
+    },
 ];
 
 pub fn scenarios() -> &'static [ScenarioSpec] {
@@ -847,6 +877,9 @@ pub const fn scenario(id: ScenarioId) -> &'static ScenarioSpec {
         ScenarioId::OrgEditingHeavy => &SCENARIOS[17],
         ScenarioId::MxTabCompletionSteady => &SCENARIOS[52],
         ScenarioId::Scrolling => &SCENARIOS[53],
+        ScenarioId::WorkerIsolatesLoop => &SCENARIOS[54],
+        ScenarioId::WorkerIsolatesJson => &SCENARIOS[55],
+        ScenarioId::WorkerIsolatesBoot => &SCENARIOS[56],
     }
 }
 
