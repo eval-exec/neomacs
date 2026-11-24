@@ -1538,6 +1538,14 @@ where
             // popping a token is the same hole as the Unbind arms had, and
             // closes when `why` names the pair (V8's `SerialUnwind` is that
             // naming). Named, not fixed here: N-world-escape-popped-as-named.
+            //
+            // V7 (F6): the `Return` cleanup's pops land here too, checked as
+            // the top run only. The bottom frame's bind_base is EMPTY, so
+            // nothing below the frame can be popped today; a V7 child
+            // frame's cleanup could pop the caller's markers below its base.
+            // When V7 lands, a completion's pops must lie above the frame's
+            // bind_base and handler_base, and the harness double's take-all
+            // loop must stop at the base.
             _ => true,
         };
         let contract = if !self

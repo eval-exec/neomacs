@@ -305,7 +305,9 @@ impl VmEscape for RecordingEscape {
         {
             // The Return's serial cleanup is the slow arm's `unbind_to`: it
             // undoes the frame's owner records too (the disposition sent the
-            // Return here for exactly that), take then store.
+            // Return here for exactly that), take then store. It takes every
+            // live record, which is the bottom frame's; V7 (F6) must make it
+            // stop at the frame's base.
             if self.handoff_undoes {
                 while let Some(top) = plain.top_record() {
                     match plain.pop_binding(top) {
@@ -2181,6 +2183,50 @@ fn vm_debug_on_exit_return_takes_the_serial_cleanup() {
         "the debugger's value"
     );
     assert_eq!(engine.take(pending), Ok(Value::fixnum(7)));
+    assert_clear(&engine);
+}
+
+#[test]
+fn vm_the_entry_debug_on_exit_flag_lasts_one_run() {
+    // The harness arms the bottom frame's DEBUG_ON_EXIT for ONE run: GNU's
+    // flag is per backtrace frame (bytecode.c:900), and each run pushes a
+    // new frame. Run 1's Return escapes; run 2's, on the same engine, is
+    // owner-local. A sticky flag (never taken when the frame is pushed)
+    // makes run 2 escape too.
+    let constants = [Value::fixnum(42)];
+    let ops = [Op::Constant(0), Op::Return];
+    let script = vec![Some(completion(&Op::Return, vec![Value::fixnum(7)]))];
+    let mut engine = VmExec::new(
+        &(),
+        RecordingEscape::with_script(script),
+        HarnessVmSealed,
+        HarnessArith::new(),
+        HarnessPlain::new(),
+        RecordingPoll::new(),
+    );
+    engine.set_entry_exit_flags(ExitFlags::DEBUG_ON_EXIT);
+    let outcome = engine.run(&mut context(), program_with(&ops, &constants));
+    assert_eq!(
+        done_value(&mut engine, outcome),
+        Value::fixnum(7),
+        "run 1: the debugger's value"
+    );
+    assert_eq!(
+        engine.escape_handler().requests.len(),
+        1,
+        "run 1: the cleanup escaped"
+    );
+    let outcome = engine.run(&mut context(), program_with(&ops, &constants));
+    assert_eq!(
+        done_value(&mut engine, outcome),
+        Value::fixnum(42),
+        "run 2: the operand, owner-local"
+    );
+    assert_eq!(
+        engine.escape_handler().requests.len(),
+        1,
+        "run 2: no escape, the flag was taken"
+    );
     assert_clear(&engine);
 }
 
