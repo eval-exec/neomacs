@@ -4340,26 +4340,42 @@ fn ev_alias_and_build(
 /// One AOT compilation unit's on-disk location, keyed by content hash.
 type UnitIndex = std::collections::HashMap<u128, std::path::PathBuf>;
 
+/// `{ptr:x}_{len:x}` from the live `LispValueVec` slice probe, or `none`
+/// when owned and mapped storage disagree. An unstamped binary's pdump
+/// fingerprint is the shared placeholder, so this token is what keeps a
+/// unit baked by another toolchain out of the index.
+fn vec_slice_layout_token() -> String {
+    match super::compile::jit_layout::heap::value_vec_slice_offsets() {
+        Some((pointer, length)) => format!("{pointer:x}_{length:x}"),
+        None => "none".to_string(),
+    }
+}
+
 /// On-disk name of a per-hash AOT unit for this build:
-/// `{content_hash:032x}_{ABI_TAG:08x}_{fingerprint}.so`.
+/// `{content_hash:032x}_{ABI_TAG:08x}_{fingerprint}_{vec-slice}.so`.
 ///
 /// `ABI_TAG` salts the named layouts. `value_vec_slice_offsets` is measured
 /// on a live `Vec` and baked into the object, so a rustc layout change does
-/// not move the tag. The running pdump fingerprint is this binary's identity.
-/// [`unit_index`] serves a file only when that fingerprint matches.
+/// not move the tag. The token above is that measurement. The running pdump
+/// fingerprint is this binary's identity when `xtask` stamped it. An
+/// unstamped build still carries the placeholder, and the slice token is
+/// then the layout identity. [`unit_index`] serves a file only when both match.
 pub(crate) fn aot_unit_file_name(content_hash: u128) -> String {
     format!(
-        "{content_hash:032x}_{ABI_TAG:08x}_{}.so",
-        crate::emacs_core::pdump::fingerprint_hex()
+        "{content_hash:032x}_{ABI_TAG:08x}_{}_{}.so",
+        crate::emacs_core::pdump::fingerprint_hex(),
+        vec_slice_layout_token(),
     )
 }
 
 /// Content hash of `name` when it is a unit of this build. A legacy
-/// `{hash}_{ABI_TAG}.so` name, or any other fingerprint, is `None`.
+/// `{hash}_{ABI_TAG}.so` name, a fingerprint-only name, any other
+/// fingerprint, or any other slice offsets, is `None`.
 fn content_hash_of_running_unit_name(name: &str) -> Option<u128> {
     let suffix = format!(
-        "_{ABI_TAG:08x}_{}.so",
-        crate::emacs_core::pdump::fingerprint_hex()
+        "_{ABI_TAG:08x}_{}_{}.so",
+        crate::emacs_core::pdump::fingerprint_hex(),
+        vec_slice_layout_token(),
     );
     let stem = name.strip_suffix(&suffix)?;
     if stem.len() != 32 || !stem.bytes().all(|byte| byte.is_ascii_hexdigit()) {
@@ -4390,8 +4406,8 @@ fn index_aot_dir(dir: &std::path::Path) -> UnitIndex {
 /// Process-wide index of available AOT `.so`s by content hash, built once from
 /// `NEOVM_AOT_DIR` (default: none → AOT disabled). Memoized loaded units are
 /// thread-local (the cache + leaves are `!Send`); the INDEX is shareable (just
-/// paths). Indexes only files whose name carries the current `ABI_TAG` and
-/// the running pdump fingerprint.
+/// paths). Indexes only files whose name carries the current `ABI_TAG`,
+/// the running pdump fingerprint, and the live `Vec` slice offsets.
 fn unit_index() -> &'static UnitIndex {
     static INDEX: std::sync::OnceLock<UnitIndex> = std::sync::OnceLock::new();
     INDEX.get_or_init(|| {

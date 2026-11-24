@@ -220,6 +220,13 @@ fn fingerprint_bytes() -> [u8; 32] {
     }
 }
 
+/// Whether `xtask` has not replaced the link-time placeholder. Every such
+/// binary shares one pdump identity, so a layout-sensitive cache must not
+/// key on the fingerprint alone.
+pub(crate) fn fingerprint_is_placeholder() -> bool {
+    fingerprint_bytes() == FINGERPRINT_PLACEHOLDER
+}
+
 fn hex_string(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len() * 2);
     for byte in bytes {

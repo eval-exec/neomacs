@@ -298,6 +298,47 @@ fn aot_unit_index_skips_a_stale_build_fingerprint() {
     );
 }
 
+/// A test binary is unstamped, so its pdump fingerprint is the shared
+/// placeholder. A unit named with that fingerprint but another
+/// `value_vec_slice_offsets` pair must not be indexed: those offsets are
+/// baked into the object.
+#[test]
+fn aot_unit_index_refuses_a_placeholder_fingerprint_with_foreign_vec_offsets() {
+    let hash: u128 = 0xfedc_ba98_7654_3210_fedc_ba98_7654_3210;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let running = crate::emacs_core::pdump::fingerprint_hex();
+    assert!(
+        crate::emacs_core::pdump::fingerprint_is_placeholder(),
+        "this binary is unstamped, so the fingerprint is the placeholder"
+    );
+    let live = aot_unit_file_name(hash);
+    let fingerprint_only = format!("{hash:032x}_{ABI_TAG:08x}_{running}.so");
+    assert_ne!(
+        live, fingerprint_only,
+        "the slice offsets are part of an unstamped unit name"
+    );
+    let (pointer, length) = super::super::compile::jit_layout::heap::value_vec_slice_offsets()
+        .expect("this host publishes one slice pair");
+    let foreign = format!(
+        "{hash:032x}_{ABI_TAG:08x}_{running}_{:x}_{:x}.so",
+        pointer.wrapping_add(1),
+        length.wrapping_add(1),
+    );
+    assert_ne!(live, foreign);
+    for name in [&live, &fingerprint_only, &foreign] {
+        std::fs::write(dir.path().join(name), b"not a real object").expect("write");
+    }
+    let indexed = super::index_aot_dir(dir.path());
+    assert_eq!(indexed.len(), 1, "only the live slice pair is indexed");
+    assert_eq!(
+        indexed
+            .get(&hash)
+            .and_then(|path| path.file_name())
+            .and_then(|n| n.to_str()),
+        Some(live.as_str())
+    );
+}
+
 /// The LIVE reloc set a test must pass to `load_leaf_from_unit` (audit #A):
 /// the function's own constant objects, re-collected in emit-time order.
 #[cfg(target_os = "linux")]
