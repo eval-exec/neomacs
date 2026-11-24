@@ -6,14 +6,18 @@ use neomacs_display_protocol::{
 use std::collections::{HashMap, HashSet};
 use std::io::Cursor;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 const DEFAULT_SEQUENCE_CACHE_BYTES: usize = 64 * 1024 * 1024;
-
-/// Test probe: GIF frames handed out by a decoder, whole-sequence or
-/// streamed. A regression row divides it by the frames shown (#823).
-#[cfg(test)]
-pub(super) static DECODED_FRAMES: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
+/// Drop idle GIF streams after 60 s, matching GNU `anim_prune_animation_cache`
+/// (`src/image.c:3768-3794`).
+const IDLE_STREAM_TTL: Duration = Duration::from_secs(60);
+/// Streams accessed within this window are treated as actively animating and
+/// spared from budget eviction until idle streams and materialized sequences
+/// have been evicted first.
+const ACTIVE_STREAM_WINDOW: Duration = Duration::from_secs(5);
+/// Upper bound for a single GIF stream's reverse-playback window.
+const MAX_BACKWARD_WINDOW_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Clone)]
 pub(crate) struct DecodedImageSequence {
@@ -226,6 +230,7 @@ enum SequenceCacheEntry {
         stream: Arc<GifStream>,
         memory_size: usize,
         last_access: u64,
+        last_access_at: Instant,
     },
 }
 
@@ -240,6 +245,22 @@ impl SequenceCacheEntry {
         match self {
             Self::Animated { sequence, .. } => sequence.memory_size,
             Self::Stream { memory_size, .. } => *memory_size,
+        }
+    }
+
+    /// Eviction tier under budget pressure:
+    /// 0 = idle stream (not stepped within `ACTIVE_STREAM_WINDOW`)
+    /// 1 = materialized `Animated` sequence
+    /// 2 = actively animating stream
+    fn eviction_priority(&self, now: Instant) -> u8 {
+        match self {
+            Self::Stream { last_access_at, .. }
+                if now.saturating_duration_since(*last_access_at) >= ACTIVE_STREAM_WINDOW =>
+            {
+                0
+            }
+            Self::Animated { .. } => 1,
+            Self::Stream { .. } => 2,
         }
     }
 
@@ -260,10 +281,18 @@ impl SequenceCacheEntry {
         }
     }
 
-    fn touch(&mut self, stamp: u64) {
+    fn touch(&mut self, stamp: u64, now: Instant) {
         match self {
-            Self::Animated { last_access, .. } | Self::Stream { last_access, .. } => {
+            Self::Animated { last_access, .. } => {
                 *last_access = stamp;
+            }
+            Self::Stream {
+                last_access,
+                last_access_at,
+                ..
+            } => {
+                *last_access = stamp;
+                *last_access_at = now;
             }
         }
     }
@@ -293,12 +322,34 @@ impl ImageSequenceCacheState {
             || self.individually_retired.contains(&sequence)
     }
 
+    /// Drop GIF streams idle for at least `ttl`, matching GNU
+    /// `anim_prune_animation_cache` (`src/image.c:3768-3794`).
+    fn prune_idle_streams(&mut self, now: Instant, ttl: Duration) {
+        let expired: Vec<ImageSequenceId> = self
+            .entries
+            .iter()
+            .filter_map(|(id, entry)| match entry {
+                SequenceCacheEntry::Stream { last_access_at, .. }
+                    if now.saturating_duration_since(*last_access_at) >= ttl =>
+                {
+                    Some(*id)
+                }
+                _ => None,
+            })
+            .collect();
+        for id in expired {
+            self.remove(id);
+        }
+    }
+
     /// A resident entry with exactly the inputs requested by this worker.
     fn entry_for(
         &mut self,
         sequence: ImageSequenceId,
         materialization: &SequenceMaterialization,
+        now: Instant,
     ) -> Option<&mut SequenceCacheEntry> {
+        self.prune_idle_streams(now, IDLE_STREAM_TTL);
         let stamp = self.next_access();
         let hit = self
             .entries
@@ -307,7 +358,7 @@ impl ImageSequenceCacheState {
         match hit {
             Some(entry) => {
                 self.hits = self.hits.saturating_add(1);
-                entry.touch(stamp);
+                entry.touch(stamp, now);
                 Some(entry)
             }
             None => {
@@ -324,16 +375,23 @@ impl ImageSequenceCacheState {
     }
 
     /// The resident stream for `sequence`, without counting a miss when absent.
-    fn existing_stream_for(&mut self, sequence: ImageSequenceId) -> Option<Arc<GifStream>> {
+    fn existing_stream_for(
+        &mut self,
+        sequence: ImageSequenceId,
+        now: Instant,
+    ) -> Option<Arc<GifStream>> {
+        self.prune_idle_streams(now, IDLE_STREAM_TTL);
         let stamp = self.next_access();
         match self.entries.get_mut(&sequence) {
             Some(SequenceCacheEntry::Stream {
                 stream,
                 last_access,
+                last_access_at,
                 ..
             }) => {
                 self.hits = self.hits.saturating_add(1);
                 *last_access = stamp;
+                *last_access_at = now;
                 Some(Arc::clone(stream))
             }
             _ => None,
@@ -342,8 +400,8 @@ impl ImageSequenceCacheState {
 
     /// The resident stream for `sequence`, counted like `entry_for` counts a
     /// materialized hit. Any other entry, or none, is a miss.
-    fn stream_for(&mut self, sequence: ImageSequenceId) -> Option<Arc<GifStream>> {
-        match self.existing_stream_for(sequence) {
+    fn stream_for(&mut self, sequence: ImageSequenceId, now: Instant) -> Option<Arc<GifStream>> {
+        match self.existing_stream_for(sequence, now) {
             Some(stream) => Some(stream),
             None => {
                 self.misses = self.misses.saturating_add(1);
@@ -360,6 +418,7 @@ impl ImageSequenceCacheState {
         &mut self,
         sequence: ImageSequenceId,
         stream: Arc<GifStream>,
+        now: Instant,
     ) -> Arc<GifStream> {
         if self.is_retired(sequence) {
             return stream;
@@ -378,27 +437,33 @@ impl ImageSequenceCacheState {
                 stream: Arc::clone(&stream),
                 memory_size: 0,
                 last_access,
+                last_access_at: now,
             },
         );
         stream
     }
 
-    /// Record what `stream` retains, then keep the budget by evicting the
-    /// least recently used other entries. A stream is never refused for its
-    /// size: GNU retains the composed frame of any animation however large
-    /// (its `anim_cache` has no byte budget, src/image.c:3773-3793), and
-    /// refusing one is the redecode on every frame that #823 reports.
+    /// Record what `stream` retains, then keep the budget by evicting expired
+    /// idle streams first, then LRU idle streams and materialized entries,
+    /// before displacing any other actively animating stream. A stream is never
+    /// refused for its own size: GNU retains the composed frame of any
+    /// animation however large (its `anim_cache` has no byte budget,
+    /// src/image.c:3773-3793), and refusing one is the redecode on every frame
+    /// that #823 reports.
     fn account_stream(
         &mut self,
         sequence: ImageSequenceId,
         stream: &Arc<GifStream>,
         bytes: usize,
         max_bytes: usize,
+        now: Instant,
     ) {
+        self.prune_idle_streams(now, IDLE_STREAM_TTL);
         {
             let Some(SequenceCacheEntry::Stream {
                 stream: resident,
                 memory_size,
+                last_access_at,
                 ..
             }) = self.entries.get_mut(&sequence)
             else {
@@ -412,13 +477,14 @@ impl ImageSequenceCacheState {
                 .saturating_sub(*memory_size)
                 .saturating_add(bytes);
             *memory_size = bytes;
+            *last_access_at = now;
         }
         while self.total_bytes > max_bytes {
             let Some(victim) = self
                 .entries
                 .iter()
                 .filter(|(id, entry)| **id != sequence && entry.memory_size() > 0)
-                .min_by_key(|(id, entry)| (entry.last_access(), **id))
+                .min_by_key(|(id, entry)| (entry.eviction_priority(now), entry.last_access(), **id))
                 .map(|(id, _)| *id)
             else {
                 break;
@@ -464,14 +530,17 @@ impl ImageSequenceCacheState {
 /// than holding the mutex across decoder work; publication coalesces them into
 /// one resident entry and retirement fences every late result.
 ///
-/// A GIF holds no materialized entry: its source keeps a [`GifStream`], GNU's
-/// decoder position plus composed frame, and each request steps it under the
-/// stream's own lock. A materialized sequence is retained only when the
-/// budget holds all of it; a stream is retained whatever its size and the
-/// budget evicts whole streams, least recently used first.
+/// A multi-frame GIF holds no materialized entry: its source keeps a
+/// [`GifStream`] (retained encoded bytes, decoder positions, composed frames,
+/// and a bounded reverse-playback window), stepped under the stream's own lock.
+/// Still (single-frame) GIFs decode without staying resident in this cache.
+/// Streams idle for 60 s are pruned (GNU `anim_prune_animation_cache`), and
+/// budget pressure evicts idle streams before actively animating ones.
 pub(crate) struct ImageSequenceCache {
     max_bytes: usize,
     state: Mutex<ImageSequenceCacheState>,
+    #[cfg(test)]
+    decoded_frames: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl ImageSequenceCache {
@@ -483,7 +552,25 @@ impl ImageSequenceCache {
         Self {
             max_bytes,
             state: Mutex::new(ImageSequenceCacheState::default()),
+            #[cfg(test)]
+            decoded_frames: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
+    }
+
+    fn backward_window_limit(&self) -> usize {
+        (self.max_bytes / 2).min(MAX_BACKWARD_WINDOW_BYTES)
+    }
+
+    #[cfg(test)]
+    fn decoded_frames(&self) -> u64 {
+        self.decoded_frames
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    #[cfg(test)]
+    fn reset_decoded_frames(&self) {
+        self.decoded_frames
+            .store(0, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub(crate) fn resolve(
@@ -492,6 +579,16 @@ impl ImageSequenceCache {
         data: &EncodedBytes,
         frame: ImageFrameIndex,
     ) -> ImageSequenceResolution {
+        self.resolve_at(sequence, data, frame, Instant::now())
+    }
+
+    fn resolve_at(
+        &self,
+        sequence: ImageSequenceId,
+        data: &EncodedBytes,
+        frame: ImageFrameIndex,
+        now: Instant,
+    ) -> ImageSequenceResolution {
         if crate::image_probe::has_tiff_signature(data) {
             return match tiff_pages::decode(data, frame) {
                 Some(frame) => ImageSequenceResolution::Frame(frame),
@@ -499,7 +596,7 @@ impl ImageSequenceCache {
             };
         }
         if matches!(image::guess_format(data), Ok(image::ImageFormat::Gif)) {
-            return self.resolve_stream(sequence, data, frame);
+            return self.resolve_stream_at(sequence, data, frame, now);
         }
         self.resolve_with(
             sequence,
@@ -518,33 +615,46 @@ impl ImageSequenceCache {
         sequence: ImageSequenceId,
         frame: ImageFrameIndex,
     ) -> Option<ImageSequenceResolution> {
+        let now = Instant::now();
         let stream = self
             .state
             .lock()
             .unwrap_or_else(|error| error.into_inner())
-            .existing_stream_for(sequence)?;
-        Some(self.step_stream(sequence, stream, frame))
+            .existing_stream_for(sequence, now)?;
+        Some(self.step_stream(sequence, stream, frame, now))
     }
 
     /// One frame of a GIF, from the stream retained for its source.
-    fn resolve_stream(
+    fn resolve_stream_at(
         &self,
         sequence: ImageSequenceId,
         source: &EncodedBytes,
         frame: ImageFrameIndex,
+        now: Instant,
     ) -> ImageSequenceResolution {
-        self.resolve_stream_with(sequence, frame, || GifStream::open(source.clone()))
+        self.resolve_stream_with_at(sequence, frame, now, || GifStream::open(source.clone()))
     }
 
+    #[cfg(test)]
     fn resolve_stream_with(
         &self,
         sequence: ImageSequenceId,
         frame: ImageFrameIndex,
         open: impl FnOnce() -> Option<GifStream>,
     ) -> ImageSequenceResolution {
+        self.resolve_stream_with_at(sequence, frame, Instant::now(), open)
+    }
+
+    fn resolve_stream_with_at(
+        &self,
+        sequence: ImageSequenceId,
+        frame: ImageFrameIndex,
+        now: Instant,
+        open: impl FnOnce() -> Option<GifStream>,
+    ) -> ImageSequenceResolution {
         let existing_or_lease = {
             let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-            match state.stream_for(sequence) {
+            match state.stream_for(sequence, now) {
                 Some(stream) => Ok(stream),
                 None => {
                     // Track the in-flight open under `DecodeLease` so an
@@ -563,14 +673,28 @@ impl ImageSequenceCache {
         let stream = match existing_or_lease {
             Ok(stream) => stream,
             Err(_lease) => {
-                let Some(stream) = open() else {
+                #[allow(unused_mut)]
+                let Some(mut stream) = open() else {
                     return undecodable(frame);
                 };
+                #[cfg(test)]
+                stream.attach_counter(Arc::clone(&self.decoded_frames));
+                if stream.frame_count() <= 1 {
+                    // Still (1-frame) GIFs carry GCE metadata through the same
+                    // decoder, but GNU does not create an `anim_cache` entry
+                    // for stills: answer the caller without retaining a stream.
+                    let (decoded, _) = stream.frame(frame, 0);
+                    return match decoded {
+                        StreamFrame::Ready(frame) => ImageSequenceResolution::Frame(frame),
+                        StreamFrame::Failed => undecodable(frame),
+                        StreamFrame::Missing => ImageSequenceResolution::MissingFrame,
+                    };
+                }
                 let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-                state.insert_stream(sequence, Arc::new(stream))
+                state.insert_stream(sequence, Arc::new(stream), now)
             }
         };
-        self.step_stream(sequence, stream, frame)
+        self.step_stream(sequence, stream, frame, now)
     }
 
     fn step_stream(
@@ -578,13 +702,17 @@ impl ImageSequenceCache {
         sequence: ImageSequenceId,
         stream: Arc<GifStream>,
         frame: ImageFrameIndex,
+        now: Instant,
     ) -> ImageSequenceResolution {
-        let decoded = stream.frame(frame);
+        // Step and measure stream memory under the stream's own lock BEFORE
+        // locking `self.state`, so the cache state lock is never held while
+        // waiting on a stream decode.
+        let (decoded, memory_size) = stream.frame(frame, self.backward_window_limit());
         {
             let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-            match decoded {
+            match &decoded {
                 StreamFrame::Ready(_) => {
-                    state.account_stream(sequence, &stream, stream.memory_size(), self.max_bytes)
+                    state.account_stream(sequence, &stream, memory_size, self.max_bytes, now)
                 }
                 StreamFrame::Failed => state.discard_stream(sequence, &stream),
                 StreamFrame::Missing => {}
@@ -633,10 +761,11 @@ impl ImageSequenceCache {
         materialization: SequenceMaterialization,
         decode: impl FnOnce() -> Option<Arc<DecodedImageSequence>>,
     ) -> ImageSequenceResolution {
+        let now = Instant::now();
         let decode_lease = {
             let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
             if let Some(sequence) = state
-                .entry_for(sequence, &materialization)
+                .entry_for(sequence, &materialization, now)
                 .and_then(|entry| entry.animated_sequence(&materialization))
             {
                 return sequence
@@ -672,7 +801,9 @@ impl ImageSequenceCache {
         decoded: Arc<DecodedImageSequence>,
         materialization: SequenceMaterialization,
     ) -> Arc<DecodedImageSequence> {
+        let now = Instant::now();
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        state.prune_idle_streams(now, IDLE_STREAM_TTL);
         if state.is_retired(sequence) {
             return decoded;
         }
@@ -696,7 +827,7 @@ impl ImageSequenceCache {
                 .entries
                 .iter()
                 .filter(|(_, entry)| entry.memory_size() > 0)
-                .min_by_key(|(id, entry)| (entry.last_access(), **id))
+                .min_by_key(|(id, entry)| (entry.eviction_priority(now), entry.last_access(), **id))
                 .map(|(id, _)| *id)
             else {
                 break;
@@ -747,6 +878,14 @@ impl ImageSequenceCache {
     }
 
     #[cfg(test)]
+    fn prune_idle_streams_at(&self, now: Instant) {
+        self.state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .prune_idle_streams(now, IDLE_STREAM_TTL);
+    }
+
+    #[cfg(test)]
     fn contains(&self, sequence: ImageSequenceId) -> bool {
         self.state
             .lock()
@@ -765,10 +904,9 @@ impl ImageSequenceCache {
     }
 
     pub(crate) fn resident_bytes(&self) -> usize {
-        self.state
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .total_bytes
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        state.prune_idle_streams(Instant::now(), IDLE_STREAM_TTL);
+        state.total_bytes
     }
 }
 

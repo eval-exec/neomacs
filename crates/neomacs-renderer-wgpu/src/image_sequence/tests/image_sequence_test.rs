@@ -3,7 +3,6 @@ use gif::{DisposalMethod, Encoder};
 use neomacs_display_protocol::{
     EncodedBytes, ImageFrameIndex, ImageSequenceId, ImageSequenceRetirement,
 };
-use std::sync::atomic::Ordering::Relaxed;
 
 fn sequence(id: u64) -> ImageSequenceId {
     ImageSequenceId::new(id).expect("test sequence ids are non-zero")
@@ -264,31 +263,32 @@ fn a_retired_identity_is_not_repopulated_by_a_stream() {
 }
 
 #[test]
-fn stream_residency_counts_the_canvas_the_frame_and_its_extensions() {
+fn stream_residency_counts_source_extensions_canvas_and_current_frame() {
     let bytes = animated_gif_bytes();
     let (pixel_bytes, extension_bytes) = gif_fixture_payload_sizes(&bytes);
     assert_eq!((pixel_bytes, extension_bytes), (16, 8));
     let frame_bytes = pixel_bytes / 2;
     let control_bytes = extension_bytes / 2;
+    let expected = bytes.len() + extension_bytes + frame_bytes * 2 + control_bytes;
 
     // A pixel-only budget used to refuse this sequence outright (#823). A
-    // stream is retained whatever its size, and what it retains is its
-    // compositing canvas, the frame it last returned, and that frame's
-    // graphics control extension.
+    // stream is retained whatever its size, and what it retains is the encoded
+    // source (GNU `anim_cache.byte_size`), its parsed extensions table, its
+    // compositing canvas, the frame it last returned, and that frame's GCE.
     let cache = ImageSequenceCache::with_max_bytes(pixel_bytes);
     cache
         .resolve(sequence(1), &source(&bytes), ImageFrameIndex::new(0))
         .expect_frame("first frame");
 
     assert!(cache.contains(sequence(1)));
-    assert_eq!(cache.resident_bytes(), frame_bytes * 2 + control_bytes);
+    assert_eq!(cache.resident_bytes(), expected);
 }
 
 #[test]
 fn streams_evict_the_least_recently_used_other_entry_to_meet_the_budget() {
     let bytes = animated_gif_bytes();
     let (pixel_bytes, extension_bytes) = gif_fixture_payload_sizes(&bytes);
-    let residency = pixel_bytes + extension_bytes / 2;
+    let residency = bytes.len() + extension_bytes + pixel_bytes + extension_bytes / 2;
     let cache = ImageSequenceCache::with_max_bytes(2 * residency);
     for id in [1, 2] {
         cache
@@ -310,12 +310,12 @@ fn streams_evict_the_least_recently_used_other_entry_to_meet_the_budget() {
     assert_eq!(cache.resident_bytes(), 2 * residency);
 
     // A displaced stream reopens on its next request, displacing stream 1.
-    DECODED_FRAMES.store(0, Relaxed);
+    cache.reset_decoded_frames();
     let reopened = cache
         .resolve(sequence(2), &source(&bytes), ImageFrameIndex::new(1))
         .expect_frame("displaced stream again");
     assert_eq!(reopened.rgba(), [0, 0xff, 0, 0xff, 0, 0xff, 0, 0xff]);
-    assert_eq!(DECODED_FRAMES.load(Relaxed), 2);
+    assert_eq!(cache.decoded_frames(), 2);
     assert!(!cache.contains(sequence(1)));
     assert!(cache.contains(sequence(2)));
     assert_eq!(cache.resident_bytes(), 2 * residency);
@@ -329,18 +329,19 @@ fn a_stream_larger_than_the_whole_budget_is_still_retained() {
     // every frame a full redecode.
     let bytes = animated_gif_bytes();
     let (pixel_bytes, extension_bytes) = gif_fixture_payload_sizes(&bytes);
-    let cache = ImageSequenceCache::with_max_bytes(pixel_bytes + extension_bytes / 2 - 1);
+    let residency = bytes.len() + extension_bytes + pixel_bytes + extension_bytes / 2;
+    let cache = ImageSequenceCache::with_max_bytes(residency - 1);
     cache
         .resolve(sequence(1), &source(&bytes), ImageFrameIndex::new(0))
         .expect_frame("first frame");
 
     assert!(cache.contains(sequence(1)));
-    DECODED_FRAMES.store(0, Relaxed);
+    cache.reset_decoded_frames();
     cache
         .resolve(sequence(1), &source(&bytes), ImageFrameIndex::new(1))
         .expect_frame("second frame");
     assert_eq!(
-        DECODED_FRAMES.load(Relaxed),
+        cache.decoded_frames(),
         1,
         "the next frame is one step of the retained stream"
     );
@@ -403,9 +404,11 @@ fn a_materialized_sequence_stays_within_its_exact_budget_and_stills_are_never_ke
 
 #[test]
 fn single_gif_keeps_graphics_control_delay_metadata() {
-    // GNU image.c:10276-10314 publishes GCE data even for a single frame.
+    // GNU image.c:10276-10314 publishes GCE data even for a single frame,
+    // without creating a persistent anim_cache entry for a still image.
     let bytes = b"GIF89a\x01\0\x01\0\x80\0\0\0\0\0\xff\xff\xff\x21\xf9\x04\x01\x0a\0\0\0\x2c\0\0\0\0\x01\0\x01\0\0\x02\x02\x44\x01\0\x3b";
-    let frame = ImageSequenceCache::new()
+    let cache = ImageSequenceCache::new();
+    let frame = cache
         .resolve(sequence(1), &source(bytes), ImageFrameIndex::new(0))
         .expect_frame("one-frame GIF");
     let (_, metadata) = frame.into_parts();
@@ -415,6 +418,11 @@ fn single_gif_keeps_graphics_control_delay_metadata() {
         ImageFrameDelay::milliseconds(100, 1),
         "a single-frame GIF still owns its GCE delay"
     );
+    assert!(
+        !cache.contains(sequence(1)),
+        "still single-frame GIF must not remain resident as an animation stream"
+    );
+    assert_eq!(cache.resident_bytes(), 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -653,11 +661,11 @@ fn gif_stream_rewinds_by_reopening_and_decodes_forward_once() {
     let reference = reference_frames(&bytes);
     let cache = ImageSequenceCache::new();
     let id = sequence(1);
-    DECODED_FRAMES.store(0, Relaxed);
+    cache.reset_decoded_frames();
 
     let mut decoded_per_request = Vec::new();
     for index in [0, 1, 1, 4, 2, 3] {
-        let before = DECODED_FRAMES.load(Relaxed);
+        let before = cache.decoded_frames();
         let frame = cache
             .resolve(
                 id,
@@ -669,7 +677,7 @@ fn gif_stream_rewinds_by_reopening_and_decodes_forward_once() {
             frame.rgba(),
             reference[index].as_ref().unwrap().as_raw().as_slice()
         );
-        decoded_per_request.push(DECODED_FRAMES.load(Relaxed) - before);
+        decoded_per_request.push(cache.decoded_frames() - before);
     }
     assert_eq!(
         decoded_per_request,
@@ -683,7 +691,7 @@ fn gif_stream_rewinds_by_reopening_and_decodes_forward_once() {
         cache.resolve(id, &source(&bytes), ImageFrameIndex::new(6)),
         ImageSequenceResolution::MissingFrame
     ));
-    assert_eq!(DECODED_FRAMES.load(Relaxed), 9);
+    assert_eq!(cache.decoded_frames(), 9);
 }
 
 #[test]
@@ -692,7 +700,7 @@ fn concurrent_requests_step_a_stream_once() {
     let reference = reference_frames(&bytes);
     let cache = std::sync::Arc::new(ImageSequenceCache::new());
     let id = sequence(1);
-    DECODED_FRAMES.store(0, Relaxed);
+    cache.reset_decoded_frames();
 
     let frames = std::thread::scope(|scope| {
         let requests = (0..4)
@@ -720,7 +728,7 @@ fn concurrent_requests_step_a_stream_once() {
             .all(|rgba| rgba == reference[3].as_ref().unwrap().as_raw())
     );
     assert_eq!(
-        DECODED_FRAMES.load(Relaxed),
+        cache.decoded_frames(),
         4,
         "four concurrent requests advance the position to frame 3 exactly once"
     );
@@ -866,14 +874,20 @@ fn over_budget_gif_decodes_one_frame_per_shown_frame() {
 
     let cache = ImageSequenceCache::new();
     let id = sequence(1);
-    DECODED_FRAMES.store(0, Relaxed);
+    let extension_bytes: usize = super::gif_metadata::frame_extensions(&bytes)
+        .unwrap()
+        .iter()
+        .flatten()
+        .map(|(_, payload)| payload.len())
+        .sum();
+    cache.reset_decoded_frames();
     let first = cache
         .resolve(id, &source(&bytes), ImageFrameIndex::new(0))
         .expect_frame("first frame");
     assert_eq!(first.dimensions(), (480, 480));
     let mut per_shown = Vec::new();
     for shown in 1..=SHOWN {
-        let before = DECODED_FRAMES.load(Relaxed);
+        let before = cache.decoded_frames();
         // What `image-animate-timeout' does per frame (lisp/image.el:1052-1057):
         // `image-multi-frame-p' reads the metadata of the frame still
         // selected, then `image-show-frame' selects the next one.
@@ -892,7 +906,7 @@ fn over_budget_gif_decodes_one_frame_per_shown_frame() {
             next.into_parts().1.frame_delay(),
             ImageFrameDelay::milliseconds(if shown % 2 == 0 { 60 } else { 70 }, 1)
         );
-        per_shown.push(DECODED_FRAMES.load(Relaxed) - before);
+        per_shown.push(cache.decoded_frames() - before);
     }
     assert_eq!(
         per_shown,
@@ -902,8 +916,8 @@ fn over_budget_gif_decodes_one_frame_per_shown_frame() {
     assert!(cache.contains(id), "the stream stays resident");
     assert_eq!(
         cache.resident_bytes(),
-        2 * 480 * 480 * 4 + 4,
-        "a canvas, one frame and its graphics control extension, whatever the frame count"
+        bytes.len() + extension_bytes + 2 * 480 * 480 * 4 + 4,
+        "retained source + extensions + one canvas + one frame + its GCE"
     );
 }
 
@@ -974,15 +988,257 @@ fn resolve_resident_gif_steps_without_source_bytes() {
     cache
         .resolve(id, &source(&bytes), ImageFrameIndex::new(0))
         .expect_frame("initial open");
-    DECODED_FRAMES.store(0, Relaxed);
+    cache.reset_decoded_frames();
     let second = cache
         .resolve_resident_gif(id, ImageFrameIndex::new(1))
         .expect("resident stream hit")
         .expect_frame("second frame");
     assert_eq!(second.rgba(), [0, 0xff, 0, 0xff, 0, 0xff, 0, 0xff]);
-    assert_eq!(DECODED_FRAMES.load(Relaxed), 1);
+    assert_eq!(cache.decoded_frames(), 1);
     assert_eq!(
         cache.stats(),
         ImageSequenceCacheStats { hits: 1, misses: 1 }
     );
+}
+
+#[test]
+fn two_out_of_phase_readers_on_one_gif_decode_one_frame_per_shown_frame() {
+    // F1: two specs sharing one GIF source out of phase must not force each
+    // other to reopen from frame 0 on every tick.
+    let frames: Vec<IndexedFrame> = (0..12)
+        .map(|i| IndexedFrame {
+            left: 0,
+            top: 0,
+            width: 4,
+            height: 3,
+            dispose: DisposalMethod::Keep,
+            transparent: None,
+            delay: 5,
+            interlaced: false,
+            pixels: vec![(i % 4) as u8; 12],
+        })
+        .collect();
+    let bytes = indexed_gif(4, 3, &frames);
+    let reference = reference_frames(&bytes);
+    let cache = ImageSequenceCache::new();
+    let id = sequence(12);
+    let src = source(&bytes);
+
+    // Prime spec A at frame 0..1 and spec B at frame 6.
+    cache
+        .resolve(id, &src, ImageFrameIndex::new(0))
+        .expect_frame("A frame 0");
+    cache
+        .resolve(id, &src, ImageFrameIndex::new(6))
+        .expect_frame("B frame 6");
+    cache
+        .resolve(id, &src, ImageFrameIndex::new(1))
+        .expect_frame("A frame 1");
+
+    // Now both specs alternate forward ticks (including metadata check on
+    // current frame followed by step to next frame, plus B wrapping 11 -> 0).
+    let mut per_tick = Vec::new();
+    for step in 0..8_u64 {
+        let a_prev = 1 + step;
+        let a_next = 2 + step;
+        let b_prev = (6 + step) % 12;
+        let b_next = (7 + step) % 12;
+
+        let before_b = cache.decoded_frames();
+        cache
+            .resolve(id, &src, ImageFrameIndex::new(b_prev))
+            .expect_frame("B current metadata");
+        let b_frame = cache
+            .resolve(id, &src, ImageFrameIndex::new(b_next))
+            .expect_frame("B next frame");
+        assert_eq!(
+            b_frame.rgba(),
+            reference[b_next as usize]
+                .as_ref()
+                .unwrap()
+                .as_raw()
+                .as_slice()
+        );
+        per_tick.push(cache.decoded_frames() - before_b);
+
+        let before_a = cache.decoded_frames();
+        cache
+            .resolve(id, &src, ImageFrameIndex::new(a_prev))
+            .expect_frame("A current metadata");
+        let a_frame = cache
+            .resolve(id, &src, ImageFrameIndex::new(a_next))
+            .expect_frame("A next frame");
+        assert_eq!(
+            a_frame.rgba(),
+            reference[a_next as usize]
+                .as_ref()
+                .unwrap()
+                .as_raw()
+                .as_slice()
+        );
+        per_tick.push(cache.decoded_frames() - before_a);
+    }
+
+    assert_eq!(
+        per_tick,
+        vec![1; 16],
+        "each out-of-phase reader must decode exactly 1 frame per shown frame, including wraparound"
+    );
+}
+
+#[test]
+fn reverse_playback_reuses_backward_window_for_o1_steps() {
+    // F1: negative `:speed` walks frames backwards (N-1, N-2, ..., 0).
+    // Once the first backward step fills the bounded backward window, every
+    // remaining reverse frame of a small GIF hits in O(1) with 0 decodes.
+    let frames = disposal_frames();
+    let bytes = indexed_gif(4, 3, &frames);
+    let reference = reference_frames(&bytes);
+    let cache = ImageSequenceCache::new();
+    let id = sequence(13);
+    let src = source(&bytes);
+
+    let last = cache
+        .resolve(id, &src, ImageFrameIndex::new(5))
+        .expect_frame("frame 5");
+    assert_eq!(
+        last.rgba(),
+        reference[5].as_ref().unwrap().as_raw().as_slice()
+    );
+
+    // First reverse step 5 -> 4 rewinds once and populates the backward window.
+    let four = cache
+        .resolve(id, &src, ImageFrameIndex::new(4))
+        .expect_frame("frame 4");
+    assert_eq!(
+        four.rgba(),
+        reference[4].as_ref().unwrap().as_raw().as_slice()
+    );
+
+    cache.reset_decoded_frames();
+    for index in (0..4_usize).rev() {
+        let frame = cache
+            .resolve(
+                id,
+                &src,
+                ImageFrameIndex::new(u64::try_from(index).unwrap()),
+            )
+            .expect_frame("reverse frame");
+        assert_eq!(
+            frame.rgba(),
+            reference[index].as_ref().unwrap().as_raw().as_slice()
+        );
+    }
+    assert_eq!(
+        cache.decoded_frames(),
+        0,
+        "subsequent reverse steps must hit the backward window without redecoding"
+    );
+}
+
+#[test]
+fn idle_streams_are_pruned_after_sixty_seconds() {
+    let bytes = animated_gif_bytes();
+    let cache = ImageSequenceCache::new();
+    let t0 = Instant::now();
+
+    cache
+        .resolve_at(sequence(1), &source(&bytes), ImageFrameIndex::new(0), t0)
+        .expect_frame("idle stream");
+    cache
+        .resolve_at(
+            sequence(2),
+            &source(&bytes),
+            ImageFrameIndex::new(0),
+            t0 + Duration::from_secs(30),
+        )
+        .expect_frame("recent stream");
+    assert!(cache.contains(sequence(1)));
+    assert!(cache.contains(sequence(2)));
+
+    cache.prune_idle_streams_at(t0 + Duration::from_secs(61));
+    assert!(
+        !cache.contains(sequence(1)),
+        "stream idle for 61 s must be pruned"
+    );
+    assert!(
+        cache.contains(sequence(2)),
+        "stream idle for only 31 s must remain resident"
+    );
+}
+
+#[test]
+fn budget_pressure_evicts_idle_streams_before_active_streams() {
+    let bytes = animated_gif_bytes();
+    let (pixel_bytes, extension_bytes) = gif_fixture_payload_sizes(&bytes);
+    let residency = bytes.len() + extension_bytes + pixel_bytes + extension_bytes / 2;
+    let cache = ImageSequenceCache::with_max_bytes(2 * residency);
+    let t0 = Instant::now();
+
+    // 1) Materialized entry (sequence 1, lower last_access stamp) vs idle GIF
+    //    stream (sequence 2, higher last_access stamp, idle >= 5 s).
+    cache
+        .resolve_with(
+            sequence(1),
+            ImageFrameIndex::new(0),
+            SequenceMaterialization::AuthoredRaster,
+            || {
+                Some(DecodedImageSequence::from_frames(
+                    vec![(1, 1, vec![0; residency])],
+                    ImageFrameDelay::milliseconds(20, 1).unwrap(),
+                ))
+            },
+        )
+        .expect_frame("materialized entry");
+    cache
+        .resolve_at(
+            sequence(2),
+            &source(&bytes),
+            ImageFrameIndex::new(0),
+            t0 + Duration::from_secs(1),
+        )
+        .expect_frame("stream 2 open");
+    // At t0 + 10s, stream 2 has been idle for 9s (>= 5s ACTIVE_STREAM_WINDOW),
+    // so stream 3 must evict idle stream 2 even though sequence 1 has an older
+    // logical access stamp.
+    cache
+        .resolve_at(
+            sequence(3),
+            &source(&bytes),
+            ImageFrameIndex::new(0),
+            t0 + Duration::from_secs(10),
+        )
+        .expect_frame("stream 3 open");
+    assert!(
+        cache.contains(sequence(1)),
+        "materialized entry must survive ahead of an idle stream"
+    );
+    assert!(
+        !cache.contains(sequence(2)),
+        "idle stream must be evicted before entries in higher-priority tiers"
+    );
+    assert!(cache.contains(sequence(3)));
+
+    // 2) Active stream (stream 3, accessed at t0 + 10s) vs newly idle stream
+    //    (stream 4 arrives at t0 + 11s, then at t0 + 12s stream 3 is still active
+    //    while sequence 1 is materialized -> sequence 1 is evicted before active
+    //    stream 3).
+    cache
+        .resolve_at(
+            sequence(4),
+            &source(&bytes),
+            ImageFrameIndex::new(0),
+            t0 + Duration::from_secs(12),
+        )
+        .expect_frame("stream 4 open");
+    assert!(
+        !cache.contains(sequence(1)),
+        "materialized entry must be evicted before an actively animating stream"
+    );
+    assert!(
+        cache.contains(sequence(3)),
+        "active stream must be spared over materialized entry"
+    );
+    assert!(cache.contains(sequence(4)));
+    assert_eq!(cache.resident_bytes(), 2 * residency);
 }

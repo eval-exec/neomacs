@@ -1,22 +1,26 @@
-//! GNU's `struct anim_cache` (src/image.c:3717-3749) for one GIF source: the
-//! decoder position and the last composed frame, so the next `:index` step
-//! composes one frame instead of decoding the file again.
+//! GNU's `struct anim_cache` (src/image.c:3717-3749) for one GIF source:
+//! retained source bytes, decoder positions, and composed frames, so each
+//! `:index` step composes one frame instead of decoding the file again.
 //!
-//! GNU reads the file once (`DGifSlurp`, src/image.c:9992) and then composes
-//! sub-images forward onto one retained pixmap, restarting when `:index` does
-//! not follow the cached frame (src/image.c:9888-9897, 10138-10144). Its
-//! position is a count into every frame's decoded raster, which a bounded
-//! stream cannot keep: here the position is the decoder itself, which decodes
-//! a frame only when that frame is first requested. A request ahead of the
-//! position decodes forward, as `webp_load` does (src/image.c:10683-10685);
-//! a request behind it reopens the source.
+//! GNU reads the file once (`DGifSlurp`, src/image.c:9992) and composes
+//! sub-images forward onto one retained pixmap per spec. Here a source retains
+//! its encoded bytes once, keeps a small pool of forward cursors so
+//! out-of-phase specs on the same GIF each step in O(1), and keeps a bounded
+//! backward-seek window so reverse playback (`:speed` < 0) avoids restarting
+//! from frame 0 on every step.
 //!
 //! Each frame is composed exactly as `image`'s own GIF iterator composes it
 //! (`GifFrameIterator::next`), because the whole-sequence decode this
 //! replaces used that iterator. A row pins the two byte for byte.
 
+use std::collections::HashMap;
 use std::io::Cursor;
 use std::sync::Mutex;
+#[cfg(test)]
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 
 use gif::{ColorOutput, DecodeOptions, DisposalMethod};
 use neomacs_display_protocol::image::ImageExtensionBlock;
@@ -24,9 +28,11 @@ use neomacs_display_protocol::{
     EncodedBytes, ImageEmbeddedMetadata, ImageFrameDelay, ImageFrameIndex,
 };
 
-#[cfg(test)]
-use super::DECODED_FRAMES;
 use super::{DecodedSequenceFrame, ImageSequenceFrame};
+
+/// Independent forward decoder positions kept per GIF source so multiple specs
+/// animating the same GIF out of phase each step in O(1) without restarting.
+const MAX_CURSORS: usize = 4;
 
 pub(super) enum StreamFrame {
     Ready(ImageSequenceFrame),
@@ -43,12 +49,31 @@ pub(super) struct GifStream {
     /// is decoded.
     extensions: Vec<Vec<(u8, Vec<u8>)>>,
     source: EncodedBytes,
-    /// GNU's `cache->index` and `anim_handle`: one position, stepped by one
-    /// thread at a time so two requests never advance it twice.
-    position: Mutex<Position>,
+    /// Fixed retained memory: encoded GIF bytes (GNU's `anim_cache.byte_size`,
+    /// src/image.c:9946/9963) plus the parsed extension payload table.
+    fixed_bytes: usize,
+    /// Canvas dimensions from the logical screen descriptor.
+    width: u32,
+    height: u32,
+    /// Per-source decoder state, stepped under one mutex so concurrent
+    /// requests never advance a cursor twice.
+    state: Mutex<StreamState>,
+    #[cfg(test)]
+    decoded_frames: Option<Arc<AtomicU64>>,
 }
 
-struct Position {
+struct StreamState {
+    cursors: Vec<CursorSlot>,
+    /// Bounded cache of frames populated on a reverse step (`index + 1 ==
+    /// last_returned`), so negative `:speed` playback serves consecutive
+    /// reverse frames in O(1) instead of reopening from frame 0 each tick.
+    backward_window: HashMap<u32, DecodedSequenceFrame>,
+    backward_window_bytes: usize,
+    last_returned: Option<u32>,
+    access_clock: u64,
+}
+
+struct CursorSlot {
     /// The decoder, positioned before frame `next`. `None` after a failed
     /// or interrupted step, so the next step reopens the source instead of
     /// resuming a decoder an unwinding panic may have left half-advanced.
@@ -59,6 +84,48 @@ struct Position {
     /// metadata of the frame still displayed before each step
     /// (lisp/image.el:1052-1057), and that frame is behind the position.
     current: Option<(u32, DecodedSequenceFrame)>,
+    last_access: u64,
+}
+
+impl CursorSlot {
+    fn new(reader: FrameReader, last_access: u64) -> Self {
+        Self {
+            reader: Some(reader),
+            next: 0,
+            current: None,
+            last_access,
+        }
+    }
+
+    fn memory_size(&self) -> usize {
+        self.reader
+            .as_ref()
+            .map_or(0, |reader| reader.canvas_bytes())
+            + self
+                .current
+                .as_ref()
+                .map_or(0, |(_, frame)| frame.memory_size())
+    }
+}
+
+impl StreamState {
+    fn next_stamp(&mut self) -> u64 {
+        self.access_clock = self.access_clock.saturating_add(1);
+        self.access_clock
+    }
+
+    fn clear_backward_window(&mut self) {
+        self.backward_window.clear();
+        self.backward_window_bytes = 0;
+    }
+
+    fn dynamic_memory_size(&self) -> usize {
+        self.cursors
+            .iter()
+            .map(CursorSlot::memory_size)
+            .sum::<usize>()
+            .saturating_add(self.backward_window_bytes)
+    }
 }
 
 const fn assert_send<T: Send>() {}
@@ -72,68 +139,260 @@ impl GifStream {
         if extensions.is_empty() {
             return None;
         }
+        let extension_bytes: usize = extensions
+            .iter()
+            .flatten()
+            .map(|(_, payload)| payload.len())
+            .sum();
+        let fixed_bytes = source.len().saturating_add(extension_bytes);
         let reader = FrameReader::open(&source)?;
+        let (width, height) = (reader.width, reader.height);
         Some(Self {
             extensions,
             source,
-            position: Mutex::new(Position {
-                reader: Some(reader),
-                next: 0,
-                current: None,
+            fixed_bytes,
+            width,
+            height,
+            state: Mutex::new(StreamState {
+                cursors: vec![CursorSlot::new(reader, 1)],
+                backward_window: HashMap::new(),
+                backward_window_bytes: 0,
+                last_returned: None,
+                access_clock: 1,
             }),
+            #[cfg(test)]
+            decoded_frames: None,
         })
     }
 
-    /// The frame at `index`, decoded from the retained position.
-    pub(super) fn frame(&self, index: ImageFrameIndex) -> StreamFrame {
+    #[cfg(test)]
+    pub(super) fn attach_counter(&mut self, counter: Arc<AtomicU64>) {
+        self.decoded_frames = Some(counter);
+    }
+
+    /// Number of image descriptors discovered in the GIF record structure.
+    pub(super) fn frame_count(&self) -> usize {
+        self.extensions.len()
+    }
+
+    /// The frame at `index`, decoded from a retained position, paired with the
+    /// stream's post-step memory footprint (computed under the same lock so
+    /// the cache never nests its own state lock over this stream lock).
+    pub(super) fn frame(
+        &self,
+        index: ImageFrameIndex,
+        backward_window_limit: usize,
+    ) -> (StreamFrame, usize) {
         let Ok(index) = u32::try_from(index.get()) else {
-            return StreamFrame::Missing;
+            return (StreamFrame::Missing, self.memory_size());
         };
         if index as usize >= self.extensions.len() {
-            return StreamFrame::Missing;
+            return (StreamFrame::Missing, self.memory_size());
         }
-        let mut position = self
-            .position
+        let mut state = self
+            .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if let Some((current, frame)) = &position.current
-            && *current == index
+        let stamp = state.next_stamp();
+
+        // 1. Instant hit on any cursor's last returned frame (0 decodes).
+        if let Some(slot) = state
+            .cursors
+            .iter_mut()
+            .find(|slot| slot.current.as_ref().is_some_and(|(cur, _)| *cur == index))
         {
-            return StreamFrame::Ready(frame.sequence_frame());
+            slot.last_access = stamp;
+            let frame = slot
+                .current
+                .as_ref()
+                .expect("matched current frame")
+                .1
+                .sequence_frame();
+            state.last_returned = Some(index);
+            let total_bytes = self.fixed_bytes.saturating_add(state.dynamic_memory_size());
+            return (StreamFrame::Ready(frame), total_bytes);
         }
-        let reopen = match position.reader {
-            Some(_) => index < position.next,
-            None => true,
+
+        // 2. Instant hit on the bounded backward-seek window (0 decodes).
+        if let Some(frame) = state.backward_window.get(&index).cloned() {
+            state.last_returned = Some(index);
+            let total_bytes = self.fixed_bytes.saturating_add(state.dynamic_memory_size());
+            return (StreamFrame::Ready(frame.sequence_frame()), total_bytes);
+        }
+
+        // 3. Closest forward cursor (`reader.is_some()` and `next <= index`).
+        if let Some(slot_idx) = state
+            .cursors
+            .iter()
+            .enumerate()
+            .filter(|(_, slot)| slot.reader.is_some() && slot.next <= index)
+            .min_by_key(|(_, slot)| index - slot.next)
+            .map(|(i, _)| i)
+        {
+            state.clear_backward_window();
+            let result = self.advance_slot(&mut state.cursors[slot_idx], index, stamp, None);
+            if matches!(result, StreamFrame::Ready(_)) {
+                state.last_returned = Some(index);
+            }
+            let total_bytes = self.fixed_bytes.saturating_add(state.dynamic_memory_size());
+            return (result, total_bytes);
+        }
+
+        // 4. Request is behind every live cursor: classify reverse step vs
+        //    loop wraparound vs independent out-of-phase reader.
+        let is_reverse_step = index.checked_add(1).is_some_and(|next_idx| {
+            state.last_returned == Some(next_idx)
+                || state.cursors.iter().any(|slot| {
+                    slot.current
+                        .as_ref()
+                        .is_some_and(|(cur, _)| *cur == next_idx)
+                })
+        });
+
+        let Some(fresh_reader) = FrameReader::open(&self.source) else {
+            let total_bytes = self.fixed_bytes.saturating_add(state.dynamic_memory_size());
+            return (StreamFrame::Failed, total_bytes);
         };
-        if reopen {
-            let Some(reader) = FrameReader::open(&self.source) else {
-                return StreamFrame::Failed;
-            };
-            position.reader = Some(reader);
-            position.next = 0;
-            position.current = None;
+
+        let count = u32::try_from(self.extensions.len()).unwrap_or(u32::MAX);
+        let slot_idx = if is_reverse_step {
+            // Rewind the cursor that just showed `index + 1` (or the LRU slot)
+            // in place so reverse playback does not consume extra cursor slots.
+            state
+                .cursors
+                .iter()
+                .position(|slot| {
+                    slot.current
+                        .as_ref()
+                        .is_some_and(|(cur, _)| Some(*cur) == index.checked_add(1))
+                })
+                .or_else(|| {
+                    state
+                        .cursors
+                        .iter()
+                        .enumerate()
+                        .min_by_key(|(_, slot)| slot.last_access)
+                        .map(|(i, _)| i)
+                })
+                .unwrap_or(0)
+        } else if index == 0
+            && let Some(finished_idx) = state
+                .cursors
+                .iter()
+                .position(|slot| slot.reader.is_none() || slot.next >= count)
+        {
+            // Normal loop wraparound (`count - 1 -> 0`): reuse the finished
+            // cursor in place so single-reader loops keep one cursor.
+            finished_idx
+        } else if let Some(dead_idx) = state.cursors.iter().position(|slot| slot.reader.is_none()) {
+            dead_idx
+        } else if state.cursors.len() < MAX_CURSORS {
+            // Out-of-phase reader: keep existing cursors intact so every
+            // reader steps forward at O(1).
+            state.cursors.push(CursorSlot::new(fresh_reader, stamp));
+            let new_idx = state.cursors.len() - 1;
+            let result = self.advance_slot(&mut state.cursors[new_idx], index, stamp, None);
+            if matches!(result, StreamFrame::Ready(_)) {
+                state.last_returned = Some(index);
+            }
+            let total_bytes = self.fixed_bytes.saturating_add(state.dynamic_memory_size());
+            return (result, total_bytes);
+        } else {
+            state
+                .cursors
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, slot)| slot.last_access)
+                .map(|(i, _)| i)
+                .unwrap_or(0)
+        };
+
+        state.cursors[slot_idx] = CursorSlot::new(fresh_reader, stamp);
+        state.clear_backward_window();
+
+        let window_start = if is_reverse_step && index > 0 && backward_window_limit > 0 {
+            let approx_frame_bytes = usize::try_from(self.width)
+                .ok()
+                .and_then(|w| {
+                    usize::try_from(self.height)
+                        .ok()
+                        .and_then(|h| w.checked_mul(h))
+                })
+                .and_then(|px| px.checked_mul(4))
+                .unwrap_or(usize::MAX)
+                .max(1);
+            let max_frames = (backward_window_limit / approx_frame_bytes).min(index as usize);
+            if max_frames > 0 {
+                Some(index.saturating_sub(max_frames as u32))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let mut captured = window_start.map(|start| (start, backward_window_limit, Vec::new()));
+        let result = self.advance_slot(
+            &mut state.cursors[slot_idx],
+            index,
+            stamp,
+            captured.as_mut(),
+        );
+        if matches!(result, StreamFrame::Ready(_)) {
+            state.last_returned = Some(index);
+            if let Some((_, _, frames)) = captured {
+                for (frame_idx, frame) in frames {
+                    let frame_bytes = frame.memory_size();
+                    if state.backward_window_bytes.saturating_add(frame_bytes)
+                        <= backward_window_limit
+                    {
+                        state.backward_window_bytes =
+                            state.backward_window_bytes.saturating_add(frame_bytes);
+                        state.backward_window.insert(frame_idx, frame);
+                    }
+                }
+            }
         }
-        let Position {
-            reader,
-            next,
-            current,
-        } = &mut *position;
-        while *next <= index {
+        let total_bytes = self.fixed_bytes.saturating_add(state.dynamic_memory_size());
+        (result, total_bytes)
+    }
+
+    fn advance_slot(
+        &self,
+        slot: &mut CursorSlot,
+        index: u32,
+        stamp: u64,
+        mut capture_window: Option<&mut (u32, usize, Vec<(u32, DecodedSequenceFrame)>)>,
+    ) -> StreamFrame {
+        slot.last_access = stamp;
+        while slot.next <= index {
             // Owned for the step, so a step that unwinds takes the decoder
             // with it and the next step reopens the source.
-            let Some(mut frame_reader) = reader.take() else {
+            let Some(mut frame_reader) = slot.reader.take() else {
                 return StreamFrame::Failed;
             };
-            match frame_reader.read_frame(*next, &self.extensions) {
+            let decoded = frame_reader.read_frame(
+                slot.next,
+                &self.extensions,
+                #[cfg(test)]
+                self.decoded_frames.as_deref(),
+            );
+            match decoded {
                 Ok(Some(frame)) => {
-                    *current = Some((*next, frame));
-                    *next += 1;
-                    *reader = Some(frame_reader);
+                    if let Some((start, _, collected)) = capture_window.as_deref_mut()
+                        && slot.next >= *start
+                        && slot.next < index
+                    {
+                        collected.push((slot.next, frame.clone()));
+                    }
+                    slot.current = Some((slot.next, frame));
+                    slot.next += 1;
+                    slot.reader = Some(frame_reader);
                 }
                 Ok(None) | Err(()) => return StreamFrame::Failed,
             }
         }
-        match current {
+        match &slot.current {
             Some((current, frame)) if *current == index => {
                 StreamFrame::Ready(frame.sequence_frame())
             }
@@ -141,21 +400,14 @@ impl GifStream {
         }
     }
 
-    /// What the stream retains: the canvas the next frame composites onto,
-    /// the returned frame, and that frame's extension payload.
+    /// What the stream retains: encoded source bytes, parsed extensions table,
+    /// active decoder canvases + current frames, and any backward-seek window.
     pub(super) fn memory_size(&self) -> usize {
-        let position = self
-            .position
+        let state = self
+            .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        position
-            .reader
-            .as_ref()
-            .map_or(0, |reader| reader.canvas_bytes())
-            + position
-                .current
-                .as_ref()
-                .map_or(0, |(_, frame)| frame.memory_size())
+        self.fixed_bytes.saturating_add(state.dynamic_memory_size())
     }
 }
 
@@ -201,6 +453,7 @@ impl FrameReader {
         &mut self,
         index: u32,
         extensions: &[Vec<(u8, Vec<u8>)>],
+        #[cfg(test)] decoded_frames: Option<&AtomicU64>,
     ) -> FrameResult<Option<DecodedSequenceFrame>> {
         let (left, top, width, height, dispose, delay) = match self.decoder.next_frame_info() {
             Ok(Some(frame)) => (
@@ -298,7 +551,9 @@ impl FrameReader {
         // `image` carries a GIF delay of N centiseconds as N*10 ms.
         let delay = ImageFrameDelay::milliseconds(delay * 10, 1).ok_or(())?;
         #[cfg(test)]
-        let _ = DECODED_FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if let Some(counter) = decoded_frames {
+            let _ = counter.fetch_add(1, Ordering::Relaxed);
+        }
         Ok(Some(DecodedSequenceFrame {
             width: self.width,
             height: self.height,
