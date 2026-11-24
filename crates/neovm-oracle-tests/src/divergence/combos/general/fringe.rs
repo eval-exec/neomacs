@@ -394,3 +394,85 @@ fn divergence_fringe_display_measurement_batch() {
         expect,
     );
 }
+
+#[test]
+fn divergence_display_string_measurement_batch() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r#""OK ((6 . 1) (4 . 1) (0 . 0) (0 . 1) (6 . 1) (6 . 1) (4 . 1) (7 . 1) (6 . 1) (4 . 1) (6 . 1) (6 . 1) (6 . 1) (6 . 1) (6 . 1) (5 . 1) (5 . 1) (6 . 1) (6 . 1) (5 . 1) (6 . 2) (3 . 1) (13 . 1) (6 . 1) (6 . 1) (5 . 1) (7 . 1) 4 2 2 0 0 3)""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r#"(let ((measure
+       (lambda (setup)
+         (with-temp-buffer
+           (funcall setup)
+           (switch-to-buffer (current-buffer))
+           (window-text-pixel-size)))))
+  (list
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display "XY")))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display "")))
+   (funcall measure (lambda () (insert "ab")
+                      (put-text-property 1 3 'display "")))
+   (funcall measure (lambda () (insert "ab\n")
+                      (put-text-property 1 3 'display "")))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '("XY" (left-fringe left-arrow)))))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '("XY" (space :width 3)))))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '((left-fringe left-arrow) "XY"))))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '((space :width 3) "XY"))))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '("XY" "ZZZ"))))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '("" (space :width 3)))))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '((raise 0.5) "XY"))))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display [(raise 0.5) "XY"])))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '((left-fringe) "XY"))))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '((image :type png :data "") "XY"))))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '(when (eq 1 1) . "XY"))))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '(when (eq 1 2) . "XY"))))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '(when t "XY"))))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '(disable-eval "XY"))))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '(disable-eval (when t . "XY")))))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '(disable-eval (when (eq 1 1) . "XY")))))
+   (funcall measure (lambda () (insert "xhello")
+                      (put-text-property 2 3 'display "AB\nCD")))
+   (funcall measure (lambda () (insert "xh")
+                      (put-text-property 2 3 'display "ab\n")))
+   (funcall measure (lambda () (insert "xhello")
+                      (put-text-property 2 3 'display "a\tb")))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display (propertize "XY" 'display "ZZZZZ"))))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display (propertize "XY" 'display '(left-fringe left-arrow)))))
+   (funcall measure (lambda () (insert "hello")
+                      (let ((ov (make-overlay 1 3)))
+                        (overlay-put ov 'display '("XY" (left-fringe left-arrow))))))
+   (funcall measure (lambda () (insert "hello")
+                      (let ((ov (make-overlay 1 1)))
+                        (overlay-put ov 'before-string
+                                     (propertize "a" 'display '("XY" (space :width 9)))))))
+   (string-pixel-width (propertize "a" 'display "XYZW"))
+   (string-pixel-width (propertize "a" 'display '("XY" (left-fringe left-arrow))))
+   (string-pixel-width (propertize "a" 'display '("XY" (space :width 5))))
+   (string-pixel-width (propertize "a" 'display '((left-fringe left-arrow) "XY")))
+   (string-pixel-width (propertize "a" 'display ""))
+   (string-pixel-width (concat "x" (propertize "h" 'display "AB\nCD")))))"#,
+        expect,
+    );
+}

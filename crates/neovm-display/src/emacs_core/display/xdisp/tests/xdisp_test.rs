@@ -8233,6 +8233,242 @@ fn test_window_text_pixel_size_consumes_fringe_display_specs() {
     }
 }
 
+/// GNU `handle_display_spec` / `handle_single_display_spec`
+/// (`src/xdisp.c:5999-6650`) models display strings in spec order: the first
+/// valid replacing spec wins (`("XY" (left-fringe ...))` and
+/// `("XY" (space :width 3))` both display `"XY"`, while
+/// `((left-fringe ...) "XY")` consumes the text and `((space :width 3) "XY")`
+/// displays the stretch).  Inside a display string, recursive replacing
+/// `display` properties are ignored (`string_from_display_prop_p`,
+/// `src/xdisp.c:6338`).
+#[test]
+fn test_window_text_pixel_size_models_display_strings() {
+    crate::test_utils::init_test_tracing();
+    let sym = Value::symbol;
+    let measure_text_prop = |text: &str, start: i64, end: i64, spec: Value| -> (i64, i64) {
+        let (mut eval, selected_window) = pixel_size_tty_context();
+        let buf_id = eval
+            .edit
+            .buffers
+            .current_buffer()
+            .expect("current buffer")
+            .id();
+        eval.edit
+            .buffers
+            .get_mut(buf_id)
+            .expect("buffer")
+            .insert(text);
+        neovm_edit::emacs_core::textprop::builtin_put_text_property(
+            &mut eval,
+            vec![
+                Value::fixnum(start),
+                Value::fixnum(end),
+                sym("display"),
+                spec,
+            ],
+        )
+        .expect("put-text-property");
+        let res = builtin_window_text_pixel_size_ctx(
+            &mut eval,
+            vec![Value::make_window(selected_window as u64)],
+        )
+        .expect("window-text-pixel-size");
+        (
+            res.cons_car().as_int().expect("width"),
+            res.cons_cdr().as_int().expect("height"),
+        )
+    };
+
+    let xy = Value::string("XY");
+    let empty = Value::string("");
+    let left_arrow = Value::list(vec![sym("left-fringe"), sym("left-arrow")]);
+    let fringe_no_cdr = Value::list(vec![sym("left-fringe")]);
+    let space3 = Value::list(vec![sym("space"), sym(":width"), Value::fixnum(3)]);
+    let raise_half = Value::list(vec![sym("raise"), Value::make_float(0.5)]);
+    let img_tty_invalid = Value::list(vec![
+        sym("image"),
+        sym(":type"),
+        sym("png"),
+        sym(":data"),
+        empty,
+    ]);
+
+    let xy_then_fringe = Value::list(vec![xy, left_arrow]);
+    let xy_then_space = Value::list(vec![xy, space3]);
+    let fringe_then_xy = Value::list(vec![left_arrow, xy]);
+    let space_then_xy = Value::list(vec![space3, xy]);
+    let xy_then_zzz = Value::list(vec![xy, Value::string("ZZZ")]);
+    let empty_then_space = Value::list(vec![empty, space3]);
+    let raise_then_xy = Value::list(vec![raise_half, xy]);
+    let vec_raise_xy = Value::vector(vec![raise_half, xy]);
+    let malformed_fringe_then_xy = Value::list(vec![fringe_no_cdr, xy]);
+    let img_tty_then_xy = Value::list(vec![img_tty_invalid, xy]);
+    let when_expr_t = Value::cons(
+        sym("when"),
+        Value::cons(
+            Value::list(vec![sym("eq"), Value::fixnum(1), Value::fixnum(1)]),
+            xy,
+        ),
+    );
+    let when_expr_nil = Value::cons(
+        sym("when"),
+        Value::cons(
+            Value::list(vec![sym("eq"), Value::fixnum(1), Value::fixnum(2)]),
+            xy,
+        ),
+    );
+    let when_list_xy = Value::list(vec![sym("when"), Value::T, xy]);
+    let when_t_xy = Value::cons(sym("when"), Value::cons(Value::T, xy));
+    let disable_eval_xy = Value::list(vec![sym("disable-eval"), xy]);
+    let disable_eval_when_t = Value::list(vec![sym("disable-eval"), when_t_xy]);
+    let disable_eval_when_expr = Value::list(vec![sym("disable-eval"), when_expr_t]);
+
+    // Nested replacing `display` property inside a display string must be ignored.
+    let nested_display = Value::string("XY");
+    set_string_text_properties_for_value(
+        nested_display,
+        vec![StringTextPropertyRun {
+            start: 0,
+            end: 2,
+            plist: Value::list(vec![sym("display"), Value::string("ZZZZZ")]),
+        }],
+    );
+    let nested_fringe = Value::string("XY");
+    set_string_text_properties_for_value(
+        nested_fringe,
+        vec![StringTextPropertyRun {
+            start: 0,
+            end: 2,
+            plist: Value::list(vec![sym("display"), left_arrow]),
+        }],
+    );
+
+    assert_eq!(measure_text_prop("hello", 1, 2, xy), (6, 1));
+    assert_eq!(measure_text_prop("hello", 1, 2, empty), (4, 1));
+    assert_eq!(measure_text_prop("ab", 1, 3, empty), (0, 0));
+    assert_eq!(measure_text_prop("ab\n", 1, 3, empty), (0, 1));
+    assert_eq!(measure_text_prop("hello", 1, 2, xy_then_fringe), (6, 1));
+    assert_eq!(measure_text_prop("hello", 1, 2, xy_then_space), (6, 1));
+    assert_eq!(measure_text_prop("hello", 1, 2, fringe_then_xy), (4, 1));
+    assert_eq!(measure_text_prop("hello", 1, 2, space_then_xy), (7, 1));
+    assert_eq!(measure_text_prop("hello", 1, 2, xy_then_zzz), (6, 1));
+    assert_eq!(measure_text_prop("hello", 1, 2, empty_then_space), (4, 1));
+    assert_eq!(measure_text_prop("hello", 1, 2, raise_then_xy), (6, 1));
+    assert_eq!(measure_text_prop("hello", 1, 2, vec_raise_xy), (6, 1));
+    assert_eq!(
+        measure_text_prop("hello", 1, 2, malformed_fringe_then_xy),
+        (6, 1)
+    );
+    assert_eq!(measure_text_prop("hello", 1, 2, img_tty_then_xy), (6, 1));
+    assert_eq!(measure_text_prop("hello", 1, 2, when_expr_t), (6, 1));
+    assert_eq!(measure_text_prop("hello", 1, 2, when_expr_nil), (5, 1));
+    assert_eq!(measure_text_prop("hello", 1, 2, when_list_xy), (5, 1));
+    assert_eq!(measure_text_prop("hello", 1, 2, disable_eval_xy), (6, 1));
+    assert_eq!(
+        measure_text_prop("hello", 1, 2, disable_eval_when_t),
+        (6, 1)
+    );
+    assert_eq!(
+        measure_text_prop("hello", 1, 2, disable_eval_when_expr),
+        (5, 1)
+    );
+    assert_eq!(
+        measure_text_prop("xhello", 2, 3, Value::string("AB\nCD")),
+        (6, 2)
+    );
+    assert_eq!(measure_text_prop("xh", 2, 3, Value::string("ab\n")), (3, 1));
+    assert_eq!(
+        measure_text_prop("xhello", 2, 3, Value::string("a\tb")),
+        (13, 1)
+    );
+    assert_eq!(measure_text_prop("hello", 1, 2, nested_display), (6, 1));
+    assert_eq!(measure_text_prop("hello", 1, 2, nested_fringe), (6, 1));
+
+    // Overlay `display` and overlay `before-string` with display-string specs.
+    {
+        let (mut eval, selected_window) = pixel_size_tty_context();
+        let buf_id = eval
+            .edit
+            .buffers
+            .current_buffer()
+            .expect("current buffer")
+            .id();
+        eval.edit
+            .buffers
+            .get_mut(buf_id)
+            .expect("buffer")
+            .insert("hello");
+        let ov = neovm_edit::emacs_core::buffer::builtin_make_overlay(
+            &mut eval.edit.buffers,
+            vec![Value::fixnum(1), Value::fixnum(3)],
+        )
+        .expect("make-overlay");
+        neovm_edit::emacs_core::buffer::builtin_overlay_put(
+            &mut eval,
+            vec![ov, sym("display"), xy_then_fringe],
+        )
+        .expect("overlay-put");
+        let res = builtin_window_text_pixel_size_ctx(
+            &mut eval,
+            vec![Value::make_window(selected_window as u64)],
+        )
+        .expect("window-text-pixel-size");
+        assert_eq!(
+            (
+                res.cons_car().as_int().expect("width"),
+                res.cons_cdr().as_int().expect("height"),
+            ),
+            (5, 1)
+        );
+    }
+
+    {
+        let (mut eval, selected_window) = pixel_size_tty_context();
+        let buf_id = eval
+            .edit
+            .buffers
+            .current_buffer()
+            .expect("current buffer")
+            .id();
+        eval.edit
+            .buffers
+            .get_mut(buf_id)
+            .expect("buffer")
+            .insert("hello");
+        let before = Value::string("a");
+        set_string_text_properties_for_value(
+            before,
+            vec![StringTextPropertyRun {
+                start: 0,
+                end: 1,
+                plist: Value::list(vec![sym("display"), xy_then_space]),
+            }],
+        );
+        let ov = neovm_edit::emacs_core::buffer::builtin_make_overlay(
+            &mut eval.edit.buffers,
+            vec![Value::fixnum(1), Value::fixnum(1)],
+        )
+        .expect("make-overlay");
+        neovm_edit::emacs_core::buffer::builtin_overlay_put(
+            &mut eval,
+            vec![ov, sym("before-string"), before],
+        )
+        .expect("overlay-put");
+        let res = builtin_window_text_pixel_size_ctx(
+            &mut eval,
+            vec![Value::make_window(selected_window as u64)],
+        )
+        .expect("window-text-pixel-size");
+        assert_eq!(
+            (
+                res.cons_car().as_int().expect("width"),
+                res.cons_cdr().as_int().expect("height"),
+            ),
+            (7, 1)
+        );
+    }
+}
+
 #[cfg(test)]
 #[path = "mode_line_min_width_boundary_test.rs"]
 mod mode_line_min_width_boundary_test;

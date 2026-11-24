@@ -622,6 +622,11 @@ enum DisplayElement {
     Cells(f32),
     /// An element with its own pixel metrics.
     Pixels(ElementExtent),
+    /// A replacing display string (`STRINGP (value)` in GNU
+    /// `handle_single_display_spec`, `src/xdisp.c:6512-6603`).  Rendered into
+    /// the same row state without re-entering replacing `display` properties
+    /// (`string_from_display_prop_p`, `src/xdisp.c:6338`).
+    Text(Value),
     /// A replacing spec that consumes its covered text without advancing
     /// inline width or contributing a baseline split (GNU
     /// `(left-fringe BITMAP [FACE])` / `(right-fringe BITMAP [FACE])`,
@@ -1083,9 +1088,10 @@ pub(crate) fn region_text_metrics_with_display(
             }
 
             // A `display` property (text property or overlay) whose value replaces
-            // the text it covers -- a `(space ...)` stretch, an image, or a
-            // `(left-fringe ...)` / `(right-fringe ...)` spec -- defines the whole
-            // run's extent.  Resolve it once and advance over the run atomically.
+            // the text it covers -- a string, a `(space ...)` stretch, an image,
+            // or a `(left-fringe ...)` / `(right-fringe ...)` spec -- defines the
+            // whole run's extent.  Resolve it once and advance over the run
+            // atomically.
             if let Some((element, run_end)) = display_element_run(
                 eval,
                 frame,
@@ -1097,7 +1103,6 @@ pub(crate) fn region_text_metrics_with_display(
             )? && run_end > scan
             {
                 state.push_display_element(element);
-                state.last_code = None;
                 scan = run_end.min(end);
                 continue;
             }
@@ -1316,13 +1321,60 @@ impl ScanState {
 
     /// Place a `display` spec's element on the current line, each in its own
     /// unit: a stretch counts text cells (so a long line stays exact), an
-    /// image counts its own pixels, and a consumed spec (fringe bitmap)
-    /// advances neither width nor baseline height.
+    /// image counts its own pixels, a display string emits its characters into
+    /// this row state without re-entering replacing `display` properties, and
+    /// a consumed spec (fringe bitmap) advances neither width nor baseline
+    /// height.
     fn push_display_element(&mut self, element: DisplayElement) {
         match element {
-            DisplayElement::Cells(columns) => self.advance_columns(columns),
-            DisplayElement::Pixels(extent) => self.push_element(extent),
-            DisplayElement::Consumed => {}
+            DisplayElement::Cells(columns) => {
+                self.advance_columns(columns);
+                self.last_code = None;
+            }
+            DisplayElement::Pixels(extent) => {
+                self.push_element(extent);
+                self.last_code = None;
+            }
+            DisplayElement::Text(string) => self.push_display_string(string),
+            DisplayElement::Consumed => {
+                self.last_code = None;
+            }
+        }
+    }
+
+    /// Emit characters of a replacing `display` string into this scan state.
+    ///
+    /// Mirrors GNU `handle_single_display_spec` (`src/xdisp.c:6563-6603`) and
+    /// `string_from_display_prop_p` (`src/xdisp.c:6338`): nested replacing
+    /// `display` properties inside the replacement string are ignored, while
+    /// newlines, tabs, wrapping/truncation edges, and `y_limit` apply normally.
+    fn push_display_string(&mut self, string: Value) {
+        let Some(s) = string.as_lisp_string() else {
+            self.last_code = None;
+            return;
+        };
+        let schars = s.schars();
+        if schars == 0 {
+            self.last_code = None;
+            return;
+        }
+        let bytes = s.as_bytes();
+        let multibyte = s.is_multibyte();
+        let mut char_index = 0usize;
+        let mut byte_off = 0usize;
+        while char_index < schars && byte_off < bytes.len() {
+            if self.y_limit_reached() {
+                return;
+            }
+            let (code, len) = if multibyte {
+                let (code, len) = neovm_value::emacs_char::string_char(&bytes[byte_off..]);
+                (code.code(), len.max(1))
+            } else {
+                (bytes[byte_off] as u32, 1)
+            };
+            self.push_char(code);
+            byte_off += len;
+            char_index += 1;
         }
     }
 
@@ -1607,11 +1659,17 @@ impl ScanState {
 /// unwraps one `(when FORM . VALUE)` clause per spec (evaluating `FORM` via
 /// `DisplayWhenContextExt::display_when_form_holds` unless eval is disabled,
 /// in which case only literal `t` holds), and returns the first replacing
-/// element modeled by this measurement:
+/// element modeled by this measurement in GNU spec order:
+///   * a display string (`STRINGP (value)`, `src/xdisp.c:6512-6603`) ->
+///     [`DisplayElement::Text`]
 ///   * `(left-fringe BITMAP [FACE])` / `(right-fringe BITMAP [FACE])` with
 ///     `CONSP (XCDR (spec))` (`src/xdisp.c:6380-6475`) -> [`DisplayElement::Consumed`]
 ///   * `(space ...)` -> [`fallback_space_element`]
 ///   * `(image ...)` on a window-system frame -> [`DisplayElement::Pixels`]
+///
+/// Deliberately unmodelled: `(slice ...)`, `(height ...)`, `(raise ...)`,
+/// `(space-width ...)`, `(min-width ...)`, `((margin ...) ...)`, `(xwidget ...)`,
+/// and the neomacs media heads (`video` / `webkit` / `surface`).
 fn resolve_display_element(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     frame: FrameId,
@@ -1674,6 +1732,12 @@ fn resolve_display_element(
             }
 
             match display_spec_kind(spec, property.eval) {
+                // GNU `xdisp.c:6512-6603`: a string replaces the covered text
+                // in-place (taking precedence over later replacing specs in
+                // the same list/vector).
+                DisplaySpecKind::Text => {
+                    return Ok(Some(DisplayElement::Text(spec)));
+                }
                 // GNU `xdisp.c:6380-6475` requires `CONSP (XCDR (spec))`:
                 // `(left-fringe)` and `(left-fringe . sym)` leave the covered
                 // text intact, while any cons cdr (including `(left-fringe nil)`)
@@ -1721,11 +1785,18 @@ fn resolve_display_element(
 ///
 /// Returns `(element, run_end_byte)`.  Mirrors the `display`-spec branch of
 /// GNU's display iterator: the covered run is laid out as ONE element -- a
-/// stretch glyph for `(space ...)`, an image glyph for `(image ...)`, or a
-/// consumed zero-width run for `(left-fringe ...)` / `(right-fringe ...)` --
-/// and the iterator jumps to the end of the run.  `cur_column` is the running
-/// row width in text columns, which `(space :align-to N)` needs (an absolute
-/// target column).
+/// display string, a stretch glyph for `(space ...)`, an image glyph for
+/// `(image ...)`, or a consumed zero-width run for `(left-fringe ...)` /
+/// `(right-fringe ...)` -- and the iterator jumps to the end of the run.
+/// `cur_column` is the running row width in text columns, which
+/// `(space :align-to N)` needs (an absolute target column).
+///
+/// Returns `None` when there is no `display` property, or its value is not a
+/// spec this measurement models.  Deliberately unmodelled: `(slice ...)`,
+/// `(height ...)`, `(raise ...)`, `(space-width ...)`, `(min-width ...)`,
+/// `((margin ...) ...)`, `(xwidget ...)`, and the neomacs media heads
+/// (`video` / `webkit` / `surface`), which either modify text geometry or
+/// replace text in areas/widgets this fallback does not track.
 fn display_element_run(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     frame: FrameId,
@@ -2145,9 +2216,9 @@ fn walk_overlay_string(
         }
 
         // Resolve this string's own `display` property at the char position.  A
-        // spec that replaces its text -- `(space ...)`, an image, or a fringe
-        // spec -- covers the run up to the next `display` change and defines
-        // its extent.
+        // spec that replaces its text -- a string, `(space ...)`, an image, or
+        // a fringe spec -- covers the run up to the next `display` change and
+        // defines its extent.
         if let Some((element, run_end_char)) = string_display_element_run(
             eval,
             frame,
@@ -2176,7 +2247,6 @@ fn walk_overlay_string(
                 char_index += 1;
                 skip -= 1;
             }
-            state.last_code = None;
             continue;
         }
 
