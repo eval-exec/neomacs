@@ -590,6 +590,17 @@ fn materialize_overlay_position(overlay: Value, range: EmacsByteRange) {
     });
 }
 
+/// Endpoint tree, its property masks, and the write generation. Shared by
+/// `Arc` so a later live view can hold the same core. The lock keeps a
+/// generation bump in the same critical section as an endpoint edit.
+#[derive(Debug)]
+struct OverlayIndexCore {
+    /// Published lazily. The property masks consulted by
+    /// [`OverlayPropertyFilter`] live on these records.
+    endpoints: OnceLock<EndpointBPlusTree>,
+    generation: u64,
+}
+
 #[derive(Debug)]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) struct OverlayIndex {
@@ -598,11 +609,7 @@ pub(super) struct OverlayIndex {
     /// during front-advancing insertion.  Positions remain authoritative in
     /// `intervals`; this field stores only identity and tree shape.
     gnu_order: GnuOverlayOrder<OverlayIdentity>,
-    /// Published lazily for semantic endpoint traversals. `OnceLock` makes the
-    /// ready-state read path one atomic load; mutations already require
-    /// `&mut OverlayIndex`, so they can update the tree through `get_mut`
-    /// without a second runtime lock.
-    endpoints: OnceLock<EndpointBPlusTree>,
+    core: Arc<RwLock<OverlayIndexCore>>,
     // Exact direct-key pair counts, maintained only by this index's owner.
     // Keys are eq identities, not rooted Lisp values or alias/category meaning.
     direct_property_keys: FxHashMap<usize, usize>,
@@ -613,9 +620,63 @@ impl OverlayIndex {
         Self {
             intervals: Arc::new(RwLock::new(IntervalBPlusTree::new())),
             gnu_order: GnuOverlayOrder::new(),
-            endpoints: OnceLock::new(),
+            core: Arc::new(RwLock::new(OverlayIndexCore {
+                endpoints: OnceLock::new(),
+                generation: 0,
+            })),
             direct_property_keys: FxHashMap::default(),
         }
+    }
+
+    /// Monotonic stamp of index writes. A no-op remap does not advance it.
+    pub(super) fn generation(&self) -> u64 {
+        self.core.read().generation
+    }
+
+    pub(super) fn bump_generation(&mut self) {
+        let mut core = self.core.write();
+        core.generation = core.generation.wrapping_add(1);
+    }
+
+    fn publish_endpoints(&self) {
+        if self.core.read().endpoints.get().is_some() {
+            return;
+        }
+        #[cfg(test)]
+        super::overlay::record_endpoint_publication_interval_read();
+        let built = {
+            let intervals = self.intervals.read();
+            let entries = intervals.endpoint_entries_in_attachment_order();
+            EndpointBPlusTree::from_entries(&entries)
+        };
+        let _ = self.core.write().endpoints.get_or_init(|| built);
+    }
+
+    /// Publish the endpoint tree if needed and return it. The reference is
+    /// tied to `&self`: tree edits take `&mut self`.
+    fn endpoint_index(&self) -> &EndpointBPlusTree {
+        self.publish_endpoints();
+        let core = self.core.read();
+        let ptr =
+            core.endpoints.get().expect("endpoint index published") as *const EndpointBPlusTree;
+        drop(core);
+        // SAFETY: `core` lives in an `Arc` owned by `self` and is not moved.
+        // The `OnceLock` does not relocate its value. Mutation of that value
+        // requires `&mut self`, which cannot overlap this shared borrow.
+        // The `Arc` is not shared with another thread in this phase.
+        unsafe { &*ptr }
+    }
+
+    fn published_endpoints(&self) -> Option<&EndpointBPlusTree> {
+        let core = self.core.read();
+        let ptr = core
+            .endpoints
+            .get()
+            .map(|tree| tree as *const EndpointBPlusTree);
+        drop(core);
+        // SAFETY: same stability as `endpoint_index`. `None` means the tree
+        // was not published; the pointer is only dereferenced when `Some`.
+        ptr.map(|ptr| unsafe { &*ptr })
     }
 
     fn add_property_keys(&mut self, keys: &[usize]) {
@@ -681,10 +742,11 @@ impl OverlayIndex {
         // A later handle write would invalidate an enclosing read capture.
         set_overlay_position_handle(overlay, &self.intervals);
         self.add_property_keys(&overlay_direct_property_keys(overlay));
-        if let Some(endpoints) = self.endpoints.get_mut() {
+        if let Some(endpoints) = self.core.write().endpoints.get_mut() {
             assert!(endpoints.insert(range.start(), EndpointKind::Start, overlay));
             assert!(endpoints.insert(range.end(), EndpointKind::End, overlay));
         }
+        self.bump_generation();
         true
     }
 
@@ -736,7 +798,7 @@ impl OverlayIndex {
         }
         self.intervals = Arc::new(RwLock::new(intervals));
         self.gnu_order = gnu_order;
-        self.endpoints = OnceLock::new();
+        self.core.write().endpoints = OnceLock::new();
         self.direct_property_keys.clear();
         for (overlay, _) in entries {
             // Snapshot attachment can run inside a collection-read capture.
@@ -744,17 +806,8 @@ impl OverlayIndex {
             set_overlay_position_handle(*overlay, &self.intervals);
             self.add_property_keys(&overlay_direct_property_keys(*overlay));
         }
+        self.bump_generation();
         true
-    }
-
-    fn endpoint_index(&self) -> &EndpointBPlusTree {
-        self.endpoints.get_or_init(|| {
-            #[cfg(test)]
-            super::overlay::record_endpoint_publication_interval_read();
-            let intervals = self.intervals.read();
-            let entries = intervals.endpoint_entries_in_attachment_order();
-            EndpointBPlusTree::from_entries(&entries)
-        })
     }
 
     /// Detach an overlay and return its indexed range.
@@ -765,7 +818,7 @@ impl OverlayIndex {
             self.gnu_order.remove(OverlayIdentity::of(overlay)).is_ok(),
             "indexed overlay missing from GNU order mirror"
         );
-        if let Some(endpoints) = self.endpoints.get_mut() {
+        if let Some(endpoints) = self.core.write().endpoints.get_mut() {
             assert_eq!(
                 endpoints.remove(overlay, EndpointKind::Start),
                 Some(range.start())
@@ -776,6 +829,7 @@ impl OverlayIndex {
             );
         }
         materialize_overlay_position(overlay, range);
+        self.bump_generation();
         Some(range)
     }
 
@@ -787,10 +841,12 @@ impl OverlayIndex {
     ) -> Option<EmacsByteRange> {
         let mut intervals = self.intervals.write();
         let old_range = intervals.range_by_identity(OverlayIdentity::of(overlay))?;
+        let mut changed = false;
         match IndexedRegionChange::between(old_range, new_range) {
             IndexedRegionChange::Unchanged => {}
             IndexedRegionChange::EndOnly => {
-                if let Some(endpoints) = self.endpoints.get_mut() {
+                changed = true;
+                if let Some(endpoints) = self.core.write().endpoints.get_mut() {
                     assert_eq!(
                         endpoints.remove(overlay, EndpointKind::End),
                         Some(old_range.end())
@@ -803,6 +859,7 @@ impl OverlayIndex {
                 debug_assert_eq!(previous, old_range);
             }
             IndexedRegionChange::StartChanged => {
+                changed = true;
                 let local_moves = local_overlay_moves_enabled();
                 let replaced_locally = local_moves
                     && intervals
@@ -821,7 +878,7 @@ impl OverlayIndex {
                     self.gnu_order.remove(OverlayIdentity::of(overlay)).is_ok(),
                     "relocated overlay missing from GNU order mirror"
                 );
-                if let Some(endpoints) = self.endpoints.get_mut() {
+                if let Some(endpoints) = self.core.write().endpoints.get_mut() {
                     assert_eq!(
                         endpoints.remove(overlay, EndpointKind::Start),
                         Some(old_range.start())
@@ -884,6 +941,10 @@ impl OverlayIndex {
                 );
             }
         }
+        if changed {
+            let mut core = self.core.write();
+            core.generation = core.generation.wrapping_add(1);
+        }
         Some(old_range)
     }
 
@@ -939,7 +1000,8 @@ impl OverlayIndex {
         // authoritative index. Observer snapshots already own separate indexes.
         *self.intervals.write() =
             IntervalBPlusTree::from_entries(&ordered, OverlayBatchOrder::AscendingQueryOrder);
-        self.endpoints = OnceLock::new();
+        self.core.write().endpoints = OnceLock::new();
+        self.bump_generation();
     }
 
     /// Apply an edit in `O(log n + k log n)`, where `k` is the number of
@@ -958,6 +1020,7 @@ impl OverlayIndex {
         if self.is_empty() {
             return OverlayTextEditOutcome::preserved(Vec::new());
         }
+        self.bump_generation();
         match edit {
             OverlayTextEdit::Insert {
                 position,
@@ -1030,7 +1093,7 @@ impl OverlayIndex {
             self.intervals
                 .write()
                 .shift_at_or_after(position, before_markers, delta);
-            if let Some(endpoints) = self.endpoints.get_mut() {
+            if let Some(endpoints) = self.core.write().endpoints.get_mut() {
                 endpoints.shift_at_or_after(position, before_markers, delta);
             }
             return OverlayTextEditOutcome::preserved(grown_effects);
@@ -1077,7 +1140,7 @@ impl OverlayIndex {
         self.intervals
             .write()
             .shift_at_or_after(position, before_markers, delta);
-        if let Some(endpoints) = self.endpoints.get_mut() {
+        if let Some(endpoints) = self.core.write().endpoints.get_mut() {
             endpoints.shift_at_or_after(position, before_markers, delta);
         }
 
@@ -1204,7 +1267,7 @@ impl OverlayIndex {
         self.intervals
             .write()
             .shift_at_or_after(range.end(), true, delta);
-        if let Some(endpoints) = self.endpoints.get_mut() {
+        if let Some(endpoints) = self.core.write().endpoints.get_mut() {
             endpoints.shift_at_or_after(range.end(), true, delta);
         }
 
@@ -1306,7 +1369,7 @@ impl OverlayIndex {
         let taken = self.intervals.write().take(overlay)?;
         self.remove_property_keys(&overlay_direct_property_keys(overlay));
         let range = taken.0;
-        if let Some(endpoints) = self.endpoints.get_mut() {
+        if let Some(endpoints) = self.core.write().endpoints.get_mut() {
             assert_eq!(
                 endpoints.remove(overlay, EndpointKind::Start),
                 Some(range.start())
@@ -1333,7 +1396,7 @@ impl OverlayIndex {
             TextEditReattachment::Reinsert => self.intervals.write().insert(overlay, range),
         };
         self.add_property_keys(&overlay_direct_property_keys(overlay));
-        if let Some(endpoints) = self.endpoints.get_mut() {
+        if let Some(endpoints) = self.core.write().endpoints.get_mut() {
             assert!(endpoints.insert(range.start(), EndpointKind::Start, overlay));
             assert!(endpoints.insert(range.end(), EndpointKind::End, overlay));
         }
@@ -1364,8 +1427,9 @@ impl OverlayIndex {
         }
         self.intervals = Arc::new(RwLock::new(IntervalBPlusTree::new()));
         self.gnu_order = GnuOverlayOrder::new();
-        self.endpoints = OnceLock::new();
+        self.core.write().endpoints = OnceLock::new();
         self.direct_property_keys.clear();
+        self.bump_generation();
     }
 
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -1553,7 +1617,7 @@ impl OverlayIndex {
             self.remove_property_keys(&previous.keys);
             self.add_property_keys(&overlay_direct_property_keys(overlay));
         }
-        if let Some(endpoints) = self.endpoints.get_mut() {
+        if let Some(endpoints) = self.core.write().endpoints.get_mut() {
             endpoints.refresh_overlay_property_mask(overlay);
         }
     }
@@ -1568,7 +1632,7 @@ impl OverlayIndex {
             .direct_property_keys
             .entry(property.bits())
             .or_default() += 1;
-        if let Some(endpoints) = self.endpoints.get_mut() {
+        if let Some(endpoints) = self.core.write().endpoints.get_mut() {
             endpoints.add_overlay_property_key(overlay, property);
         }
     }
@@ -1593,7 +1657,8 @@ impl OverlayIndex {
         if pos >= limit {
             return None;
         }
-        if let Some(endpoints) = self.endpoints.get() {
+        let core = self.core.read();
+        if let Some(endpoints) = core.endpoints.get() {
             return endpoints.next_after(pos, limit);
         }
         let intervals = self.intervals.read();
@@ -1622,7 +1687,8 @@ impl OverlayIndex {
         if pos <= limit {
             return None;
         }
-        if let Some(endpoints) = self.endpoints.get() {
+        let core = self.core.read();
+        if let Some(endpoints) = core.endpoints.get() {
             return endpoints.previous_before(pos, limit);
         }
         let intervals = self.intervals.read();
@@ -1657,9 +1723,12 @@ impl OverlayIndex {
             intervals.assert_invariants();
             intervals.len()
         };
-        if let Some(endpoints) = self.endpoints.get() {
-            endpoints.assert_invariants();
-            assert_eq!(interval_len * 2, endpoints.len());
+        {
+            let core = self.core.read();
+            if let Some(endpoints) = core.endpoints.get() {
+                endpoints.assert_invariants();
+                assert_eq!(interval_len * 2, endpoints.len());
+            }
         }
         self.gnu_order.assert_invariants();
         assert_eq!(interval_len, self.gnu_order.len());

@@ -6,6 +6,9 @@ use crate::buffer::BufferId;
 #[path = "content_accounting_test.rs"]
 mod content_accounting_test;
 
+#[path = "generation.rs"]
+mod generation;
+
 #[test]
 fn insert_and_delete_overlay_preserves_object_identity() {
     crate::test_utils::init_test_tracing();

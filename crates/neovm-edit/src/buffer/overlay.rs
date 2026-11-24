@@ -1420,6 +1420,13 @@ impl OverlayList {
         self.index.interval_height()
     }
 
+    /// Generation of the live overlay index. Writes advance it; a no-op
+    /// remap does not.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn overlay_generation(&self) -> u64 {
+        self.index.generation()
+    }
+
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn insert_overlay(&mut self, overlay: Value) {
         let data = overlay.as_overlay_data().unwrap();
@@ -1479,12 +1486,17 @@ impl OverlayList {
         // A whole-list retarget is rare and can affect any subset; dropping
         // the copies costs one re-copy per overlay on the next capture.
         self.clear_snapshot_copies();
+        let mut changed = false;
         for overlay in self.index.values() {
             let _ = overlay.with_overlay_data_mut(|data| {
                 if data.buffer == Some(from) {
                     data.buffer = Some(to);
+                    changed = true;
                 }
             });
+        }
+        if changed {
+            self.index.bump_generation();
         }
     }
 
@@ -1514,6 +1526,7 @@ impl OverlayList {
         // Adding a previously absent nil property changes the plist even
         // though GNU's display-change flag remains false.
         if changed || plist_replaced {
+            self.index.bump_generation();
             self.bump_snapshot_copy_revision(overlay);
             if plist_replaced && range.is_some() {
                 self.index
@@ -2369,6 +2382,7 @@ impl OverlayList {
         let _ = overlay.with_overlay_data_mut(|data| {
             data.front_advance = advance;
         });
+        self.index.bump_generation();
         self.bump_snapshot_copy_revision(overlay);
     }
 
@@ -2379,6 +2393,7 @@ impl OverlayList {
         let _ = overlay.with_overlay_data_mut(|data| {
             data.rear_advance = advance;
         });
+        self.index.bump_generation();
         self.bump_snapshot_copy_revision(overlay);
     }
 

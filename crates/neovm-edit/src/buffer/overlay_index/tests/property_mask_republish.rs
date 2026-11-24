@@ -138,7 +138,9 @@ fn property_mask_change_republishes_filters_without_a_full_summary_refresh() {
     crate::test_utils::init_test_tracing();
     let (mut index, overlays) = indexed_overlays(300);
     let carrier = overlays[150];
-    let endpoints = index.endpoints.get().expect("endpoint index is published");
+    let endpoints = index
+        .published_endpoints()
+        .expect("endpoint index is published");
     endpoints.records.reset_summary_refresh_count();
 
     // Diagnostic churn puts a few new names on each fresh overlay. Each new
@@ -151,7 +153,9 @@ fn property_mask_change_republishes_filters_without_a_full_summary_refresh() {
     );
     put_property_names(&mut index, carrier, &[Value::symbol("help-echo")]);
 
-    let endpoints = index.endpoints.get().expect("endpoint index is published");
+    let endpoints = index
+        .published_endpoints()
+        .expect("endpoint index is published");
     assert_eq!(
         endpoints.records.summary_refresh_count(),
         0,

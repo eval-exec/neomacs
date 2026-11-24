@@ -90,7 +90,7 @@ fn attachment_publishes_handle_before_observed_property_reads() {
             index.previous_boundary_before(EmacsBytePos::new(10), EmacsBytePos::ZERO),
             Some(EmacsBytePos::new(8))
         );
-        assert_eq!(index.endpoints.get().is_some(), published);
+        assert_eq!(index.published_endpoints().is_some(), published);
         assert!(reads.unchanged(), "read-only checks changed the attachment");
         assert_later_mutation_invalidates(&reads, overlay);
     }
@@ -135,7 +135,10 @@ fn batch_attachment_publishes_handles_before_observed_property_reads() {
             index.previous_boundary_before(EmacsBytePos::new(8), EmacsBytePos::ZERO),
             Some(EmacsBytePos::new(6))
         );
-        assert!(index.endpoints.get().is_none(), "geometry must stay cold");
+        assert!(
+            index.published_endpoints().is_none(),
+            "geometry must stay cold"
+        );
         assert!(reads.unchanged(), "read-only checks changed the batch");
         assert_later_mutation_invalidates(&reads, first);
     }

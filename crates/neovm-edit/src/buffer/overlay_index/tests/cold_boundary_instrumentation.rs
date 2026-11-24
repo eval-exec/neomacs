@@ -18,6 +18,6 @@ impl OverlayIndex {
     }
 
     pub(in crate::buffer) fn endpoint_index_is_published_for_test(&self) -> bool {
-        self.endpoints.get().is_some()
+        self.published_endpoints().is_some()
     }
 }
