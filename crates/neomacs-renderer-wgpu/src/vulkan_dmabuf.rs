@@ -36,9 +36,9 @@ pub mod drm_fourcc {
     pub const DRM_FORMAT_YUV420: u32 = 0x32315559; // YUV420
 
     /// Linear modifier (no tiling)
-    pub const DRM_FORMAT_MOD_LINEAR: u64 = 0;
+    pub const DRM_FORMAT_MOD_LINEAR: u64 = crate::dmabuf_validation::DRM_FORMAT_MOD_LINEAR;
     /// Invalid modifier
-    pub const DRM_FORMAT_MOD_INVALID: u64 = 0x00ffffffffffffff;
+    pub const DRM_FORMAT_MOD_INVALID: u64 = crate::dmabuf_validation::DRM_FORMAT_MOD_INVALID;
 }
 
 /// Convert DRM fourcc to wgpu format
@@ -65,7 +65,7 @@ pub fn drm_fourcc_to_wgpu_format(fourcc: u32) -> Option<wgpu::TextureFormat> {
 }
 
 /// Maximum number of DMA-BUF planes supported.
-pub const MAX_PLANES: usize = 4;
+pub const MAX_PLANES: usize = crate::dmabuf_validation::MAX_DMA_BUF_PLANES;
 
 /// Multi-plane DMA-BUF import parameters.
 ///
@@ -405,28 +405,6 @@ mod hal_import {
         }
     }
 
-    /// Build per-plane `VkSubresourceLayout` entries from import params.
-    ///
-    /// The `driver_plane_count` (from the modifier query) may exceed the number
-    /// of planes the buffer actually provides. Missing planes get zero layout.
-    fn build_plane_layouts(
-        params: &DmaBufImportParams<'_>,
-        driver_plane_count: u32,
-    ) -> Vec<vk::SubresourceLayout> {
-        (0..driver_plane_count)
-            .map(|i| {
-                let idx = i as usize;
-                vk::SubresourceLayout {
-                    offset: params.offsets.get(idx).copied().unwrap_or(0) as u64,
-                    size: 0, // Must be 0 — driver calculates it
-                    row_pitch: params.strides.get(idx).copied().unwrap_or(0) as u64,
-                    array_pitch: 0,
-                    depth_pitch: 0,
-                }
-            })
-            .collect()
-    }
-
     // ========================================================================
     // Memory allocation helpers
     // ========================================================================
@@ -589,10 +567,9 @@ mod hal_import {
                 }
             };
 
-            let fd_idx = (plane_idx as usize).min(params.fds.len() - 1);
             let memory = match import_fd_as_memory(
                 vk_device,
-                params.fds[fd_idx].as_raw_fd(),
+                params.fds[plane_idx as usize].as_raw_fd(),
                 image,
                 mem_req.size,
                 memory_type_index,
@@ -805,17 +782,35 @@ mod hal_import {
         }
 
         let driver_plane_count = modifier_props.plane_count;
-        if driver_plane_count == 0 || driver_plane_count > MAX_PLANES as u32 {
-            tracing::warn!(
-                "Driver reports invalid plane count {} for modifier {:#x}",
-                driver_plane_count,
-                params.modifier
-            );
-            return None;
-        }
+        let bytes_per_pixel = wgpu_format.block_copy_size(None)?;
+        let plane_count = params.num_planes as usize;
+        let backing_lens: Vec<Option<u64>> = params
+            .fds
+            .iter()
+            .take(plane_count)
+            .map(|fd| backing_fd_len(fd.as_raw_fd()))
+            .collect();
+        let validated_planes = match crate::dmabuf_validation::validate_hal_import_layout(
+            params.width,
+            params.height,
+            bytes_per_pixel,
+            params.modifier,
+            params.num_planes,
+            driver_plane_count,
+            params.fds.len(),
+            &params.strides,
+            &params.offsets,
+            &backing_lens,
+        ) {
+            Ok(planes) => planes,
+            Err(error) => {
+                tracing::warn!("import_dmabuf_vulkan: rejected DMA-BUF layout: {error}");
+                return None;
+            }
+        };
 
         // Step 2: Determine if fds are disjoint (different DMA-BUF allocations)
-        let active_fds = &params.fds[..params.num_planes.min(driver_plane_count) as usize];
+        let active_fds = &params.fds[..driver_plane_count as usize];
         let disjoint = are_fds_disjoint(active_fds);
 
         tracing::debug!(
@@ -825,8 +820,17 @@ mod hal_import {
             disjoint
         );
 
-        // Step 3: Build plane layouts from import params
-        let plane_layouts = build_plane_layouts(params, driver_plane_count);
+        // Step 3: Build plane layouts from validated params
+        let plane_layouts: Vec<vk::SubresourceLayout> = validated_planes
+            .iter()
+            .map(|plane| vk::SubresourceLayout {
+                offset: plane.offset,
+                size: 0, // Must be 0 — driver calculates it
+                row_pitch: plane.row_pitch,
+                array_pitch: 0,
+                depth_pitch: 0,
+            })
+            .collect();
 
         // Step 4: Build pNext chain for image creation
         let mut drm_modifier_info = vk::ImageDrmFormatModifierExplicitCreateInfoEXT {
@@ -992,16 +996,23 @@ struct ValidatedLinearMmap {
 
 #[cfg(target_os = "linux")]
 fn backing_fd_len(fd: libc::c_int) -> Option<u64> {
+    // SAFETY: `libc::stat` is a plain C struct where an all-zero bit pattern
+    // is valid before `fstat` initializes it.
     let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+    // SAFETY: `fstat` writes to `&mut stat` and returns `-1` on invalid fds.
     if unsafe { libc::fstat(fd, &mut stat) } == 0 && stat.st_size > 0 {
         return u64::try_from(stat.st_size).ok();
     }
     // Some DMA-BUF implementations report st_size == 0 via fstat and expose
     // the allocation length through lseek(SEEK_END). Query without clobbering
     // the file offset when seekable.
+    // SAFETY: `lseek` on any file descriptor is memory-safe and reports `-1`
+    // (`EINVAL`/`ESPIPE`/`EBADF`) when unseekable or invalid.
     let current = unsafe { libc::lseek(fd, 0, libc::SEEK_CUR) };
+    // SAFETY: same as above.
     let end = unsafe { libc::lseek(fd, 0, libc::SEEK_END) };
     if current >= 0 {
+        // SAFETY: restoring the offset returned by `SEEK_CUR` above.
         let _ = unsafe { libc::lseek(fd, current, libc::SEEK_SET) };
     }
     if end >= 0 {
@@ -1020,25 +1031,20 @@ fn validate_linear_mmap_region(
     offset: u32,
     bytes_per_pixel: u32,
 ) -> Option<ValidatedLinearMmap> {
-    if width == 0 || height == 0 || bytes_per_pixel == 0 {
-        return None;
-    }
-    let min_stride = width.checked_mul(bytes_per_pixel)?;
-    if stride < min_stride {
-        return None;
-    }
-    let byte_len_u64 = u64::from(stride).checked_mul(u64::from(height))?;
-    if byte_len_u64 == 0 {
-        return None;
-    }
-    let byte_len = usize::try_from(byte_len_u64).ok()?;
-    let end_offset = u64::from(offset).checked_add(byte_len_u64)?;
-    let fd_len = backing_fd_len(fd)?;
-    if end_offset > fd_len {
-        return None;
-    }
-    let offset = libc::off_t::try_from(offset).ok()?;
-    Some(ValidatedLinearMmap { offset, byte_len })
+    let region = crate::dmabuf_validation::validate_linear_region(
+        width,
+        height,
+        stride,
+        offset,
+        bytes_per_pixel,
+        backing_fd_len(fd),
+    )
+    .ok()?;
+    let offset = libc::off_t::try_from(region.offset).ok()?;
+    Some(ValidatedLinearMmap {
+        offset,
+        byte_len: region.byte_len,
+    })
 }
 
 /// Fallback: read DMA-BUF contents via mmap and create texture via CPU copy.
