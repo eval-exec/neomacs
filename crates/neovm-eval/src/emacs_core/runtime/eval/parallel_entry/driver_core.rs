@@ -21,7 +21,7 @@
 #![forbid(unsafe_code)]
 
 use super::sync::{self, mpsc};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::num::NonZeroU64;
 use std::time::{Duration, Instant};
@@ -236,9 +236,11 @@ type PendingObserver<'o, P> = Box<dyn FnMut(&P, usize) + 'o>;
 pub(crate) struct Driver<'o, O: KeeperOps> {
     ops: O,
     inbox: mpsc::Receiver<MsgOf<O>>,
-    owners: HashMap<u64, Enrolled<O>>,
+    /// Ordered by owner, so the poison fan-out tells owners in one fixed
+    /// order on every run (and a Loom replay sees the same sends).
+    owners: BTreeMap<u64, Enrolled<O>>,
     /// The receipt each queued request was committed under.
-    queued: HashMap<u64, O::Receipt>,
+    queued: BTreeMap<u64, O::Receipt>,
     /// One stop attempt's bound.
     stop_bound: Duration,
     /// How long a refused stop may stay `Busy` before the keeper warns, or,
@@ -256,8 +258,8 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
         Self {
             ops,
             inbox,
-            owners: HashMap::new(),
-            queued: HashMap::new(),
+            owners: BTreeMap::new(),
+            queued: BTreeMap::new(),
             stop_bound: CONTENTION_BOUND,
             contention_bound: CONTENTION_BOUND,
             pending_observer: None,
