@@ -791,12 +791,39 @@ impl LayoutEngine {
                             .emacs_byte_at_pos(neovm_core::buffer::EmacsBytePos::new(byte - 1))
                             == Some(b'\n'))
                 {
-                    let near = buffer.emacs_byte_pos_to_char_pos_clamped(
-                        neovm_core::buffer::EmacsBytePos::new(byte),
-                    );
-                    if near > bridge && near < end {
-                        observed.targets[index] = near;
-                        observed.backward_bridge = Some((near, end));
+                    // One short physical line is cheaper than the four-line
+                    // bridge. A line taller than the viewport is not a small
+                    // slice: collapsing onto it drops the connected tail.
+                    let body = retained.key.partition.text_body();
+                    let columns = (body.width / retained.key.char_width.max(1.0)) as usize;
+                    let span = end_byte.saturating_sub(byte);
+                    let visual_rows = if columns == 0 {
+                        1
+                    } else {
+                        span.div_ceil(columns).max(1)
+                    };
+                    let row_px = retained
+                        .matrix
+                        .rows
+                        .iter()
+                        .filter(|row| {
+                            row.enabled
+                                && row.height_px > 0.0
+                                && !RetainedWindowMatrix::is_chrome_role(row.role)
+                        })
+                        .map(|row| row.height_px)
+                        .fold(retained.key.char_height, f32::max)
+                        .max(1.0);
+                    let fits_in_viewport =
+                        columns == 0 || (visual_rows as f32) * row_px < body.height;
+                    if fits_in_viewport {
+                        let near = buffer.emacs_byte_pos_to_char_pos_clamped(
+                            neovm_core::buffer::EmacsBytePos::new(byte),
+                        );
+                        if near > bridge && near < end {
+                            observed.targets[index] = near;
+                            observed.backward_bridge = Some((near, end));
+                        }
                     }
                 }
             }

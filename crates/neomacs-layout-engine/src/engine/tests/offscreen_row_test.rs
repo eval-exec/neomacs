@@ -3168,6 +3168,63 @@ fn urgent_backward_bridge_publishes_after_one_physical_line() {
 }
 
 #[test]
+fn urgent_wrapping_line_keeps_the_four_line_bridge() {
+    // Long enough that one physical line is taller than a 200px window.
+    let line = format!("{}\n", "wrapped offscreen text ".repeat(60));
+    let (mut eval, frame, buffer, window) = incr_editing_frame(&line.repeat(400), 320, 200);
+    eval.frame_manager_mut()
+        .get_mut(frame)
+        .unwrap()
+        .window_system = Some(Value::symbol("neomacs"));
+    let origin = 120 * line.len();
+    let point = eval
+        .buffer_manager()
+        .get(buffer)
+        .unwrap()
+        .char_pos_to_emacs_byte_pos_clamped(CharPos0::new(origin + 100))
+        .get();
+    scroll_window_to(&mut eval, frame, window, buffer, origin as i64 + 1, point);
+    let set_hidden = |eval: &mut Context, hidden: i32| {
+        if let neovm_core::window::Window::Leaf {
+            force_start,
+            vscroll,
+            ..
+        } = eval
+            .frame_manager_mut()
+            .get_mut(frame)
+            .unwrap()
+            .find_window_mut(window)
+            .unwrap()
+        {
+            *force_start = true;
+            *vscroll = -hidden;
+        }
+    };
+    set_hidden(&mut eval, 8);
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    engine.layout_frame_rust(&mut eval, frame);
+    engine.maintain_scroll_coverage(&eval);
+    set_hidden(&mut eval, 4);
+    engine.layout_frame_rust(&mut eval, frame);
+    let key = &engine.retained_window_matrices
+        [&neomacs_display_protocol::types::DisplayWindowId::new(window.0 as i64)]
+        .key;
+    let body = key.partition.text_body();
+    let columns = (body.width / key.char_width.max(1.0)) as usize;
+    let visual_rows = line.len().div_ceil(columns.max(1));
+    assert!(
+        (visual_rows as f32) * key.char_height >= body.height,
+        "the physical line must be taller than the viewport"
+    );
+    engine.maintain_scroll_coverage(&eval);
+    assert_eq!(
+        engine.scroll_coverage.pending_source_start_for_test(),
+        Some(origin - 4 * line.len()),
+        "low backward headroom keeps the four-line bridge when the physical line is taller than the viewport"
+    );
+}
+
+#[test]
 fn rich_fractional_reversal_starts_the_nearest_physical_bridge() {
     check_short_urgent_backward_bridge(true);
 }
