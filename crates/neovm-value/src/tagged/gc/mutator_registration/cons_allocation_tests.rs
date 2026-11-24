@@ -224,6 +224,7 @@ pub enum ConsAllocationCase {
     OwnerConsReservePoisonedAllocatorIsPublication,
     OwnerConsReserveLeftoverCountIsPublication,
     OwnerConsReserveOrdinaryRequestRoutesThroughStop,
+    OwnerConsReserveResumeOfALiveLeaseIsNotBusy,
     OwnerConsReserveSessionReturnKeepsHandedCellAndReclaimsTail,
 }
 
@@ -272,6 +273,7 @@ impl ConsAllocationCase {
         Self::OwnerConsReservePoisonedAllocatorIsPublication,
         Self::OwnerConsReserveLeftoverCountIsPublication,
         Self::OwnerConsReserveOrdinaryRequestRoutesThroughStop,
+        Self::OwnerConsReserveResumeOfALiveLeaseIsNotBusy,
         Self::OwnerConsReserveSessionReturnKeepsHandedCellAndReclaimsTail,
     ];
 }
@@ -463,6 +465,12 @@ pub(crate) fn run_cons_allocation_test<K, W>(
         }
         ConsAllocationCase::OwnerConsReserveOrdinaryRequestRoutesThroughStop => {
             owner_reserve_cases::owner_cons_reserve_ordinary_request_routes_through_stop(
+                roots_era,
+                world_roots,
+            );
+        }
+        ConsAllocationCase::OwnerConsReserveResumeOfALiveLeaseIsNotBusy => {
+            owner_reserve_cases::owner_cons_reserve_resume_of_a_live_lease_is_not_busy(
                 roots_era,
                 world_roots,
             );

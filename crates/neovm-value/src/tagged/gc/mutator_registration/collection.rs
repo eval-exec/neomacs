@@ -413,15 +413,24 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
             .shutdown_admission())
     }
 
-    /// Main-thread GC request under the current stop.
+    /// Stop-session entry for a main-thread GC request.
     ///
-    /// Resume refuses a live owner-cons lease, so this request runs before
-    /// the catalog is detached again. It enters the stop session, which
-    /// returns every leased book before any collector entry. A direct
-    /// `TaggedHeap::collect` still hits the backstop, including while an
-    /// owner run is open.
+    /// The caller is expected to collect, or to return the book, before
+    /// `resume_cons_storage` while a lease is live. This function does not
+    /// check that order. Resume reports `RegistrationError::OwnerReserveHeld`
+    /// until a collection or an explicit return. That error is not `Busy`.
+    ///
+    /// `gc_safe_point` does not call this. It collects the serial `Context`
+    /// heap through `begin_stw_collection` and has no `AllStopped`.
+    /// `grant_at_stop` is test-gated, and nothing else inserts an owner-cons
+    /// lease, so that heap's reserve count stays zero until a production
+    /// grant exists. Wiring the safe point waits for that grant.
+    ///
+    /// The body enters the stop session, which returns every leased book
+    /// before any collector entry. A direct `TaggedHeap::collect` still hits
+    /// the backstop, including while an owner run is open.
     #[cold]
-    pub(super) fn request_collection(
+    pub(super) fn collect_requested(
         &self,
         stopped: &mut AllStopped<'_>,
         roots: impl FnOnce(

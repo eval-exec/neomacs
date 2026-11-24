@@ -460,7 +460,7 @@ pub(super) fn owner_cons_reserve_session_returns_closed_book_then_collects<K, W>
         assert!(
             matches!(
                 era.resume_cons_storage(&stopped),
-                Err(RegistrationError::Busy)
+                Err(RegistrationError::OwnerReserveHeld)
             ),
             "catalog refusal must preserve the stop for explicit return and GC retry"
         );
@@ -730,7 +730,7 @@ pub(super) fn owner_cons_reserve_drop_and_forget_keep_collection_excluded<K, W>(
             assert!(
                 matches!(
                     era.resume_cons_storage(&stopped),
-                    Err(RegistrationError::Busy)
+                    Err(RegistrationError::OwnerReserveHeld)
                 ),
                 "catalog admission must not hide the obligation in its detached allocator"
             );
@@ -865,9 +865,9 @@ pub(super) fn owner_cons_reserve_ordinary_request_routes_through_stop<K, W>(
             reserve.holds_reserve(),
             "the closed book is still outstanding"
         );
-        // Resume refuses a live lease, so the request runs under this stop,
-        // before the catalog is detached again.
-        let result = era.request_collection(&mut stopped, world_roots);
+        // Resume reports OwnerReserveHeld for a live lease. That order is
+        // the caller's convention: this request does not enforce it.
+        let result = era.collect_requested(&mut stopped, world_roots);
         assert!(
             result.is_ok(),
             "the main-thread request routes through the stop session: {result:?}"
@@ -883,11 +883,78 @@ pub(super) fn owner_cons_reserve_ordinary_request_routes_through_stop<K, W>(
     });
 }
 
+/// A closed live lease makes resume a permanent refusal.
+///
+/// A second resume stays refused. The lease clears only when the stop
+/// session collects, and resume then succeeds. This row was red while
+/// resume still reported `Busy`.
+pub(super) fn owner_cons_reserve_resume_of_a_live_lease_is_not_busy<K, W>(
+    roots_era: &mut dyn FnMut(&mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>, RootsFixture)),
+    world_roots: W,
+) where
+    K: EraKeeper + std::fmt::Debug,
+    W: Copy
+        + for<'k, 's, 'e, 'o> Fn(
+            &'k K,
+            &'s mut AllStopped<'e>,
+            &'o mut Vec<Value>,
+        ) -> Result<
+            Vec<*mut *mut crate::tagged::header::MarkerObj>,
+            RendezvousError,
+        >,
+{
+    roots_era(&mut |era, _inputs| {
+        era.start_cons_storage().unwrap();
+        let mut stopped = era.stop().unwrap();
+        era.return_cons_storage(&stopped).unwrap();
+        let mut reserve = OwnerEraReserve::new();
+        with_stopped_legacy_heap(&era, &stopped, |heap| {
+            reserve
+                .grant_at_stop(&stopped, heap, true, MeasuredInterval::zero())
+                .unwrap();
+        });
+        assert!(
+            reserve.holds_reserve(),
+            "the closed book is still outstanding"
+        );
+        let first = era.resume_cons_storage(&stopped);
+        assert_eq!(
+            first,
+            Err(RegistrationError::OwnerReserveHeld),
+            "a live lease is permanent, not a transient resume miss"
+        );
+        let second = era.resume_cons_storage(&stopped);
+        assert_eq!(
+            second,
+            Err(RegistrationError::OwnerReserveHeld),
+            "retrying resume does not clear the lease"
+        );
+        assert!(
+            reserve.holds_reserve(),
+            "a refused resume leaves the book outstanding"
+        );
+        let collected = era.collect_requested(&mut stopped, world_roots);
+        assert!(
+            collected.is_ok(),
+            "the stop session returns the lease: {collected:?}"
+        );
+        assert!(!reserve.holds_reserve(), "collection cleared the lease");
+        era.resume_cons_storage(&stopped).unwrap();
+        // Resume detaches the catalog. Finish restores the serial heap only
+        // after that catalog is returned.
+        era.return_cons_storage(&stopped).unwrap();
+        complete(stopped);
+        let (collector, keeper) = era.finish().unwrap();
+        drop(collector);
+        drop(keeper);
+    });
+}
+
 /// Ordinary `TaggedHeap::collect` while a lease still has an open run.
 ///
 /// The direct entry must refuse at `assert_no_owner_cons_reserves` and
 /// leave the book returnable. It must not rewind the block under the open
-/// run. A closed book uses `request_collection`, which enters the stop
+/// run. A closed book uses `collect_requested`, which enters the stop
 /// session. This row is red on 9c6133fae3: the infallible entry returns
 /// the lease, `close_for_stop` sticks on `InvalidReserve`, and the owner
 /// cursor and the free list hand out the same cell.

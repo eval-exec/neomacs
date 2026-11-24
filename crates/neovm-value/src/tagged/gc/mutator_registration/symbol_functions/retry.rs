@@ -20,7 +20,8 @@ pub(crate) fn registration(error: &RegistrationError) -> Retry {
         | RegistrationError::ResidualSatb
         | RegistrationError::Publication
         | RegistrationError::PendingRoots
-        | RegistrationError::PendingYoung => Retry::Refuse,
+        | RegistrationError::PendingYoung
+        | RegistrationError::OwnerReserveHeld => Retry::Refuse,
     }
 }
 

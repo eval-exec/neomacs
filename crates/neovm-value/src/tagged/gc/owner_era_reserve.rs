@@ -610,9 +610,11 @@ impl TaggedHeap {
 
     /// Backstop for a direct collector entry. Those entries hold only
     /// `&mut TaggedHeap`, so they must not return a lease: the owner may
-    /// still be handing the run out. The main-thread request is
-    /// `EraCore::request_collection`, which enters the stop session.
-    /// `grant_at_stop` stays test-gated until a production grant is enabled.
+    /// still be handing the run out. The stop-session entry is
+    /// `EraCore::collect_requested`. `gc_safe_point` does not use it: the
+    /// safe point has no `AllStopped`, and `grant_at_stop` stays test-gated,
+    /// so the serial heap's reserve count stays zero until a production
+    /// grant exists.
     pub(in crate::tagged::gc) fn assert_no_owner_cons_reserves(&self) {
         assert!(
             !self.has_owner_cons_reserves(),

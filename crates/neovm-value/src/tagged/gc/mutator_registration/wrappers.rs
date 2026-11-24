@@ -468,9 +468,9 @@ macro_rules! era_operations {
                 self.core.stop()
             }
 
-            /// Main-thread GC request. See [`EraCore::request_collection`].
+            /// Main-thread GC request. See [`EraCore::collect_requested`].
             #[cold]
-            pub fn request_collection(
+            pub fn collect_requested(
                 &self,
                 stopped: &mut AllStopped<'_>,
                 roots: impl FnOnce(
@@ -482,7 +482,7 @@ macro_rules! era_operations {
                     RendezvousError,
                 >,
             ) -> Result<CollectionReport, CollectionError> {
-                self.core.request_collection(stopped, roots)
+                self.core.collect_requested(stopped, roots)
             }
 
             pub fn rendezvous(&self) -> Rendezvous<'_> {

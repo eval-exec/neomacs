@@ -232,7 +232,8 @@ fn map_registration(error: RegistrationError) -> OwnedParallelError {
         | RegistrationError::ResidualSatb
         | RegistrationError::Publication
         | RegistrationError::PendingRoots
-        | RegistrationError::PendingYoung => OwnedParallelError::Publication,
+        | RegistrationError::PendingYoung
+        | RegistrationError::OwnerReserveHeld => OwnedParallelError::Publication,
     }
 }
 

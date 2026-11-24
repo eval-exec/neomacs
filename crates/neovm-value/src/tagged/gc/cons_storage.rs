@@ -514,9 +514,10 @@ impl ConsCatalog {
         }
         // Detaching the allocator below replaces it with an empty heap-side
         // placeholder. Keep outstanding reserve obligations on the heap until
-        // their books explicitly return every block.
+        // their books explicitly return every block. A live lease is not a
+        // transient miss: collection or an explicit return is what clears it.
         if heap.has_owner_cons_reserves() {
-            return Err(RegistrationError::Busy);
+            return Err(RegistrationError::OwnerReserveHeld);
         }
         let mut gate = self.lock()?;
         if gate.is_some() {

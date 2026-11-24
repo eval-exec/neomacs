@@ -190,6 +190,8 @@ pub enum RegistrationError {
     WrongThread,
     Poisoned,
     Busy,
+    /// A live owner-cons lease. Cleared only by collection or an explicit return.
+    OwnerReserveHeld,
     Exhausted,
     Capacity,
     OutstandingLoan,
