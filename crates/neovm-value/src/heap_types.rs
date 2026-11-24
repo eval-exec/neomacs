@@ -521,7 +521,10 @@ impl LispString {
         let size_byte = Self::normalize_size_byte(size_byte, false);
         Self::assert_valid_size_byte(size_byte);
         Self::assert_unibyte_count_has_no_proof(size, size_byte);
-        debug_assert_eq!(
+        // Release builds must refuse a header that names more bytes than the
+        // allocation. A debug-only check let `from_dump` publish that header,
+        // and the owned destructor then rebuilt the Vec with `len > capacity`.
+        assert_eq!(
             payload.len(),
             Self::payload_len_for(size, size_byte),
             "LispString storage length must match GNU size/size_byte fields"
@@ -729,8 +732,12 @@ impl LispString {
     }
 
     /// Reconstruct a `LispString` from pdump data with pre-computed fields.
-    /// The caller is responsible for passing consistent `data`, `size`, and
-    /// `size_byte` values (as stored in the dump file).
+    ///
+    /// `data.len()` must be the byte count those fields name
+    /// (`size_byte` when it is non-negative, otherwise the unibyte character
+    /// count in `size`). A mismatch panics before the record is published.
+    /// The character count itself may still disagree with a scan of the
+    /// bytes: GNU image reconstruction stores the dumped count.
     pub fn from_dump(data: Vec<u8>, size: usize, size_byte: i64) -> Self {
         let size = Self::character_count_word_for_image(&data, size, size_byte);
         Self::from_owned_payload(data, size, size_byte)
