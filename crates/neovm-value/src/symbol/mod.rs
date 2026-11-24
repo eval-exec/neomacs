@@ -64,7 +64,7 @@ pub(crate) use cell::plist_epoch;
 use cell::{ArmMut, CellWrite, MarkGate, RevealedCell, read_symbol_children};
 #[doc(hidden)]
 pub use cell::{
-    BlvPtr, DumpedCell, DumpedSymbolFlags, LISP_SYMBOL_FLAGS_OFFSET,
+    BlvPtr, DumpedCell, DumpedSymbolFlags, LISP_SYMBOL_FLAGS_OFFSET, LISP_SYMBOL_FUNCTION_OFFSET,
     LISP_SYMBOL_INTERNED_GLOBAL_OFFSET, LISP_SYMBOL_SIZE, LISP_SYMBOL_VAL_OFFSET, ValueCell,
 };
 pub use cell::{LispSymbol, SymbolFlags};
@@ -1277,12 +1277,14 @@ impl Clone for SymbolChunks {
             .chunks
             .iter()
             .map(|chunk| {
-                let mut copied = Vec::with_capacity(OBARRAY_CHUNK);
-                for slot in chunk.iter() {
-                    copied.push(slot.clone_for_obarray());
-                }
-                copied
-                    .into_boxed_slice()
+                // SAFETY: `SymbolChunks::clone` is called only by
+                // `Obarray::clone`, which immediately re-homes every
+                // `Localized` BLV pointer and stateful `Forwarded` descriptor
+                // before returning the new obarray.
+                chunk
+                    .iter()
+                    .map(|slot| unsafe { slot.clone_for_obarray() })
+                    .collect::<Box<[_]>>()
                     .try_into()
                     .ok()
                     .expect("chunk length matches OBARRAY_CHUNK")
@@ -1652,13 +1654,26 @@ impl Drop for Obarray {
 
 impl Clone for Obarray {
     fn clone(&self) -> Self {
-        // Deep-copy the BLV pool. Build a `old → new` map so we can
-        // re-home each LOCALIZED symbol's cell to its record's copy.
+        // Deep-copy the BLV pool and each BLV's default-value cons (`defcell`).
+        // Build an `old → new` map so we can re-home each LOCALIZED symbol's
+        // cell to its record's copy. Sharing `defcell` would let `set-default`
+        // in one obarray leak into the other; a non-default `valcell` points
+        // into a buffer's `local_var_alist` cons and stays shared by design.
         let mut blvs: Vec<BlvPtr> = Vec::with_capacity(self.blvs.len());
         let mut blv_map: rustc_hash::FxHashMap<BlvPtr, BlvPtr> = rustc_hash::FxHashMap::default();
         for &orig in &self.blvs {
             // SAFETY: the pool's records are alive for the duration of `&self`.
-            let copy = BlvPtr::leak(Box::new(unsafe { (*orig.as_ptr()).clone() }));
+            let mut cloned_blv = unsafe { (*orig.as_ptr()).clone() };
+            let orig_defcell = cloned_blv.defcell.get();
+            if orig_defcell.is_cons() {
+                let fresh_defcell = Value::cons(orig_defcell.cons_car(), orig_defcell.cons_cdr());
+                let valcell_was_defcell = cloned_blv.valcell.get().bits() == orig_defcell.bits();
+                cloned_blv.defcell = AtomicTaggedValue::new(fresh_defcell);
+                if valcell_was_defcell {
+                    cloned_blv.valcell = AtomicTaggedValue::new(fresh_defcell);
+                }
+            }
+            let copy = BlvPtr::leak(Box::new(cloned_blv));
             blvs.push(copy);
             blv_map.insert(orig, copy);
         }
@@ -1691,9 +1706,10 @@ impl Clone for Obarray {
             };
             match write.arm() {
                 ArmMut::Localized(local) => {
-                    if let Some(&copy) = blv_map.get(&local.blv()) {
-                        local.rehome(copy);
-                    }
+                    let copy = *blv_map
+                        .get(&local.blv())
+                        .expect("localized symbol BLV must exist in Obarray::blvs pool");
+                    local.rehome(copy);
                 }
                 ArmMut::Forwarded(forwarded) => {
                     let orig = forwarded.descriptor();
@@ -1702,7 +1718,9 @@ impl Clone for Obarray {
                         let logical = match projection.arm() {
                             CanonicalArm::Plain => RevealedCell::Plain(projection.plain_value()),
                             CanonicalArm::Localized(blv) => RevealedCell::Localized(
-                                blv_map.get(&blv.blv()).copied().unwrap_or(blv.blv()),
+                                *blv_map.get(&blv.blv()).expect(
+                                    "projected localized symbol BLV must exist in Obarray::blvs pool",
+                                ),
                             ),
                             CanonicalArm::Forwarded(builtin) => {
                                 let builtin = builtin.descriptor();
@@ -1814,7 +1832,7 @@ impl Obarray {
         self.symbols.get_mut(Self::slot_index(id))
     }
 
-    pub(crate) fn ensure_slot(&mut self, id: SymId) -> &mut LispSymbol {
+    fn ensure_slot(&mut self, id: SymId) -> &mut LispSymbol {
         let idx = Self::slot_index(id);
         let slot = self.symbols.ensure(idx);
         if !slot.is_present() {

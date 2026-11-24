@@ -1109,7 +1109,7 @@ pub fn builtin_register_code_conversion_map(
         let plist = eval
             .obarray()
             .get_by_id(sym_id)
-            .map(|s| s.plist.get())
+            .map(|s| s.plist())
             .unwrap_or(Value::NIL);
         neovm_value::plist::plist_check(plist)?;
     }

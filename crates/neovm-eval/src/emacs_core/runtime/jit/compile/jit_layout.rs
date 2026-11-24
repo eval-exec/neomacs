@@ -33,7 +33,6 @@ use crate::emacs_core::eval::{
 };
 use cranelift_codegen::ir::{InstBuilder, MemFlagsData, Value as ClifValue, types};
 use cranelift_frontend::FunctionBuilder;
-use neovm_value::symbol::LispSymbol;
 use neovm_value::value::Value;
 use std::mem::{ManuallyDrop, offset_of, size_of};
 use std::sync::OnceLock;
@@ -191,8 +190,8 @@ const _: () = {
 // ---------------------------------------------------------------------------
 
 pub(crate) use neovm_value::symbol::{
-    LISP_SYMBOL_FLAGS_OFFSET, LISP_SYMBOL_INTERNED_GLOBAL_OFFSET, LISP_SYMBOL_SIZE,
-    LISP_SYMBOL_VAL_OFFSET, LISP_SYMBOL_WRITE_WINDOW_OFFSET, OBARRAY_CHUNK_BITS,
+    LISP_SYMBOL_FLAGS_OFFSET, LISP_SYMBOL_FUNCTION_OFFSET, LISP_SYMBOL_INTERNED_GLOBAL_OFFSET,
+    LISP_SYMBOL_SIZE, LISP_SYMBOL_VAL_OFFSET, LISP_SYMBOL_WRITE_WINDOW_OFFSET, OBARRAY_CHUNK_BITS,
     OBARRAY_CHUNK_SLOTS, OBARRAY_JIT_LEN_OFFSET, OBARRAY_JIT_SPINE_OFFSET,
     SYMBOL_FLAGS_REDIRECT_MASK,
 };
@@ -200,10 +199,6 @@ pub(crate) use neovm_value::symbol::{
 pub(crate) use neovm_value::symbol::{
     OBARRAY_DEBUG_ON_NEXT_CALL_FWD_OFFSET, OBARRAY_FUNCTION_EPOCH_OFFSET,
 };
-
-/// A symbol's function cell (`LispSymbol::function`, one `Value` word):
-/// what a named call's callee is read from (P2.3's function-cell guard).
-pub(crate) const LISP_SYMBOL_FUNCTION_OFFSET: usize = offset_of!(LispSymbol, function);
 
 const _: () = {
     assert!(size_of::<Value>() == WORD);

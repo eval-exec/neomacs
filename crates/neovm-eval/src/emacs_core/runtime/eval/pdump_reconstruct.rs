@@ -370,10 +370,10 @@ impl Context {
         // surface, so restore that surface immediately afterward.
         super::hooks_proof::register_core_subrs(&mut ev);
         for (sym_id, symbol) in dumped_function_surface.iter_symbols() {
-            if !symbol.function.get().is_nil() {
+            if !symbol.function().is_nil() {
                 ev.obarray.set_symbol_function_id_for(
                     sym_id,
-                    symbol.function.get(),
+                    symbol.function(),
                     neovm_value::symbol::FunctionEpochBump::PdumpRestore,
                 );
             } else if dumped_function_surface.is_function_unbound_id(sym_id) {

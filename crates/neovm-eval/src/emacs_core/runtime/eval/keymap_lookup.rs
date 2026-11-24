@@ -153,10 +153,10 @@ pub fn resolve_indirect_function_by_id_in_obarray(
             return None;
         }
         let sym = obarray.get_by_id(current)?;
-        if sym.function.get().is_nil() {
+        let function = sym.function();
+        if function.is_nil() {
             return None;
         }
-        let function = sym.function.get();
         if let Some(next_symbol) = keymap_symbol_id(&function, symbol_mode) {
             current = next_symbol;
             continue;

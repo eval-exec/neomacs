@@ -9,7 +9,7 @@
 
 use std::marker::PhantomData;
 
-use super::{LispSymbol, Obarray, Value, intern};
+use super::{CanonicalAccess, LispSymbol, Obarray, Value, intern};
 use crate::value::buffer_vocab::BufferId;
 
 struct CloneProbe<T>(PhantomData<T>);
@@ -123,6 +123,57 @@ fn obarray_clone_deep_copies_localized_blv_after_source_drop() {
     assert_eq!(
         cloned.read_localized(id, Value::NIL, Value::NIL),
         Some(Value::fixnum(42))
+    );
+}
+
+#[test]
+fn obarray_clone_isolates_localized_default_cell() {
+    crate::test_utils::init_test_tracing();
+    let id = intern("vc-a9-m2-clone-defcell-isolation");
+    let mut source = Obarray::new();
+    source
+        .make_symbol_localized(id, Value::fixnum(10))
+        .expect("localized symbol gets a BLV");
+    let source_defcell = source
+        .get_by_id(id)
+        .unwrap()
+        .blv_default_cells()
+        .unwrap()
+        .defcell();
+
+    let mut cloned = source.clone();
+    let cloned_defcell = cloned
+        .get_by_id(id)
+        .unwrap()
+        .blv_default_cells()
+        .unwrap()
+        .defcell();
+    assert_ne!(
+        cloned_defcell.bits(),
+        source_defcell.bits(),
+        "Obarray::clone must allocate a fresh default-value cons rather than sharing the source defcell"
+    );
+
+    cloned.set_canonical_value(CanonicalAccess::TEST, id, Value::fixnum(99));
+    assert_eq!(
+        cloned.read_localized(id, Value::NIL, Value::NIL),
+        Some(Value::fixnum(99))
+    );
+    assert_eq!(
+        source.read_localized(id, Value::NIL, Value::NIL),
+        Some(Value::fixnum(10)),
+        "mutating the cloned obarray's default cell must not leak into the source obarray"
+    );
+
+    source.set_canonical_value(CanonicalAccess::TEST, id, Value::fixnum(25));
+    assert_eq!(
+        source.read_localized(id, Value::NIL, Value::NIL),
+        Some(Value::fixnum(25))
+    );
+    assert_eq!(
+        cloned.read_localized(id, Value::NIL, Value::NIL),
+        Some(Value::fixnum(99)),
+        "mutating the source obarray's default cell must not leak into the cloned obarray"
     );
 }
 
