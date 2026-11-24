@@ -12,9 +12,11 @@
 //! `StoppedCollectorJob::run` in `collection.rs`. A new safe wrapper fails.
 //! `Context::gc_collect_exact` stays safe. `&mut Context` is the capability
 //! only after Phase 1 stops returning `&'static` payload borrows. Until then
-//! a Rust local can keep a freed object. Dropping a `TaggedHeap` and
-//! `shutdown(self)` still free from safe code. Those are Phase 1c
-//! (`HeapRef<'h>`). This guard does not cover them. Test support calls
+//! a Rust local can keep a freed object. P1.1 place-anchors eight readers in
+//! `value/mod.rs`. The borrow is the `Value` place, so it still does not
+//! conflict with a collection. That conflict is Phase 1c (`HeapRef<'h>`).
+//! Dropping a `TaggedHeap` and `shutdown(self)` still free from safe code.
+//! Those are Phase 1c too. This guard does not cover them. Test support calls
 //! `collect_rooted` and the `*_for_test` sweep wrappers, which are cfg'd out
 //! of production builds and are deliberately unsound for unrooted borrows.
 //!
@@ -621,5 +623,157 @@ fn heap_capability_guard_flags_a_new_safe_sweep_wrapper() {
     assert!(
         collect_still.contains("safe `gc_collect_from_current_roots_body` calls `collect_exact`"),
         "the sweep allow-list must not cover collect: {collect_still}"
+    );
+}
+
+/// P1.1. These readers must take `&self` and must not return `'static`.
+/// A place anchor does not make collection conflict with the borrow.
+const PLACE_ANCHORED: &[&str] = &[
+    "as_window_configuration_data",
+    "as_xwidget_view",
+    "as_treesit_node_data",
+    "as_bool_vector_obj",
+    "as_font_data",
+    "as_xwidget",
+    "closure_params",
+    "closure_slots",
+];
+
+fn walk_items(items: &[syn::Item], visit: &mut dyn FnMut(&syn::ImplItemFn)) {
+    for item in items {
+        match item {
+            syn::Item::Impl(block) => {
+                for inner in &block.items {
+                    if let syn::ImplItem::Fn(func) = inner {
+                        visit(func);
+                    }
+                }
+            }
+            syn::Item::Mod(module) => {
+                if let Some((_, nested)) = &module.content {
+                    walk_items(nested, visit);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn type_has_static(ty: &Type) -> bool {
+    match ty {
+        Type::Reference(reference) => {
+            reference
+                .lifetime
+                .as_ref()
+                .is_some_and(|lifetime| lifetime.ident == "static")
+                || type_has_static(&reference.elem)
+        }
+        Type::Path(path) => path.path.segments.iter().any(|segment| {
+            let syn::PathArguments::AngleBracketed(args) = &segment.arguments else {
+                return false;
+            };
+            args.args.iter().any(|arg| match arg {
+                syn::GenericArgument::Lifetime(lifetime) => lifetime.ident == "static",
+                syn::GenericArgument::Type(inner) => type_has_static(inner),
+                _ => false,
+            })
+        }),
+        Type::Tuple(tuple) => tuple.elems.iter().any(type_has_static),
+        Type::Slice(slice) => type_has_static(&slice.elem),
+        Type::Array(array) => type_has_static(&array.elem),
+        Type::Paren(paren) => type_has_static(&paren.elem),
+        Type::Group(group) => type_has_static(&group.elem),
+        Type::Ptr(pointer) => type_has_static(&pointer.elem),
+        _ => false,
+    }
+}
+
+fn output_has_static(output: &syn::ReturnType) -> bool {
+    match output {
+        syn::ReturnType::Default => false,
+        syn::ReturnType::Type(_, ty) => type_has_static(ty),
+    }
+}
+
+fn place_anchor_problems(source: &str, file: &str, require_all: bool) -> Vec<String> {
+    let syntax = syn::parse_file(source).unwrap_or_else(|error| panic!("parse {file}: {error}"));
+    let mut problems = Vec::new();
+    let mut seen = Vec::new();
+    walk_items(&syntax.items, &mut |func| {
+        let name = func.sig.ident.to_string();
+        if !PLACE_ANCHORED.contains(&name.as_str()) {
+            return;
+        }
+        seen.push(name.clone());
+        let anchored = func.sig.receiver().is_some_and(|receiver| {
+            matches!(
+                &receiver.kind,
+                syn::ReceiverKind::Reference(_, lifetime, None)
+                    if lifetime.as_ref().is_none_or(|lt| lt.ident != "static")
+            )
+        });
+        if !anchored {
+            problems.push(format!("`{name}` in {file} is not `&self`"));
+        }
+        if output_has_static(&func.sig.output) {
+            problems.push(format!("`{name}` in {file} still returns `'static`"));
+        }
+    });
+    if require_all {
+        for name in PLACE_ANCHORED {
+            if !seen.iter().any(|found| found == name) {
+                problems.push(format!("`{name}` missing from {file}"));
+            }
+        }
+    }
+    problems
+}
+
+#[test]
+fn place_anchor_checker_flags_a_static_by_value_reader() {
+    let problems = place_anchor_problems(
+        r#"
+        impl Value {
+            pub fn as_xwidget(self) -> Option<&'static XwidgetObj> { None }
+        }
+        "#,
+        "snippet.rs",
+        false,
+    )
+    .join("\n");
+    assert!(
+        problems.contains("`as_xwidget` in snippet.rs is not `&self`"),
+        "missing receiver failure: {problems}"
+    );
+    assert!(
+        problems.contains("`as_xwidget` in snippet.rs still returns `'static`"),
+        "missing 'static failure: {problems}"
+    );
+
+    let clean = place_anchor_problems(
+        r#"
+        impl Value {
+            pub fn as_xwidget(&self) -> Option<&XwidgetObj> { None }
+        }
+        "#,
+        "clean.rs",
+        false,
+    )
+    .join("\n");
+    assert!(clean.is_empty(), "place-anchored reader must pass: {clean}");
+}
+
+#[test]
+fn place_anchored_payload_readers_are_not_static() {
+    let file = architecture_production_source_roots::production_source_files()
+        .into_iter()
+        .find(|file| file.workspace_relative() == "neovm-value/src/value/mod.rs")
+        .expect("value/mod.rs");
+    let source = std::fs::read_to_string(&file.path).expect("read value/mod.rs");
+    let problems = place_anchor_problems(&source, "neovm-value/src/value/mod.rs", true);
+    assert!(
+        problems.is_empty(),
+        "P1.1 readers must be place-anchored:\n{}",
+        problems.join("\n")
     );
 }

@@ -379,7 +379,7 @@ fn equal_hash_obj(value: Value, depth: u32, mut hasher: FxHasher) -> FxHasher {
             | VecLikeType::Record
             | VecLikeType::TsNode
             | VecLikeType::CharTable => {
-                let Some(view) = StructuralPseudovectorView::from_value(value, kind) else {
+                let Some(view) = StructuralPseudovectorView::from_value(&value, kind) else {
                     return identity(hasher);
                 };
                 let tag = match kind {

@@ -270,7 +270,7 @@ fn emacs_sxhash_structural_pseudovector(
     if kind == VecLikeType::SubCharTable {
         return Some(42);
     }
-    let view = StructuralPseudovectorView::from_value(*value, kind)?;
+    let view = StructuralPseudovectorView::from_value(value, kind)?;
     let mut hash = view.len() as u64;
     let count = view.len().min(SXHASH_MAX_LEN);
     for index in 0..count {

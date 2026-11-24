@@ -3791,7 +3791,10 @@ impl TaggedValue {
     }
 
     /// Get the closure slot vector for a Lambda or Macro.
-    pub fn closure_slots(self) -> Option<&'static LispValueSlice> {
+    ///
+    /// Tied to this `Value` place. A later collection does not conflict with
+    /// this borrow.
+    pub fn closure_slots(&self) -> Option<&LispValueSlice> {
         let header = self.as_veclike_ptr()?;
         match unsafe { (*header).type_tag } {
             VecLikeType::Lambda => {
@@ -3831,7 +3834,11 @@ impl TaggedValue {
             .and_then(|slots| slots.get(index).copied())
     }
 
-    pub fn closure_params(self) -> Option<&'static LambdaParams> {
+    /// Parsed parameter list.
+    ///
+    /// Tied to this `Value` place. A later collection does not conflict with
+    /// this borrow.
+    pub fn closure_params(&self) -> Option<&LambdaParams> {
         let cell = self.closure_parsed_params_cell()?;
         Some(cell.get_or_init(|| {
             let arglist = self.closure_slot(CLOSURE_ARGLIST).unwrap_or(Value::NIL);
@@ -3984,7 +3991,10 @@ impl TaggedValue {
     }
 
     /// Get the xwidget payload from an xwidget value.
-    pub fn as_xwidget(self) -> Option<&'static XwidgetObj> {
+    ///
+    /// Tied to this `Value` place. A later collection does not conflict with
+    /// this borrow.
+    pub fn as_xwidget(&self) -> Option<&XwidgetObj> {
         if self.is_xwidget() {
             let ptr = self.as_veclike_ptr().unwrap() as *const XwidgetObj;
             Some(unsafe { &*ptr })
@@ -3999,7 +4009,10 @@ impl TaggedValue {
     }
 
     /// Get the xwidget-view payload from an xwidget-view value.
-    pub fn as_xwidget_view(self) -> Option<&'static XwidgetViewObj> {
+    ///
+    /// Tied to this `Value` place. A later collection does not conflict with
+    /// this borrow.
+    pub fn as_xwidget_view(&self) -> Option<&XwidgetViewObj> {
         if self.is_xwidget_view() {
             let ptr = self.as_veclike_ptr().unwrap() as *const XwidgetViewObj;
             Some(unsafe { &*ptr })
@@ -4080,8 +4093,11 @@ impl TaggedValue {
     }
 
     /// Borrow a packed bool-vector.
+    ///
+    /// Tied to this `Value` place. A later collection does not conflict with
+    /// this borrow.
     #[inline]
-    pub fn as_bool_vector_obj(self) -> Option<&'static BoolVectorObj> {
+    pub fn as_bool_vector_obj(&self) -> Option<&BoolVectorObj> {
         if self.is_bool_vector_obj() {
             let ptr = self.as_veclike_ptr().unwrap() as *const BoolVectorObj;
             Some(unsafe { &*ptr })
@@ -4167,8 +4183,11 @@ impl TaggedValue {
 
     /// Borrow the private GC-traced slots of a native tree-sitter node.
     /// This does not establish backend freshness or parser liveness.
+    ///
+    /// Tied to this `Value` place. A later collection does not conflict with
+    /// this borrow.
     #[doc(hidden)]
-    pub fn as_treesit_node_data(self) -> Option<&'static LispValueSlice> {
+    pub fn as_treesit_node_data(&self) -> Option<&LispValueSlice> {
         let header = self.as_veclike_ptr()?;
         if unsafe { (*header).type_tag } == VecLikeType::TsNode {
             // SAFETY: TsNode allocations share the RecordObj storage layout,
@@ -4181,8 +4200,11 @@ impl TaggedValue {
     }
 
     /// Borrow the typed native payload of an opened-font pseudovector.
+    ///
+    /// Tied to this `Value` place. A later collection does not conflict with
+    /// this borrow.
     #[doc(hidden)]
-    pub fn as_font_data(self) -> Option<&'static FontObjectData> {
+    pub fn as_font_data(&self) -> Option<&FontObjectData> {
         if self.is_font_object() {
             let ptr = self.as_veclike_ptr().unwrap() as *const FontObj;
             Some(unsafe { &(*ptr).data })
@@ -4194,7 +4216,10 @@ impl TaggedValue {
     /// Borrow the data slots of a window-configuration pseudovector. Distinct
     /// from `as_vector_data`/`as_record_data` so that a window-configuration is
     /// never mistaken for a vector or a record by the type predicates.
-    pub fn as_window_configuration_data(self) -> Option<&'static LispValueSlice> {
+    ///
+    /// Tied to this `Value` place. A later collection does not conflict with
+    /// this borrow.
+    pub fn as_window_configuration_data(&self) -> Option<&LispValueSlice> {
         if self.is_window_configuration() {
             let ptr = self.as_veclike_ptr().unwrap() as *const RecordObj;
             Some(unsafe { LispValueSlice::from_slice((*ptr).data.as_slice()) })
@@ -4644,7 +4669,7 @@ impl TaggedValue {
                     return HashKey::Cycle(index);
                 }
                 seen.push(ptr);
-                let view = StructuralPseudovectorView::from_value(self, kind)
+                let view = StructuralPseudovectorView::from_value(&self, kind)
                     .expect("structural pseudovector kind must expose its storage");
                 let mut keys = Vec::with_capacity(view.len() + 3);
                 keys.push(HashKey::Text(view.hash_tag().into()));
@@ -4917,8 +4942,8 @@ pub(crate) enum StructuralPseudovectorView<'a> {
     SubCharTable(&'a SubCharTableObj),
 }
 
-impl StructuralPseudovectorView<'_> {
-    pub(crate) fn from_value(value: Value, kind: VecLikeType) -> Option<Self> {
+impl<'a> StructuralPseudovectorView<'a> {
+    pub(crate) fn from_value(value: &'a Value, kind: VecLikeType) -> Option<Self> {
         match kind {
             VecLikeType::Vector => value
                 .as_vector_data()
@@ -5163,8 +5188,8 @@ pub fn equal_value_inner(
         | VecLikeType::CharTable
         | VecLikeType::SubCharTable => {
             let (Some(left_view), Some(right_view)) = (
-                StructuralPseudovectorView::from_value(left, left_type),
-                StructuralPseudovectorView::from_value(right, right_type),
+                StructuralPseudovectorView::from_value(&left, left_type),
+                StructuralPseudovectorView::from_value(&right, right_type),
             ) else {
                 return false;
             };
@@ -5521,8 +5546,8 @@ pub fn try_equal_value_inner(
         | VecLikeType::CharTable
         | VecLikeType::SubCharTable => {
             let (Some(left_view), Some(right_view)) = (
-                StructuralPseudovectorView::from_value(left, left_type),
-                StructuralPseudovectorView::from_value(right, right_type),
+                StructuralPseudovectorView::from_value(&left, left_type),
+                StructuralPseudovectorView::from_value(&right, right_type),
             ) else {
                 return Ok(false);
             };

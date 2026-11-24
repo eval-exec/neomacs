@@ -1,0 +1,8 @@
+error[E0515]: cannot return value referencing function parameter `value`
+ --> tests/heap_capability_ui/u1_place_anchor_blocks_static_escape.rs:6:5
+  |
+6 |     value.as_window_configuration_data()
+  |     -----^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |     |
+  |     returns a value referencing data owned by the current function
+  |     `value` is borrowed here

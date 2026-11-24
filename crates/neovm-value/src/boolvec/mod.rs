@@ -146,7 +146,7 @@ fn wrong_type(pred: &'static str, got: &Value) -> Flow {
 }
 
 /// GNU `CHECK_BOOL_VECTOR`.
-fn check_bool_vector(value: &Value) -> Result<BoolVectorView<'static>, Flow> {
+fn check_bool_vector(value: &Value) -> Result<BoolVectorView<'_>, Flow> {
     BoolVectorView::of(value).ok_or_else(|| wrong_type("bool-vector-p", value))
 }
 

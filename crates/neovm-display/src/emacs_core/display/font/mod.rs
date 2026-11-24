@@ -885,7 +885,7 @@ fn sync_live_frame_font_state_in_state(
         return;
     }
 
-    let opened = OpenedFont::decode(resolution.font_value)
+    let opened = OpenedFont::decode(&resolution.font_value)
         .expect("an opened font object must carry native font data");
     let metrics = opened.data.metrics;
 
@@ -1297,18 +1297,18 @@ impl OpenedFontMetricsExt for OpenedFontMetrics {
 }
 
 #[derive(Clone, Copy)]
-struct OpenedFont {
-    data: &'static FontObjectData,
+struct OpenedFont<'a> {
+    data: &'a FontObjectData,
 }
 
-impl OpenedFont {
-    fn decode(value: Value) -> Option<Self> {
+impl<'a> OpenedFont<'a> {
+    fn decode(value: &'a Value) -> Option<Self> {
         Some(Self {
             data: value.as_font_data()?,
         })
     }
 
-    fn fields(self) -> &'static [Value] {
+    fn fields(self) -> &'a [Value] {
         self.data.fields.as_slice()
     }
 
@@ -1363,10 +1363,10 @@ pub(crate) fn is_font(val: &Value) -> bool {
     is_font_spec(val) || is_font_entity(val) || is_font_object(val)
 }
 
-pub(crate) fn font_value_fields(value: &Value) -> Option<&'static [Value]> {
+pub(crate) fn font_value_fields(value: &Value) -> Option<&[Value]> {
     match value.kind() {
         ValueKind::Veclike(VecLikeType::Vector) => value.as_vector_data().map(|v| &v[..]),
-        ValueKind::Veclike(VecLikeType::Font) => OpenedFont::decode(*value).map(OpenedFont::fields),
+        ValueKind::Veclike(VecLikeType::Font) => OpenedFont::decode(value).map(OpenedFont::fields),
         _ => None,
     }
 }
@@ -4568,21 +4568,21 @@ fn realized_font_object_key(matched: &neovm_eval::emacs_core::eval::ResolvedFont
 /// GNU Ffont_info has distinct opening semantics for these four inputs.
 /// In particular, a named font honors its requested size, but a scalable
 /// entity (including one matched from a spec) is opened at its smallest size.
-enum FontInfoTarget {
+enum FontInfoTarget<'a> {
     Named(Value),
     Spec(Value),
     Entity(Value),
-    Opened(OpenedFont),
+    Opened(OpenedFont<'a>),
 }
 
-impl FontInfoTarget {
-    fn decode(value: Value) -> Option<Self> {
+impl<'a> FontInfoTarget<'a> {
+    fn decode(value: &'a Value) -> Option<Self> {
         if value.is_string() {
-            Some(Self::Named(value))
-        } else if is_font_spec(&value) {
-            Some(Self::Spec(value))
-        } else if is_font_entity(&value) {
-            Some(Self::Entity(value))
+            Some(Self::Named(*value))
+        } else if is_font_spec(value) {
+            Some(Self::Spec(*value))
+        } else if is_font_entity(value) {
+            Some(Self::Entity(*value))
         } else {
             OpenedFont::decode(value).map(Self::Opened)
         }
@@ -4629,7 +4629,7 @@ pub(crate) fn font_info(
     expect_min_args("font-info", &args, 1)?;
     expect_max_args("font-info", &args, 2)?;
 
-    let target = FontInfoTarget::decode(args[0]).ok_or_else(|| {
+    let target = FontInfoTarget::decode(&args[0]).ok_or_else(|| {
         signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("stringp"), args[0]],
@@ -4708,7 +4708,7 @@ pub(crate) fn query_font(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("query-font", &args, 1)?;
-    let Some(opened) = OpenedFont::decode(args[0]) else {
+    let Some(opened) = OpenedFont::decode(&args[0]) else {
         return Err(signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("font-object"), args[0]],

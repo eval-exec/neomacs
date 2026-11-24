@@ -2146,7 +2146,7 @@ fn opened_font_retains_exact_backend_identity_and_variations() {
             .unwrap()
             .is_nil()
     );
-    let info = OpenedFont::decode(object)
+    let info = OpenedFont::decode(&object)
         .expect("opened font payload")
         .info_vector();
     let values = info.as_vector_data().expect("font info vector");
