@@ -56,6 +56,9 @@ impl From<RegistrationError> for RendezvousError {
             RegistrationError::OutstandingLoan => Self::Loan,
             RegistrationError::Exhausted => Self::Generation,
             RegistrationError::Capacity => Self::Capacity,
+            // A live owner-cons lease is permanent. Name it so the catch-all
+            // cannot turn it into Busy. The payload stays OwnerReserveHeld.
+            held @ RegistrationError::OwnerReserveHeld => Self::Registration(held),
             other => Self::Registration(other),
         }
     }

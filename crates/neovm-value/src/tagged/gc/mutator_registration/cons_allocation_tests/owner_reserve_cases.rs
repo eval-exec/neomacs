@@ -923,6 +923,11 @@ pub(super) fn owner_cons_reserve_resume_of_a_live_lease_is_not_busy<K, W>(
             Err(RegistrationError::OwnerReserveHeld),
             "a live lease is permanent, not a transient resume miss"
         );
+        assert_eq!(
+            RendezvousError::from(first.unwrap_err()),
+            RendezvousError::Registration(RegistrationError::OwnerReserveHeld),
+            "the rendezvous conversion names the lease and stays off Busy"
+        );
         let second = era.resume_cons_storage(&stopped);
         assert_eq!(
             second,
