@@ -369,6 +369,97 @@ struct BufferCallbackData {
     wake: WebViewWake,
 }
 
+/// Owns the heap-allocated `BufferCallbackData` together with every native
+/// callback handle (`WPEView` render sink and `WebKitWebView` GObject signal
+/// handlers) that borrows its raw pointer.
+///
+/// `disconnect` must run before `WpeWebView` drops its `WebKitWebView` ref so
+/// neither teardown notifications nor surviving external GObject references can
+/// invoke a callback after `BufferCallbackData` is freed.
+struct ViewCallbackRegistration {
+    data: NonNull<BufferCallbackData>,
+    decide_policy_handler_id: plat::gulong,
+    process_failed_handler_id: plat::gulong,
+    disconnected: bool,
+}
+
+impl ViewCallbackRegistration {
+    fn new(
+        data: NonNull<BufferCallbackData>,
+        decide_policy_handler_id: plat::gulong,
+        process_failed_handler_id: plat::gulong,
+    ) -> Self {
+        Self {
+            data,
+            decide_policy_handler_id,
+            process_failed_handler_id,
+            disconnected: false,
+        }
+    }
+
+    fn as_ptr(&self) -> *mut BufferCallbackData {
+        self.data.as_ptr()
+    }
+
+    /// Safety: caller must be on the reactor thread with no active C callback
+    /// borrowing `self.data`.
+    unsafe fn as_ref(&self) -> &BufferCallbackData {
+        self.data.as_ref()
+    }
+
+    /// Safety: caller must be on the reactor thread with no active C callback
+    /// borrowing `self.data`.
+    unsafe fn as_mut(&mut self) -> &mut BufferCallbackData {
+        self.data.as_mut()
+    }
+
+    /// Clear the WPEView render sink and disconnect every WebKitWebView signal
+    /// handler referencing `self.data`.
+    ///
+    /// Safety: `web_view` and `wpe_view` must still be valid GObjects (or null)
+    /// owned on the reactor thread.
+    unsafe fn disconnect(
+        &mut self,
+        web_view: *mut wk::WebKitWebView,
+        wpe_view: *mut plat::WPEView,
+    ) {
+        if self.disconnected {
+            return;
+        }
+        if !wpe_view.is_null() {
+            native::clear_render_buffer_callback(wpe_view);
+        }
+        if !web_view.is_null() {
+            for handler_id in [
+                &mut self.decide_policy_handler_id,
+                &mut self.process_failed_handler_id,
+            ] {
+                if *handler_id != 0 {
+                    if plat::g_signal_handler_is_connected(web_view.cast(), *handler_id) != 0 {
+                        plat::g_signal_handler_disconnect(web_view.cast(), *handler_id);
+                    }
+                    *handler_id = 0;
+                }
+            }
+        }
+        self.disconnected = true;
+    }
+}
+
+impl Drop for ViewCallbackRegistration {
+    fn drop(&mut self) {
+        debug_assert!(
+            self.disconnected,
+            "ViewCallbackRegistration dropped without disconnecting native callbacks"
+        );
+        // SAFETY: `WpeWebView::drop` disconnected every native callback handle
+        // and unreferenced `web_view` before this field drops.
+        unsafe {
+            let _ = Box::from_raw(self.data.as_ptr());
+        }
+    }
+}
+
 /// A WPE WebKit browser view using WPE Platform API.
 ///
 /// Uses WPEDisplay headless mode and WPEView buffer-rendered signals
@@ -401,8 +492,8 @@ pub struct WpeWebView {
     /// The WPEView (obtained from WebKitWebView)
     wpe_view: *mut plat::WPEView,
 
-    /// Callback data (must be boxed and leaked to be stable)
-    callback_data: *mut BufferCallbackData,
+    /// Callback data and its native signal/render-sink handles.
+    callbacks: ViewCallbackRegistration,
 
     events: Rc<RefCell<Vec<WebViewEvent>>>,
     wake: WebViewWake,
@@ -533,7 +624,7 @@ impl WpeWebView {
 
             // Connect decide-policy signal for new window handling
             let decide_policy_signal = CString::new("decide-policy").unwrap();
-            let _decide_policy_handler_id = plat::g_signal_connect_data(
+            let decide_policy_handler_id = plat::g_signal_connect_data(
                 web_view as *mut _,
                 decide_policy_signal.as_ptr(),
                 Some(std::mem::transmute::<
@@ -551,11 +642,11 @@ impl WpeWebView {
             );
             tracing::debug!(
                 "WpeWebView::new: connected decide-policy signal, handler_id={}",
-                _decide_policy_handler_id
+                decide_policy_handler_id
             );
 
             let process_failed_signal = CString::new("web-process-terminated").unwrap();
-            let _process_failed_handler_id = plat::g_signal_connect_data(
+            let process_failed_handler_id = plat::g_signal_connect_data(
                 web_view.cast(),
                 process_failed_signal.as_ptr(),
                 Some(std::mem::transmute::<
@@ -569,6 +660,11 @@ impl WpeWebView {
                 callback_data.cast(),
                 None,
                 0,
+            );
+            let callbacks = ViewCallbackRegistration::new(
+                NonNull::new_unchecked(callback_data),
+                decide_policy_handler_id,
+                process_failed_handler_id,
             );
 
             // The custom display attaches a matching custom toplevel while it
@@ -602,7 +698,7 @@ impl WpeWebView {
                 progress: 0.0,
                 web_view,
                 wpe_view: wpe_view as *mut _,
-                callback_data,
+                callbacks,
                 events,
                 wake: creation.wake,
             })
@@ -751,18 +847,18 @@ impl WpeWebView {
             }
 
             // Check for new frame from callback
-            tracing::trace!("WPE update: callback_data ptr = {:?}", self.callback_data);
-            if let Some(callback_data) = self.callback_data.as_ref() {
-                let frame_avail = callback_data
-                    .latest_frame
-                    .try_borrow()
-                    .is_ok_and(|frame| frame.is_some());
-                tracing::trace!("WPE update: frame_available = {}", frame_avail);
-                if frame_avail {
-                    tracing::info!("WPE update: new frame available, triggering redraw");
-                }
-            } else {
-                tracing::warn!("WPE update: callback_data.as_ref() returned None");
+            tracing::trace!(
+                "WPE update: callback_data ptr = {:?}",
+                self.callbacks.as_ptr()
+            );
+            let callback_data = self.callbacks.as_ref();
+            let frame_avail = callback_data
+                .latest_frame
+                .try_borrow()
+                .is_ok_and(|frame| frame.is_some());
+            tracing::trace!("WPE update: frame_available = {}", frame_avail);
+            if frame_avail {
+                tracing::info!("WPE update: new frame available, triggering redraw");
             }
         }
     }
@@ -793,18 +889,15 @@ impl WpeWebView {
         // SAFETY: the reactor alone owns and calls this view. The callback data
         // stays live until its owner disconnects the callbacks in Drop.
         unsafe {
-            if let Some(data) = self.callback_data.as_mut() {
-                data.frame_transport = transport;
-            }
+            self.callbacks.as_mut().frame_transport = transport;
         }
     }
 
     /// Take the one negotiated representation of the latest native frame.
     pub(super) fn take_latest_frame(&self) -> Option<CapturedFrame> {
         unsafe {
-            if let Some(callback_data) = self.callback_data.as_ref()
-                && let Ok(mut latest) = callback_data.latest_frame.try_borrow_mut()
-            {
+            let callback_data = self.callbacks.as_ref();
+            if let Ok(mut latest) = callback_data.latest_frame.try_borrow_mut() {
                 return latest.take();
             }
         }
@@ -1036,15 +1129,19 @@ unsafe extern "C" fn web_process_terminated_callback(
 impl Drop for WpeWebView {
     fn drop(&mut self) {
         unsafe {
-            // Destroy native signal owners while callback userdata is still
-            // alive: WPE may emit final release notifications during teardown.
+            // Disconnect every native callback handle (WPEView render sink and
+            // WebKitWebView GObject signals) before releasing the GObject ref
+            // and freeing BufferCallbackData, so neither teardown notifications
+            // nor surviving external GObject refs can invoke callbacks on freed
+            // userdata.
+            self.callbacks.disconnect(self.web_view, self.wpe_view);
             if !self.web_view.is_null() {
                 plat::g_object_unref(self.web_view as *mut _);
             }
-            if !self.callback_data.is_null() {
-                let _ = Box::from_raw(self.callback_data);
-            }
         }
+        // `self.callbacks` drops immediately after `drop(&mut self)`, freeing
+        // `BufferCallbackData` once all native handles are disconnected and
+        // `self.web_view` has been unreferenced.
         tracing::debug!("WPE Platform WebKitWebView destroyed");
     }
 }
@@ -1439,3 +1536,7 @@ mod software_pixel_tests;
 #[cfg(test)]
 #[path = "view/tests/transport_test.rs"]
 mod transport_tests;
+
+#[cfg(test)]
+#[path = "view/tests/drop_teardown_test.rs"]
+mod drop_teardown_tests;

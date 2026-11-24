@@ -466,6 +466,29 @@ pub(super) unsafe fn set_render_buffer_callback(
     true
 }
 
+pub(super) unsafe fn clear_render_buffer_callback(view: *mut plat::WPEView) {
+    if !is_custom_view(view) {
+        return;
+    }
+    let instance = &*(view as *mut <view_imp::NeomacsWpeView as ObjectSubclass>::Instance);
+    if let Ok(mut sink) = instance.imp().sink.try_borrow_mut() {
+        *sink = None;
+    }
+}
+
+#[cfg(test)]
+pub(super) unsafe fn has_render_buffer_callback(view: *mut plat::WPEView) -> bool {
+    if !is_custom_view(view) {
+        return false;
+    }
+    let instance = &*(view as *mut <view_imp::NeomacsWpeView as ObjectSubclass>::Instance);
+    instance
+        .imp()
+        .sink
+        .try_borrow()
+        .is_ok_and(|sink| sink.is_some())
+}
+
 #[cfg(test)]
 #[path = "native/tests/native_test.rs"]
 mod tests;
