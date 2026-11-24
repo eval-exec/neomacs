@@ -3593,11 +3593,12 @@ impl<'a> Vm<'a> {
     }
 
     /// [`Self::run_resumed_frame`], with the resumed frame's OSR latch set
-    /// to OSR_TRIED. A frame resumed from an OSR run's precise deopt starts
-    /// latched: its loop just deopted out of native code, and another
-    /// transfer would nest one more resumed frame on the Rust stack for
-    /// every retry (one per 256 iterations of a loop that keeps failing the
-    /// same guard).
+    /// to `osr_tried`. A precise deopt passes true while the leaf that just
+    /// ran is still cached: another transfer would nest one more resumed
+    /// frame on the Rust stack for every retry (one per 256 iterations of a
+    /// loop that keeps failing the same guard). A deopt that retired that
+    /// leaf passes false, so the next header may re-enter a leaf compiled
+    /// from the widened feedback.
     #[allow(clippy::too_many_arguments)]
     #[doc(hidden)]
     pub fn run_resumed_frame_latched(
@@ -4794,8 +4795,9 @@ impl<'a> Vm<'a> {
     /// through [`Self::run_resumed_frame_latched`] on the checked driver. The
     /// suspended interpreter frame retains final
     /// cleanup ownership on the in-place path. State the checked driver
-    /// could not adopt finishes in a resumed frame instead -- latched
-    /// against another transfer, on a guarded stack.
+    /// could not adopt finishes in a resumed frame on a guarded stack. That
+    /// frame stays latched while the leaf is still cached, and may transfer
+    /// again when the deopt retired it.
     #[cfg(feature = "jit")]
     #[cold]
     #[inline(never)]
@@ -5020,6 +5022,12 @@ impl<'a> Vm<'a> {
                     cond_base,
                 );
             }
+            // The verified driver cannot adopt a stack the proof does not
+            // name. The checked frame still runs the rest of the loop. Latch
+            // another transfer only while the leaf that just deopted is
+            // cached; a retired leaf (the float widening) is free to re-enter
+            // at the next header.
+            let latch = crate::emacs_core::jit::cache::osr_entry_cached(func, target);
             Vm::from_context(ctx).run_resumed_frame_latched(
                 func,
                 Value::NIL,
@@ -5029,7 +5037,7 @@ impl<'a> Vm<'a> {
                 &binds,
                 spec_base,
                 cond_base,
-                true,
+                latch,
             )
         }) {
             Ok(value) => OsrOutcome::Returned(value),
