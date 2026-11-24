@@ -277,6 +277,35 @@ impl State {
         Ok(Some(id))
     }
 
+    /// Grant the head inside the caller's own stop (L6.7 K3). A serial turn
+    /// runs inside a stop, so its grant is issued there: only `Tracing` for
+    /// the caller's epoch grants, which leaves no window where a granted head
+    /// exists without a stop. One ticket is out at a time; `ready` is the
+    /// keeper's publication check, and an unready head is never skipped.
+    pub(in crate::tagged::gc) fn grant_head_in_stop(
+        &mut self,
+        epoch: NonZeroU64,
+        ready: impl FnOnce(&RingEntry) -> bool,
+    ) -> Result<Option<RequestId>, RendezvousError> {
+        self.live()?;
+        if self.phase != Phase::Tracing(epoch) {
+            return Err(RendezvousError::Publication);
+        }
+        if self.ring_head_granted.is_some() {
+            return Ok(None);
+        }
+        let Some(head) = self.serial_ring.front_mut() else {
+            return Ok(None);
+        };
+        if head.phase != RingPhase::Queued || !ready(head) {
+            return Ok(None);
+        }
+        head.phase = RingPhase::Granted;
+        let id = head.id();
+        self.ring_head_granted = Some(id);
+        Ok(Some(id))
+    }
+
     /// Retire a queued or granted entry exactly once. This stays available
     /// after poison so a granted-but-unreceived ticket is not lost (L6 f); a
     /// second retire is a typed refusal.

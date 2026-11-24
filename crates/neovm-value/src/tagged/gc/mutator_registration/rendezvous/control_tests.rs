@@ -412,3 +412,88 @@ fn ring_refuses_a_duplicate_owner() {
     let again = state.enqueue_serial(keys[0], ring_generation()).unwrap();
     assert_eq!(state.ring_head(), Some(again));
 }
+
+/// Members after the stop: every owner acknowledged.
+fn stopped_members(keys: &[MutatorKey]) -> Vec<(MutatorKey, Mode)> {
+    keys.iter().map(|key| (*key, Mode::Stopped)).collect()
+}
+
+/// The keeper's grant happens inside its own stop (L6.7 K3): only
+/// `Tracing(epoch)` for the caller's epoch grants, and only once.
+#[test]
+fn ring_grant_in_stop_needs_the_callers_tracing_epoch() {
+    let mut state = State::new();
+    let keys = ring_keys();
+    let a = state.enqueue_serial(keys[0], ring_generation()).unwrap();
+    let b = state.enqueue_serial(keys[1], ring_generation()).unwrap();
+    let any = NonZeroU64::new(1).unwrap();
+    assert_eq!(
+        state.grant_head_in_stop(any, |_| true),
+        Err(RendezvousError::Publication),
+        "no grant outside a stop"
+    );
+    let epoch = requested(&mut state, &running(&keys));
+    assert_eq!(
+        state.grant_head_in_stop(epoch, |_| true),
+        Err(RendezvousError::Publication),
+        "no grant before the trace"
+    );
+    state.begin_trace(epoch, &stopped_members(&keys)).unwrap();
+    let other = NonZeroU64::new(epoch.get() + 1).unwrap();
+    assert_eq!(
+        state.grant_head_in_stop(other, |_| true),
+        Err(RendezvousError::Publication),
+        "another stop's epoch grants nothing"
+    );
+    assert_eq!(state.grant_head_in_stop(epoch, |_| true), Ok(Some(a)));
+    assert_eq!(
+        state.grant_head_in_stop(epoch, |_| true),
+        Ok(None),
+        "one ticket out: the granted head is not granted again"
+    );
+    state.retire_serial(a).unwrap();
+    assert_eq!(state.grant_head_in_stop(epoch, |_| true), Ok(Some(b)));
+    assert_eq!(state.ring_head(), Some(b));
+}
+
+/// FIFO: an unready head blocks the grant; the entry behind it is not
+/// granted ahead of it.
+#[test]
+fn ring_grant_in_stop_never_skips_an_unready_head() {
+    let mut state = State::new();
+    let keys = ring_keys();
+    let a = state.enqueue_serial(keys[0], ring_generation()).unwrap();
+    let _b = state.enqueue_serial(keys[1], ring_generation()).unwrap();
+    let epoch = requested(&mut state, &running(&keys));
+    state.begin_trace(epoch, &stopped_members(&keys)).unwrap();
+    let mut asked = Vec::new();
+    assert_eq!(
+        state.grant_head_in_stop(epoch, |entry| {
+            asked.push(entry.id());
+            false
+        }),
+        Ok(None)
+    );
+    assert_eq!(asked, [a], "only the head is asked");
+    assert_eq!(state.ring_head_granted, None);
+    assert_eq!(state.grant_head_in_stop(epoch, |_| true), Ok(Some(a)));
+}
+
+/// Poison refuses the grant; the granted head still retires exactly once.
+#[test]
+fn ring_grant_in_stop_refuses_after_poison_and_keeps_retire() {
+    let mut state = State::new();
+    let keys = ring_keys();
+    let a = state.enqueue_serial(keys[0], ring_generation()).unwrap();
+    let epoch = requested(&mut state, &running(&keys));
+    state.begin_trace(epoch, &stopped_members(&keys)).unwrap();
+    assert_eq!(state.grant_head_in_stop(epoch, |_| true), Ok(Some(a)));
+    state.poison();
+    assert_eq!(
+        state.grant_head_in_stop(epoch, |_| true),
+        Err(RendezvousError::Poisoned)
+    );
+    state.retire_serial(a).unwrap();
+    assert_eq!(state.retire_serial(a), Err(RendezvousError::Identity));
+    assert_eq!(state.ring_len(), 0);
+}
