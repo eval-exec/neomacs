@@ -1042,6 +1042,11 @@ fn process_symbol_policy_changed(use_primary_font: bool, symbol_ranges: &[(u32, 
 /// `0` means the backend has no shared counter, so each `Changed` poll is
 /// its own process-wide event. A non-zero value is one publication: only the
 /// first service to advance the applied id clears orders.
+///
+/// `APPLIED` is one process-wide high-water mark. The generation must come
+/// from the single native catalog counter compiled into this process: one
+/// native backend type is built per target. Two independent non-zero
+/// counters in one process would suppress each other's clears.
 fn process_catalog_generation_changed(generation: u64) -> bool {
     if generation == 0 {
         return true;
@@ -1570,10 +1575,15 @@ impl FontMetricsService {
                 self.font_file_cache = FontFileCache::new();
             }
             // A native catalog publication drops every frame's orders once
-            // per process. Each service still observes `Changed`, but the
-            // second observation of the same generation only clears that
-            // service. A backend that reports generation 0 has no shared
-            // counter, so each of its `Changed` polls still clears globally.
+            // per process. The pollers are the engine layout service
+            // (`prepare_frame_font_inputs`) and the font-at host
+            // (`PrimaryWindowDisplayHost::synchronized_font_metrics`). Each
+            // still observes `Changed`, but the second observation of the
+            // same generation only clears that service. Row workers do not
+            // poll. They follow main's catalog generation through
+            // `MeasurementRevision::rebuild_key`. A backend that reports
+            // generation 0 has no shared counter, so each of its `Changed`
+            // polls still clears globally.
             // A render edge drops orders only when this process has not
             // applied these options yet. Both keys update even when the
             // other edge also clears: skipping either one would leave the
