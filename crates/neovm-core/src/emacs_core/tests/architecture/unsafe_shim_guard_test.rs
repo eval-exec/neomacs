@@ -20,18 +20,23 @@
 //!     parameter. A word is the same unsound contract as a raw pointer: safe
 //!     code can pass garbage bits. A no-argument shim is not this shape.
 //! (d) Class guard (G4): across every workspace production crate, no safe `fn`
-//!     taking a raw pointer parameter (`*const`/`*mut` or `emacs_value`) may
-//!     dereference that parameter (or a local derived from it) or pass it to
-//!     an unsafe operation/call inside an `unsafe` block. Pure address/identity
-//!     checks (`==`, `!=`, `is_null`, `cast`, `addr`, `ptr::eq`) remain allowed.
+//!     taking a raw pointer parameter (`*const`/`*mut`, `NonNull<T>`, or
+//!     `emacs_value`) — or casting an integer word parameter (`usize`/`u64`/
+//!     `i64`) to a pointer — may dereference that pointer (or a value derived
+//!     from it via locals, assignments, control flow, patterns, struct fields,
+//!     calls, or macro invocations) or pass it to an unsafe operation/call
+//!     inside an `unsafe` block. `macro_rules!` bodies are scanned as items
+//!     too. Pure address/identity checks (`==`, `!=`, `is_null`, `cast`,
+//!     `addr`, `ptr::eq`) remain allowed.
 //! (e) Class guard (G4): across every workspace production crate, no safe `fn`
-//!     may pass an integer word parameter (`usize`/`u64`/`i64`, or a local
+//!     may pass an integer word parameter (`usize`/`u64`/`i64`, or a value
 //!     derived from it) directly to `from_bits` / `Value::from_bits` /
-//!     `TaggedValue::from_bits`.
+//!     `TaggedValue::from_bits`, or cast it to a raw pointer for an unsafe op.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+use proc_macro2::{Delimiter, Group, Ident, Spacing, Span, TokenStream, TokenTree};
 use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
 
@@ -846,6 +851,7 @@ const EXCLUDED_WORKSPACE_CRATES: &[&str] = &[
 const SAFE_PTR_METHODS: &[&str] = &[
     "addr",
     "align_offset",
+    "as_ptr",
     "cast",
     "cast_const",
     "cast_mut",
@@ -857,6 +863,24 @@ const SAFE_PTR_METHODS: &[&str] = &[
     "is_null",
     "ne",
     "with_addr",
+];
+
+const NON_PTR_RETURN_METHODS: &[&str] = &[
+    "addr",
+    "align_offset",
+    "cmp",
+    "eq",
+    "expose_provenance",
+    "is_aligned",
+    "is_aligned_to",
+    "is_empty",
+    "is_err",
+    "is_none",
+    "is_null",
+    "is_ok",
+    "is_some",
+    "len",
+    "ne",
 ];
 
 fn workspace_production_source_files() -> Vec<(String, PathBuf)> {
@@ -879,6 +903,7 @@ fn workspace_production_source_files() -> Vec<(String, PathBuf)> {
                 if name.starts_with("test_")
                     || name.ends_with("_test.rs")
                     || name.ends_with("_tests.rs")
+                    || name == "tests.rs"
                     || name == "test_support.rs"
                     || name == "test_utils.rs"
                     || name == "restricted_lisp.rs"
@@ -920,21 +945,30 @@ fn workspace_production_source_files() -> Vec<(String, PathBuf)> {
     files
 }
 
+fn meta_is_cfg_test(meta: &syn::Meta) -> bool {
+    match meta {
+        syn::Meta::Path(path) => path.is_ident("test"),
+        syn::Meta::List(list) if list.path.is_ident("all") => list
+            .parse_args_with(
+                syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+            )
+            .is_ok_and(|nested| nested.iter().any(meta_is_cfg_test)),
+        syn::Meta::List(list) if list.path.is_ident("any") => list
+            .parse_args_with(
+                syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+            )
+            .is_ok_and(|nested| !nested.is_empty() && nested.iter().all(meta_is_cfg_test)),
+        _ => false,
+    }
+}
+
 fn has_cfg_test(attrs: &[syn::Attribute]) -> bool {
     attrs.iter().any(|attr| {
         if !attr.path().is_ident("cfg") {
             return false;
         }
-        let tokens = attr
-            .meta
-            .require_list()
-            .map(|list| list.tokens.to_string())
-            .unwrap_or_default();
-        let compact: String = tokens.chars().filter(|c| !c.is_whitespace()).collect();
-        compact == "test"
-            || compact.contains("all(test,")
-            || compact.contains(",test)")
-            || compact.contains(",test,")
+        attr.parse_args::<syn::Meta>()
+            .is_ok_and(|meta| meta_is_cfg_test(&meta))
     })
 }
 
@@ -947,7 +981,7 @@ fn is_raw_ptr_type(ty: &syn::Type) -> bool {
             .path
             .segments
             .last()
-            .is_some_and(|seg| seg.ident == "emacs_value"),
+            .is_some_and(|seg| seg.ident == "emacs_value" || seg.ident == "NonNull"),
         _ => false,
     }
 }
@@ -972,73 +1006,313 @@ fn collect_pat_idents(pat: &syn::Pat, out: &mut Vec<String>) {
             if name != "self" && !name.starts_with('_') {
                 out.push(name);
             }
+            if let Some((_, sub)) = &ident.subpat {
+                collect_pat_idents(sub, out);
+            }
         }
         syn::Pat::Tuple(tuple) => {
             for elem in &tuple.elems {
                 collect_pat_idents(elem, out);
             }
         }
+        syn::Pat::TupleStruct(ts) => {
+            for elem in &ts.elems {
+                collect_pat_idents(elem, out);
+            }
+        }
+        syn::Pat::Struct(st) => {
+            for field in &st.fields {
+                collect_pat_idents(&field.pat, out);
+            }
+        }
+        syn::Pat::Slice(slice) => {
+            for elem in &slice.elems {
+                collect_pat_idents(elem, out);
+            }
+        }
+        syn::Pat::Or(or) => {
+            for case in &or.cases {
+                collect_pat_idents(case, out);
+            }
+        }
         syn::Pat::Reference(r) => collect_pat_idents(&r.pat, out),
         syn::Pat::Type(t) => collect_pat_idents(&t.pat, out),
+        syn::Pat::Paren(p) => collect_pat_idents(&p.pat, out),
         _ => {}
     }
 }
 
-/// Whether `expr` is directly derived from one of `names` (ident, cast,
-/// parens, pointer offset/cast method chain) — NOT an array index or unrelated
-/// field access.
-fn expr_is_derived_from(expr: &syn::Expr, names: &BTreeSet<String>) -> bool {
+fn collect_assign_target_idents(expr: &syn::Expr, out: &mut Vec<String>) {
+    match expr {
+        syn::Expr::Path(path) => {
+            if let Some(ident) = path.path.get_ident() {
+                let name = ident.to_string();
+                if name != "self" && !name.starts_with('_') {
+                    out.push(name);
+                }
+            }
+        }
+        syn::Expr::Field(field) => collect_assign_target_idents(&field.base, out),
+        syn::Expr::Paren(p) => collect_assign_target_idents(&p.expr, out),
+        syn::Expr::Group(g) => collect_assign_target_idents(&g.expr, out),
+        syn::Expr::Tuple(t) => {
+            for elem in &t.elems {
+                collect_assign_target_idents(elem, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn call_last_two_segments(func: &syn::Expr) -> Option<(Option<String>, String)> {
+    let syn::Expr::Path(path) = func else {
+        return None;
+    };
+    let segs: Vec<String> = path
+        .path
+        .segments
+        .iter()
+        .map(|s| s.ident.to_string())
+        .collect();
+    let last = segs.last()?.clone();
+    let prev = if segs.len() >= 2 {
+        Some(segs[segs.len() - 2].clone())
+    } else {
+        None
+    };
+    Some((prev, last))
+}
+
+fn is_word_to_ptr_constructor(func: &syn::Expr) -> bool {
+    let Some((_, last)) = call_last_two_segments(func) else {
+        return false;
+    };
+    matches!(
+        last.as_str(),
+        "with_exposed_provenance"
+            | "with_exposed_provenance_mut"
+            | "from_exposed_addr"
+            | "from_exposed_addr_mut"
+            | "without_provenance"
+            | "without_provenance_mut"
+    )
+}
+
+fn is_ptr_accepting_inferred_cast_call(func: &syn::Expr) -> bool {
+    let Some((prev, last)) = call_last_two_segments(func) else {
+        return false;
+    };
+    if prev.as_deref() == Some("NonNull") && matches!(last.as_str(), "new" | "new_unchecked") {
+        return true;
+    }
+    last.starts_with("from_") && last.ends_with("_ptr")
+}
+
+/// Whether `expr` is derived from a word parameter (`usize`/`u64`/`i64`).
+fn expr_is_word_derived(
+    expr: &syn::Expr,
+    ptr_tainted: &BTreeSet<String>,
+    word_tainted: &BTreeSet<String>,
+) -> bool {
     match expr {
         syn::Expr::Path(path) => path
             .path
             .get_ident()
-            .is_some_and(|ident| names.contains(&ident.to_string())),
-        syn::Expr::Cast(cast) => expr_is_derived_from(&cast.expr, names),
-        syn::Expr::Paren(paren) => expr_is_derived_from(&paren.expr, names),
-        syn::Expr::Group(group) => expr_is_derived_from(&group.expr, names),
-        syn::Expr::Reference(r) => expr_is_derived_from(&r.expr, names),
-        syn::Expr::Unary(u) => expr_is_derived_from(&u.expr, names),
+            .is_some_and(|ident| word_tainted.contains(&ident.to_string())),
+        syn::Expr::Cast(cast) => {
+            !is_raw_ptr_type(&cast.ty)
+                && (expr_is_word_derived(&cast.expr, ptr_tainted, word_tainted)
+                    || expr_is_ptr_derived(&cast.expr, ptr_tainted, word_tainted))
+        }
+        syn::Expr::Paren(paren) => expr_is_word_derived(&paren.expr, ptr_tainted, word_tainted),
+        syn::Expr::Group(group) => expr_is_word_derived(&group.expr, ptr_tainted, word_tainted),
+        syn::Expr::Unary(u) => expr_is_word_derived(&u.expr, ptr_tainted, word_tainted),
+        syn::Expr::Try(t) => expr_is_word_derived(&t.expr, ptr_tainted, word_tainted),
+        syn::Expr::Field(f) => expr_is_word_derived(&f.base, ptr_tainted, word_tainted),
+        syn::Expr::Struct(s) => {
+            s.fields
+                .iter()
+                .any(|f| expr_is_word_derived(&f.expr, ptr_tainted, word_tainted))
+                || s.rest
+                    .as_deref()
+                    .is_some_and(|r| expr_is_word_derived(r, ptr_tainted, word_tainted))
+        }
+        syn::Expr::Tuple(t) => t
+            .elems
+            .iter()
+            .any(|e| expr_is_word_derived(e, ptr_tainted, word_tainted)),
+        syn::Expr::Block(b) => block_tail_expr(&b.block)
+            .is_some_and(|e| expr_is_word_derived(e, ptr_tainted, word_tainted)),
+        syn::Expr::If(i) => {
+            block_tail_expr(&i.then_branch)
+                .is_some_and(|e| expr_is_word_derived(e, ptr_tainted, word_tainted))
+                || i.else_branch
+                    .as_ref()
+                    .is_some_and(|(_, e)| expr_is_word_derived(e, ptr_tainted, word_tainted))
+        }
+        syn::Expr::Match(m) => m
+            .arms
+            .iter()
+            .any(|a| expr_is_word_derived(&a.body, ptr_tainted, word_tainted)),
         syn::Expr::MethodCall(call) => {
             let method = call.method.to_string();
-            matches!(
-                method.as_str(),
-                "cast"
-                    | "cast_const"
-                    | "cast_mut"
-                    | "add"
-                    | "sub"
-                    | "offset"
-                    | "byte_add"
-                    | "byte_sub"
-                    | "byte_offset"
-                    | "wrapping_add"
-                    | "wrapping_sub"
-                    | "wrapping_offset"
-            ) && expr_is_derived_from(&call.receiver, names)
+            if matches!(method.as_str(), "addr" | "expose_provenance")
+                && expr_is_ptr_derived(&call.receiver, ptr_tainted, word_tainted)
+            {
+                return true;
+            }
+            !NON_PTR_RETURN_METHODS.contains(&method.as_str())
+                && expr_is_word_derived(&call.receiver, ptr_tainted, word_tainted)
         }
         _ => false,
     }
 }
 
-/// Whether `expr` mentions any identifier in `names` anywhere inside a pointer
-/// subexpression (excluding pure equality operands handled at the binary site).
-fn expr_mentions_ptr(expr: &syn::Expr, names: &BTreeSet<String>) -> bool {
+/// Whether `expr` is derived from a raw pointer parameter (including `NonNull`),
+/// or from a word parameter cast/converted to a raw pointer.
+fn expr_is_ptr_derived(
+    expr: &syn::Expr,
+    ptr_tainted: &BTreeSet<String>,
+    word_tainted: &BTreeSet<String>,
+) -> bool {
+    match expr {
+        syn::Expr::Path(path) => path
+            .path
+            .get_ident()
+            .is_some_and(|ident| ptr_tainted.contains(&ident.to_string())),
+        syn::Expr::Cast(cast) => {
+            if is_raw_ptr_type(&cast.ty) {
+                expr_is_ptr_derived(&cast.expr, ptr_tainted, word_tainted)
+                    || expr_is_word_derived(&cast.expr, ptr_tainted, word_tainted)
+            } else {
+                expr_is_ptr_derived(&cast.expr, ptr_tainted, word_tainted)
+            }
+        }
+        syn::Expr::Paren(paren) => expr_is_ptr_derived(&paren.expr, ptr_tainted, word_tainted),
+        syn::Expr::Group(group) => expr_is_ptr_derived(&group.expr, ptr_tainted, word_tainted),
+        syn::Expr::Reference(r) => expr_is_ptr_derived(&r.expr, ptr_tainted, word_tainted),
+        syn::Expr::Unary(u) => expr_is_ptr_derived(&u.expr, ptr_tainted, word_tainted),
+        syn::Expr::Try(t) => expr_is_ptr_derived(&t.expr, ptr_tainted, word_tainted),
+        syn::Expr::Field(f) => expr_is_ptr_derived(&f.base, ptr_tainted, word_tainted),
+        syn::Expr::Struct(s) => {
+            s.fields
+                .iter()
+                .any(|f| expr_is_ptr_derived(&f.expr, ptr_tainted, word_tainted))
+                || s.rest
+                    .as_deref()
+                    .is_some_and(|r| expr_is_ptr_derived(r, ptr_tainted, word_tainted))
+        }
+        syn::Expr::Tuple(t) => t
+            .elems
+            .iter()
+            .any(|e| expr_is_ptr_derived(e, ptr_tainted, word_tainted)),
+        syn::Expr::Block(b) => block_tail_expr(&b.block)
+            .is_some_and(|e| expr_is_ptr_derived(e, ptr_tainted, word_tainted)),
+        syn::Expr::If(i) => {
+            block_tail_expr(&i.then_branch)
+                .is_some_and(|e| expr_is_ptr_derived(e, ptr_tainted, word_tainted))
+                || i.else_branch
+                    .as_ref()
+                    .is_some_and(|(_, e)| expr_is_ptr_derived(e, ptr_tainted, word_tainted))
+        }
+        syn::Expr::Match(m) => m
+            .arms
+            .iter()
+            .any(|a| expr_is_ptr_derived(&a.body, ptr_tainted, word_tainted)),
+        syn::Expr::MethodCall(call) => {
+            let method = call.method.to_string();
+            !NON_PTR_RETURN_METHODS.contains(&method.as_str())
+                && expr_is_ptr_derived(&call.receiver, ptr_tainted, word_tainted)
+        }
+        syn::Expr::Call(call) => {
+            if is_word_to_ptr_constructor(&call.func) {
+                return call.args.iter().any(|arg| {
+                    expr_is_word_derived(arg, ptr_tainted, word_tainted)
+                        || expr_is_ptr_derived(arg, ptr_tainted, word_tainted)
+                });
+            }
+            if is_safe_ptr_free_call(&call.func) {
+                return false;
+            }
+            call.args
+                .iter()
+                .any(|arg| expr_is_ptr_derived(arg, ptr_tainted, word_tainted))
+        }
+        _ => false,
+    }
+}
+
+/// Whether `expr` is a word-tainted expression cast via `as _` (e.g.
+/// `Value::from_cons_ptr(word as _)` or `NonNull::new_unchecked(word as _)`).
+fn expr_is_word_inferred_cast(
+    expr: &syn::Expr,
+    ptr_tainted: &BTreeSet<String>,
+    word_tainted: &BTreeSet<String>,
+) -> bool {
+    match expr {
+        syn::Expr::Cast(cast) => {
+            matches!(&*cast.ty, syn::Type::Infer(_))
+                && expr_is_word_derived(&cast.expr, ptr_tainted, word_tainted)
+        }
+        syn::Expr::Paren(p) => expr_is_word_inferred_cast(&p.expr, ptr_tainted, word_tainted),
+        syn::Expr::Group(g) => expr_is_word_inferred_cast(&g.expr, ptr_tainted, word_tainted),
+        _ => false,
+    }
+}
+
+fn block_tail_expr(block: &syn::Block) -> Option<&syn::Expr> {
+    match block.stmts.last()? {
+        syn::Stmt::Expr(expr, None) => Some(expr),
+        _ => None,
+    }
+}
+
+/// Whether `expr` mentions any pointer-tainted identifier or word-to-pointer
+/// cast anywhere inside a dereference operand.
+fn expr_mentions_ptr_or_word_cast(
+    expr: &syn::Expr,
+    ptr_tainted: &BTreeSet<String>,
+    word_tainted: &BTreeSet<String>,
+) -> bool {
     struct Finder<'a> {
-        names: &'a BTreeSet<String>,
+        ptr_tainted: &'a BTreeSet<String>,
+        word_tainted: &'a BTreeSet<String>,
         found: bool,
     }
     impl<'ast> Visit<'ast> for Finder<'_> {
         fn visit_expr_path(&mut self, path: &'ast syn::ExprPath) {
             if let Some(ident) = path.path.get_ident()
-                && self.names.contains(&ident.to_string())
+                && self.ptr_tainted.contains(&ident.to_string())
             {
                 self.found = true;
             }
             visit::visit_expr_path(self, path);
         }
+
+        fn visit_expr_cast(&mut self, cast: &'ast syn::ExprCast) {
+            if (is_raw_ptr_type(&cast.ty) || matches!(&*cast.ty, syn::Type::Infer(_)))
+                && expr_is_word_derived(&cast.expr, self.ptr_tainted, self.word_tainted)
+            {
+                self.found = true;
+            }
+            visit::visit_expr_cast(self, cast);
+        }
+
+        fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
+            if is_word_to_ptr_constructor(&call.func)
+                && call.args.iter().any(|arg| {
+                    expr_is_word_derived(arg, self.ptr_tainted, self.word_tainted)
+                        || expr_is_ptr_derived(arg, self.ptr_tainted, self.word_tainted)
+                })
+            {
+                self.found = true;
+            }
+            visit::visit_expr_call(self, call);
+        }
     }
     let mut finder = Finder {
-        names,
+        ptr_tainted,
+        word_tainted,
         found: false,
     };
     finder.visit_expr(expr);
@@ -1109,6 +1383,65 @@ impl FnBodyScanner {
             word_offense: None,
         }
     }
+
+    fn taint_idents_from_expr(&mut self, expr: &syn::Expr, idents: &[String]) {
+        if expr_is_ptr_derived(expr, &self.ptr_tainted, &self.word_tainted) {
+            for name in idents {
+                self.ptr_tainted.insert(name.clone());
+            }
+        }
+        if expr_is_word_derived(expr, &self.ptr_tainted, &self.word_tainted) {
+            for name in idents {
+                self.word_tainted.insert(name.clone());
+            }
+        }
+    }
+
+    fn scan_macro_tokens(&mut self, tokens: TokenStream) {
+        if let Ok(block) = syn::parse2::<syn::Block>(tokens.clone()) {
+            self.visit_block(&block);
+            return;
+        }
+        if let Ok(exprs) = syn::parse::Parser::parse2(
+            syn::punctuated::Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated,
+            tokens.clone(),
+        ) {
+            for expr in &exprs {
+                self.visit_expr(expr);
+            }
+            return;
+        }
+        // Fallback for custom macro grammars such as `jit_shim_contain!(detach args, ctx, SENTINEL, { ... })`:
+        // recursively inspect nested groups as blocks/expr lists, and also track
+        // raw `unsafe { ... }` blocks when a group contains non-standard syntax.
+        let trees: Vec<TokenTree> = tokens.into_iter().collect();
+        let mut i = 0;
+        while i < trees.len() {
+            if let TokenTree::Ident(ident) = &trees[i]
+                && ident == "unsafe"
+                && let Some(TokenTree::Group(group)) = trees.get(i + 1)
+                && group.delimiter() == Delimiter::Brace
+            {
+                self.in_unsafe += 1;
+                self.scan_macro_tokens(group.stream());
+                self.in_unsafe -= 1;
+                i += 2;
+                continue;
+            }
+            if let TokenTree::Group(group) = &trees[i] {
+                if group.delimiter() == Delimiter::Brace {
+                    let braced = TokenStream::from(TokenTree::Group(group.clone()));
+                    if let Ok(block) = syn::parse2::<syn::Block>(braced) {
+                        self.visit_block(&block);
+                        i += 1;
+                        continue;
+                    }
+                }
+                self.scan_macro_tokens(group.stream());
+            }
+            i += 1;
+        }
+    }
 }
 
 impl<'ast> Visit<'ast> for FnBodyScanner {
@@ -1124,17 +1457,59 @@ impl<'ast> Visit<'ast> for FnBodyScanner {
             }
             let mut bound = Vec::new();
             collect_pat_idents(&local.pat, &mut bound);
-            if expr_is_derived_from(&init.expr, &self.ptr_tainted) {
-                for name in &bound {
-                    self.ptr_tainted.insert(name.clone());
-                }
-            }
-            if expr_is_derived_from(&init.expr, &self.word_tainted) {
-                for name in &bound {
-                    self.word_tainted.insert(name.clone());
-                }
-            }
+            self.taint_idents_from_expr(&init.expr, &bound);
         }
+    }
+
+    fn visit_expr_assign(&mut self, node: &'ast syn::ExprAssign) {
+        self.visit_expr(&node.right);
+        let mut targets = Vec::new();
+        collect_assign_target_idents(&node.left, &mut targets);
+        self.taint_idents_from_expr(&node.right, &targets);
+        self.visit_expr(&node.left);
+    }
+
+    fn visit_expr_let(&mut self, node: &'ast syn::ExprLet) {
+        self.visit_expr(&node.expr);
+        let mut bound = Vec::new();
+        collect_pat_idents(&node.pat, &mut bound);
+        self.taint_idents_from_expr(&node.expr, &bound);
+    }
+
+    fn visit_expr_for_loop(&mut self, node: &'ast syn::ExprForLoop) {
+        self.visit_expr(&node.expr);
+        let mut bound = Vec::new();
+        collect_pat_idents(&node.pat, &mut bound);
+        self.taint_idents_from_expr(&node.expr, &bound);
+        self.visit_block(&node.body);
+    }
+
+    fn visit_expr_match(&mut self, node: &'ast syn::ExprMatch) {
+        self.visit_expr(&node.expr);
+        let expr_ptr = expr_is_ptr_derived(&node.expr, &self.ptr_tainted, &self.word_tainted);
+        let expr_word = expr_is_word_derived(&node.expr, &self.ptr_tainted, &self.word_tainted);
+        for arm in &node.arms {
+            if expr_ptr || expr_word {
+                let mut bound = Vec::new();
+                collect_pat_idents(&arm.pat, &mut bound);
+                if expr_ptr {
+                    for name in &bound {
+                        self.ptr_tainted.insert(name.clone());
+                    }
+                }
+                if expr_word {
+                    for name in &bound {
+                        self.word_tainted.insert(name.clone());
+                    }
+                }
+            }
+            self.visit_pat(&arm.pat);
+            self.visit_expr(&arm.body);
+        }
+    }
+
+    fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+        self.scan_macro_tokens(mac.tokens.clone());
     }
 
     fn visit_expr_unsafe(&mut self, node: &'ast syn::ExprUnsafe) {
@@ -1146,7 +1521,7 @@ impl<'ast> Visit<'ast> for FnBodyScanner {
     fn visit_expr_unary(&mut self, node: &'ast syn::ExprUnary) {
         if self.in_unsafe > 0
             && matches!(node.op, syn::UnOp::Deref(_))
-            && expr_mentions_ptr(&node.expr, &self.ptr_tainted)
+            && expr_mentions_ptr_or_word_cast(&node.expr, &self.ptr_tainted, &self.word_tainted)
             && self.ptr_offense.is_none()
         {
             self.ptr_offense = Some(node.op.span().start().line);
@@ -1157,11 +1532,17 @@ impl<'ast> Visit<'ast> for FnBodyScanner {
     fn visit_expr_method_call(&mut self, node: &'ast syn::ExprMethodCall) {
         if self.in_unsafe > 0 && self.ptr_offense.is_none() {
             let method = node.method.to_string();
-            let recv_tainted = expr_is_derived_from(&node.receiver, &self.ptr_tainted);
+            let recv_tainted =
+                expr_is_ptr_derived(&node.receiver, &self.ptr_tainted, &self.word_tainted)
+                    || expr_is_word_inferred_cast(
+                        &node.receiver,
+                        &self.ptr_tainted,
+                        &self.word_tainted,
+                    );
             let arg_tainted = node
                 .args
                 .iter()
-                .any(|arg| expr_is_derived_from(arg, &self.ptr_tainted));
+                .any(|arg| expr_is_ptr_derived(arg, &self.ptr_tainted, &self.word_tainted));
             if (recv_tainted && !SAFE_PTR_METHODS.contains(&method.as_str()))
                 || (arg_tainted && !matches!(method.as_str(), "eq" | "ne" | "cmp"))
             {
@@ -1175,10 +1556,11 @@ impl<'ast> Visit<'ast> for FnBodyScanner {
         if self.in_unsafe > 0
             && self.ptr_offense.is_none()
             && !is_safe_ptr_free_call(&node.func)
-            && node
-                .args
-                .iter()
-                .any(|arg| expr_is_derived_from(arg, &self.ptr_tainted))
+            && node.args.iter().any(|arg| {
+                expr_is_ptr_derived(arg, &self.ptr_tainted, &self.word_tainted)
+                    || (is_ptr_accepting_inferred_cast_call(&node.func)
+                        && expr_is_word_inferred_cast(arg, &self.ptr_tainted, &self.word_tainted))
+            })
         {
             self.ptr_offense = Some(node.paren_token.span.open().start().line);
         }
@@ -1187,12 +1569,183 @@ impl<'ast> Visit<'ast> for FnBodyScanner {
             && node
                 .args
                 .iter()
-                .any(|arg| expr_is_derived_from(arg, &self.word_tainted))
+                .any(|arg| expr_is_word_derived(arg, &self.ptr_tainted, &self.word_tainted))
         {
             self.word_offense = Some(node.paren_token.span.open().start().line);
         }
         visit::visit_expr_call(self, node);
     }
+}
+
+/// Replace `$ident` macro metavariables with synthetic valid identifiers
+/// (`__macro_<ident>`) preserving the original span so `syn` can parse `fn`
+/// definitions embedded inside `macro_rules!` bodies with exact line numbers.
+fn normalize_macro_body_tokens(tokens: TokenStream) -> TokenStream {
+    let trees: Vec<TokenTree> = tokens.into_iter().collect();
+    let mut out = Vec::with_capacity(trees.len());
+    let mut i = 0;
+    while i < trees.len() {
+        if let TokenTree::Punct(p) = &trees[i]
+            && p.as_char() == '$'
+        {
+            if let Some(TokenTree::Ident(ident)) = trees.get(i + 1) {
+                let synth = Ident::new(&format!("__macro_{ident}"), ident.span());
+                out.push(TokenTree::Ident(synth));
+                i += 2;
+                continue;
+            }
+            if let Some(TokenTree::Group(group)) = trees.get(i + 1)
+                && group.delimiter() == Delimiter::Parenthesis
+            {
+                // Flatten `$( ... )sep*` repetition to a single instance so
+                // inner `fn` items or statements can still be parsed.
+                out.extend(normalize_macro_body_tokens(group.stream()));
+                i += 2;
+                if let Some(TokenTree::Punct(sep)) = trees.get(i)
+                    && !matches!(sep.as_char(), '*' | '+' | '?')
+                {
+                    i += 1;
+                }
+                if let Some(TokenTree::Punct(rep)) = trees.get(i)
+                    && matches!(rep.as_char(), '*' | '+' | '?')
+                {
+                    i += 1;
+                }
+                continue;
+            }
+        }
+        match &trees[i] {
+            TokenTree::Group(group) => {
+                let mut rebuilt = Group::new(
+                    group.delimiter(),
+                    normalize_macro_body_tokens(group.stream()),
+                );
+                rebuilt.set_span(group.span());
+                out.push(TokenTree::Group(rebuilt));
+            }
+            other => out.push(other.clone()),
+        }
+        i += 1;
+    }
+    out.into_iter().collect()
+}
+
+/// Extract `fn` items from a `macro_rules!` definition by scanning each
+/// `(...) => { ... }` rule arm's body.
+fn extract_macro_rules_fns(tokens: TokenStream) -> Vec<syn::ItemFn> {
+    let mut fns = Vec::new();
+    let trees: Vec<TokenTree> = tokens.into_iter().collect();
+    let mut i = 0;
+    while i + 2 < trees.len() {
+        let is_fat_arrow = matches!(
+            (&trees[i], &trees[i + 1]),
+            (TokenTree::Punct(eq), TokenTree::Punct(gt))
+                if eq.as_char() == '=' && eq.spacing() == Spacing::Joint && gt.as_char() == '>'
+        );
+        if is_fat_arrow && let Some(TokenTree::Group(body)) = trees.get(i + 2) {
+            let normalized = normalize_macro_body_tokens(body.stream());
+            if let Ok(file) = syn::parse2::<syn::File>(normalized.clone()) {
+                struct MacroFnCollector<'a>(&'a mut Vec<syn::ItemFn>);
+                impl<'ast> Visit<'ast> for MacroFnCollector<'_> {
+                    fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
+                        self.0.push(node.clone());
+                        visit::visit_item_fn(self, node);
+                    }
+                    fn visit_impl_item_fn(&mut self, node: &'ast syn::ImplItemFn) {
+                        self.0.push(syn::ItemFn {
+                            attrs: node.attrs.clone(),
+                            vis: node.vis.clone(),
+                            modifiers: node.modifiers.clone(),
+                            sig: node.sig.clone(),
+                            block: Box::new(node.block.clone()),
+                        });
+                        visit::visit_impl_item_fn(self, node);
+                    }
+                }
+                MacroFnCollector(&mut fns).visit_file(&file);
+            } else {
+                // Fallback: extract individual `fn ... { ... }` slices from
+                // the normalized body token stream if the arm mixes statements
+                // or fragments with item definitions.
+                let body_trees: Vec<TokenTree> = normalized.into_iter().collect();
+                let mut k = 0;
+                while k < body_trees.len() {
+                    if let TokenTree::Ident(ident) = &body_trees[k]
+                        && ident == "fn"
+                    {
+                        // Walk backward over leading modifiers/attributes (`#[...]`,
+                        // `pub(...)`, `const`, `async`, `unsafe`, `extern "..."`).
+                        let mut start = k;
+                        while start > 0 {
+                            match &body_trees[start - 1] {
+                                TokenTree::Ident(prev)
+                                    if matches!(
+                                        prev.to_string().as_str(),
+                                        "pub" | "const" | "async" | "unsafe" | "extern"
+                                    ) =>
+                                {
+                                    start -= 1;
+                                }
+                                TokenTree::Literal(_)
+                                    if start >= 2
+                                        && matches!(&body_trees[start - 2], TokenTree::Ident(e) if e == "extern") =>
+                                {
+                                    start -= 2;
+                                }
+                                TokenTree::Group(g)
+                                    if g.delimiter() == Delimiter::Parenthesis
+                                        && start >= 2
+                                        && matches!(&body_trees[start - 2], TokenTree::Ident(p) if p == "pub") =>
+                                {
+                                    start -= 2;
+                                }
+                                TokenTree::Group(g)
+                                    if g.delimiter() == Delimiter::Bracket
+                                        && start >= 2
+                                        && matches!(&body_trees[start - 2], TokenTree::Punct(p) if p.as_char() == '#') =>
+                                {
+                                    start -= 2;
+                                }
+                                _ => break,
+                            }
+                        }
+                        // Walk forward to the function's body `{ ... }`.
+                        let mut end = k + 1;
+                        while end < body_trees.len() {
+                            if let TokenTree::Group(g) = &body_trees[end]
+                                && g.delimiter() == Delimiter::Brace
+                            {
+                                end += 1;
+                                break;
+                            }
+                            if let TokenTree::Punct(p) = &body_trees[end]
+                                && p.as_char() == ';'
+                            {
+                                end = k + 1;
+                                break;
+                            }
+                            end += 1;
+                        }
+                        if end > k + 1 {
+                            let slice: TokenStream =
+                                body_trees[start..end].iter().cloned().collect();
+                            if let Ok(item_fn) = syn::parse2::<syn::ItemFn>(slice) {
+                                fns.push(item_fn);
+                                k = end;
+                                continue;
+                            }
+                        }
+                    }
+                    k += 1;
+                }
+            }
+            i += 3;
+            continue;
+        }
+        i += 1;
+    }
+    let _ = Span::call_site();
+    fns
 }
 
 #[derive(Default)]
@@ -1273,6 +1826,17 @@ impl<'ast> Visit<'ast> for ClassGuardScan {
         }
         visit::visit_trait_item_fn(self, node);
     }
+
+    fn visit_item_macro(&mut self, node: &'ast syn::ItemMacro) {
+        if has_cfg_test(&node.attrs) {
+            return;
+        }
+        if node.mac.path.is_ident("macro_rules") {
+            for item_fn in extract_macro_rules_fns(node.mac.tokens.clone()) {
+                self.check_fn(&item_fn.attrs, &item_fn.sig, &item_fn.block);
+            }
+        }
+    }
 }
 
 fn scan_class_guard_source(file: &str, source: &str) -> (Vec<String>, Vec<String>, usize) {
@@ -1331,6 +1895,102 @@ fn class_guard_controls_detect_safe_ptr_deref_and_word_from_bits() {
             false,
             true,
         ),
+        // B1: macro argument deref (jit_shim_contain! shape)
+        (
+            "deref inside macro argument block",
+            "fn bad(ctx: *mut u8) -> i64 { jit_shim_contain!(ctx, 0, { let c = unsafe { &*(ctx as *const Context) }; c.x }) }",
+            true,
+            false,
+        ),
+        (
+            "deref inside detach macro argument block",
+            "fn bad(ctx: *mut u8, args: *const i64) -> i64 { jit_shim_contain!(detach args, ctx, 0, { unsafe { *args } }) }",
+            true,
+            false,
+        ),
+        // B1: safe fn generated inside macro_rules! body (leaf_abi $rest shape)
+        (
+            "safe fn inside macro_rules! body",
+            "macro_rules! def_rest { ($rest:ident, $spec:path, $body:path) => { #[cold] fn $rest(ctx: *const Context) -> i64 { unsafe { leaf_contained(ctx, &$spec, |c| $body(c)) } } }; }",
+            true,
+            false,
+        ),
+        // B2: word-as-pointer casts (FwdRef::from_address / mark_run_at / from_cons_ptr shapes)
+        (
+            "usize word cast to raw ptr and passed to NonNull::new_unchecked",
+            "fn bad(address: usize) -> FwdRef { FwdRef(unsafe { std::ptr::NonNull::new_unchecked(address as *mut LispFwd) }) }",
+            true,
+            false,
+        ),
+        (
+            "usize word cast to raw ptr and dereferenced",
+            "fn bad(base: usize) -> u8 { let p = base as *const u8; unsafe { *p } }",
+            true,
+            false,
+        ),
+        (
+            "usize word cast via as _ to Value::from_cons_ptr",
+            "fn bad(word: usize) -> Value { unsafe { Value::from_cons_ptr(word as _) } }",
+            true,
+            false,
+        ),
+        // B3: NonNull<T> parameter deref / FFI pass
+        (
+            "NonNull param as_ref",
+            "fn bad(root: NonNull<TaggedHeap>) -> usize { unsafe { root.as_ref().len() } }",
+            true,
+            false,
+        ),
+        (
+            "NonNull param as_ptr passed to unsafe ffi",
+            "fn bad(display: NonNull<c_void>) { unsafe { from_foreign(display.as_ptr().cast()) } }",
+            true,
+            false,
+        ),
+        // B4: extended taint propagation
+        (
+            "taint via assignment",
+            "fn bad(p: *const u8) -> u8 { let mut q = core::ptr::null(); q = p; unsafe { *q } }",
+            true,
+            false,
+        ),
+        (
+            "taint via if expression",
+            "fn bad(p: *const u8, flag: bool) -> u8 { let q = if flag { p } else { core::ptr::null() }; unsafe { *q } }",
+            true,
+            false,
+        ),
+        (
+            "taint via match expression",
+            "fn bad(p: *const u8, n: usize) -> u8 { let q = match n { 0 => p, _ => core::ptr::null() }; unsafe { *q } }",
+            true,
+            false,
+        ),
+        (
+            "taint via if let pattern",
+            "fn bad(p: *mut u8) -> u8 { if let Some(q) = NonNull::new(p) { return unsafe { *q.as_ref() }; } 0 }",
+            true,
+            false,
+        ),
+        (
+            "taint via struct field",
+            "fn bad(p: *const u8) -> u8 { let w = Wrap { ptr: p }; unsafe { *w.ptr } }",
+            true,
+            false,
+        ),
+        (
+            "taint via call result NonNull::new(p)?",
+            "fn bad(p: *mut u8) -> Option<&'static u8> { let q = NonNull::new(p)?; Some(unsafe { q.as_ref() }) }",
+            true,
+            false,
+        ),
+        // N1: cfg(any(target_os = "macos", test)) is production on macOS, MUST NOT be skipped
+        (
+            "cfg(any(target_os, test)) is still production",
+            "#[cfg(any(target_os = \"macos\", test))] fn bad(p: *const u8) -> u8 { unsafe { *p } }",
+            true,
+            false,
+        ),
     ] {
         let (ptrs, words, _) = scan_class_guard_source("fixture.rs", fixture);
         assert_eq!(
@@ -1356,6 +2016,10 @@ fn class_guard_controls_detect_safe_ptr_deref_and_word_from_bits() {
             "unsafe fn ok(bits: usize) -> Value { unsafe { Value::from_bits(bits) } }",
         ),
         (
+            "unsafe fn inside macro_rules! body",
+            "macro_rules! def_ok { ($rest:ident) => { unsafe fn $rest(ctx: *const Context) -> i64 { unsafe { leaf_contained(ctx) } } }; }",
+        ),
+        (
             "safe identity comparison inside unsafe chain walk",
             "impl Chain { fn ok(&self, target: *mut Node) -> bool { unsafe { let mut c = self.head; while !c.is_null() { if c == target { return true; } c = (*c).next; } false } } }",
         ),
@@ -1370,6 +2034,22 @@ fn class_guard_controls_detect_safe_ptr_deref_and_word_from_bits() {
         (
             "f64::from_bits",
             "fn ok(bits: u64) -> f64 { f64::from_bits(bits) }",
+        ),
+        (
+            "usize length passed with as _ to unsafe syscall",
+            "fn ok(&self, len: usize) { unsafe { libc::write(1, self.ptr, len as _); } }",
+        ),
+        (
+            "address of local holding word param passed to ffi",
+            "fn ok(epoch: i64) { let mut t = epoch; unsafe { libc::localtime_r(&mut t as *mut _); } }",
+        ),
+        (
+            "cfg(test) is skipped",
+            "#[cfg(test)] fn ok(p: *const u8) -> u8 { unsafe { *p } }",
+        ),
+        (
+            "cfg(all(feature, test)) is skipped",
+            "#[cfg(all(feature = \"jit\", test))] fn ok(p: *const u8) -> u8 { unsafe { *p } }",
         ),
     ] {
         let (ptrs, words, _) = scan_class_guard_source("fixture.rs", fixture);
