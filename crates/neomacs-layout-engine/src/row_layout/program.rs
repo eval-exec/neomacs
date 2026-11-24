@@ -1077,7 +1077,14 @@ impl RowProgram {
             {
                 word_wrap.allow_after_current_char(last);
             }
+            let position_before_item = position;
+            let row_height_before_item = row.height_px;
+            let row_ascent_before_item = row.ascent_px;
+            let row_spacing_before_item = row.line_spacing_px;
             position = progress.end();
+            // A mapped run can fold into the previous hit span. Remember that
+            // span so a deferred clip can put it back unchanged.
+            let mut merged_away = None;
             if let DisplayItemKind::SourceMappedText(mapped) = &render_item.source_item().kind
                 && let Some(measurement_face) = mapped.measurement_face
             {
@@ -1088,8 +1095,11 @@ impl RowProgram {
                     .last()
                     .is_some_and(|slot: &DisplayRowGlyphSlot| slot.source() == source)
                 {
-                    slot_heights.pop();
-                    slots.pop().unwrap().start_position()
+                    let height = slot_heights.pop().ok_or(RowProgramError::Unsupported)?;
+                    let slot = slots.pop().ok_or(RowProgramError::Unsupported)?;
+                    let start = slot.start_position();
+                    merged_away = Some((slot, height));
+                    start
                 } else {
                     progress.start()
                 };
@@ -1123,11 +1133,39 @@ impl RowProgram {
                 return Err(RowProgramError::Budget);
             }
             if progress.status() == DisplayRowAppendStatus::Clipped {
-                if !can_split || slots.is_empty() {
+                // GNU `display_line` restores the iterator to before an element
+                // that drew past the right edge and keeps only that element's
+                // already-committed glyphs (src/xdisp.c:26433-26466,
+                // `row->used[TEXT_AREA] = n_glyphs_before + i`). An invisible
+                // ellipsis is one program operation: `preserves_buffer_anchor`
+                // holds the buffer position at the preceding text, so resuming
+                // after a partial glyph prefix would advance that anchor.
+                // Drop every glyph this operation added and produce it whole
+                // on the next row. An empty row that cannot hold it still
+                // overflows. A splittable buffer run keeps the `can_split` guard.
+                let deferred_whole = previous_slots > 0
+                    && preserves_buffer_anchor(&render_item.source_item().span.start);
+                if !deferred_whole && (!can_split || slots.is_empty()) {
                     return Err(RowProgramError::Overflow);
                 }
+                if deferred_whole {
+                    checkpoint.restore(&mut row);
+                    if let Some((slot, height)) = merged_away {
+                        slots.pop();
+                        slot_heights.pop();
+                        slots.push(slot);
+                        slot_heights.push(height);
+                    } else {
+                        slots.truncate(previous_slots);
+                        slot_heights.truncate(previous_slots);
+                    }
+                    row.height_px = row_height_before_item;
+                    row.ascent_px = row_ascent_before_item;
+                    row.line_spacing_px = row_spacing_before_item;
+                    position = position_before_item;
+                }
                 let mut wrap_extend = active_extend;
-                let (next_index, next_offset) = if word_wrap.has_candidate() {
+                let (next_index, next_offset) = if !deferred_whole && word_wrap.has_candidate() {
                     let candidate = word_wrap.candidate();
                     wrap_extend = candidate.row_extend();
                     let boundary = candidate.source_position().charpos();
@@ -1172,7 +1210,14 @@ impl RowProgram {
                     position = candidate.row_position();
                     (index, offset)
                 } else {
-                    (operation_index, operation_offset + progress.slots().len())
+                    (
+                        operation_index,
+                        if deferred_whole {
+                            operation_offset
+                        } else {
+                            operation_offset + progress.slots().len()
+                        },
+                    )
                 };
                 let next_source = buffer_anchors[next_index].advanced_by(
                     next_offset,
