@@ -663,6 +663,25 @@ fn equal_key_hundred_thousand_list_does_not_overflow() {
     });
 }
 
+/// `hash_key_to_value` walks the cdr spine in a loop. The insert budget still
+/// bounds the stored chain. This row locks a 2000-element list of fixnums.
+#[test]
+fn hash_key_to_value_walks_a_two_thousand_element_list() {
+    crate::test_utils::init_test_tracing();
+    with_test_heap(|| {
+        let mut tail = Value::NIL;
+        for i in (0..2000).rev() {
+            tail = Value::cons(Value::fixnum(i), tail);
+        }
+        let key = tail.to_hash_key(&HashTableTest::Equal);
+        let restored = crate::hashtab::hash_key_to_value(&key);
+        assert!(
+            restored == tail,
+            "a 2000-element list key converts back to its list"
+        );
+    });
+}
+
 fn rust_hash(value: &Value) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     value.hash(&mut hasher);

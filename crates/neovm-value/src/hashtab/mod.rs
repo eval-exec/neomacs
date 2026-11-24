@@ -94,7 +94,24 @@ pub(crate) fn hash_key_to_value(key: &HashKey) -> Value {
         HashKey::Window(id) => Value::make_window(*id),
         HashKey::Frame(id) => Value::make_frame(*id),
         HashKey::Ptr(_) => Value::NIL, // can't reconstruct from pointer
-        HashKey::EqualCons(car, cdr) => Value::cons(hash_key_to_value(car), hash_key_to_value(cdr)),
+        HashKey::EqualCons(_, _) => {
+            let mut cars = Vec::new();
+            let mut node = key;
+            let tail = loop {
+                match node {
+                    HashKey::EqualCons(car, cdr) => {
+                        cars.push(hash_key_to_value(car));
+                        node = cdr.as_ref();
+                    }
+                    other => break hash_key_to_value(other),
+                }
+            };
+            let mut value = tail;
+            while let Some(car) = cars.pop() {
+                value = Value::cons(car, value);
+            }
+            value
+        }
         HashKey::EqualVec(items) => {
             let vals: Vec<Value> = items.iter().map(hash_key_to_value).collect();
             Value::vector(vals)

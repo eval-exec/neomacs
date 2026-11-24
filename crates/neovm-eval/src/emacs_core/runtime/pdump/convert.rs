@@ -3194,10 +3194,27 @@ pub(crate) fn dump_hash_key(encoder: &mut DumpEncoder, k: &HashKey) -> DumpHashK
                 DumpHashKey::Ptr(*p as u64)
             }
         }
-        HashKey::EqualCons(a, b) => DumpHashKey::EqualCons(
-            Box::new(dump_hash_key(encoder, a)),
-            Box::new(dump_hash_key(encoder, b)),
-        ),
+        HashKey::EqualCons(_, _) => {
+            // A proper list is one cdr chain. Recursing on it overflows near
+            // the insert budget. Cars stay recursive; their nesting is the
+            // depth cap.
+            let mut cars = Vec::new();
+            let mut node = k;
+            let tail = loop {
+                match node {
+                    HashKey::EqualCons(car, cdr) => {
+                        cars.push(dump_hash_key(encoder, car));
+                        node = cdr.as_ref();
+                    }
+                    other => break dump_hash_key(encoder, other),
+                }
+            };
+            let mut dumped = tail;
+            while let Some(car) = cars.pop() {
+                dumped = DumpHashKey::EqualCons(Box::new(car), Box::new(dumped));
+            }
+            dumped
+        }
         HashKey::EqualVec(v) => {
             DumpHashKey::EqualVec(v.iter().map(|key| dump_hash_key(encoder, key)).collect())
         }
@@ -5260,10 +5277,24 @@ pub(crate) fn load_hash_key(decoder: &mut LoadDecoder, k: &DumpHashKey) -> HashK
                 .heap_ref_to_value(TaggedHeapRef { index: *a })
                 .bits(),
         ),
-        DumpHashKey::EqualCons(a, b) => HashKey::EqualCons(
-            Box::new(load_hash_key(decoder, a)),
-            Box::new(load_hash_key(decoder, b)),
-        ),
+        DumpHashKey::EqualCons(_, _) => {
+            let mut cars = Vec::new();
+            let mut node = k;
+            let tail = loop {
+                match node {
+                    DumpHashKey::EqualCons(car, cdr) => {
+                        cars.push(load_hash_key(decoder, car));
+                        node = cdr.as_ref();
+                    }
+                    other => break load_hash_key(decoder, other),
+                }
+            };
+            let mut loaded = tail;
+            while let Some(car) = cars.pop() {
+                loaded = HashKey::EqualCons(Box::new(car), Box::new(loaded));
+            }
+            loaded
+        }
         DumpHashKey::EqualVec(v) => HashKey::EqualVec(
             v.iter()
                 .map(|item| load_hash_key(decoder, item))
@@ -5334,6 +5365,24 @@ fn load_byte_code_key_part(
 }
 
 fn load_hash_key_owned(decoder: &mut LoadDecoder, k: DumpHashKey) -> HashKey {
+    if matches!(k, DumpHashKey::EqualCons(_, _)) {
+        let mut cars = Vec::new();
+        let mut node = k;
+        let tail = loop {
+            match node {
+                DumpHashKey::EqualCons(car, cdr) => {
+                    cars.push(load_hash_key_owned(decoder, *car));
+                    node = *cdr;
+                }
+                other => break load_hash_key_owned(decoder, other),
+            }
+        };
+        let mut loaded = tail;
+        while let Some(car) = cars.pop() {
+            loaded = HashKey::EqualCons(Box::new(car), Box::new(loaded));
+        }
+        return loaded;
+    }
     match k {
         DumpHashKey::Nil => HashKey::Nil,
         DumpHashKey::True => HashKey::True,
@@ -5353,10 +5402,7 @@ fn load_hash_key_owned(decoder: &mut LoadDecoder, k: DumpHashKey) -> HashKey {
         DumpHashKey::HeapRef(a) => {
             HashKey::Ptr(decoder.heap_ref_to_value(TaggedHeapRef { index: a }).bits())
         }
-        DumpHashKey::EqualCons(a, b) => HashKey::EqualCons(
-            Box::new(load_hash_key_owned(decoder, *a)),
-            Box::new(load_hash_key_owned(decoder, *b)),
-        ),
+        DumpHashKey::EqualCons(_, _) => unreachable!("spines are loaded above"),
         DumpHashKey::EqualVec(v) => HashKey::EqualVec(
             v.into_iter()
                 .map(|item| load_hash_key_owned(decoder, item))

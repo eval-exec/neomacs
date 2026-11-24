@@ -298,9 +298,11 @@ fn load_hash_table_makes_all_dumped_entries_iterable() {
     );
 }
 
-/// A stored equal key for a long list is one `EqualCons` chain. Dumping and
-/// loading it must not recurse one frame per cons. `assert!` avoids the
-/// derived `Debug`, which still walks that chain.
+/// A stored equal key for a long list is one `EqualCons` chain. Dump and
+/// load walk that cdr spine in a loop. The insert budget still bounds how
+/// long a stored chain can be. This row locks a 2000-element list of
+/// fixnums. `assert!` avoids the derived `Debug`, which still walks that
+/// chain.
 #[test]
 fn dump_and_load_a_two_thousand_element_list_key() {
     crate::test_utils::init_test_tracing();
@@ -322,6 +324,11 @@ fn dump_and_load_a_two_thousand_element_list_key() {
     assert!(
         loaded == key,
         "a 2000-element list key survives dump and load"
+    );
+    let loaded_owned = load_hash_key_owned(&mut LoadDecoder::new(&heap), dumped);
+    assert!(
+        loaded_owned == key,
+        "the owned load walks the same 2000-element spine"
     );
 }
 
