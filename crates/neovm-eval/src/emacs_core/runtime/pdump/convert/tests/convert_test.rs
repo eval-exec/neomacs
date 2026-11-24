@@ -298,6 +298,33 @@ fn load_hash_table_makes_all_dumped_entries_iterable() {
     );
 }
 
+/// A stored equal key for a long list is one `EqualCons` chain. Dumping and
+/// loading it must not recurse one frame per cons. `assert!` avoids the
+/// derived `Debug`, which still walks that chain.
+#[test]
+fn dump_and_load_a_two_thousand_element_list_key() {
+    crate::test_utils::init_test_tracing();
+    let mut tail = Value::NIL;
+    for i in (0..2000).rev() {
+        tail = Value::cons(Value::fixnum(i), tail);
+    }
+    let key = tail.to_hash_key(&HashTableTest::Equal);
+    let dumped = dump_hash_key(&mut DumpEncoder::new(), &key);
+    let heap = DumpTaggedHeap {
+        objects: Vec::new(),
+        mapped_cons: Vec::new(),
+        mapped_floats: Vec::new(),
+        mapped_strings: Vec::new(),
+        mapped_veclikes: Vec::new(),
+        mapped_slots: Vec::new(),
+    };
+    let loaded = load_hash_key(&mut LoadDecoder::new(&heap), &dumped);
+    assert!(
+        loaded == key,
+        "a 2000-element list key survives dump and load"
+    );
+}
+
 fn write_raw_word(bytes: &mut [u8], offset: usize, word: usize) {
     bytes[offset..offset + std::mem::size_of::<usize>()].copy_from_slice(&word.to_ne_bytes());
 }
