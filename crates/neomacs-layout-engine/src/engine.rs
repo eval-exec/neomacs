@@ -6280,17 +6280,25 @@ impl LayoutEngine {
         let budget = screenful.saturating_mul(4).max(8192);
         let first = (params.window_start.max(0) as usize).saturating_sub(screenful);
         let minimum_end = first.saturating_add(budget);
-        let previous_end = self
+        let previous_span = self
             .retained_window_matrices
             .get(&DisplayWindowId::new(params.window_id))
-            .and_then(|matrix| matrix.display_snapshot.visible_buffer_span())
-            .map(|span| {
-                neovm_core::buffer::CharPos0::from_lisp(span.end())
-                    .get()
-                    .saturating_add(1)
-            })?;
-        let end = previous_end
-            .max(minimum_end)
+            .and_then(|matrix| matrix.display_snapshot.visible_buffer_span())?;
+        let previous_start = neovm_core::buffer::CharPos0::from_lisp(previous_span.start()).get();
+        let previous_end = neovm_core::buffer::CharPos0::from_lisp(previous_span.end())
+            .get()
+            .saturating_add(1);
+        // Carry forward `previous_end` only when the new viewport overlaps or
+        // adjoins the previous one (e.g. scrolling/editing across an invisible
+        // span). A large jump backward (such as `G` -> `gg` in a long log
+        // buffer) must not stretch the range view from the new top all the way
+        // to the old bottom and snapshot the entire buffer's overlays.
+        let end_anchor = if previous_start <= minimum_end && first <= previous_end {
+            previous_end.max(minimum_end)
+        } else {
+            minimum_end
+        };
+        let end = end_anchor
             .saturating_add(budget)
             .min(buffer.total_char_end_pos().get());
         Some((first.min(end), end))

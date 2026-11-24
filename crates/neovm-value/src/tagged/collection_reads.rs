@@ -498,6 +498,11 @@ fn unchanged_since(
     revision: LispCollectionRevision,
     store: &StoreState,
 ) -> bool {
+    // An observation that read zero mutable collections cannot be invalidated
+    // by unrelated writes in its own World even after the bounded journal wraps.
+    if reads.is_empty() {
+        return true;
+    }
     let count = store.sequence().wrapping_sub(revision.sequence());
     if count > JOURNAL_SIZE as u64 {
         return false;

@@ -1320,3 +1320,130 @@ fn restoring_prefix_bytes_restores_attempt_validity() {
             .unwrap()
     );
 }
+
+fn setup_large_overlay_buffer_for_jump_test() -> (
+    neovm_core::emacs_core::Context,
+    neovm_core::window::FrameId,
+    neovm_core::window::WindowId,
+    neovm_core::buffer::BufferId,
+) {
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let buffer = eval.buffer_manager().current_buffer().unwrap().id();
+    // > JOURNAL_SIZE (8192) overlays with multi-property plists so a whole-buffer
+    // overlay snapshot performs well over 8192 cons writes, matching magit-log
+    // after 5+ doubles on a long-history repo.
+    let line_count = 9_500usize;
+    let mut content = String::with_capacity(line_count * 32);
+    for i in 0..line_count {
+        use std::fmt::Write;
+        let _ = writeln!(content, "* commit {i:06} subject line");
+    }
+    eval.buffer_manager_mut()
+        .get_mut(buffer)
+        .unwrap()
+        .insert(&content);
+    eval.eval_str(
+        r#"(save-excursion
+             (goto-char (point-min))
+             (let ((i 0))
+               (while (null (eobp))
+                 (let* ((beg (point))
+                        (end (line-end-position))
+                        (ov (make-overlay beg end)))
+                   (overlay-put ov 'face 'bold)
+                   (overlay-put ov 'magit-section i)
+                   (if (= i 0)
+                       (overlay-put ov 'before-string "* "))
+                   (setq i (1+ i)))
+                 (forward-line 1))))"#,
+    )
+    .unwrap();
+    let frame = eval
+        .frame_manager_mut()
+        .create_frame("large-overlay-jump", 640, 400, buffer);
+    let window = eval.frame_manager().get(frame).unwrap().selected_window;
+    (eval, frame, window, buffer)
+}
+
+#[test]
+fn initial_layout_converges_on_large_overlay_buffer_with_before_string() {
+    let (mut eval, frame, window, buffer) = setup_large_overlay_buffer_for_jump_test();
+    eval.eval_str("(goto-char (point-min))").unwrap();
+    let mut engine = LayoutEngine::new_without_font_metrics();
+    engine.layout_frame_rust(&mut eval, frame);
+    assert!(
+        eval.fresh_window_display_snapshot(frame, window, buffer)
+            .is_some(),
+        "initial layout on >8192-overlay buffer must converge and publish a fresh display snapshot"
+    );
+}
+
+#[test]
+fn layout_converges_after_jumping_to_top_of_large_overlay_buffer() {
+    let (mut eval, frame, window, buffer) = setup_large_overlay_buffer_for_jump_test();
+    let mut engine = LayoutEngine::new_without_font_metrics();
+
+    // First lay out at the bottom of the buffer (like `G` in magit-log).
+    eval.eval_str("(goto-char (point-max))").unwrap();
+    engine.layout_frame_rust(&mut eval, frame);
+    assert!(
+        eval.fresh_window_display_snapshot(frame, window, buffer)
+            .is_some(),
+        "layout at bottom of large overlay buffer should converge"
+    );
+
+    // Now jump to the top of the buffer (like `gg`).
+    eval.eval_str("(goto-char (point-min))").unwrap();
+    let frame_ref = eval.frame_manager().get(frame).unwrap();
+    let win_ref = frame_ref.find_window(window).unwrap();
+    let buf_ref = eval.buffer_manager().get(buffer).unwrap();
+    let mut top_params = crate::neovm_bridge::window_params_from_neovm(
+        win_ref,
+        buf_ref,
+        frame_ref,
+        eval.variables(),
+        eval.face_table(),
+        None,
+        true,
+        false,
+        Value::T,
+        Value::NIL,
+        None,
+    )
+    .expect("leaf window params");
+    top_params.window_start = 0;
+    let span_after_jump = engine
+        .overlay_view_char_span_for(&top_params, buf_ref)
+        .expect("retained window matrix provides an overlay view span");
+    let total_chars = buf_ref.total_char_end_pos().get();
+    assert!(
+        span_after_jump.1 < total_chars / 2,
+        "G -> gg backward jump must keep overlay view bounded near top, got {span_after_jump:?} of {total_chars}"
+    );
+    engine.layout_frame_rust(&mut eval, frame);
+    let snapshot = eval
+        .fresh_window_display_snapshot(frame, window, buffer)
+        .expect("G -> gg jump on >8192-overlay buffer must converge and publish a fresh snapshot");
+    let span = snapshot
+        .visible_buffer_span()
+        .expect("visible span at top of buffer");
+    assert_eq!(
+        neovm_core::buffer::CharPos0::from_lisp(span.start()).get(),
+        0,
+        "viewport should start at point-min"
+    );
+
+    // Verify a subsequent layout query (like `G` after `gg`) also converges.
+    eval.eval_str("(goto-char (point-max))").unwrap();
+    let mut query_engine = WindowLayoutQueryEngine::new_without_font_metrics();
+    let queried = query_engine.query_window_layout(
+        &mut eval,
+        frame,
+        window,
+        neovm_core::window::WindowLayoutQueryScope::Viewport,
+    );
+    assert!(
+        queried.is_ok(),
+        "synchronous layout query after G -> gg must converge: {queried:?}"
+    );
+}
