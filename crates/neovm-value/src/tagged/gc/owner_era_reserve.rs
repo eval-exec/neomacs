@@ -623,10 +623,13 @@ impl TaggedHeap {
     /// Return every leased range. Only the stopped session calls this.
     ///
     /// A poisoned allocator is permanent, so this leaves the count
-    /// outstanding. The session reports `Publication` for that case. A
-    /// forgotten or abandoned book is recoverable on the next stop while
-    /// the allocator is healthy. Retire-path reclaim, one owner at
-    /// `retire_rooted`, is still owed: this walk returns every owner.
+    /// outstanding. A mid-return unwind can also leave a count after the
+    /// lease table has been taken; the next stop walks an empty table and
+    /// that count does not clear. The session reports `Publication` for
+    /// either leftover. A forgotten book whose lease is still in the table
+    /// is returned on the next stop while the allocator is healthy.
+    /// Retire-path reclaim, one owner at `retire_rooted`, is still owed:
+    /// this walk returns every owner.
     pub(in crate::tagged::gc) fn return_leased_owner_cons_reserves(&mut self) {
         if !self.has_owner_cons_reserves() || self.cons_allocator.is_poisoned() {
             return;

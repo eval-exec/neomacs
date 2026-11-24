@@ -989,6 +989,64 @@ pub(super) fn owner_cons_reserve_poisoned_allocator_is_publication<K, W>(
     });
 }
 
+/// A reserved-block count with an empty lease table is what a mid-return
+/// unwind leaves behind. The count stands in for that wedge: the return
+/// took the table and did not discharge every block. Two stopped
+/// collections both report `Publication`, because the next walk still
+/// sees an empty table and the count does not clear.
+pub(super) fn owner_cons_reserve_leftover_count_is_publication<K, W>(
+    roots_era: &mut dyn FnMut(&mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>, RootsFixture)),
+    world_roots: W,
+) where
+    K: EraKeeper + std::fmt::Debug,
+    W: Copy
+        + for<'k, 's, 'e, 'o> Fn(
+            &'k K,
+            &'s mut AllStopped<'e>,
+            &'o mut Vec<Value>,
+        ) -> Result<
+            Vec<*mut *mut crate::tagged::header::MarkerObj>,
+            RendezvousError,
+        >,
+{
+    roots_era(&mut |era, _inputs| {
+        era.start_cons_storage().unwrap();
+        let mut stopped = era.stop().unwrap();
+        era.return_cons_storage(&stopped).unwrap();
+        with_stopped_legacy_heap(&era, &stopped, |heap| {
+            assert!(
+                !heap.has_owner_cons_reserves(),
+                "a fresh stop holds no owner cons count"
+            );
+            // No lease is inserted. The count alone is the wedge's leftover.
+            heap.cons_allocator.credit_owner_reserved_block();
+            assert!(
+                heap.has_owner_cons_reserves(),
+                "the leftover count is visible with an empty lease table"
+            );
+        });
+        assert_eq!(
+            era.collect_stopped(&mut stopped, world_roots).err(),
+            Some(RendezvousError::Publication),
+            "a leftover count is permanent and must not be retried as Busy"
+        );
+        assert_eq!(
+            era.collect_stopped(&mut stopped, world_roots).err(),
+            Some(RendezvousError::Publication),
+            "a second stop still sees the leftover count"
+        );
+        with_stopped_legacy_heap(&era, &stopped, |heap| {
+            heap.cons_allocator.return_owner_reserved_blocks(1);
+            assert!(!heap.has_owner_cons_reserves());
+        });
+        stopped.trace(|_, _| Ok(())).unwrap();
+        complete(stopped);
+        let (collector, keeper) = era.finish().unwrap();
+        drop(collector);
+        drop(keeper);
+    });
+}
+
 /// The session, not an explicit return, gives a partly carved block back.
 /// The rooted handed cell stays, the unhanded tail is rewound, and the next
 /// allocation is a different cell.
@@ -1034,6 +1092,9 @@ pub(super) fn owner_cons_reserve_session_return_keeps_handed_cell_and_reclaims_t
             let block_index = reserve.first_leased_block_for_test();
             reserve.close_for_stop(heap, &mut region).unwrap();
             // The session returns the lease. This row does not.
+            // SAFETY: this cell was just taken from this run and written
+            // with car 1701. The keeper of this stop registers it before
+            // the session collects.
             let root = unsafe { SharedRoot::new(heap, handed) };
             (root, block_index, handed_addr)
         });
@@ -1052,9 +1113,20 @@ pub(super) fn owner_cons_reserve_session_return_keeps_handed_cell_and_reclaims_t
         with_stopped_legacy_heap(&era, &stopped, |heap| {
             let value = root.materialize(heap).unwrap().value();
             assert_eq!(value.cons_car(), Value::fixnum(1701));
+            let block = &heap.cons_blocks[block_index];
             assert_eq!(
-                heap.cons_blocks[block_index].next_index, 1,
+                block.next_index, 1,
                 "the unhanded tail was rewound to the handed cell"
+            );
+            let cell = std::mem::size_of::<ConsCell>();
+            let tail_addr = handed_addr + cell;
+            // Closing the region ends this block's bump, so the next
+            // alloc_cons comes from another block. Reclaim is the cursor
+            // sitting on the tail cell, which the sweep does not walk.
+            assert_eq!(
+                tail_addr,
+                block.base_addr() + (block.next_index as usize) * cell,
+                "the tail cell is the bump cursor and is not in the swept prefix"
             );
             let fresh = heap.alloc_cons(Value::NIL, Value::NIL);
             assert_ne!(
