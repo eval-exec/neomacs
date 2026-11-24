@@ -384,8 +384,9 @@ fn projected_localized_read_allocates_nothing_without_the_buffer_object() {
         .buffers
         .set_buffer_local_property_by_sym_id(buffer_id, id, Value::fixnum(4547))
         .expect("the local binding is written");
-    let buffer_object =
-        || neovm_value::tagged::gc::with_tagged_heap(|heap| heap.buffer_value(buffer_id));
+    let buffer_object = || unsafe {
+        neovm_value::tagged::gc::with_tagged_heap(|heap| heap.buffer_value(buffer_id))
+    };
     assert!(buffer_object().is_none(), "the buffer object starts absent");
     let allocated = ev.tagged_heap.allocated_count();
 
@@ -563,7 +564,8 @@ fn projected_localized_generic_view_keeps_unregistered_cache_locus_nil() {
         );
     }
     assert!(
-        neovm_value::tagged::gc::with_tagged_heap(|heap| heap.buffer_value(buffer_id)).is_none()
+        unsafe { neovm_value::tagged::gc::with_tagged_heap(|heap| heap.buffer_value(buffer_id)) }
+            .is_none()
     );
     assert_eq!(ev.tagged_heap.allocated_count(), allocated);
 }

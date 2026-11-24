@@ -157,7 +157,7 @@ impl SerialHashTableStorageCharge {
             .materialized_bytes()
             .saturating_sub(self.before.materialized_bytes());
         if grown != 0 {
-            with_tagged_heap(|heap| heap.note_allocation_bytes(grown));
+            unsafe { with_tagged_heap(|heap| heap.note_allocation_bytes(grown)) };
         }
     }
 }

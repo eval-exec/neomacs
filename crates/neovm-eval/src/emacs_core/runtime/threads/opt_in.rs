@@ -38,7 +38,11 @@ fn admit_parallel(eval: &Context) -> Result<ParallelAdmission, NMutatorEntryErro
     // The subr runs with this heap installed. A caller that has not installed
     // it yet must not observe a different thread-local heap.
     let eligible = if neovm_value::tagged::gc::tagged_heap_is_current(&eval.tagged_heap) {
-        neovm_value::tagged::gc::with_tagged_heap(|heap| heap.tagged_heap_generational_enabled())
+        unsafe {
+            neovm_value::tagged::gc::with_tagged_heap(|heap| {
+                heap.tagged_heap_generational_enabled()
+            })
+        }
     } else {
         eval.tagged_heap.tagged_heap_generational_enabled()
     };

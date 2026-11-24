@@ -265,7 +265,8 @@ fn frame_only_original_certificate_is_not_cached_as_history() {
 fn dead_frame_retirement_releases_original_source_roots() {
     let (mut context, mut entry) = viewport();
     context.gc_collect_exact();
-    let allocated = || neovm_core::tagged::gc::with_tagged_heap(|heap| heap.allocated_count());
+    let allocated =
+        || unsafe { neovm_core::tagged::gc::with_tagged_heap(|heap| heap.allocated_count()) };
     let baseline = allocated();
     std::rc::Rc::make_mut(&mut entry.payload).cursor_sources = Some(capture(
         &context,

@@ -176,6 +176,14 @@ impl TaggedHeap {
     /// `drop_in_place` frees the element `Vec` the vector owns).
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn alloc_vector(&mut self, items: Vec<TaggedValue>) -> TaggedValue {
+        let ptr = self.alloc_vector_raw(items);
+        unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
+    }
+
+    /// Allocate a vector slot from the vector arena pages and return its typed
+    /// raw pointer without an integer-to-pointer round-trip. Used by
+    /// `alloc_vector` and by strict-provenance Miri tests.
+    pub(crate) fn alloc_vector_raw(&mut self, items: Vec<TaggedValue>) -> *mut VectorObj {
         self.add_memory_use_count(MemoryUseCountSlot::VectorCells, items.len() as u64);
         let ptr = self.vector_arena.alloc_slot();
         unsafe {
@@ -204,7 +212,13 @@ impl TaggedHeap {
             size_of::<VectorObj>()
                 .saturating_add(Self::lisp_value_vec_storage_bytes(unsafe { &(*ptr).data })),
         );
-        unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
+        ptr
+    }
+
+    /// Number of live 64 KiB pages currently owned by `vector_arena`.
+    #[cfg(test)]
+    pub(crate) fn vector_arena_page_count(&self) -> usize {
+        self.vector_arena.pages.len()
     }
 
     /// Allocate a GNU-shaped char-table.

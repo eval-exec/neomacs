@@ -2986,24 +2986,24 @@ impl TaggedValue {
     pub fn make_string(s: impl Into<String>) -> Self {
         let s = s.into();
         let multibyte = !s.is_ascii();
-        with_tagged_heap(|h| h.alloc_string(LispString::new(s, multibyte)))
+        unsafe { with_tagged_heap(|h| h.alloc_string(LispString::new(s, multibyte))) }
     }
 
     /// Allocate a string from a pre-built LispString.
     pub fn heap_string(s: LispString) -> Self {
-        with_tagged_heap(|h| h.alloc_string(s))
+        unsafe { with_tagged_heap(|h| h.alloc_string(s)) }
     }
 
     /// Allocate a multibyte string.
     pub fn multibyte_string(s: impl Into<String>) -> Self {
         let s = s.into();
-        with_tagged_heap(|h| h.alloc_string(LispString::new(s, true)))
+        unsafe { with_tagged_heap(|h| h.alloc_string(LispString::new(s, true))) }
     }
 
     /// Allocate a unibyte string.
     pub fn unibyte_string(s: impl Into<String>) -> Self {
         let s = s.into();
-        with_tagged_heap(|h| h.alloc_string(LispString::new(s, false)))
+        unsafe { with_tagged_heap(|h| h.alloc_string(LispString::new(s, false))) }
     }
 
     /// Allocate a string with text properties.
@@ -3028,7 +3028,7 @@ impl TaggedValue {
 
     /// Allocate a float on the heap.
     pub fn make_float(f: f64) -> Self {
-        with_tagged_heap(|h| h.alloc_float(f))
+        unsafe { with_tagged_heap(|h| h.alloc_float(f)) }
     }
 
     /// Allocate a bignum on the heap. Caller is responsible for ensuring
@@ -3038,7 +3038,7 @@ impl TaggedValue {
     /// fixnum when the value fits and only allocating a bignum on
     /// promotion.
     pub fn bignum(value: Integer) -> Self {
-        with_tagged_heap(|h| h.alloc_bignum(value))
+        unsafe { with_tagged_heap(|h| h.alloc_bignum(value)) }
     }
 
     /// [`Self::bignum`] with the arena allocation inlined into the caller:
@@ -3048,7 +3048,7 @@ impl TaggedValue {
     #[inline(always)]
     #[doc(hidden)]
     pub fn bignum_inline(value: Integer) -> Self {
-        with_tagged_heap(|h| h.alloc_bignum_inline(value))
+        unsafe { with_tagged_heap(|h| h.alloc_bignum_inline(value)) }
     }
 
     /// Canonical "make a Lisp integer from this machine integer" fast
@@ -3152,7 +3152,7 @@ impl TaggedValue {
                 );
             }
         }
-        with_tagged_heap(|h| h.alloc_cons(car, cdr))
+        unsafe { with_tagged_heap(|h| h.alloc_cons(car, cdr)) }
     }
 
     /// Build a proper list from a Vec.
@@ -3173,7 +3173,7 @@ impl TaggedValue {
         if values.is_empty() {
             return Value::NIL;
         }
-        with_tagged_heap(|heap| heap.list_from_slice(values))
+        unsafe { with_tagged_heap(|heap| heap.list_from_slice(values)) }
     }
 
     /// Allocate a vector (old API name).
@@ -3183,7 +3183,7 @@ impl TaggedValue {
 
     /// Allocate a vector.
     pub fn make_vector(values: Vec<Value>) -> Self {
-        with_tagged_heap(|h| h.alloc_vector(values))
+        unsafe { with_tagged_heap(|h| h.alloc_vector(values)) }
     }
 
     /// Allocate a GNU-shaped char-table.
@@ -3191,7 +3191,7 @@ impl TaggedValue {
         // A new table can reuse a collected table's address; caches keyed on
         // (table bits, char-table write tick) must not match across that.
         bump_char_table_write_tick();
-        with_tagged_heap(|h| h.alloc_char_table(purpose, init, n_extras))
+        unsafe { with_tagged_heap(|h| h.alloc_char_table(purpose, init, n_extras)) }
     }
 
     /// Allocate Lisp-supplied extra slots only after GNU count validation.
@@ -3205,58 +3205,56 @@ impl TaggedValue {
         let mut extras = reserved_values(count)?;
         extras.resize(count.capacity(), init);
         bump_char_table_write_tick();
-        Ok(with_tagged_heap(|h| {
-            h.alloc_char_table_with_extras(purpose, init, extras)
-        }))
+        Ok(unsafe { with_tagged_heap(|h| h.alloc_char_table_with_extras(purpose, init, extras)) })
     }
 
     /// Allocate a GNU-shaped sub-char-table.
     pub fn make_sub_char_table(depth: i32, min_char: i32, contents: Vec<Value>) -> Self {
-        with_tagged_heap(|h| h.alloc_sub_char_table(depth, min_char, contents))
+        unsafe { with_tagged_heap(|h| h.alloc_sub_char_table(depth, min_char, contents)) }
     }
 
     /// Allocate a record.
     pub fn make_record(values: Vec<Value>) -> Self {
-        with_tagged_heap(|h| h.alloc_record(values))
+        unsafe { with_tagged_heap(|h| h.alloc_record(values)) }
     }
 
     /// Allocate a native tree-sitter node with private, GC-traced slots.
     /// Ordinary Lisp records cannot acquire this pseudovector type.
     #[doc(hidden)]
     pub fn make_treesit_node(values: Vec<Value>) -> Self {
-        with_tagged_heap(|h| h.alloc_treesit_node(values))
+        unsafe { with_tagged_heap(|h| h.alloc_treesit_node(values)) }
     }
 
     /// Allocate an opaque opened-font pseudovector (`PVEC_FONT`).
     #[doc(hidden)]
     pub fn make_font(data: FontObjectData) -> Self {
-        with_tagged_heap(|h| h.alloc_font(data))
+        unsafe { with_tagged_heap(|h| h.alloc_font(data)) }
     }
 
     /// Allocate a window-configuration pseudovector (distinct type tag, same
     /// `{header, data}` storage as a record).
     pub fn make_window_configuration(values: Vec<Value>) -> Self {
-        with_tagged_heap(|h| h.alloc_window_configuration(values))
+        unsafe { with_tagged_heap(|h| h.alloc_window_configuration(values)) }
     }
 
     /// Allocate a lambda. Converts LambdaData to a Value vector for GC safety.
     pub fn make_lambda(data: LambdaData) -> Self {
-        with_tagged_heap(|h| h.alloc_lambda_from_data(data))
+        unsafe { with_tagged_heap(|h| h.alloc_lambda_from_data(data)) }
     }
 
     /// Allocate a lambda from already-validated GNU closure slots.
     pub fn make_lambda_with_slots(slots: Vec<Value>) -> Self {
-        with_tagged_heap(|h| h.alloc_lambda(slots))
+        unsafe { with_tagged_heap(|h| h.alloc_lambda(slots)) }
     }
 
     /// Allocate a macro. Converts LambdaData to a Value vector for GC safety.
     pub fn make_macro(data: LambdaData) -> Self {
-        with_tagged_heap(|h| h.alloc_macro_from_data(data))
+        unsafe { with_tagged_heap(|h| h.alloc_macro_from_data(data)) }
     }
 
     /// Allocate a hash table.
     pub fn hash_table(test: HashTableTest) -> Self {
-        with_tagged_heap(|h| h.alloc_hash_table(LispHashTable::new(test)))
+        unsafe { with_tagged_heap(|h| h.alloc_hash_table(LispHashTable::new(test))) }
     }
 
     /// Allocate a hash table with options.
@@ -3267,15 +3265,17 @@ impl TaggedValue {
         rehash_size: f64,
         rehash_threshold: f64,
     ) -> Self {
-        with_tagged_heap(|h| {
-            h.alloc_hash_table(LispHashTable::new_with_options(
-                test,
-                size,
-                weakness,
-                rehash_size,
-                rehash_threshold,
-            ))
-        })
+        unsafe {
+            with_tagged_heap(|h| {
+                h.alloc_hash_table(LispHashTable::new_with_options(
+                    test,
+                    size,
+                    weakness,
+                    rehash_size,
+                    rehash_threshold,
+                ))
+            })
+        }
     }
 
     /// Allocate a hash table after validating the Lisp capacity and reserving
@@ -3290,12 +3290,12 @@ impl TaggedValue {
         let data = HashTableStorage::try_with_capacity(size)?;
         let table =
             LispHashTable::with_storage(test, size.capacity() as i64, weakness, 1.5, 0.8125, data);
-        Ok(with_tagged_heap(|h| h.alloc_hash_table(table)))
+        Ok(unsafe { with_tagged_heap(|h| h.alloc_hash_table(table)) })
     }
 
     /// Allocate a GNU-shaped obarray object.
     pub fn obarray(size: usize) -> Self {
-        with_tagged_heap(|h| h.alloc_obarray(vec![Value::NIL; size]))
+        unsafe { with_tagged_heap(|h| h.alloc_obarray(vec![Value::NIL; size])) }
     }
 
     /// Allocate obarray buckets after validating GNU's size-hint boundary.
@@ -3304,45 +3304,49 @@ impl TaggedValue {
         use crate::alloc::{AllocLen, reserved_values};
         let mut buckets = reserved_values(size)?;
         buckets.resize(size.capacity(), Value::NIL);
-        Ok(with_tagged_heap(|h| h.alloc_obarray(buckets)))
+        Ok(unsafe { with_tagged_heap(|h| h.alloc_obarray(buckets)) })
     }
 
     /// Allocate a marker.
     pub fn make_marker(data: crate::heap_types::LispMarker) -> Self {
-        with_tagged_heap(|h| h.alloc_marker(data))
+        unsafe { with_tagged_heap(|h| h.alloc_marker(data)) }
     }
 
     /// Allocate an overlay. A fresh object's precedence serial is minted by
     /// the World's heap before the value is published; `Preserved` sources
     /// (observer copies, buffered copies, image loads) keep their identity.
     pub fn make_overlay(init: crate::heap_types::OverlayDataInit) -> Self {
-        with_tagged_heap(|h| h.alloc_overlay(init))
+        unsafe { with_tagged_heap(|h| h.alloc_overlay(init)) }
     }
 
     /// Allocate a buffer reference.
     pub fn make_buffer(id: BufferId) -> Self {
-        with_tagged_heap(|h| {
-            if let Some(value) = h.buffer_value(id) {
-                value
-            } else {
-                let value = h.alloc_buffer(id);
-                h.register_buffer_value(id, value);
-                value
-            }
-        })
+        unsafe {
+            with_tagged_heap(|h| {
+                if let Some(value) = h.buffer_value(id) {
+                    value
+                } else {
+                    let value = h.alloc_buffer(id);
+                    h.register_buffer_value(id, value);
+                    value
+                }
+            })
+        }
     }
 
     /// Allocate a window reference.
     pub fn make_window(id: u64) -> Self {
-        with_tagged_heap(|h| {
-            if let Some(value) = h.window_value(id) {
-                value
-            } else {
-                let value = h.alloc_window(id);
-                h.register_window_value(id, value);
-                value
-            }
-        })
+        unsafe {
+            with_tagged_heap(|h| {
+                if let Some(value) = h.window_value(id) {
+                    value
+                } else {
+                    let value = h.alloc_window(id);
+                    h.register_window_value(id, value);
+                    value
+                }
+            })
+        }
     }
 
     /// Return the frame object for `id`.
@@ -3351,20 +3355,22 @@ impl TaggedValue {
     /// registry entry means the frame was reclaimed or never created. This
     /// lookup does not allocate and does not reinsert.
     pub fn make_frame(id: u64) -> Self {
-        with_tagged_heap(|h| match h.frame_value(id) {
-            Some(value) => value,
-            None => {
-                tracing::error!(
-                    frame_id = id,
-                    "make_frame refused a missing frame id; a missing registry entry means the frame was reclaimed or never existed"
-                );
-                debug_assert!(
-                    false,
-                    "make_frame({id}) on a missing frame registry entry (reclaimed or never existed)"
-                );
-                Value::NIL
-            }
-        })
+        unsafe {
+            with_tagged_heap(|h| match h.frame_value(id) {
+                Some(value) => value,
+                None => {
+                    tracing::error!(
+                        frame_id = id,
+                        "make_frame refused a missing frame id; a missing registry entry means the frame was reclaimed or never existed"
+                    );
+                    debug_assert!(
+                        false,
+                        "make_frame({id}) on a missing frame registry entry (reclaimed or never existed)"
+                    );
+                    Value::NIL
+                }
+            })
+        }
     }
 
     /// The frame object when the registry still has `id`.
@@ -3374,7 +3380,7 @@ impl TaggedValue {
     /// reclaimed id never reaches the refusal. A structure that keeps the id
     /// must root the returned object or clear the id at delete.
     pub fn registered_frame(id: u64) -> Option<Self> {
-        with_tagged_heap(|h| h.frame_value(id))
+        unsafe { with_tagged_heap(|h| h.frame_value(id)) }
     }
 
     /// Mint the heap object for a frame at the moment the frame is created.
@@ -3382,27 +3388,31 @@ impl TaggedValue {
     /// Idempotent: an id that is already registered returns that object.
     /// [`Self::make_frame`] is the later lookup and never mints.
     pub fn mint_frame(id: u64) -> Self {
-        with_tagged_heap(|h| {
-            if let Some(value) = h.frame_value(id) {
-                return value;
-            }
-            let value = h.alloc_frame(id);
-            h.register_frame_value(id, value);
-            value
-        })
+        unsafe {
+            with_tagged_heap(|h| {
+                if let Some(value) = h.frame_value(id) {
+                    return value;
+                }
+                let value = h.alloc_frame(id);
+                h.register_frame_value(id, value);
+                value
+            })
+        }
     }
 
     /// Allocate a timer reference.
     pub fn make_timer(id: u64) -> Self {
-        with_tagged_heap(|h| {
-            if let Some(value) = h.timer_value(id) {
-                value
-            } else {
-                let value = h.alloc_timer(id);
-                h.register_timer_value(id, value);
-                value
-            }
-        })
+        unsafe {
+            with_tagged_heap(|h| {
+                if let Some(value) = h.timer_value(id) {
+                    value
+                } else {
+                    let value = h.alloc_timer(id);
+                    h.register_timer_value(id, value);
+                    value
+                }
+            })
+        }
     }
 
     /// Allocate a process reference.
@@ -3412,20 +3422,22 @@ impl TaggedValue {
     /// exited is still a process object in GNU (status `exit`/`signal`), so the
     /// cached value is never evicted on `delete-process`.
     pub fn make_process(id: u64) -> Self {
-        with_tagged_heap(|h| {
-            if let Some(value) = h.process_value(id) {
-                value
-            } else {
-                let value = h.alloc_process(id);
-                h.register_process_value(id, value);
-                value
-            }
-        })
+        unsafe {
+            with_tagged_heap(|h| {
+                if let Some(value) = h.process_value(id) {
+                    value
+                } else {
+                    let value = h.alloc_process(id);
+                    h.register_process_value(id, value);
+                    value
+                }
+            })
+        }
     }
 
     /// Allocate a GNU-shaped terminal object.
     pub fn make_terminal(id: u64) -> Self {
-        with_tagged_heap(|h| h.alloc_terminal(id))
+        unsafe { with_tagged_heap(|h| h.alloc_terminal(id)) }
     }
 
     /// Allocate a GNU-shaped xwidget model object.
@@ -3438,16 +3450,18 @@ impl TaggedValue {
         xwidget_id: u32,
         webview_id: neovm_display_identity::WebViewId,
     ) -> Self {
-        with_tagged_heap(|h| {
-            h.alloc_xwidget(type_, title, buffer, width, height, xwidget_id, webview_id)
-        })
+        unsafe {
+            with_tagged_heap(|h| {
+                h.alloc_xwidget(type_, title, buffer, width, height, xwidget_id, webview_id)
+            })
+        }
     }
 
     /// Allocate a bool-vector of `nbits` bits from `words` (`⌈nbits/64⌉`
     /// of them, GNU's PVEC_BOOL_VECTOR layout). Lisp-level constructors go
     /// through `boolvec`.
     pub fn make_bool_vector(nbits: usize, words: Vec<u64>) -> Self {
-        with_tagged_heap(|h| h.alloc_bool_vector(nbits, words))
+        unsafe { with_tagged_heap(|h| h.alloc_bool_vector(nbits, words)) }
     }
 
     /// Allocate a GC-managed shader-surface handle wrapping a host surface
@@ -3456,13 +3470,13 @@ impl TaggedValue {
     /// `DisplayHost::destroy_shader_surface`, so a handle Lisp drops without
     /// an explicit `neomacs-surface-destroy` still frees its GPU objects.
     pub fn make_surface_handle(surface_id: u32) -> Self {
-        with_tagged_heap(|h| h.alloc_surface_handle(surface_id))
+        unsafe { with_tagged_heap(|h| h.alloc_surface_handle(surface_id)) }
     }
 
     /// Allocate a GC-managed video-session handle. The stable `VideoId` is
     /// destroyed through the display host when Lisp drops the final reference.
     pub fn make_video_handle(video_id: neovm_display_identity::VideoId) -> Self {
-        with_tagged_heap(|h| h.alloc_video_handle(video_id))
+        unsafe { with_tagged_heap(|h| h.alloc_video_handle(video_id)) }
     }
 
     /// The native scheduler key inside a thread, mutex or condition variable.
@@ -3522,7 +3536,7 @@ impl TaggedValue {
     /// Allocate an opaque SQLite database or statement object.
     #[doc(hidden)]
     pub fn make_sqlite(is_statement: bool, id: i64) -> Self {
-        with_tagged_heap(|h| h.alloc_sqlite(is_statement, id))
+        unsafe { with_tagged_heap(|h| h.alloc_sqlite(is_statement, id)) }
     }
 
     // -- Veclike accessor helpers --
@@ -4289,7 +4303,7 @@ impl TaggedValue {
     fn hydrate_hash_table_for_access(self, ptr: *mut HashTableObj) {
         // A parked structural key without a snapshot can be reconstructed as
         // a fresh heap object. Remember the owner before creating that edge.
-        if with_tagged_heap(|heap| heap.tagged_heap_generational_enabled()) {
+        if unsafe { with_tagged_heap(|heap| heap.tagged_heap_generational_enabled()) } {
             note_heap_write(self, HeapWriteKind::HashTableData);
         }
         // SAFETY: this cold serial path owns the initialized table until
@@ -4406,12 +4420,28 @@ impl TaggedValue {
 
     // -----------------------------------------------------------------------
     // Phase 1c: HeapRef-anchored payload readers and HeapMut-gated bulk mutators
+    //
+    // SAFETY INVARIANT FOR ALL `*_in(&self, _heap: HeapRef<'h>)` READERS:
+    // Returning `&'h T` tied to `HeapRef<'h>` is sound while:
+    // (a) `self` was allocated in the `TaggedHeap` that minted `_heap`
+    //     (heap-identity branding is not yet enforced at compile time; see
+    //     `tagged::heap_ref`'s "Not yet enforced" section);
+    // (b) no collection or sweep runs during `'h`, enforced by `HeapRef<'h>`
+    //     holding `&'h TaggedHeap` while collection requires `&mut Context`
+    //     / `&mut TaggedHeap` and `with_tagged_heap` is `unsafe fn`;
+    // (c) no structural/bulk payload mutation runs during `'h` — Phase 1c.0
+    //     provides `*_in(&mut HeapMut)` counterparts, and Phase 1c.1 withdraws
+    //     the tokenless bulk mutators;
+    // (d) for `&'h LispValueSlice` readers, concurrent single-slot stores are
+    //     addressed in Phase 1b (atomic slot reads + withdrawing `as_slice()`).
     // -----------------------------------------------------------------------
 
     /// Borrow the closure slot vector for a Lambda or Macro, anchored to `heap`.
     #[inline]
     pub fn closure_slots_in<'h>(self, _heap: HeapRef<'h>) -> Option<&'h LispValueSlice> {
         let header = self.as_veclike_ptr()?;
+        // SAFETY: `header` is a valid veclike header; lifetime `'h` is tied to
+        // `_heap` under the Phase 1c `*_in` invariant (a)–(d) above.
         match unsafe { (*header).type_tag } {
             VecLikeType::Lambda => {
                 let ptr = header as *const LambdaObj;
@@ -4428,6 +4458,9 @@ impl TaggedValue {
     /// Borrow parsed closure parameters, anchored to `heap`.
     #[inline]
     pub fn closure_params_in<'h>(self, _heap: HeapRef<'h>) -> Option<&'h LambdaParams> {
+        // SAFETY: `closure_parsed_params_cell` returns the `OnceLock` owned by
+        // the closure object; its lifetime is tied to `_heap` under invariant
+        // (a)–(c) above.
         let cell = self.closure_parsed_params_cell()?;
         Some(cell.get_or_init(|| {
             let arglist = self.closure_slot(CLOSURE_ARGLIST).unwrap_or(Value::NIL);
@@ -4441,6 +4474,8 @@ impl TaggedValue {
     pub fn xwidget_in<'h>(self, _heap: HeapRef<'h>) -> Option<&'h XwidgetObj> {
         if self.is_xwidget() {
             let ptr = self.as_veclike_ptr().unwrap() as *const XwidgetObj;
+            // SAFETY: `self.is_xwidget()` verified the header tag; `'h` is
+            // tied to `_heap` under the Phase 1c `*_in` invariant (a)–(c).
             Some(unsafe { &*ptr })
         } else {
             None
@@ -4452,6 +4487,8 @@ impl TaggedValue {
     pub fn xwidget_view_in<'h>(self, _heap: HeapRef<'h>) -> Option<&'h XwidgetViewObj> {
         if self.is_xwidget_view() {
             let ptr = self.as_veclike_ptr().unwrap() as *const XwidgetViewObj;
+            // SAFETY: `self.is_xwidget_view()` verified the header tag; `'h` is
+            // tied to `_heap` under the Phase 1c `*_in` invariant (a)–(c).
             Some(unsafe { &*ptr })
         } else {
             None
@@ -4466,6 +4503,8 @@ impl TaggedValue {
     ) -> Option<&'h crate::heap_types::LispMarker> {
         if self.is_marker() {
             let ptr = self.as_veclike_ptr().unwrap() as *const MarkerObj;
+            // SAFETY: `self.is_marker()` verified the header tag; `'h` is tied
+            // to `_heap` under the Phase 1c `*_in` invariant (a)–(c).
             Some(unsafe { &(*ptr).data })
         } else {
             None
@@ -4480,6 +4519,8 @@ impl TaggedValue {
     ) -> Option<&'h crate::heap_types::OverlayData> {
         if self.is_overlay() {
             let ptr = self.as_veclike_ptr().unwrap() as *const OverlayObj;
+            // SAFETY: `self.is_overlay()` verified the header tag; `'h` is tied
+            // to `_heap` under the Phase 1c `*_in` invariant (a)–(c).
             Some(unsafe { &(*ptr).data })
         } else {
             None
@@ -4490,6 +4531,8 @@ impl TaggedValue {
     #[inline]
     pub fn vector_data_in<'h>(self, _heap: HeapRef<'h>) -> Option<&'h LispValueSlice> {
         let header = self.as_veclike_ptr()?;
+        // SAFETY: `header` is a valid veclike header; after confirming
+        // `VecLikeType::Vector`, `'h` is tied to `_heap` under invariant (a)–(d).
         if unsafe { (*header).type_tag } == VecLikeType::Vector {
             let ptr = header as *const VectorObj;
             Some(unsafe { LispValueSlice::from_slice((*ptr).data.as_slice()) })
@@ -4503,6 +4546,8 @@ impl TaggedValue {
     pub fn bool_vector_obj_in<'h>(self, _heap: HeapRef<'h>) -> Option<&'h BoolVectorObj> {
         if self.is_bool_vector_obj() {
             let ptr = self.as_veclike_ptr().unwrap() as *const BoolVectorObj;
+            // SAFETY: `self.is_bool_vector_obj()` verified the header tag; `'h`
+            // is tied to `_heap` under the Phase 1c `*_in` invariant (a)–(c).
             Some(unsafe { &*ptr })
         } else {
             None
@@ -4513,6 +4558,8 @@ impl TaggedValue {
     #[inline]
     pub fn char_table_obj_in<'h>(self, _heap: HeapRef<'h>) -> Option<&'h CharTableObj> {
         let header = self.as_veclike_ptr()?;
+        // SAFETY: `header` is a valid veclike header; after confirming
+        // `VecLikeType::CharTable`, `'h` is tied to `_heap` under invariant (a)–(c).
         if unsafe { (*header).type_tag } == VecLikeType::CharTable {
             let ptr = header as *const CharTableObj;
             Some(unsafe { &*ptr })
@@ -4525,6 +4572,8 @@ impl TaggedValue {
     #[inline]
     pub fn sub_char_table_obj_in<'h>(self, _heap: HeapRef<'h>) -> Option<&'h SubCharTableObj> {
         let header = self.as_veclike_ptr()?;
+        // SAFETY: `header` is a valid veclike header; after confirming
+        // `VecLikeType::SubCharTable`, `'h` is tied to `_heap` under invariant (a)–(c).
         if unsafe { (*header).type_tag } == VecLikeType::SubCharTable {
             let ptr = header as *const SubCharTableObj;
             Some(unsafe { &*ptr })
@@ -4537,6 +4586,8 @@ impl TaggedValue {
     #[inline]
     pub fn record_data_in<'h>(self, _heap: HeapRef<'h>) -> Option<&'h LispValueSlice> {
         let header = self.as_veclike_ptr()?;
+        // SAFETY: `header` is a valid veclike header; after confirming
+        // `VecLikeType::Record`, `'h` is tied to `_heap` under invariant (a)–(d).
         if unsafe { (*header).type_tag } == VecLikeType::Record {
             let ptr = header as *const RecordObj;
             Some(unsafe { LispValueSlice::from_slice((*ptr).data.as_slice()) })
@@ -4550,6 +4601,8 @@ impl TaggedValue {
     #[doc(hidden)]
     pub fn treesit_node_data_in<'h>(self, _heap: HeapRef<'h>) -> Option<&'h LispValueSlice> {
         let header = self.as_veclike_ptr()?;
+        // SAFETY: `header` is a valid veclike header; after confirming
+        // `VecLikeType::TsNode`, `'h` is tied to `_heap` under invariant (a)–(d).
         if unsafe { (*header).type_tag } == VecLikeType::TsNode {
             let ptr = header as *const RecordObj;
             Some(unsafe { LispValueSlice::from_slice((*ptr).data.as_slice()) })
@@ -4564,6 +4617,8 @@ impl TaggedValue {
     pub fn font_data_in<'h>(self, _heap: HeapRef<'h>) -> Option<&'h FontObjectData> {
         if self.is_font_object() {
             let ptr = self.as_veclike_ptr().unwrap() as *const FontObj;
+            // SAFETY: `self.is_font_object()` verified the header tag; `'h` is
+            // tied to `_heap` under the Phase 1c `*_in` invariant (a)–(c).
             Some(unsafe { &(*ptr).data })
         } else {
             None
@@ -4578,6 +4633,8 @@ impl TaggedValue {
     ) -> Option<&'h LispValueSlice> {
         if self.is_window_configuration() {
             let ptr = self.as_veclike_ptr().unwrap() as *const RecordObj;
+            // SAFETY: `self.is_window_configuration()` verified the header tag;
+            // `'h` is tied to `_heap` under invariant (a)–(d).
             Some(unsafe { LispValueSlice::from_slice((*ptr).data.as_slice()) })
         } else {
             None
@@ -4589,6 +4646,9 @@ impl TaggedValue {
     pub fn hash_table_in<'h>(self, _heap: HeapRef<'h>) -> Option<&'h LispHashTable> {
         if self.is_hash_table() {
             let ptr = self.as_veclike_ptr().unwrap() as *mut HashTableObj;
+            // SAFETY: `self.is_hash_table()` verified the header tag; lazy
+            // hydration initializes internal buckets once before sharing, and
+            // `'h` is tied to `_heap` under invariant (a)–(c).
             unsafe {
                 if (*ptr).table.needs_hydration() {
                     self.hydrate_hash_table_for_access(ptr);
@@ -5118,7 +5178,7 @@ impl TaggedValue {
 
     #[doc(hidden)]
     pub fn memory_use_counts_snapshot() -> [i64; 7] {
-        let mut counts = with_tagged_heap(|heap| heap.memory_use_counts_snapshot());
+        let mut counts = unsafe { with_tagged_heap(|heap| heap.memory_use_counts_snapshot()) };
         let thread_local_counts = THREAD_LOCAL_ALLOCATION_COUNTS.with(|counts| counts.get());
         for (count, extra) in counts.iter_mut().zip(thread_local_counts) {
             *count = count.wrapping_add(extra);
@@ -5137,7 +5197,7 @@ impl TaggedValue {
     /// Return the live cons-cell count for `(garbage-collect)` statistics.
     #[doc(hidden)]
     pub fn cons_live_count_snapshot() -> i64 {
-        with_tagged_heap(|heap| heap.cons_live_count_exact() as i64)
+        unsafe { with_tagged_heap(|heap| heap.cons_live_count_exact() as i64) }
     }
 }
 

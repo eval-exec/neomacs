@@ -318,9 +318,11 @@ fn with_remembered_defcell(mut site: VarSite) -> VarSite {
                 .defcell
                 .get()
         };
-        let remembered = neovm_value::tagged::gc::with_tagged_heap(|heap| {
-            heap.remember_mapped_cons_ahead_of_writes(defcell)
-        });
+        let remembered = unsafe {
+            neovm_value::tagged::gc::with_tagged_heap(|heap| {
+                heap.remember_mapped_cons_ahead_of_writes(defcell)
+            })
+        };
         *remembered_defcell = remembered.then_some(defcell.bits());
     }
     site

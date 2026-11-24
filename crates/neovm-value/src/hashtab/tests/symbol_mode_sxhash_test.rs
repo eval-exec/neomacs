@@ -4,7 +4,7 @@ use super::*;
 use std::hash::{Hash, Hasher};
 
 fn positioned(symbol: Value, pos: i64) -> Value {
-    with_tagged_heap(|heap| heap.alloc_symbol_with_pos(symbol, Value::fixnum(pos)))
+    unsafe { with_tagged_heap(|heap| heap.alloc_symbol_with_pos(symbol, Value::fixnum(pos))) }
 }
 
 #[test]

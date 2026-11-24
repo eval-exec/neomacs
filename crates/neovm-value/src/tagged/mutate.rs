@@ -341,7 +341,7 @@ pub fn with_vector_data_mut<R>(
     // (see the heap-side hook) — a single thread-local load, so the idle path pays
     // essentially nothing.
     if super::gc::concurrent_mark_active() {
-        super::gc::with_tagged_heap(|heap| heap.concurrent_clone_on_write_vector(value));
+        unsafe { super::gc::with_tagged_heap(|heap| heap.concurrent_clone_on_write_vector(value)) };
     }
     let ptr = value.as_veclike_ptr().unwrap() as *mut VectorObj;
     #[cfg(any(test, debug_assertions, feature = "test-support"))]

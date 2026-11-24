@@ -6356,7 +6356,8 @@ fn a6_ht_growth_memory_overhead<H: HostParts>(host: &mut H) {
         .unwrap_or_else(|error| panic!("image table setup: {error}"));
     // The serial host is active and no sealed owner has been admitted. Use
     // loader registration so provenance and the image-hash index agree.
-    let stamp = crate::tagged::gc::with_tagged_heap(|heap| heap.note_image_object(image_table));
+    let stamp =
+        unsafe { crate::tagged::gc::with_tagged_heap(|heap| heap.note_image_object(image_table)) };
     assert_eq!(stamp, crate::tagged::gc::ImageStamp::Stamped);
     let setup = HtSetup {
         source: "(list a6-tM2)",

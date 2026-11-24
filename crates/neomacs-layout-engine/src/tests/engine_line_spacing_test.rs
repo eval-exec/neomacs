@@ -1251,7 +1251,8 @@ fn deleted_frame_source_roots_retire_during_idle_without_a_presentation() {
     for _ in 0..3 {
         eval.gc_collect_exact();
     }
-    let count = || neovm_core::tagged::gc::with_tagged_heap(|heap| heap.allocated_count());
+    let count =
+        || unsafe { neovm_core::tagged::gc::with_tagged_heap(|heap| heap.allocated_count()) };
     let baseline = count();
     let source = Value::string("deleted-frame-unique-source");
     let capture = Capture::begin(&eval);

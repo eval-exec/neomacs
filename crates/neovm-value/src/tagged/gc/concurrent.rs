@@ -1156,14 +1156,16 @@ impl TaggedHeap {
 pub fn concurrent_hash_snapshot(
     owner: TaggedValue,
 ) -> Option<std::sync::Arc<concurrent_hash::HashTableScanSnapshot>> {
-    with_tagged_heap(|heap| {
-        debug_assert!(heap.concurrent_mark_running && heap.concurrent_claims());
-        let snapshot = heap.concurrent_hash_snapshot()?;
-        // Most P5 writes initialize post-start tables. A map miss needs no
-        // shared lifetime guard, avoiding two Arc RMWs on that common path.
-        snapshot.get(owner.gc_veclike_ptr()? as usize)?;
-        Some(snapshot.clone())
-    })
+    unsafe {
+        with_tagged_heap(|heap| {
+            debug_assert!(heap.concurrent_mark_running && heap.concurrent_claims());
+            let snapshot = heap.concurrent_hash_snapshot()?;
+            // Most P5 writes initialize post-start tables. A map miss needs no
+            // shared lifetime guard, avoiding two Arc RMWs on that common path.
+            snapshot.get(owner.gc_veclike_ptr()? as usize)?;
+            Some(snapshot.clone())
+        })
+    }
 }
 
 #[cold]
@@ -1179,20 +1181,19 @@ pub(crate) fn prepare_concurrent_hash_write(
     if !guard.claim_dirty() {
         return;
     }
-    with_tagged_heap(|heap| {
-        debug_assert!(heap.concurrent_mark_running);
-        let entry = heap.current_concurrent_hash_mutator();
-        let mut state = entry.lock().unwrap();
-        // The entry guard covers this payload access, barrier enumeration and
-        // the caller's subsequent &mut. It either preserves unread storage,
-        // defers admission, or waits until the admitted reader has completed.
-        let object = owner.gc_veclike_ptr().unwrap() as *mut HashTableObj;
-        guard.clone_on_first_write(
-            unsafe { &mut (*object).table.data },
-            &mut state.retired_hash_buffers,
-        );
-        state.written_hash_owners.push(owner);
-    });
+    unsafe {
+        with_tagged_heap(|heap| {
+            debug_assert!(heap.concurrent_mark_running);
+            let entry = heap.current_concurrent_hash_mutator();
+            let mut state = entry.lock().unwrap();
+            // The entry guard covers this payload access, barrier enumeration and
+            // the caller's subsequent &mut. It either preserves unread storage,
+            // defers admission, or waits until the admitted reader has completed.
+            let object = owner.gc_veclike_ptr().unwrap() as *mut HashTableObj;
+            guard.clone_on_first_write(&mut (*object).table.data, &mut state.retired_hash_buffers);
+            state.written_hash_owners.push(owner);
+        })
+    };
 }
 
 impl TaggedHeap {

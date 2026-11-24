@@ -81,33 +81,35 @@ fn graph(context: &mut Context) -> Graph {
         let property = Value::symbol("p15-stopped-name-child");
         let thread_name = Value::heap_string(named("thread", property, children[7]));
         let thread_name = PayloadThreadName::from_value(thread_name).unwrap();
-        with_tagged_heap(|heap| {
-            // SAFETY: the live map roots this same-World object. Setup holds
-            // exclusive serial World access; the closure copies prepared words
-            // without allocating, collecting, invoking Lisp or yielding.
-            unsafe {
-                heap.with_thread_payload_mut(thread, |payload| {
-                    // `name` and `function` have readers and no setters.
-                    // Rebuild through the public constructor so the untouched
-                    // words (error symbol, stored events) stay put.
-                    let error_symbol = payload.error_symbol();
-                    let stored_events = payload.stored_events().to_vec();
-                    *payload = neovm_value::heap_types::threading::ThreadChildren::new(
-                        thread_name,
-                        children[0],
-                        children[1],
-                        Some(children[2]),
-                        children[3],
-                        children[4],
-                        error_symbol,
-                        children[6],
-                        children[5],
-                        stored_events,
-                    );
-                })
-            }
-            .expect("same-World thread mutation")
-        });
+        unsafe {
+            with_tagged_heap(|heap| {
+                // SAFETY: the live map roots this same-World object. Setup holds
+                // exclusive serial World access; the closure copies prepared words
+                // without allocating, collecting, invoking Lisp or yielding.
+                unsafe {
+                    heap.with_thread_payload_mut(thread, |payload| {
+                        // `name` and `function` have readers and no setters.
+                        // Rebuild through the public constructor so the untouched
+                        // words (error symbol, stored events) stay put.
+                        let error_symbol = payload.error_symbol();
+                        let stored_events = payload.stored_events().to_vec();
+                        *payload = neovm_value::heap_types::threading::ThreadChildren::new(
+                            thread_name,
+                            children[0],
+                            children[1],
+                            Some(children[2]),
+                            children[3],
+                            children[4],
+                            error_symbol,
+                            children[6],
+                            children[5],
+                            stored_events,
+                        );
+                    })
+                }
+                .expect("same-World thread mutation")
+            })
+        };
         let mutex = context
             .threads
             .create_mutex(Some(named("mutex", property, children[8])))

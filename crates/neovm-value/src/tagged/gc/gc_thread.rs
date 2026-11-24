@@ -1973,6 +1973,15 @@ unsafe fn installed_heap_generational_enabled(heap: *const TaggedHeap) -> bool {
 
 /// Access the thread-local tagged heap.
 ///
+/// # Safety
+///
+/// - No other `&mut TaggedHeap` (including an enclosing `with_tagged_heap`
+///   call or a live `&mut WorldView<TaggedHeap>`) may be active on this thread
+///   for the duration of `f`.
+/// - `f` must not mint a [`super::HeapRef`] or [`super::HeapMut`] (which would
+///   bypass `Context` / `WorldView` borrow checking) and must not trigger
+///   collection or sweep.
+///
 /// In a cfg(test) build, or after the dedicated test-thread-fallback-heap
 /// build used by the core tests' no-Context fixtures has been ARMED for this
 /// process (see `enable_test_thread_fallback`), auto-creates a fallback heap
@@ -1980,7 +1989,7 @@ unsafe fn installed_heap_generational_enabled(heap: *const TaggedHeap) -> bool {
 /// no heap is set: the fallback must not disable the tripwire for crates that
 /// never had it.
 #[inline]
-pub fn with_tagged_heap<R>(f: impl FnOnce(&mut TaggedHeap) -> R) -> R {
+pub unsafe fn with_tagged_heap<R>(f: impl FnOnce(&mut TaggedHeap) -> R) -> R {
     TAGGED_HEAP.with(|h| {
         let ptr = h.get();
         if !ptr.is_null() {
@@ -2283,14 +2292,16 @@ fn note_cons_write_slow(
         // encoding and create no edge; a symbol's liveness rides on the card
         // like any heap value.
         if !value.is_some_and(TaggedValue::is_fixnum) {
-            with_tagged_heap(|heap| {
-                if heap
-                    .old_cons_trailer(owner)
-                    .is_some_and(|(trailer, index)| trailer.age_is_old(index))
-                {
-                    heap.mark_owner_card(addr);
-                }
-            });
+            unsafe {
+                with_tagged_heap(|heap| {
+                    if heap
+                        .old_cons_trailer(owner)
+                        .is_some_and(|(trailer, index)| trailer.age_is_old(index))
+                    {
+                        heap.mark_owner_card(addr);
+                    }
+                })
+            };
         }
         return;
     }
@@ -2315,13 +2326,13 @@ fn note_heap_write_slow(
         value,
     };
     if census_remset_probe_on() {
-        with_tagged_heap(|heap| heap.census_note_write(record));
+        unsafe { with_tagged_heap(|heap| heap.census_note_write(record)) };
     }
     let disabled =
         TAGGED_HEAP_WRITE_TRACKING_MODE.with(|mode| mode.get()) == WriteTrackingMode::Disabled;
     let concurrent = TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.get());
     if barrier_needs_heap(record, disabled, concurrent) {
-        with_tagged_heap(|heap| heap.record_heap_write(record));
+        unsafe { with_tagged_heap(|heap| heap.record_heap_write(record)) };
     }
 }
 
@@ -2339,31 +2350,32 @@ pub(super) fn barrier_needs_heap(
         // Reject irrelevant generation-only writes before claiming the owner.
         // Tracking and concurrent marking use the legacy barrier below and
         // must not pay for a generational heap lookup.
-        let gen_decision = with_tagged_heap(|heap| {
-            if !heap.tagged_heap_generational_enabled() {
-                return None;
-            }
-            // Characters have fixnum encoding. Symbols (including nil/t) and
-            // all pointer/handle tags remain conservative: symbols have GC
-            // side-table liveness, and SymbolWithPos is a traced heap object.
-            if record.value.is_some_and(TaggedValue::is_fixnum) {
-                return Some(false);
-            }
-            let needs_log = if heap.owner_is_mapped(record.owner) {
-                !heap
-                    .current_mutator_gc()
-                    .r_mapped_seen
-                    .contains(&record.owner.bits())
-            } else if record.owner.is_cons() {
-                heap.old_cons_trailer(record.owner)
-                    .is_some_and(|(trailer, index)| trailer.age_is_old(index))
-            } else {
-                TaggedHeap::value_heap_addr(record.owner).is_some_and(|addr| unsafe {
-                    GcHeader::needs_remembering(addr as *const GcHeader)
-                })
-            };
-            Some(needs_log)
-        });
+        let gen_decision = unsafe {
+            with_tagged_heap(|heap| {
+                if !heap.tagged_heap_generational_enabled() {
+                    return None;
+                }
+                // Characters have fixnum encoding. Symbols (including nil/t) and
+                // all pointer/handle tags remain conservative: symbols have GC
+                // side-table liveness, and SymbolWithPos is a traced heap object.
+                if record.value.is_some_and(TaggedValue::is_fixnum) {
+                    return Some(false);
+                }
+                let needs_log = if heap.owner_is_mapped(record.owner) {
+                    !heap
+                        .current_mutator_gc()
+                        .r_mapped_seen
+                        .contains(&record.owner.bits())
+                } else if record.owner.is_cons() {
+                    heap.old_cons_trailer(record.owner)
+                        .is_some_and(|(trailer, index)| trailer.age_is_old(index))
+                } else {
+                    TaggedHeap::value_heap_addr(record.owner)
+                        .is_some_and(|addr| GcHeader::needs_remembering(addr as *const GcHeader))
+                };
+                Some(needs_log)
+            })
+        };
         if let Some(needs_log) = gen_decision {
             return needs_log;
         }
@@ -2428,7 +2440,7 @@ pub fn feed_concurrent_roots(values: &[TaggedValue]) {
     if values.is_empty() || !TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.get()) {
         return;
     }
-    with_tagged_heap(|heap| heap.feed_satb_roots(values));
+    unsafe { with_tagged_heap(|heap| heap.feed_satb_roots(values)) };
 }
 
 #[inline]
@@ -2445,7 +2457,7 @@ pub fn note_root_overwrite(pre_image: TaggedValue) {
     if !TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.get()) {
         return;
     }
-    with_tagged_heap(|heap| heap.note_root_overwrite_value(pre_image));
+    unsafe { with_tagged_heap(|heap| heap.note_root_overwrite_value(pre_image)) };
 }
 
 /// [`note_root_overwrite`] for a caller that has just read
@@ -2461,7 +2473,7 @@ pub(crate) fn note_root_overwrite_while_marking(pre_image: TaggedValue) {
     {
         return;
     }
-    with_tagged_heap(|heap| heap.note_root_overwrite_value(pre_image));
+    unsafe { with_tagged_heap(|heap| heap.note_root_overwrite_value(pre_image)) };
 }
 
 /// Whether a concurrent mark is active on this (mutator) thread — the gate the
@@ -2497,24 +2509,27 @@ pub(crate) fn note_string_interval_preimage(
     string_addr: usize,
     table: &crate::value::text_props::TextPropertyTable,
 ) {
-    with_tagged_heap(|heap| {
-        if !heap
-            .current_mutator_satb_mut()
-            .satb_string_preimage_addrs
-            .insert(string_addr)
-        {
-            return; // this string's full pre-image was already logged this cycle
-        }
-        let major = heap.generational.major_in_progress;
-        let (mutator, handoff) = heap.satb_parts();
-        table.for_each_root(|value| {
-            if value.is_heap_object()
-                || (major && matches!(value.gc_kind(), crate::tagged::value::ValueKind::Symbol(_)))
+    unsafe {
+        with_tagged_heap(|heap| {
+            if !heap
+                .current_mutator_satb_mut()
+                .satb_string_preimage_addrs
+                .insert(string_addr)
             {
-                mutator.satb.push(MarkWord::of(value), handoff);
+                return; // this string's full pre-image was already logged this cycle
             }
-        });
-    });
+            let major = heap.generational.major_in_progress;
+            let (mutator, handoff) = heap.satb_parts();
+            table.for_each_root(|value| {
+                if value.is_heap_object()
+                    || (major
+                        && matches!(value.gc_kind(), crate::tagged::value::ValueKind::Symbol(_)))
+                {
+                    mutator.satb.push(MarkWord::of(value), handoff);
+                }
+            });
+        })
+    };
 }
 
 #[cfg(test)]

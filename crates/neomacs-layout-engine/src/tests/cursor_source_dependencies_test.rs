@@ -111,7 +111,8 @@ fn equal_content_sources_keep_distinct_roots() {
     use neovm_core::emacs_core::value::{mutate_string_text_properties, positions::*};
     let mut context = neovm_core::emacs_core::eval_hook_installers::new_context();
     context.gc_collect_exact();
-    let allocated = || neovm_core::tagged::gc::with_tagged_heap(|heap| heap.allocated_count());
+    let allocated =
+        || unsafe { neovm_core::tagged::gc::with_tagged_heap(|heap| heap.allocated_count()) };
     let baseline = allocated();
     let first = Value::string("same");
     let second = Value::string("same");
@@ -394,7 +395,8 @@ fn completed_body_seal_keeps_original_sources_rooted_and_detects_later_mutation(
 
     let mut context = neovm_core::emacs_core::eval_hook_installers::new_context();
     context.gc_collect_exact();
-    let allocated = || neovm_core::tagged::gc::with_tagged_heap(|heap| heap.allocated_count());
+    let allocated =
+        || unsafe { neovm_core::tagged::gc::with_tagged_heap(|heap| heap.allocated_count()) };
     let baseline = allocated();
     let source = Value::string("completed body source");
     let setup_roots = context.retain_gc_roots([source]);

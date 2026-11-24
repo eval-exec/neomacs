@@ -677,7 +677,7 @@ fn module_panic_recovery_blocked_via_ctx() -> bool {
             // without a Context, but GC lock poison is still observable via
             // the thread heap — probe that half, exactly like the JIT's
             // ctx-less shim arm (`contain_jit_shim_panic`).
-            return neovm_value::tagged::gc::with_tagged_heap(|h| h.gc_locks_poisoned());
+            return unsafe { neovm_value::tagged::gc::with_tagged_heap(|h| h.gc_locks_poisoned()) };
         }
         // SAFETY: same shared-read-through-MODULE_CTX discipline as
         // `module_should_quit`; the probe only reads two flags.
@@ -1303,11 +1303,13 @@ unsafe extern "C" fn module_make_unibyte_string(
             Ok(bytes) => bytes,
             Err(()) => return std::ptr::null_mut(),
         };
-        let val = neovm_value::tagged::gc::with_tagged_heap(|h| {
-            h.alloc_string(neovm_value::heap_types::LispString::from_unibyte(
-                bytes.to_vec(),
-            ))
-        });
+        let val = unsafe {
+            neovm_value::tagged::gc::with_tagged_heap(|h| {
+                h.alloc_string(neovm_value::heap_types::LispString::from_unibyte(
+                    bytes.to_vec(),
+                ))
+            })
+        };
         lisp_to_value(env, val)
     })
 }
@@ -1326,7 +1328,7 @@ unsafe extern "C" fn module_make_user_ptr(
         // SAFETY: the emacs-module ABI gives `fin` ownership of `ptr`.
         // This `unsafe extern "C"` entry is that contract.
         let val =
-            neovm_value::tagged::gc::with_tagged_heap(|h| unsafe { h.alloc_user_ptr(ptr, fin) });
+            unsafe { neovm_value::tagged::gc::with_tagged_heap(|h| h.alloc_user_ptr(ptr, fin)) };
         lisp_to_value(env, val)
     })
 }
@@ -2030,16 +2032,18 @@ unsafe extern "C" fn module_make_function(
         };
         // SAFETY: the emacs-module ABI passes `subr` as a live `emacs_function`
         // and `data` that outlives every later invocation.
-        let val = neovm_value::tagged::gc::with_tagged_heap(|h| unsafe {
-            h.alloc_module_function(
-                min_arity,
-                max_arity,
-                subr as *const c_void,
-                data,
-                doc_val,
-                Value::NIL,
-            )
-        });
+        let val = unsafe {
+            neovm_value::tagged::gc::with_tagged_heap(|h| {
+                h.alloc_module_function(
+                    min_arity,
+                    max_arity,
+                    subr as *const c_void,
+                    data,
+                    doc_val,
+                    Value::NIL,
+                )
+            })
+        };
         lisp_to_value(env, val)
     })
 }

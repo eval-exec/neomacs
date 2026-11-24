@@ -1,10 +1,11 @@
-//! No safe production path reaches `TaggedHeap` collection.
+//! No safe production path reaches `TaggedHeap` collection, and
+//! `with_tagged_heap` stays `unsafe fn` and never mints `HeapRef`/`HeapMut`.
 //!
-//! `collect`, `collect_exact`, `set_tagged_heap_root`, `alloc_user_ptr`,
-//! `alloc_module_function`, and the sweep entries (`begin_stw_collection`,
-//! `complete_collection`, `begin_minor_collection`, `complete_minor_collection`,
-//! `incremental_finish`, `incremental_sweep_slice`,
-//! `finish_incremental_sweep_now`) are `unsafe fn`. `seed_root` stays safe:
+//! `collect`, `collect_exact`, `set_tagged_heap_root`, `with_tagged_heap`,
+//! `alloc_user_ptr`, `alloc_module_function`, and the sweep entries
+//! (`begin_stw_collection`, `complete_collection`, `begin_minor_collection`,
+//! `complete_minor_collection`, `incremental_finish`,
+//! `incremental_sweep_slice`, `finish_incremental_sweep_now`) are `unsafe fn`. `seed_root` stays safe:
 //! it does not free. A safe function, including one that hides the call in
 //! an `unsafe` block, must not call `collect` or `collect_exact`. The same
 //! scan covers the seven sweep entries. Exactly two safe callers may reach
@@ -49,6 +50,7 @@ const HEAP_METHODS: &[&str] = &[
 ];
 
 const INSTALL: &str = "set_tagged_heap_root";
+const TLS_HEAP_ACCESS: &str = "with_tagged_heap";
 
 /// Safe production functions that already own a sweep cycle. The pair is
 /// file plus function, so another `run` does not inherit the allowance.
@@ -92,6 +94,7 @@ struct Violation {
 struct Survey {
     definitions: Vec<Definition>,
     violations: Vec<Violation>,
+    tls_token_violations: Vec<Violation>,
 }
 
 struct Scanner<'a> {
@@ -99,6 +102,7 @@ struct Scanner<'a> {
     excluded: u32,
     unsafe_fn: u32,
     in_tagged_heap: bool,
+    in_with_tagged_heap_arg: u32,
     function: Vec<String>,
     survey: Survey,
 }
@@ -110,10 +114,12 @@ impl<'a> Scanner<'a> {
             excluded: 0,
             unsafe_fn: 0,
             in_tagged_heap: false,
+            in_with_tagged_heap_arg: 0,
             function: Vec::new(),
             survey: Survey {
                 definitions: Vec::new(),
                 violations: Vec::new(),
+                tls_token_violations: Vec::new(),
             },
         }
     }
@@ -178,6 +184,22 @@ impl<'a> Scanner<'a> {
             call: call.to_owned(),
         });
     }
+
+    fn note_tls_token_mint(&mut self, call: &str, line: usize) {
+        if self.excluded > 0 {
+            return;
+        }
+        self.survey.tls_token_violations.push(Violation {
+            file: self.file.to_owned(),
+            line,
+            function: self
+                .function
+                .last()
+                .cloned()
+                .unwrap_or_else(|| "<module>".to_owned()),
+            call: call.to_owned(),
+        });
+    }
 }
 
 impl<'ast> Visit<'ast> for Scanner<'_> {
@@ -192,6 +214,12 @@ impl<'ast> Visit<'ast> for Scanner<'_> {
         if name == INSTALL {
             self.note_definition(
                 INSTALL,
+                &item.attrs,
+                matches!(item.sig.safety, syn::Safety::Unsafe(_)),
+            );
+        } else if name == TLS_HEAP_ACCESS {
+            self.note_definition(
+                TLS_HEAP_ACCESS,
                 &item.attrs,
                 matches!(item.sig.safety, syn::Safety::Unsafe(_)),
             );
@@ -246,19 +274,52 @@ impl<'ast> Visit<'ast> for Scanner<'_> {
         if collect || (sweep && !self.sweep_caller_allowed()) {
             self.note_call(&name, call.method.span().start().line);
         }
+        if self.in_with_tagged_heap_arg > 0 && matches!(name.as_str(), "heap_mut" | "heap_ref") {
+            self.note_tls_token_mint(&name, call.method.span().start().line);
+        }
         visit::visit_expr_method_call(self, call);
     }
 
     fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
-        if let Expr::Path(path) = &*call.func
-            && let Some(name) = heap_path_method(&path.path)
-        {
-            let sweep = is_sweep_method(&name);
-            if !sweep || !self.sweep_caller_allowed() {
-                self.note_call(&name, path.path.span().start().line);
+        let mut entered_tls_call = false;
+        if let Expr::Path(path) = &*call.func {
+            if let Some(name) = heap_path_method(&path.path) {
+                let sweep = is_sweep_method(&name);
+                if !sweep || !self.sweep_caller_allowed() {
+                    self.note_call(&name, path.path.span().start().line);
+                }
+            }
+            if let Some(last) = path.path.segments.last() {
+                let ident = last.ident.to_string();
+                if ident == TLS_HEAP_ACCESS {
+                    entered_tls_call = true;
+                } else if self.in_with_tagged_heap_arg > 0
+                    && matches!(ident.as_str(), "heap_mut" | "heap_ref")
+                {
+                    self.note_tls_token_mint(&ident, last.ident.span().start().line);
+                }
             }
         }
-        visit::visit_expr_call(self, call);
+        if entered_tls_call {
+            self.visit_expr(&call.func);
+            self.in_with_tagged_heap_arg += 1;
+            for arg in &call.args {
+                self.visit_expr(arg);
+            }
+            self.in_with_tagged_heap_arg -= 1;
+        } else {
+            visit::visit_expr_call(self, call);
+        }
+    }
+
+    fn visit_expr_path(&mut self, expr: &'ast syn::ExprPath) {
+        if self.in_with_tagged_heap_arg > 0
+            && let Some(last) = expr.path.segments.last()
+            && matches!(last.ident.to_string().as_str(), "heap_mut" | "heap_ref")
+        {
+            self.note_tls_token_mint(&last.ident.to_string(), last.ident.span().start().line);
+        }
+        visit::visit_expr_path(self, expr);
     }
 
     fn visit_expr_closure(&mut self, closure: &'ast syn::ExprClosure) {
@@ -363,6 +424,7 @@ fn survey_production() -> Survey {
     let mut survey = Survey {
         definitions: Vec::new(),
         violations: Vec::new(),
+        tls_token_violations: Vec::new(),
     };
     for file in architecture_production_source_roots::production_source_files() {
         if file.is_test_path() {
@@ -373,6 +435,7 @@ fn survey_production() -> Survey {
         let one = survey_file(&source, &display_path(&file));
         survey.definitions.extend(one.definitions);
         survey.violations.extend(one.violations);
+        survey.tls_token_violations.extend(one.tls_token_violations);
     }
     survey
 }
@@ -383,7 +446,11 @@ fn display_path(file: &ProductionSourceFile) -> String {
 
 fn capability_problems(survey: &Survey) -> Vec<String> {
     let mut problems = Vec::new();
-    for name in HEAP_METHODS.iter().copied().chain(std::iter::once(INSTALL)) {
+    for name in HEAP_METHODS
+        .iter()
+        .copied()
+        .chain([INSTALL, TLS_HEAP_ACCESS])
+    {
         let found = survey
             .definitions
             .iter()
@@ -409,6 +476,12 @@ fn capability_problems(survey: &Survey) -> Vec<String> {
     for violation in &survey.violations {
         problems.push(format!(
             "safe `{}` calls `{}` at {}:{}",
+            violation.function, violation.call, violation.file, violation.line
+        ));
+    }
+    for violation in &survey.tls_token_violations {
+        problems.push(format!(
+            "`with_tagged_heap` in `{}` mints capability token via `{}` at {}:{}",
             violation.function, violation.call, violation.file, violation.line
         ));
     }
@@ -475,6 +548,7 @@ fn heap_capability_guard_flags_a_safe_collect_call() {
             }
         }
         pub unsafe fn set_tagged_heap_root() {}
+        pub unsafe fn with_tagged_heap() {}
         pub fn gc_collect_exact(&mut self) {}
         "#,
         "gated.rs",
@@ -484,6 +558,53 @@ fn heap_capability_guard_flags_a_safe_collect_call() {
         gated_problems.is_empty(),
         "gated fixture must pass:\n{}",
         gated_problems.join("\n")
+    );
+}
+
+#[test]
+fn heap_capability_guard_flags_safe_with_tagged_heap_and_token_minting() {
+    let bad = survey_file(
+        r#"
+        struct TaggedHeap;
+        impl TaggedHeap {
+            pub unsafe fn collect(&mut self, _roots: impl Iterator<Item = i32>) {}
+            pub unsafe fn collect_exact(&mut self, _roots: impl Iterator<Item = i32>) {}
+            pub unsafe fn alloc_user_ptr(&mut self) {}
+            pub unsafe fn alloc_module_function(&mut self) {}
+            pub unsafe fn begin_stw_collection(&mut self) {}
+            pub unsafe fn complete_collection(&mut self) {}
+            pub unsafe fn begin_minor_collection(&mut self) {}
+            pub unsafe fn complete_minor_collection(&mut self) {}
+            pub unsafe fn incremental_finish(&mut self, _bytes: usize, _pause: i32) {}
+            pub unsafe fn incremental_sweep_slice(&mut self, _budget: usize) -> bool { true }
+            pub unsafe fn finish_incremental_sweep_now(&mut self) {}
+        }
+        pub unsafe fn set_tagged_heap_root() {}
+        pub fn with_tagged_heap<R>(_f: impl FnOnce(&mut TaggedHeap) -> R) -> R { todo!() }
+        fn bypass_mut() {
+            with_tagged_heap(|h| { let _hm = h.heap_mut(); });
+        }
+        unsafe fn bypass_ref() {
+            unsafe { with_tagged_heap(|h| { let _hr = h.heap_ref(); }) };
+        }
+        fn bypass_ufcs() {
+            with_tagged_heap(TaggedHeap::heap_mut);
+        }
+        "#,
+        "bypass.rs",
+    );
+    let problems = capability_problems(&bad).join("\n");
+    assert!(
+        problems.contains("with_tagged_heap is a safe fn"),
+        "safe with_tagged_heap must fail: {problems}"
+    );
+    assert!(
+        problems.contains("mints capability token via `heap_mut`"),
+        "with_tagged_heap calling heap_mut must fail: {problems}"
+    );
+    assert!(
+        problems.contains("mints capability token via `heap_ref`"),
+        "with_tagged_heap calling heap_ref must fail even inside unsafe fn: {problems}"
     );
 }
 
@@ -506,6 +627,7 @@ fn heap_capability_guard_ignores_iterator_collect_and_test_modules() {
             pub unsafe fn finish_incremental_sweep_now(&mut self) {}
         }
         pub unsafe fn set_tagged_heap_root() {}
+        pub unsafe fn with_tagged_heap() {}
         fn production(values: &[i32]) -> Vec<i32> {
             values.iter().copied().collect()
         }
@@ -545,6 +667,7 @@ fn sweep_stubs() -> &'static str {
             pub unsafe fn finish_incremental_sweep_now(&mut self) {}
         }
         pub unsafe fn set_tagged_heap_root() {}
+        pub unsafe fn with_tagged_heap() {}
         pub fn sweep_now(heap: &mut TaggedHeap) {
             unsafe { heap.complete_collection(); }
         }
@@ -613,6 +736,7 @@ fn heap_capability_guard_flags_a_new_safe_sweep_wrapper() {
             pub unsafe fn finish_incremental_sweep_now(&mut self) {}
         }
         pub unsafe fn set_tagged_heap_root() {}
+        pub unsafe fn with_tagged_heap() {}
         pub fn gc_collect_from_current_roots_body(heap: &mut TaggedHeap) {
             unsafe { heap.collect_exact(std::iter::empty()); }
         }
@@ -787,9 +911,10 @@ fn place_anchored_payload_readers_are_not_static() {
 
 /// Phase 1c.0 allocator-never-collects guard: token-free allocation is sound
 /// under `HeapRef<'h>` only because allocation entry points never collect,
-/// sweep, or move existing objects. If a future allocator calls a collection
-/// or sweep entry (even inside `unsafe fn`), this guard fails and allocation
-/// must start taking `&mut HeapMut`.
+/// sweep, or move existing objects — neither directly nor transitively through
+/// helpers in other GC files. If any allocator or transitive GC callee reaches
+/// a collection/sweep entry (even inside `unsafe fn`), this guard fails and
+/// allocation must start taking `&mut HeapMut`.
 const ALLOCATOR_SOURCE_FILES: &[&str] = &[
     "neovm-value/src/tagged/gc/allocation.rs",
     "neovm-value/src/tagged/gc/alloc_region.rs",
@@ -797,129 +922,392 @@ const ALLOCATOR_SOURCE_FILES: &[&str] = &[
     "neovm-value/src/tagged/gc/owner_alloc_region.rs",
 ];
 
-fn is_allocator_forbidden_call(name: &str, arg_count: usize) -> bool {
-    name == "collect_exact"
-        || (name == "collect" && arg_count == 1)
+fn is_allocator_forbidden_call(
+    name: &str,
+    arg_count: usize,
+    is_path: bool,
+    is_heap_path: bool,
+) -> bool {
+    name.starts_with("collect_")
+        || (name == "collect" && ((!is_path && arg_count == 1) || is_heap_path))
         || is_sweep_method(name)
         || name.starts_with("gc_safe_point")
         || name.starts_with("gc_collect_")
         || name == "finish_concurrent_mark"
 }
 
-struct AllocatorScanner<'a> {
-    file: &'a str,
-    excluded: u32,
-    function: Vec<String>,
-    violations: Vec<Violation>,
+fn is_boilerplate_method_name(name: &str) -> bool {
+    matches!(
+        name,
+        "new"
+            | "default"
+            | "len"
+            | "is_empty"
+            | "get"
+            | "get_mut"
+            | "set"
+            | "push"
+            | "pop"
+            | "clear"
+            | "insert"
+            | "remove"
+            | "contains"
+            | "iter"
+            | "iter_mut"
+            | "clone"
+            | "drop"
+            | "from"
+            | "into"
+            | "as_ref"
+            | "as_mut"
+            | "fmt"
+            | "eq"
+            | "cmp"
+            | "hash"
+            | "next"
+            | "load"
+            | "store"
+            | "swap"
+            | "fetch_add"
+            | "fetch_sub"
+            | "read"
+            | "write"
+            | "lock"
+            | "unlock"
+            | "unwrap"
+            | "expect"
+            | "ok"
+            | "err"
+            | "map"
+            | "and_then"
+            | "or_else"
+            | "unwrap_or"
+            | "unwrap_or_else"
+            | "take"
+            | "replace"
+            | "reserve"
+            | "capacity"
+            | "as_ptr"
+            | "as_mut_ptr"
+            | "cast"
+            | "bits"
+            | "raw"
+            | "min"
+            | "max"
+            | "saturating_add"
+            | "saturating_sub"
+            | "checked_add"
+            | "checked_sub"
+            | "wrapping_add"
+            | "wrapping_sub"
+            | "count"
+            | "first"
+            | "last"
+            | "collect"
+            | "words"
+            | "run"
+    )
 }
 
-impl<'a> AllocatorScanner<'a> {
-    fn new(file: &'a str) -> Self {
+fn impl_type_name(ty: &Type) -> Option<String> {
+    match ty {
+        Type::Path(path) => path
+            .path
+            .segments
+            .last()
+            .map(|segment| segment.ident.to_string()),
+        Type::Group(group) => impl_type_name(&group.elem),
+        Type::Paren(paren) => impl_type_name(&paren.elem),
+        _ => None,
+    }
+}
+
+#[derive(Clone)]
+struct AllocCallEdge {
+    callee: String,
+    qualified_target: Option<String>,
+    arg_count: usize,
+    is_path: bool,
+    is_heap_path: bool,
+    file: String,
+    line: usize,
+}
+
+#[derive(Clone)]
+struct AllocFnNode {
+    key: String,
+    bare_name: String,
+    is_method: bool,
+    file: String,
+    is_root: bool,
+    calls: Vec<AllocCallEdge>,
+}
+
+struct AllocGraphScanner<'a> {
+    file: &'a str,
+    is_allocator_file: bool,
+    excluded: u32,
+    current_impl: Option<String>,
+    current_node: Option<usize>,
+    nodes: Vec<AllocFnNode>,
+}
+
+impl<'a> AllocGraphScanner<'a> {
+    fn new(file: &'a str, is_allocator_file: bool) -> Self {
         Self {
             file,
+            is_allocator_file,
             excluded: 0,
-            function: Vec::new(),
-            violations: Vec::new(),
+            current_impl: None,
+            current_node: None,
+            nodes: Vec::new(),
         }
     }
 
-    fn enter_item(&mut self, name: &str, attrs: &[Attribute], body: impl FnOnce(&mut Self)) {
+    fn enter_fn(&mut self, bare_name: String, attrs: &[Attribute], body: impl FnOnce(&mut Self)) {
         let excluded = production_excluded(attrs);
         if excluded {
             self.excluded += 1;
         }
-        self.function.push(name.to_owned());
+        let saved_node = self.current_node;
+        if self.excluded == 0 {
+            let (key, is_method) = match &self.current_impl {
+                Some(ty) => (format!("{ty}::{bare_name}"), true),
+                None => (bare_name.clone(), false),
+            };
+            let is_root = self.is_allocator_file || bare_name.starts_with("alloc_");
+            let idx = self.nodes.len();
+            self.nodes.push(AllocFnNode {
+                key,
+                bare_name,
+                is_method,
+                file: self.file.to_owned(),
+                is_root,
+                calls: Vec::new(),
+            });
+            self.current_node = Some(idx);
+        }
         body(self);
-        self.function.pop();
+        self.current_node = saved_node;
         if excluded {
             self.excluded -= 1;
         }
     }
 
-    fn note_violation(&mut self, call: &str, line: usize) {
+    fn record_call(&mut self, edge: AllocCallEdge) {
         if self.excluded > 0 {
             return;
         }
-        self.violations.push(Violation {
-            file: self.file.to_owned(),
-            line,
-            function: self
-                .function
-                .last()
-                .cloned()
-                .unwrap_or_else(|| "<module>".to_owned()),
-            call: call.to_owned(),
-        });
+        if let Some(idx) = self.current_node {
+            self.nodes[idx].calls.push(edge);
+        }
     }
 }
 
-impl<'ast> Visit<'ast> for AllocatorScanner<'_> {
+impl<'ast> Visit<'ast> for AllocGraphScanner<'_> {
     fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
-        self.enter_item(&item.ident.to_string(), &item.attrs, |scanner| {
-            visit::visit_item_mod(scanner, item);
-        });
+        let excluded = production_excluded(&item.attrs);
+        if excluded {
+            self.excluded += 1;
+        }
+        visit::visit_item_mod(self, item);
+        if excluded {
+            self.excluded -= 1;
+        }
     }
 
     fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
-        self.enter_item(&item.sig.ident.to_string(), &item.attrs, |scanner| {
+        self.enter_fn(item.sig.ident.to_string(), &item.attrs, |scanner| {
             visit::visit_item_fn(scanner, item);
         });
     }
 
     fn visit_item_impl(&mut self, item: &'ast ItemImpl) {
-        self.enter_item("<impl>", &item.attrs, |scanner| {
-            visit::visit_item_impl(scanner, item);
-        });
+        let excluded = production_excluded(&item.attrs);
+        if excluded {
+            self.excluded += 1;
+        }
+        let saved_impl = self.current_impl.clone();
+        self.current_impl = if item.trait_.is_none() {
+            impl_type_name(&item.self_ty)
+        } else {
+            None
+        };
+        visit::visit_item_impl(self, item);
+        self.current_impl = saved_impl;
+        if excluded {
+            self.excluded -= 1;
+        }
     }
 
     fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
-        self.enter_item(&item.sig.ident.to_string(), &item.attrs, |scanner| {
+        self.enter_fn(item.sig.ident.to_string(), &item.attrs, |scanner| {
             visit::visit_impl_item_fn(scanner, item);
         });
     }
 
     fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
-        let name = call.method.to_string();
-        if is_allocator_forbidden_call(&name, call.args.len()) {
-            self.note_violation(&name, call.method.span().start().line);
-        }
+        let callee = call.method.to_string();
+        let receiver_is_self = matches!(
+            &*call.receiver,
+            Expr::Path(path) if path.path.is_ident("self")
+        );
+        let qualified_target = if receiver_is_self {
+            self.current_impl
+                .as_ref()
+                .map(|ty| format!("{ty}::{callee}"))
+        } else {
+            None
+        };
+        self.record_call(AllocCallEdge {
+            callee,
+            qualified_target,
+            arg_count: call.args.len(),
+            is_path: false,
+            is_heap_path: false,
+            file: self.file.to_owned(),
+            line: call.method.span().start().line,
+        });
         visit::visit_expr_method_call(self, call);
     }
 
     fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
         if let Expr::Path(path) = &*call.func
-            && let Some(segment) = path.path.segments.last()
+            && let Some(last) = path.path.segments.last()
         {
-            let name = segment.ident.to_string();
-            // For bare `collect` path calls, require `TaggedHeap::collect` / `Self::collect`
-            // (2 args including self) or `collect_exact` / sweep / safepoint names.
-            let forbidden = if name == "collect" {
-                heap_path_method(&path.path).is_some()
+            let callee = last.ident.to_string();
+            let segments: Vec<String> = path
+                .path
+                .segments
+                .iter()
+                .map(|segment| segment.ident.to_string())
+                .collect();
+            let qualified_target = if segments.len() >= 2 {
+                let prefix = &segments[segments.len() - 2];
+                if prefix == "Self" {
+                    self.current_impl
+                        .as_ref()
+                        .map(|ty| format!("{ty}::{callee}"))
+                } else if prefix.chars().next().is_some_and(|c| c.is_uppercase()) {
+                    Some(format!("{prefix}::{callee}"))
+                } else {
+                    None
+                }
             } else {
-                is_allocator_forbidden_call(&name, call.args.len())
+                None
             };
-            if forbidden {
-                self.note_violation(&name, path.path.span().start().line);
-            }
+            self.record_call(AllocCallEdge {
+                callee,
+                qualified_target,
+                arg_count: call.args.len(),
+                is_path: true,
+                is_heap_path: heap_path_method(&path.path).is_some(),
+                file: self.file.to_owned(),
+                line: path.path.span().start().line,
+            });
         }
         visit::visit_expr_call(self, call);
     }
 }
 
-fn allocator_collection_problems(source: &str, file: &str) -> Vec<String> {
-    let syntax = syn::parse_file(source).unwrap_or_else(|error| panic!("parse {file}: {error}"));
-    let mut scanner = AllocatorScanner::new(file);
-    scanner.visit_file(&syntax);
-    scanner
-        .violations
-        .into_iter()
-        .map(|v| format!("{}:{}: `{}` calls `{}`", v.file, v.line, v.function, v.call))
-        .collect()
+fn allocator_graph_problems(sources: &[(&str, &str)]) -> Vec<String> {
+    use std::collections::{BTreeMap, BTreeSet, VecDeque};
+
+    let mut nodes: Vec<AllocFnNode> = Vec::new();
+    for &(file, source) in sources {
+        let syntax =
+            syn::parse_file(source).unwrap_or_else(|error| panic!("parse {file}: {error}"));
+        if production_excluded(&syntax.attrs) {
+            continue;
+        }
+        let is_allocator_file = ALLOCATOR_SOURCE_FILES.contains(&file);
+        let mut scanner = AllocGraphScanner::new(file, is_allocator_file);
+        scanner.visit_file(&syntax);
+        nodes.extend(scanner.nodes);
+    }
+
+    let mut by_key: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    let mut by_method: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    let mut by_free_fn: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for (idx, node) in nodes.iter().enumerate() {
+        by_key.entry(node.key.clone()).or_default().push(idx);
+        if !is_boilerplate_method_name(&node.bare_name) {
+            if node.is_method {
+                by_method
+                    .entry(node.bare_name.clone())
+                    .or_default()
+                    .push(idx);
+            } else {
+                by_free_fn
+                    .entry(node.bare_name.clone())
+                    .or_default()
+                    .push(idx);
+            }
+        }
+    }
+
+    let mut problems = Vec::new();
+    for (root_idx, root) in nodes.iter().enumerate() {
+        if !root.is_root {
+            continue;
+        }
+        let mut visited: BTreeSet<usize> = BTreeSet::new();
+        let mut queue: VecDeque<(usize, Vec<String>)> = VecDeque::new();
+        visited.insert(root_idx);
+        queue.push_back((root_idx, vec![format!("{} ({})", root.key, root.file)]));
+
+        while let Some((node_idx, chain)) = queue.pop_front() {
+            for edge in &nodes[node_idx].calls {
+                if is_allocator_forbidden_call(
+                    &edge.callee,
+                    edge.arg_count,
+                    edge.is_path,
+                    edge.is_heap_path,
+                ) {
+                    problems.push(format!(
+                        "{}:{}: `{}` reaches `{}` via {}",
+                        edge.file,
+                        edge.line,
+                        nodes[node_idx].bare_name,
+                        edge.callee,
+                        chain.join(" -> ")
+                    ));
+                    continue;
+                }
+                let targets: &[usize] = if let Some(qualified) = &edge.qualified_target {
+                    by_key.get(qualified).map(Vec::as_slice).unwrap_or(&[])
+                } else if edge.is_path {
+                    by_free_fn
+                        .get(&edge.callee)
+                        .map(Vec::as_slice)
+                        .unwrap_or(&[])
+                } else {
+                    by_method
+                        .get(&edge.callee)
+                        .map(Vec::as_slice)
+                        .unwrap_or(&[])
+                };
+                for &next_idx in targets {
+                    if visited.insert(next_idx) {
+                        let mut next_chain = chain.clone();
+                        next_chain.push(format!(
+                            "{} ({}:{})",
+                            nodes[next_idx].key, edge.file, edge.line
+                        ));
+                        queue.push_back((next_idx, next_chain));
+                    }
+                }
+            }
+        }
+    }
+
+    problems
 }
 
 #[test]
 fn allocation_guard_flags_collect_inside_allocator() {
-    let bad = allocator_collection_problems(
+    let bad = allocator_graph_problems(&[(
+        "neovm-value/src/tagged/gc/allocation.rs",
         r#"
         impl TaggedHeap {
             pub fn alloc_vector(&mut self) {
@@ -930,19 +1318,19 @@ fn allocation_guard_flags_collect_inside_allocator() {
             }
         }
         "#,
-        "neovm-value/src/tagged/gc/allocation.rs",
-    )
+    )])
     .join("\n");
     assert!(
-        bad.contains("`alloc_vector` calls `collect_exact`"),
+        bad.contains("`alloc_vector` reaches `collect_exact`"),
         "guard must flag safe allocator collecting: {bad}"
     );
     assert!(
-        bad.contains("`alloc_user_ptr` calls `begin_stw_collection`"),
+        bad.contains("`alloc_user_ptr` reaches `begin_stw_collection`"),
         "guard must flag unsafe allocator sweeping: {bad}"
     );
 
-    let clean = allocator_collection_problems(
+    let clean = allocator_graph_problems(&[(
+        "neovm-value/src/tagged/gc/allocation.rs",
         r#"
         impl TaggedHeap {
             pub fn alloc_cons(&mut self) -> Vec<i32> {
@@ -950,8 +1338,7 @@ fn allocation_guard_flags_collect_inside_allocator() {
             }
         }
         "#,
-        "neovm-value/src/tagged/gc/allocation.rs",
-    );
+    )]);
     assert!(
         clean.is_empty(),
         "Iterator::collect must not false-positive: {clean:?}"
@@ -959,23 +1346,87 @@ fn allocation_guard_flags_collect_inside_allocator() {
 }
 
 #[test]
+fn allocation_guard_flags_two_hop_cross_file_collection() {
+    let bad = allocator_graph_problems(&[
+        (
+            "neovm-value/src/tagged/gc/allocation.rs",
+            r#"
+            impl TaggedHeap {
+                pub fn alloc_vector(&mut self) {
+                    self.grow_arena_slow();
+                }
+            }
+            "#,
+        ),
+        (
+            "neovm-value/src/tagged/gc/arena_pages.rs",
+            r#"
+            impl TaggedHeap {
+                fn grow_arena_slow(&mut self) {
+                    self.reclaim_or_grow();
+                }
+            }
+            "#,
+        ),
+        (
+            "neovm-value/src/tagged/gc/mark_sweep.rs",
+            r#"
+            impl TaggedHeap {
+                fn reclaim_or_grow(&mut self) {
+                    self.collect_garbage();
+                }
+            }
+            "#,
+        ),
+    ])
+    .join("\n");
+    assert!(
+        bad.contains("`reclaim_or_grow` reaches `collect_garbage`"),
+        "2-hop cross-file allocator -> helper -> collect_* must fail: {bad}"
+    );
+    assert!(
+        bad.contains("TaggedHeap::alloc_vector") && bad.contains("TaggedHeap::grow_arena_slow"),
+        "violation must include the full transitive call chain: {bad}"
+    );
+}
+
+#[test]
 fn allocation_entry_points_never_collect() {
     let files = architecture_production_source_roots::production_source_files();
-    let mut seen = 0usize;
-    let mut problems = Vec::new();
-    for target in ALLOCATOR_SOURCE_FILES {
-        let file = files
-            .iter()
-            .find(|file| file.workspace_relative() == *target)
-            .unwrap_or_else(|| panic!("missing allocator file {target}"));
-        seen += 1;
-        let source = std::fs::read_to_string(&file.path).expect("read allocator source");
-        problems.extend(allocator_collection_problems(&source, target));
+    let mut gc_sources: Vec<(String, String)> = Vec::new();
+    let mut seen_allocator_files = 0usize;
+    for file in &files {
+        if file.is_test_path() {
+            continue;
+        }
+        let rel = file.workspace_relative();
+        if rel.ends_with("/tests.rs")
+            || rel.contains("_tests/")
+            || rel.ends_with("_tests.rs")
+            || rel.ends_with("_test.rs")
+            || rel.contains("test_support")
+            || rel.contains("testkit")
+        {
+            continue;
+        }
+        if rel == "neovm-value/src/tagged/gc.rs" || rel.starts_with("neovm-value/src/tagged/gc/") {
+            if ALLOCATOR_SOURCE_FILES.contains(&rel.as_str()) {
+                seen_allocator_files += 1;
+            }
+            let source = std::fs::read_to_string(&file.path)
+                .unwrap_or_else(|error| panic!("read {}: {error}", file.path.display()));
+            gc_sources.push((rel.to_owned(), source));
+        }
     }
-    assert_eq!(seen, ALLOCATOR_SOURCE_FILES.len());
+    assert_eq!(seen_allocator_files, ALLOCATOR_SOURCE_FILES.len());
+    let borrowed: Vec<(&str, &str)> = gc_sources
+        .iter()
+        .map(|(path, src)| (path.as_str(), src.as_str()))
+        .collect();
+    let problems = allocator_graph_problems(&borrowed);
     assert!(
         problems.is_empty(),
-        "allocator entry points must never collect or sweep:\n{}",
+        "allocator entry points (and their transitive GC callees) must never collect or sweep:\n{}",
         problems.join("\n")
     );
 }

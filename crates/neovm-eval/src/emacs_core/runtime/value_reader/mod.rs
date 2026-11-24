@@ -1848,9 +1848,11 @@ impl<'a> Reader<'a> {
             SymbolPositionMode::Positioned => {
                 if value.is_bare_symbol() && !value.is_nil() {
                     let pos_val = Value::fixnum(self.symbol_position(form_start) as i64);
-                    Ok(neovm_value::tagged::gc::with_tagged_heap(|heap| {
-                        heap.alloc_symbol_with_pos(value, pos_val)
-                    }))
+                    Ok(unsafe {
+                        neovm_value::tagged::gc::with_tagged_heap(|heap| {
+                            heap.alloc_symbol_with_pos(value, pos_val)
+                        })
+                    })
                 } else {
                     Ok(value)
                 }

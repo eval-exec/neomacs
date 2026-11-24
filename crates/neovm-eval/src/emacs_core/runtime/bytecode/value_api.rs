@@ -67,7 +67,7 @@ impl TaggedValueBytecodeExt for TaggedValue {
             bc.seal_hand_assembled_ops();
             bc
         };
-        with_tagged_heap(|h| h.alloc_bytecode(bc))
+        unsafe { with_tagged_heap(|h| h.alloc_bytecode(bc)) }
     }
 
     /// Allocate a `make-closure` instance of `proto` with the constant pool
@@ -78,7 +78,7 @@ impl TaggedValueBytecodeExt for TaggedValue {
         constants: neovm_value::tagged::header::LispValueVec,
         code: Value,
     ) -> Self {
-        with_tagged_heap(|h| h.alloc_bytecode_instance(proto, constants, code))
+        unsafe { with_tagged_heap(|h| h.alloc_bytecode_instance(proto, constants, code)) }
     }
 
     /// Borrow the ByteCodeFunction from a ByteCode value.

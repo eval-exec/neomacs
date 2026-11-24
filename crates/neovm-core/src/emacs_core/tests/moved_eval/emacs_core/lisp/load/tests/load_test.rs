@@ -94,13 +94,15 @@ fn load_name_equal_matches_lisp_equal_without_tagged_heap_allocation() {
     let unibyte = neovm_value::heap_types::LispString::from_unibyte(b"same-name.el".to_vec());
     let multibyte = neovm_value::heap_types::LispString::from_utf8("same-name.el");
     let different = neovm_value::heap_types::LispString::from_unibyte(b"other-name.el".to_vec());
-    let before = neovm_value::tagged::gc::with_tagged_heap(|heap| heap.total_allocated_bytes());
+    let before =
+        unsafe { neovm_value::tagged::gc::with_tagged_heap(|heap| heap.total_allocated_bytes()) };
 
     assert!(load_name_equal(&unibyte, &multibyte));
     assert!(load_name_equal(&multibyte, &unibyte));
     assert!(!load_name_equal(&unibyte, &different));
 
-    let after = neovm_value::tagged::gc::with_tagged_heap(|heap| heap.total_allocated_bytes());
+    let after =
+        unsafe { neovm_value::tagged::gc::with_tagged_heap(|heap| heap.total_allocated_bytes()) };
     assert_eq!(
         after, before,
         "comparing borrowed load names must not allocate tagged heap objects",

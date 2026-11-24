@@ -763,7 +763,7 @@ fn gc_count(value: usize) -> i64 {
 /// and `vector-slots` their cells. The cache excludes mapped/image residents
 /// and was captured before hooks and this return-list allocation.
 pub(crate) fn builtin_garbage_collect_stats() -> EvalResult {
-    let gc = neovm_value::tagged::gc::with_tagged_heap(|heap| heap.gc_object_counts());
+    let gc = unsafe { neovm_value::tagged::gc::with_tagged_heap(|heap| heap.gc_object_counts()) };
 
     Ok(Value::list(vec![
         gc_bucket(
@@ -845,12 +845,14 @@ fn arena_layout_value(stats: &neovm_value::tagged::gc::ArenaLayoutStats) -> Valu
 #[doc(hidden)]
 pub fn builtin_neomacs_heap_layout_stats(args: Vec<Value>) -> EvalResult {
     expect_args("neomacs--heap-layout-stats", &args, 0)?;
-    let stats = neovm_value::tagged::gc::with_tagged_heap(|heap| {
-        // An open allocation region's cells are neither on the free list nor
-        // handed out: give them back so the census is exact.
-        heap.close_alloc_regions();
-        heap.layout_stats()
-    });
+    let stats = unsafe {
+        neovm_value::tagged::gc::with_tagged_heap(|heap| {
+            // An open allocation region's cells are neither on the free list nor
+            // handed out: give them back so the census is exact.
+            heap.close_alloc_regions();
+            heap.layout_stats()
+        })
+    };
 
     let cons = Value::list(vec![
         layout_stat_pair("pages", stats.cons.pages),

@@ -32,42 +32,46 @@ fn run_replacing_fontifier(
 }
 
 fn assert_snapshot_values_alive(values: &[Value], owner: &str) {
-    neovm_core::tagged::gc::with_tagged_heap(|heap| {
-        for &value in values {
-            // This raw-Value allocation oracle excludes freed cons cells,
-            // even when their enclosing allocation block still survives.
-            // Never inspect a captured payload before this check succeeds.
-            assert!(
-                heap.owns_heap_value_for_test(value),
-                "{owner}: captured operand was reclaimed by callback GC"
-            );
-            assert!(
-                heap.value_is_marked_for_test(value),
-                "{owner}: captured operand was not marked by callback GC"
-            );
-        }
-    });
+    unsafe {
+        neovm_core::tagged::gc::with_tagged_heap(|heap| {
+            for &value in values {
+                // This raw-Value allocation oracle excludes freed cons cells,
+                // even when their enclosing allocation block still survives.
+                // Never inspect a captured payload before this check succeeds.
+                assert!(
+                    heap.owns_heap_value_for_test(value),
+                    "{owner}: captured operand was reclaimed by callback GC"
+                );
+                assert!(
+                    heap.value_is_marked_for_test(value),
+                    "{owner}: captured operand was not marked by callback GC"
+                );
+            }
+        })
+    };
 }
 
 fn assert_snapshot_values_reclaimed(values: &[Value], owner: &str) {
-    neovm_core::tagged::gc::with_tagged_heap(|heap| {
-        for &value in values {
-            // Allocation/mark metadata only: the final owner has been dropped
-            // and no Lisp query may touch these captured operands now.
-            assert!(
-                !heap.owns_heap_value_for_test(value),
-                "{owner}: final snapshot drop must release captured operand"
-            );
-            // Mark queries treat unowned non-cons addresses as permanent
-            // runtime objects. Allocation ownership is the release oracle.
-            if value.is_cons() {
+    unsafe {
+        neovm_core::tagged::gc::with_tagged_heap(|heap| {
+            for &value in values {
+                // Allocation/mark metadata only: the final owner has been dropped
+                // and no Lisp query may touch these captured operands now.
                 assert!(
-                    !heap.value_is_marked_for_test(value),
-                    "{owner}: released captured cons must not remain marked"
+                    !heap.owns_heap_value_for_test(value),
+                    "{owner}: final snapshot drop must release captured operand"
                 );
+                // Mark queries treat unowned non-cons addresses as permanent
+                // runtime objects. Allocation ownership is the release oracle.
+                if value.is_cons() {
+                    assert!(
+                        !heap.value_is_marked_for_test(value),
+                        "{owner}: released captured cons must not remain marked"
+                    );
+                }
             }
-        }
-    });
+        })
+    };
 }
 
 fn check_resolved_layout_vars_roots(bounded: bool) {

@@ -4134,7 +4134,7 @@ fn rooted_lisp_string_frame_keeps_detached_face_operands_through_callback_gc() {
     use neovm_core::emacs_core::value::set_string_text_properties_for_value;
 
     fn live_count() -> usize {
-        neovm_core::tagged::gc::with_tagged_heap(|heap| heap.allocated_count())
+        unsafe { neovm_core::tagged::gc::with_tagged_heap(|heap| heap.allocated_count()) }
     }
 
     struct CollectingFaceResolver<'a> {

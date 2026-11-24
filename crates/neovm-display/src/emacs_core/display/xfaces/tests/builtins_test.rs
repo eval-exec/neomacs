@@ -468,14 +468,14 @@ fn internal_lisp_face_p_is_a_pure_read_of_the_live_table() {
     // ~0. The 100 KB bound sits ~200x below the old cost and far above any
     // incidental allocation, so it separates the two without flaking.
     let bytes_before =
-        neovm_value::tagged::gc::with_tagged_heap(|heap| heap.total_allocated_bytes());
+        unsafe { neovm_value::tagged::gc::with_tagged_heap(|heap| heap.total_allocated_bytes()) };
     let default_sym = Value::symbol("default");
     for _ in 0..500 {
         let v = builtin_internal_lisp_face_p(&mut eval, vec![default_sym]).unwrap();
         assert!(v.is_vector());
     }
     let bytes_after =
-        neovm_value::tagged::gc::with_tagged_heap(|heap| heap.total_allocated_bytes());
+        unsafe { neovm_value::tagged::gc::with_tagged_heap(|heap| heap.total_allocated_bytes()) };
     let grew = bytes_after.saturating_sub(bytes_before);
     assert!(
         grew < 100_000,

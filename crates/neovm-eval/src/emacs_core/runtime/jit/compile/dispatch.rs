@@ -3805,7 +3805,9 @@ unsafe fn cbsym_read_contained(
                 CBSYM_SPEC_GENERIC_COUNT.fetch_add(1, Ordering::Relaxed);
                 return STATUS_NEED_GENERIC;
             };
-            return match neovm_value::tagged::gc::with_tagged_heap(|h| h.buffer_value(buf_id)) {
+            return match unsafe {
+                neovm_value::tagged::gc::with_tagged_heap(|h| h.buffer_value(buf_id))
+            } {
                 Some(v) => {
                     #[cfg(any(test, debug_assertions, feature = "test-support"))]
                     CBSYM_SPEC_FAST_COUNT.fetch_add(1, Ordering::Relaxed);

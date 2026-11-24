@@ -2493,33 +2493,35 @@ fn p15_gc_thread_payload_fields_have_only_object_edges() {
         let thread = eval.threads.thread_handle(native).unwrap();
         let probes: [Value; 7] =
             std::array::from_fn(|index| Value::vector(vec![Value::fixnum(index as i64)]));
-        neovm_value::tagged::gc::with_tagged_heap(|heap| {
-            // SAFETY: the live registration roots this same-World ThreadObj.
-            // The test retains exclusive World authority; this closure only
-            // copies prepared words, without allocating, collecting or yielding.
-            unsafe {
-                heap.with_thread_payload_mut(thread, |payload| {
-                    // `function` has a reader and no setter. Rebuild through
-                    // the public constructor so the untouched words stay put.
-                    let name = payload.name();
-                    let error_symbol = payload.error_symbol();
-                    let stored_events = payload.stored_events().to_vec();
-                    *payload = neovm_value::heap_types::threading::ThreadChildren::new(
-                        name,
-                        probes[0],
-                        probes[1],
-                        Some(probes[2]),
-                        probes[3],
-                        probes[4],
-                        error_symbol,
-                        probes[6],
-                        probes[5],
-                        stored_events,
-                    );
-                })
-            }
-            .expect("same-World thread payload")
-        });
+        unsafe {
+            neovm_value::tagged::gc::with_tagged_heap(|heap| {
+                // SAFETY: the live registration roots this same-World ThreadObj.
+                // The test retains exclusive World authority; this closure only
+                // copies prepared words, without allocating, collecting or yielding.
+                unsafe {
+                    heap.with_thread_payload_mut(thread, |payload| {
+                        // `function` has a reader and no setter. Rebuild through
+                        // the public constructor so the untouched words stay put.
+                        let name = payload.name();
+                        let error_symbol = payload.error_symbol();
+                        let stored_events = payload.stored_events().to_vec();
+                        *payload = neovm_value::heap_types::threading::ThreadChildren::new(
+                            name,
+                            probes[0],
+                            probes[1],
+                            Some(probes[2]),
+                            probes[3],
+                            probes[4],
+                            error_symbol,
+                            probes[6],
+                            probes[5],
+                            stored_events,
+                        );
+                    })
+                }
+                .expect("same-World thread payload")
+            })
+        };
         (native, thread, probes)
     });
     let check = |eval: &Context| {
@@ -2597,20 +2599,22 @@ fn p15_gc_old_thread_payload_remembers_young_children() {
 
     let child = eval.with_gc_inhibited(|_eval| {
         let child = Value::vector(vec![Value::fixnum(1515)]);
-        neovm_value::tagged::gc::with_tagged_heap(|heap| {
-            assert!(heap.owns_heap_value_for_test(child));
-            assert!(!heap.value_is_old_for_test(child));
-            // SAFETY: this ordinary World Context owns the installed heap,
-            // and its live registration roots the already-promoted ThreadObj.
-            // The prepared child is copied before any further collection;
-            // the barrier closure does not allocate, collect, or yield.
-            unsafe {
-                heap.with_thread_payload_mut(thread, |payload| {
-                    *payload.result_mut() = child;
-                })
-            }
-            .expect("same-World old thread payload");
-        });
+        unsafe {
+            neovm_value::tagged::gc::with_tagged_heap(|heap| {
+                assert!(heap.owns_heap_value_for_test(child));
+                assert!(!heap.value_is_old_for_test(child));
+                // SAFETY: this ordinary World Context owns the installed heap,
+                // and its live registration roots the already-promoted ThreadObj.
+                // The prepared child is copied before any further collection;
+                // the barrier closure does not allocate, collect, or yield.
+                unsafe {
+                    heap.with_thread_payload_mut(thread, |payload| {
+                        *payload.result_mut() = child;
+                    })
+                }
+                .expect("same-World old thread payload");
+            })
+        };
         child
     });
     let check = |eval: &Context| {

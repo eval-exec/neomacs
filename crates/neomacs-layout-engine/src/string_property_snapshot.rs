@@ -109,7 +109,7 @@ mod tests {
     };
 
     fn allocated() -> usize {
-        neovm_core::tagged::gc::with_tagged_heap(|heap| heap.allocated_count())
+        unsafe { neovm_core::tagged::gc::with_tagged_heap(|heap| heap.allocated_count()) }
     }
 
     #[test]

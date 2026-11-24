@@ -259,16 +259,18 @@ fn install_module_function(
     name: &str,
     func: unsafe extern "C" fn(*mut emacs_env, isize, *mut emacs_value, *mut c_void) -> emacs_value,
 ) {
-    let value = neovm_value::tagged::gc::with_tagged_heap(|h| unsafe {
-        h.alloc_module_function(
-            0,
-            0,
-            func as *const c_void,
-            std::ptr::null_mut(),
-            Value::NIL,
-            Value::NIL,
-        )
-    });
+    let value = unsafe {
+        neovm_value::tagged::gc::with_tagged_heap(|h| {
+            h.alloc_module_function(
+                0,
+                0,
+                func as *const c_void,
+                std::ptr::null_mut(),
+                Value::NIL,
+                Value::NIL,
+            )
+        })
+    };
     ev.obarray_view_mut().set_symbol_function(name, value);
 }
 
@@ -322,7 +324,7 @@ fn module_guard_preserves_earlier_pending_exit() {
 #[test]
 fn module_guard_re_raises_on_poisoned_gc_locks_without_ctx() {
     crate::test_utils::init_test_tracing();
-    neovm_value::tagged::gc::with_tagged_heap(|h| h.poison_gc_locks_for_test());
+    unsafe { neovm_value::tagged::gc::with_tagged_heap(|h| h.poison_gc_locks_for_test()) };
     let mut fixture = TestEnv::new();
     let env = fixture.env_ptr();
 

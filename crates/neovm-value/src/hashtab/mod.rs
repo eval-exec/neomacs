@@ -816,7 +816,7 @@ pub fn builtin_copy_hash_table(args: Vec<Value>) -> EvalResult {
             // logical immutability belongs only to its original table. The
             // nesting count lives on the object, and `alloc_hash_table`
             // starts the copy at zero even when the source is mid-test.
-            Ok(with_tagged_heap(|h| h.alloc_hash_table(new_table)))
+            Ok(unsafe { with_tagged_heap(|h| h.alloc_hash_table(new_table)) })
         }
         _ => Err(signal(
             LispCondition::WrongTypeArgument,

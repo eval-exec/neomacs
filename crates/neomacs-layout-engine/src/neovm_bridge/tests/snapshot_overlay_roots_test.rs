@@ -10,18 +10,21 @@ use neovm_core::emacs_core::xdisp::{
 /// The counts come from the real root registry, so a buffer-owned memo copy
 /// can never stand in for a live snapshot lease.
 fn root_group_counts(eval: &Context, targets: &[usize]) -> (Vec<usize>, Vec<usize>) {
-    let heap_id = neovm_core::tagged::gc::with_tagged_heap(|heap| heap.tagged_heap_identity());
+    let heap_id =
+        unsafe { neovm_core::tagged::gc::with_tagged_heap(|heap| heap.tagged_heap_identity()) };
     let mut owned = vec![0usize; targets.len()];
     let mut buffered = vec![0usize; targets.len()];
     let current = std::cell::Cell::new("");
     eval.trace_roots(
         heap_id,
         |roots| {
-            neovm_core::tagged::gc::with_tagged_heap(|heap| {
-                neovm_value::tagged::transport::root_table::collect_shared_root_gc_roots(
-                    heap, roots,
-                );
-            });
+            unsafe {
+                neovm_core::tagged::gc::with_tagged_heap(|heap| {
+                    neovm_value::tagged::transport::root_table::collect_shared_root_gc_roots(
+                        heap, roots,
+                    );
+                })
+            };
         },
         &mut |group| current.set(group),
         &mut |value| {
@@ -141,21 +144,23 @@ fn check_snapshot_fontification_roots(bounded: bool) {
     );
     // Check numeric allocation-catalog membership BEFORE any potentially
     // stale copied Value is dereferenced. A red run must fail without a UAF.
-    neovm_core::tagged::gc::with_tagged_heap(|heap| {
-        for &address in &addresses {
-            assert!(
-                heap.non_cons_object_addrs_contains_for_test(address),
-                "snapshot copied overlay lost across fontification GC; bounded={bounded}"
-            );
-        }
-        for cell in &plist_cells {
-            assert!(
-                heap.owns_heap_value_for_test(*cell),
-                "snapshot copied plist cell lost across callback GC"
-            );
-            assert!(heap.value_is_marked_for_test(*cell));
-        }
-    });
+    unsafe {
+        neovm_core::tagged::gc::with_tagged_heap(|heap| {
+            for &address in &addresses {
+                assert!(
+                    heap.non_cons_object_addrs_contains_for_test(address),
+                    "snapshot copied overlay lost across fontification GC; bounded={bounded}"
+                );
+            }
+            for cell in &plist_cells {
+                assert!(
+                    heap.owns_heap_value_for_test(*cell),
+                    "snapshot copied plist cell lost across callback GC"
+                );
+                assert!(heap.value_is_marked_for_test(*cell));
+            }
+        })
+    };
     for copy in &copied {
         assert_eq!(
             snapshot
@@ -234,21 +239,23 @@ fn check_snapshot_fontification_roots(bounded: bool) {
         // The memo no longer owns the changed old copy. Its header and plist
         // must still be live under the first view's lease, checked BEFORE any
         // dereference, and its old value must still read back.
-        neovm_core::tagged::gc::with_tagged_heap(|heap| {
-            for address in &addresses {
-                assert!(
-                    heap.non_cons_object_addrs_contains_for_test(*address),
-                    "a held copy's header was lost after the memo eviction GC"
-                );
-            }
-            for cell in &plist_cells {
-                assert!(
-                    heap.owns_heap_value_for_test(*cell),
-                    "a held copy's plist cell was lost after the memo eviction GC"
-                );
-                assert!(heap.value_is_marked_for_test(*cell));
-            }
-        });
+        unsafe {
+            neovm_core::tagged::gc::with_tagged_heap(|heap| {
+                for address in &addresses {
+                    assert!(
+                        heap.non_cons_object_addrs_contains_for_test(*address),
+                        "a held copy's header was lost after the memo eviction GC"
+                    );
+                }
+                for cell in &plist_cells {
+                    assert!(
+                        heap.owns_heap_value_for_test(*cell),
+                        "a held copy's plist cell was lost after the memo eviction GC"
+                    );
+                    assert!(heap.value_is_marked_for_test(*cell));
+                }
+            })
+        };
         for copy in &copied {
             assert_eq!(
                 snapshot
@@ -290,12 +297,14 @@ fn check_snapshot_fontification_roots(bounded: bool) {
             .iter()
             .position(|count| *count == 0)
             .expect("the invalidated copy must have left the memo");
-        neovm_core::tagged::gc::with_tagged_heap(|heap| {
-            assert!(
-                !heap.non_cons_object_addrs_contains_for_test(addresses[evicted_index]),
-                "the memo-evicted old copy must be reclaimed as soon as its lease drops"
-            );
-        });
+        unsafe {
+            neovm_core::tagged::gc::with_tagged_heap(|heap| {
+                assert!(
+                    !heap.non_cons_object_addrs_contains_for_test(addresses[evicted_index]),
+                    "the memo-evicted old copy must be reclaimed as soon as its lease drops"
+                );
+            })
+        };
         eval.eval_str(
             "(mapc #'delete-overlay (append (car (overlay-lists)) (cdr (overlay-lists))))",
         )
@@ -306,23 +315,27 @@ fn check_snapshot_fontification_roots(bounded: bool) {
             buffered_after.iter().all(|count| *count == 0),
             "a full snapshot's copies must not be retained by the buffer"
         );
+        unsafe {
+            neovm_core::tagged::gc::with_tagged_heap(|heap| {
+                for address in &addresses {
+                    assert!(
+                        !heap.non_cons_object_addrs_contains_for_test(*address),
+                        "a full snapshot's copy must be reclaimed as soon as its lease drops"
+                    );
+                }
+            })
+        };
+    }
+    unsafe {
         neovm_core::tagged::gc::with_tagged_heap(|heap| {
-            for address in &addresses {
+            for address in addresses.iter().chain(second_addresses.iter()) {
                 assert!(
                     !heap.non_cons_object_addrs_contains_for_test(*address),
-                    "a full snapshot's copy must be reclaimed as soon as its lease drops"
+                    "dropping the final snapshot (and any bounded memo owner) must release its copied overlay roots"
                 );
             }
-        });
-    }
-    neovm_core::tagged::gc::with_tagged_heap(|heap| {
-        for address in addresses.iter().chain(second_addresses.iter()) {
-            assert!(
-                !heap.non_cons_object_addrs_contains_for_test(*address),
-                "dropping the final snapshot (and any bounded memo owner) must release its copied overlay roots"
-            );
-        }
-    });
+        })
+    };
 }
 
 #[test]
@@ -407,18 +420,20 @@ fn held_snapshot_text_property_operands_survive_replacing_fontifier_gc() {
     );
     // Allocation membership uses tag/address metadata and cons free lists.
     // Do NOT read the held view or any old payload before all guards pass.
-    neovm_core::tagged::gc::with_tagged_heap(|heap| {
-        assert!(
-            heap.owns_heap_value_for_test(old_string),
-            "Rc-held text-property string lost across replacing fontifier GC"
-        );
-        for &cell in &old_cells {
+    unsafe {
+        neovm_core::tagged::gc::with_tagged_heap(|heap| {
             assert!(
-                heap.owns_heap_value_for_test(cell),
-                "Rc-held text-property plist cell lost across replacing fontifier GC"
+                heap.owns_heap_value_for_test(old_string),
+                "Rc-held text-property string lost across replacing fontifier GC"
             );
-        }
-    });
+            for &cell in &old_cells {
+                assert!(
+                    heap.owns_heap_value_for_test(cell),
+                    "Rc-held text-property plist cell lost across replacing fontifier GC"
+                );
+            }
+        })
+    };
     let retained_face = snapshot
         .layout_text_prop_at_emacs_byte_pos(EmacsBytePos::new(0), Value::symbol("face"))
         .unwrap();
@@ -433,12 +448,14 @@ fn held_snapshot_text_property_operands_survive_replacing_fontifier_gc() {
     );
     drop(snapshot);
     eval.gc_collect_exact();
-    neovm_core::tagged::gc::with_tagged_heap(|heap| {
-        assert!(
-            !heap.owns_heap_value_for_test(old_string),
-            "retiring the final old table must release its operands"
-        );
-    });
+    unsafe {
+        neovm_core::tagged::gc::with_tagged_heap(|heap| {
+            assert!(
+                !heap.owns_heap_value_for_test(old_string),
+                "retiring the final old table must release its operands"
+            );
+        })
+    };
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -519,9 +536,11 @@ fn check_snapshot_composition_rules_survive_fontification_gc(root: SnapshotCompo
         SnapshotCompositionRoot::CategoryTable => category,
         SnapshotCompositionRoot::SyntaxTable => syntax,
     };
-    neovm_core::tagged::gc::with_tagged_heap(|heap| {
-        assert!(heap.owns_heap_value_for_test(target));
-    });
+    unsafe {
+        neovm_core::tagged::gc::with_tagged_heap(|heap| {
+            assert!(heap.owns_heap_value_for_test(target));
+        })
+    };
     let before_gc = eval
         .variables()
         .value_by_name("gcs-done")
@@ -554,17 +573,19 @@ fn check_snapshot_composition_rules_survive_fontification_gc(root: SnapshotCompo
             .unwrap()
             > before_gc
     );
-    neovm_core::tagged::gc::with_tagged_heap(|heap| {
-        // Numeric ownership metadata only, before any captured rule can read
-        // either potentially reclaimed table. Each target has its own test.
-        assert!(
-            heap.owns_heap_value_for_test(target),
-            "snapshot composition root lost across callback GC: {root:?}"
-        );
-        assert!(heap.owns_heap_value_for_test(table));
-        assert!(heap.owns_heap_value_for_test(category));
-        assert!(heap.owns_heap_value_for_test(syntax));
-    });
+    unsafe {
+        neovm_core::tagged::gc::with_tagged_heap(|heap| {
+            // Numeric ownership metadata only, before any captured rule can read
+            // either potentially reclaimed table. Each target has its own test.
+            assert!(
+                heap.owns_heap_value_for_test(target),
+                "snapshot composition root lost across callback GC: {root:?}"
+            );
+            assert!(heap.owns_heap_value_for_test(table));
+            assert!(heap.owns_heap_value_for_test(category));
+            assert!(heap.owns_heap_value_for_test(syntax));
+        })
+    };
     let after_spans = snapshot
         .string_composition_rules
         .expect("pending view retains its rules")
@@ -586,14 +607,16 @@ fn check_snapshot_composition_rules_survive_fontification_gc(root: SnapshotCompo
     // local `rules` does not own a root. Only the snapshot lease retains it.
     drop(snapshot);
     eval.gc_collect_exact();
-    neovm_core::tagged::gc::with_tagged_heap(|heap| {
-        assert!(
-            !heap.owns_heap_value_for_test(target),
-            "final snapshot drop must release its replaced composition input: {root:?}"
-        );
-        // An unowned non-cons address is treated as permanent by mark
-        // queries; the allocation catalog above proves reclamation.
-    });
+    unsafe {
+        neovm_core::tagged::gc::with_tagged_heap(|heap| {
+            assert!(
+                !heap.owns_heap_value_for_test(target),
+                "final snapshot drop must release its replaced composition input: {root:?}"
+            );
+            // An unowned non-cons address is treated as permanent by mark
+            // queries; the allocation catalog above proves reclamation.
+        })
+    };
 }
 
 #[test]
@@ -768,25 +791,27 @@ fn check_initial_display_when_answers_survive_fontification_gc(root: InitialDisp
             .is_nil()
     );
     let check_captured_root = |phase: &str| {
-        neovm_core::tagged::gc::with_tagged_heap(|heap| {
-            // Only check the class this row names. In particular, the object
-            // row must not fail because FORM was collected. Neither guard
-            // reads an old payload; a freed/reused cons needs both checks.
-            let values: &[Value] = match root {
-                InitialDisplayWhenRoot::Form => &form_cells,
-                InitialDisplayWhenRoot::Object => std::slice::from_ref(&source),
-            };
-            for &value in values {
-                assert!(
-                    heap.owns_heap_value_for_test(value),
-                    "initial display-WHEN {root:?} reclaimed: {phase}"
-                );
-                assert!(
-                    heap.value_is_marked_for_test(value),
-                    "initial display-WHEN {root:?} unmarked: {phase}"
-                );
-            }
-        });
+        unsafe {
+            neovm_core::tagged::gc::with_tagged_heap(|heap| {
+                // Only check the class this row names. In particular, the object
+                // row must not fail because FORM was collected. Neither guard
+                // reads an old payload; a freed/reused cons needs both checks.
+                let values: &[Value] = match root {
+                    InitialDisplayWhenRoot::Form => &form_cells,
+                    InitialDisplayWhenRoot::Object => std::slice::from_ref(&source),
+                };
+                for &value in values {
+                    assert!(
+                        heap.owns_heap_value_for_test(value),
+                        "initial display-WHEN {root:?} reclaimed: {phase}"
+                    );
+                    assert!(
+                        heap.value_is_marked_for_test(value),
+                        "initial display-WHEN {root:?} unmarked: {phase}"
+                    );
+                }
+            })
+        };
     };
     check_captured_root("callback GC");
     // The hook has now returned. Collect again without evaluating another
@@ -821,28 +846,30 @@ fn check_initial_display_when_answers_survive_fontification_gc(root: InitialDisp
     assert!(!snapshot.display_when_conditions().has_recorded_visits());
     drop(snapshot);
     eval.gc_collect_exact();
-    neovm_core::tagged::gc::with_tagged_heap(|heap| {
-        // The final pending-view owner is gone. Do not query Lisp or inspect
-        // a payload after collecting: these raw Values are identities only.
-        let values: &[Value] = match root {
-            InitialDisplayWhenRoot::Form => &form_cells,
-            InitialDisplayWhenRoot::Object => std::slice::from_ref(&source),
-        };
-        for &value in values {
-            assert!(
-                !heap.owns_heap_value_for_test(value),
-                "final snapshot drop must release initial display-WHEN {root:?}"
-            );
-            // Only query ownership after reclamation: non-cons mark queries
-            // default to permanent for addresses outside the heap catalog.
-            if value.is_cons() {
+    unsafe {
+        neovm_core::tagged::gc::with_tagged_heap(|heap| {
+            // The final pending-view owner is gone. Do not query Lisp or inspect
+            // a payload after collecting: these raw Values are identities only.
+            let values: &[Value] = match root {
+                InitialDisplayWhenRoot::Form => &form_cells,
+                InitialDisplayWhenRoot::Object => std::slice::from_ref(&source),
+            };
+            for &value in values {
                 assert!(
-                    !heap.value_is_marked_for_test(value),
-                    "released initial display-WHEN {root:?} must not remain marked"
+                    !heap.owns_heap_value_for_test(value),
+                    "final snapshot drop must release initial display-WHEN {root:?}"
                 );
+                // Only query ownership after reclamation: non-cons mark queries
+                // default to permanent for addresses outside the heap catalog.
+                if value.is_cons() {
+                    assert!(
+                        !heap.value_is_marked_for_test(value),
+                        "released initial display-WHEN {root:?} must not remain marked"
+                    );
+                }
             }
-        }
-    });
+        })
+    };
 }
 
 #[test]

@@ -649,13 +649,15 @@ impl<'a> LoadDecoder<'a> {
         // permanent. Mapped rows are already permanent through the mapped
         // side tables, and the heap ignores conses, mapped objects and static
         // values.
-        with_tagged_heap(|heap| {
-            for index in 0..self.state.values.len() {
-                if let Some(value) = self.state.cached_value(index) {
-                    heap.note_image_object(value);
+        unsafe {
+            with_tagged_heap(|heap| {
+                for index in 0..self.state.values.len() {
+                    if let Some(value) = self.state.cached_value(index) {
+                        heap.note_image_object(value);
+                    }
                 }
-            }
-        });
+            })
+        };
         Ok(())
     }
 
@@ -892,7 +894,7 @@ impl<'a> LoadDecoder<'a> {
         // table is far cheaper than growing a 12K-entry FxHashMap by
         // rehashing during registration.
         let (veclikes, strings) = self.state.spans.count_vectorlikes_and_strings();
-        with_tagged_heap(|heap| heap.reserve_mapped_object_capacity(veclikes, strings));
+        unsafe { with_tagged_heap(|heap| heap.reserve_mapped_object_capacity(veclikes, strings)) };
 
         for (_index, record) in self.state.spans.iter() {
             match record {
@@ -909,9 +911,11 @@ impl<'a> LoadDecoder<'a> {
                             )
                         })?;
                         let ptr = mapped_heap.cons_cell_mut(DumpConsSpan { offset: run_start })?;
-                        with_tagged_heap(|heap| unsafe {
-                            heap.register_mapped_cons_range(ptr, run_len);
-                        });
+                        unsafe {
+                            with_tagged_heap(|heap| {
+                                heap.register_mapped_cons_range(ptr, run_len);
+                            })
+                        };
                         Ok(())
                     })?;
                 }
@@ -924,9 +928,11 @@ impl<'a> LoadDecoder<'a> {
                             )
                         })?;
                         let ptr = mapped_heap.float_obj_mut(DumpFloatSpan { offset: run_start })?;
-                        with_tagged_heap(|heap| unsafe {
-                            heap.register_mapped_float_range(ptr, run_len);
-                        });
+                        unsafe {
+                            with_tagged_heap(|heap| {
+                                heap.register_mapped_float_range(ptr, run_len);
+                            })
+                        };
                         Ok(())
                     })?;
                 }
@@ -938,9 +944,14 @@ impl<'a> LoadDecoder<'a> {
                         )
                     })?;
                     let ptr = mapped_heap.string_obj_mut(span)?;
-                    with_tagged_heap(|heap| unsafe {
-                        heap.register_mapped_string_object(ptr, std::mem::size_of::<StringObj>())
-                    });
+                    unsafe {
+                        with_tagged_heap(|heap| {
+                            heap.register_mapped_string_object(
+                                ptr,
+                                std::mem::size_of::<StringObj>(),
+                            )
+                        })
+                    };
                 }
                 LoadedObjectSpan::Vectorlike { object: span, .. } => {
                     let mapped_heap = mapped_heap.ok_or_else(|| {
@@ -955,9 +966,9 @@ impl<'a> LoadDecoder<'a> {
                             "mapped vectorlike span length overflows usize".into(),
                         )
                     })?;
-                    with_tagged_heap(|heap| unsafe {
-                        heap.register_mapped_veclike_object(ptr, byte_len)
-                    });
+                    unsafe {
+                        with_tagged_heap(|heap| heap.register_mapped_veclike_object(ptr, byte_len))
+                    };
                 }
                 LoadedObjectSpan::None | LoadedObjectSpan::Unmapped => {}
             }
@@ -970,9 +981,11 @@ impl<'a> LoadDecoder<'a> {
                 )
             })?;
             let ptr = mapped_heap.cons_cell_mut(DumpConsSpan { offset: run_start })?;
-            with_tagged_heap(|heap| unsafe {
-                heap.register_mapped_cons_range(ptr, run_len);
-            });
+            unsafe {
+                with_tagged_heap(|heap| {
+                    heap.register_mapped_cons_range(ptr, run_len);
+                })
+            };
             Ok(())
         })?;
         float_run.finish(|run_start, run_len| {
@@ -982,9 +995,11 @@ impl<'a> LoadDecoder<'a> {
                 )
             })?;
             let ptr = mapped_heap.float_obj_mut(DumpFloatSpan { offset: run_start })?;
-            with_tagged_heap(|heap| unsafe {
-                heap.register_mapped_float_range(ptr, run_len);
-            });
+            unsafe {
+                with_tagged_heap(|heap| {
+                    heap.register_mapped_float_range(ptr, run_len);
+                })
+            };
             Ok(())
         })?;
         Ok(())
@@ -1778,19 +1793,21 @@ impl<'a> LoadDecoder<'a> {
                 })?;
                 Value::make_sub_char_table(depth, min_char, vec![Value::NIL; contents.len()])
             }
-            DumpHeapObject::HashTable(ht) => with_tagged_heap(|heap| {
-                // GNU pdumper restores the hash table header first and wires
-                // the key/value arrays via relocation.  This placeholder is
-                // only for identity during graph fixups, so avoid allocating
-                // maps that population immediately replaces.
-                heap.alloc_hash_table(LispHashTable::new_unpopulated_with_options(
-                    load_hash_table_test(&ht.test),
-                    ht.size,
-                    ht.weakness.as_ref().map(load_hash_table_weakness),
-                    ht.rehash_size,
-                    ht.rehash_threshold,
-                ))
-            }),
+            DumpHeapObject::HashTable(ht) => unsafe {
+                with_tagged_heap(|heap| {
+                    // GNU pdumper restores the hash table header first and wires
+                    // the key/value arrays via relocation.  This placeholder is
+                    // only for identity during graph fixups, so avoid allocating
+                    // maps that population immediately replaces.
+                    heap.alloc_hash_table(LispHashTable::new_unpopulated_with_options(
+                        load_hash_table_test(&ht.test),
+                        ht.size,
+                        ht.weakness.as_ref().map(load_hash_table_weakness),
+                        ht.rehash_size,
+                        ht.rehash_threshold,
+                    ))
+                })
+            },
             DumpHeapObject::Obarray { buckets, .. } => Value::obarray(buckets.len()),
             // Self-contained: no Lisp children, so the one allocation is the
             // whole restore.
@@ -1839,7 +1856,7 @@ impl<'a> LoadDecoder<'a> {
                         Value::from_veclike_ptr(ptr.cast::<VecLikeHeader>())
                     }
                 } else {
-                    with_tagged_heap(|heap| heap.alloc_lambda(vec![Value::NIL; len]))
+                    unsafe { with_tagged_heap(|heap| heap.alloc_lambda(vec![Value::NIL; len])) }
                 }
             }
             DumpHeapObject::Macro(slots) => {
@@ -1861,7 +1878,7 @@ impl<'a> LoadDecoder<'a> {
                         Value::from_veclike_ptr(ptr.cast::<VecLikeHeader>())
                     }
                 } else {
-                    with_tagged_heap(|heap| heap.alloc_macro(vec![Value::NIL; len]))
+                    unsafe { with_tagged_heap(|heap| heap.alloc_macro(vec![Value::NIL; len])) }
                 }
             }
             DumpHeapObject::ByteCode(_) => {
@@ -1977,7 +1994,7 @@ impl<'a> LoadDecoder<'a> {
                     })?;
                 // A mapped object is written in place instead of allocated by
                 // `alloc_overlay`, so resume the World counter explicitly.
-                with_tagged_heap(|heap| heap.observe_overlay_serial(serial));
+                unsafe { with_tagged_heap(|heap| heap.observe_overlay_serial(serial)) };
                 let data = neovm_value::heap_types::OverlayData::new(
                     serial,
                     Value::NIL,

@@ -372,7 +372,9 @@ fn restoring_the_live_runtime_after_a_clone_rebuilds_the_terminal_in_the_live_he
     crate::emacs_core::pdump::restore_active_runtime(&mut eval, &live_runtime);
     let handle = crate::emacs_core::terminal::pure::terminal_handle_value();
     assert!(
-        neovm_value::tagged::gc::with_tagged_heap(|heap| heap.owns_heap_value_for_test(handle)),
+        unsafe {
+            neovm_value::tagged::gc::with_tagged_heap(|heap| heap.owns_heap_value_for_test(handle))
+        },
         "the terminal handle must live in the reinstalled heap"
     );
     drop(cloned);

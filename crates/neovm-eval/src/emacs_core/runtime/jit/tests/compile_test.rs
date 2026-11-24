@@ -8214,7 +8214,7 @@ fn ctxless_shim_panic_re_raised_when_gc_locks_poisoned() {
     // lock the panic must be re-raised (abort at the shim in
     // production), stashing nothing. Poison is permanent for this
     // process — fine under nextest's process-per-test.
-    neovm_value::tagged::gc::with_tagged_heap(|h| h.poison_gc_locks_for_test());
+    unsafe { neovm_value::tagged::gc::with_tagged_heap(|h| h.poison_gc_locks_for_test()) };
     let payload: Box<dyn std::any::Any + Send> = Box::new("poisoned-flee");
     let back = contain_jit_shim_panic(core::ptr::null_mut(), payload)
         .expect_err("poisoned GC locks must re-raise on the ctx-less path");

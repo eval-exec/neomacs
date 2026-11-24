@@ -547,9 +547,11 @@ impl Obarray {
         let blv_ptr = blv.blv().as_ptr();
         match buffer {
             Some(buffer) => {
-                let target_buf = crate::tagged::gc::with_tagged_heap(|heap| {
-                    heap.buffer_value(buffer.buffer_id())
-                });
+                let target_buf = unsafe {
+                    crate::tagged::gc::with_tagged_heap(|heap| {
+                        heap.buffer_value(buffer.buffer_id())
+                    })
+                };
                 match target_buf {
                     // SAFETY: a projection's localized arm names a record this
                     // obarray's BLV pool owns (it was the cell's record when the
