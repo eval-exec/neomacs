@@ -1,7 +1,7 @@
-//! Source guard for the JIT C-ABI shims.
+//! Source guard for the JIT C-ABI shims and safe-fn raw-pointer/word contracts (G4).
 //!
-//! Two rules, both source scans over the whole crate so `macro_rules!` bodies
-//! (the leaf trampolines are generated there) are covered:
+//! Five rules, covering both macro-generated `extern "C"` shims and every
+//! production function across the workspace:
 //!
 //! (a) No `#[allow(clippy::not_unsafe_ptr_arg_deref)]`, in any combined or
 //!     multi-line attribute.
@@ -19,8 +19,23 @@
 //!     `TaggedValue::from_bits`, including through a local copied from that
 //!     parameter. A word is the same unsound contract as a raw pointer: safe
 //!     code can pass garbage bits. A no-argument shim is not this shape.
+//! (d) Class guard (G4): across every workspace production crate, no safe `fn`
+//!     taking a raw pointer parameter (`*const`/`*mut` or `emacs_value`) may
+//!     dereference that parameter (or a local derived from it) or pass it to
+//!     an unsafe operation/call inside an `unsafe` block. Pure address/identity
+//!     checks (`==`, `!=`, `is_null`, `cast`, `addr`, `ptr::eq`) remain allowed.
+//! (e) Class guard (G4): across every workspace production crate, no safe `fn`
+//!     may pass an integer word parameter (`usize`/`u64`/`i64`, or a local
+//!     derived from it) directly to `from_bits` / `Value::from_bits` /
+//!     `TaggedValue::from_bits`.
 
-use super::architecture_production_source_roots::production_source_files;
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
+
+use syn::spanned::Spanned;
+use syn::visit::{self, Visit};
+
+use super::architecture_production_source_roots::{crates_dir, production_source_files};
 
 const LINT: &str = "not_unsafe_ptr_arg_deref";
 
@@ -813,5 +828,591 @@ fn gc_restore_shim_is_an_unsafe_extern() {
     assert!(
         doc.contains("# Safety"),
         "neovm_jit_gc_restore needs a Safety contract for the saved depth, immediately above the function; saw:\n{doc}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// G4 class guard (rules d & e): workspace-wide syn scan over production fns
+// ---------------------------------------------------------------------------
+
+const EXCLUDED_WORKSPACE_CRATES: &[&str] = &[
+    "neomacs-bench",
+    "neomacs-melpa-tests",
+    "neomacs-xtask",
+    "neovm-oracle-tests",
+    "xtask",
+];
+
+const SAFE_PTR_METHODS: &[&str] = &[
+    "addr",
+    "align_offset",
+    "cast",
+    "cast_const",
+    "cast_mut",
+    "cmp",
+    "eq",
+    "expose_provenance",
+    "is_aligned",
+    "is_aligned_to",
+    "is_null",
+    "ne",
+    "with_addr",
+];
+
+fn workspace_production_source_files() -> Vec<(String, PathBuf)> {
+    fn walk(crate_name: &str, src_root: &Path, dir: &Path, out: &mut Vec<(String, PathBuf)>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        let mut sorted: Vec<_> = entries.filter_map(Result::ok).collect();
+        sorted.sort_by_key(|entry| entry.path());
+        for entry in sorted {
+            let path = entry.path();
+            if path.is_dir() {
+                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                if matches!(name, "tests" | "test_support" | "restricted_lisp") {
+                    continue;
+                }
+                walk(crate_name, src_root, &path, out);
+            } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                if name.starts_with("test_")
+                    || name.ends_with("_test.rs")
+                    || name.ends_with("_tests.rs")
+                    || name == "test_support.rs"
+                    || name == "test_utils.rs"
+                    || name == "restricted_lisp.rs"
+                {
+                    continue;
+                }
+                let rel = path
+                    .strip_prefix(src_root)
+                    .expect("file under crate src")
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                out.push((format!("{crate_name}/src/{rel}"), path));
+            }
+        }
+    }
+
+    let root = crates_dir();
+    let mut crate_dirs: Vec<_> = std::fs::read_dir(&root)
+        .expect("read workspace crates/")
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().is_dir())
+        .collect();
+    crate_dirs.sort_by_key(|entry| entry.path());
+
+    let mut files = Vec::new();
+    for entry in crate_dirs {
+        let crate_name = entry
+            .file_name()
+            .into_string()
+            .expect("valid utf-8 crate dir");
+        if EXCLUDED_WORKSPACE_CRATES.contains(&crate_name.as_str()) {
+            continue;
+        }
+        let src = entry.path().join("src");
+        if src.is_dir() {
+            walk(&crate_name, &src, &src, &mut files);
+        }
+    }
+    files
+}
+
+fn has_cfg_test(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|attr| {
+        if !attr.path().is_ident("cfg") {
+            return false;
+        }
+        let tokens = attr
+            .meta
+            .require_list()
+            .map(|list| list.tokens.to_string())
+            .unwrap_or_default();
+        let compact: String = tokens.chars().filter(|c| !c.is_whitespace()).collect();
+        compact == "test"
+            || compact.contains("all(test,")
+            || compact.contains(",test)")
+            || compact.contains(",test,")
+    })
+}
+
+fn is_raw_ptr_type(ty: &syn::Type) -> bool {
+    match ty {
+        syn::Type::Ptr(_) => true,
+        syn::Type::Group(group) => is_raw_ptr_type(&group.elem),
+        syn::Type::Paren(paren) => is_raw_ptr_type(&paren.elem),
+        syn::Type::Path(path) => path
+            .path
+            .segments
+            .last()
+            .is_some_and(|seg| seg.ident == "emacs_value"),
+        _ => false,
+    }
+}
+
+fn is_word_int_type(ty: &syn::Type) -> bool {
+    match ty {
+        syn::Type::Group(group) => is_word_int_type(&group.elem),
+        syn::Type::Paren(paren) => is_word_int_type(&paren.elem),
+        syn::Type::Path(path) => {
+            path.path.segments.last().is_some_and(|seg| {
+                matches!(seg.ident.to_string().as_str(), "usize" | "u64" | "i64")
+            })
+        }
+        _ => false,
+    }
+}
+
+fn collect_pat_idents(pat: &syn::Pat, out: &mut Vec<String>) {
+    match pat {
+        syn::Pat::Ident(ident) => {
+            let name = ident.ident.to_string();
+            if name != "self" && !name.starts_with('_') {
+                out.push(name);
+            }
+        }
+        syn::Pat::Tuple(tuple) => {
+            for elem in &tuple.elems {
+                collect_pat_idents(elem, out);
+            }
+        }
+        syn::Pat::Reference(r) => collect_pat_idents(&r.pat, out),
+        syn::Pat::Type(t) => collect_pat_idents(&t.pat, out),
+        _ => {}
+    }
+}
+
+/// Whether `expr` is directly derived from one of `names` (ident, cast,
+/// parens, pointer offset/cast method chain) — NOT an array index or unrelated
+/// field access.
+fn expr_is_derived_from(expr: &syn::Expr, names: &BTreeSet<String>) -> bool {
+    match expr {
+        syn::Expr::Path(path) => path
+            .path
+            .get_ident()
+            .is_some_and(|ident| names.contains(&ident.to_string())),
+        syn::Expr::Cast(cast) => expr_is_derived_from(&cast.expr, names),
+        syn::Expr::Paren(paren) => expr_is_derived_from(&paren.expr, names),
+        syn::Expr::Group(group) => expr_is_derived_from(&group.expr, names),
+        syn::Expr::Reference(r) => expr_is_derived_from(&r.expr, names),
+        syn::Expr::Unary(u) => expr_is_derived_from(&u.expr, names),
+        syn::Expr::MethodCall(call) => {
+            let method = call.method.to_string();
+            matches!(
+                method.as_str(),
+                "cast"
+                    | "cast_const"
+                    | "cast_mut"
+                    | "add"
+                    | "sub"
+                    | "offset"
+                    | "byte_add"
+                    | "byte_sub"
+                    | "byte_offset"
+                    | "wrapping_add"
+                    | "wrapping_sub"
+                    | "wrapping_offset"
+            ) && expr_is_derived_from(&call.receiver, names)
+        }
+        _ => false,
+    }
+}
+
+/// Whether `expr` mentions any identifier in `names` anywhere inside a pointer
+/// subexpression (excluding pure equality operands handled at the binary site).
+fn expr_mentions_ptr(expr: &syn::Expr, names: &BTreeSet<String>) -> bool {
+    struct Finder<'a> {
+        names: &'a BTreeSet<String>,
+        found: bool,
+    }
+    impl<'ast> Visit<'ast> for Finder<'_> {
+        fn visit_expr_path(&mut self, path: &'ast syn::ExprPath) {
+            if let Some(ident) = path.path.get_ident()
+                && self.names.contains(&ident.to_string())
+            {
+                self.found = true;
+            }
+            visit::visit_expr_path(self, path);
+        }
+    }
+    let mut finder = Finder {
+        names,
+        found: false,
+    };
+    finder.visit_expr(expr);
+    finder.found
+}
+
+fn is_safe_ptr_free_call(func: &syn::Expr) -> bool {
+    let syn::Expr::Path(path) = func else {
+        return false;
+    };
+    let segs: Vec<String> = path
+        .path
+        .segments
+        .iter()
+        .map(|s| s.ident.to_string())
+        .collect();
+    matches!(
+        segs.iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .as_slice(),
+        ["ptr", "eq"]
+            | ["std", "ptr", "eq"]
+            | ["core", "ptr", "eq"]
+            | ["ptr", "addr_eq"]
+            | ["std", "ptr", "addr_eq"]
+            | ["core", "ptr", "addr_eq"]
+    )
+}
+
+fn is_value_from_bits_call(func: &syn::Expr) -> bool {
+    let syn::Expr::Path(path) = func else {
+        return false;
+    };
+    let segs: Vec<String> = path
+        .path
+        .segments
+        .iter()
+        .map(|s| s.ident.to_string())
+        .collect();
+    let Some(last) = segs.last() else {
+        return false;
+    };
+    if last != "from_bits" {
+        return false;
+    }
+    match segs.len() {
+        1 => true,
+        n => matches!(segs[n - 2].as_str(), "Value" | "TaggedValue"),
+    }
+}
+
+struct FnBodyScanner {
+    ptr_tainted: BTreeSet<String>,
+    word_tainted: BTreeSet<String>,
+    in_unsafe: usize,
+    ptr_offense: Option<usize>,
+    word_offense: Option<usize>,
+}
+
+impl FnBodyScanner {
+    fn new(ptr_params: Vec<String>, word_params: Vec<String>) -> Self {
+        Self {
+            ptr_tainted: ptr_params.into_iter().collect(),
+            word_tainted: word_params.into_iter().collect(),
+            in_unsafe: 0,
+            ptr_offense: None,
+            word_offense: None,
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for FnBodyScanner {
+    // Nested `fn` items have their own safety boundary and are visited by the
+    // outer file visitor directly.
+    fn visit_item_fn(&mut self, _node: &'ast syn::ItemFn) {}
+
+    fn visit_local(&mut self, local: &'ast syn::Local) {
+        if let Some(init) = &local.init {
+            self.visit_expr(&init.expr);
+            if let Some((_, diverge)) = &init.diverge {
+                self.visit_expr(diverge);
+            }
+            let mut bound = Vec::new();
+            collect_pat_idents(&local.pat, &mut bound);
+            if expr_is_derived_from(&init.expr, &self.ptr_tainted) {
+                for name in &bound {
+                    self.ptr_tainted.insert(name.clone());
+                }
+            }
+            if expr_is_derived_from(&init.expr, &self.word_tainted) {
+                for name in &bound {
+                    self.word_tainted.insert(name.clone());
+                }
+            }
+        }
+    }
+
+    fn visit_expr_unsafe(&mut self, node: &'ast syn::ExprUnsafe) {
+        self.in_unsafe += 1;
+        visit::visit_expr_unsafe(self, node);
+        self.in_unsafe -= 1;
+    }
+
+    fn visit_expr_unary(&mut self, node: &'ast syn::ExprUnary) {
+        if self.in_unsafe > 0
+            && matches!(node.op, syn::UnOp::Deref(_))
+            && expr_mentions_ptr(&node.expr, &self.ptr_tainted)
+            && self.ptr_offense.is_none()
+        {
+            self.ptr_offense = Some(node.op.span().start().line);
+        }
+        visit::visit_expr_unary(self, node);
+    }
+
+    fn visit_expr_method_call(&mut self, node: &'ast syn::ExprMethodCall) {
+        if self.in_unsafe > 0 && self.ptr_offense.is_none() {
+            let method = node.method.to_string();
+            let recv_tainted = expr_is_derived_from(&node.receiver, &self.ptr_tainted);
+            let arg_tainted = node
+                .args
+                .iter()
+                .any(|arg| expr_is_derived_from(arg, &self.ptr_tainted));
+            if (recv_tainted && !SAFE_PTR_METHODS.contains(&method.as_str()))
+                || (arg_tainted && !matches!(method.as_str(), "eq" | "ne" | "cmp"))
+            {
+                self.ptr_offense = Some(node.method.span().start().line);
+            }
+        }
+        visit::visit_expr_method_call(self, node);
+    }
+
+    fn visit_expr_call(&mut self, node: &'ast syn::ExprCall) {
+        if self.in_unsafe > 0
+            && self.ptr_offense.is_none()
+            && !is_safe_ptr_free_call(&node.func)
+            && node
+                .args
+                .iter()
+                .any(|arg| expr_is_derived_from(arg, &self.ptr_tainted))
+        {
+            self.ptr_offense = Some(node.paren_token.span.open().start().line);
+        }
+        if self.word_offense.is_none()
+            && is_value_from_bits_call(&node.func)
+            && node
+                .args
+                .iter()
+                .any(|arg| expr_is_derived_from(arg, &self.word_tainted))
+        {
+            self.word_offense = Some(node.paren_token.span.open().start().line);
+        }
+        visit::visit_expr_call(self, node);
+    }
+}
+
+#[derive(Default)]
+struct ClassGuardScan {
+    file: String,
+    fn_count: usize,
+    ptr_offenders: Vec<String>,
+    word_offenders: Vec<String>,
+}
+
+impl ClassGuardScan {
+    fn check_fn(&mut self, attrs: &[syn::Attribute], sig: &syn::Signature, block: &syn::Block) {
+        if has_cfg_test(attrs) || matches!(sig.safety, syn::Safety::Unsafe(_)) {
+            return;
+        }
+        self.fn_count += 1;
+        let mut ptr_params = Vec::new();
+        let mut word_params = Vec::new();
+        for arg in &sig.inputs {
+            let syn::FnArg::Typed(typed) = arg else {
+                continue;
+            };
+            if is_raw_ptr_type(&typed.ty) {
+                collect_pat_idents(&typed.pat, &mut ptr_params);
+            } else if is_word_int_type(&typed.ty) {
+                collect_pat_idents(&typed.pat, &mut word_params);
+            }
+        }
+        if ptr_params.is_empty() && word_params.is_empty() {
+            return;
+        }
+        let mut scanner = FnBodyScanner::new(ptr_params, word_params);
+        scanner.visit_block(block);
+        let fn_line = sig.ident.span().start().line;
+        if let Some(use_line) = scanner.ptr_offense {
+            self.ptr_offenders.push(format!(
+                "{}:{fn_line}: fn {} (unsafe ptr use at line {use_line})",
+                self.file, sig.ident
+            ));
+        }
+        if let Some(use_line) = scanner.word_offense {
+            self.word_offenders.push(format!(
+                "{}:{fn_line}: fn {} (from_bits on word param at line {use_line})",
+                self.file, sig.ident
+            ));
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for ClassGuardScan {
+    fn visit_item_mod(&mut self, node: &'ast syn::ItemMod) {
+        if has_cfg_test(&node.attrs) {
+            return;
+        }
+        visit::visit_item_mod(self, node);
+    }
+
+    fn visit_item_impl(&mut self, node: &'ast syn::ItemImpl) {
+        if has_cfg_test(&node.attrs) {
+            return;
+        }
+        visit::visit_item_impl(self, node);
+    }
+
+    fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
+        self.check_fn(&node.attrs, &node.sig, &node.block);
+        visit::visit_item_fn(self, node);
+    }
+
+    fn visit_impl_item_fn(&mut self, node: &'ast syn::ImplItemFn) {
+        self.check_fn(&node.attrs, &node.sig, &node.block);
+        visit::visit_impl_item_fn(self, node);
+    }
+
+    fn visit_trait_item_fn(&mut self, node: &'ast syn::TraitItemFn) {
+        if let Some(block) = &node.default {
+            self.check_fn(&node.attrs, &node.sig, block);
+        }
+        visit::visit_trait_item_fn(self, node);
+    }
+}
+
+fn scan_class_guard_source(file: &str, source: &str) -> (Vec<String>, Vec<String>, usize) {
+    let parsed = syn::parse_file(source).unwrap_or_else(|error| panic!("parse {file}: {error}"));
+    let mut scan = ClassGuardScan {
+        file: file.to_owned(),
+        ..ClassGuardScan::default()
+    };
+    scan.visit_file(&parsed);
+    (scan.ptr_offenders, scan.word_offenders, scan.fn_count)
+}
+
+#[test]
+fn class_guard_controls_detect_safe_ptr_deref_and_word_from_bits() {
+    // Synthetic offenders MUST be caught.
+    for (label, fixture, expect_ptr, expect_word) in [
+        (
+            "deref raw ptr param",
+            "fn bad(p: *const u8) -> u8 { unsafe { *p } }",
+            true,
+            false,
+        ),
+        (
+            "pass raw ptr param to unsafe call",
+            "fn bad(p: *mut u8) { unsafe { ffi(p); } }",
+            true,
+            false,
+        ),
+        (
+            "call as_ref on raw ptr param",
+            "fn bad(p: *mut u8) -> Option<&'static u8> { unsafe { p.as_ref() } }",
+            true,
+            false,
+        ),
+        (
+            "tainted local from raw ptr param",
+            "fn bad(p: *mut u8) -> u32 { let q = p as *const u32; unsafe { *q } }",
+            true,
+            false,
+        ),
+        (
+            "emacs_value typedef deref",
+            "fn bad(v: emacs_value) -> usize { unsafe { (*v).v } }",
+            true,
+            false,
+        ),
+        (
+            "from_bits on word param",
+            "fn bad(bits: u64) -> Value { unsafe { Value::from_bits(bits as usize) } }",
+            false,
+            true,
+        ),
+        (
+            "from_bits via tainted local",
+            "fn bad(raw: i64) -> Value { let w = raw as usize; unsafe { TaggedValue::from_bits(w) } }",
+            false,
+            true,
+        ),
+    ] {
+        let (ptrs, words, _) = scan_class_guard_source("fixture.rs", fixture);
+        assert_eq!(
+            !ptrs.is_empty(),
+            expect_ptr,
+            "ptr control mismatch for {label}: {ptrs:?}"
+        );
+        assert_eq!(
+            !words.is_empty(),
+            expect_word,
+            "word control mismatch for {label}: {words:?}"
+        );
+    }
+
+    // Valid shapes MUST NOT be flagged.
+    for (label, fixture) in [
+        (
+            "unsafe fn dereferencing raw ptr",
+            "unsafe fn ok(p: *const u8) -> u8 { unsafe { *p } }",
+        ),
+        (
+            "unsafe fn calling from_bits",
+            "unsafe fn ok(bits: usize) -> Value { unsafe { Value::from_bits(bits) } }",
+        ),
+        (
+            "safe identity comparison inside unsafe chain walk",
+            "impl Chain { fn ok(&self, target: *mut Node) -> bool { unsafe { let mut c = self.head; while !c.is_null() { if c == target { return true; } c = (*c).next; } false } } }",
+        ),
+        (
+            "safe null check only",
+            "fn ok(p: *const u8) -> bool { p.is_null() }",
+        ),
+        (
+            "from_bits on table slot indexed by usize param",
+            "fn ok(&self, idx: usize) -> Value { unsafe { Value::from_bits(self.table[idx]) } }",
+        ),
+        (
+            "f64::from_bits",
+            "fn ok(bits: u64) -> f64 { f64::from_bits(bits) }",
+        ),
+    ] {
+        let (ptrs, words, _) = scan_class_guard_source("fixture.rs", fixture);
+        assert!(
+            ptrs.is_empty() && words.is_empty(),
+            "valid control flagged for {label}: ptrs={ptrs:?} words={words:?}"
+        );
+    }
+}
+
+#[test]
+fn safe_fns_do_not_deref_raw_ptr_or_word_params() {
+    let files = workspace_production_source_files();
+    assert!(
+        files.len() > 200,
+        "G4 class guard must scan every workspace production source file, saw {}",
+        files.len()
+    );
+    let mut ptr_offenders = Vec::new();
+    let mut word_offenders = Vec::new();
+    let mut fn_count = 0usize;
+    for (relative, path) in &files {
+        let source = std::fs::read_to_string(path)
+            .unwrap_or_else(|error| panic!("read {relative}: {error}"));
+        let (ptrs, words, count) = scan_class_guard_source(relative, &source);
+        fn_count += count;
+        ptr_offenders.extend(ptrs);
+        word_offenders.extend(words);
+    }
+    assert!(
+        fn_count > 1000,
+        "G4 class guard scanned too few production fns ({fn_count})"
+    );
+    assert!(
+        ptr_offenders.is_empty() && word_offenders.is_empty(),
+        "G4 class guard: a safe fn must not dereference a raw pointer parameter or \
+         rebuild a Value from a word parameter via from_bits; mark it `unsafe fn` \
+         with a `# Safety` section or take a typed handle.\n\
+         raw-ptr offenders ({}):\n{}\n\
+         word-param from_bits offenders ({}):\n{}",
+        ptr_offenders.len(),
+        ptr_offenders.join("\n"),
+        word_offenders.len(),
+        word_offenders.join("\n"),
     );
 }
