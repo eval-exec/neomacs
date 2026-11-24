@@ -4022,7 +4022,10 @@ impl TaggedValue {
     }
 
     /// Get the marker data from a marker value.
-    pub fn as_marker_data(self) -> Option<&'static crate::heap_types::LispMarker> {
+    ///
+    /// Tied to this `Value` place. A later collection does not conflict with
+    /// this borrow.
+    pub fn as_marker_data(&self) -> Option<&crate::heap_types::LispMarker> {
         if self.is_marker() {
             let ptr = self.as_veclike_ptr().unwrap() as *const MarkerObj;
             Some(unsafe { &(*ptr).data })
@@ -4040,7 +4043,10 @@ impl TaggedValue {
     }
 
     /// Get the overlay data from an overlay value.
-    pub fn as_overlay_data(self) -> Option<&'static crate::heap_types::OverlayData> {
+    ///
+    /// Tied to this `Value` place. A later collection does not conflict with
+    /// this borrow.
+    pub fn as_overlay_data(&self) -> Option<&crate::heap_types::OverlayData> {
         if self.is_overlay() {
             let ptr = self.as_veclike_ptr().unwrap() as *const OverlayObj;
             Some(unsafe { &(*ptr).data })
@@ -4171,7 +4177,10 @@ impl TaggedValue {
     }
 
     /// Get record elements.
-    pub fn as_record_data(self) -> Option<&'static LispValueSlice> {
+    ///
+    /// Tied to this `Value` place. A later collection does not conflict with
+    /// this borrow.
+    pub fn as_record_data(&self) -> Option<&LispValueSlice> {
         let header = self.as_veclike_ptr()?;
         if unsafe { (*header).type_tag } == VecLikeType::Record {
             let ptr = header as *const RecordObj;

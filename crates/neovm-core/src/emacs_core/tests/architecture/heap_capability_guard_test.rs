@@ -12,8 +12,8 @@
 //! `StoppedCollectorJob::run` in `collection.rs`. A new safe wrapper fails.
 //! `Context::gc_collect_exact` stays safe. `&mut Context` is the capability
 //! only after Phase 1 stops returning `&'static` payload borrows. Until then
-//! a Rust local can keep a freed object. P1.1 place-anchors eight readers in
-//! `value/mod.rs`. The borrow is the `Value` place, so it still does not
+//! a Rust local can keep a freed object. P1.1 and P1.2 place-anchor eleven
+//! readers in `value/mod.rs`. The borrow is the `Value` place, so it still does not
 //! conflict with a collection. That conflict is Phase 1c (`HeapRef<'h>`).
 //! Dropping a `TaggedHeap` and `shutdown(self)` still free from safe code.
 //! Those are Phase 1c too. This guard does not cover them. Test support calls
@@ -626,7 +626,7 @@ fn heap_capability_guard_flags_a_new_safe_sweep_wrapper() {
     );
 }
 
-/// P1.1. These readers must take `&self` and must not return `'static`.
+/// P1.1 and P1.2. These readers must take `&self` and must not return `'static`.
 /// A place anchor does not make collection conflict with the borrow.
 const PLACE_ANCHORED: &[&str] = &[
     "as_window_configuration_data",
@@ -637,6 +637,9 @@ const PLACE_ANCHORED: &[&str] = &[
     "as_xwidget",
     "closure_params",
     "closure_slots",
+    "as_marker_data",
+    "as_record_data",
+    "as_overlay_data",
 ];
 
 fn walk_items(items: &[syn::Item], visit: &mut dyn FnMut(&syn::ImplItemFn)) {
