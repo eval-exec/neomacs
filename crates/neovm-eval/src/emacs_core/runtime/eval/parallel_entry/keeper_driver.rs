@@ -9,8 +9,9 @@
 //!
 //! Only a proven invariant break poisons the era: an owner whose lend guard
 //! dropped armed (a Rust unwind or a leaked turn), or a message that cannot
-//! belong to the protocol. A Lisp signal ends a turn normally. A stop that
-//! cannot be taken within its bound answers `Retry` and poisons nothing.
+//! belong to the protocol. A Lisp signal ends a turn normally. A stop its
+//! owners have not met within its bound stays requested: the keeper warns,
+//! serves its inbox, and waits on (K8 r2). A slow owner poisons nothing.
 #![forbid(unsafe_code)]
 
 use super::keeper_custody::{
@@ -20,16 +21,19 @@ use super::owned_source::KeeperEra;
 use super::serial_park::{Grant, KeeperPort, LendGuard, PortRefusal};
 use super::serial_ticket::{ReceiveReason, StoppedSerialTicket};
 use super::sync::mpsc;
+#[cfg(test)]
+use neovm_value::tagged::gc::StopPending;
 use neovm_value::tagged::gc::heap_transfer::{PublishedOwner, with_stop_scope};
 use neovm_value::tagged::gc::{
-    AllStopped, AllStoppedFailure, Mutator, MutatorKey, RendezvousError, SerialGrant,
+    AllStopped, AllStoppedFailure, Mutator, MutatorKey, RendezvousError, SerialGrant, StopAttempt,
 };
 use std::collections::HashMap;
 use std::num::NonZeroU64;
 use std::time::{Duration, Instant};
 
-/// How long the keeper retries a contended gate for one stop, and an owner
-/// retries one contended publication, before giving up without poisoning.
+/// How long one stop attempt waits for its owners before the keeper warns
+/// and serves its inbox, and how long a contended gate is retried before the
+/// call gives up. Neither poisons.
 const CONTENTION_BOUND: Duration = Duration::from_secs(60);
 
 /// Owner -> keeper. One inbox, so each owner's messages arrive in the order
@@ -63,8 +67,6 @@ pub(crate) enum GrantMsg {
     },
     /// The request's publication is no longer current: publish again.
     Republish,
-    /// The keeper could not stop within its bound: request again.
-    Retry,
     /// The era is poisoned.
     Poisoned,
 }
@@ -168,6 +170,15 @@ impl<'s, 'era> Between<'s, 'era> {
     }
 }
 
+/// A test's view of one pending stop attempt: what it waited on, and how
+/// many requests were committed once the keeper had served its inbox.
+#[cfg(test)]
+#[derive(Debug)]
+pub(crate) struct PendingNotice {
+    pub(crate) pending: StopPending,
+    pub(crate) queued: usize,
+}
+
 /// The keeper side of L6.7a.
 pub(crate) struct Driver<'k, 'service, 'heap> {
     era: &'k KeeperEra<'service, 'heap>,
@@ -175,6 +186,10 @@ pub(crate) struct Driver<'k, 'service, 'heap> {
     owners: HashMap<u64, Enrolled>,
     /// The receipt each queued request was committed under.
     queued: HashMap<u64, PublishedOwner>,
+    /// One stop attempt's bound.
+    stop_bound: Duration,
+    #[cfg(test)]
+    pending_notices: Option<mpsc::Sender<PendingNotice>>,
 }
 
 #[cfg_attr(
@@ -191,7 +206,23 @@ impl<'k, 'service, 'heap> Driver<'k, 'service, 'heap> {
             inbox,
             owners: HashMap::new(),
             queued: HashMap::new(),
+            stop_bound: CONTENTION_BOUND,
+            #[cfg(test)]
+            pending_notices: None,
         }
+    }
+
+    /// Shorten each stop attempt to BOUND and report every pending attempt
+    /// to NOTICES.
+    #[cfg(test)]
+    pub(crate) fn observe_pending(
+        mut self,
+        bound: Duration,
+        notices: mpsc::Sender<PendingNotice>,
+    ) -> Self {
+        self.stop_bound = bound;
+        self.pending_notices = Some(notices);
+        self
     }
 
     /// Enroll one owner before it can request. `grants` is that owner's own
@@ -293,32 +324,35 @@ impl<'k, 'service, 'heap> Driver<'k, 'service, 'heap> {
         }
     }
 
-    /// Answer every queued request with `message` and drop the entries.
-    fn answer_all(&mut self, message: impl Fn() -> GrantMsg) {
-        let owners: Vec<u64> = self.queued.keys().copied().collect();
-        for owner in owners {
-            self.queued.remove(&owner);
-            if let Some(key) = self.owners.get(&owner).map(|enrolled| enrolled.key) {
-                let _ = self.era.cancel_serial(key);
-            }
-            self.send(owner, message());
-        }
-    }
-
-    /// Take the stop, bounded. A contended gate past the bound answers
-    /// `Retry` to every queued request.
-    fn take_stop(&mut self) -> Result<Option<AllStopped<'k>>, Breach> {
-        let start = Instant::now();
+    /// Take the stop (K8 r2). Each attempt is bounded. A pending attempt
+    /// leaves the request standing, so the owners that stopped stay stopped
+    /// and a requester keeps its place: the keeper warns, commits what its
+    /// inbox holds, and continues the same epoch. As with GNU's global lock,
+    /// a slow owner delays the turn and poisons nothing.
+    fn take_stop(&mut self) -> Result<AllStopped<'k>, Breach> {
+        let (era, bound) = (self.era, self.stop_bound);
         loop {
-            match self.era.stop() {
-                Ok(stopped) => return Ok(Some(stopped)),
-                Err(RendezvousError::Busy) if start.elapsed() < CONTENTION_BOUND => {
-                    std::thread::yield_now();
+            match retry_contended(|| era.stop_within(bound)) {
+                Ok(StopAttempt::Stopped(stopped)) => return Ok(stopped),
+                Ok(StopAttempt::Pending(pending)) => {
+                    tracing::warn!(
+                        epoch = ?pending.epoch(),
+                        waiting_on = ?pending.waiting_on(),
+                        "keeper stop overdue"
+                    );
+                    while let Ok(message) = self.inbox.try_recv() {
+                        self.between_stops(message)?;
+                    }
+                    #[cfg(test)]
+                    if let Some(notices) = &self.pending_notices {
+                        let _ = notices.send(PendingNotice {
+                            pending,
+                            queued: self.queued.len(),
+                        });
+                    }
                 }
-                Err(RendezvousError::Busy) => {
-                    self.answer_all(|| GrantMsg::Retry);
-                    return Ok(None);
-                }
+                // Includes a gate held past the contention bound: a holder
+                // is brief by construction, so that is an invariant break.
                 Err(reason) => return Err(Breach::Rendezvous(reason)),
             }
         }
@@ -327,9 +361,7 @@ impl<'k, 'service, 'heap> Driver<'k, 'service, 'heap> {
     /// One stop: lend the ring's head in order, each after the previous
     /// ticket came back, at most the requests queued when the stop began.
     fn serve_stop(&mut self) -> Result<(), Breach> {
-        let Some(mut stopped) = self.take_stop()? else {
-            return Ok(());
-        };
+        let mut stopped = self.take_stop()?;
         let epoch = stopped.epoch();
         if let Err(reason) = retry_contended(|| stopped.trace_serial()) {
             return Err(Breach::Rendezvous(reason));
@@ -445,7 +477,13 @@ impl<'k, 'service, 'heap> Driver<'k, 'service, 'heap> {
     /// poisoned it when the breach came from inside one.
     fn poison(mut self, breach: Breach) -> DriverEnd {
         let _ = self.era.poison_era();
-        self.answer_all(|| GrantMsg::Poisoned);
+        // Retire every queued entry (allowed after poison) and tell its owner.
+        for (owner, _receipt) in std::mem::take(&mut self.queued) {
+            if let Some(enrolled) = self.owners.get(&owner) {
+                let _ = self.era.cancel_serial(enrolled.key);
+            }
+            self.send(owner, GrantMsg::Poisoned);
+        }
         for enrolled in self.owners.values() {
             let _ = enrolled.grants.try_send(GrantMsg::Poisoned);
         }
@@ -608,7 +646,6 @@ impl KeeperPort for ChannelPort<'_> {
                     ));
                 }
                 Ok(GrantMsg::Republish) => continue,
-                Ok(GrantMsg::Retry) => return Err(PortRefusal::Retry),
                 Ok(GrantMsg::Poisoned) | Err(mpsc::RecvError) => {
                     return Err(PortRefusal::Poisoned);
                 }

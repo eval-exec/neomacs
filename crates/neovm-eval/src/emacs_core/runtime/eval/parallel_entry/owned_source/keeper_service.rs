@@ -14,12 +14,15 @@ use neovm_value::tagged::gc::heap_transfer::{
 };
 use std::num::NonZeroU64;
 
-use neovm_value::tagged::gc::{AllStopped, MutatorKey, ParallelHeapEra, RendezvousError};
+use neovm_value::tagged::gc::{
+    AllStopped, MutatorKey, ParallelHeapEra, RendezvousError, StopAttempt,
+};
 #[cfg(test)]
 use neovm_value::tagged::gc::{HeapIdentity, MutatorPermit, RegistrationError};
 use std::marker::PhantomData;
 use std::rc::Rc;
 use std::thread::ThreadId;
+use std::time::Duration;
 
 /// Private proof that the current thread is the keeper's service thread.
 #[must_use]
@@ -78,6 +81,12 @@ impl<'service, 'heap> KeeperEra<'service, 'heap> {
     // The L6.7 driver's methods below carry no `expect(dead_code)`: rustc
     // counts what an item under that expectation calls as used, so the
     // driver's own expectation keeps them live in non-test builds.
+
+    /// L6.7 K8: one stop attempt bounded by BUDGET. A pending attempt leaves
+    /// the request standing; the next attempt continues the same epoch.
+    pub(crate) fn stop_within(&self, budget: Duration) -> Result<StopAttempt<'_>, RendezvousError> {
+        self.era.stop_within(budget)
+    }
 
     /// L6.7 K4: commit one serial request at the ring's tail.
     pub(crate) fn enqueue_serial(

@@ -990,3 +990,113 @@ fn l67a_an_owner_unwinding_mid_turn_poisons_and_wakes_the_rest() {
         "B learns the era is poisoned"
     );
 }
+
+const L: u64 = 7204;
+
+/// D-10 (K8 r2). Running owner L has not met the stop A's request started.
+/// Each bounded attempt comes back pending and leaves the request standing:
+/// the keeper serves its inbox, so D's later request joins the same stop,
+/// and once L stops both turns are lent in that one epoch. Nothing is
+/// poisoned and nobody is told to retry.
+#[test]
+fn l67a_a_slow_owner_delays_the_stop_and_poisons_nothing() {
+    with_live_era("l67a-slow", |era| {
+        let (inbox, inbox_rx) = mpsc::channel();
+        let (notices_tx, notices) = mpsc::channel();
+        let mut driver =
+            Driver::new(era, inbox_rx).observe_pending(Duration::from_millis(5), notices_tx);
+        let a = enroll_driver(era, &mut driver, &inbox, O);
+        let d = enroll_driver(era, &mut driver, &inbox, B);
+        let slow = era.register(L, 0).expect("register the slow owner");
+        let slow_key = slow.key();
+        let heap = era.heap_identity();
+        drop(inbox);
+        let (d_go_tx, d_go) = mpsc::channel::<()>();
+        let (l_go_tx, l_go) = mpsc::channel::<()>();
+        let (l_running_tx, l_running) = mpsc::channel::<()>();
+        let (d_running_tx, d_running) = mpsc::channel::<()>();
+        std::thread::scope(|scope| {
+            let _panic_guard = KeeperPanicGuard { keeper: era };
+            let lagging = scope.spawn(move || {
+                let mut owner = activate(slow, heap, L);
+                l_running_tx.send(()).expect("L runs");
+                // Running and not polling until D's request is committed.
+                l_go.recv_timeout(BOUND).expect("L may poll");
+                let epoch = retry_native("L sees the stop", || owner.wait_request());
+                retry_native("L stops", || owner.publish_native_owner(&[]).map(|_| ()));
+                retry_native("L runs again", || owner.leave_native().map(|_| ()));
+                retire(owner);
+                epoch
+            });
+            l_running.recv_timeout(BOUND).expect("L is running");
+            let first = scope.spawn(move || {
+                a.run(|state, home, port| {
+                    // D runs before A's request starts the stop, so D is a
+                    // running member of it.
+                    d_running.recv_timeout(BOUND).expect("D is running");
+                    let (grant, lend) = port.request_turn().ok().expect("A is granted");
+                    let epoch = grant.epoch;
+                    let mut turn = begin_turn(state, home, (grant, lend), port, standalone)
+                        .ok()
+                        .expect("A's grant begins");
+                    let seen = turn.with_world(|ev| eval(ev, "(setq sp-live 41)"));
+                    turn.end(port).ok().expect("A's host detaches");
+                    (epoch, seen)
+                })
+            });
+            let second = scope.spawn(move || {
+                d.run(|state, home, port| {
+                    d_running_tx.send(()).expect("D runs");
+                    d_go.recv_timeout(BOUND).expect("D may request");
+                    let (grant, lend) = port.request_turn().ok().expect("D is granted");
+                    let epoch = grant.epoch;
+                    let mut turn = begin_turn(state, home, (grant, lend), port, standalone)
+                        .ok()
+                        .expect("D's grant begins");
+                    let seen = turn.with_world(|ev| eval(ev, "(setq sp-live 42)"));
+                    turn.end(port).ok().expect("D's host detaches");
+                    (epoch, seen)
+                })
+            });
+            let conductor = scope.spawn(move || {
+                let mut first_pending = None;
+                loop {
+                    let notice = notices
+                        .recv_timeout(BOUND)
+                        .expect("a pending stop attempt is reported");
+                    if notice.queued == 1 && first_pending.is_none() {
+                        first_pending = Some(notice.pending.clone());
+                        d_go_tx.send(()).expect("tell D");
+                    } else if notice.queued == 2 {
+                        l_go_tx.send(()).expect("tell L");
+                        return (first_pending, notice.pending);
+                    }
+                }
+            });
+            let end = driver.run();
+            let (first_pending, both_queued) = conductor.join().expect("the conductor");
+            let slow_epoch = lagging.join().expect("L");
+            let (a_epoch, a_seen) = first.join().expect("A");
+            let (d_epoch, d_seen) = second.join().expect("D");
+            assert_eq!(end, DriverEnd::Drained, "nothing is poisoned");
+            let first_pending = first_pending.expect("A's request waits on a pending stop");
+            assert_eq!(
+                first_pending.epoch(),
+                Some(slow_epoch),
+                "the pending stop is the one L later meets"
+            );
+            assert!(
+                first_pending.waiting_on().contains(&slow_key),
+                "the keeper names L: {first_pending:?}"
+            );
+            assert_eq!(
+                both_queued.waiting_on(),
+                &[slow_key],
+                "D's request is committed while the stop waits on L only"
+            );
+            assert_eq!(a_epoch, slow_epoch, "A is lent in the standing stop");
+            assert_eq!(d_epoch, slow_epoch, "D joins that same stop");
+            assert_eq!((a_seen.as_str(), d_seen.as_str()), ("41", "42"));
+        });
+    });
+}
